@@ -124,17 +124,15 @@ func TestNativeSurfacesServeACompanyAppliedAfterBoot(t *testing.T) {
 	}
 }
 
-// A COMPANY APPLIED AFTER BOOT IS SERVED GIT AND ITS CODE READS. Gitlet
-// is built with the native runtime, which a node booted with no company builds
-// at its first apply — after the API was assembled — so the git routes and
-// the /gitlet/ reads are asked of the engine per request. Before the company,
-// both say it hosts no code; after the apply that sets code.backend: gitlet, a person
-// clones and pushes with their own token through the API `crewlet run` serves,
-// and the push is read back as theirs.
+// A COMPANY APPLIED AFTER BOOT IS SERVED GIT AND ITS CODE READS. A node booted
+// with no company builds Gitlet's native runtime at its first apply, after the
+// API was assembled, so the git routes and /gitlet/ reads are asked of the
+// engine per request. Before the company both say it hosts no code; after the
+// apply that sets code.backend: gitlet, a person clones and pushes with their
+// own token and the push is read back as theirs.
 //
-// The hook is THIS test binary through the engine's DEFAULT GitHook — the
-// production argv, os.Executable as `gitlet hook proc-receive` — which TestMain
-// runs as main() would.
+// The hook is THIS test binary through the engine's DEFAULT GitHook (the
+// production argv, `gitlet hook proc-receive`), which TestMain runs as main().
 //
 // Mutation: capture Gitlet at api.New, and the clone after the apply is
 // refused as a company that hosts no code.
@@ -239,15 +237,13 @@ code:
 }
 
 // A NODE WHERE GITLET COULD NOT START SAYS SO, and never that the company
-// hosts no code. An apply builds Gitlet before it publishes its epoch,
-// so a node whose apply of the configuration that turns Gitlet on fails —
-// here a cache directory somebody else's files already fill, which the cache
-// refuses to take — still serves the previous epoch, one that hosts no code;
-// read off that epoch, the person who had just turned Gitlet on was told
-// "this company does not host code". The answer is read off what the fleet
-// activated instead: 503 config_apply_failed, with no Retry-After — waiting
-// clears nothing, another node serves it — as the envelope's code on a /gitlet/
-// read and in brackets on git's one line on a git route.
+// hosts no code. An apply builds Gitlet before it publishes its epoch, so a
+// failed apply that turns Gitlet on (here a cache directory somebody else's
+// files fill, which the cache refuses) still serves the previous epoch, which
+// hosts no code. The answer is read off what the fleet activated instead: 503
+// config_apply_failed, no Retry-After (waiting clears nothing, another node
+// serves it), as the envelope's code on a /gitlet/ read and in brackets on
+// git's one line on a git route.
 //
 // Mutation: answer from the published epoch alone (engine.CodeUnserved), and
 // the read says the company hosts no code.

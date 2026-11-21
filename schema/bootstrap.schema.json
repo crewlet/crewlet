@@ -593,7 +593,7 @@
               "type": "string"
             }
           ],
-          "description": "Clones, fetches and pushes this node serves at once; 0 is four for each of max_processes, and no more than one for every 512 MiB of the node's memory. Each holds a few hundred MiB while it runs, so size it to memory rather than cores."
+          "description": "Clones, fetches and pushes this node serves at once; 0 is four for each of max_processes, and no more than one for every 512 MiB of the memory the executor's pools leave. Each holds a few hundred MiB while it runs, so size it to memory rather than cores."
         }
       },
       "type": [
@@ -1251,6 +1251,23 @@
             }
           ],
           "description": "Byte ceiling on the access log, where what each seat was told about its access and every SSH certificate and command are recorded; unset takes 128 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."
+        },
+        "advisor_log_max_bytes": {
+          "anyOf": [
+            {
+              "maximum": 68719476736,
+              "minimum": 67108864,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Byte ceiling on the advisor log, where the Advisor's findings, runs, reports and alarm episodes are kept with their history; unset takes 64 MiB, 64 MiB..64 GiB."
         },
         "artifact_data_log_max_bytes": {
           "anyOf": [

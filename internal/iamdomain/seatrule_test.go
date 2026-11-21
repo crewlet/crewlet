@@ -20,38 +20,24 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// EVERY PERSON HOLDS A HUMAN SEAT (ADR-0032): the writer's half.
-//
-// A person with no seat acted under their bare login, in no unit, led by
-// nobody and reached by no contact route, so every rule the org chart decides
-// had nothing to say about them — and a person on an AGENT's seat was refused
-// 403 on every request they sent, a principal the request path could never
-// serve. These cases hold the writer to the rule at every write that binds —
-// the writer and never the applier, which writes whatever a record says,
-// because refusing a record there stops the log on every node.
+// EVERY PERSON HOLDS A HUMAN SEAT (ADR-0032): the writer's half (package doc,
+// "Every person holds a HUMAN seat"); a person on an agent's seat is refused on
+// every request. The writer holds every binding write to the rule, never the
+// applier, which writes whatever a record says: refusing a record there stops
+// the log on every node.
 
 // A PERSON ENROLS ONLY ONTO A HUMAN SEAT; A SERVICE ACCOUNT ONTO ONE OR NONE.
 //
-// A person's create naming no seat is [iamdomain.ErrSeatRequired] — still an
-// invalid value to a surface, and one it can name the field of — and one
-// naming an agent's seat, or one the company does not hold, is the value the
-// caller typed wrong. A service account acts as itself, so it may name none;
-// one it names is held to the same human seat a person's is, since a Tier A
-// token bound through its row acts as that seat on every request. Every
-// refusal publishes nothing.
+// A person naming no seat is [iamdomain.ErrSeatRequired], whose field a
+// surface can name; an agent's seat or one the company lacks is
+// [iamdomain.ErrInvalid]. A service account may name none, but one it names
+// must be human: a Tier A token bound through its row acts as that seat. Also
+// ErrInvalid: a service account handed a password link's expiry, and a person
+// created other than active, whose first link would set an unusable password.
+// Every refusal publishes nothing.
 //
-// TWO MORE REFUSALS RIDE ON THE SAME VALIDATION, and are the value the caller
-// typed wrong rather than a missing seat: a service account's create handed a
-// password link's expiry — it has no password — and a person created at any
-// stage but active, whose first password link would set a password nobody can
-// sign in with. Each names a seat the company holds, so nothing but its own
-// clause stands in its way.
-//
-// Mutation: drop the person's seat requirement from the create's validation
-// and the seatless create lands; check the seat for existence rather than for
-// a HUMAN seat and the agent's seat is bound — for a person and a service
-// account alike; drop the service account's expiry clause, or the person's
-// stage clause, and that row lands.
+// Mutation: drop the person's seat requirement, check a seat for existence
+// rather than HUMAN, or drop the expiry or stage clause, and that row lands.
 func TestAPersonEnrolsOnlyOntoAHumanSeat(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -134,20 +120,16 @@ func TestAPersonEnrolsOnlyOntoAHumanSeat(t *testing.T) {
 
 // AN OPEN INVITATION HOLDS ITS SEAT, as it holds its address.
 //
-// The invitation is a person on their way to that seat, so from its issue
-// until it is redeemed, cancelled or ages out it is refused to everything else
-// that would take the seat — a create, a person moved onto it, a service
-// account bound to it, a second invitation — naming the invitation, whose
-// remedy is to cancel it. Its own redemption is what binds the seat, and a
-// cancellation or an expiry frees it at once. Held only by the people's rows,
-// the person the link was sent to would be told at the last step that somebody
-// took their seat meanwhile, and a create beside the invitation put two people
-// on one seat the day the link was followed.
+// Until redeemed, cancelled or aged out, it refuses everything else that would
+// take the seat (a create, a move, a service account's binding, a second
+// invitation) naming the invitation, whose remedy is to cancel it. Its own
+// redemption binds the seat; a cancellation or expiry frees it at once. Held
+// only by people's rows, the invitee would learn at the last step that
+// somebody took their seat, and a create beside it would seat two people.
 //
-// Mutation: drop the seat's open-invitation check from the enrolment's decide,
-// SetIdentity's or the issue's, and its row lands on the invited seat; drop
-// the column from the cancellation's delete — keep the row — and the seat is
-// held for a link that opens nothing.
+// Mutation: drop the open-invitation check from the enrolment's, SetIdentity's
+// or the issue's decide and its row lands on the invited seat; drop the column
+// from the cancellation's delete and the seat stays held for a dead link.
 func TestAnOpenInvitationHoldsItsSeat(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -239,18 +221,15 @@ func TestAnOpenInvitationHoldsItsSeat(t *testing.T) {
 
 // TWO OPEN INVITATIONS ON ONE SEAT DO NOT DEADLOCK THEIR REDEMPTIONS.
 //
-// The writer never issues a second invitation onto a seat one is outstanding
-// on, but a node that retained the record cancelling one, or a restore, can
-// hold two — and the applier writes whatever a record says. Were
-// a redemption held to the OPEN INVITATIONS on its seat, each link would be
-// refused for the other's sake and neither could ever be redeemed. So a
-// redemption is held to the PEOPLE alone: the first one redeemed lands, and the
-// second is then refused because a PERSON holds the seat — naming them, never
-// the invitation that was just spent.
+// The writer never issues two onto one seat, but a node that retained the
+// record cancelling one, or a restore, can hold two, and the applier writes
+// what a record says. Held to the seat's OPEN INVITATIONS, each link would be
+// refused for the other's sake; so a redemption is held to the PEOPLE alone:
+// the first lands, and the second is refused naming the PERSON now on the
+// seat, never the invitation just spent.
 //
-// Mutation: hold the redemption to the open invitations on its seat, leaving
-// out the one being redeemed, and the first redemption is refused naming the
-// other invitation.
+// Mutation: hold the redemption to the seat's other open invitations and the
+// first is refused naming the other invitation.
 func TestTwoOpenInvitationsOnOneSeatDoNotDeadlockTheirRedemptions(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -294,29 +273,18 @@ func TestTwoOpenInvitationsOnOneSeatDoNotDeadlockTheirRedemptions(t *testing.T) 
 	}
 }
 
-// A CREATED PERSON GETS A FIRST PASSWORD LINK, in the record that creates them.
+// A CREATED PERSON GETS A FIRST PASSWORD LINK, in the record that creates them:
+// a `reset` credential derived from the person under the company's key, spent
+// through the ordinary reset path ([iamdomain.ResetRow.Opens]). The estate
+// holds its verifier, never its secret; it reads as FIRST only while they hold
+// no password; a retry after it is spent hands out none and says so
+// ([iamdomain.Created.LinkClosed]).
 //
-// An administrator's create makes somebody active who has proved nothing, and
-// the one thing they lack is a way to set a password: the record carries a
-// `reset` credential whose id and secret are derived from the person under
-// the company's key, and it is spent through the ordinary reset path — the
-// same [iamdomain.ResetRow.Opens] and the same one-record password set — which
-// marks it spent and revokes it with every other link. The estate holds its
-// verifier and never its secret. The reset read says it sets their FIRST
-// password while they hold none, and stops saying so once they do. A retry of
-// the create the ledger answers after the link is spent hands out no link and
-// says so ([iamdomain.Created.LinkClosed]), since what opens now is a reset.
-//
-// THE LINK IS STAMPED IN ITS OWN SNAPSHOT. A credential is ended by whatever
-// moves its person's epoch or the company's session generation after its
-// issue, so it carries both as its snapshot held them — and this case moves
-// the generation BEFORE the create, as the last step of every restore does:
-// formed outside the decide, the link carried zero for both and was born
-// ended.
-//
-// Mutation: drop the stamp from the enrolment's decide and the link reads
-// ended; answer a collapsed create's derived link without reading the rows
-// and the spent link is handed out again.
+// THE LINK IS STAMPED IN ITS OWN SNAPSHOT with the epoch and generation, as a
+// later move of either ends it; the case moves the generation BEFORE the
+// create, as a restore does. Mutation: drop the stamp from the enrolment's
+// decide and the link is born ended; answer a collapsed create's link without
+// reading the rows and the spent link is handed out again.
 func TestACreatedPersonGetsAFirstPasswordLink(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -432,15 +400,11 @@ func TestACreatedPersonGetsAFirstPasswordLink(t *testing.T) {
 // A RETRIED CREATE THIS NODE HAS NOT APPLIED CANNOT SAY WHETHER ITS LINK
 // OPENS, and says so.
 //
-// Two calls under one key race — an administrator's retry sent while the first
-// request is still in flight — and both decide from the same snapshot, before
-// either record is on the log. The first lands; the second is the broker's
-// DUPLICATE of it, collapsed onto the first copy's position on a node whose
-// applier has not reached it, so there is no row to read the link back from.
-// Answered as a link that no longer opens, the surface would tell an
-// administrator to issue a reset for a link that works, about a person this
-// node cannot show them yet; so it is unavailable — retry the same key — and
-// once the node has applied the record, the same key is answered with the link.
+// Two calls under one key race and decide from one snapshot; the second is
+// the broker's duplicate of the first, collapsed onto a position this node's
+// applier has not reached, so no row holds the link. Answered as closed, the
+// surface would send an administrator to reset a working link; so it is
+// unavailable (retry the same key), and once applied the key answers the link.
 //
 // Mutation: drop the not-applied arm from the read-back and the second call
 // answers [iamdomain.Created.LinkClosed].
@@ -514,16 +478,13 @@ func TestARetriedCreateThisNodeHasNotAppliedIsUnavailable(t *testing.T) {
 }
 
 // raceOnOneKey orders two appends under one operation id so the second is
-// decided before the first lands and sent after it: the first call's append is
-// held until the second's arrives, forwarded, and only then is the second's.
+// decided before the first lands and sent after it: the first append is held
+// until the second's arrives, forwarded, and only then is the second's.
 //
-// AND IT ANSWERS THE SECOND IN A FLEET'S ORDER. A clustered stream checks a
-// message id against its dedupe window BEFORE the subject's expected last
-// sequence (the leader's pre-proposal checks), so an append repeating a stored
-// id is acknowledged as that copy's duplicate; a single server checks the
-// expectation first and refuses it as stale. The rig's broker is a single
-// server, so an id already forwarded goes again without its expectation, and
-// the broker's own dedupe answers it — the acknowledgement a fleet's log gives.
+// It answers the second as a fleet does: a clustered stream checks the dedupe
+// window BEFORE the expected last sequence, so a repeated id is acknowledged
+// as a duplicate, where the rig's single server would refuse it as stale. So a
+// repeated id goes without its expectation, and the broker's dedupe answers it.
 type raceOnOneKey struct {
 	statelog.Appender
 
@@ -570,13 +531,11 @@ func (r *raceOnOneKey) Append(ctx context.Context, subject, msgID string,
 
 // A REDEMPTION NAMING NO SEAT IS ITS CALLER'S FAULT, never the link's.
 //
-// Every invitation holds a seat, and the surface redeeming one hands on the
-// seat it read off the invitation, so a redemption that names none is a call
-// formed wrong — [iamdomain.ErrInvalid], refused before anything is read or
-// published — and never the link's refusal ([iamdomain.ErrRefused]), which
-// would tell an invitee their link is dead, nor [iamdomain.ErrSeatRequired],
-// which would ask them for a field their form does not have. The CONTROL is
-// the same redemption naming the invitation's seat, which lands.
+// The redeeming surface hands on the seat it read off the invitation, so none
+// is a call formed wrong: [iamdomain.ErrInvalid] before anything is read or
+// published, never [iamdomain.ErrRefused] (telling the invitee their link is
+// dead) nor [iamdomain.ErrSeatRequired] (asking for a field their form lacks). The CONTROL names
+// the invitation's seat and lands.
 //
 // Mutation: drop the seat clause from the redemption's validation and the
 // record's own comparison refuses it as the link's, ErrRefused.
@@ -603,12 +562,8 @@ func TestARedemptionNamingNoSeatIsItsCallersFault(t *testing.T) {
 
 // AN INVITATION WITH NO EXPIRY OPENS NOTHING, in every reader.
 //
-// No writer forms one — the issue refuses it — but the applier writes what a
-// record says, and three readers had disagreed about the row that carries
-// one: the redemption and the issue's retry read it as open for the life of
-// the company, while the hold and the listing read it as closed. Read as open,
-// it was the one link in the company nothing could retire. It is aged out
-// everywhere now.
+// The issue refuses one, but the applier writes what a record says; read as
+// open, it would be the one link nothing could retire.
 //
 // Mutation: read a zero expiry as `never` in the redemption's check and the
 // link creates a person; in [iamdomain.InvitationRow.Spent] and it reads as
@@ -666,20 +621,16 @@ func TestAnInvitationWithNoExpiryOpensNothing(t *testing.T) {
 }
 
 // THE APPLIER RE-DERIVES AN INVITATION'S SEAT whenever the checkpoint's rule
-// set differs from this build's.
-//
-// `seat_id` is a DERIVED column ([statelog.Deriver]): the apply writes it from
-// the record, and [iamdomain.Applier.Rederive] recomputes it from the row's own
-// document when a node holds rows derived under other rules — a checkpoint a
-// reanchor created (derivation 0), or rows adopted from a build whose rules
-// differ — so every node converges on the rows a node replaying the log
-// writes. It recomputes from the same decode the apply writes the column
-// from, and writes only rows that differ, so a second run — over rows this
-// build has been maintaining — writes nothing.
+// set differs from this build's: `seat_id` is a DERIVED column
+// ([statelog.Deriver]), and [iamdomain.Applier.Rederive] recomputes it from the
+// row's document, by the decode the apply writes it from, over rows derived
+// under other rules (a reanchor's checkpoint at derivation 0, rows adopted from
+// another build), so every node converges on what a replay writes. It writes
+// only rows that differ, so a second run writes nothing.
 //
 // Mutation: leave the column alone in Rederive and the planted rows keep what
-// another rule set left; derive every row's seat as empty and the issued ones
-// lose theirs.
+// another rule set left; derive every seat as empty and the issued ones lose
+// theirs.
 func TestTheApplierRederivesAnInvitationsSeat(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -739,28 +690,16 @@ func seatsOf(t *testing.T, rig *writeRig) map[string]string {
 }
 
 // A NODE RUNNING NO COMPANY REFUSES EVERY BINDING BY NAME, and a failed lookup
-// as unknown.
+// as unknown: a fresh install holds no human seat until a company declares
+// one, so it is [iamdomain.ErrNoCompany], answered with the remedy, not
+// [statelog.ErrUnavailable], which no retry clears. A REDEMPTION there is
+// unavailable: its invitation came from a node running the company, and
+// "create a company" is no advice for the invitee. The seat is asked BEFORE
+// the blinder, which mints the company's key on a fresh node's first blind, so
+// a write the seat refuses mints nothing.
 //
-// A fresh install that has not created its company holds no human seat at
-// all, and no wait changes that — a company declaring one does. Answered as
-// [statelog.ErrUnavailable], a surface told the operator to retry, and the
-// retry met the same answer on every node for ever; so it is
-// [iamdomain.ErrNoCompany], which a surface answers with the remedy. A lookup
-// that FAILED is the unknown arm still. And a REDEMPTION on such a node is
-// unavailable rather than either: its invitation was issued on a node that ran
-// the company, so another node can redeem it, and "create a company first" is
-// advice to an administrator, not to the invitee holding the link.
-//
-// AND THE SEAT IS ASKED BEFORE THE BLINDER, which mints the company's key on
-// the first address a fresh node ever blinds: a create or an invitation the
-// seat refuses must have minted nothing. Asked after it, the first invitation
-// a fresh node was asked for answered whatever the mint's guard said — a 500,
-// on a node whose rows had not applied the session that asked.
-//
-// Mutation: wrap the seam's no-company answer as unavailable in the seat check
-// and the first three rows answer it; return it from the redemption and the
-// invitee is told to create a company; ask the blinder before the seat in a
-// create or an invitation and the blinder is asked.
+// Mutation: wrap no-company as unavailable in the seat check, return it from
+// the redemption, or ask the blinder before the seat, and its row fails.
 func TestANodeRunningNoCompanyRefusesEveryBindingByName(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -856,11 +795,10 @@ func (f failingSeats) Seat(context.Context, string) (session.Seat, bool, error) 
 // --- records this build's writer refuses to form ---------------------------- //
 
 // applyByHand applies one directory record straight through the rig's applier,
-// at sequence 1<<30+n — past everything the log holds. It is how a residue
-// this build's writer refuses to produce — what a retained record, a restore
-// or a newer peer's record can put in front of a node — reaches the applier
-// and the readers, which must still take it: the applier writes whatever a
-// record says, since refusing one stops the log on every node.
+// at sequence 1<<30+n, past everything the log holds: residue this build's
+// writer refuses to form (a retained record, a restore, a newer peer's record),
+// which the applier and readers must still take, since refusing a record stops
+// the log on every node.
 func applyByHand(t *testing.T, rig *writeRig, op iamdomain.OpKind, person string,
 	scope iamdomain.ScopeSet, mutation []byte, n uint64) {
 

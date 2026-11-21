@@ -26,30 +26,17 @@ var pathTree = []string{
 }
 
 // ONE RULE, OVER A REF AND OVER A TREE'S PATH: a path glob is Pattern's rule
-// read over the paths of a repository's tree, and that is held three ways.
-//
-//   - TO GIT: git reads a glob pathspec (`:(glob)…`) against a tree's paths by
-//     wildmatch with WM_PATHNAME — * within one component, ** whole components,
-//     one or more as the last — and its listing of a real repository's index
-//     IS the rule for a glob of wildcards, so one column is both answers, each
-//     row WRITTEN DOWN and re-measured on every run, so the table cannot drift
-//     from the git it describes. For a literal, git lists the path and every
-//     path below a directory of that name, and a path glob the identical path
-//     alone — the one place this package is stricter — and the test derives
-//     that difference from git's own listing rather than from a second column.
-//   - TO THE RULE written out plainly ([rule], the one TestPatternMatchAgreesWithItsRule
+// read over a repository's tree paths, held three ways:
+//   - TO GIT: git's `:(glob)` listing of a real index IS the rule for a
+//     wildcard glob, each row WRITTEN DOWN and re-measured every run. A
+//     literal also lists what lies below it in git, not in a path glob.
+//   - TO THE RULE written out plainly ([rule], which TestPatternMatchAgreesWithItsRule
 //     holds Pattern to), over every glob of up to four components drawn from
-//     seven against every path of up to four drawn from four: every placement
-//     of * and ** against every split of a short path, where Pattern.Match on
-//     the same glob and path under refs/heads/ must say the same — one rule,
-//     whichever of the two walks asks it.
-//   - PAST A REF'S BOUND: a path is a tree's and has none, so globs are asked
-//     about paths longer and deeper than any ref, the rule answering for each.
+//     seven against every path of up to four from four; Pattern.Match must agree.
+//   - PAST A REF'S BOUND: globs face paths longer and deeper than any ref.
 //
-// Mutation: read a trailing ** as zero components or more (drop readGlob's
-// rewrite) — README.md/** matches the file README.md, red; advance the walk's
-// backtrack a byte rather than a component — **/a/** finds the a inside ba,
-// red.
+// Mutation: read a trailing ** as zero or more components (drop readGlob's
+// rewrite), red; advance the walk's backtrack a byte, not a component, red.
 func TestOnePathGlobRuleMatchesTreePaths(t *testing.T) {
 	t.Parallel()
 	c := gittest.NewClient(t)

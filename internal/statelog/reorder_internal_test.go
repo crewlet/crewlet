@@ -6,15 +6,10 @@ import (
 )
 
 // THE NEXT SEQUENCE IS ONE PAST THE HIGHEST RECORD IN THE RUN, never one past
-// its length.
-//
-// A run carries records outside its contiguous prefix on purpose: a redelivery
-// at or below the checkpoint is passed through so the loop can acknowledge it,
-// and a second copy of a record already in hand is passed through for the same
-// reason. Counting either as a step of the prefix moves the expected sequence
-// past a record that has not arrived, and the record above the hole is then
-// admitted as contiguous — applied on every node that hit the same
-// redelivery, with the checkpoint moving over a record nothing wrote.
+// its length. A run carries redeliveries at or below the checkpoint and second
+// copies on purpose, to be acknowledged; counted as steps of the prefix, they
+// admit the record above a hole as contiguous, and the checkpoint moves over a
+// record nothing wrote.
 func TestTheReorderBufferNeverAdmitsPastAHoleAfterARedelivery(t *testing.T) {
 	t.Parallel()
 	cursor := Position{Stream: "s", Generation: 1, Seq: 10}
@@ -58,9 +53,8 @@ func TestTheReorderBufferNeverAdmitsPastAHoleAfterARedelivery(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var b reorderBuffer
 			var run []Record
-			// The first fetch may arrive in more than one batch, which is
-			// how a redelivery lands at the END of a run: each batch is
-			// admitted into what the previous ones left.
+			// One batch per record, which is how a redelivery lands at the
+			// END of a run.
 			for _, r := range tc.first {
 				ready, err := b.admit([]Record{r}, cursor, ReplayStrict, run)
 				if err != nil {
@@ -107,10 +101,7 @@ func TestTheReorderBufferStopsWhenAHoleWillNotClose(t *testing.T) {
 	var b reorderBuffer
 	big := make([]byte, ReorderBufferBytes/2+1)
 	above := func(seq uint64) Record {
-		// THE FRAMED BYTES ARE WHAT THE BUFFER HOLDS, and what it is
-		// measured in: [Record.Payload] is a subslice of them, so
-		// counting both would double a number that has one allocation
-		// behind it.
+		// Framed bytes are what the buffer is measured in ([payloadBytes]).
 		return Record{
 			Position: Position{Stream: "s", Generation: 1, Seq: seq},
 			Payload:  big, framed: big,

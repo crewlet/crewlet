@@ -6,8 +6,7 @@ import "slices"
 // applier all read.
 
 // ReproducibleTables is every table a replay from zero must rebuild byte for
-// byte: the entries and their claims, the purge markers, the node gate's table
-// and the reanchor's audit.
+// byte.
 var ReproducibleTables = []string{
 	"atlas_entries", "atlas_claims", "atlas_purges", "atlas_evictions", "atlas_log_generations",
 }

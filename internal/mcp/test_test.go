@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
 
 // stepOf is the report's step for stage, failing the test where it has none.
@@ -82,12 +83,7 @@ func TestEachFailureClassIsDecidedAtItsStage(t *testing.T) {
 		t.Cleanup(srv.Close)
 		return srv.URL + "/mcp"
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closed := "http://" + listener.Addr().String() + "/mcp"
-	_ = listener.Close()
+	closed := "http://" + httpxtest.Refusing(t) + "/mcp"
 	unsigned := httptest.NewTLSServer(http.NotFoundHandler())
 	t.Cleanup(unsigned.Close)
 	empty, _ := newHTTPMCPServer(t, `[]`)
@@ -236,12 +232,7 @@ func TestATestsWordsCarryNoValue(t *testing.T) {
 		t.Errorf("failure = %q, want the credential withheld", report.Failure.Said)
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	address := "http://" + listener.Addr().String() + "/mcp?api_key=opaque-key-value-42"
-	_ = listener.Close()
+	address := "http://" + httpxtest.Refusing(t) + "/mcp?api_key=opaque-key-value-42"
 	report = Test(t.Context(), httpSpec("keyed", address), discardLogger())
 	for _, s := range report.Steps {
 		if strings.Contains(s.Detail, "opaque-key-value-42") {

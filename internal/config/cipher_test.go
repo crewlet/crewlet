@@ -180,15 +180,12 @@ func TestKeyMaterialOfTheWrongLengthIsRefused(t *testing.T) {
 	}
 }
 
-// VALIDATION REFUSES THE KEY MATERIAL THE BOOT WOULD.
-//
-// `crewlet validate` checked only that a key's material was present, so a file
-// whose key was not base64, or was base64 of three bytes, printed a clean
-// summary and exited 0 — and the boot refused it building the cipher. Tier A
-// resolves ${VAR} before it decodes, so the material validation sees is the
-// material the boot would use, and it is judged by the one decoder the cipher
-// uses, in the one sentence the cipher refuses with. Each row names the key's
-// own material field and never carries the material.
+// VALIDATION REFUSES THE KEY MATERIAL THE BOOT WOULD, or `crewlet validate`
+// prints a clean summary for a key that is not base64, or is base64 of three
+// bytes, and the boot then fails building the cipher. Tier A resolves ${VAR}
+// before it decodes, so validation sees the material the boot uses, judged by
+// the cipher's one decoder in its one sentence. Each row names the key's
+// material field and never carries the material.
 //
 // The control is the same file holding a 32-byte key.
 //

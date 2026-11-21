@@ -36,21 +36,15 @@ func (r *Result) Findings() []integration.Finding {
 
 	// NO ADDRESS TO DELIVER TO IS ONE FINDING, said once.
 	//
-	// An empty hook list used to be silence, on the reasoning that a
-	// read-only pass produces one by construction and that the public base
-	// "is not on the integrations block today". It IS — it is Tier A's
-	// webhook address (`api.public.external_url` behind a public
-	// listener, `api.external_url` otherwise), and the reconcile loop
-	// feeds exactly that value into every pass — so the silence meant a
-	// company that never set it saw GitHub reported Ready while nothing at
-	// GitHub pointed anywhere. That is the state this whole subsystem
+	// An empty hook list is not silence: the address is Tier A's webhook
+	// address, which every pass is fed, so silence would report GitHub Ready
+	// while nothing at GitHub pointed anywhere, the state this subsystem
 	// exists to refuse.
 	//
-	// ONCE rather than per target, because there is nothing per-target
-	// about it: no address means no hook anywhere, and one sentence naming
-	// the field is the whole of what an operator has to do — the field the
-	// address was READ from, which only the caller holding the Tier A can
-	// say ([Result.NoIngressKey]).
+	// ONCE rather than per target: no address means no hook anywhere, and one
+	// sentence naming the field the address was READ from is the whole of
+	// what an operator has to do. Only the caller holding the Tier A can say
+	// which ([Result.NoIngressKey]).
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,
@@ -120,20 +114,15 @@ func (r *Result) Findings() []integration.Finding {
 
 	// AND A SEAT WHOSE OWN CREDENTIAL DOES NOT AUTHENTICATE.
 	//
-	// ONLY THAT SEAT. A seat with no login used to be one finding whether
-	// or not it had ever asked for a credential, and on the shape this
-	// integration actually ships — each agent acting as its OWN GitHub App,
-	// with no `mcp_env.github` token anywhere by design — that was every
-	// agent seat, for ever, in [integration.PhaseDegraded], saying "no
-	// review request or mention reaches it" about seats whose mentions
-	// resolve perfectly well through their app's slug ([SeatLookup] and
-	// the identity registration that reads [BotLogin]).
+	// ONLY THAT SEAT. Each agent normally acts as its OWN GitHub App with no
+	// `mcp_env.github` token by design, and its mentions resolve through the
+	// app's slug ([SeatLookup], [BotLogin]), so a seat with no login is not
+	// degraded unless it asked for a credential.
 	//
-	// The sentence changed with it. What a personal access token actually
-	// buys a seat is that its TOOLS act as somebody, so that is what a
-	// refused one costs — claiming the seat is unreachable was a second
-	// false statement, true only of a seat with no app either, which this
-	// run cannot see and the access sync reports on.
+	// What a personal access token buys a seat is that its TOOLS act as
+	// somebody, so that is what a refused one costs. Claiming the seat is
+	// unreachable would be false of one with an app, and a seat with no app
+	// either is the access sync's to report.
 	for _, seat := range r.Seats {
 		if !seat.Refused() {
 			continue

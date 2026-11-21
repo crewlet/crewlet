@@ -381,23 +381,16 @@ func TestARangedAuditFindsWhatAStatWould(t *testing.T) {
 }
 
 // A RANGE THE STORE CANNOT GIVE IN ORDER TURNS THE REST OF THE WALK TO THE
-// STORE'S LISTING, as for a store that keeps no order — and the range already
-// handed on is asked about by name — rather than reading every object the
+// STORE'S LISTING, as for a store that keeps no order, and the range already
+// handed on is asked about by name, rather than reading every object the
 // order lost as missing. The listing starts after the last range handed on,
-// so no reference is looked at twice. And since the walk cuts no second range
-// before its first has come back, one range is all a store that keeps no order
-// is ever asked for: its first answer turns the walk before another goes out.
-//
-// THE GOROUTINE THAT ANSWERED THE FIRST RANGE IS HELD as it lets the walk go,
-// until the walk has made its next request of the store — a second range, or
-// the listing's first window — so the walk decides from what that goroutine set
-// before letting it go and from nothing it sets a moment after. Unheld, the
-// order was the scheduler's, and the race came out wrong one CI run in many.
+// so no reference is looked at twice; one range is all such a store is asked
+// for. THE GOROUTINE THAT ANSWERED THE FIRST RANGE IS HELD as it lets the
+// walk go, until the walk has made its next request, so the walk decides from
+// what that goroutine set; unheld, the order was the scheduler's.
 //
 // Mutation: let the walk go before the audit turns to the listing
-// (auditor.cameBack probing ahead of unordered) — held there, the walk hands on
-// range after range while the mode still says ranges, each listed or asked
-// about by name, red.
+// (auditor.cameBack probing ahead of unordered): red, range after range.
 func TestARangeOutOfOrderTurnsTheAuditToTheListing(t *testing.T) {
 	t.Parallel()
 	h, r := newRangedHarness(t)

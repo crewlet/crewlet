@@ -13,17 +13,15 @@ import (
 
 // THE NO-COMPANY SENTENCE NAMES EVERY HALF IT IS ANSWERED FOR.
 //
-// A node with no company answers every question and tool over the company's own
-// halves `no_active_revision` with ONE sentence ([httpjson.NativeHalvesNotUp]),
-// and each half reaches it through the same arm, `nativeAbsent(engine,
-// started, half)` in native.go, the half named as a word. So the sentence is the answer
-// for every half that arm is ever called with, and one it does not name is
-// told about the others: it named the tracker and the knowledge base while
-// chat answered it too, and a Chatlet verb on such a node was told two halves it
-// never asked for were not running. Read from the source, so a fourth half is
-// held the day its first call lands. And IN A PERSON'S WORDS: it said the node
-// "has not been handed a company" and that the halves "come up with its first
-// revision", the engine's account of its own bring-up. Mutation: drop chat
+// A node with no company answers every question and tool over the company's
+// own halves `no_active_revision` with ONE sentence
+// ([httpjson.NativeHalvesNotUp]), each half reaching it through `nativeAbsent(
+// engine, started, half)` in native.go. So the sentence must name every half
+// that arm is called with: one it omits is told about the others (a Chatlet
+// verb was told the tracker and knowledge base were not running). Read from the
+// source, so a fourth half is held the day its first call lands. And IN A
+// PERSON'S WORDS, not the engine's account of its bring-up ("has not been
+// handed a company", "come up with its first revision"). Mutation: drop chat
 // from the sentence, or put either phrase back, and this fails.
 func TestTheNoCompanySentenceNamesEveryHalfItAnswersFor(t *testing.T) {
 	t.Parallel()

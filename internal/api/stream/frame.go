@@ -2,33 +2,18 @@ package stream
 
 import "encoding/json"
 
-// FramePosture is how one connected client is being served, and it is the ONE
-// thing that decides the bytes its frames carry: two clients in the same
-// posture receive byte-identical frames from one encode, and a client in
-// another posture receives whatever that posture allows instead. That is what
-// lets [Hub.Broadcast] marshal an envelope once per posture rather than once
-// per tab.
+// FramePosture is how one client is served, the ONE thing deciding the bytes
+// its frames carry: one encode per posture, not per tab ([Hub.Broadcast]).
 //
-// # It is FramePosture, and there are two other "postures" it is not
+// The name is long because "posture" is already two other closed sets: THE
+// NODE POSTURE (`serve`, `wait`, `shed`, `isolated`, `stuck`, read by /ready)
+// describes a PROCESS, while this describes ONE SOCKET and derives from it
+// ([Options.Posture]); THE ENROLMENT STAGE is arriving under the bare name
+// `Posture`, and a value of the wrong set would compile into a frame decision.
 //
-// The name is deliberately long, because "posture" is already taken twice in
-// this engine and both of the others are a different closed set:
-//
-//   - THE NODE POSTURE — `serve`, `wait`, `shed`, `isolated`, `stuck` — is
-//     what a node concluded about its own config lag, carried on the health
-//     envelope (`internal/api/health.go`) and read by /ready. It describes a
-//     PROCESS. This describes ONE SOCKET, and it is derived FROM that one:
-//     see [Options.Posture].
-//   - THE ENROLMENT STAGE a principal moves through is arriving in the
-//     identity work under the bare name `Posture`. Two closed sets under one
-//     name is how a later change maps the wrong one — a `Posture` value from
-//     over there would compile perfectly well into a frame decision here — so
-//     this type carries the word `Frame` and never sheds it.
-//
-// THE ZERO VALUE IS INVALID. An empty posture is a client nobody decided about,
-// and the two ways to read it are opposite (serve it everything, or serve it
-// nothing), so it is refused rather than guessed: [FramePosture.Valid] is
-// false for it and [Client.SetPosture] will not take it.
+// THE ZERO VALUE IS INVALID: a client nobody decided about has two opposite
+// readings (serve everything, serve nothing), so [FramePosture.Valid] is false
+// for it and [Client.SetPosture] refuses it.
 type FramePosture string
 
 const (
@@ -80,17 +65,14 @@ func (p FramePosture) index() int {
 // Delivers reports whether a frame of this kind reaches a client in this
 // posture.
 //
-// A DIRECT frame always passes, in every posture. It is the answer to
-// something this client did — its snapshot, its pong, its query's result or
-// refusal — and a posture that swallowed those would leave a client waiting
-// for an answer that is never coming, which is the one failure a socket cannot
-// report. The degraded refusal itself is a direct frame.
+// A DIRECT frame always passes, in every posture: it answers something this
+// client did (snapshot, pong, a query's result or refusal), and swallowing it
+// would leave a client waiting for an answer never coming, a failure a socket
+// cannot report. The degraded refusal itself is a direct frame.
 //
-// Of the fanned-out kinds a degraded client keeps only [KindHealth]: it is the
-// keepalive AND the explanation, so the one frame that still arrives is the
-// one that says why the others stopped. Everything else is derived from this
-// node's copy of the company, which is what being degraded means it cannot
-// vouch for.
+// Of the fanned-out kinds a degraded client keeps only [KindHealth], the
+// keepalive AND the explanation of why the others stopped. The rest derives
+// from this node's copy of the company, which a degraded node cannot vouch for.
 func (p FramePosture) Delivers(kind Kind) bool {
 	switch p {
 	case FrameLive:

@@ -20,61 +20,29 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ONE REFUSAL MAPPING: what a call that did not do what it was asked is
-// answered with over HTTP — its status, its code and the envelope beside them —
-// on the act route, the human write surface's tool-backed routes and its
-// tool-less verbs alike. The MCP transport answers a refused call as the tool's
-// own failed result (that is the protocol's shape for it) and reads the same
-// classes for its audit record.
-//
-// # From the CAUSE, never from the sentence
-//
-// A tool's refusal carries the error underneath it as its cause, beneath the
-// class it stated (internal/mcp's [crewletmcp.Refusal]). Reading a status back
-// out of a sentence written for a model would make the wording of every
-// refusal an API.
-//
-// # A person's words, or none (ADR-0060)
-//
-// Every caller of this mapping answers a PERSON: the dashboard, a person's
-// assistant executing what they approved, a script run on a person's
-// credential. So the `detail` is the refusal in a person's words
-// ([caveat.Refusal]) and never the tool's sentence, which is written for a
-// model and names the arguments and tools a model would use next. Where
-// nobody has worded the refusal for a person yet, the answer carries NO
-// detail, and its code's own sentence (the envelope's `message`, written for
-// people) is the whole of what it says. The parameter is typed, so no caller
-// can hand this mapping a free sentence: every detail it writes is one the
-// catalog's walk has read.
-//
-// # The classes are the codes
-//
-// A refused call answers with its class's own spelling as the `error` —
-// `stale_version`, `budget_exhausted`, `not_running` — whichever transport it
-// came through, so a client reads one vocabulary and a screen branches on the
-// class rather than the prose. What the class does NOT say, the cause does,
-// and those arms come first: a write nobody can vouch for, an operation key
-// that already names another write, a permanent deletion, nobody presented a
-// credential, an argument the tool does not declare, the authority table's own
-// answer (with the rule's reason and the grants that would have admitted the
-// caller), a node that could not decide, a wiring that decided nothing.
+// THE ONE REFUSAL MAPPING: what a refused call is answered with over HTTP
+// (status, code, envelope) on the act route and the human write surface. MCP
+// answers the tool's own failed result and reads the same classes for audit.
+// The status comes from the refusal's CAUSE, never its sentence: model-worded
+// text read for it would make every wording an API. The `detail` is the
+// refusal in a person's words ([caveat.Refusal], ADR-0060), none yet worded
+// meaning NO detail and the code's own message; a typed parameter no caller
+// can hand a free sentence. The class's spelling (`stale_version`) is the
+// `error`. What a class does NOT say, the cause does, and those arms come
+// first: an unvouched write, a reused key, a permanent deletion, no
+// credential, an undeclared argument, the authority table's answer, an
+// undecided node or wiring.
 
-// About is what a call's failure answer names beside its own fields: the tool,
-// and the object its arguments named — the item, the page (or, for a page not
-// written yet, the container it is written in), the project, the person — so
-// a refusal or an unknown outcome says which object to read to see what became
-// of it. A failed tool answers a sentence and no receipt, and a 503 that
-// dropped what it was about left a client holding a key and nothing saying
-// where to look whether it landed. The `about` every transport hands [Fail].
+// About is what a failure answer names beside its own fields: the tool, and
+// the object its arguments named (item, page or its container, project,
+// person), so a client holding a key knows what to read to see whether the
+// call landed. The `about` every transport hands [Fail].
 //
 // THE ARGUMENTS ARE EVERY NATIVE DOMAIN'S OWN ([builtin.ObjectArgs]), declared
-// once beside the domain's refusal classes, rather than a list here: a list
-// here was one more place a domain added later had to be remembered in.
+// once beside its refusal classes, so a later domain needs no entry here.
 //
 // AN OBJECT NAMED BY A LIST IS NAMED BY THE LIST: a direct conversation is its
-// participants, and `send_dm` and `open_dm` address it by them alone, so a
-// failed one names who it was with — the handles as the call gave them, its
-// empty entries dropped. Read as text only, it named nothing at all.
+// participants (`send_dm`, `open_dm`): the handles as given, empties dropped.
 func About(tool string, args map[string]any) httpjson.Detail {
 	about := httpjson.Detail{"tool": tool}
 	for _, field := range builtin.ObjectArgs() {
@@ -113,22 +81,16 @@ type classAnswer struct {
 
 // classAnswers is every refusal class's status and code.
 //
-// BY WHAT THE CALLER DOES NEXT, which is the only thing a status is for: 422
-// for an argument to change, 404 for an object that is not there, 403 for a
-// gesture the domain forbids this caller, 409 for a state the request collided
-// with — re-read it, or (for a spent budget, a full inbox, a quota the
-// company's holdings reached, a turn's notes full or spent, a run that
-// stopped) change it —
-// 503 for a node that could not serve it, the one class a retry of the same
-// request can fix, 507 for content the object store had no room for
-// ([crewletmcp.RefusalStoreFull]), which neither the request nor a wait
-// changes and an operator's room does — HTTP's own status for a server that
-// cannot store what the request needs, and never a 503, whose Retry-After sent
-// the same bytes back into the same full bucket — and 500 for a node that
-// FAILED at something of its own ([crewletmcp.RefusalInternalError]): nothing
-// the caller does next helps, and a 503 there told a client to come back in
-// two seconds, for ever. A test answers every class this build knows through
-// [Fail] and holds each to exactly one status.
+// BY WHAT THE CALLER DOES NEXT, the only thing a status is for: 422 for an
+// argument to change, 404 for an object not there, 403 for a gesture the
+// domain forbids this caller, 409 for a state the request collided with
+// (re-read it, or change a spent budget, full inbox, reached quota, full or
+// spent notes, stopped run), 503 for a node that could not serve it, the one
+// class a retry can fix, 507 for content the object store had no room for
+// ([crewletmcp.RefusalStoreFull]), never a 503 whose Retry-After would resend
+// the same bytes into the same full bucket, and 500 for a node that FAILED at
+// something of its own ([crewletmcp.RefusalInternalError]), where a 503 would
+// tell a client to come back for ever. A test holds each class to one status.
 var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalInvalid:            {http.StatusUnprocessableEntity, httpjson.CodeInvalid},
 	crewletmcp.RefusalNotFound:           {http.StatusNotFound, httpjson.CodeNotFound},
@@ -168,17 +130,12 @@ func Fail(w http.ResponseWriter, cause error, said caveat.Refusal, key string,
 // If-Match HEADER — a version a tool takes as an argument, which an HTTP route
 // folds the header into.
 //
-// THE ONE REFINEMENT OF THE MAPPING, and it is HTTP's: a stale version a
-// request stated as a header precondition is `412 version_moved` (RFC 9110
-// §13.1.1 — a server whose If-Match condition is false MUST NOT perform the
-// method, and answers 412), where the same version stated as an argument is
-// the class's own `409 stale_version`. One refusal of one tool; the status
-// says only whether the request made it an HTTP condition, as every route
-// that reads If-Match itself answers a moved version (a project file, an
-// artifact's head) and as the configuration answers a moved revision. Every
-// other refusal — an unknown outcome, a reused key and the authority table's
-// own answer among them, each decided BEFORE the class — is [Fail]'s, byte
-// for byte.
+// THE ONE REFINEMENT OF THE MAPPING, and it is HTTP's: a stale version stated
+// as a header precondition is `412 version_moved` (RFC 9110 §13.1.1), where
+// the same version stated as an argument is the class's own `409
+// stale_version`, as every route that reads If-Match itself answers. Every
+// other refusal (an unknown outcome, a reused key, the authority table's
+// answer, each decided BEFORE the class) is [Fail]'s, byte for byte.
 func FailIfMatched(w http.ResponseWriter, cause error, said caveat.Refusal, key string,
 	about httpjson.Detail) {
 
@@ -326,25 +283,36 @@ func failClass(w http.ResponseWriter, cause error, key string, detail,
 		httpjson.FailWithFields(w, http.StatusPreconditionFailed,
 			httpjson.CodeVersionMoved, detail)
 	default:
+		if field := refusedField(cause); class == crewletmcp.RefusalInvalid && field != "" {
+			detail[KeyFields] = []string{field}
+		}
 		httpjson.FailWithFields(w, answer.status, answer.code, detail)
 	}
+}
+
+// refusedField is the field a refusal's chain names as a value (gitlet.FieldRefused), "" for none:
+// a client says which value was refused in its own words (ADR-0060), never in the domain's
+// sentence, which is written for whoever built the request.
+func refusedField(cause error) string {
+	var named interface{ RefusedField() string }
+	if errors.As(cause, &named) {
+		return named.RefusedField()
+	}
+	return ""
 }
 
 // LogCondition writes what a node's condition says for whoever runs the node
 // — a state-log refusal's own detail, which names positions, settings and the
 // broker's words, or a backend's error naming its hosts — to the one reader
-// it is for: every surface that answers a condition answers it without the
-// error, in a person's sentence for it ([builtin.ConditionSentence]) or, on the
-// act route and the human write surface, in its code's own (ADR-0060), so this
-// line is the only place the error goes.
+// it is for: every surface answers a condition without the error
+// ([builtin.ConditionSentence], or its code's own on the act route and the
+// human write surface, ADR-0060), so this line is the only place it goes.
 //
-// THROUGH THE SURFACE'S OWN LOGGER AND WITH ITS OWN FIELDS — the verb and the
-// operation an artifact write was, the read a configuration route made, the
-// board and the dataset a reading was for — because a line that carries the
-// error alone, under this package's component, says that something failed and
-// nothing about what. Only the level is decided once, for every surface:
-// [conditionLevel], WARN where no wait clears the condition and INFO where one
-// does, since a gesture somebody made once is worth its line.
+// THROUGH THE SURFACE'S OWN LOGGER AND WITH ITS OWN FIELDS (the verb, the
+// read, the board a reading was for), because a line carrying the error alone
+// says that something failed and nothing about what. Only the level is decided
+// once: [conditionLevel], WARN where no wait clears the condition and INFO
+// where one does.
 func LogCondition(ctx context.Context, logger *slog.Logger, event string, err error,
 	fields ...any) {
 
@@ -474,28 +442,16 @@ const KeyAction = "action"
 
 // UnknownOutcome is the 503 of a write this node cannot account for, carrying
 // `outcome: "unknown"`, the request's operation key and whether ANOTHER node
-// could say more — through [httpjson.UnknownOutcome], so it is told from a
-// refusal that wrote nothing by a field rather than by a sentence.
+// could say more ([httpjson.UnknownOutcome]): a field, not a sentence, tells
+// it from a refusal that wrote nothing.
 //
-// # Two unknowns, and they send a client opposite ways
-//
-// A LOST ACKNOWLEDGEMENT is settled by the same request again under the same
-// key, HERE: the ledger answers what landed, and it lands once if it did not —
-// so the answer carries the Retry-After this node's own undecided hint gives.
-// An UNVOUCHED one ([statelog.Result.Unvouched]) was not published at all:
-// this node's operation ledger may have lost the row the operation needs, so
-// the same request asked here answers the same way until the write reaches
-// this node — and the answer says so by carrying NO Retry-After and
-// `unvouched`, and by sending the client to another node, or to read whether
-// it landed. Either way the key is the one to keep: a fresh one is a second
-// operation, and if the first landed it is a second write.
-//
-// about is the write's own receipt or the fields naming what it was about,
-// carried beneath this answer's own fields, because a 503 that dropped it left
-// a client holding a key and nothing saying which object to read to see
-// whether it landed. The tool's own sentence about the write is NOT carried:
-// it is written for a model (ADR-0060), and the key, `unvouched` and the
-// object are what a client acts on.
+// A LOST ACKNOWLEDGEMENT is settled by the same request under the same key,
+// HERE: the ledger answers what landed, with this node's undecided Retry-After.
+// An UNVOUCHED one ([statelog.Result.Unvouched]) was not published: asking here
+// answers the same way until the write reaches this node, so the answer carries
+// NO Retry-After and `unvouched`, sending the client to another node. Either
+// way keep the key. about is the write's receipt or the fields naming its
+// object; the tool's own sentence is NOT carried (written for a model, ADR-0060).
 func UnknownOutcome(w http.ResponseWriter, key string, unvouched bool,
 	about map[string]any) {
 
@@ -532,25 +488,17 @@ func Interrupted(w http.ResponseWriter, r *http.Request, key, tool string, err e
 }
 
 // ClassifyWrite states the refusal class of an error a WRITER returned to a
-// surface that called it without a tool — the human write surface's purge,
-// rename, trash, restore, comment take-down and remark edit — so [Fail]
-// answers it exactly as it answers the same refusal from a tool.
+// surface that called it without a tool (the human write surface's purge,
+// rename, trash, restore, take-down and remark edit), so [Fail] answers it as
+// it answers the same refusal from a tool.
 //
-// A CONTENT REFUSAL IS MARKED AND EVERYTHING UNMARKED IS THE NODE'S, the rule
-// the tools' own classification follows: the tracker and the knowledge base
-// wrap their sentinel on every refusal they write about what was asked, and
-// what arrives unmarked — a SQL read, the log's last message, a ledger — is
-// this node's failure. Read the other way, a write that hit a disk error would
-// tell a person to fix their input. And "the node's" is the tools' TWO answers
-// ([builtin.Condition]): a condition waiting clears is `unavailable`, and a
-// fault of the node's own is `internal_error`.
-//
-// A WRITE THAT MAY HAVE LANDED IS NEITHER, and is read by the tools' own rule
-// for that too ([builtin.UnknownCause]): a walk that stopped at a step nobody
-// can confirm, and a write the estate's router sent to a data node that never
-// answered, become an UNKNOWN outcome — which [Fail] answers with
-// `outcome: "unknown"` under the request's key, and the audit records as
-// `unknown` rather than as a refusal that wrote nothing.
+// A CONTENT REFUSAL IS MARKED AND EVERYTHING UNMARKED IS THE NODE'S: the
+// tracker and the knowledge base wrap their sentinel on every refusal about
+// what was asked; read the other way, a disk error would tell a person to fix
+// their input. "The node's" is [builtin.Condition]'s two answers.
+// A WRITE THAT MAY HAVE LANDED IS NEITHER ([builtin.UnknownCause]): a walk
+// stopped at an unconfirmable step, or a write sent to a data node that never
+// answered, is UNKNOWN, answered and audited as `unknown`.
 func ClassifyWrite(err error) error {
 	if err == nil || classOf(err) != "" {
 		return err
@@ -583,7 +531,8 @@ func FailWrite(ctx context.Context, w http.ResponseWriter, err error, key string
 }
 
 // KeyFields names the arguments a call carried that its tool does not read, on
-// its `400 invalid_body`: values a client fixes its request by.
+// its `400 invalid_body`, and the field a domain refused a call by, on its
+// `422 invalid`: values a client fixes its request by.
 const KeyFields = "fields"
 
 // writeClass is the class a writer's error is refused under: the class its

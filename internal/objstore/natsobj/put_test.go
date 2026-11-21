@@ -100,24 +100,17 @@ func TestAPutAcrossALinkSlowerThanFiveSecondsAMessageLands(t *testing.T) {
 	readBack(t, b, "slow", data)
 }
 
-// A PUT THE BROKER STOPS ACKNOWLEDGING FAILS AS STALLED a stall after its
-// last acknowledgement, names the messages it has out, and — once the link
-// moves again — leaves no object a stat or a listing finds.
-//
-// THE LINK FREEZES BOTH WAYS once the put's first message is acknowledged:
-// the body waits on its second read until then, so the stall is measured from
-// an acknowledgement rather than from the put's start. A freeze holds what the
-// link was carrying, the clean-up's purge request among it, and delivers it
-// after the thaw in an order the stream's ingest and its API do not keep, so a
-// piece can land after the purge: an unfinished upload, which the collector
-// abandons. So Pending is not held to be empty — only to name nothing but
-// this put's own pieces, and to be cleared by abandoning them.
-//
-// THE READS WAIT ON A BARRIER BEHIND WHAT THE LINK HELD: one more piece on
-// the put's subject, published on its connection and acknowledged. A stream
-// stores one connection's publishes in order, so every held piece has landed
-// by then. Without it a held piece landed after the Abandon (CI run
-// 41745668479), and the second listing named the upload again.
+// A PUT THE BROKER STOPS ACKNOWLEDGING FAILS AS STALLED a stall after its last
+// acknowledgement, names the messages it has out, and leaves no object a stat
+// or listing finds once the link moves again. THE LINK FREEZES BOTH WAYS once
+// the first message is acknowledged, so the stall is measured from an
+// acknowledgement. A freeze delivers what it held, the clean-up's purge
+// included, in an order the stream's ingest and API do not keep, so a piece
+// can land after the purge: Pending is held only to name nothing but this
+// put's pieces and be cleared by abandoning them. THE READS WAIT ON A BARRIER
+// BEHIND WHAT THE LINK HELD, one more acknowledged piece on the put's subject
+// (one connection's publishes are stored in order); without it a held piece
+// landed after the Abandon (CI run 41745668479).
 func TestAPutTheBrokerStopsAcknowledgingFailsAsStalled(t *testing.T) {
 	t.Parallel()
 	ns := tcpMember(t)

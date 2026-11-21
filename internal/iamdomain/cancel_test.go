@@ -29,16 +29,14 @@ func cancel(t *testing.T, rig *writeRig, id string) (statelog.Result, error) {
 // A CANCELLED INVITATION OPENS NOTHING, AND ITS ADDRESS AND ITS SEAT ARE FREE
 // AT ONCE.
 //
-// The record deletes the row, so a link to it resolves exactly as an id nobody
-// issued does — the zero row every refusal of a dead link is decided on — and
-// the address and the seat it held are free for a new invitation under a new
-// key the moment it lands. The cancellation is on the trail, filed under the
-// address as the issue was.
+// The record deletes the row, so a link to it resolves as an id nobody issued
+// (the zero row every dead-link refusal is decided on), and the address and
+// seat are free for a new invitation the moment it lands. The cancellation is
+// on the trail, filed under the address as the issue was.
 //
-// The CONTROL is the same two invitations with no cancellation, which the
-// address and the seat each refuse as held by the first. Mutation: delete
-// nothing in the apply and the second invitations are refused; keep the row
-// and the link still opens.
+// The CONTROL is the same two invitations with no cancellation, each refused
+// as held by the first. Mutation: delete nothing in the apply and the second
+// invitations are refused; keep the row and the link still opens.
 func TestACancelledInvitationOpensNothingAndFreesItsAddressAndItsSeat(t *testing.T) {
 	t.Parallel()
 	for _, cancelled := range []bool{true, false} {
@@ -94,14 +92,11 @@ func TestACancelledInvitationOpensNothingAndFreesItsAddressAndItsSeat(t *testing
 
 // AN INVITATION THAT AGED OUT HOLDS NOTHING, swept or not.
 //
-// Open is one predicate — not redeemed, not aged out — and the sweep that
-// collects the row runs a week after its deadline, so between the two an
-// expired invitation is a row that must hold neither its address nor its seat:
-// held, an administrator who let a link lapse could not create its person on
-// the seat for a week, for a link that opens nothing.
-//
-// The CONTROL is the same create while the invitation is still open, refused
-// naming it.
+// Open is one predicate (not redeemed, not aged out), and the sweep collects
+// the row a week after its deadline, so until then an expired row must hold
+// neither address nor seat, or a lapsed link would block its person's create
+// for a week. The CONTROL is the same create while the invitation is open,
+// refused naming it.
 func TestAnInvitationThatAgedOutHoldsNothing(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -140,10 +135,9 @@ func TestAnInvitationThatAgedOutHoldsNothing(t *testing.T) {
 
 // A REDEEMED INVITATION IS NOT CANCELLED, AND NEITHER IS ONE NOBODY ISSUED.
 //
-// A redeemed one created somebody, and the refusal names them: what undoes it
-// is removing that person. An id the estate does not hold is its own refusal.
-// Neither publishes anything. Mutation: drop the redeemed check and the
-// redeemed invitation's record lands.
+// A redeemed one's refusal names the person it created, whose removal undoes
+// it; an id the estate does not hold is its own refusal. Neither publishes.
+// Mutation: drop the redeemed check and the redeemed invitation's record lands.
 func TestOnlyAnUnredeemedInvitationIsCancelled(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -180,12 +174,10 @@ func TestOnlyAnUnredeemedInvitationIsCancelled(t *testing.T) {
 
 // THE LISTING IS THE OPEN INVITATIONS UNLESS IT IS ASKED FOR ALL, AND IT PAGES.
 //
-// Open is the issue's own predicate — not redeemed, a deadline still ahead —
-// judged at the instant the caller names; `All` adds every one the estate
-// holds; and a page one row short of the rest says where the next starts. The
-// CONTROL is the All listing beside the open one at the same instant.
-// Mutation: drop the redeemed term from the predicate and the redeemed
-// invitation is listed as open.
+// Open (not redeemed, deadline ahead) is judged at the instant the caller
+// names; `All` adds every row; a page short of the rest says where the next
+// starts. The CONTROL is the All listing at the same instant. Mutation: drop
+// the redeemed term and the redeemed invitation is listed as open.
 func TestTheReaderListsOpenInvitationsUnlessAskedForAll(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

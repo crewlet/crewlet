@@ -14,21 +14,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE READER IS WHAT VALIDATES A BEARER, asserted at compile time.
-//
-// [session.Directory] is consumer-defined in the package that validates — one
-// method, six facts — and this is the only implementation of it that reads a
-// real estate. A signature drift between the two would otherwise surface as a
-// wiring failure at boot on somebody's deployment rather than as a build
-// failure here, and what a node with no directory does is answer 503 to every
-// request carrying a cookie.
+// THE READER IS WHAT VALIDATES A BEARER, asserted at compile time:
+// [session.Directory] is consumer-defined, and this is its only implementation
+// over a real estate, so a signature drift fails the build here rather than
+// leaving a deployment's node answering 503 to every request with a cookie.
 var _ session.Directory = (*iamdomain.Reader)(nil)
 
-// A READER REFUSES A MISSING ESTATE.
-//
-// Every answer is this node's rows, so a reader with no estate to read them
-// from has nothing to answer with — and one built anyway would fail on its
-// first request rather than at boot, where the missing wiring is named.
+// A READER REFUSES A MISSING ESTATE: every answer is this node's rows, and one
+// built without them would fail on its first request rather than at boot,
+// where the missing wiring is named.
 func TestAReaderRefusesAMissingEstate(t *testing.T) {
 	t.Parallel()
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{})
@@ -40,16 +34,13 @@ func TestAReaderRefusesAMissingEstate(t *testing.T) {
 	}
 }
 
-// A LOGIN NOBODY HOLDS IS THE ZERO VALUE AND NO ERROR — never a sentinel.
+// A LOGIN NOBODY HOLDS IS THE ZERO VALUE AND NO ERROR, never a sentinel.
 //
-// THIS IS THE ENUMERATION RULE, and it is a shape decision rather than a
-// convenience one. A caller that could tell "no such login" from "wrong
-// password" has a roster: the two arms have to be indistinguishable in what
-// they return, how long they take and what they log. internal/iam/credential
-// owns the timing half; this is the shape half, and the caller runs a
-// fixed-cost decoy against the zero value rather than branching on it.
-//
-// An error stays the unknown arm, here as everywhere in this estate.
+// THE ENUMERATION RULE's shape half: a caller that could tell "no such login"
+// from "wrong password" has a roster, so the arms must match in what they
+// return, take and log. internal/iam/credential owns the timing half; the
+// caller runs a fixed-cost decoy against the zero value rather than branching.
+// An error stays the unknown arm.
 func TestAnAbsentLoginIsNobodyRatherThanAnError(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -96,18 +87,16 @@ func TestAnAbsentLoginIsNobodyRatherThanAnError(t *testing.T) {
 	}
 }
 
-// AND THE ESTATE KNOWS WHETHER ANYBODY IS IN IT, which is what `/health` tells
-// an operator of a fresh install: nobody is enrolled yet, so the next step is
-// to invite the first person. A COUNT and never a listing, because it is asked
-// by an unauthenticated route and the answer is one bit — and a count of
-// PEOPLE, so a service account alone leaves the company unclaimed.
+// AND THE ESTATE KNOWS WHETHER ANYBODY IS IN IT, so `/health` can tell a
+// fresh install's operator to invite the first person. A COUNT, never a
+// listing, since an unauthenticated route asks for one bit; a count of PEOPLE,
+// so a service account alone leaves the company unclaimed.
 //
-// And "nobody" is PROVED against the log's end or not said: every data node
-// applies the identity log from boot, company or none, so a node that has just
-// joined a fleet with people in it holds empty rows for a moment — and its
-// /health and its boot log would tell an operator to invite a founder into a
-// company that has one. Mutation: drop the coverage check and the behind arm
-// answers (false, nil); count every row and the machine alone answers true.
+// "Nobody" is PROVED against the log's end or not said: a node just joined to
+// a fleet holds empty rows for a moment, and would tell an operator to invite
+// a founder into a company that has one. Mutation: drop the coverage check and
+// the behind arm answers (false, nil); count every row and the machine alone
+// answers true.
 func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -180,17 +169,13 @@ func TestTheEstateSaysWhetherAnybodyIsEnrolled(t *testing.T) {
 // A NAMED SESSION THESE ROWS DO NOT HOLD IS NOBODY'S ONLY WHERE THEY HOLD THE
 // WHOLE LOG.
 //
-// A named sign-out answers "ended" for a lineage nobody holds — the session is
-// over, or never was. On rows that have not applied the session's start that
-// was a session still running reported closed, with nothing written: an
-// administrator ending a stolen laptop's session on a node behind the one that
-// listed it was told it was done. So the absence is proved against the log's
-// end, read first, exactly as [iamdomain.Reader.AnyPerson]'s "nobody" is. The
-// controls: a held session is answered whatever the end, live and then over,
-// and a lineage nobody opened is nobody's on rows that hold the whole log.
-//
-// Mutation: drop the proof from the absent arm and the behind case answers
-// ("", false, nil).
+// A named sign-out answers "ended" for a lineage nobody holds; on rows behind
+// the session's start that reports a running session (a stolen laptop's)
+// closed with nothing written. So the absence is proved against the log's end,
+// read first, as [iamdomain.Reader.AnyPerson]'s "nobody" is. The controls: a
+// held session is answered whatever the end, live and then over, and a lineage
+// nobody opened is nobody's on rows that hold the whole log. Mutation: drop
+// the proof from the absent arm and the behind case answers ("", false, nil).
 func TestANamedSessionTheseRowsDoNotHoldIsNobodysOnlyWhereTheyHoldTheLog(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -244,14 +229,10 @@ func TestANamedSessionTheseRowsDoNotHoldIsNobodysOnlyWhereTheyHoldTheLog(t *test
 	}
 }
 
-// THE SESSION READ IS ONE SNAPSHOT, and it answers all six facts at a
-// position this node states.
-//
-// Reading the session and the person separately produces a verdict that never
-// existed at any instant: a revocation landing between the two is a bearer
-// judged against a live session and a bumped epoch, or the reverse. It is also
-// the only shape in which "the replicated estate is not open" is one answer
-// rather than three.
+// THE SESSION READ IS ONE SNAPSHOT, answering all six facts at a position this
+// node states: read separately, a revocation landing between the session and
+// the person yields a verdict that never existed at any instant. It also makes
+// "the replicated estate is not open" one answer rather than three.
 func TestOneResolveAnswersTheSessionAndThePersonTogether(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -364,10 +345,9 @@ func TestTheEstateSaysWhetherItEverUsedTheBlindKey(t *testing.T) {
 		t.Errorf("rows behind the log answered (%v, %v), want ErrNotCurrent — "+
 			"their \"none\" is the answer that mints over a deleted key", held, err)
 	}
-	// AND IT IS A CONDITION THAT CLEARS, never a fault: a node behind its own
-	// log answers it the moment it catches up and another node may answer it
-	// now, so a surface must offer a retry. Unclassified, it reached /iam as a
-	// 500 on the first invitation a fresh node issued.
+	// AND IT IS A CONDITION THAT CLEARS, never a fault: the node answers once
+	// it catches up and another may answer now, so a surface must offer a
+	// retry rather than a 500.
 	if !errors.Is(err, statelog.ErrUnavailable) {
 		t.Errorf("rows behind the log answered %v, which does not wrap "+
 			"statelog.ErrUnavailable — every surface reads it as a fault", err)
@@ -377,16 +357,15 @@ func TestTheEstateSaysWhetherItEverUsedTheBlindKey(t *testing.T) {
 // A WAIT IS FOR THE PACKED POSITION A BEARER STATES, ON THIS DOMAIN'S OWN LOG,
 // AND A READER WITH NO APPLIER NEVER REPORTS ARRIVAL.
 //
-// The request guard waits here for a session's start before it decides a
-// write on the rows, so the two halves are the whole contract: the position
-// unpacks into the log this reader answers for, generation and all — a wait
-// in the wrong number space arrives early or never — and a reader built with
-// no runner behind it answers an error rather than nil, because a wait that
-// reported arrival would send the guard to decide on rows that are not there.
+// The request guard waits here for a session's start before deciding a write
+// on the rows: the position unpacks into this reader's log, generation and all
+// (a wait in the wrong number space arrives early or never), and a reader with
+// no runner answers an error, since a reported arrival would have the guard
+// decide on rows that are not there.
 //
-// THE APPLIER HERE HAS COMMITTED NOTHING, which is the state a node is in when
-// the first sign-in after a boot is answered: the stream is the domain's own,
-// and one read back off an empty cursor would be no stream at all.
+// THE APPLIER HERE HAS COMMITTED NOTHING, a node's state at the first sign-in
+// after boot: the stream must still be the domain's own, where one read back
+// off an empty cursor would be no stream at all.
 func TestAReaderWaitsForTheBearersPositionOnItsOwnLog(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

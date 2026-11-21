@@ -24,16 +24,16 @@ type TailHold struct {
 	// Register is where the pin is written and renewed.
 	Register HoldWriter
 
-	// Owner, Streams and Reason are the hold's own — see [coord.TrimHold].
-	// Its At is stamped by every put, so it is not asked for.
+	// Owner, Streams and Reason are the hold's own ([coord.TrimHold]); its At
+	// is stamped by every put.
 	Owner   string
 	Streams map[string]coord.Position
 	Reason  string
 
-	// Every is how often the pin is renewed: [TrimHoldHeartbeat], which is
-	// what every holder in the engine passes. A parameter so a case can
-	// renew on a cadence it can wait out. Zero or below is refused — a pin
-	// that never renewed is the defect this type exists to remove.
+	// Every is how often the pin is renewed: [TrimHoldHeartbeat] in the
+	// engine; a parameter so a case can renew on a cadence it can wait out.
+	// Zero or below is refused: a pin that never renews is the defect this
+	// type removes.
 	Every time.Duration
 
 	// Now stamps each put. Nil is the wall clock, in UTC.
@@ -49,8 +49,8 @@ type TailPin struct {
 	owner    string
 	register HoldWriter
 	log      *slog.Logger
-	// base is the context the pin was taken under, detached from its
-	// cancellation: what the release is logged and written under.
+	// base is the taking context without its cancellation; the release
+	// writes and logs under it.
 	base context.Context
 	stop context.CancelFunc
 	done chan struct{}
@@ -58,32 +58,16 @@ type TailPin struct {
 }
 
 // HoldTail writes a pin on the replay tail and renews it every spec.Every
-// until it is released.
+// until [TailPin.Release].
 //
-// # Why a pin renews itself
-//
-// The trim ignores a hold older than [TrimHoldStale], which is what stops a
-// holder that crashed pinning the log for the life of the deployment. The same
-// rule reads a pin nobody renews as a crashed holder — exactly right for a
-// crashed holder, and exactly wrong for a forty-minute copy of a large store
-// or a snapshot transfer that runs for hours. The join's pin was put once and
-// never renewed: a minute into any transfer it pinned nothing, and the trim
-// could pass the tail the transfer was fetching.
-//
-// # One implementation, for every holder
-//
-// A backup and a join hold the tail for the same reason, against the same
-// arithmetic, so the renewal, its cadence ([TrimHoldHeartbeat]) and the
-// release are written once, here. Two copies is how one of them came to have
-// no renewal at all.
-//
-// THE RENEWAL BELONGS TO THE PIN, not to the context it was taken under: it
-// runs until [TailPin.Release], on a goroutine the release joins, because a
-// pin is held for as long as its holder needs the tail — which for a join
-// outlives the call that took it ([AdoptDeps.Hold]). A renewal the register
-// refuses is logged and carried: a missed beat is survivable, the stale bound
-// allows three. The FIRST put is not: a holder that cannot pin the log at all
-// is told, and holds nothing.
+// The trim ignores a hold older than [TrimHoldStale] so a crashed holder
+// cannot pin the log forever, and so reads an unrenewed pin as crashed: a
+// transfer running for hours would lose its tail. Every holder (a backup, a
+// join) shares this one renewal. It belongs to the pin, not to ctx, since a
+// join's pin outlives the call that took it ([AdoptDeps.Hold]); the release
+// joins its goroutine. A refused renewal is logged and carried (the stale
+// bound allows three missed beats); a refused FIRST put is returned, and
+// nothing is held.
 func HoldTail(ctx context.Context, spec TailHold) (*TailPin, error) {
 	switch {
 	case spec.Register == nil:
@@ -135,15 +119,11 @@ func HoldTail(ctx context.Context, spec TailHold) (*TailPin, error) {
 	return pin, nil
 }
 
-// Release stops renewing the pin and removes it from the register. It is safe
-// to call more than once, and from any goroutine: only the first call does
-// anything.
-//
-// WRITTEN UNDER A CONTEXT THAT OUTLIVES THE FAILURE. The failure a release is
-// undoing is often the cancellation itself, and a release that inherited a
-// dead context would leave the pin standing until the stale bound expired it.
-// The renewal is joined FIRST, so no beat in flight can put the pin back after
-// it has been removed.
+// Release stops renewing the pin and removes it from the register. Only the
+// first call, from any goroutine, does anything. It writes under a context
+// detached from the pin's cancellation, which is often the failure being
+// undone (a dead one would leave the pin standing until stale), and joins the
+// renewal FIRST so no beat in flight puts the pin back.
 func (p *TailPin) Release() {
 	if p == nil {
 		return

@@ -7,46 +7,18 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
-// ONE SEAT-STATE VOCABULARY, and the engine is what speaks it.
+// ONE SEAT-STATE VOCABULARY, computed HERE, served on every `agents` row:
+//	working — a turn is running (a parked turn's work is its run's), or an
+//	          executor it launched is launching or running;
+//	needs   — an executor it launched awaits a person (awaiting_clarification,
+//	          or reseed: the box is gone, only the question survives);
+//	stopped — the seat cannot take work; `stopped_reason` says why;
+//	idle    — held somewhere, waiting for work.
 //
-// A seat's state used to be three things at once, none of them whole. The
-// projection sent a `state` word folded from the events alone (idle, working,
-// afk, terminated); the dashboard's sidebar counted `working` off that word,
-// its live screen folded the running-runs panel in on top of it, and the seat
-// library folded it in a third way — so a seat parked on an executor's
-// question was "working" on one screen, "sandbox" on another and "needs you"
-// on a third, and a run parked past the old twelve-hour age-out vanished from
-// every ring at once. A seat a PEER held had no state at all, because the only
-// placement this process could answer was its own, and the client drew the
-// absence as offline: on a fleet, every seat another node ran read as down.
-//
-// So the answer is one word per seat, computed HERE, from every input that
-// bears on it, and served on every `agents` row — the snapshot's, the REST
-// roster's and every push — so no reader derives it and no two readers can
-// disagree:
-//
-//	working — a turn is running on the seat (a parked turn's work is its
-//	          run's), or an executor it launched is launching or running;
-//	needs   — an executor it launched is waiting on a person
-//	          (awaiting_clarification, or reseed: the box is gone and only the
-//	          question survives);
-//	stopped — the seat cannot take work, and `stopped_reason` says why;
-//	idle    — none of the above: held somewhere, and waiting for work.
-//
-// IN THAT ORDER, and the order is the decision. A seat whose turn is still
-// running is working even while a person's pause waits for the turn to end,
-// or while an older run of its waits on a question: what it is doing now is
-// the truer word, and `paused` and the running-runs panel say the rest. A
-// FAILED LAST TURN IS NOT A STOP: it is `last_error`, which stays a separate
-// flag, because a seat whose last turn failed is still taking work.
-//
-// THE RUNS ARE READ FROM THE DURABLE RECORD — the running-runs set, which the
-// coordination store's run record is reconciled into every
-// [ReconcileInterval] and which nothing ages out (sandbox.go) — and never from
-// the turn's own stage. A parked turn says a run was launched; only the record
-// says whether that run is still running or has stopped to ask somebody, and a
-// run waiting on a question for thirteen hours is exactly the seat a person
-// most needs to see.
+// IN THAT ORDER: a running turn is working even while a pause or an older run's
+// question waits. A FAILED LAST TURN IS NOT A STOP (`last_error`). Runs come from
+// the DURABLE running-runs set ([ReconcileInterval]; sandbox.go), which nothing
+// ages out, not the turn's stage: only it says whether a run stopped to ask.
 
 // Activity is what a seat is doing, in the one vocabulary every surface reads.
 //
@@ -142,13 +114,7 @@ func (st seatState) stoppedReason() *StoppedReason {
 //
 // Called under s.mu.
 func (s *LiveState) stateOf(agentID string, agent *agentLive) seatState {
-	// A SEAT PARKED ON ITS MODELS' LIMIT IS NOT WORKING, even through the
-	// probe the engine runs when the park's alarm lifts it: until a call
-	// answers, the seat is waiting, and drawing each probe as work is the
-	// blink this state exists to stop. A person's pause still outranks it,
-	// below, as every stop's reason is ranked.
-	limitParked := agent != nil && agent.providerLimit != nil && agent.providerLimit.Parked
-	if agent != nil && agent.turn != nil && agent.turn.Stage != StageParked && !limitParked {
+	if turnWorks(agent) {
 		return seatState{activity: ActivityWorking}
 	}
 	running, waiting := s.runsOf(agentID)
@@ -164,21 +130,46 @@ func (s *LiveState) stateOf(agentID string, agent *agentLive) seatState {
 	case waiting:
 		return seatState{activity: ActivityNeeds}
 	}
-	stopped := func(r StoppedReason) seatState {
-		return seatState{activity: ActivityStopped, reason: r}
-	}
-	switch {
-	case agent != nil && agent.paused != nil:
-		return stopped(StoppedPaused)
-	case s.unplaced(agentID):
-		return stopped(StoppedUnplaced)
-	case agent != nil && agent.budget != nil && refusing(agent.budget.Windows, s.clock()),
-		s.budget != nil && refusing(s.budget.Org.Windows, s.clock()):
-		return stopped(StoppedBudget)
-	case limitParked:
-		return stopped(StoppedProvider)
+	if reason, stopped := s.stopOf(agentID, agent); stopped {
+		return seatState{activity: ActivityStopped, reason: reason}
 	}
 	return seatState{activity: ActivityIdle}
+}
+
+// turnWorks reports a turn the seat is working on now: one not parked on its
+// run, whose work is the run's.
+//
+// A SEAT PARKED ON ITS MODELS' LIMIT IS NOT WORKING, even through the probe the
+// engine runs when the park's alarm lifts it: until a call answers, the seat is
+// waiting, and drawing each probe as work is the blink this state exists to
+// stop. A person's pause still outranks it, as every stop's reason is ranked.
+func turnWorks(agent *agentLive) bool {
+	return agent != nil && agent.turn != nil && agent.turn.Stage != StageParked &&
+		!limitParked(agent)
+}
+
+func limitParked(agent *agentLive) bool {
+	return agent != nil && agent.providerLimit != nil && agent.providerLimit.Parked
+}
+
+// stopOf is why the seat cannot take a turn: the first of [StoppedReasons] that
+// holds, whatever the seat is doing now. The one ranking the seat's state and
+// an item's flow both read (posture.go).
+//
+// Called under s.mu.
+func (s *LiveState) stopOf(agentID string, agent *agentLive) (StoppedReason, bool) {
+	switch {
+	case agent != nil && agent.paused != nil:
+		return StoppedPaused, true
+	case s.unplaced(agentID):
+		return StoppedUnplaced, true
+	case agent != nil && agent.budget != nil && refusing(agent.budget.Windows, s.clock()),
+		s.budget != nil && refusing(s.budget.Org.Windows, s.clock()):
+		return StoppedBudget, true
+	case limitParked(agent):
+		return StoppedProvider, true
+	}
+	return "", false
 }
 
 // unplaced reports whether the last placement read LISTED the seat and found no
@@ -292,18 +283,13 @@ func (s *LiveState) noteMoved(before map[string]seatState, change *Change) {
 }
 
 // SetPlacement lands a read of which of the company's agent seats some node in
-// the fleet holds, keyed by AGENT ID: every agent seat in the company, true
-// where a node holds it. It replaces the previous read whole — a seat the
-// company no longer has is no longer a seat anything is placed for — and
-// reports the seats whose state it moved.
+// the fleet holds, keyed by AGENT ID (what a seat lease is named by,
+// coord.SeatResource; two seats sharing a role name would read as one): every
+// agent seat in the company, true where a node holds it. It replaces the
+// previous read whole and reports the seats whose state it moved.
 //
-// BY ID, because that is what a seat lease is named by (coord.SeatResource)
-// and what every other input here is keyed on: keyed by role name, two seats
-// sharing a name read as one, and either one's lease placed both.
-//
-// A READ THAT FAILED IS NOT PASSED HERE. Until the first read lands the
-// projection claims no seat is unplaced: "no node holds it" is a fact about the
-// lease table, and a lease table nobody has read says nothing either way.
+// A READ THAT FAILED IS NOT PASSED HERE. Until the first read lands no seat is
+// claimed unplaced: a lease table nobody has read says nothing either way.
 func (s *LiveState) SetPlacement(placed map[string]bool) Change {
 	s.mu.Lock()
 	defer s.mu.Unlock()

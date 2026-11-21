@@ -10,12 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// MOVING THE SEALED TEXTS ONTO THE KEYRING'S ACTIVE KEY. A keyring rotation
-// adds a key, makes it active, re-seals what the old key sealed, and then drops
-// it. These rows are derived from the log, so a node never rewrites its own:
-// each command or verdict still sealed under another key is moved by a RECORD
-// on its own subject ([OpResealed]), carrying the same texts sealed afresh,
-// which every data node applies.
+// A keyring rotation re-seals what the old key sealed before dropping it. These
+// rows derive from the log, so a node never rewrites its own: each command or
+// verdict under another key is moved by an [OpResealed] RECORD on its own
+// subject, carrying the same texts sealed afresh.
 
 // ResealReport is what one pass over the commands and the verdicts moved.
 type ResealReport struct {
@@ -23,8 +21,7 @@ type ResealReport struct {
 	Commands int
 	Verdicts int
 	// Unknown is how many records nobody could confirm: run the pass
-	// again, which re-seals what did not land and finds nothing to do for
-	// what did.
+	// again, which re-seals only what did not land.
 	Unknown int
 }
 
@@ -36,10 +33,9 @@ var errResealed = errors.New("accessdomain: the record is already under the acti
 // keyring's active key, one record per command or verdict sealed under
 // another, AS by.
 //
-// IT IS ITS OWN RETRY: each record is decided in its own snapshot against what
-// the row holds now, so a pass run again re-seals only what is still under an
-// old key. A record that fails does not stop the rest; every failure is
-// returned beside the report of what moved.
+// IT IS ITS OWN RETRY: each record is decided in its own snapshot against its
+// row now, so a rerun re-seals only what is still under an old key. A failing
+// record does not stop the rest; every failure is returned beside the report.
 func (w *Writer) Reseal(ctx context.Context, by iam.Actor, reader *Reader) (ResealReport, error) {
 	var report ResealReport
 	if reader == nil {

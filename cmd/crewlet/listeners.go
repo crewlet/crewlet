@@ -85,23 +85,17 @@ func bindListeners(ctx context.Context, boot *config.Bootstrap, nodeID string,
 	return l, nil
 }
 
-// boxHostURL is where a box on this node's own host — the `direct` cell —
-// reaches the two routes a box dials, the tool bridge and the telemetry
-// receiver: this node's own listener that serves them, as this host dials it
-// ([engine.Options.BoxHostURL]). Empty where the node runs no seat, and so
-// launches no box, or binds no listener a box of its own reaches (api.port 0):
-// such a node's boxes dial CREWLET_MCP_BRIDGE_URL like any other.
-//
-// THE LISTENER THEY ARE SERVED ON. An ingress node serves them to anyone:
-// on api.public where it binds one — they are public routes — and on api.port
-// otherwise, dialled at the address it bound ([loopbackURL]). A node without
-// the role serves them on api.port beside its probes, to this host's loopback
-// ALONE (internal/api's Probes): a seat pool with no route in from the
-// network, which is what such a node is for, still runs every seat a direct
-// box serves. So its listener must be one loopback reaches — bound on every
-// interface or on loopback — and one bound to a single address that is not
-// loopback derives none: a call from this host to that address arrives from
-// it, not from loopback, and would be refused as from off the host.
+// boxHostURL is where a box on this node's own host (the `direct` cell) reaches
+// the tool bridge and the telemetry receiver: this node's listener serving them,
+// as this host dials it ([engine.Options.BoxHostURL]). Empty where the node runs
+// no seat, or binds no listener a box reaches (api.port 0): such boxes dial
+// CREWLET_MCP_BRIDGE_URL like any other. THE LISTENER THEY ARE SERVED ON. An ingress node serves them on api.public
+// where it binds one, else api.port, dialled at the address it bound
+// ([loopbackURL]). A node without the role serves them on api.port to this host's
+// loopback ALONE (internal/api's Probes), so that listener must be one loopback
+// reaches: bound on every interface or on loopback. One bound to a single
+// non-loopback address derives none, since a call from this host to it arrives
+// from that address, not loopback, and would be refused as from off the host.
 func (l *nodeListeners) boxHostURL(boot *config.Bootstrap, nodeID string) string {
 	profile := boot.Profile(nodeID)
 	if l == nil || !profile.RunsSeats() {
@@ -204,25 +198,18 @@ func (s *handlerSlot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.current.Load().ServeHTTP(w, r)
 }
 
-// unusedConns is every connection of one listener that has not sent a
-// request, closed as the listener's shutdown begins (#315).
+// unusedConns is every connection of one listener that has not sent a request,
+// closed as the listener's shutdown begins (#315).
 //
-// net/http's Shutdown closes an IDLE connection at once, but counts one that
-// has sent nothing yet (StateNew) as active until it is five seconds old (Go
-// issue 22682) — and [apiShutdownGrace] is five seconds, so a stop with one
-// open spent its whole grace waiting for it and then logged
-// api_shutdown_failed, the warning meant for a request that was stuck. Clients
-// leave such connections routinely: one whose request finds no idle connection
-// dials another, takes the connection the request before it frees if that
-// comes first, and keeps the one it dialled idle, never used (a goroutine dump
-// of a stop held so showed exactly that); a browser opens them ahead of its
-// requests.
-//
-// So the stop closes them as it closes the idle ones: a connection that has
-// sent nothing carries no request to finish. What it shares with an idle
-// connection is the one instant a client may be writing its first request
-// down it as the stop begins, which then meets a closed connection — as it
-// would at the end of Go's five seconds, or on a node that has stopped.
+// net/http's Shutdown closes an IDLE connection at once but counts one that has
+// sent nothing (StateNew) as active until it is five seconds old (Go issue
+// 22682), and [apiShutdownGrace] is five seconds: a stop with one open spent its
+// whole grace waiting and logged api_shutdown_failed, the warning meant for a
+// stuck request. Clients leave such connections routinely (a request that finds
+// no idle connection dials another and keeps the one it dialled unused). So the
+// stop closes them as it closes idle ones: they carry no request to finish. The
+// one race they share with idle connections is a first request written as the
+// stop begins, which meets a closed connection, as it would after the five seconds.
 type unusedConns struct {
 	mu    sync.Mutex
 	conns map[net.Conn]struct{}

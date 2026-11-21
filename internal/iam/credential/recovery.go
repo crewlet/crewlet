@@ -12,21 +12,16 @@ import (
 
 // RECOVERY CODES ARE THE WAY BACK IN WHEN THE SECOND FACTOR IS GONE.
 //
-// A person whose phone is at the bottom of a river is locked out of a company
-// whose only other way in is an administrator — and an administrator who can
-// reset somebody's second factor is an administrator who can become them. So
-// the codes are minted WITH the second factor, shown once, and each one is
-// spendable exactly once.
+// The only other way in is an administrator, and one who can reset somebody's
+// second factor can become them. So the codes are minted WITH the second
+// factor, shown once, and each is spendable exactly once.
 //
 // # Why they are hashed and not sealed
 //
-// A recovery code is a SECRET SOMEBODY PRESENTS, like a password, so what is
-// stored has to be a verifier. It is a SHA-256 rather than an argon2id digest
-// for the reason a machine token is: the code is minted by this engine from
-// crypto/rand with a hundred bits of entropy in it, so there is no dictionary
-// to run against a stolen digest and no memory cost to buy. Spending a
-// password's cost per candidate on a value nobody chose would be paying for a
-// defence against an attack that cannot exist.
+// A code is a SECRET SOMEBODY PRESENTS, so what is stored has to be a verifier.
+// It is a SHA-256 rather than argon2id for a machine token's reason: minted from
+// crypto/rand with a hundred bits of entropy, it has no dictionary to run
+// against a stolen digest, so a memory cost would defend against nothing.
 
 const (
 	// RecoveryCodeCount is how many are minted at once: TEN.

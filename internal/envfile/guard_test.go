@@ -12,29 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// THE GUARD: nobody builds an assignment line by hand.
+// THE GUARD: nobody builds an assignment line by hand. This grammar is only
+// worth having if it is the ONLY one: the failure is silent and positional (a
+// bare space ends the assignment, `source` runs the rest as a command and
+// abandons every credential below it), and a second implementation is always
+// one reasonable-looking line, so only a scan of the tree catches it.
 //
-// This grammar is only worth having if it is the ONLY one. The failure it
-// prevents is silent and positional — a bare space ends the assignment,
-// `source` runs the remainder as a command and abandons every credential
-// below it — so a second implementation does not announce itself. It shows
-// up as a company whose seats defined after some particular token stop
-// authenticating.
+// # Scoped to files that touch a .env, deliberately
 //
-// A scan of the tree is the only thing that can catch that, because the
-// second implementation is always one line long and always looks reasonable.
-//
-// # It is scoped to files that touch a .env, deliberately
-//
-// The tree is full of legitimate KEY=VALUE building that has nothing to do
-// with this grammar: every exec.Cmd.Env entry is one. Those go to execve as
-// raw strings — no shell, no dotenv reader, no quoting — so applying this
-// package to them would be actively wrong.
-//
-// What distinguishes the case that matters is the DESTINATION: text written
-// to a credential file that `source` and a dotenv loader both read. So the
-// scan looks only at files that mention one, which is a boundary a reader
-// can check and an author cannot cross by accident.
+// Every exec.Cmd.Env entry is legitimate KEY=VALUE building: raw strings to
+// execve, no shell or dotenv reader, so this package would be wrong there. The
+// case that matters is the DESTINATION, a credential file `source` and a
+// dotenv loader both read, so the scan looks only at files that mention one.
 var handBuilt = regexp.MustCompile(
 	`fmt\.(Sprintf|Fprintf)\([^)]*"[^"]*%s\s*=\s*%[svq]|` +
 		`"export "\s*\+`)

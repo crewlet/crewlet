@@ -1,13 +1,12 @@
 package executor
 
 import (
-	"encoding/json"
+	"bytes"
 	"math"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 // The lists a harness's record holds, as the readers outside the thread layer
@@ -38,8 +37,7 @@ const listSlack = 64
 // listBuilder is a transcript read's builder, as a read from the archive's
 // first entry starts one.
 func listBuilder() *transcriptBuilder {
-	return &transcriptBuilder{bounds: TranscriptReadBounds(), entries: []TranscriptEntry{},
-		places: []EntryPlace{}, calls: map[string]string{}}
+	return newTranscriptBuilder(0, TranscriptReadBounds(), TranscriptFilter{})
 }
 
 // allocationsOf is what read allocates, heap objects and bytes, the fewest of
@@ -70,6 +68,8 @@ func heldBy(read func() any) uint64 {
 	held := uint64(math.MaxUint64)
 	var before, after runtime.MemStats
 	for range 3 {
+		// Twice: a sync.Pool's victim cache outlives one, and freed after the read it offsets the read's hold.
+		runtime.GC()
 		runtime.GC()
 		runtime.ReadMemStats(&before)
 		answer := read()
@@ -108,8 +108,8 @@ func TestAListInAHarnesssRecordCostsItsReaderOneElementAtATime(t *testing.T) {
 		return func() { _ = listBuilder().claudeLine(t.Context(), raw) }
 	}
 	step := func(content string) func() {
-		raw := json.RawMessage(content)
-		return func() { _ = listBuilder().openCodeStep(t.Context(), raw, time.Time{}) }
+		raw := []byte(`{"messages":[{"type":"assistant","content":` + content + `}]}`)
+		return func() { _ = listBuilder().openCodeExport(t.Context(), bytes.NewReader(raw)) }
 	}
 	const (
 		reply  = `{"type":"assistant","message":{"role":"assistant","content":[`
@@ -190,7 +190,8 @@ func TestAListIsReadAnElementAtATimeAsItsHarnessReadsIt(t *testing.T) {
 	}
 	step := func(content string) string {
 		b := listBuilder()
-		return entries(b, b.openCodeStep(t.Context(), json.RawMessage(content), time.Time{}))
+		return entries(b, b.openCodeExport(t.Context(),
+			strings.NewReader(`{"messages":[{"type":"assistant","content":`+content+`}]}`)))
 	}
 	reply := `{"type":"assistant","message":{"role":"assistant","content":` + blocks + `}}`
 	result := `{"type":"user","message":{"role":"user","content":[{"type":"tool_result",` +

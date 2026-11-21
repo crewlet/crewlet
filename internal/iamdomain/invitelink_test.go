@@ -13,8 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// inviteFor issues one invitation through the rig's writer, answering what the
-// issue handed back — the id AND the secret its link carries.
+// inviteFor issues one invitation through the rig's writer, answering the id
+// AND the secret its link carries.
 func inviteFor(t *testing.T, rig *writeRig, address, seat string) (
 	iamdomain.InviteIssued, error) {
 
@@ -36,9 +36,8 @@ func inviteFor(t *testing.T, rig *writeRig, address, seat string) (
 }
 
 // redeemAs enrols the person an invitation creates through the node's own
-// writer, as the sign-in surface does, presenting secret and binding seat —
-// a fresh person per attempt, as the surface mints one, carrying the password
-// they chose.
+// writer, as the sign-in surface does: presenting secret, binding seat, a
+// fresh person per attempt and the password they chose.
 func redeemAs(t *testing.T, rig *writeRig, issued iamdomain.InviteIssued,
 	address, secret, seat string) (statelog.Result, error) {
 
@@ -62,13 +61,10 @@ func redeemAs(t *testing.T, rig *writeRig, issued iamdomain.InviteIssued,
 
 // AN INVITATION KEEPS ITS LINK'S SECRET ONLY AS A VERIFIER.
 //
-// The id is the row's primary key, in the record that issued it, in every
-// snapshot and backup and in the path of every request that reads it — so when
-// the link was the id alone, each of those held a working invitation. The link
-// now carries a secret beside the id, and what the estate keeps of it is its
-// SHA-256: the document says the verifier, no row anywhere says the secret,
-// and the one question a reader can ask of the row is whether a presented
-// secret is the one.
+// The id is in the issuing record, every snapshot and backup and every
+// request path that reads it, so it cannot be what admits. The link carries a
+// secret beside it and the estate keeps only its SHA-256: no row holds the
+// secret, and a row answers only whether a presented secret is the one.
 //
 // Mutation: store the secret itself as the verifier and the document case
 // fails; compare without the hash, or admit an empty verifier, and Admits
@@ -118,8 +114,8 @@ func TestAnInvitationKeepsItsLinksSecretOnlyAsAVerifier(t *testing.T) {
 			t.Errorf("the row admitted %q, which is not the link's secret", wrong)
 		}
 	}
-	// AND AN INVITATION WITH NO VERIFIER ADMITS NOBODY — one issued before
-	// links carried a secret, which admitting on its id would reopen.
+	// AND AN INVITATION WITH NO VERIFIER ADMITS NOBODY: admitting it would make
+	// its id a working link.
 	if (iamdomain.InvitationRow{ID: issued.ID}).Admits(issued.Secret) {
 		t.Error("an invitation with no verifier admitted a secret")
 	}
@@ -128,10 +124,9 @@ func TestAnInvitationKeepsItsLinksSecretOnlyAsAVerifier(t *testing.T) {
 // A REDEMPTION PRESENTS THE LINK'S SECRET, and the record that creates the
 // person checks it in its own snapshot.
 //
-// The route checks it too, but a record can be published by more than a route,
-// and naming an invitation's id — which every snapshot holds — is not holding
-// its link. A wrong or absent secret is refused in the record's own snapshot,
-// so it leaves nothing behind; the right one lands.
+// The route checks it too, but more than a route can publish a record, and
+// naming an invitation's id, which every snapshot holds, is not holding its
+// link. A wrong or absent secret is refused there, leaving nothing behind.
 //
 // Mutation: drop the secret from the person record's basis and the wrong
 // secret enrols the person.
@@ -161,12 +156,11 @@ func TestARedemptionPresentsItsLinksSecret(t *testing.T) {
 
 // A REDEMPTION CARRIES ONE CREDENTIAL, AND IT IS A PASSWORD.
 //
-// The invitee presents a link and a password they chose, and nothing they
-// presented could vouch for any other credential: a token carried here would
-// skip the mint's cut to what its owner holds, a second factor would be one
-// nobody enrolled, and a reset link one nobody was shown. The type holds a
-// redemption to one credential; its validation holds that one to the
-// password's method, and refuses the rest before anything is published.
+// The invitee presents a link and a password they chose, which vouch for no
+// other credential: a token would skip the mint's cut to what its owner holds,
+// a second factor would be one nobody enrolled, a reset link one nobody was
+// shown. The type allows one credential; validation holds it to the password's
+// method before anything is published.
 //
 // Mutation: drop the method from the redemption's validation and each row
 // lands a person holding that credential instead.
@@ -214,15 +208,14 @@ func TestARedemptionCarriesOnlyThePasswordItsInviteeChose(t *testing.T) {
 	}
 }
 
-// AN INVITATION BINDS ONLY A HUMAN SEAT NOBODY HOLDS, decided when it is issued
-// — and it binds one: the person it creates holds a seat from the moment they
+// AN INVITATION BINDS ONLY A HUMAN SEAT NOBODY HOLDS, decided at its issue,
+// and it binds one: the person it creates holds a seat from the moment they
 // exist (ADR-0032).
 //
-// Each refusal is one the person the link is sent to could do nothing about: no
-// seat at all, a seat nobody created, an agent's seat — a person bound to one
-// is refused on every request — a seat a colleague is already bound to, and a
-// seat another open invitation is on its way to. What it records is the seat's
-// handle, which is its identity.
+// Each refusal is one the invitee could do nothing about: no seat, a seat
+// nobody created, an agent's seat (a person bound to one is refused on every
+// request), a seat a colleague holds, and one another open invitation is on
+// its way to. It records the seat's handle, which is its identity.
 //
 // Mutation: drop the seat requirement and the invitation naming none is issued;
 // drop the kind check and the agent seat is; drop the holder check and the
@@ -342,14 +335,13 @@ func TestARedemptionBindsTheSeatItsInvitationNamed(t *testing.T) {
 
 // A SEAT A PERSON HOLDS REFUSES THE REDEMPTION, before anything is written.
 //
-// The invitation holds its seat from its issue, so a bind or a create onto it
-// is refused naming the invitation — the first defence, asserted first. The
-// redemption's own decide is the second, for what the first cannot see: a
-// person on the seat a retained record, a restore or a build before
-// invitations held their seats left behind. That residue is planted, since the
-// writer no longer produces it, and the redemption is refused naming the
-// seat's holder — whose remedy is a new invitation — publishing nothing: the
-// invited address is not held against the next invitation to the same person.
+// The invitation holds its seat from its issue, so a bind or create onto it is
+// refused naming the invitation: the first defence, asserted first. The
+// redemption's decide is the second, for a person a retained record or a
+// restore left on the seat. That residue is planted, since the writer cannot
+// produce it, and the redemption is refused naming the seat's holder (whose
+// remedy is a new invitation), publishing nothing, so the invited address is
+// not held against the next invitation to the same person.
 //
 // Mutation: drop the seat check from the enrolment's decide and the redemption
 // binds a second person to the colleague's seat.

@@ -105,10 +105,10 @@ const nobody: ViewerState = {
   failedRefusal: null,
   configWriter: true,
   configManagedBy: [],
-  assistant: "disabled",
+  assistant: "no_model",
   assistantModel: null,
   assistantReadsImages: false,
-  assistantDeliberate: false,
+  assistantCanAssign: false,
   chatVendors: [],
 };
 const ada: ViewerState = {

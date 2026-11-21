@@ -9,10 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A SUBJECT ROUND-TRIPS THROUGH THE LOG'S GRAMMAR, including an id's dots.
-//
-// A node id carries dots (`node-a.example`), and a parser splitting on every
-// one would lose everything after the first.
+// A SUBJECT ROUND-TRIPS THROUGH THE LOG'S GRAMMAR, including the dots a node
+// id carries (`node-a.example`).
 func TestASubjectRoundTripsThroughTheWireGrammar(t *testing.T) {
 	t.Parallel()
 	for name, want := range map[string]iamdomain.Subject{
@@ -68,11 +66,9 @@ func TestValidateRefusesASubjectThatAddressesNothing(t *testing.T) {
 			}
 		})
 	}
-	// AND A KIND THIS BUILD DOES NOT KNOW IS NOT REFUSED. It is refused
-	// where a record is WRITTEN and accepted where one is READ, which is
-	// the asymmetry the whole two-pass decode exists for: this build must
-	// be able to hold a newer peer's record under its own subject without
-	// being able to act on it.
+	// AND A KIND THIS BUILD DOES NOT KNOW IS NOT REFUSED: this build must
+	// hold a newer peer's record it cannot act on
+	// ([iamdomain.Subject.Validate]).
 	newer := iamdomain.Subject{Kind: "somethingnewer", ID: "x"}
 	if err := newer.Validate(); err != nil {
 		t.Errorf("a kind a newer peer wrote was refused at the subject layer: "+
@@ -80,14 +76,10 @@ func TestValidateRefusesASubjectThatAddressesNothing(t *testing.T) {
 	}
 }
 
-// THE THREE SINGLETON KINDS ARE THE THREE THE GRAMMAR SAYS THEY ARE.
-//
-// Both directions: a kind that stopped needing an id would silently start
-// publishing to the log's own prefix, and a singleton that acquired one would
-// stop being a singleton — which for the directory means two administrators
-// giving one login to two people without ever contending, and for the
-// invalidation two operators ending the company's sessions each reading the
-// same generation and writing the same new one.
+// THE THREE SINGLETON KINDS ARE THE THREE THE GRAMMAR SAYS THEY ARE, both
+// ways: a kind that stopped needing an id would publish to the log's own
+// prefix, and a singleton given one would let two writes that must contend
+// (one login for two people, two invalidations) miss each other.
 func TestTheSingletonKindsAreTheOnesWithNoId(t *testing.T) {
 	t.Parallel()
 	singletons := map[iamdomain.ObjectKind]bool{
@@ -100,9 +92,8 @@ func TestTheSingletonKindsAreTheOnesWithNoId(t *testing.T) {
 		if got := kind.Identified(); got != want {
 			t.Errorf("%s reports Identified() = %v, want %v", kind, got, want)
 		}
-		// And the grammar agrees: an idless subject sits ONE token below
-		// the prefix rather than two, which is the shape a wildcard
-		// written as `prefix.*.>` would silently exclude.
+		// An idless subject sits ONE token below the prefix, which a
+		// wildcard written as `prefix.*.>` would silently exclude.
 		if !want {
 			s := iamdomain.Subject{Kind: kind}
 			if s.Wire() != topics.IamLogPrefix+"."+string(kind) {
@@ -113,11 +104,8 @@ func TestTheSingletonKindsAreTheOnesWithNoId(t *testing.T) {
 }
 
 // EVERY KIND BUT THE BARRIER AND THE TRIMMED RECORD ARBITRATES, and the
-// declaration the stream is created with is DERIVED from that rather than typed
-// again.
-//
-// A list written twice is a kind that arbitrates in one place and not the
-// other, which wedges that subject the first time a gate drops a record.
+// stream's declaration is DERIVED from that: a list written twice can disagree,
+// which wedges that subject the first time a gate drops a record.
 func TestTheArbitratedKindsAreDerivedFromTheEnum(t *testing.T) {
 	t.Parallel()
 	spec := iamdomain.Domain{}.Stream()
@@ -144,18 +132,10 @@ func TestTheArbitratedKindsAreDerivedFromTheEnum(t *testing.T) {
 	}
 }
 
-// EXACTLY FIVE KINDS MAY STATE THE WHOLE ESTATE AS THEIR SCOPE.
-//
-// Both directions, because each failure is silent in its own way: a kind that
-// gained the permission would freeze every login in the company on the first
-// record a node could not decode, and one that lost it would be a gate or a
-// reanchor blocking only some reads while licensing the rest.
-//
-// EVERY ONE OF THE FIVE IS A KIND THAT IS NEVER DEFERRED, which is what makes
-// the permission affordable: three install a gate and the other two — the read
-// index's barrier and the trim's trimmed record — are framework records every
-// build reads, whose scope resolves to the framework's own and intersects
-// nothing, so none of them can be the record a node cannot decode.
+// EXACTLY FIVE KINDS MAY STATE THE WHOLE ESTATE AS THEIR SCOPE, both ways: a
+// kind that gained it would freeze every login on the first record a node could
+// not decode, and one that lost it would be a gate or a reanchor blocking only
+// some reads. The five are never deferred ([iamdomain.ObjectKind.RootScoped]).
 func TestExactlyFiveKindsMayClaimTheWholeEstate(t *testing.T) {
 	t.Parallel()
 	want := []iamdomain.ObjectKind{

@@ -16,15 +16,13 @@ const pausedHold = "seat_paused"
 
 // A SEAT A PERSON PAUSED STAYS PAUSED WHEN PLACEMENT MOVES IT.
 //
-// The node that held the paused seat held its mail under a pause hold, and the
-// RELEASE drops that hold with the attachment — so the node that acquires the
-// seat next starts with none, and the mail that waited through the pause would
-// be the first thing its consumer ran. The hold has to be on the subscription
-// before the attach, which is what node.Config.AttachHolds is for; a hold
-// taken after the attach is taken after the first delivery can arrive.
-//
-// The resume is then the only thing that delivers the mail: lifting the hold
-// on the node that now holds the seat hands it on, in order.
+// The RELEASE drops a pause hold with the attachment, so the next node to
+// acquire the seat starts with none, and the mail that waited through the pause
+// would be the first thing its consumer ran. The hold has to be taken before
+// the attach, for the attachment the acquisition makes: that is why
+// node.Config.SeatReady is handed it, and the engine's preparation takes a
+// paused seat's hold there. After the attach, a delivery may already have
+// arrived. Only the resume then delivers the mail, in order.
 func TestPlacementMovingAPausedSeatKeepsItPaused(t *testing.T) {
 	t.Parallel()
 	for _, sub := range substrates() {
@@ -35,7 +33,7 @@ func TestPlacementMovingAPausedSeatKeepsItPaused(t *testing.T) {
 			paused := true
 			// ASKED BY THE SEAT'S ID, the key a pause is kept under: a
 			// hold answered for any other seat would hold the wrong mail.
-			f.attachHolds = func(id uuid.UUID) []string {
+			f.holdOnAcquire = func(id uuid.UUID) []string {
 				mu.Lock()
 				defer mu.Unlock()
 				if paused && id == seatID("ceo") {
@@ -98,7 +96,11 @@ func resume(t *testing.T, f *fleet, nodeID, handle string) {
 	f.mu.Lock()
 	q := f.queues[nodeID]
 	f.mu.Unlock()
-	if err := q.ResumeTopic(t.Context(), inbox(handle), inboxGroup(handle), pausedHold); err != nil {
+	at, err := q.Attachment(t.Context(), inbox(handle), inboxGroup(handle))
+	if err != nil {
+		t.Fatalf("Attachment: %v", err)
+	}
+	if err := q.ResumeTopic(t.Context(), inbox(handle), inboxGroup(handle), at, pausedHold); err != nil {
 		t.Fatalf("ResumeTopic: %v", err)
 	}
 }

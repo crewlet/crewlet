@@ -9,19 +9,16 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// Toggle is a boolean a config may leave UNSET, where unset is a third
-// answer rather than false.
+// Toggle is a boolean a config may leave UNSET, where unset is a third answer
+// rather than false.
 //
 // It is the org model's type, aliased rather than redeclared: a config's
-// learning_enabled and a seat's learning_enabled are the same value moving
-// between layers, and two structurally identical types would need a
-// conversion whose only job is to lose that.
+// learning_enabled and a seat's are the same value moving between layers.
 //
-// Every field that uses it would be a bug as a plain bool. An unset
-// learning_enabled means "inherit the system setting" while false means
-// "opt this seat out"; extension_enabled and the schedule toggles default
-// to TRUE, so a bare bool would silently disable everything an operator did
-// not annotate.
+// A plain bool would be a bug in every field that uses it: an unset
+// learning_enabled means "inherit the system setting" while false means "opt
+// this seat out", and extension_enabled and the schedule toggles default to
+// TRUE, so a bare bool would silently disable everything not annotated.
 type Toggle = org.Toggle
 
 // ProviderKeys is an ordered LLM provider fallback chain, written as a bare
@@ -38,13 +35,9 @@ type ProviderKeys = org.ProviderKeys
 //	llm: [fast, backup]               # a fallback chain for every phase
 //	llm: {default: fast, review: big} # a chain per phase
 //
-// The mapping form exists because the phases have genuinely different
-// shapes of work (reviewing wants a strong model, the extension judge wants
-// a cheap fast one), and splitting them by hand across five flat fields is
-// how a config ends up with four of them agreeing and one stale.
-//
-// It decodes to ONE type rather than an `any`, so no consumer type-switches
-// on what the operator happened to write. A phase left unset here falls
+// Phases differ in kind of work (reviewing wants a strong model, the extension
+// judge a cheap one), and five flat fields leave one stale. It decodes to ONE
+// type, not an `any`, so no consumer type-switches. A phase unset here falls
 // back to Default; a flat llm_<phase> field on the seat wins over both.
 type PhaseLLM struct {
 	Default   ProviderKeys `yaml:"default,omitempty" json:"default,omitzero"`

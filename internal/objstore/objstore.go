@@ -42,6 +42,22 @@
 // end of a file whose content is not the one recorded: a download of a
 // damaged object ends short of its Content-Length rather than whole.
 //
+// # The backend is dumb; the store is not
+//
+// A [Backend] is a streaming store of opaque names: a put reads its reader to
+// io.EOF itself (through [Fill]) and leaves nothing findable when it fails, a
+// get refuses a context with no deadline rather than pick a bound of its own,
+// and a listing never hands back a name it cannot date ([ErrUndated]). What a
+// name means is this package's grammar and the collector's judgement, never a
+// backend's. Everything judged about bytes lives in [Store]: it mints the key,
+// hashes and counts on the way in, and bounds each read by [ReadBudget] and
+// [Stall]. Ordered listing ([Ranged]), batch delete ([BatchDeleter]), direct
+// uploads ([Presigner]) and usage ([Reserver]) are capabilities a backend may
+// advertise, each certified by objstoretest, never verbs every backend owes.
+// A full store is a refusal ([Full]) carrying the backend's own remedy, never
+// a failure to retry. [MiBPace] is the one floor every transfer is held to, so
+// no bound is retuned out from under another.
+//
 // # What checking every byte costs, measured
 //
 // A put hashes every byte it stores and a read every byte it hands out, once
@@ -147,20 +163,15 @@ func (h Hash) Valid() bool {
 
 // Key names one object: a UUIDv7 minted for the upload that stored it.
 //
-// # Why a UUIDv7
+// RANDOM, so no two uploads share a name, which lets the collector delete
+// without a lock. TIME-ORDERED, carrying its minting instant ([Key.Minted]),
+// so a write naming a key too old to name safely is refused ([RecordWithin])
+// with no field beside it.
 //
-// RANDOM, so no two uploads are ever stored under one name — which is the
-// whole of what lets the collector delete without a lock. TIME-ORDERED and
-// carrying its own minting instant ([Key.Minted]), so the write that names a
-// key can be refused once the key is too old to be named safely
-// ([RecordWithin]) with no field beside it, and a keyset page of a table's
-// keys walks them in roughly the order they were written.
-//
-// ONE SPELLING: [ParseKey] accepts the canonical lowercase form of a version
-// 7, RFC 4122 UUID and nothing else — an upper-case spelling, a `urn:uuid:`
-// or braced one, thirty-two bare hex digits, another version. A second
-// spelling of one key would be a second name in the store, and a name that is
-// not the canonical spelling of a key is not one the collector may judge.
+// ONE SPELLING: [ParseKey] accepts only the canonical lowercase version 7
+// UUID (no upper case, `urn:uuid:`, braces, bare hex, other versions). A
+// second spelling would be a second name in the store, one the collector may
+// not judge.
 type Key uuid.UUID
 
 // ErrBadKey is a string that is not an object key.
@@ -309,125 +320,27 @@ func (o Object) Validate() error {
 // object: the write is refused once the key is older than this by the clock
 // of the node deciding it (tracker's PutFile).
 //
-// # Why it exists
-//
-// The collector deletes an object no row names once it is past a grace
-// (collect.PendingGrace), measured both from the instant the backend stored
-// it and from the instant its key was minted. Unbounded, a write naming an
-// old key could land AFTER a collection pinned the estate and read it as
-// unnamed — and the row would name bytes the collector had just deleted. With
-// this bound, a key the collector judges is one no write can name any more:
-// the grace exceeds this by more than any two nodes' clocks disagree — twice
-// [AssumedClockSkew].
-//
-// TWELVE HOURS: half the collector's day, and comfortably more than the
-// slowest upload the engine accepts: a file of worklet.MaxFileBytes at the
-// [MiBPace] floor is eight and a half hours from the key's minting to the
-// last byte stored — plus the write that follows it. The two inequalities are
-// pinned by one test where every constant they name can be imported
-// (internal/objstore/references).
+// The collector deletes an object no row names once past a grace
+// (collect.PendingGrace). Unbounded, a write naming an old key could land
+// AFTER a collection pinned the estate, naming bytes just deleted. With this
+// bound a key the collector judges can no longer be named: the grace exceeds
+// this by more than twice [AssumedClockSkew]. TWELVE HOURS: half the
+// collector's day, above the slowest accepted upload (worklet.MaxFileBytes at
+// the [MiBPace] floor: 8.5 hours, plus the write after). One test in
+// internal/objstore/references pins both inequalities.
 const RecordWithin = 12 * time.Hour
 
-// AssumedClockSkew is the most any node's clock, or the clock of the broker
-// member leading the coordination store's position register, may stand from
-// the fleet's — the median of the data nodes' clocks: what the engine's
-// `clock_skew` alarm raises past, and the bound under every rule that judges
-// an instant one machine stamped by another machine's clock:
-//
-//   - the collector's grace (collect.PendingGrace) against [RecordWithin]: a
-//     key one node minted, judged a day old by the collector's clock while a
-//     write may name it for twelve hours by the deciding node's; pinned by
-//     internal/objstore/references;
-//   - a retired reference's grace (gitlet.RetireGrace) against the longest
-//     read of what its row names: the broker's instant on the retirement,
-//     judged by the code-retention duty holder's clock; pinned there too;
-//   - the idle times past which a turn's hold is also recorded
-//     (gitlet.HoldRecordAfter on a scratch repository, gitlet.RefHoldRecordAfter
-//     on a seat's branch): the holding node's clock and the retention pass's,
-//     each against the same broker-stamped activity; pinned there too;
-//   - a ref drop's grace (gitlet.PruneGrace): the broker's instant on the push
-//     that dropped it, judged by the clock of the node expunging the
-//     repository; a policy's edge rather than a margin under a read, so no
-//     inequality pins it, and its doc says what the bound moves it by;
-//   - a seat's push days (the push apply's day rule, internal/gitlet's
-//     apply_push.go): a day forgotten only once a committer's clock has reached
-//     a day beginning a whole company day after it ended, so a committer still
-//     deciding on it stands more than a day behind another; argued at the rule;
-//   - a push history's day series (gitlet.PushDaysKept): the history deletes a
-//     push by the broker's instant on it, and a read's first bound is held to
-//     the history less twice this by the reading node's clock, so a bound the
-//     deletion may have reached is refused rather than counted short;
-//   - a narrowed push history's page (gitlet.PushInstantSkew): a push's
-//     instant, stamped by whichever broker member led the stream, read past
-//     each end of a window it skips to or stops at by twice this, so a push
-//     stamped before one that landed earlier is still met; argued there;
-//   - a capture's and a standby's age (sandbox.SessionCaptureBudget and
-//     standbyBudget): the instant the taking or the standing node's clock
-//     stamped on the run's row, read as still being kept or still standing by
-//     any node until the life or the window and twice this have passed by its
-//     own clock; no wait holds that long on that reading alone, since a turn's
-//     end and a standby count from the moment they first see it, on their own
-//     clocks; argued at each;
-//   - a capture's record still to be answered (sandbox's pastRecordWithin):
-//     the object's key, minted by the clock of the node that spooled it,
-//     refused by the executor log past RecordWithin by its deciding node's
-//     clock, so a reader waits on the record's answer until RecordWithin and
-//     twice this have passed by its own; argued at the rule;
-//   - a box read's admission (sandbox.BoxReadClockAllowance): the asking
-//     node's deadline, stamped by its clock, admitted by the box's host until
-//     twice this past it by the host's own, so a host ahead of its asker by
-//     less than that still takes the read; argued at the allowance;
-//   - a stop's give-up of a silent host (sandbox's Coordinator.hostGivenUp):
-//     the stop's decision, dated by the deciding node's clock, given up by the
-//     node asking the box's host once it is the box timeout and twice this old
-//     by that node's own clock, so it never comes before the box timeout has
-//     passed in real time; argued at the rule.
-//
-// One rule reads this machine's clock against itself: a node's sweep of its
-// spools (sandbox's Coordinator.sweepSpools) ages a spool an hour past the
-// longest a keep may wait to open it, since NTP may step this machine's clock
-// forward by up to this to correct it.
-//
-// # Two readings, and every rule takes the second
-//
-// The alarm holds each clock within this of ONE clock, the fleet's, which
-// every node reads off the position register on its heartbeat: each data
-// node's row there carries the node's stamp and the instant the member stored
-// it, so the rows' offsets differ by how far their nodes' clocks stand apart,
-// and their median is the fleet's clock. So a machine the alarm holds and the
-// fleet's clock disagree by at most this, and any TWO such machines by up to
-// TWICE it — two nodes, or a node and a broker member stamping some other
-// log's records, which on an embedded fleet is a data node the alarm holds
-// too. Every rule bounded here compares two machines — the node deciding a
-// write against the node running the collector, the node sweeping a retired
-// row against the member that stamped its retirement, the node holding a
-// repository against the node passing over it, one committer against another,
-// a push history's reader against the broker's members, the node reading a
-// capture against the node that took it or stood by for it, the node asking a
-// box read against the box's host, the node asking a stopped run's host
-// against the node that decided the stop — so each is held to twice it. Not
-// every one of them is a machine the alarm holds: a rule judged on the clock
-// of a node that runs seats, a turn's hold on a repository, a capture's or a
-// standby's age, a box read's admission or a stop's give-up, rests on a clock
-// the alarm measures only where that node holds data too, since a node without
-// the data role writes no row to the register. The servers of an external NATS
-// cluster are not nodes, and nothing measures them but the one leading the
-// register. Those clocks are the operator's to keep, so NTP runs on every node
-// and every server, not only on the machines the alarm watches
-// (docs/guides/deployment.md).
-//
-// AN HOUR: NTP keeps every machine within milliseconds, so a node an hour off
-// is one whose clock nothing keeps — a host with no NTP client, a virtual
-// machine restored from a snapshot — and the hour, doubled for two machines,
-// still fits inside each rule's margin: the collector's grace exceeds
-// RecordWithin by twelve hours, a retired pack's grace the longest read of the
-// largest bundle a row names by two hours and thirty-nine minutes, each hold
-// threshold falls short of the idle window it is defined from by exactly the
-// two hours, and a seat's push days leave a whole day against those two hours;
-// a ref drop's fourteen days, a policy's edge, move by at most them; and a
-// push history's day series and narrowed pages, a capture's and a standby's
-// age, a capture's record still to be answered, a box read's admission and a
-// stop's give-up allow exactly the two hours, the spool sweep the one.
+// AssumedClockSkew is the most any node's clock (or that of the broker member
+// leading the position register) may stand from the fleet's, the median of
+// the data nodes' clocks: what the `clock_skew` alarm raises past, and the
+// bound under every rule judging an instant one machine stamped by another's
+// clock (collect.PendingGrace against [RecordWithin], gitlet's RetireGrace,
+// PruneGrace, PushDaysKept and hold thresholds, sandbox's capture, standby,
+// box-read and ledger rules), each argued at its rule. Any TWO held machines
+// differ by up to TWICE it, so each margin takes twice it. Nodes without the
+// data role and external NATS servers are unmeasured: run NTP on every one
+// (docs/guides/deployment.md). AN HOUR: further off means no NTP at all, and
+// the doubled hour still fits every margin.
 const AssumedClockSkew = time.Hour
 
 // identifier is what a declared table or column may be spelled as, since each
@@ -439,16 +352,11 @@ var identifier = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 // and the row beside it says what that object's bytes must be.
 //
 // DECLARED BY THE CONSUMER that owns the table, and collected in one list
-// (internal/objstore/references) that everything asking which objects exist
-// reads — the collector, its audit and the backup, each building its query
-// from the declaration rather than from a statement of its own. A table that
-// names objects and is missing from that list is the one mistake here that
+// (internal/objstore/references) that the collector, its audit and the backup
+// build their queries from. A table naming objects but missing from that list
 // destroys data: its objects read as unreferenced and are collected a day
-// after they were written. So the list is held against the schema by a test
-// rather than by a reader's memory. Every declaration also states its
-// [Standing]: whether its rows are references the company is owed, retired
-// ones that only keep their objects from collection for a grace, or derived
-// ones naming objects the engine can build again.
+// after they were written, so a test holds the list against the schema. Every
+// declaration states its [Standing].
 type ReferenceTable struct {
 	// Domain is the state log whose applier writes the table. A pass must
 	// be current on THAT log before it may call an object unnamed, so the
@@ -497,26 +405,18 @@ type ReferenceTable struct {
 	Log      string
 	Deferred string
 
-	// Records reads ONE record of Log — its body, which the caller has
-	// opened from the signed frame the broker stores and verified under
-	// the fleet keyring (recordseal's Verifier, ADR-0031), never the frame
-	// itself — and answers every row of THIS table the record writes: the row
-	// ([RecordReference.NamedBy], spelled with [JoinOwner] as
-	// [ReferenceTable.ScanReferences] spells it) and the object it names
-	// once the record applies — or none, for a record leaving the row
-	// naming nothing. Nil and no error for a record that writes no row of
-	// the table; [ErrRecordUnreadable] (wrapped) for one this build cannot
-	// read that may write one.
+	// Records reads ONE record of Log (its body, opened from the signed frame
+	// and verified under the fleet keyring: recordseal's Verifier, ADR-0031)
+	// and answers every row of THIS table it writes: the row
+	// ([RecordReference.NamedBy], spelled with [JoinOwner]) and the object it
+	// names once applied, or none for a row left naming nothing. Nil for a
+	// record writing no row of the table; [ErrRecordUnreadable] (wrapped) for
+	// one this build cannot read that may write one.
 	//
-	// THE DECLARING DOMAIN'S OWN DECODE of its records, never a second
-	// reading of them: the domain's applier and this function share one
-	// decoder, and the domain's own test holds what one says a record
-	// writes to what the other wrote. For a record this build cannot read —
-	// a newer version, or a kind it has never heard of — WHETHER IT MAY
-	// write the table is answered from what every build reads of it (the
-	// tracker's: its kind and the scope its writer stated), never from what
-	// this build's applier does with a kind, which says nothing about what
-	// a newer build's does.
+	// THE DECLARING DOMAIN'S OWN DECODE, shared with its applier and held to
+	// it by the domain's test. WHETHER an unreadable record MAY write the
+	// table is answered from what every build reads of it (the tracker's kind
+	// and stated scope), never from this build's applier.
 	Records func(payload []byte) ([]RecordReference, error)
 }
 
@@ -552,35 +452,17 @@ var ErrRecordUnreadable = errors.New("objstore: a log record this build cannot r
 func JoinOwner(owner ...string) string { return strings.Join(owner, "/") }
 
 // Standing is what a declared table's rows are to the company: references it
-// is owed, retired ones that keep their objects only for a grace, or derived
-// ones naming objects the engine can build again from what it is owed —
-// ADR-0081, whose rationale is internal/objstore/references' package doc.
-//
-// ONE TABLE OF OBLIGATIONS, which the collector, its audit, the backup, a
-// store move and the references gate each read off the standing and none
-// restates — the three walks' columns are [Pass.Reads]:
+// is owed, retired ones kept for a grace, or derived ones the engine can
+// build again (ADR-0081); every consumer reads its duties off this table:
 //
 //	Standing  Kept from collection  Audited  Carried by a backup  Copied by a store move  Declares a log
 //	Required  yes                   yes      yes                  yes                     yes
 //	Retired   yes, for its grace    no       no                   no                      no
 //	Derived   yes, while named      no       no                   yes                     no
 //
-// "Carried by a backup" is no for Retired and Derived alike: never copied,
-// counted or asked after — on `nats` the bytes ride the bucket's stream
-// snapshot uncounted, like anything else the bucket holds. "Copied by a store
-// move" parts them: a backup is taken again and again and restored rarely, so
-// carrying an object any node can build again would cost its bytes at every
-// backup to spare a rebuild after a restore, while a move is made once, and
-// leaving such an object behind would have every node of the moved fleet
-// build it again (internal/objstore/migrate).
-//
-// A NAMED TYPE WITH NO DEFAULT. Its zero value is refused
-// ([ReferenceTable.Validate]), because every default is a silent failure: a
-// live table read as retired or derived is audited by nobody and accounted for
-// by no backup, and a retired or derived table read as live pages somebody
-// about bytes nobody needs and has every backup copy them, or list them lost.
-// A bool could neither refuse nor hold the third answer: its zero value is one
-// of its two.
+// A backup recurs and is rarely restored, so it skips rebuildable bytes; a
+// move is made once. NO DEFAULT: the zero value is refused
+// ([ReferenceTable.Validate]), as a live table read as retired is unaudited.
 type Standing string
 
 const (
@@ -603,27 +485,15 @@ const (
 	Retired Standing = "retired"
 
 	// Derived is a reference to an object the engine can build again from
-	// what Required rows name — an index over a repository's packs, say — so
-	// losing one costs a rebuild and no data. It keeps the object from
-	// collection while a row names it, exactly as a Required row does (the
-	// collector asks every declared table), and a store move copies it as it
-	// copies a Required one, since the fleet it moves would otherwise build
-	// it again on every node ([PassMove]). The audit never asks after it:
-	// `objects_missing` is the alarm for lost DATA, and would page somebody
-	// about a loss the engine repairs by itself. And no backup copies, counts
-	// or asks after it — on `nats` its bytes ride the bucket's stream
-	// snapshot uncounted — because a restore can do without it: the restored
-	// rows may name objects the restored store lacks, and the engine builds
-	// them again. For the same reason a store move that cannot read one back
-	// whole leaves it behind and holds nothing up.
+	// Required rows (an index over a repository's packs): losing one costs a
+	// rebuild, not data. Kept from collection while a row names it and copied
+	// by a store move ([PassMove]), skipped by the audit (`objects_missing`
+	// alarms lost DATA) and by backups, since a restored row naming a missing
+	// object is built again; a move that cannot read one whole leaves it.
 	//
-	// IT OWES NO GRACE, unlike Retired, because of the obligation it puts on
-	// its domain instead: every reader of a derived object goes on without it
-	// when a read of it fails — reading the rows again for what replaced it,
-	// or building it. So the domain may delete a derived row the moment it
-	// replaces what the row names, and the collector's next pass deletes the
-	// object as it deletes any object nothing names, with none of the sweep
-	// and reviewed grace a retired table owes (internal/objstore/references).
+	// IT OWES NO GRACE, unlike Retired: every reader goes on without it when
+	// a read fails, so the domain may delete the row the moment it replaces
+	// what it names (internal/objstore/references).
 	Derived Standing = "derived"
 )
 
@@ -744,21 +614,14 @@ func (t ReferenceTable) ObjectsAmong(n int) (string, error) {
 }
 
 // ReferencesAfter is the statement answering the next page of at most n rows
-// naming an object, in key order after its one argument — the last key of
-// the page before, or "" for the first. Each row is the key, the digest, the
-// size and then the owner columns.
+// naming an object, in key order after its one argument (the last key of the
+// page before, or "" for the first): key, digest, size, then owner columns.
 //
-// A KEYSET PAGE ON THE KEY COLUMN'S INDEX, so a walk of every reference a
-// pass reads ([ReferenceTable.WalkOf]) holds a page in memory and seeks to
-// each next one, and NULL is excluded by name: a row naming no object (a
-// removed file) is no reference.
-//
-// ONLY FOR A TABLE SOME PASS WALKS — a Required one, which the audit, a backup
-// and a store move read, or a Derived one, which a store move reads
-// ([Pass.Reads]) — and refused for a retired one, whose rows keep objects from
-// collection and name none any pass is owed. Which pass may walk which table
-// is the walk's to refuse, before it builds this statement: the audit's walk
-// and a backup's refuse a derived table as well.
+// A KEYSET PAGE ON THE KEY COLUMN'S INDEX ([ReferenceTable.WalkOf]); NULL is
+// excluded by name, since a row naming no object is no reference. ONLY FOR A
+// TABLE SOME PASS WALKS (Required, or Derived for a store move: [Pass.Reads]);
+// refused for a retired one. Which pass may walk which table is the walk's to
+// refuse before this is built: the audit's and a backup's refuse a derived one.
 func (t ReferenceTable) ReferencesAfter(n int) (string, error) {
 	if n <= 0 {
 		return "", fmt.Errorf("objstore: a page of %d references", n)

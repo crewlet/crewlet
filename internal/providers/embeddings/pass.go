@@ -10,123 +10,65 @@ import (
 	"time"
 )
 
-// # Sending a backlog: one PASS at a time, and what is remembered between
+// A backlog is sent a PASS at a time, one tick of the caller's loop. [Pass]
+// holds every pass to the rules here, written once so the two tables a seat's
+// memory fills share one implementation.
 //
-// A caller with a backlog to embed — the node holding a seat filling the
-// vectors its diary and its episodes lack after a model change — sends it a
-// PASS at a time, one tick of its own loop, and every pass is held to what the
-// provider answered by four rules. [Pass] is them, written once, so the two
-// tables a seat's memory fills share one implementation rather than two copies
-// that drift.
+//   - Every call is ONE request, packed by [Limits.Requests]; every input is
+//     embedded WHOLE as [EmbedWhole] would, cut into [Chunks] and pooled.
+//   - A refusal ([ErrRefused]) is SPLIT, both halves of a split before either
+//     half's own, until the input is alone: at most 1 + 2·⌈log₂n⌉ requests (15
+//     for a full [PassBatch]), plus the canary. The bound each input may be
+//     sent in is REMEMBERED ([Refusals]), so an interrupted isolation resumes.
+//   - An input refused alone is HELD BACK for [RefusalRetry] at no request,
+//     then offered alone again; changed text is a new input (keyed by digest).
+
+// Two more rules.
 //
-//   - THE PASS FORMS EVERY REQUEST. A provider call that fails fails whole, and
-//     a caller handed one error for a hundred and twenty-eight inputs cannot
-//     tell the one the model will never accept from the rest. So inputs are
-//     grouped through the provider's own packing rule ([Limits.Requests], the
-//     one rule) into calls that each are ONE request, and a refused call is a
-//     request whose inputs the pass knows. Every input is embedded WHOLE, as
-//     [EmbedWhole] would embed it: cut into [Chunks] at the model's bound, the
-//     pieces sent together and their vectors pooled, so a long ask or a long
-//     account is read to its end.
-//   - A REFUSAL ([ErrRefused]) IS SPLIT until the input it refuses is alone: a
-//     refused call's inputs may be sent again only in calls of at most half its
-//     size, so one input among n costs at most 1 + 2·⌈log₂n⌉ requests, fifteen
-//     for a full call of [PassBatch] — and one more, the canary below, when
-//     the refusal is the first answer the pass has had. The halves are sent
-//     in the order they were made — both halves of a split before either
-//     half's own — so the inputs a refusal did not concern are accepted
-//     before the pass reaches any input alone. And the bound each input may
-//     be sent in is REMEMBERED ([Refusals]) rather than held by this pass: a
-//     pass that runs out of requests half way through an isolation leaves
-//     the next pass to resume it, rather than to start again at the full
-//     size and spend its own requests on the same halves.
-//   - AN INPUT REFUSED ALONE IS HELD BACK for [RefusalRetry], costing no
-//     request, and then offered again alone. A changed text is a new input
-//     (it is remembered by the digest of what was sent) and is offered at
-//     once.
-//   - AN INPUT ANSWERED WITH NO DIRECTION IS HELD BACK TOO. A request the
-//     provider accepted may still answer one input with a vector nothing can
-//     use — all zeros, or a component that is not finite, for the input or
-//     for one of its pieces, or pieces whose directions cancel — which no
-//     cosine can compare, no pool can weigh and no store keeps. Its
-//     neighbours keep their vectors; it is held back for [RefusalRetry] like
-//     an input refused alone, and is then offered again with its neighbours,
-//     from the piece that had none. It is a fact about this text under this
-//     configuration as a refusal is: forgotten and sent again, it was read
-//     on every pass for ever, and a text longer than a pass paid every
-//     request before that piece again each time it came round.
-//   - ANY OTHER FAILURE ENDS THE PASS — a rate limit, a timeout, a server
-//     down, a credential or model refused ([ErrConfiguration]), an answer of
-//     another width than the provider's own, a cancellation, an answer this
-//     package could not read — because it is a fact about the provider rather
-//     than about an input, and every request after it would meet it too. The
-//     caller's next pass is the retry.
-//
-// And a pass is BOUNDED in what it SENDS — its requests and the prepared bytes
-// of its inputs — never in what came of them: a refused request was still a
-// request, and still bytes against the account's minute. Every call is one
-// request, so a pass never sends more requests than it was given, and never
-// more bytes than it was given but by ONE PIECE: its first call always carries
-// at least one, so a pass whose whole allowance is smaller than one input of
-// the model still moves. A pass that cannot afford its next call is spent, and
-// the next pass sends it.
-//
-// # A text longer than one request, or than a pass
-//
-// The length of a turn's ask is bounded by nothing but the event that carried
-// it, so an input may need more requests than a pass has, more bytes than the
-// account's minute, or longer than the caller's tick to embed. Sent as one call
-// — every request of it at once, as [EmbedWhole] sends it — such an input broke
-// the pass's bound by however long it was, and a call that ran out of time or
-// met a rate limit part way threw away every request it had been answered: the
-// next pass began with the same input again, and the caller's walk stopped
-// there for good.
-//
-// So an input that does not fit what one request carries and the pass has left
-// is sent A REQUEST AT A TIME — as many of its next pieces as one request takes
-// — and what each answer embeds of it is KEPT: its pieces' vectors summed in
-// order ([pooling]) in the memory ([Refusals]), across calls and across passes,
-// and pooled when its last piece is in, to the bit as one call would have pooled
-// them. A pass that runs out mid-way leaves the rest to the next, which resumes
-// at the next piece rather than at the first, and a failure costs only the
-// request it met. A piece refused, or answered with no direction, holds the
-// input back with that sum kept, so its retry an hour on resumes at that piece
-// too. What the memory keeps of such an input is one sum the width of a
-// vector, and it is forgotten like everything else the memory holds about an
-// input no pass meets any more.
-//
-// # When the refusal is the configuration's
-//
-// A provider that refuses a SETTING — a `dimensions` the model does not take,
-// a model the endpoint does not serve at that width — refuses every request
-// whatever its inputs, and answers it as a refusal. Isolating "the input" would
-// then hold every input back one by one, each a request of its own once an hour,
-// for ever. So the first refusal a pass meets before it has had anything
-// accepted is JUDGED, by the one request that tells the two apart: a CANARY
-// ([canary]), one plain word sent alone, which a provider refusing an input for
-// what it says has no reason to refuse and a provider refusing its
-// configuration refuses like everything else. Accepted, the pass is PROVEN —
-// what it meets is refused for being what it is, and is isolated as above.
-// Refused, the configuration is: the pass ends with [ErrRefusedWhole], records
-// nothing against the inputs whose refusal was not theirs, and every pass under
-// that memory is held back for [RefusalRetry]; the first refusal after the
-// pause is judged again, so a configuration that is still refused costs two
-// requests an hour and one that was fixed is embedding again within the hour.
-//
-// THE CANARY, NEVER THE INPUTS, because the inputs a fill meets are not a
-// sample of anything: in steady state the only rows left without a vector are
-// the ones whose embed failed when they were written, which is exactly where a
-// poison input is. A rule concluding from what the inputs did — "two inputs
-// refused alone while nothing was accepted" — took two poison notes met first
-// by a fresh memory, after any boot, for a refused configuration, blamed
-// providers.embeddings and stopped the node's whole fill for an hour, and again
-// after it. And PER PASS, never once per memory: what proves a configuration
-// accepted is an acceptance NOW, a minute's worth of evidence rather than
-// whatever the provider took when the process started, so a setting the
-// endpoint stops honouring mid-life is concluded at the first pass that meets
-// it rather than isolated input by input. A pass that has had anything accepted
-// needs no canary, so a provider that works costs none: the canary is spent
-// only on a pass whose first answer was a refusal.
+//   - An input answered with NO DIRECTION (zeros, a non-finite component, or
+//     pieces whose directions cancel: no cosine, pool or store can use it) is
+//     HELD BACK like one refused alone, its neighbours keeping their vectors.
+//     Forgotten, it was read on every pass for ever.
+//   - Any other failure ENDS THE PASS (rate limit, timeout, server down,
+//     [ErrConfiguration], a foreign width, cancellation, an unreadable answer):
+//     it is a fact about the provider, not an input, and the next request
+//     would meet it too. The caller's next pass is the retry.
+
+// A pass is BOUNDED in what it SENDS (requests and prepared bytes), never in
+// what came of it: a refused request still counts. It overshoots the bytes by
+// at most ONE PIECE, since its first call always carries one, so an allowance
+// smaller than one input still moves. A pass that cannot afford its next call
+// is spent.
+
+// An input may need more requests than a pass has, more bytes than the
+// account's minute, or more time than the caller's tick. Sent as one call it
+// broke the pass's bound, and a call failing part way discarded every answered
+// request. So an input that does not fit is sent A REQUEST AT A TIME and each
+// answer's pieces are KEPT: their vectors summed in order ([pooling]) in the
+// memory ([Refusals]) across calls and passes, then pooled at the last piece to
+// the bit as one call would. A pass running out resumes at the next piece; a
+// refused or directionless piece holds the input back with the sum kept. The
+// memory keeps one vector-width sum per input, forgotten like all it holds
+// about inputs no pass meets any more.
+
+// A provider refusing a SETTING (a `dimensions` the model does not take, a
+// model not served at that width) refuses every request, as a refusal;
+// isolating "the input" would hold every input back, each costing a request an
+// hour for ever. So the first refusal before anything was accepted is JUDGED by
+// a CANARY ([canary]), one plain word sent alone. Accepted: the pass is PROVEN
+// and isolates as above. Refused: the pass ends with [ErrRefusedWhole], records
+// nothing against the inputs, and every pass under that memory is held back for
+// [RefusalRetry]; the next refusal is judged again, so a still-refused
+// configuration costs two requests an hour and a fixed one embeds within it.
+
+// THE CANARY, NEVER THE INPUTS: a fill's inputs are not a sample, since in
+// steady state the only rows without a vector are those whose embed failed,
+// which is where a poison input is. Concluding from "two inputs refused alone
+// while nothing was accepted" blamed providers.embeddings for two poison notes
+// and stopped the fill for an hour. And PER PASS, not once per memory: proof is
+// an acceptance NOW, so a setting the endpoint stops honouring mid-life is
+// concluded at the first pass that meets it. A pass with anything accepted
+// needs no canary.
 
 // PassBatch is the most inputs one call of a pass carries.
 //
@@ -477,21 +419,16 @@ func (p *Pass) settle(c call, raw [][]float32, spans [][2]int, width int,
 	return settled, vectors
 }
 
-// embedded is what an accepted answer made of q — the vectors of its pieces up
-// to upTo — and whether that settles it: an input of one piece takes that
-// piece's vector as the provider answered it, the vector [Embedder.Embed] gives
-// the same text wherever the provider answers an array as it answers a string,
-// and an input of several takes the [Pool] of all of them, the vector
-// [EmbedWhole] gives it, summed across however many calls carried them.
+// embedded is what an accepted answer made of q (its pieces up to upTo) and
+// whether that settles it: one piece takes the provider's vector as answered
+// (what [Embedder.Embed] gives), several take the [Pool] of all of them, as
+// [EmbedWhole] gives, summed across the calls that carried them.
 //
 // An answer with NO DIRECTION settles q with no vector and says why: a single
-// piece's vector of zeros or not finite, the first such piece of several — q's
-// begun is then the sum of every piece before it, so the retry resumes at that
-// piece — or pieces whose directions cancel, which leave nothing to resume and
-// begin again. It costs only q; its neighbours in the call keep theirs.
-//
-// Not settled — pieces still to send — what is summed of it is kept in the
-// memory, so a pass that stops here leaves the next one to send only the rest.
+// piece of zeros or non-finite, the first such piece of several (q's begun is
+// then the sum before it, so the retry resumes there), or pieces whose
+// directions cancel, which begin again. It costs only q; its neighbours keep
+// theirs. Not settled, what is summed is kept in the memory for the next pass.
 func (p *Pass) embedded(q *queued, upTo int, answer [][]float32, width int) (
 	vector []float32, done bool, unusable error,
 ) {
@@ -776,18 +713,13 @@ func keyOfInput(in PassInput) refusalKey {
 // Refusals is what ONE provider configuration refused, held across the passes
 // sent to it: the size each input of an unfinished isolation may be sent in,
 // when an input was refused alone or answered with no direction, and until
-// when a configuration the [canary] found refused is left alone — see [Pass].
-// And, beside them, what it has embedded of each text a pass began and did not
-// finish ([PassProgress]), which is a fact about the same provider for the
-// same reason.
+// when a configuration the [canary] found refused is left alone (see [Pass]),
+// plus what it has embedded of each unfinished text ([PassProgress]).
 //
-// THIS NODE'S ALONE, and in memory: a cache of what one provider told one
-// caller, whose loss costs one more isolation of each input it held, and one
-// more send of what was embedded of a text that was not finished. Nothing
-// about it is a fact a fleet must agree on. A caller builds a new one when the
-// provider is configured otherwise — its model, width, limits or endpoint —
-// because a refusal is a fact about the provider as it was configured, and
-// keeps this one when the provider is merely built again the same.
+// THIS NODE'S ALONE, and in memory: a cache whose loss costs one more
+// isolation per input and one more send of unfinished text; no fleet agrees on
+// it. A caller builds a new one when the provider's model, width, limits or
+// endpoint change (a refusal is a fact about the provider as configured).
 //
 // Safe for concurrent use.
 type Refusals struct {

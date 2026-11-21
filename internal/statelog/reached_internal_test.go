@@ -9,14 +9,11 @@ import (
 // THE REACHED POSITION PASSES NOTHING THAT WRITES A ROW, AND NOTHING IT HAS NOT
 // BEEN HANDED IN ORDER.
 //
-// A reader is released the moment the position passes a record, before any
-// transaction — which is right for a barrier this node authenticated, since its
-// transaction is the checkpoint and nothing else, and wrong for every record
-// whose transaction writes a row: a read released over it is served from rows
-// without it. So each case is a record one term of [writesNoRow] or the walk's
-// own order is there to stop, put next in the log after the position, with a
-// barrier the position could pass behind it — and the position must stop in
-// front of the record, never pass it to that barrier.
+// A reader is released the moment the position passes a record, so passing one
+// whose transaction writes a row serves a read from rows without it. Each case
+// puts next after the position a record that one term of [writesNoRow], or the
+// walk's order, stops at, with a passable barrier behind it: the position must
+// stop in front of the record.
 func TestTheReachedPositionPassesNothingThatWritesARow(t *testing.T) {
 	t.Parallel()
 	at := func(seq uint64) Position { return Position{Stream: "s", Generation: 1, Seq: seq} }

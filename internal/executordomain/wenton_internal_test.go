@@ -38,25 +38,18 @@ func (e *estate) endStamped(p End, v int) []byte {
 	return encoded
 }
 
-// AN END WHOSE TURN WENT ON PAST ITS SESSION KEEPS IT. A turn whose row names a
-// session it went on past — a capture its job took while it still worked, its
-// final capture refused after it; a launch's capture that a later launch
-// continued, or started fresh beside, and that kept nothing of its own — ends
-// saying so, and the row keeps that session, its ending naming any newer
-// capture that was not kept: what the turn did up to it, which holds more than
-// the conversation's previous head or a fresh session would. And the end
-// absorbs what the turn's read handed out, as any turn that landed a capture
-// does, so the conversation's next turn is handed this session as its head —
-// unless the session itself ran out of context in the turn, which retires it
-// whatever the end says. Released instead, the row named no session and the
-// head was handed the conversation's previous one; released and then absorbed,
-// as the rule once was, the conversation was left with no head at all.
+// AN END WHOSE TURN WENT ON PAST ITS SESSION KEEPS IT: a session the turn went
+// past (a capture taken while it still worked, its final capture refused after;
+// a launch's capture a later launch continued or started fresh beside) holds
+// more than the conversation's previous head or a fresh session would. The end
+// still absorbs what the turn's read handed out, as any turn that landed a
+// capture does, so the next turn is handed this session as its head, unless it
+// ran out of context in the turn, which retires it whatever the end says.
 //
-// Mutation: take the row's session off for an unkept attempt whatever the end
-// is stamped, and the cases beside a newer capture not kept lose it; absorb
-// nothing where the end says the turn went on, and the head the turn was handed
-// stays beside it; let went_on shield a session that ran out of context, and the
-// last case keeps a session no launch may continue.
+// Mutation: take the session off for an unkept attempt whatever the stamp, and
+// the cases beside a newer unkept capture lose it; absorb nothing on went_on, and
+// the old head stays; let went_on shield a session that ran out of context, and
+// the last case keeps a session no launch may continue.
 func TestAnEndWhoseTurnWentOnPastItsSessionKeepsIt(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -123,22 +116,18 @@ func TestAnEndWhoseTurnWentOnPastItsSessionKeepsIt(t *testing.T) {
 	}
 }
 
-// AN END STAMPED BELOW FOUR IS APPLIED BY THE RULE IT WAS WRITTEN UNDER. A
-// record's meaning is fixed by its stamp. An end naming its turn's newest
-// capture as not kept, newer than the capture its row names, and stamped below
-// version 4 — every end a build before it wrote, an end of this build that
-// carries nothing newer than the base format or a session that ran out, a relay
-// keeping its writer's version — is applied as those builds apply it on every
-// copy they hold: the older session goes off the row, and the end absorbs
-// nothing, so the head the turn was handed stays. One stamped 4 is applied by
-// the rule version 4 brought, whether or not its ending says the turn went on:
-// the row keeps its session, and the end absorbs the head. Decided by the field
-// instead, a node of the build before and a node of this one would apply one
-// end two ways, and hold rows no other copy holds.
+// AN END STAMPED BELOW FOUR IS APPLIED BY THE RULE IT WAS WRITTEN UNDER: a
+// record's meaning is fixed by its stamp ([wentOnVersion]). Below 4 (every older
+// build's end, this build's end carrying nothing newer than the base format or
+// a session that ran out, a relay keeping its writer's version), an end naming a
+// newer unkept capture takes the older session off the row and absorbs nothing.
+// Stamped 4, with or without went_on, the row keeps its session and the end
+// absorbs the head. Decided by the field instead, two builds would apply one end
+// two ways and hold rows no other copy holds.
 //
-// Mutation: branch on whether the ending carries went_on rather than on the
-// stamp, and the end stamped 4 without it releases the session; apply every end
-// by the new rule, and the ends stamped 1 and 3 keep theirs and absorb the head.
+// Mutation: branch on went_on rather than the stamp, and the end stamped 4
+// without it releases the session; apply every end by the new rule, and the
+// ends stamped 1 and 3 keep theirs and absorb the head.
 func TestAnEndStampedBelowFourIsAppliedByTheRuleItWasWrittenUnder(t *testing.T) {
 	t.Parallel()
 	unkept := &executorkeep.Unkept{LaunchSeq: 2, CaptureSeq: 1, Reason: "the object store's reservation is spent"}

@@ -49,14 +49,11 @@ var ErrSeveralRoles = errors.New("the account holds several Datadog roles, and a
 // KeptAccess is one seat's lane as the vendor holds it, in the document's
 // terms: what "Keep the vendor's setting" (after drift, D2) and "Keep off"
 // (after the account was turned off at the vendor, D3) write, so the next sync
-// finds nothing to restore. want is the lane as the document holds it now, and
-// have what the vendor shows.
-//
-// EACH VENDOR'S SETTING IN ITS OWN TERMS:
-//   - an account turned off is kept off, and keeps the access the document
-//     names, so turning it back on restores that rather than nothing;
-//   - Slack holds no level, permissions or scope here (its scopes are its
-//     app's), so only on or off is kept;
+// finds nothing to restore. want is the lane as the document holds it, have
+// what the vendor shows. EACH VENDOR'S SETTING IN ITS OWN TERMS:
+//   - an account turned off is kept off with the access the document names, so
+//     turning it back on restores that rather than nothing;
+//   - Slack keeps only on or off (its scopes are its app's);
 //   - GitHub keeps the app's permissions, every other vendor its level;
 //   - a lane that narrows by scope keeps the vendor's scope.
 func KeptAccess(lane Lane, want Desired, have Observed) (Desired, error) {

@@ -12,23 +12,16 @@ import (
 
 // PullFacts is one pull request as a merge decision reads it.
 //
-// # Every fact is about one commit
+// EVERY FACT IS ABOUT ONE COMMIT: a push after the reviews were read would
+// leave an approval of a commit nobody is merging, so the head is read once and
+// everything else against it. An approval counts only when it reviewed
+// [PullFacts.HeadSHA], the checks are that commit's, and the merge names it
+// ([Client.MergePull]), which GitHub refuses if the head has moved.
 //
-// A delegate's "allow" stands only on facts that hold at decision time, and
-// the one that moves under them is the head: a push after the reviews were
-// read would leave an approval of a commit nobody is merging. So the head is
-// read once, here, and everything else is read AGAINST it: an approval counts
-// only when it reviewed [PullFacts.HeadSHA], and the checks are that commit's.
-// The merge then names the same commit ([Client.MergePull]), and GitHub
-// refuses it if the head has moved since.
-//
-// # A partial answer is refused, never returned
-//
-// Each list is read whole ([ErrListTooLong]) and each read either answers or
-// fails the call: a reviewer's later change request on page two, or a failing
-// check past a cut, would make a partial answer a wrong one. What GitHub
-// refuses to show the credential is the one exception, said per check
-// ([CheckUnread]).
+// A PARTIAL ANSWER IS REFUSED, never returned: each list is read whole
+// ([ErrListTooLong]), since a change request on page two or a failing check
+// past a cut would make it wrong. What GitHub hides from the credential is the
+// exception, said per check ([CheckUnread]).
 type PullFacts struct {
 	Ref PullRef `json:"ref"`
 

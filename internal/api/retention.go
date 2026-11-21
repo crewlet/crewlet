@@ -17,33 +17,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE THREE RETENTION GESTURES THAT WRITE, over HTTP for one reason.
+// THE THREE RETENTION GESTURES THAT WRITE, over HTTP for one reason: each
+// changes FLEET state held in the broker, and the default embedded broker binds
+// no socket, so a CLI cannot reach it while the engine is UP
+// (internal/queue/jetstream's StoreDirLock). `crewlet retention ack`, `evict`
+// and `readmit` are clients of these routes.
 //
-// Every one of them changes FLEET state: an acknowledgement is a record in the
-// coordination store's positions register, and an eviction or a readmission is
-// a record on every identity-claiming state log. Both live in the broker, and
-// on the default topology that is the engine's own embedded one, which binds no
-// socket: a CLI run while the engine is UP cannot reach it — a second broker
-// on its store directory is refused (internal/queue/jetstream's
-// StoreDirLock) — and these gestures act on a fleet that is running, so the
-// node already holding that state is where they go.
-//
-// So each gesture goes where the state is reachable: through a node that
-// already holds it. `crewlet retention ack`, `evict` and `readmit` are clients
-// of these routes, exactly as `crewlet backup` is of its own.
-//
-// # Why they are POSTs even though one of them only publishes a number
-//
-// An acknowledgement moves the floor the trim deletes against, an eviction
-// stops a machine's records applying, and a readmission lets them apply again
-// — none is a read, and nothing about one should be retried by a proxy or
-// prefetched by a browser the way a GET may be.
-//
-// # Who may make them
-//
-// `admin`, decided by the authority table where [App.mountDeployment] mounts
-// them — every route in this file, the two reads included. The handlers resolve
-// the caller for the audit line and decide nothing themselves.
+// All are POSTs: each moves the trim's floor or whether a machine's records
+// apply, so no proxy may retry nor a browser prefetch it. `admin` decides, by
+// the authority table where [App.mountDeployment] mounts them (the two reads
+// included); handlers resolve the caller for the audit line only.
 
 // retentionWriter is the slice of the fleet these routes need.
 //
@@ -83,38 +66,16 @@ type NodeGate interface {
 
 // serveRetentionAck answers POST /worklet/retention/ack.
 //
-// It publishes an OPERATOR backup floor: the assertion that a copy has reached
-// wherever the company's policy says it must, which the engine cannot see for
-// itself — a backup is not a backup until it leaves the host.
+// It publishes an OPERATOR backup floor: that a copy reached wherever the
+// policy says, which the engine cannot see. `?stream=` and `?position=` are
+// required, none guessed: this moves the floor the trim deletes against. One
+// log per acknowledgement ([coord.BackupPointKey]).
 //
-// `?position=` is the sequence, and it is per STREAM because a position's
-// number space belongs to the stream it came from: `?stream=` names which. A
-// call naming neither is refused rather than guessed at, because guessing here
-// moves the floor the trim deletes against.
-//
-// ONE LOG PER ACKNOWLEDGEMENT, and the register files it under that log
-// ([coord.BackupPointKey]), so acknowledging another log leaves this one
-// standing: under `backup_floor: operator` the procedure is one of these per
-// log, and each log's trim reads its own.
-//
-// `?taken_at=` IS WHEN THE COPY WAS TAKEN, an RFC 3339 instant, and it is what
-// the point records as [coord.BackupPoint.At]. The acknowledgement is given
-// after the copy reached wherever it was going, often hours later, and the
-// backup-age alarm and the no-verified-backup notice age the COPY: stamped
-// with the time of the call, an acknowledgement of a copy days old cleared
-// both as though it were fresh. So the instant has no default, and one later
-// than this node's clock is refused rather than recorded, with no allowance
-// for a clock that runs ahead: an instant past now is a copy younger than any
-// could be, which overstates the one thing the field exists to state, and an
-// operator whose own clock leads can give the instant by this node's, which
-// the refusal reads out. The zero instant is refused with a missing one: it
-// says nothing about any copy, and the register would refuse it anyway.
-//
-// AN OLDER COPY MAY REPLACE A NEWER ONE. The point under this log is the
-// operator's newest ASSERTION, and an operator who finds the newer copy bad
-// has to be able to fall back to an older one. Either way the record states
-// the copy the operator vouches for, and moving it back is the conservative
-// direction: the trim deletes less, and the backup's age reads older.
+// `?taken_at=` IS WHEN THE COPY WAS TAKEN, RFC 3339 ([coord.BackupPoint.At]):
+// the backup-age alarm ages the COPY, so a call-time default would clear it for
+// a copy days old. Zero is refused as missing, a future instant (by this node's
+// clock, no allowance) as impossible.
+// AN OLDER COPY MAY REPLACE A NEWER ONE: falling back is conservative.
 func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	position, err := strconv.ParseUint(r.URL.Query().Get("position"), 10, 64)
@@ -195,38 +156,13 @@ func (a *App) serveRetentionAck(w http.ResponseWriter, r *http.Request) {
 // generationOf is the generation the NAMED stream's log stands at, taken from
 // the domain this node is running rather than from the fleet's registers.
 //
-// # The question is per stream, and neither register can be asked per stream
-//
-// An acknowledgement is filed under a STREAM — [coord.BackupPoint.Streams] is
-// what the trim's backup term looks its reach up in — while the published
-// floors are keyed by DOMAIN and every data node's positions heartbeat by
-// domain too, and neither record carries a stream name at all. So there was no
-// lookup to perform in them, and what the two sources here actually did was
-// take the FIRST row of whichever one answered. That is not "the fleet's
-// generation": a reanchor moves ONE domain's, so on an estate where the tracker
-// has been re-anchored and the pages log has not, the two numbers differ and
-// which one came back was whichever key the store happened to list first.
-//
-// # And a generation that is too HIGH is not a refused acknowledgement
-//
-// The trim discards a backup point BELOW its own generation and reads one at
-// or above it as covering the log (see [statelog.TrimInputs]'s backup term).
-// So a point stamped with a re-anchored neighbour's higher generation counts —
-// at a sequence belonging to a number space that is not this log's — and the
-// trim then deletes records the acknowledged copy does not contain. The one
-// failure this whole route exists to prevent.
-//
-// # Why the running domain is the right source
-//
-// It is the SAME number the trim compares against: both read that stream's
-// applier committed cursor. A node that has not yet applied a reanchor answers
-// LOW, which the trim's own guard refuses — the safe direction, and a visible
-// one, because the acknowledgement echoes back the generation it recorded.
-//
-// A stream this build does not run has no such cursor and is REFUSED, where
-// the register sources answered it confidently with some other log's number:
-// a mistyped stream name used to read back as a successful acknowledgement
-// that nothing would ever count.
+// The fleet's registers are keyed by DOMAIN and name no stream, and a reanchor
+// moves ONE domain's generation, so none can answer per stream. A generation
+// too HIGH is what this route prevents: the trim reads a point at or above its
+// generation as covering the log ([statelog.TrimInputs]), so a neighbour's
+// number would delete records the copy lacks. The running domain is the SAME
+// number the trim compares; a node behind a reanchor answers LOW, which the
+// trim's guard refuses. An unrun stream has no cursor and is REFUSED.
 func (a *App) generationOf(stream string) (uint32, error) {
 	// FROM MEMORY, never through the reanchor's status read: that one reads
 	// the stream's creation instant LIVE from the broker, which this route
@@ -238,12 +174,9 @@ func (a *App) generationOf(stream string) (uint32, error) {
 // mountRetention registers the write half of the retention surface, through
 // the mount [App.mountDeployment] hands it — which is what decides the grant.
 //
-// NO PURGE HERE. A work item's purge used to be `POST /worklet/{id}/purge` on
-// this surface, with an operator check written beside it; it is
-// `POST /worklet/items/{key}/purge` on the human write surface now
-// (internal/api/workapi), decided by the authority table's
-// [authz.ActionWorkPurge] like every other verb, with its op id taken from the
-// request's `Idempotency-Key`.
+// NO PURGE HERE: a work item's purge is `POST /worklet/items/{key}/purge` on the
+// human write surface (internal/api/workapi), decided by
+// [authz.ActionWorkPurge], its op id the `Idempotency-Key`.
 func (a *App) mountRetention(mount func(string, authz.Effect, http.HandlerFunc)) {
 	mount("POST /worklet/retention/ack", authz.EffectRewrites, a.serveRetentionAck)
 	// AN EVICTION IS TAKEN BACK by a readmission, its inverse commit, so it
@@ -256,17 +189,12 @@ func (a *App) mountRetention(mount func(string, authz.Effect, http.HandlerFunc))
 // named name where it brought none.
 //
 // A retry is only a retry under the SAME id: a gesture that came back `unknown`
-// or partial is finished by sending the id it answered with, and one sent with
-// a fresh id is a second gesture.
-//
-// THE ID CARRIES THE INSTANT IT WAS MINTED, which is what the state log reads
-// to decide whether its ledger can vouch for the retry — so the one minted here
-// is [statelog.NewOpID]'s, and the id a caller brings back is the one the route
-// answered with, instant and all.
+// or partial is finished by sending the id it answered with; a fresh id is a
+// second gesture. THE ID CARRIES THE INSTANT IT WAS MINTED, which the state log
+// reads to decide whether its ledger can vouch for the retry ([statelog.NewOpID]).
 //
 // An id [statelog.CheckCallerOpID] refuses is answered `400 op_id_invalid` and
-// false is returned with the response already written; nothing is judged or
-// written.
+// false is returned, the response written; nothing is judged or written.
 func callerOpID(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
 	opID := r.URL.Query().Get("op_id")
 	if opID == "" {
@@ -316,34 +244,16 @@ func gateNoun(evict bool) string {
 
 // gate answers the eviction and readmission routes.
 //
-// ONE HANDLER FOR BOTH, because they are one gesture with a sign: a
-// readmission is the INVERSE COMMIT rather than a delete, written onto the same
-// subjects of the same logs, so two handlers would be two copies of one refusal
-// vocabulary.
-//
-// # One gesture, every identity-claiming log, and each log's own answer
-//
-// The engine judges the gesture once and then writes its record to every log
-// the trim counts nodes on — see [engine.NodeGate]. A refusal is a 409 with
-// nothing written anywhere: an eviction of a node still holding a live
-// presence lease (unless `force=true`), a readmission of one below a trim
-// floor it would be counted against, each carrying the numbers the refusal is
-// about, and every refusal carries its remedy as `actions` — what to do, in a
-// closed set ([statelog.GateAction]) each surface renders in its own words —
-// beside `hint`, the sentence saying why in none of them. Past the judgement
-// the answer is 200 and PER LOG ([GateAnswer], rendered by [RenderGate] and by
-// nothing else) — each with its own three-valued outcome, or the refusal that
-// stopped that log — and `complete` says whether every log now holds the
-// record. An incomplete answer is not a failure to report as one: the logs
-// that answered hold their record, and a log the gesture did not finish
-// carries `actions` and `hint` — `retry_same_op` where the same request sent
-// again with the `op_id` it answered with can finish it, something else where
-// it cannot.
-//
-// A dropped request does not stop a gesture half-way: once its first record is
-// about to be written the engine finishes it under its own budget
-// ([engine.GateLogBudget]), and the caller that minted the `op_id` it sent can ask
-// again with it to read every log's answer.
+// ONE HANDLER FOR BOTH: a readmission is the INVERSE COMMIT, so two handlers
+// would copy one refusal vocabulary. The engine judges once and writes to every
+// log the trim counts nodes on ([engine.NodeGate]). A refusal is a 409 with
+// nothing written (a live presence lease unless `force=true`; a trim floor the
+// node would be counted against), carrying its numbers and its remedy as
+// `actions` ([statelog.GateAction]) beside `hint`. Past the judgement the
+// answer is 200 and PER LOG ([GateAnswer], rendered only by [RenderGate]);
+// `complete` says whether every log holds the record; one left unfinished
+// carries `actions` (`retry_same_op`: resend with the `op_id` it answered with).
+// A dropped request does not stop a gesture half-way ([engine.GateLogBudget]).
 func (a *App) gate(evict bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		node := r.PathValue("node")
@@ -483,19 +393,16 @@ func (a *App) mountCapacity(mount func(string, authz.Effect, http.HandlerFunc)) 
 }
 
 // serveReanchorStatus answers GET /worklet/retention/reanchor: the stream's own
-// creation instant, which is the value the confirmation has to echo, and the
-// case a reanchor would answer now — `recreated` (followed from its first
-// surviving record), `restored` (followed from its end) or `abandoned`
-// (followed from this node's own checkpoint, a generation only an evicted peer
-// held made void), with the sequence the checkpoint would go to — or, with no
-// case, why there is nothing to re-anchor. A restored log holding records this
-// node's rows do not — written after the restore — also answers `discards`,
-// the newest of them, and `discarding`, why a reanchor refuses them without
-// `discard=true`.
+// creation instant, which the confirmation has to echo, and the case a reanchor
+// would answer now: `recreated` (followed from its first surviving record),
+// `restored` (from its end) or `abandoned` (from this node's own checkpoint, a
+// generation only an evicted peer held made void), with the sequence the
+// checkpoint would go to, or why there is nothing to re-anchor. A restored log
+// holding records this node's rows lack also answers `discards` (the newest)
+// and `discarding`, why a reanchor refuses them without `discard=true`.
 //
-// A SEPARATE READ, because the confirmation is meant to say "I looked at the
-// thing I am re-anchoring": a verb that printed the value and accepted it back
-// in one call would be confirming against its own output.
+// A SEPARATE READ, so the confirmation says "I looked at the thing I am
+// re-anchoring", not one call confirming against its own output.
 func (a *App) serveReanchorStatus(w http.ResponseWriter, r *http.Request) {
 	stream := r.URL.Query().Get("stream")
 	if stream == "" {
@@ -696,19 +603,15 @@ func (a *App) serveMaintenanceStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	if found {
 		body["operation"] = operationWith(op, state.Acks, state.AcksErr)
-		// WHAT IS MISSING, computed here rather than left to a reader:
-		// the whole question an operator runs this for is why the window
-		// hasn't moved, and a list of acknowledgements is that answer only
-		// if you already know the rule. WHICH LIST IS THE PHASE'S. At
-		// `opened` the next step is the baseline, which reads a restart
-		// into a maintenance mode from every participant and the
-		// admissions; the seal's list there named every node as owing a
-		// seal restart the procedure hadn't asked for yet. Past it, the
-		// seal is the next step and no step reads an admission again.
-		// AND ONCE IT HAS SEALED, THE SEAL IS A FACT OF THE PHASE: the
-		// verify and the release wait on no node, and the seal's rule
-		// applied to what nodes wrote since judged a node restarted again
-		// after it, so the page said "not sealed" under PHASE sealed.
+		// WHAT IS MISSING, computed here: an operator runs this to learn
+		// why the window hasn't moved. WHICH LIST IS THE PHASE'S: at
+		// `opened` the next step is the baseline (a restart into maintenance
+		// from every participant, and the admissions), not the seal's list,
+		// which would name every node as owing a seal restart. Past it the
+		// seal is next and no step reads an admission again. ONCE SEALED,
+		// THE SEAL IS A FACT OF THE PHASE: verify and release wait on no
+		// node, and re-applying the seal's rule to later writes read "not
+		// sealed" under PHASE sealed.
 		switch op.Phase {
 		case coord.PhaseOpened:
 			if acksRead {

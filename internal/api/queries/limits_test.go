@@ -63,13 +63,6 @@ func TestEveryLimitIsReadFromTheKeyItNames(t *testing.T) {
 		"code.scratch.idle_days":                      "14",
 		"code.scratch.max_per_seat":                   "20",
 		"chat.chatlet.message_retention_days":         "90",
-		"assistant.max_steps":                         "12",
-		"assistant.turn_timeout_seconds":              "600",
-		"assistant.proposal_ttl_seconds":              "300",
-		"assistant.retention_days":                    "60",
-		"assistant.deep_work.timeout_seconds":         "900",
-		"assistant.deep_work.max_steps":               "120",
-		"assistant.deep_work.max_tokens":              "500000",
 	}
 	doc := "name: Acme\n" + nest(withContext(written))
 	c, err := config.ParseCompany([]byte(doc))
@@ -133,12 +126,6 @@ func withContext(flat map[string]string) map[string]string {
 	for key := range flat {
 		if strings.HasPrefix(key, "code.") {
 			out["code.backend"] = "gitlet"
-		}
-		// Deep work's bounds need deep work, which needs a Claude Code entry.
-		if strings.HasPrefix(key, "assistant.deep_work.") {
-			out["assistant.deep_work.llm"] = "deep"
-			out["providers.llm.deep.harness"] = "claude-code"
-			out["providers.llm.deep.model"] = "sonnet"
 		}
 	}
 	return out
@@ -277,14 +264,12 @@ func TestTheLimitsAreAnAdministratorsAndNeedACompany(t *testing.T) {
 
 // EVERY CAP A SCREEN CHANGES REPORTS THE RANGE THE VALIDATOR HOLDS IT TO.
 //
-// Settings › Limits checks a typed value against the row's range before it
-// sends anything, so a range missing from a settable row is a cap whose editor
-// sends 0 or -2 for the engine to refuse, and a range that differs from the
-// validator's is an editor that refuses what the engine runs or sends what it
-// refuses. Each settable row's range is therefore tried against the validator
-// itself: the value just outside each bound is refused at the row's key,
-// carrying that same range for the screen to word, and a value inside it is
-// admitted.
+// Settings › Limits checks a typed value against the row's range before
+// sending, so a missing range sends 0 or -2 for the engine to refuse, and a
+// differing one refuses what the engine runs or sends what it refuses. Each
+// settable row's range is tried against the validator itself: the value just
+// outside each bound is refused at the row's key, carrying that same range,
+// and a value inside it is admitted.
 //
 // Mutation: drop a key from config's settingRanges, or tighten a validator
 // past its declared range, and a row here fails.

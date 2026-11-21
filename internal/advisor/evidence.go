@@ -25,10 +25,14 @@ const (
 	ClassAskOvertaken             Class = "ask.overtaken"
 	ClassReviewIdle               Class = "review.idle"
 	ClassNoticeLoad               Class = "person.notice_load"
-	ClassNoopShare                Class = "wake.noop_share"
-	ClassPickupStillWaiting       Class = "work.pickup_still_waiting"
-	ClassAuxiliaryShare           Class = "spend.auxiliary_share"
-	ClassRedeliveredSeen          Class = "wake.redelivered_seen"
+	// ClassNoopShare is no longer listed: wake.reason_waste says the same by
+	// what woke the turns, with its numbers, and its findings resolve on the
+	// next run. It is still read for the usage insights, whose published
+	// catalogue shares it ([Shared]).
+	ClassNoopShare          Class = "wake.noop_share"
+	ClassPickupStillWaiting Class = "work.pickup_still_waiting"
+	ClassAuxiliaryShare     Class = "spend.auxiliary_share"
+	ClassRedeliveredSeen    Class = "wake.redelivered_seen"
 	// ClassNoVerifiedBackup is the owner's: no backup within the policy's age.
 	ClassNoVerifiedBackup Class = "durability.no_verified_backup"
 	// ClassApprovalRubberStamp is the owner's: a person chose one agent's
@@ -93,10 +97,25 @@ type Evidence struct {
 	// Waiting is each agent seat's wakes queued now, by handle, where its
 	// holder reported them.
 	Waiting map[string]int
+	// Episodes is every alarm episode on any node that stood in the window.
+	Episodes []AlarmEpisode
+	// Flow is how long each seat's items in progress stood in each flow
+	// state over the window (ADR-0162).
+	Flow []worklet.FlowHours
+	// Skips is every scheduled run the dispatch ledger skipped in the window.
+	Skips []ScheduleSkip
+	// StaffingWeek and StaffingFortnight are the staffing classes' exact
+	// reads over their windows of whole company days; nil where unread.
+	StaffingWeek, StaffingFortnight *Staffing
+	// Capacity is the hours each model entry was out on its usage limit over
+	// the week's company days (ADR-0166); nil where unread.
+	Capacity *Capacity
+	// CapacityUnread says the seats' park records could not be read.
+	CapacityUnread bool
 	// The Unread flags say the caller could not read that source, so its
 	// classes raise nothing and the answer names it.
-	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread bool
-	StopsUnread, MergesUnread                                                     bool
+	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread      bool
+	StopsUnread, MergesUnread, EpisodesUnread, FlowUnread, SkipsUnread, StaffingUnread bool
 }
 
 // source is the record a detector reads.
@@ -119,6 +138,16 @@ const (
 	sourceStops
 	// sourceMerges is the access log's merge escalations, [Evidence.Merges].
 	sourceMerges
+	// sourceEpisodes is the advisor log's alarm history, [Evidence.Episodes].
+	sourceEpisodes
+	// sourceFlow is the tracker's flow record, [Evidence.Flow].
+	sourceFlow
+	// sourceSkips is the schedules' skipped runs, [Evidence.Skips].
+	sourceSkips
+	// sourceStaffing is the seats' exact time, [Evidence.StaffingWeek].
+	sourceStaffing
+	// sourceCapacity is the seats' park records, [Evidence.Capacity].
+	sourceCapacity
 )
 
 // unread reports whether ev could not read src.
@@ -140,6 +169,16 @@ func (ev Evidence) unread(src source) bool {
 		return ev.StopsUnread
 	case sourceMerges:
 		return ev.MergesUnread
+	case sourceEpisodes:
+		return ev.EpisodesUnread
+	case sourceFlow:
+		return ev.FlowUnread
+	case sourceSkips:
+		return ev.SkipsUnread
+	case sourceStaffing:
+		return ev.StaffingUnread
+	case sourceCapacity:
+		return ev.CapacityUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -186,6 +225,8 @@ var detectors = []detector{
 	{ClassWorkBottleneck, sourceWork, workBottleneck},
 	{ClassWorkHeldByPerson, sourceWork, workHeldByPerson},
 	{ClassMergeNoChecks, sourceMerges, mergeNoChecks},
+	{ClassPoolWaits, sourceEpisodes, poolWaits},
+	{ClassFalseAlarm, sourceEpisodes, falseAlarm},
 }
 
 // Thresholds, each the point where a pattern stops being a slip: routing on
@@ -258,7 +299,12 @@ func classesOf(src source) []Class {
 	return out
 }
 
-// Detect is every evidence finding ev raises, the most costly first.
+// Shared reports a class the Advisor no longer lists and the usage insights
+// still share: [Detect] raises it, and [ReadWithEvidence] keeps it apart.
+func Shared(c Class) bool { return c == ClassNoopShare }
+
+// Detect is every evidence finding ev raises, the most costly first, the
+// [Shared] classes' included.
 func Detect(ev Evidence, kind func(handle string) SeatKind) []Finding {
 	out := []Finding{}
 	for _, d := range detectors {
@@ -276,7 +322,7 @@ func Detect(ev Evidence, kind func(handle string) SeatKind) []Finding {
 
 // ReadWithEvidence is [Read] with the findings ev raises beside the document's.
 func ReadWithEvidence(in Inputs, ev Evidence) Answer {
-	answer := Read(in)
+	answer := readEach(in)
 	c := in.Company
 	kinds := map[string]SeatKind{}
 	for role := range c.EachRole() {
@@ -285,18 +331,30 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 			kinds[role.Seat().Handle()] = SeatPerson
 		}
 	}
-	found := Detect(ev, func(h string) SeatKind { return kinds[h] })
-	for i := range found {
-		if s := &found[i].Subject; s.Kind == SubjectSeat {
+	var found []Finding
+	for _, f := range Detect(ev, func(h string) SeatKind { return kinds[h] }) {
+		if s := &f.Subject; s.Kind == SubjectSeat {
 			s.Name = seatName(c, s.Seat)
 		}
+		if Shared(f.Class) {
+			answer.Shared = append(answer.Shared, f)
+			continue
+		}
+		found = append(found, f)
 	}
 	for _, d := range documented {
-		if !ev.unread(d.source) {
-			found = append(found, d.detect(c, ev)...)
+		if ev.unread(d.source) {
+			continue
+		}
+		found = append(found, d.detect(c, ev)...)
+		if d.silent != nil {
+			if reason := d.silent(c, ev); reason != "" {
+				answer.Silent = append(answer.Silent, Silence{Class: d.class, Reason: reason})
+			}
 		}
 	}
-	answer.Findings = scheduleEvidence(c, ev, append(answer.Findings, found...))
+	answer.Findings = groupCauses(c, scheduleEvidence(c, ev, append(answer.Findings, found...)))
+	stateHeadlines(c, answer.Findings)
 	sortFindings(answer.Findings)
 	if ev.WorkUnread {
 		answer.Unread = append(answer.Unread, UnreadWork)
@@ -321,6 +379,21 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	}
 	if ev.MergesUnread {
 		answer.Unread = append(answer.Unread, UnreadMerges)
+	}
+	if ev.EpisodesUnread {
+		answer.Unread = append(answer.Unread, UnreadEpisodes)
+	}
+	if ev.FlowUnread {
+		answer.Unread = append(answer.Unread, UnreadFlow)
+	}
+	if ev.SkipsUnread {
+		answer.Unread = append(answer.Unread, UnreadSkips)
+	}
+	if ev.StaffingUnread {
+		answer.Unread = append(answer.Unread, UnreadStaffing)
+	}
+	if ev.CapacityUnread {
+		answer.Unread = append(answer.Unread, UnreadCapacity)
 	}
 	return answer
 }
@@ -371,6 +444,12 @@ var engineWords = map[Class]said{
 	ClassRedeliveredSeen: {"Wakes repeated changes an agent had already read.",
 		"These agents were woken for changes a turn of theirs had already read, so the engine " +
 			"absorbed the wakes instead of starting turns."},
+	ClassRemoveSeat: {"A group of seats sat idle most of two weeks.",
+		"Every seat of this group was idle most of the time it could take a turn, and almost nothing " +
+			"waited for them, so one seat fewer would cost nothing in waiting work."},
+	ClassFalseAlarm: {"An objective alarm fired and cleared within minutes, again and again.",
+		"Each of these cleared within ten minutes of its raise: the node recovered from a short " +
+			"burst by itself, so they were not outages, and nobody needs to act on the next one like them."},
 	ClassAuxiliaryShare: {"An agent spent a large share of its tokens on auxiliary calls.",
 		"More than 15% of the tokens these agents' turns spent went to auxiliary calls inside them " +
 			"rather than to the turns' own work."},
@@ -392,6 +471,7 @@ var reviewWords = map[string]said{
 
 // engineSentences is what each engine class's note says about the pattern.
 var engineSentences = map[Class]string{
+	ClassFalseAlarm:               "Nothing for you: the engine's objective judged bursts the node recovered from by itself.",
 	ClassAgentMentionsWithoutAsk:  "The engine wakes an agent only for words that ask it something.",
 	ClassPersonRequestsWithoutAsk: "A comment reaches a person's Inbox as a decision only when it asks them a question.",
 	ClassAskOvertaken:             "An answer helps most on the newest question an item carries.",
@@ -490,7 +570,7 @@ func approvalRubberStamp(ev Evidence, _ func(string) SeatKind) []Finding {
 				people, asker, s.recommended, s.decided),
 			Evidence: []Fact{{Key: "decided", Value: int64(s.decided)},
 				{Key: "recommended", Value: int64(s.recommended)}},
-			Fix: Fix{Kind: FixDraftWithAssistant, Options: []Option{},
+			Fix: Fix{Kind: FixAskCrewlet, Options: []Option{},
 				Sentence:  "Draft a policy with Ask Crewlet, and review it before it is saved.",
 				Unchanged: "Nothing changes until you approve the policy Ask Crewlet drafts.",
 				Prompt: fmt.Sprintf("In the last 7 days %s chose %s's recommended option in %d of "+
@@ -557,6 +637,7 @@ func reviewIdle(ev Evidence, _ func(string) SeatKind) []Finding {
 			words.Count(len(keys), "item in review", "items in review"),
 			[]Fact{{Key: "idle", Value: int64(len(keys))}}, recordsOf(RecordItem, keys))
 		f.Title, f.Why = reviewWords[w.how].title, reviewWords[w.how].why
+		f.Focus = w.how
 		out = append(out, f)
 	}
 	return out
@@ -640,7 +721,8 @@ const (
 	scheduleWake = types.OriginSchedule + ":"
 )
 
-// noopShare is one finding per agent whose started turns often committed nothing.
+// noopShare is one finding per agent whose started turns often committed
+// nothing, for the usage insights alone ([Shared]).
 func noopShare(ev Evidence, _ func(string) SeatKind) []Finding {
 	var out []Finding
 	for _, s := range seatsOf(ev.Ledger) {
@@ -724,9 +806,11 @@ func AgentHandles(c *config.Company) []string {
 	return out
 }
 
-// tokensSaid is a token count as a person reads it: 26.5M, 812K, 940.
+// tokensSaid is a token count as a person reads it: 1.4B, 26.5M, 812K, 940.
 func tokensSaid(n int64) string {
 	switch {
+	case n >= 1_000_000_000:
+		return trimmed(fmt.Sprintf("%.1f", float64(n)/1_000_000_000)) + "B"
 	case n >= 1_000_000:
 		return trimmed(fmt.Sprintf("%.1f", float64(n)/1_000_000)) + "M"
 	case n >= 1_000:

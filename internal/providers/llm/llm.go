@@ -24,6 +24,27 @@
 //   - It does not decide what a failure MEANS beyond a coarse kind. A backend
 //     classifies; the chain decides. Putting the policy in the backend gave
 //     three backends three subtly different ideas of "exhausted".
+//
+// # What a call carries
+//
+// Tools are offered, never forced: there is no tool-choice field. There is no
+// temperature, output cap, effort or reasoning field either, because no
+// harness takes one per call, and a field no backend sends is a setting every
+// caller believes it changed; a caller that needs a short answer says so in
+// its prompt. A [Completion] names three stop reasons (end, tool_use, cap),
+// the three a harness can name; one that hit its ceiling or declined says so
+// in prose or fails.
+//
+// An entry has no mode. Every phase runs the harness's own loop over the
+// phase's tools: a seat's executor launches the harness in a box
+// (internal/sandbox) with the seat's tools bridged in, so only an entry whose
+// harness has an in-box runner can be an executor; every other phase (the
+// reviewer, a worker, the onboarding pass, a side pass) runs on this host over
+// a [ToolHost], which any harness serves.
+//
+// [ServeOptions] is what the backend tells the host about its harness, since
+// the host decides with it. A harness whose record shows no requests counts as
+// one round and is never refused for it.
 package llm
 
 import (
@@ -178,6 +199,21 @@ type Completion struct {
 // TotalTokens is the figure a budget is charged.
 func (c Completion) TotalTokens() int { return c.InputTokens + c.OutputTokens }
 
+// Image is one picture a request hands the model: its bytes and the media
+// type they were sniffed as (image/png, image/jpeg, image/webp, image/gif).
+type Image struct {
+	MediaType string
+	Data      []byte
+}
+
+// ImageReader is a provider that can say whether its calls take images.
+type ImageReader interface {
+	ReadsImages() bool
+}
+
+// ErrNoImages is a request carrying images to a backend that takes none.
+var ErrNoImages = errors.New("llm: this model's harness takes no image")
+
 // Request is one call's inputs. A struct rather than a parameter list because
 // it grows, and every feature added over time would otherwise become another
 // positional argument at forty call sites.
@@ -201,37 +237,34 @@ type Request struct {
 	// request to call something.
 	Tools ToolHost
 
-	// Agent marks a call made by a seat at work — a round of one phase of
-	// its turn — rather than a text function the engine runs on its behalf
-	// (a relevance filter, a classifier, a rewrite, a judge).
+	// Images are pictures handed to the model beside the prompt, in order:
+	// what a person attached to a question. A backend whose harness takes no
+	// image refuses a request carrying one ([ErrNoImages]) rather than drop
+	// it, so a caller asks [ImageReader] first.
+	Images []Image
+
+	// Agent marks a call made by a seat at work (a round of one phase of its
+	// turn) rather than a text function the engine runs on its behalf (a
+	// relevance filter, a classifier, a rewrite, a judge).
 	//
-	// The difference is what the call is FOR, and only the backend knows
-	// what that changes: a backend that runs a vendor's own harness keeps
-	// the harness's system prompt for an agent call and adds the engine's
-	// after it — the vendor writes that prompt for an agent and moves it
-	// with every model it ships — and replaces it for any other call, whose
-	// system prompt is the whole instruction and whose answer is parsed.
-	// False is a text function, which is every caller but a seat's tool
-	// loop, and the Dashboard Assistant's loop, whose system prompt is its
-	// whole instruction (toolloop's Config.OwnPrompt).
+	// A harness backend keeps the harness's own system prompt for an agent call
+	// and adds the engine's after it (the vendor writes it for an agent), and
+	// replaces it for any other call, whose system prompt is the whole instruction
+	// and whose answer is parsed. False is every caller but a seat's tool loop
+	// and the Dashboard Assistant's (toolloop's Config.OwnPrompt).
 	Agent bool
 
 	// OnDelta, when set, asks the backend to stream and calls this as text
 	// arrives. Nil — the common case — takes the ordinary unary path.
 	//
-	// A REQUEST FIELD rather than a second method on [Provider], because
-	// streaming is a property of one call and not of a backend: thirteen
-	// call sites in this engine want an answer, and exactly one wants to
-	// watch it being written. A `Stream` method would make every backend
-	// implement something twelve of its callers must remember not to use,
-	// and a capability interface asserted at the call site would make
-	// "does this stream?" a fact the caller discovers by type switch.
+	// A REQUEST FIELD, not a method on [Provider] or a capability interface:
+	// streaming is a property of one call, and exactly one caller wants it, so a
+	// `Stream` method would burden every backend and an assertion at the call
+	// site would make "does this stream?" a type switch.
 	//
-	// Called SYNCHRONOUSLY on the goroutine running the request, in order,
-	// so a slow callback slows the read loop — coalesce in the callback,
-	// do not fan out from it. A backend that cannot stream never calls it
-	// and returns the same Completion it always would; nothing above here
-	// may treat the absence of deltas as an error.
+	// Called SYNCHRONOUSLY on the request's goroutine, in order, so a slow
+	// callback slows the read loop: coalesce, do not fan out. A backend that
+	// cannot stream never calls it; the absence of deltas is not an error.
 	OnDelta func(Delta)
 }
 
@@ -328,21 +361,16 @@ type ErrorKind int
 
 const (
 	// KindFatal is a call the engine itself cannot make: a prompt it cannot
-	// render, a file of the call's it cannot write, a seat's home this host
-	// cannot prepare, a harness it cannot start — exec's own refusal before any
-	// child exists, a binary missing or not executable on this host, or no
-	// pipe or process to give it. The chain does NOT try another provider.
-	// The fault is in front of the harness, on the engine's side of the exec, so
-	// it is the operator's to fix rather than an outage to wait out: a
-	// prompt that cannot be rendered fails identically on every member, and
-	// a host that cannot start a harness or write its files is a deployment
-	// fault that a walk would paper over by carrying every call on the node
-	// to the next member — and its bill — until somebody read why.
+	// render, a file it cannot write, a seat's home it cannot prepare, a harness
+	// it cannot start (a binary missing or not executable, no pipe or process).
+	// The chain does NOT try another provider: the fault is in front of the
+	// harness, on the engine's side of the exec, so it is the operator's to fix,
+	// and a walk would paper over it by carrying every call on the node to the
+	// next member, and its bill, until somebody read why.
 	//
-	// NOT a harness that started and failed, however it failed — its exit, its
-	// output, the wait for it: that is [KindServer], [KindTimeout] for a
-	// deadline, or a marker's kind where the harness said why in words its
-	// profile recognises.
+	// NOT a harness that started and failed, however it failed: that is
+	// [KindServer], [KindTimeout] for a deadline, or a marker's kind where the
+	// harness said why in words its profile recognises.
 	KindFatal ErrorKind = iota
 
 	// KindRateLimit is a spent plan or a rate limit the harness reported in its
@@ -484,6 +512,45 @@ var LimitWindows = []LimitWindow{LimitSession, LimitWeekly, LimitModel, LimitUnk
 
 // Valid reports whether w is one of [LimitWindows].
 func (w LimitWindow) Valid() bool { return slices.Contains(LimitWindows, w) }
+
+// LimitState is where a vendor says one of its windows stands.
+type LimitState string
+
+const (
+	// LimitOK is a window with room left.
+	LimitOK LimitState = "ok"
+	// LimitWarning is a window the vendor says is close to its limit.
+	LimitWarning LimitState = "warning"
+	// LimitReached is a window at its limit: the vendor refuses calls on it.
+	LimitReached LimitState = "reached"
+)
+
+// LimitStates is the closed set, in escalating order.
+var LimitStates = []LimitState{LimitOK, LimitWarning, LimitReached}
+
+// Valid reports whether s is one of [LimitStates].
+func (s LimitState) Valid() bool { return slices.Contains(LimitStates, s) }
+
+// LimitReading is what a vendor said of one of its limit windows on a call,
+// in the engine's words.
+type LimitReading struct {
+	Window LimitWindow
+	// Hours is the window's length as the vendor names it (5, 168), 0 where
+	// it names none.
+	Hours int
+	// Model is the model family a [LimitModel] window is of ("opus"), "" for
+	// a window of the whole plan.
+	Model string
+	State LimitState
+	// Used is the fraction of the window used, nil where the vendor did not
+	// say. It may pass 1: a vendor lets some work run past a window's cap.
+	Used *float64
+	// ResetsAt is when the window turns over, zero where the vendor did not say.
+	ResetsAt time.Time
+}
+
+// Key is what tells two of a plan's windows apart.
+func (r LimitReading) Key() string { return string(r.Window) + "/" + r.Model }
 
 // LimitedUntil reports whether err is a rate limit, and when the entry that
 // refused it is tried again and when its vendor said the limit lifts (either

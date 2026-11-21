@@ -296,8 +296,9 @@ func TestACompletionOnANodeThatLostTheSeatIsRoutedOn(t *testing.T) {
 	rig.coordinator.lease = notLeased
 	payload, ev := rig.completion("t1")
 	err := rig.coordinator.OnCompleted(t.Context(), payload, ev)
-	if !errors.Is(err, ErrResumeUnavailable) || !errors.Is(err, ErrSeatNotHeld) {
-		t.Fatalf("OnCompleted = %v, want it handed back as a seat this node does not hold", err)
+	if !errors.Is(err, ErrResumeElsewhere) || !errors.Is(err, ErrSeatNotHeld) {
+		t.Fatalf("OnCompleted = %v, want it handed back as a seat this node does not hold, "+
+			"which its holder can resume", err)
 	}
 	if got := rig.get("t1"); got.Status != StatusRunning {
 		t.Fatalf("run %q, want it left running for the seat's holder", got.Status)

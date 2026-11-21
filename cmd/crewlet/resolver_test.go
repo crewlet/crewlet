@@ -107,20 +107,15 @@ func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 	}
 }
 
-// THE OPERATOR'S OWN CREDENTIAL IS NOT THE COMPANY'S, and does not come
-// from the store — nor from the process's environment, but from the one the
-// invocation is handed ([runIn]), which for the binary is the process's.
+// THE OPERATOR'S OWN CREDENTIAL IS NOT THE COMPANY'S, and comes neither from the
+// store nor the process's environment but from the one the invocation is handed
+// ([runIn]), which for the binary is the process's.
 //
-// A GitLab admin PAT carries `api` scope over the whole group, and the store
-// is held on the coordination KV, which every node reads and every node's
-// keyring opens. Crewlet never persists one; reading one back would imply it
-// may be kept there — which is how the most powerful credential in the
-// deployment ends up in the shared store beside the seat tokens it exists to
-// mint. And a case that read the process's
-// environment would run on whatever the machine running the suite exports.
-//
-// Not parallel: it exports the credential on the process, to show a run
-// handed an environment without it does not read it there.
+// A GitLab admin PAT carries `api` scope over the whole group, and the store sits
+// on the coordination KV every node reads and every keyring opens. Crewlet never
+// persists one; reading one back would imply it may be kept there, beside the seat
+// tokens it exists to mint. Not parallel: it exports the credential on the process
+// to show a run handed an environment without it does not read it there.
 //
 // Mutation: read the store, or the process's environment, and the run finds a
 // provisioning token.
@@ -910,16 +905,14 @@ func TestANamedNodeIsReadWithNoTierAHere(t *testing.T) {
 	}
 }
 
-// A STOPPED NODE READS WHAT THE FLEET HOLDS — the resolver and the sink alike.
+// A STOPPED NODE READS WHAT THE FLEET HOLDS, resolver and sink alike.
 //
-// The bug this whole route exists for: with the engine stopped, a command read
-// the node's own table, which never held what was stored through a running
-// node, so a provisioning run read a working signing key as unset and MINTED
-// over it, and a -secret-store sink read a seat's working token as absent and
-// replaced it. The value here is put on the fleet's store the way a running
-// node puts it there, and both halves of one provisioning run must see it —
-// at once, as a run holds them: the resolver it plans from and the sink it
-// asks before minting, over the run's one route.
+// With the engine stopped, a command used to read the node's own table, which
+// never held what a running node stored, so a provisioning run read a working
+// signing key as unset and MINTED over it, and a -secret-store sink replaced a
+// seat's working token. The value is put on the fleet's store as a running node
+// puts it, and both halves of one run must see it at once: the resolver it plans
+// from and the sink it asks before minting, over the run's one route.
 //
 // Mutation: answer a stopped node from anywhere but the fleet's store, and
 // both resolve unset.

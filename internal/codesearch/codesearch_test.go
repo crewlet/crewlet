@@ -665,21 +665,17 @@ func hitsOf(rs ...repo) []codesearch.Hit {
 }
 
 // A PAGE CONTINUES AFTER ITS KEY (codesearch.Key): a search read two lines a
-// page answers every line once and in order — a scatter of three
-// repositories over two nodes, and the walk of the one repository a search
-// names — and each page asks only what follows its key: no repository before
-// the key's is asked again, the key's own is read at the key's commit and
-// every one after it at its ref. A page of a search of several repositories
-// is a scatter, whichever repository its key leaves; and a key naming no
-// commit is refused before anything is asked.
+// page answers every line once and in order, as a scatter of three
+// repositories over two nodes and as the walk of one, and each page asks only
+// what follows its key: no repository before the key's, the key's own at the
+// key's commit, every later one at its ref. A page of a search of several
+// repositories is a scatter whichever repository its key leaves; a key naming
+// no commit is refused before anything is asked.
 //
-// Mutations: ask every repository on every page (no cut by the key's
-// repository) — amber is asked on every page, red; read the key's repository
-// at the search's ref (continueIn's Ref) — amber is asked at its branch,
-// red; drop the key's place (continueIn's After) — a page repeats lines and
-// the walk never ends, red; decide one repository or a scatter after the
-// key's cut — the two-repository search's last page is read by the walk,
-// red; drop the tip's check — a key naming a branch is searched, red.
+// Mutations, each red: ask every repository on every page; read the key's
+// repository at the search's ref (continueIn's Ref); drop the key's place
+// (continueIn's After); decide one repository or a scatter after the key's
+// cut; drop the tip's check.
 func TestAPageContinuesAfterItsKey(t *testing.T) {
 	t.Parallel()
 	amber, basalt, cobalt := lines(indexed("amber", "git-a")), lines(indexed("basalt", "git-b")),

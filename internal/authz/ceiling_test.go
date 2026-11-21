@@ -65,13 +65,11 @@ func TestAnAgentNeverDisclosesToOrWritesForARequesterWhoCouldNot(t *testing.T) {
 // NOTHING ELSE OF IT — IN AN APP THEY USE.
 //
 // On the agent's own artifact, a requester who uses the artifacts app and
-// cannot open the artifact may still have the agent publish a fix, rename it,
-// add an asset, reshape or fill in its data, and create a new one, as they may
-// ask an agent to change any other work it owns. They may NOT have it read the
-// artifact back to them, nor share it with them, which is the same read one
-// step removed. The app is asked before the spare (ADR-0109): a requester who
-// does not use the artifacts app steers none of its edits, and neither does a
-// stranger, who uses no app — what either still steers is an edit no app
+// cannot open it may still have the agent publish a fix, rename it, add an
+// asset, reshape or fill in its data, and create a new one. They may NOT have
+// it read the artifact back, nor share it with them (the same read one step
+// removed). The app is asked before the spare (ADR-0109): a requester without
+// the artifacts app, or a stranger, steers none of its edits except one no app
 // gates, such as filling in the agent's own data. On somebody else's artifact
 // nothing is steered. Mutation: spare every verb on the agent's own artifact,
 // or none, or ask the spare before the app, and this goes red.

@@ -164,17 +164,13 @@ func TestOneReadCapServesEveryGroup(t *testing.T) {
 	}
 }
 
-// THE SHOWN GROUPS ARE WHAT THE RENDER PRINTS. A caller that must name the calls
-// a render of several groups counted without listing them (internal/agent/
-// runner's leftOut, which records the reads a brief left out for the next brief
-// to tell) reads them off [ShownCallGroups], never off a rule of its own, so
-// what it names and what the brief counted can never part. Each group's shown
-// calls are exactly the calls its render prints a line for, the very values
-// given, in the group's order; the reads past the one cap, counted across the
-// groups in order, are each group's LAST reads and as many as its omitted line
-// counts; a write and a call nobody counts as a read are never left out, a
-// skipped name never shown; and a group whose every read falls past the cap
-// shows its writes alone.
+// The shown groups are what the render prints. A caller naming the calls a
+// render left out (internal/agent/runner's leftOut) reads [ShownCallGroups],
+// never a rule of its own. Each group's shown calls are exactly those its render
+// prints a line for, the very values given, in order; reads past the one cap,
+// counted across groups, are each group's LAST reads, as many as its omitted
+// line counts; a write is never left out, a skipped name never shown; a group
+// whose reads all fall past the cap shows its writes alone.
 //
 // Mutation: count each group's reads from zero, and the groups show more reads
 // than the one cap; show a skipped name, leave out a write, or leave out a
@@ -264,17 +260,13 @@ func TestTheShownGroupsAreWhatTheRenderPrints(t *testing.T) {
 	}
 }
 
-// A NOTE ENDS THE LINE OF THE CALL IT NAMES, by the call's place in the group
-// the caller handed over. A caller that ends a line with words of its own
-// (internal/agent/runner's calledAfter, saying a call listed again was made in
-// an earlier round) knows the call by where it stands in its group, and the
-// render leaves out skipped names and reads past the one cap from anywhere in
-// a group, so a note given by place lands on that call's line and on no other:
-// a write's, a shown read's after the read marker, and never a read the cap
-// left out, whose note is printed nowhere, its omitted line included. Every
-// line without a note is the line it was, a note is the caller's words as
-// given, and no notes at all render every group as before. [FormatCalls] reads
-// its one group's notes.
+// A note ends the line of the call it names, by the call's place in the group
+// handed over (internal/agent/runner's calledAfter). The render leaves out
+// skipped names and capped reads from anywhere in a group, so a note by place
+// lands on that call's line and no other: a write's, a shown read's after the
+// read marker, never a left-out read's, printed nowhere (the omitted line
+// included). Lines without a note are unchanged and a note is the caller's
+// words as given. [FormatCalls] reads its one group's notes.
 //
 // Mutation: index the notes by a line's position among the lines printed, and
 // the skipped name and the read before the write move every note one line up;
@@ -498,14 +490,12 @@ func TestFailureRendersAsFailureNotSuccess(t *testing.T) {
 	}
 }
 
-// A CALL OF UNKNOWN OUTCOME SAYS NO RECORD KEEPS ITS ARGUMENTS. A call still
-// in flight as its round was read keeps its identity alone on every record
-// (Call.Unfinished), so nothing says what it was called with; drawn `name()`,
-// its line read as the tool called with none, a different call, and a run told
-// to check whether it took effect before making it again had nothing to check
-// by. One that carries arguments is drawn with them, a failed call with none
-// that is not of unknown outcome is still drawn `name()`, and a withheld call
-// still says its arguments are sealed.
+// A call of unknown outcome says no record keeps its arguments. A call in
+// flight when its round was read keeps only its identity (Call.Unfinished);
+// drawn `name()` it would read as a call with none, a different call, leaving a
+// run nothing to check against. One carrying arguments is drawn with them, a
+// plain failure with none is still `name()`, and a withheld call still says its
+// arguments are sealed.
 //
 // Mutation: drop the clause, and the first line reads `set_status()`; draw
 // every call with no arguments so, and the plain failure does too; draw it so

@@ -16,11 +16,12 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/activityline"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // OpenCodeName is this runner's config name.
-const OpenCodeName = "opencode"
+const OpenCodeName = sandbox.OpenCodeHarness
 
 // transcriptDetailLimit caps one transcript line's echoed text: the grammar's
 // own preview bound.
@@ -107,8 +108,8 @@ const openCodeCallWait = 10 * time.Second
 // data URI.
 //
 // THIRTY SECONDS, about five times the slowest measured: 6.4 s to export a 256
-// MiB session (the most a kept session's export holds unpacked, sandbox's
-// SessionMaxBytes at the scrub's eightfold) on a busy 2-core box, OpenCode
+// MiB session (the most a kept session's export holds unpacked, the scrub's
+// plaintext bound, [scrubPlainMax]) on a busy 2-core box, OpenCode
 // 2.1.4. Past it only the wait is lost: an export it ended is packed on demand
 // once the job is over ([OpenCode.Pack]), and a page it ended leaves the
 // figure carried along the copy's lineage.
@@ -252,31 +253,112 @@ func (OpenCode) VersionCommand() string { return "opencode --version" }
 // ends ([openCodeCapture]), but through a private server (`--standalone`),
 // since the run's server, whose address and password only its script held, may
 // be gone: into staged, its own staging directory, and over dest
-// ([Paths.SessionPackHeld]), its digest kept.
+// ([Paths.SessionPackHeld]), its digest kept ([openCodePackNow]). Never held to
+// a room, as a save is: a refused final pack would lose the job's newest state
+// on an estimate that counts every session in the box.
+func (OpenCode) Pack(paths Paths, session, staged, dest string, _ bool) string {
+	// Whether the job may still work (the ignored flag) changes nothing: the
+	// export holds only settled messages either way.
+	return openCodePackNow(paths, session, staged, dest, false)
+}
+
+// PackSave packs a save of rec's session beside its running server ([saver]),
+// by the pack on demand's own export ([openCodePackNow]), into staged and over
+// dest, waiting where its box lacks the room the export takes
+// ([openCodeSaveRoom]). A record naming a release outside [openCodeCountRead]
+// is refused before any script runs: a save beside a running server is made
+// only on a release a probe measured it on (the package doc's "An OpenCode
+// session saved beside its running server").
+func (OpenCode) PackSave(paths Paths, rec sessionRecord, staged, dest string) (string, error) {
+	if release := releaseOf(rec.release); !openCodeCountRead(release) {
+		return "", fmt.Errorf("executor: OpenCode %q's save beside its running server was never measured, so "+
+			"its session is not saved as it works", release)
+	}
+	return openCodePackNow(paths, rec.id, staged, dest, true), nil
+}
+
+// openCodePackNow is ONE PACK ON DEMAND, [OpenCode.Pack]'s and
+// [OpenCode.PackSave]'s: the pins every standalone call takes
+// ([openCodeStandalonePins]), the room where room (a save's alone,
+// [openCodeSaveRoom]), the probe, and [openCodePack]'s bounded export through
+// a private server, beside a server that may still be writing (the package
+// doc's "An OpenCode session saved beside its running server").
 //
 // It ends [packNothing] ONLY ON OPENCODE'S OWN ANSWER that it holds no such
-// session ([openCodeNotHeld]), and [packFailed] wherever else no archive was
-// made ([Runner.PackCapture]): a probe that could not say is no "no session".
-// It packs only a job that is over or one a box would not end: an end lets a
-// working job export through its own server first, so this never meets that
-// server's busy database.
-func (OpenCode) Pack(paths Paths, session, staged, dest string, _ bool) string {
+// session ([openCodeNotHeld]), [packNoRoom] where a save's box lacks the room,
+// and [packFailed] wherever else no archive was made ([Runner.PackCapture]): a
+// probe that could not say is no "no session".
+func openCodePackNow(paths Paths, session, staged, dest string, room bool) string {
 	// A probe read as "no session" recorded a session the box held as none,
-	// and the turn's end named an older capture as its last. Whether the job
-	// may still work (the ignored flag) changes nothing: the export holds only
-	// settled messages either way.
+	// and the turn's end named an older capture as its last.
 	q := sandbox.ShellQuote
 	answer := q(staged + "/answer")
-	return "sid=" + q(session) + " packed=\n" +
-		fmt.Sprintf(`rm -rf %[1]s; mkdir -p %[1]s || { echo 'crewlet: the pack could not make its staging directory' >&2; exit %[3]d; }`+"\n"+
-			`if opencode api --standalone session.get --param sessionID="$sid" < /dev/null > %[2]s 2>&1; then probe=$(cat %[2]s); held=$probe; else probe=$(cat %[2]s 2> /dev/null); held=; fi; rm -rf %[1]s`+"\n",
-			q(staged), answer, packFailed) +
-		fmt.Sprintf(`case "$held" in *%s*) ;; *) case "$probe" in %s) exit %d;; esac; `+
-			`printf '%%s\n' "${probe:-OpenCode answered nothing about the session}" >&2; exit %d;; esac`+"\n",
-			sandbox.ShellQuote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed) +
-		openCodePack(paths, staged, dest, "--standalone", "") +
-		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
+	var b strings.Builder
+	b.WriteString("sid=" + q(session) + " packed=\n" + openCodeStandalonePins)
+	if room {
+		// THE ROOM BEFORE ANY OPENCODE PROCESS, the probe's included: the
+		// probe is a standalone OpenCode too. No database yet is no session
+		// yet, which the probe says; one it holds all the same is in a
+		// database the room never read, which the export is not run on.
+		b.WriteString(sandbox.MemoryDomainScript + "\n" + openCodeSaveRoom + "\n")
+		fmt.Fprintf(&b, `db="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db" bounded=`+"\n"+
+			`if [ -f "$db" ]; then crewlet_memory 2> /dev/null | crewlet_save_fits "$(crewlet_size "$db")" "$(crewlet_size "$db-wal")" || exit %d; bounded=1; fi`+"\n",
+			packNoRoom)
+	}
+	fmt.Fprintf(&b, `rm -rf %[1]s; mkdir -p %[1]s || { echo 'crewlet: the pack could not make its staging directory' >&2; exit %[3]d; }`+"\n"+
+		`if opencode api --standalone session.get --param sessionID="$sid" < /dev/null > %[2]s 2>&1; then probe=$(cat %[2]s); held=$probe; else probe=$(cat %[2]s 2> /dev/null); held=; fi; rm -rf %[1]s`+"\n",
+		q(staged), answer, packFailed)
+	fmt.Fprintf(&b, `case "$held" in *%s*) ;; *) case "$probe" in %s) exit %d;; esac; `+
+		`printf '%%s\n' "${probe:-OpenCode answered nothing about the session}" >&2; exit %d;; esac`+"\n",
+		sandbox.ShellQuote(`"id":"`+session+`"`), openCodeNotHeld, packNothing, packFailed)
+	if room {
+		fmt.Fprintf(&b, `[ -n "$bounded" ] || { echo "crewlet: OpenCode's database is not at $db, so the memory its export takes cannot be bounded" >&2; exit %d; }`+"\n",
+			packFailed)
+	}
+	b.WriteString(openCodePack(paths, staged, dest, "--standalone", "", true))
+	fmt.Fprintf(&b, "[ -n \"$packed\" ] || exit %d\n", packFailed)
+	return b.String()
 }
+
+// openCodeStandalonePins is what every standalone call of a pack on demand runs
+// under: the models fetch and the updater off, and loopback first in NO_PROXY
+// and no_proxy, so a proxy the box's environment names never takes the
+// in-process server a standalone call reaches over HTTP on loopback (2.0.32,
+// which a proxy that does not answer hangs). None measured opened a connection
+// of its own either way; the pins keep a save, which every running job takes
+// every interval, from depending on that.
+const openCodeStandalonePins = `export OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1` + "\n" +
+	`NO_PROXY="127.0.0.1,localhost,::1${NO_PROXY:+,$NO_PROXY}" no_proxy="127.0.0.1,localhost,::1${no_proxy:+,$no_proxy}"; export NO_PROXY no_proxy` + "\n"
+
+// openCodeSaveNeedFactor and openCodeSaveNeedBase are the memory an OpenCode
+// save's export is held to need: the factor times its database's bytes and
+// its WAL's, plus the base. Twelve and 128 MiB hold every point measured (the
+// steepest a slope of 9.7 and an intercept of 93 MiB, 2.2.7 with a character
+// past Latin-1 in every string), and a fifth's room for a shape not measured
+// at the bound; an all-ASCII session, about 4.5, is over-counted. The package
+// doc has the measurements.
+const (
+	openCodeSaveNeedFactor = 12
+	openCodeSaveNeedBase   = 128 << 20
+)
+
+// openCodeSaveRoom defines crewlet_size (a file's bytes, 0 where it is none),
+// crewlet_save_room, which prints the room a save's export may take off
+// crewlet_memory's lines on its input ([sandbox.MemoryDomainScript]): the
+// domain's limit less what its kernel cannot reclaim, capped by the machine's
+// MemAvailable, else MemAvailable alone, else nothing; and crewlet_save_fits
+// DB WAL, which fails, saying both figures, where the export's need exceeds a
+// room read. AN UNREAD ROOM REFUSES NOTHING: the node's one pack slot still
+// serializes such a pack where its box shares the node's memory.
+var openCodeSaveRoom = `crewlet_size() { if [ -f "$1" ]; then ls -Lln "$1" | awk '{print $5}'; else echo 0; fi; }
+crewlet_save_room() {
+awk -F= '$1=="limit"{l=$2} $1=="held"{h=$2} $1=="avail_kb"{a=$2}
+END{n=""; if (l ~ /^[0-9]+$/ && h ~ /^-?[0-9]+$/) n=l-h; if (a ~ /^[0-9]+$/) {v=a*1024; if (n=="" || v<n) n=v}; if (n!="") {if (n<0) n=0; printf "%.0f\n", n}}'
+}
+crewlet_save_fits() {
+room=$(crewlet_save_room); need=$((` + strconv.Itoa(openCodeSaveNeedFactor) + ` * (${1:-0} + ${2:-0}) + ` + strconv.Itoa(openCodeSaveNeedBase) + `))
+[ -z "$room" ] || [ "$need" -le "$room" ] || { echo "crewlet: the save's export needs about $need bytes of memory, and its box has $room" >&2; return 1; }
+}`
 
 // openCodeNotHeld matches OpenCode's answer to `session.get` on an id its
 // database does not hold: its NotFoundError, printed as "Session not found:
@@ -668,29 +750,34 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 // server costs the bound, never the session.
 func openCodeCapture(paths Paths, times openCodeTimes) string {
 	return openCodePack(paths, paths.SessionStaging(), paths.SessionCapture(), `--server "$url"`,
-		fmt.Sprintf("bounded export %d - ", secs(times.sessionCall)))
+		fmt.Sprintf("bounded export %d - ", secs(times.sessionCall)), false)
 }
 
 // openCodePack exports sid through server, the run's own (`--server "$url"`)
 // or a pack on demand's private one (`--standalone`), gzips it in staged and
 // moves the archive over dest, its digest kept: ONE PACK for [openCodeCapture]
-// and [OpenCode.Pack]. An export holds only settled messages
-// (core/src/session/transfer.ts), never the session's note inbox.
+// and [openCodePackNow]. An export holds only settled messages, never the
+// session's note inbox; where bounded, one empty or past [heldPlainMax] is
+// refused before gzip, saying which, as the take would refuse it unread.
 //
 // THE EXPORT GOES TO A FILE that gzip then reads, never a pipe: piped,
 // OpenCode 2.0.32 and 2.1.4 cut a large export at a 64 KiB multiple with
-// status 0; into a file every release measured writes it whole. call prefixes
-// the export: the run's script bounds it; a pack on demand runs it bare, under
-// [sandbox.SessionPackWait], since OpenCode's WAL database lets it complete
-// beside a live, stopped or killed server (2.0.32 to 2.3.0).
-func openCodePack(paths Paths, staged, dest, server, call string) string {
+// status 0. call prefixes the export: the run's script bounds it; a pack on
+// demand runs it bare, under [sandbox.SessionPackWait], since OpenCode's WAL
+// database lets it complete beside a live, stopped, killed or writing server.
+func openCodePack(paths Paths, staged, dest, server, call string, bounded bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	q := sandbox.ShellQuote
 	export, capture, failed := q(staged+"/export.json"), q(staged+"/capture"), q(staged+"/error")
+	bound := ""
+	if bounded {
+		bound = fmt.Sprintf(`n=$(($(wc -c < %[1]s))) && { [ "$n" -gt 0 ] || { echo 'OpenCode exported it empty' > %[2]s; false; }; } && { [ "$n" -le %[3]d ] || { echo "its export is $n bytes, past the %[3]d a kept session's scrub reads" > %[2]s; false; }; } && `,
+			export, failed, heldPlainMax)
+	}
 	line(`if command -v gzip > /dev/null 2>&1; then`)
-	line(`  rm -rf %s; if mkdir -p %s && %sopencode session export %s "$sid" < /dev/null > %s 2> %s && gzip -c < %s > %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
-		q(staged), q(staged), call, server, export, failed, export, capture, packDigest(paths, "sid", staged),
+	line(`  rm -rf %s; if mkdir -p %s && %sopencode session export %s "$sid" < /dev/null > %s 2> %s && %sgzip -c < %s > %s && %s && mv -f %s %s; then packed=1; else echo "crewlet: the session $sid was not exported to be continued in another box: $(cat %s 2> /dev/null)" >&2; fi`,
+		q(staged), q(staged), call, server, export, failed, bound, export, capture, packDigest(paths, "sid", staged),
 		capture, q(dest), failed)
 	line(`  rm -rf %s`, q(staged))
 	line(`else`)
@@ -1411,8 +1498,16 @@ type openCodeEvents struct {
 	// order, and message that message's id. A text event that names no
 	// message belongs to the latest one: only a message that names itself
 	// and differs ends it, so a stream that names none is read whole.
-	answers    []string
-	message    string
+	// answerBytes is what answers hold joined, and answerDropped what the
+	// message wrote past [openCodeEvents.bound], counted rather than kept.
+	answers       []string
+	message       string
+	answerBytes   int
+	answerDropped int
+	// readBound is the most of the answer, or of the plain output, kept:
+	// [sandbox.MaxFileBytes], what a run's report is read to whatever the
+	// harness wrote it as, where zero; a test lowers it.
+	readBound  int
 	transcript transcriptLines
 	// seq numbers the run's tool calls ([activityline]).
 	seq     int
@@ -1431,7 +1526,7 @@ type openCodeEvents struct {
 	// plain is the output while no event has been seen: a run that printed its
 	// answer as text, not the event stream, whose whole output is then the
 	// answer (its exit status, not this decoder, says whether it failed). Held
-	// to [sandbox.MaxFileBytes], what lies past it counted rather than kept.
+	// to [openCodeEvents.bound], what lies past it counted rather than kept.
 	plain        strings.Builder
 	plainDropped int64
 
@@ -1457,12 +1552,12 @@ type openCodeEvents struct {
 }
 
 // Entries implements [Decoder].
-func (d *openCodeEvents) Entries() []string {
+func (d *openCodeEvents) Entries(end bool) []string {
 	d.following = true
 	d.answers = nil
 	d.named = nil
 	d.plain.Reset()
-	return d.transcript.take()
+	return d.transcript.take(end)
 }
 
 func (d *openCodeEvents) Line(line []byte) {
@@ -1633,21 +1728,53 @@ func (d *openCodeEvents) request() contextRead {
 // answer adds one text event's chunk to the answer: after the latest message's
 // text where the event is that message's, or names none; in its place where it
 // names a later one.
+// A later message lets the earlier one's chunks go. A chunk that would take
+// the message past the bound, its line break counted, is counted rather than
+// kept, and so is every later chunk of the message.
 func (d *openCodeEvents) answer(message, chunk string) {
 	if message != "" {
 		if d.message != "" && message != d.message {
-			d.answers = d.answers[:0]
+			d.answers, d.answerBytes, d.answerDropped = nil, 0, 0
 		}
 		d.message = message
 	}
+	if d.answerDropped > 0 || d.answerBytes+len(chunk)+1 > d.bound() {
+		d.answerDropped += len(chunk) + 1
+		return
+	}
 	d.answers = append(d.answers, chunk)
+	d.answerBytes += len(chunk) + 1
+}
+
+// bound is [openCodeEvents.readBound], or [sandbox.MaxFileBytes] where unset.
+func (d *openCodeEvents) bound() int {
+	if d.readBound > 0 {
+		return d.readBound
+	}
+	return sandbox.MaxFileBytes
+}
+
+// settledHead is text, whole lines that a bound cut after, held to what its
+// redaction settles ([redact.Settled]), so a reader that redacts it reads an
+// opening of what the whole text redacts to; and the bytes it held back.
+func settledHead(text string) (string, int) {
+	kept := text[:redact.Settled(text)]
+	return kept, len(text) - len(kept)
+}
+
+// withNote is text with note on a line after it, or note alone.
+func withNote(text, note string) string {
+	if text == "" {
+		return note
+	}
+	return text + "\n" + note
 }
 
 func (d *openCodeEvents) keepPlain(line []byte) {
 	if d.following {
 		return
 	}
-	if d.plainDropped > 0 || d.plain.Len()+len(line)+1 > sandbox.MaxFileBytes {
+	if d.plainDropped > 0 || d.plain.Len()+len(line)+1 > d.bound() {
 		d.plainDropped += int64(len(line) + 1)
 		return
 	}
@@ -1679,21 +1806,34 @@ func (d *openCodeEvents) Result() sandbox.Result {
 	if !d.sawEvent {
 		// Output that is not the event stream: the whole of it is the
 		// answer.
-		text := strings.TrimSpace(d.plain.String())
+		text := d.plain.String()
 		if d.plainDropped > 0 {
-			text += fmt.Sprintf("\n(%s more of the output not read: past the %s a run's plain "+
-				"output is read to)", humanSize(d.plainDropped), humanSize(sandbox.MaxFileBytes))
+			kept, held := settledHead(text)
+			text = withNote(strings.TrimSpace(kept), fmt.Sprintf("(%s more of the output not kept: past the %s "+
+				"a run's plain output is read to)", humanSize(d.plainDropped+int64(held)), humanSize(int64(d.bound()))))
 		}
+		text = strings.TrimSpace(text)
 		return sandbox.Result{Text: text, Success: true, DeliveredRefs: deliveredRefs(text)}
 	}
 	body := strings.TrimSpace(strings.Join(d.answers, "\n"))
 	success := body != "" && d.errText == ""
+	if d.answerDropped > 0 {
+		var lines strings.Builder
+		for _, chunk := range d.answers {
+			lines.WriteString(chunk)
+			lines.WriteByte('\n')
+		}
+		kept, held := settledHead(lines.String())
+		body = withNote(strings.TrimSpace(kept), fmt.Sprintf("(%s more of the answer not kept: past the %s "+
+			"a run's answer is read to)", humanSize(int64(d.answerDropped+held)), humanSize(int64(d.bound()))))
+		success = d.errText == ""
+	}
 	res := sandbox.Result{
 		Text:          body,
 		Success:       success,
-		Transcript:    d.transcript.String(),
 		DeliveredRefs: deliveredRefs(body),
 	}
+	res.Transcript, res.TranscriptElidedLines, res.TranscriptElidedBytes = d.transcript.result()
 	if u := d.usage; u != nil {
 		tokens := u.Data.Tokens
 		res.InputTokens = tokens.Input + tokens.Cache.Read + tokens.Cache.Write

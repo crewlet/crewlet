@@ -29,6 +29,14 @@
 // covered by construction. A handler that serves a page replaces the policy
 // with the one that page needs.
 //
+// [HSTS] follows the address the listener is published at (`api.external_url`
+// for api.port, `api.public.external_url` for the public and bridge-only
+// listeners), never the bind address or `r.TLS`, since a TLS-terminating proxy
+// hands the engine plain http. Each listener decides for itself: one flag for
+// both sockets sent none on landings published over https beside a private
+// http admin side. [ForTemplate] hashes the template as rendered, not its
+// source, because html/template strips comments inside a script.
+//
 // # And the origin that holds no session
 //
 // The artifact origin (the api.artifacts listener, internal/artifactserve)
@@ -39,6 +47,11 @@
 // dashboard's own policy names that origin as the one thing it may frame
 // ([DashboardFor]). One package, so every policy this engine writes can be
 // read side by side.
+//
+// What [ArtifactDocument] leaves open (a page's own script may send what its
+// viewer reads to any host) is stated on the artifact policy's declaration.
+// The one gzip negotiation ([AcceptsGzip], [GzipTag], [GzipSmaller]) lives here
+// for the dashboard's assets and the artifact origin alike.
 //
 // # And a repository's bytes on the dashboard's origin
 //
@@ -61,55 +74,30 @@ import (
 )
 
 // Dashboard is the policy for the dashboard shell and every static asset.
-//
-// Everything the built dashboard loads is its own: the entry module, the
-// vendor chunk, the stylesheet and the embedded fonts are all served from
-// /static on this origin, and the index.html Vite emits carries no inline
-// script or style. So each fetch directive is 'self' and nothing else:
-//
-//   - connect-src 'self' covers the REST calls and the /ws/stream socket. CSP
-//     Level 3 matches ws: and wss: against 'self' on the same host, which every
-//     browser the dashboard supports implements.
-//   - style-src 'self' still permits React's `style` prop, because React writes
-//     it through the CSSOM rather than as a markup attribute, and the CSSOM is
-//     not subject to style-src.
-//   - img-src adds data: because Vite inlines an imported image below its
-//     assetsInlineLimit as a data: URI, so a small icon added to the source
-//     arrives in the bundle in that form rather than as a file. It adds blob:
-//     because a native artifact's image (a deck's picture) is a file of its
-//     version the API serves only as an attachment typed text/plain where a
-//     browser could run it: the dashboard fetches the bytes with the reader's
-//     own credential, types them from the version's manifest, and shows them
-//     through an object URL of its own making. A blob: URL is minted by script
-//     already running on this origin, so it widens nothing an injected
-//     element could reach on its own.
-//   - object-src and base-uri are 'none': the dashboard embeds no plugin and
-//     sets no base, and a base tag injected into the shell would otherwise
-//     re-point every relative URL.
-//
-// form-action is 'self' AND https:, and the https: is load bearing. Creating a
-// seat's GitHub App posts a manifest form from the dashboard to the code host
-// (`postManifest`, which the dashboard's Company › Integrations owns — named by
-// its function rather than a path, because the screen has already moved once
-// and the path this used to give went stale), because the host must
-// see the operator's own session and render its own confirmation page. That
-// host is github.com or a GitHub Enterprise Server base the company configures,
-// so no static host list can name it. Browsers enforce form-action on a form
-// submitted into a new tab too, so 'self' alone makes the button do nothing
-// but log a violation.
-//
-// TRUSTED TYPES ARE ENFORCED WITH NO POLICY: `require-trusted-types-for
-// 'script'` makes every string handed to a sink that parses markup or loads
-// script throw, and `trusted-types 'none'` lets no code on the origin create a
-// policy to bless one. The dashboard reaches no such sink (its Markdown
-// renderer builds elements and never parses markup, and an artifact's page is
-// framed on its own origin rather than written into this one), and
-// dashboard/src/app/trustedTypes.test.ts holds the source to that, so a
-// script that did get onto this origin finds no markup sink to widen its
-// reach through.
+// Everything it loads is its own, served from /static on this origin, and its
+// index.html has no inline script or style, so each fetch directive is 'self':
+//   - connect-src covers REST and the /ws/stream socket (CSP3 matches ws: and
+//     wss: against 'self' on the same host).
+//   - style-src still permits React's `style` prop, written through the CSSOM,
+//     which style-src does not govern.
+//   - img-src adds data: for images Vite inlines, and blob: for a native
+//     artifact's image, fetched with the reader's credential and shown through
+//     an object URL minted by script already on this origin: it widens nothing.
+//   - object-src and base-uri are 'none': an injected base would re-point every
+//     relative URL.
 const Dashboard = "default-src 'self'; script-src 'self'; style-src 'self'; " +
 	"img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; " +
+	// form-action is 'self' AND https:, and the https: is load bearing:
+	// creating a seat's GitHub App posts a manifest form from the dashboard
+	// (`postManifest`) to a host that is github.com or a GitHub Enterprise base
+	// the company configures, so no static list names it. Browsers enforce
+	// form-action on a form submitted into a new tab too, so 'self' alone makes
+	// the button do nothing.
 	"base-uri 'none'; frame-ancestors 'none'; form-action 'self' https:; " +
+	// TRUSTED TYPES ARE ENFORCED WITH NO POLICY: every string handed to a markup
+	// or script sink throws, and no code can create a policy to bless one. The
+	// dashboard reaches no such sink, and dashboard/src/app/trustedTypes.test.ts
+	// holds the source to that, so injected script finds no markup sink.
 	"require-trusted-types-for 'script'; trusted-types 'none'"
 
 // API is the policy for every response that is not a page: JSON, plain text,
@@ -172,23 +160,16 @@ func Apply(next http.Handler, secure bool) http.Handler {
 
 // HSTS is what an https deployment tells a browser about coming back.
 //
-// # Why a year, and why subdomains are not included
+// A YEAR, because the header only protects a browser that has been here once,
+// so a short max-age leaves a window on every device not seen lately.
 //
-// A YEAR is what makes it worth setting at all: the header only protects a
-// browser that has already been here once, so a short max-age leaves a window
-// open on every device that has not visited recently — which is the device an
-// attacker on a café network is waiting for.
-//
-// NO `includeSubDomains`, and that is a decision rather than an omission. This
-// engine is one host and knows nothing about its neighbours: a deployment at
-// `crewlet.example.com` sending it would commit every other name under
-// `example.com` to https for a year, including ones served by somebody who
-// never agreed to it and cannot undo it inside that year. An operator who
-// wants it sets it at the proxy that actually owns the domain.
-//
-// NO `preload` for the sharper form of the same reason: preloading is a
-// submission to a list shipped inside browsers, and it is close to
-// irreversible. Nothing this engine emits should enrol a domain in that.
+// NO `includeSubDomains`, a decision rather than an omission: this engine is
+// one host and knows nothing about its neighbours, and sending it at
+// `crewlet.example.com` would commit every other name under `example.com` to
+// https for a year, ones whose owners never agreed and cannot undo it. An
+// operator sets it at the proxy that owns the domain. NO `preload` for the
+// same reason: enrolling in a list shipped inside browsers is near
+// irreversible.
 const HSTS = "max-age=31536000"
 
 // inlineStyle and inlineScript find an inline block and its content.
@@ -205,22 +186,14 @@ var (
 // inline style and script blocks are allowed by their sha256 hashes, and
 // nothing else runs or loads.
 //
-// The hashes are taken from the template RENDERED, never from its source text.
-// html/template strips comments inside a <script> or <style> block when it
-// escapes the template, so the bytes a browser hashes are not the bytes in the
-// Go source, and a hash of the source would refuse the page's own script.
-//
-// views are the data to render the template with, and between them they must
-// reach every conditional branch that holds an inline block. The blocks
-// themselves must not depend on the data, because a hash is fixed once: a page
-// whose script varies per request needs a nonce rather than this, and the
-// tests of each page check a real response's blocks against its real header.
-//
-// img-src data: lets a page show the product's mark, INLINED, and nothing else:
-// the pages this serves are self-contained, so they render when the dashboard
-// bundle is not built, and they are public routes, served on the public
-// listener when a deployment sets one, where /static is not served at all. A
-// script with a src attribute is refused for the same reason.
+// The hashes are of the template RENDERED, never its source: html/template
+// strips comments inside <script> and <style> when it escapes, so a hash of
+// the source would refuse the page's own script. views must between them reach
+// every conditional branch holding an inline block, and the blocks must not
+// depend on the data, since a hash is fixed once (a per-request script needs a
+// nonce). img-src data: lets a page show the product's mark INLINED: these
+// pages are self-contained and public, served where /static is not. A script
+// with a src attribute is refused for the same reason.
 func ForTemplate(page *template.Template, views ...any) (string, error) {
 	if len(views) == 0 {
 		return "", fmt.Errorf("pagepolicy: %s: render it with at least one view", page.Name())

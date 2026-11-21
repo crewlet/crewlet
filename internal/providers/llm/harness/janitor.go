@@ -8,29 +8,16 @@ import (
 )
 
 // janitor holds the captures something still held at their child's end, and
-// keeps each of them EMPTY until its holder lets go.
-//
-// A pipe bounded a writer that outlived its call: once the engine closed the
-// read end, its writes failed. Into a file every write succeeds, so a helper
-// that escaped the harness's group with its stdout, and logs a megabyte a
-// second for an hour after the call, would write 3.6 GB to an inode nobody
-// will ever read: on a data pod, the volume the store and the stream live on;
-// on a seat pod, scratch whose accounting never sees an unlinked file. So
-// every [tailPoll] the janitor truncates each capture it holds to nothing
-// through the engine's read-write description, which gives back its blocks,
-// its reserved room and its size while the holder keeps appending (at the
-// file's end, which is now its start), and then asks whether anything still
-// holds it: once nothing does it closes the capture, which frees the inode,
-// and logs `harness_capture_released`. An escaped writer so holds at most
-// its rate times tailPoll on the volume, or in memory.
-//
-// ONE PER PROVIDER, its zero value ready, and its goroutine runs only while it
-// holds a capture: the provider has no close, and a janitor with nothing to
-// watch has no reason to run.
-//
-// What it cannot reach: a holder through a description the pin does not see
-// (a holder that unlocked its own stdout, or reopened its capture by path),
-// which the end read as let go; and an engine that exits, with which it goes.
+// keeps each EMPTY until its holder lets go. Into a file every write succeeds
+// (a closed pipe failed them), so a helper that escaped the harness's group
+// and logs a megabyte a second for an hour would write 3.6 GB to an inode
+// nobody reads, on the data pod's store volume or a seat pod's scratch. So
+// every [tailPoll] it truncates each capture through the engine's read-write
+// description, then asks whether anything still holds it; once nothing does
+// it closes the capture, logging `harness_capture_released`. An escaped
+// writer holds at most its rate times tailPoll. ONE PER PROVIDER, zero value
+// ready, running only while it holds a capture. It cannot reach a holder the
+// pin does not see (unlocked or reopened by path).
 type janitor struct {
 	mu      sync.Mutex
 	held    []*heldCapture

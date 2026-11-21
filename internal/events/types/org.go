@@ -5,24 +5,14 @@ import "github.com/crewlet/crewlet/internal/events"
 // Two lifecycles, on different clocks: this NODE coming up and going down
 // under a company, and a SEAT arriving on or leaving this node.
 //
-// ONE ORG PAIR PER NODE, and the envelope's source names which — the same
-// shape [ConfigRevisionApplied] has, and for the same reason: starting and
-// stopping is something a PROCESS does, and a fleet of three that reported one
-// start between them would be hiding two of them.
+// ONE ORG PAIR PER NODE, the envelope's source naming which, as with
+// [ConfigRevisionApplied]: a fleet of three reporting one start would hide two.
 //
-// THE SEAT PAIR IS LIVE-ONLY (see [events.LiveOnly]). Placement moves seats on
-// every rebalance, so a durable row per claim would fill the audit log with a
-// fact about scheduling rather than about the company. What reads them is the
-// live seat state, where "is this seat running, and where" is the question —
-// and where `terminated` was a state nothing could reach, so a seat that went
-// away kept showing whatever it last did.
+// THE SEAT PAIR IS LIVE-ONLY (see [events.LiveOnly]): placement moves seats on
+// every rebalance, so durable rows would fill the audit log with scheduling.
 //
-// # Why there is no seat REDEFINITION here
-//
-// There were two more — reassigned, redefined — and neither had a publisher.
-// The roster change they were about is a CONFIG REVISION, which the engine
-// stores whole and serves a diff of: a precise record where these were a lossy
-// paraphrase of one, published N times on a fleet that all apply it.
+// There is no seat REDEFINITION event: a roster change is a CONFIG REVISION,
+// stored whole with a diff, which an event would paraphrase N times.
 
 func init() {
 	events.Register[OrgStarted]()

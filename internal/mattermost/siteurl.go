@@ -8,49 +8,15 @@ import (
 // What a server's Site URL can get wrong, judged by what the server itself
 // does with the value.
 //
-// # Never by comparing it with the address the engine dials
-//
-// That comparison is what this replaced, and its premise was false twice
-// over. Browsers do not use the engine's address: people browse the Site URL,
-// and the engine may reach the same server by any route — an in-cluster
-// Service while people browse a public name is the ordinary deployment on
-// Kubernetes, not a mistake. And Mattermost's websocket origin check is a
-// browser control the engine is not subject to: it sends no Origin header
-// (see [dialWebsocket]), and every branch of the check admits an upgrade that
-// carries none. So "the two addresses differ" predicted nothing, and a
-// warning saying browsers would fail fired on every correctly configured
-// split-horizon deployment.
-//
-// # What the server does with it (v11.11.1)
-//
-// The Site URL is where every absolute address the server hands out starts,
-// and the input to its websocket origin check (App.OriginChecker,
-// server/channels/app/server.go). With AllowCorsFrom unset, a browser's
-// upgrade is admitted when its Origin's host and scheme equal the Site URL's
-// — or, with no Site URL, the host the request was sent to. With
-// AllowCorsFrom set, the Origin must equal one of its entries or the Site
-// URL with its path removed, string for string (utils.CheckOrigin). An
-// upgrade with no Origin is admitted either way.
-//
-// So what is observable from the public configuration, and wrong whatever
-// address anybody dials, is two things: no Site URL at all, and one no
-// browser can match — not an absolute http(s) address, which the server's own
-// validation lets through (url.ParseRequestURI takes `chat.example.com:8065`
-// as a scheme and an opaque rest, and `/mattermost` as a path), or one that
-// spells out its scheme's default port, which no browser's Origin carries.
-// AllowCorsFrom is not in the public configuration, so a fault that hangs on
-// it is the doctor's live browser probe to find, never this judgement's.
-//
-// # Nor the engine's path
-//
-// Mattermost serves its API under its Site URL's path whatever host a
-// request arrives on, so an engine address under another path misses it —
-// but comparing the two paths predicts that wrongly in both directions: a
-// proxy that maps a path of its own onto the server's is fine and differs,
-// and a proxy that redirects http to https breaks every write and does not.
-// What happens instead is observed where it happens, on every call: the
-// client refuses a redirect, naming the address the server sent it to, and
-// names a web page answered where the API's JSON should be (client.go).
+// Never by comparing it with the address the engine dials: people browse the
+// Site URL while the engine may dial an in-cluster Service, and the engine sends
+// no Origin ([dialWebsocket]); that comparison fired on correct split-horizon
+// setups. The Site URL feeds the origin check (v11.11.1): unless AllowCorsFrom
+// is set a browser's Origin host and scheme must equal it (none: the request's
+// host). So the faults wrong whatever is dialled are no Site URL, and one no
+// browser matches: not absolute http(s), which validation admits
+// (`chat.example.com:8065` parses as a scheme), or spelling its default port.
+// AllowCorsFrom faults are the doctor's probe's; paths are observed per call.
 
 // SiteURLFault is one thing wrong with a server's Site URL.
 type SiteURLFault struct {

@@ -17,17 +17,13 @@ import (
 
 // turns lists one row per unit of agent work, newest first.
 //
-// A TURN IS THE UNIT OF WORK THIS ENGINE DOES — a wake, a decision, some tool
-// rounds, a reply — and everything else is a projection of one: the spend
-// rollup, the seat page, an item's history. None of them is a LIST of them.
-// The dashboard faked one by paging the raw event feed sixty-one times and
-// folding the rows in the browser: slow, capped at whatever the caller gave up
-// on, and wrong at the page boundary, where a turn straddling two pages
-// appeared twice.
+// A TURN IS THE UNIT OF WORK THIS ENGINE DOES (a wake, a decision, some tool
+// rounds, a reply) and everything else is a projection of one. This is the
+// LIST of them, so no client folds the raw event feed, where a turn straddling
+// two pages appears twice.
 //
-// THE CURSOR IS ON THE TURN, not on an event, because that is what the listing
-// is ordered by — and it is exactly the defect the browser-side fold had: a
-// keyset on any one event pages a turn twice. It is OPAQUE ([turnCursor]).
+// THE CURSOR IS ON THE TURN, not on an event: a keyset on any one event pages
+// a turn twice. It is OPAQUE ([turnCursor]).
 //
 // ONE SEAT'S TURNS ARE ITS TRAIL, and every seat's are the company's — see
 // [Sources.trailOf], which decides both before anything is read.
@@ -181,15 +177,11 @@ func (s Sources) turns(ctx context.Context, p Params) (any, error) {
 // `seat=`, as the agent id its rows are filed under, decided before anything
 // is read; and the principal the answer is shown to.
 //
-// # One seat's, or the company's
-//
-// ONE SEAT'S TURNS AND PHASES ARE ITS TRAIL — the prompts it was sent, the
-// responses it gave, what woke it — and are read by whoever reads that seat's
-// trail ([authz.ActionSeatTrailRead]: an admin, or the seat's lead, who
-// steers, pauses and answers for the agents they run and could do none of it
-// well without reading what those agents did). EVERY SEAT'S AT ONCE is the
-// company-wide trail ([authz.ActionAuditRead], an admin's), which no lead's
-// relation reaches: a listing naming no seat is every seat in the company.
+// ONE SEAT'S TURNS AND PHASES ARE ITS TRAIL, read by whoever reads that
+// seat's trail ([authz.ActionSeatTrailRead]: an admin, or the seat's lead).
+// EVERY SEAT'S AT ONCE is the company-wide trail ([authz.ActionAuditRead], an
+// admin's), which no lead's relation reaches: a listing naming no seat is
+// every seat.
 //
 // DECIDED BEFORE THE HANDLE IS RESOLVED, so a seat the caller may not read is
 // refused in the same words whether or not it is an agent's.
@@ -280,25 +272,17 @@ func originObject(origin string) authz.ObjectKind {
 	return ""
 }
 
-// A PAGE OF TURNS RESUMES FROM AN OPAQUE CURSOR: `next` is a token, and `before`
-// takes exactly the token a page answered, and nothing else.
+// A PAGE OF TURNS RESUMES FROM AN OPAQUE CURSOR: `before` takes exactly the
+// `next` token a page answered.
 //
 // OPAQUE, unlike the event list's `before_time`/`before_id`, because the
-// position is not a row's own fields. The event list resumes from its last
-// row's key, which the row carries; a page of turns resumes from where its last
-// turn is LISTED — the earliest start at which any node's page lists it, which
-// is not its `started_at` when its earliest half is a half no node lists — and
-// from that turn's id, without which two turns starting at one microsecond
-// either side of a page's cut were one position, and the one past the cut was
-// on no page. And the fleet's cursor can stand on an empty page, where a node's
-// page stopped, which is no row at all. So a client that composed one from a
-// row would resume from a position the walk did not stop at; one token says
-// "hand this back as it is", and leaves the engine free to say more in it.
-//
-// Its content is the position — the listing instant to the microsecond and the
-// turn id — in URL-safe base64, so it passes through a query string untouched.
-// A token this endpoint did not hand out is refused as `bad_params`, never read
-// as some other position.
+// position is not a row's own fields: a page resumes from where its last turn
+// is LISTED (the earliest start at which any node's page lists it, not
+// necessarily its `started_at`) and from that turn's id, without which two
+// turns a microsecond either side of the cut were one position. The cursor
+// can also stand on an empty page, which is no row. Its content is the
+// listing instant and the turn id in URL-safe base64; a token this endpoint
+// did not hand out is refused as `bad_params`.
 func encodeTurnCursor(c store.TurnCursor) string {
 	return base64.RawURLEncoding.EncodeToString(
 		[]byte(c.Start.UTC().Format(time.RFC3339Nano) + " " + c.TurnID))

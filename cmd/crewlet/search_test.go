@@ -15,16 +15,15 @@ import (
 // THE EVALUATION NAMES WHICH FIRST STAGE FAILED, because the two failures have
 // opposite remedies.
 //
-// An index below the floor while the full scan over the same queries meets it
-// is the INDEX's recall — the corpus has moved since it was trained, and
-// raising the quantization over-fetch would pay latency on every search for a
-// loss the codes never had. A scan below the floor is the sign codes failing
-// this corpus, and there the over-fetch is the remedy. Printing one verdict
+// An index below the floor while the full scan meets it is the INDEX's recall (the
+// corpus has moved since training; raising the over-fetch would pay latency on
+// every search for a loss the codes never had). A scan below the floor is the sign
+// codes failing this corpus, and there the over-fetch is the remedy. One verdict
 // for both sends an operator to the wrong knob exactly when there is an index.
 //
-// And the first-stage line names WHY a corpus scanned, because "no index"
-// has four causes an operator acts on differently: too small, measured not
-// worth installing, trained in another space, never trained.
+// The first-stage line also names WHY a corpus scanned, since "no index" has four
+// causes: too small, measured not worth installing, trained in another space,
+// never trained.
 func TestTheEvalVerdictNamesWhichFirstStageFailed(t *testing.T) {
 	t.Parallel()
 	measured := &search.Measurement{Sources: 20000, Recall: 0.9859, Floor: 0.98,

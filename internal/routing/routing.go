@@ -70,6 +70,10 @@
 // `asks` statement and receipts), never from prose, and a reason whose wake
 // turns on who the handle is offers it through [Builder.AddWaking].
 //
+// Whom a woken turn works for is not routing's: an agent's record names whom
+// it was written for (ADR-0109) and its wake carries that to the turn, while
+// who is woken is decided by [Route]'s steps exactly as before.
+//
 // # The fallback is a chain
 //
 // A domain offers a lead to fall back on when nobody ordinary hears a change,
@@ -186,17 +190,13 @@ type Candidate[R ~string] struct {
 // Hears reports whether c is told of a change actor made.
 //
 // Everybody but the actor is. The actor is told only under a reason
-// wakesActor says is news to them — the tracker's `unblocked` tells somebody
-// a task of theirs became workable, which is news whoever wrote the record
-// saying so — and a nil wakesActor names no such reason. Otherwise telling
-// somebody what they just did is a round a model spends on nothing, and a
-// notice in a person's own inbox about their own write.
+// wakesActor says is news to them (the tracker's `unblocked`), and a nil
+// wakesActor names none: telling somebody what they just did wastes a model
+// round and clutters their inbox.
 //
-// THE ONE STEP OF [Route] A RECORD CAN TAKE ON ITS OWN: who wrote the record
-// is on the record, so an applier writing notice rows — which holds no roster
-// and so takes none of Route's other steps — asks this too, and a row is
-// written for the change's own author only under a reason that is news to
-// them.
+// THE ONE STEP OF [Route] A RECORD CAN TAKE ON ITS OWN: the author is on the
+// record, so an applier writing notice rows, which holds no roster, asks this
+// too.
 func (c Candidate[R]) Hears(actor string, wakesActor func(R) bool) bool {
 	return c.Handle != actor || (wakesActor != nil && wakesActor(c.Reason))
 }
@@ -304,46 +304,18 @@ func (b *Builder[R]) wakes(reason R) bool {
 	return b.StartsTurn == nil || b.StartsTurn(reason)
 }
 
-// Route is the post-filter: which of a record's candidates are woken.
-//
-// Five steps, in this order. The fourth is the whole reason the fallback is
-// a chain, and the fifth is why it comes last:
-//
-//  1. Drop the inbox-only candidates — they are a record, not a wake.
-//  2. Drop the actor, except under a reason wakesActor says is news to them
-//     ([Candidate.Hears]). wakesActor is the domain's, because which of its
-//     reasons are news to the person who made the change is a fact about
-//     those reasons.
-//  3. Drop handles the company no longer employs. registry answers whether
-//     it still does, and a nil registry admits everybody: the honest answer
-//     for a deployment with no organization loaded yet. A departed handle
-//     keeps its notice row, written before anybody asked, and loses only its
-//     wake — a wake addressed to nobody is one nothing reports.
-//  4. If no ordinary candidate survived, keep the LOWEST-RANKED fallback the
-//     company still employs, and only that one.
-//  5. Keep only the candidates whose notice starts a turn
-//     ([Candidate.Wakes]). AFTER the fallback is decided, never before: a
-//     candidate told and not woken still heard about the change (see the
-//     package doc).
+// Route is the post-filter: which of a record's candidates are woken. Steps,
+// in order: (1) drop inbox-only candidates; (2) drop the actor unless
+// wakesActor says it is news to them ([Candidate.Hears]); (3) drop handles
+// registry says are no longer employed (nil admits all), which keep their
+// notice row; (4) if no ordinary candidate survived, keep only the
+// LOWEST-RANKED fallback still employed; (5) keep candidates whose notice
+// starts a turn ([Candidate.Wakes]), AFTER the fallback is decided.
 //
 // THE REGISTRY IS ASKED ONLY ABOUT A HANDLE WHOSE ANSWER COULD CHANGE THE
-// RESULT: never the actor, never an inbox-only candidate, never a fallback
-// while an ordinary candidate survives, and the chain link by link in rank
-// order, stopping at the first link still employed. An ordinary candidate
-// that will not be woken is asked like one that will, because whether it is
-// still employed is whether it keeps the fallback quiet. Steps 2 and 3 are
-// both filters, so taking the record's own step first changes no answer — it
-// changes what the roster is asked, and that is what a domain counts and pays
-// for: the knowledge base logs every handle the roster refused as a dropped
-// recipient, which asked first would count an actor who has since left, or a
-// departed lead whose copy nobody needed, from a change that reached everyone
-// it should; and a snapshot of hundreds of handles costs a lookup per
-// would-be recipient rather than per name.
-//
-// ONE NAME IS THE ACTOR. A person bound to a seat writes AS that seat — the
-// author iam.ActorFor records for them — so the handle their own gestures
-// land on is the author itself, and a credential nobody is bound through
-// writes, and is watched, under its own login.
+// RESULT (a lookup is counted and paid per handle): never the actor (the author
+// iam.ActorFor records), an inbox-only candidate or a fallback while an
+// ordinary one survives; the chain in rank order, stopping at the first employed.
 func Route[R ~string](candidates []Candidate[R], registry func(string) bool,
 	actor string, wakesActor func(R) bool) []Candidate[R] {
 

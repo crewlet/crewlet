@@ -82,17 +82,13 @@ type Evidence struct {
 
 // DeliveryOf is the one place the three empty states are told apart.
 //
-// An announced record with no rows is ambiguous between three things — a
-// routing that resolved to nobody, rows a retention sweep took, and not
-// knowing which — and THE HORIZON separates them: a record older than it is
-// one whose rows the sweep was entitled to take and the applier entitled
-// never to write, so their absence is not evidence; a record newer than it
-// would still have its rows, so their absence IS evidence that nobody was
-// reached; and with no horizon stated there is nothing to date it by.
-//
-// A FUNCTION OVER VALUES rather than a branch inside a domain's read, so the
-// rule is exercisable without a database and every domain that keeps
-// recipient rows answers it alike.
+// An announced record with no rows is ambiguous between a routing that
+// resolved to nobody, rows a retention sweep took, and not knowing which. THE
+// HORIZON separates them: a record older than it may have lost its rows (or
+// never had them written), so their absence is not evidence; a newer one
+// would still have them, so their absence IS evidence nobody was reached; with
+// no horizon there is nothing to date it by. A function over values, so the
+// rule is testable without a database and every domain answers it alike.
 func DeliveryOf(e Evidence) Delivery {
 	switch {
 	case e.Recipients > 0:

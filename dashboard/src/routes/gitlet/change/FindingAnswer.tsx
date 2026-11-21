@@ -11,7 +11,7 @@
  * same form, which says that it clears the finding for good.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Input, Select } from "@crewlethq/ui";
 import { CircleCheckGlyph } from "@crewlethq/icons/glyphs";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
@@ -34,17 +34,28 @@ export function findingStands(state: string): boolean {
   return STANDING.includes(state);
 }
 
+/** Answer, or once pressed its form, which is the card's whole foot until Send or Cancel. */
 export function FindingAnswer({
   change,
   finding,
+  open,
+  onOpenChange,
+  focusBack = false,
 }: {
   change: CodeChangeDetail;
   finding: CodeFindingRow;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The form just closed: Answer takes the focus back. */
+  focusBack?: boolean;
 }) {
   const write = useAct("code_resolve_finding");
-  const [open, setOpen] = useState(false);
   const [resolution, setResolution] = useState("resolved");
   const [note, setNote] = useState("");
+  const press = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (focusBack && !open) press.current?.querySelector("button")?.focus();
+  }, [focusBack, open]);
   if (!findingStands(finding.state)) return null;
   const answer = FINDING_ANSWERS.find((a) => a.value === resolution) ?? FINDING_ANSWERS[0]!;
   const blocked = resolution === finding.state ? "It is answered this way already." : undefined;
@@ -60,34 +71,36 @@ export function FindingAnswer({
       { done: `${answer.done} “${finding.title}”` },
     );
     if (result && (result.kind === "applied" || result.kind === "pending")) {
-      setOpen(false);
+      onOpenChange(false);
       setNote("");
     }
   };
   if (!open) {
     return (
-      <WriteButton
-        write={write}
-        size="small"
-        variant="ghost"
-        leadingIcon={<CircleCheckGlyph size="sm" />}
-        aria-label={`Answer the finding “${finding.title}”`}
-        onPress={() => setOpen(true)}
-      >
-        Answer
-      </WriteButton>
+      <span ref={press} className="code-finding__press">
+        <WriteButton
+          write={write}
+          size="small"
+          variant="ghost"
+          leadingIcon={<CircleCheckGlyph size="sm" />}
+          aria-label={`Answer the finding “${finding.title}”`}
+          onPress={() => onOpenChange(true)}
+        >
+          Answer
+        </WriteButton>
+      </span>
     );
   }
   return (
     <form
-      className="col gap-2"
+      className="code-finding__answer"
       aria-label={`Answer the finding “${finding.title}”`}
       onSubmit={(event) => {
         event.preventDefault();
         void submit();
       }}
     >
-      <div className="row gap-2 wrap">
+      <div className="code-finding__answer-fields">
         <Select
           size="sm"
           width="auto"
@@ -98,7 +111,9 @@ export function FindingAnswer({
         />
         <Input
           aria-label="Note"
+          width="full"
           placeholder="A note for whoever raised it (optional)"
+          autoFocus
           value={note}
           onChange={(event) => setNote(event.target.value)}
         />
@@ -118,7 +133,12 @@ export function FindingAnswer({
         >
           {resolution === "dismissed" ? "Dismiss finding" : "Send answer"}
         </WriteButton>
-        <Button size="small" variant="ghost" onClick={() => setOpen(false)} disabled={write.busy}>
+        <Button
+          size="small"
+          variant="ghost"
+          onClick={() => onOpenChange(false)}
+          disabled={write.busy}
+        >
           Cancel
         </Button>
       </div>

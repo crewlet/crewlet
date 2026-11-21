@@ -14,19 +14,15 @@ import (
 // A REGISTRATION IS JUDGED AGAINST THE ADDRESS A VENDOR REACHES, never the one a
 // person does.
 //
-// Every writer of a surface's endpoint — the reconcile loop and the dashboard's
-// setup write alike — stamps the vendors' address, `config.API.WebhookBase`:
-// the public listener's `api.public.external_url` once `api.public` is set. The
-// integrations answer compares that recorded endpoint with an address
-// [serveAPI] hands it, and it was handed the PERSON's `api.external_url`: on
-// every deployment with a public listener each healthy registration read as
-// moved, for ever, and its card as Action needed — while a hook registered on
-// the admin socket, where every webhook route answers 404, read as current.
+// Every writer of a surface's endpoint (the reconcile loop, the dashboard's setup
+// write) stamps `config.API.WebhookBase`: the public listener's
+// `api.public.external_url` once `api.public` is set. The integrations answer
+// compares the recorded endpoint with an address [serveAPI] hands it; handed the
+// PERSON's `api.external_url`, every healthy registration read as moved, and a
+// hook on the admin socket (webhook routes answer 404) read as current.
 //
-// THROUGH serveAPI, because the comparison itself is internal/api/queries' and
-// has its own cases; what only a running node can get wrong is which address
-// it is handed. Both directions, so the case fails on a wiring that answers
-// true or false for everything.
+// THROUGH serveAPI, because the comparison is internal/api/queries' and has its
+// own cases; only the wiring can hand it the wrong address. Both directions.
 func TestARegistrationIsJudgedAgainstTheVendorsAddress(t *testing.T) {
 	t.Parallel()
 	company, err := config.ParseCompany([]byte(companyYAML))

@@ -12,33 +12,46 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// LimitResetEvent reads WHEN a limit lifts and WHICH limit it is from an event
-// the harness writes in fields, ahead of any sentence: Claude Code's
-// `rate_limit_event`, whose `rate_limit_info` carries the reset as an epoch and
-// the window as `five_hour`, `seven_day` or `seven_day_opus`.
-//
-// IT DOES NOT CLASSIFY. A run reports a limit by its [LimitEvent] or a
-// [LimitMarker], and this only dates and names it: the LAST event of a run
-// that matches is the reset of the limit the same run reported. Claude Code
-// writes one on every run, an allowed one too (`status: allowed_warning`), so
-// a match that does not name the refusal would date a limit by a window that
-// is still open; the shipped profile matches `status: rejected` for that
-// reason.
-//
-// Safe for the reason [LimitEvent] is: a model chooses the words inside an
-// event's strings, never the keys or the types of the event, so the profile
-// may declare these only with jsonl output and a discriminator, and every
-// match names the discriminator and at least one field beside it.
-type LimitResetEvent struct {
+// LimitReport reads where the vendor's limit windows stand from the harness's own
+// event fields (Claude Code's `rate_limit_event`). It classifies nothing: the last
+// report a run wrote whose window is reached dates that run's limit.
+type LimitReport struct {
 	// Match picks the event out; see [Match].
 	Match []Match `yaml:"match,omitempty"`
 
-	// ResetsAt is where the event carries the instant the limit lifts.
+	// State is where the event says its own window stands, and how the
+	// vendor's words map onto [llm.LimitState].
+	State EventState `yaml:"state,omitempty"`
+
+	// Window is where the event names its own window, and how the vendor's
+	// names map onto the engine's; an unmapped name dates a limit as unknown.
+	Window EventWindow `yaml:"window,omitempty"`
+
+	// Used is where the event carries the fraction of its window used.
+	Used Path `yaml:"used,omitempty"`
+
+	// ResetsAt is where the event carries the instant its window turns over.
 	ResetsAt EventInstant `yaml:"resets_at,omitempty"`
 
-	// Window is where the event names which limit it is, and how the
-	// vendor's names map onto [llm.LimitWindow]. Empty reads no window.
-	Window EventWindow `yaml:"window,omitempty"`
+	// Windows reads every window at once from an object keyed by the vendor's
+	// names; optional.
+	Windows *EventWindows `yaml:"windows,omitempty"`
+}
+
+// EventState is where an event names a state, and the map from the vendor's
+// words to the engine's.
+type EventState struct {
+	Path Path                      `yaml:"path,omitempty"`
+	Map  map[string]llm.LimitState `yaml:"map,omitempty"`
+}
+
+// EventWindows is an object of windows keyed by the vendor's names, each read
+// at the same paths within its own entry.
+type EventWindows struct {
+	Path     Path         `yaml:"path,omitempty"`
+	State    Path         `yaml:"state,omitempty"`
+	Used     Path         `yaml:"used,omitempty"`
+	ResetsAt EventInstant `yaml:"resets_at,omitempty"`
 }
 
 // EventInstant is an instant at a path in an event, in a unit.
@@ -68,17 +81,24 @@ func (u InstantUnit) Valid() bool {
 	return false
 }
 
-// EventWindow is where an event names its limit, and the map from the
-// vendor's names to the engine's. A name the map does not hold reads as
-// [llm.LimitUnknown], so a window the vendor adds is a limit of unknown window
-// rather than a misread one.
+// EventWindow is where an event names its window, and the map from the
+// vendor's names to the engine's.
 type EventWindow struct {
-	Path Path                       `yaml:"path,omitempty"`
-	Map  map[string]llm.LimitWindow `yaml:"map,omitempty"`
+	Path Path                  `yaml:"path,omitempty"`
+	Map  map[string]WindowName `yaml:"map,omitempty"`
+}
+
+// WindowName is one of the vendor's windows in the engine's words: its kind,
+// its length in hours where the vendor's name says it, and the model family a
+// [llm.LimitModel] window is of.
+type WindowName struct {
+	Window llm.LimitWindow `yaml:"window,omitempty"`
+	Hours  int             `yaml:"hours,omitempty"`
+	Model  string          `yaml:"model,omitempty"`
 }
 
 // LimitWindowWording names the window of a limit from the vendor's sentence,
-// for a report no [LimitResetEvent] named one for: "weekly limit" is
+// for a report no [LimitReport] named one for: "weekly limit" is
 // [llm.LimitWeekly]. Compared case-sensitively, as a sentinel is, against the
 // sentence the classification already took as the vendor's report, so it
 // reads nothing the model wrote.
@@ -321,44 +341,27 @@ func (p *Profile) validateDeviceLogin(add func(string, ...any)) {
 	}
 }
 
-// validateEventReports holds [Profile.LimitResetEvents], [Profile.AuthEvents]
+// validateEventReports holds [Profile.LimitReports], [Profile.AuthEvents]
 // and [Profile.LimitWindows] to the shape [Profile.validateLimitEvents] holds
 // a limit event to: matched on fields the harness writes, never on the model's
 // words.
 func (p *Profile) validateEventReports(add func(string, ...any)) {
-	if (len(p.LimitResetEvents) > 0 || len(p.AuthEvents) > 0) &&
+	if (len(p.LimitReports) > 0 || len(p.AuthEvents) > 0) &&
 		(p.EffectiveOutput() != OutputJSONL || len(p.EventTypePath) == 0) {
-		add("limit_reset_events and auth_events need output: %s and an event_type_path: on "+
+		add("limit_reports and auth_events need output: %s and an event_type_path: on "+
 			"any other output a line of the model's answer is a line of stdout", OutputJSONL)
 	}
+	names := func(match []Match) bool {
+		return slices.ContainsFunc(match, func(m Match) bool { return slices.Equal(m.Path, p.EventTypePath) })
+	}
 	discriminated := func(what string, match []Match) {
-		named := slices.ContainsFunc(match, func(m Match) bool {
-			return slices.Equal(m.Path, p.EventTypePath)
-		})
-		if !named || len(match) < 2 {
+		if !names(match) || len(match) < 2 {
 			add("%s.match must name the event type at event_type_path and at least one "+
 				"field the harness writes beside it", what)
 		}
 	}
-	for i, e := range p.LimitResetEvents {
-		what := fmt.Sprintf("limit_reset_events[%d]", i)
-		discriminated(what, e.Match)
-		if len(e.ResetsAt.Path) == 0 && len(e.Window.Path) == 0 {
-			add("%s reads neither resets_at nor window, so it says nothing", what)
-		}
-		if len(e.ResetsAt.Path) > 0 && !e.ResetsAt.Unit.Valid() {
-			add("%s.resets_at.unit %q (want %s, %s or %s)", what, e.ResetsAt.Unit,
-				InstantEpoch, InstantEpochMS, InstantRFC3339)
-		}
-		if len(e.Window.Path) == 0 && len(e.Window.Map) > 0 {
-			add("%s.window.map is set with no window.path", what)
-		}
-		for _, name := range slices.Sorted(maps.Keys(e.Window.Map)) {
-			if w := e.Window.Map[name]; !w.Valid() {
-				add("%s.window.map[%q] is %q (want %s, %s, %s or %s)", what, name, w,
-					llm.LimitSession, llm.LimitWeekly, llm.LimitModel, llm.LimitUnknown)
-			}
-		}
+	for i, e := range p.LimitReports {
+		e.validate(fmt.Sprintf("limit_reports[%d]", i), names(e.Match), add)
 	}
 	for i, e := range p.AuthEvents {
 		discriminated(fmt.Sprintf("auth_events[%d]", i), e.Match)
@@ -374,18 +377,63 @@ func (p *Profile) validateEventReports(add func(string, ...any)) {
 	}
 }
 
+// validate holds one report to a shape that reads the harness's fields alone.
+// The state map is the field beside the discriminator: an event whose state
+// is not a word it holds is no report.
+func (e LimitReport) validate(what string, named bool, add func(string, ...any)) {
+	if !named {
+		add("%s.match must name the event type at event_type_path", what)
+	}
+	if len(e.State.Path) == 0 || len(e.State.Map) == 0 {
+		add("%s.state needs a path and a map: it is what makes an event a report", what)
+	}
+	for _, word := range slices.Sorted(maps.Keys(e.State.Map)) {
+		if s := e.State.Map[word]; !s.Valid() {
+			add("%s.state.map[%q] is %q (want %s, %s or %s)", what, word, s,
+				llm.LimitOK, llm.LimitWarning, llm.LimitReached)
+		}
+	}
+	if len(e.Window.Path) == 0 {
+		add("%s.window.path is empty, so no report names its window", what)
+	}
+	for _, name := range slices.Sorted(maps.Keys(e.Window.Map)) {
+		w := e.Window.Map[name]
+		if !w.Window.Valid() {
+			add("%s.window.map[%q].window is %q (want %s, %s, %s or %s)", what, name, w.Window,
+				llm.LimitSession, llm.LimitWeekly, llm.LimitModel, llm.LimitUnknown)
+		}
+		if w.Hours < 0 {
+			add("%s.window.map[%q].hours is %d: a window's length is never negative", what, name, w.Hours)
+		}
+		if w.Model != "" && w.Window != llm.LimitModel {
+			add("%s.window.map[%q].model is set on a %s window: only a %s window is one model's",
+				what, name, w.Window, llm.LimitModel)
+		}
+	}
+	instant := func(field string, at EventInstant) {
+		if len(at.Path) > 0 && !at.Unit.Valid() {
+			add("%s.%s.unit %q (want %s, %s or %s)", what, field, at.Unit,
+				InstantEpoch, InstantEpochMS, InstantRFC3339)
+		}
+	}
+	instant("resets_at", e.ResetsAt)
+	if w := e.Windows; w != nil {
+		if len(w.Path) == 0 {
+			add("%s.windows.path is empty", what)
+		}
+		if len(w.State) == 0 && len(w.Used) == 0 && len(w.ResetsAt.Path) == 0 {
+			add("%s.windows reads neither state, used nor resets_at, so it says nothing", what)
+		}
+		instant("windows.resets_at", w.ResetsAt)
+	}
+}
+
 // cloneSignIn copies the fields of this file a clone must not share.
 func (p Profile) cloneSignIn(out *Profile) {
-	if p.LimitResetEvents != nil {
-		out.LimitResetEvents = make([]LimitResetEvent, len(p.LimitResetEvents))
-		for i, e := range p.LimitResetEvents {
-			window := EventWindow{Path: slices.Clone(e.Window.Path)}
-			if e.Window.Map != nil {
-				window.Map = maps.Clone(e.Window.Map)
-			}
-			out.LimitResetEvents[i] = LimitResetEvent{Match: cloneMatches(e.Match),
-				ResetsAt: EventInstant{Path: slices.Clone(e.ResetsAt.Path), Unit: e.ResetsAt.Unit},
-				Window:   window}
+	if p.LimitReports != nil {
+		out.LimitReports = make([]LimitReport, len(p.LimitReports))
+		for i, e := range p.LimitReports {
+			out.LimitReports[i] = e.clone()
 		}
 	}
 	out.LimitWindows = slices.Clone(p.LimitWindows)
@@ -408,4 +456,19 @@ func (p Profile) cloneSignIn(out *Profile) {
 			Account: clonePaths(p.StatusFields.Account)}
 	}
 	out.ModelAliases = slices.Clone(p.ModelAliases)
+}
+
+// clone copies a report so that no slice or map is shared.
+func (e LimitReport) clone() LimitReport {
+	out := LimitReport{Match: cloneMatches(e.Match),
+		State:    EventState{Path: slices.Clone(e.State.Path), Map: maps.Clone(e.State.Map)},
+		Window:   EventWindow{Path: slices.Clone(e.Window.Path), Map: maps.Clone(e.Window.Map)},
+		Used:     slices.Clone(e.Used),
+		ResetsAt: EventInstant{Path: slices.Clone(e.ResetsAt.Path), Unit: e.ResetsAt.Unit}}
+	if w := e.Windows; w != nil {
+		out.Windows = &EventWindows{Path: slices.Clone(w.Path), State: slices.Clone(w.State),
+			Used:     slices.Clone(w.Used),
+			ResetsAt: EventInstant{Path: slices.Clone(w.ResetsAt.Path), Unit: w.ResetsAt.Unit}}
+	}
+	return out
 }

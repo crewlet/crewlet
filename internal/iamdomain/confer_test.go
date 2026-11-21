@@ -13,18 +13,17 @@ import (
 
 // WHAT AN ENROLMENT MAY CONFER, AND ON WHOSE AUTHORITY.
 //
-// An enrolment is a permission change from nothing to what it carries, and it
-// was held to nothing: a party allowed to enrol could enrol a colleague holding
-// everything and then sign in as them. [iamdomain.Writer.UpdatePerson] already
-// refused conferring what the writer does not hold; these cases hold the
-// enrolment and the invitation to the same rule, read through [iam.Expand], and
-// hold the two enrolments that are NOT the writer's to authorise — the first
-// person and a redemption — to the basis each names.
+// An enrolment changes permissions from nothing to what it carries, so unheld it
+// lets a party enrol a colleague holding everything and sign in as them. These
+// cases hold the enrolment and the invitation to [iamdomain.Writer.UpdatePerson]'s
+// rule (confer only what the writer holds, read through [iam.Expand]), and the
+// two enrolments that are NOT the writer's to authorise, the first person and a
+// redemption, to the basis each names.
 
-// nodeWriter is a running node's own writer: the permissions `internal/engine`
-// gives it and nothing else, and — because it is built rather than derived
-// from a principal — no credential, which is what keeps the sign-in surface's
-// records at the base record version and off every token's name.
+// nodeWriter is a running node's own writer: only the permissions
+// `internal/engine` gives it, and, being built rather than derived from a
+// principal, no credential, which keeps the sign-in surface's records at the
+// base record version and off every token's name.
 func nodeWriter(rig *writeRig) *iamdomain.Writer { return rig.node }
 
 // anAdmin is a person holding admin and nothing else written on their row.
@@ -35,12 +34,11 @@ func anAdmin(rig *writeRig) *iamdomain.Writer {
 
 // AN ENROLMENT NEEDS ADMIN, AND CONFERS ONLY NAMES THIS BUILD KNOWS.
 //
-// Somebody using every app, and no more, enrols nobody — an enrolment decides
-// who may do anything at all — and is refused before anything is claimed, so
-// the refusal leaves no residue. An administrator may confer any permission,
-// admin included, and never a name this build cannot read, which would ride a
-// new row for good. Mutation: let MayConfer accept an unknown name and the
-// second case lands.
+// Somebody using every app enrols nobody (an enrolment decides who may do
+// anything at all), refused before anything is claimed so no residue is left.
+// An administrator may confer any permission, admin included, but never a name
+// this build cannot read, which would ride a new row for good. Mutation: let
+// MayConfer accept an unknown name and the second case lands.
 func TestAnEnrolmentConfersOnlyWhatItsWriterHolds(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -63,9 +61,8 @@ func TestAnEnrolmentConfersOnlyWhatItsWriterHolds(t *testing.T) {
 		"swarm"}); !errors.Is(err, iamdomain.ErrRefused) {
 		t.Errorf("an administrator conferred a name this build does not know (%v)", err)
 	}
-	// REFUSED BEFORE THE FIRST CLAIM, so the refusal leaves nothing behind:
-	// the writer's own permissions need no read, and a claimed login behind a
-	// refusal that was knowable up front is residue for nothing.
+	// REFUSED BEFORE THE FIRST CLAIM: the writer's own permissions need no
+	// read, so a login claimed ahead of the refusal would be residue for nothing.
 	rig.drain()
 	if got := rig.column(`SELECT id FROM iam_people`); len(got) != 0 {
 		t.Errorf("a refused enrolment left rows behind: %v", got)
@@ -81,11 +78,9 @@ func TestAnEnrolmentConfersOnlyWhatItsWriterHolds(t *testing.T) {
 // A machine acts only through tokens, and a token may carry admin: what keeps
 // it off the gestures that need a person present is the authority table's
 // presence on their rows and this domain's refusal of an administrative record
-// written through one — never a permission it cannot hold. So a service
-// account is enrolled holding admin, and an edit may add admin to one; it used
-// to be refused the two grants a token could not carry, which no longer
-// exist. Mutation: refuse admin to a machine at the enrolment and the first
-// case goes red.
+// written through one, never a permission it cannot hold. So a service account
+// is enrolled holding admin, and an edit may add admin to one. Mutation: refuse
+// admin to a machine at the enrolment and the first case goes red.
 func TestAServiceAccountMayHoldAdmin(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -165,9 +160,8 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	offered := []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}
-	// THE LINK'S SECRET AND THE SEAT, per invitation: a redemption presents
-	// the one and binds the other, and these cases are about what the
-	// invitation confers.
+	// Each invitation's link secret and seat, which a redemption presents and
+	// binds; the cases vary only what the invitation confers.
 	secrets, seats := map[string]string{}, map[string]string{}
 	var redeemAs func(person, invitation, address string, grants []iam.Grant) error
 	issue := func(address string) string {
@@ -234,19 +228,17 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 				refused.name, err)
 		}
 	}
-	// A REFUSAL PUBLISHES NOTHING: the invitation is read in the record's
-	// own snapshot, so a redemption it does not cover leaves nothing
-	// holding the joiner's address against the corrected retry. Sarah is
-	// the only row.
+	// A REFUSAL PUBLISHES NOTHING: the invitation is read in the record's own
+	// snapshot, so nothing holds the joiner's address against the corrected
+	// retry. Sarah is the only row.
 	if rows := rig.column(`SELECT id FROM iam_people`); len(rows) != 1 {
 		t.Errorf("refused redemptions left rows behind: %v", rows)
 	}
 
-	// A SPENT LINK IS NOBODY'S AUTHORITY, however many times it is shown —
-	// including once the address it enrolled is free again. The person it
-	// created holds the address, so the directory refuses a second
-	// redemption while they are there; what is left to refuse is the link
-	// outliving them, which removing them stands in for here.
+	// A SPENT LINK IS NOBODY'S AUTHORITY, even once the address it enrolled is
+	// free again. While its person is here the directory refuses a second
+	// redemption by address; what is left is the link outliving them, which
+	// removing them stands in for.
 	spent := issue("spent@example.com")
 	redeemer := uuid.Must(uuid.NewV7()).String()
 	if err := redeemAs(redeemer, spent, "spent@example.com", offered); err != nil {
@@ -289,16 +281,13 @@ func TestARedemptionConfersWhatTheInvitationSaid(t *testing.T) {
 	}
 }
 
-// THE FIRST PERSON IS INVITED UNDER A TIER A TOKEN, on an estate with nobody
-// in it, and carries what the token could confer.
+// THE FIRST PERSON IS INVITED UNDER A TIER A TOKEN, on an empty estate, and
+// carries what the token could confer.
 //
-// There is no exemption for them. A company with nobody in it still holds the
-// deployment's own token, which is a party like any other: its invitation is
-// held to its grants, and the node's own writer redeems it on the invitation's
-// authority exactly as it redeems every later one. Nothing on the way may ask
-// for somebody to be enrolled already — that would be a company nobody could
-// ever enter.
-//
+// There is no exemption for them: the deployment's own token is a party like
+// any other, its invitation held to its grants, and the node's own writer
+// redeems it on the invitation's authority as it does every later one. Nothing
+// on the way may require somebody already enrolled, or nobody could ever enter.
 // Mutation: hold the invitation to an enrolled issuer and the first issue is
 // refused.
 func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
@@ -307,8 +296,8 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	if anybody, err := rig.anybody(t); err != nil || anybody {
 		t.Fatalf("the rig's estate is not empty (%v, %v)", anybody, err)
 	}
-	// THE FOUNDER'S SEAT, which the company declares before anybody can be
-	// invited onto it: every person holds one.
+	// The founder's seat, declared before anybody is invited onto it: every
+	// person holds one.
 	founder := rig.vacantSeat("founder")
 	token := rig.writer.As(principalNamed("token:ops", iam.KindMachine, iam.AllGrants))
 	var issued iamdomain.InviteIssued

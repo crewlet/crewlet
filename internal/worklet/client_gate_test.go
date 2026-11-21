@@ -250,6 +250,9 @@ func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 		"DECISION_MIN_OPTIONS":        decision.MinOptions,
 		"DECISION_MAX_OPTIONS":        decision.MaxOptions,
 		"PROJECT_PAGE":                worklet.MaxProjectsPerAnswer,
+		"STUCK_AFTER_HOURS_MIN":       worklet.MinStuckAfterHours,
+		"STUCK_AFTER_HOURS_MAX":       worklet.MaxStuckAfterHours,
+		"STUCK_AFTER_HOURS_DEFAULT":   worklet.DefaultStuckAfterHours,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {
@@ -286,5 +289,81 @@ func TestTheDashboardNamesEveryInformSurface(t *testing.T) {
 		t.Errorf("the dashboard names the inform surfaces %v and the engine %v — "+
 			"make InformSurface in contract/work.ts the engine's set, in its order",
 			client, engine)
+	}
+}
+
+// THE DASHBOARD KNOWS AN ITEM'S CONVERSATION BY THE KEY THE ENGINE STAMPS.
+//
+// A hold the engine puts on a conversation names it by its key, and the
+// dashboard reads the item it is about off that key: the item page's banner
+// and the Inbox row that opens the item. A copy that drifts from
+// [worklet.ItemConversation] matches no hold, and the item says nothing.
+func TestTheDashboardKnowsAnItemsConversationByTheEnginesKey(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Scalar(clientsource.Tree(t), "ITEM_CONVERSATION_PREFIX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "6f1c2e04-6a51-4b8a-9d0e-2c7f3b1a9e55"
+	if want := worklet.ItemConversation(id); got+id != want {
+		t.Errorf("the dashboard names item %s's conversation %q, the engine %q", id, got+id, want)
+	}
+}
+
+// THE DASHBOARD DRAWS EVERY FLOW STATE AND CAUSE THE ENGINE SENDS (ADR-0162).
+//
+// A state with no row draws a bare word in a neutral badge, and a cause with no
+// row leaves the item's sentence without its reason; a row the engine never
+// sends is unreachable. Every row carries its words, so half a row fails too.
+func TestTheDashboardDrawsEveryFlowStateAndCause(t *testing.T) {
+	t.Parallel()
+	tree := clientsource.Tree(t)
+	states, err := clientsource.Literal(tree, "FLOW_STATES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	causes, err := clientsource.Literal(tree, "FLOW_CAUSES")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var engineStates, engineCauses []string
+	for _, s := range worklet.FlowStates {
+		engineStates = append(engineStates, string(s))
+	}
+	for _, c := range worklet.FlowCauses {
+		engineCauses = append(engineCauses, string(c))
+	}
+	for _, set := range []struct {
+		name, key string
+		words     []string
+		body      clientsource.Body
+		engine    []string
+	}{
+		{"FLOW_STATES", "state", []string{"label", "tone"}, states, engineStates},
+		{"FLOW_CAUSES", "cause", []string{"phrase"}, causes, engineCauses},
+	} {
+		client := clientsource.Field(set.body, set.key)
+		if len(client) == 0 {
+			t.Fatalf("%s names nothing, so this gate certifies nothing", set.name)
+		}
+		for _, field := range set.words {
+			if got := clientsource.Field(set.body, field); len(got) != len(client) {
+				t.Errorf("%s has %d rows and %d %ss: every row carries one", set.name,
+					len(client), len(got), field)
+			}
+		}
+		for _, name := range set.engine {
+			if !slices.Contains(client, name) {
+				t.Errorf("the engine sends the flow %s %q and %s has no row for it: "+
+					"the item says a bare word with no reason. It names %v",
+					set.key, name, set.name, client)
+			}
+		}
+		for _, name := range client {
+			if !slices.Contains(set.engine, name) {
+				t.Errorf("%s draws the flow %s %q, which the engine never sends", set.name,
+					set.key, name)
+			}
+		}
 	}
 }

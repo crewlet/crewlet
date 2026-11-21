@@ -605,18 +605,15 @@ func TestARenameOfAPurgedPageClaimsNothing(t *testing.T) {
 
 // TestAPagesChildSetsCrossAChunkBoundaryUnchanged.
 //
-// THE LABELS AND THE WATCHERS ARE THE TWO COLLECTIONS ON A PAGE WHOSE SIZE IS
-// THE FOUNDER'S rather than the engine's, and both are written as multi-row
-// INSERTs — so how many statements a set takes is a property of the ESTATE's
-// probed parameter limit rather than of the record. That limit is the one
-// input to an apply that two nodes can legitimately disagree about, and the
-// identity claim this whole domain rests on says their tables are still
-// byte-identical: so the same record is applied here at the probed limit and
-// at one small enough to force several statements for each set, and the rows
-// and the returned count have to match.
+// THE LABELS AND THE WATCHERS ARE THE TWO FOUNDER-SIZED COLLECTIONS ON A PAGE,
+// written as multi-row INSERTs, so how many statements a set takes depends on
+// the ESTATE's probed parameter limit, the one apply input two nodes can
+// legitimately disagree about. Their tables must still be byte-identical: the
+// same record is applied at the probed limit and at one forcing several
+// statements per set, and rows and returned count must match.
 //
-// It is also what a per-row loop could never stage: a set that spans a chunk
-// is the only place the ON CONFLICT clause has to hold WITHIN one statement.
+// A set spanning a chunk is also the only place ON CONFLICT has to hold
+// WITHIN one statement.
 func TestAPagesChildSetsCrossAChunkBoundaryUnchanged(t *testing.T) {
 	t.Parallel()
 
@@ -710,18 +707,12 @@ func TestAPagesChildSetsCrossAChunkBoundaryUnchanged(t *testing.T) {
 
 // A REDELIVERED SAVE WRITES NO SECOND REVISION.
 //
-// Every row an apply writes here is guarded on its own key, and for the
-// revision that is not enough: the revision NUMBER is derived from the head
-// the apply just read. A redelivery reads a head that has already moved,
-// derives a number one higher, and inserts a second immutable body under a
-// key nothing has taken — so two nodes hold the same page at different
-// revision counts, and the one that saw the redelivery reports a version the
-// other has never heard of.
-//
-// A key guard cannot express that, which is why the apply compares the
-// record's POSITION against the one the head was last written at. The shared
-// contract suite catches it too; this is the case that says which value went
-// wrong and why.
+// A key guard is not enough for the revision: its NUMBER derives from the head
+// the apply just read. A redelivery reads a head that already moved, derives a
+// number one higher and inserts a second immutable body under a free key, so
+// nodes hold the page at different revision counts. Hence the apply compares
+// the record's POSITION against the one the head was last written at. The
+// shared contract suite catches it too; this case says which value went wrong.
 func TestARedeliveredSaveWritesNoSecondRevision(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, nil)

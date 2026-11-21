@@ -6,22 +6,20 @@ import (
 	"unicode/utf8"
 )
 
-// The sentinels. Each is a fact a caller acts on differently, which is why they
-// are separate.
+// The sentinels, each a fact a caller acts on differently.
 var (
 	// ErrNotFound reports a turn this seat holds no row for.
 	ErrNotFound = errors.New("executordomain: not found")
 
 	// ErrTurnEnded reports a write to a turn that has ended, or whose row a
 	// retention or a seat's removal took: its tombstone takes no further
-	// capture and no second end. A capture refused this way is not an error
-	// of the capture's own; the turn is over.
+	// capture and no second end. For a capture it is no fault of its own: the
+	// turn is over.
 	ErrTurnEnded = errors.New("executordomain: the turn has ended")
 
-	// ErrStaleCapture reports a capture whose (launch, capture) ordinals
-	// are not newer than the ones the turn's row already holds: a late or
-	// retried capture the row has moved past. Nothing was written, and the
-	// newer session stays.
+	// ErrStaleCapture reports a capture whose (launch, capture) ordinals are
+	// not newer than the turn's row holds: a late or retried capture. Nothing
+	// was written, and the newer session stays.
 	ErrStaleCapture = errors.New("executordomain: a newer capture of the turn is " +
 		"already recorded")
 
@@ -31,11 +29,10 @@ var (
 	ErrUploadStale = errors.New("executordomain: the session's object is too old " +
 		"to name")
 
-	// ErrOverBudget reports a capture the seat's byte budget cannot hold
-	// even with every ended turn's session released that no live turn holds
-	// as its base: the seat's live turns, and the bases their first reads
-	// hold, already fill it. Nothing was written; the turn's next launch
-	// starts from the session the row already names, or fresh.
+	// ErrOverBudget reports a capture the seat's byte budget cannot hold even
+	// with every ended session no live turn holds as its base released: the
+	// live turns and their bases already fill it. Nothing was written; the
+	// turn's next launch starts from the session its row names, or fresh.
 	ErrOverBudget = errors.New("executordomain: the seat's session budget cannot " +
 		"hold this capture")
 

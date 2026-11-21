@@ -54,6 +54,10 @@
 // rendered to SQL only by [Arm.SQL], so the arithmetic is tested against rows
 // held in memory in every direction and with NULLs at every depth rather than
 // through a database, and no consumer composes a second copy of it.
+//
+// The tracker's cursor, an around task's neighbours (the arms before it, read
+// with the order reversed) and the knowledge base's listing windows read
+// through it; a consumer that spells its own resume predicate loses the seek.
 package keyset
 
 import (

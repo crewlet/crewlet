@@ -49,6 +49,10 @@ type Completions interface {
 	// record states no instant. Fails open as Worked does.
 	WorkedAt(ctx context.Context, handle string, keys []string) map[string]time.Time
 
+	// WorkedBy is Worked with the turn each key was recorded worked by, ""
+	// where its record names none. Fails open as Worked does.
+	WorkedBy(ctx context.Context, handle string, keys []string) map[string]string
+
 	// Record marks a key worked. Best effort — see Worked.
 	Record(ctx context.Context, handle, key, turnID string, at time.Time) error
 
@@ -60,22 +64,16 @@ type Completions interface {
 	// asserted by coordtest.
 }
 
-// FleetCompletions is the completion ledger on the fleet's coordination
-// store.
-//
-// The ledger answers "has this trigger already been worked?", and the answer
-// is only useful if every node gives the same one. On the node's own database
-// it could not: a redelivery that landed on a peer found an empty ledger and
-// the turn ran a second time — which is the single thing this ledger exists
-// to prevent.
+// FleetCompletions is the completion ledger on the fleet's coordination store,
+// so every node answers "has this trigger been worked?" alike: a node's own
+// database would let a redelivery landing on a peer run the turn twice.
 //
 // # Where the fail-open decision is made
 //
-// [coord.Ledger] RAISES a read failure rather than swallowing it, because the
-// choice to do the work anyway belongs to whoever is about to do it. This is
-// that whoever: it logs the failure by name and answers "nothing is worked",
-// so the trigger runs. Duplicating a turn is recoverable; silently answering
-// nothing is not.
+// [coord.Ledger] raises a read failure, because the choice to work anyway
+// belongs to whoever is about to. This is that whoever: it logs the failure by
+// name and answers "nothing is worked", so the trigger runs. Duplicating a turn
+// is recoverable; silently answering nothing is not.
 type FleetCompletions struct{ ledger coord.Ledger }
 
 // NewFleetCompletions wraps a coordination store.
@@ -99,6 +97,18 @@ func (f *FleetCompletions) Worked(ctx context.Context, handle string, keys []str
 // WorkedAt returns the keys already recorded for this seat, each with when.
 func (f *FleetCompletions) WorkedAt(ctx context.Context, handle string, keys []string) map[string]time.Time {
 	got, err := f.ledger.WorkedAt(ctx, handle, keys)
+	if err != nil {
+		log.WarnContext(ctx, "completion_ledger_unreadable", "seat", handle, "error", err,
+			"detail", "treating every trigger as unworked, which may repeat a turn a peer took")
+		return nil
+	}
+	return got
+}
+
+// WorkedBy returns the keys already recorded for this seat, each with the turn
+// that worked it.
+func (f *FleetCompletions) WorkedBy(ctx context.Context, handle string, keys []string) map[string]string {
+	got, err := f.ledger.WorkedBy(ctx, handle, keys)
 	if err != nil {
 		log.WarnContext(ctx, "completion_ledger_unreadable", "seat", handle, "error", err,
 			"detail", "treating every trigger as unworked, which may repeat a turn a peer took")

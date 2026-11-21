@@ -339,23 +339,14 @@ func TestAPendingPasswordChangeOpensNoSessionHere(t *testing.T) {
 
 // A PASSWORD CHANGE ASKS THE SECOND FACTOR ITS PERSON HOLDS, AS A STEP-UP DOES.
 //
-// The change ends every other session and token the person holds, and every
-// reset link. On the current password alone, somebody holding a person's
-// session cookie and their password — but not their authenticator — changed
-// it, signed the owner out everywhere and locked them out until an
-// administrator issued them a reset link. So it is proved as a step-up from
-// them is proved: without the code it is ASKED FOR, changes nothing and is
-// counted as nothing; with a wrong one it is the one refusal, a counted
-// second-factor failure, and changes nothing; with a right one — the app's or
-// a recovery code — it lands, the code is SPENT, and the session this browser
-// is handed is proved NOW, not when the session it replaced was. The CONTROL
-// is a person holding no second factor, whose change takes no code and lands
-// exactly as it always did.
-//
-// Mutations: drop the second-factor check and the code-less change lands;
-// check the code without spending it and the app's step stays where it was
-// and the recovery code stays usable; keep the replaced session's proof for a
-// holder and the replacement is not proved now.
+// The change ends every other session, token and reset link, so the password
+// alone must not suffice. Without the code it is ASKED FOR, changes and counts
+// nothing; a wrong one is the one refusal, a counted second-factor failure; a
+// right one (app or recovery) lands, is SPENT, and the new session is proved
+// NOW. The CONTROL is a person holding no second factor, whose change takes no
+// code. Mutations: drop the check and the code-less change lands; skip the
+// spend and the code stays usable; keep the replaced session's proof and the
+// replacement is not proved now.
 func TestAPasswordChangeAsksTheSecondFactorItsPersonHolds(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

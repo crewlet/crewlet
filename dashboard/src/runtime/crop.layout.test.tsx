@@ -4,9 +4,12 @@
  * frame, so it runs in a headless browser.
  */
 import { afterEach, expect, test } from "vitest";
+import { page } from "vitest/browser";
 import { eventually } from "~/test/settle.ts";
 import type { CommentPoint, CommentTarget } from "./bridge.ts";
 import { PageComments } from "./comments.ts";
+import { CROP_MARGIN, cropScale, drawRegion, type CropRegion } from "./crop.ts";
+import { copyRegion, type Copied } from "./cropcopy.ts";
 
 const BANDS = 24;
 const colour = (i: number) => `hsl(${(i * 47) % 360} 75% 50%)`;
@@ -218,4 +221,219 @@ test("drawing a sticky bar leaves the page as it was", async () => {
   expect(bar.getAttribute("style")).toBe("outline: 1px solid red");
   expect(bar.getBoundingClientRect().top).toBe(before);
   expect(main.scrollTop).toBe(1200);
+});
+
+/** A screenshot-like file: bands of colour, so a picture shifted by a few pixels shows it. */
+async function screenshotFile(seed: number): Promise<string> {
+  const c = document.createElement("canvas");
+  c.width = 1440;
+  c.height = 900;
+  const g = c.getContext("2d")!;
+  for (let i = 0; i < 30; i++) {
+    g.fillStyle = `hsl(${(seed * 67 + i * 23) % 360} 70% ${40 + (i % 3) * 15}%)`;
+    g.fillRect(0, i * 30, 1440, 30);
+  }
+  g.fillStyle = "#fff";
+  g.fillRect(430, 200, 580, 450);
+  g.fillStyle = "rgb(250,238,200)";
+  g.fillRect(460, 300, 520, 160);
+  const blob = await new Promise<Blob>((resolve) => c.toBlob((b) => resolve(b!), "image/png"));
+  return URL.createObjectURL(blob);
+}
+
+/** A before-and-after review: sections whose last paragraph's margin collapses through them, each with two screenshots. */
+async function review(sections: number, extra = ""): Promise<string> {
+  const files = await Promise.all([0, 1, 2, 3].map(screenshotFile));
+  const parts = Array.from(
+    { length: sections },
+    (
+      _,
+      i,
+    ) => `<section id="s${i}"><h2>Comparison ${i}</h2><p>Opened from the menu, then Fast review.</p>
+<div class="pair"><figure><img src="${files[(2 * i) % 4]}" alt="Comparison ${i}, before"><div class="mark"></div></figure>
+<figure data-crewlet-anchor="after-${i}"><img src="${files[(2 * i + 1) % 4]}" alt="Comparison ${i}, after"><div class="mark"></div></figure></div>
+<p>axe: 0 violations.</p></section>`,
+  ).join("");
+  return `<!doctype html><html><head><style>${BASE}
+body{background:#0d0d10;color:#e6e6ea;font:16px/1.5 sans-serif}
+.col{max-width:960px;margin:0 auto;padding:24px}
+section{border-top:1px solid #333}
+h2{margin:28px 0 8px} p{margin:0 0 16px}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px;background:#1b1b20;padding:12px}
+figure{margin:0;position:relative} img{display:block;width:100%;height:auto}
+.mark{position:absolute;left:80%;top:10%;width:12%;height:14%;border:2px dashed #e040a0}
+${extra}</style></head><body><div class="col">${parts}</div></body></html>`;
+}
+
+/** The frame's own pixels over a rectangle of its viewport, at one per CSS pixel. */
+async function screenOf(r: CropRegion): Promise<ImageData> {
+  const shot = await page.screenshot({ element: frame!, save: false });
+  const img = new Image();
+  img.src = `data:image/png;base64,${shot}`;
+  await img.decode();
+  const k = img.naturalWidth / frame!.clientWidth;
+  return pixelsOf(img, { x: r.x * k, y: r.y * k, w: r.w * k, h: r.h * k }, r.w, r.h);
+}
+
+function pixelsOf(img: CanvasImageSource, from: CropRegion, w: number, h: number): ImageData {
+  const c = document.createElement("canvas");
+  c.width = Math.round(w);
+  c.height = Math.round(h);
+  const g = c.getContext("2d")!;
+  g.drawImage(img, from.x, from.y, from.w, from.h, 0, 0, c.width, c.height);
+  return g.getImageData(0, 0, c.width, c.height);
+}
+
+/** The mean difference of two pictures' channels, 0 to 255. */
+function meanDiff(a: ImageData, b: ImageData): number {
+  let s = 0;
+  for (let i = 0; i < a.data.length; i += 4) {
+    for (let c = 0; c < 3; c++) s += Math.abs(a.data[i + c]! - b.data[i + c]!);
+  }
+  return s / (a.data.length / 4) / 3;
+}
+
+/** The picture `target` asks for, drawn at `density`, against what the frame shows over its region. */
+async function againstScreen(p: Page, target: CommentTarget, density = 1) {
+  const region = p.comments.regionOf(target);
+  const de = p.doc.documentElement;
+  const background = p.win.getComputedStyle(p.doc.body).backgroundColor;
+  const url = await drawRegion(
+    de,
+    { w: de.scrollWidth, h: de.scrollHeight },
+    region,
+    background,
+    density,
+  );
+  expect(url).toMatch(/^data:image\/webp;base64,/);
+  const img = new Image();
+  img.src = url!;
+  await img.decode();
+  const view = {
+    x: region.x - p.win.scrollX,
+    y: region.y - p.win.scrollY,
+    w: region.w,
+    h: region.h,
+  };
+  const drawn = pixelsOf(
+    img,
+    { x: 0, y: 0, w: img.naturalWidth, h: img.naturalHeight },
+    region.w,
+    region.h,
+  );
+  return { img, region, diff: meanDiff(drawn, await screenOf(view)) };
+}
+
+test("a point over a screenshot far down a review page is drawn as the reader sees it", async () => {
+  await page.viewport(1200, 900);
+  const p = await open(await review(12));
+  await Promise.all([...p.doc.images].map((i) => i.decode()));
+  for (const k of [1, 6, 11]) {
+    const shot = p.doc.querySelectorAll("#s" + k + " img")[1]!;
+    shot.scrollIntoView({ block: "center" });
+    const r = shot.getBoundingClientRect();
+    const point = pick(p, r.left + r.width * 0.45, r.top + r.height * 0.42);
+    expect((await againstScreen(p, { point })).diff, `comparison ${k}`).toBeLessThan(8);
+  }
+});
+
+test("a part pinned by name over a screenshot is drawn whole, with room around it", async () => {
+  await page.viewport(1200, 900);
+  const p = await open(await review(8));
+  await Promise.all([...p.doc.images].map((i) => i.decode()));
+  const part = p.doc.querySelector('[data-crewlet-anchor="after-5"]')!;
+  part.scrollIntoView({ block: "center" });
+  const { region, diff } = await againstScreen(p, { name: "after-5" });
+  const r = part.getBoundingClientRect();
+  expect(region.w).toBeCloseTo(r.width + 2 * CROP_MARGIN, 0);
+  expect(diff).toBeLessThan(8);
+});
+
+test("a zoomed page is drawn where the reader sees it", async () => {
+  await page.viewport(1200, 900);
+  const p = await open(await review(6, "body{zoom:1.25} .col{max-width:720px}"));
+  await Promise.all([...p.doc.images].map((i) => i.decode()));
+  const shot = p.doc.querySelectorAll("#s4 img")[0]!;
+  shot.scrollIntoView({ block: "center" });
+  const r = shot.getBoundingClientRect();
+  const point = pick(p, r.left + r.width * 0.5, r.top + r.height * 0.5);
+  expect((await againstScreen(p, { point })).diff).toBeLessThan(8);
+});
+
+test("on a screen of twice the density the picture has twice the pixels, of the same region", async () => {
+  await page.viewport(1200, 900);
+  const p = await open(await review(4));
+  await Promise.all([...p.doc.images].map((i) => i.decode()));
+  const shot = p.doc.querySelectorAll("#s2 img")[1]!;
+  shot.scrollIntoView({ block: "center" });
+  const r = shot.getBoundingClientRect();
+  const point = pick(p, r.left + r.width / 2, r.top + r.height / 2);
+  const { img, region, diff } = await againstScreen(p, { point }, 2);
+  expect(img.naturalWidth).toBe(Math.round(region.w * cropScale(region, 2)));
+  expect(img.naturalWidth).toBeGreaterThan(region.w);
+  expect(diff).toBeLessThan(8);
+});
+
+test("a long page is read only across the picture's rows, and no image outside them is drawn", async () => {
+  await page.viewport(1200, 900);
+  const counts: Copied["counts"][] = [];
+  for (const sections of [6, 30]) {
+    const p = await open(await review(sections));
+    await Promise.all([...p.doc.images].map((i) => i.decode()));
+    const shot = p.doc.querySelectorAll("#s3 img")[1]!;
+    shot.scrollIntoView({ block: "center" });
+    const r = shot.getBoundingClientRect();
+    const region = p.comments.regionOf({
+      point: pick(p, r.left + r.width / 2, r.top + r.height / 2),
+    });
+    const copied = copyRegion(p.doc.documentElement, region);
+    counts.push(copied.counts);
+    // The pair across the window's rows, each read at most once; every other image left out.
+    expect(copied.pixels.map((j) => j.live)).toEqual([...p.doc.querySelectorAll("#s3 img")]);
+    frame?.remove();
+  }
+  // The same rows read in full however long the page is; only the empty boxes grow.
+  expect(counts[1]!.full).toBe(counts[0]!.full);
+  expect(counts[1]!.shells).toBeGreaterThan(counts[0]!.shells);
+});
+
+/** Sections whose first block's top margin and last paragraph's bottom margin pass through them, unless `edge` stops one. */
+const collapsing = (edge: string) => `<!doctype html><html><head><style>${BASE}
+section{${edge}} section p{margin:0 0 16px;height:20px} section div{margin:24px 0 0}
+</style></head><body>${Array.from(
+  { length: BANDS },
+  (_, i) =>
+    `<section><div class="band" id="c${i}" style="background:${colour(i)}"></div><p></p></section>`,
+).join("")}</body></html>`;
+
+test("a block a child's margin passes through keeps that space, however far down the point is", async () => {
+  for (const edge of [
+    "border-top:1px solid rgb(90,90,90)",
+    "border-bottom:1px solid rgb(90,90,90)",
+  ]) {
+    const p = await open(collapsing(edge));
+    p.win.scrollTo(0, 3700);
+    const tops = [...p.doc.querySelectorAll(".band")]
+      .map((b) => b.getBoundingClientRect().top)
+      .filter((top) => top > 10 && top < 560);
+    expect(tops.length).toBeGreaterThan(1);
+    for (const top of tops) {
+      // Just inside a band's top edge, where a few pixels of drift land on the gap above it.
+      const y = top + 8;
+      const point = pick(p, 300, y);
+      expectColour(await picture(p, { point }, docAt(p, 300, y)), shown(p, 300, y));
+    }
+    frame?.remove();
+  }
+});
+
+test("words with a #, a % and their own line breaks are drawn as the page shows them", async () => {
+  await page.viewport(1200, 900);
+  const p = await open(`<!doctype html><html><head><style>${BASE}
+body{background:#fff;color:#000;font:28px/1.3 monospace} pre{margin:20px;font:inherit}
+</style></head><body><pre>#1 of 3: 100% done
+\tnext  line, # and %20 kept
+last</pre></body></html>`);
+  const point = pick(p, 200, 60);
+  expect((await againstScreen(p, { point })).diff).toBeLessThan(8);
 });

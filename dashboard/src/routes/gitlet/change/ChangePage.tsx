@@ -46,6 +46,7 @@ import { useId, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   EmptyState,
+  FormField,
   Menu,
   Skeleton,
   Stack,
@@ -78,7 +79,8 @@ import { WriteButton } from "~/components/WriteButton.tsx";
 import { ago } from "~/lib/ago.ts";
 import { changeLive, changeRef, isRepoName, refName } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateTime, plural } from "~/lib/format.ts";
+import { notPassedWords } from "~/lib/checks.ts";
+import { fmtDateTime } from "~/lib/format.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
@@ -244,11 +246,12 @@ export function ChangePage({ repo, number }: { repo: string; number: number }) {
   );
 }
 
-/** The Checks tab's marker: a count of the failed checks, or that every one passed. */
+/** The Checks tab's marker: a count of the failed and errored checks, or that every one passed. */
 export function checksMarker(rows: readonly CodeCheckRow[]): TabsMarker | undefined {
-  const failed = rows.filter((r) => r.state === "failed" || r.state === "errored").length;
-  if (failed > 0)
-    return { tone: "danger", count: failed, label: `${plural(failed, "check")} failed` };
+  const failed = rows.filter((r) => r.state === "failed").length;
+  const errored = rows.filter((r) => r.state === "errored").length;
+  if (failed + errored > 0)
+    return { tone: "danger", count: failed + errored, label: notPassedWords(failed, errored) };
   if (rows.every((r) => r.state === "passed" || r.state === "skipped")) {
     return { tone: "success", label: "Every check passed" };
   }
@@ -362,7 +365,13 @@ function bylineVerb(change: CodeChangeDetail): ReactNode {
         </>
       );
     case "closed":
-      return <>closed its proposal of {branches}</>;
+      // WHO CLOSED IT, where the engine names them; a push nobody made named
+      // nobody, so the owner is said to have proposed it, never to have closed it.
+      return change.closed_by ? (
+        <>closed the proposal of {branches}</>
+      ) : (
+        <>proposed {branches}, closed</>
+      );
     case "draft":
       return (
         <>
@@ -375,6 +384,15 @@ function bylineVerb(change: CodeChangeDetail): ReactNode {
       wants to merge revision {change.revision} of {branches}
     </>
   );
+}
+
+/** Who the byline names: whoever merged or closed the change where the engine says, else its owner. */
+export function bylineActor(
+  change: Pick<CodeChangeDetail, "state" | "owner" | "merged_by" | "closed_by">,
+): string {
+  if (change.state === "merged" && change.merged_by) return change.merged_by;
+  if (change.state === "closed" && change.closed_by) return change.closed_by;
+  return change.owner;
 }
 
 /** When the byline's act happened, and the word before it on a live change. */
@@ -390,7 +408,7 @@ function bylineAt(change: CodeChangeDetail): { at: string; opened: boolean } {
  */
 function ChangeHeader({ change }: { change: CodeChangeDetail }) {
   const now = useNow();
-  const actor = change.state === "merged" && change.merged_by ? change.merged_by : change.owner;
+  const actor = bylineActor(change);
   const work = change.work_item;
   const when = bylineAt(change);
   return (
@@ -572,13 +590,17 @@ function CloseDialog({
       {reopen ? (
         <p>Its source branch must still be live, and no other change open on it.</p>
       ) : (
-        <Textarea
-          aria-label="Reason"
-          placeholder="Why it is closed (optional)"
-          value={reason}
-          rows={3}
-          onChange={(event) => setReason(event.target.value)}
-        />
+        <FormField label="Reason" optional helper="Kept with the close, and shown on the change.">
+          {(field) => (
+            <Textarea
+              id={field.id}
+              aria-describedby={field.describedBy}
+              value={reason}
+              rows={3}
+              onChange={(event) => setReason(event.target.value)}
+            />
+          )}
+        </FormField>
       )}
     </Modal>
   );

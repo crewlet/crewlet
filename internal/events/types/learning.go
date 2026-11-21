@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/named"
 )
 
 // The agent-learning lifecycle. Each fires from a learning worker after one
@@ -37,13 +38,10 @@ func init() {
 // the node holding the seat attaches.
 //
 // A WAKE, NOT A RECORD: the turn is already a row (turn_completed), so this
-// carries it whole and is kept out of the event store, as a2a_request is.
-//
-// Why a wake rather than reflecting off turn_completed itself: reflection
-// writes the seat's memory into the store of the node that runs it, and only
-// the holder carries a seat's memory to the next holder. Off one fleet-wide
-// group, most reflections ran on a node that held nothing of the seat, and
-// what they wrote was never read.
+// carries it whole and is kept out of the event store, as a2a_request is. Not
+// reflected off turn_completed itself: reflection writes the seat's memory
+// into the running node's store, and only the holder carries it to the next
+// holder, so a fleet-wide group wrote memory nobody read.
 type ReflectionDue struct {
 	Turn TurnCompleted `json:"turn"`
 }
@@ -51,9 +49,10 @@ type ReflectionDue struct {
 // EventType is the "reflection_due" wire type.
 func (ReflectionDue) EventType() string { return "reflection_due" }
 
-// Summary names the turn the reflection is for.
-func (e ReflectionDue) Summary() string {
-	return fmt.Sprintf("Reflection due on %s's turn %s", e.Turn.AgentHandle, e.Turn.TurnID)
+// PhraseFor names the seat and the turn the reflection is for.
+func (e ReflectionDue) PhraseFor(string) named.Line {
+	return named.Words("Reflection due on ").Name(named.SeatRef(e.Turn.AgentHandle, e.Turn.AgentHandle)).
+		Words("'s turn ").Name(named.TurnRef(e.Turn.TurnID))
 }
 
 // MemoryScope is whose memory a persisted reflection belongs to.
@@ -293,14 +292,12 @@ func (o EmbedOutcome) Valid() bool {
 // each of them.
 //
 // IT IS THE ONLY VISIBILITY THIS PIPELINE HAS. Every block but two degrades
-// silently on failure by design — an unreachable store, an unconfigured
-// auxiliary model and a filter that selected nothing all leave the seat with
-// no memory — so without this event a seat running with no memory at all
-// looks exactly like a seat whose stores had nothing to say. The two are the
-// knowledge and chat-thread blocks, which say in words when their source could
-// not be read, because there the difference sends a seat somewhere else.
-// Operators plot per-block hit rate per agent: a block stuck at zero is a
-// configuration or data problem, not a turn problem.
+// silently on failure by design (an unreachable store, an unconfigured
+// auxiliary model, a filter that selected nothing), so without this event a seat
+// with no memory looks like one whose stores had nothing to say. The two are
+// the knowledge and chat-thread blocks, which say in words when their source
+// could not be read. A block stuck at zero hit rate is a configuration or data
+// problem, not a turn problem.
 type PrefetchSummary struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`

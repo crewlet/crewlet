@@ -116,6 +116,8 @@ export type WriteFailed =
        * words (the merge controls) reads this, never the sentence.
        */
       hostRefusal: string;
+      /** An `invalid` refusal's refused fields (ADR-0060), as the request spells them. */
+      fields: string[];
       /**
        * On a refusal on AUTHORITY, the grants any ONE of which would have
        * admitted the caller, read from the answer. Empty everywhere else.
@@ -241,6 +243,10 @@ export function writeFailed(err: RestError): WriteFailed {
     detail,
     hint: err.hint,
     hostRefusal: typeof err.body.refusal === "string" ? err.body.refusal : "",
+    fields:
+      code === "invalid" && Array.isArray(err.body.fields)
+        ? err.body.fields.filter((f): f is string => typeof f === "string")
+        : [],
     grants: err.grants,
     reason: err.reason,
     retryable,

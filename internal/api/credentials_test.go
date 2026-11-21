@@ -270,19 +270,15 @@ func TestAnIdentityMoveClosesTheTabsItEnded(t *testing.T) {
 }
 
 // A MOVE THAT NAMES NOBODY CLOSES EVERY TAB, AND THE HANDSHAKE DECIDES.
-//
 // The fleet-wide session generation, a record this node retained (a newer
-// build's, or one signed under a key it was not restarted with), a replaced
-// estate and a node that stopped vouching for its identity rows (its applier
-// halted on a record it cannot read, or frozen past the stall grace) each name
-// nobody: whose it is sits where this node cannot read. Every open tab closes
-// 1013 at once and nothing is read on its behalf; the reconnect's handshake is
-// the decision, through the guard's ordinary resolution. Here one person's
-// rows are what such a record leaves them — unvouched — and the other's are
-// fine: both tabs close, neither's rows are read for it, and the two
-// reconnects are answered differently, 503 for the person this node cannot
-// vouch for and 426 (the upgrade the GET did not ask for) for the other.
-//
+// build's, or signed under a key it was not restarted with), a replaced estate
+// and a node that stopped vouching for its identity rows (applier halted or
+// frozen past the stall grace) each name nobody: whose it is sits where this
+// node cannot read. Every open tab closes 1013 at once, nothing is read on its
+// behalf, and the reconnect's handshake decides through the guard's ordinary
+// resolution. Here one person's rows are left unvouched and the other's are
+// fine: both tabs close, and the reconnects are answered differently, 503 for
+// the person this node cannot vouch for and 426 for the other.
 // Mutation: decide every socket by the guard on such a move, and the tab whose
 // rows are fine stays open.
 func TestAMoveNamingNobodyClosesEveryTabAndTheHandshakeDecides(t *testing.T) {
@@ -342,20 +338,14 @@ func TestATabClosesAtItsSessionsAbsoluteDeadline(t *testing.T) {
 
 // AN OPEN TAB OUTLIVES ITS SESSION'S IDLE DEADLINE, and a request does not.
 //
-// A session's idle deadline is moved by a re-issue on a REST response, and a
-// socket can never receive one, so the bearer it holds carries the
-// handshake's deadline however busy the tab has been. Decided on that
-// deadline, every tab open past the idle limit would close on the first
-// identity move anywhere near it while its person was at the screen; so the
-// HANDLER decides an open socket through the guard's ResolveOpen, which sets
-// that deadline aside and asks the rows. A REST request presenting the same
-// cookie at the same instant is held to it, which is the control: the cookie
-// is past its idle deadline, and only the socket may outlive it.
-//
-// Two moves, and the socket's rows are read for each: the socket acts on one
-// signal at a time, so the second read is proof the first decision left it
-// open.
-//
+// A session's idle deadline is moved by a re-issue on a REST response, which a
+// socket never receives, so its bearer carries the handshake's deadline however
+// busy the tab. Decided on that, every tab open past the idle limit would close
+// on the first identity move while its person was at the screen; so the HANDLER
+// decides an open socket through the guard's ResolveOpen, which sets the
+// deadline aside and asks the rows. A REST request with the same cookie at the
+// same instant is held to it, the control. Two moves: the second read of the
+// socket's rows proves the first decision left it open.
 // Mutation: decide an open socket through the guard's ordinary Resolve, and
 // the first move closes the tab.
 func TestAnOpenTabOutlivesItsSessionsIdleDeadline(t *testing.T) {

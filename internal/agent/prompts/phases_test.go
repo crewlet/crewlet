@@ -200,6 +200,28 @@ func TestASteerMessageIsFactualWhereverItLands(t *testing.T) {
 		"\nA person who runs this company sent this through Crewlet")
 }
 
+// A NOTE SENT BEFORE ONE ALREADY HANDED OVER SAYS SO, under the heading every
+// note opens with: a reader handed it after a note filed later would take it
+// as the later word, since it arrived last. The heading is what a captured
+// session's reader finds a note by, so it is the same; the note is last and
+// verbatim.
+//
+// Mutation: render it as SteerMessage, and it says nothing of the later note.
+func TestANoteSentBeforeOneAlreadyHandedOverSaysSo(t *testing.T) {
+	t.Parallel()
+	msg := SteerMessageSentBefore("ada", "  post to #staging  ")
+	head := "## A note from ada, sent while this turn was running\n"
+	if !strings.HasPrefix(msg, head) || !strings.HasPrefix(SteerMessage("ada", "x"), head) {
+		t.Errorf("the note does not open with every note's heading:\n%s", msg)
+	}
+	contains(t, msg, "before a later note already handed to this turn",
+		"where the two disagree, the later note stands")
+	if !strings.HasSuffix(msg, "\n\npost to #staging") {
+		t.Errorf("the note is not last and verbatim:\n%s", msg)
+	}
+	contains(t, SteerMessageSentBefore("", "x"), "## A note from a person who runs this company")
+}
+
 func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 	t.Parallel()
 	withPrior := BuildPhaseUserMessage(UserMessage{
@@ -230,5 +252,49 @@ func TestPhaseUserMessageCarriesTheLedgerRules(t *testing.T) {
 		"history, not the current state", "the task wins")
 	if !strings.HasSuffix(strings.TrimRight(withEndings, "\n"), "## Task\nany update?") {
 		t.Error("the ask must sit last when there is no prior work")
+	}
+}
+
+// A LATE CALL'S ACCOUNT STATES THE LATE SECTION'S FACTS, AS STATEMENTS: what the
+// brief's late section tells ([lateCallsHeader], [lateSubmission]) — the
+// session may lack its outcome or have been told it, it is one call whose
+// outcome stands, a success ran and a failure took no effect, a successful
+// `submit_work` is not the work's — and no more but that it arrived while the
+// work was under way and what it answers if it was finishing. In statements,
+// never commands, as a person's note is ([SteerMessage]); its heading first,
+// then the outcome before the call.
+//
+// Mutation: restore a command (`do NOT`, `call ... yourself`), drop a fact, or
+// put the call before its outcome, and this goes red.
+func TestALateCallArrivedStatesTheLateWordsFactsAsStatements(t *testing.T) {
+	t.Parallel()
+	msg := LateCallArrived("error: denied", "post_message({\"channel\":\"#eng\"})", true)
+	if first, _, _ := strings.Cut(msg, "\n"); first != LateCallHead {
+		t.Errorf("the account opens with %q, want its heading %q alone on its line", first, LateCallHead)
+	}
+	for _, fact := range []string{
+		"stopped waiting for it before it finished", "it has finished since",
+		"while the work was under way, and it is not a new request",
+		"may show the call with no outcome, as still running, as interrupted or as failed",
+		"an earlier message may have told it", "It is one call, made once, and the outcome told here stands",
+		"a call that succeeded has already run, so making it again would make it twice",
+		"a call that failed did not take effect", "the answer you give next is this run's report",
+		"It is not this work's submission",
+	} {
+		if !strings.Contains(msg, fact) {
+			t.Errorf("the account does not say %q:\n%s", fact, msg)
+		}
+	}
+	for _, command := range []string{"do NOT", "do not", "yourself", "Do not", "must", "Call `"} {
+		if strings.Contains(msg, command) {
+			t.Errorf("the account commands (%q) where it should state:\n%s", command, msg)
+		}
+	}
+	outcome, call := strings.Index(msg, "Outcome: error: denied"), strings.Index(msg, "Call: post_message(")
+	if outcome < 0 || call < outcome {
+		t.Errorf("the account tells the call at %d and its outcome at %d, want the outcome first", call, outcome)
+	}
+	if plain := LateCallArrived("success", "read_page()", false); strings.Contains(plain, "submission") {
+		t.Errorf("an account of a call that is no submission speaks of one:\n%s", plain)
 	}
 }

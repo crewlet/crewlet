@@ -12,29 +12,18 @@ import (
 // below, and the `/config/charter` route a person edits them through), and a
 // rule or a route that took them one at a time would let the three drift.
 
-// The charter's bounds, in CHARACTERS (Unicode code points, as
-// [utf8.RuneCountInString] counts them).
+// The charter's bounds, in CHARACTERS (code points, as
+// [utf8.RuneCountInString] counts them), unlike the tracker's byte caps: the
+// editor shows "120 of 1024 characters", and a byte bound would refuse a
+// French or Japanese mission the counter shows as inside it.
 //
-// CHARACTERS RATHER THAN BYTES, unlike the tracker's caps, because the person
-// these bounds speak to is writing prose on a page that counts what they type:
-// the editor shows "120 of 1024 characters", and a byte bound would refuse a
-// French or Japanese mission the counter shows as inside it. The prompt budget
-// below holds either way, since a code point is at most four bytes.
-//
-// EVERY CHARACTER OF THE CHARTER IS IN EVERY SEAT'S SYSTEM PROMPT, re-sent on
-// every round of every turn the company runs (`internal/agent/prompts` inlines
-// it whole, deliberately, so a seat never needs a knowledge round trip to know
-// what the company is for). So the bound is a prompt budget rather than a
-// storage one: at these figures the whole charter is at most 28 672
-// characters, about seven thousand tokens of Latin text, which is the most a
-// company can make every turn carry before its own work. The figures sit well
-// above what a real charter is: the shipped Nimbus example's vision is under
-// 900 characters and its longest policy under 300, and a written charter of
-// eight long policies (the dashboard's Acme fixture) has none over 300.
+// EVERY CHARACTER IS IN EVERY SEAT'S SYSTEM PROMPT, re-sent each round
+// (`internal/agent/prompts` inlines it whole), so the bound is a prompt
+// budget: at most 28 672 characters, about seven thousand tokens, well above
+// a real charter (Nimbus's vision is under 900 characters).
 //
 // The dashboard holds the same figures (`dashboard/src/contract/config.ts`),
-// held to these by `TestTheDashboardBoundsTheCharterAtTheEnginesCaps`, so a
-// draft past one is marked before anybody presses Save.
+// held by `TestTheDashboardBoundsTheCharterAtTheEnginesCaps`.
 const (
 	// MaxMissionChars bounds the mission: one or two sentences on what the
 	// company is for.
@@ -96,53 +85,17 @@ func (ch Charter) Equal(other Charter) bool {
 }
 
 // ValidateCharterChange reports every charter rule the write from prior to c
-// breaks IN WHAT IT CHANGES. Prior is the stored revision the write replaces.
+// breaks IN WHAT IT CHANGES; prior is the stored revision it replaces.
 //
-// # Nil refuses nothing
-//
-// With no stored version there is nothing the write changes a part FROM, and
-// the writes that have none are the ones that must never be refused for an
-// old file: a node booting an empty store from its company.yaml, a restore
-// and a migration, each importing a document that ran yesterday under a build
-// without these rules. Refused there, an upgrade would leave a node unable to
-// boot. Such a document is admitted, and its faults are warnings
-// ([Company.CharterWarnings]) like any other untouched fault.
-//
-// # Judged on the change, never on the document
-//
-// The charter rules arrived after companies were written, and a company
-// whose stored mission runs long, or whose policies number thirty, must still
-// be able to raise a budget or add a seat. Judged on the whole document, as
-// [Company.Validate] judges its own rules, every write would carry that one
-// old fault and be refused for it: the company would be locked out of every
-// setting by a sentence nobody was editing. So a part is judged only when the
-// write changes it:
-//
-//   - the mission and the vision, when the write changes them;
-//   - a policy, when its text (trimmed) is not one of the prior's: a new or
-//     an edited policy;
-//   - the number of policies, when it is past the bound AND the write adds to
-//     it, so removing a policy from a list already over the bound is admitted;
-//   - a repeated policy, when the write makes a text appear more times than
-//     it did.
-//
-// A fault the write did not touch is reported by [Company.Warnings] instead,
-// on every write and every apply, which is how the company finds out about it.
-//
-// THE MISSION AND EACH POLICY ARE ONE LINE. A seat reads the mission inline
-// after its label and each policy as one item of a list, so a line break
-// cannot mean in the prompt what it shows on the page; the prompt folds one
-// that a stored revision carries, and quotes a vision line by line, so no line
-// stands alone either way (internal/agent/prompts). The vision is the one
-// field written in paragraphs.
-//
-// A blank policy is refused rather than skipped, because it is a line of the
-// prompt that says nothing, and a repeated one because the second copy is
-// always a mistake: the order of the list is the order every seat reads it in,
-// and nothing about a rule changes by saying it twice. Every rule judges the
-// value as it is stored and read, TRIMMED: a policy of spaces is blank, two
-// that differ only by the space around them are one, and a value at its bound
-// with space around it is at its bound.
+// Nil refuses nothing: a boot from company.yaml, a restore or a migration
+// imports a document that ran under a build without these rules, and refusing
+// it would stop the node booting. Judging the whole document would refuse
+// every write for one old fault, so a part is judged only when the write
+// changes it (mission, vision, a policy with new trimmed text, a count past
+// the bound that the write raises, a text made to repeat more); the rest are
+// warnings ([Company.CharterWarnings]). The mission and each policy are ONE
+// LINE, a blank or repeated policy is refused, and every rule judges the
+// TRIMMED value (a seat reads each inline: internal/agent/prompts).
 func (c *Company) ValidateCharterChange(prior *Company) error {
 	if prior == nil {
 		return nil

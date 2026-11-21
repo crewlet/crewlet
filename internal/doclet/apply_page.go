@@ -138,19 +138,15 @@ func (a *Applier) applyRename(ctx context.Context, tx *sql.Tx, at applyContext,
 	n, _ := res.RowsAffected()
 	rows += int(n)
 
-	// THE DOCUMENT MOVES WITH THE COLUMNS, which is the same rule
-	// [Applier.applyStatusChange] states for a trash: every reader here
-	// decodes `document` — the reader's own Get, each write path's
-	// snapshot, the head a caller compares its rename against — so a title
-	// moved in the columns alone is a rename NOBODY CAN SEE. The new
-	// address resolves (that is a column) and the page goes on rendering
-	// the name it had (that is the document), for ever, on every node.
+	// THE DOCUMENT MOVES WITH THE COLUMNS, as [Applier.applyStatusChange]
+	// states for a trash: every reader decodes `document`, so a title moved in
+	// the columns alone is a rename NOBODY CAN SEE (the address resolves, the
+	// page renders its old name, on every node).
 	//
-	// It cannot simply call [Applier.writeHead], which is the reason this
-	// diverged in the first place: that writer stamps `version`, and a
-	// rename arbitrates on the TITLE and writes the page's row from
-	// another subject — so it must move `scoped_through` and leave
-	// `version` exactly where the page's own last record put it.
+	// It cannot call [Applier.writeHead]: that stamps `version`, and a rename
+	// arbitrates on the TITLE and writes the row from another subject, so it
+	// must move `scoped_through` and leave `version` where the page's own last
+	// record put it.
 	head, found, err := readHead(ctx, tx, p.PageID)
 	if err != nil {
 		return 0, err
@@ -222,23 +218,18 @@ func (a *Applier) applyPage(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		at.position, payload)
 }
 
-// applyRetitle writes a page's new DISPLAYED title, leaving its address where
-// it is.
+// applyRetitle writes a page's new DISPLAYED title, leaving its address.
 //
-// NOTHING IN pages_titles MOVES, and that is the operation: the claim is keyed
-// on the NORMALISED title, which is byte-identical either side of this record,
-// so there is no claim to take and none to release. The head's `title_norm`
-// does not move either — [Applier.writeHead] recomputes it from the title, and
-// for a capitalisation or a spacing change it lands on the same value.
+// NOTHING IN pages_titles MOVES: the claim is keyed on the NORMALISED title,
+// identical either side, so none is taken or released, and `title_norm`
+// ([Applier.writeHead]) lands on the same value.
 //
 // THE GUARD IS THE ADDRESS THE RECORD WAS DECIDED AGAINST. A concurrent rename
 // that MOVES the page arbitrates on the new title's subject, which this record
-// never touches, so the broker cannot order the two — and applying this one
-// after that one would park the page at a displayed title whose address it no
-// longer holds, which is a name no link resolves and no claim protects. Skipped
-// rather than refused, because it is ordinary traffic rather than a malformed
-// record, and it is a pure function of the record and the row, so every node
-// skips exactly the same records.
+// never touches, so the broker cannot order the two; applying this one after
+// that would park the page at a displayed title whose address it no longer
+// holds, a name no link resolves. Skipped, not refused (ordinary traffic), and
+// a pure function of record and row, so every node skips the same records.
 func (a *Applier) applyRetitle(ctx context.Context, tx *sql.Tx, at applyContext,
 	p RetitlePayload) (int, error) {
 
@@ -560,23 +551,18 @@ func childClearStatement(child childTable) string {
 	return `DELETE FROM ` + child.table + ` WHERE ` + child.column + ` = ?`
 }
 
-// reparentChildren files every page directly under parentID under newParent
-// instead, in the order `pages_heads_parent_idx` holds them.
+// reparentChildren files every page directly under parentID under newParent,
+// in the order `pages_heads_parent_idx` holds them.
 //
-// THE INDEX'S ORDER, NOT THE ID'S. Each child is its own row, so any order
-// that is the same on every data node writes the same rows; the one this read
-// is given is the index's own (parent_id, container, title, id), which the
-// seek of the parent reads the children in, where asked for them by id the
-// planner sought them and then sorted them all (measured).
+// THE INDEX'S ORDER, NOT THE ID'S: any order the same on every data node
+// writes the same rows, and the index's (parent_id, container, title, id) is
+// what the parent's seek reads; by id the planner sought then sorted all.
 //
-// FROM ANOTHER SUBJECT, so it moves `scoped_through` and never `version` — the
-// rule [Applier.applyRename] states for the same reason: each child's own
-// broker expectation is its own last record, and a version stamped here would
-// poison it into permanent unwritability. The document moves with the column,
-// because every reader decodes the document.
-//
-// A REDELIVERY FINDS NO CHILDREN, because the first apply already re-filed
-// them, so this is idempotent without a guard of its own.
+// FROM ANOTHER SUBJECT, so it moves `scoped_through` and never `version`, as
+// [Applier.applyRename] states: each child's broker expectation is its own
+// last record, and a stamped version would make it permanently unwritable.
+// The document moves with the column. A REDELIVERY FINDS NO CHILDREN, so it
+// is idempotent unguarded.
 func (a *Applier) reparentChildren(ctx context.Context, tx *sql.Tx,
 	at applyContext, parentID, newParent string) (int, error) {
 
@@ -653,19 +639,15 @@ func (a *Applier) applyComment(ctx context.Context, tx *sql.Tx, at applyContext,
 		return int(n), ChangeCommentEdited, nil
 	}
 	// WHEN IT WAS WRITTEN IS THE HELD ROW'S, on an edit. The patch carries no
-	// creation instant — a writer stating one would be stating what it read in
-	// another transaction — so the applier reads it here, in its own. Encoded
-	// from the edit's instant instead, the document said an edited comment was
-	// written the moment it was edited: every reader of the document (the
-	// thread, the edit's own answer, a page's detail) reported the two instants
-	// equal, and "(edited)" could never be drawn.
+	// creation instant (a writer would state what it read in another
+	// transaction), so the applier reads it in its own; encoded from the edit's
+	// instant, the two instants would read equal and "(edited)" could never be
+	// drawn.
 	//
-	// FROM THE ROW'S created_at COLUMN, which the insert wrote from the same
-	// broker instant as its document and no edit moves: the state log hands
-	// that instant in the store's encoding on every path
-	// ([statelog.Record.StoredAt]), so the column is exactly what the held
-	// document says, and it answers for a document this build cannot decode
-	// as well.
+	// FROM THE ROW'S created_at COLUMN, written from the same broker instant as
+	// its document and moved by no edit ([statelog.Record.StoredAt] hands it in
+	// the store's encoding on every path); it also answers for a document this
+	// build cannot decode.
 	created := at.brokerAt
 	var heldAt int64
 	switch err := tx.QueryRowContext(ctx, heldCommentStatement, c.ID).
@@ -828,17 +810,14 @@ func (a *Applier) writeWatchers(ctx context.Context, tx *sql.Tx, at applyContext
 
 // writeSkillRow recomputes THIS BUILD'S answer about a page's body.
 //
-// DIVERGENT BY CONSTRUCTION: two nodes on different builds legitimately
-// disagree, which is why the row is in its own table and outside the identity
-// claim. It is recomputed on every apply rather than carried on the record, so
-// a parser fix reaches every page on the next rebuild.
+// DIVERGENT BY CONSTRUCTION: nodes on different builds legitimately disagree,
+// so the row is in its own table, outside the identity claim, recomputed on
+// every apply so a parser fix reaches every page on rebuild.
 //
-// IT CARRIES THE HEAD'S `updated_at`, because the newest-first listing of the
-// skills is ordered by it from this table's own index (replicated 0067): the
-// flag is here and not on the head, so the order has to be here too. Every
-// apply that moves a head's `updated_at` calls this in the same transaction
-// with that head — [Applier.writeHead], and a rename's own write — so the copy
-// is the head's own instant, never a second clock.
+// IT CARRIES THE HEAD'S `updated_at`, because the newest-first skills listing
+// is ordered by it from this table's own index (replicated 0067). Every apply
+// that moves a head's `updated_at` ([Applier.writeHead], a rename's write)
+// calls this in the same transaction, so the copy is the head's own instant.
 func (a *Applier) writeSkillRow(ctx context.Context, tx *sql.Tx, head Page) (int, error) {
 
 	skill := 0

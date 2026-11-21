@@ -25,6 +25,7 @@ import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import {
   Assignee,
   DueMark,
+  FlowTag,
   PriorityMark,
   StatusBadge,
   TypeIcon,
@@ -41,6 +42,9 @@ import type {
 } from "~/protocol/index.ts";
 
 type Column = DataGridColumn<WorkSummary>;
+
+/** A list row's blocked flow is the blocker tag beside it. */
+const LIST_FLOW_SKIP = ["blocked"] as const;
 
 /** What a list's columns are drawn from. */
 export interface WorkColumnContext {
@@ -105,6 +109,15 @@ export function workListColumns(ctx: WorkColumnContext, cells: WorkColumnCells =
             {blockedBy(row, keyOf)}
           </Tag>
         )}
+        {/* WHY IT IS NOT MOVING, the engine's reading (ADR-0162); the tag
+            beside it already names a blocker. */}
+        <FlowTag
+          flow={row.flow}
+          skip={LIST_FLOW_SKIP}
+          assignee={row.assignee}
+          chrome={chrome}
+          stuckHours={chrome.stuckHours}
+        />
       </span>
     ),
   };

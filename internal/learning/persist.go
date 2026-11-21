@@ -22,26 +22,15 @@ import (
 // PersistDecider is the post-turn classifier that decides what, if anything,
 // a completed turn leaves behind in the seat's diary.
 //
-// It is the DETERMINISTIC half of the learning stack: it runs whether or not
-// the turn's own model remembered to call reflect_and_persist, so a durable
-// fact does not fall on the floor because an agent forgot. What to keep is
-// still a model's judgement — compressing a turn into a fact that is useful
-// next week needs one — so the pass is a single tool-less completion on the
-// seat's auxiliary (cheap) model, and its answer is one of four tiers:
-//
-//   - NOOP: nothing durable. The common case, and the one the prompt tells
-//     the model to pick when unsure.
-//   - DOC: a STANDING RULE the team should follow. No diary write at all —
-//     the tier exists so the system can say "that is not memory, it is
-//     policy". The lifecycle event counts it, and the log line carrying the
-//     rule ([Directive]) is what an operator routes into the team's
-//     documentation.
-//   - LONG: a personal fact worth remembering indefinitely.
+// It runs whether or not the turn's own model called reflect_and_persist: one
+// tool-less auxiliary completion, answering one tier:
+//   - NOOP: nothing durable; the prompt says pick it when unsure.
+//   - DOC: a STANDING RULE: policy, not memory, so no diary write. The log
+//     line carrying it ([Directive]) is what an operator routes.
+//   - LONG: a personal fact worth keeping indefinitely.
 //   - SHORT: a personal fact with a known expiry.
 //
-// Both writing tiers land at AGENT scope. Unit and org scope are not
-// categories this produces: a fact that belongs to a unit belongs in that
-// unit's documentation, which is what DOC is for.
+// LONG and SHORT land at AGENT scope.
 type PersistDecider struct {
 	models Models
 	diary  DiaryStore
@@ -426,24 +415,15 @@ func (d *PersistDecider) write(
 
 // PersistSystemPrompt is the classifier's contract.
 //
-// A const, so it is byte-stable across calls — provider prompt caching keys
-// on the prefix, and a prompt assembled per call would miss the cache on
-// every completed turn in the company.
+// A const, so it is byte-stable: prompt caching keys on the prefix. It states
+// only what the code does not do: the SHORT tier's default and cap are
+// [coerceTTLDays]'s. One example per tier, since the DOC/LONG boundary is what
+// an example settles; the attribution example is written as [Subject.Label]
+// renders a person, the form a stored fact is later matched against.
 //
-// IT STATES WHAT THE PASS NEEDS AND NOTHING THE CODE ALREADY DOES. The SHORT
-// tier's default and cap are [coerceTTLDays]'s, so the model is asked for a
-// number and the band is enforced after it; a turn that wrote its own memory
-// never reaches this prompt ([PersistDecider.Skip]). One example per tier,
-// because where DOC ends and LONG begins is the call an example settles, and
-// a second one settles nothing the first did not. The attribution example is
-// written as [Subject.Label] renders a person — the form of the user
-// message's Requester lines and of the memory filter's "Current sender:"
-// line, which is what a stored fact is later matched against.
-//
-// IT ENDS ON THE STANDING SENTENCE ON FENCES ([provenance.StandingInstruction]),
-// the one the seat's own prompt carries: what the turn was asked and what was
-// said to it reach this call fenced under a token minted for the call
-// (ADR-0040), and the sentence is what says a fence is somebody's words.
+// It ends on [provenance.StandingInstruction]: the turn's words reach this
+// call fenced under a per-call token (ADR-0040), and that sentence says a
+// fence is somebody's words.
 const PersistSystemPrompt = `You are a post-turn reflection classifier. Read the turn summary and decide
 which tier its content falls into:
 

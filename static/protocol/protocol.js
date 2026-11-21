@@ -62,6 +62,10 @@ var LIVE_CALL_DETAIL = {
 * far beyond the slowest query's normal latency and still short enough that a
 * screen shows an error rather than an eternal skeleton.
 *
+* THE QUERY FRAME CARRIES IT (`wait_ms`), and the engine stops answering a
+* question once it has passed, so a read this tab gave up on frees the slots it
+* holds rather than running on for nobody.
+*
 * AND LONGER THAN THE ENGINE'S OWN READ OF THE BROKER GROUP
 * (`engine.BrokerReadWait`), held there by `internal/api`'s
 * `TestTheDashboardWaitsPastAReadOfTheGroup`: the `fleet_broker` query asks a
@@ -2825,22 +2829,50 @@ var LiveSocket = class {
 	*
 	* Rejects with a [QueryError] carrying the server's machine-readable code
 	* (`not_found`, `unauthorized`, `unavailable`, …), `timeout` if a sent
-	* query goes unanswered, or `closed` if the client shuts down.
+	* query goes unanswered for `waitMs`, or `closed` if the client shuts down;
+	* and with `signal`'s reason once it aborts, the question then given up on
+	* here and at the engine (`query_cancel`), which stops reading for it.
 	*/
-	query(what, params) {
+	query(what, params, waitMs = QUERY_TIMEOUT_MS, signal) {
 		const id = this.nextQueryId++;
 		return new Promise((resolve, reject) => {
+			if (signal?.aborted) {
+				reject(signal.reason);
+				return;
+			}
 			const entry = {
 				id,
 				what,
 				params: params ?? {},
+				waitMs,
 				resolve,
 				reject,
-				timer: 0
+				timer: 0,
+				sentOn: null
 			};
 			this.inflight.set(id, entry);
+			signal?.addEventListener("abort", () => this.cancel(entry, signal.reason), { once: true });
 			this.sendQuery(entry);
 		});
+	}
+	/**
+	* GIVE UP ON A QUESTION NOBODY WAITS FOR ANY MORE, here and at the engine: a
+	* screen left behind a transcript page's read held one of the socket's four
+	* slots and one of the node's two transcript reads for minutes, for nobody.
+	* An answer that comes anyway finds nothing in flight and is dropped.
+	*/
+	cancel(entry, reason) {
+		if (this.inflight.get(entry.id) !== entry) return;
+		this.inflight.delete(entry.id);
+		clearTimeout(entry.timer);
+		entry.reject(reason instanceof Error ? reason : new Error(String(reason)));
+		if (!this.connected || !this.sock || entry.sentOn !== this.sock) return;
+		try {
+			this.sock.send(JSON.stringify({
+				kind: "query_cancel",
+				id: entry.id
+			}));
+		} catch {}
 	}
 	sendQuery(entry) {
 		if (!this.connected || !this.sock) return;
@@ -2848,18 +2880,20 @@ var LiveSocket = class {
 			kind: "query",
 			id: entry.id,
 			what: entry.what,
-			params: entry.params
+			params: entry.params,
+			wait_ms: entry.waitMs
 		};
 		try {
 			this.sock.send(JSON.stringify(frame));
 		} catch {
 			return;
 		}
+		entry.sentOn = this.sock;
 		clearTimeout(entry.timer);
 		entry.timer = setTimeout(() => {
 			this.inflight.delete(entry.id);
 			entry.reject(new QueryError("timeout"));
-		}, QUERY_TIMEOUT_MS);
+		}, entry.waitMs);
 	}
 	flushQueries() {
 		for (const entry of this.inflight.values()) this.sendQuery(entry);
@@ -4109,6 +4143,7 @@ var ACTIONS = {
 			"target_date",
 			"default_assignee",
 			"archived",
+			"stuck_after_hours",
 			"fields",
 			"tags_add",
 			"tags_rename",
@@ -4569,6 +4604,29 @@ var ACTIONS = {
 		refreshes: [],
 		scope: "person"
 	},
+	code_create_tag: {
+		args: [
+			"repo",
+			"tag",
+			"at",
+			"message"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_delete_tag: {
+		args: [
+			"repo",
+			"tag",
+			"expected_target"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
 	code_commit_files: {
 		args: [
 			"repo",
@@ -4631,7 +4689,19 @@ var ACTIONS = {
 			"thread",
 			"finding",
 			"anchor",
-			"resolve"
+			"resolve",
+			"edit"
+		],
+		domain: "code",
+		apps: ["gitlet"],
+		refreshes: [],
+		scope: "person"
+	},
+	code_delete_comment: {
+		args: [
+			"repo",
+			"change",
+			"comment"
 		],
 		domain: "code",
 		apps: ["gitlet"],
@@ -4658,7 +4728,9 @@ var ACTIONS = {
 			"expected_version",
 			"draft",
 			"title",
-			"body"
+			"body",
+			"work_item",
+			"target"
 		],
 		domain: "code",
 		apps: ["gitlet"],
@@ -4726,7 +4798,10 @@ var ACTIONS = {
 		args: [
 			"repo",
 			"change",
-			"all_failed"
+			"all_failed",
+			"sha",
+			"checked_for",
+			"checks"
 		],
 		domain: "code",
 		apps: ["gitlet"],
@@ -5129,6 +5204,7 @@ function writeFailed(err) {
 		detail,
 		hint: err.hint,
 		hostRefusal: typeof err.body.refusal === "string" ? err.body.refusal : "",
+		fields: code === "invalid" && Array.isArray(err.body.fields) ? err.body.fields.filter((f) => typeof f === "string") : [],
 		grants: err.grants,
 		reason: err.reason,
 		retryable,
@@ -5222,6 +5298,42 @@ function sentenceOf(code, err, detail, retryable) {
 }
 /** What a refusal no wait clears says where the engine's answer said nothing. */
 var NO_WAIT_CLEARS = "This can't be done here, and waiting won't change that.";
+// src/protocol/refusedFields.ts
+/** What a form calls each field a person fills in, by tool and the field's name. */
+var ENTERED = {
+	code_create_repo: {
+		name: "its name",
+		owner: "its owner",
+		description: "its description"
+	},
+	code_open_change: {
+		"open.title": "its title",
+		"open.body": "its description",
+		title: "its title"
+	},
+	code_update_change: {
+		"edit.title": "its title",
+		"edit.body": "its description"
+	},
+	code_close_change: { "close.reason": "the reason" },
+	code_comment_on_change: { "comment.body": "the comment" },
+	code_review_change: {
+		"review.summary": "the review's summary",
+		"review.findings": "its findings"
+	}
+};
+/** The form's name for field on tool, an indexed field (`review.findings[2]`) by its list's. */
+function labelOf(tool, field) {
+	const named = ENTERED[tool];
+	if (!named) return void 0;
+	return named[field] ?? named[field.replace(/\[\d+\].*$/, "")];
+}
+/** The sentence of an `invalid` refusal that names the field it refused. */
+function refusedFieldSentence(tool, fields) {
+	const field = fields[0];
+	const label = labelOf(tool, field);
+	return label ? `That change was refused, and nothing was written: Gitlet did not accept ${label}. Change it, then try again.` : `That change was refused, and nothing was written: Gitlet did not accept the value this page sent as ${field}.`;
+}
 // src/protocol/act.ts
 /**
 * The dashboard's one write: a change, made as the principal this browser's
@@ -5349,8 +5461,10 @@ function refusalOf(tool, opId, err, floors) {
 		floors.written(domain, null, refreshes);
 	}
 	const { lookAgain: _lookAgain, ...refused } = failed;
+	const named = refused.code === "invalid" && refused.detail === "" && refused.fields.length > 0 ? refusedFieldSentence(tool, refused.fields) : null;
 	return {
 		...refused,
+		...named ? { sentence: named } : {},
 		tool,
 		opId
 	};

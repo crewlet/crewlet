@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -164,7 +166,8 @@ func TestAnAssistGrantNeverReachesADecisionRoute(t *testing.T) {
 	t.Parallel()
 	fx, _ := actingAssistApp(t)
 	proposal := uuid.Must(uuid.NewV7()).String()
-	digest := `{"protocol_version":1,"digest":"sha256:` + strings.Repeat("a", 64) + `"}`
+	digest := `{"protocol_version":` + strconv.Itoa(wire.ProtocolVersion) +
+		`,"digest":"sha256:` + strings.Repeat("a", 64) + `"}`
 	read := fx.derive(t, readTurn())
 	for _, call := range []exec.Request{
 		{Method: http.MethodPost, Path: "/assistant/proposals/" + proposal + "/approve",
@@ -172,7 +175,8 @@ func TestAnAssistGrantNeverReachesADecisionRoute(t *testing.T) {
 		{Method: http.MethodPost, Path: "/assistant/proposals/" + proposal + "/decline",
 			Body: []byte(digest)},
 		{Method: http.MethodPut, Path: "/assistant/actions/" + proposal,
-			Body: []byte(`{"protocol_version":1,"state":"applying","revision":"r1"}`)},
+			Body: []byte(`{"protocol_version":` + strconv.Itoa(wire.ProtocolVersion) +
+				`,"state":"applying","revision":"r1"}`)},
 	} {
 		call.IdempotencyKey = uuid.Must(uuid.NewV7()).String()
 		if err := fx.tryDerive(approvedFor(call, authz.ActionAssistantApprove)); !errors.Is(err, auth.ErrAssistRefused) ||

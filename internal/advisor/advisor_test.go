@@ -63,14 +63,9 @@ func owned(a advisor.Answer) []string {
 func TestTheLiveShapeRaisesExactlyTheStaticClasses(t *testing.T) {
 	t.Parallel()
 	got := owned(read(liveShape(t), "r1"))
-	want := []string{
-		"grant.health_unheld:",
-		"learning.auxiliary_model:app", "learning.auxiliary_model:backend",
-		"learning.auxiliary_model:designer", "learning.auxiliary_model:pm",
-		"learning.auxiliary_model:qa", "learning.auxiliary_model:sre",
-		"schedule.frequent:sre/health-check", "schedule.frequent:sre/post-release",
-		"schedule.frequent:sre/release-window",
-	}
+	// ONE FINDING PER CAUSE: every seat learning on its main model, and
+	// every schedule running too often, inside one finding each.
+	want := []string{"grant.health_unheld:", "learning.auxiliary_model:", "schedule.frequent:"}
 	if !slices.Equal(got, want) {
 		t.Errorf("findings with a change =\n  %v\nwant\n  %v", got, want)
 	}
@@ -186,12 +181,17 @@ func TestEveryOptionOfEveryChangeClearsItsFindingAndBreaksNoRule(t *testing.T) {
 			t.Run(string(f.Class)+"/"+o.Label, func(t *testing.T) {
 				c := liveShape(t)
 				before := len(config.Problems(c.ValidateAdmission()))
-				apply(t, c, o.Change)
+				// EVERY CHANGE THE OPTION MAKES, in its order.
+				for _, ch := range o.Changes() {
+					apply(t, c, ch)
+				}
 				if after := len(config.Problems(c.ValidateAdmission())); after > before {
 					t.Errorf("the change breaks an admission rule: %v", c.ValidateAdmission())
 				}
-				if o.Change.Summary == "" {
-					t.Error("the change carries no revision summary")
+				for _, ch := range o.Changes() {
+					if ch.Summary == "" {
+						t.Error("a change carries no revision summary")
+					}
 				}
 				for _, g := range read(c, "r2").Findings {
 					if g.Class == f.Class && g.Subject == f.Subject {
@@ -256,6 +256,20 @@ func TestAFindingFromAWarningIsListedInItsRulesWords(t *testing.T) {
 	}
 	seen := map[advisor.Class]bool{}
 	for _, f := range read(c, "r1").Findings {
+		// ONE FINDING PER CAUSE is in its rule's title too, its items the
+		// warnings' items.
+		if f.Subject.Kind == advisor.SubjectCompany && f.Path == "" {
+			for _, w := range warnings {
+				if advisor.Class(w.Class) == f.Class && f.Source == advisor.SourceStatic {
+					seen[f.Class] = true
+					if f.Title != w.Title+"." || (w.Item != "" && !strings.Contains(f.Item, w.Item)) &&
+						!strings.Contains(f.Item, "more") {
+						t.Errorf("%s: listed as %q (%q), want %q with its items", f.Class, f.Title, f.Item, w.Title+".")
+					}
+				}
+			}
+			continue
+		}
 		w, ok := warnings[f.Path]
 		if !ok || f.Source != advisor.SourceStatic {
 			continue
@@ -301,8 +315,7 @@ func TestFindingsOfOneClassSayTheSameAboutEverySubject(t *testing.T) {
 	for _, f := range answer.Findings {
 		byClass[f.Class] = append(byClass[f.Class], f)
 	}
-	for _, class := range []advisor.Class{advisor.ClassAuxiliaryModel, advisor.ClassScheduleFrequent,
-		advisor.ClassScheduleUnproductive, advisor.ClassSandboxOutOfMemory} {
+	for _, class := range []advisor.Class{advisor.ClassScheduleUnproductive, advisor.ClassSandboxOutOfMemory} {
 		found := byClass[class]
 		if len(found) < 2 {
 			t.Errorf("%s: %d findings, want two or more to compare", class, len(found))
@@ -320,10 +333,15 @@ func TestFindingsOfOneClassSayTheSameAboutEverySubject(t *testing.T) {
 			t.Errorf("%s: the findings do not name their subjects apart: %+v", class, found)
 		}
 	}
-	for _, f := range byClass[advisor.ClassScheduleFrequent] {
-		if f.Subject.Schedule == "" || !strings.HasPrefix(f.Item, f.Subject.Schedule+" (") ||
-			!strings.HasSuffix(f.Item, " a day)") {
-			t.Errorf("a frequent schedule's item is %q, want its name and how often it runs", f.Item)
+	// ONE FINDING PER CAUSE: the frequent schedules inside one, each named
+	// with how often it runs.
+	frequent := byClass[advisor.ClassScheduleFrequent]
+	if len(frequent) != 1 || frequent[0].Subject.Kind != advisor.SubjectCompany {
+		t.Fatalf("frequent schedules = %+v, want one finding about the company", frequent)
+	}
+	for _, item := range strings.Split(frequent[0].Item, "; ") {
+		if !strings.HasSuffix(item, " a day)") {
+			t.Errorf("a frequent schedule's item is %q, want its name and how often it runs", item)
 		}
 	}
 }
@@ -378,8 +396,8 @@ func TestAUnitsScheduleIsChangedOnItsUnit(t *testing.T) {
 		if f.Class != advisor.ClassScheduleFrequent {
 			continue
 		}
-		if f.Subject.Unit != "night" || f.Subject.Schedule != "poll" {
-			t.Fatalf("subject = %+v, want the child unit's schedule", f.Subject)
+		if f.Subject.Kind != advisor.SubjectCompany || !strings.Contains(f.Item, "poll") {
+			t.Fatalf("finding = %+v, want one about the company naming the child unit's schedule", f)
 		}
 		daily := f.Fix.Options[0].Change
 		if daily.Entity != advisor.EntityUnits || daily.ID != "night" {
@@ -452,7 +470,7 @@ func TestAScheduleWhoseFiresRarelyMoveWorkIsTheOwnersCost(t *testing.T) {
 		cost.Fix.Kind != advisor.FixConfigChange || len(cost.Fix.Options) != 2 {
 		t.Errorf("the health check's cost = %+v, want the owner's, its fires counted, with the frequent fix", cost)
 	}
-	if of(advisor.ClassScheduleFrequent, "health-check") != nil {
+	if f := grouped(answer, advisor.ClassScheduleFrequent, "health-check"); f != nil {
 		t.Error("an unproductive schedule was said twice, as frequent too")
 	}
 	if of(advisor.ClassScheduleUnproductive, "post-release") != nil {
@@ -463,8 +481,9 @@ func TestAScheduleWhoseFiresRarelyMoveWorkIsTheOwnersCost(t *testing.T) {
 	tally := func(f *advisor.Finding) bool {
 		return slices.ContainsFunc(f.Evidence, func(e advisor.Fact) bool { return e.Key == "fires" })
 	}
-	frequent := of(advisor.ClassScheduleFrequent, "post-release")
-	if frequent == nil || !slices.Equal(frequent.Evidence, []advisor.Fact{{Key: "fires", Value: 8}, {Key: "moved", Value: 2}}) {
+	frequent := grouped(answer, advisor.ClassScheduleFrequent, "post-release")
+	if frequent == nil || !slices.Contains(frequent.Evidence, advisor.Fact{Key: "fires", Value: 8}) ||
+		!slices.Contains(frequent.Evidence, advisor.Fact{Key: "moved", Value: 2}) {
 		t.Errorf("post-release's frequent note = %+v, want what its fires did as evidence", frequent)
 	}
 	// An agent that writes code, work or pages at a vendor does work the
@@ -481,7 +500,7 @@ func TestAScheduleWhoseFiresRarelyMoveWorkIsTheOwnersCost(t *testing.T) {
 		if got := of(advisor.ClassScheduleUnproductive, "health-check") != nil; got != judged {
 			t.Errorf("with GitHub %s, the health check judged = %v, want %v", access, got, judged)
 		}
-		if f := of(advisor.ClassScheduleFrequent, "post-release"); f == nil || tally(f) != judged {
+		if f := grouped(answer, advisor.ClassScheduleFrequent, "post-release"); f == nil || tally(f) != judged {
 			t.Errorf("with GitHub %s, post-release's frequent note = %+v, want its fires counted only if judged", access, f)
 		}
 	}
@@ -495,4 +514,15 @@ func TestAScheduleWhoseFiresRarelyMoveWorkIsTheOwnersCost(t *testing.T) {
 	if !slices.Contains(unread.Unread, advisor.UnreadFires) {
 		t.Errorf("unread = %v, want the fires named", unread.Unread)
 	}
+}
+
+// grouped is the one finding of class about the company whose items name
+// schedule, nil where there is none.
+func grouped(a advisor.Answer, class advisor.Class, schedule string) *advisor.Finding {
+	for i, f := range a.Findings {
+		if f.Class == class && f.Subject.Kind == advisor.SubjectCompany && strings.Contains(f.Item, schedule+" (") {
+			return &a.Findings[i]
+		}
+	}
+	return nil
 }

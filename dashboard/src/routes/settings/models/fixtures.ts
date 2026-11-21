@@ -21,7 +21,12 @@ import type {
   ModelUse,
 } from "~/protocol/models.ts";
 import type { CompanyDocument, OrgProjection } from "~/protocol/types.ts";
-import { assistantOf, modelViews, type ModelsData } from "~/routes/settings/models/data.ts";
+import {
+  advisorOf,
+  assistantOf,
+  modelViews,
+  type ModelsData,
+} from "~/routes/settings/models/data.ts";
 import { withDerived } from "~/test/org.ts";
 import { SERVED_LOOK } from "~/test/org.ts";
 
@@ -88,6 +93,8 @@ export function modelEntry(over: Partial<ModelEntry> & { key: string }): ModelEn
     usage: { days: 7, calls: 0, total_tokens: 0 },
     used_by: [],
     device_sign_in: null,
+    limits: [],
+    helper_problem: null,
     ...over,
   };
 }
@@ -112,6 +119,7 @@ export function memberEntry(e: ModelEntry): MemberModelEntry {
     last_success: e.last_success,
     waiting: e.waiting,
     used_by: e.used_by,
+    limits: e.limits,
   };
 }
 
@@ -163,6 +171,7 @@ export function modelsData({
   doc = null,
   assistant,
   seats = MODELS_SEATS,
+  names,
   reload = () => {},
 }: {
   entries: ModelEntry[];
@@ -171,6 +180,8 @@ export function modelsData({
   doc?: CompanyDocument | null;
   assistant?: ModelsData["assistant"];
   seats?: Seat[];
+  /** The models' names by `nameKey`, as `llm_models` gives them; left out, each is said by its id. */
+  names?: ReadonlyMap<string, string>;
   reload?: () => void;
 }): ModelsData {
   const answer: ModelEntriesAnswer = admin
@@ -188,7 +199,7 @@ export function modelsData({
         entries: entries.map(memberEntry),
         alarms: null,
       };
-  const models = modelViews(answer, admin ? doc : null);
+  const models = modelViews(answer, admin ? doc : null, names);
   return {
     admin,
     doc: admin ? doc : null,
@@ -198,6 +209,7 @@ export function modelsData({
     nodes: answer.nodes,
     node: answer.node,
     assistant: assistant ?? assistantOf(admin ? doc : null, models),
+    advisor: advisorOf(admin ? doc : null, models),
     loading: false,
     error: null,
     failed: null,

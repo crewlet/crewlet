@@ -91,7 +91,7 @@ func TestAFailedReplicatedOpenLeavesTheNodeAsItWas(t *testing.T) {
 func TestAPinnedWritersConnectionKeepsTheNodesPageCache(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
-	node, err := OpenNode(ctx, filepath.Join(t.TempDir(), "node.db"), Options{})
+	node, err := OpenNode(ctx, filepath.Join(t.TempDir(), "node.db"), Options{PageCacheKiB: 8 << 10})
 	if err != nil {
 		t.Fatalf("open the node: %v", err)
 	}
@@ -105,9 +105,9 @@ func TestAPinnedWritersConnectionKeepsTheNodesPageCache(t *testing.T) {
 		t.Fatalf("pin the replicated estate's writer: %v", err)
 	}
 	defer func() { _ = w.Close() }()
-	if got := cacheOn(t, w); got != nodeCacheKiB {
-		t.Errorf("the replicated estate's pinned writer caches %d KiB, want %d",
-			got, nodeCacheKiB)
+	if got := cacheOn(t, w); got != 8<<10 {
+		t.Errorf("the replicated estate's pinned writer caches %d KiB, want the node's %d",
+			got, 8<<10)
 	}
 }
 

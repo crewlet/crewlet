@@ -135,18 +135,16 @@ func TestTheReadersRouteIsAnAdminsAlone(t *testing.T) {
 
 // THE READERS ROUTE ANSWERS WHO READ A UNIT'S REPOSITORY, as the operator tool
 // does (builtin.ReadersOf): the repository read by name as the caller at
-// linearizable — never answered undeclared from an old copy — and one page of
-// its readers over the range — the thirty company days ending today on the
-// company's clock where the request names neither end — at the tool's own page
-// bound, from the cursor handed back; the first page with how many readers the
-// per-day cap left out. A company repository's readers are not recorded, and
-// its answer says so without asking. A range or a cursor the read cannot take
-// is `bad_params` before anything is read, as one a peer refuses is; a name
-// nobody declared is the code reads' `not_found`; a read no node served is
+// linearizable (never answered undeclared from an old copy) and one page of its
+// readers over the range (thirty company days ending today on the company's
+// clock where the request names neither end) at the tool's page bound, from the
+// cursor handed back; the first page with how many readers the per-day cap left
+// out. A company repository's readers are not recorded, and its answer says so
+// without asking. A range or cursor the read cannot take is `bad_params` before
+// anything is read; an undeclared name is `not_found`; a read no node served is
 // `unavailable` with its Retry-After.
-//
-// Mutation: answer ErrBadRange through the code questions' codeRefusal
-// (internal/api/queries), and the range rows answer 500 query_failed.
+// Mutation: answer ErrBadRange through queries' codeRefusal and the range rows
+// answer 500 query_failed.
 func TestTheReadersRouteAnswersWhoReadAUnitRepository(t *testing.T) {
 	t.Parallel()
 	elided := int64(2)

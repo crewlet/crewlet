@@ -15,38 +15,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ONE ADMISSION every artifact path takes, the HTTP routes here and the read
-// questions in internal/api/queries alike: read the artifact's head, decide the
-// verb on it through the authority table, and conclude the caller's role from
-// the same decision. A second copy of this in the questions would be the place
-// the two first disagreed about who may read a private artifact.
+// THE ONE ADMISSION every artifact path takes, these routes and the read
+// questions in internal/api/queries alike: read the head (shares and owner, no
+// content), decide the verb through the authority table, conclude the role from
+// that decision, so the two never disagree about who may read a private
+// artifact. An unrelated caller is answered as for an id nothing holds.
 //
-// # Access is decided before anything is touched
-//
-// Every handler admits first and reads or writes after: the head a decision
-// reads is the artifact's shares and owner and nothing of its content, and a
-// caller the table refuses is answered before a version, a file or a byte is
-// read. A caller with no relation is answered exactly as an id nothing holds.
-//
-// # The admin path is recorded where it is used
-//
-// An administrator may open any artifact (admin is host access, and a refusal
-// would promise a privacy the engine cannot keep), and the override is made
-// visible: [Gate.Read] and [Gate.Content] write an elevated-read record for
-// every read the admin path alone admitted, before the read is answered, and
-// REFUSE the read when the record cannot be written. An override nobody can
-// see afterwards is the thing the record exists to prevent. Every read of an
-// artifact takes one of the two: its metadata through [Gate.Read], its content
-// (a version's files, its datastore) through [Gate.Content], whatever verb
-// decides it.
-//
-// # The trash stops serving content at once
-//
-// An artifact in the trash keeps its head, its versions list and its history
-// for the owner's trash view, and serves no content: [Gate.Content] refuses it
-// ([artifactsdomain.ErrTrashed]) before anything is read or recorded, so the file routes, the
-// datastore's reads and its export, and the room that pushes its data all
-// stop together.
+// Admin is host access, so the override is made visible: [Gate.Read] (metadata)
+// and [Gate.Content] (files, datastore) write an elevated-read record for each
+// read only the admin path admitted, and REFUSE the read when it cannot be
+// written. A trashed artifact serves no content: [Gate.Content] refuses it
+// ([artifactsdomain.ErrTrashed]) before anything is read or recorded.
 
 // Heads is the artifacts estate's read of one artifact's head: what the shares
 // and the owner a decision reads come from. The estate router's, so a node

@@ -19,31 +19,17 @@ import (
 )
 
 // benchVariable is the VALUE of a string literal that names one of the real
-// bucket's variables or is what a name is built from: it CONTAINS the
-// variables' stem, CREWLET_BENCH_S3, and holds no whitespace. So it is a whole
-// name (what os.Getenv or t.Setenv takes, or `NAME=` in a child's
-// environment), the stem or the `_`-ended prefix a name is joined to, a
-// Sprintf format, a reference expanded from the environment (`${NAME}` or
-// `$NAME`, for os.ExpandEnv — or for envref.Resolve, which is how this tree
-// reads a config value that points at the environment, so a benchmark
-// building an s3obj.Config of references is the likeliest second parser of
-// all), or a struct tag a decoder reads the environment by (`env:"NAME"`) —
-// each a way a second parser spells one. A sentence that mentions a variable
-// (a skip's reason, a refusal) holds a space and does not match.
-//
-// Matching the stem ANYWHERE in the value rather than whole names is what the
-// shape of a copy demands: a matcher of whole names,
-// `^CREWLET_BENCH_S3_[A-Z0-9_]*$`, passed `os.Getenv(stem + "_BUCKET")` and
-// `fmt.Sprintf("CREWLET_BENCH_S3_%s", k)`, and one anchored at the stem,
-// `^CREWLET_BENCH_S3(_\S*)?$`, passed every reference and every tag, whose
-// value has the name after a character of its own.
-//
-// What it still cannot see is two things. The stem SPLIT across literals,
-// which no copy of a parser does by accident and nothing short of evaluating
-// the program's constants could see. And a value that HOLDS WHITESPACE — not
-// only a sentence, which is the point, but a struct tag of several keys or a
-// multi-line YAML or shell literal naming a variable, which the scanner cannot
-// tell from a sentence without knowing what reads the text.
+// bucket's variables or what a name is built from: it CONTAINS the stem,
+// CREWLET_BENCH_S3, and holds no whitespace. So it matches a whole name
+// (os.Getenv, t.Setenv, `NAME=`), the stem or `_`-ended prefix, a Sprintf
+// format, a reference (`${NAME}`, `$NAME`, envref.Resolve) or a struct tag
+// (`env:"NAME"`): each a way a second parser spells one. A sentence mentioning
+// a variable holds a space and does not match. The stem is matched ANYWHERE
+// because whole-name matching
+// (`^CREWLET_BENCH_S3_[A-Z0-9_]*$`) passes `os.Getenv(stem + "_BUCKET")` and a
+// Sprintf format, and anchoring at the stem passes every reference and tag.
+// Blind to: the stem SPLIT across literals, and a value HOLDING WHITESPACE (a
+// multi-key struct tag, a multi-line literal), which looks like a sentence.
 var benchVariable = regexp.MustCompile(`^\S*CREWLET_BENCH_S3\S*$`)
 
 // benchVariableNeeds is what a value benchVariable matches cannot be spelled
@@ -55,18 +41,14 @@ var benchVariableNeeds = regexlit.Required(benchVariable)
 // spells one of the CREWLET_BENCH_S3_* variables' names, or the stem a name
 // is built from.
 //
-// Every benchmark that measures a real bucket — the object store's own, and
-// each that measures a path over one — reads the variables through
-// s3fake.RealBucket, because a second parser is the copy that quietly reads
-// them differently: a region it does not require, a prefix it does not
-// default, a path style it reads as false where the first refuses it. Each
-// of those passes its own package's benchmarks and points a measurement at a
-// bucket nobody meant. A copy is always a few lines that look reasonable, so
-// only a scan of the tree finds one.
+// Every benchmark of a real bucket reads the variables through
+// s3fake.RealBucket, because a second parser quietly reads them differently (a
+// region it does not require, a prefix it does not default, a path style it
+// reads as false), passes its own package's benchmarks and measures a bucket
+// nobody meant. Only a scan of the tree finds such a copy.
 //
-// The parser's own reads are the scan's CONTROL: RealBucket spells the
-// bucket's variable, and a walk or a matcher that stopped finding it there
-// would find nothing anywhere else either, and pass.
+// The parser's own reads are the scan's CONTROL: a walk or matcher that
+// stopped finding the variable there would find nothing elsewhere and pass.
 func TestNoOtherPackageNamesTheRealBucketsVariables(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -132,20 +114,15 @@ func namesIn(path string, body []byte) []variableName {
 // mayHoldAName is false only for a Go source in which no string literal's
 // VALUE can hold the stem, so the scanner need not run on it: scanning every
 // file costs the walk about six seconds over this tree under the race
-// detector, and scanning what this admits — the files that hold the stem and
-// the few dozen that hold a numeric escape — under one.
-//
-// The check reads the file's BYTES and the matcher a literal's unquoted
-// value, and the two differ in exactly two ways. An interpreted string's
-// escape spells a character its bytes never show: a NUMERIC escape (`\x`,
-// `\u`, `\U`, or a backslash before an octal digit) any character at all, a
-// simple one only a quote, a backslash or a control character, none of which
-// the stem holds (TestTheScanFindsTheStemInEveryUnspacedLiteral holds that).
-// And a raw string's value drops every carriage return in it. So a file
-// holding the stem nowhere, no numeric escape and no carriage return holds no
-// literal whose value contains the stem. An escaped backslash before one of
-// those bytes is read as starting an escape too, which admits more than it
-// must and never less.
+// detector, scanning only what this admits under one. The check reads BYTES
+// and the matcher a literal's unquoted value; they differ in two ways. A
+// NUMERIC escape (`\x`, `\u`, `\U`, a backslash before an octal digit) spells
+// any character its bytes never show, a simple one only a quote, backslash or
+// control character, none in the stem
+// (TestTheScanFindsTheStemInEveryUnspacedLiteral holds that). And a raw string
+// drops every carriage return. So a file with no stem, numeric escape or
+// carriage return holds no matching literal; an escaped backslash is read as
+// an escape too, admitting more than needed, never less.
 func mayHoldAName(body []byte) bool {
 	return benchVariableNeeds.Admits(body) ||
 		bytes.IndexByte(body, '\r') >= 0 ||
@@ -204,25 +181,15 @@ func variableNames(path string, body []byte) []variableName {
 // THE SCAN SEES THE STEM IN EVERY LITERAL THAT SPELLS IT WHOLE AND HOLDS NO
 // WHITESPACE, and no sentence about a variable.
 //
-// A second parser need not spell a whole name: it can build one from the stem
-// (`"CREWLET_BENCH_S3" + "_BUCKET"`, a Sprintf format), set one for a child
-// process (`"CREWLET_BENCH_S3_BUCKET=" + …`), point at one with a reference
-// it expands (`"${CREWLET_BENCH_S3_BUCKET}"`, through os.ExpandEnv or
-// envref.Resolve) or a tag a decoder reads (`env:"CREWLET_BENCH_S3_BUCKET"`),
-// or spell a character of one with an escape the file's bytes never show.
-// Each case is a file the walk could meet, judged by exactly what the walk
-// runs on it — the skip check AND the scanner — so a skip check that stopped
-// admitting an escape, or a matcher that stopped at whole names or at a value
-// that starts with the stem, turns its case red here, where the walk over
-// this tree, which holds none of them, would stay green. What it cannot see
-// is benchVariable's to say.
-//
-// It also holds the two premises mayHoldAName rests on that no case can
-// exercise. The pattern still requires a stem: one requiring nothing makes
-// the check admit every file, which is correct and gives the walk its six
-// seconds back. And no character the stem holds is one a SIMPLE escape
-// spells — a quote, a backslash or one of the seven control characters —
-// since the check admits a file on a numeric escape only.
+// A second parser can build a name from the stem (`"CREWLET_BENCH_S3" +
+// "_BUCKET"`, a Sprintf format), set one for a child, point at one by reference
+// (`"${CREWLET_BENCH_S3_BUCKET}"`) or tag, or spell a character with an escape.
+// Each case is judged by what the walk runs, the skip check AND the scanner, so
+// a check that stopped admitting an escape, or a matcher that stopped at whole
+// names or at a value starting with the stem, goes red here though the walk
+// would stay green. It also holds mayHoldAName's two premises no case can
+// exercise: the pattern still requires a stem, and no stem character is one a
+// SIMPLE escape spells.
 func TestTheScanFindsTheStemInEveryUnspacedLiteral(t *testing.T) {
 	t.Parallel()
 	// simpleEscaped is what Go's simple escapes spell inside an interpreted

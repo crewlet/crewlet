@@ -161,25 +161,15 @@ func (a Annotations) Merge(override Annotations) Annotations {
 // WritesToSharedSurface reports whether a tool writes somewhere outside the
 // local engine — a channel, an issue, a pull request, anything a human reads.
 //
-// This is the question the SUB-AGENT GUARD asks: a sub-agent must not post
-// under its parent's identity. It is deliberately conservative about unknowns
-// in ONE direction:
+// It is the SUB-AGENT GUARD's question: a sub-agent must not post under its
+// parent's identity. ReadOnly == Yes is false; Destructive == Yes is true;
+// ReadOnly == No with OpenWorld != No is true; anything else, all-unknown
+// included, is false.
 //
-//   - ReadOnly == Yes                          -> false (a pure read)
-//   - Destructive == Yes                       -> true
-//   - ReadOnly == No and OpenWorld != No       -> true
-//   - anything else, including all-unknown     -> false
-//
-// # The trap
-//
-// FALSE FROM THIS FUNCTION IS NOT "READ-ONLY". It answers the opposite
-// question from ReadOnly, and it answers false for a tool nobody annotated at
-// all. That is right for its caller — the parent's explicit allowlist already
-// curates the sub-agent surface, so the engine does not block what it cannot
-// classify — and it is exactly wrong as a read-only fence, where an
-// unclassifiable tool must be refused, not admitted. A fence that reads
-// !WritesToSharedSurface(a) admits every under-annotated write tool in the
-// company and looks like it is checking something. Use ReadOnlyProven.
+// FALSE IS NOT "READ-ONLY": an unannotated tool answers false. That suits the
+// guard, since the parent's allowlist already curates the surface, and is
+// wrong as a read-only fence, where !WritesToSharedSurface(a) would admit
+// every under-annotated write tool. Use ReadOnlyProven.
 func WritesToSharedSurface(a Annotations) bool {
 	if a.ReadOnly == Yes {
 		return false
@@ -198,37 +188,16 @@ func WritesToSharedSurface(a Annotations) bool {
 // unannotated tool, which is the whole point.
 func ReadOnlyProven(a Annotations) bool { return a.ReadOnly == Yes }
 
-// SDKAnnotations is the OUTBOUND conversion — the engine's own tri-state as
-// the SDK's struct, for a surface this engine SERVES rather than dials.
+// SDKAnnotations is the OUTBOUND conversion of the engine's tri-state to the
+// SDK's struct, for a surface this engine SERVES. The SDK declares
+// DestructiveHint and OpenWorldHint as *bool, where absence survives, and
+// ReadOnlyHint and IdempotentHint as plain bool, where it does not (see [annotationsFromSDK] for the inbound half). Outbound, an UNKNOWN
+// read-only hint and an explicit false serialize identically, so an
+// unclassified tool is advertised "not read-only", the conservative reading.
+// The reverse cannot happen: only [Yes] sets readOnlyHint true.
 //
-// # Why this exists
-//
-// Both MCP surfaces the engine serves published every tool with nothing but a
-// name, a description and a schema. `annotationsFor` in internal/agent/builtin
-// decides each builtin's hints carefully, the registry carries them, the
-// sub-agent guard reads them — and the two places that hand the catalogue to
-// somebody else's client dropped them on the floor. An operator's assistant
-// and a sandboxed harness therefore saw a company's whole tool surface
-// unannotated, which is the shape a client cannot distinguish a read from an
-// irreversible write in: `search_work_items` and `remove_work_item` arrived
-// identical.
-//
-// # The lossy pair, and what is done about it
-//
-// The SDK declares DestructiveHint and OpenWorldHint as *bool, where absence
-// survives, and ReadOnlyHint and IdempotentHint as plain bool, where it does
-// not — see [annotationsFromSDK] for the inbound half of the same problem.
-// Outbound the asymmetry is harmless in one direction and not the other: an
-// UNKNOWN read-only hint and an explicit FALSE serialize identically, so a
-// tool this engine has not classified is advertised as "not read-only", which
-// is the conservative reading a client should already default to. What must
-// never happen is the reverse — advertising `readOnlyHint: true` for something
-// the engine did not say was a read — and that cannot, because only [Yes]
-// sets it.
-//
-// A wholly unknown set returns nil rather than a zero struct, so a tool with
-// no decision advertises no annotations at all instead of four false hints it
-// would be read as having asserted.
+// A wholly unknown set returns nil, not four false hints the tool would be
+// read as having asserted.
 func SDKAnnotations(a Annotations) *sdk.ToolAnnotations {
 	if a == (Annotations{}) {
 		return nil

@@ -733,7 +733,8 @@
    leading, unbounded measure. That is a wall of text nobody reads. Here it
    gets a proportional face, real leading and a bounded measure, while
    monospace stays where it means something. `pre-wrap` keeps the model's own
-   paragraph breaks, which are load-bearing in a long answer. */
+   paragraph breaks, which are load-bearing in a long answer. The measure is
+   only for a `.prose` that is not the kit's, whose caller chose its own. */
 .prose {
   margin: 0;
   font-family: var(--font-family-sans);
@@ -742,6 +743,8 @@
   color: var(--color-text-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.prose:not(.crewlet-prose) {
   max-width: 78ch;
 }
 .prose.muted {
@@ -2418,6 +2421,7 @@ a.prof-row:hover {
    the time and one line, the actor then what happened, taking every pixel
    the time leaves. The event log itself is the kit's grid (`EventGrid`). */
 .feed-row {
+  position: relative;
   display: grid;
   grid-template-columns: 62px minmax(0, 1fr);
   gap: var(--spacing-3);
@@ -2431,6 +2435,22 @@ a.prof-row:hover {
 }
 .feed-row:last-child {
   border-bottom: none;
+}
+/* THE ROW OPENS ITS EVENT through the time's link, stretched over the row, and
+   a reference its line names stands above that, so it opens its own page. */
+.feed-row__open {
+  color: inherit;
+  text-decoration: none;
+  outline: none;
+}
+.feed-row__open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+.feed-what a {
+  position: relative;
+  z-index: 1;
 }
 .feed-row:hover {
   background: var(--color-surface-hover);
@@ -5143,6 +5163,13 @@ span.list-position-step {
 .task-flags {
   flex-wrap: wrap;
 }
+/* The rail's flow: the badge, then why it holds on the next line. */
+.task-flow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-1);
+}
 .task-readonly {
   margin: 0;
 }
@@ -5924,15 +5951,13 @@ a.work-cal-chip {
   overflow-wrap: break-word;
 }
 
-/* A WRITTEN LINK, DRAWN INERT (`links: "checked"` in lib/markdown.ts, for an
-   address that is not the company's): the label in the text's own ink, then
-   the place it names in the quiet link ink, never underlined and never a
-   control, so a reader can see where a link would have gone without being
-   able to follow one a model or an agent wrote. */
-.md-link-inert-host {
-  color: var(--color-text-link-quiet);
-  overflow-wrap: anywhere;
+/* AN ANSWER'S WORDS READ AT THE NARROW MEASURE, about 70 characters a line
+   (app/assistant/chunk/blocks.tsx), while a table or a code sample takes the
+   thread's width, where a row cut to a reading measure would scroll. */
+.prose.md.ask-answer > :is(p, ul, ol, blockquote, h2, h3, h4, h5, h6, .md-heading) {
+  max-width: var(--size-measure-narrow);
 }
+
 /* EVERY ELEMENT'S OWN MARGIN IS ZEROED FIRST and the rhythm is one rule over
    siblings. The other way round — a `margin: 0` reset per element type after
    the sibling rule — is how the rhythm died: the shorthand resets margin-top
@@ -6091,6 +6116,20 @@ a.work-cal-chip {
    block it is in. */
 .prose.md.muted .md-heading {
   color: var(--color-text-secondary);
+}
+
+/* WORDS QUOTED UNDER A LINE (`components/Said.tsx`): a reply under "You
+   replied" in an Inbox row or a decision row. Set in the line's own size and
+   leading, with no air between blocks, since a row stops at its lines and a
+   gap there spends one on nothing. */
+.prose.md.said {
+  max-width: none;
+  font-size: inherit;
+  line-height: inherit;
+}
+.prose.md.said > * + *,
+.prose.md.said li + li {
+  margin-top: 0;
 }
 
 /* A TABLE SCROLLS RATHER THAN OVERFLOWING ITS PANEL. A page's own table is
@@ -7321,8 +7360,22 @@ a.work-cal-chip {
   color: inherit;
   text-decoration: none;
 }
-a.live-row:hover {
+.live-row--linked {
+  position: relative;
+}
+.live-row--linked:hover {
   background: var(--color-surface-hover);
+}
+/* THE ROW OPENS ITS TURN through this link, stretched over it; a reference the
+   trigger names stands above it, so it opens its own page. */
+.live-row__open {
+  position: absolute;
+  inset: 0;
+  outline: none;
+}
+.live-body a {
+  position: relative;
+  z-index: 1;
 }
 /* THE ROW'S OWN WIDTH DECIDES ITS SHAPE, not the window's: Home's card is narrow
    on the widest screen, and Live's is wide on a smaller one. */
@@ -7686,9 +7739,15 @@ a.live-row:hover {
   display: grid;
   place-content: center;
 }
-/* The phone pane's way back, at its top start, above the byline. */
+/* The phone pane's way back, at its top start, above the byline: a grid item of the pane's column. */
 .inbox-pane-back {
-  align-self: flex-start;
+  justify-self: start;
+}
+/* An item nobody holds, in one column: the way back on top, the word centred under it. */
+.inbox-pane-missing {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  place-items: center;
 }
 .inbox-evidence {
   margin-top: var(--spacing-1);
@@ -10568,4 +10627,145 @@ a.live-row:hover {
 .assistant-model-notice,
 .assistant-attach-refusal {
   margin: 0 0 var(--spacing-2);
+}
+
+/* Ask Crewlet's page (app/assistant/chunk/AskPage.tsx): the reader's
+   conversations, a column as wide as a roomy sidebar, beside the one open,
+   which runs edge to edge under its head as a chat room does. The list's
+   width is the kit's own variable; nothing here sizes the kit's boxes. */
+.ask-page {
+  --ask-page-pad-x: var(--spacing-4);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* THE LIST KEEPS ROOM FOR A READABLE TITLE beside its time and the room each
+   row keeps for its actions: at a tablet's 768px a 16rem column cut every
+   title to fifteen characters. */
+.ask-page__split {
+  --crewlet-list-detail-list: clamp(21rem, 32%, 24rem);
+}
+
+.ask-page__list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* New conversation and the search stay at the list's top as it scrolls. */
+.ask-page__list-top {
+  position: sticky;
+  top: var(--sticky-top);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--ask-page-pad-x);
+  border-bottom: 1px solid var(--color-border-default);
+  background: var(--color-surface-background);
+}
+
+/* A head the column cannot hold on one line (a larger text size) puts New
+   conversation under the title rather than past the column's divider. */
+.ask-page__list-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.ask-page__list-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+.ask-page__list-note,
+.ask-page__list-more {
+  padding: var(--spacing-3) var(--ask-page-pad-x);
+}
+
+.ask-page__open {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The open conversation's head: its title and its actions, on a hairline,
+   at the height of a chat room's. Where the title and the model's picker do
+   not both fit, the actions wrap under the title rather than cut it. */
+.ask-page__head {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-height: calc(var(--size-control-md) + var(--spacing-2) * 2);
+  padding: 0 var(--spacing-3) 0 var(--ask-page-pad-x);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.ask-page__title {
+  flex: 1 1 12rem;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ask-page__actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/* The thread is the one scroller; the notice that says why the reader may
+   not ask does not scroll itself, so it is given a box that does. */
+.ask-page__thread {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ask-page__thread--offline {
+  overflow: auto;
+  padding: var(--spacing-6) var(--ask-page-pad-x);
+}
+
+.ask-page__foot {
+  flex: none;
+  padding: 0 var(--ask-page-pad-x) var(--spacing-3);
+}
+
+/* A conversation on its way or not opened (Conversation.tsx's AskOpening): a
+   skeleton at the thread's inset, or the reason centred in its place. */
+.ask-opening {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  padding: var(--spacing-6) var(--spacing-4);
+}
+
+.ask-opening--reading {
+  place-items: start stretch;
+  padding: var(--spacing-4);
+}
+
+/* A helper's model in its page's head (components/HelperModel.tsx): the
+   picker, and what its last change came to beside it. */
+.helper-model {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
 }

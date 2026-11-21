@@ -16,22 +16,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// CODE SEARCH IS NOT A SESSION QUERY: it answers at the tip it names. Each
-// repository is searched at the commit its answering node's copy holds — the
-// answer's `tips` — and a hit's file is read at that commit, so the search
-// takes no floor: `read_level=session`, bare or beside a `min_position`, and
-// a `min_position` at any level are refused `bad_params` before anything is
-// searched, and the search reads every copy as it stands (no floor on the
-// code log). What the caller names is the level its repositories are listed
-// at: the REST read path's `stale` by default, `linearizable` asked. And it is
-// no row of [sessionQuestions], the one table the dashboard's SESSION_QUERIES
-// is held to both ways ([TestEverySessionQueryTakesAFreshnessFloor]) — so a
-// client listing it there is refused by that gate, as a screen that believes
-// it waited for its write.
+// CODE SEARCH IS NOT A SESSION QUERY: it answers at the tip it names (each
+// repository at its copy's commit, the answer's `tips`), so it takes no
+// floor: `read_level=session` and any `min_position` are refused `bad_params`
+// before anything is searched. The caller names only the level its
+// repositories are listed at, `stale` by default. It is no row of
+// [sessionQuestions], the table SESSION_QUERIES is held to both ways
+// ([TestEverySessionQueryTakesAFreshnessFloor]).
 //
-// Mutation: take the caller's freshness, floor and all, as the search's
-// listing and git floor, and the floored asks are searched, red; hand the
-// search the caller's floor on the code log as its git floor, red.
+// Mutation: take the caller's floor as the listing and git floor, or hand the
+// search the caller's code-log floor as its git floor; both red.
 func TestCodeSearchIsNotASessionQuery(t *testing.T) {
 	t.Parallel()
 	if slices.ContainsFunc(sessionQuestions, func(q sessionQuestion) bool { return q.what == "code_search" }) {

@@ -9,19 +9,15 @@ import (
 
 // EVERY ANSWER UNDER /auth IS no-store, THE GUARD'S OWN INCLUDED.
 //
-// What /auth answers — a second-factor seed, recovery codes shown once, who
-// somebody is, a sign-in's Set-Cookie — is what no cache may keep, and a
-// refusal there says who the caller is and what their session may reach. The
-// header was set by a wrapper around the surface's routes, so everything the
-// guard wrote before them went out cacheable: the 401 to no credential, the
-// 403 to an enrolment-only session (on an answer re-issuing its cookie), the
-// 503 when this node cannot read the estate. The guard marks every answer
-// under /auth now, before it resolves anything.
+// /auth answers a second-factor seed, recovery codes shown once, who somebody
+// is and a Set-Cookie: no cache may keep them, nor a refusal there. A wrapper
+// around the routes left the guard's own answers cacheable (the 401, the 403 to
+// an enrolment-only session, the 503), so the guard marks every answer under
+// /auth before it resolves anything.
 //
-// The CONTROL is a refusal outside /auth, which carries no such header: the
-// marking follows the surface whose bodies need it, not every refusal. Mutation:
-// drop the guard's marking and the /auth rows fail; mark every path and the
-// control does.
+// The CONTROL is a refusal outside /auth, which carries no such header.
+// Mutation: drop the guard's marking and the /auth rows fail; mark every path
+// and the control does.
 func TestEveryAnswerUnderAuthIsNoStoreTheGuardsOwnIncluded(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

@@ -10,13 +10,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A WRITE THE DELETION GATE DROPPED IS A PURGE, as the decide says when it is
-// the one that finds the marker: the artifact's purge landed ahead of the
-// record, after the decide passed, and the framework states that as one of its
-// conditions — which the artifacts API answered `503` "try again" and a tool
-// "try again shortly", about an artifact nothing will ever write again. As
-// [artifactsdomain.ErrPurged] it is the API's `404` and the tools' not-found,
-// and an asset's subject names the artifact the asset was part of.
+// A WRITE THE DELETION GATE DROPPED IS A PURGE, as the decide says when it
+// finds the marker: the purge landed ahead of the record, after the decide
+// passed. It is [artifactsdomain.ErrPurged] (the API's `404`, the tools'
+// not-found), never a framework condition read as "try again" about an
+// artifact nothing will write again, and an asset's subject names its
+// artifact.
 //
 // Mutation: drop the deletion arm from publishError and every case fails.
 func TestAWriteTheDeletionGateDroppedIsAPurge(t *testing.T) {

@@ -51,22 +51,16 @@ func TestTheRetentionsOutlastWhatTheyCover(t *testing.T) {
 			coord.FireRetention, schedule.DefaultCatchupMax)
 	}
 
-	// The setup-state window is bounded from BOTH sides, and neither bound
-	// is a number this engine chooses. Above it is GitHub's: the one-time
-	// code a manifest conversion returns dies at an hour, so a state valid
-	// for longer lets somebody complete a flow whose code is already gone
-	// — and the failure they are shown names the code rather than the
-	// wait, which sends them to the wrong place entirely. Below it is a
-	// person at a browser: a window that closes during a round trip to
-	// GitHub and two clicks refuses the operator who did exactly what was
-	// asked.
+	// The setup-state window is bounded from BOTH sides, neither a number this
+	// engine chooses. Above is GitHub's: a manifest conversion's one-time code
+	// dies at an hour, so a longer state lets somebody complete a flow whose
+	// code is gone. Below is a person at a browser: a window closing during a
+	// round trip to GitHub and two clicks refuses the operator.
 	//
-	// It is checked here rather than in internal/api/setupapi because the
-	// record is what enforces it: the claim that spends a state lapses at
-	// this TTL, so a manifestTTL longer than it would be a token still
-	// validating after the record that spends it has lapsed — which is the
-	// replay the record exists to stop. setupapi's manifestTTL IS this
-	// constant for that reason.
+	// Checked here, not in internal/api/setupapi, because the record enforces
+	// it: the claim spending a state lapses at this TTL, so a longer
+	// manifestTTL would be a token validating after its record lapsed, the
+	// replay the record exists to stop. setupapi's manifestTTL IS this constant.
 	if coord.SetupOnceRetention >= time.Hour {
 		t.Errorf("coord.SetupOnceRetention %v outlives GitHub's one-hour one-time code, so "+
 			"a setup link can be completed after the code behind it is dead and the "+

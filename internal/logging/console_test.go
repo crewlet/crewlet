@@ -202,18 +202,14 @@ func TestValuesAreQuotedOnlyWhenAmbiguous(t *testing.T) {
 // appended to by every derivation, so sharing its backing array would put
 // one logger's attributes on another's lines.
 //
-// Three things make this able to fail, and a version missing any of them
-// passed with clone's copy deleted:
+// Three things make this able to fail (without any, it passed with clone's
+// copy deleted):
 //
-//   - THE SHARED PARENT CARRIES AN ATTRIBUTE, so there is something for a
-//     child to append after.
-//   - ITS BUFFER HAS SPARE CAPACITY, reserved below rather than inherited
-//     from an append. Whether an append happens to leave room is an allocator
-//     detail: with none, both children reallocate and a sharing clone looks
-//     correct. A test that relied on that luck proves nothing.
-//   - BOTH DERIVATIONS EXIST BEFORE EITHER LOGS. Deriving and logging one at
-//     a time renders each line before the other can overwrite the bytes
-//     behind it — the corruption happening and going unobserved.
+//   - THE SHARED PARENT CARRIES AN ATTRIBUTE, for a child to append after.
+//   - ITS BUFFER HAS SPARE CAPACITY, reserved below: with none (an allocator
+//     detail) both children reallocate and a sharing clone looks correct.
+//   - BOTH DERIVATIONS EXIST BEFORE EITHER LOGS: one at a time renders each
+//     line before the other can overwrite the bytes behind it.
 func TestDerivedConsoleHandlersDoNotShareAttributes(t *testing.T) {
 	var buf bytes.Buffer
 	base := console(&buf, ColorNever).
@@ -397,17 +393,12 @@ func TestASingleDestinationIsNotWrappedInAFanout(t *testing.T) {
 
 // NOTHING A CALLER SUPPLIES REACHES THE TERMINAL RAW.
 //
-// Log content is not all first-party: an MCP server's stderr, a webhook
-// payload, an LLM error string and a vendor API message all end up as values
-// on these lines. A control byte that survived would let that content repaint
-// an operator's terminal, and a newline would let it forge a whole log line —
-// a fake ERROR, or a fake "seat_released", written by whatever the engine was
-// talking to.
-//
-// The component column is in here because it was the one that DIDN'T escape.
-// Every logging.Get in the tree passes a literal today, so it was not
-// reachable — but the column is reached by any `.With("component", x)`, and x
-// is one refactor away from being a server name out of the company config.
+// Log content is not all first-party: MCP stderr, webhook payloads, LLM error
+// strings and vendor API messages land as values. A surviving control byte
+// would repaint an operator's terminal, and a newline would forge a whole log
+// line (a fake ERROR or "seat_released") from whatever the engine talked to.
+// The component column is covered because any `.With("component", x)`
+// reaches it, and x may be a server name out of the company config.
 func TestNothingReachesTheTerminalRaw(t *testing.T) {
 	for _, tc := range []struct{ name, component, message, value string }{
 		{"escape in the component", "seat\x1b[31m.host", "an_event", "ok"},

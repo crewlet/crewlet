@@ -11,24 +11,16 @@ import (
 
 // SeatLookup reads a thread's participants through the agents' own apps.
 //
-// # It replaced a shared organization token, and the token had nothing left to do
-//
-// Fan-out needs one question answered that no payload carries: who has
-// COMMENTED on this issue, and who has REVIEWED this pull request. That took
-// a personal access token an operator pasted in, held at the company and used
-// for every repository.
-//
-// An agent that acts as itself already holds a credential that can answer it.
-// Its app is installed on the repositories it works in and every tier grants
-// `issues:read` and `pull_requests:read`, so the reader is there for free and
-// scoped to what that agent may see, where the shared token was scoped to
-// whatever the person who made it could reach.
+// Fan-out needs one answer no payload carries: who has COMMENTED on this
+// issue and who has REVIEWED this pull request. An agent's own app, already
+// installed on its repositories with `issues:read` and `pull_requests:read`
+// at every tier, answers it scoped to what that agent may see, so no shared
+// organization token is needed.
 //
 // ANY INSTALLED SEAT ANSWERS FOR THE THREAD, and the first one that mints is
-// taken. The question is about the thread rather than about an agent, and
-// every app on one organization sees the same commenters; trying the next
-// seat when one refuses is what keeps the answer available while an operator
-// is mid-rollout, with some apps installed and others not.
+// taken: every app on one organization sees the same commenters, and trying
+// the next seat on a refusal keeps the answer available mid-rollout, with
+// some apps installed and others not.
 type SeatLookup struct {
 	// Opts is the same roster the reconcile runs on, captured when the
 	// parser was built. An app created or installed later writes the

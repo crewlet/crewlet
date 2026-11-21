@@ -11,18 +11,13 @@ import (
 	"time"
 )
 
-// A RUN OF FAILURES IS REPORTED ONCE, NOT ONCE PER RETRY.
+// A RUN OF FAILURES IS REPORTED ONCE, NOT ONCE PER RETRY: a fault outliving
+// the budget is the kind that lasts, and a line per retry reads one incident as
+// hundreds. A run is written as its transitions (it starts, it crosses the
+// budget, it recovers), and a second run is a second incident, written again.
 //
-// `statelog_apply_faulted` was written on every retry past the budget, and a
-// fault that outlives the budget is the kind that lasts — so a full disk wrote
-// twelve ERROR lines a minute per domain for as long as it was full, and
-// anything counting the event read one incident as hundreds. A run is written
-// as its transitions instead: it starts, it crosses the budget, it recovers.
-// And a second run is a second incident, which is written again.
-//
-// Internal, because the clock the budget is measured on is the runner's own
-// and the retry pause is real time: driven through Run, ten minutes of a
-// fault would take ten minutes.
+// Internal, because the budget's clock is the runner's own and the retry pause
+// is real time: driven through Run, ten minutes of a fault would take ten.
 func TestAFaultPastTheBudgetIsReportedOncePerRun(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
@@ -40,8 +35,8 @@ func TestAFaultPastTheBudgetIsReportedOncePerRun(t *testing.T) {
 	}
 	full := errors.New("the disk is full")
 
-	// faultFor retries one failure at the loop's slowest pace for as long
-	// as it is told to, which is the most lines the old shape could write.
+	// faultFor retries one failure at the loop's slowest pace for d: the
+	// most lines a line-per-retry log could write.
 	faultFor := func(d time.Duration) {
 		t.Helper()
 		start := now
@@ -112,10 +107,9 @@ func TestAFaultPastTheBudgetIsReportedOncePerRun(t *testing.T) {
 			"(%d in total, want 2)", got)
 	}
 
-	// A RUN THE LOOP WAS RESTARTED OUT OF ends with it. An adoption ends
-	// the loop mid-fault and runs it again, and Run forgets the fault as a
-	// verdict about rows the node no longer has — so a failure after it is
-	// a new run, and it is reported when it crosses the budget in its turn.
+	// A RUN THE LOOP WAS RESTARTED OUT OF ends with it: an adoption restarts
+	// the loop mid-fault and Run forgets the fault, so a later failure is a new
+	// run, reported when it crosses the budget in its turn.
 	faultFor(2 * ApplyRetryBudget)
 	stopped, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -129,16 +123,11 @@ func TestAFaultPastTheBudgetIsReportedOncePerRun(t *testing.T) {
 	}
 }
 
-// A RUN ENDS ONLY ONCE EVERY PART THAT FAILED IN IT HAS SUCCEEDED AGAIN.
-//
-// A commit of the checkpoint transaction beside the loop is the retry of that
-// transaction's failure and of nothing else's. Here a fetch fails and that
-// transaction then commits what the loop handed it before: the run stands — no
-// `statelog_apply_recovered`, its clock running on, Fault reporting it past the
-// budget, a second failed fetch the same run rather than a second one — until a
-// fetch is answered. Before, any success ended any run, so a commit beside the
-// loop logged a recovery from a fetch nobody had retried and restarted the
-// fault's clock and its back-off.
+// A RUN ENDS ONLY ONCE EVERY PART THAT FAILED IN IT HAS SUCCEEDED AGAIN. A
+// commit of the checkpoint transaction beside the loop retries that
+// transaction's failure and nothing else's: after a failed fetch the run stands
+// (no `statelog_apply_recovered`, its clock running on, Fault reporting it past
+// the budget, a second failed fetch the same run) until a fetch is answered.
 func TestARunEndsOnlyOnceEveryPartThatFailedHasSucceeded(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
@@ -225,13 +214,10 @@ func TestARunEndsOnlyOnceEveryPartThatFailedHasSucceeded(t *testing.T) {
 	}
 }
 
-// ONLY A VERIFICATION THAT SETTLED ENDS A VERIFICATION'S FAILURE.
-//
-// The look at the checkpoint's record failed — the log's ends could not be
-// read — and the loop then let through a run of nothing past the checkpoint,
-// which needs no look: the verification is still owed, and its failure stands,
-// with no `statelog_apply_recovered`, until a look settles it. Before, any run
-// the verification let through ended the run of failures.
+// ONLY A VERIFICATION THAT SETTLED ENDS A VERIFICATION'S FAILURE: after a
+// failed look at the checkpoint's record, a run with nothing past the
+// checkpoint needs no look, so the verification is still owed and its failure
+// stands, with no `statelog_apply_recovered`, until a look settles it.
 func TestOnlyAVerificationThatSettledEndsItsFailure(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer

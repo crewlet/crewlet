@@ -20,17 +20,10 @@ import (
 // overview included.
 //
 // The four REST mirrors (`/agents`, `/org`, `/tools`, `/stream/snapshot`) are
-// everybody's, so the one check that stands in front of them is the authority
-// table's first: the stage. The guard already refuses a principal whose stage
-// may not act before any route runs, which is exactly why this is asked of the
-// handler itself — the stage check here is the mirrors' own, for a principal
-// that reached them by any other path, and through the whole app it could
-// never be seen to fire. Every stage this build names is walked, because the
-// rule is an allowlist of one: invited and enrolling are refused exactly as
-// suspended and retired are. A refusal is the engine's envelope naming `stage`
-// and no permission, since no grant would change it; and nothing is BUILT for
-// a principal refused, so a mirror cannot leak through an answer composed
-// before the decision.
+// everybody's, so only the stage check stands in front of them. The guard
+// refuses such a principal first, so the handler is asked directly. Every stage
+// is walked: the rule is an allowlist of one. The refusal names `stage` and no
+// permission, and nothing is BUILT for a refused principal.
 //
 // Mutation: drop the stage check from [App.serveFrom], and every stage but
 // active is answered 200 with the roster built.

@@ -153,15 +153,13 @@ func read(t *testing.T, rows executorread.Rows, objects executorread.Objects,
 }
 
 // EVERY READER OF A SESSION SAYS ITS STATE IN ONE SET OF WORDS. A session the
-// row names and the read cannot show is an answer whose state names why and
-// whose sentence is the engine's own, the row beside it: an object the store
-// no longer holds, which the turn's row read again still names, is missing,
-// one whose bytes are not the ones sealed is
-// unreadable, one that opened and is no archive is malformed in the runner's
-// reason, a harness this build does not read is unsupported in the reason it
-// gives, and a row naming no object is none in the domain's own reason,
-// redacted. Only a store that did not answer, and a turn the seat keeps no row
-// of, are no page — each said by its sentinel and its sentence.
+// row names and the read cannot show gets a state naming why, in the engine's
+// own sentence: an object the store no longer holds is missing, one whose bytes
+// are not the sealed ones is unreadable, one that opened and is no archive is
+// malformed (the runner's reason), an unread harness is unsupported (its
+// reason), a row naming no object is none (the domain's reason, redacted).
+// Only a store that did not answer, and a turn the seat keeps no row of, are
+// no page — each said by its sentinel and sentence.
 //
 // Mutation: read the store's absence as an object that does not open (drop the
 // missing case, or put it after the unreadable one), or answer a store that
@@ -289,14 +287,12 @@ func (s *leavingRows) Session(ctx context.Context, handle, turn string,
 
 // A READ ITS CALLER'S OWN BOUND ENDED IS RETURNED AS IT ENDED, beside the row
 // it was reading — on the object, or on the row read again once the object
-// failed: never a page, and never a store's failure or a loss, while the row
-// says which session it was — what a caller whose bound ended the read tells
-// its reader of the session's size.
+// failed: never a page, and never a store's failure or a loss.
 //
 // NOT PARALLEL, NOR ITS CASES: a seat's read waits for the process's one seat
 // slot of transcript reads before it opens the object, and a read holding the
-// slot would end a case's twenty milliseconds in that wait, where the read
-// leaves on neither place it is about.
+// slot would end a case's twenty milliseconds in that wait, not at either
+// place under test.
 //
 // Mutation: answer a read its caller left, at either place, with no row, or as
 // a store that did not answer, and a case goes red.

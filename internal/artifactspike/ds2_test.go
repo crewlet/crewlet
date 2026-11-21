@@ -19,16 +19,13 @@ import (
 // SPIKE DS-2: what a datastore really costs on disk, against what the applier
 // meters for it.
 //
-// Every datastore byte is held on every data node and rides every snapshot and
-// backup, and the quotas (`artifacts.limits.data_bytes`, `data_store_bytes`)
-// bound the footprint the applier meters (internal/artifactdata/meter.go). If
-// the metered figure is far from what the file really holds, a quota means
-// something other than what it says. The spike fills one store with ten
-// thousand review rows and a week's worth of edits, then measures the bytes
-// the store added to the replicated file (live, with its write-ahead log) and
-// to a snapshot of it (VACUUM INTO, which is what a backup is), each against
-// the same file before the store existed. [TestTheFootprintMeterMatchesTheFile]
-// holds the meter to the file on every run, across row shapes.
+// The quotas (`artifacts.limits.data_bytes`, `data_store_bytes`) bound the
+// footprint the applier meters (internal/artifactdata/meter.go); if that is far
+// from the file, a quota means something other than what it says. The spike
+// fills one store with ten thousand review rows and a week's edits, then
+// measures the bytes it added to the replicated file (live, with its WAL) and
+// to a snapshot (VACUUM INTO, which is what a backup is).
+// [TestTheFootprintMeterMatchesTheFile] holds the meter to the file every run.
 //
 // Run: go test -run '^$' -bench DS2 -benchtime 1x ./internal/artifactspike
 

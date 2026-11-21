@@ -86,6 +86,11 @@ func newBusySeat(t *testing.T, resume func(*busySeat) sandbox.Resumer) *busySeat
 		return inbox.Conditions{Owned: true, TurnEngineReady: true, AdmitsTriggers: true,
 			SeatHeldBySandbox: held, SandboxAwaitsAnswer: awaits}
 	}
+	// THE SEAT TAKEN, as a node's acquisition takes it: recovered for the
+	// attachment of its inbox before the attach, which every hold names.
+	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1, fixtureAttachment(t, q, "swe"), nil); err != nil {
+		t.Fatalf("RecoverSeat: %v", err)
+	}
 	s.mail = watchAcks(q, s.inbox(), s.control())
 	if err := q.Subscribe(ctx, s.inbox(), fixtureInboxGroup("swe"),
 		s.mail.handler(s.inbox(), func(ctx context.Context, ev *events.Event) queue.Result {
@@ -153,21 +158,10 @@ func (s *busySeat) answer(t *testing.T, run sandbox.PendingRun, text string) {
 // AN ANSWER BY TURN REACHES ITS RUN WHILE ANOTHER OF THE SEAT'S JOBS HOLDS THE
 // SEAT, and resumes it as the seat's next turn, ahead of the seat's mail.
 //
-// What a person saw: they answered a parked run from the Inbox and were told
-// `pending`, and nothing happened, twice, until the run's pause TTL took its
-// box. The answer had gone to the seat's INBOX, and the seat was busy coding:
-//
-//  1. run t1 parks on a question;
-//  2. the seat takes on another job, t2, which holds the seat, so its inbox is
-//     held and fetches nothing, an older notice waiting on it;
-//  3. the person answers t1, and the answer waits on the held inbox, behind the
-//     notice; when t2 ended, the notice ran first, and its turn could launch
-//     the next job and hold the seat again.
-//
-// The answer is addressed to a run, so it travels on the seat's control topic,
-// which no hold stops: it is RECORDED at once (the run reads `answered`, which
-// is what the person's Inbox settles on), its resume waits for t2 to stop
-// holding the seat, and the seat's held mail waits behind that resume.
+// Run t1 parks; t2 holds the seat, so its inbox waits behind an older notice
+// whose turn can hold the seat again. The answer therefore travels on the
+// seat's control topic, which no hold stops: recorded at once (`answered`),
+// resumed when t2 releases the seat, ahead of the held mail.
 //
 // Mutation: deliver to the inbox again and the run is never answered; drop the
 // coordinator's seat-coding refusal and t1 resumes beside t2's job; drop the

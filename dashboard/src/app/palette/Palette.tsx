@@ -101,7 +101,7 @@ import { DOCLET_SEARCH_BACKEND, useSearchQuery } from "~/lib/useSearchQuery.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { GITLET, needsWords } from "~/lib/access.ts";
 import { useQuiet } from "~/lib/useQuiet.ts";
-import { repoPath } from "~/lib/code.ts";
+import { isRepoPrefix, repoPath } from "~/lib/code.ts";
 import { groupHits, hitAt } from "~/lib/codeSearch.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useRecents, forgetAll } from "~/lib/recents.ts";
@@ -149,6 +149,7 @@ import {
   ARTIFACT_HITS,
   artifactHits,
   CODE_HITS,
+  CODE_PLACE_HITS,
   CODE_SEARCH_MIN,
   SEARCH_MIN,
   TASK_HITS,
@@ -157,11 +158,13 @@ import {
   destinationGroups,
   destinationHits,
   changeHits,
+  changeTitleHits,
   idHits,
   matchingSeats,
   matchingUnits,
   readSigil,
   recentHits,
+  repoHits,
   routeProject,
   routeTask,
   score,
@@ -374,6 +377,30 @@ export function CommandPalette({
     { q: codeTerm, limit: CODE_HITS },
     { enabled: wantsCode, refetchOnReconnect: "unreached" },
   );
+  // A REPOSITORY BY ITS NAME AND A CHANGE BY ITS TITLE, above the lines and from
+  // two characters: each one read of the replicated rows, not a scatter. A title
+  // is searched by its words, so a term holding none asks nothing.
+  const wantsPlaces =
+    served &&
+    ask.code &&
+    viewer.gitlet &&
+    !picking &&
+    scope === "code" &&
+    codeTerm.length >= SEARCH_MIN &&
+    codeTerm === term;
+  const repoPrefix = codeTerm.toLowerCase();
+  const wantsRepos = wantsPlaces && isRepoPrefix(repoPrefix);
+  const repos = useCodeQuery(
+    "code_repos",
+    { prefix: repoPrefix, limit: CODE_PLACE_HITS },
+    { enabled: wantsRepos },
+  );
+  const wantsTitles = wantsPlaces && CHANGE_WORD.test(codeTerm);
+  const titled = useCodeQuery(
+    "code_changes",
+    { text: codeTerm, limit: CODE_PLACE_HITS },
+    { enabled: wantsTitles, fill: CODE_PLACE_HITS },
+  );
   const pickingAgent = pick?.kind === "assign" || pick?.kind === "ask";
   const nameTerm = useDeferredValue(picking ? pickTerm : term);
   const wantsNames =
@@ -411,6 +438,8 @@ export function CommandPalette({
   const pageAnswer = useSettled(pages, searchTerm, wantsPages);
   const artifactAnswer = useSettled(artifacts, searchTerm, wantsArtifacts);
   const codeAnswer = useSettled(code, term, wantsCode);
+  const repoAnswer = useSettled(repos, term, wantsRepos);
+  const titleAnswer = useSettled(titled, term, wantsTitles);
   const nameAnswer = useSettled(names, nameTerm, wantsNames);
 
   // ---- the answer --------------------------------------------------------
@@ -1119,6 +1148,21 @@ export function CommandPalette({
       ]);
       push("sources", "Sources of the answer", sourceRows(drawn));
       push("search", "Search", asItems(searchHits(term, nav, runs)));
+      // CODE TOO, as a scope to go on in: its three questions are its own.
+      if (term.length >= SEARCH_MIN && runs.code && viewer.gitlet) {
+        push("code-scope", "Code", [
+          {
+            id: "code-scope",
+            icon: <SearchGlyph size="sm" />,
+            label: `Find “${term}” in code →`,
+            hint: "repositories by name, changes by title, and lines",
+            onSelect: () => {
+              editScope("code");
+              return false;
+            },
+          },
+        ]);
+      }
       // A SCOPE TO GO ON IN, NOT A MATCH: with nothing found above it, a row
       // first in the list is the one Enter takes, and Enter on a question then
       // left the reader in the artifacts scope rather than at an answer.
@@ -1157,6 +1201,8 @@ export function CommandPalette({
   } else if (scope === "artifacts") {
     push("artifacts", "Artifacts", asItems(artifactHits(artifactAnswer.data?.contents ?? [], nav)));
   } else if (scope === "code") {
+    push("repos", "Repositories", asItems(repoHits(repoAnswer.data?.repos ?? [], nav)));
+    push("changes", "Changes", asItems(changeTitleHits(titleAnswer.data?.changes ?? [], nav)));
     push("code", "Code", codeRows());
   } else if (scope === "agents") {
     for (const g of agentGroups(Infinity, true)) push(g.id, g.label, g.items);
@@ -1241,10 +1287,19 @@ export function CommandPalette({
       // WITHHELD FIRST, as Tasks and Pages are: no term a reader without
       // Gitlet types finds a line.
       if (codeWithheld) return codeWithheld;
-      if (term.length < CODE_SEARCH_MIN) return "Type three or more characters.";
-      if (codeAnswer.error) return "Code search did not run.";
-      if (!codeAnswer.data) return "Searching…";
-      return `No line matches “${term}” in what was searched.`;
+      if (term.length < SEARCH_MIN) return "Type two or more characters.";
+      // EACH QUESTION THIS TERM ASKS ONCE IT RESTS, and only those.
+      const asked = [
+        isRepoPrefix(term.toLowerCase()) && repoAnswer,
+        CHANGE_WORD.test(term) && titleAnswer,
+        term.length >= CODE_SEARCH_MIN && codeAnswer,
+      ].filter((a) => a !== false);
+      if (asked.some((a) => !a.data && !a.error)) return "Searching…";
+      if (asked.length > 0 && asked.every((a) => a.error)) return "Code search did not run.";
+      if (term.length < CODE_SEARCH_MIN) {
+        return `No repository or change matches “${term}”. Type three or more characters to search the lines.`;
+      }
+      return `No repository, change or line matches “${term}” in what was searched.`;
     }
     if (scope === "agents") return `Nobody in the chart matches “${term}”.`;
     return `Nothing matches “${term}”.`;
@@ -1488,13 +1543,16 @@ function themeOfRow(id: string | undefined) {
   return isThemeId(theme) ? theme : null;
 }
 
+/** A term the engine searches changes' words by holds one: two letters or digits. */
+const CHANGE_WORD = /[\p{L}\p{N}]{2}/u;
+
 /** What the footer says each scope searches. */
 const SCOPE_NOTES: Record<Exclude<ScopeId, "actions">, string> = {
   all: "Screens, tasks, pages, agents",
   tasks: "The company’s tasks",
   pages: "The knowledge base",
   artifacts: "Every artifact you can open",
-  code: "The lines of the repositories you read",
+  code: "Repositories, changes and lines you read",
   agents: "The org chart",
 };
 

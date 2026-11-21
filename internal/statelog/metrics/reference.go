@@ -5,12 +5,9 @@ import (
 	"strings"
 )
 
-// Reference renders the catalogue as the published markdown page.
-//
-// GENERATED, and a test regenerates and diffs — the same idiom schema/ uses,
-// and for the same reason: a reference maintained by hand is one that stops
-// matching the code, and a metric whose meaning lives only in the source is
-// one an operator cannot act on.
+// Reference renders the catalogue as the published markdown page, which
+// TestTheMetricsReferenceIsGenerated regenerates and diffs (package doc, "The
+// catalogue is written once").
 func Reference() string {
 	var b strings.Builder
 	b.WriteString(referenceHeader)

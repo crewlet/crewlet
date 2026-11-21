@@ -16,26 +16,15 @@ import (
 // A SLOW GITHUB IS NOT A TORN-DOWN PASS, and only the CONTEXT can tell them
 // apart.
 //
-// [AdoptSeatApps] abandons the whole roster when this pass is over, and
-// leaves one seat exactly as it was when GitHub could not answer. Those are
-// opposite reactions to what looks like one condition, and the guard that
-// chooses between them tests `ctx.Err() != nil`, never the error a call came
-// back with.
+// [AdoptSeatApps] abandons the roster when the pass is over, but leaves one
+// seat as it was when GitHub could not answer. The guard tests
+// `ctx.Err() != nil`, never the call's error: net/http gives a
+// [http.Client.Timeout] a `context.DeadlineExceeded` under a live parent, so
+// an `errors.Is` guard would fail every pass over a merely slow GitHub.
 //
-// The distinction is not theoretical, which is what this file is here to
-// keep true. net/http gives a [http.Client.Timeout] a `context.DeadlineExceeded`
-// of its own, under a parent context that is perfectly alive, so a guard
-// written as `errors.Is(err, context.DeadlineExceeded)` fires on every slow
-// GitHub, and every pass then fails over somebody's API being merely slow,
-// leaving each seat's record as stale as the slowness lasts.
-//
-// # It is an internal test because the timeout has to be real
-//
-// [AppClient] is built with [ClientTimeout], which is ten seconds: long
-// enough that no suite can wait for it. Reaching in to shorten it is the only
-// way to produce the ACTUAL error net/http produces rather than a
-// hand-written stand-in — and a hand-written one would prove nothing here,
-// since the whole claim is about what net/http does.
+// It is an internal test because the timeout has to be real: [ClientTimeout]
+// is ten seconds, and only shortening it produces the ACTUAL net/http error,
+// which a hand-written stand-in cannot prove anything about.
 
 // slowGitHubTimeout bounds the two requests this file makes.
 //

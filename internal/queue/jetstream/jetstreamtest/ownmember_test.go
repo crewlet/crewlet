@@ -13,39 +13,16 @@ import (
 
 // A MEMBER'S OWN CLIENT DISCOVERS NO PEER, AND DOES NOT OUTLIVE ITS MEMBER.
 //
-// Each node of an embedded fleet talks to the member in its own process. A
-// member used to be dialled over TCP at its client listener, which bound every
-// interface, and it advertised every peer's client URL — on the host's
-// external address — in the INFO it sent: a connection that took them into
-// its reconnect pool went to a peer the moment it dropped, for the rest of its
-// life on a slow-consumer drop and for good when its own member stopped, where
-// the node ran on through a peer with its member dead, the cluster a replica
-// short and nothing saying so. That reconnect is held by the dial ignoring what
-// it discovers; this case holds the rest: the node's connection is IN PROCESS,
-// its pool is this member alone and lists nothing discovered, and the member's
-// client listener — open only because routing needs it — is on loopback and
-// tells NO client of any peer.
-//
-// The CONTROL is a client with nats's own defaults dialling member 0's client
-// listener with the operator key — the one client that listener admits, the
-// nats tool on the member's host: it reads every peer the member advertises,
-// and before this change any client there read all of them.
-//
-// AND ONCE ITS MEMBER STOPS, it lands nowhere, decided by what the client will
-// reconnect to rather than by watching it for a while. Every attempt goes to a
-// server in the pool — over an in-process dial, to the member in this process
-// whatever the pool names — and the pool grows only by an INFO, which only a
-// connected reader takes. So the pool is read once the client has said it is
-// down, which it does on its way into its reconnects with its reader already
-// returned: nothing can add to the pool from there, and this member alone,
-// with nothing discovered, is a reconnect that cannot land on a peer. Five
-// seconds of watching for a peer's URL was a bet that a reconnect which could
-// land would have landed by then.
-//
-// Mutations: Cluster.NoAdvertise off → the control discovers the peers, red;
-// dial a clustered member over its client listener again → the in-process row,
-// red; drop IgnoreDiscoveredServers and NoAdvertise together → the node's pool,
-// read once it is down, red; reconnect for ever → the budget row, red.
+// A member advertises every peer's client URL, and a connection pooling them
+// reconnects to a peer when it drops: a node whose member died ran on through a
+// peer, a replica short. This holds that the node's connection is IN PROCESS,
+// its pool is this member alone, and the loopback client listener tells NO
+// client of any peer (the CONTROL, nats defaults, reads them all).
+// ONCE ITS MEMBER STOPS it lands nowhere, decided by the pool, not a wait: the
+// pool grows only by an INFO a connected reader takes.
+// Mutations: NoAdvertise off → control discovers peers; dial over the client
+// listener → in-process row; drop IgnoreDiscoveredServers and NoAdvertise →
+// pool row; reconnect for ever → budget row.
 func TestAMembersOwnClientDiscoversNoPeer(t *testing.T) {
 	t.Parallel()
 	c := StartCluster(t, 3, js.Config{})

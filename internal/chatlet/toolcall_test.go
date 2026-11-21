@@ -21,17 +21,15 @@ import (
 // A SEAT'S TURN SAYS EVERYTHING IT SAID, ONCE — end to end, from the model's
 // tool call to the rows.
 //
-// Nothing between the two is mocked: the seat's own chat tools behind the
-// authority gate, the tool surface a real turn's calls go through — which
-// keeps the run's call log — and the shipped store over a real broker. Every
-// half of the property lives in a different package, which is exactly why it
-// is asserted here rather than in any one of them: the store derives a
-// message's id from the key the tool hands it, the tool derives that key from
-// the turn and reads its repeat count from the log, and the surface is what
-// writes the log. A count read from anything the surface does not fill makes
-// every post of a turn its first, and a seat's second remark in one room is
-// then dropped as a duplicate of the first — a failure each package's own
-// tests pass straight over.
+// Nothing between the two is mocked: the seat's chat tools behind the authority
+// gate, the tool surface a real turn goes through (which keeps the run's call
+// log) and the shipped store over a real broker. The halves live in different
+// packages, so it is asserted here: the store derives a message's id from the
+// key the tool hands it, the tool derives that key from the turn and reads its
+// repeat count from the log, and the surface writes the log. A count read from
+// anything the surface does not fill makes every post its first, and a seat's
+// second remark in one room is dropped as a duplicate of the first, which each
+// package's own tests pass over.
 func TestASeatsTurnSaysEverythingItSaidOnce(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents())
@@ -170,20 +168,15 @@ func TestASeatSaysOneThingInTwoPlacesInBoth(t *testing.T) {
 	}
 }
 
-// A SEAT THAT LEAVES A ROOM AND JOINS IT AGAIN IS IN IT — and one that joins
-// and leaves again is out of it — end to end, for the reason the cases above
-// are: the halves live in three packages.
+// A SEAT THAT LEAVES A ROOM AND JOINS IT AGAIN IS IN IT, and one that joins and
+// leaves again is out of it, end to end: the halves live in three packages.
 //
-// join_channel and leave_channel are two tools writing ONE membership, and a
-// repeat count kept per tool cannot see the other one: the second join of
-// join, leave, join is its tool's first call after nothing different, so it
-// would derive the first join's operation, the ledger would answer it as that
-// join's retry — `joined`, at the first join's revision, with nothing
-// published — and the seat would stay outside the room. The pair is counted as
-// one family ([chatlet.CallFamily]), so the leave raises the second join's count.
-//
-// A RE-RUN of the same calls still publishes nothing, because the family's
-// counts are a function of the calls and a re-run makes the same ones.
+// join_channel and leave_channel write ONE membership, and a repeat count kept
+// per tool cannot see the other: join, leave, join would derive the second
+// join as the first's operation, the ledger would answer it as that join's
+// retry (`joined`, nothing published) and the seat would stay outside. The pair
+// is one family ([chatlet.CallFamily]), so the leave raises the second join's
+// count. A RE-RUN of the same calls still publishes nothing.
 func TestASeatThatRejoinsARoomIsInIt(t *testing.T) {
 	t.Parallel()
 	join, leave := chatlet.JoinChannelTool, chatlet.LeaveChannelTool

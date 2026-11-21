@@ -15,7 +15,7 @@ import (
 // removalDoc is a company whose models are named every way a removal has to
 // answer: pm names none (its jobs run on `default`), qa names codex-review for
 // its reviewing flat and sonnet as its executor, backend names codex-review
-// inside its `llm` mapping, and the assistant chats on aux with deep work on
+// inside its `llm` mapping, and Ask Crewlet runs on aux
 // sonnet.
 const removalDoc = `
 name: Acme
@@ -46,10 +46,7 @@ roles:
       default: sonnet
       subagent: codex-review
 assistant:
-  enabled: true
-  llm: [aux]
-  deep_work:
-    llm: sonnet
+  model: aux
 `
 
 func removeModel(t *testing.T, s *surface, key, query, body string, headers map[string]string) (int, map[string]any) {
@@ -112,6 +109,42 @@ func TestARemovalNamesEveryDependantItLeavesUnanswered(t *testing.T) {
 	// NOTHING MOVED.
 	if _, ok := activeCompany(t, s).Providers.LLM["codex-review"]; !ok {
 		t.Error("a refused removal removed the entry")
+	}
+}
+
+// WHAT NAMES A MODEL IS READ, NOT REFUSED: the list a removal's refusal
+// carries, answered 200 by a read with no write asked, so a page opening its
+// removal draws the list without a failed request in every browser's log.
+func TestAModelsReferencesAreReadWithNoWriteAsked(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, removalDoc)
+
+	res := s.do(t, http.MethodGet, "/config/llm-providers/codex-review/references", "", nil)
+	body := decode(t, res)
+	if res.Code != http.StatusOK {
+		t.Fatalf("references = %d %v, want 200", res.Code, body)
+	}
+	refs, _ := body["references"].([]any)
+	if len(refs) != 2 {
+		t.Fatalf("references = %v, want qa's reviewing and backend's delegated tasks", refs)
+	}
+	// THE SAME LIST the dry run's refusal names, reference for reference.
+	_, refused := removeModel(t, s, "codex-review", "?dry_run=true", "", nil)
+	read, _ := json.Marshal(refs)
+	said, _ := json.Marshal(refused["references"])
+	if string(read) != string(said) {
+		t.Errorf("read %s, refusal %s: want one list", read, said)
+	}
+	// A MODEL NOTHING NAMES reads an empty list, and one that is not there is 404.
+	res = s.do(t, http.MethodGet, "/config/llm-providers/default/references", "", nil)
+	if body = decode(t, res); res.Code != http.StatusOK {
+		t.Errorf("an unnamed model = %d %v", res.Code, body)
+	} else if refs, ok := body["references"].([]any); !ok || len(refs) != 0 {
+		t.Errorf("an unnamed model's references = %v, want []", body["references"])
+	}
+	if res = s.do(t, http.MethodGet, "/config/llm-providers/nope/references", "", nil); res.Code != http.StatusNotFound {
+		t.Errorf("an absent model = %d, want 404", res.Code)
 	}
 }
 
@@ -225,43 +258,104 @@ func TestARemovalSaysWhereAnUnwrittenJobMoves(t *testing.T) {
 	}
 }
 
-// THE ASSISTANT'S CHAT IS NEVER LEFT EMPTY BY ACCIDENT.
-//
-// While the assistant is on, a removal that leaves its chat with no model is
-// refused at `assistant.llm` unless the write turns the assistant off itself,
-// and its deep work left unset removes the block.
-func TestARemovalTurnsTheAssistantOffOnlyWhenAsked(t *testing.T) {
+// ASK CREWLET'S MODEL IS ANSWERED LIKE ANY OTHER REFERENCE: left unanswered, the
+// removal is refused naming `assistant.model`; repointed, Ask Crewlet runs on
+// the new model; repointed to nothing, it is off, said out loud by the write.
+func TestRemovingAskCrewletsModelTurnsItOffOnlyWhenTheWriteSaysSo(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
 	s.seed(t, removalDoc)
-	clear := `{"repoint": [{"at": {"seat": "qa", "job": "review"}, "to": null},
-		{"at": {"assistant": "chat"}, "to": null}]}`
+	review := `{"at": {"seat": "qa", "job": "review"}, "to": null}`
 
-	code, body := removeModel(t, s, "aux", "?dry_run=true", clear, nil)
+	code, body := removeModel(t, s, "aux", "?dry_run=true", `{"repoint": [`+review+`]}`, nil)
 	if code != http.StatusUnprocessableEntity {
-		t.Fatalf("an emptied chat = %d %v, want 422", code, body)
+		t.Fatalf("Ask Crewlet's model left unanswered = %d %v, want 422", code, body)
 	}
 	problems, _ := body["problems"].([]any)
-	p, _ := problems[0].(map[string]any)
-	if segs, _ := json.Marshal(p["segments"]); string(segs) != `["assistant","llm"]` {
-		t.Errorf("problem = %v, want it at assistant.llm", p)
+	var at []string
+	for _, raw := range problems {
+		p, _ := raw.(map[string]any)
+		segs, _ := json.Marshal(p["segments"])
+		at = append(at, string(segs))
+	}
+	if !slices.Contains(at, `["assistant","model"]`) {
+		t.Errorf("problems at %v, want one at assistant.model", at)
 	}
 
-	off := strings.Replace(clear, `]}`, `], "assistant_off": true}`, 1)
-	code, body = removeModel(t, s, "aux", "", off, map[string]string{"X-Summary": "remove aux"})
-	if code != http.StatusCreated {
-		t.Fatalf("with assistant_off = %d %v", code, body)
-	}
-	if activeCompany(t, s).Assistant.On() {
-		t.Error("the assistant is still on")
-	}
-
-	code, body = removeModel(t, s, "sonnet", "?dry_run=true", `{"repoint": [
-		{"at": {"seat": "qa", "job": "executor"}, "to": "default"},
-		{"at": {"seat": "backend", "job": "executor"}, "to": "default"},
-		{"at": {"assistant": "deep_work"}, "to": null}]}`, nil)
+	code, body = removeModel(t, s, "aux", "?dry_run=true", `{"repoint": [`+review+`,
+		{"at": {"assistant": "chat"}, "to": "default"}]}`, nil)
 	if code != http.StatusOK {
-		t.Errorf("removing deep work's model with its block = %d %v", code, body)
+		t.Errorf("repointing Ask Crewlet's model = %d %v", code, body)
+	}
+
+	code, body = removeModel(t, s, "aux", "", `{"repoint": [`+review+`,
+		{"at": {"assistant": "chat"}, "to": null}]}`, map[string]string{"X-Summary": "remove aux"})
+	if code != http.StatusCreated {
+		t.Fatalf("repointing Ask Crewlet's model to nothing = %d %v", code, body)
+	}
+	if after := activeCompany(t, s); after.Assistant.On() || after.Assistant.Model != "" {
+		t.Errorf("Ask Crewlet still runs on %q", after.Assistant.Model)
+	}
+}
+
+// THE ADVISOR'S MODEL IS ANSWERED LIKE ASK CREWLET'S: left unanswered, the
+// removal is refused naming `advisor.model` rather than failing admission on a
+// model the document no longer holds; repointed, the Advisor explains with the
+// new model; repointed to nothing, its checks run with no model.
+func TestRemovingTheAdvisorsModelMovesItOrRunsItWithNone(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, removalDoc+"advisor:\n  model: aux\n")
+	answered := `{"at": {"seat": "qa", "job": "review"}, "to": null},
+		{"at": {"assistant": "chat"}, "to": "default"}`
+
+	code, body := removeModel(t, s, "aux", "?dry_run=true", `{"repoint": [`+answered+`]}`, nil)
+	if code != http.StatusUnprocessableEntity {
+		t.Fatalf("the Advisor's model left unanswered = %d %v, want 422", code, body)
+	}
+	problems, _ := body["problems"].([]any)
+	var at []string
+	for _, raw := range problems {
+		p, _ := raw.(map[string]any)
+		segs, _ := json.Marshal(p["segments"])
+		at = append(at, string(segs))
+	}
+	if !slices.Contains(at, `["advisor","model"]`) {
+		t.Errorf("problems at %v, want one at advisor.model", at)
+	}
+
+	code, body = removeModel(t, s, "aux", "?dry_run=true", `{"repoint": [`+answered+`,
+		{"at": {"advisor": "findings"}, "to": "default"}]}`, nil)
+	if code != http.StatusOK {
+		t.Errorf("repointing the Advisor's model = %d %v", code, body)
+	}
+
+	code, body = removeModel(t, s, "aux", "", `{"repoint": [`+answered+`,
+		{"at": {"advisor": "findings"}, "to": null}]}`, map[string]string{"X-Summary": "remove aux"})
+	if code != http.StatusCreated {
+		t.Fatalf("repointing the Advisor's model to nothing = %d %v", code, body)
+	}
+	if after := activeCompany(t, s); after.Advisor.Model != "" {
+		t.Errorf("the Advisor still explains with %q", after.Advisor.Model)
+	}
+}
+
+// AN ADDRESS NAMES ONE PLACE: a seat, Ask Crewlet or the Advisor, never two.
+func TestARepointAddressesOnePlace(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, removalDoc+"advisor:\n  model: aux\n")
+	for _, at := range []string{
+		`{"assistant": "chat", "advisor": "findings"}`,
+		`{"seat": "qa", "job": "review", "advisor": "findings"}`,
+		`{"advisor": "explanations"}`,
+		`{"seat": "qa", "job": "advisor"}`,
+	} {
+		code, body := removeModel(t, s, "aux", "?dry_run=true",
+			`{"repoint": [{"at": `+at+`, "to": null}]}`, nil)
+		if code != http.StatusBadRequest {
+			t.Errorf("repoint at %s = %d %v, want 400", at, code, body)
+		}
 	}
 }
 
@@ -300,8 +394,7 @@ func TestARemovalRefusesARepointTheCompanyCannotRun(t *testing.T) {
 	// CODEX CANNOT RUN AN EXECUTOR: the whole document is validated.
 	code, body = removeModel(t, s, "sonnet", "?dry_run=true", `{"repoint": [
 		{"at": {"seat": "qa", "job": "executor"}, "to": "codex-review"},
-		{"at": {"seat": "backend", "job": "executor"}, "to": "default"},
-		{"at": {"assistant": "deep_work"}, "to": null}]}`, nil)
+		{"at": {"seat": "backend", "job": "executor"}, "to": "default"}]}`, nil)
 	if code != http.StatusUnprocessableEntity || body["error"] != "validation_error" {
 		t.Fatalf("an executor moved to codex = %d %v, want 422 validation_error", code, body)
 	}
@@ -414,8 +507,7 @@ func TestARemovalDoesNotWarnAboutAJobThatFollowsItsExecutor(t *testing.T) {
 	s.seed(t, removalDoc)
 	code, body := removeModel(t, s, "sonnet", "?dry_run=true", `{"repoint": [
 		{"at": {"seat": "qa", "job": "executor"}, "to": "aux"},
-		{"at": {"seat": "backend", "job": "executor"}, "to": "aux"},
-		{"at": {"assistant": "deep_work"}, "to": null}]}`, nil)
+		{"at": {"seat": "backend", "job": "executor"}, "to": "aux"}]}`, nil)
 	if code != http.StatusOK {
 		t.Fatalf("dry run = %d %v", code, body)
 	}

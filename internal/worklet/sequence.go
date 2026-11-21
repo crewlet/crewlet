@@ -583,6 +583,9 @@ func checkCreateAsk(task *Task, ask *Comment) error {
 	case ask.Answers != nil, ask.Choice != "", ask.ReplyTo != nil:
 		return invalid("the ask filed with task %s answers or replies "+
 			"to a comment, and a task that does not exist yet has none", task.ID)
+	case strings.TrimSpace(ask.Body) == "":
+		return invalid("the ask filed with task %s says nothing: a question "+
+			"carries its words", task.ID)
 	case ask.Task != "" && ask.Task != task.ID:
 		return invalid("the ask filed with task %s names task %s",
 			task.ID, ask.Task)

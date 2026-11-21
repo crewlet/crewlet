@@ -1,6 +1,7 @@
 package harnessprofile
 
 import (
+	"maps"
 	"strings"
 	"testing"
 
@@ -47,18 +48,42 @@ func TestASignInOrLimitFieldTheEngineCannotUseIsRefused(t *testing.T) {
 				"device_code_patterns": map[string]any{"url": `https://\S+`, "code": `([A-Z]{4})`}},
 			want: "no capture group",
 		},
-		"a reset event matched on its type alone": {
-			overrides: map[string]any{"limit_reset_events": []any{map[string]any{
-				"match":     []any{map[string]any{"path": []any{"type"}, "equals": "rate_limit_event"}},
-				"resets_at": map[string]any{"path": []any{"resetsAt"}, "unit": "epoch"}}}},
-			want: "limit_reset_events[0].match",
+		"a limit report that names no event type": {
+			overrides: map[string]any{"limit_reports": []any{limitReport(map[string]any{
+				"match": []any{map[string]any{"path": []any{"kind"}, "equals": "rate_limit_event"}}})}},
+			want: "limit_reports[0].match",
+		},
+		"a limit report with no state map": {
+			overrides: map[string]any{"limit_reports": []any{limitReport(map[string]any{
+				"state": map[string]any{"path": []any{"status"}}})}},
+			want: "limit_reports[0].state needs a path and a map",
+		},
+		"a limit report state that is no state": {
+			overrides: map[string]any{"limit_reports": []any{limitReport(map[string]any{
+				"state": map[string]any{"path": []any{"status"}, "map": map[string]any{"allowed": "fine"}}})}},
+			want: `limit_reports[0].state.map["allowed"]`,
+		},
+		"a limit report window that is no window": {
+			overrides: map[string]any{"limit_reports": []any{limitReport(map[string]any{
+				"window": map[string]any{"path": []any{"kind"}, "map": map[string]any{
+					"monthly": map[string]any{"window": "monthly"}}}})}},
+			want: `limit_reports[0].window.map["monthly"].window`,
+		},
+		"a model family on a plan-wide window": {
+			overrides: map[string]any{"limit_reports": []any{limitReport(map[string]any{
+				"window": map[string]any{"path": []any{"kind"}, "map": map[string]any{
+					"seven_day": map[string]any{"window": "weekly", "model": "opus"}}}})}},
+			want: `limit_reports[0].window.map["seven_day"].model`,
 		},
 		"a reset in no unit": {
-			overrides: map[string]any{"limit_reset_events": []any{map[string]any{
-				"match": []any{map[string]any{"path": []any{"type"}, "equals": "rate_limit_event"},
-					map[string]any{"path": []any{"status"}, "equals": "rejected"}},
-				"resets_at": map[string]any{"path": []any{"resetsAt"}, "unit": "fortnights"}}}},
+			overrides: map[string]any{"limit_reports": []any{limitReport(map[string]any{
+				"resets_at": map[string]any{"path": []any{"resetsAt"}, "unit": "fortnights"}})}},
 			want: "resets_at.unit",
+		},
+		"an object of windows that reads nothing": {
+			overrides: map[string]any{"limit_reports": []any{limitReport(map[string]any{
+				"windows": map[string]any{"path": []any{"windows"}}})}},
+			want: "limit_reports[0].windows reads neither",
 		},
 		"a window that is no window": {
 			overrides: map[string]any{"limit_windows": []any{map[string]any{"contains": "weekly limit", "window": "monthly"}}},
@@ -121,4 +146,17 @@ func TestNoLoginFileMayTakeTheInstallRecordsName(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), LoginInstallFile) {
 		t.Errorf("Load = %v, want a refusal naming %s", err, LoginInstallFile)
 	}
+}
+
+// limitReport is a well-formed limit report with the given fields replaced.
+func limitReport(with map[string]any) map[string]any {
+	out := map[string]any{
+		"match": []any{map[string]any{"path": []any{"type"}, "equals": "rate_limit_event"}},
+		"state": map[string]any{"path": []any{"status"}, "map": map[string]any{
+			"allowed": "ok", "rejected": "reached"}},
+		"window": map[string]any{"path": []any{"kind"}, "map": map[string]any{
+			"five_hour": map[string]any{"window": "session", "hours": 5}}},
+	}
+	maps.Copy(out, with)
+	return out
 }

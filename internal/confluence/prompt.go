@@ -9,17 +9,11 @@ import (
 
 // Prompt is what a Confluence event asks of the seat it reached.
 //
-// # A wiki change is rarely urgent, and the prompt has to say so
-//
-// Every other third-party app's event is somebody asking for something. A page edit
-// usually is not: it is documentation moving, and the right answer is
-// almost always to read it, decide it changes nothing, and stay silent. A
-// prompt that framed it as a request would produce a stream of "noted,
-// thanks" comments on a wiki — which is worse than the noise, because it
-// trains a reader to ignore the page's comments entirely.
-//
-// The one exception is a MENTION, which is somebody asking a question on a
-// page, and that is the one routing this prompt frames as an ask.
+// A page edit is usually documentation moving, not a request: the right answer
+// is almost always to read it and stay silent. Framed as a request it would
+// produce "noted, thanks" comments, which train readers to ignore the page's
+// comments. The one exception is a MENTION, somebody asking a question, the
+// one routing this prompt frames as an ask.
 type Prompt struct{}
 
 var _ notify.Prompt = Prompt{}

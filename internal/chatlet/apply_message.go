@@ -13,27 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE TRANSCRIPT'S CASES: post, edit, delete, react — and the two gestures
-// that destroy what was said, erase and prune.
+// THE TRANSCRIPT'S CASES: post, edit, delete, react, and the destroying erase and prune.
 //
-// Nothing here arbitrates, and nothing here commutes either: a message record
-// is SEQUENCED ([statelog.PatternSequenced]). It carries no expectation —
-// paying for arbitration would serialise the single hottest subject in the
-// company behind itself, and turn a lost race into a message somebody typed
-// and lost, which is the one failure a chat system may not have — so the log
-// orders it and this applier DECIDES it, at its position, from the record and
-// the rows it holds there: a post into a room archived ahead of it, a reaction
-// that would be the message's thirty-third emoji, an edit of a message taken
-// back ahead of it. Every node applies the same records in the same order, so
-// every node reaches the same decision, and each is written down
-// ([writeVerdict]) for the writer to read back — see verdict.go.
+// A message record is SEQUENCED ([statelog.PatternSequenced]) with no
+// expectation: arbitration would serialise the hottest subject in the company
+// and turn a lost race into a message somebody typed and lost. So the log orders
+// it and this applier DECIDES it at its position from the rows it holds (a post
+// into an archived room, a thirty-third emoji), the same on every node, and
+// writes the verdict ([writeVerdict]; see verdict.go).
 //
-// Beside the verdict, the INSERT'S OWN ID GATE: every side effect a post has —
-// the room's sequence, the mentions, the thread rows — is issued only when the
-// message row was NEW, exactly as the tracker's turn records spend only when
-// its own insert landed. A redelivery therefore consumes nothing and repairs
-// nothing, which is what makes this idempotent at a position without a version
-// to compare.
+// THE INSERT'S OWN ID GATE: a post's side effects (sequence, mentions, thread
+// rows) are issued only when the message row was NEW, so a redelivery changes
+// nothing: idempotent without a version.
 
 // applyMessage writes one record on a room's message stream, and its verdict.
 //
@@ -86,18 +77,14 @@ func (a *Applier) applyMessage(ctx context.Context, tx *sql.Tx, at applyContext)
 // applyPost writes one message, the number it landed at, and everything
 // derived from it.
 //
-// # The per-channel sequence, and why the applier mints it
-//
 // `channel_seq` comes from the ROOM'S OWN high-water mark, read in this
 // transaction and moved only when the insert was new. A writer cannot carry it
-// — sequenced records form no expectation, so two writers in one room would
-// compute the same number — and every data node can, because every data node
-// applies the same records in the same order.
+// (two would compute the same number); every data node can, applying the same
+// records in the same order.
 //
-// The number is CONTIGUOUS per room, which is what lets a browser tell a live
-// frame it can apply from a hole it must refetch: holding 41 and handed 43, it
-// asks for 42 rather than for the room. That contiguity is also why a post's
-// declared scope is its CHANNEL — see the package doc.
+// It is CONTIGUOUS per room, so a browser can tell a live frame it can apply
+// from a hole it must refetch (holding 41, handed 43, it asks for 42). That is
+// also why a post's declared scope is its CHANNEL; see the package doc.
 func (a *Applier) applyPost(ctx context.Context, tx *sql.Tx, at applyContext,
 	p MessagePost) (int, Verdict, error) {
 
@@ -357,26 +344,17 @@ func (a *Applier) applyEdit(ctx context.Context, tx *sql.Tx, at applyContext,
 		// would replace a newer edit's set with an older one's.
 		return 0, VerdictRepeated, nil
 	}
-	// THE ROWS ARE BROUGHT TO THE RECORD'S WHOLE SET — which it carries
-	// whole because a delta cannot rebuild them on a replay from zero — and
-	// a handle the edit still names KEEPS ITS ROW, version and instant
-	// included. A mention row is the moment somebody was named, and fixing
-	// the words around a name is not naming them again: an edit that
-	// cleared every row and wrote them again stamped each at the edit, so
-	// every typo fixed lifted the mentions it kept to the top of the feed —
-	// as though they were news, to a reader who had already seen them — and
-	// above every cursor a reader paging back already held, which is the gap
-	// a keyset exists to prevent. Only a handle the edit no longer names
-	// loses its row, and one the words before it did not name is written at
-	// this record's position and instant by [writeMentions]' `ON CONFLICT DO
-	// NOTHING` — which is when that person WAS named, and the moment
-	// [Store.Edit] wakes them for. Every data node applies the same records in the
-	// same order, so every node keeps and adds the same rows.
+	// THE ROWS ARE BROUGHT TO THE RECORD'S WHOLE SET (carried whole because a
+	// delta cannot rebuild them on a replay from zero), and a handle the edit
+	// still names KEEPS ITS ROW, version and instant: a mention row is the moment
+	// somebody was named, and fixing a typo is not naming them again. Clearing and
+	// rewriting would lift kept mentions to the top of the feed and above cursors
+	// readers already hold. Only an unnamed handle loses its row; a newly named
+	// one is written at this record's position and instant by [writeMentions]'
+	// `ON CONFLICT DO NOTHING`, the moment [Store.Edit] wakes them for.
 	//
-	// WHAT THE MESSAGE NAMED IS READ FROM ITS ROWS before they move, because
-	// the two differences below are both taken against it: the rows are what
-	// the feed and the follows derive from, so they are the set an edit
-	// changes.
+	// WHAT THE MESSAGE NAMED IS READ FROM ITS ROWS before they move: both
+	// differences below are taken against it.
 	before, err := namedBy(ctx, tx, at, message.ID)
 	if err != nil {
 		return 0, "", err
@@ -466,17 +444,13 @@ func (a *Applier) applyDelete(ctx context.Context, tx *sql.Tx, at applyContext,
 	if rows == 0 {
 		return 0, VerdictRepeated, nil
 	}
-	// THE MENTIONS GO WITH THE BODY. A mention row IS the mention feed, and
-	// the feed is where a person goes to find what they were asked: a
-	// message taken back asks nothing and has no words left to read, so a
-	// tombstone kept there would be an entry pointing at a blank — and
-	// would go on telling the person they were named in words the author
-	// withdrew, or a moderator took down. The room keeps the tombstone,
-	// because a thread hangs off it; the feed has nothing hanging off it.
+	// THE MENTIONS GO WITH THE BODY. A mention row IS the mention feed; a
+	// tombstone kept there would point at a blank and keep telling a person they
+	// were named in words the author withdrew or a moderator took down. The room
+	// keeps the tombstone because a thread hangs off it; the feed has nothing.
 	//
-	// THE REACTIONS DO NOT. They are other people's marks ON the message
-	// rather than anything derived from its text, and they go when the row
-	// goes — with the erase, or with the prune.
+	// THE REACTIONS DO NOT: they are other people's marks ON the message, not
+	// derived from its text, and go when the row goes (erase or prune).
 	//
 	// WHOM IT NAMED IS READ FIRST, for the follows those names gave.
 	named, err := namedBy(ctx, tx, at, message.ID)
@@ -590,20 +564,15 @@ func (a *Applier) applyErase(ctx context.Context, tx *sql.Tx, at applyContext,
 
 	rows := 0
 	for _, id := range p.MessageIDs {
-		// A MESSAGE ANOTHER RECORD ALREADY ERASED IS LEFT ALONE, and
-		// what that buys is the gesture's COST: without it a repeated
-		// 250-id erase issues four statements per id to remove rows
-		// that are already gone. The attribution is made permanent by
-		// the marker's own conflict clause below rather than by this —
-		// the first erasure is the one the marker records, and
-		// the two guards are deliberately both here because one of
-		// them is structural (a marker insert with no conflict clause
-		// would abort the transaction on every node) and the other is
-		// the rule in one sentence.
+		// A MESSAGE ANOTHER RECORD ALREADY ERASED IS LEFT ALONE, for the
+		// gesture's COST: a repeated 250-id erase would issue four statements
+		// per id to remove rows already gone. The first erasure is the one the
+		// marker records, by its own conflict clause below; both guards stay
+		// because that clause is structural (an insert without it would abort
+		// the transaction on every node) and this one is the rule.
 		//
-		// THE RECORD'S OWN REDELIVERY IS EXCEPTED, by operation id, so
-		// it re-asserts its own effect rather than reading it as
-		// somebody else's.
+		// THE RECORD'S OWN REDELIVERY IS EXCEPTED, by operation id, so it
+		// re-asserts its own effect rather than reading it as somebody else's.
 		erased, err := messageErased(ctx, tx, id, at.record.OpID)
 		if err != nil {
 			return 0, err
@@ -778,31 +747,15 @@ func namedBy(ctx context.Context, tx *sql.Tx, at applyContext,
 // unfollowUnnamed takes back the follow being named gave each handle in one
 // thread, wherever nothing left in that thread names them.
 //
-// A FOLLOW IS DERIVED FROM THE THREAD'S MENTIONS, as participation is from its
-// messages ([dropThreadParticipation]), so it is recomputed from them rather
-// than kept as a standing grant: being named is what subscribes you
-// ([writeFollows]), and a name taken back — by an edit that dropped it, a
-// delete, an erase — takes the subscription with it. Left behind, a colleague
-// named by mistake and corrected away a minute later would be woken by every
-// reply the thread ever had, each its own launch in a box, with no gesture
-// in this build's vocabulary to stop it.
+// A follow is derived from the thread's mentions ([writeFollows]); left behind,
+// a colleague named by mistake would be woken by every reply, with no gesture to stop it.
 //
-// IT IS THE THREAD'S QUESTION, NOT THE MESSAGE'S. A follow is keyed on the
-// thread, so a handle the root or another reply still names keeps it: the
-// check runs after the caller has moved this message's own rows, and reads the
-// thread's root and replies as two lookups for [dropThreadParticipation]'s
-// reason — the root carries an empty `thread_root`, and one predicate over both
-// is an OR the planner drives on neither index.
+// IT IS THE THREAD'S QUESTION, NOT THE MESSAGE'S: a handle the root or another
+// reply still names keeps its follow. Root and replies are two lookups, for
+// [dropThreadParticipation]'s reason (an OR over both uses neither index).
 //
-// THE ROW IS TAKEN BACK BY ITS KEY ALONE. Every row in this table is a
-// `mention` follow — [writeFollows] is its only producer — so the key names
-// exactly the row this derivation wrote. And it has to be the key alone: a
-// term on the unindexed `reason` turns the planner off the primary key and
-// onto `chat_follows_prune_idx`, a walk of every follow in the room for each
-// name taken back ([unfollowStatement]).
-//
-// Every data node applies the same records in the same order against the same
-// rows, so every data node takes back exactly the same follows.
+// TAKEN BACK BY KEY ALONE: a term on the unindexed `reason` moves the planner
+// onto `chat_follows_prune_idx`, a walk of the room's follows ([unfollowStatement]).
 func unfollowUnnamed(ctx context.Context, tx *sql.Tx, at applyContext,
 	channelID, root string, handles []string) (int, error) {
 
@@ -887,22 +840,16 @@ func threadNames(ctx context.Context, tx *sql.Tx, at applyContext,
 
 // applyPrune removes everything in a room stored before a cutoff instant.
 //
-// # Why a record rather than a sweep
+// A record rather than a sweep: "older than a year" on each node's own clock
+// deletes a different set per node, unreported. The cutoff is one number on the
+// log, compared against `created_at`, the BROKER'S stored instant.
 //
-// "Older than a year" evaluated against each node's own clock deletes a
-// different set on every node, for ever, and nothing would ever report it. The
-// cutoff is one number on the log, compared against `created_at` — which is
-// the BROKER'S own stored instant rather than anything a writer chose — so
-// every node deletes exactly the same rows at exactly the same position.
+// STRICTLY BEFORE ([Prune]): a record deleting its own boundary instant would
+// remove a message a second prune at the same cutoff would not.
 //
-// STRICTLY BEFORE, which is what [Prune] states: a cutoff is a boundary rather
-// than a row, and a record that deleted its own boundary instant would remove
-// a message a second prune at the same cutoff would not.
-//
-// EVERY TABLE IS RANGED ON ITS OWN COLUMN, and each of those columns is a copy
-// of the parent message's — `message_at`, `root_at` — carried precisely so
-// this delete is an index seek rather than a join the planner walks inside the
-// transaction holding this store's only writer.
+// EVERY TABLE IS RANGED ON ITS OWN COLUMN (`message_at`, `root_at`: copies of
+// the parent message's), so this delete is an index seek, not a join walked
+// inside the transaction holding the store's only writer.
 func (a *Applier) applyPrune(ctx context.Context, tx *sql.Tx, at applyContext,
 	p Prune) (int, error) {
 
@@ -1005,23 +952,16 @@ func dropUnnamedMentions(ctx context.Context, tx *sql.Tx, messageID string,
 
 // writeMentions writes one row per handle a message named.
 //
-// THIS IS THE @-MENTION FEED. There is no second mailbox table and no
-// per-viewer notification row: a mention is a fact about the message, the feed
-// is a range over `chat_mentions_handle_idx`, and an unread count is a counted
-// range above a cursor that lives in coordination rather than here.
+// THIS IS THE @-MENTION FEED: a range over `chat_mentions_handle_idx`, with no
+// mailbox or per-viewer row; unread is a count above a cursor in coordination.
 //
-// A ROW IS STAMPED WITH THIS RECORD — its position and its broker instant —
-// and never restamped: `ON CONFLICT DO NOTHING` leaves a handle an earlier
-// record named exactly where it was. So the feed orders by when somebody was
-// named and shows that same moment beside it, which for a handle an edit
-// named is the edit's rather than the message's: a row placed at the top of
-// the feed and dated the morning the words were first said reads as a feed
-// out of order.
+// A ROW IS STAMPED WITH THIS RECORD (position and broker instant) and never
+// restamped: `ON CONFLICT DO NOTHING` leaves an earlier record's handle alone,
+// so a handle an edit named is dated the edit's.
 //
-// A MENTION OF SOMEBODY WHO IS NOT IN THE ROOM IS STILL A ROW. Whether it
-// woke them is the routing's answer and it rides the record; what the message
-// SAID is this row, and a feed built from the woken set alone would render a
-// message as though it had never named them.
+// A MENTION OF SOMEBODY NOT IN THE ROOM IS STILL A ROW: whether it woke them is
+// the routing's answer; a feed built from the woken set would render a message
+// as though it never named them.
 func writeMentions(ctx context.Context, tx *sql.Tx, at applyContext,
 	message Message) (int, error) {
 
@@ -1083,15 +1023,14 @@ func writeReceipts(ctx context.Context, tx *sql.Tx, at applyContext,
 // receipts of its AUTHOR on earlier messages in its thread, or, in a direct
 // conversation, on any earlier message in it.
 //
-// WHAT COUNTS AS AN ANSWER is the reply a person can see: the seat speaking in
-// the thread the message started or sits in. In a named room a seat's post at
-// the top level is a remark of its own, not an answer to somebody's thread; a
-// direct conversation exists only between its parties, so anything the seat
-// says in it after the message answers it.
+// AN ANSWER is the reply a person can see: the seat speaking in the thread the
+// message started or sits in. In a named room a seat's top-level post is a
+// remark of its own; a direct conversation exists only between its parties, so
+// anything the seat says in it afterwards answers.
 //
-// ON `chat_receipts_open_idx`, which holds only the receipts still waiting, so
-// a post reads the few its author still owes in this room. Every value is the
-// record's or the room's minted sequence, so every node marks the same rows.
+// ON `chat_receipts_open_idx`, which holds only receipts still waiting, so a
+// post reads the few its author owes in this room. Every value is the record's
+// or the room's minted sequence, so every node marks the same rows.
 func answerReceipts(ctx context.Context, tx *sql.Tx, at applyContext, kind Kind,
 	message Message, seq int64) (int, error) {
 
@@ -1168,25 +1107,15 @@ func reachedHandles(r *Reach) []string {
 
 // writeThreadRows derives who has spoken in a thread and who follows it.
 //
-// # Two tables, because they answer two questions
+// A PARTICIPANT has spoken and is reached as [ReasonReply]; a FOLLOWER is NAMED
+// and is reached as [ReasonFollow]. Collapsing them would make every remark a
+// standing subscription. Both are DERIVED by the applier (facts about rows, not
+// claims a writer can make) and RECOMPUTED when their source rows go
+// ([dropThreadParticipation], [unfollowUnnamed]).
 //
-// A PARTICIPANT has spoken in the thread, and a reply reaches them as
-// [ReasonReply], which obliges nothing. A FOLLOWER is NAMED in it, and a
-// reply reaches them as [ReasonFollow] — also unaddressed, because a standing
-// arrangement is not somebody speaking to you. Collapsing the two would make
-// every remark in a thread a standing subscription to it.
-//
-// BOTH ARE DERIVED BY THE APPLIER rather than authored by the writer, for the
-// reason the schema states: participation and subscription are facts about
-// ROWS rather than claims a record can make, and a writer stating them would
-// be stating what it read in another transaction. Being derived, each is also
-// RECOMPUTED when the rows it came from go: [dropThreadParticipation] for a
-// speaker, [unfollowUnnamed] for a name.
-//
-// PARTICIPATION IS WRITTEN ONLY FOR A REPLY, and the root's author is written
-// with the first one. A room's every post is not a thread, and a participant
-// row per message would be a second row per message in the highest-volume
-// table in the engine — for a thread that mostly never happens.
+// PARTICIPATION IS WRITTEN ONLY FOR A REPLY (the root's author with the first):
+// a row per message would double the highest-volume table for threads that
+// mostly never happen.
 func (a *Applier) writeThreadRows(ctx context.Context, tx *sql.Tx,
 	at applyContext, message Message) (int, error) {
 
@@ -1269,22 +1198,16 @@ func threadRootOf(ctx context.Context, tx *sql.Tx, at applyContext,
 
 // writeFollows subscribes each handle to one thread.
 //
-// BEING NAMED SUBSCRIBES YOU TO THE THREAD, and that is the whole producer of
-// this table — by a post, or by an edit that names you where the words before
-// it did not: there is no follow op in this build's vocabulary, because a
-// subscription nobody can express is one nobody would ever have. A mention on
-// a message that starts no thread still writes the row, keyed on that message
-// as the root it would be — so somebody named in a question hears the answer.
+// BEING NAMED SUBSCRIBES YOU TO THE THREAD, the table's only producer (a post,
+// or an edit that newly names you); there is no follow op. A mention on a
+// message that starts no thread still writes the row, keyed on that message as
+// its would-be root, so somebody named in a question hears the answer.
 //
-// AND THE ROW LASTS AS LONG AS THE NAMING DOES. A follow is derived from the
-// thread's mentions, so the last of them taken back — an edit that drops the
-// name, a delete, an erase — takes it back too ([unfollowUnnamed]); a follow
-// that outlived every message naming its holder would be a subscription
-// nothing in the thread still asks for and nothing in this build can undo.
+// THE ROW LASTS AS LONG AS THE NAMING: the last mention taken back (edit,
+// delete, erase) takes it back too ([unfollowUnnamed]); nothing else can undo it.
 //
-// A FOLLOW IS NEVER RESTAMPED: `ON CONFLICT DO NOTHING` keeps the instant and
-// the position of the record that first subscribed the handle, which is when
-// they started following however many times they are named after.
+// NEVER RESTAMPED: `ON CONFLICT DO NOTHING` keeps the instant and position of
+// the record that first subscribed the handle.
 func writeFollows(ctx context.Context, tx *sql.Tx, at applyContext,
 	channelID, root string, rootAt time.Time, handles []string) (int, error) {
 

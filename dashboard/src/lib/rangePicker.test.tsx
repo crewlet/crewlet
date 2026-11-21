@@ -18,7 +18,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { LayerHost, TimeRangePicker } from "@crewlethq/ui";
 import { rangePickerProps } from "./rangePicker.ts";
-import type { TimeRange, Window } from "./range.ts";
+import { edgeAt, type TimeRange, type Window } from "./range.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
 
 /** The kit's control, as every screen draws it. */
@@ -28,8 +28,8 @@ function Picker({ range }: { range: TimeRange }) {
 
 afterEach(cleanup);
 
-const FROM = "2031-04-16T09:00:00Z";
-const TO = "2031-04-16T17:00:00Z";
+const FROM = edgeAt(Date.parse("2031-04-16T09:00:00Z"));
+const TO = edgeAt(Date.parse("2031-04-16T17:00:00Z"));
 
 /**
  * A range the way a screen's own hook hands one over.
@@ -45,7 +45,7 @@ function picker(set: (next: Window) => void = vi.fn()): TimeRange {
     window: "1d",
     since: FROM,
     until: TO,
-    previous: { since: "2031-04-16T01:00:00Z", until: FROM },
+    previous: { since: edgeAt(Date.parse("2031-04-16T01:00:00Z")), until: FROM },
     bucket: "hour",
     offer: {
       screen: "test",

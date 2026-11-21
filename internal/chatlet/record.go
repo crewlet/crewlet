@@ -16,25 +16,15 @@ import (
 // RecordVersion is the record shape THIS BUILD can decode — never the version
 // it stamps on what it writes.
 //
-// A record above it is RETAINED rather than skipped — see the deferral
-// contract in [github.com/crewlet/crewlet/internal/statelog] — which is what
-// makes a rolling upgrade a period of reduced coverage rather than an outage.
-// What a writer stamps is the LOWEST version that reads the record, computed by
-// [Encode] from [versionedFields]; internal/worklet's RecordVersion states why,
-// and the rule is one rule across every strict domain.
+// A record above it is RETAINED, not skipped (the deferral contract in
+// [github.com/crewlet/crewlet/internal/statelog]); a writer stamps the LOWEST
+// version that reads it, from [versionedFields] ([Encode]). It moves ONLY with
+// the table, to its highest version: statelogtest refuses a build reading a
+// version no field introduced, which would drop a newer peer's field.
 //
-// It moves ONLY with the table, and exactly to the table's highest version:
-// statelogtest's declaration case refuses a build that reads a version no
-// field introduced, because such a build would accept a newer peer's record
-// at that version and drop the field it was minted for.
-//
-// # What each version added
-//
-//   - 1: every shape this domain has.
-//   - 2: an agent's statement that its message asks something, the seats a
-//     message held back and asked, and the asks it answers (ADR-0113).
-//   - 3: whom an agent's message that wakes somebody was written for
-//     ([MutationRecord.WorkingFor], ADR-0109).
+// Versions: 1 every shape this domain has; 2 an agent's ask, the seats held
+// back and asked, and the asks answered (ADR-0113); 3 whom a waking agent
+// message was written for ([MutationRecord.WorkingFor], ADR-0109).
 const RecordVersion = 3
 
 // WorkingForVersion is the version from which a record carries whom it was
@@ -59,17 +49,14 @@ const baseRecordVersion = 1
 // versionedFields is every field a chat record has gained since the base
 // format, and the version a reader must be at to apply a record carrying it.
 //
-// Adding a field to a record, a payload or a document is adding a row here,
-// moving [RecordVersion] to its version, and giving the domain's statelogtest
-// candidate a record that carries it — on the tracker's terms, which are the
-// framework's ([statelog.VersionedField]). A field no tag has shipped is still
-// a field two builds of one rolling upgrade disagree about, so "nothing has
-// been released" does not exempt a new field from its row.
+// A new field on a record, payload or document is a row here, [RecordVersion]
+// moved to its version, and a statelogtest candidate record carrying it, on the
+// framework's terms ([statelog.VersionedField]). Unreleased is no exemption:
+// two builds of one rolling upgrade still disagree about the field.
 //
 // NONE MAY EVER RIDE AN ERASE OR A PRUNE. Both install a gate
-// ([RecordEnvelope.InstallsGate]), so both are read by every build for ever
-// and [Encode] refuses either one carrying a versioned field: a field a later
-// erase or prune needs is a field that belongs on another record.
+// ([RecordEnvelope.InstallsGate]), so every build reads them for ever and
+// [Encode] refuses either carrying a versioned field.
 var versionedFields = statelog.RecordFields{
 	{Name: "MessagePost.Asks", Since: 2, Op: string(OpPost), Path: []string{"mutation", "asks"}},
 	{Name: "Notify.Asks", Since: 2, Path: []string{"notify", "asks"}},
@@ -160,17 +147,14 @@ type RecordEnvelope struct {
 
 // InstallsGate reports whether this record installs an apply gate.
 //
-// ANSWERED FROM THE ENVELOPE ALONE, because it must be answerable by a node
-// that cannot decode the payload: it is what turns an unknown version into a
-// STOP rather than a deferral.
+// ANSWERED FROM THE ENVELOPE ALONE, because a node that cannot decode the
+// payload must answer it: it turns an unknown version into a STOP rather than
+// a deferral.
 //
-// TWO CONDITIONS, NOT ONE. An eviction is a gate by its KIND. An ERASE and a
-// PRUNE are gates by their OP, on an ordinary channel subject, and they have
-// to be: both DELETE message rows, and a deferred deletion is a node that goes
-// on serving what every other node removed — an operator's redaction still
-// readable on one member, or a year of a room that retention deleted
-// everywhere else. Neither has an inverse that repairs it, which is exactly
-// the test the wiki's purge meets.
+// An eviction is a gate by its KIND; an ERASE and a PRUNE by their OP, on an
+// ordinary channel subject. Both DELETE message rows, and a deferred deletion
+// leaves a node serving what every other node removed, with no inverse that
+// repairs it.
 func (e RecordEnvelope) InstallsGate() bool {
 	return e.Subject.Kind.InstallsGate() || e.Op == OpErase || e.Op == OpPrune
 }
@@ -179,16 +163,13 @@ func (e RecordEnvelope) InstallsGate() bool {
 // a gate ([RecordEnvelope.InstallsGate]), the read index's barrier, the trim's
 // trimmed record and a reanchor's generation.
 //
-// Each is pinned at [baseRecordVersion] for its own reason, and all four
-// reasons are what an older node does with a record it cannot read. A gate it
-// deferred would leave its gate table empty — or its copy of a room holding
-// what every other node erased — while it went on applying every record the
-// gate was meant to govern, with no inverse that repairs it; a barrier it
-// retained is one more deferral row for every linearizable read; a trimmed
-// record it retained is every anchor it names kept on that node; a generation
-// it retained is a transition it never makes. So none of them may carry a
-// versioned field, and [Encode] refuses one that does — a field such a record
-// needs is a field that belongs somewhere else.
+// Each is pinned at [baseRecordVersion] because of what an older node does with
+// a record it cannot read. A deferred gate leaves its gate table empty while it
+// applies every record the gate governs, with no inverse that repairs it; a
+// retained barrier is one more deferral row for every linearizable read; a
+// retained trimmed record keeps every anchor it names; a retained generation is
+// a transition never made. So none may carry a versioned field, and [Encode]
+// refuses one that does.
 func (e RecordEnvelope) readByEveryBuild() bool {
 	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpTrimmed ||
 		e.Op == OpGeneration
@@ -217,35 +198,25 @@ type MutationRecord struct {
 
 	// WorkingFor is whom an [AuthorAgent] record that routes to somebody
 	// ([Notify.Recipients]) was written for (ADR-0109): whoever the turn that
-	// wrote it worked for, composed from that turn's own bound ceiling, and
-	// absent on every other record: an agent's write made for nobody else,
-	// every other author's, and one that routes to nobody, a silent message
-	// whose named seats were all held back included (an erase and a prune
-	// among them, which no
-	// versioned field may ride). The change feed reads it, and the turn the
-	// record wakes works for them (notify.FirstPartyWriter), never for the
-	// writing seat, which holds every app. KEPT ON THE MESSAGE A POST WRITES
-	// ([Message.WorkingFor], [WorkingForVersion]), applied on every node from
-	// the carrier's first build on, which the engine's turn-start thread
-	// read alone takes ([Reader.TurnThread]). Version 3:
-	// an older build retains a record carrying it rather than waking a seat
-	// for the writing agent.
+	// wrote it worked for, composed from that turn's own bound ceiling. Absent
+	// on every other record, including one that routes to nobody and an erase
+	// or prune (no versioned field may ride those). The turn the record wakes
+	// works for them (notify.FirstPartyWriter), never for the writing seat,
+	// which holds every app. KEPT ON THE MESSAGE A POST WRITES
+	// ([Message.WorkingFor], [WorkingForVersion]); the turn-start thread read
+	// takes it ([Reader.TurnThread]). An older build retains a record carrying
+	// it rather than waking a seat for the writing agent.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
-	// Notify is the routing snapshot, and NIL is what "wakes nobody"
-	// means.
+	// Notify is the routing snapshot, and NIL is what "wakes nobody" means.
 	//
-	// A NIL POINTER RATHER THAN A quiet FLAG, so the wake filter is "has a
-	// Notify" — a question about the record's own shape — instead of a
-	// boolean a writer can forget to set. A quiet record is a full record,
-	// ordered and applied exactly like a loud one: quiet means it wakes
-	// nobody, and nothing else.
+	// A NIL POINTER RATHER THAN A quiet FLAG, so the wake filter is a question
+	// about the record's own shape, not a boolean a writer can forget to set.
+	// A quiet record is otherwise ordered and applied like a loud one.
 	//
-	// A SYSTEM NARRATION IS THE CASE THIS EXISTS FOR — the engine saying
-	// somebody joined, or a prune taking a year of a room. A flag on the
-	// payload would have to be read after a version-gated decode, by which
-	// point the record a newer build wrote has already been filed as
-	// routable.
+	// A SYSTEM NARRATION (somebody joined, a prune) IS WHY: a flag on the
+	// payload is read after a version-gated decode, by which point a newer
+	// build's record has already been filed as routable.
 	Notify *Notify `json:"notify,omitempty"`
 
 	// Extra carries fields a newer build wrote, so a record round-trips
@@ -294,31 +265,24 @@ const (
 
 	// ReasonCollectiveRequest is a PERSON'S `@channel`: the message asked
 	// the whole room, so every seat it reached owes an answer for its own
-	// role (what it knows, what it will do, or that it has nothing to
-	// add).
+	// role (what it knows, what it will do, or that it has nothing to add).
 	//
-	// A REASON OF ITS OWN rather than [ReasonCollective] read together
-	// with the author, because whether a wake obliges an answer is a
-	// property of the reason ([Reason.Addressed]) that the delivery gate,
-	// the prompt and the working indicator all read through one rule. A
-	// verdict that also depended on the author would be a second input
-	// to that rule which only this domain could supply, and the three
-	// readers would no longer be one evaluation.
+	// A REASON OF ITS OWN rather than [ReasonCollective] read with the author:
+	// whether a wake obliges an answer is a property of the reason
+	// ([Reason.Addressed]) that the delivery gate, the prompt and the working
+	// indicator read through one rule, and an author input would be one only
+	// this domain could supply.
 	ReasonCollectiveRequest Reason = "collective_request"
 
-	// ReasonAnswerer is a person posting in a named room (public, private
-	// or a unit's), naming no seat, where the routing reached nobody else:
-	// the room's ANSWERER is woken to reply. A message that names a seat
-	// the company has, a person included, was addressed to them and has
-	// no answerer. A unit's room is answered by the unit's
-	// lead; any other room by its most senior agent member
-	// ([Roster.Senior]).
+	// ReasonAnswerer is a person posting in a named room (public, private or
+	// a unit's), naming no seat, where routing reached nobody else: the room's
+	// ANSWERER is woken to reply. A message naming a seat the company has was
+	// addressed to it and has no answerer. A unit's room is answered by its
+	// lead; any other by its most senior agent member ([Roster.Senior]).
 	//
-	// IT ARISES ONLY IN THE ABSENCE OF EVERY OTHER REASON, which is what
-	// puts it last among the addressed ones although it obliges an answer
-	// as much as a mention does: it is the answer to "a person spoke to
-	// this room and nobody was listening", and a room where that resolved
-	// to silence is a person talking to an empty screen.
+	// IT ARISES ONLY IN THE ABSENCE OF EVERY OTHER REASON, which puts it last
+	// among the addressed ones though it obliges as much as a mention: it
+	// answers "a person spoke to this room and nobody was listening".
 	ReasonAnswerer Reason = "answerer"
 
 	// ReasonAnswer is a message answering a question this recipient asked
@@ -358,24 +322,11 @@ const (
 // Reasons are the thirteen, IN PRECEDENCE ORDER: a recipient appears once, under
 // the first of these that applies to them.
 //
-// # The ordering, and the two rules it is built from
-//
-// EVERY ADDRESSED REASON OUTRANKS EVERY UNADDRESSED ONE. An obligation to
-// answer is a stronger claim than an FYI, so the five [Reason.Addressed] ones
-// come first, and that is a property a test can assert over this slice rather
-// than a convention somebody maintains.
-//
-// WITHIN EACH HALF, WHAT THIS MESSAGE DID TO YOU OUTRANKS THE ROLE YOU HOLD.
-// That is the tracker's own routing precedence, and it decides the rest: a DM
-// exists for you, a mention named you, a reply answered the thread you
-// started, and a person's `@channel` asked everybody you are among; then a
-// reply in a thread you are in and an agent's `@channel` are both about this
-// message, while following a thread or a room is a standing arrangement. A
-// reply outranks a collective address because a reply is about a
-// conversation you are already in and `@channel` is about everybody.
-//
-// THE ORDER IS THE VOCABULARY'S, NOT THE ARITHMETIC'S. Nothing in this package
-// computes a precedence; recipients.go walks this slice.
+// The five [Reason.Addressed] ones come first, since an obligation outranks an
+// FYI (a test asserts it). Within each half, WHAT THIS MESSAGE DID TO YOU
+// OUTRANKS THE ROLE YOU HOLD (the tracker's routing precedence): a reply
+// outranks a collective address, and following is a standing arrangement.
+// recipients.go walks this slice; nothing else computes a precedence.
 var Reasons = []Reason{
 	ReasonDM, ReasonMention, ReasonReplyToOwnRoot, ReasonCollectiveRequest,
 	ReasonAnswerer, ReasonAnswer, ReasonNamed, ReasonReply,
@@ -387,24 +338,15 @@ func (r Reason) Valid() bool { return slices.Contains(Reasons, r) }
 
 // Addressed reports whether being woken for this reason OBLIGES A REPLY.
 //
-// FIVE, AND IT IS A CLOSED SET: a direct conversation, a mention, a reply to
-// the thread you started, a person's `@channel`, and the room's answerer.
-// Each is a person or a colleague speaking TO this recipient.
+// FIVE, A CLOSED SET: a direct conversation, a mention, a reply to the thread
+// you started, a person's `@channel`, and the room's answerer: somebody
+// speaking TO this recipient. The other eight would be false obligations (an
+// answer closes a question; the rest are news or standing arrangements), and a
+// seat treating them as addressed answers every remark in every room it
+// follows.
 //
-// THE OTHER EIGHT ARE NOT, and each would be a false obligation: an answer
-// closes a question rather than opening one, an agent's mention that asks
-// nothing and an agent's collective address are news, a reply in a thread
-// where the seat owes or awaits an answer adds to a stake it has, a plain
-// reply reaches everybody who ever posted in the thread, and both follow
-// reasons are standing arrangements the recipient made rather than anything
-// this message did. A seat that treats them as addressed answers every remark in every
-// room it follows, which is a company that talks to itself instead of
-// working.
-//
-// This is the one value the delivery gate, the prompt and the working
-// indicator all read, through
-// [github.com/crewlet/crewlet/internal/notify.AddressRule], so the three can
-// never disagree about whether somebody owes an answer.
+// The delivery gate, the prompt and the working indicator all read this,
+// through [github.com/crewlet/crewlet/internal/notify.AddressRule].
 func (r Reason) Addressed() bool {
 	switch r {
 	case ReasonDM, ReasonMention, ReasonReplyToOwnRoot, ReasonCollectiveRequest,
@@ -528,16 +470,11 @@ func Excerpt(body string) string { return textcut.Within(body, MaxExcerpt) }
 // Validate refuses a notification that would render wrong or cost the fleet
 // more than it was meant to.
 //
-// # Why the caps are checked at the publish boundary
-//
-// Because the record is what the cost lives on. A snapshot is copied onto the
-// log, replicated to every node, held for the stream's whole retention window
-// and read back by every applier — so a collection that grew without a bound
-// is not one screen rendering badly, it is bytes every member of the fleet
-// stores for a year. And it is a REFUSAL rather than a trim: a trim would
-// publish a notification that silently told fewer people than the writer
-// named, which is the failure this whole family exists to prevent, arriving at
-// the one place nobody is watching.
+// The caps are checked at the publish boundary because the record is where the
+// cost lives: a snapshot is replicated to every node and held for the stream's
+// whole retention window, so an unbounded collection is bytes every member
+// stores for a year. It is a REFUSAL rather than a trim: a trim would publish a
+// notification that silently told fewer people than the writer named.
 func (n *Notify) Validate() error {
 	if n == nil {
 		return nil
@@ -672,22 +609,15 @@ func Decode(payload []byte) (MutationRecord, error) {
 // Encode renders a record, carrying back whatever a newer build wrote, and
 // stamps it with the lowest version that reads it.
 //
-// LOSSLESS IN BOTH DIRECTIONS, which is what makes a rolling upgrade safe: a
-// node that read a record it only half understood and republished it — the
-// reanchor path does exactly that — must not strip the half it did not.
+// LOSSLESS IN BOTH DIRECTIONS: a republished record (the reanchor path) keeps
+// what this build could not read. It uses [jsoncarry.Encode], not a second
+// merge: a carried field LOSES to a known one, and two implementations of that
+// rule let a stale carried copy undo the write that set it.
 //
-// It goes through the same [jsoncarry.Encode] every document shape here uses,
-// rather than a second merge of its own: a carried field LOSES to a known one,
-// and two implementations of that rule are one place where a stale carried
-// copy undoes the write that set it.
-//
-// A ZERO VERSION IS "STAMP IT", on the tracker's rule: every writer leaves V
-// unset and this stamps [versionedFields]' minimum over the bytes it is about
-// to publish. A set version is kept — a relay keeps its writer's, a barrier
-// and a generation their pinned [baseRecordVersion] — and refused when it is
-// below what the record carries. A record every build must read
-// ([RecordEnvelope.readByEveryBuild]) is refused whenever it carries a
-// versioned field at all, stamped or set.
+// A ZERO VERSION IS "STAMP IT" at [versionedFields]' minimum over the bytes. A
+// set version is kept (a relay its writer's, a barrier and a generation their
+// pinned [baseRecordVersion]) and refused when below what the record carries; a
+// [RecordEnvelope.readByEveryBuild] record is refused with any versioned field.
 func Encode(rec MutationRecord) ([]byte, error) { return encodeWith(rec, versionedFields) }
 
 // encodeWith is [Encode] under a named field table — the seam the stamping

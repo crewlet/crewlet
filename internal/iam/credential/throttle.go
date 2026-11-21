@@ -20,136 +20,16 @@ import (
 
 // THE ENUMERATION ORACLE, AND THE TWO THINGS THAT CLOSE IT.
 //
-// A sign-in endpoint is the one surface an unauthenticated stranger may
-// address, and EVERYTHING about how it answers is evidence. The failure this
-// file exists for is not a guessed password — it is an attacker learning WHO
-// WORKS HERE, in as many requests as they care to make, from nothing but how
-// long each one took or which of them was throttled.
+// A sign-in's timing and throttling are evidence: the failure is WHO WORKS HERE.
 //
-// # 1. The throttle is keyed on what was TYPED, never on what it resolved to
+// 1. KEYED ON WHAT WAS TYPED, never on what it resolved to. [Throttle.Admit]
+// decides before any lookup. A throttle keyed on the resolved subject is one
+// only real subjects trigger, so the roster reads off which names slow down;
+// keyed on the typed value, a name nobody holds climbs the curve as a real one
+// does. (Two spellings of one person are two keys, a curve each.)
 //
-// [Throttle.Admit] decides before anything is looked up, on the subject as the
-// caller TYPED it — normalised, never resolved — from the request's source. A
-// throttle keyed on the RESOLVED subject is one only real subjects can
-// trigger, so its delay becomes the oracle it was added to prevent: an
-// attacker fails a few times per name and reads the roster off which names
-// start slowing down. Keyed on the typed value, a name nobody holds climbs
-// the curve exactly as a real one does, and the curve says nothing about
-// anybody. (Two spellings of one person — their address and their login —
-// are two keys, which costs a guesser one more curve per spelling and is the
-// price of the key never depending on a lookup.)
-//
-// # 2. A subject that does not exist is still verified against
-//
-// [Hasher.Decoy] verifies what was presented against one dummy verifier at the
-// hasher's own cost when there is no real verifier to check, so a miss is one
-// argon2id derivation under the same cap exactly as a hit is — and the
-// derivation is what dominates how long a sign-in takes.
-//
-// WHAT IS NOT EQUALISED is said there and in the package doc: the directory
-// read before the derivation, and a real verifier written at another cost. No
-// answer is padded to a common deadline. One was, measured from admission, and
-// keeping it honest under load took a turn per address at the verify cap and a
-// decoy whose hold was drawn from the node's recent derivations — a scheduler
-// and a sampler to hide a difference of one indexed read.
-
-// THE CURVE, AND WHY IT IS NEVER A LOCKOUT.
-//
-// A hard refusal after N failures is a lockout an outsider can cause: keyed on
-// a login it locks the company's only administrator out for ever at less than
-// a request a minute. So a failure costs DELAY, never refusal: each one
-// doubles the wait before its key's next attempt, from [DelayFloor] to
-// [DelayCeiling], and a correct credential after the wait succeeds. A wait up
-// to [InlineDelay] is served inside the request; a longer one is answered 429
-// with the time left, which is the whole of the specific answer this surface
-// gives.
-//
-// # One key: the subject as typed, from one source
-//
-// THE PAIR catches a run at ONE account, and it has no allowance: the first
-// failure is already a second's wait. A success clears THIS PAIR and nothing
-// else, so somebody holding any account cannot sign in as themselves between
-// guesses at somebody else's and wipe the record of them.
-//
-// # And never the source alone
-//
-// A curve on the source alone would catch a run across many accounts, and this
-// throttle had one: ten failures free, then the same doubling wait, refused
-// past five seconds. A refusal decided on an address is one ANYBODY SHARING IT
-// holds shut for everybody else at it — an office behind one NAT, a VPN's
-// egress, and on a deployment whose proxy is not in `api.trusted_proxies` the
-// whole internet — and it took one failed attempt every twenty-five seconds,
-// from anybody, at any name, to keep every sign-in from that address at 429,
-// the right passwords included, since a refusal before the verification never
-// reaches one. And because an attempt still being checked counted against it
-// as a failure, a dozen honest people signing in at once from one office met
-// the same 429 with nobody failing at all. A gate on the source that nobody
-// else could hold shut would have to be one that never refuses, and a wait
-// that is never a refusal slows the guesser no more than the verify cap
-// already does.
-//
-// WHAT THAT LEAVES UNBOUNDED BY A CURVE is one password tried against many
-// names from one address — every pair is fresh. What bounds it is COST: every
-// name tried, held or not, is an argon2id derivation waiting for a slot of the
-// verify cap, and past that the password floor and the blocklist. What makes
-// it seen is the failure count per source the audit trail publishes each
-// minute.
-//
-// # And a second factor on the person, whatever the address
-//
-// A code is decided on the pair's curve AND on one keyed on the person the
-// login resolved to ([Throttle.AdmitSecondFactor]). The pair alone lets
-// somebody holding the password divide the curve by every address they own —
-// sixty-five thousand in a /48 — and a six-digit code falls to that in about
-// an hour. Keying on the resolved person is what the first rule above forbids,
-// and it is safe here for the one reason it is safe anywhere: it is reached
-// only past the password, so only a caller who already knows who this is can
-// drive it. It lifts on the success that completes a sign-in, and the failure
-// that takes it to its ceiling says so ([Ticket.Fail]) — once per climb — so
-// the caller can announce that somebody holding a person's password is
-// guessing at their second factor.
-//
-// AN ATTEMPT THAT NAMES NOBODY IS NOT COUNTED — an invitation link. There is
-// no subject to key a pair on, and its secret is minted with 256 bits of
-// crypto/rand, so there is nothing a curve would slow; keyed on the source it
-// was a way for a stranger to hold every invitation from an address shut.
-//
-// # Each node keeps its own curve
-//
-// A load balancer puts each attempt of a guessing run on whichever node it
-// likes, and a node counts only the failures it saw. So on a fleet of N nodes
-// serving sign-ins, a run rotated across all of them meets each node's curve
-// separately and is admitted up to N times as often as it would be on one —
-// and that residual is DECIDED, not overlooked. The curve was once shared
-// through the coordination store: every failure written to a fleet bucket, a
-// climbing pair read back before each step, each writer's clock re-dated, a
-// per-source allowance bounding the reads a spray of fresh names drove, a
-// pause when the store stopped answering, and a digest key derived from the
-// keyring so every node named a pair alike. That is a coordination round trip
-// on the sign-in path and a subsystem of its own, bought for a factor of N on
-// a rate the curve has already cut sixty-fold at its first step — and on the
-// single node most deployments are, it bought nothing at all. What bounds a
-// run at one account on N nodes is what bounds it on one, multiplied by N:
-// thirty seconds per attempt per node at the ceiling, each attempt an
-// argon2id verification under the verify cap, against a password at least
-// twelve characters long that is not on the blocklist, and — for a person who
-// holds one — a second factor, whose own curve a guesser meets only once they
-// already hold the password.
-//
-// EVERY INSTANT HERE IS THIS PROCESS'S OWN CLOCK, read through [time.Now]'s
-// monotonic reading, so a wall-clock step — an NTP correction, a VM migration
-// — neither stretches a pair's wait nor ends it early: a monotonic reading is
-// what every comparison below is between.
-//
-// Nothing held is what was typed: a pair is a keyed digest under a key this
-// process generated and never wrote anywhere.
-//
-// # Concurrency is paid for, too
-//
-// An attempt that is admitted and not yet resolved counts against its pair as
-// a failure until it resolves: a burst of concurrent guesses at one account is
-// then served one after another along the curve rather than all at once. A
-// success refunds it; a request that verified nothing releases it.
+// 2. A SUBJECT THAT DOES NOT EXIST IS STILL VERIFIED AGAINST: [Hasher.Decoy]
+// makes a miss one argon2id derivation under the same cap as a hit.
 
 // Window is how long a failure counts against its key.
 //
@@ -163,7 +43,15 @@ import (
 // longer would meet them at their next sign-in as a wait nobody could explain.
 const Window = 15 * time.Minute
 
-// The curve.
+// THE CURVE, AND WHY IT IS NEVER A LOCKOUT.
+//
+// A hard refusal after N failures is a lockout an outsider can cause: keyed on
+// a login it locks the company's only administrator out for ever at under a
+// request a minute. So a failure costs DELAY: each doubles the wait before its
+// key's next attempt, from [DelayFloor] to [DelayCeiling], and a correct
+// credential after the wait succeeds. A wait up to [InlineDelay] is served
+// inside the request; a longer one is answered 429 with the time left, the only
+// specific answer this surface gives.
 const (
 	// DelayFloor is the wait a pair's first failure costs: one second,
 	// which is invisible to a person who mistyped and is already a
@@ -199,18 +87,14 @@ const (
 	DelayedCap = 64
 
 	// MaxPairs is how many pairs' failures one throttle holds, the least
-	// recently used forgotten past it: 16384. Every pair costs at most
-	// [pairKeep] failure instants, beside its digest and its place in the
-	// order — about half a kilobyte — so the bound is under ten megabytes
-	// of memory an unauthenticated caller cannot grow, where a map walked
-	// on every failure was both unbounded and O(keys) per write.
+	// recently used forgotten past it: 16384. A pair costs at most [pairKeep]
+	// failure instants plus its digest and place, about half a kilobyte, so
+	// memory an unauthenticated caller can grow stays under ten megabytes.
 	//
-	// A PAIR FORGOTTEN EARLY STARTS ITS CURVE AGAIN, which is what the
-	// bound costs, and why it is set this high: to push one climbing pair
-	// out, a guesser has to fail 16384 others inside [Window] — each an
-	// argon2id derivation under the verify cap, which at the shipped cost
-	// is minutes of a whole node's cap, every sign-in on it queueing
-	// behind them while they run.
+	// A PAIR FORGOTTEN EARLY STARTS ITS CURVE AGAIN, which is why the bound is
+	// this high: to push one climbing pair out, a guesser must fail 16384
+	// others inside [Window], each an argon2id derivation under the verify cap:
+	// minutes of a whole node's cap, every sign-in queueing behind them.
 	MaxPairs = 16384
 )
 
@@ -267,9 +151,17 @@ type Attempt struct {
 	Subject string
 }
 
-// Throttle is the sign-in curve.
+// Throttle is the sign-in curve. SAFE FOR CONCURRENT USE.
 //
-// SAFE FOR CONCURRENT USE.
+// THE KEY IS THE PAIR: the subject as typed, from one source, with no allowance.
+// A success clears THIS PAIR only, so holding any account cannot wipe the record
+// of guesses at another's.
+//
+// NEVER THE SOURCE ALONE: a refusal decided on an address is one ANYBODY SHARING
+// IT (a NAT, a VPN egress, behind an untrusted proxy the whole internet) holds
+// shut for the rest, and a gate nobody can hold shut never refuses. One password
+// at many names from one address is bounded by COST (a derivation per name, the
+// floor, the blocklist) and made seen by the audit trail's per-source count.
 type Throttle struct {
 	key   []byte
 	now   func() time.Time
@@ -297,9 +189,10 @@ type Throttle struct {
 
 // ThrottleDeps is what a throttle is built from. Every field is optional.
 type ThrottleDeps struct {
-	// Now is the clock. Nil takes [time.Now], whose monotonic reading is
-	// what keeps a wall-clock step out of every wait — see this file's
-	// head — so a production caller leaves it nil.
+	// Now is the clock. Nil takes [time.Now], whose monotonic reading keeps a
+	// wall-clock step (NTP, a VM migration) from stretching or ending a wait,
+	// so a production caller leaves it nil. Nothing held is what was typed: a
+	// pair is a keyed digest under a key this process never wrote anywhere.
 	Now func() time.Time
 
 	// Sleep is how a wait is served. Nil takes a sleep the request's
@@ -308,6 +201,17 @@ type ThrottleDeps struct {
 }
 
 // NewThrottle builds one.
+//
+// EACH NODE KEEPS ITS OWN CURVE, decided rather than overlooked. A balancer
+// spreads a guessing run over N nodes, each counting only what it saw, so the
+// run is admitted up to N times as often as on one. Sharing the curve through
+// the coordination store put a round trip on the sign-in path and a subsystem
+// of its own to buy a factor of N on a rate the curve already cuts sixty-fold
+// at its first step, and nothing on the single node most deployments are. A
+// run at one account is bounded as on one node, times N: 30 s per attempt per
+// node at the ceiling, each an argon2id verification under the verify cap,
+// against a password of twelve characters off the blocklist and, where held, a
+// second factor.
 func NewThrottle(deps ThrottleDeps) *Throttle {
 	t := &Throttle{
 		key: randomKey(), now: deps.Now, sleep: deps.Sleep,
@@ -333,32 +237,16 @@ func randomKey() []byte {
 
 // Admit decides whether an attempt may proceed, and when.
 //
-// # Nothing is looked up before it, and nothing about the subject is looked up
-// inside it
+// It runs before the subject resolves and decides on the pair's count alone,
+// with no I/O. The attempt waits up to [InlineDelay] inside the call; a longer
+// wait is a [*Throttled]. The caller resolves the [Ticket] exactly once:
+// [Ticket.Fail], [Ticket.Succeed], or [Ticket.Release] (safe to defer).
 //
-// It is called before the subject resolves, and decides on the pair's own
-// count with no I/O: a map lookup under a lock. The attempt waits up to
-// [InlineDelay] inside this call; a longer wait is a [*Throttled].
-//
-// # What it hands back
-//
-// A [Ticket] the caller resolves exactly once: [Ticket.Fail] for a credential
-// that did not prove itself, [Ticket.Succeed] for one that did, and
-// [Ticket.Release] — safe to defer, and a no-op after either — for an attempt
-// that never reached a verdict. Until then the attempt counts against its pair
-// as a failure, which is what serialises a burst at one account.
-//
-// AN ATTEMPT THAT NAMES NOBODY IS ADMITTED, and uncounted: there is no pair to
-// key it on, and the source alone is a key anybody at the address could hold
-// shut — see this file's head.
-//
-// AN UNIDENTIFIABLE SOURCE IS ADMITTED, and uncounted, which is the safe
-// direction rather than the lax one: refusing would mean a misconfigured proxy
-// — one that strips the header a source is derived from — locks every person
-// in the company out at once, which is an outage the throttle caused. What
-// still bounds that caller is the password cost and the verify cap.
-//
-// An uncounted attempt's ticket is nil, whose methods do nothing.
+// ADMITTED UNCOUNTED, with a nil ticket: an attempt that names nobody (no pair
+// to key, an invitation's 256-bit secret gives a curve nothing to slow) and an
+// UNIDENTIFIABLE source, the safe direction: refusing would let a proxy that
+// strips the source header lock everybody out. The password cost and verify
+// cap still bound both.
 func (t *Throttle) Admit(ctx context.Context, a Attempt) (*Ticket, error) {
 	if a.Source == "" || a.Subject == "" {
 		return nil, nil
@@ -366,27 +254,18 @@ func (t *Throttle) Admit(ctx context.Context, a Attempt) (*Ticket, error) {
 	return t.admit(ctx, t.pairOf(a.Subject, SourceKey(a.Source)))
 }
 
-// AdmitSecondFactor decides whether a second factor may be checked for
-// person, and when — on the PERSON'S OWN CURVE, whatever address the code
-// arrives from.
+// AdmitSecondFactor decides whether a second factor may be checked for person,
+// on the PERSON'S OWN CURVE whatever address the code arrives from.
 //
-// # Why this one key is the resolved person
+// On the pair's curve alone somebody holding the password is barely slowed:
+// each address is a fresh pair (65 thousand in an IPv6 /48) and a six-digit
+// code falls in about an hour. A code is ALSO decided on a curve keyed on the
+// person, which all addresses climb together; a completed sign-in lifts it.
 //
-// A second factor exists to stop somebody who already has the password, and
-// on the pair's curve alone that somebody is barely slowed: each address and
-// each spelling of the login is a fresh pair, so a /48 of IPv6 addresses is
-// sixty-five thousand of them, each allowed a handful of guesses a minute, and
-// what is left to bound six digits is the verify cap. So a code is ALSO
-// decided on a curve keyed on the person, and every address's guesses climb
-// it together.
-//
-// It is keyed on who the login RESOLVED to, which is exactly what the pair's
-// curve must never be (this file's head), and the difference is who can reach
-// it: this is asked only once the password has proved itself, so the only
-// caller who can drive it holds the password, and it tells them nothing about
-// who exists that the password did not. Its digest is taken in a domain of its
-// own, so no typed subject can ever name it. An empty person is admitted
-// uncounted.
+// Keying on who the login RESOLVED to is what the pair's curve must never do
+// (this file's head); it is safe here because it is asked only past the
+// password, so only a caller holding it can drive it. Its digest has its own
+// domain, so no typed subject names it. An empty person is admitted uncounted.
 func (t *Throttle) AdmitSecondFactor(ctx context.Context, person string) (*Ticket, error) {
 	if person == "" {
 		return nil, nil
@@ -429,6 +308,10 @@ func (t *Throttle) admit(ctx context.Context, pair string) (*Ticket, error) {
 // A NIL TICKET IS AN UNCOUNTED ATTEMPT — one that names nobody, or an
 // unidentifiable source — and every method on it does nothing, so a caller
 // never branches on which it holds.
+//
+// Until resolved it counts against its pair as a failure, so a burst of
+// concurrent guesses at one account is served one after another along the
+// curve. A success refunds it; a request that verified nothing releases it.
 type Ticket struct {
 	t    *Throttle
 	pair string
@@ -439,17 +322,13 @@ type Ticket struct {
 // Fail resolves the attempt as a credential that did not prove itself, and
 // records the failure against its pair.
 //
-// It reports whether THIS failure took the key's curve to its ceiling —
-// [CurveSteps] failures inside the window, where there had been fewer — which a
-// caller whose key is a person reads as somebody guessing at them
-// ([Throttle.AdmitSecondFactor]).
+// It reports whether THIS failure took the curve to its ceiling ([CurveSteps]
+// failures in the window, where there had been fewer), which a caller whose key
+// is a person ([Throttle.AdmitSecondFactor]) announces as somebody guessing.
 //
-// THE TRANSITION AND NOT THE STATE, so the curve itself is what says "once":
-// a run held at the ceiling keeps [CurveSteps] failures in the window, each
-// new one replacing the oldest, and reaches it again only after it has aged
-// back down. A caller announcing on the state would announce every failure of
-// a run, and one deduplicating that would keep a second memory of what the
-// curve already knows.
+// THE TRANSITION, NOT THE STATE, so the curve says "once": a run held at the
+// ceiling keeps [CurveSteps] failures, each replacing the oldest, and reaches
+// it again only after aging back down. The state would announce every failure.
 func (k *Ticket) Fail() (reachedCeiling bool) {
 	if k == nil || !k.done.CompareAndSwap(false, true) {
 		return false
@@ -593,18 +472,17 @@ func (t *Throttle) factorOf(person string) string {
 }
 
 // SourceKey is the unit one caller's attempts are counted under: the address,
-// and for IPv6 its /64. It is the source half of a pair's key here, and the
-// source a failed attempt is counted under in the audit trail's per-minute row
-// (internal/iam/authevents) — ONE FOLD, because a row that counted per address
-// while the curve counted per /64 let one host cycling addresses inside its own
-// /64 take every source the row names in the first milliseconds of a minute,
-// and fold every other caller's failures into the anonymous overflow.
+// and for IPv6 its /64. It is the source half of a pair's key and the source a
+// failure is counted under in the audit trail's per-minute row
+// (internal/iam/authevents): ONE FOLD, because a row counting per address while
+// the curve counted per /64 let one host cycling addresses in its /64 take
+// every source the row names within a minute, folding other callers' failures
+// into the anonymous overflow.
 //
-// THE /64 IS WHAT ONE IPv6 CUSTOMER IS GIVEN, and every address inside it is
-// theirs to use: keyed per address, a run at one account from one host rotates
-// through 2^64 fresh pairs and its curve never starts. A value that is not an
-// address — a test's name for a caller, or whatever a misconfigured proxy
-// forwarded — is keyed as it is.
+// THE /64 IS WHAT ONE IPv6 CUSTOMER IS GIVEN: keyed per address, a run from one
+// host rotates through 2^64 fresh pairs and its curve never starts. A value
+// that is not an address (a test's name, or whatever a misconfigured proxy
+// forwarded) is keyed as it is.
 func SourceKey(source string) string {
 	addr, err := netip.ParseAddr(strings.TrimSpace(source))
 	if err != nil {

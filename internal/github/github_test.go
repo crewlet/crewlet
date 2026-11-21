@@ -1260,18 +1260,14 @@ func TestASeatsCredentialIsFoundUnderEveryToolsSpelling(t *testing.T) {
 
 // EVERY SEAT IS RESOLVED TO THE ACCOUNT ITS OWN CREDENTIAL HOLDS.
 //
-// That mapping is the whole of a seat's inbound routing and nothing in the
-// org chart declares it, so the two findings this walk exists to surface are
-// the seats it could NOT resolve: one with no credential receives no GitHub
-// events at all, and one whose credential is dead receives none either. Both
-// are reported rather than raised — failing the run over one seat would hide
-// the state of every other.
+// That mapping is the whole of a seat's inbound routing, so the findings this
+// walk surfaces are the seats it could NOT resolve: no credential or a dead
+// one receives no GitHub events. Both are reported rather than raised, since
+// failing the run over one seat would hide every other.
 //
-// The walk is CONCURRENT, which is part of the contract rather than a
-// tuning choice: it is one round trip per seat on a command an operator sits
-// and waits for. It also means several requests land on the stub at once,
-// which is the shape that produced this package's last -race failure — so
-// this test is where the recording stub has to hold under real parallelism.
+// The walk is CONCURRENT by contract (one round trip per seat on a command an
+// operator waits for), so this test is where the recording stub has to hold
+// under real parallelism, under -race.
 func TestEachSeatIsResolvedToTheAccountItsOwnCredentialHolds(t *testing.T) {
 	t.Parallel()
 	rec := newStub()
@@ -1390,17 +1386,12 @@ func TestEachSeatIsResolvedToTheAccountItsOwnCredentialHolds(t *testing.T) {
 
 // A SEAT THAT NAMES NO CREDENTIAL IS NOT A SEAT WITH A BROKEN ONE.
 //
-// Identity on this host is each agent's OWN GitHub App, so a company on the
-// shape this integration actually ships has no `mcp_env.github` token
-// anywhere at all — by design, not by oversight. Reported as one state with a
-// credential that failed, every agent seat of such a company became an
-// identity_failed finding, which is [integration.PhaseDegraded] owed by an
-// admin: a healthy company permanently degraded, retried on the admin
-// backoff for ever, over a credential the design had deliberately removed.
-//
-// And the sentence was false twice over. It said no mention reaches the seat,
-// when mentions resolve through the app's slug; it said no review request
-// does, when the payload carries the app's own bot login.
+// Identity on this host is each agent's OWN GitHub App, so a company has no
+// `mcp_env.github` token by design. Reported like a failed credential, every
+// agent seat would be an identity_failed finding, [integration.PhaseDegraded]
+// owed by an admin: a healthy company permanently degraded. Nor may the
+// sentence claim no mention or review request reaches the seat, since both
+// resolve through the app's slug and bot login.
 func TestASeatThatNamesNoCredentialIsNotAFinding(t *testing.T) {
 	t.Parallel()
 	client, _ := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -1963,22 +1954,15 @@ func TestOnlyAnAskAddressesTheSeat(t *testing.T) {
 
 // A COMPANY WITH NO ORG TOKEN HAS NOTHING TO REPORT.
 //
-// Three things this got wrong in turn. Refusing the run made the loop record
-// "the last pass could not read this integration", which sends an operator
-// looking for an outage rather than an unset variable. Reporting it as
-// credential_missing then put the card in Failed, which is the phase for an
-// integration that cannot be talked to at all. Reporting it as
-// optional_missing kept the card ready and left a permanent note on it.
+// Refusing the run sends an operator looking for an outage rather than an
+// unset variable; credential_missing puts the card in Failed, the phase for an
+// integration that cannot be talked to at all; optional_missing leaves a
+// permanent note. None is right: the agents' own apps answer who participates
+// in a thread, and the token is only for the organization-level reconcile a
+// company wanting one org-wide hook opts into.
 //
-// None of them is right, because there is no degradation left to describe:
-// the token's one job in routing was the list of who is participating in a
-// thread, and the agents' own apps answer that. What is left for it is the
-// organization-level reconcile, which a company that wants one org-wide hook
-// opts into and every other company never had a reason for.
-//
-// The deployment's own address is passed in, because it is the one thing a
-// credential-less run still knows and the next test is what happens without
-// it: leaving it out here would test two rules at once and pass on either.
+// The deployment's own address is passed in, because the next test covers
+// its absence: leaving it out here would test two rules at once.
 func TestAPassWithNoOrgTokenReportsNothing(t *testing.T) {
 	t.Parallel()
 	res, err := github.Reconcile(t.Context(), github.Options{

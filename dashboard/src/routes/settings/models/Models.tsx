@@ -3,25 +3,24 @@
  * every operator task on them from the page, with no hand edit of the company
  * document.
  *
- * Two lenses (Models, By job), one page per model, and the flows a task
- * needs, each opened by the address (`?flow=`), so a link, an alarm's fix or
- * the browser's Back reaches the same step. Every member can open the page and
+ * One page (the models, then Ask Crewlet and the Advisor, then every seat's
+ * jobs), one page per model, and the flows a task needs, each opened by the
+ * address (`?flow=`), so a link, an alarm's fix or the browser's Back reaches
+ * the same step. Every member can open the page and
  * read each model's condition; the reading names no credential, and every
  * action is an admin's (`llm_entries` answers each reading, and the engine
  * decides every write).
  */
 
 import { useEffect, useMemo, useRef } from "react";
-import { EmptyState, Skeleton, Tabs, useToast } from "@crewlethq/ui";
+import { EmptyState, Skeleton, useToast } from "@crewlethq/ui";
 import { CpuGlyph } from "@crewlethq/icons/glyphs";
-import { PageLenses } from "~/app/frame/PageActions.tsx";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
-import { useModelsData, type ModelView } from "./data.ts";
+import { MODELS_POLL_MS, useModelsData, type ModelView } from "./data.ts";
 import { QueryState } from "~/components/common.tsx";
 import { EntryPage } from "./EntryPage.tsx";
 import { Overview } from "./Overview.tsx";
 import { flowMisfit, useFlow, type OnFlow } from "./parts.tsx";
-import { ByJob } from "./ByJob.tsx";
 import { DeviceDialog } from "./flows/DeviceDialog.tsx";
 import { RemoveDialog } from "./flows/RemoveDialog.tsx";
 import { RetryDialog } from "./flows/RetryDialog.tsx";
@@ -35,7 +34,13 @@ const ModelWizard = lazyScreen("model-wizard", (module) => module.ModelWizard);
 export function Models({ id }: { id?: string }) {
   const data = useModelsData();
   const nav = useNavigator();
-  const [view, setView] = useParam("view", "", "section");
+  // THE OLD LENS ADDRESS (`?view=jobs`) opens the one page: its grid is on it now.
+  const [view] = useParam("view", "");
+  useEffect(() => {
+    if (view) nav.filter({ view: null });
+  }, [view, nav]);
+  // A model the wizard has just added, which the engine's reading may not hold yet.
+  const [added, setAdded] = useParam("added", "");
   const flow = useFlow(id);
   const open: OnFlow = (next, key, at) => {
     // A HOST SIGN-IN CHANGES NOTHING in the model, so it never opens the
@@ -60,6 +65,9 @@ export function Models({ id }: { id?: string }) {
     [data.models, flow.entry],
   );
   const misfit = useMisfit(data, flow, model);
+  const addressed = id ? (data.models.find((m) => m.key === id) ?? null) : null;
+  const adding = !!id && !addressed && added === id;
+  useAddedMark(adding, !!addressed && added !== "", () => setAdded(""));
 
   if (data.loading) return <Skeleton variant="text" rows={8} label="Loading models" />;
   // A FAILED READ IS THE SHARED FAILED-READ STATE, with its Try again: it
@@ -91,27 +99,11 @@ export function Models({ id }: { id?: string }) {
     );
   }
 
-  const addressed = id ? (data.models.find((m) => m.key === id) ?? null) : null;
-
   return (
     <>
-      {!id ? (
-        <PageLenses>
-          <Tabs
-            variant="chip"
-            ariaLabel="Lens"
-            value={view || "models"}
-            onValueChange={(v) => setView(v === "models" ? "" : v)}
-            items={[
-              { value: "models", label: "Models" },
-              { value: "jobs", label: "By job" },
-            ]}
-          />
-        </PageLenses>
-      ) : null}
-
       {id && addressed ? <EntryPage model={addressed} data={data} onFlow={open} /> : null}
-      {id && !addressed ? (
+      {adding ? <Skeleton variant="text" rows={6} label={`Adding ${id}`} /> : null}
+      {id && !addressed && !adding ? (
         <EmptyState
           icon={<CpuGlyph size="xl" />}
           title={`No model called ${id}`}
@@ -123,8 +115,7 @@ export function Models({ id }: { id?: string }) {
           }
         />
       ) : null}
-      {!id && view !== "jobs" ? <Overview data={data} onFlow={open} /> : null}
-      {!id && view === "jobs" ? <ByJob data={data} onFlow={open} /> : null}
+      {!id ? <Overview data={data} onFlow={open} /> : null}
 
       {data.admin && model && !misfit && flow.flow === "test" ? (
         <TestDialog model={model} onClose={flow.close} onDone={data.reload} />
@@ -138,8 +129,7 @@ export function Models({ id }: { id?: string }) {
           data={data}
           onClose={flow.close}
           onDone={data.reload}
-          // BACK TO WHERE IT WAS OPENED: the list (on the lens it was on)
-          // stays the list. Only the removed model's own page has nowhere to
+          // BACK TO WHERE IT WAS OPENED: the list stays the list. Only the removed model's own page has nowhere to
           // return to, and goes to the list.
           onRemoved={() => (id ? nav.to(["settings", "models"]) : flow.close())}
         />
@@ -149,6 +139,21 @@ export function Models({ id }: { id?: string }) {
       ) : null}
     </>
   );
+}
+
+/**
+ * Clears the just-added mark once the reading holds the model, or after two
+ * polls, past which a model still missing is said to be missing.
+ */
+function useAddedMark(adding: boolean, held: boolean, clear: () => void) {
+  useEffect(() => {
+    if (held) clear();
+    if (!adding) return;
+    const t = setTimeout(clear, 2 * MODELS_POLL_MS);
+    return () => clearTimeout(t);
+    // `clear` writes the address, the same every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adding, held]);
 }
 
 /** The dialog flows, which each act on one model and are opened by the address. */

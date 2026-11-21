@@ -11,20 +11,16 @@ import (
 
 // A GESTURE MINTED NOW IS PUBLISHED ON A NODE WHOSE LEDGER HAS LOST ROWS.
 //
-// Every operation ledger loses rows: its retention sweep deletes what is older
-// than [statelog.OpsRetention], and that sweep is the one thing that moves the
-// ledger's watermark. From then on the publisher answers `unknown` — and
-// publishes NOTHING — for any operation minted before that loss whose row it
-// does not hold, and it reads the mint instant off the id itself. An id
-// carrying no instant is read as minted before every loss, so a chat whose ids
-// carried none would have stopped speaking on every node the day its first
-// sweep deleted a row, and no test with a fresh ledger would ever have
-// noticed. The loss here is where a real sweep leaves it.
+// A ledger's retention sweep deletes rows older than [statelog.OpsRetention]
+// and moves its watermark. From then on the publisher answers `unknown` and
+// publishes NOTHING for an operation minted before that loss whose row it
+// lacks, reading the mint instant off the id. An id with no instant reads as
+// minted before every loss, so such a chat would go silent on every node at its
+// first sweep, unnoticed by a fresh-ledger test: the loss is where a sweep leaves it.
 //
 // AND A KEYED GESTURE CARRIES ITS KEY'S INSTANT, not the call's: the same post
-// whose unit of work began before the loss is answered `unknown`, because a
-// re-run of it after the loss is exactly what the ledger can no longer tell
-// from its own first copy.
+// begun before the loss is answered `unknown`, since a re-run after it is what
+// the ledger can no longer tell from its own first copy.
 func TestAFreshGestureIsPublishedWhereTheLedgerLostRows(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents().withPeople("jane", "bob"))

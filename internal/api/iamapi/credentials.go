@@ -103,52 +103,19 @@ type mintBody struct {
 // access token for their assistant, or a service account's — minted for the
 // person the route names.
 //
-// # The value is shown ONCE and stored as a verifier
+// The value is shown ONCE and stored as a SHA-256 verifier: a minted token is
+// a crypto/rand value, so there is no dictionary to grind and a memory-hard
+// digest would cost 50 ms on every tool call.
 //
-// What the estate holds is a SHA-256 of the secret, not the secret: a machine
-// token is a crypto/rand value this engine minted, so there is no dictionary
-// to grind and a memory-hard digest would cost 50 ms on every tool call a
-// pipeline makes. What that buys is that the estate being replicated,
-// snapshotted, backed up and donated to a joining peer leaks nothing.
-//
-// # What it may carry is the DOMAIN's decision
-//
-// A subset of the owner's CURRENT permissions, admin among them, and nothing
-// the caller does not hold — read in the snapshot the credential is formed in,
-// so a demotion landing a moment earlier cannot be minted past. This handler
-// shapes the request and renders the answer; internal/iamdomain is the last
-// frame every path to a token goes through, and it is where each of those is
-// refused. The one thing judged here first is a name this build does not know,
-// refused `400` naming the set rather than `403` as a permission nobody holds.
-//
-// A token MAY carry admin (ADR-0033): it acts as its owner, cut on every
-// request to what they still hold and to the node's admin posture. What keeps
-// one off the gestures that need a person at a keyboard is not a permission it
-// could not carry — it is the authority table's `presence` rows, which refuse
-// a request that presented a token on every person-present verb, and
-// internal/iamdomain's own refusal of an administrative identity record
-// written through one ([iamdomain.ErrTokenRefused]).
-//
-// # A token does not mint a token
-//
-// A request carrying a machine token is refused here, whoever it acts as: a
-// token minted from a token is one whoever holds a pipeline's environment can
-// extend for ever, a year at a time, with nobody present.
-//
-// # A person's token is theirs alone to mint
-//
-// The authority table admits the person themselves or admin, and the second
-// is for SERVICE ACCOUNTS: whoever mints a token is shown its value
-// and it acts as its owner, so an administrator minting on a person's account
-// is an administrator holding a credential that acts as them. The domain
-// refuses it in the owner's snapshot, on the minting party's id this handler
-// states from the resolved principal. What a person needs instead is THIS
-// ROUTE with no `?person=` from their own session, which is the request
-// `crewlet iam token -login` signs in to make.
+// What it may carry is the DOMAIN's decision (internal/iamdomain), read in the
+// snapshot the credential is formed in: a subset of the owner's CURRENT
+// permissions, admin included (ADR-0033; the authority table's `presence` rows
+// keep a token off person-present verbs), nothing the caller does not hold.
 func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
-	// BEFORE THE BODY: what the request presented decides this whatever it
-	// asked for, so a token is told it may not mint rather than how to
-	// phrase a mint it may not make.
+	// A TOKEN DOES NOT MINT A TOKEN, whoever it acts as: one minted from a
+	// token is one whoever holds a pipeline's environment can extend for
+	// ever, a year at a time, with nobody present. Checked BEFORE THE BODY,
+	// so a token is told it may not mint rather than how to phrase a mint.
 	if _, fromToken := auth.PresentedToken(r.Context()); fromToken {
 		// `token_refused`, the code every gesture a token may not make
 		// answers — `unauthorized`'s sentence is about access the
@@ -236,10 +203,13 @@ func (s *Service) PostCredentials(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	const reason = "a machine token was minted"
-	// WHO IS MINTING is the writer's own party — the caller's principal,
-	// which [Service.writerFor] handed it whole — and never a field of the
-	// mint: a person's own token is theirs alone to mint, and the domain
-	// decides that on the party's id in the owner's snapshot.
+	// WHO IS MINTING is the writer's own party (the caller's principal, from
+	// [Service.writerFor]), never a field of the mint. A person's token is
+	// theirs alone to mint: the authority table's admin path is for SERVICE
+	// ACCOUNTS, since an administrator minting on a person's account would
+	// hold a credential acting as them. The domain refuses it on the party's
+	// id in the owner's snapshot; a person uses this route with no `?person=`
+	// (`crewlet iam token -login`).
 	minted, err := writer.MintToken(r.Context(), iamdomain.TokenMint{
 		PersonID: owner, ID: id,
 		Verifier:  credential.TokenVerifier(id, secret),
@@ -322,30 +292,16 @@ const mintUnknown = "Couldn't confirm the token was created. Create another " +
 
 // DeleteCredential is `DELETE /iam/credentials/{id}`.
 //
-// IT REVOKES RATHER THAN DELETES, which is the same choice the session rows
-// make: "this token was withdrawn on the 3rd by Ana" is the sentence an
-// investigation is looking for, and a row that vanished carries none of it.
+// IT REVOKES RATHER THAN DELETES, as session rows do: an investigation looks
+// for "withdrawn on the 3rd by Ana".
 //
-// # Two verbs, and the credential decides which
-//
-// The route is admitted on [authz.ActionCredentialWrite], which is what
-// revoking a MACHINE TOKEN is — a leaked one withdrawn from wherever it was
-// found, by its owner or by the token itself. Revoking anything else changes
-// how its owner proves who they are: a password, a second factor or the
-// recovery codes, each a second-factor reset by another door. That is
-// [authz.ActionCredentialProof], the verb `/auth`'s own second-factor routes
-// ask, and its row needs a PERSON PRESENT — so the table refuses a request
-// that presented a machine token there, although the token acts as its owner
-// and is stepped up: a leaked one that could strip its owner's second factor
-// would be the first half of taking the account.
-//
-// The proof verb is decided ONCE, at the request's instant, and both reads key
-// on that one answer: the read of which credential the id names, which
-// refuses BEFORE anything is written, and the snapshot that revokes, which
-// refuses a credential that is not a token to a request the proof verb did
-// not admit, publishing nothing ([errProofRefused]). The method of a
-// credential id never changes, so the two reads agree about it, and an id this
-// node could not read yet is answered as the first refuses it.
+// Admitted on [authz.ActionCredentialWrite], which is revoking a MACHINE TOKEN.
+// Revoking a password, second factor or recovery code is
+// [authz.ActionCredentialProof], whose row needs a PERSON PRESENT, so a leaked
+// token cannot strip a second factor. That verb is decided ONCE, at the
+// request's instant, and both reads key on it: the credential lookup (refusing
+// BEFORE anything is written) and the revoking snapshot, which refuses a
+// non-token to a request the verb did not admit ([errProofRefused]).
 func (s *Service) DeleteCredential(w http.ResponseWriter, r *http.Request) {
 	person := s.subjectOf(r)
 	if person == "" {

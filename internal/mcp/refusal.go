@@ -8,113 +8,28 @@ import (
 // Refusal is the machine-readable class of a tool call that did not do what it
 // was asked, set ONLY by a first-party tool.
 //
-// # Why a class beside the sentence
-//
-// Because the sentence has one reader and the class has another. A model reads
-// [Result.Output] and is expected to act on its words — that is why the output
-// is the whole story for it, and why the refusal text names the argument to
-// change. A PERSON's surface cannot: it has to decide what a person reads in
-// place of the tool's sentence, which names the next call for a model (the
-// words the refusal carries for a person, or its code's own sentence where it
-// carries none: internal/api/operator's Fail, ADR-0060), which HTTP status the
-// write surface answers, and whether a retry could ever help — and every one
-// of those decisions, made by
-// matching the prose, is a decision that changes when somebody rewords a
-// refusal for the model's benefit. The prompt text is tuned against observed
-// model behaviour; it cannot also be a wire contract.
-//
-// # Why an MCP server's failure carries none
-//
-// Because nothing it says can be classified honestly. A third-party server
-// reports failure as a bare isError with prose, and inferring a class from
-// that prose would be the same prose-matching this type exists to end, applied
-// to text the engine did not write. An unclassified failure is [Result.Failed]
-// with no class in its [Result.Cause] — [RefusalOf] answers "" — and a reader
-// that needs a class treats it as the server's own failure rather than
-// guessing one.
-//
-// What IS classed is a call the engine refuses ABOUT a server: one that is not
-// running — down and being restarted, or stopped — or whose session ended
-// under the call. That sentence is the engine's, from a state it observed
-// rather than prose it would have to read, so it carries [RefusalUnavailable]
-// like any other first-party refusal (supervise.go).
-//
-// # Why it is an ERROR, carried in the cause
-//
-// Because the class is a fact about WHY the call failed, and [Result.Cause]
-// is where why lives. A tool states its class as the cause outright (`Cause:
-// RefusalInvalid` for an argument it refuses with nothing underneath), or
-// beneath the error that decided it ([Classify]), and [RefusalOf] reads it
-// back with [errors.As]. A class field beside the cause was the other shape,
-// and it was two classifiers of one failure: a write surface branching on
-// the cause and an audit row recording the field could tell one caller two
-// different stories about the same call.
-//
-// # Which class a refusal is
-//
-// ONE RULE, for every domain a first-party tool writes: a refusal is classed by
-// WHAT IT IS ABOUT and by WHAT WOULD MAKE THE SAME REQUEST LAND, because that
-// is the one thing every reader of a class decides from — a model choosing
-// between another argument and another attempt, a screen choosing between the
-// sentence and a re-read, a client choosing a status.
-//
-//   - THE REQUEST ITSELF is [RefusalInvalid]: an argument outside its
-//     grammar, a value past a limit of its own (a body's bytes, the members
-//     one call names, what one move may carry), or an argument naming ANOTHER
-//     object that cannot take part — a parent in the trash, a blocker at its
-//     dependents' cap, an archived type, a destination that takes nothing.
-//     Nothing anybody does makes the same request land; a different one does.
-//   - A COLLISION is [RefusalExists]: a name, a title, a label, an address or
-//     an id the call gives an object is ANOTHER object's already — a page
-//     title in its container, a room's name, a tag label another tag carries,
-//     a label another version holds, a source address another artifact holds
-//     — as is a create of an object that is already there. The request is
-//     well formed and the object it is about refuses nothing by its state:
-//     another value lands now, the same one once its holder gives it up, and
-//     the sentence names the holder, because using it is often the move.
-//   - THE OBJECT THE CALL IS ABOUT — or the container it writes into, a room,
-//     a project, an artifact — NOT BEING THERE is [RefusalNotFound], and it
-//     being gone for good (purged, erased, taken back) is the same.
-//   - THAT OBJECT IN A STATE THAT REFUSES THE GESTURE UNTIL SOMEBODY CHANGES
-//     IT is [RefusalConflict]: archived, in the trash, being purged, frozen,
-//     nothing in the trash to restore, a history that cannot be undone, an
-//     upload too old to name — and its own contents at their cap, which is
-//     its state too: a message's distinct emoji, a project's tags, the views a
-//     person pins, every label an artifact keeps in use. The request was
-//     well formed; reading the object again shows the state, and the very
-//     same request lands once whoever the sentence names changes it, and not
-//     before. A write that lost its race is the same class for the same
-//     reason: the object moved, and the request is not wrong.
-//   - A LIMIT THIS VOCABULARY GIVES A CLASS OF ITS OWN is that class, because
-//     what lifts it is not a change of the object and a surface names the
-//     remedy: [RefusalQuotaExceeded] (the company's plan),
-//     [RefusalInboxFull] (a person's marks), [RefusalReassignmentBudget] (an
-//     item's hand-offs, which must not invite another attempt),
-//     [RefusalNotesFull] (the notes a running turn holds unread),
-//     [RefusalNotesSpent] (the notes a turn takes, which must not invite one
-//     either) and [RefusalBudgetExhausted] (a token window).
-//
-// So a room archived a moment before a post, a project archived before a task
-// is filed into it and an artifact in the trash are one class wherever they
-// are met, and a parent in the trash is another, since the call is about the
-// child; and a label another version holds is a collision while every label
-// in use is the artifact's state, since another label lands on the first and
-// on the second none does. internal/agent/builtin's
-// TestEveryDomainRefusalIsClassed holds every sentinel each native domain
-// declares to the meaning it carries and the class this rule gives that
-// meaning, on the domains' own table and on every domain's tools alike, and
-// holds the meaning to the sentinel's own name where the name says it — a
-// …Taken, …Clash or …Exists is a collision, a …Full the object's contents at
-// their cap; internal/api/operator answers each class with one status.
-//
-// # Why it is a named string with [Refusal.Valid]
-//
-// The value travels: a newer build may classify a refusal this build has no
-// constant for, and an unknown class must arrive as a VALUE a reader can
-// branch on (and fall back from) rather than a decode error. See
-// CLAUDE.md's rule for enums.
+// The sentence is for a model; a PERSON's surface decides its status and retry
+// advice (internal/api/operator's Fail, ADR-0060) from the class, not prose.
+// The class is an ERROR in [Result.Cause], stated outright or beneath the
+// deciding error ([Classify]) and read by [RefusalOf] with [errors.As]: one
+// classifier of one failure. An MCP server's failure carries none ([RefusalOf]
+// answers ""); a call refused ABOUT a down server is [RefusalUnavailable]
+// (supervise.go). A named string with [Refusal.Valid], so an unknown class
+// arrives as a value.
 type Refusal string
 
+// A refusal is classed, in every domain, by WHAT IT IS ABOUT and WHAT WOULD
+// MAKE THE SAME REQUEST LAND: the request itself, or an argument naming
+// ANOTHER object that cannot take part, is [RefusalInvalid]; a name or id
+// another object holds is [RefusalExists]; the object missing or gone for good
+// is [RefusalNotFound]; the object in a state refusing the gesture until
+// changed (archived, trashed, frozen, its contents at their cap, a lost race)
+// is [RefusalConflict]; a limit with a remedy of its own keeps its own class.
+// So a room archived before a post is one class wherever met, a parent in the
+// trash another, and a label another version holds a collision while every
+// label in use is the artifact's state. internal/agent/builtin's
+// TestEveryDomainRefusalIsClassed holds each domain sentinel to its meaning and
+// class: a …Taken, …Clash or …Exists is a collision, a …Full a cap.
 const (
 	// RefusalInvalid — the REQUEST is wrong: an argument outside its
 	// grammar, a value past a limit of its own, or an argument naming
@@ -239,26 +154,17 @@ const (
 	RefusalUnavailable Refusal = "unavailable"
 
 	// RefusalInternalError — this node FAILED at something of its own: a
-	// read of its own store that broke, a database that would not answer,
-	// a path in its own code that went wrong. Nothing about the call was
-	// wrong, and — which is what tells it from [RefusalUnavailable] —
-	// waiting does not clear it: a node behind its log catches up and a
-	// coordination store that blinked answers again, while a store that
-	// cannot be read stays that way until somebody fixes the node. Read as
-	// unavailable, a client was told to come back in two seconds, for
-	// ever.
+	// read of its own store that broke, a path in its own code that went
+	// wrong. Nothing about the call was wrong, and, unlike
+	// [RefusalUnavailable], waiting does not clear it until somebody fixes
+	// the node; read as unavailable, a client was told to retry for ever.
 	//
-	// ITS SENTENCE IS FIXED and its error is in the node's log, never in
-	// the sentence: a store's error is a driver's message, a SQL fragment
-	// or a database path, and the sentence reaches a model's prompt, an
-	// operator's assistant and a person's screen — none of whom can act
-	// on it, while whoever runs the node reads the log.
+	// ITS SENTENCE IS FIXED and the error goes to the node's log: a driver
+	// message, SQL fragment or database path reaches a model, an assistant
+	// and a screen, none of whom can act on it.
 	//
-	// SPELLED AS THE ERROR ENVELOPE'S OWN 500, because that is what a
-	// person's surface answers it with, the classes are the codes, and an
-	// unclassified failure — a first-party tool that forgot to classify —
-	// is answered the same: both say the engine broke, and neither has a
-	// remedy the caller can apply.
+	// SPELLED AS THE ERROR ENVELOPE'S OWN 500, as are unclassified failures:
+	// both say the engine broke, with no remedy the caller can apply.
 	RefusalInternalError Refusal = "internal_error"
 )
 
@@ -285,22 +191,16 @@ func (r Refusal) Error() string { return "refused: " + string(r) }
 
 // ErrOutcomeUnknown is the cause of a failed write whose outcome NOBODY CAN
 // VOUCH FOR: the append's acknowledgement was lost, or the node answered
-// before it applied, so the write may have landed — or an MCP server's
-// session ended with the call in flight, so whatever the tool does may have
-// been done (supervise.go). [UnknownOf] is exactly [errors.Is] against it.
+// before it applied, or an MCP server's session ended with the call in flight
+// (supervise.go). [UnknownOf] is exactly [errors.Is] against it.
 //
-// DEFINED HERE, beneath every tool, because the tools that make writes sit
-// above this package and the readers of a result — the audit, the loop's
-// record, a person's write surface — must be able to ask without importing
-// them: a tool's own unknown-outcome error wraps this one.
+// DEFINED HERE, beneath every tool, so readers of a result can ask without
+// importing the tools above: a tool's own unknown-outcome error wraps this.
 //
-// IT IS [RefusalUnavailable] TOO, and wraps it, because the class answers
-// "can this node serve the call now" — and the answer is still no — while
-// this answers a different question: whether the caller has to find out what
-// happened before doing anything else. A person's surface that read the class
-// alone would tell somebody "nothing happened" about a write that may have
-// landed, and they would make it a second time. A model reads
-// [Result.Output], which says all of this in words.
+// IT IS [RefusalUnavailable] TOO, and wraps it: the class says the node cannot
+// serve the call now, this says the caller must find out what happened first.
+// A surface reading the class alone would say "nothing happened" about a write
+// that may have landed, and it would be made twice.
 var ErrOutcomeUnknown error = &unknownOutcome{}
 
 // unknownOutcome is [ErrOutcomeUnknown]'s type: a sentinel that is also
@@ -316,11 +216,9 @@ func (*unknownOutcome) Unwrap() error { return RefusalUnavailable }
 // caller branching on the domain's own error ([errors.Is] against a tracker or
 // knowledge-base sentinel) and a reader asking [RefusalOf] read one value.
 //
-// The class it is handed WINS over any class err already carries: it is the
-// tool's statement about this call, made with what the tool knows about the
-// gesture, and the class underneath was somebody's statement about a part of
-// it. A nil err is the class alone. The message is err's, because the class is
-// already a value and a log line reads the reason.
+// The class handed WINS over any class err carries: it is the tool's
+// statement about this call, the other about a part of it. A nil err is the
+// class alone. The message is err's: a log line reads the reason.
 func Classify(class Refusal, err error) error {
 	if err == nil {
 		return class

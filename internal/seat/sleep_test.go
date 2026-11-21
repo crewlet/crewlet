@@ -19,14 +19,11 @@ func (f *fleet) at(now time.Time) {
 // A HOST THAT SLEPT PAST ITS TTL PROVES NO LEASE ON WAKING, and one whose wall
 // clock was stepped back proves none past its TTL either.
 //
-// A renew's age was measured on the monotonic clock alone, which stops while
-// the host sleeps while the store's TTL runs on. So a node that slept past its
-// TTL woke still provably holding every seat and its presence, and went on
-// admitting turns as the seat until its next heartbeat failed to renew, while
-// the store had expired the lease and a peer could hold it. The wall clock
-// alone would have the opposite fault: a step back makes a renew look younger
-// than it is. The age is the larger of the two readings, which neither fault
-// can hold back.
+// The monotonic clock stops while the host sleeps and the store's TTL runs
+// on, so measured on it alone a node that slept past its TTL woke still
+// holding every seat and admitting turns on a lease a peer could hold. The
+// wall clock alone fails the other way: a step back makes a renew look
+// younger. The age is the larger of the two readings.
 //
 // Mutation: measure the age on the monotonic clock alone, and the host that
 // slept past its TTL still proves its seat and admits a turn on it; on the

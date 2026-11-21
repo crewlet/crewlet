@@ -283,8 +283,8 @@ func createKeyValue(ctx context.Context, js jetstream.JetStream, clustered bool,
 //	           splitting the company's files between two stores
 //	custody    thirty-two days, a day past the event log's retention: it must
 //	           outlive every row it can be asked about
-//	uploads    thirty hours, the longest hold a reservation keeps, so an
-//	           abandoned upload's record goes with no sweep
+//	uploads    thirty hours, the longest hold a reservation or a seat's save
+//	           ledger entry keeps, so what lapsed goes with no sweep
 //	positions  none: an expired position reads as a node that applied NOTHING,
 //	           which pins the trim or lets it delete what that node still needs
 //
@@ -636,7 +636,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			"Crewlet stateless-node event custody; the bucket TTL outlasts the event log's retention",
 			cfg.CustodyRetention},
 		{&store.uploads, uploadsSuffix,
-			"Crewlet artifact upload reservations; the bucket TTL outlasts the longest hold a reservation keeps",
+			"Crewlet artifact upload reservations and seat save ledgers; the bucket TTL outlasts the longest hold either keeps",
 			cfg.UploadRetention},
 		{&store.positions, positionsSuffix,
 			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
@@ -944,6 +944,29 @@ func (f *FleetStore) WorkedAt(ctx context.Context, scope string, keys []string) 
 			var record ledgerRecord
 			_ = json.Unmarshal(entry.Value(), &record)
 			out[key] = record.At
+		case errors.Is(err, jetstream.ErrKeyNotFound):
+		default:
+			return nil, unavailable("read the completion ledger", err)
+		}
+	}
+	return out, nil
+}
+
+// WorkedBy returns the keys already recorded under scope, each with the detail
+// its first record stated.
+func (f *FleetStore) WorkedBy(ctx context.Context, scope string, keys []string) (map[string]string, error) {
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		entry, err := f.get(ctx, f.ledger, ledgerKey(scope, key))
+		switch {
+		case err == nil:
+			// A RECORD THAT DOES NOT DECODE IS STILL WORKED, by nobody it names.
+			var record ledgerRecord
+			_ = json.Unmarshal(entry.Value(), &record)
+			out[key] = record.Detail
 		case errors.Is(err, jetstream.ErrKeyNotFound):
 		default:
 			return nil, unavailable("read the completion ledger", err)

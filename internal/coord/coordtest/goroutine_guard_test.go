@@ -16,52 +16,16 @@ var stopsTheGoroutine = map[string]bool{
 }
 
 // TestNoFatalOffTheTestGoroutine fails the build if any case reports a failure
-// from a goroutine it spawned.
+// from a goroutine it spawned. t.Fatal only fails the test on its OWN goroutine; elsewhere it Goexits one
+// nobody waits on, so a WaitGroup never completes and the case hangs until a
+// timeout blames a package. Cases collect under a mutex and report after
+// joining. It walks the syntax tree: a line scan cannot see scope.
 //
-// t.Fatal is only a failure on the test's OWN goroutine. Anywhere else it
-// marks the test failed and then calls runtime.Goexit on a goroutine nobody
-// is waiting on, so the spawned worker vanishes silently: a WaitGroup it had
-// not yet marked done never completes and the case hangs until a timeout
-// blames a package. The concurrency cases here are written to collect into
-// slices under a mutex and report from the test goroutine after joining, and
-// this is what keeps that a rule rather than a habit.
-//
-// It walks the syntax tree because the line-based version of this check
-// cannot see scope, and is not merely imprecise but wrong in both directions:
-// a closure passed as an argument does not close its brace at the end of its
-// body — the line continues `}, arg)` — so a line scan runs past the closure
-// into the enclosing function and flags its perfectly legal Fatals, while a
-// Fatal further into a long body than the scan's window falls out entirely. A
-// teammate's line-based version of this same check reported six violations,
-// all false; "fixing" them would have converted correct Fatals into Errorfs
-// and let tests carry on into assertions whose preconditions never held.
-//
-// BOUNDARY, measured rather than reasoned. It CATCHES a stop-call written
-// lexically inside a `go` statement, directly or nested in a closure. It does
-// NOT catch a `go` statement calling a NAMED function that fatals: injecting
-// exactly that — `go namedWorkerThatFatals(h)` with the stop-call in the
-// function body — passes this guard, landing-checked.
-//
-// Both halves are stated because a limitation is the claim nobody audits. It
-// reads as candour, so it is thanked for and read past, while an over-claim
-// gets challenged on sight. A teammate found two guards of their own whose
-// "what this does not catch" paragraph named the exact form the guard was
-// built to find — wrong in the one direction no reader is motivated to check.
-//
-// WHY THE VACUITY CHECK BELOW IS ONLY A COUNT. A guard can also go blind by
-// having its matcher stop recognising its subject, which is worse than a false
-// negative because it is permanent and silent — a teammate's lock guard keyed
-// on a receiver field literally named `mu`, so renaming that one field to
-// `lock` made every function in the package read as lock-free and the guard
-// reported zero for ever. This matcher cannot be blinded that way: its subject
-// is `*ast.GoStmt`, a language construct, and the method names are testing.T's
-// own, so nothing a refactor in this repo can rename is load-bearing. Measured
-// rather than assumed — an injected Fatal is still caught when called through
-// a renamed local alias, and when called on an unrelated receiver.
-//
-// That last case is deliberate, not a false positive worth suppressing:
-// log.Fatalf on a spawned goroutine is worse than t.Fatalf, because it takes
-// the process down instead of one goroutine.
+// BOUNDARY: it CATCHES a stop-call lexically inside a `go` statement, directly
+// or in a closure; it does NOT catch `go namedWorkerThatFatals(h)`
+// (landing-checked). The vacuity check is only a count because the subject is
+// `*ast.GoStmt` and the names are testing.T's, so no rename blinds it. An
+// aliased or unrelated receiver (log.Fatalf) is caught on purpose.
 func TestNoFatalOffTheTestGoroutine(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()

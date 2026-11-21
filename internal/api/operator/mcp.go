@@ -86,16 +86,14 @@ func (s *Server) mcpServer(cat catalogue) *mcp.Server {
 // handlerFor adapts one catalogue tool to the MCP SDK's own signature.
 //
 // BY NAME, THROUGH THE SERVER'S DISPATCH, rather than closing over the tool
-// value, so the MCP transport reaches a tool by exactly the path every other
-// transport does — and is audited by it — and there is no second handle on it
-// to fall out of step. An MCP call names no operation of its own: a tracker
-// write mints one and answers it as `op_id`, which the assistant brings back
-// as an argument to finish the same write.
+// value, so MCP reaches a tool by the path every transport does, audit
+// included, with no second handle to fall out of step. An MCP call names no
+// operation: a tracker write mints one and answers it as `op_id`, which the
+// assistant brings back as an argument to finish the same write.
 //
-// WHO IS CALLING COMES FROM THE REQUEST'S CREDENTIAL, carried on the context
-// by the request guard and read by the catalogue's actor — never from an
-// argument. A caller that could name its own actor could file work as
-// anybody, which is the same rule a seat's tools follow and the same reason.
+// WHO IS CALLING COMES FROM THE REQUEST'S CREDENTIAL, on the context from the
+// request guard, never from an argument: a caller naming its own actor could
+// file work as anybody.
 func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// THE ONE DECODE every transport into a tool shares
@@ -136,48 +134,18 @@ func mcpAnswer(result tools.Result) *mcp.CallToolResult {
 	return &mcp.CallToolResult{IsError: result.Failed, Content: content}
 }
 
-// MCPHandler serves the MCP transport at [MCPPattern].
+// MCPHandler serves the MCP transport at [MCPPattern], a POST: GET and DELETE
+// get the mux's 405 naming POST before anything here runs.
 //
-// # STATELESS, so every call is decided by the request that carries it
-//
-// The SDK's stateful handler opens a SESSION on the initialize request and
-// serves every later request on that session through the context the
-// initialize request had — so the principal a tool call reads off its context
-// is whoever OPENED the session, not whoever sent the call. That made two
-// things true that must not be: a grant withdrawn mid-session went on working
-// for as long as the assistant stayed connected (the ceiling, a revoked
-// session and a removed token included), and any other credential presenting
-// the same Mcp-Session-Id header acted as the opener — a session id is an
-// opaque handle a client echoes, not a secret anybody proved.
-//
-// Stateless mode gives each POST a temporary session built from THAT
-// request's own context, so the guard's resolution of each request is the
-// resolution its tool call is decided on, and there is no session for a second
-// credential to ride. Nothing this surface serves needed the state: its
-// catalogue is read for each request and no tool here asks the client anything
-// back. The one thing it tells a client between its requests — that its tools
-// changed — goes down the stream a 2026-07-28 client opens as a POST of its
-// own, `subscriptions/listen`, whose session lives exactly as long as that one
-// request: ended by the client, by its connection dropping, or by the node's
-// listener shutting down ([Listeners.End]). Stateless is also what serves a
-// FLEET: a session is held by the one node that opened it, so behind a load
-// balancer with no affinity every other ingress node refused it, and the MCP
-// client this repository ships reads that refusal as the end of its
-// connection.
-//
-// # Two answers before any tool runs
-//
-// A node that has not been handed a company answers `503
-// no_active_revision`, and anything else is served over the catalogue the
-// request found — never an empty one, since [New] requires the seat controls
-// every node can serve whatever backends its company runs.
-//
-// MOUNTED AT [MCPPattern], a POST: a GET for the server-to-client stream and a
-// DELETE to end a session are answered the mux's own 405 naming POST before
-// anything here runs — the transport's documented way of saying "this server
-// offers no stream", in the engine's envelope rather than the SDK's plain text.
-// Served bare, as a suite serves it, the SDK's stateless handler answers both
-// 405 too, so neither verb reaches a tool whichever way the handler is mounted.
+// STATELESS, so every call is decided by the request that carries it. A
+// stateful session serves requests through the initialize request's context,
+// so a call's principal would be whoever OPENED it: a withdrawn grant would
+// keep working, and any credential echoing the same Mcp-Session-Id (a handle,
+// not a secret) would act as the opener. Each POST instead gets a temporary
+// session from THAT request's context. Tools-changed notices go down the
+// `subscriptions/listen` POST, ended by the client, its connection or
+// [Listeners.End]. Stateless also serves a FLEET: another ingress node would
+// refuse a session opened elsewhere. No company: `503 no_active_revision`.
 func (s *Server) MCPHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// THE GUARD IS THE APP'S, not a second one here: this path is not

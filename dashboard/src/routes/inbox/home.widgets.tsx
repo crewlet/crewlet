@@ -13,6 +13,7 @@ import { useMemo } from "react";
 import { List, ListItem } from "@crewlethq/ui";
 import { InboxGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
+import { inboxItemPath } from "~/app/routes.ts";
 import { useNow } from "~/lib/clock.ts";
 import { indexOrg } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
@@ -80,7 +81,7 @@ function Updates() {
                 return (
                   <ListItem
                     key={row.key}
-                    href={href(["inbox"], { row: row.key })}
+                    href={href(inboxItemPath(row.key))}
                     leading={<Badge row={row} who={null} size={20} />}
                     trailing={<span className="home-tasks-when">{shortWhen(row.at, now)}</span>}
                   >
@@ -101,7 +102,7 @@ function Updates() {
                 return (
                   <ListItem
                     key={row.key}
-                    href={href(["inbox"], { row: row.key })}
+                    href={href(inboxItemPath(row.key))}
                     leading={<Badge row={row} who={who} size={20} />}
                     trailing={<span className="home-tasks-when">{shortWhen(row.at, now)}</span>}
                   >
@@ -120,7 +121,7 @@ function Updates() {
               return (
                 <ListItem
                   key={row.key}
-                  href={href(["inbox"], { row: row.key })}
+                  href={href(inboxItemPath(row.key))}
                   leading={<Badge row={row} who={who} size={20} />}
                   trailing={<span className="home-tasks-when">{shortWhen(row.at, now)}</span>}
                 >

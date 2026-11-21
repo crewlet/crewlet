@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/assistant/cards"
-	"github.com/crewlet/crewlet/internal/assistant/catalog"
 )
 
 // THE WALK THAT HOLDS A READ'S CARD TO ITS ROUTE'S REAL ANSWER.
@@ -20,8 +19,8 @@ import (
 // A card spec is a set of dotted paths (cards.Spec.Paths) the compiler cannot
 // hold to anything, and the model reads a tool's result from its card, so a
 // path naming a key the answer does not hold is a tool that tells the person
-// nothing exists: list_artifacts read its rows from `items` while GET
-// /artifacts answers `contents`. The walk here takes an answer a route's own
+// nothing exists: a spec reading rows from `items` while GET /artifacts
+// answers `contents`. The walk here takes an answer a route's own
 // handler gave and fails every path that is not in it. A suite that can serve
 // a route (internal/api, internal/api/iamapi) asks it and hands the answer
 // here, so no fixture typed beside the spec can repeat the spec's mistake.
@@ -49,23 +48,18 @@ type ValueTypes map[string]reflect.Type
 // the answer leaves out (omitted where empty) is held to.
 const AnswerScope = "answer"
 
-// HoldCard holds every path spec reads to answer, the decoded body a route's
-// handler gave the request a tool named name sent, and fails each one the
-// answer does not hold:
-//
+// HoldCard holds every path spec reads, but its Note, to answer (the decoded
+// body a route's handler gave the request a tool named name sent), and fails
+// each one it does not hold:
 //   - a path read from the answer is a key of it at every step (null counts,
 //     an empty list is a list);
 //   - a path read from a row, the record or an item is a key of at least one
 //     of them, the rows expanded as cards.Build expands them.
 //
-// Every path but the spec's Note, which only a search that could not run
-// answers: the caller holds it to such an answer with [Present].
-//
-// A path a row, the record or an item does not show is held to types instead
-// (see [ValueTypes]); a type declared for a scope must hold every key a real
-// value there carries, so a declaration naming the wrong type fails. It
-// answers how many paths it held and which declarations it consulted, so a
-// suite can fail one that is no longer needed.
+// The Note is the caller's to hold, with [Present], to a search that could not
+// run. A path no row, record or item shows is held to types ([ValueTypes]); a
+// scope's type must hold every key a real value carries. It answers the paths
+// held and declarations consulted.
 func HoldCard(t testing.TB, name string, spec cards.Spec, answer any, types ValueTypes) (
 	held int, consulted []string) {
 
@@ -375,43 +369,6 @@ func jsonMember(t reflect.Type, name string) (reflect.Type, bool) {
 func encoded(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
-}
-
-// CardVariants are example arguments that reach each of tool's card variants:
-// [ExampleArgs], each with one of its arguments left out, and each with one
-// enum argument set to each of its values; the first to reach a variant is
-// kept.
-func CardVariants(t testing.TB, tool catalog.Tool) map[string]map[string]any {
-	t.Helper()
-	base := ExampleArgs(t, tool.Parameters)
-	out := map[string]map[string]any{}
-	try := func(args map[string]any) {
-		if _, err := tool.Request(args); err != nil {
-			return
-		}
-		variant := ""
-		if tool.Variant != nil {
-			variant = tool.Variant(args)
-		}
-		if _, ok := out[variant]; !ok {
-			out[variant] = args
-		}
-	}
-	try(base)
-	props, _ := tool.Parameters["properties"].(map[string]any)
-	for _, name := range slices.Sorted(maps.Keys(props)) {
-		less := maps.Clone(base)
-		delete(less, name)
-		try(less)
-		prop, _ := props[name].(map[string]any)
-		enum, _ := prop["enum"].([]string)
-		for _, value := range enum {
-			with := maps.Clone(base)
-			with[name] = value
-			try(with)
-		}
-	}
-	return out
 }
 
 // Filled is a T with every exported field set, for a source a suite stands in

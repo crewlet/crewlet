@@ -18,17 +18,15 @@ import (
 // THE ANSWER EVERY READER GETS CARRIES HOSTS, A CODE HOST'S OWNERS, AND
 // NOTHING ELSE.
 //
-// `link_hosts` is everybody's because it is the least of the integrations a
-// reader needs to link a reference, and the moment it carries one more thing
-// it is a second `integrations` answer with the administrator's gate taken
-// off. So the fixture configures every app with everything a block can hold
-// that a reader must not read (each credential, the repositories, projects
-// and team), and with a credential, a query and a fragment written into an
-// instance URL, and the case fails on any of them reaching the wire, on any
-// field beside the three, and on any kind outside the closed set. The owners
-// (an organization, a group, and the owner part of every repository the
-// company or a seat names) are the one thing beside the hosts, and only on a
-// code host.
+// `link_hosts` is everybody's because it is the least a reader needs to link a
+// reference; one more field and it is a second `integrations` answer without
+// the administrator's gate. So the fixture configures every app with
+// everything a reader must not read (credentials, repositories, projects,
+// team) and a credential, query and fragment in an instance URL, and the case
+// fails on any of them reaching the wire, on any field beside the three, and
+// on any kind outside the closed set. The owners (an organization, a group,
+// the owner part of every repository named) are the one thing beside the
+// hosts, and only on a code host.
 func TestTheLinkHostsAnswerCarriesHostsAndNothingElse(t *testing.T) {
 	t.Parallel()
 	const secret = "SECRETMARK"

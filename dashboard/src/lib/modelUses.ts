@@ -11,8 +11,9 @@
  * evaluations is `llm_auxiliary` and `llm_judge`. The pairs are paired by the
  * model each wants: the review and the delegated work take a strong model, and
  * the routines and the onboarding judge, each under a fixed deadline, a fast
- * one, so one choice of model serves both jobs it writes. The Assistant is
- * the company's, not a seat's: `assistant.llm`, with no seats.
+ * one, so one choice of model serves both jobs it writes. Ask Crewlet and
+ * the Advisor are the company's, not a seat's: `assistant.model` and
+ * `advisor.model`, with no seats.
  *
  * ONE MODEL PER SEAT FIELD. The page writes a seat's field as one scalar key
  * and never a chain (decision D3): a chain the document held there is
@@ -21,13 +22,12 @@
  * whatever the field named behind it, so the job resolves as the document
  * then says.
  *
- * ASK CREWLET KEEPS ITS CHAIN. `assistant.llm` is the one chain every
- * person's Ask Crewlet runs on, and each member is an entry held to the
- * assistant's own rules (web tools denied), so its fallbacks are the only
- * thing between a model that sits out its plan's limit and nobody being
- * answered. Choosing Ask Crewlet's model therefore replaces the model it
- * answers with first and keeps every fallback behind it, in order
- * ([assistantChain]).
+ * ASK CREWLET RUNS ON ONE MODEL. `assistant.model` is one key, and choosing
+ * Ask Crewlet's model writes it, which also turns Ask Crewlet on.
+ *
+ * THE ADVISOR EXPLAINS WITH ONE MODEL, or with none: its checks run either
+ * way. `advisor.model` is one key; choosing the Advisor for a model writes
+ * it, and taking the Advisor off the model it runs on clears it.
  *
  * WHAT A JOB RUNS ON NOW is the engine's answer (`llm_entries`' `used_by`),
  * never resolved here: this module only writes.
@@ -79,13 +79,15 @@ export function categoryOfJob(job: ModelJob): JobCategory | null {
 }
 
 /**
- * A model's uses: the seats that run each seat job on it, and whether the
- * Dashboard Assistant does. The page edits it a category at a time; it holds
+ * A model's uses: the seats that run each seat job on it, and whether Ask
+ * Crewlet and the Advisor do. The page edits it a category at a time; it holds
  * jobs, so a document that split a category by hand reads back exactly.
  */
 export interface Uses {
   jobs: Record<SeatJob, string[]>;
   assistant: boolean;
+  /** Whether the Advisor explains its findings with this model (`advisor.model`). */
+  advisor: boolean;
 }
 
 /** No use at all. */
@@ -96,12 +98,13 @@ export function noUses(): Uses {
       string[]
     >,
     assistant: false,
+    advisor: false,
   };
 }
 
 /**
  * A model's uses as the engine reports them: each seat job a seat RUNS on it
- * (position 0), and the assistant's chat. A fallback position is not a use the
+ * (position 0), Ask Crewlet's chat and the Advisor's findings. A fallback position is not a use the
  * page edits; deep work stays in Configuration.
  */
 export function usesOf(usedBy: readonly ModelUse[]): Uses {
@@ -109,6 +112,7 @@ export function usesOf(usedBy: readonly ModelUse[]): Uses {
   for (const use of usedBy) {
     if (use.position !== 0) continue;
     if (use.assistant === "chat") out.assistant = true;
+    if (use.advisor === "findings") out.advisor = true;
     if (use.seat && use.job && use.job in SEAT_JOB_FIELDS) {
       const job = use.job as SeatJob;
       if (!out.jobs[job].includes(use.seat)) out.jobs[job].push(use.seat);
@@ -151,11 +155,11 @@ export function everythingSeats(uses: Pick<Uses, "jobs">): string[] {
  * The Assistant beside seat work does not change the choice: the page says it
  * on a line of its own.
  */
-export type Intent = "all" | JobCategory | "assistant" | "none" | "custom";
+export type Intent = "all" | JobCategory | "assistant" | "advisor" | "none" | "custom";
 
 export function intentOf(uses: Uses): Intent {
   const used = SEAT_JOBS.filter((j) => uses.jobs[j].length > 0);
-  if (used.length === 0) return uses.assistant ? "assistant" : "none";
+  if (used.length === 0) return uses.assistant ? "assistant" : uses.advisor ? "advisor" : "none";
   const same = (jobs: readonly SeatJob[]) =>
     jobs.every((j) => uses.jobs[j].join(",") === uses.jobs[jobs[0]!].join(","));
   if (used.length === SEAT_JOBS.length && same(SEAT_JOBS)) return "all";
@@ -166,21 +170,23 @@ export function intentOf(uses: Uses): Intent {
   return whole ?? "custom";
 }
 
-/** The uses an intent sets for `seats`, every other seat job off; the assistant as given. */
+/** The uses an intent sets for `seats`, every other seat job off; Ask Crewlet and the Advisor as given. */
 export function usesForIntent(
   intent: Exclude<Intent, "custom">,
   seats: readonly string[],
   assistant: boolean,
+  advisor = false,
 ): Uses {
   const out = noUses();
   const jobs: readonly SeatJob[] =
     intent === "all"
       ? SEAT_JOBS
-      : intent === "none" || intent === "assistant"
+      : intent === "none" || intent === "assistant" || intent === "advisor"
         ? []
         : CATEGORY_JOBS[intent];
   for (const job of jobs) out.jobs[job] = [...seats].sort();
   out.assistant = intent === "assistant" || assistant;
+  out.advisor = intent === "advisor" || advisor;
   return out;
 }
 
@@ -309,16 +315,6 @@ function fallbacksOf(value: unknown, key: string): string[] {
     .filter((k) => k !== key);
 }
 
-/**
- * Ask Crewlet's chain with `key` answering first: the model it answered with
- * first replaced, every fallback behind it kept in its order, and `key` taken
- * out of the fallbacks rather than tried twice. A chain that already starts
- * with `key` comes back as it was.
- */
-export function assistantChain(chain: unknown, key: string): string[] {
-  return [key, ...fallbacksOf(chain, key)];
-}
-
 /** The fallbacks a write takes out of a seat's field, for the review to name. */
 export interface Dropped {
   seat: string;
@@ -346,10 +342,12 @@ export interface UsesWrite {
  * - A seat job taken off the model removes `key` from the field it is written
  *   in, keeping the rest; a field left empty is deleted, so the job resolves as
  *   an unset job does.
- * - The Assistant writes `key` at the head of `assistant.llm`, keeping every
- *   fallback the chain named behind it ([assistantChain]). Leaving it is not a
- *   write: the assistant runs on something, so it moves when another model is
- *   chosen.
+ * - Ask Crewlet writes `key` as `assistant.model`. Leaving it is not a write:
+ *   Ask Crewlet runs on something, so it moves when another model is chosen,
+ *   and is turned off only by removing its model on its own page.
+ * - The Advisor writes `key` as `advisor.model`, and taking it off the model
+ *   it runs on clears `advisor.model`: its checks run with no model, so no
+ *   model has to take it over, and this page is the one place it is chosen.
  */
 export function applyUses(doc: CompanyDocument, key: string, was: Uses, next: Uses): UsesWrite {
   const out = structuredClone(doc) as unknown as Doc;
@@ -397,7 +395,13 @@ export function applyUses(doc: CompanyDocument, key: string, was: Uses, next: Us
 
   if (next.assistant && !was.assistant) {
     const assistant = (isRecord(out.assistant) ? out.assistant : (out.assistant = {})) as Doc;
-    assistant.llm = chainValue(assistantChain(assistant.llm, key));
+    assistant.model = key;
+  }
+  if (next.advisor && !was.advisor) {
+    const advisor = (isRecord(out.advisor) ? out.advisor : (out.advisor = {})) as Doc;
+    advisor.model = key;
+  } else if (!next.advisor && was.advisor && isRecord(out.advisor) && out.advisor.model === key) {
+    delete out.advisor.model;
   }
   return { doc: out as unknown as CompanyDocument, dropped };
 }

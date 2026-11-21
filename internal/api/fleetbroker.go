@@ -15,28 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE FLEET'S BROKER MEMBERSHIP, over HTTP for the retention gestures' reason:
-// the metadata group is read and changed from inside a member, whose broker
-// binds no socket anything outside the fleet could reach, so `crewlet fleet
-// broker list` and `remove` are clients of these routes.
+// THE FLEET'S BROKER MEMBERSHIP, over HTTP because a member's broker binds no
+// socket outside the fleet; `crewlet fleet broker list` and `remove` are clients.
 //
 //   - GET /fleet/broker answers what every live node advertises about its
-//     broker, the metadata group as a member reports it, and every place the
-//     two disagree — a member gone for good that the group still counts
-//     first among them. Any node answers it, asking a member where it is not
-//     one ([engine.FleetBroker.List]). It is the `fleet_broker` question, as
-//     a named read route: the dashboard asks it over the socket.
+//     broker, the metadata group as a member reports it, and where they
+//     disagree. Any node answers ([engine.FleetBroker.List]).
 //   - POST /fleet/broker/remove/{node}?confirm={node}[&force=true] removes a
-//     member from the metadata group through a live member's system account,
-//     by the peer id its node id hashes to — which reaches it whether or not
-//     any member still remembers its name. Refused while the named node holds
-//     a live presence lease as a member (or without saying what its broker
-//     is), unless forced: a running member removed from the group rejoins it
-//     as a voter at its next restart.
+//     member through a live member's system account by the peer id its node id
+//     hashes to. Refused while the node holds a live presence lease, unless
+//     forced: a running member removed rejoins as a voter at its next restart.
 //   - POST /fleet/broker/remove-peer/{peer}?confirm={peer}[&force=true] is the
-//     same removal naming the voter by the raft peer id GET /fleet/broker
-//     shows, for a voter whose name no member has heard — which has no node
-//     id to give.
+//     same by raft peer id, for a voter with no node id.
 
 // FleetBrokerControl is the broker-membership seam — see [engine.FleetBroker].
 // Every engine has one, so it is required like the capacity seam.
@@ -83,16 +73,14 @@ func (b BrokerRefusal) Write(w http.ResponseWriter) {
 // reporting false for anything else — a failure the route answers
 // `500 broker_remove_failed`.
 //
-// EACH SENDS AN OPERATOR SOMEWHERE DIFFERENT, which is why each has its own
-// code: a member still running is stopped first, a voter the group does not
-// count is a typo or a removal already made, a change in flight is waited out,
-// a group with no leader is brought back to a quorum, a carrier that went
-// silent is read about before asking again, and an external cluster is its
-// own operator's.
+// EACH HAS ITS OWN CODE because each sends an operator somewhere different: stop
+// a running member first, an uncounted voter is a typo or done already, wait out
+// a change in flight, restore a leaderless group's quorum, read about a silent
+// carrier, or leave an external cluster to its own operator.
 //
-// THE TWO 503s WAIT AN ELECTION ([statelog.ElectionRetryHint]): a group with
-// no leader answers again no sooner than it elects one, and a removal with no
-// member to carry it waits on a member's broker coming back into that group.
+// THE TWO 503s WAIT AN ELECTION ([statelog.ElectionRetryHint]): a leaderless
+// group answers no sooner than it elects one, and a removal with no member to
+// carry it waits for a member's broker to rejoin.
 func RenderBrokerRefusal(err error) (BrokerRefusal, bool) {
 	refuse := func(status int, code httpjson.Code, hint string) (BrokerRefusal, bool) {
 		out := BrokerRefusal{Status: status, Code: code,

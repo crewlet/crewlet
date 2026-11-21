@@ -539,12 +539,10 @@ var seatReqs = []setup.Requirement{
 // A SEAL THAT FAILS NAMES ITSELF AND WHAT WAS SEALED BEFORE IT, on both
 // halves.
 //
-// The fleet's secret store is a coordination write, so the second of two
-// credentials can fail on the very error a pointer read fails with, after the
-// first is in the store. The first must still be named — it is a value nothing
-// points at yet — and the failure must say it was a seal, because a caller
-// that read it as an unreadable pointer told the operator the wrong thing
-// failed.
+// The second of two credentials can fail on the very error a pointer read
+// fails with, after the first is stored. The first must still be named (nothing
+// points at it yet) and the failure must say it was a seal, or the operator is
+// told the wrong thing failed.
 //
 // Mutations: return an empty Result from either seal loop, and that half's
 // first name is lost; wrap the failure in a plain error, and SealError is not

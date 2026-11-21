@@ -72,7 +72,8 @@ import { heldReason, heldSetting, itemHold } from "~/lib/heldConversation.ts";
 import { ADVISOR_POLL_MS } from "~/lib/useAttention.ts";
 import { href, useNavigator, useRoute } from "~/app/router.tsx";
 import { QueryState } from "~/components/common.tsx";
-import { Coverage, type RowChrome } from "~/components/work.tsx";
+import { Coverage, FlowTag, type RowChrome } from "~/components/work.tsx";
+import { badgedFlow } from "~/lib/flow.ts";
 import { RestoreButton } from "~/components/writes.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useNarrowerThan } from "~/lib/useNarrowerThan.ts";
@@ -121,6 +122,7 @@ import { taskEntries, taskTargetOf, useTaskActions, type TaskActions } from "./t
 import type {
   AgentRow,
   WorkItemsAnswer,
+  WorkFlowState,
   WorkItemDetail,
   WorkProjectDetail,
   WorkSummary,
@@ -147,12 +149,16 @@ const READ_ONLY = "The fields, checklists and description are read-only here.";
  *
  * `undefined` rather than an empty element, so an ordinary task draws no row.
  */
-export function itemFlags(detail: WorkItemDetail) {
+export function itemFlags(detail: WorkItemDetail, chrome: RowChrome = {}) {
   const item = detail.task;
   const blocked = readsBlocked({ ...item, blocked: detail.blocked });
+  // WHY IT IS NOT MOVING (ADR-0162), less what the page says another way: the
+  // live row says working, and the Blocked flag blocked.
+  const flow = badgedFlow(detail.flow);
+  const flowed = flow && !FLAG_FLOW_SKIP.includes(flow.state);
   // IN THE TRASH IS NOT A FLAG HERE: [RemovedNote] is its one mark, drawn
   // wherever these are, and a chip over it said the same thing twice.
-  if (!blocked && !item.archived) return undefined;
+  if (!blocked && !item.archived && !flowed) return undefined;
   return (
     <span className="row gap-1 task-flags">
       {blocked && (
@@ -160,10 +166,20 @@ export function itemFlags(detail: WorkItemDetail) {
           Blocked
         </Tag>
       )}
+      <FlowTag
+        flow={detail.flow}
+        skip={FLAG_FLOW_SKIP}
+        assignee={item.assignee}
+        chrome={chrome}
+        stuckHours={chrome.stuckHours}
+      />
       {item.archived && <Tag appearance="outline">Archived</Tag>}
     </span>
   );
 }
+
+/** The flow states the page draws other than as a flag. */
+const FLAG_FLOW_SKIP: readonly WorkFlowState[] = ["working", "blocked"];
 
 /**
  * The engine's hold on the item's conversation (ADR-0117), said where a reader
@@ -249,25 +265,23 @@ function useItemChrome(
       types: project?.types,
       statuses: project?.statuses,
       tags: project?.tags,
+      ...(project ? { stuckHours: project.stuck_after_hours } : {}),
     };
   }, [index, authors, project]);
 }
 
 /**
- * The seat running a turn on this task now — joined on the item the engine
- * charges the turn to, never on a `work_key`, and only while the seat's own
- * state is `working`.
+ * The seat running a turn on this task now: its assignee, where the engine
+ * reads the task's flow `working` (ADR-0162) and the seat's own state is
+ * `working` too. No turn is matched to the task by its key or id here.
  */
 export function liveOn(
   rows: readonly AgentRow[],
-  item: { id: string; key: string },
+  detail: Pick<WorkItemDetail, "flow"> & { task: { assignee?: string } },
 ): AgentRow | null {
-  for (const row of rows) {
-    if (row.activity !== "working") continue;
-    const on = row.live_call?.work_item ?? row.turn?.work_item ?? null;
-    if (on && (on.key === item.key || on.id === item.id)) return row;
-  }
-  return null;
+  const handle = detail.task.assignee;
+  if (detail.flow?.state !== "working" || !handle) return null;
+  return rows.find((row) => row.handle === handle && row.activity === "working") ?? null;
 }
 
 /**
@@ -403,7 +417,10 @@ export function WorkItem({ id }: { id: string }) {
   const { state, item, project, children, worklet } = useTask(id);
   // THE ENGINE'S HOLD ON ITS CONVERSATION, from the notices an administrator reads.
   const admin = useViewer().admin;
-  const advisor = useQuery("advisor", undefined, { pollMs: ADVISOR_POLL_MS, enabled: admin });
+  const advisor = useQuery("advisor_notices", undefined, {
+    pollMs: ADVISOR_POLL_MS,
+    enabled: admin,
+  });
   const held = item ? itemHold(admin ? advisor.data?.notices : undefined, item.id) : undefined;
   const chrome = useItemChrome(index, state.data, project.data);
   const { open: openPeek } = usePeekControls();
@@ -417,7 +434,7 @@ export function WorkItem({ id }: { id: string }) {
   // sidebar and a peek decide how much of the window the page has.
   const frame = useRef<HTMLDivElement>(null);
   const stacked = useNarrowerThan(frame, TASK_RAIL_STACKS + 1, Boolean(state.data && item));
-  const live = item ? liveOn(agents, item) : null;
+  const live = state.data ? liveOn(agents, state.data) : null;
   const statusFor = useMemo(() => {
     const byHandle = new Map(agents.map((row) => [row.handle ?? "", row]));
     return (handle: string) => statusOf(activityOf(byHandle.get(handle)));
@@ -580,7 +597,7 @@ export function WorkItem({ id }: { id: string }) {
                     </div>
                   ) : (
                     <>
-                      {itemFlags(state.data)}
+                      {itemFlags(state.data, chrome)}
                       {item.removed && (
                         <RemovedNote tomb={item.removed} now={now} seatName={chrome.seatName} />
                       )}
@@ -616,6 +633,9 @@ export function WorkItem({ id }: { id: string }) {
                         index={index}
                         now={now}
                         live={live}
+                        {...(state.data.flow_history
+                          ? { flowHistory: state.data.flow_history }
+                          : {})}
                         {...(state.data.comments ? { thread: state.data.comments } : {})}
                       />
                     </>
@@ -657,7 +677,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
   const now = useNow();
   const { state, item, project, children, worklet } = useTask(itemKey);
   const chrome = useItemChrome(index, state.data, project.data);
-  const live = item ? liveOn(agents, item) : null;
+  const live = state.data ? liveOn(agents, state.data) : null;
   // THE ADDRESS ITS WRITES NAME, as the page's — see [WorkItem].
   const address = state.data ? itemAddress(detailItem(state.data)) : "";
   // THE TASK'S MENU IS OFFERED HERE TOO, in the header: a calendar's chip and
@@ -687,7 +707,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                 icon={typeIcon(item.type)}
                 identifier={item.key}
                 title={item.title}
-                status={itemFlags(state.data)}
+                status={itemFlags(state.data, chrome)}
                 actions={
                   <Menu
                     label={`More for ${item.key}`}
@@ -733,6 +753,7 @@ export function ItemPeek({ itemKey }: { itemKey: string }) {
                   now={now}
                   live={live}
                   param="peek_activity"
+                  {...(state.data.flow_history ? { flowHistory: state.data.flow_history } : {})}
                   {...(state.data.comments ? { thread: state.data.comments } : {})}
                 />
               </div>

@@ -7,131 +7,17 @@ import (
 )
 
 // StopBudget is the one allowance a stopping node's lease give-backs share:
-// the presence and seat leases it hands back, the taker lease its sandbox
-// coordinator gives back once its last keep has ended, the duties it releases
-// and the holds its loops give back as they are stopped — and, after them,
-// its removals of the MCP listings and the status record it published, which
-// no reader counts once its presence has gone and whose fallbacks are the
-// maintenance sweep and the record bucket's age.
-//
-// # Why one allowance rather than one per step
-//
-// Every one of those steps races a lease, and every one falls back to the
-// same thing when it cannot reach the store: the lease lapses on its TTL.
-// Each used to run under a bound of its own, so a member whose store had gone
-// spent the SUM of them, five seconds a step and every one failing — more than
-// an orchestrator's grace leaves a stop after its drain, so it was killed
-// before its custody flush and its store close. Sharing one allowance bounds
-// the give-backs; what else a stop waits on, and the grace that covers it, is
-// "What it bounds, and what it does not" below.
-//
-// So the steps draw on one allowance, [StopAllowance] of the lease TTL: on a
-// healthy fleet each takes milliseconds and the allowance never binds; on an
-// unreachable store the give-backs cost one allowance in total, after which
-// every remaining step fails at once and takes its documented fallback. A
-// store that blinks during a healthy stop costs the steps the blink, not the
-// stop its allowance — the alternative, abandoning every step after the first
-// failure, turns one transient error into a TTL of dark seats for every peer.
-//
-// # What it bounds, and what it does not
-//
-// The give-backs, and nothing else. A member that has lost its coordination
-// store ALONE stops in about one allowance: 15 s at the shipped 45 s TTL — and
-// up to five seconds more where it holds settles of note takes whose answers
-// were lost, whose last attempts have a window of their own ("Only what
-// lapses" below), which nothing else in that stop overlaps. A
-// member that has lost BOTH stores — a lone embedded member whose peers have
-// gone, where the event stream and the buckets lose their quorum together —
-// also pays every bound the stream's records keep, which this allowance
-// cannot share because none of them falls back to a lease (see "Only what
-// lapses" below): each seat's last event beside its last memory publish, the
-// engine's auxiliary-spend flush and the usage publisher's last flush on a
-// data node whose day moved since its last tick, five seconds each — and up to
-// a second for a custody batch a data node's keeper had in hand. With the
-// engine's admission share, that stop's own steps take about 30 s at the
-// shipped TTL — the 25 s the e2e fleet measured a lone member's stop at before
-// this allowance existed, and the usage flush added since. After the drain,
-// the stop also closes the HTTP listeners (cmd/crewlet's shutdown), which wait
-// up to 5 s each and 5 s more for the projector and the sign-in surface's
-// background writes; an open sandbox bridge session spends its listener's
-// grace whole. The leases' share can fall entirely after the drain too: a
-// store lost during it leaves the presence give-back fast and the seats'
-// give-backs, each after its seat's 5 s last event, spending all of it. And
-// on a node that runs seats, the sandbox coordinator's own stop carries
-// records rather than gives leases back, so none of it is a step of this
-// allowance either (internal/sandbox's Coordinator.Stop): a retry still
-// running, whose every write on the coordinator's lifetime ends as the stop
-// begins and everything it makes on a context of its own — a teardown's write,
-// a capture's stamp, a box's kill, however many one after another — within
-// one thirty-second grace from the stop; a session keep still uploading, given
-// thirty seconds to end; and the stamp of each keep it cuts there, held to its
-// thirty seconds — 90 s at most, each write held to its reason alone once the
-// coordinator stops, and its taker lease given back after them, on this
-// allowance. So what follows the drain
-// can take about 136 s on a member that runs seats: 15 for the seats, 15 for
-// the listeners, 16 for the aux, keeper, usage and admission bounds and 90 for
-// the sandbox coordinator — 46 s on one that runs none — and about 140 s on a
-// node without `data`, which flushes its custody batches on a ten-second
-// budget instead of a keeper and a usage flush. The settles' window adds
-// nothing to any of them: it opens as the teardown begins, before the
-// engine's auxiliary-spend flush, and is over by the end of that flush's five
-// seconds wherever the flush spends them. docs/guides/deployment.md therefore
-// has every pod given a grace of at least its longest turn plus 150 s, plus
-// any preStop sleep (Kubernetes counts the hook inside the grace): the
-// drain's share, this stop's 140 s at most, and room for the process to exit
-// — a pod that runs no seats its longest turn plus 60 s.
-//
-// # Only what lapses
-//
-// A round trip whose fallback is NOT a lease lapsing is never a step of it,
-// because the allowance's whole argument is that running out of it costs no
-// more than not trying. Three of a stop's round trips are not that:
-//
-//   - Its LIFECYCLE EVENTS — the node's `org_stopped`, each seat's last
-//     `agent_terminated` — travel on the event stream, which is replicated
-//     apart from the coordination buckets and can lose its quorum alone. A
-//     publish the stream never acknowledges waits out whatever deadline it is
-//     handed, so as steps of this allowance a stream without quorum spent the
-//     time every lease behind them needed, and a store that was answering was
-//     left holding the presence, the seats, the admission and every duty. The
-//     engine bounds each on its own and publishes it beside the give-backs
-//     rather than in front of them.
-//   - The engine's ADMISSION withdrawal falls back to nothing at all: an
-//     admission has no TTL, so one that is not withdrawn stays until the node
-//     restarts under the same id or an operator excludes it. The engine
-//     reserves it a share of the allowance no step before it can spend, and
-//     hands this budget the rest.
-//   - The engine's last attempts at the SETTLES of note takes whose answers
-//     were lost fall back to a take said unsettled: the run records are a
-//     bucket of their own, which can lose its quorum alone — which is when
-//     settles are held — so as steps of this allowance they spent what the
-//     give-backs made later in the stop needed. The engine makes them in a
-//     window of their own from the teardown's start, five seconds
-//     (internal/engine's steerSettleStopBudget), beside the give-backs.
-//
-// # The clock runs only while a step does
-//
-// Between the stop's first steps and its last sits the drain's wait for the
-// turns still running, which has no bound of the engine's own (the drain's
-// doc says why). The allowance is charged only while at least one step is in
-// flight, so a long drain spends none of it, and steps running concurrently —
-// a node's seats are released together — are charged once for the time they
-// overlap rather than once each.
-//
-// # Carried on the context
-//
-// The steps live in three packages — the engine, the node that composes the
-// drain, and this one — and the drain passes between them as a context. A
-// value is what survives the [context.WithoutCancel] every teardown takes, so
-// the one allowance reaches every step without a parameter at each layer. The
-// steps no stop's context reaches are the give-backs made on the context their
-// lease was TAKEN on, made before the stop existed: a hold's, and the sandbox
-// coordinator's taker lease, claimed as the coordinator was built. The engine
-// binds each at the lease store it is taken through, which makes the give-back
-// a step from the moment the TEARDOWN that ends it begins, whether it was in
-// flight by then or not — never from the drain, whose wait for running turns
-// a hold's loop runs straight through, so a pass that ends on its own during
-// it would otherwise spend what the seats are owed at its end.
+// its presence, seat and taker leases, duties, holds, and the removals of its
+// MCP listings and status record. Each falls back to the lease lapsing on its
+// TTL, so per-step bounds made a member with a lost store spend their SUM and
+// outlive the orchestrator's grace. All steps draw on one [StopAllowance]; once
+// spent, every remaining step fails at once and takes its fallback. A blink
+// costs only the blink: abandoning all steps after one failure would leave
+// peers a TTL of dark seats. Only what lapses is a step: lifecycle events (the
+// stream can lose quorum alone), the admission withdrawal (no TTL) and the last
+// settle attempts (steerSettleStopBudget) keep bounds of their own. The clock
+// runs only while a step is in flight and rides the context, so it survives
+// [context.WithoutCancel]. docs/guides/deployment.md derives the pod grace.
 type StopBudget struct {
 	total time.Duration
 

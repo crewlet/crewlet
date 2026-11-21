@@ -137,10 +137,21 @@ func (i *inbox) count() int {
 	return len(i.got)
 }
 
-// holder is one node's view of the seat.
-type holder struct{ c pickup.Conditions }
+// holder is one node's view of the seat: its conditions, and whether a
+// delivery waits on its priority lane, counting how often that is asked.
+type holder struct {
+	c         pickup.Conditions
+	lane      bool
+	laneErr   error
+	laneAsked int
+}
 
 func (h *holder) Conditions(context.Context, pickup.Seat) pickup.Conditions { return h.c }
+
+func (h *holder) LaneWaiting(context.Context, pickup.Seat) (bool, error) {
+	h.laneAsked++
+	return h.lane, h.laneErr
+}
 
 // node is one engine's picker over the shared fleet and tracker.
 func node(f *fleet, tr *tracker, in *inbox, h *holder) *pickup.Picker {

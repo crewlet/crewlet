@@ -21,13 +21,11 @@ import (
 // through the whole app: the guard middleware and then the stream handler, in
 // that order.
 //
-// The socket used to take `?token=`, because a browser cannot set a header on
-// a WebSocket constructor. The dashboard's handshake carries its session
-// cookie now ([TestACookieAuthenticatesTheHandshake]) and a script sets the
-// header, so the query is read nowhere: a URL is written into every proxy's
-// access log, and the one route that paid that price no longer has a reason
-// to. A valid token there is refused exactly like a missing one — on the
-// handshake and on the plain GET the dashboard re-asks with.
+// The dashboard's handshake carries its session cookie
+// ([TestACookieAuthenticatesTheHandshake]) and a script sets the header, so
+// `?token=` is read nowhere: a URL lands in every proxy's access log. A valid
+// token there is refused like a missing one, on the handshake and on the plain
+// GET the dashboard re-asks with.
 //
 // Control: the same token in the header opens the socket and is sent the
 // snapshot, so the refusals are about where the token was presented.

@@ -21,8 +21,7 @@ import (
 // [liveWindow]; its ORIGIN names that place and the account, so two owners
 // derive the same text, and beginning again (the stream outran [liveBacklog]
 // or shrank, or the transcript spoke) names another. The error stream reads
-// redaction context before that place ([rawStream.leads]); an event is one
-// line, a credential in it whole, so the event stream needs none.
+// redaction context before that place ([rawStream.leads]).
 
 // liveWindow is how much of a stream's END a reading begins from. An event's
 // size is dominated by what it echoes (a tool's output, twice on Claude Code's
@@ -123,16 +122,35 @@ func (f *follower) readEvents(ctx context.Context, box sandbox.Sandbox, path str
 	}
 	if restarted || f.dec == nil {
 		f.dec, f.transcript = f.harness.Events(), pendingText{}
+		// Read through Entries from its first line ([Decoder.Entries]).
+		_ = f.dec.Entries(false)
 	}
-	if len(lines) == 0 {
+	if len(lines) > 0 {
+		// A bytes.Reader cannot fail, so neither can this.
+		_ = eachLine(bytes.NewReader(lines), f.dec, f.lineBound)
+	}
+	// DONE, every line is fed ([rawStream.take]), so the end is said even by
+	// a read that brought no line: the skipped lines it ends on were fed by
+	// an earlier one.
+	entries := f.dec.Entries(done)
+	if len(entries) == 0 {
 		return nil
 	}
-	// A bytes.Reader cannot fail, so neither can this.
-	_ = eachLine(bytes.NewReader(lines), f.dec, f.lineBound)
-	for _, entry := range f.dec.Entries() {
-		f.transcript.add(entry + "\n")
-		f.spoke = true
+	// ADDED ONCE, each entry a line: an add appends to the pending text, so an
+	// add per entry would copy that text once per entry, quadratic in a read of
+	// many short events. Adding the read's text in one piece settles the same.
+	size := len(entries)
+	for _, entry := range entries {
+		size += len(entry)
 	}
+	var text strings.Builder
+	text.Grow(size)
+	for _, entry := range entries {
+		text.WriteString(entry)
+		text.WriteByte('\n')
+	}
+	f.transcript.add(text.String())
+	f.spoke = true
 	return nil
 }
 
@@ -141,29 +159,46 @@ func (f *follower) readEvents(ctx context.Context, box sandbox.Sandbox, path str
 // stream holds before that text ([pendingText.lead]).
 type pendingText struct{ ctx, text string }
 
-func (p *pendingText) add(s string) { p.text += s }
+// add adds what the stream holds after what was added before.
+//
+// ONLY A LINE THE TEXT OPENS IS SHOWN: while the context ends inside a line,
+// s up to its first break ends that line and joins the context, untrimmed.
+// What a rule replaces runs no further than its line's break and is not
+// bounded short of it ([redact.MaxReach]), so a line's end redacts as its
+// line does, from the line's start. A line the text opens is redacted with
+// all the context the lead kept and the rest of the line it ended in, as the
+// first line a stream's end shows is with all read before it ([settledEnd]).
+func (p *pendingText) add(s string) {
+	if p.text == "" && p.ctx != "" && p.ctx[len(p.ctx)-1] != '\n' {
+		i := strings.IndexByte(s, '\n') + 1
+		if i == 0 {
+			i = len(s)
+		}
+		p.ctx += s[:i]
+		s = s[i:]
+	}
+	p.text += s
+}
 
 // lead adds context: what the stream holds before the text, which comes
-// before any text is added. Only its last [redactContext] bytes are kept,
-// which is as far back as a key reaching into the text can have begun.
+// before any text is added. Only its last [redact.LookBack] bytes are kept, the
+// redaction's look-back.
 func (p *pendingText) lead(s string) {
 	if s == "" {
 		return
 	}
 	p.ctx += s
-	if len(p.ctx) > redactContext {
-		p.ctx = p.ctx[len(p.ctx)-redactContext:]
+	if len(p.ctx) > redact.LookBack {
+		p.ctx = p.ctx[len(p.ctx)-redact.LookBack:]
 	}
 }
 
 // settle takes what is settled (all of it once the job is done), redacted.
 //
-// THE CONTEXT SETTLES THE TEXT'S START and is never shown: until what settles
-// reaches past it, settling is decided over context and text together, and
-// what is shown starts on the line after the last place where the text
-// redacted alone differs from the two together (a key whose BEGIN the context
-// holds would, read alone, publish its lines above three that part it). Past
-// that nothing before can change how what follows redacts, so the context goes.
+// THE CONTEXT SETTLES THE TEXT'S START, a line's ([pendingText.add]), and is
+// never shown: until what settles reaches past it, what is shown is what the
+// context settles ([redact.SettledEnd]). Past that nothing before can change
+// how what follows redacts, so the context goes.
 func (p *pendingText) settle(done bool) string {
 	if p.ctx == "" {
 		n := len(p.text)
@@ -182,18 +217,10 @@ func (p *pendingText) settle(done bool) string {
 	if n <= len(p.ctx) {
 		return ""
 	}
-	n -= len(p.ctx)
-	part := redact.Secrets(p.text[:n])
-	start := len(part) - sharedSuffix(redact.Secrets(whole[:len(p.ctx)+n]), part)
-	if start > 0 && part[start-1] != '\n' {
-		if i := strings.IndexByte(part[start:], '\n'); i >= 0 {
-			start += i + 1
-		} else {
-			start = len(part)
-		}
-	}
-	p.ctx, p.text = "", p.text[n:]
-	return part[start:]
+	shown, _ := redact.SettledEnd(whole[:n], len(p.ctx))
+	rest := p.text[n-len(p.ctx):]
+	p.ctx, p.text = "", rest
+	return shown
 }
 
 func (p *pendingText) held() int { return len(p.text) }
@@ -216,7 +243,7 @@ type rawStream struct {
 	// without its rule's anchor.
 	partialOpen bool
 	// leads is set on a stream shown as written (the error stream): a reading
-	// that begins inside it reads [redactContext] more before that place and
+	// that begins inside it reads [redact.LookBack] more before that place and
 	// hands it on as lead, the context the text's start is redacted with and
 	// never shows ([pendingText.settle]), with the rest of an overlong line it
 	// drops ([rawStream.take]).
@@ -233,13 +260,13 @@ func (s *rawStream) takeLead() []byte {
 }
 
 // keepLead adds b to the context to hand on, keeping only its last
-// [redactContext] bytes, as [pendingText.lead] does.
+// [redact.LookBack] bytes, as [pendingText.lead] does.
 func (s *rawStream) keepLead(b []byte) {
 	if !s.leads || len(b) == 0 {
 		return
 	}
 	s.lead = append(s.lead, b...)
-	if over := len(s.lead) - redactContext; over > 0 {
+	if over := len(s.lead) - redact.LookBack; over > 0 {
 		s.lead = append(s.lead[:0], s.lead[over:]...)
 	}
 }
@@ -290,12 +317,12 @@ func (s *rawStream) next(ctx context.Context, box sandbox.Sandbox, path string, 
 
 // begin starts the reading at the start of the stream's last [liveWindow], on
 // a line, or mid-line with [rawStream.partialOpen] set when the window holds no
-// break. A stream that leads reads [redactContext] more before the window and
+// break. A stream that leads reads [redact.LookBack] more before the window and
 // keeps all it read before the reading's start as lead.
 func (s *rawStream) begin(ctx context.Context, box sandbox.Sandbox, path string, done, again bool) ([]byte, bool, error) {
 	want := liveWindow
 	if s.leads {
-		want += redactContext
+		want += redact.LookBack
 	}
 	read, err := box.ReadTail(ctx, path, want)
 	if err != nil {

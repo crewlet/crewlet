@@ -96,33 +96,18 @@ func trigramsOf(refs []ref) []Trigram {
 // decoding it once for the several that read it (Plan.held).
 func alone(f ref) bool { return f.held < 0 }
 
-// A CLAUSE READS EACH LIST IT NAMES ONCE. An alternation's literals share
-// much of what they hold — (?i)(create|delete|update)User crosses into three
-// literals that each hold "use" and "ser" — and the lists of the commonest
-// trigrams are a segment's longest, so a clause that looked each literal up
-// whole read a list once for every literal holding it, decoded each time into
-// a buffer of its own: k·L work and garbage where L would do.
+// A CLAUSE READS EACH LIST IT NAMES ONCE. An alternation's literals share much
+// of what they hold ((?i)(create|delete|update)User: "use" in all three), and
+// the commonest trigrams have the longest lists, so looking each literal up
+// whole cost k·L where L would do.
 //
-// Over a segment of 2 048 blobs, each holding `x := ` and one of the clause's
-// words — p000word, q001word, p002word, ... — every word holds "wor" and
-// "ord", whose lists name every blob; the words of one decade and parity
-// share a trigram ("p00", "q01", ...), and those ending in one digit another
-// ("0wo", "1wo", ...); the rest of each word's are its own. A clause of 64
-// such words reads no more bytes of postings than the lists it names hold,
-// each once. It allocates, beside the object ids it answers, within three
-// decodes of each list every word holds — the blobs holding them, read once,
-// and the union of what its literals admit, every blob here and so as many
-// as such a list names, in the two buffers the union merges between, each
-// grown as it fills — and one decode of each list some words share. And it
-// reads and allocates within half again of what a clause of 2 such words
-// does over a segment whose 2 048 blobs each hold one of those.
-//
-// Measured under the race detector, as the suite runs: both clauses read
-// 12 288 bytes, what their lists hold, and allocate 86 768 bytes (2 words)
-// and 100 288 (64). Looked up a literal at a time, the 64 words read 289 280
-// bytes to the 2 words' 16 384 and allocated 1 457 152 to their 142 160 —
-// eighteen and ten times as much; with only the lists every word holds read
-// once, they still read 30 936, two and a half times what the 2 did.
+// Segment of 2 048 blobs, each holding `x := ` and one word (p000word, ...):
+// every word holds "wor" and "ord" (lists naming every blob); words of one
+// decade and parity share a trigram ("p00"), those ending in one digit another
+// ("0wo"). A clause of 64 words reads no more postings bytes than its lists
+// hold, each once; allocates within three decodes of each list every word holds
+// and one of each list some share; and costs within half again of a clause of 2
+// words. Under race both read 12 288 bytes, against 289 280 looked up per literal.
 func TestAClauseReadsEachListItNamesOnce(t *testing.T) {
 	// Not parallel: a parallel case's measured call would be counted as this one's.
 	const blobs = 2048
@@ -233,24 +218,17 @@ func TestAClauseReadsEachListItNamesOnce(t *testing.T) {
 }
 
 // A PLAN READS EACH LIST ITS CLAUSES NAME ONCE. A pattern's clauses share
-// trigrams as an alternation's literals do — foo_a.*foo_b's two clauses both
-// hold foo's — and two clauses that differ only in case are two to
-// regexlit.Required, which compares substrings as they are, and one to an
-// index that lowers them both: (foo.*(?i:foo).*){16} is the clause foo and the
-// clause (?i)foo there, a repeat of each dropped. So a lookup decodes a list
-// more than one clause reads once for all of them, and looks up no clause
-// another implies.
+// trigrams as an alternation's literals do (foo_a.*foo_b: both hold foo's), and
+// two clauses differing only in case are two to regexlit.Required and one to an
+// index that lowers both: (foo.*(?i:foo).*){16} is the clause foo and (?i)foo.
+// So a list more than one clause reads is decoded once, and no implied clause
+// is looked up.
 //
-// Over a segment of 2 048 blobs, each holding every one of 32 words —
-// w000word, w001word, ... — so that every list the words name names every
-// blob: the plan of all 32, one clause a word, reads no more bytes of
-// postings than the lists it names hold, each once, though every clause
-// holds "wor" and "ord", ten each hold "w00", and so on; and the plan of one
-// word repeated 16 times as it is and 16 times folded looks up one clause,
-// reading and allocating what the plan of the word alone does. Looked up a
-// clause at a time, the 32 clauses read 393 216 bytes of the 163 840 their
-// lists hold; and the word's folded clause, looked up beside its plain one,
-// held every blob again.
+// Segment of 2 048 blobs each holding all of 32 words (w000word, ...): the plan
+// of all 32 reads no more postings bytes than its lists hold, each once; and
+// one word repeated 16 times plain and 16 folded looks up one clause, reading
+// and allocating what the word alone does. Looked up per clause, the 32 read
+// 393 216 bytes of the 163 840 their lists hold.
 func TestAPlanReadsEachListItsClausesNameOnce(t *testing.T) {
 	// Not parallel: a parallel case's measured call would be counted as this one's.
 	const blobs, words = 2048, 32
@@ -316,37 +294,17 @@ func TestAPlanReadsEachListItsClausesNameOnce(t *testing.T) {
 	}
 }
 
-// A LOOKUP ADMITS WHAT ITS LITERALS LOOKED UP ALONE ADMIT. Reading each list
-// a plan names once — the blobs every literal of a clause holds hoisted out
-// of its union, a list more than one place reads decoded once for them all,
-// each literal starting from the least of what it holds — and looking up no
-// clause another implies change how a lookup reads, never what it answers.
-//
-// Over clauses GENERATED to share trigrams every way — a core in every
-// literal, so some trigrams are in them all, and now and then a literal that
-// is the core alone; a core in some; words over a few letters, so others are
-// in some, and in other clauses, by chance — with a clause another implies
-// among them now and then (the same again, one more literal, its literals in
-// capitals, or folded) or one made plain from a folded one, which that one
-// does not imply, since it admits an escape the plain one does not; and
-// segments of blobs over the same letters, so lists run from a blob or two
-// to nearly every one, with a letter no blob holds, escapes and binary blobs
-// among them: each clause's blobs are what looking every literal up whole
-// finds — every list of it decoded and intersected, as a lookup did before —
-// and what the blobs' own text says, a blob admitted holding some literal's
-// every trigram, or an escape where the clause is folded. A plan's
-// candidates are the intersection of every clause generated, a clause it
-// dropped as implied included, skipped blobs out. And no lookup reads more
-// bytes of postings than the lists it names hold, each once: a clause's
-// alone, or a plan's whole.
-//
-// A FIXED SEED, so a failure reproduces exactly; the counts it reports say
-// each way a literal can be read was met — from the blobs every literal of
-// its clause holds, from a list more than one place reads, from a list it
-// reads alone — and a clause that is its shared trigrams alone, with blobs
-// holding them, a literal no blob can hold, a blob only its escape admits, a
-// list two clauses read, a clause dropped as implied, and plans of several
-// clauses that admit some.
+// A LOOKUP ADMITS WHAT ITS LITERALS LOOKED UP ALONE ADMIT: reading each list
+// once and skipping implied clauses change how a lookup reads, never what it
+// answers. Clauses are GENERATED to share trigrams every way (a core in every literal,
+// in some, or alone), with implied clauses now and then (repeated, capitals,
+// folded, one more literal) or a plain clause made from a folded one, which
+// that one does not imply since it admits an escape; segments over the same
+// letters, with escapes and binary blobs. Each clause's blobs equal looking
+// every literal up whole; a plan's candidates intersect every clause generated,
+// an implied one included; no lookup reads more bytes than its lists hold.
+// A FIXED SEED reproduces a failure; the reported counts say every way a
+// literal can be read and each edge case was met.
 func TestALookupAdmitsWhatItsLiteralsLookedUpAloneAdmit(t *testing.T) {
 	t.Parallel()
 	rng := rand.New(rand.NewPCG(20261028, 7))
@@ -723,21 +681,18 @@ func through(list []byte, last uint32) int {
 	return len(list)
 }
 
-// A LOOKUP READS A LIST ONLY AS FAR AS THE BLOBS IT KEEPS. Blobs sit in a
-// segment in id order, and a place narrowing what it admits by a list of its
-// own reads it only until the list passes the last blob it keeps
-// (reading.listed), as a list decoded for several places is read only as far
-// as the furthest blob one of them needs (decoded.upTo): so a pattern held by
-// a few blobs early in a segment, beside lists naming every blob, reads those
-// lists a few bytes in, never to their ends.
+// A LOOKUP READS A LIST ONLY AS FAR AS THE BLOBS IT KEEPS. Blobs sit in id
+// order, so a place narrowing by a list of its own reads it only until it
+// passes the last blob it keeps (reading.listed), and a list decoded for
+// several places only as far as the furthest blob one needs (decoded.upTo): a
+// pattern held by a few early blobs, beside lists naming every blob, reads
+// those lists a few bytes in, never to their ends.
 //
-// Over a segment of 2 048 blobs, each holding abcdefmn and abcdefuv and the
-// first 16 zzabcdefmn and yyabcdefuv, the plan of zzabcdefmn.*yyabcdefuv is
-// two clauses: abcdef's trigrams, in both, are decoded once for the two
-// (Plan.held), and efm, fmn, efu and fuv each read by one alone, every one of
-// those lists naming every blob, zz's and yy's the first 16. The lookup reads
-// of each list no more than its bytes through its first ordinal past the
-// 16th blob.
+// Segment of 2 048 blobs each holding abcdefmn and abcdefuv, the first 16
+// zzabcdefmn and yyabcdefuv. The plan of zzabcdefmn.*yyabcdefuv is two clauses:
+// abcdef's trigrams, in both, decoded once for the two (Plan.held); efm, fmn,
+// efu and fuv each read alone, all naming every blob, zz's and yy's the first
+// 16. Each list is read no further than its first ordinal past the 16th blob.
 func TestALookupReadsAListOnlyAsFarAsTheBlobsItKeeps(t *testing.T) {
 	t.Parallel()
 	const blobs, early = 2048, 16
@@ -808,22 +763,16 @@ func TestALookupReadsAListOnlyAsFarAsTheBlobsItKeeps(t *testing.T) {
 }
 
 // A CLAUSE'S UNION SPARES WHAT IT MERGES, NOT WHAT ITS BUFFER CAN HOLD. A
-// lookup decodes a literal's least list straight into its clause's union
-// and narrows it there (reading.admitted), so a union can hold a few blobs in
-// the capacity of the longest list one of its literals decoded; the spare it
-// merges them into is made as long as what it merges. Made as long as the
-// buffer can hold, it was that list's decode again for every clause of two
-// or more literals that narrow what they decode.
-//
-// Over a segment of 16 384 blobs, each holding the first halves of three
-// words — abcde, ijklm, qrstu — or their second halves, and one in 1 024 all
-// three whole, each literal of abcdefgh|ijklmnop|qrstuvwx decodes a list of
-// half the blobs and keeps 16. Merging the 48 ordinals they admit allocates
-// within twice them and their 3 lists' ends.
-//
-// It measures the merge alone: what the whole lookup allocates turns on
-// whether the race detector doubles slices.Grow's growth, by as much as a
-// spare too long.
+// lookup decodes a literal's least list straight into its clause's union and
+// narrows it there (reading.admitted), so a union can hold a few blobs in the
+// capacity of the longest list decoded; the spare it merges into is made as
+// long as what it merges, not the buffer, or it was that list's decode again
+// for every clause of two or more narrowing literals. Segment of 16 384 blobs each holding the first halves of three words (abcde,
+// ijklm, qrstu) or their second halves, one in 1 024 all three whole: each
+// literal of abcdefgh|ijklmnop|qrstuvwx decodes half the blobs and keeps 16.
+// Merging the 48 admitted ordinals allocates within twice them and their 3
+// lists' ends. It measures the merge alone: the whole lookup's allocation
+// turns on whether race doubles slices.Grow's growth.
 func TestAClausesUnionSparesWhatItMergesNotWhatItsBufferHolds(t *testing.T) {
 	// Not parallel: a parallel case's measured call would be counted as this one's.
 	const blobs, every = 16384, 1024

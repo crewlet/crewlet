@@ -57,18 +57,13 @@ func TestAnExecutorTailNeedsTheTurnAndTheJob(t *testing.T) {
 	}
 }
 
-// WHAT A HARNESS PRINTS IS ITS TRANSCRIPT, so the tail is read by
-// whoever reads the run's SEAT's trail — an admin, or the seat's lead — and
-// nobody else: everybody sees that a run is running, and only they see what
-// it says (ADR-0033).
+// WHAT A HARNESS PRINTS IS ITS TRANSCRIPT, so only the run's SEAT's trail (an
+// admin, the seat's lead) reads the tail (ADR-0033). The seat is the one the
+// run's record names, read before the tail is asked for.
 //
-// The seat is the one the run's record names, read before the tail is asked
-// for; a run no record names any more is `not_running`, answered without
-// asking the tail reader, whose own later read of the record could find one
-// this decision never saw; and a record that cannot be read is unavailable to
-// a lead, never a refusal. A caller who leads nobody — a person with no
-// reports, an unbound token — is refused BEFORE the record is read, so a run
-// store that cannot answer never tells them to come back to a refusal.
+// A run no record names is `not_running`; an unreadable record is unavailable
+// to a lead, never a refusal. A caller who leads nobody is refused BEFORE the
+// record is read, so an unavailable store never turns that into "come back".
 //
 // Mutation: drop [queries.Sources.mayTail]'s seat decision and the stranger
 // is shown the run's output; decide on the caller instead of the run's seat

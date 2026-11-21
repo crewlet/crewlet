@@ -31,9 +31,14 @@ func TestAnUrgentPickupIsTheBusySeatsNextTurn(t *testing.T) {
 	if _, err := q.EnsureSubscription(ctx, topic, group); err != nil {
 		t.Fatalf("EnsureSubscription: %v", err)
 	}
-	// HELD while the backlog queues, so one drain takes all of it.
+	// HELD while the backlog queues, so one drain takes all of it, for the
+	// attachment the subscription below makes.
 	const hold = "backlog"
-	if err := q.PauseTopic(ctx, topic, group, hold); err != nil {
+	at, err := q.Attachment(ctx, topic, group)
+	if err != nil {
+		t.Fatalf("Attachment: %v", err)
+	}
+	if err := q.PauseTopic(ctx, topic, group, at, hold); err != nil {
 		t.Fatalf("PauseTopic: %v", err)
 	}
 	const backlog = 30
@@ -50,7 +55,7 @@ func TestAnUrgentPickupIsTheBusySeatsNextTurn(t *testing.T) {
 	started, release, ran := make(chan struct{}), make(chan struct{}), make(chan struct{}, backlog+1)
 	var releaseOnce sync.Once
 	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
-	err := q.SubscribeBatch(ctx, topic, group, func(_ context.Context, evs []*events.Event) queue.Result {
+	err = q.SubscribeBatch(ctx, topic, group, func(_ context.Context, evs []*events.Event) queue.Result {
 		mu.Lock()
 		turns = append(turns, evs)
 		first := len(turns) == 1
@@ -66,7 +71,7 @@ func TestAnUrgentPickupIsTheBusySeatsNextTurn(t *testing.T) {
 		t.Fatalf("SubscribeBatch: %v", err)
 	}
 	// Off the test's goroutine: the twin runs the drain on whoever resumes it.
-	go func() { _ = q.ResumeTopic(context.WithoutCancel(ctx), topic, group, hold) }()
+	go func() { _ = q.ResumeTopic(context.WithoutCancel(ctx), topic, group, at, hold) }()
 	<-started
 
 	f := newFleet()

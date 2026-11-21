@@ -6,63 +6,37 @@ import "slices"
 // beyond the estate acts on: this node's contact routing, and every connection
 // held open on a credential this estate answers for.
 //
-// # Why it says WHOSE, where the signal it replaced said nothing
-//
-// The applier's post-commit signal used to carry nothing, because its one
-// listener — the notify registry — is rebuilt WHOLE from a fresh read of the
-// directory, and a list of changed people could only have been wrong about
-// that. An open connection is the opposite case. A dashboard socket is
-// authenticated once, at its handshake, and then held for as long as the tab
-// is: what ends it is the record that ended its credential, and re-deciding
-// every open socket on every sign-out anywhere in the company would be a
-// directory read per tab per sign-out. So the value names the CREDENTIALS a
-// batch moved, and each listener reads the part it needs — the registry the
-// one flag, a socket whether any of the rest is about the credential it was
-// opened with.
-//
-// # Whose, never what
-//
-// It names whose standing moved and never how. A listener re-decides from the
-// rows, which this batch has already committed by the time the value is
-// handed over, so a grant or a stage carried here could only be a second,
-// older copy of what the rows say.
-//
-// # Over-reporting is harmless; under-reporting is not
-//
-// A listener told about somebody nothing happened to re-reads a row and
-// changes nothing. A listener NOT told leaves a revoked credential serving an
-// open connection until it closes on its own. So an apply names everybody whose
-// row it moved — an identity change names the login it took and the one it
-// left — and [Moved.Everyone] is left for the few moves that cannot name
-// anyone.
+// It names the CREDENTIALS moved: a dashboard socket is authenticated once, at
+// its handshake, and re-deciding every socket on every sign-out would be a
+// directory read per tab. It names WHOSE standing moved, never how: a listener
+// re-decides from the rows, committed before the value arrives. Over-reporting
+// costs a re-read; under-reporting leaves a revoked credential serving an open
+// connection, so an apply names everybody whose row it moved (an identity
+// change, the login taken and the one left) and [Moved.Everyone] is for the
+// few moves that cannot name anyone.
 type Moved struct {
-	// Seats is whether a seat's STANDING may have moved — a person's
-	// stage, a seat bound or released, a removal — which is what this
-	// node's contact routing is rebuilt from. A sign-in sets nothing: it
-	// is the bulk of this log's traffic and moves no seat.
+	// Seats is whether a seat's STANDING may have moved (a stage, a seat
+	// bound or released, a removal): what this node's contact routing is
+	// rebuilt from. A sign-in sets nothing: it is the bulk of this log's
+	// traffic and moves no seat.
 	Seats bool
 
-	// People are the persons whose row a committed record moved — their
-	// content (grants, the credentials and machine tokens they hold),
-	// their stage, their revocation epoch, a login or seat set or cleared,
-	// their removal — by id, each once. Every credential acting
-	// FOR one of them, a session they signed in with or a machine token
-	// they own, may now be over or may carry other grants.
+	// People are the persons whose row a committed record moved (content,
+	// stage, revocation epoch, login or seat, removal), by id, each once:
+	// every session or machine token acting for one of them may now be
+	// over or carry other grants.
 	People []string
 
 	// Logins are the logins those people held when their row moved, and
-	// every login an identity change gave or took — each once. A
-	// credential composed
-	// from configuration (a Tier A token) is bound through the directory
-	// row under its own login, `token:<id>`, whose person id it never
-	// learns, so the login is the one name that reaches it.
+	// every login an identity change gave or took, each once. A Tier A
+	// token binds through the directory row under its own login,
+	// `token:<id>`, and never learns the person id: the login reaches it.
 	Logins []string
 
-	// Removed are the persons a committed record REMOVED, by id, each once:
-	// the subset of People whose rows are gone for good. What a person
-	// keeps in another domain that must go with them (their Dashboard
-	// Assistant conversations, ADR-0053) is erased from it, and that domain
-	// cannot read this one, so the engine hands it these ids.
+	// Removed are the persons a committed record REMOVED, by id, each once
+	// (a subset of People). The engine hands them to the domains that erase
+	// what a person keeps there (Dashboard Assistant conversations,
+	// ADR-0053), which cannot read this one.
 	Removed []string
 
 	// Sessions are the lineages a committed record ended: a sign-out, a

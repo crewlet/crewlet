@@ -76,7 +76,7 @@ func TestACommentWakesTheAgentsItsRecordNames(t *testing.T) {
 		t.Errorf("the wake ids are not derived per recipient from the record")
 	}
 
-	// A RECORD TELLING ONLY PEOPLE, AN EDIT, AND A RECORD OF ANOTHER KIND RELAY NOTHING.
+	// A RECORD TELLING ONLY PEOPLE, AND AN EDIT, RELAY NOTHING.
 	people := snapshot()
 	people.Agents = nil
 	for name, rec := range map[string]changefeed.Record{

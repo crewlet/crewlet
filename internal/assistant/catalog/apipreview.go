@@ -24,50 +24,39 @@ import (
 // THE GENERIC CHANGE'S PREVIEW: what a [ProposeAPIChangeTool] call would do,
 // read by the server from the resource as it is now, never from what the model
 // said about it (ADR-0051).
-//
-//  1. The request is built from the call ([generic.request]), so the card and
-//     the approval's request are one value.
-//  2. A PUT, a PATCH or a DELETE on a path the table also reads (a GET on the
-//     same path) reads that representation through the turn's grant.
-//  3. What the change makes of it: a PUT's body replaces it, a PATCH's body is
-//     merged onto it (RFC 7396, the API's own patch format), and a DELETE
-//     takes it away. A POST does what its route declares ([authz.Effect]): a
-//     create adds what its body states, and a call on the act route, a
-//     rewrite, a destruction or a question shows its body and its query as
-//     sent, since what it does to what is there is its route's or its
-//     tool's, titled by its action ([describe]); a call a curated write
-//     makes is that write's to propose ([curatedCall]).
-//  4. The rows are the fields that move and nothing else: a structural diff,
-//     a list of records matched by the identity each carries (a seat's
-//     handle, a unit's id) so one new seat is one added member with its
-//     fields, long text as a word diff, a removal as the values it removes,
-//     and a field a write sets to null, which no value shows, as cleared.
-//     The request itself, its body redacted, is the card's technical details
-//     for an approver who administers the company, never a row.
-//  5. The proposal is bound to the representation it was shown: a strong
-//     entity tag becomes the write's If-Match ([proposal.RevisionEntity]),
-//     and a representation stating its own version field is re-read by the
-//     approval ([proposal.RevisionResource]), so a stale proposal is refused.
-//     A PUT whose read found nothing is a create, bound to that absence
-//     ([proposal.RevisionCreate]) and sent under `If-None-Match: *`, every
-//     field drawn as added; a PATCH or a DELETE of nothing is refused before
-//     any card, in the read's own words ([PreviewRefusal]).
-//     [proposal.Revision.Precondition] is the one rule from the revision to
-//     the headers.
+//  1. The request is built from the call ([generic.request]): one value for
+//     the card and the approval.
+//  2. A PUT, PATCH or DELETE on a path the table also reads reads that
+//     representation through the turn's grant.
+//  3. A PUT replaces it, a PATCH merges onto it (RFC 7396), a DELETE removes
+//     it. A POST does what its route declares ([authz.Effect]): a create adds
+//     its body; the act route, a rewrite, a destruction or a question shows
+//     body and query as sent, titled by its action ([describe]); a curated
+//     write's call is that write's to propose ([curatedCall]).
+
+//  4. Rows are the fields that move: a structural diff, list records matched
+//     by identity (a seat's handle) so one new seat is one added member, long
+//     text as a word diff, a removal as the values it removes, a field set to
+//     null as cleared. The request, its body redacted, is the card's technical
+//     details for an administrator, never a row.
+//  5. The proposal is bound to the representation shown: a strong entity tag
+//     becomes the If-Match ([proposal.RevisionEntity]), a stated version field
+//     is re-read at approval ([proposal.RevisionResource]), so a stale
+//     proposal is refused. A PUT that read nothing is a create bound to that
+//     absence ([proposal.RevisionCreate], `If-None-Match: *`); a PATCH or
+//     DELETE of nothing is refused before any card ([PreviewRefusal]). Headers
+//     come from [proposal.Revision.Precondition] alone.
+
 //  6. The verb's own step-up is asked of the approver, shown on the card.
-//  7. A route that answers `?dry_run=true` ([Route.DryRun]) is asked it, with
-//     the exact request and precondition the approval would send, before any
-//     card is drawn (ADR-0055): a body the route would refuse is the step's
-//     refusal in the route's own words, so the model corrects it within the
-//     turn, and the check's warnings are rows on the card. The route's check
-//     is the one source of what it accepts; no rule of it is copied here.
-//  8. A route that records a revision summary ([Route.Summary]) carries it as
-//     `_summary` in the body ([summarised]), shown on the card as the history
-//     line and kept out of the field rows.
-//  9. A route that replaces the whole object ([Route.Replaces]) removes only
-//     what the call's `removes` names: a field the body drops by omission is
-//     the step's refusal, and a declared removal heads the card
-//     ([removalCheck]).
+//  7. A route answering `?dry_run=true` ([Route.DryRun]) is asked it with the
+//     exact request before any card (ADR-0055): its refusal is the step's, in
+//     its own words, and its warnings are rows. The route's check is the one
+//     source of what it accepts; no rule of it is copied here.
+//  8. A route recording a revision summary ([Route.Summary]) carries it as
+//     `_summary` in the body ([summarised]), shown as the history line.
+//  9. A route replacing the whole object ([Route.Replaces]) removes only what
+//     the call's `removes` names: omission is the step's refusal, and a
+//     declared removal heads the card ([removalCheck]).
 
 // diffRows bounds how many field rows one card carries: past it, the rest is
 // counted in one row, and the whole change is still the request the card
@@ -192,16 +181,16 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 	}
 	switch {
 	case req.Method == http.MethodDelete && before == nil:
-		d.c.fact("removes", "Deletes", capitalised(said.Object))
+		d.c.factOf("removes", "Deletes", capitalisedOf(said.Object))
 	case req.Method == http.MethodDelete:
 		d.leaves("", before, proposal.Removed)
 	case route.Effect == authz.EffectCalls:
 		// A CALL'S ARGUMENTS travel in `args`, which labels none of them.
-		d.sent(after, "args.", req.Query, "")
+		d.sent(after, "args.", req.Query, nil)
 	case req.Method == http.MethodPost && acts(route.Effect):
-		d.sent(after, "", req.Query, capitalised(said.Object))
+		d.sent(after, "", req.Query, capitalisedOf(said.Object))
 	case before == nil:
-		d.leaves("", after, func(field, label, v string) wire.Change {
+		d.leaves("", after, func(field, label string, v wire.Phrase) wire.Change {
 			return proposal.Added(field, label, v, false)
 		})
 		if req.Method == http.MethodPut && !creates {
@@ -482,6 +471,25 @@ type differ struct {
 	l labeller
 }
 
+// ChangeRows are the rows of a change from before to after, two JSON
+// documents (before null for one that creates), each field labelled and
+// valued as a person reads it. THE ONE RULE a change is shown by wherever a
+// person approves one: a proposal's card here, and an Advisor fix's preview
+// (internal/api's re-check), which labelled its rows by their raw keys.
+func ChangeRows(before, after []byte) ([]wire.Change, error) {
+	b, err := cards.Decode(before)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: read the document before the change: %w", err)
+	}
+	a, err := cards.Decode(after)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: read the document after the change: %w", err)
+	}
+	d := differ{l: newLabeller(b, a)}
+	d.diff("", b, a)
+	return d.c.rows(), nil
+}
+
 // diff appends the rows for what moves from before to after at field.
 func (d *differ) diff(field string, before, after any) {
 	switch b := before.(type) {
@@ -604,7 +612,7 @@ func find(list []entry, id string) *entry {
 // addedLeaves appends a row for every value v holds, as added under field;
 // onRecord marks a field added to a record that already exists.
 func (d *differ) addedLeaves(field string, v any, onRecord bool) {
-	d.leaves(field, v, func(f, label, value string) wire.Change {
+	d.leaves(field, v, func(f, label string, value wire.Phrase) wire.Change {
 		return proposal.Added(f, label, value, onRecord)
 	})
 }
@@ -620,17 +628,17 @@ func (d *differ) removedLeaves(field string, v any) {
 // labelled by its own name, below wrapper (a call's `args`). A request sending
 // nothing names what it acts on in one row (object), or says it sends nothing,
 // so the card still shows what the person approves.
-func (d *differ) sent(body any, wrapper string, query url.Values, object string) {
+func (d *differ) sent(body any, wrapper string, query url.Values, object wire.Phrase) {
 	n := len(d.c)
-	d.leaves("", body, func(field, _, value string) wire.Change {
+	d.leaves("", body, func(field, _ string, value wire.Phrase) wire.Change {
 		return proposal.Fact(field, d.l.label(strings.TrimPrefix(field, wrapper)), value)
 	})
 	d.cleared("", body)
 	d.queried(query)
 	switch {
 	case len(d.c) > n:
-	case object != "":
-		d.c.fact("object", "Applies to", object)
+	case len(object) > 0:
+		d.c.factOf("object", "Applies to", object)
 	default:
 		d.c.fact("sent", "Details", "None")
 	}
@@ -728,7 +736,7 @@ func actedOn(path string) string {
 
 // leaves appends row(field, label, value) for every scalar v holds beneath
 // field, a list of plain values as one value.
-func (d *differ) leaves(field string, v any, row func(field, label, value string) wire.Change) {
+func (d *differ) leaves(field string, v any, row func(field, label string, value wire.Phrase) wire.Change) {
 	switch t := v.(type) {
 	case map[string]any:
 		for _, k := range slices.Sorted(maps.Keys(t)) {
@@ -749,15 +757,16 @@ func (d *differ) leaves(field string, v any, row func(field, label, value string
 			return
 		}
 	}
-	items, isItems := plainItems(v)
-	value := scalar(v)
+	plain, isItems := plainItems(v)
+	var items []wire.Phrase
+	var value wire.Phrase
 	if isItems {
-		items = d.l.items(field, items)
-		value = strings.Join(items, ", ")
+		items = d.l.items(field, plain)
+		value = wire.Join(items, ", ")
 	} else {
-		value = d.l.value(field, value)
+		value = d.l.value(field, scalar(v))
 	}
-	if value == "" || field == "" {
+	if len(value) == 0 || field == "" {
 		return
 	}
 	line := row(field, d.l.label(field), value)
@@ -797,10 +806,13 @@ func (d *differ) valueRow(field string, before, after any) (wire.Change, bool) {
 	was, wasList := plainItems(before)
 	is, isList := plainItems(after)
 	if (wasList || before == nil) && (isList || after == nil) && (wasList || isList) {
-		return proposal.List(field, label, d.l.items(field, was), d.l.items(field, is))
+		return proposal.ListOf(field, label, d.l.items(field, was), d.l.items(field, is))
 	}
-	return proposal.Value(field, label, d.l.value(field, scalar(before)),
-		d.l.value(field, scalar(after)))
+	if slices.Contains(refFields, lastKey(field)) {
+		return proposal.ValueOf(field, label, d.l.value(field, scalar(before)),
+			d.l.value(field, scalar(after)))
+	}
+	return proposal.Value(field, label, scalar(before), scalar(after))
 }
 
 // removalLabels are removal paths as the card names them: a member by its
@@ -832,12 +844,18 @@ func join(field, key string) string {
 	return field + "." + key
 }
 
-// scalar is a value as one line of a card: a string as it is, a number or a
-// truth as written, a list of plain values joined, and anything else as JSON.
+// scalar is a value as one line of a card: a string as it is, a number as
+// written, a truth as Yes or No (a switch read "true" beside its label), a
+// list of plain values joined, and anything else as JSON.
 func scalar(v any) string {
 	switch t := v.(type) {
 	case nil:
 		return ""
+	case bool:
+		if t {
+			return "Yes"
+		}
+		return "No"
 	case string:
 		return redact.Secrets(t)
 	case []any:

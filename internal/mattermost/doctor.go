@@ -18,46 +18,18 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// The health check for the things that fail SILENTLY.
+// The health check for what fails SILENTLY: Mattermost admits a BROWSER's
+// websocket only when its Origin matches the Site URL (or AllowCorsFrom), so a
+// wrong Site URL costs every person their live feed while agents keep working
+// (their sockets carry no Origin, which the check admits).
 //
-// # Why this command exists at all
-//
-// Everything that fails loudly on Mattermost is already reported: a bad
-// token 401s, a missing team 404s, a channel that is not there is a note in
-// the provisioning report. What has no symptom is the Site URL.
-//
-// Mattermost admits a BROWSER's websocket only when its Origin matches the
-// server's own ServiceSettings.SiteURL (or an AllowCorsFrom entry), so a
-// Site URL that is not where people browse costs every person their live
-// feed while the agents keep working — their sockets carry no Origin, and
-// the check admits an upgrade with none. Nobody files a bug about a chat
-// client that just seems slow.
-//
-// # Where people browse is the one fact only the person running this has
-//
-// The server reports where it BELIEVES it is browsed, its Site URL; the
-// engine may reach it by any route, and an in-cluster Service dialled while
-// people browse a public name is the ordinary deployment on Kubernetes. So
-// this company's url says nothing about browsers, and comparing it with the
-// Site URL — what this check once did — failed every such deployment while
-// its browsers worked, and passed none it could not see. The address people
-// type is an INPUT ([DoctorOptions.BrowsedAt], the CLI's -browser-url): given
-// it, the Site URL is held to it and the browser probe goes there; without
-// it, the Site URL is judged on its own ([JudgeSiteURL], the sentence the
-// running transport logs too) and the report says what was not asked.
-//
-// A url the server does not serve its API at is not a comparison either: the
-// client refuses the redirect, or names the web page, that it is answered
-// with, and the first check to ask says so.
-//
-// # So it dials, rather than only reading settings
-//
-// A setting can be read; what the server DOES with an Origin cannot,
-// because AllowCorsFrom is not in its public configuration. The only answer
-// that means anything is a real upgrade carrying a browser's Origin — and
-// then a real authenticated socket per seat, shaped exactly as the engine's
-// own, because "the server accepts sockets" and "this bot's token opens one"
-// are different questions and only the second one wakes an agent.
+// Where people browse is a fact only the operator has (the engine may dial an
+// in-cluster Service), so it is an INPUT ([DoctorOptions.BrowsedAt],
+// -browser-url): given it, the Site URL is held to it and the browser probe
+// goes there; without it the Site URL is judged alone ([JudgeSiteURL]) and the
+// report says what was not asked. It dials, because AllowCorsFrom is not in the
+// public configuration and "sockets are accepted" is not "this bot's token
+// opens one", which alone wakes an agent.
 
 // Finding is one thing the doctor checked.
 type Finding struct {
@@ -361,21 +333,16 @@ func checkTeam(ctx context.Context, report *Report, opts DoctorOptions, reader *
 
 // checkBrowserSocket proves the upgrade a person's browser performs.
 //
-// GIVEN WHERE PEOPLE BROWSE, IT IS A BROWSER THERE, whole: sent to that
-// address, under the Site URL's path as the web app's own socket is, carrying
-// that Origin — so it passes through whatever stands in front of the server,
-// a proxy that drops the Upgrade header included, and asks the server's
-// origin rule, AllowCorsFrom included, the question a person's browser asks.
+// GIVEN WHERE PEOPLE BROWSE, it is a browser there, whole: sent to that
+// address under the Site URL's path, carrying that Origin, so it passes
+// whatever stands in front of the server (a proxy dropping Upgrade included)
+// and asks the origin rule, AllowCorsFrom included, what a browser asks.
 //
-// NOT GIVEN, it can stand in only for a browser the server itself names. With
-// a Site URL that is one at the Site URL, and the rule compares the Origin
-// with the Site URL rather than with the host an upgrade arrives at, so the
-// probe is sent to this company's url, which this run already reaches: it
-// finds an AllowCorsFrom that refuses the server's own browsers, and nothing
-// in front of the Site URL. With no Site URL the rule compares the Origin with
-// the host the upgrade arrives at, so the only browser to stand in for is one
-// at the address dialled, written as a browser writes it (no default port, in
-// the Origin or the Host).
+// NOT GIVEN, it stands in only for a browser the server names. With a Site URL
+// the rule compares the Origin with it, so the probe goes to this company's
+// url: it finds an AllowCorsFrom refusing the server's own browsers, nothing in
+// front of the Site URL. With none the rule compares with the host dialled, so
+// the browser is one at that address, written as a browser writes it.
 func checkBrowserSocket(ctx context.Context, report *Report, dial Dialer,
 	token, browsedAt, configured, reported string,
 ) {
@@ -439,20 +406,14 @@ func browserAddress(raw string) string {
 
 // checkSeats asks, per agent seat, whether that seat would actually wake.
 //
-// # "The server accepts sockets" is not "this bot wakes"
+// A seat fails on its own while every other check passes (revoked token,
+// deactivated bot, a `${VAR}` missing from this environment, a bot in no
+// channel) and leaves ONE agent deaf, so each seat is checked with ITS OWN
+// credential.
 //
-// A seat fails on its own while every other check passes: a token that was
-// revoked, a bot that was deactivated, a `${VAR}` that never made it into
-// this deployment's environment, a bot in no channel. Each leaves ONE agent
-// permanently deaf while the company looks healthy, so each seat is checked
-// with ITS OWN credential.
-//
-// # A seat that fails early is not asked the later questions
-//
-// A seat whose token did not resolve never gets a socket dialled, and one
-// whose credential is refused is never asked about its channels. Reporting
-// those as separate failures would send an operator after faults nobody
-// observed — the answer is already in the first line.
+// A seat whose token did not resolve gets no socket dialled, and one whose
+// credential is refused is not asked about its channels: reporting those as
+// separate failures would send an operator after faults nobody observed.
 func checkSeats(ctx context.Context, report *Report, opts DoctorOptions, dial Dialer,
 	seats []seatCredential, teamID string,
 ) {

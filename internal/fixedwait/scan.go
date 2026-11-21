@@ -813,22 +813,16 @@ func scanFile(fset *token.FileSet, s *source, pkgs map[string]*pkgDecls, typed [
 		slices.SortFunc(cands, func(a, b candidate) int { return cmp.Compare(a.pos, b.pos) })
 	}
 
-	// The markers. Each covers the counted references of ONE line, which its
-	// place decides: a marker that trails code covers that code's line, and
-	// a marker alone on its line covers the line under it. Never both, so a
-	// marker written after a liveness timer does not also take the wait on
-	// the next line out of the class, unseen by whoever reads the diff. One
-	// that covers no counted reference is stale.
+	// The markers. Each covers the counted references of ONE line: a marker
+	// trailing code covers that line, one alone on its line the line under it,
+	// never both, so a marker after a liveness timer does not also take the
+	// next line's wait out of the class unseen. One covering nothing is stale.
 	//
-	// AND EACH COVERS ITS OWN SHAPE ([Kind.covers]): measure a reading of
-	// elapsed time, stated a comparison of two instants (a time.Time's Sub,
-	// Before, After or Compare), every other kind a fixed wait.
-	// A wait is not a measurement nor a measurement a wait, and a reading of
-	// now is never stated, so a marker over only what it does not cover is
-	// refused rather than taken as stale or, worse, as covering it. A line
-	// holding a wait and an elapsed reading takes one marker for each, one
-	// alone above it and one trailing it: two markers alone on consecutive
-	// lines would put the second under the first, which covers no reference.
+	// EACH COVERS ITS OWN SHAPE ([Kind.covers]): measure an elapsed reading,
+	// stated a comparison of two instants, every other kind a fixed wait; a
+	// marker over only what it does not cover is refused. A line with a wait
+	// and an elapsed reading takes one marker above and one trailing: two alone
+	// on consecutive lines put the second under the first.
 	type marker struct {
 		line, target int
 		kind         Kind

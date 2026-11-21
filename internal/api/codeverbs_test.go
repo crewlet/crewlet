@@ -24,29 +24,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE CODE ROUTES ARE DECIDED BY THE AUTHORITY TABLE, each on the verb it is
-// mounted with.
+// THE CODE ROUTES ARE DECIDED BY THE AUTHORITY TABLE, each on its verb.
 //
-// A VERIFY IS ADMIN'S, as the deployment's other controls are: it reads every
-// byte of THIS NODE's copy of a repository, holds a maintenance slot and the
-// memory its check needs, and with `repair=true` rewrites the copy every fetch
-// on the node is served from. Mounted on the plain mux it asked only whether
-// somebody resolved, so a person holding nothing but the overview — or a
-// machine token carrying one app — could start a check and its repair on
-// every repository a Gitlet node keeps. So a caller holding every app and not
-// admin is refused it `403` naming admin, before Gitlet is asked, and
-// its read the same.
-//
-// THE READS AND THE GIT ROUTES ADMIT EVERY HOLDER OF THE GITLET APP THE GUARD
-// RESOLVED: what each may read, fetch or push is the per-repository grant the
-// serving node decides (ADR-0088), behind the app (ADR-0110;
-// [TestEveryGitletRouteNeedsTheApp] holds the app itself). The same caller
-// reaches every one of them — the control that shows the refusal above is the
-// verb's and not the credential's.
-//
-// Mutation: mount the code routes on the plain mux again, and the colleague
-// starts a check; mount the reads or the git routes on an admin verb, and the
-// colleague is refused them.
+// A VERIFY IS ADMIN'S: it reads every byte of THIS NODE's copy, and with
+// `repair=true` rewrites what every fetch is served from. A caller holding
+// every app and not admin is refused it `403` naming admin, before Gitlet is
+// asked, and its read the same.
+// THE READS AND THE GIT ROUTES ADMIT EVERY HOLDER OF THE GITLET APP: the
+// per-repository grant is the serving node's (ADR-0088, ADR-0110;
+// [TestEveryGitletRouteNeedsTheApp]). The same caller reaches every one, so the
+// refusal above is the verb's, not the credential's.
+// Mutation: mount the code routes on the plain mux, or the reads or git routes
+// on an admin verb.
 func TestTheCodeRoutesAreDecidedByTheAuthorityTable(t *testing.T) {
 	t.Parallel()
 	const colleague = "a-token-that-carries-every-app-and-not-admin"
@@ -160,17 +149,14 @@ func TestAGitRoutesRefusalIsOneLineGitPrints(t *testing.T) {
 // EVERY GITLET ROUTE NEEDS THE APP, AND GIT SAYS WHICH (ADR-0110).
 //
 // Reaching a repository takes the gitlet app through every door, so a token
-// carrying every other app is refused each of Gitlet's reads — the rows, a
-// repository, its pushes, a search — 403 `unauthorized` naming exactly
-// gitlet, and each git route in git's own form, one line that names the
-// Gitlet permission rather than every permission there is; and Gitlet is
-// asked nothing, so no answer, count or advertisement says what a repository
-// holds. The CONTROL is a token carrying gitlet alone, served every one of
-// them: the refusal is the app's, not the routes'.
-//
-// Mutation: put code.git back on everybody and the git routes serve the
-// token without the app; word the git line by its code again and it names
-// every permission.
+// carrying every other app is refused each of Gitlet's reads (rows, a
+// repository, its pushes, a search) 403 `unauthorized` naming exactly gitlet,
+// and each git route in git's form, one line naming the Gitlet permission, not
+// every permission; and Gitlet is asked nothing, so no answer says what a
+// repository holds. The CONTROL is a token carrying gitlet alone, served every
+// one: the refusal is the app's, not the routes'.
+// Mutation: put code.git back on everybody, or word the git line by its code
+// again so it names every permission.
 func TestEveryGitletRouteNeedsTheApp(t *testing.T) {
 	t.Parallel()
 	var others []iam.Grant

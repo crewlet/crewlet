@@ -10,31 +10,22 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The framework's own implementation of [Rows], and why it is here rather than
-// in each domain.
-//
-// Most of what a snapshot returns is the FRAMEWORK's: the arbitration anchor
-// and the checkpoint live in its tables, and the deferred record and its scope
-// index live in tables whose shape the framework writes. A domain implementing
-// this seam for itself would be a second copy of the two-clause containment
-// probe — the one piece of SQL in this design where getting a clause wrong is
-// silent data loss rather than a wrong answer, because a probe that misses a
-// deferred record lets a writer take the retry-at-zero branch and overwrite a
-// mutation no later reprocess can recover.
-//
-// What is genuinely the domain's is the pair of GUARDS: whether an object was
-// permanently removed, and whether it exists at all. Those are rows only the
-// domain knows the shape of, so they arrive as one small callback.
+// The framework's own implementation of [Rows]. Most of a snapshot is the
+// FRAMEWORK's (the arbitration anchor, the checkpoint, the deferred record and
+// its scope index), and a domain implementing this seam would be a second copy
+// of the two-clause containment probe, where a wrong clause is silent data
+// loss: a probe that misses a deferred record lets a writer take the
+// retry-at-zero branch and overwrite a mutation no later reprocess can
+// recover. Only the GUARDS (permanently removed? exists at all?) are the
+// domain's, so they arrive as one callback.
 
 // Guards answers the two object-level facts a first write needs, from inside
 // the snapshot's own transaction.
 //
-// A CALLBACK RATHER THAN TWO TABLE NAMES, because the questions are not always
-// one table each: a domain may keep its deletion markers beside its objects, or
-// have no concept of removal at all. Returning false for both is a legitimate
-// answer and means "this domain has no permanent removal and no first-writer
-// guard", which is exactly right for a domain whose objects are all created by
-// their first record.
+// A CALLBACK RATHER THAN TWO TABLE NAMES: a domain may keep its deletion
+// markers beside its objects, or have no removal at all. Returning false for
+// both means "no permanent removal and no first-writer guard", right for a
+// domain whose objects are all created by their first record.
 type Guards func(ctx context.Context, tx *sql.Tx, subj Subject) (deleted, guard bool, err error)
 
 // SnapshotRows is [Rows] over one domain's own estate.
@@ -49,10 +40,9 @@ type SnapshotRows struct {
 // and whose prefix keys every anchor an expectation is formed from.
 //
 // THE REPLICATED ESTATE'S READ HANDLE, and nothing looser: the node's own
-// database reads exactly as the replicated estate does, and a seam over it
-// answers every decision from a file with none of the domain's tables — "no
-// such table", or worse, the empty answer of a table that happens to share
-// the name.
+// database reads the same way, and a seam over it answers every decision from
+// a file with none of the domain's tables — "no such table", or worse, the
+// empty answer of a table that happens to share the name.
 func NewRows(db store.ReplicatedReader, d Domain, spec StreamSpec, guards Guards) (*SnapshotRows, error) {
 	if db.IsZero() {
 		return nil, fmt.Errorf("statelog: a read seam needs the replicated estate")
@@ -91,12 +81,10 @@ func (r *SnapshotRows) Snapshot(ctx context.Context, subj Subject, scope ScopeSe
 			snap.Held, snap.HeldOK = entry.Position, true
 			return nil
 		}
-		// THE CHECKPOINT THESE ROWS ARE AT, from the same transaction:
-		// it commits with the rows, so this is exactly the prefix the
-		// decision sees. The expectation-zero fence compares it rather
-		// than the applier's live position, for the reason
-		// [Snap.Checkpoint] gives — and it is read BEFORE the decision
-		// because the decision is stamped with its generation.
+		// THE CHECKPOINT THESE ROWS ARE AT, from the same transaction, where
+		// it commits with the rows. The expectation-zero fence compares it
+		// rather than the applier's live position ([Snap.Checkpoint]), and it
+		// is read BEFORE the decision, which is stamped with its generation.
 		row, _, err := r.tables.readCursor(ctx, tx)
 		if err != nil {
 			return err
@@ -143,12 +131,11 @@ func (r *SnapshotRows) Snapshot(ctx context.Context, subj Subject, scope ScopeSe
 
 // probeScope is what the deferral probe is run over.
 //
-// AN EMPTY SCOPE IS NOT AN EMPTY PROBE. A caller that could not say what its
-// write is about is a caller every deferred record concerns, and answering
-// "nothing is deferred" there is the one answer that licenses the unsafe
-// branch. The domain's own root path is not known here, so the fallback is the
-// scope the caller gave with one addition: an empty set probes nothing and is
-// replaced by a set that matches every stored path.
+// AN EMPTY SCOPE IS NOT AN EMPTY PROBE: a caller that could not say what its
+// write is about is one every deferred record concerns, and "nothing is
+// deferred" is the one answer that licenses the unsafe branch. The domain's
+// root path is not known here, so an empty set is replaced by one matching
+// every stored path.
 func probeScope(s ScopeSet) ScopeSet {
 	if !s.Empty() {
 		return s
@@ -187,8 +174,8 @@ func (r *SnapshotRows) Op(ctx context.Context, opID string) (OpEntry, bool, erro
 		return OpEntry{}, false, err
 	}
 	// THE ROW'S OWN FOUND FLAG, not its position: a zero position is a
-	// value a row can hold, and reading it as absence answered a present
-	// row "never applied".
+	// value a row can hold, and reading it as absence would answer a
+	// present row "never applied".
 	return entry, held, nil
 }
 
@@ -210,18 +197,13 @@ func (r *SnapshotRows) LostBefore(ctx context.Context, kind string) (time.Time, 
 // CheckTables reports whether a domain's declared tables accept the
 // framework's own statements.
 //
-// # Why this is a check and not a comment
-//
-// A domain declares three table NAMES and the framework writes their COLUMNS.
-// Nothing in Go connects the two: the statements are built by interpolating the
-// name into SQL the framework owns, so a migration that spelled a column
-// differently — or gave the position three columns where the framework writes
-// one — compiles, migrates, opens, serves every read, and fails the first time
-// a record this build cannot decode arrives. That is the rarest path in the
-// system and the one whose failure is a stalled log.
-//
-// So the suite runs one of each statement against a fresh estate and rolls it
-// back. What it proves is exactly what a comment cannot: the shapes agree.
+// A domain declares three table NAMES and the framework writes their COLUMNS,
+// interpolating the name into SQL it owns, so nothing in Go connects the two:
+// a migration that spelled a column differently, or gave the position three
+// columns where the framework writes one, compiles, migrates, opens, serves
+// every read, and fails the first time a record this build cannot decode
+// arrives: the rarest path, and its failure is a stalled log. So the suite
+// runs each statement against a fresh estate and rolls it back.
 func CheckTables(ctx context.Context, db Estate, d Domain, spec StreamSpec) error {
 	t, err := newTables(d, spec)
 	if err != nil {
@@ -285,9 +267,9 @@ func CheckTables(ctx context.Context, db Estate, d Domain, spec StreamSpec) erro
 		return fmt.Errorf("statelog: domain %q declares tables the framework's "+
 			"own statements cannot use: %w", d.Name(), err)
 	}
-	// The transaction committed, which means the sentinel did not travel —
-	// a store that swallows a returned error would make this check pass
-	// having written rows, so it is reported rather than assumed.
+	// The transaction committed, so the sentinel did not travel: a store
+	// that swallows a returned error would pass this check having written
+	// rows, so it is reported rather than assumed.
 	return fmt.Errorf("statelog: the table check committed instead of rolling "+
 		"back, so it has written rows into %q's estate", d.Name())
 }

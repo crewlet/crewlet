@@ -361,7 +361,6 @@ func TestABoxWaitsAsLongAsTheBridgeCanTakeToAnswer(t *testing.T) {
 		{"a seat holding a tool bound past the floor", boundedSurface(t, 10*time.Second, 2*time.Hour),
 			2*time.Hour + margin},
 		{"a seat whose tools are bound under the floor", boundedSurface(t, 10*time.Second), floor + margin},
-		{"a surface that is not a seat's", &probeSurface{}, floor + margin},
 	} {
 		if got := alone.CallTimeout(tc.surface); got != tc.want {
 			t.Errorf("%s: a box waits %s for a call, want %s", tc.name, got, tc.want)

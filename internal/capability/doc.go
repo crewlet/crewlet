@@ -18,6 +18,13 @@
 // is told as a change back, and re-applying an unchanged revision (how a
 // credential is rotated) is no change at all.
 //
+// # Where access is decided
+//
+// Crewlet narrows every credential to the grant an administrator sets in
+// Crewlet, so each lane's line names that grant and the screen it is changed
+// on ([seataccess.GrantPlace]). What GitHub's app holds outside the grant is
+// said but is never a change: it moves with no decision of the seat's.
+//
 // # Pure, and holding no secret
 //
 // [Snapshot] reads its [Input] and nothing else: no clock, no store and no

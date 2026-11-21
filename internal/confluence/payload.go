@@ -91,23 +91,16 @@ func EscapeCQL(value string) string {
 
 // BuildCQL renders one search.
 //
-// THE QUERY IS NOT SHORTENED. A 200-character cap used to sit here, justified
-// as turning "the server refused a 4KB query" into "the search used the first
-// 200 characters" — but those are not comparable outcomes. A refusal is an
-// error the caller sees, and the knowledge block reports it as empty; a
-// silently shortened query is a DIFFERENT SEARCH, returning plausible pages
-// for terms the seat never asked about, with nothing anywhere saying so. The
-// cut was mid-rune too, so a non-ASCII query could end in half a character
-// inside a quoted CQL literal. What bounds this text is the aux model's own
-// output-token cap, upstream, where a bound belongs.
+// THE QUERY IS NOT SHORTENED: a silently shortened query is a DIFFERENT SEARCH
+// returning plausible pages for terms never asked about (and a mid-rune cut
+// could leave half a character in a quoted literal). The bound is the aux
+// model's output-token cap, upstream.
 //
 // Shape: `space IN ("ENG","HANDBOOK") AND type = page AND text ~ "…"`.
-//
-// AN EMPTY RESULT IS A REFUSAL, and the caller skips the request rather than
-// searching. That happens in exactly one case worth stating: no scope AND a
-// seat that does not authenticate as itself — searching the whole instance
-// on the shared org credential is how one seat reads a page its own account
-// never could. See [knowledge.Permitted].
+// AN EMPTY RESULT IS A REFUSAL, and the caller skips the request: no scope AND
+// a seat not authenticating as itself, since searching everything on the
+// shared org credential reads pages its own account could not.
+// See [knowledge.Permitted].
 func BuildCQL(text string, spaces []string, allowUnscoped bool) string {
 	text = strings.TrimSpace(text)
 	if text == "" {

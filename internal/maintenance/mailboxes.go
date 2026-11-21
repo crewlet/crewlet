@@ -17,146 +17,41 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE REMOVED SEAT'S MAILBOX.
-//
-// A seat's mailbox is a durable subscription, and a durable subscription on
-// the agent stream retains every message addressed to it until a consumer
-// acks it. That is what makes an unowned seat's mail safe, and it is also why
-// a seat that LEAVES the company's agent seats — removed from the chart, or
-// made a person's — is a leak: nothing consumes its mailbox again, nothing
-// deletes it, and every event still addressed to the seat is kept for the
-// life of the deployment. The mailbox is named by the agent id derived from
-// the seat's handle (ADR-0013), so a seat created again under the same handle
-// attaches to it, and one under any other handle never does.
-//
-// So a mailbox is retired once its seat has been absent from the active
-// revision for [MailboxRetirementGrace]. The pieces, and why each is shaped
-// the way it is:
-//
-//   - THE REGISTRY. Every node records a handle in the coordination store
-//     BEFORE it creates the subscription ([Mailboxes.Register]). The record is
-//     what the protocol below runs on: the absence stamp, the retirement mark
-//     and the compare-and-set every writer takes. The broker can say which
-//     mailboxes exist, but it has nowhere to keep when a seat was first seen
-//     missing or that a retirement is in flight.
-//   - THE BROKER IS THE BACKSTOP. A mailbox can exist with no record: a node
-//     whose registration failed creates the mailbox anyway. Once such a seat
-//     is gone its handle is gone from the org, so nothing but the broker
-//     still knows the subscription is there. So every sweep also
-//     LISTS the seat mailboxes the broker holds ([queue.EventQueue]'s
-//     ListSubscriptions) and registers each one of a seat outside the roster
-//     that has no record, stamping its absence at once. From then on it is an
-//     ordinary absent record, retired after the same grace period — with NO
-//     HANDLE, because nothing the fleet still holds can say what the seat was
-//     called, which is why everything a retirement acts on is found by the
-//     seat's ID and the handle is only ever a label. A seat that comes back
-//     has its handle written onto the record by the first registration or
-//     sweep that finds it in the roster.
-//   - ABSENCE IS OBSERVED, NOT INFERRED. The sweep stamps a record absent the
-//     first time the active revision lacks its handle, and retires it only
-//     once that stamp is older than the grace period. The stamp is cleared by
-//     whichever writer sees the seat again first: the sweep, or a node
-//     registering the seat on an apply.
-//   - UNKNOWN IS NEVER ABSENT. The sweep reads the roster of the company the
-//     fleet is running, and a roster it cannot read, or a node that has not
-//     applied the activation the fleet is pointed at, stamps nothing and
-//     retires nothing. A store blip or a lagging duty holder must not be able
-//     to delete a live seat's mail.
-//   - EVERY WRITE IS A COMPARE-AND-SET. Two sweeps that overlap during a duty
-//     handoff read the same record and exactly one wins the mark that starts a
-//     retirement; a returning seat's registration that lands first makes the
-//     sweep's mark lose instead.
-//   - A RETIREMENT IS MARKED BEFORE IT DELETES ANYTHING. The mark is what makes
-//     a sweep that dies mid-way recoverable (a later sweep resumes it once the
-//     mark is stale) and what tells a registering node not to create the
-//     subscription a retirement is still deleting (it waits instead, and takes
-//     the record over if the retirement outlives its own budget).
-//   - A RETIREMENT HOLDS THE SEAT'S LEASE WHILE IT DELETES. The mark stops a
-//     registering node, but a node's seat host claims a seat off the company
-//     it installed without ever reading the record, and attaching the seat's
-//     consumer creates the very subscriptions the retirement is about to
-//     delete. Only the lease excludes that node, so the retirement claims it
-//     under its own owner before the mark and gives it back after the record
-//     is gone. A seat whose lease somebody else holds is not retired at all.
-//
-//   - A RETIREMENT ENDS THE SEAT'S EXECUTORS FIRST. A detached run belongs to
-//     its seat, and a departed seat's runs are kept through the grace for the
-//     same reason its mail is: a seat made an agent's again within it comes
-//     back to its parked questions and running jobs. Once the grace has passed nothing can
-//     reach them (a resume needs the seat, an answer arrives on the inbox about
-//     to go, and a completion is routed to the control topic that goes with
-//     it), so while the lease is held they are ended ([SeatRunRetirer]) before
-//     a single subscription is deleted, and a retirement that cannot end them
-//     is undone and retried like one that cannot delete. A run whose tool call
-//     is still running is no run that cannot be ended: it is left WAITING
-//     ([SeatRunsWaiting]), and the retirement is undone and retried the same
-//     way, said at info on every tick it lasts rather than failing them. They
-//     are found by the seat's ID, the key their subscriptions are named by, so
-//     a mailbox the broker alone remembered ends its seat's runs like any
-//     other.
-//
-//   - A RETIREMENT REMOVES THE SEAT'S EXECUTOR SESSIONS, after its runs and
-//     before its subscriptions ([SeatSessionRetirer]). A session is what a
-//     later launch of the seat's turn continues, and the grace that keeps a
-//     departed seat's mail for a seat made an agent's again within it keeps
-//     its sessions for the same seat; past it no turn of the seat runs again,
-//     and what its sessions hold (a harness's whole transcript, sealed in
-//     the fleet's object store) would otherwise wait out the company's whole
-//     conversation retention with nobody able to continue it. A retirement
-//     whose node cannot tell which sessions are the seat's is undone and
-//     retried like one whose runs cannot be ended; one whose removal the
-//     executor log cannot take now completes, and leaves the sessions to
-//     that retention, which bounds them where a held mailbox is not bounded.
-//
-// Memory is NOT retired. A seat's diary and onboarding markers are keyed by
-// its agent id, and its episodes, synthesized skills and counterparty
-// profiles by the handle their rows were written under, so a seat made a
-// person's and an agent's again finds them where it left them. A REMOVED
-// seat's id-keyed rows are reachable by no other seat, because its id is
-// never derived again, and the learning lifecycle is what bounds them.
+// THE REMOVED SEAT'S MAILBOX. A durable subscription keeps every message until
+// acked, so a seat leaving the agent seats leaks its mailbox unless retired
+// after [MailboxRetirementGrace] of absence (the id derives from the handle,
+// ADR-0013). A registry record per seat, written BEFORE its subscription,
+// carries the absence stamp, retirement mark and CAS; the broker backstops
+// mailboxes with no record, found by seat ID (the handle is only a label).
+// Absence is observed, never inferred; unknown is never absent; every write is
+// a CAS. A retirement marks first (a dead sweep resumes), holds the seat's
+// lease, re-homes its work ([SeatWorkRehomer]), ends runs ([SeatRunRetirer])
+// then sessions ([SeatSessionRetirer]) before deleting any subscription, and
+// is undone and retried if it cannot. Memory is not retired.
 
 // MailboxRetirementGrace is how long a seat must have been absent from the
 // active revision before its mailbox is deleted.
 //
-// Twenty-four hours, sized from the two things it trades against. Long enough
-// that a seat made a person's by mistake and made an agent's again within a
-// working day — the one departure from the agent seats that can be undone,
-// since a removal retires the seat's address and identity for good — comes
-// back to its backlog intact rather than to an empty mailbox. Short enough
-// that mail addressed to a seat nobody runs is not retained for longer than
-// one day plus a tick.
-//
-// The clock starts when a sweep FIRST OBSERVES the absence, so the effective
-// delay is this plus up to one [Interval], and longer while no duty holder can
-// read the active revision. A retirement is therefore never early, only late,
-// which is the safe direction for a delete that cannot be undone.
+// Twenty-four hours: long enough that a seat made a person's by mistake and
+// made an agent's again within a working day (the one departure that can be
+// undone, since a removal retires the address and identity for good) finds its
+// backlog intact; short enough that mail for a seat nobody runs is kept about a
+// day. The clock starts when a sweep FIRST OBSERVES the absence, so the delay
+// is this plus up to one [Interval], longer while no duty holder can read the
+// active revision: never early, which is the safe direction for a delete.
 const MailboxRetirementGrace = 24 * time.Hour
 
-// mailboxRetireBudget bounds the broker and store work of one retirement, from
-// before its mark is written to the delete of its record.
-//
-// Thirty seconds: the work is a seat lease claim, two subscription deletes and
-// two conditional store writes, each a millisecond on a healthy broker and each
-// individually bounded by the client's five-second API timeout, so this covers
-// every one of them timing out with room to spare. A seat that left executors
-// behind adds a box kill and a record delete per run; a retirement whose runs
-// do not all end inside the budget is undone and resumes on the next tick,
-// where the runs it already ended are gone. Removing the seat's executor
-// sessions adds a read of the fleet's activation pointer and one publish to
-// the executor log, each as quick on a healthy fleet; the publish waits at
-// most a second for this node to apply it (a removal durable in the log
-// applies on every node in log order, whether this one has caught up or not).
-// A removal the log refuses leaves the sessions to the retention rather than
-// the mailbox held; one that runs the budget out is undone with the rest of
-// the retirement, like everything else here. It is load-bearing for the
-// registering side as well: a node that finds a retirement in flight waits
-// twice this long before it takes the record over, so by then the retiring
-// sweep can no longer issue a delete that lands on the subscription the node is
-// about to create.
-//
-// A retirement is also held to half the seat lease TTL when that is shorter,
-// because its deletes are only excluded from a claiming node while the lease
-// it took is live; see [Mailboxes.workLimit].
+// mailboxRetireBudget bounds the work of one retirement, from before its mark
+// to the delete of its record. Thirty seconds: a lease claim, two deletes and
+// two conditional writes (each bounded by the client's five-second API
+// timeout), plus a box kill and record delete per left-behind run, the session
+// removal's publish and a tracker write per open item. A retirement that
+// outruns it is undone and resumes next tick, where the items it re-homed are
+// no longer the seat's, so a long backlog is re-homed over several ticks. A
+// registering node that finds a retirement in flight waits twice this long
+// before taking the record over, so the retiring sweep can no longer delete a
+// subscription the node is about to create. Capped at half the seat lease TTL
+// when shorter; see [Mailboxes.workLimit].
 const mailboxRetireBudget = 30 * time.Second
 
 // mailboxRetireStale is how old a retirement mark must be before a later sweep
@@ -241,19 +136,14 @@ type SeatLeases interface {
 // being retired, while the retirement holds the seat's lease under owner and
 // epoch.
 //
-// THE SEAT'S ID selects the runs, and the handle is only a label: a record the
-// broker's listing alone found has none, and a retirer that selected by it
-// matched no run of that seat, ended nothing, and let the retirement delete
-// the subscriptions every one of them is reached on. The id is the key the run
-// records and the subscriptions share.
+// THE SEAT'S ID selects the runs; the handle is only a label, absent from a
+// record only the broker's listing found, and selecting by it would end nothing
+// and let the retirement delete the runs' subscriptions.
 //
-// An error means some run was not ended, including a node that cannot tell
-// whether the seat has runs at all, and the retirement is undone and retried:
-// deleting the subscriptions a run's completion and answer travel on, while
-// the run itself is left behind, would strand it in the fleet's run records
-// for good. A run left because a tool call of it is still running is answered
-// in [SeatRunsWaiting] instead, beside the error and never inside it, and the
-// retirement is undone and retried for it too.
+// An error means some run was not ended (or the node cannot tell): the
+// retirement is undone and retried, since deleting the subscriptions a run's
+// completion travels on would strand it. A run left because a tool call is
+// still running is answered in [SeatRunsWaiting], beside the error.
 type SeatRunRetirer func(ctx context.Context, seat uuid.UUID, handle, owner string, epoch int64,
 ) (SeatRunsWaiting, error)
 
@@ -284,22 +174,30 @@ func (w SeatRunsWaiting) waiting() bool { return len(w.Calls) > 0 }
 
 // SeatSessionRetirer removes every executor session a seat whose mailbox is
 // being retired holds, after its runs are ended and while the retirement holds
-// the seat's lease. retiring is the instant this attempt marked the retirement
-// at, which the removal derives its operation from: the attempt's own instant,
-// so an operation minted at it is one every node's ledger can vouch for however
-// late the retirement runs, and a retried retirement — marked anew — publishes
-// the removal again, which applies idempotently.
+// the seat's lease. retiring is the instant this attempt marked the retirement,
+// which the removal derives its operation from so every node's ledger can vouch
+// for it; a retried retirement republishes it, which applies idempotently.
+// THE SEAT'S ID selects the seat, for [SeatRunRetirer]'s reason; handle is a
+// label, empty for a mailbox only the broker's listing found.
 //
-// THE SEAT'S ID selects the seat, for [SeatRunRetirer]'s reason, and handle is
-// the record's label — empty for a mailbox the broker's listing alone found.
-//
-// An error means this node cannot tell which sessions are the seat's (it
-// cannot read the revision the fleet runs, or its copy of the executor log
-// cannot answer which seats hold sessions), and the retirement is undone and
-// retried. A removal the log cannot take now is NOT an error: the retirer
-// leaves those sessions to the company's conversation retention, which bounds
-// them, rather than hold a mailbox for as long as the log is unhealthy.
+// An error means this node cannot tell which sessions are the seat's, and the
+// retirement is undone and retried. A removal the log cannot take now is NOT an
+// error: those sessions are left to the conversation retention, which bounds
+// them, rather than hold a mailbox as long as the log is unhealthy.
 type SeatSessionRetirer func(ctx context.Context, seat uuid.UUID, handle string, retiring time.Time) error
+
+// SeatWorkRehomer re-homes the open work a seat whose mailbox is being retired
+// still holds, while the retirement holds the seat's lease (ADR-0162).
+// retiring is the instant this attempt marked the retirement, which each write
+// derives its operation from, for [SeatSessionRetirer]'s reason. THE SEAT'S ID
+// names the seat; handle is a label, empty for a mailbox only the broker's
+// listing found.
+//
+// BEFORE THE RUNS ARE ENDED, so a run of the seat on an item is still a fact
+// the rule can read, and a retried retirement decides from the same facts. An
+// error means some item was not re-homed: the retirement is undone and
+// retried, since a seat whose mailbox is gone is one no later sweep retires.
+type SeatWorkRehomer func(ctx context.Context, seat uuid.UUID, handle string, retiring time.Time) error
 
 // SeatRoster reads the agent seats of the company the fleet is running: the
 // revision the activation pointer names.
@@ -348,6 +246,11 @@ type MailboxOptions struct {
 	// Roster reads the active revision's agent seats. Required.
 	Roster SeatRoster
 
+	// Work re-homes a retired seat's open work before its runs are ended.
+	// Required, for Runs' reason: whether a removed seat left work assigned
+	// is a fact about the replicated estate, not about this node.
+	Work SeatWorkRehomer
+
 	// Runs ends a retired seat's executors before its subscriptions are
 	// deleted. Required, because there is no value that could mean "this
 	// node has nothing to end": whether a removed seat left runs behind is
@@ -381,6 +284,7 @@ type Mailboxes struct {
 	owner    string
 	leaseTTL time.Duration
 	roster   SeatRoster
+	work     SeatWorkRehomer
 	runs     SeatRunRetirer
 	sessions SeatSessionRetirer
 	budget   time.Duration
@@ -411,6 +315,9 @@ func NewMailboxes(opts MailboxOptions) (*Mailboxes, error) {
 	if opts.Roster == nil {
 		missing = append(missing, errors.New("maintenance: MailboxOptions.Roster is required"))
 	}
+	if opts.Work == nil {
+		missing = append(missing, errors.New("maintenance: MailboxOptions.Work is required"))
+	}
 	if opts.Runs == nil {
 		missing = append(missing, errors.New("maintenance: MailboxOptions.Runs is required"))
 	}
@@ -423,7 +330,7 @@ func NewMailboxes(opts MailboxOptions) (*Mailboxes, error) {
 	m := &Mailboxes{
 		records: opts.Records, queue: opts.Queue, leases: opts.Leases,
 		owner: opts.Owner, leaseTTL: opts.LeaseTTL, roster: opts.Roster,
-		runs: opts.Runs, sessions: opts.Sessions,
+		work: opts.Work, runs: opts.Runs, sessions: opts.Sessions,
 		budget: opts.RetireBudget, poll: opts.RegisterPoll,
 	}
 	if m.budget <= 0 {
@@ -449,24 +356,14 @@ func (m *Mailboxes) Jobs() []Job {
 // Register records that a seat's mailbox exists or is about to, and returns
 // once the caller may create it.
 //
-// Called by every node for every agent seat of the revision it applied, BEFORE
-// the subscription is created, so a crash between the two leaves a record with
-// no subscription (harmless, a retirement deletes nothing) rather than a
-// subscription nothing remembers.
-//
-// A record the sweep stamped absent is cleared: the seat is back. A record that
-// carries no handle — one the sweep registered from the broker's listing alone
-// — is given the seat's, so every later log line names whose mailbox it is. A
-// record whose retirement is in flight is NOT overwritten at once, because the retiring
-// sweep may still delete the subscription this node is about to create; the
-// node waits for the retirement to finish, and takes the record over only once
-// it has outlived twice its budget, by which point the retiring sweep can no
-// longer act. The wait is measured on this process's monotonic clock from the
-// moment it first saw the mark, so no two nodes' wall clocks are compared.
-//
-// An error means the record could not be written. The caller creates the
-// mailbox anyway: losing mail for a seat in the company is worse than a
-// mailbox the sweep has to register on its next tick.
+// Called by every node for every agent seat, BEFORE the subscription is
+// created, so a crash between leaves a harmless record, not a subscription
+// nothing remembers. A stamped-absent record is cleared. One whose retirement
+// is in flight is NOT overwritten at once, since the sweep may still delete the
+// subscription this node is about to create: the node waits, taking it over
+// after twice the budget on its own monotonic clock (no two nodes' wall clocks
+// compared). On error the caller creates the mailbox anyway: lost mail is worse
+// than a record the next sweep adds.
 func (m *Mailboxes) Register(ctx context.Context, seat placement.Seat) error {
 	handle := seat.Handle
 	if seat.ID == uuid.Nil {
@@ -821,6 +718,13 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 		return false, nil
 	}
 
+	// THE SEAT'S WORK FIRST, under the lease, while its runs are still facts
+	// ([SeatWorkRehomer]): once the record is deleted nothing re-homes it.
+	if workErr := m.work(work, rec.Seat, rec.Handle, marked.RetiringSince); workErr != nil {
+		m.unmark(ctx, marked)
+		return false, fmt.Errorf("re-home the work of retired seat %q: %w", handle, workErr)
+	}
+
 	// THE RUNS BEFORE THE SUBSCRIPTIONS, under the same lease and budget: a
 	// run left behind once its control topic and inbox are gone is one no
 	// completion, answer or resume can ever reach again. A run left WAITING on
@@ -862,8 +766,8 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 	}
 	log.InfoContext(ctx, "seat_mailbox_retired", "handle", handle, "absent_since", rec.AbsentSince,
 		"detail", "the seat has been absent from the active revision for longer than the grace "+
-			"period; its mailbox, the mail it held and its executor sessions are deleted, "+
-			"and its memory is kept")
+			"period; its open work is re-homed, its mailbox, the mail it held and its executor "+
+			"sessions are deleted, and its memory is kept")
 
 	// A SEAT ADDED AGAIN WHILE THIS RAN. The roster this sweep started from
 	// may be older than the revision now active, and a node that applied it

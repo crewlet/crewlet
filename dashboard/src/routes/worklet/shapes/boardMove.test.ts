@@ -9,6 +9,7 @@ import { keyboardDrop, moveFor, withDrop } from "./boardMove.ts";
 import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 
 const row = (key: string, project = "ENG", version = 4): WorkSummary => ({
+  flow: null,
   id: key.toLowerCase(),
   key,
   project,

@@ -2,26 +2,16 @@ package notify
 
 // THE CHAT METADATA VOCABULARY.
 //
-// A chat notification travels as a map[string]string, and every key in it is
-// a contract between the parser that writes it and a reader somewhere else
-// that acts on it — the coalescer, the working indicator, the reply
-// obligation, the prompt, the self-action guard.
+// Every key of a chat notification's map[string]string is a contract between
+// the parser that writes it and a reader that acts on it. As literals it is
+// invisible: a reader of a key nobody writes gets "" and neither fails nor
+// logs. These names are the only spelling, so a rename is a compile error.
 //
-// Spelled as a literal at both ends, as most of them were, that contract is
-// invisible: a reader for a key nobody writes gets "" and answers as though
-// the message had nothing to say, and a writer of a key nobody reads is work
-// that looks done. Neither fails, neither logs, and nothing tells the two
-// halves apart. The names below are the only spelling, so a rename is a
-// compile error rather than a silence.
-//
-// FIVE OF THE KEYS ARE DECLARED ELSEWHERE, and they keep their homes. Four
-// are not chat's: [ChannelKindField] and [ActorField] are stamped by every
-// source that has the fact, and [RecipientField] and [PartitionField] are
-// stamped by the spine itself after resolution. The fifth, [TransportField],
-// IS chat's (only a chat parser stamps it), but it predates this vocabulary
-// and is declared in conversation.go, whose doc names every reader that must
-// agree on it (ADR-0008). All five are part of the vocabulary: [ChatKeys]
-// lists them.
+// FIVE KEYS ARE DECLARED ELSEWHERE. [ChannelKindField] and [ActorField] are
+// stamped by every source that has the fact, [RecipientField] and
+// [PartitionField] by the spine after resolution. [TransportField] IS chat's
+// but is declared in conversation.go, whose doc names every reader that must
+// agree on it (ADR-0008). [ChatKeys] lists all five.
 const (
 	// ChannelField is the backend's own id for the surface a message
 	// arrived on. Opaque: only the producing backend may read structure
@@ -114,16 +104,14 @@ func ChatKeys() []string {
 // RequiredChatKeys are the keys a chat parser stamps on EVERY delivery,
 // whatever the message was.
 //
-// PRESENCE, not content: [ThreadField] is empty on a top-level message and
-// [FollowReasonField] is empty when nothing triggered, and both are still
-// stamped — an absent key and an empty one are the same to a reader, and the
-// difference between them is exactly what a conformance check cannot see.
+// PRESENCE, not content: [ThreadField] and [FollowReasonField] are empty on a
+// top-level or untriggered message and still stamped, since a conformance
+// check cannot tell an absent key from an empty one.
 //
-// The conditional keys are deliberately NOT here: [ChannelNameField] exists
-// only where the backend names its rooms, [FollowingField] only on a reply
-// that rode a follow, [ReplayedField] only on a replay. And
-// [RecipientField] and [PartitionField] are stamped by the spine after the
-// recipient cascade, which is the one fact a parser genuinely cannot know.
+// The conditional keys are NOT here: [ChannelNameField] exists only where the
+// backend names rooms, [FollowingField] only on a reply that rode a follow,
+// [ReplayedField] only on a replay. [RecipientField] and [PartitionField] are
+// stamped by the spine after the recipient cascade, which a parser cannot know.
 func RequiredChatKeys() []string {
 	return []string{
 		TransportField,
@@ -143,15 +131,14 @@ func RequiredChatKeys() []string {
 // for a top-level message, which has no thread yet — the message itself,
 // which BECOMES the thread the moment anybody answers under it.
 //
-// ONE derivation, and it had five: both parsers stamping [ThreadAnchorField],
-// the working indicator resolving which conversation to raise, the
-// partition key the inbox coalesces on, and the trigger telling the agent
-// what to reply under. A disagreement between those does not fail — it puts
-// the spinner in one place and the reply in another.
+// ONE derivation, shared by the parsers stamping [ThreadAnchorField], the
+// working indicator, the inbox's partition key and the trigger's reply target:
+// a disagreement does not fail, it puts the spinner in one place and the
+// reply in another.
 //
-// THE STAMPED ANCHOR WINS where a producer supplied one. A backend whose
+// THE STAMPED ANCHOR WINS where a producer supplied one: a backend whose
 // reply target is not simply the root states it there, and a reader that
-// re-derived instead would overrule the only code that knows.
+// re-derived would overrule the only code that knows.
 func Anchor(metadata map[string]string) string {
 	if anchor := metadata[ThreadAnchorField]; anchor != "" {
 		return anchor

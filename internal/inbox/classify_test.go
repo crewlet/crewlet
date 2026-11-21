@@ -12,14 +12,11 @@ import (
 // outranks both.
 //
 // The read list is pruned to what sits above the position at every write, so
-// a reader of the lists alone resurfaced every notice older than the person's
-// last visit; a reader of the position alone missed what they marked read out
-// of order; and one that consulted only the position and the read list made
-// "mark unread" after a "mark all read" a gesture nothing could see. The
-// position is a triple, so a notice on another stream — a log recreated under
-// the person — is never covered by it, and a later generation is above every
-// sequence of an earlier one. A snooze is asleep until its instant and back
-// the moment it passes.
+// the lists alone resurface old notices, the position alone misses out-of-order
+// reads, and without the override "mark unread" after "mark all read" is
+// invisible. The position is a triple: a notice on another stream is never
+// covered, and a later generation is above every sequence of an earlier one.
+// A snooze is asleep until its instant.
 //
 // Mutation: drop the unread override, the stream check or the generation
 // order from Classify, or read a due snooze as asleep, and a row fails.
@@ -79,13 +76,11 @@ func TestANoticeReadsByThePositionThenTheMarks(t *testing.T) {
 // THE SCAN AND THE PAGE ARE ONE RULE: the sets a domain filters its scan by
 // are exactly what the page is then marked by.
 //
-// A filter applied to the page after it was read short-paged it, so each
-// domain states its filters as predicates on its own scan — and a filter that
-// disagreed with the page's marks by one notice would hide a notice the page
-// says is awake, or show one it says is asleep, on every read. So the sets
-// come from the same lookups as the marks, and this holds them together over
-// one record: the read and unread overrides as stored, and the sleeping
-// notices as the clock finds them now.
+// A filter applied after the page was read short-pages it, so each domain
+// filters its own scan; a filter disagreeing with the page's marks by one
+// notice would hide an awake notice or show a sleeping one. So the sets come
+// from the same lookups as the marks, held together here over one record: the
+// overrides as stored, the sleeping notices as the clock finds them now.
 //
 // Mutation: let Asleep keep a due snooze, or drop a set's sort, and this
 // fails.

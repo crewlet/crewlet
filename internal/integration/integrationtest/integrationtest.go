@@ -265,18 +265,11 @@ func personFindingsAreActionable(t TB, r Reconciler) {
 // THE ANTI-VACUITY CLAUSE, and the reason the two cases after it mean
 // anything.
 //
-// Every case that walks a findings list is satisfied by an empty one. So a
-// harness whose "outstanding" world is quietly converged — a credential that
-// resolves after all, a seat that does have an account, a fixture that
-// short-circuits before the walk that would have noticed — puts three green
-// ticks on a vendor nothing was checked about. That is not hypothetical: it is
-// what this suite did for every vendor before this case existed, and what the
-// suite it replaced did for all seven.
-//
-// So the world has to prove itself first. At least one finding, and at least
-// one a PERSON owes, because the cases below are about what an operator is
-// told and a world whose only finding is "the third-party app is still
-// applying a grant" tells them nothing.
+// Every case that walks a findings list is satisfied by an empty one, so a
+// quietly converged "outstanding" world puts green ticks on a vendor nothing
+// was checked about. The world must prove itself first: at least one finding,
+// and one a PERSON owes, since the cases below are about what an operator is
+// told.
 func outstandingWorldReports(t TB, r Reconciler) {
 	findings, err := r.Outstanding(t).Reconcile(context.Background())
 	if err != nil {

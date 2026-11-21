@@ -45,6 +45,7 @@ function refused(code: ActErrorCode | "", sentence = "", hint = ""): ActResult {
     detail: "",
     hint,
     hostRefusal: "",
+    fields: [],
     grants: [],
     reason: "",
     retryable: false,

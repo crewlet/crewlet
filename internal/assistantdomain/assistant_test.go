@@ -19,11 +19,10 @@ import (
 
 // ANOTHER PERSON'S CONVERSATION IS NOT FOUND, at the store, on every read.
 //
-// A caller with no relation to a conversation is told it does not exist,
-// never that it is forbidden (ADR-0053): every read is keyed on the owner, so
-// a conversation, its transcript, its turn, its card and its proposal are each
-// not found to anybody else, and a listing shows them nothing. Mutation: drop
-// the owner clause from any one read and its case here goes red.
+// Never forbidden (ADR-0053): every read is keyed on the owner, so a
+// conversation, its transcript, turn, card and proposal are each not found to
+// anybody else, and a listing shows them nothing. Mutation: drop the owner
+// clause from any one read and its case here goes red.
 func TestAnotherPersonsConversationIsNotFound(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -57,7 +56,7 @@ func TestAnotherPersonsConversationIsNotFound(t *testing.T) {
 			t.Errorf("%s reads for another person as %v, want not found", name, err)
 		}
 	}
-	list, err := n.reader.Conversations(ctx, bob, "", 0)
+	list, err := n.reader.Conversations(ctx, bob, "", 0, "")
 	if err != nil {
 		t.Fatalf("list bob's conversations: %v", err)
 	}
@@ -125,12 +124,11 @@ func TestATranscriptReadsBackWhatWasRecorded(t *testing.T) {
 }
 
 // A LISTING IS ORDERED BY ITS LAST ACTIVITY AND SAYS IT, so the time a client
-// shows beside each conversation reads down the list in order. A new title
-// moves the record's updated_at and not its activity, so a conversation used
-// first and retitled last stays below the one used after it, and its
-// summary's last_activity_at is the instant the order was decided by.
-// Mutation: leave LastActivityAt out of Summary, or order by updated_at, and
-// this fails.
+// shows beside each conversation reads down the list in order. A retitle moves
+// updated_at, not activity: a conversation used first and retitled last stays
+// below the one used after it, and its last_activity_at is what the order was
+// decided by. Mutation: leave LastActivityAt out of Summary, or order by
+// updated_at, and this fails.
 func TestAListingIsOrderedByTheActivityItShows(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -141,10 +139,10 @@ func TestAListingIsOrderedByTheActivityItShows(t *testing.T) {
 	n.openTurn(c, first)
 	second := n.conversation(c, "Hiring plan")
 	n.openTurn(c, second)
-	if _, err := n.writer.TitleConversation(ctx, fresh(c), first, "Payroll, October"); err != nil {
+	if _, err := n.writer.TitleConversation(ctx, fresh(c), first, "Payroll, October", wire.TitleByModel); err != nil {
 		t.Fatalf("retitle the first conversation: %v", err)
 	}
-	list, err := n.reader.Conversations(ctx, ada, "", 0)
+	list, err := n.reader.Conversations(ctx, ada, "", 0, "")
 	if err != nil {
 		t.Fatalf("list ada's conversations: %v", err)
 	}
@@ -181,10 +179,8 @@ func TestAListingIsOrderedByTheActivityItShows(t *testing.T) {
 // A PAGE TITLE THE WIRE TAKES IS ONE A TURN AND ITS MESSAGE STORE.
 //
 // The page chip is the page context's title, which the wire takes at
-// wire.PageTitleMaxRunes characters: three bytes each for a Japanese title,
-// four for a row of emoji. Held to a conversation title's 256 bytes, the turn
-// refused the chip of every question asked on a page whose title ran past 85
-// Japanese characters, after the wire had validated that page. Each title here
+// wire.PageTitleMaxRunes characters (three bytes each in Japanese, four in
+// emoji), well past a conversation title's TitleMaxBytes. Each title here
 // validates, opens its turn, records its message and reads back whole, and one
 // byte past the wire's bound is refused. Mutation: hold the chip's title to
 // TitleMaxBytes, and the Japanese title's turn is refused.
@@ -724,14 +720,14 @@ func TestNothingSaidIsStoredInTheClear(t *testing.T) {
 }
 
 // A STORED CARD IN A SHAPE TODAY'S CONTRACT REFUSES IS READ AS A NOTICE, never
-// as its body: the brief cards an engine recorded before ADR-0062 (a
-// summary, a recommendation and a neutral row, and no about line) come back as
-// one notice on every read the transcript, the card and the model's history
-// share, while a card in today's shape and a kind this build does not know
-// are read as they were written. Mutation: drop the check and the earlier
-// brief reads as a brief with no about line, which the dashboard draws empty;
-// replace an unknown kind too and a newer peer's card is lost; drop the log or
-// the count and the case goes red.
+// as its body: a pre-ADR-0062 brief (summary, recommendation, neutral row, no
+// about line) comes back as one notice on every read the transcript, the card
+// and the model's history share, while a card in today's shape and a kind this
+// build does not know read as written. Mutation: drop the check and the brief
+// reads with no about line, which the dashboard draws empty; replace an
+// unknown kind too and a newer peer's card is lost; drop the log or the count
+// and the case goes red. A body that does not even decode (a proposal whose
+// values were strings before they were phrases) is the same case.
 func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)
@@ -766,13 +762,18 @@ func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 			t.Fatalf("store card %s: %v", id, err)
 		}
 	}
-	earlier, today, newer := record(1), record(2), record(3)
+	earlier, today, newer, undecodable := record(1), record(2), record(3), record(4)
 	store(earlier, wire.CardBrief, `{"type":"brief","brief":{"scope":{"screen":"inbox",`+
 		`"title":"Inbox"},"summary":"Product Manager asks whether to move ENG-20.",`+
 		`"needs":[{"ref":{"kind":"task","id":"ENG-20"},"text":"ENG-20 waits on you",`+
 		`"tone":"neutral"}],"recommended":{"text":"Open ENG-20"},"follow_ups":["a","b","c"],`+
 		`"as_of":"2026-10-27T08:03:17Z"}}`)
 	store(newer, "timeline", `{"type":"timeline","timeline":{"events":[]}}`)
+	store(undecodable, wire.CardProposal, `{"type":"proposal","proposal":{"proposal_id":`+
+		`"`+uuid.NewString()+`","scope":"server","tool":"create_task","title":"Create task",`+
+		`"changes":[{"kind":"fact","field":"project","label":"Project","to":"ENG"}],`+
+		`"note":"Product Manager is assigned the new task.","digest":"sha256:`+hex64("d")+`",`+
+		`"expires_at":"2026-10-27T08:18:17Z","state":"proposed","approve_label":"Approve"}}`)
 
 	want := assistantdomain.UnshownCardNotice()
 	got, err := n.reader.Transcript(t.Context(), ada, conversation)
@@ -796,6 +797,10 @@ func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 	if card := cards[newer]; card.Type != "timeline" || card.Card.Type != "timeline" {
 		t.Errorf("a newer peer's card reads as %+v, want it as written", card.Card)
 	}
+	if card := cards[undecodable]; card.Type != wire.CardNotice || card.Card.Proposal != nil ||
+		card.Card.Notice == nil || *card.Card.Notice != *want.Notice {
+		t.Errorf("a proposal of an earlier contract reads as %+v, want the notice", card.Card)
+	}
 	one, err := n.reader.Card(t.Context(), ada, earlier)
 	if err != nil || one.Type != wire.CardNotice || one.Card.Notice == nil {
 		t.Errorf("the earlier brief read alone is %+v, %v, want the notice", one.Card, err)
@@ -811,6 +816,9 @@ func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 			t.Errorf("the log does not carry %s: %s", want, logged)
 		}
 	}
+	if !strings.Contains(logged, `"card":"`+undecodable.String()+`"`) {
+		t.Errorf("the log does not name the undecodable proposal: %s", logged)
+	}
 	for _, said := range []string{"ENG-20", "Product Manager", today.String(), newer.String()} {
 		if strings.Contains(logged, said) {
 			t.Errorf("the log carries %q, which is a card's body or a card that was shown: %s",
@@ -818,12 +826,14 @@ func TestACardInAnEarlierShapeIsReadAsANotice(t *testing.T) {
 		}
 	}
 	adds := n.counts.read()
-	if len(adds) != 2 {
-		t.Fatalf("counted %+v, want the earlier brief once per read", adds)
-	}
+	types := map[string]int{}
 	for _, a := range adds {
-		if a.name != metrics.AssistantCardsShownAsNotice || a.n != 1 || a.attrs["type"] != "brief" {
-			t.Errorf("counted %+v, want one %s of type brief", a, metrics.AssistantCardsShownAsNotice)
+		if a.name != metrics.AssistantCardsShownAsNotice || a.n != 1 {
+			t.Errorf("counted %+v, want one %s", a, metrics.AssistantCardsShownAsNotice)
 		}
+		types[a.attrs["type"]]++
+	}
+	if types["brief"] != 2 || types["proposal"] != 1 || len(adds) != 3 {
+		t.Fatalf("counted %+v, want the earlier brief once per read and the proposal once", adds)
 	}
 }

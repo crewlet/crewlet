@@ -139,13 +139,10 @@ func (s *surface) activeID(t *testing.T) string {
 // REMOVING A SEAT SOMEBODY IS BOUND TO IS REFUSED NAMING THEM, on every write
 // path — and a seat nobody holds is removed.
 //
-// A person's binding lives in the identity directory and their seat in the
-// company document; a revision that removed the seat left them bound to
-// nothing, refused on every request and named only once somebody asked
-// `/iam/check`. A SUSPENDED holder still holds their seat: suspending somebody
-// is not giving their seat away. A SERVICE ACCOUNT bound to one holds it too,
-// and the refusal says it is one — the remedy differs: a person is moved or
-// removed, only a service account is unbound — which the hint names.
+// A revision that removed a bound person's seat left them refused on every
+// request. A SUSPENDED holder still holds their seat. A SERVICE ACCOUNT holds
+// one too, and the refusal says so because the remedy differs: a person is
+// moved or removed, only a service account is unbound.
 //
 // Mutation: drop the check from prepare, and every arm but the control lands;
 // drop the kind from the holder and the service account reads as a person.
@@ -389,30 +386,16 @@ var samInvited = iamdomain.SeatInvitation{
 
 // AN INVITED SEAT CANNOT BE TAKEN OUT OF THE COMPANY (ADR-0032).
 //
-// A person holds a human seat for as long as they exist, so every invitation
-// names the seat its redemption binds and HOLDS it, as it holds its address.
-// A write removing that seat — or turning it into an agent's — while the link
-// is outstanding would leave a link whose redemption is refused with nothing to
-// tell its holder why, so it is refused `409 seat_held` naming the invitation
-// by its id, with when it lapses and frees the seat on its own — and NEVER its
-// address: a `/config` writer may be a unit's lead holding no grant over the
-// identity directory.
+// An invitation HOLDS its seat: removing it or making it an agent's is refused
+// `409 seat_held` naming the invitation's id and expiry, NEVER its address (a
+// `/config` writer may be a unit's lead with no directory grant). Driven
+// through the PRODUCTION FOLD at the surface's clock. CONTROLS: no open
+// invitation takes nothing; a person beside an invitation is named. The fold
+// answers only about seats the write takes away.
 //
-// DRIVEN THROUGH THE PRODUCTION FOLD over one snapshot of the claims, read at
-// this surface's own clock. THE CONTROLS: a snapshot holding no open
-// invitation — one redeemed, cancelled or lapsed is not in it, the directory
-// judging "open" at the instant it is asked — takes nothing; and where a
-// person and an invitation left by an older build both claim a seat, the
-// PERSON is named, whose seat the write takes.
-//
-// AND THE FOLD ANSWERS ABOUT THE SEATS THE WRITE TAKES AWAY: two rows on one
-// seat are the unknown arm for that seat, and a residue on a seat the write
-// keeps refuses nothing.
-//
-// Mutation: drop the invitation arm from the fold and the removal lands; ask
-// at any clock but the surface's and the instant is wrong; fold the whole
-// snapshot rather than the seats asked and the residue on Jane's seat refuses
-// the removal of Sam's.
+// Mutation: drop the invitation arm and the removal lands; ask at another
+// clock and the instant is wrong; fold the whole snapshot and Jane's residue
+// refuses the removal of Sam's.
 func TestAnInvitedSeatCannotBeTakenOutOfTheCompany(t *testing.T) {
 	t.Parallel()
 	invited := iamdomain.SeatClaims{Invitations: []iamdomain.SeatInvitation{samInvited}}
@@ -524,20 +507,15 @@ func TestAnInvitedSeatCannotBeTakenOutOfTheCompany(t *testing.T) {
 
 // THE DASHBOARD READS WHAT A SEAT-HELD REFUSAL SENDS.
 //
-// `SeatHeldHolder` (`contract/config.ts`) is the dashboard's type for one entry
-// of a `409 seat_held` refusal's `held`, and the org builder words its remedy
-// from it: a person is moved or removed, a service account unbound, an
-// invitation cancelled — so a key renamed on this side alone, `kind` above all,
-// tells an administrator to unbind a person, a remedy the directory refuses.
+// `SeatHeldHolder` (`contract/config.ts`) types one entry of a `409 seat_held`
+// refusal's `held`, and the org builder words its remedy from it: a key
+// renamed on this side alone, `kind` above all, tells an administrator to
+// unbind a person, which the directory refuses. HELD BOTH WAYS over one holder
+// of each kind: every declared member is sent by some entry, every REQUIRED
+// one by every entry, every key sent is declared.
 //
-// HELD BOTH WAYS over a refusal naming one holder of each kind, through the
-// production fold: every member the interface declares is sent by some entry
-// and every REQUIRED one by every entry, and every key an entry sends is one
-// the interface declares.
-//
-// Mutation: rename a tag on [configapi.SeatHolder] and the old name is declared
-// and never sent while the new one is sent and never declared; send the
-// invitation's address and it is a key nothing declares.
+// Mutation: rename a tag on [configapi.SeatHolder], or send the invitation's
+// address, and a key is sent or declared by one side only.
 func TestTheDashboardReadsWhatASeatHeldRefusalSends(t *testing.T) {
 	t.Parallel()
 	s, before, _ := claimsSurface(t, iamdomain.SeatClaims{

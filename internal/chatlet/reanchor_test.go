@@ -16,16 +16,12 @@ import (
 // A REANCHOR'S RECORD LANDS WHERE A READER ASKS FOR IT, AND APPLIES AS THE
 // AUDIT ROW IT CLAIMS TO BE.
 //
-// The encoder is the one step of a reanchor only this domain can take, and both
-// of its halves are read by somebody who never sees the other. The SUBJECT is
-// what [statelog.GenerationOpeners] asks for to learn who opened a generation —
-// a record published anywhere else is a generation nobody can attribute, and
-// the transition that reads back whose record landed reads nothing. The
-// PAYLOAD is what every node's applier turns into `chat_log_generations` — a
-// high-water mark or a stream instant lost on the way is an audit row that
-// names the wrong log the fleet walked away from. The framework's suite builds
-// its own generation record, so nothing but this case holds the encoder the
-// engine actually calls to either.
+// Both halves of the encoder are read by somebody who never sees the other. The
+// SUBJECT is what [statelog.GenerationOpeners] asks for; a record published
+// elsewhere is a generation nobody can attribute. The PAYLOAD becomes
+// `chat_log_generations`; a lost high-water mark or stream instant names the
+// wrong log in the audit row. The framework's suite builds its own generation
+// record, so only this case holds the encoder the engine actually calls.
 func TestTheGenerationRecordLandsOnItsSubjectAndAppliesAsItsAuditRow(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)

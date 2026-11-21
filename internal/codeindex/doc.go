@@ -17,7 +17,11 @@
 // is a TIP MAP's to say: the tip's every file and the blob at it (tipmap.go).
 // Blobs leave a repository's index when a merge keeps only those its tip
 // still names (MergeSegments), which is also how its SEGMENTS (segment.go) —
-// one per batch of new blobs — stay few.
+// one per batch of new blobs — stay few. A merge writes the very bytes a build
+// of the blobs it keeps writes, and unions each trigram's lists in pairs
+// between two buffers kept from trigram to trigram, as a plan unions a
+// clause's literals: L·⌈log₂ k⌉ work and no allocation a posting, where
+// folding the lists in one at a time cost k·L.
 //
 // The obvious alternative, postings by path at a commit, re-indexes every
 // file a rename or a new tip touches and holds one list a path for blobs the
@@ -88,7 +92,12 @@
 // that holds what every match needs (Plan.Confirm): an answer is RE2's
 // whichever path offered the blob, the index or git grep over the plan's
 // literals (Plan.Grep: one `-E` expression that is only an alternation of
-// those strings, every byte of its syntax escaped). A second dialect — the
+// those strings, every byte of its syntax escaped). Grep takes the most
+// selective clause git reads exactly: never one a -F pattern would carry
+// (its look-ahead rescans a file after every hit), and none with a NUL or
+// newline in a string, or a folded literal git's ASCII-only -i cannot fold as
+// RE2 does, so git's lines are a superset of RE2's; a plan with no such clause
+// has git answer every line. A second dialect — the
 // query's own expression handed to `git grep -E` — would answer the same
 // query two ways.
 //
@@ -141,5 +150,8 @@
 // at most MaxQueryBytes; a Mode says how the text is read — literal, regex or
 // whole word — and every mode is an RE2 expression under (?m), so the
 // expression the confirm runs is the one the plan was made of. PathFilter is
-// the grammar of a path:, a .gitignore line's without its negation.
+// the grammar of a path:, a .gitignore line's without its negation. The tests
+// draw patterns over non-ASCII case orbits and the long s, and blobs matching
+// each from its own syntax tree (regexlittest), and hold that no blob Go's
+// regexp matches is ever ruled out.
 package codeindex

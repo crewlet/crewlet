@@ -25,56 +25,16 @@ import (
 
 // Certifying this third-party app against the one suite every reconciler passes.
 //
-// # Why the harness is here and not at the loop
+// The harness is here, not at the loop: integrationtest's write-counting hook
+// ("a converged pass writes nothing") needs a WORLD already converged and a
+// count of what a pass wrote, which only this package can stand up; the engine
+// seam hands out a live client and company and would certify the adapter again.
 //
-// integrationtest states [integration.Reconciler]'s safety contract and calls
-// its write-counting hook required, because that clause is "the one most
-// likely to be wrong". Its only caller drove a stub whose pass returned
-// (nil, nil), so "a converged pass writes nothing" was true because nothing
-// happened, and no reconciler in this tree was certified at all.
-//
-// The clause cannot be certified anywhere but here. What the suite needs is a
-// WORLD that is already converged and a count of what a pass wrote to it, and
-// only the third-party app's own package can stand one up: the engine seam
-// hands out a live client and a live company, and a suite driven through it
-// would be certifying the adapter again.
-//
-// # What is restated, and what that costs
-//
-// A GitHub pass is TWO halves, [github.Reconcile] over the organization's
-// credential and webhooks and [github.AdoptSeatApps] keeping each agent's app
-// record in step, and engine.githubPass.Run is what composes them. This file
-// composes them the same way, which means the composition itself is the one
-// thing here that is a copy rather than the original: a change to the order
-// or to which findings are appended would pass here and be wrong there. The
-// two halves, which are all of the behaviour, are the real ones.
-//
-// # TWO WORLDS, because a converged one certifies half of what it looks like
-//
-// A converged pass reports NO findings — that is what converged means — so
-// every clause that walks the findings list walked an empty one and passed
-// whatever this package did. Three of the nine were green for that reason
-// alone: "every finding is a kind this build knows", "a finding a person must
-// act on says what to do" and "two passes over an outstanding world agree"
-// all hold perfectly over nothing at all.
-//
-// So [newOutstandingWorld] stands up a GitHub where five separate things are
-// wrong and every one of them needs A PERSON: an organization hook this
-// credential may not register, a repository it cannot see, a seat whose own
-// access token GitHub refuses, a seat installed with less than its tier asks
-// for, and a seat whose app nobody has created. The suite's anti-vacuity
-// clause fails if that world reports nothing, which is what stops it quietly
-// becoming a second converged world the next time the fixture drifts.
-//
-// # The two credential shapes, because one of them could not fail
-//
-// `integrations.github.token` is optional and the engine hands a nil client
-// for an empty one, so a company with no organization credential is an
-// ordinary supported deployment — and it was the one shape whose pass could
-// not fail. A harness that only ever configured a token would have seen every
-// case green while a cancelled pass over the other shape reported a converged
-// integration. Both are certified, and the case that separates them has its
-// own named test below.
+// A pass is [github.Reconcile] plus [github.AdoptSeatApps], composed by
+// engine.githubPass.Run; this composition is the one copy, so a change to its
+// order or appended findings would pass here and be wrong there. TWO WORLDS,
+// because a converged pass reports no findings; TWO CREDENTIAL SHAPES, because
+// a company with no `integrations.github.token` gets a nil client.
 
 // The worlds' fixed points. Constants rather than literals scattered through
 // the handlers, because the fixture only proves anything while the address
@@ -102,18 +62,14 @@ const (
 
 // The webhook secret, AS A REFERENCE RATHER THAN A LITERAL.
 //
-// A literal here made [countingSink] unreachable and the harness's loudest
-// claim — "a freshly minted webhook secret sealed" — untestable: with a value
-// in the slot [github.Reconcile] returns at the already-resolved arm, and
-// forcing the mint branch is refused for the literal, which has no variable
-// to mint into ([provision.RefuseFresh]), BEFORE the sink is ever called. A
-// re-minting regression still went red, but as a config refusal rather than
-// through the counter that exists to see it.
-//
-// A `${VAR}` that RESOLVES is the shape a real company has and the only one
-// where both arms are reachable: the converged pass takes the resolved value
-// and writes nothing, and a pass whose variable is unset reaches the sink,
-// which [TestTheWriteCounterSeesASecretSealedWhenThereIsOneToSeal] drives.
+// With a literal in the slot [github.Reconcile] returns at the already-resolved
+// arm, and forcing the mint is refused for the literal, which has no variable
+// to mint into ([provision.RefuseFresh]), before [countingSink] is called, so
+// the harness's loudest claim ("a freshly minted webhook secret sealed") was
+// untestable. A `${VAR}` that RESOLVES is the shape a real company has and
+// reaches both arms: the converged pass takes the value and writes nothing, and
+// a pass with the variable unset reaches the sink, which
+// [TestTheWriteCounterSeesASecretSealedWhenThereIsOneToSeal] drives.
 const (
 	webhookSecretVar   = "GITHUB_WEBHOOK_SECRET"
 	webhookSecretRef   = "${" + webhookSecretVar + "}"
@@ -129,23 +85,17 @@ func resolveConfigValue(v string) string {
 	return v
 }
 
-// routeLog is what a pass did to a world: everything it WROTE, and everything
-// it READ.
+// routeLog is what a pass did to a world: everything it WROTE and READ.
 //
-// A LOG RATHER THAN A COUNTER, because the number is what fails the suite and
-// the route is what a person then has to find. "a pass made 1 write(s)" sends
-// somebody reading the whole reconcile; "PATCH /orgs/acme/hooks/1" names the
-// branch.
+// A LOG RATHER THAN A COUNTER: the number fails the suite, and the route is
+// what a person then has to find ("PATCH /orgs/acme/hooks/1" names the branch).
 //
-// The reads are half of it and no clause of the suite can check them. A GREEN
-// SUITE OVER A WORLD NOBODY TOUCHED IS THE FAILURE THIS EXISTS FOR: "no
-// writes", "no findings" and "two passes agree" are all satisfied perfectly
-// by a pass that returned before making a single request, which is exactly
-// what the stub this harness replaces did.
+// No clause can check the reads. A GREEN SUITE OVER A WORLD NOBODY TOUCHED is
+// the failure this exists for: "no writes", "no findings" and "two passes
+// agree" all hold for a pass that made no request, as the replaced stub did.
 //
-// ONE LOCK OVER BOTH, because the seat walk is concurrent and the credential
-// walk fans out: a slice appended to straight from a handler closure is this
-// package's documented -race failure.
+// ONE LOCK OVER BOTH: the seat walk is concurrent and the credential walk fans
+// out, and appending from a handler closure is this package's -race failure.
 type routeLog struct {
 	mu     sync.Mutex
 	writes []string
@@ -220,21 +170,16 @@ type convergedWorld struct {
 
 // mutationAt names what a request CHANGED at GitHub, or "" for a read.
 //
-// THE ROUTE DECIDES, not the method, and the difference is not academic: some
-// hosts model a listing as a POST — Atlassian's workspace discovery is one —
-// so a counter that read every non-GET as a write would make the suite's
-// load-bearing clause impossible to pass rather than hard to pass, and an
-// impossible clause is what gets a suite weakened instead of a third-party app
-// fixed. The route is also what a person needs when the count moves: "1
-// write" sends somebody reading the whole reconcile, "the delivery path" names
-// the branch.
+// THE ROUTE DECIDES, not the method: some hosts model a listing as a POST
+// (Atlassian's workspace discovery), so reading every non-GET as a write would
+// make the suite's load-bearing clause impossible to pass, which gets a suite
+// weakened instead of an app fixed. The route is also what a person needs when
+// the count moves.
 //
-// GitHub has no listing behind a POST, which is why the method still appears:
-// it serves the hook LISTING and the hook CREATE from one path, so on a write
-// route the method is what separates the two. The default arm is the backstop
-// for a route a later build adds — an unrecognised non-GET counts, because a
-// counter that silently stops seeing the write it exists to see is worse than
-// no counter at all.
+// The method still appears because GitHub serves the hook LISTING and CREATE
+// from one path. The default arm is the backstop for a later route: an
+// unrecognised non-GET counts, since a counter that silently stops seeing the
+// write it exists to see is worse than none.
 func mutationAt(method, path string) string {
 	if method == http.MethodGet {
 		return ""
@@ -298,24 +243,17 @@ func (w *convergedWorld) serve(rw http.ResponseWriter, r *http.Request) {
 			_, _ = rw.Write([]byte(body))
 			return
 		}
-		// EVERY OTHER ROUTE MEANS THE WORLD IS NOT CONVERGED, and each
-		// one is a route the pass reaches only when something is
-		// outstanding: GET /app/installations is the discovery walk a
-		// seat with no recorded installation makes, GET /app is the probe
-		// that runs after a 404, and ANYTHING UNDER /repos is the
-		// per-repository fallback that a working organization hook exists
-		// to make unnecessary. All three end in a write — at GitHub, or
-		// onto the company document — so a fixture that quietly answered
-		// them would certify a pass that hooks every repository a second
-		// time, or rewrites the company document, every tick.
+		// Every other route means the world is not converged: GET
+		// /app/installations (discovery for a seat with no recorded
+		// installation), GET /app (the probe after a 404) and anything under
+		// /repos (the per-repository fallback an organization hook makes
+		// unnecessary). All end in a write, at GitHub or onto the company
+		// document, so serving them would certify a pass that re-hooks every
+		// repository or rewrites the document every tick.
 		//
-		// The repository routes were SERVED here once, and served they
-		// were dead fixture code: the converged org hook short-circuits
-		// the repository walk, so nothing ever asked for them and nothing
-		// would have noticed if something started to. Refusing them is
-		// what makes the short-circuit an assertion rather than a
-		// coincidence. The outstanding world below serves them, because
-		// there the fallback is exactly what is supposed to happen.
+		// Refusing the repository routes makes the org hook's short-circuit of
+		// the repository walk an assertion rather than a coincidence. The
+		// outstanding world serves them, where the fallback is expected.
 		w.t.Errorf("a pass over a converged world asked for %s %s, which it "+
 			"reaches only when something is outstanding", r.Method, r.URL.Path)
 		rw.WriteHeader(http.StatusNotFound)
@@ -577,40 +515,18 @@ func (s *sealingSink) Value(_ context.Context, name string) (string, bool, error
 
 // ---- the outstanding world -------------------------------------------- //
 
-// outstandingWorld is a GitHub where five separate things are wrong, and
-// every one of them is owed by a PERSON.
-//
-// THE ANTI-VACUITY FIXTURE. Everything the suite checks about findings is
-// satisfied by an empty list, so certifying those clauses over a converged
-// world certified nothing — which is what this harness did for three of the
-// nine. Each state below is one a real deployment reaches, and each produces
-// a different finding kind, so the "every finding is a kind this build knows"
-// and "a finding a person must act on says what to do" clauses walk four
-// distinct kinds rather than none:
-//
+// outstandingWorld is a GitHub with five faults, each owed by a PERSON: THE
+// ANTI-VACUITY FIXTURE, since an empty findings list satisfies every clause:
 //   - the ORGANIZATION HOOK is refused (a fine-grained token cannot carry
-//     admin:org_hook at all), so the pass falls back to per-repository hooks
-//     — which is also the only way this harness drives ensureRepoWebhook's
-//     read-and-create branch at all;
-//   - one named REPOSITORY answers 404, which GitHub uses for both "does not
-//     exist" and "not visible to this credential" → ingress_blocked;
-//   - one seat NAMES an `mcp_env.github` token GitHub refuses →
-//     identity_failed. Its colleague names none, and is silent, because on
-//     this host identity is each agent's own app;
-//   - one seat's app is INSTALLED and its installation not yet recorded, so
-//     the pass records it; one seat has NO APP AT ALL; and one names an app
-//     SOMEBODY DELETED at GitHub, so the pass clears the record. What each
-//     of those agents still owes is the access sync's to report, not this
-//     pass's; the deleted app is the only thing anywhere that drives the
-//     pass's second engine-side write, the record being cleared.
+//     admin:org_hook), so the pass falls back to per-repository hooks, which
+//     drives ensureRepoWebhook's read-and-create branch;
+//   - one repository answers 404 → ingress_blocked;
+//   - one seat NAMES an `mcp_env.github` token GitHub refuses → identity_failed;
+//   - one seat's app is installed but unrecorded, one has NO APP, one names
+//     an app SOMEBODY DELETED (the only driver of the second engine write).
 //
-// A pass here is ALLOWED to write, and does: it creates the repository hook,
-// records the installation it discovered and clears the app record GitHub no
-// longer honours. Nothing counts mutations over this world — the suite
-// samples them only around a converged pass — and
-// [TestTheOutstandingWorldIsReadAndWrittenTo] asserts those writes happened,
-// because a fixture that silently stopped reaching them would leave both
-// write surfaces uncounted and every clause still green.
+// A pass writes here and nothing counts it; [TestTheOutstandingWorldIsReadAndWrittenTo]
+// asserts the writes happened, so an unreached fixture cannot go green.
 type outstandingWorld struct {
 	routeLog
 
@@ -921,19 +837,16 @@ func TestTheWriteCounterSeesAWriteWhenThereIsOneToSee(t *testing.T) {
 	}
 }
 
-// AND THE SAME FOR THE OTHER SURFACE THE COUNTER CLAIMS TO SEE.
+// The same for the other surface the counter claims to see.
 //
-// The sealed store is the write that costs the outage — a webhook secret
-// minted on a converged world invalidates the key every other deployment of
-// this company is verifying deliveries with — and it was the one arm of
-// [countingSink] no test could reach: with a LITERAL in `webhook_secret` the
-// pass returns at the already-resolved arm, and forcing the mint branch died
-// at provision.SoleVar before the sink was called at all. So the counter's
-// loudest claim was pinned by nothing.
-//
-// With the `${VAR}` the fixture now carries, an UNSET variable is all it
-// takes: that is a real deployment (a company whose secret was never sealed),
-// and it is the state a re-minting regression would put every pass into.
+// The sealed store is the write that costs the outage: a webhook secret minted
+// on a converged world invalidates the key every other deployment of this
+// company verifies deliveries with. With a LITERAL in `webhook_secret` the
+// pass returns at the already-resolved arm and forcing the mint dies at
+// provision.SoleVar before the sink is called, so [countingSink]'s sealing arm
+// was unreachable. With the fixture's `${VAR}`, an UNSET variable suffices: a
+// real deployment whose secret was never sealed, and the state a re-minting
+// regression would put every pass into.
 func TestTheWriteCounterSeesASecretSealedWhenThereIsOneToSeal(t *testing.T) {
 	t.Parallel()
 	_, pem := testKey(t)
@@ -1202,19 +1115,16 @@ func TestTheOutstandingWorldIsReadAndWrittenTo(t *testing.T) {
 	}
 }
 
-// A CANCELLED PASS REPORTS A FAULT RATHER THAN HEALTH — the suite's ninth
+// A cancelled pass reports a fault rather than health: the suite's ninth
 // clause, and the four root causes that used to break it on this host.
 //
-// The two answers are opposite claims to the loop: an error is a fault it
-// retries, and an empty findings list is a statement that everything is fine,
-// trusted for a full settled interval. A node shutting down went through each
-// path below and came out of it with (no findings, nil error).
+// An error is a fault the loop retries; an empty findings list says
+// everything is fine, trusted for a full settled interval. A node shutting
+// down used to return (no findings, nil error) through each path below.
 //
-// EACH GUARD HAS ITS OWN TEST, and that is the whole point of there being
-// four. The suite's clause is satisfied by a disjunction — any one of them
-// raising makes the composed pass raise — so removing any single guard left
-// every conformance run green while the hole it protects was wide open. These
-// four are what isolate them.
+// EACH GUARD HAS ITS OWN TEST. The suite's clause is a disjunction, so removing
+// any single guard left every conformance run green while its hole was open;
+// these four isolate them.
 
 // THE FIRST: no organization credential, which is a supported deployment.
 //
@@ -1246,20 +1156,16 @@ func TestACancelledPassWithNoOrgCredentialRaisesRatherThanReportingHealth(t *tes
 
 // THE SECOND: a pass that read everything and was torn down on the way out.
 //
-// The org half's guard at the TOP cannot see this, and neither can anything
-// in between: every read after the credential probe reports its own failure
-// as a FINDING rather than raising — a seat whose lookup failed becomes
-// identity_failed, a repository whose hook listing failed becomes
-// ingress_blocked — so a node draining mid-pass answered with a page of
-// sentences about the operator's credentials, every one of them actually
-// about this engine shutting down, and NO error at all. The loop then records
-// the findings and trusts the pass.
+// The org half's top guard cannot see this: every read after the credential
+// probe reports its own failure as a FINDING rather than raising
+// (identity_failed, ingress_blocked), so a node draining mid-pass answered
+// with sentences about the operator's credentials and NO error, and the loop
+// trusted the pass.
 //
-// The cancellation arrives where a drain actually lands it: after the
-// credential probe has succeeded and while the seat walk is running. What
-// follows it — the organization hook listing, the repository fallback — then
-// fails on a dead context and is reported rather than raised, which is
-// precisely the state the trailing guard exists to catch.
+// The cancellation arrives where a drain lands it: after the credential probe
+// succeeded, during the seat walk. The org hook listing and repository
+// fallback then fail on a dead context and are reported, not raised, which is
+// the state the trailing guard exists to catch.
 func TestAPassCancelledAfterItsCredentialProbeRaisesRatherThanReportingWhatItSaw(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1332,23 +1238,18 @@ func TestACancelledSeatPassRaisesRatherThanLeavingEverySeatAlone(t *testing.T) {
 	}
 }
 
-// AND A CANCELLATION BETWEEN SEATS STOPS THE WALK, not just one that
-// interrupts a request.
+// A cancellation between seats stops the walk, not only one mid-request.
 //
-// A seat with no app or no key is passed over from the DOCUMENT alone, with no
-// request at all, so a check placed only where a read failed would let a
-// torn-down pass keep walking the roster and present one it did not finish as
-// one it did.
+// A seat with no app or key is passed over from the document alone, with no
+// request, so a check only where a read failed would let a torn-down pass
+// present an unfinished walk as finished.
 //
-// THE CANCELLATION HAS TO LAND BETWEEN THE SEATS, and getting that wrong is
-// how this test came to pin nothing: cancelled from inside the first seat's
-// own request, the per-seat guard raises before the loop ever iterates, and
-// removing the loop-top guard left the whole package green. So it is cancelled
-// from [SeatAppOptions.Forget] instead — a callback the walk invokes on the
-// FIRST seat's way out, on the one path that returns without consulting the
-// context. The second seat then begins under a dead context having made no
-// request of its own, which is the state the loop-top guard is the only
-// thing standing in.
+// The cancellation must land between seats: cancelled inside the first seat's
+// own request, the per-seat guard raises before the loop iterates and removing
+// the loop-top guard left the package green. So it is cancelled from
+// [SeatAppOptions.Forget], called on the first seat's way out on the one path
+// that never consults the context; the second seat then begins under a dead
+// context, which only the loop-top guard catches.
 func TestACancellationBetweenSeatsStopsTheWalk(t *testing.T) {
 	t.Parallel()
 	_, pem := testKey(t)
@@ -1480,19 +1381,14 @@ func mintThenFail(t *testing.T, sink provision.TokenSink) (*github.Result, error
 	})
 }
 
-// A SECRET THIS PASS MINTED IS FLUSHED EVEN WHEN THE PASS THEN FAILS.
+// A secret this pass minted is flushed even when the pass then fails.
 //
-// [github.webhookSecret] seals a fresh secret BEFORE the hooks that have to
-// carry it are registered, and the sink the loop hands in makes what it
-// recorded visible to a running engine only inside Flush. Returning from the
-// failure without one left the secret sealed and INVISIBLE: the next pass
-// resolved nothing, minted a second secret, failed at the same place, and
-// went on doing that for as long as the failure lasted.
-//
-// That is a webhook key rotated every few minutes by the loop whose whole
-// promise is that it is safe to leave switched on — the runaway the "mint
-// only where there is nothing usable" rule exists to prevent, reached through
-// the error path instead of through the happy one.
+// [github.webhookSecret] seals a fresh secret BEFORE the hooks that carry it
+// are registered, and the loop's sink makes it visible to a running engine
+// only inside Flush. Failing without a flush left the secret sealed and
+// invisible: the next pass minted a second one and failed at the same place,
+// rotating the webhook key every few minutes. That is the runaway the "mint
+// only where there is nothing usable" rule prevents, via the error path.
 func TestAWebhookSecretMintedBeforeAFailureIsStillFlushed(t *testing.T) {
 	t.Parallel()
 	sink := &recordingSink{}

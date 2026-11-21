@@ -25,31 +25,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// `POST /mcp-approvals/{id}` answers a call an agent's run made to a tool at
-// Needs approval, held parked on the run's row (ADR-0077):
-// `{"answer": "once"|"always"|"deny"}`, with an optional `_summary` for the
-// revision `always` writes.
+// `POST /mcp-approvals/{id}` answers a call parked on an agent run's row
+// (ADR-0077): `{"answer": "once"|"always"|"deny"}`, optional `_summary`.
+// WHO MAY ANSWER is decided twice: the route admits on `tools.approve` on the
+// caller's own record (no agent seats, no assistant); the handler then reads
+// the held call and decides `tools.approve` on the run's seat, known only then.
 //
-// WHO MAY ANSWER is decided twice. The route admits on the weakest honest
-// precondition, `tools.approve` on the caller's own record, which keeps out an
-// agent seat and the assistant (the row is a person's alone) and nothing else;
-// the handler then reads the held call, learns whose run made it, and decides
-// `tools.approve` on that seat: an administrator, or a lead of the seat's unit.
-// Decided on the route alone, a lead would be undecidable there, since the
-// seat is only known once the call is read.
-//
-// ALWAYS ALLOW IS A CONFIGURATION WRITE, decided as one (`config.write` at its
-// recent step-up) and made before the answer is sent: the tool's level is set
-// to allow by the server's own name for it, as `PUT /mcp-servers/{name}/tools`
-// sets it, so an answer whose write is refused answers nothing; and the
-// definition the call was made under is accepted, where the server changed
-// the tool and lists that definition still (ADR-0078). Once and deny write
-// neither the company nor a credential.
-//
-// ONE ANSWER PER CALL: a call no longer waiting (answered, or its run moved on
-// to another question) is refused `409 stale_version`, and the node holding the
-// seat records the first answer it takes and spends any other, so a held call
-// is never made twice whatever reaches it.
+// ALWAYS ALLOW IS A CONFIGURATION WRITE (`config.write` at its recent step-up),
+// made before the answer is sent so a refused write answers nothing: it sets
+// the tool's level as `PUT /mcp-servers/{name}/tools` does and accepts the
+// definition the call was made under (ADR-0078). Once and deny write nothing.
+// A call no longer waiting is refused `409 stale_version`; the seat's node
+// spends answers after the first, so a held call is never made twice.
 
 // Approvals is where a held call is found and its answer delivered
 // ([sandbox.AnswerDesk]).

@@ -8,17 +8,13 @@ import (
 
 // Teardown removes the hooks this engine registered at a Confluence site.
 //
-// THE WEBHOOKS AND NOTHING ELSE, for the same reason as Jira's: a Confluence
-// pass creates no account and issues no credential at the site, so there are
-// no seats this engine made and none for a disconnect to remove.
+// THE WEBHOOKS AND NOTHING ELSE, as in Jira: a Confluence pass creates no
+// account or credential at the site, so there are no seats to remove.
 //
-// Matched by the NAME PREFIX rather than by target, which is the opposite of
-// Jira's rule and follows how each third-party app lets a hook be identified.
-// Confluence registers one hook per event, each carrying the event's own
-// token in its URL, so a target comparison would need the token this engine
-// no longer wants to resolve; the [HookNamePrefix] every one of them is
-// created under names the whole set in one test. It is a namespace this
-// engine owns, which is why [HookNamePrefix] exists.
+// Matched by the NAME PREFIX rather than by target, the opposite of Jira's
+// rule: each per-event hook carries its own token in its URL, so a target
+// comparison would need a token this engine no longer resolves, while
+// [HookNamePrefix] is a namespace this engine owns and names the whole set.
 //
 // SAFE TO REPEAT: a hook already gone is not an error, and a pass finding
 // none has finished rather than failed.

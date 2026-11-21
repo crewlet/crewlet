@@ -153,12 +153,10 @@ func TestAPublishIsAnsweredByWhatTheLeaderDecided(t *testing.T) {
 // AN ATTEMPT AFTER AN IN-FLIGHT ANSWER IS GIVEN ITS OWN CROSSING.
 //
 // The leader answers "in flight" only once it holds the whole message, so the
-// attempt it refused has already spent the time its bytes took to cross the
-// link, and the attempt after it sends them all again. Handed the budget the
-// first attempt had, the second had the request term alone left for a
-// crossing of its own, and a large record across a slow link read as no
-// answer while it was still crossing. So each attempt's send waits in the
-// context the budget gives it: the first the request term and a crossing, the
+// refused attempt has spent its crossing and the next sends all the bytes
+// again. Handed the first attempt's budget, the second had the request term
+// alone left, and a large record across a slow link read as no answer while
+// still crossing. So the first send waits the request term and a crossing, the
 // second a crossing more. Exact, in a bubble.
 //
 // Mutation: give every send the first send's budget, and the second attempt is
@@ -198,16 +196,11 @@ func TestAnAttemptAfterAnInFlightAnswerIsGivenItsOwnCrossing(t *testing.T) {
 // NEVER LATER.
 //
 // Its budget gives a crossing to each of the sends a write may make and no
-// more, fixed when the publish starts. A leader that goes on answering in
-// flight — a backlog under load, a proposal it cannot commit — answers at
-// once on a link faster than the floor, so an attempt costs milliseconds;
-// counted per attempt with no end, each attempt gained a whole crossing and
-// the publish ran ahead of the clock and never ended undecided, where held to
-// the request term it had ended at five seconds. Here every send is answered
-// in flight at once, as production's publishes make them, each send in the
-// context the budget gives it: the publish ends Undecided exactly at the
+// more. A leader that keeps answering in flight answers at once on a fast
+// link, so an attempt costs milliseconds; counted per attempt with no end, each
+// gained a whole crossing and the publish never ended undecided. Here every
+// send is answered in flight at once: the publish ends Undecided exactly at the
 // request term and its three crossings, and no attempt is sent past them.
-// Exact, in a bubble.
 //
 // Mutation: let every send after the first add its crossing with no end, and
 // an attempt is sent past the bound.

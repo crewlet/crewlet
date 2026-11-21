@@ -21,6 +21,53 @@
 // holder's identities are withheld, with no configuration change at all — see
 // directory.go. Both inputs are fixed for a registry's life, and either moving
 // is a new registry built whole and swapped by the engine.
+//
+// A zero [Standing] is chart-only, which no running node builds from: a node
+// holding the estate reads its own identity rows from boot, one without data
+// reads them through the estate router. A turn pins the registry's withholding
+// (turnctx.Turn.Withheld), so a lead's roster and lookup_colleague omit
+// exactly the people an inbound message would not be attributed to, without
+// saying why.
+//
+// # Engine-hosted senders are handles
+//
+// A sender id from a source the engine hosts (tracker, knowledge base, chat,
+// Gitlet) is the seat's handle, so [NewRegistry] is told those sources as
+// handle namespaces (the engine's one firstPartySources list, held to its
+// native parsers by a test). Read through a registry that did not know, a
+// colleague on a native surface was an outside party: filed under a platform
+// id, fenced as external, refused artifacts their ceiling allows.
+//
+// # Both directions, one seam each
+//
+// Writes (the working indicator, a [StatusPost]) and reads ([ThreadReader],
+// [ThreadReaders]) are per-backend seams. The fan-out routes on the trigger's
+// own transport, because a company runs two chat surfaces and a caller holding
+// one backend's reader silently reads none. [ThreadOf] is not [ConversationOf]:
+// one answers where a reply lands, the other what was already said.
+//
+// # The spine fences every wake's body
+//
+// [Render] is the one caller of [Prompt.Build] and hands a prompt a body
+// already fenced (ADR-0040), so no prompt can render it bare. A source states
+// who wrote the body only where the payload says one person wrote every word
+// ([Stated]); otherwise nobody, which reads external on a vendor's surface,
+// because who caused an event is not who wrote its body. A surface the engine
+// hosts reads as a colleague's ([StatedHosted]).
+//
+// The delivery mints the wake's fence token ([Inbound].Fence), as no turn
+// exists yet; a coalesced digest moves earlier fences onto the latest's token
+// and the turn onto its own (provenance.Rekey). engine's
+// TestEveryWakeSurfaceFencesWhatSomebodyWrote and
+// TestEveryPromptBuilderIsAWakeSurface hold every surface to this.
+//
+// # Partitions, passes and replay
+//
+// [KeyOf] splits the stamped key by writer and by whom an agent wrote for, so
+// one turn works for one writer (ADR-0109). A relayed record a newer build
+// wrote is passed, never acked ([Defer]): an ack loses the wake for the fleet.
+// Nothing steers a pass to a node that reads it, so the dead letter delivers
+// it (replay.go), paced by the rate valve in a bucket of its own.
 package notify
 
 import (
@@ -32,83 +79,18 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE TWO KEYS, AND WHICH QUESTION EACH ANSWERS.
-//
-// An event carries two identities because SIX subsystems read one, and they
-// do not all ask the same thing:
-//
-//   - THE PARTITION KEY — "which other events is this one handled WITH?" The
-//     broker partitions a seat's inbox by it (internal/node) and the
-//     coalescer merges a partition into one trigger.
-//   - THE CONVERSATION IDENTITY — "which ongoing conversation is this event
-//     part of?" The executor log keys a seat's sessions on it — so the
-//     conversation's next turn reads its head and how its earlier turns
-//     ended under it — the turn telemetry carries it into the event store's
-//     conversation_key tag and the episodes column, the API's
-//     answerable-in-chat predicate reads it, and a parked executor matches a
-//     person's answer back to the question that asked it on it — because a
-//     person answers on the conversation, which for a direct message is not
-//     the batch their reply lands in.
-//
-// They were ONE value, and the one case where the two questions have
-// different answers is what that cost: a direct message's top-level burst
-// partitions on the bare channel so a person typing four times costs one turn,
-// while a reply in the thread that burst started partitions on the thread —
-// so a seat's own prior turn on the DM was filed under a key its next turn
-// never looked up, and read as a first turn every time.
-//
-// THE PARTITION REFINES THE IDENTITY. Every event in one partition carries
-// the SAME identity, and a partition key is either that identity or a finer
-// cut of it — on every source, not just chat. That is the property that makes
-// a turn's conversation well-defined: a turn is a partition and its rows on
-// the executor log are keyed once, so if two constituents of one coalesced
-// trigger disagreed about the identity the key would depend on which event
-// sorted first. It is stated and enforced where a source decides both — see
-// [Prompt.ConversationIdentity].
-//
-// Both are STAMPED BY THE PRODUCER and read by everyone else. The
-// notification layer knows the third-party app and can derive them; the
-// broker's partition function is then a field read that cannot disagree with
-// what the producer meant. Deriving either again at partition time would put
-// integration knowledge in the queue layer and give two places a chance to
-// answer differently.
-//
-// A SCHEDULE IS A CONVERSATION TOO, of each seat that runs it: the scheduler
-// stamps every fire with the schedule's conversation ([ScheduleConversation])
-// as both keys, so the fires that wait in a seat's inbox together run as one
-// turn and each fire's turn continues the session the schedule's last fire
-// left, as a conversation's next turn continues its last turn's. It is the one
-// conversation nobody can reply into ([Derived]): every fire of a schedule
-// carries it, so a fire read as a reply would be taken for the answer to the
-// question the last fire's run parked on.
-//
-// THE PARTITION FUNCTION SPLITS THE STAMPED KEY BY WRITER ([KeyOf]), in memory,
-// where a seat's drain is grouped into turns. A turn works for the one
-// principal who woke it, held to the apps they use (ADR-0109), so two people
-// in one thread, or a person and a stranger, are two partitions and two turns,
-// each bounded by its own writer, never one turn working for both. The writer
-// is read from fields every producer already sends (a first-party notice's
-// writer, the actor every parser stamps, the sender), so the queue learns no
-// integration and an older producer's events split too. The STAMPED key stays
-// thread-grained ([KeyOfAll]): it is the conversation a merged event carries
-// and a parked run's batch, which a later writer's reply in the same thread
-// must still find.
-//
-// AND BY WHOM AN AGENT WROTE FOR ([ForSeparator]): a seat woken by somebody
-// writes for them, and its record and its wake carry whom
-// ([types.NotificationWriter.WorkingFor]), so the turn that write wakes works
-// for them. One seat's writes for two requesters are two partitions and two
-// turns, since a turn works for one writer and for one whom: coalesced, the
-// second requester's write would be worked inside the first's turn, held to the
-// first's apps. The engine's record about an agent's earlier act made for
-// somebody carries that act's carrier too ([FirstPartyWriter]), keyed after
-// the engine's own (`system for seat:ada`), so the engine's wakes for two
-// requesters are two turns as well. ONE DELIBERATE EXCEPTION: ADR-0120's
-// seen-through mark keys on the thread ([KeyOfAll]), never on this partition,
-// so a completed turn absorbs a later wake at or below its mark that obliges
-// the seat to nothing, whatever that wake's writer or whom. Absorption only
-// drops, so nothing widens; but two requesters are two turns only for wakes
-// that oblige the seat (ADR-0109).
+// THE TWO KEYS. THE PARTITION KEY asks "which events is this handled WITH?"
+// (the broker partitions a seat's inbox by it, the coalescer merges one).
+// THE CONVERSATION IDENTITY asks "which conversation is this part of?" (the
+// executor log keys sessions on it, and a parked executor matches an answer
+// to its question). They differ for a direct message: a top-level burst
+// partitions on the channel, a thread reply on the thread, so one value filed
+// a seat's DM turn under a key its next turn never looked up. THE PARTITION
+// REFINES THE IDENTITY on every source ([Prompt.ConversationIdentity]).
+// Both are STAMPED BY THE PRODUCER, never derived in the queue layer, which
+// must hold no integration knowledge. A SCHEDULE IS A CONVERSATION TOO
+// ([ScheduleConversation], both keys), the one nobody can reply into
+// ([Derived]).
 
 // PartitionField is the payload field a producer stamps the partition key
 // into.
@@ -151,35 +133,26 @@ const RecipientField = "recipient_handle"
 
 // TransportField carries the name of the chat backend a message arrived on.
 //
-// THE DISCRIMINATOR FOR EVERY CHAT-ONLY DECISION, and the reason it is a
-// constant rather than a literal: a company can run two chat surfaces, and
-// four places have to agree on this key for a turn to reach the right one —
-// each chat parser stamps it, [ConversationOf] matches a working indicator's
-// driver on it, [ThreadOf] matches the thread reader on it, and the engine
-// reads it to tell a chat-triggered turn from a schedule tick. Written as a
-// literal in each, a rename in one of them makes a backend silently deaf on
-// the surfaces that still spell it the old way: every driver refuses the
-// trigger, and refusing is indistinguishable from "nobody is waiting". See
-// ADR-0008.
+// THE DISCRIMINATOR FOR EVERY CHAT-ONLY DECISION, a constant so the four
+// readers cannot drift: each chat parser stamps it, [ConversationOf] and
+// [ThreadOf] match a driver and the thread reader on it, and the engine tells
+// a chat-triggered turn from a schedule tick by it. A rename missed in one
+// spelling leaves that backend silently deaf: every driver refuses the
+// trigger, indistinguishable from "nobody is waiting" (ADR-0008).
 //
-// A source with no chat concept stamps nothing, which is what makes "was this
-// turn woken by a chat message" answerable without asking each backend.
+// A source with no chat concept stamps nothing.
 const TransportField = "transport"
 
 // ChannelKindField carries the CANONICAL shape of the surface a message
 // arrived on — one of [types.ChannelKind].
 //
-// Stamped by the parser and never derived downstream, for the reason
-// [PartitionField] gives: the raw value is integration-specific (Mattermost
-// says "D", Slack says the id starts with "D", a tracker has no channel at
-// all), and mapping it anywhere but in the third-party app's own parser puts
-// integration knowledge in a layer that must not have it, where it would
-// quietly mark arbitrary surfaces as direct messages the first time a
-// third-party app changed its encoding.
+// Stamped by the parser, never derived downstream: the raw value is
+// integration-specific (Mattermost says "D", Slack an id starting with "D"),
+// and mapping it outside the app's own parser would quietly mark arbitrary
+// surfaces as direct messages when an app changed its encoding.
 //
 // A source with no channel concept stamps nothing, which reads back as
-// [types.ChannelUnknown]. That is a real answer for a tracker or a code
-// host — "this did not arrive on a channel" — rather than a gap.
+// [types.ChannelUnknown]: a real answer ("not on a channel"), not a gap.
 const ChannelKindField = "channel_kind"
 
 // EventPrefix namespaces the fallback key.
@@ -191,19 +164,14 @@ const EventPrefix = "event:"
 
 // Fallback is the key for an event with no derivable conversation.
 //
-// UNIQUE PER EVENT, which is what makes it correct rather than a placeholder:
-// an event that cannot name its conversation must never be merged with
-// another, and a shared fallback would merge every one of them. A task
-// assignment and an A2A wake each become a partition of one, which is exactly
-// the pre-coalescing dispatch path. A schedule's fire is not among them: it
-// names its schedule's conversation ([ScheduleConversation]), which every fire
-// of the schedule shares.
+// UNIQUE PER EVENT: an event that cannot name its conversation must never
+// merge with another, which a shared fallback would do. A task assignment and
+// an A2A wake each become a partition of one. A schedule's fire is not among
+// them: it names its schedule's conversation ([ScheduleConversation]).
 //
-// IT SERVES BOTH KEYS, and must: [Derived] refuses it under either reading,
-// so a key minted for one event — by the broker's partition function, or by a
-// peer that wrote one onto a run — is never offered a person's reply as a
-// conversation they could be answering on, nor shown as a thread a reply in
-// chat could reach.
+// IT SERVES BOTH KEYS: [Derived] refuses it under either reading, so a key
+// minted for one event is never offered a person's reply as a conversation
+// they could answer on, nor shown as a thread a chat reply could reach.
 func Fallback(eventID string) string { return EventPrefix + eventID }
 
 // SchedulePrefix namespaces a schedule's conversation ([ScheduleConversation]).
@@ -215,27 +183,16 @@ func Fallback(eventID string) string { return EventPrefix + eventID }
 const SchedulePrefix = "schedule/"
 
 // ScheduleConversation is the conversation every fire of one schedule is, of
-// each seat that runs it: the identity the scheduler stamps on a fire and the
-// inbox partition the fire shares with the schedule's other fires
-// (internal/schedule's FirePartition). The executor log keys a seat's sessions
-// on (seat, conversation), so each runner seat's fires are one conversation of
-// that seat — the next fire continues the session the last one left — and a
-// unit schedule fanned out to two seats is two conversations, one per seat.
+// each seat that runs it: the identity the scheduler stamps on a fire and its
+// partition (internal/schedule's FirePartition). The executor log keys on
+// (seat, conversation), so a unit schedule fanned out to two seats is two.
 //
-// THE SCHEDULE'S WHOLE IDENTITY AND NOTHING ELSE: its scope (a role or a unit),
-// the scope's id (the seat's agent id, the unit's key) and its name. So a
-// schedule renamed, or moved between a role and a unit, starts a conversation
-// of its own, as does a role schedule whose company was renamed (the seat's
-// agent id derives from the company's name); a `lead` schedule whose unit
-// changes hands is the new lead's to start, on that seat's own log; and an edit
-// to its task, its cron, its zone or its timeout keeps it.
-//
-// ESCAPED, each part, so a separator in one part cannot merge two schedules: a
-// unit `Q3/Launch` with a schedule `review` is not a unit `Q3` with a schedule
-// `Launch/review`. The name is bounded as it is escaped here
-// (org.ScheduleNameMaxBytes), so every key fits the executor log's
-// (internal/executordomain's ConversationKeyMaxBytes), which refuses a longer
-// key rather than cut one.
+// ITS WHOLE IDENTITY: scope (role or unit), scope id and name; a rename or a
+// role/unit move starts a new conversation, an edit to task, cron, zone or
+// timeout keeps it. ESCAPED, each part, so `Q3/Launch` + `review` never
+// merges with `Q3` + `Launch/review`; the name is bounded
+// (org.ScheduleNameMaxBytes) to fit the executor log's ConversationKeyMaxBytes,
+// which refuses rather than cuts.
 func ScheduleConversation(scope types.ScheduleScope, scopeID, name string) string {
 	return SchedulePrefix + url.PathEscape(string(scope)) + "/" + url.PathEscape(scopeID) + "/" +
 		url.PathEscape(name)
@@ -267,15 +224,15 @@ func Namespaced(source, local string) string {
 // KeyOf is the partition function: the partition key an event carries, split
 // by the event's writer ([WriterSeparator], writerOf), or its fallback.
 //
-// ONE TURN WORKS FOR ONE WRITER (see "THE PARTITION FUNCTION SPLITS THE STAMPED
-// KEY BY WRITER" above): a person's four messages in a thread are one turn, and
-// a second person's message in the same thread is a turn of its own. And for
-// one whom: an agent's writes for two requesters are two turns, for every wake
-// that obliges the seat (ADR-0120's seen-through mark, keyed on [KeyOfAll],
-// absorbs one that obliges it to nothing, whatever its writer). Only an
-// external notification names a writer; an A2A ask, a task assignment and a
-// schedule's fire partition by their stamped key as before. A per-event
-// fallback is a partition of one already, and gets no writer.
+// ONE TURN WORKS FOR ONE WRITER, held to the apps they use (ADR-0109): two
+// people in a thread, or a person and a stranger, are two turns. The writer is
+// read from fields every producer sends (a first-party notice's writer, the
+// actor, the sender), so the queue learns no integration. ONE WHOM TOO
+// ([ForSeparator], [FirstPartyWriter]): an agent's writes for two requesters
+// are two turns. The STAMPED key stays thread-grained ([KeyOfAll]) so a later
+// writer's reply still finds a parked run. EXCEPTION: ADR-0120's seen-through
+// mark keys on the thread, so a wake that obliges the seat to nothing is
+// absorbed whatever its writer. A fallback gets no writer.
 func KeyOf(ev *events.Event) string {
 	if ev == nil {
 		return ""
@@ -298,17 +255,15 @@ const WriterSeparator = " by "
 
 // writerOf is who wrote ev, as the partition function splits on it: a
 // first-party notice's writer by the kind its record names (a seat by its
-// handle, with whom an agent wrote for, a credential acting as no seat by its
-// login, the engine as itself, with whom its record about an agent's earlier
-// act was made for), and anything else by the actor every parser stamps
-// ([ActorField]), else its sender. Empty for an event that is no external
-// notification.
+// handle, a credential acting as no seat by its login, the engine as itself;
+// an agent's or the engine's writer also names whom it wrote for), and anything
+// else by the actor every parser stamps ([ActorField]), else its sender. Empty
+// for an event that is no external notification.
 //
 // THE SAME IDENTITY THE TURN IS THEN WORKED FOR: the requester a turn's reads
 // are decided for is composed from these fields (the engine's turnRequesters,
-// writerSubject, and whom an agent's write, or the engine's record about an
-// agent's earlier act, was made for, read before them), so a partition never
-// holds two principals the turn would have to work for at once.
+// writerSubject), so a partition never holds two principals the turn would
+// have to work for at once.
 func writerOf(ev *events.Event) string {
 	n, ok := events.DataAs[*types.ExternalNotification](ev)
 	if !ok || n == nil {
@@ -363,21 +318,14 @@ func forOf(w *types.NotificationWriter) string {
 // for nobody, and otherwise [ForSeparator] and the WHOLE carrier, its kind, the
 // seat or the login, and a credential's apps.
 //
-// THE ONE SPELLING, because two readers compare carriers and must agree with the
-// partition that split them: a worked-through mark of a chat message's edit
-// keys on the marking turn's carrier, and the drop keys an edit's wake on the
-// carrier its writer stated. A turn's carrier does not always come through
-// [FirstPartyWriter]: a pickup's is read off an item's history row, which keeps
-// a credential's apps in the order they were granted. So the apps are held to
-// the order a writer carries them in ([knownApps]: the apps this build knows,
-// once each, in iam.Apps order), never to the order they arrived in, and never
-// sorted by spelling, which a writer's own order is not.
+// THE ONE SPELLING: readers that compare carriers (an edit's worked-through
+// mark, the drop of an edit's wake) must agree with the partition. A pickup's
+// carrier keeps apps in grant order, so they are held to the writer's order
+// ([knownApps]: known apps once each, in iam.Apps order), never arrival order.
 //
-// ONLY NIL IS "". A carrier of an empty kind is a carrier, which the turn reads
-// as a stranger's, and keying it as nobody would match it to a turn that works
-// for nobody. A kind this build does not know keys by the kind alone: the turn
-// reads any such carrier as a stranger's, and two strangers hold the same
-// nothing.
+// ONLY NIL IS "": an empty-kind carrier is read as a stranger's, and keying it
+// as nobody would match a turn that works for nobody. An unknown kind keys by
+// the kind alone, since strangers hold the same nothing.
 func WorkingForKey(c *types.WorkingFor) string {
 	if c == nil {
 		return ""
@@ -400,17 +348,15 @@ func WorkingForKey(c *types.WorkingFor) string {
 // KeyOfAll is the partition key for a whole partition: the key its events
 // were STAMPED with, thread-grained, never [KeyOf]'s writer split.
 //
-// Every event in a partition shares a stamped key by construction — the
-// partition function only ever refines it — so a later event naming a
-// different one is a routing bug. Taking the FIRST keeps the answer stable
-// rather than letting it depend on which event happened to sort last.
+// Every event in a partition shares a stamped key by construction, so a later
+// one naming a different key is a routing bug; taking the FIRST keeps the
+// answer independent of sort order.
 //
-// THE STAMPED KEY, because it is what outlives the drain: the coalescer stamps
-// it on the merged event (so KeyOf reads the merged event back into the same
-// partition, by the same writer), a parked run's row carries it as the batch a
-// reply is matched against, and the turn's telemetry names it. A writer in it
-// would hide a parked run from every reply but its own writer's, which is the
-// answer route's decision to make, not the key's.
+// THE STAMPED KEY, because it outlives the drain: the coalescer stamps it on
+// the merged event (so KeyOf reads it back into the same partition and
+// writer), a parked run's row carries it as the batch a reply is matched
+// against, and telemetry names it. A writer in it would hide a parked run from
+// every reply but its own writer's, which is the answer route's decision.
 func KeyOfAll(evs []*events.Event) string {
 	for _, ev := range evs {
 		if ev == nil {
@@ -426,16 +372,14 @@ func KeyOfAll(evs []*events.Event) string {
 // ConversationIdentityOf is the durable conversation an event belongs to, or
 // its fallback.
 //
-// Named for what it answers rather than as a sibling of [KeyOf], and NOT
-// "ConversationOf" — that name is taken by the chat thread resolver the
-// working indicator raises its spinner on ([ConversationOf] in status.go),
-// which answers a different question from different metadata.
+// NOT "ConversationOf": that is the chat thread resolver the working
+// indicator raises its spinner on ([ConversationOf] in status.go), a
+// different question from different metadata.
 //
 // NEVER THE PARTITION. Every producer that stamps a partition stamps the
-// identity it refines beside it ([Prompt.ConversationIdentity], and a
-// schedule's fire its [ScheduleConversation] as both), so an event naming no
-// identity names no conversation at all — an A2A wake, a task assignment — and
-// gets its own fallback.
+// identity it refines beside it ([Prompt.ConversationIdentity], a schedule's
+// [ScheduleConversation] as both), so an event naming none (an A2A wake, a
+// task assignment) names no conversation and gets its own fallback.
 func ConversationIdentityOf(ev *events.Event) string {
 	if ev == nil {
 		return ""
@@ -475,15 +419,12 @@ func ConversationIdentityOfAll(evs []*events.Event) string {
 //
 // THE QUESTION BOTH OF A PARKED EXECUTOR'S ANSWER ROUTES ASK: whether a
 // delivery may be offered to a parked run as the reply to its question
-// (internal/engine's Dispatcher.answered), and whether a person reading the
-// runs board can answer a parked run in chat (internal/api/queries'
-// answerable_in_chat). A run an A2A wake or a task assignment started stored no
-// conversation, and a fallback key is one no inbound message can ever
-// reproduce. A schedule's is reproduced by every fire of the schedule and by
-// nothing anybody writes: offered as a reply, the next fire would be taken for
-// the answer to the question the last fire's run parked on, and telling
-// somebody to "reply in the thread" would send them to a thread that does not
-// exist.
+// (internal/engine's Dispatcher.answered) and whether a person can answer it
+// in chat (internal/api/queries' answerable_in_chat). A fallback key is one no
+// inbound message can reproduce. A schedule's is reproduced by every fire and
+// by nothing anybody writes: offered as a reply, the next fire would be taken
+// for the answer to the last fire's question, and "reply in the thread" would
+// point at a thread that does not exist.
 func Derived(key string) bool {
 	return key != "" && !strings.HasPrefix(key, EventPrefix) && !Scheduled(key)
 }

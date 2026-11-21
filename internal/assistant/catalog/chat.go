@@ -14,59 +14,40 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // THE COMPANY'S OWN CHAT: the reads that draw it as the chat screen does
 // ([chatReads]), and the writes a person makes in a room, each executing as
-// the chat gesture the dashboard's own controls send on the act route, so a
-// message the assistant prepared and one the person typed are one code path.
+// the chat gesture the dashboard's controls send on the act route, so one
+// code path serves a prepared message and a typed one.
 //
-// A CHAT GESTURE IS A CALL, NOT A RESOURCE. The generic change can show what a
-// call sends and nothing more: never which room an id names, who reads it,
-// whom a membership list leaves out or which words an edit replaces. So every
-// gesture whose effect turns on what the room or the message holds now is a
-// write of its own here, and its preview reads the room
-// (`GET /chatlet/channels/{channel_id}`) or the message through the turn's grant,
-// as the person (ADR-0051):
+// A CHAT GESTURE IS A CALL, NOT A RESOURCE. The generic change cannot show
+// which room an id names, who reads it, whom a membership list leaves out or
+// which words an edit replaces. So a gesture whose effect turns on what the
+// room or message holds is a write of its own, its preview reading the room
+// (`GET /chatlet/channels/{channel_id}`) or message as the person (ADR-0051).
+// The other gestures touch only what their call names, so the generic card
+// shows all of them.
+
+// A chat write names the room as people do and who will read it; binds the
+// room as shown or the message's position (NOT the room's `revision`, which
+// every message moves) so a stale approval is refused; states a membership
+// whole, refusing a removal not named in `removes` (ADR-0055); and is
+// destructive ([wire.RiskDestructive]) when it takes something away. People
+// are named by handle or seat name ([Tool.Names]); a member the chart no
+// longer lists is kept as the room holds them ([DirMember]).
 //
-//   - it names the room as people do, and who will read it once the write
-//     lands: the whole company for a room anybody may read, and its members
-//     by name for one only they may (D09);
-//   - it binds the room as the card shows it, or the message's position, so
-//     an approval after somebody changed either is refused as stale and
-//     prepared again against what is there now. NOT THE ROOM'S OWN
-//     `revision`: every message said in the room moves that, so a change
-//     bound to it would go stale whenever anybody spoke;
-//   - a membership is stated whole, which is where a member is dropped by
-//     being forgotten, and in a private room that is who may read it: the
-//     card shows who is added and who is removed, and a removal the call does
-//     not name in `removes` refuses the step (ADR-0055);
-//   - a change that takes something away (a message taken down, a member
-//     taken out of a room) is destructive ([wire.RiskDestructive]), and its
-//     summary says what goes, as the generic change's does.
-//
-// The people a write names are seats, by handle or by seat name ([Tool.Names]):
-// the turn resolves a name to its handle before the preview reads anything,
-// and a member the chart no longer lists is kept as the room holds them
-// ([DirMember]).
-//
-// The other gestures (a reaction, joining a room, making one, opening a
-// conversation before anything is said in it, marking rooms read) touch only
-// what their own call names, so the generic change's card, the call as sent
-// and titled by its tool, shows the whole of what they do.
-//
-// EVERY TEXT A CHAT CARD SHOWS PASSES redact.Secrets, as the generic change's
-// rows do: a room is where a credential gets pasted, and taking such a message
-// down is one of these writes, so its card must not copy the credential into
-// the conversation's record.
+// EVERY TEXT A CHAT CARD SHOWS PASSES redact.Secrets: a room is where a
+// credential gets pasted, and taking such a message down must not copy it
+// into the conversation's record.
 
 // The reads of one room (internal/api's named reads): the room and a thread in
 // it, which a chat write's preview reads too, and its transcript.
@@ -77,8 +58,6 @@ const (
 	// that message as its root, which is how the chat tools themselves read
 	// whose words a message is before an edit or a delete.
 	chatThreadRoute = "GET /chatlet/channels/{channel_id}/threads/{root_id}"
-	// chatMessagesRoute is a room's transcript, which only a read reads.
-	chatMessagesRoute = "GET /chatlet/channels/{channel_id}/messages"
 	// chatReachRoute is whom a draft would reach, which a post's and a
 	// reply's preview read: the post's own decision run dry.
 	chatReachRoute = "GET /chatlet/channels/{channel_id}/reach"
@@ -104,9 +83,9 @@ const (
 	chatChannelWakes = 32 // chatlet.MaxCollectiveRecipients
 )
 
-// chatWakes is who a person's chat message wakes, said in the two tools a
-// model reaches for when the question is whether an agent will see a message:
-// the one that posts it and the one that reads the room it lands in.
+// chatWakes is who a person's chat message wakes, said in the tool a model
+// reaches for when the question is whether an agent will see a message: the
+// one that posts it.
 //
 // STATED, because a model left to guess says what it would expect of a person
 // in a room: that the agents there "read the room on their next turn". They do
@@ -124,291 +103,6 @@ var chatWakes = fmt.Sprintf("Who a message wakes: an agent it names with @handle
 	"not woken never reads the message later, and each person's message says which "+
 	"agents it reached and which have answered.", chatChannelWakes)
 
-// chatApp is the app every chat read needs: chat's questions answer a holder
-// of Chatlet, and a card drawn from one is withheld from a person who no longer
-// holds it.
-var chatApp = []iam.Grant{iam.GrantChatlet}
-
-// chatReads are the chat reads, each one of chat's questions carded as the
-// chat screen draws it: a room by its name, a speaker by the seat's name, a
-// message by what it says, never a room's id or the log's bookkeeping. Each
-// card opens the chat screen at its room where it is about one, and the
-// mentions and the search their own screens.
-//
-// A ROOM IS NAMED AS PEOPLE WRITE IT. Every read about one room takes it by
-// its name ("#launch") as well as its id, which the room's questions resolve
-// by the one rule every surface reads a typed room by: the rail lists only
-// the rooms somebody is in, and a name reaches every room they may read. Its
-// step and its card's title say where the read is ([Tool.Room]): "in #launch"
-// where the call wrote the name, and where it gave an id, the room as the
-// turn reads it through the person's grant, a direct conversation by the
-// people in it ("with Ada Lovelace"), which is all one has to be named by.
-// So two conversations read by their ids are two reads to the person, never
-// one drawn twice.
-//
-// A READ IS ONE PAGE, as every read in the catalogue is (ADR-0061): the
-// newest messages or mentions, a thread from its first reply, at most a
-// limit, and the card says when more lie past it. None takes a cursor. A
-// page past the first would be a second read titled as the first, which the
-// drawer takes for the same read and keeps only once; older words are found
-// by what they say (search_chat), and the room's screen, which every card
-// about one room opens, reads all of it.
-func chatReads() []Tool {
-	room := text("The room, by its name as people write it (#launch) or by its id.", nameBytes)
-	return []Tool{
-		{
-			Name: "list_chat_rooms", Phrase: "list your chat rooms",
-			Narrow: []string{"unread"},
-			Description: "List the chat rooms the person is in, most recently active first: " +
-				"each one's name, or the people in a direct conversation, how many messages " +
-				"they have not read and the last thing said. Any other room they may read is " +
-				"reached by its name with get_chat_room.",
-			schema: object(nil, map[string]*schema{
-				"unread": flag("Only the rooms with messages the person has not read."),
-				"include_archived": flag("Include rooms closed to new messages, which stay " +
-					"readable."),
-				"limit": positive("How many rooms, at most.", chatRoomsLimit),
-			}),
-			Routes: []string{"GET /chatlet/channels"}, Apps: chatApp, Fence: true,
-			// ONE PAGE OF ROOMS, the most recently active, `truncated` saying
-			// more lie past it: the rail answers every room whole, and a person
-			// in about sixty rooms with long last messages is past what one step
-			// reads ([chatRoomsPage]).
-			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /chatlet/channels", nil, query(a).truth("unread", "unread").
-					truth("include_archived", "include_archived").
-					num("limit", "limit", chatRoomsPage).values())
-			},
-			// NO LINK: the chat screen opens one room, and a table's link is
-			// the whole card's.
-			Cards: one(cards.Spec{Table: &cards.Table{Title: "Chat rooms", Rows: "channels",
-				Brief: []string{"room", "people", "unread", "last"},
-				Columns: []cards.Column{roomColumn("room", "channel.name"),
-					col("people", "People", "participants", tText),
-					col("unread", "Unread", "unread", tNumber),
-					prose("last", "Last message", "last.excerpt"),
-					seat("by", "Said by", "last.author"),
-					col("at", "Said", "last.at", tDatetime),
-					prose("topic", "Topic", "channel.topic"),
-					col("kind", "Kind", "channel.kind", tLabel),
-					// THE ID, for the model only: a direct conversation has no
-					// name to be asked for by.
-					col("id", "Room ID", "channel.id", tText)},
-				More: "truncated"}}),
-			Label: func(map[string]any) string { return "Reading your chat rooms" },
-			Scope: func(a Args) string {
-				unread, archived := "", ""
-				if a.Bool("unread") {
-					unread = "with unread messages"
-				}
-				if a.Bool("include_archived") {
-					archived = "including archived"
-				}
-				return scopeOf(unread, archived)
-			},
-		},
-		{
-			Name: "get_chat_room", Phrase: "read this chat room",
-			Description: "Read one chat room: its topic and purpose, what kind of room it is " +
-				"and who is in it, each member who follows every message marked so. Its " +
-				"messages are read_chat_messages. " + chatWakes,
-			schema: object([]string{"channel"}, map[string]*schema{"channel": room}),
-			Routes: []string{chatRoomRoute}, Apps: chatApp, Fence: true,
-			Build: func(a map[string]any) (exec.Request, error) {
-				return get(chatRoomRoute, map[string]string{"channel_id": Args(a).String("channel")},
-					nil)
-			},
-			// A ROOM IS WRITTEN BY ITS NAME after its "#", which is its key: the
-			// answer's "#launch" is its chip. A DIRECT CONVERSATION HAS NO NAME,
-			// so no key, and is headed by its people, as the turn says the room
-			// it is ("Direct conversation with Ada Lovelace"), its members listed
-			// beneath; by what it is where the room could not be read again.
-			Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceRoom, Root: "channel",
-				ID: "id", Key: "name", KeyPrefix: "#", Title: "name", TitlePrefix: "#",
-				Room: "id", Subtitle: "topic", Name: "Direct conversation", Prose: true,
-				Facts: []cards.Fact{fact("Kind", "kind", tLabel),
-					fact("Purpose", "purpose", tText), fact("Unit", "unit", tText),
-					fact("Created", "created_at", tDatetime),
-					fact("Archived", "archived_at", tDatetime)},
-				// WHO FOLLOWS EVERY MESSAGE is the half of the routing a
-				// room's own rows decide, so the card says it per member:
-				// without it a model asked whether an agent will see a
-				// message has only the membership, which wakes nobody.
-				Items: &cards.Items{Path: "members", ID: "handle", Label: "handle",
-					Fact: "follow_all", Flag: "follows every message",
-					Noun: wire.Noun{One: "member", Many: "members"}},
-				Open: &cards.Open{Screen: "chatlet", Params: map[string]string{"id": "id"}}}}),
-			Label: func(a map[string]any) string {
-				return "Reading " + roomCalled(Args(a).String("channel"))
-			},
-		},
-		{
-			Name: "read_chat_messages", Phrase: "read a chat room's messages",
-			Description: "Read what was said in a chat room, newest first: who said each " +
-				"message, its words and when, and for a person's message which agents it " +
-				"reached and which have answered. A thread under a message is " +
-				"get_chat_thread. Older messages are found by what they say with " +
-				"search_chat. " + chatWakes,
-			schema: object([]string{"channel"}, map[string]*schema{
-				"channel": room,
-				"limit":   positive("How many messages, at most.", 50),
-			}),
-			Routes: []string{chatMessagesRoute}, Apps: chatApp, Fence: true,
-			Build: func(a map[string]any) (exec.Request, error) {
-				return get(chatMessagesRoute,
-					map[string]string{"channel_id": Args(a).String("channel")},
-					query(a).num("limit", "limit", 20).values())
-			},
-			Cards: one(cards.Spec{Table: &cards.Table{Title: "Messages", Rows: "messages",
-				Brief: []string{"from", "said", "at"},
-				Columns: []cards.Column{seat("from", "From", "message.author"),
-					prose("said", "Message", "message.body"),
-					col("at", "When", "message.created_at", tDatetime),
-					col("edited", "Edited", "message.edited_at", tDatetime),
-					// THE IDS, for the model only: a reply, an edit and a
-					// thread name the message they are about by its id, and a
-					// brief cites the room by its own.
-					col("id", "Message ID", "message.id", tText),
-					col("thread", "In thread", "message.thread_root", tText),
-					col("room_id", "Room ID", "message.channel_id", tText),
-					// WHOM A PERSON'S MESSAGE REACHED AND WHO ANSWERED:
-					// no_agent is a message nobody was asked to answer,
-					// which a person otherwise waits on for ever.
-					col("delivery", "Delivery", "delivery", tLabel),
-					col("reached", "Reached", "message.reach.recipients", tText),
-					col("answered", "Answered by", "answered", tText)},
-				More: "next_cursor",
-				Open: &cards.Open{Screen: "chatlet", Params: map[string]string{"id": "channel_id"}}}}),
-			Label: func(map[string]any) string { return "Reading the messages" },
-			Room:  "channel",
-		},
-		{
-			Name: "get_chat_thread", Phrase: "read a chat thread",
-			Description: "Read a thread in a chat room: the message it hangs off and the " +
-				"replies under it, oldest first.",
-			schema: object([]string{"channel", "message_id"}, map[string]*schema{
-				"channel":    room,
-				"message_id": text("The id of the message the thread hangs off.", nameBytes),
-				"limit":      positive("How many replies, at most.", 50),
-			}),
-			Routes: []string{chatThreadRoute}, Apps: chatApp, Fence: true,
-			Build: func(a map[string]any) (exec.Request, error) {
-				args := Args(a)
-				return get(chatThreadRoute, map[string]string{"channel_id": args.String("channel"),
-					"root_id": args.String("message_id")},
-					query(a).num("limit", "limit", 20).values())
-			},
-			// HEADED BY ITS FIRST WORDS, as the screen lists a thread: two
-			// threads read in one answer are two chips, never two "Thread"s.
-			// A thread whose first message was taken back has no words left,
-			// and is headed by what it is.
-			Cards: one(cards.Spec{Entity: &cards.Entity{Root: "root", ID: "message.id",
-				Title: "message.body", TitlePrefix: "Thread: ", TitleCut: threadHeadingBytes,
-				Name: "Thread", Text: "message.body", Prose: true,
-				Facts: []cards.Fact{fact("Started by", "message.author", tText),
-					fact("Said", "message.created_at", tDatetime)},
-				Items: &cards.Items{Path: "replies", ID: "message.id", Label: "message.body",
-					Fact: "message.author", Prose: true, More: "next_cursor",
-					Noun: wire.Noun{One: "reply", Many: "replies"}},
-				Open: &cards.Open{Screen: "chatlet",
-					Params: map[string]string{"id": "message.channel_id"}}}}),
-			Label: func(map[string]any) string { return "Reading a thread" },
-			Room:  "channel",
-		},
-		{
-			Name: "list_chat_mentions", Phrase: "read where you were named in chat",
-			Description: "Where the person was named with @ in chat, newest first: the room, " +
-				"who named them and what they said.",
-			schema: object(nil, map[string]*schema{
-				"limit": positive("How many, at most.", 50),
-			}),
-			// ACTIVITY'S MENTIONS, the away story the dashboard reads: one
-			// feed of where a person was named, read as the Activity view
-			// reads it rather than through a second question beside it.
-			Routes: []string{"GET /chatlet/activity"}, Apps: chatApp, Fence: true,
-			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /chatlet/activity", nil,
-					query(a).fixed("kind", "mention").num("limit", "limit", 20).values())
-			},
-			Cards: one(cards.Spec{Table: &cards.Table{Title: "Where you were named",
-				Rows: "items", Brief: []string{"room", "by", "said", "at"},
-				Columns: []cards.Column{roomColumn("room", "channel_name"),
-					seat("by", "By", "actor"), prose("said", "Message", "excerpt"),
-					col("at", "When", "at", tDatetime),
-					col("kind", "Room kind", "channel_kind", tLabel),
-					col("room_id", "Room ID", "channel_id", tText),
-					col("id", "Message ID", "message_id", tText)},
-				More: "next_cursor", Open: &cards.Open{Screen: "chatlet-activity"}}}),
-			Label: func(map[string]any) string { return "Reading where you were named" },
-		},
-		{
-			Name: "search_chat", Phrase: "search chat",
-			Narrow: []string{"q", "author"},
-			Description: "Find chat messages by what they say, ranked, over every room the " +
-				"person may read, joined or not.",
-			schema: object([]string{"q"}, map[string]*schema{
-				"q":      text("What was said, in a few words.", queryBytes),
-				"author": text("Only what one seat said: its handle or name.", nameBytes),
-				"limit":  positive("How many results, at most.", 25),
-			}),
-			Routes: []string{"GET /chatlet/search"}, Apps: chatApp, Fence: true,
-			Build: func(a map[string]any) (exec.Request, error) {
-				return get("GET /chatlet/search", nil, query(a).str("q", "q").
-					str("author", "author").num("limit", "limit", 10).values())
-			},
-			// AN INDEX STILL CATCHING UP SAYS SO in the answer's own note, as
-			// search_work's does, rather than reading as "nobody said that".
-			Cards: one(cards.Spec{Note: "note", Table: &cards.Table{Title: "Matching messages",
-				Rows: "hits", Brief: []string{"room", "by", "said", "at"},
-				Columns: []cards.Column{roomColumn("room", "channel_name"),
-					seat("by", "By", "author"), prose("said", "Matched", "snippet"),
-					col("at", "When", "at", tDatetime),
-					col("kind", "Room kind", "channel_kind", tLabel),
-					col("room_id", "Room ID", "channel_id", tText),
-					col("id", "Message ID", "message_id", tText)},
-				Open: &cards.Open{Screen: "chatlet-search"}}}),
-			Label: func(map[string]any) string { return "Searching chat" },
-			// THE WORDS AND WHOSE: one search's words by two authors are two
-			// reads.
-			Scope: func(a Args) string { return scopeOf(quoted(a), labelled(a, "author", "by")) },
-			Names: map[string]Directory{"author": DirSeat},
-		},
-	}
-}
-
-// The bounds of the chat reads.
-const (
-	// chatRoomsPage is the rooms list_chat_rooms asks for when the call names
-	// no limit: the most recently active, as many as one step reads whole
-	// at every field's cap. The rail answers each room whole (its name,
-	// topic and purpose, its last message's excerpt) beside the person's
-	// whole read state (up to 256 cursors and 256 mutes), so fifteen rooms
-	// with every one of those at its cap are 58,116 bytes against the step's
-	// 65,536; seventeen are 62,482, and twenty past it
-	// (TestTheAssistantsPageOfRoomsIsReadInOneStep, internal/api/queries).
-	// What is left is for markup, which the API's encoding writes as six
-	// bytes to a `<`, `>` or `&`: about 1,500 such characters across a page.
-	// A page markup takes past the step is a read too large to show, which
-	// names what narrows it: the rooms with something unread, or fewer.
-	chatRoomsPage = 15
-	// chatRoomsLimit is the most rooms a call asks for: as many as most
-	// people are in, past which a page is cut at a step's bound and drawn as
-	// a read too large to show, which names what narrows it.
-	chatRoomsLimit = 50
-	// threadHeadingBytes is how much of its first message heads a thread's
-	// card: about a dozen words, which a chip on the Also looked up line holds on
-	// one line, and enough to tell two threads of one room apart.
-	threadHeadingBytes = 80
-)
-
-// roomColumn is a column of room names, each drawn as every screen draws a
-// room, after its "#"; a direct conversation has no name and draws nothing.
-func roomColumn(key, path string) cards.Column {
-	c := col(key, "Room", path, tText)
-	c.Prefix = "#"
-	return c
-}
-
 // roomName is the name ref gives a room as people write it, normalised as the
 // room's questions read it (without its "#", in lower case: internal/chatlet's
 // RoomRef), or "" where ref names it by its id or names nothing.
@@ -418,16 +112,6 @@ func roomName(ref string) string {
 		return ""
 	}
 	return name
-}
-
-// roomCalled is a room as a step says it: "#launch" where the call names it by
-// its name, and "the room" where it names it by its id, which reads as
-// nothing to anybody.
-func roomCalled(ref string) string {
-	if name := roomName(ref); name != "" {
-		return "#" + name
-	}
-	return "the room"
 }
 
 // roomWhere is where a read of the room ref names is, as its step and its
@@ -454,7 +138,7 @@ func chatWrites() []Tool {
 	links := linkList(fmt.Sprintf("Up to %d links the message points at.", chatLinks))
 	members := chatWrite("set_chat_room_members", authz.ActionChatMembers, true,
 		"change who is in a chat room",
-		"Propose a chat room's whole membership. Read the room first with "+APIRequestTool+
+		"Propose a chat room's whole membership. Read the room first with "+ReadAPITool+
 			" (GET /chatlet/channels/{channel_id}) and send everybody who stays as well as "+
 			"anybody new: a member left out is removed, so name each one the person asked "+
 			"to remove in removes. A unit's own room and a direct conversation cannot be "+
@@ -654,6 +338,9 @@ func (r room) called() string {
 	return "Unnamed room"
 }
 
+// ref is the room as a card names it: a record linked to the room.
+func (r room) ref() wire.Phrase { return naming(wire.ResourceRoom, r.id, r.called()) }
+
 // handles are the room's members' handles.
 func (r room) handles() []string { return handlesOf(r.members) }
 
@@ -664,12 +351,12 @@ func (r room) member(handle string) bool {
 
 // readers are who reads the room once a write leaves members in it, as a card
 // names them (D09): the whole company for a room anybody may read, and
-// otherwise the members, each as name says them.
-func (r room) readers(name func(handle string) string, members []string) []string {
+// otherwise the members, each a seat.
+func (r room) readers(seats company, members []string) []wire.Phrase {
 	if r.readByAll() {
-		return []string{audienceLabel("company")}
+		return []wire.Phrase{seats.audience(string(artifacts.AudienceCompany))}
 	}
-	return namedOnCard(name, members)
+	return namedOnCard(seats, members)
 }
 
 // bound is the revision a change of the room binds: the room as a card shows
@@ -742,19 +429,35 @@ func handlesOf(members []roomMember) []string {
 	return out
 }
 
-// namedOnCard is handles as a card names them: each as name says it, the
-// first [listNamed] one by one and how many more after, and nobody for none.
-func namedOnCard(name func(handle string) string, handles []string) []string {
+// namedOnCard is handles as a card names them: the first [listNamed] each a
+// seat, how many more after, and nobody for none.
+func namedOnCard(seats company, handles []string) []wire.Phrase {
 	if len(handles) == 0 {
-		return []string{"Nobody"}
+		return []wire.Phrase{wire.Plain("Nobody")}
 	}
-	out := make([]string, 0, min(len(handles), listNamed)+1)
+	out := make([]wire.Phrase, 0, min(len(handles), listNamed)+1)
 	for i, h := range handles {
 		if i == listNamed {
-			out = append(out, fmt.Sprintf("and %d more", len(handles)-listNamed))
+			out = append(out, wire.Plain(fmt.Sprintf("and %d more", len(handles)-listNamed)))
 			break
 		}
-		out = append(out, name(h))
+		out = append(out, seats.seat(h))
+	}
+	return out
+}
+
+// andPhrases is phrases as a sentence lists them: "a", "a and b", "a, b and c".
+func andPhrases(phrases []wire.Phrase) wire.Phrase {
+	var out wire.Phrase
+	for i, p := range phrases {
+		switch {
+		case i == 0:
+		case i == len(phrases)-1:
+			out = out.Plain(" and ")
+		default:
+			out = out.Plain(", ")
+		}
+		out = out.Then(p)
 	}
 	return out
 }
@@ -802,14 +505,14 @@ func (m chatMessage) bound() string {
 		ID: url.PathEscape(m.room) + "/" + url.PathEscape(m.id), Version: m.version}.String()
 }
 
-// quote is the message a reply answers, as its card names it: whose words, as
-// name says the author, and the words on one line.
-func (m chatMessage) quote(name func(handle string) string) string {
+// quote is the message a reply answers, as its card names it: its author, a
+// seat, and the words on one line.
+func (m chatMessage) quote(seats company) wire.Phrase {
 	if m.deleted {
-		return name(m.author) + ": a message that was taken back"
+		return seats.seat(m.author).Plain(": a message that was taken back")
 	}
 	said := strings.Join(strings.Fields(redact.Secrets(m.body)), " ")
-	return name(m.author) + ": " + textcut.Within(said, cardLineBytes)
+	return seats.seat(m.author).Plain(": " + textcut.Within(said, cardLineBytes))
 }
 
 // chatRevision re-reads a room's or a message's revision now, for [Revision].
@@ -883,19 +586,19 @@ func chatPostPreview(t Tool) proposal.Previewer {
 		if err != nil {
 			return proposal.Preview{}, err
 		}
-		reaches, err := readReach(ctx, read, r.id, "", a.String("body"), seats.seatName)
+		reaches, err := readReach(ctx, read, r.id, "", a.String("body"), seats)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
-		c.fact("reaches", "Reaches", reaches)
+		c.factOf("room", "Room", r.ref())
+		c.factOf("reaches", "Reaches", reaches)
 		c.said(a)
 		return proposal.Preview{Title: "Post in room", Target: r.called(),
-			Note: "Everyone it names with @ is told, and so is everyone who follows the " +
-				"whole room.",
+			Note: wire.Plain("Everyone it names with @ is told, and so is everyone who " +
+				"follows the whole room."),
 			ApproveLabel: "Approve and post", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, r.handles()), SourceRevision: r.bound()}, nil
+			Audience: r.readers(seats, r.handles()), SourceRevision: r.bound()}, nil
 	}
 }
 
@@ -921,19 +624,20 @@ func chatReplyPreview(t Tool) proposal.Previewer {
 		if err != nil {
 			return proposal.Preview{}, err
 		}
-		reaches, err := readReach(ctx, read, r.id, answered.id, a.String("body"), seats.seatName)
+		reaches, err := readReach(ctx, read, r.id, answered.id, a.String("body"), seats)
 		if err != nil {
 			return proposal.Preview{}, err
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
-		c.fact("reply_to", "Replying to", answered.quote(seats.seatName))
-		c.fact("reaches", "Reaches", reaches)
+		c.factOf("room", "Room", r.ref())
+		c.factOf("reply_to", "Replying to", answered.quote(seats))
+		c.factOf("reaches", "Reaches", reaches)
 		c.said(a)
 		return proposal.Preview{Title: "Reply in thread", Target: r.called(),
-			Note:         "Everyone in the thread is told, and so is everyone it names with @.",
+			Note: wire.Plain("Everyone in the thread is told, and so is everyone it names " +
+				"with @."),
 			ApproveLabel: "Approve and reply", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, r.handles()), SourceRevision: r.bound()}, nil
+			Audience: r.readers(seats, r.handles()), SourceRevision: r.bound()}, nil
 	}
 }
 
@@ -956,12 +660,11 @@ var quietWords = map[string]string{
 	"addressed_to_people": "No agent. It names only people, so it is for them.",
 }
 
-// readReach is whom a draft would reach, as a card says it: each seat by its
-// name, with why where the message alone would not say, or why it reaches no
-// agent. It reads the post's own decision run dry ([chatReachRoute]), so the
-// card says what the approved post will do.
+// readReach is whom a draft would reach, each a seat with why, read from the
+// post's own decision run dry ([chatReachRoute]), so the card says what the
+// approved post will do.
 func readReach(ctx context.Context, read proposal.Read, roomID, replyTo, body string,
-	name func(handle string) string) (string, error) {
+	seats company) (wire.Phrase, error) {
 
 	q := url.Values{"body": {body}}
 	if replyTo != "" {
@@ -969,24 +672,24 @@ func readReach(ctx context.Context, read proposal.Read, roomID, replyTo, body st
 	}
 	doc, err := readGet(ctx, read, chatReachRoute, map[string]string{"channel_id": roomID}, q)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if words, ok := quietWords[value(doc, "quiet")]; ok {
-		return words, nil
+		return wire.Plain(words), nil
 	}
 	list, _ := cards.Lookup(doc, "reach.recipients").([]any)
 	if len(list) == 0 {
-		return "Nobody", nil
+		return wire.Plain("Nobody"), nil
 	}
-	out := make([]string, 0, len(list))
+	out := make([]wire.Phrase, 0, len(list))
 	for _, item := range list {
-		who := name(value(item, "handle"))
+		who := seats.seat(value(item, "handle"))
 		if why, ok := reachReasons[value(item, "reason")]; ok {
-			who += " " + why
+			who = who.Plain(" " + why)
 		}
 		out = append(out, who)
 	}
-	return strings.Join(out, ", "), nil
+	return wire.Join(out, ", "), nil
 }
 
 // chatDirectPreview names who a direct message reaches. It reads no room: a
@@ -1008,25 +711,27 @@ func chatDirectPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		self := value(viewer, "handle")
-		var others, named []string
+		var others []string
 		for _, h := range a.Strings("to") {
 			if h != self && !slices.Contains(others, h) {
 				others = append(others, h)
-				named = append(named, seats.seatName(h))
 			}
 		}
-		to := strings.Join(named, ", ")
+		named := seats.seatsOf(others)
+		to := wire.Join(named, ", ")
 		if len(others) == 0 {
-			to = "Only you"
+			to = wire.Plain("Only you")
 		}
 		row := proposal.Fact("to", "To", to)
-		row.Items = named
+		if len(named) > 0 {
+			row.Items = named
+		}
 		c := changes{row}
 		c.said(a)
-		return proposal.Preview{Title: "Send direct message", Target: to,
-			Note:         "Everyone it goes to is told.",
+		return proposal.Preview{Title: "Send direct message", Target: to.Text(),
+			Note:         wire.Plain("Everyone it goes to is told."),
 			ApproveLabel: "Approve and send", Changes: c.rows(), Request: req,
-			Audience: namedOnCard(seats.seatName, append([]string{self}, others...))}, nil
+			Audience: namedOnCard(seats, append([]string{self}, others...))}, nil
 	}
 }
 
@@ -1068,8 +773,8 @@ func chatEditPreview(t Tool) proposal.Previewer {
 				seats.seatName(m.author))
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
-		c.fact("author", "Written by", seats.seatName(m.author))
+		c.factOf("room", "Room", r.ref())
+		c.factOf("author", "Written by", seats.seat(m.author))
 		c.move("body", "Message", redact.Secrets(m.body), redact.Secrets(a.String("body")))
 		if _, given := args["links"]; given {
 			row, moved := proposal.List("links", "Links", redactAll(m.links),
@@ -1083,10 +788,10 @@ func chatEditPreview(t Tool) proposal.Previewer {
 				"it is", ErrInvalidArguments)
 		}
 		return proposal.Preview{Title: "Edit message", Target: r.called(),
-			Note: "Anybody the new words name with @ who was not named before is told. " +
-				"Nobody else is woken again.",
+			Note: wire.Plain("Anybody the new words name with @ who was not named before is " +
+				"told. Nobody else is woken again."),
 			ApproveLabel: "Approve and edit", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, r.handles()), SourceRevision: m.bound()}, nil
+			Audience: r.readers(seats, r.handles()), SourceRevision: m.bound()}, nil
 	}
 }
 
@@ -1117,8 +822,8 @@ func chatDeletePreview(t Tool) proposal.Previewer {
 				ErrInvalidArguments)
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
-		c.fact("author", "Written by", seats.seatName(m.author))
+		c.factOf("room", "Room", r.ref())
+		c.factOf("author", "Written by", seats.seat(m.author))
 		c.move("body", "Message", redact.Secrets(m.body), "")
 		if row, removed := proposal.List("links", "Links", redactAll(m.links), nil); removed {
 			c = append(c, row)
@@ -1126,13 +831,13 @@ func chatDeletePreview(t Tool) proposal.Previewer {
 		// WHAT GOES LEADS THE CARD, as the generic change's deletion does:
 		// the words are blanked for good, so it is destructive.
 		return proposal.Preview{Title: "Delete message", Target: r.called(),
-			Summary: "This deletes the message " + seats.seatName(m.author) + " wrote in " +
-				r.called() + ", for everyone who can read it.",
-			Note: "Its place stays, so a thread under it keeps its first message. Nobody is " +
-				"told, and its words cannot be brought back.",
+			Summary: wire.Plain("This deletes the message ").Then(seats.seat(m.author)).
+				Plain(" wrote in ").Then(r.ref()).Plain(", for everyone who can read it."),
+			Note: wire.Plain("Its place stays, so a thread under it keeps its first message. " +
+				"Nobody is told, and its words cannot be brought back."),
 			Risk:         wire.RiskDestructive,
 			ApproveLabel: "Approve and delete", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, r.handles()), SourceRevision: m.bound()}, nil
+			Audience: r.readers(seats, r.handles()), SourceRevision: m.bound()}, nil
 	}
 }
 
@@ -1155,7 +860,7 @@ func chatRoomPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
+		c.factOf("room", "Room", r.ref())
 		if _, given := args["topic"]; given {
 			c.move("topic", "Topic", redact.Secrets(r.topic), redact.Secrets(a.String("topic")))
 		}
@@ -1163,14 +868,14 @@ func chatRoomPreview(t Tool) proposal.Previewer {
 			c.move("purpose", "Purpose", redact.Secrets(r.purpose),
 				redact.Secrets(a.String("purpose")))
 		}
-		note := "Everyone who can read " + r.called() + " sees the change."
+		note := wire.Plain("Everyone who can read ").Then(r.ref()).Plain(" sees the change.")
 		if archive, given := args["archived"].(bool); given && archive != r.archived {
-			c = append(c, proposal.Changed("archived", "State", roomState(r.archived),
-				roomState(archive)))
-			note = "People can post in " + r.called() + " again."
+			c = append(c, proposal.Changed("archived", "State", wire.Plain(roomState(r.archived)),
+				wire.Plain(roomState(archive))))
+			note = wire.Plain("People can post in ").Then(r.ref()).Plain(" again.")
 			if archive {
-				note = "Nobody can post in " + r.called() + " until it is opened again. " +
-					"Everything said in it stays readable and searchable."
+				note = wire.Plain("Nobody can post in ").Then(r.ref()).Plain(" until it is " +
+					"opened again. Everything said in it stays readable and searchable.")
 			}
 		}
 		if len(c) < 2 {
@@ -1179,7 +884,7 @@ func chatRoomPreview(t Tool) proposal.Previewer {
 		}
 		return proposal.Preview{Title: "Update room", Target: r.called(), Note: note,
 			ApproveLabel: "Approve and update", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, r.handles()), SourceRevision: r.bound()}, nil
+			Audience: r.readers(seats, r.handles()), SourceRevision: r.bound()}, nil
 	}
 }
 
@@ -1261,49 +966,52 @@ func chatMembersPreview(t Tool) proposal.Previewer {
 			return proposal.Preview{}, err
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
+		c.factOf("room", "Room", r.ref())
 		for _, m := range next {
 			was := slices.IndexFunc(r.members, func(held roomMember) bool {
 				return held.handle == m.handle
 			})
-			name := seats.seatName(m.handle)
 			switch {
 			case was < 0:
-				shown := name
+				shown := seats.seat(m.handle)
 				if m.followAll {
-					shown += " (follows the whole room)"
+					shown = shown.Plain(following(true))
 				}
 				c = append(c, proposal.Added("members."+m.handle, "Member", shown, false))
 			case r.members[was].followAll != m.followAll:
-				c = append(c, proposal.Changed("members."+m.handle, name,
-					following(r.members[was].followAll), following(m.followAll)))
+				// THE SEAT IS THE VALUE, with how it follows the room: a
+				// row's label is words, and a seat is drawn as itself.
+				c = append(c, proposal.Changed("members."+m.handle, "Member",
+					seats.seat(m.handle).Plain(following(r.members[was].followAll)),
+					seats.seat(m.handle).Plain(following(m.followAll))))
 			}
 		}
 		var removes []string
+		var gone []wire.Phrase
 		for _, h := range removed {
-			name := seats.seatName(h)
-			removes = append(removes, name)
-			c = append(c, proposal.Removed("members."+h, "Member", name))
+			removes = append(removes, seats.seatName(h))
+			gone = append(gone, seats.seat(h))
+			c = append(c, proposal.Removed("members."+h, "Member", seats.seat(h)))
 		}
 		if len(c) < 2 {
 			return proposal.Preview{}, fmt.Errorf("%w: the change leaves who is in %s exactly "+
 				"as it is", ErrInvalidArguments, r.called())
 		}
-		note := "Anybody in the company can read " + r.called() + " either way. Its members " +
-			"are told about what is said in it."
+		note := wire.Plain("Anybody in the company can read ").Then(r.ref()).Plain(" either " +
+			"way. Its members are told about what is said in it.")
 		if !r.readByAll() {
-			note = "Only its members can read " + r.called() + ", so whoever is taken out can " +
-				"no longer read it and whoever is added can read all of it."
+			note = wire.Plain("Only its members can read ").Then(r.ref()).Plain(", so whoever " +
+				"is taken out can no longer read it and whoever is added can read all of it.")
 		}
 		p := proposal.Preview{Title: "Change room members", Target: r.called(), Note: note,
 			ApproveLabel: "Approve and change", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, handlesOf(next)), SourceRevision: r.bound(),
+			Audience: r.readers(seats, handlesOf(next)), SourceRevision: r.bound(),
 			Removes: removes}
 		if len(removes) > 0 {
 			// WHAT GOES LEADS THE CARD (ADR-0055), as a member the generic
-			// change removes does: everyone it takes out, by name, above
-			// every row.
-			p.Summary = "This removes " + inWords(removes) + " from " + r.called() + "."
+			// change removes does: everyone it takes out, above every row.
+			p.Summary = wire.Plain("This removes ").Then(andPhrases(gone)).Plain(" from ").
+				Then(r.ref()).Plain(".")
 			p.Risk = wire.RiskDestructive
 		}
 		return p, nil
@@ -1437,12 +1145,12 @@ func isNotIn(n int) string {
 	return "are not in"
 }
 
-// following is how a member follows a room, as a card shows it.
+// following is how a member follows a room, as a card says it after the seat.
 func following(all bool) string {
 	if all {
-		return "Follows the whole room"
+		return " (follows the whole room)"
 	}
-	return "Follows only what names them"
+	return " (follows only what names them)"
 }
 
 func chatLeavePreview(t Tool) proposal.Previewer {
@@ -1487,19 +1195,19 @@ func chatLeavePreview(t Tool) proposal.Previewer {
 			}
 		}
 		var c changes
-		c.fact("room", "Room", r.called())
-		c = append(c, proposal.Removed("member", "Member", seats.seatName(self)))
-		note := "You can join " + r.called() + " again at any time."
+		c.factOf("room", "Room", r.ref())
+		c = append(c, proposal.Removed("member", "Member", seats.seat(self)))
+		note := wire.Plain("You can join ").Then(r.ref()).Plain(" again at any time.")
 		if !r.readByAll() {
-			note = "You can no longer read " + r.called() + ", and only a member can add " +
-				"you back."
+			note = wire.Plain("You can no longer read ").Then(r.ref()).Plain(", and only a " +
+				"member can add you back.")
 		}
 		// A MEMBER TAKEN OUT, the person themself: destructive as any
 		// member's removal is, what goes leading the card.
 		return proposal.Preview{Title: "Leave room", Target: r.called(),
-			Summary: "This removes you from " + r.called() + ".", Note: note,
+			Summary: wire.Plain("This removes you from ").Then(r.ref()).Plain("."), Note: note,
 			Risk:         wire.RiskDestructive,
 			ApproveLabel: "Approve and leave", Changes: c.rows(), Request: req,
-			Audience: r.readers(seats.seatName, stay), SourceRevision: r.bound()}, nil
+			Audience: r.readers(seats, stay), SourceRevision: r.bound()}, nil
 	}
 }

@@ -15,11 +15,10 @@ import (
 // STILL THE GATE IN FORCE — and every other finding is a refusal or an error,
 // never "applied".
 //
-// A ledger hit says the operation's record landed; it does not say the record
-// is what the node's standing on the log still rests on. An eviction retried
-// after a readmission was answered "applied" at its old position while every
-// row counted the node. Each case is the node's own row against where the
-// operation landed, over values.
+// A ledger hit says the record landed, not that the node's standing still
+// rests on it: an eviction retried after a readmission must not answer
+// "applied". Each case is the node's own row against where the operation
+// landed.
 func TestAGateRetryStandsOnlyWhileItsRecordIsInForce(t *testing.T) {
 	t.Parallel()
 	const node = "node-away"
@@ -114,11 +113,9 @@ func TestAGateRetryStandsOnlyWhileItsRecordIsInForce(t *testing.T) {
 // JUDGEMENT OR A LEDGER THAT CANNOT BE READ IS AN ERROR — never "never landed",
 // and never a decision.
 //
-// A gate's standing is read from the node's row, and it has to be the row the
-// same transaction's ledger read saw: judged in another, a readmission landing
-// between the two reads is judged against a ledger from before it. And the
-// lookup this replaced read `err == nil && done`, so an unreadable ledger was
-// a ledger that said no and the gate record went out again.
+// The node's row must be read in the ledger read's transaction, or a
+// readmission landing between them is judged against a stale ledger. An
+// unreadable ledger read as "no" would send the gate record out again.
 func TestAHeldOperationIsJudgedInsideTheSnapshot(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})

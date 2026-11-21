@@ -26,6 +26,15 @@ func (f *fakeSource) Name() string { return f.name }
 
 func (f *fakeSource) Notices(_ context.Context, q inbox.SourceQuery) (inbox.SourcePage, error) {
 	f.asked = append(f.asked, q)
+	if q.Record != "" {
+		named := inbox.SourcePage{Notices: []inbox.Notice{}}
+		for _, n := range f.notices {
+			if n.RecordID == q.Record {
+				named.Notices = append(named.Notices, n)
+			}
+		}
+		return named, nil
+	}
 	start := 0
 	if q.Cursor != "" {
 		i := slices.IndexFunc(f.notices, func(n inbox.Notice) bool { return n.Position.String() == q.Cursor })
@@ -106,6 +115,27 @@ func TestTheInboxInterleavesBothDomainsByWhenTheyHappened(t *testing.T) {
 	if page.NextCursor != "" || page.Unread != 6 || len(page.Sources) != 2 {
 		t.Errorf("a page holding both sources whole answers cursor %q, %d unread, sources %+v", page.NextCursor,
 			page.Unread, page.Sources)
+	}
+}
+
+// ONE NOTICE BY ITS RECORD IS ASKED OF EVERY SOURCE, each narrowing its own scan.
+// Mutation: leave Record off the source query (both sources' pages answer, red).
+func TestARecordIsAskedOfEverySource(t *testing.T) {
+	t.Parallel()
+	tracker := noticesAt("tracker", "CREWLET_TRACKER_LOG", composeBase, 50, 30)
+	code := noticesAt("code", "CREWLET_CODE_LOG", composeBase, 40, 20)
+	page, err := inbox.Compose(t.Context(), inbox.Query{Handle: "founder", Snoozed: inbox.SnoozeInclude,
+		Record: "code-20"}, []inbox.Source{tracker, code})
+	if err != nil {
+		t.Fatalf("Compose: %v", err)
+	}
+	if got := ids(page); !slices.Equal(got, []string{"code-20"}) || page.NextCursor != "" {
+		t.Fatalf("a read of one record reads %v next %q, want [code-20] and no cursor", got, page.NextCursor)
+	}
+	for _, s := range []*fakeSource{tracker, code} {
+		if len(s.asked) != 1 || s.asked[0].Record != "code-20" {
+			t.Errorf("%s was asked %+v, want the record narrowed in its scan", s.name, s.asked)
+		}
 	}
 }
 
@@ -212,19 +242,15 @@ func (p *pagedSource) Notices(_ context.Context, q inbox.SourceQuery) (inbox.Sou
 	return page, nil
 }
 
-// A SOURCE'S PAGE OF NONE STILL MOVES ITS CURSOR: Gitlet scanned
-// founder's newest code notices and left every one out — each on a repository
-// deleted and not yet purged — so its first page holds no notice and its own
-// cursor past what it scanned; the next page asks it below that cursor and
-// reaches a notice on a repository founder still reads, and the inbox then
-// ends. Likewise a page whose last rows the source left out resumes below
-// them, never at its last notice.
+// A SOURCE'S PAGE OF NONE STILL MOVES ITS CURSOR: Gitlet scanned the newest
+// code notices and left every one out (each on a deleted, unpurged repository),
+// so its first page holds none and its cursor is past what it scanned; the next
+// page asks below it. Likewise a page whose last rows the source left out
+// resumes below them, never at its last notice.
 //
-// Mutation: keep the cursor a source was asked with where the page took none
-// of its notices — every page asks Gitlet its first page again, the
-// composed cursor never moves and the notices below are never read, red;
-// resume a page taken whole at its last notice — the left-out rows are asked
-// for again, red.
+// Mutation: keep the cursor the source was asked with where the page took none
+// of its notices, or resume a page taken whole at its last notice, and the
+// composed cursor never moves or left-out rows are asked again: red.
 func TestASourcesPageOfNoneStillMovesItsCursor(t *testing.T) {
 	t.Parallel()
 	const (

@@ -28,10 +28,10 @@ const PERSON: ViewerState = {
   failedRefusal: null,
   configWriter: false,
   configManagedBy: [],
-  assistant: "disabled",
+  assistant: "no_model",
   assistantModel: null,
   assistantReadsImages: false,
-  assistantDeliberate: false,
+  assistantCanAssign: false,
 };
 
 describe("a change to an artifact", () => {

@@ -146,28 +146,16 @@ func flagRegistered(call *ast.CallExpr, consts map[string]string) (string, bool)
 }
 
 // `GET /iam/check` NAMES A DANGLING BINDING THROUGH THE SEAM THIS NODE WIRES,
-// not through one a case builds.
+// not through one a case builds: the report asks [api.NewHumanSurfaces]'s seam,
+// and internal/api/iamapi's suite hands it a function of its own, so a node
+// wiring nil left every suite green. This case serves the API as `crewlet run`
+// does and reads the report over HTTP.
 //
-// The directory report asks the seam [api.NewHumanSurfaces] wires whether a
-// binding dangles, and that seam is the one place the engine's rule — the
-// request path's own seat table — is connected to the report, the one place a
-// dangling binding is said. internal/api/iamapi's suite hands the report a
-// function of its own, so a node whose wiring passed nil, or a seam asking a
-// narrower question, left every suite green while `crewlet iam check` said
-// nothing about a principal refused on every request. So this case boots a
-// node, serves its API the way `crewlet run` does, and reads the report over
-// HTTP.
-//
-// THE RESIDUE IS MADE THE WAY IT IS REALLY LEFT. Every bind is checked against
-// the running org as a HUMAN seat, so no write binds anybody to an agent's;
-// what leaves one is a company write that turns a held human seat into an
-// agent's — an offline import, or a revision another node applied first — and
-// the engine's own apply makes no seat-held check. So a service account is
-// created on the human seat `founder`, the report is read clean with the seat
-// held, and then the company is applied with `founder` an agent's: the
-// binding is the same row, and only the seat moved under it. Mutation: decide
-// a binding by whether the chart still holds the handle at all, rather than
-// as a human seat, and the flipped seat goes unreported.
+// THE RESIDUE IS MADE THE WAY IT IS REALLY LEFT: a company write turns a held
+// human seat into an agent's, and the apply makes no seat-held check. So a
+// service account is created on the human seat `founder`, the report is read
+// clean, then `founder` becomes an agent's. Mutation: decide a binding by
+// whether the chart holds the handle at all, not as a human seat.
 func TestTheCheckNamesADanglingBindingThroughTheNodesOwnWiring(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -275,21 +263,15 @@ func danglingFindings(t *testing.T, base string) []map[string]any {
 
 // THE BOOT SAYS WHERE THE FIRST PERSON GOES, and says nothing it cannot know.
 //
-// A person is always invited onto a human seat, so "invite its first person"
-// is an instruction an operator can follow only once the company declares one
-// — and the invitation has to name it. So the line names the seats where there
-// are some, and the step before the invitation where there are none: a company
-// to import, or a human seat to declare. ONLY THE VACANT SEATS are named: a
-// seat a service account holds, or an open invitation names, refuses an
-// invitation onto it, and "nobody is in the directory" counts people alone —
-// so an open invitation is said to be the step already taken, a company whose
-// every seat is held says what holds each and what frees one, and a seat
-// listing that cannot be read names no seat at all. Where somebody is already
-// in, or this node cannot read its directory, it says nothing — the second is
-// a node joining a fleet before its identity log has caught up, which telling
-// to invite a founder would be telling to invite one into a company that has
-// one. Mutation: drop the handles from the sentence, the vacancy filter, the
-// no-company arm, or the silence on an unreadable estate, and a row fails.
+// An invitation must name a human seat, so the line names the seats where
+// there are some, and the step before it where there are none: a company to
+// import, or a human seat to declare. ONLY THE VACANT SEATS are named: a seat
+// a service account holds, or an open invitation names, refuses an invitation,
+// so an open invitation is the step already taken, a company whose every seat
+// is held says what holds each and what frees one, and an unreadable listing
+// names no seat. With somebody already in, or an unreadable directory, it says
+// nothing. Mutation: drop the handles, the vacancy filter, the no-company arm,
+// or the silence on an unreadable estate, and a row fails.
 func TestTheBootSaysWhereTheFirstPersonIsInvited(t *testing.T) {
 	t.Parallel()
 	nobody := func(context.Context) (bool, error) { return false, nil }

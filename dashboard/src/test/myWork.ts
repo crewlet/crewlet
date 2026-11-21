@@ -8,6 +8,7 @@ import type { WorkMyWork } from "~/protocol/types.ts";
 
 export function emptyDay(handle: string, over: Partial<WorkMyWork> = {}): WorkMyWork {
   return {
+    flow_live: false,
     handle,
     priorities: [],
     assigned: [],

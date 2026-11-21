@@ -16,17 +16,15 @@ import (
 // THE API REFERENCE AS THE MODEL READS IT: docs/reference/api-endpoints.md,
 // embedded in the binary (the module root's APIReference), indexed by route.
 //
-// The reference names a route in the shapes a person writes it, and every one
-// is read: a row of a route table (`| GET | /path | what it does |`), a table
-// row or a list item that leads with it (`| POST /iam/people | admin |`,
-// `- POST /artifacts/{id}/tickets (…)`, several methods sharing one path as
-// `PUT`, `DELETE /path`), a heading that names it, whose section is the
-// route's long form, and a mention in a sentence, which documents a route
-// only where nothing above does. A walk holds the index to the route table
-// this build mounts in both directions (internal/api's
-// TestEveryAssistantRouteIsDocumented), so a route added without its
-// documentation, or documentation left behind by a removed route, is a red
-// build rather than a model reading a guess.
+// Every shape a person writes a route in is read: a route-table row
+// (`| GET | /path | what it does |`), a table row or list item leading with it
+// (`| POST /iam/people | admin |`, `- POST /artifacts/{id}/tickets (…)`,
+// several methods on one path as `PUT`, `DELETE /path`), a heading naming it
+// (its section is the long form), and a mention in a sentence, which documents
+// a route only where nothing above does. The index is held to the mounted
+// route table in both directions (internal/api's
+// TestEveryAssistantRouteIsDocumented), so an undocumented or orphaned route
+// is a red build, not a model reading a guess.
 
 // routeDoc is one route's documentation.
 type routeDoc struct {
@@ -40,27 +38,29 @@ type routeDoc struct {
 	strong bool
 }
 
-// The reference's shapes of a route.
+// The reference's shapes of a route, each compiled at first use, not at init:
+// Gitlet's push hook is this binary, and pays every package's init
+// (cmd/crewlet's hookinit_test.go).
 var (
-	tableRow = regexp.MustCompile("^\\|\\s*`(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|WS)`\\s*\\|" +
-		"\\s*`([^`]+)`\\s*\\|(.*)\\|\\s*$")
-	// Compiled at first use, not at init: Gitlet's push hook is this
-	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+	tableRow = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile("^\\|\\s*`(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|WS)`\\s*\\|" +
+			"\\s*`([^`]+)`\\s*\\|(.*)\\|\\s*$")
+	})
 	headingRoute = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile("^(#{2,4})\\s.*?`(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|WS) " +
 			"(/[^`]*)`")
 	})
-	// Compiled at first use, not at init: Gitlet's push hook is this
-	// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
 	headingLine = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^(#{1,6})\s`)
 	})
-	wildcard = regexp.MustCompile(`\{[^}]*\}`)
+	wildcard = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\{[^}]*\}`) })
 	// mention is a route named in backticks anywhere in a line, with the
 	// methods that share its path ahead of it (`PUT`, `DELETE /path`).
-	mention = regexp.MustCompile("((?:`(?:GET|HEAD|POST|PUT|PATCH|DELETE)`,\\s*)*)" +
-		"`(GET|HEAD|POST|PUT|PATCH|DELETE) (/[^`\\s]*)`")
-	method = regexp.MustCompile("GET|HEAD|POST|PUT|PATCH|DELETE")
+	mention = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile("((?:`(?:GET|HEAD|POST|PUT|PATCH|DELETE)`,\\s*)*)" +
+			"`(GET|HEAD|POST|PUT|PATCH|DELETE) (/[^`\\s]*)`")
+	})
+	method = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile("GET|HEAD|POST|PUT|PATCH|DELETE") })
 )
 
 // docKey is a route's pattern with every wildcard's name erased and any query
@@ -69,7 +69,7 @@ var (
 // and a wildcard's name is the mux's.
 func docKey(pattern string) string {
 	pattern, _, _ = strings.Cut(pattern, "?")
-	return wildcard.ReplaceAllStringFunc(pattern, func(w string) string {
+	return wildcard().ReplaceAllStringFunc(pattern, func(w string) string {
 		if strings.HasSuffix(w, "...}") {
 			return "{...}"
 		}
@@ -102,7 +102,7 @@ func indexReference(md string) map[string]routeDoc {
 		if fenced {
 			continue
 		}
-		if m := tableRow.FindStringSubmatch(line); m != nil {
+		if m := tableRow().FindStringSubmatch(line); m != nil {
 			note(docKey(m[1]+" "+m[2]), strings.TrimSpace(m[3]), true)
 			continue
 		}
@@ -117,8 +117,8 @@ func indexReference(md string) map[string]routeDoc {
 			continue
 		}
 		trimmed := strings.TrimSpace(line)
-		for _, at := range mention.FindAllStringSubmatchIndex(line, -1) {
-			m := mention.FindStringSubmatch(line[at[0]:at[1]])
+		for _, at := range mention().FindAllStringSubmatchIndex(line, -1) {
+			m := mention().FindStringSubmatch(line[at[0]:at[1]])
 			path := m[3]
 			if cut := strings.IndexAny(path, "[?"); cut >= 0 {
 				path = path[:cut]
@@ -128,7 +128,7 @@ func indexReference(md string) map[string]routeDoc {
 			// does.
 			lead := strings.TrimLeft(trimmed, "|-* ")
 			strong := strings.HasPrefix(lead, strings.TrimSpace(line[at[0]:at[1]]))
-			for _, verb := range append(method.FindAllString(m[1], -1), m[2]) {
+			for _, verb := range append(method().FindAllString(m[1], -1), m[2]) {
 				note(docKey(verb+" "+path), strings.Trim(trimmed, "|- "), strong)
 			}
 		}
@@ -221,24 +221,33 @@ func RouteDocumented(pattern string) bool {
 // read's answer is cut to.
 const docsBytes = 15 << 10
 
-// document is a [DescribeAPITool] call's answer: one route's documentation, or
-// the list of routes the person may use.
+// document is a [DescribeAPITool] call's answer: one route's documentation,
+// the routes of a domain or matching words, or else the domain map.
 func (g generic) document(args Args) (string, error) {
 	if pattern := args.String("route"); pattern != "" {
 		return g.one(pattern)
 	}
-	return g.list(args.String("search")), nil
+	domain, words := strings.Trim(strings.ToLower(args.String("domain")), "/ "),
+		strings.Fields(strings.ToLower(args.String("query")))
+	if domain == "" && len(words) == 0 {
+		return "Name a domain or a query. The domains this person can read:\n" +
+			g.domainMap(), nil
+	}
+	return g.list(domain, words), nil
 }
 
 // one is one route's documentation.
 func (g generic) one(pattern string) (string, error) {
 	route, ok := g.table.Lookup(pattern)
-	if !ok {
+	if !ok || !g.listed(route) {
 		return "", fmt.Errorf("%w: %q is not a route you can use; call describe_api with "+
-			"no route to list them", ErrInvalidArguments, pattern)
+			"a domain or a query to find one", ErrInvalidArguments, pattern)
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n%s\n", route.Pattern, g.facts(route))
+	if params := queryParams(route.Pattern); len(params) > 0 {
+		fmt.Fprintf(&b, "Query parameters: %s\n", strings.Join(params, ", "))
+	}
 	doc, _ := docOf(route.Pattern)
 	if doc.Summary != "" {
 		fmt.Fprintf(&b, "\n%s\n", doc.Summary)
@@ -250,17 +259,13 @@ func (g generic) one(pattern string) (string, error) {
 		"docs/reference/api-endpoints.md."), nil
 }
 
-// list is every route the person may use, matching search where it names
-// words, one line each.
-func (g generic) list(search string) string {
-	words := strings.Fields(strings.ToLower(search))
-	var b strings.Builder
-	b.WriteString("Routes you can use. A read is sent with api_request; a change is " +
-		"proposed with propose_api_change and sent only once the person approves it. " +
-		"Call describe_api with a route for its documentation.\n\n")
-	listed := 0
+// list is the routes the person may use in domain, or matching words, reads
+// first, one line each: the route, how it is decided, what it is for and the
+// query parameters it takes.
+func (g generic) list(domain string, words []string) string {
+	var reads, changes []string
 	for _, route := range g.table.routes {
-		if !g.mayUse(route) {
+		if !g.listed(route) || (domain != "" && DomainOf(route.Pattern) != domain) {
 			continue
 		}
 		doc, _ := docOf(route.Pattern)
@@ -271,19 +276,79 @@ func (g generic) list(search string) string {
 			}
 		}
 		line := route.Pattern + " (" + g.facts(route) + ")"
-		if len(words) > 0 && doc.Summary != "" {
-			line += ": " + firstSentence(doc.Summary)
+		if doc.Summary != "" {
+			line += ": " + clipText(doc.Summary, routeLineBytes)
 		}
-		if b.Len()+len(line) > docsBytes {
-			b.WriteString("\nThe list goes on; narrow it with search.\n")
-			return b.String()
+		if params := queryParams(route.Pattern); len(params) > 0 {
+			line += " Query: " + strings.Join(params, ", ") + "."
 		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-		listed++
+		if route.reads() {
+			reads = append(reads, line)
+		} else {
+			changes = append(changes, line)
+		}
 	}
-	if listed == 0 {
-		b.WriteString("No route matches.\n")
+	var b strings.Builder
+	b.WriteString("A read is sent with read_api; a change is proposed with " +
+		"propose_api_change and sent only once the person approves it. Call describe_api " +
+		"with a route for its whole documentation.\n")
+	if len(reads)+len(changes) == 0 {
+		b.WriteString("\nNo route matches.\n")
+		return b.String()
+	}
+	for _, part := range []struct {
+		head  string
+		lines []string
+	}{{"Reads", reads}, {"Changes", changes}} {
+		if len(part.lines) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "\n%s:\n", part.head)
+		for _, line := range part.lines {
+			if b.Len()+len(line) > docsBytes {
+				b.WriteString("\nThe list goes on; narrow it with query.\n")
+				return b.String()
+			}
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+// routeLineBytes bounds one route's documentation in a list, so a domain's
+// routes fit what one answer holds.
+const routeLineBytes = 280
+
+// DomainOf is the domain a route belongs to: its path's first segment.
+func DomainOf(pattern string) string {
+	_, path, _ := strings.Cut(pattern, " ")
+	first, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	return first
+}
+
+// domainMap is one line per domain the person may read: the domain, then the
+// distinct first two segments of its read routes, so the model knows where to
+// look without a tool per screen.
+func (g generic) domainMap() string {
+	prefixes := map[string][]string{}
+	for _, route := range g.table.routes {
+		if !route.reads() || !g.listed(route) {
+			continue
+		}
+		domain := DomainOf(route.Pattern)
+		segments := strings.SplitN(strings.TrimPrefix(route.Path(), "/"), "/", 3)
+		prefix := "/" + strings.Join(segments[:min(2, len(segments))], "/")
+		if !slices.Contains(prefixes[domain], prefix) {
+			prefixes[domain] = append(prefixes[domain], prefix)
+		}
+	}
+	var b strings.Builder
+	for _, domain := range slices.Sorted(maps.Keys(prefixes)) {
+		fmt.Fprintf(&b, "- %s: %s\n", domain, strings.Join(prefixes[domain], " "))
+	}
+	if b.Len() == 0 {
+		return "(none)\n"
 	}
 	return b.String()
 }
@@ -321,27 +386,61 @@ func (g generic) facts(route Route) string {
 	return strings.Join(parts, ", ")
 }
 
-// mayUse reports whether the person could be admitted to route at all: a
-// filter on what is LISTED, never authority, which the route's own guard is.
-// A verb whose row needs an app the person does not hold, or admin they do not
-// hold, is left out; every other route is listed, and decided when it is sent.
+// ListedReads are the read routes describe_api lists for p over table, sorted:
+// for the walks that hold the listing to what the API answers p.
+func ListedReads(table *RouteTable, p iam.Principal) []string {
+	g := generic{table: table, person: p}
+	return table.patterns(func(r Route) bool { return r.reads() && g.mayRead(r) })
+}
+
+// listed reports a route describe_api lists for the person: a read their read
+// grant could be admitted to ([generic.mayRead]), or a change they could
+// propose ([generic.mayUse]).
+func (g generic) listed(route Route) bool {
+	if route.reads() {
+		return g.mayRead(route)
+	}
+	return g.mayUse(route)
+}
+
+// mayRead reports whether the person's read grant could be admitted to a read
+// route: one decided inside its handler, or one whose verb the assistant reads
+// and the person could be admitted to ([generic.mayUse]). A FILTER on what is
+// listed, never authority: the route's own guard decides every call.
+func (g generic) mayRead(route Route) bool {
+	if _, owned := webRoutes[route.Pattern]; owned {
+		return false
+	}
+	if route.Action == "" {
+		return true
+	}
+	if class, _ := authz.AssistOf(route.Action); class != authz.AssistRead {
+		return false
+	}
+	return g.mayUse(route)
+}
+
+// mayUse reports whether the person could be admitted to route at all, by the
+// parts of its verb's row that no object changes: a verb only a seat takes,
+// one whose app (or every one of whose apps) the person does not hold, and an
+// administrator's verb they are not one for are left out; every other route is
+// listed, and decided when it is sent.
 func (g generic) mayUse(route Route) bool {
 	if route.Action == "" {
 		return true
 	}
+	if seatOnly, _ := authz.SeatOnlyOf(route.Action); seatOnly {
+		return false
+	}
 	if app, _ := authz.AppOf(route.Action); app != "" && !g.person.Can(app) {
+		return false
+	}
+	if apps, _ := authz.AnyOf(route.Action); len(apps) > 0 &&
+		!slices.ContainsFunc(apps, g.person.Can) {
 		return false
 	}
 	class, _ := authz.ClassOf(route.Action)
 	return class != authz.ClassAdmin || g.person.Can(iam.GrantAdmin)
-}
-
-// firstSentence is a description's first sentence.
-func firstSentence(s string) string {
-	if i := strings.Index(s, ". "); i > 0 {
-		return s[:i+1]
-	}
-	return s
 }
 
 // cut is s within limit bytes, on a line, saying it was cut.
@@ -357,8 +456,11 @@ func cut(s string, limit int, more string) string {
 }
 
 // queryRow is a row of the reference's question table: the question, the
-// parameters it takes, and the route it answers.
-var queryRow = regexp.MustCompile("^\\|\\s*`[a-z_]+`\\s*\\|\\s*`\\{([^}]*)\\}`\\s*\\|\\s*`GET (/[^`\\s]*)`")
+// parameters it takes, and the route it answers. Compiled at first use, as
+// the route's shapes are.
+var queryRow = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile("^\\|\\s*`[a-z_]+`\\s*\\|\\s*`\\{([^}]*)\\}`\\s*\\|\\s*`GET (/[^`\\s]*)`")
+})
 
 // queryIndex is every read route's query parameters as the reference's
 // question table documents them, by [docKey].
@@ -371,7 +473,7 @@ var queryIndex = sync.OnceValue(func() map[string][]string {
 func indexQuery(md string) map[string][]string {
 	out := map[string][]string{}
 	for _, line := range strings.Split(md, "\n") {
-		m := queryRow.FindStringSubmatch(line)
+		m := queryRow().FindStringSubmatch(line)
 		if m == nil {
 			continue
 		}

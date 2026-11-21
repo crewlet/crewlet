@@ -103,14 +103,11 @@ func TestTheInvitationProposesALoginFromTheAddress(t *testing.T) {
 // AN INVITATION ID THAT RESOLVES TO NOTHING IS A FAILED ATTEMPT, COUNTED — AND
 // NEVER A REFUSAL OF THE ADDRESS IT CAME FROM.
 //
-// The id in the link is the credential, and a 410 once recorded nothing, so a
-// source could present a new invitation id on every request and no operator
-// would see it. Each 410 is now a failed attempt, counted on the audit trail's
-// per-minute failure row under its source, which is what makes a walk
-// visible. It meets no curve: a link carries 256 bits of secret, so there is
-// nothing a curve would slow, and a curve keyed on the address a link was
-// presented from let one stranger there hold every colleague's invitation at
-// 429.
+// Each 410 is a failed attempt, counted on the audit trail's per-minute failure
+// row under its source, which makes a walk of ids visible. It meets no curve:
+// a link carries 256 bits of secret, so there is nothing to slow, and a curve
+// keyed on the source would let one stranger hold every colleague's
+// invitation at 429.
 //
 // Mutation: drop the count from the 410 and no failure is counted; key the
 // invitation on its source and the walk meets 429.
@@ -211,22 +208,16 @@ func (w refusingWriter) Redeem(context.Context, iamdomain.Redemption) (statelog.
 
 // A REFUSED REDEMPTION SAYS WHOSE PROBLEM IT IS.
 //
-// Every enrolment failure used to answer `503 unavailable`, which says "the
-// engine is having a moment, try again" — false for a login the domain refused,
-// which no retry changes. The person holding the link was left resubmitting a
-// name at a form that never said what was wrong with it; and with the login
-// grammar now held per kind, `token:ops` is one of those refusals. So a value
-// they typed is 400 naming the rule, a taken name is 409, and only what is
-// left is 503.
+// `503 unavailable` says "try again", false for a login the domain refused
+// (`token:ops` is one). A value they typed is 400 naming the rule, a taken
+// name is 409, only what is left is 503.
 //
-// THE 409 DOES NOT NAME THE HOLDER. The domain's own refusal carries the
-// holder's person id, which is right for an administrator and wrong for a
-// caller whose only credential is an invitation link.
+// THE 409 DOES NOT NAME THE HOLDER, whom the domain's own refusal carries: right
+// for an administrator, wrong for a caller holding only an invitation link.
 //
-// AND THE 400 IS THE DOMAIN'S SENTENCE ALONE ([iamdomain.Sentence]), without
-// the sentinel in front of it ("invalid login: …"), which says what errors.Is
-// finds and nothing the invitee acts on. Mutation: answer err.Error() as the
-// detail again and both 400 rows go red.
+// THE 400 IS THE DOMAIN'S SENTENCE ALONE ([iamdomain.Sentence]), without the
+// sentinel ("invalid login: …"), which the invitee cannot act on. Mutation:
+// answer err.Error() as the detail and both 400 rows go red.
 func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 	t.Parallel()
 	const holder = "018f3a9c-0000-7000-8000-0000000000a1"

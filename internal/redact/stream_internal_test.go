@@ -4,14 +4,64 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"math/bits"
 	"math/rand/v2"
 	"regexp"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
 // StreamText is [streamText] for the package's external tests.
 var StreamText = streamText
+
+// StageAdvance is [stageAdvance], where a rule's stage's first window ends, for
+// the package's external tests.
+const StageAdvance = stageAdvance
+
+// KeysBytes is [keysBytes], for the package's external tests.
+const KeysBytes = keysBytes
+
+// KeysBufferMost is the largest buffer a [Stream]'s keys' stage reads from
+// while text is written to it 64 KiB at a time, for the package's external
+// tests.
+func KeysBufferMost(text []byte) int {
+	s, most := NewStream(io.Discard), 0
+	for at := 0; at < len(text); at += 64 << 10 {
+		_, _ = s.Write(text[at:min(len(text), at+64<<10)])
+		if s.p != nil {
+			most = max(most, cap(s.p.keys.in.buf))
+		}
+	}
+	_ = s.Close()
+	return most
+}
+
+// StreamBuffers is the most a [Stream]'s stages allocate to read from
+// ([feed.reserve]) where its keys' stage never waits on its claims, for the
+// package's external tests: every rule's and claims stage's input at its
+// bound, and the keys' stage's doubled from a piece to [keysBytes], under
+// twice it summed, each allocation in the runtime's whole 8 KiB pages.
+var StreamBuffers = sync.OnceValue(func() int {
+	const page = 8 << 10
+	p := newPipeline(&endSink{}, true, holdBytes())
+	n := 2*keysBytes + (bits.Len(uint(keysBytes/pieceBytes))+1)*page
+	for _, f := range p.feeds() {
+		if f != &p.keys.in {
+			n += (f.bound + page - 1) / page * page
+		}
+	}
+	return n
+})
+
+// NewPoisonedStream is [NewStream] with every stage's input poisoned ([feed]),
+// for the package's external tests.
+func NewPoisonedStream(w io.Writer) *Stream {
+	s := NewStream(w)
+	s.poison = true
+	return s
+}
 
 // streamText is a text of about size bytes of every shape a stage carries
 // across its window, drawn from r: a token's run through long base64 and
@@ -148,29 +198,25 @@ func parted(got, want string) string {
 func staged(text string) string {
 	var b strings.Builder
 	b.Grow(len(text))
-	p := newPipeline(func(s string) { b.WriteString(s) }, strings.Contains(text, keyArmour), holdBytes())
+	p := newPipeline(&endSink{w: &b}, strings.Contains(text, keyArmour), holdBytes())
 	for at := 0; at < len(text); at += pieceBytes {
-		p.write(text[at:min(len(text), at+pieceBytes)])
+		p.write([]byte(text[at:min(len(text), at+pieceBytes)]))
 	}
 	p.close()
 	return b.String()
 }
 
-// A TEXT LONGER THAN A WINDOW IS REDACTED BY ITS STAGES AS IT IS WHOLE: the
-// stages, fed such a text whole, write what [Secrets] writes reading it
-// whole, every rule's decisions
+// A TEXT LONGER THAN A WINDOW IS REDACTED BY ITS STAGES AS IT IS WHOLE: fed
+// whole, the stages write what [Secrets] writes, every rule's decisions
 // trusted only where the window holds what they read, every run read on past
-// it, and the keys' blocks read once what the rules claim is decided. And so
-// does a [Stream] that has every stage, claims and keys' stage included,
-// whatever the text holds.
+// it, and the keys' blocks read once the rules' claims are decided; so does a
+// [Stream] with every stage.
 //
-// Mutation: trust a password's value whose end the window read back over
-// backslashes only up to its end ([ruleStage.trusted]), write the backslashes
-// a value's run held and an escaped break ends it before as the value's
-// ([ruleStage.carryValue]), let the keys' stage read a block before the
-// claims through its window are decided ([keyStage.step]), or read a Google
-// token's held dots as its body ([ruleStage.carryToken]), and texts here
-// part.
+// Mutation: trust a value whose end the window read back over backslashes only
+// ([ruleStage.trusted]), write a value's backslashes before an escaped break
+// ([ruleStage.carryValue]), let the keys' stage read a block before the claims
+// are decided ([keyStage.step]), or read a token's held dots as its body
+// ([ruleStage.carryToken]), and texts here part.
 func TestALongTextIsRedactedByItsStagesAsWhole(t *testing.T) {
 	t.Parallel()
 	check := func(name, text string) {
@@ -207,20 +253,15 @@ func TestALongTextIsRedactedByItsStagesAsWhole(t *testing.T) {
 }
 
 // A SHAPE IS REDACTED ALIKE AT EVERY BYTE A WINDOW CAN END BESIDE IT: the
-// shapes whose reads run furthest, each set so the end of what the first
-// window of a rule's stage and of the keys' stage decides ([stageAdvance])
-// falls a byte or two past where it is read from, or at it: a run token whose
-// subject is as long as [MaxReach] lets it be, an AWS secret's quoted key
-// whose separator's spaces run almost that far, a key's block read forward
-// from its BEGIN, alone and holding a token's run, and one read back from its
-// END. The random texts and the steps of a third of a reach elsewhere place
-// none of these to the byte, which is what a window's geometry is held by.
-//
-// Mutation: take the margin out of a stage's reach ([stageReach]), look for
-// an armour in the keys' window no further than where it reads to
-// ([keyStage.step]), or keep a block's reach behind where the keys' stage
-// writes shorter than a block ([keyReach]), and a text here is redacted
-// otherwise, or a stage reads out of its window.
+// shapes whose reads run furthest, each set so the end of the first window of a
+// rule's stage and of the keys' stage ([stageAdvance]) falls a byte or two past
+// where it is read from, or at it: a run token whose subject is [MaxReach]
+// long, an AWS secret's quoted key with nearly that many spaces, a key's block
+// read forward from its BEGIN, alone and holding a token's run, and one read
+// back from its END. Random texts place none of these to the byte.
+// Mutation: take the margin out of [stageReach], look for an armour in the
+// keys' window no further than it reads ([keyStage.step]), or keep a block's
+// reach behind the writes shorter than a block ([keyReach]).
 func TestAShapeIsRedactedAlikeAtEveryByteAWindowCanEndBesideIt(t *testing.T) {
 	t.Parallel()
 	const (
@@ -379,27 +420,34 @@ func TestAValueWrittenAStretchAtATimeIsWrittenAsWhole(t *testing.T) {
 	}
 }
 
-// streamHeld is what a pipeline's stages hold between two writes: the text in
-// their feeds, what they have yet to hand on and the runs they read on, and
-// beside it the entries they keep (values, edits, claims and blocks) at the
-// bytes each takes; and the most any one rule's stage holds of its input, and
-// of edits.
+// streamHeld is what a pipeline's stages hold between two writes: the buffers
+// their inputs are read from, at their capacity, and the runs they read on,
+// and beside them the entries they keep (values, edits, claims and blocks,
+// the edits a stage hands on at the capacity it keeps for them) at the bytes
+// each takes; and the most any one rule's stage holds of input, and of edits;
+// and rooms, the room the claims stages keep for the edits they hand on, each
+// room counted once however many stages share it ([handedEdits]).
 type streamHeld struct {
-	text, entries, stageText, stageEdits int
+	text, entries, stageText, stageEdits, rooms int
 }
 
 // held is what p's stages hold.
 func (p *pipeline) held() streamHeld {
 	var h streamHeld
+	rooms := map[*[]edit]bool{}
 	var walk func(s sink)
 	walk = func(s sink) {
 		switch st := s.(type) {
 		case *ruleStage:
-			h.text += st.in.held() + st.out.Len() + len(st.run.head) + len(st.run.w.pending)
-			h.stageText = max(h.stageText, st.in.held())
-			h.entries += 16 * len(st.prior)
+			h.text += cap(st.in.buf) + len(st.run.head) + len(st.run.w.pending)
+			h.stageText = max(h.stageText, cap(st.in.buf))
+			h.entries += 16*len(st.prior) + 32*cap(st.outEdits)
+			if st.handed != nil && !rooms[st.handed] {
+				rooms[st.handed] = true
+				h.rooms += 32 * cap(*st.handed)
+			}
 			if st.raw != nil {
-				h.entries += 32*len(st.raw.edits) + 16*len(st.src.tokens) + 24*len(st.src.words)
+				h.entries += 32*len(st.raw.edits) + 16*len(st.src.tokens) + 56*len(st.src.words)
 				h.stageEdits = max(h.stageEdits, len(st.raw.edits))
 			}
 			if st.to != nil {
@@ -412,12 +460,13 @@ func (p *pipeline) held() streamHeld {
 		}
 	}
 	walk(p.rules)
-	h.text += len(p.carry)
+	h.text += cap(p.carry)
 	if p.keys != nil {
 		walk(p.claims)
-		h.text += p.keys.in.held()
-		h.entries += 16*(len(p.keys.pending)+len(p.keys.forward)) + 8*len(p.keys.closed) + 32*len(p.keys.early)
+		h.text += cap(p.keys.in.buf)
+		h.entries += 16*(len(p.keys.pending)+len(p.keys.forward)) + 8*len(p.keys.closed) + 32*(len(p.keys.early)+len(p.keys.beginsEarly))
 	}
+	h.entries += h.rooms
 	return h
 }
 
@@ -437,56 +486,59 @@ func longestMarker() int {
 	return n
 }
 
-// streamBound is the most a [Stream]'s stages hold between two writes, as the
-// text they hold and as the entries they keep beside it (values, edits,
-// claims, blocks), derived from the code: the piece the stream carries short
-// of the next of the text's offsets it hands its stages at ([pipeline.feed]),
-// less than [pieceBytes]; every rule's stage over the keys'
-// stage, every claims stage and every reader holds [streamWindow]; the keys'
-// stage holds what lies behind where it reads (four blocks' reach at most) and
-// a step's text past it, and while it waits on the claims, the text every
-// claims stage holds past where it resumes, in turn; an edit a claims stage or
-// a reader keeps stands for a marker, fifteen bytes of its input at least (a
-// JSON Web Token's and one byte), at 32 bytes; a value the password's stage
-// and reader keep, six bytes (a key, its operator, a byte and a space), at 16,
-// as many again while it trims them; a claim the keys' stage may still ask
-// of, five bytes of what it holds (`pwd:` and a break), at 24; and the
-// windows it decided early that wait on their claims, [earlyWindows] at 32.
+// streamBound is the most a [Stream]'s stages hold between two writes, as text
+// and as entries (values, edits, claims, blocks), derived from the code: the
+// piece carried short of the next offset ([pipeline.feed]), under
+// [pieceBytes]; every rule's stage, claims stage and reader holds
+// [streamWindow]; the keys' stage holds what lies behind where it reads (four
+// blocks' reach) and a step past it, and while it waits on claims the text
+// every claims stage holds past its resume. An edit stands for a marker,
+// fifteen bytes of input at least, at 32 bytes; a value, six bytes, at 16, as
+// many again while trimmed; a claim, five bytes (`pwd:` and a break), at 56;
+// the early windows, [earlyWindows] at 32 in each of two lists; and the room
+// for the edits the claims stages hand on ([handedEdits]).
 func streamBound() (text, entries int) {
 	table := len(rules())
 	readers := 1
 	for _, r := range rules() {
-		if r.value != nil && r.keyed != passwordRule {
+		if r.value != nil && r.keyed != passwordRule() {
 			readers++
 		}
 	}
 	tracking := table - 1 + readers
-	keys := pieceBytes + 4*keyReach + stageAdvance + keyAhead
+	keys := keysBytes
 	lag := (table - 1 + 1) * (stageStep + pieceBytes + longestMarker())
 	text = (table+tracking)*streamWindow + keys + lag + pieceBytes
-	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*24/5 + 32*earlyWindows
+	entries = tracking*streamWindow*32/15 + 2*2*16*((stageReach+8)/6+1) + (keys+stageStep)*56/5 + 2*32*earlyWindows +
+		32*handedEdits()
 	return text, entries
 }
 
+// handedEdits is the most edits the claims stages keep room for, which they
+// share ([ruleStage.hand]): those in a piece and a marker of output, each a
+// marker, at append's growth past 256 (a quarter and 192), rounded up to a
+// page of 32-byte edits.
+func handedEdits() int {
+	shortest := len(keyMarker)
+	for _, m := range ruleMarkers() {
+		shortest = min(shortest, len(m))
+	}
+	n := (pieceBytes+longestMarker())/shortest + 2
+	return n + n/4 + 192 + 8192/32
+}
+
 // A STREAM HOLDS NO MORE THAN ITS STAGES' WINDOWS, whatever the text and
-// however it is cut: each rule's stage no more of its input than
-// [streamWindow], and of edits than the markers that fit between where it
-// resumes and the end of what it holds, and all of them together no more than
-// [streamBound] derives, held between every two writes over texts of every
-// shape the stages carry, over the densest the entries they keep can be (a
-// JSON Web Token every fifteen bytes), over values a reach below their keys
-// that run on past a window, and over the runs a stage counts rather than
-// holds, a Google token's dots and the backslashes an escaped break ends a
-// value before, each a MiB long. The texts that held a stream past its
-// windows before its keys' stage decided a window early ([holdBytes]) are
-// TestNoTextHoldsAStreamPastItsWindowsAndItsHold's.
-//
-// Mutation: hand a stage's output on a step at a time rather than a piece at a
-// time ([ruleStage.pass]), write a run's counted dots or backslashes out at
-// once ([ruleStage.repeat]), keep the stretches a feed joined for a window
-// ([feed.window]), keep a stage's edits behind where it resumes
-// ([rawMap.prune]), or advance a stage by less than it needs to decide the
-// first thing in its window ([stageAdvance]), and a stage here holds more.
+// however it is cut: each rule's stage a buffer no larger than [streamWindow]
+// and edits no more than the markers that fit in it, all together no more
+// than [streamBound] derives between every two writes, and, closing, one
+// window at a time. Over texts of every shape, the densest entries (a JSON Web
+// Token every fifteen bytes), values that run on past a window (one of escaped
+// breaks), and runs a stage counts rather than holds, each a MiB long; texts
+// held past the windows are TestNoTextHoldsAStreamPastItsWindowsAndItsHold's.
+// Mutation: hand output a step at a time ([ruleStage.pass]), write counted runs
+// at once ([ruleStage.repeat]), grow a buffer past its bound ([feed.reserve]),
+// free one past the next stage's close ([ruleStage.close]), keep edits behind
+// the resume ([rawMap.prune]), or give each claims stage a room ([newPipeline]).
 func TestAStreamHoldsNoMoreThanItsStagesWindows(t *testing.T) {
 	t.Parallel()
 	boundText, boundEntries := streamBound()
@@ -507,48 +559,125 @@ func TestAStreamHoldsNoMoreThanItsStagesWindows(t *testing.T) {
 			dense("the build passed\n")[:1<<20],
 		"backslashes a break ends a value before": "pwd=x" + strings.Repeat(`\`, 1<<20) + `\n" ` + "\n" +
 			dense("the build passed\n")[:1<<20],
+		"a value of escaped breaks": "pwd=x" + strings.Repeat(`\n`, 1<<20) + " \n" + dense("the build passed\n")[:1<<20],
 	}
 	for name, text := range texts {
 		s := NewStream(io.Discard)
 		var most streamHeld
+		closing := -1
 		for at := 0; at < len(text); {
 			n := 1 + r.IntN(64<<10)
 			_, _ = s.Write([]byte(text[at:min(len(text), at+n)]))
 			at += n
-			if s.p != nil {
-				h := s.p.held()
-				most = streamHeld{max(most.text, h.text), max(most.entries, h.entries), max(most.stageText, h.stageText), max(most.stageEdits, h.stageEdits)}
+			if s.p == nil {
+				continue
 			}
+			if closing < 0 {
+				closing = 0
+				atEnd(s.p, func(p *pipeline) { closing = p.buffered() })
+			}
+			h := s.p.held()
+			most = most.atLeast(h)
 		}
 		_ = s.Close()
+		if closing > streamWindow {
+			t.Errorf("%s: as the last stage closed, the stages held %d KiB of buffers, more than one window: each closed holding its input", name, closing>>10)
+		}
 		switch {
 		case most.stageText > streamWindow:
 			t.Errorf("%s: a stage held %d bytes of its input, past the %d of its window", name, most.stageText, streamWindow)
 		case most.stageEdits > boundEdits:
 			t.Errorf("%s: a stage kept %d edits, past the %d markers that fit past where it resumes", name, most.stageEdits, boundEdits)
+		case most.rooms > 32*handedEdits():
+			t.Errorf("%s: the claims stages kept %d KiB of room for the edits they hand on, past the %d KiB of the one room they share", name, most.rooms>>10, 32*handedEdits()>>10)
 		case most.text > boundText || most.entries > boundEntries:
 			t.Errorf("%s: the stages held %d bytes of text and %d of entries, past the %d and %d derived", name, most.text, most.entries, boundText, boundEntries)
 		}
-		t.Logf("%s: held %d KiB of text, %d KiB of entries; a stage at most %d KiB and %d edits", name, most.text>>10, most.entries>>10, most.stageText>>10, most.stageEdits)
+		t.Logf("%s: held %d KiB of text, %d KiB of entries; a stage at most %d KiB and %d edits; %d KiB at the last close", name, most.text>>10, most.entries>>10, most.stageText>>10, most.stageEdits, closing>>10)
 	}
 	t.Logf("bound: %d KiB of text, %d KiB of entries; a stage %d KiB and %d edits", boundText>>10, boundEntries>>10, streamWindow>>10, boundEdits)
+}
+
+// atLeast is the most of m and h, figure by figure.
+func (m streamHeld) atLeast(h streamHeld) streamHeld {
+	return streamHeld{max(m.text, h.text), max(m.entries, h.entries), max(m.stageText, h.stageText),
+		max(m.stageEdits, h.stageEdits), max(m.rooms, h.rooms)}
+}
+
+// THE END WRITES A MARKER WITHOUT ALLOCATING ([endSink]): a string longer than
+// its scratch, and a run of one byte, to a writer with no WriteString of its
+// own, each a write or a few of what it copies to its scratch.
+//
+// Mutation: write a string through io.WriteString, which copies it to the
+// heap for such a writer, and every marker allocates.
+func TestTheEndWritesAMarkerWithoutAllocating(t *testing.T) {
+	e := &endSink{w: struct{ io.Writer }{io.Discard}}
+	marker := strings.Repeat(passwordMarker, 40)
+	if n := testing.AllocsPerRun(100, func() { e.putString(marker) }); n != 0 {
+		t.Errorf("writing a marker of %d bytes allocated %v times", len(marker), n)
+	}
+	if n := testing.AllocsPerRun(100, func() { e.putRepeat('*', 2000) }); n != 0 {
+		t.Errorf("writing a run of 2000 bytes allocated %v times", n)
+	}
+}
+
+// buffered is the capacity of every buffer p's stages read from.
+func (p *pipeline) buffered() int {
+	n := cap(p.carry)
+	for _, f := range p.feeds() {
+		n += cap(f.buf)
+	}
+	return n
+}
+
+// closeProbe is a stage that calls at as it is closed, before it closes.
+type closeProbe struct {
+	sink
+	at func()
+}
+
+func (c closeProbe) close() {
+	c.at()
+	c.sink.close()
+}
+
+// atEnd calls at with p as the last of p's stages closes its end, every stage
+// having stepped through the rest of its input.
+func atEnd(p *pipeline, at func(*pipeline)) {
+	for st, ok := p.rules.(*ruleStage); ok; st, ok = st.to.(*ruleStage) {
+		if _, last := st.to.(*endSink); last {
+			st.to = closeProbe{st.to, func() { at(p) }}
+			return
+		}
+	}
 }
 
 // A STREAM HANDS ITS STAGES THE SAME PIECES HOWEVER THE TEXT IS CUT: after
 // every write, its stages have been handed the text up to the last offset
 // that is a multiple of [pieceBytes] and no further, a piece of exactly that
-// length at a time, and the stream carries the rest ([pipeline.feed]); so
-// where each stage's input ends when it is handed a piece, and what it holds
-// when it steps, is the text's alone, whether it arrives a byte at a time, in
-// pieces of any size, or whole.
+// length at a time, and the stream carries the rest ([pipeline.feed]); and
+// every later stage has taken as many stretches, to the same end, each at most
+// a piece and a marker ([pieceBytes]). So where each stage's input ends when
+// it is handed a piece, and what it holds when it steps, is the text's alone,
+// whether it arrives a byte at a time, in pieces of any size, or whole.
 //
 // Mutation: cut each write into pieces from the write's own start
-// ([pipeline.feed]), and the stages are handed the text up to where each
-// write ends, in pieces of the writes' making.
+// ([pipeline.feed]), and the stages are handed other stretches; or have a
+// stage hand on its input two pieces at a time ([ruleStage.pass]), and longer.
 func TestAStreamHandsItsStagesTheSamePiecesHoweverTheTextIsCut(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1170, 6))
 	text := streamText(r, wholeBytes+5*pieceBytes+r.IntN(pieceBytes))
+	taken := func(p *pipeline) (got [][2]int) {
+		for _, f := range p.feeds() {
+			got = append(got, [2]int{f.end, f.takes})
+			if f.largest > pieceBytes+longestMarker() {
+				t.Fatalf("a stage took a stretch of %d bytes, past a piece and a marker", f.largest)
+			}
+		}
+		return got
+	}
+	var first [][2]int
 	for _, most := range []int{1, 4 << 10, pieceBytes - 1, pieceBytes + 1, 3 * pieceBytes, len(text)} {
 		var out bytes.Buffer
 		s := NewStream(&out)
@@ -565,15 +694,18 @@ func TestAStreamHandsItsStagesTheSamePiecesHoweverTheTextIsCut(t *testing.T) {
 				if in.end != handed {
 					t.Fatalf("pieces of at most %d bytes, %d written: %s was handed %d bytes, not the %d up to the last multiple of a piece", most, written, name, in.end, handed)
 				}
-				for _, c := range in.chunks {
-					if len(c) != pieceBytes {
-						t.Fatalf("pieces of at most %d bytes, %d written: %s was handed a piece of %d bytes, not %d", most, written, name, len(c), pieceBytes)
-					}
+				if in.takes*pieceBytes != in.end {
+					t.Fatalf("pieces of at most %d bytes, %d written: %s took %d stretches for %d bytes, not pieces of %d", most, written, name, in.takes, in.end, pieceBytes)
 				}
 			}
 			if len(s.p.carry) != written-handed {
 				t.Fatalf("pieces of at most %d bytes, %d written: the stream carries %d bytes, not the %d past the last multiple of a piece", most, written, len(s.p.carry), written-handed)
 			}
+		}
+		if got := taken(s.p); first == nil {
+			first = got
+		} else if !slices.Equal(got, first) {
+			t.Fatalf("pieces of at most %d bytes: the stages took (end, stretches) %v, where a byte at a time they took %v", most, got, first)
 		}
 		_ = s.Close()
 		if got, want := out.String(), Secrets(text); got != want {

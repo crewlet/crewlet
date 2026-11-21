@@ -321,9 +321,11 @@ export function waitingReason(
 function ejectedSentence(change: CodeChangeSummary, now: number): string {
   const e = change.card!.ejected!;
   const target = refName(change.target_ref).name;
-  const why = e.checks?.length
-    ? `${namesSaid(e.checks, e.checks_more)} failed`
-    : ejectReasonWord(e.reason);
+  const why = !e.checks?.length
+    ? ejectReasonWord(e.reason)
+    : e.reason === "checks_undefined"
+      ? `${namesSaid(e.checks, e.checks_more)} defined by no checks file on ${target}`
+      : `${namesSaid(e.checks, e.checks_more)} failed`;
   return `Taken out of ${target}'s queue ${ago(e.at, now)}: ${why}`;
 }
 

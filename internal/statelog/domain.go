@@ -14,202 +14,135 @@ import (
 // Domain is one replicated state machine: one ordered stream, one
 // deterministic applier, and N identical copies in N node databases.
 //
-// # Why the FRAMEWORK declares this and not the domain
-//
-// CLAUDE.md's rule is that an interface belongs to its consumer, and here the
-// framework is the consumer: it calls the applier, derives the scrub list,
-// picks the replay loop and gates seat admission from these answers. The
-// domain packages export concrete types. It is the arrangement the projection
-// estate this framework replaced stated at its own Applier — "DECLARED HERE,
-// implemented by the packages that own the documents" — one layer down.
+// The framework declares it because the framework is its consumer: it calls
+// the applier, derives the scrub list, picks the replay loop and gates seat
+// admission from these answers. Domain packages export concrete types.
 type Domain interface {
 	// Name is the register key, the manifest key and the operator
-	// column. NEVER renamed: it is durable in three places that have no
-	// idea about each other.
+	// column. NEVER renamed: it is durable in all three, independently.
 	Name() string
 
 	// Stream is the stream this domain's records live on, and the replay
 	// protocol its own shape implies.
 	Stream() StreamSpec
 
-	// RecordVersion is the highest record version THIS BUILD can decode.
-	// A record above it is retained rather than skipped — see the
-	// package doc's deferral contract.
+	// RecordVersion is the highest record version THIS BUILD can decode;
+	// a record above it is retained, not skipped (package doc, "A record
+	// this build cannot decode is RETAINED, with one exception").
 	RecordVersion() int
 
 	// Envelope decodes the always-readable half of a record.
 	//
-	// IT MUST NOT FAIL ON AN UNKNOWN VERSION. The deferral contract rests
-	// on it: without an envelope there is no position, no kind, no
-	// subject and no scope, so a record a build cannot decode could not
-	// be indexed, probed for or reported on — only dropped. And its
-	// Scope is NEVER empty, because an empty scope is indistinguishable
-	// from "touches nothing" and would license every read the record
-	// makes stale.
+	// It MUST NOT FAIL ON AN UNKNOWN VERSION: without an envelope, a record
+	// this build cannot decode has no position, kind, subject or scope to
+	// be indexed, probed for or reported on, and could only be dropped. Its
+	// Scope is NEVER empty: an empty scope reads as "touches nothing" and
+	// would license every read the record makes stale.
 	Envelope(payload []byte) (Envelope, error)
 
-	// InstallsGate reports whether this record installs an APPLY GATE — a
+	// InstallsGate reports whether this record installs an APPLY GATE: a
 	// rule under which a durable record produces no rows on ANY node.
 	//
-	// ANSWERED FROM THE ENVELOPE ALONE, because the only caller is the
-	// unknown-version arm, which by definition cannot decode the payload.
-	// A record this build cannot decode and cannot rule out as a gate is
-	// a STOP rather than a deferral: a deferred gate does not postpone
-	// one record's effect on one node, it silently licenses every record
-	// above it.
+	// Answered from the envelope alone: the only caller is the
+	// unknown-version arm, which cannot decode the payload. An undecodable
+	// record that may be a gate is a STOP, not a deferral (package doc, "A
+	// record this build cannot decode is RETAINED, with one exception").
 	InstallsGate(env Envelope) bool
 
-	// NodeGate reports whether this record EVICTS OR READMITS A NODE — the
+	// NodeGate reports whether this record EVICTS OR READMITS A NODE: the
 	// one record a write flagged [Request.NodeGate] may carry.
 	//
-	// A NARROWER QUESTION THAN [Domain.InstallsGate], and the publisher
-	// holds the flag to this one. Every node gate installs an apply gate,
-	// but not every apply gate is a node's: a purge is a permanent deletion
-	// marker on an object, published like any other write. The flag excuses
-	// three fences — the passed generation, a peer's truncated rows and the
-	// gate reserve — so held to the wider answer, a purge flagged by mistake
-	// would spend the room kept for the eviction that unpins a full log and
-	// pass every fence that stops an ordinary write.
+	// Narrower than [Domain.InstallsGate] on purpose: a purge installs a
+	// gate but is an ordinary write. The flag excuses three fences (the
+	// passed generation, a peer's truncated rows, the gate reserve), so a
+	// purge flagged by mistake under the wider answer would pass them all
+	// and spend the room kept for the eviction that unpins a full log.
 	//
-	// ANSWERED FROM THE ENVELOPE ALONE, for InstallsGate's reason: it is the
-	// half every build reads. A domain that keeps no eviction gate answers
-	// false for every record. statelogtest certifies both halves: the
-	// domain's own eviction and readmission answer true and install a gate,
-	// and nothing else does.
+	// Answered from the envelope alone, as InstallsGate is. statelogtest
+	// certifies that only the domain's own eviction and readmission (if
+	// any) answer true, and both install a gate.
 	NodeGate(env Envelope) bool
 
 	// Tables is every table this domain writes, with the class that says
 	// what a snapshot, an identity claim and a local sweep each do with
-	// it. The framework derives all three from this map, so a table added
-	// without a class fails a static test rather than silently joining
-	// whichever behaviour its absence happened to produce.
+	// it. A table without a class fails a static test rather than
+	// silently joining whichever behaviour its absence produced.
 	Tables() map[string]TableClass
 
 	// DeferredTable is where a record this build cannot decode is
-	// retained, byte for byte, at its original position. Classed Local
-	// and named by the domain for the same reason its ops table is: the
-	// framework writes the statements and the domain owns the schema.
+	// retained, byte for byte, at its original position. Classed Local;
+	// the domain names it because the domain owns the schema and the
+	// framework writes the statements.
 	DeferredTable() string
 
 	// ScopeIndex is the table the framework probes for deferred records
 	// whose declared scope intersects a read's or a write's closure.
-	// Classed Local, written in the same transaction as the deferred row
-	// it belongs to, and OPAQUE to the framework — which takes a ScopeSet
-	// and a table name and never a domain's own terms.
+	// Classed Local, written in its deferred row's transaction, and opaque
+	// to the framework, which takes a ScopeSet and a table name, never a
+	// domain's own terms.
 	ScopeIndex() string
 
 	// OpsTable is the idempotency ledger: the op ids this node's applier
 	// has written, at the positions it wrote them.
 	//
-	// CLASSED [Divergent], and the class is what makes a retry safe on a
-	// node that adopted a snapshot: the ledger TRAVELS with the rows it
-	// describes, so the adopter holds a row for every operation the donor
-	// applied and answers a retry of one from it, while an operation
-	// neither ledger holds is one that never applied and is decided
-	// afresh. Classed [Local] it would be scrubbed out of every artefact,
-	// and the adopter could tell neither apart for anything minted before
-	// the adoption — so it would answer a turn's FIRST attempt at a write
-	// `unknown` whenever the turn's trigger predated the join, which is
-	// the recovering node's whole backlog. Every node writes the same op
-	// id, subject and position from the same record; only `applied_at`,
-	// this node's own clock and read by nothing but this node's own sweep,
-	// differs, which is why the class is Divergent rather than Replicated.
+	// [Divergent] so it TRAVELS with its rows: an adopter answers a retry
+	// from the donor's entries. As [Local] it would be scrubbed, and the
+	// adopter would answer `unknown` for every op minted before the
+	// adoption. Not Replicated only because `applied_at` is this node's
+	// clock, read by its own sweep alone.
 	//
-	// EMPTY only for a domain whose apply is a total function under a
-	// monotone version guard AND whose writer never reports a committed
-	// position to a caller. That pairing is asserted rather than assumed,
-	// because half of it is not enough: a domain with a total apply whose
-	// writer answers a caller still needs to say whether the answer
-	// landed.
+	// EMPTY only for a domain whose apply is total under a monotone version
+	// guard AND whose writer never reports a committed position to a
+	// caller; asserted, since a writer that answers must say if it landed.
 	OpsTable() string
 
 	// GatesSeatAdmission reports whether a SEAT depends on this domain's
-	// copy: whether a node admits a seat only once this domain's copy is
-	// established at a lag of zero ([Health.Established], strict), and
-	// whether this copy going out of service leaves the node's seats routed
-	// through its peers — so that a node which then cannot name a peer
-	// gives them up.
+	// copy: a node admits a seat only once the copy is established at lag
+	// zero ([Health.Established], strict), and the copy going out of
+	// service routes the node's seats through peers, so a node that can
+	// name none gives them up. It does NOT decide whether the copy is
+	// judged: every copy is ([Health.Healthy], ADR-0079).
 	//
-	// IT DOES NOT DECIDE WHETHER THE COPY IS JUDGED. Every domain's copy is
-	// judged ([Health.Healthy]) and a wrong one goes out of service for
-	// that domain's operations alone, whatever this answers — ADR-0079. The
-	// one declaration that used to answer both questions let a domain that
-	// did not gate seats escape the judgement too, so a wrong copy of it was
-	// served for ever.
-	//
-	// TRUE for a domain a seat's tools read on every turn, where a seat
-	// attached to a copy that is behind answers "there is no such item"
-	// about work it was just handed. FALSE for a compacted domain, whose gap
-	// is a coverage number rather than a fault — statelogtest refuses one
-	// that answers true — and for any domain whose lag must not withhold
-	// every seat claim on a node: a busy log a seat rarely reads is an
-	// outage of the whole company bought to protect one tool.
+	// TRUE for a domain a seat's tools read every turn, where a lagging
+	// copy denies work the seat was just handed. FALSE for a compacted
+	// domain, whose gap is coverage, not a fault (statelogtest refuses
+	// true there), and for a busy log a seat rarely reads, whose lag would
+	// withhold every seat claim on the node.
 	GatesSeatAdmission() bool
 
 	// ClaimsIdentity reports whether two nodes at one checkpoint are
-	// ASSERTED to hold byte-identical Replicated tables.
+	// ASSERTED to hold byte-identical Replicated tables. False for a
+	// compacted domain, whose per-node coverage legitimately differs.
 	//
-	// False for a compacted domain, whose per-node coverage legitimately
-	// differs. Stating it per domain is what keeps the claim exactly
-	// "the Replicated tables of a domain that claims identity" rather
-	// than "Replicated minus the tables somebody remembered".
-	//
-	// THE FRAMEWORK'S HALF of the claim is that what it hands an applier
-	// OF THE RECORD is one value on every node, however the record reached
-	// it: the payload, the position, and the broker's instant
-	// ([Record.StoredAt]), which arrives in the node's own zone at
-	// nanoseconds on one path and in the store's encoding on the other,
-	// and is handed on in the store's encoding on both. The rest of
-	// [ApplyOptions] is not: Now is this node's clock and Epoch this
-	// node's epoch, each read per batch, and they may decide only a
-	// [Divergent] row. The domain's half is that no Replicated byte
-	// depends on anything but the record, its rows and the static
-	// declarations.
+	// The framework's half: what it hands an applier OF THE RECORD is one
+	// value on every node however the record arrived: payload, position,
+	// and [Record.StoredAt] in the store's encoding. The rest of
+	// [ApplyOptions] (Now, Epoch) is this node's, per batch, and may
+	// decide only a [Divergent] row. The domain's half: no Replicated byte
+	// depends on anything but the record, its rows and the declarations.
 	ClaimsIdentity() bool
 
 	// FeedGroup is the fleet-wide consumer this domain's WAKE FEED runs as
-	// on its own stream, or empty for a domain that has no wake feed.
+	// on its own stream, or empty for a domain with no wake feed.
 	//
-	// DECLARED because two parties name one consumer and neither can ask
-	// the other: the feed that advances it, on whichever node wins a
-	// record, and the trim's `feed_ack_floor` term that waits for it, on
-	// whichever node holds the trim duty — which need not run the feed at
-	// all. When the trim named that consumer for itself it named ONE
-	// domain's for every domain with a feed; on the other log the
-	// consumer never exists, the term permits nothing, and that log's trim
-	// was blocked for the life of the deployment.
+	// Declared because the feed advancing it and the trim's
+	// `feed_ack_floor` term waiting for it (on the trim duty's node)
+	// cannot ask each other. EMPTY makes the term ABSENT, not zero. Wrong
+	// answers are quiet: empty with a feed trims records nobody was woken
+	// for; another domain's group blocks the trim on a consumer nobody opens.
 	//
-	// EMPTY IS AN ANSWER rather than an omission, and it is the only one
-	// that makes the term ABSENT instead of zero. Each wrong answer costs
-	// something different and neither is loud: a domain with a feed that
-	// answers empty has its log trimmed past records nobody has been woken
-	// for yet, and one that answers another domain's group blocks its trim
-	// on a consumer nobody opens.
-	//
-	// The name is also the fleet's POSITION on its log, so it never
-	// changes. A new name is a fresh durable consumer, and every group
-	// starts from the log's first retained record rather than its head, so
-	// a rename loses nothing: it REPLAYS every record the log still holds
-	// as a wake, and only the change feed's claim and its wake-id dedupe
-	// hold those back, and only within their own retention windows. Until
-	// the new consumer catches up, its acknowledgement floor is what the
-	// trim's `feed_ack_floor` term reads, so the log's trim stalls behind
-	// the replay.
+	// NEVER RENAMED: the name is the fleet's position on its log. A new
+	// name replays every retained record as a wake (only the change feed's
+	// claim and wake-id dedupe hold some back) and stalls the trim behind it.
 	FeedGroup() string
 }
 
-// ReplayProtocol is how a domain's stream behaves under replay, and the
-// framework picks a loop from it rather than inferring one.
+// ReplayProtocol is how a domain's stream behaves under replay; the
+// framework picks a loop from it and never infers or defaults one.
 //
-// # Why this is DECLARED and never defaulted
-//
-// The two loops differ in the one property neither can check for itself:
-// whether an interior sequence can go missing. A strict loop over a compacted
-// stream stalls for ever on the first hole, and a compacted loop over a
-// strict stream silently accepts a gap that means data loss. Both failures
-// are quiet, both are permanent, and the stream's own configuration is what
-// decides which is which — so the domain that configured the stream is what
-// says which loop reads it.
+// A strict loop over a compacted stream stalls for ever on the first hole; a
+// compacted loop over a strict stream silently accepts a gap that is data
+// loss. Neither loop can tell, so the domain that configured the stream says.
 type ReplayProtocol string
 
 const (
@@ -241,78 +174,52 @@ func (r ReplayProtocol) Valid() bool {
 }
 
 // StreamSpec is a domain's stream: what the broker is asked for, plus the
-// replay protocol the broker has no field for.
-//
-// THE PROTOCOL IS NOT A STREAM SETTING and this type is where the two meet.
-// The client models replay as a CONSUMER policy, so a stream cannot carry it
-// and the framework has to hold the pair together — which is also the honest
-// place for it, since the protocol is a claim about what the stream's own
-// settings imply rather than one of them.
+// replay protocol, which the client models as a consumer policy and so no
+// stream setting can carry.
 type StreamSpec struct {
 	// Name is the stream. Conventionally CREWLET_<DOMAIN>_LOG.
 	Name string
 
 	// Subjects is the subject space this domain publishes into, as the
-	// broker is told it — normally one wildcard.
+	// broker is told it: normally one wildcard.
 	Subjects []string
 
 	// ArbitratedKinds are the subject kinds whose writes carry a
-	// per-subject expectation, and therefore the only kinds an anchor is
-	// written for.
+	// per-subject expectation, and so the only kinds an anchor is written
+	// for.
 	//
-	// ARBITRATION IS A PROPERTY OF THE SUBJECT KIND, not of the stream,
-	// and a stream-wide flag cannot say so. One log carries kinds that
-	// arbitrate, a kind that is additive and needs no expectation at all,
-	// and the framework's own barrier, which nobody arbitrates. Writing
-	// an anchor for the last two costs a row nothing can ever read — and
-	// for the barrier it is worse than waste: every barrier shares ONE
-	// subject, so a stream-wide rule would put an upsert per read on a
-	// single hot row inside the transaction holding this store's only
-	// writer, and would falsify the property that a barrier writes zero
-	// rows and never enters the applier's row budget at all.
+	// Per kind, not per stream: one log carries arbitrating kinds, additive
+	// kinds and the framework's barrier. An anchor for the barrier, whose
+	// writes all share ONE subject, would put an upsert per read on one hot
+	// row inside the store's only writer, and break the property that a
+	// barrier writes zero rows and never enters the applier's row budget.
 	//
-	// EMPTY is legal and means a domain that publishes no expectation:
-	// its idempotency is its own row guard.
+	// EMPTY means a domain that publishes no expectation; its row guard is
+	// its idempotency.
 	ArbitratedKinds []string
 
-	// SubjectPrefix is what a subject's own path is appended to, and it
-	// is DECLARED rather than derived from Subjects.
-	//
-	// Deriving it would mean stripping a wildcard token off a configured
-	// string, which is a parser between the framework and every record it
-	// publishes: a domain that declared two subject spaces, or one
-	// without a trailing wildcard, would silently publish to a subject
-	// no consumer covers and no test would say so.
+	// SubjectPrefix is what a subject's own path is appended to. Declared,
+	// not derived from Subjects: stripping a wildcard is a parser, and a
+	// domain with two subject spaces or no trailing wildcard would
+	// silently publish to a subject no consumer covers.
 	SubjectPrefix string
 
-	// MaxBytes is the ceiling. Crossing it REFUSES an append rather than
-	// dropping the oldest record, so zero — unlimited — is a stream that
-	// fills the volume instead.
-	//
-	// A domain declares its WHOLE budget here, and it is the one setting a
-	// node may replace: the stream a node creates carries the ceiling its
-	// own Tier A sized ([StreamSpec.Instantiates]).
+	// MaxBytes is the domain's WHOLE byte budget. Crossing it REFUSES an
+	// append rather than dropping the oldest record, so zero (unlimited)
+	// fills the volume. It is the one setting a node may replace, with its
+	// own Tier A sizing ([StreamSpec.Instantiates]).
 	MaxBytes int64
 
-	// MaxRecordBytes is the largest record this domain publishes — the
-	// payload its decide forms, before the signature — and it is a LIMIT
-	// rather than a description. The publisher refuses a record above it
-	// `record_too_large` before anything is sent, and the broker refuses a
-	// message above [StreamSpec.MaxAppendBytes], which is how a peer on a
-	// build that does not ask is held to it as well.
+	// MaxRecordBytes is the largest payload this domain's decide forms,
+	// before the signature, and it is a LIMIT: the publisher refuses a
+	// larger record `record_too_large` before sending, and the broker
+	// refuses a message above [StreamSpec.MaxAppendBytes], which holds a
+	// peer on another build to it too.
 	//
-	// DECLARED PER DOMAIN because the gate reserve is sized by it
-	// ([Reservation]): when a log's soft ceiling is crossed, every peer
-	// may hold one append of up to this size in flight that the admitting
-	// node's reading cannot see. Sized as though every log's records were
-	// the transport's eight mebibytes, the reserve on a log whose records
-	// are kilobytes and whose ceiling is tens of mebibytes had to be most
-	// of the log — and sized as a sixteenth of the ceiling instead, as it
-	// was, it was smaller than ONE such record on the two smallest logs.
-	//
-	// REQUIRED, and at most [MaxTransportRecordBytes]: a record the
-	// transport cannot carry is one no declaration can admit, and the
-	// transport's limit is on the signed message, so it is the transport's
+	// Per domain because it sizes the gate reserve ([Reservation]): past
+	// the soft ceiling every peer may hold one append of this size in
+	// flight unseen; one transport-wide size made it most of a small log.
+	// REQUIRED, and at most [MaxTransportRecordBytes]: the transport's
 	// maximum less what a stored record carries beside its payload.
 	MaxRecordBytes int64
 
@@ -321,27 +228,24 @@ type StreamSpec struct {
 	// compacted shape, and the pairing with ReplayCompacted is asserted.
 	MaxPerSubject int
 
-	// MaxAge bounds how long a message is kept. Zero for a log — an age
-	// bound on a log deletes state a node has not applied — and non-zero
-	// only on a compacted stream whose rows are durable in SQL anyway.
+	// MaxAge bounds how long a message is kept. Zero for a log (an age
+	// bound on a log deletes state a node has not applied); non-zero only
+	// on a compacted stream whose rows are durable in SQL anyway.
 	MaxAge time.Duration
 
 	// Duplicates is the window a repeated op id is collapsed in. It must
-	// outlast a publisher's whole retry budget, and it is an
-	// optimisation rather than a mechanism: see the package doc on why
-	// the ops table is the only layer that may be relied on.
+	// outlast a publisher's whole retry budget, and is an optimisation,
+	// not a mechanism (package doc, "Retry is three layers and only one
+	// may be relied on").
 	Duplicates time.Duration
 
 	// Replay is the protocol, declared rather than inferred.
 	Replay ReplayProtocol
 }
 
-// Validate refuses a spec whose settings and protocol disagree.
-//
-// The pairing is the whole reason the protocol is a field: a compacted stream
-// read by a strict loop stalls on its first ordinary write, and a log read by
-// a compacted loop accepts a hole that is data loss. Neither loop can detect
-// its own mismatch, so the declaration is checked here, once, at the seam.
+// Validate refuses a spec whose settings and protocol disagree: neither
+// replay loop can detect its own mismatch ([ReplayProtocol]), so the
+// declaration is checked here, once.
 func (s StreamSpec) Validate() error {
 	if s.Name == "" {
 		return fmt.Errorf("statelog: stream spec has no name")
@@ -403,22 +307,14 @@ func (s StreamSpec) Validate() error {
 // Instantiates refuses a spec that is not domain d's stream: every setting but
 // the byte ceiling must be the domain's own, names included.
 //
-// The NAMES because every per-log record a node keeps is keyed by one of two
-// things — the checkpoint and the anchors by the stream, a position row and a
-// floor by the domain's name — and a spec naming another stream than the
-// domain it runs under would file one log's positions under another's name.
-// The REST because the loop that reads the log, the arbitration the publisher
-// forms and the duplicate window a retry leans on are all chosen from the
-// DOMAIN's declaration, and a stream of another shape is one those choices
-// are wrong for, silently.
-//
-// ONLY THE CEILING MAY DIFFER: the spec a node creates the stream with
-// carries the byte budget its own Tier A sized, which is the node's to
-// choose. The LARGEST RECORD is not the ceiling's companion but the domain's
-// declaration: the gate reserve is sized by it, the publisher refuses a record
-// past it and the stream's `max_msg_size` holds a peer on another build to it,
-// so a node that ran a log at a largest record of its own choosing would size
-// a reserve and admit records its peers do not.
+// The NAMES because a node keys per-log records by stream (checkpoint,
+// anchors) or by domain name (position row, floor), so a mismatch files one
+// log's positions under another's name. The REST because the replay loop,
+// the arbitration and the duplicate window are chosen from the domain's
+// declaration, and silently wrong for a stream of another shape. Only
+// MaxBytes is the node's, sized by its Tier A; the largest record is not,
+// since it sizes the gate reserve and `max_msg_size` holds peers to it, so a
+// node's own choice would admit records its peers do not.
 func (s StreamSpec) Instantiates(d Domain) error {
 	if err := s.Validate(); err != nil {
 		return err
@@ -452,14 +348,10 @@ func (s StreamSpec) Instantiates(d Domain) error {
 // TableClass says what a snapshot, an identity claim and a local sweep each
 // do with one of a domain's tables.
 //
-// # Why this is a DECLARATION and not a list somewhere
-//
-// [internal/backup] already names the failure in its own words: a hardcoded
-// list "would silently omit whatever a deployment actually has". Every list
-// the framework needs — what a donated snapshot scrubs, what two nodes are
-// asserted to agree about, what a node sweeps on its own schedule — is
-// derived from this one map, so a table added without a class fails a static
-// test instead of joining whichever behaviour its absence resembled.
+// Every such list (what a donated snapshot scrubs, what nodes are asserted to
+// agree on, what a node sweeps) derives from [Domain.Tables], never a
+// hardcoded list, which "would silently omit whatever a deployment actually
+// has" ([internal/backup]); a table without a class fails a static test.
 type TableClass int
 
 const (
@@ -470,16 +362,11 @@ const (
 	Replicated TableClass = iota
 
 	// Divergent is written only by applying a committed record and
-	// TRAVELS inside a snapshot — but is not in the identity claim,
-	// because its content depends on a per-node or per-epoch value the
-	// framework passes in.
-	//
-	// It exists so the claim's membership stays exactly "Replicated"
-	// rather than "Replicated minus two tables somebody remembered". The
-	// alternative is worse than untidy: classing such a table Local would
-	// scrub it from every snapshot, and an adopting node would hold a
-	// tail where its peers hold a year — which is exactly what classing
-	// the operation ledger Local would do (see [Domain.OpsTable]).
+	// TRAVELS inside a snapshot, but is outside the identity claim: its
+	// content depends on a per-node or per-epoch value the framework
+	// passes in. It keeps the claim exactly "Replicated"; classed Local
+	// instead, the table would be scrubbed and an adopter would hold a
+	// tail where its peers hold a year ([Domain.OpsTable]).
 	Divergent
 
 	// Local is this node's own rows. SCRUBBED from every snapshot,
@@ -514,10 +401,9 @@ func (c TableClass) Valid() bool { return c >= Replicated && c <= Derived }
 // Subject names the OBJECT a record arbitrates over, in the domain's own
 // vocabulary rather than as a wire string.
 //
-// ONE SUBJECT PER OBJECT, which is what makes the subject the arbitration
-// unit: the broker's per-subject expectation is the whole concurrency
-// control, so an object that shared a subject with another would serialize
-// against it and an object spread across two would arbitrate against neither.
+// ONE SUBJECT PER OBJECT: the broker's per-subject expectation is the whole
+// concurrency control, so objects sharing a subject serialize against each
+// other and an object spread across two arbitrates against neither.
 type Subject struct {
 	// Kind is the object kind — the domain's own enum, as a string.
 	Kind string
@@ -535,15 +421,10 @@ func (s Subject) String() string {
 	return s.Kind + "." + s.ID
 }
 
-// ScopeSet is the set of objects an operation is ABOUT, opaque to the
-// framework.
-//
-// The framework takes a scope and a table name from the domain and never a
-// domain's own terms, which is what lets the read levels and the write
-// path's deferral probe be written before any domain exists. A scope is a set
-// of qualified paths under a containment order the domain defines: the
-// framework only ever asks whether two of them intersect, and asks the
-// domain's own index.
+// ScopeSet is the set of objects an operation is ABOUT: qualified paths under
+// a containment order the domain defines, opaque to the framework, which only
+// asks the domain's own index whether two intersect. That is what lets the
+// read levels and the write path's deferral probe predate any domain.
 type ScopeSet struct {
 	// Paths are the qualified paths this operation touches.
 	Paths []string
@@ -556,10 +437,9 @@ func (s ScopeSet) Empty() bool { return len(s.Paths) == 0 }
 
 // Envelope is the always-decodable half of a record.
 //
-// EVERY FIELD HERE IS READABLE BY EVERY BUILD, FOR EVER. That is not a
-// convention: a record a build cannot decode is retained and indexed by these
-// fields, so a field added at a later version is readable by every build
-// except the one that needs it.
+// EVERY FIELD IS READABLE BY EVERY BUILD, FOR EVER: a record a build cannot
+// decode is retained and indexed by these fields, so a field added later is
+// readable by every build except the one that needs it.
 type Envelope struct {
 	// V is the record version. A record above this build's
 	// RecordVersion is retained rather than skipped.
@@ -568,14 +448,11 @@ type Envelope struct {
 	// Kind is the record kind within the domain.
 	Kind string
 
-	// Op is the operation within that kind, for the one question a kind
-	// cannot answer: whether this record INSTALLS A GATE.
-	//
-	// A domain's gates are not always a kind of their own — this tree's
-	// purge is an ordinary task subject with a destructive operation on it
-	// — and the gate question has to be answerable by a node that cannot
-	// decode the payload. The framework never interprets this field; it
-	// carries it back to [Domain.InstallsGate], which is the only reader.
+	// Op is the operation within that kind, for whether this record
+	// INSTALLS A GATE: a gate need not be a kind of its own (a purge is a
+	// destructive operation on an ordinary task subject), and a node that
+	// cannot decode the payload must still answer. Only
+	// [Domain.InstallsGate] reads it.
 	Op string
 
 	// Subject is the object this record arbitrates over.
@@ -590,10 +467,10 @@ type Envelope struct {
 	// indistinguishable from a current one.
 	Gen uint32
 
-	// Scope is every object this record's rows touch, which is more than
-	// its subject whenever an operation rewrites a neighbour. NEVER
-	// empty: an empty scope would say "this record makes nothing stale",
-	// which is the one claim a record a build cannot read may not make.
+	// Scope is every object this record's rows touch, more than its
+	// subject whenever an operation rewrites a neighbour. NEVER empty:
+	// that would claim the record makes nothing stale, which a record a
+	// build cannot read may not claim.
 	Scope ScopeSet
 
 	// Writer is the node that published the record, which the eviction
@@ -609,58 +486,42 @@ type Record struct {
 	// the broker's sequence and the writer's own generation.
 	Position Position
 
-	// Payload is the record's BODY: what the domain published, with the
-	// framework's signature frame already opened and checked. An applier
-	// decodes this and never sees the frame, which is ADR-0031's rule
-	// stated at the one field every applier reads — the alternative is
-	// every domain unwrapping for itself, and the one that forgot would
-	// fail on every record in the company while its neighbour worked.
+	// Payload is the record's BODY, with the framework's signature frame
+	// already opened and checked (ADR-0031), so no applier unwraps for
+	// itself and none that forgot can fail on every record.
 	//
-	// It is NOT what a retained record is stored as. That is the framed
-	// form, which the framework keeps privately, because LOSSLESS MEANS
-	// THE BYTES: a record filed under a key this node does not hold is
-	// re-opened and re-verified by the build that can finally read it,
-	// rather than trusted because an earlier build once looked at it.
+	// A retained record is stored FRAMED instead (framed), because
+	// lossless means the bytes: the build that can finally read it
+	// re-opens and re-verifies them rather than trusting an earlier
+	// build's look.
 	Payload []byte
 
-	// framed is the record exactly as it was published, frame and all.
-	//
-	// UNEXPORTED, for [Record.verdict]'s reason: it is the framework's own
-	// copy and only the framework may write it down or open it. An applier
-	// that could reach it could decode bytes the framework has not
-	// authenticated, which is the one thing the frame exists to prevent.
-	// It is what the deferred table stores and what [Runner] re-verifies
-	// on a reprocess.
+	// framed is the record exactly as published, frame and all: what the
+	// deferred table stores and [Runner] re-verifies on a reprocess.
+	// Unexported so no applier can decode bytes the framework has not
+	// authenticated.
 	framed []byte
 
-	// StoredAt is the broker's own timestamp for this record, which is
-	// what makes it byte-identical on every node rather than a clock each
-	// one reads for itself — in the store's encoding, UTC at a microsecond
-	// ([AppliedInstant]), whether the record was applied as it arrived or
-	// held back and applied later, so it is ONE VALUE on every node and
-	// not only one instant.
+	// StoredAt is the broker's own timestamp, in the store's encoding (UTC
+	// at a microsecond, [AppliedInstant]) whether the record applied on
+	// arrival or after being held back, so it is ONE VALUE on every node,
+	// not merely one instant.
 	StoredAt time.Time
 
-	// verdict is what the framework's signature check concluded about
-	// this record, unexported for [Record.ack]'s reason: it is the
-	// framework's own fact and the apply loop is the only thing that may
-	// act on it. An applier that could read it might branch on it, and a
-	// state machine whose rows depend on which keys the node happened to
-	// hold is no longer a pure function of the record.
+	// verdict is the framework's signature-check conclusion, unexported
+	// so only the apply loop acts on it: rows that depended on which keys
+	// a node held would not be a pure function of the record.
 	verdict recordseal.Verdict
 
-	// ack acknowledges this record's delivery, and is unexported because
-	// exactly one caller may use it: the apply loop, after the transaction
-	// that consumed the record has committed. An applier that could reach
-	// it would be able to acknowledge a record from inside the transaction
-	// that writes its rows — which the store may roll back and run again.
+	// ack acknowledges delivery. Unexported: only the apply loop calls
+	// it, after the consuming transaction commits, since an ack inside
+	// that transaction would outlive a rollback and re-run.
 	ack func() error
 
-	// release hands this record's delivery back to the broker, which
-	// delivers it again at once ([Message.Release]); nil where the fetcher
-	// has no such call. Unexported for ack's reason: only the apply loop
-	// decides that a record it holds will not be consumed, and only outside
-	// a transaction ([Runner.Run]'s unwind).
+	// release hands the delivery back for immediate redelivery
+	// ([Message.Release]); nil where the fetcher has none. Unexported:
+	// only the apply loop calls it, outside a transaction ([Runner.Run]'s
+	// unwind).
 	release func() error
 }
 
@@ -669,91 +530,47 @@ type Record struct {
 //
 //   - APPLY IS IDEMPOTENT at a position.
 //   - APPLY IS A PURE FUNCTION of (the rows in this transaction, the record,
-//     the options). No clock, no config read, no coordination read, no node
-//     identity, no randomness, and no collection written from a map without
-//     sorting it first.
+//     the options): no clock, config or coordination read, node identity,
+//     randomness, or collection written from an unsorted map.
 //
-// The purity is not a style rule: it is the whole identity claim. Two nodes
-// applying one record must produce the same rows, so anything the applier
-// could read from the world instead of from its arguments is a value the two
-// nodes can differ on. What an applier legitimately needs from outside
-// arrives through [ApplyOptions], which the framework fills once.
-//
-// There is no Order method and no Reset: a total order removes the first, and
-// a checkpoint committed with its own rows removes the second.
+// Purity is the identity claim: anything read from the world is a value two
+// nodes can differ on, so what an applier needs arrives through
+// [ApplyOptions]. No Order (the order is total) and no Reset (the checkpoint
+// commits with the rows).
 type Applier interface {
-	// Apply writes this record's rows and reports how many it wrote. The
-	// framework commits the rows, the op id, the anchor and the
-	// checkpoint in this same transaction.
+	// Apply writes this record's rows and reports how many. The framework
+	// commits the rows, op id, anchor and checkpoint in this same
+	// transaction.
 	//
-	// THE ROW COUNT IS THE BUDGET'S INPUT and the framework cannot derive
-	// it: a transaction ends at a record boundary at or past a row budget,
-	// and only the applier knows what its record cost. An approximation
-	// here is a transaction that holds this store's only writer for as
-	// long as the approximation is wrong.
+	// The row count feeds the budget (a transaction ends at the first
+	// record boundary at or past it), and only the applier knows it: a
+	// wrong count holds the store's only writer for as long as it is wrong.
 	Apply(ctx context.Context, tx *sql.Tx, rec Record, opts ApplyOptions) (rows int, err error)
 
 	// Gated reports whether this record must produce NO rows, read from
-	// this same transaction.
-	//
-	// A gate is a rule under which a DURABLE record applies nowhere — a
-	// permanent deletion marker on its subject, or an eviction of the node
-	// that wrote it. It is the domain's because the rows that carry it
-	// are, and it is asked inside the transaction because the answer has
-	// to come from the same committed state the record would have applied
-	// against.
+	// this same transaction: a gate (a permanent deletion marker on its
+	// subject, an eviction of its writer) lives in the domain's rows and
+	// must come from the state the record would apply against.
 	Gated(ctx context.Context, tx *sql.Tx, rec Record) (Reason, bool, error)
 
-	// Committed runs AFTER the transaction commits, for the consequences
-	// that are not rows.
-	//
-	// Separate because the transaction may run more than once: the store
-	// re-runs the body of an attempt that failed transiently, so a side
-	// effect inside Apply would happen twice.
+	// Committed runs AFTER the transaction commits, for consequences that
+	// are not rows: the store re-runs a transiently failed body, so a side
+	// effect in Apply could happen twice.
 	Committed(ctx context.Context)
 }
 
-// RetentionHook is the optional half of the [Applier] contract: an applier that
-// has a consequence to act on when a committed batch RETAINED records rather
-// than applying them implements it, and the framework calls Retained after the
-// commit, IMMEDIATELY BEFORE [Applier.Committed] for the same batch, with how
-// many records the batch retained.
+// RetentionHook is the optional half of the [Applier] contract: after a
+// committed batch that RETAINED at least one record, the framework calls
+// Retained with how many, IMMEDIATELY BEFORE [Applier.Committed].
 //
-// # Why a retained record needs a hook of its own
-//
-// Committed's consequences are the ones an applier gathered in Apply, and a
-// retained record never reaches Apply: a record a newer build wrote, one signed
-// under a keyring key this node does not hold, and one whose scope a record
-// already retained covers are each filed in the deferral index and consumed
-// without a row. So an applier that says after a batch what the batch MOVED
-// says nothing about one that retained — and what moved is what this node can
-// vouch for: every read whose scope the record covers is unknown from that
-// commit on ([Runner.Deferred], the readers' coverage answers). A listener held
-// on a decision made before the commit has to hear that it may no longer stand,
-// and only the applier knows who that listener is.
-//
-// # A count, not the records
-//
-// What a retained record is ABOUT is inside the payload this node could not
-// read; its envelope names a scope, and a scope is the domain's own address
-// for what a reader asks rather than a list of whom the record moves. So the
-// hook says THAT the batch retained and how much, and an applier that cannot
-// say whose standing that leaves unknown says everyone's.
-//
-// # When it is not called
-//
-// Only for a batch that retained at least one record. A record the reprocess
-// at a loop's start KEEPS — still above this build's version, still signed
-// under a key it lacks — calls nothing: it was retained before, and was
-// announced then, by this process or by one that ran before any listener this
-// process holds was registered.
-//
-// OPTIONAL, because most domains have no consequence of a record they cannot
-// read beyond the deferral the framework already records: a wake is derived
-// when the record applies, and a reader asks the deferral index itself. An
-// applier that implements it asserts so at compile time
-// (`var _ statelog.RetentionHook = (*Applier)(nil)`), since the framework finds
-// it by a type assertion that a misspelt method would silently fail.
+// A retained record never reaches Apply, yet every read its scope covers is
+// unknown from that commit ([Runner.Deferred]), and only the applier knows
+// which listener holds a decision that may no longer stand. A count, since
+// what the record is about is in a payload this node cannot read: an applier
+// that cannot say whose standing is unknown says everyone's. A record the
+// loop's reprocess KEEPS calls nothing; it was announced when first retained.
+// Implementers assert `var _ statelog.RetentionHook = (*Applier)(nil)`: a
+// misspelt method silently fails the framework's type assertion.
 type RetentionHook interface {
 	// Retained runs after the commit and before Committed, on the apply
 	// loop's own goroutine. It must not block.
@@ -761,52 +578,37 @@ type RetentionHook interface {
 }
 
 // ApplyOptions carries every value an applier would otherwise read from the
-// world.
-//
-// Filled by the framework PER BATCH ([Runner.batchOptions]: the batch's Now,
-// the epoch as it stands, the store's bind limit, beside the stream's static
-// declarations), EXCEPT StoredAt, which is per record and comes from the
-// broker — which is what makes it byte-identical on every node rather than a
-// clock each node reads for itself, once the framework has put it in the
-// store's encoding ([Record.StoredAt]).
+// world. Filled PER BATCH ([Runner.batchOptions]), except StoredAt, which is
+// per record and the broker's ([Record.StoredAt]).
 type ApplyOptions struct {
 	// Now is the batch's instant. NOT for durations: it is the same
 	// value for every record in a batch, so a difference between two
 	// records' Now values is a batch boundary rather than elapsed time.
 	Now time.Time
 
-	// StoredAt is the broker's own timestamp for this record, the same
-	// value as [Record.StoredAt]: UTC at a microsecond on every node and on
-	// every path a record reaches the applier by.
+	// StoredAt is [Record.StoredAt]: UTC at a microsecond on every node
+	// and every path a record reaches the applier by.
 	StoredAt time.Time
 
-	// ArbitratedKinds is the stream's declaration, carried here so an
-	// applier that needs it reads the same static value the framework
-	// does rather than a second copy.
+	// ArbitratedKinds is the stream's declaration, carried so an applier
+	// reads the framework's static value rather than a second copy.
 	ArbitratedKinds []string
 
 	// Epoch is the per-epoch configuration the domain declared it reads,
-	// as this node's epoch stood when the BATCH began
-	// ([RunnerDeps.Epoch]). It is here rather than read by the applier
-	// because two nodes briefly on different epochs must still produce
-	// rows a reader can account for — which is exactly what the Divergent
-	// class names — and "briefly" is the whole of it: each node moves to
-	// a new epoch at its next batch, not at its next restart.
+	// as this node's epoch stood when the BATCH began ([RunnerDeps.Epoch]).
+	// Passed in so two nodes briefly on different epochs produce rows a
+	// reader can account for (the Divergent class); a node moves to a new
+	// epoch at its next batch, not its next restart.
 	Epoch map[string]any
 
-	// MaxVariables is the engine's probed bind-parameter limit, which is
-	// what [store.InsertRows] divides by a row's width to size a chunk.
+	// MaxVariables is the engine's probed bind-parameter limit, which
+	// [store.InsertRows] divides by a row's width to size a chunk. Carried
+	// here because an applier holds only a transaction; without it each
+	// would need a store handle to write child rows as more than one
+	// statement per row.
 	//
-	// CARRIED HERE for the reason ArbitratedKinds is: an applier holds a
-	// transaction and nothing else, so without this every one of them
-	// would need a store handle plumbed through its constructor to write
-	// its child rows as anything but one statement per row — which is
-	// precisely what they all did, and what made the chunker a function
-	// with no callers while three doc comments described it as shipped.
-	//
-	// A ZERO IS NOT A LIMIT, it is an unset field: [store.RowsPerInsert]
-	// reads 0 as "no room for even one row" and falls to a single row per
-	// statement, so a caller that forgets to set this gets the old
-	// per-row behaviour rather than a statement the engine refuses.
+	// ZERO IS UNSET, not a limit: [store.RowsPerInsert] reads it as no room
+	// and falls back to one row per statement, never a statement the
+	// engine refuses.
 	MaxVariables int
 }

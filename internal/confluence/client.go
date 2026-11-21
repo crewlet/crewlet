@@ -158,20 +158,11 @@ func (c *Client) Deployment() Deployment { return c.deploy }
 // RESTBase is the address every call is made against, /wiki included where
 // the deployment needs it.
 //
-// Three shapes, and the difference is not cosmetic:
-//
-//   - a Cloud gateway already names the product, so /wiki there is a 404
-//     on every call;
-//   - a Cloud SITE serves Confluence under /wiki, and without it every call
-//     lands on the Jira side of the same host;
-//   - Data Center serves it at the root.
-//
-// A base that already ends in /wiki is left alone, because an operator who
-// wrote the full address is not wrong. Only a site at a host the rule
-// recognises ([atlassianhost.IsSite]) gains the prefix: an Isolated Cloud
-// site, Cloud by its company's declaration, is at a host no rule names, and
-// whether a path there is a site or a gateway is something only its address
-// can say — so it is written out whole, /wiki included.
+// A Cloud gateway already names the product (/wiki there is a 404); a Cloud
+// SITE serves Confluence under /wiki (without it calls land on Jira); Data
+// Center serves it at the root. A base already ending in /wiki is left alone.
+// Only a site at a host [atlassianhost.IsSite] recognises gains the prefix: an
+// Isolated Cloud site is at a host no rule names, so it is written out whole.
 func RESTBase(base string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	switch {

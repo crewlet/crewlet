@@ -57,14 +57,12 @@ func twoRevisions(answeredAt statelog.Position) func(gitlet.ReadQuery) (gitlet.R
 }
 
 // THE CHANGE QUESTIONS READ AT THE CALLER'S FLOOR. A screen reads its own
-// write to a change back at `session` beside the position the write answered
-// with, so each change question hands the reader the caller's WHOLE freshness
-// on its first read of the rows; a part read by object id reads every later
-// row of its answer at `session` floored at that first read's position — so
-// it is never assembled from a copy older than the one its first read saw —
-// and asks the Gitlet node at the floor of the records that moved each revision
-// it reads and its target (gitlet.ObjectFloor), never at the caller's floor or
-// a row read's checkpoint.
+// write back at `session` beside the position the write answered with, so each
+// change question hands the reader the caller's WHOLE freshness on its first
+// read of the rows; a part read by object id reads every later row at `session`
+// floored at that first read's position, and asks the Gitlet node at the floor
+// of the records that moved each revision it reads and its target
+// (gitlet.ObjectFloor), never at the caller's floor or a row read's checkpoint.
 //
 // Mutations: read a later revision at the caller's freshness → its read is
 // not floored at the first's answer, red; ask the Gitlet node at the caller's

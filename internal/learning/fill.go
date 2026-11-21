@@ -137,15 +137,12 @@ const (
 // fill statements above — in one transaction, and reports how many it stored.
 //
 // A row already holding a vector of the same model at this width is not
-// counted. Setting the vector stamps the row with a fresh change sequence —
-// the table's own trigger (node migration 0041) — which is what carries it to
-// the seat's next holder.
+// counted. Setting the vector stamps a fresh change sequence (the table's
+// trigger, node migration 0041), which carries it to the seat's next holder.
 //
-// The vector rule is the writers' own ([encodeVectorColumns]): a vector of the
-// wrong width fails the whole fill — a provider answering another width is a
-// configuration fault, and every vector beside it is suspect — while a
-// non-finite one, one of zeros, or one naming no model, is skipped and the row
-// stays unfilled.
+// The vector rule is the writers' own ([encodeVectorColumns]): a wrong width
+// fails the whole fill (a configuration fault, every vector beside it suspect);
+// a non-finite, all-zero or modelless one is skipped and the row stays unfilled.
 func fillVectors(ctx context.Context, db *store.DB, statement, table, discarded string,
 	fills []VectorFill,
 ) (int, error) {

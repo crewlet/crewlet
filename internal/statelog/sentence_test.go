@@ -14,14 +14,8 @@ import (
 )
 
 // THE THREE REFUSALS THAT MEAN ONE THING ARE TOLD IN WORDS FOR A PERSON,
-// however a domain wrapped them — and nothing else is.
-//
-// The framework's own text for each names the subject it met, a broker path;
-// a domain's wrap adds its own sentinel in front. Both are the same refusal,
-// and a surface asking [statelog.Sentence] about either is handed the same
-// words, with no package prefix and no subject in them. A condition of the node
-// is not one of the three, and a surface told it was would tell a person a
-// lost race where the node could not serve.
+// however a domain wrapped them, and nothing else is: no package prefix, no
+// subject, and a node's condition never told as a lost race.
 //
 // Mutation: drop any arm of [statelog.Sentence] and its rows go red; answer
 // the error's own text and every row carries the subject.
@@ -67,35 +61,18 @@ func TestTheFrameworksRefusalsAreToldInWordsForAPerson(t *testing.T) {
 	}
 }
 
-// EVERY CONDITION THIS BUILD NAMES IS TOLD IN WORDS FOR A PERSON, and the
-// words agree with the answer's Retry-After.
+// EVERY CONDITION THIS BUILD NAMES IS TOLD IN WORDS FOR A PERSON, agreeing
+// with the answer's Retry-After. The walk is over [statelog.Reasons] and
+// [statelog.ReadRefusals], so a code added without a sentence fails here. Each
+// sentence is its own (not the unknown code's); carries nothing of the detail,
+// the framework's words, a code's spelling, a position or an em dash; reads as
+// a sentence whose first half a tool can carry; says "try again in a moment"
+// exactly where [statelog.RetryAfter] is above zero; never says "this node" or
+// "ask an administrator"; and is logged at WARN exactly where no wait clears it.
 //
-// The walk is over [statelog.Reasons] and [statelog.ReadRefusals] rather than a
-// list here, so a code added later without a sentence fails this test instead
-// of reaching a screen as the framework's text or as the sentence for a code
-// this build does not know. For each one the sentence must:
-//
-//   - be its own, not the one a code from a newer peer is told in;
-//   - carry nothing of the refusal's detail, the framework's words, a code's
-//     spelling, a position or an em dash, all of which are the log's;
-//   - read as a sentence: a capital first, a full stop last, and its first
-//     half a clause a tool's sentence can carry (no capital, no full stop);
-//   - ask the person to try again in a moment exactly where the answer
-//     carries a Retry-After ([statelog.RetryAfter] above zero), and nowhere
-//     else, because "in a moment" with no wait that changes anything is a
-//     loop;
-//   - never say "this node", since the node that refused may be a data node
-//     the asking one routed to, nor ask for an administrator, since an
-//     administrator reads the identity directory's answers;
-//   - be logged at WARN exactly where no wait clears it
-//     ([statelog.ConditionLevel]).
-//
-// Mutation: delete any row of either table and that code reads the unknown
-// code's sentence; give a code that clears on its own any other advice, or one
-// that does not "try again in a moment", and its row goes red; answer the
-// detail and every row carries it; say "this node" again and the rows naming
-// a node go red; drop the copy table, or the copy's hint, and the copy cases
-// go red.
+// Mutation: delete a row of either table, give a code the wrong advice, answer
+// the detail, say "this node" again, or drop the copy table or its hint, and
+// rows go red.
 func TestEveryConditionIsToldInWordsForAPerson(t *testing.T) {
 	t.Parallel()
 	const detail = "the write needs this node to have applied 3:4182 on " +
@@ -169,9 +146,8 @@ func TestEveryConditionIsToldInWordsForAPerson(t *testing.T) {
 			t.Errorf("%s clears on no wait and asks for one: %q", c.name, said)
 		}
 		// NOT "THIS NODE": the estate router hands a data node's refusal
-		// back as the asking node's answer, so the node is named by what
-		// it is doing; and an administrator is never asked for on a
-		// surface whose reader is one, nor told every record is full when
+		// back as the asking node's answer. Nor an administrator asked for on
+		// a surface whose reader is one, nor every record called full when
 		// one area's log is.
 		for _, wrong := range []string{"this node", "check this one",
 			"readmit this one", "ask an administrator", "records are full"} {
@@ -184,11 +160,9 @@ func TestEveryConditionIsToldInWordsForAPerson(t *testing.T) {
 			t.Errorf("%s (Retry-After %v) is logged at %s", c.name, waits, level)
 		}
 	}
-	// ANOTHER NODE'S COPY under a gate that blames its writer clears once the
-	// log's duplicate window lets go of the operation, so it carries that
-	// window as its hint and asks the person to send it again in a few
-	// minutes — never to readmit a node or to remake a change that will land
-	// as it is — and is logged at the level a condition that clears is.
+	// ANOTHER NODE'S COPY under a gate that blames its writer waits out the
+	// log's duplicate window, asks for a resend in a few minutes (never a
+	// readmit or a remake), and logs at the cleared level.
 	for _, r := range statelog.Reasons() {
 		if !r.BlamesWriter() {
 			continue

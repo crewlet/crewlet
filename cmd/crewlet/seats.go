@@ -17,24 +17,13 @@ import (
 //
 // # Through the act transport, as whoever the token is
 //
-// The same `pause_seat` and `resume_seat` the dashboard's buttons call, over
-// the same route (`POST /operator/act/{tool}`), so a pause from a terminal and
-// one from the profile screen are one gesture with one record. The credential
-// is CREWLET_API_TOKEN and nothing else, and the node decides the gesture on
-// the principal it resolves to — the seat's holder, whoever leads it, or an
-// admin — and records it under that principal's own name, its kind and the
-// credential, as every other write is recorded. Nobody is refused for being
-// bound to no seat: a token with the authority acts under its own login.
-//
-// # A retry is the same operation
-//
-// Every invocation mints an operation id before the request and sends it as
-// the `Idempotency-Key` header, which the act transport requires; an answer
-// whose outcome is unknown — or none at all — prints it, and `-op-id` sends it
-// again, so a retry is the first attempt's operation rather than a second one.
-// Both gestures are also idempotent on the record itself — pausing a paused
-// seat changes nothing — so the id is what keeps the runtime audit to one row
-// per gesture.
+// The same `pause_seat` and `resume_seat` the dashboard calls, over the same route
+// (`POST /operator/act/{tool}`): one gesture, one record. The credential is
+// CREWLET_API_TOKEN alone; the node decides on the principal it resolves to and
+// records it under that name. Every invocation mints an operation id, sent as the
+// `Idempotency-Key` header the act transport requires; an unknown outcome prints
+// it and `-op-id` sends it again, so a retry is the first attempt's operation and
+// the runtime audit stays at one row per gesture.
 
 // runSeats dispatches `crewlet seats`.
 func runSeats(environ config.Source, args []string, stdout, stderr io.Writer) error {

@@ -199,11 +199,52 @@ export function artifactStandalonePath(id: string): string[] {
 
 /**
  * The page an address opens: an artifact's standalone page is its artifact's
- * page, so a recent or a star kept from either is the one artifact.
+ * page, so a recent or a star kept from either is the one artifact, and an
+ * Inbox item's address is the Inbox.
  */
 export function pagePath(path: readonly string[]): string[] {
   const where = resolve([...path]);
+  if (where.resolved && where.screen === "inbox") return ["inbox"];
   return where.resolved && where.screen === "artifact" ? artifactPath(where.id) : [...path];
+}
+
+/** The kinds of item the Inbox lists, each its row key's prefix and its address's first segment. */
+export const INBOX_ITEM_KINDS = [
+  "ask",
+  "run",
+  "seat",
+  "condition",
+  "notice",
+  "change",
+  "artifact",
+] as const;
+
+export type InboxItemKind = (typeof INBOX_ITEM_KINDS)[number];
+
+/**
+ * An Inbox item's address from its row key (`<kind>:<id>`): `#/inbox/<kind>/<id>`, a `/` in an id
+ * a segment break. An executor's open question is `run/<turn>` whichever it asks now, an answered
+ * one `run/<turn>/<launch>`. Here for the reason [artifactPath] is: Home links to an item.
+ */
+export function inboxItemPath(key: string): string[] {
+  const cut = key.indexOf(":");
+  const kind = key.slice(0, cut);
+  const id = key.slice(cut + 1);
+  if (cut <= 0 || !id || !INBOX_ITEM_KINDS.includes(kind as InboxItemKind)) return ["inbox"];
+  if (kind !== "run") return ["inbox", kind, ...id.split("/")];
+  const at = id.indexOf(":");
+  const turn = at < 0 ? id : id.slice(0, at);
+  const launch = at < 0 ? "" : id.slice(at + 1);
+  return ["inbox", "run", turn, ...(launch ? launch.split("/") : [])];
+}
+
+/** The row key an Inbox address's tail (after `inbox`) names, or null where it names none. */
+export function inboxItemKey(tail: readonly string[]): string | null {
+  const [kind, ...id] = tail;
+  if (!kind || id.length === 0 || !INBOX_ITEM_KINDS.includes(kind as InboxItemKind)) return null;
+  if (kind === "run")
+    return id.length === 1 ? `run:${id[0]}` : `run:${id[0]}:${id.slice(1).join("/")}`;
+  return `${kind}:${id.join("/")}`;
 }
 
 /**
@@ -297,11 +338,27 @@ export type SignInScreen =
   | { screen: "invite"; link: string }
   | { screen: "reset"; link: string };
 
+/** The Advisor page's tabs: what is open now, the weekly reports, and what closed. */
+export const ADVISOR_SECTIONS = ["findings", "reports", "history"] as const;
+
+/** An ISO week as the Advisor names a report: `2026-W47`. */
+const WEEK_SHAPE = /^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$/;
+export type AdvisorSection = (typeof ADVISOR_SECTIONS)[number];
+
 /** Every screen the frame draws, with what its path names. */
 export type FramedScreen =
   | { screen: "home" }
-  | { screen: "inbox" }
+  /** `item` is the open item's row key ([inboxItemKey]). */
+  | { screen: "inbox"; item?: string }
   | { screen: "me"; section: MeSection }
+  /** Ask Crewlet's page, on one of the reader's conversations by id, or on the one this tab was on. */
+  | { screen: "ask"; conversation?: string }
+  /** The Advisor's page, on one of its tabs. */
+  | { screen: "advisor"; section: AdvisorSection }
+  /** One finding, by its episode's id. */
+  | { screen: "advisor-finding"; id: string }
+  /** One weekly report, by its ISO week. */
+  | { screen: "advisor-report"; week: string }
   | { screen: "worklet-projects" }
   | { screen: "worklet-tasks" }
   | { screen: "worklet-views"; id?: string }
@@ -371,7 +428,6 @@ export type FramedScreen =
   | { screen: "mcp-tools"; server?: string; tool?: string }
   | { screen: "secrets"; name?: string }
   | { screen: "limits" }
-  | { screen: "ask-crewlet" }
   | { screen: "spend" }
   | { screen: "spend-tasks" }
   | { screen: "people" }
@@ -386,7 +442,6 @@ export type FramedScreen =
   | { screen: "storage" }
   | { screen: "code-settings" }
   | { screen: "diagnostics" }
-  | { screen: "advisor" }
   | { screen: "account" };
 
 /** Every screen the dashboard draws. */
@@ -450,8 +505,34 @@ export function resolve(path: string[]): Route {
   switch (head) {
     case "home":
       return rest.length ? missing("home", under("Home")) : screen({ screen: "home" });
-    case "inbox":
-      return rest.length ? missing("inbox", under("Inbox")) : screen({ screen: "inbox" });
+    case "inbox": {
+      if (rest.length === 0) return screen({ screen: "inbox" });
+      const item = inboxItemKey(rest);
+      return item ? screen({ screen: "inbox", item }) : missing("inbox", under("Inbox"));
+    }
+    case "ask": {
+      // ONE CONVERSATION BY ITS ID, or none: the page opens on the one this
+      // tab was on, or on a new one.
+      if (rest.length === 0) return screen({ screen: "ask" });
+      const [id] = rest;
+      if (rest.length === 1 && id && ID_SHAPE.test(id))
+        return screen({ screen: "ask", conversation: id });
+      return missing("ask", under("Ask Crewlet"), "A conversation is named by its id");
+    }
+    case "advisor": {
+      const [first, second] = rest;
+      if (first === undefined) return screen({ screen: "advisor", section: "findings" });
+      if (rest.length === 1 && (first === "reports" || first === "history")) {
+        return screen({ screen: "advisor", section: first });
+      }
+      if (rest.length === 2 && first === "reports" && second && WEEK_SHAPE.test(second)) {
+        return screen({ screen: "advisor-report", week: second });
+      }
+      if (rest.length === 2 && first === "findings" && second && ID_SHAPE.test(second)) {
+        return screen({ screen: "advisor-finding", id: second });
+      }
+      return missing("advisor", under("Advisor"));
+    }
     case "me": {
       if (rest.length === 0) return screen({ screen: "me", section: "queue" });
       const [section] = rest;
@@ -858,7 +939,6 @@ function settings(rest: string[], screen: Make, under: Under): Route {
   const bare: Partial<Record<string, FramedScreen>> = {
     general: { screen: "general" },
     limits: { screen: "limits" },
-    "ask-crewlet": { screen: "ask-crewlet" },
     people: { screen: "people" },
     "service-accounts": { screen: "service-accounts" },
     tokens: { screen: "tokens" },
@@ -868,7 +948,6 @@ function settings(rest: string[], screen: Make, under: Under): Route {
     storage: { screen: "storage" },
     gitlet: { screen: "code-settings" },
     diagnostics: { screen: "diagnostics" },
-    advisor: { screen: "advisor" },
   };
   const plain = Object.hasOwn(bare, first) ? bare[first] : undefined;
   if (plain) return tail.length ? none() : screen(plain);

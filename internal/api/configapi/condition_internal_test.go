@@ -22,23 +22,16 @@ import (
 
 // A CONDITION OF THE NODE IS NOT A FAULT HERE EITHER.
 //
-// Every failure this surface did not name was `500 internal_error`, beside
-// the coordination store's own arm, which answers the fleet's pointer it could
-// not read with its reason and the Retry-After every undecided request here
-// takes: a store busy with other writes, one closed while the node adopts a
-// snapshot, a log at its ceiling, a request out of time, each told an
-// administrator the engine had broken and offered no retry. A condition is
-// `503` in a person's words for it ([builtin.ConditionSentence]), under its
-// own hint, none where no wait clears it, and its error goes to the log; a
-// fault keeps its `500` (the control).
+// A busy store, a log at its ceiling or a request out of time must not answer
+// `500 internal_error`, which says the engine broke and offers no retry. A
+// condition is `503` in a person's words ([builtin.ConditionSentence]), under
+// its own hint, none where no wait clears it, its error logged; a fault keeps
+// its `500` (the control). Not parallel: it installs the process's log sink.
 //
-// Not parallel: it installs the process's log sink.
-//
-// Mutation: drop the condition's arm from fail and the busy store and the
-// full log answer 500; put it before the coordination store's arm and that
-// row loses its reason; answer the fault as a condition and the control
-// does; log through another package's logger, or without what the request was
-// doing, and the log assertion goes red.
+// Mutation: drop the condition's arm from fail and the busy store and full log
+// answer 500; put it before the coordination store's arm and that row loses its
+// reason; answer the fault as a condition and the control does; log elsewhere
+// or without what the request was doing and the log assertion goes red.
 func TestAConditionIsNotAFault(t *testing.T) {
 	var out syncBuffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &out)

@@ -141,15 +141,13 @@ func TestAReadIsScopedToTheCanonicalContainer(t *testing.T) {
 // A PAGE READ REFUSES A PAGE A RETAINED RECORD IS ABOUT — BY ITS ID AND BY ITS
 // ADDRESS — AND ONE NO ROW HOLDS WHILE A RETAINED RECORD MAY CREATE IT.
 //
-// A point read's refusal is decided on the page's own scope, and that scope
-// was formed from the reference: an id became the container AND the id, an
-// address the id, so neither matched the object path any record about the
-// page is filed under, and a page a record this node cannot decode had saved,
-// moved or trashed was served as current. The scope is the resolved page's,
-// in the snapshot that read it — and a page no row holds is decided the same
-// way, since "no such page" read from rows a retained create never wrote is
-// the same stale answer.
-//
+// A point read's refusal is decided on the page's own scope, which was once
+// formed from the reference (an id became container AND id, an address the id),
+// matching no object path a record about the page is filed under, so a page a
+// record this node cannot decode had saved, moved or trashed was served as
+// current. The scope is the resolved page's, in the snapshot that read it; a
+// page no row holds is decided the same way, since "no such page" from rows a
+// retained create never wrote is the same stale answer.
 // Mutation: go back to the reference's own scope, or drop the absent page's
 // probe, and a row goes red.
 func TestAPageReadRefusesWhatARetainedRecordCovers(t *testing.T) {
@@ -182,24 +180,18 @@ func TestAPageReadRefusesWhatARetainedRecordCovers(t *testing.T) {
 	}
 }
 
-// A PAGE NO ROW HOLDS IS REFUSED WHILE ANY RETAINED RECORD MAY CREATE IT — ONE
-// ABOUT A WHOLE SPACE INCLUDED — AND EVERY POINT READ IS DECIDED IN ITS OWN
-// SNAPSHOT.
+// A PAGE NO ROW HOLDS IS REFUSED WHILE ANY RETAINED RECORD MAY CREATE IT, AND
+// EVERY POINT READ IS DECIDED IN ITS OWN SNAPSHOT.
 //
-// A record's scope is the complete set of objects its apply may write, and a
-// space's own term covers every page that may come to be in it: a record about
-// all of OPS that this node cannot decode may be the one that creates a page,
-// so "no such page", read by id from rows that record never wrote, is the
-// stale answer a point read refuses. The absent row names no space, so every
-// space's term is asked. And the decision is the read's own: the framework
-// consults the deferral index only where the node reported a retained record
-// before the read began, so one retained while the read waited — a node that
-// reports none, here — is seen by the read's snapshot or by nothing, for a page
-// that is held, one absent by id and one absent by address alike.
-//
-// Mutation: match an absent id against its object path alone, or leave an
-// absent page (by id or by address) or a held one to the framework's probe,
-// and a row goes red.
+// A space's own term covers every page that may come to be in it: an
+// undecodable record about all of OPS may create the page, so "no such page" by
+// id is a stale answer. The absent row names no space, so every space's term is
+// asked. The framework consults the deferral index only where the node reported
+// a retained record before the read began, so one retained while it waited is
+// seen by the read's snapshot or by nothing, for a held page, an absent id and
+// an absent address alike. Mutation: match an absent id against its object path
+// alone, or leave an absent or held page to the framework's probe, and a row
+// goes red.
 func TestAnAbsentPageIsDecidedAgainstEveryRecordThatMayCreateIt(t *testing.T) {
 	t.Parallel()
 	unwritten := uuid.Must(uuid.NewV7()).String()

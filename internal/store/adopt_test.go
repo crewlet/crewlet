@@ -11,17 +11,14 @@ import (
 
 // ADOPTION OVER A LIVE DATABASE WITH A HOT -wal.
 //
-// The shape that matters: both files have uncommitted-to-the-database pages
-// sitting in a -wal when the adoption starts, which is the ordinary state of
-// any database this engine has written to. What the test asserts is that the
-// adopted database reads back as the DONOR's — and that no sidecar of either
-// file survives, because a -wal left beside a renamed database is pages of a
-// database that no longer exists.
+// Both files have pages sitting in a -wal when adoption starts, the ordinary
+// state of a written database. The adopted database must read back as the
+// DONOR's and no sidecar of either file may survive: a -wal beside a renamed
+// database is pages of a database that no longer exists.
 //
-// Mutation: rename without checkpointing the prepared file and the adopted
-// database is missing whatever was still in its -wal; remove the live file's
-// sidecars after the rename instead of before, and the new database opens
-// with the OLD one's pages applied to it.
+// Mutation: rename without checkpointing the prepared file and its -wal pages
+// are missing; remove the live file's sidecars after the rename instead of
+// before, and the new database opens with the OLD one's pages applied.
 func TestAdoptFileReplacesALiveDatabase(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

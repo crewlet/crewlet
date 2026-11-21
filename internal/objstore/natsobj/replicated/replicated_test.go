@@ -160,17 +160,14 @@ func TestAnObjectPutThroughOneMemberIsWholeThroughEvery(t *testing.T) {
 
 // BenchmarkBackend measures the broker's object store at three replicas
 // through the suite every backend runs, driven from a FOLLOWER's client
-// (`from=follower`): every put and every read is answered by the bucket's
-// stream leader whichever member's client sends it, so two of a fleet's three
-// data nodes reach it from a follower, across a route.
+// (`from=follower`): the stream leader answers every put and read whichever
+// member sends it, so two of a fleet's three data nodes reach it across a route.
 //
-// THE THREE MEMBERS SHARE ONE MACHINE — three brokers on its CPUs and three
-// copies of every byte fsynced to its one disk, with no network hop between
-// them — so the figures are pessimistic per member for the disk and the CPU,
-// and say nothing about a datacenter's round trip between members.
-//
-// ONE CLUSTER FOR EVERY CASE, the bucket's stream PURGED before each, so a
-// case starts from an empty bucket without paying a cluster's bring-up.
+// THE THREE MEMBERS SHARE ONE MACHINE (its CPUs, one disk fsyncing three copies
+// of every byte, no network hop), so figures are pessimistic per member for
+// disk and CPU and say nothing of a datacenter's round trip. ONE CLUSTER FOR
+// EVERY CASE, the stream PURGED before each, so a case starts empty without a
+// cluster's bring-up.
 func BenchmarkBackend(b *testing.B) {
 	quiet(b)
 	f := startFleet(b)

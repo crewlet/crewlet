@@ -15,11 +15,10 @@ import (
 
 // NewRows builds the publisher's read seam over the log spec names.
 //
-// NO GUARDS, and that is the domain rather than an omission: the guards answer
-// a first-writer-wins create ([statelog.PatternCreate]), and nothing on this
-// log is created that way. A conversation and a seat are not objects anything
-// creates, only subjects records arbitrate on, and a turn's tombstone is read
-// by its own records' decides and applies ([readTomb]).
+// NO GUARDS, by design: guards answer a first-writer-wins create
+// ([statelog.PatternCreate]), and nothing here is created that way. A
+// conversation and a seat are only subjects records arbitrate on, and a turn's
+// tombstone is read by its own records' decides and applies ([readTomb]).
 func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows, error) {
 	return statelog.NewRows(db, Domain{}, spec, nil)
 }

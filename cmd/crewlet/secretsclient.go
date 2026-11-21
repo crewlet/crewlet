@@ -28,17 +28,16 @@ import (
 
 // The CLI's client for /secrets, and why the command has one at all.
 //
-// The company's secrets live on the coordination KV so every node reads the
-// same rows. On the default topology that KV is inside the engine's own
-// process and does not listen on a socket, and while the engine runs a second
-// broker on its store directory is refused — so the running node is the only
-// way in. This is how `crewlet secrets` reaches it.
+// The company's secrets live on the coordination KV so every node reads the same
+// rows. On the default topology that KV is inside the engine's process with no
+// socket, and a second broker on its store directory is refused while the engine
+// runs, so the running node is the only way in: how `crewlet secrets` reaches it.
 //
 // # It is not a fallback, it is the primary path
 //
 // A fleet's engine is running. With this node's engine STOPPED, the command
-// reaches the same store itself instead (fleetstore.go), and a node that
-// holds no data, or a member of a cluster, still goes through a running one.
+// reaches the same store itself instead (fleetstore.go), and a node that holds no
+// data, or a member of a cluster, still goes through a running one.
 
 // apiTimeout bounds one call to the node's API.
 //
@@ -120,16 +119,15 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 // Set stores or rotates one value, and reports the author the node recorded.
 //
 // NEITHER `by` NOR `source` IS SENT. The node stamps the party its own guard
-// authenticated, which is the only attribution that means anything on this
-// path — a client-supplied author would be a field the caller chooses — and
-// its route's own source, `api`, and it refuses a write that names either:
-// the route takes no query at all. It answers with what it stamped, which is
-// what the command prints.
+// authenticated, the only attribution that means anything here (a client-supplied
+// author is a field the caller chooses), and its route's own source, `api`, and it
+// refuses a write that names either. It answers with what it stamped, which the
+// command prints.
 //
-// A VALUE PAST [secrets.MaxValueBytes] IS REFUSED BEFORE IT IS SENT, in the
-// words the fleet's store refuses a direct write in: the node would refuse it
-// too, with a 413 that names a body rather than a value, after the whole of it
-// had crossed the network.
+// A VALUE PAST [secrets.MaxValueBytes] IS REFUSED BEFORE IT IS SENT, in the words
+// the fleet's store refuses a direct write in: the node would refuse it too, with
+// a 413 naming a body rather than a value, after all of it had crossed the
+// network.
 func (c *secretsClient) Set(ctx context.Context, name, value string, _ secrets.Author,
 	_ secrets.Source, _ time.Time) (storedSecret, error) {
 
@@ -212,23 +210,18 @@ func (c *secretsClient) Get(ctx context.Context, name string) (string, error) {
 	return body.Value, nil
 }
 
-// Values reads the values held under the names asked for through the node's
-// POST /secrets/reveal, in requests of at most [secretsapi.MaxRevealNames], so
-// a set is one request or a few and never one per name. A name nothing holds
-// is absent from the answer, and only the names asked come back, whatever the
-// node answers beside them.
+// Values reads the values held under the names asked for through the node's POST
+// /secrets/reveal, in requests of at most [secretsapi.MaxRevealNames], so a set is
+// one request or a few, never one per name. A name nothing holds is absent from
+// the answer, and only the names asked come back.
 //
-// It is the BREAK-GLASS READ, as [secretsClient.Get] is: the node decides it
-// on `secrets.reveal` — admin, a recent proof and a person present, so a
-// machine token is refused it — logs every name each request asked for in
-// one line (`secrets_revealed`), and refuses the whole of a request one bad
-// name is in. A draining node answers 503, for any token.
-//
-// A REFUSAL OR AN UNREACHABLE NODE FAILS THE WHOLE READ, the values of the
-// requests before it included, and the [nodeRefusal] is kept for the caller
-// to tell a refused credential from a failing node ([refusedTheToken]): a
-// value missing because the node could not be asked is not a value the fleet
-// does not hold, and nothing here fills it in.
+// It is the BREAK-GLASS READ, as [secretsClient.Get] is: the node decides it on
+// `secrets.reveal` (admin, a recent proof and a person present, so a machine token
+// is refused), logs every name asked in one line (`secrets_revealed`), and refuses
+// a whole request one bad name is in. A REFUSAL OR AN UNREACHABLE NODE FAILS THE
+// WHOLE READ, earlier values included, and the [nodeRefusal] is kept so the caller
+// can tell a refused credential from a failing node ([refusedTheToken]): a value
+// missing because the node could not be asked is not one the fleet lacks.
 func (c *secretsClient) Values(ctx context.Context, names []string) (map[string]string, error) {
 	out := make(map[string]string, len(names))
 	for batch := range slices.Chunk(names, secretsapi.MaxRevealNames) {

@@ -46,11 +46,15 @@ var spelledElsewhere = map[string]map[string]string{
 	// pinned byte for byte by the envelope gate: a fleet mid-upgrade runs two
 	// builds, and a tool renamed in one must not rename the operation the
 	// other serves.
-	"internal/estate/ops.go": {
+	"internal/estate/ops_chat.go": {
 		"create_channel": "an estate operation's wire name",
-		"mark_inbox":     "an estate operation's wire name",
-		"my_work":        "an estate operation's wire name",
-		"write_project":  "an estate operation's wire name",
+	},
+	"internal/estate/ops_tracker_reads.go": {
+		"my_work": "an estate operation's wire name",
+	},
+	"internal/estate/ops_tracker_writes.go": {
+		"mark_inbox":    "an estate operation's wire name",
+		"write_project": "an estate operation's wire name",
 	},
 	"internal/estate/artifacts.go": {
 		"mark_inbox": "an estate operation's wire name",
@@ -126,12 +130,7 @@ var spelledElsewhere = map[string]map[string]string{
 	// every engine tool's name it needs off the authority verb.
 	"internal/assistant/catalog/toolnames.go": {
 		"answer_executor":  "a Dashboard Assistant tool's own name",
-		"get_artifact":     "a Dashboard Assistant tool's own name",
-		"get_page":         "a Dashboard Assistant tool's own name",
-		"list_artifacts":   "a Dashboard Assistant tool's own name",
-		"list_projects":    "a Dashboard Assistant tool's own name",
 		"mark_inbox":       "a Dashboard Assistant tool's own name",
-		"search_knowledge": "a Dashboard Assistant tool's own name",
 		"share_artifact":   "a Dashboard Assistant tool's own name",
 		"steer_turn":       "a Dashboard Assistant tool's own name",
 		"unshare_artifact": "a Dashboard Assistant tool's own name",
@@ -140,46 +139,27 @@ var spelledElsewhere = map[string]map[string]string{
 
 // authorityTable is the file the authority table's verbs are declared in.
 //
-// A VERB A TOOL SERVES IS NAMED AFTER THE TOOL, so the table spells every tool
-// name, and it is the one other place a name may be spelled. For the
-// artifacts' tools it is the name's DECLARATION — internal/agent/builtin reads
-// each artifacts tool's name off its row — except for the two a format's
-// reference names, which this package declares and their rows read. For every
-// other tool it is a copy of the owner's constant, and it stays one on
-// purpose: internal/authz cannot read the tracker's, the chat's or the pages'
-// constants without importing the store and the broker into a package that
-// decides over values, and it need not, because internal/agent/builtin's
+// The table spells every tool name, the one other place a name may be spelled.
+// For the artifacts' tools it is the name's DECLARATION (internal/agent/builtin
+// reads each name off its row), except the two a format's reference names,
+// which this package declares. For every other tool it is a copy of the
+// owner's constant, on purpose: internal/authz cannot read those without
+// importing the store and the broker, and internal/agent/builtin's
 // TestEveryRegisteredToolHasAnAuthorityRule and
-// TestEveryToolShapedActionIsARegisteredTool hold the table to the names this
-// build registers in both directions — a rename that left a row behind fails
-// the build there. Anything ELSE the file spells is a copy like any other.
+// TestEveryToolShapedActionIsARegisteredTool hold the table to the registered
+// names both ways. Anything ELSE the file spells is a copy like any other.
 const authorityTable = "internal/authz/rules.go"
 
 // NO TOOL NAME IS SPELLED TWICE. Every string literal in the module's non-test
-// Go source is read, and one that carries a tool name as a word of its own is
-// either that name's ONE declaration — the whole value of a constant — or a
-// copy, which fails naming the file and line: a prompt, a description, a
-// refusal or a deny list that spells the name instead of reading its
-// constant is a copy a rename leaves behind, compiling, telling a model to
-// call a tool that no longer exists or exempting one that does not. And every
-// name is declared exactly once, so there is one constant to read.
+// Go source is read; one carrying a tool name as a word is either that name's
+// ONE declaration (a constant's whole value) or a copy, which fails naming file
+// and line: a prompt or deny list spelling a name survives a rename, naming a
+// tool that no longer exists. Every name is declared exactly once, for EVERY
+// TOOL A MODEL IS OFFERED (the set fails closed). Test files and test-support
+// packages are not read: a test pins the literal on purpose.
 //
-// EVERY TOOL A MODEL IS OFFERED, not only the ones this package declares: the
-// walk used to read only this package's names, and the tools' own
-// descriptions, schemas and results spelled some two hundred names their
-// owners — the tracker, the chat, the pages, the builtins — declared as
-// constants, each a copy nothing compared. And the set fails closed: a tool a
-// phase surface offers beyond the seat's registry, which no authority row
-// names, is held to it by the runner's suite, which is how `ask_and_wait`,
-// declared beside its implementation alone, came to be read here at all.
-//
-// Test files are not read — a test pins the literal on purpose, so that a
-// rename is a decision its suite notices — and neither are test-support
-// packages (a package whose name ends in "test"), which spell what they fake.
-//
-// Mutation: put "activate_tool" back in skills' exempt list, write
-// "call get_work_item" into a tool's description, or spell "`ask_and_wait`"
-// in the run's brief (internal/engine's askBrief), and this is red; declare a
+// Mutation: write "call get_work_item" into a tool's description, or spell
+// "`ask_and_wait`" in internal/engine's askBrief, and this is red; declare a
 // second constant equal to "post_message" and it names both.
 func TestNoToolNameIsSpelledTwice(t *testing.T) {
 	t.Parallel()

@@ -438,20 +438,15 @@ func (s *suite) runScatter(t *testing.T) {
 		}
 	})
 
-	// THE BOUND IS THE REGISTRATION'S OWN, and so are its slots: a
-	// registration answers up to the bound it states, a request past it
-	// waits for one of ITS slots, and another registration beside it is
-	// answered at once. That is what lets a registration whose answers wait
-	// on a queue of their own — a push proposal behind its repository's
-	// earlier pushes, held for its asker's whole attempt — sit beside one
-	// whose answers do not: on one gate, sixty-four such waits hold every
-	// request the process answers.
+	// THE BOUND IS THE REGISTRATION'S OWN, and so are its slots: a request past
+	// it waits for one of ITS slots, and another registration beside it is
+	// answered at once. That lets a registration whose answers wait on a queue
+	// of their own (a push proposal behind earlier pushes) sit beside one whose
+	// answers do not; on one gate, sixty-four such waits hold every request.
 	//
 	// THAT THE ONE PAST THE BOUND WAITS is read off the registration's own
-	// count once it has decided, never off the answerer staying quiet for a
-	// while: a request the registration admits past its bound reaches the
-	// answerer whenever its answer runs, which a loaded runner puts after any
-	// pause.
+	// count, never off the answerer staying quiet: an admitted request reaches
+	// the answerer whenever its answer runs, after any pause on a loaded runner.
 	//
 	// Mutation: serve with a bound wider than the one the registration
 	// states, and the request past it is counted running.

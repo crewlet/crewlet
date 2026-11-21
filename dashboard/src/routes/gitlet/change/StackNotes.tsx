@@ -11,12 +11,23 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Button, Disclosure, Input, Select, Stack, Tag, Textarea } from "@crewlethq/ui";
+import {
+  Button,
+  Disclosure,
+  Input,
+  SegmentedControl,
+  Select,
+  Stack,
+  Tag,
+  Textarea,
+} from "@crewlethq/ui";
 import { PencilGlyph } from "@crewlethq/icons/glyphs";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useDraftState } from "~/app/assistant/draft.ts";
 import type { DiffLine } from "~/components/DiffView.tsx";
 import { CATEGORY_CHOICES, SEVERITY_CHOICES, categoryWord, severityWord } from "~/lib/code.ts";
+import { WriteButton, pressable } from "~/components/WriteButton.tsx";
+import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { plural } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -213,9 +224,12 @@ export function ChangeLines({ file, hunks, children }: StackLinesProps): ReactNo
         }
         if (drafts && pick && pick.side === side && pick.end === n) {
           out.push(
-            <FindingComposer
+            <LineComposer
               key="composer"
+              change={change}
+              path={path}
               pick={pick}
+              reviewing={drafts.drafts.length > 0}
               onAdd={(draft) => {
                 drafts.add({
                   ...draft,
@@ -381,6 +395,137 @@ function DraftNote({
   );
 }
 
+/** What a pick leaves on its lines: a comment, posted at once, or a finding, drafted for the review. */
+type LineNote = "comment" | "finding";
+
+/** The composer under a pick: a comment or a finding, a finding first while a review is drafted. */
+function LineComposer({
+  change,
+  path,
+  pick,
+  reviewing,
+  onAdd,
+  onCancel,
+}: {
+  change: CodeChangeDetail;
+  path: string;
+  pick: LinePick;
+  /** The reader is drafting a review: its findings are what they leave next. */
+  reviewing: boolean;
+  onAdd: (draft: Omit<DraftFinding, "id" | "path" | "side" | "line_start" | "line_end">) => void;
+  onCancel: () => void;
+}) {
+  const [note, setNote] = useState<LineNote>(reviewing ? "finding" : "comment");
+  const lines = linesOf(pick);
+  return (
+    <div className="code-line-compose">
+      <SegmentedControl
+        label={`What to leave on ${lines}`}
+        semantics="radio"
+        size="sm"
+        value={note}
+        options={[
+          { value: "comment", label: "Comment" },
+          { value: "finding", label: "Finding for the review" },
+        ]}
+        onValueChange={(next) => setNote(next === "finding" ? "finding" : "comment")}
+      />
+      {note === "comment" ? (
+        <LineComment change={change} path={path} pick={pick} onDone={onCancel} />
+      ) : (
+        <FindingComposer pick={pick} onAdd={onAdd} onCancel={onCancel} />
+      )}
+    </div>
+  );
+}
+
+/** "line 6" or "lines 4–6". */
+function linesOf(pick: LinePick): string {
+  return pick.start === pick.end ? `line ${pick.start}` : `lines ${pick.start}–${pick.end}`;
+}
+
+/** A comment on the picked lines, posted at once as a thread of its own anchored at the last of them. */
+function LineComment({
+  change,
+  path,
+  pick,
+  onDone,
+}: {
+  change: CodeChangeDetail;
+  path: string;
+  pick: LinePick;
+  onDone: () => void;
+}) {
+  const write = useAct("code_comment_on_change");
+  const [body, setBody] = useDraftState("");
+  const lines = linesOf(pick);
+  useDraftBox({
+    path: "line_comment",
+    label: `Comment on ${path}, ${lines}`,
+    hint: "Markdown",
+    rank: 10,
+    value: body,
+    set: setBody,
+    refuses: () => null,
+  });
+  const blocked = body.trim() ? undefined : "Write the comment first.";
+  const send = async () => {
+    if (!pressable(write, blocked)) return;
+    const result = await write.run(
+      {
+        change: change.ref,
+        body,
+        anchor: { path, line: pick.end, side: pick.side, revision: change.revision },
+      },
+      { done: `Commented on ${path}, ${lines}` },
+    );
+    if (result && (result.kind === "applied" || result.kind === "pending")) {
+      setBody("");
+      onDone();
+    }
+  };
+  return (
+    <form
+      className="code-finding"
+      aria-label={`A comment on ${lines}`}
+      onSubmit={(event) => {
+        event.preventDefault();
+        void send();
+      }}
+    >
+      <p className="muted">A comment on {lines}, posted now as a thread of its own.</p>
+      <Textarea
+        aria-label="Comment"
+        placeholder="Leave a comment. Markdown works."
+        autoFocus
+        value={body}
+        rows={3}
+        onChange={(event) => setBody(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.preventDefault();
+            void send();
+          }
+        }}
+      />
+      <div className="row gap-2">
+        <WriteButton
+          write={write}
+          size="small"
+          variant="primary"
+          blocked={blocked}
+          onPress={() => void send()}
+        >
+          Comment
+        </WriteButton>
+        <Button size="small" variant="ghost" onClick={onDone} disabled={write.busy}>
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 /** The composer under a pick: a finding drafted on the picked lines. It writes nothing to the
  *  engine: a draft is the tab's until a review sends it. */
 function FindingComposer({
@@ -401,7 +546,7 @@ function FindingComposer({
   const [body, setBody] = useDraftState(initial?.body ?? "");
   const [suggesting, setSuggesting] = useState(initial?.suggestion !== undefined);
   const [suggestion, setSuggestion] = useDraftState(initial?.suggestion ?? "");
-  const lines = pick.start === pick.end ? `line ${pick.start}` : `lines ${pick.start}–${pick.end}`;
+  const lines = linesOf(pick);
   // THE FINDING'S BOXES AS FIELDS of the change page's one draft, so the
   // person's assistant reads and can fill what is being written here.
   useDraftBox({

@@ -9,40 +9,19 @@ import (
 
 // A NODE'S STANDING ON A LOG, READ OFF THE LOG ITSELF.
 //
-// # Why the rows are not enough, for the one reader this is for
-//
-// A node's eviction is a record on each identity-claiming log, and every node
-// applies it into that domain's own table — which is what the trim and the
-// write fence read, and for a node whose applier is running that table is the
-// answer. It is not the answer for a node a peer re-anchored past. Such a node's
-// applier stops before the first record of the new generation, so a record
-// written after that stop — the eviction of the peer that stranded it — never
-// reaches its rows; and whether that peer is evicted is exactly what it has to
-// know for the peer's generation to stop counting as the fleet's. With the rows
-// as the only source, the one gesture that releases such a fleet was one no
-// stranded node could ever see, and every node waited for a donor that had been
-// decommissioned.
-//
-// So the question is asked of the log, which is where the eviction lives: the
-// LAST record on the node's eviction subject is its current standing on that
-// log — an eviction, or the readmission that inverted one — whether or not this
-// node's applier has reached it. A subject holding nothing (never gated, or
-// trimmed) answers found=false, and the caller falls back to the rows, which
-// then hold whatever the trim removed.
-//
-// ONE THING THE APPLIER ASKS THAT THIS DOES NOT: whether the record's own
-// writer was evicted at that position, which drops it on every node. The write
-// path's fence 0 refuses an evicted writer before it can publish, so such a
-// record exists only where that fence was defeated — and the answer here is
-// about the operator's latest decision, which is what the fleet-generation and
-// reanchor questions it serves are asking.
+// The domain's rows answer for a node whose applier runs, not for one a peer
+// re-anchored past: its applier stops before the new generation, so the
+// eviction of the peer that stranded it, which ends that peer's generation
+// counting as the fleet's, never reaches its rows. So the LAST record on the
+// node's eviction subject (an eviction, or a readmission) is its standing,
+// applied or not; an empty subject (never gated, or trimmed) answers
+// found=false and the caller falls back to the rows. Unlike the applier, this
+// ignores whether that record's writer was evicted: fence 0 refuses such a
+// writer, and the question is the operator's latest decision.
 
 // EvictionProbe is a domain whose evictions and readmissions can be read
 // straight off its log, for [EvictedOnLog].
-//
-// OPTIONAL, like every seam a domain declares only when it has the thing: a
-// domain with no eviction gate has no subject to read, and a node's standing
-// there is nothing at all.
+// Optional: a domain with no eviction gate has no subject to read.
 type EvictionProbe interface {
 	// EvictionSubject is the subject a node's evictions and readmissions
 	// are published on, in the domain's own naming.
@@ -106,13 +85,9 @@ func EvictedOnLog(ctx context.Context, d Domain, spec StreamSpec, log StandingLo
 
 // lastStanding is the last record on node's eviction subject of the log named
 // stream, whose wire subjects carry prefix: its sequence, whether it evicts,
-// and found false when the subject holds nothing.
-//
-// THE SEQUENCE TOO, for the reader that has to place the standing against a
-// position: a publisher judging another node's copy of its operation
-// ([Publisher.unresolved]) needs to know whether the last word on that node
-// is below the copy, where it decides the copy, or above it, where it says
-// nothing about it.
+// and found false when the subject holds nothing. The sequence lets
+// [Publisher.unresolved] place it against another node's copy of its
+// operation: below the copy it decides it, above it says nothing.
 func lastStanding(ctx context.Context, probe EvictionProbe, prefix, stream string,
 	log StandingLog, node string) (seq uint64, evicts, found bool, err error) {
 
@@ -131,8 +106,8 @@ func lastStanding(ctx context.Context, probe EvictionProbe, prefix, stream strin
 		return 0, false, false, fmt.Errorf("statelog: read %s's standing at sequence %d "+
 			"of %s: %w", node, seq, stream, err)
 	case !ok:
-		// TRIMMED BETWEEN THE TWO READS: what the trim removed, the rows
-		// hold, which is the caller's fallback for found=false.
+		// TRIMMED BETWEEN THE TWO READS: the rows, the caller's fallback,
+		// hold what the trim removed.
 		return 0, false, false, nil
 	case got != subject:
 		return 0, false, false, fmt.Errorf("statelog: the broker named sequence %d of %s "+
@@ -153,17 +128,11 @@ func lastStanding(ctx context.Context, probe EvictionProbe, prefix, stream strin
 // the highest the caller already knows of — and past it for as long as each
 // subject holds a record.
 //
-// # Why the log, when the register names every node's generation
-//
-// Because a reanchor appends its record before it commits its checkpoint and
-// before it publishes its position, so a node that died in between opened a
-// generation no row names. A later reanchor that derived that number from the
-// register alone would lose to the dead node's record on every attempt — the
-// append refused, the record read back, a writer that is not this node — and
-// the operator would have no generation left to open.
-//
-// A domain that keeps no generation record answers an empty map: there is
-// nothing on its log to find.
+// The log, not the register: a reanchor appends its record before it commits
+// its checkpoint or publishes its position, so a node that died in between
+// opened a generation no row names, and a number taken from the register would
+// lose to that record on every attempt. A domain that keeps no generation
+// record answers an empty map.
 func GenerationOpeners(ctx context.Context, d Domain, spec StreamSpec, enc GenerationEncoder,
 	log StandingLog, above, through uint32) (map[uint32]string, error) {
 
@@ -204,21 +173,15 @@ func GenerationOpeners(ctx context.Context, d Domain, spec StreamSpec, enc Gener
 
 // OwnGeneration is the sequence of THIS node's own record opening generation
 // gen of domain d, and false when the subject holds no record, another node's,
-// or d keeps none — what a re-run of an interrupted reanchor finds its own
-// earlier append by.
+// or d keeps none: how a re-run of an interrupted reanchor finds its own
+// earlier append.
 //
-// # Why a re-run needs it before it appends anything
-//
-// A reanchor appends its generation record before anything else moves, so one
-// that failed after the append — a caller that gave up while the consumer was
-// being rebuilt is enough — leaves that record on the log and nothing
-// committed. The re-run reads the log's end AFTER it: a restored reanchor that
-// walked back from that end for records these rows do not hold met its own
-// record first and refused naming it, hiding every record written after the
-// restore beneath it; and forced past, it put the checkpoint at the end, above
-// the record, which was then applied nowhere. So the walk and the checkpoint
-// are both bounded one below this node's own record ([ReanchorInputs.Opened]).
-// Another node's record there is not this node's to bound anything by: the
+// A reanchor that failed after its append leaves that record and nothing
+// committed, and the re-run reads the log's end above it. Its walk back for
+// records the rows lack would meet its own record first and refuse, hiding
+// every later record beneath it, and a checkpoint at the end would leave the
+// record applied nowhere, so both are bounded one below it
+// ([ReanchorInputs.Opened]). Another node's record there bounds nothing: the
 // transition reads it back and refuses ([Reanchor]).
 func OwnGeneration(ctx context.Context, d Domain, spec StreamSpec, enc GenerationEncoder,
 	log StandingLog, gen uint32, nodeID string) (uint64, bool, error) {

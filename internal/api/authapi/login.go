@@ -107,21 +107,15 @@ const (
 
 // Login signs somebody in with what they know.
 //
-// # UNGUARDED, and what stands in for the guard
+// UNGUARDED: a login cannot require a login. The throttle's curve (on the
+// login as typed, from its source, before any lookup) and the argon2id
+// derivation every arm spends bound it. It is still origin-checked, since
+// credential-guard exemption is no cross-site exemption.
 //
-// A login cannot require a login. What bounds it instead is the throttle's
-// curve — on the login as it was typed, from its source, run before anything
-// is looked up — and the argon2id derivation every arm spends.
-// It is origin-checked like every other state change — being exempt from the
-// credential guard is not being exempt from the cross-site rule.
-//
-// # One refusal, and why the shape is the whole of it
-//
-// Every way this can fail answers [httpjson.CodeSignInRefused] with a 401,
-// each after one derivation at this build's cost: a login nobody holds, a
-// wrong password, a person suspended, a person removed, a second factor that
-// does not check out. The arms are distinguishable only in this node's log.
-// See the package doc for why both halves are needed.
+// Every failure (unknown login, wrong password, suspended or removed person,
+// bad second factor) answers [httpjson.CodeSignInRefused] with a 401 after one
+// derivation, distinguishable only in this node's log. The package doc says
+// why both halves are needed.
 func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	source := s.sourceOf(r)
 
@@ -229,55 +223,16 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 // rehashPassword rewrites a password verifier written under a weaker cost at
-// this hasher's current one, for a sign-in that has just proved the password —
-// in the BACKGROUND, owned by this surface, once the answer is on its way.
-//
-// # The only instant a cost raise can be carried out
-//
-// The plaintext is not stored, so a stronger digest can be computed only when
-// somebody presents their password — which is why the parameters ride in the
-// stored verifier and [credential.Hasher.Verify] reports one that is stale. It
-// reported it to nobody: every sign-in discarded the flag, so raising the cost
-// changed new passwords and left every existing verifier at the old one for
-// the life of the deployment.
-//
-// STALE IS WEAKER and never merely different, which is what makes acting on
-// the flag safe in a rolling upgrade: a node still on an older build meets the
-// verifiers a newer one wrote at a raised cost, and rewriting those at this
-// build's cost would be a downgrade, undone by the next sign-in on an upgraded
-// node and redone by the next here. Verify leaves them unreported.
-//
-// # Never on the request, and never at a sign-in's expense
-//
-// The person is waiting for a session, not for a stronger digest, so nothing
-// they wait on includes it: callers DEFER this, so it starts once the handler
-// has answered, whatever it answered. It was inline once, given the time left
-// before a refusal deadline the sign-in used to be padded to — and a 64 MiB
-// derivation after a 64 MiB verification had all but used that up, so the
-// write that followed ran on an expired context, failed, and the verifier was
-// never rewritten on any real hardware while every such sign-in paid for a
-// second derivation.
-//
-// SO IT HAS BUDGETS OF ITS OWN, and neither is the request's: the derivation takes a
-// slot of the cap only if one is free at once ([credential.Hasher.Rehash]) —
-// a rewrite nobody waits on must not queue ahead of the sign-ins behind it —
-// and the write has [rehashBudget]. One rewrite per person runs at a time,
-// because a person signing in twice while the first is in flight would pay a
-// second derivation whose write then finds the verifier already replaced and
-// publishes nothing. Anything short of a confirmed write is LOGGED and changes
-// nothing: the old verifier still verifies at its own cost, and the next
-// sign-in asks again.
-//
-// # Once per verifier, and never over somebody else's change
-//
-// Each rewrite is an operation of its own, minted when it writes
-// ([errVerifierMoved] says why it is not derived from the verifier), and the
-// swap is decided inside the write's own snapshot: only the credential that
-// was verified, still holding the verifier that was verified, is rewritten — a
-// password changed in between keeps its change, and a second rewrite of a
-// verifier the first already replaced finds it gone and publishes nothing —
-// and it keeps its id, because a re-hash is the same credential at a
-// different cost.
+// this hasher's current one, in the BACKGROUND once a sign-in has proved the
+// password and answered (callers DEFER it; inline it ran on the little time
+// left before a refusal deadline and its write hit an expired context).
+// STALE IS WEAKER, never merely different: Verify leaves a verifier a newer
+// node wrote at a raised cost unreported, or a rolling upgrade would fight over
+// it. Budgets of its own: a derivation takes a cap slot only if one is free at
+// once ([credential.Hasher.Rehash]), the write has [rehashBudget], one rewrite
+// per person runs at a time, and a short write is LOGGED and changes nothing.
+// The swap is decided in the write's snapshot (a changed password keeps its
+// change), under an op minted when it writes ([errVerifierMoved]).
 func (s *Service) rehashPassword(r *http.Request, person string,
 	stale iamdomain.Credential, password string) {
 
@@ -301,19 +256,15 @@ func (s *Service) rehashPassword(r *http.Request, person string,
 }
 
 // errVerifierMoved refuses a rewrite whose credential no longer holds the
-// verifier this sign-in verified, in the write's own snapshot — so nothing is
+// verifier this sign-in verified, in the write's own snapshot, so nothing is
 // published.
 //
-// # One operation per rewrite, and a moved verifier writes nothing
-//
 // A rewrite's operation is minted NOW ([statelog.NewOpID]), in the grammar the
-// ledger vouches for a retry by. It was derived from the person and the stale
-// verifier, so that every node rewriting one verifier made one operation — and
-// carried no instant, which read as minted at the epoch and was answered
-// `unknown` without being published once the ledger had swept anything. So two
-// sign-ins that both present a stale verifier are two operations now, and the
-// second must not publish a set that changes nothing: its decide meets the
-// verifier the first one wrote and refuses, which publishes nothing at all.
+// ledger vouches for a retry by: one derived from the person and verifier
+// carries no instant, reads as minted at the epoch and is answered `unknown`
+// unpublished once the ledger has swept anything. So two sign-ins presenting a
+// stale verifier are two operations, and the second's decide meets the
+// verifier the first wrote and refuses rather than publish a no-op.
 var errVerifierMoved = errors.New("authapi: the verifier to rewrite is no " +
 	"longer the credential's")
 
@@ -569,23 +520,15 @@ type factorUse struct {
 // checkSecondFactor verifies a presented code against EVERY second factor the
 // person holds, and reports which one it proved.
 //
-// EVERY ONE, and that is a repair: it used to check only the first factor held
-// — the authenticator app, whenever there was one — so a recovery code, which
-// exists for exactly the day the app is lost, was checked against the app's
-// six digits and refused for everybody who had both. Both are evaluated
-// whatever the first answered, so the time taken does not say which one a
-// person holds; the app wins where both would match.
+// EVERY ONE, never only the first (the app): a recovery code exists for the day
+// the app is lost. Both are evaluated whatever the first answered, so timing
+// does not say which a person holds; the app wins where both match.
 //
-// # The app's seed is opened here and nowhere else
-//
-// It is stored SEALED under the fleet keyring and bound to its person and its
-// credential ([iamdomain.Sealer.SealCredential]), and opened only to check a
-// code. A seed that does not open is never a match — a value that is not this
-// credential's seed (moved, forged, or enrolled in the clear) or one sealed
-// under a key this node's ring no longer holds — and it is logged, because it
-// is a row somebody has to repair: nothing a retry of the code could change,
-// so there is no third answer to give. Opening fetches nothing, which is why
-// there is no outage to tell from a wrong code.
+// The app's seed is opened here only: stored SEALED under the fleet keyring,
+// bound to its person and credential ([iamdomain.Sealer.SealCredential]). A
+// seed that does not open (moved, forged, clear, or under a key this ring
+// lacks) is never a match and is logged as a row to repair; no retry changes
+// it. Opening fetches nothing, so there is no outage to tell from a wrong code.
 func (s *Service) checkSecondFactor(ctx context.Context, held iamdomain.Sighting,
 	code string) (factorUse, bool) {
 
@@ -636,36 +579,13 @@ var errFactorSpent = errors.New("authapi: this second factor was already spent")
 // spendSecondFactor records a second factor as used, so it can never prove
 // anybody again.
 //
-// # It is what makes a code single-use, and it was missing
-//
-// A TOTP code carries its step and a recovery code is one of ten, and both
-// are only single-use if the use is WRITTEN: the step onto the credential,
-// the recovery verifier off it. Neither was — so an observed six-digit code
-// worked for the whole drift window, and a recovery code worked for ever.
-//
-// # Decided inside the write's own snapshot
-//
-// The set it writes is formed from the credential as the DECIDE reads it, and
-// if that already records this step, or no longer holds this recovery code,
-// the code was spent by somebody else between this node's check and this
-// write — the second of two concurrent uses — and the answer is
-// [errFactorSpent] rather than a sign-in, REFUSED in that snapshot so that
-// nothing is published: it used to publish the unchanged set, a record of a
-// spend that spent nothing. A decide may run again against a fresh snapshot,
-// so the verdict is the LAST run's.
-//
-// A FRESH OPERATION ID PER USE, never one derived from the step: two uses of
-// one code under one id would collapse into one record in the operation
-// ledger, and the second would read the first's success as its own. Minted in
-// the grammar ([statelog.NewOpID]), whose instant the ledger vouches for a
-// retry by — `second-factor:<person>:<uuid>` carried none.
-//
-// THE WRITE'S OWN ANSWER comes back beside the use, because only a spend that
-// LANDED AS THIS CALL'S OWN makes the code single-use for this sign-in: an
-// unknown one may not be on the log, one that collapsed onto a copy has a
-// verdict this call cannot prove is its own, and a session opened on either
-// could be a session on a code that still works or on one somebody else
-// spent. The caller reads that off the result ([built]).
+// Single-use exists only if the use is WRITTEN (TOTP step onto the credential,
+// recovery verifier off it). If the DECIDE's snapshot already records this
+// step or lacks this code, it was spent between check and write: the answer is
+// [errFactorSpent], REFUSED so nothing is published; the verdict is the LAST
+// run's. A FRESH OPERATION ID PER USE ([statelog.NewOpID]), or two uses
+// collapse in the ledger. Only a spend that LANDED AS THIS CALL'S OWN counts
+// ([built]).
 func (s *Service) spendSecondFactor(ctx context.Context, person iamdomain.Sighting,
 	use factorUse) (factorUse, statelog.Result, error) {
 
@@ -746,28 +666,15 @@ func withExtra(c iamdomain.Credential, key string, value any) iamdomain.Credenti
 // proveSecondFactor checks a presented code and spends it, answering false
 // once it has written the refusal.
 //
-// ONE PATH FOR THE SIGN-IN AND THE STEP-UP, which are the two places a second
-// factor is presented, so the check, the spend and the refusal are decided
-// once. A recovery code spent here is ALSO its own event, because a person
-// down to their last one is one lost phone away from needing an administrator.
-//
-// # On the person's own curve, before the code is looked at
-//
-// The attempt's pair — the login as typed, from its address — is one curve,
-// and a caller holding the password divides it by every address and spelling
-// they have: a /48 of IPv6 is sixty-five thousand fresh pairs, and six digits
-// fall to that in about an hour. So a code is ALSO decided on a curve keyed
-// on the PERSON the login resolved to ([credential.Throttle.AdmitSecondFactor]),
-// before it is checked: every address's guesses at
-// one person climb it together, a wait past five seconds is `429` with the
-// time left, a wrong code or a code already spent is a failure on it, and the
-// code that completes the sign-in lifts it. Keyed on the resolved person here
-// and nowhere else, because this is reached only past the password: it tells
-// nobody anything about who exists that the password did not. And the wrong
-// code that takes the curve to its ceiling is announced
-// ([types.IAMSecondFactorThrottled]) — the curve reports that transition once
-// per climb, so nothing here keeps a memory of having said it — because it
-// means somebody holding this person's password is guessing at their code.
+// ONE PATH FOR THE SIGN-IN AND THE STEP-UP; a recovery code spent here is ALSO
+// its own event (a person on their last is one lost phone from an
+// administrator). A code is decided on a curve keyed on the PERSON before it is
+// checked ([credential.Throttle.AdmitSecondFactor]): the login-and-address pair is
+// divided by every address (a /48 of IPv6, six digits in an hour). All
+// addresses' guesses climb it together, a wait past five seconds is `429`, the
+// completing code lifts it. Keyed on the person only here, past the password,
+// so it leaks no roster. The wrong code reaching the ceiling is announced
+// ([types.IAMSecondFactorThrottled]), once per climb.
 func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 	adm admission, attempt authevents.Failure, held iamdomain.Sighting,
 	code string) (factorUse, bool) {
@@ -866,20 +773,16 @@ type signIn struct {
 	signedIn time.Time
 	absolute time.Time
 
-	// provedAt is when this sign-in's person proved who they are, where
-	// that was NOT here and now — and nil for every way in that was: a
-	// password, a second factor, an invitation, a password change (which
-	// proves what a step-up from its person proves, the code included
-	// where they hold a second factor).
+	// provedAt is when this sign-in's person proved who they are where that
+	// was NOT here and now; nil for every way in that was (password, second
+	// factor, invitation, password change).
 	//
-	// ONE WAY IN SETS IT: an ENROLMENT's replacement session inherits the
-	// proof of the enrolment-only session it replaces, because the code
-	// the enrolment checked proves possession of a seed that same session
-	// was handed moments earlier — which says nothing about who is
-	// holding it. Dated now, it restarted the step-up window and handed
-	// whoever held the restricted cookie a fresh one its password never
-	// earned. A POINTER, so "proved nothing datable" (a zero time)
-	// and "proved here" (nil) stay two answers.
+	// ONLY AN ENROLMENT's replacement session sets it, inheriting the proof of
+	// the enrolment-only session it replaces: the code proves possession of a
+	// seed that session was handed, not who holds it, and dating it now would
+	// give the restricted cookie's holder a step-up window its password never
+	// earned. A POINTER, so "proved nothing datable" (zero time) and "proved
+	// here" (nil) stay two answers.
 	provedAt *time.Time
 
 	// because is what the replaced session's close records as its reason,
@@ -890,22 +793,13 @@ type signIn struct {
 // enrolmentOnly reports whether a sign-in opens a session that may do nothing
 // but enrol a second factor.
 //
-// # A sign-in that proved a password and nothing else, where one is required
-//
-// A required second factor says nobody signs in on a password alone. So
-// a sign-in THIS SURFACE verified — the password route, a password step-up, a
-// password change, an invitation's redemption — that proved no second factor
-// opens a restricted session. Proving none means holding none: the password
-// route, the step-up and the change demand a code from anybody who holds a
-// factor, and a new person holds none yet.
-//
-// A Tier A exchange never reaches this: presenting the token was its whole
-// proof, and it holds no second factor to enrol.
-//
-// A REPLACEMENT THAT KEEPS ITS SESSION'S PROOF ([signIn.provedAt]) is never
-// restricted: it is the enrolment that lifts the restriction itself. A
-// password change by somebody holding a second factor is not restricted
-// either, for the reason every step-up from them is not: it proved the code.
+// A required second factor says nobody signs in on a password alone: a sign-in
+// THIS SURFACE verified (password route, step-up, password change, invitation
+// redemption) that proved no second factor opens a restricted session. Proving
+// none means holding none, since each demands a code of anybody holding a
+// factor. A Tier A exchange never reaches this: the token was its whole proof.
+// A REPLACEMENT KEEPING ITS SESSION'S PROOF ([signIn.provedAt]) is never
+// restricted: it is the enrolment lifting the restriction.
 func (s *Service) enrolmentOnly(how signIn) bool {
 	if how.provedAt != nil {
 		return false

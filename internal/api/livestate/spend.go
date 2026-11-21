@@ -36,21 +36,13 @@ const (
 
 // foldSpend records one spend record, reporting whether the rollup moved.
 //
-// Deduped by event id so a redelivered envelope cannot inflate the rollup, and
-// aged on the projection's CLOCK: every arrival first drops what the window
-// has aged past, and a record already outside it is not counted at all.
-//
-// THE CLOCK, NEVER THE ARRIVING RECORD'S OWN STAMP. The window used to be cut
-// at the arriving record's stamp minus a day, which made it a window only while
-// records kept arriving and only while every node's clock agreed: a quiet
-// company kept showing spend older than a day under a heading that said it was
-// the last one, and one record stamped ahead by a node with a fast clock moved
-// the cutoff forward, dropped every correctly stamped record a day behind it
-// and forgot their ids — so a redelivery of one of them counted it again.
-//
-// A RECORD STAMPED AHEAD IS AGED FROM ITS ARRIVAL ([ageingStamp]): it leaves
-// the window a day after it arrived, never a day after a stamp the clock may
-// not reach for decades.
+// Deduped by event id so a redelivery cannot inflate the rollup, and aged on
+// the projection's CLOCK, NEVER THE ARRIVING RECORD'S STAMP: every arrival
+// first drops what the window has aged past, and a record already outside it is
+// not counted. A cutoff from the arriving stamp is a window only while records
+// keep arriving and clocks agree: a quiet company would show spend older than a
+// day, and one record stamped ahead would drop every correct record and forget
+// their ids. A record stamped ahead is aged from its arrival ([ageingStamp]).
 func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 	now := s.clock()
 	moved := s.expireSpend(now)
@@ -145,23 +137,14 @@ func (s *LiveState) foldSpend(env Envelope, payload map[string]any) bool {
 // ageingStamp is a spend record's stamp as the window ages it: the instant the
 // record carries, or now — its arrival — when that instant is ahead of now.
 //
-// A record is aged by its own stamp because that is when its spend happened,
-// which a record arriving late behind a cross-topic race still says truly. A
-// stamp AHEAD of the clock names an instant that has not come: a node whose
-// clock runs fast, by milliseconds or by a garbled year. Aged by that stamp, a
-// record was held until the clock passed it plus a day — for the garbled year,
-// counted in "the last 24 hours" for the life of the process, under a window
-// label that excluded it, and the last record the count cap would ever drop,
-// since it sorted newest. Aged from its arrival it leaves a day after it came,
-// the cap takes it in its arrival's place, and every held record's ageing
-// instant lies inside the window [LiveState.Spend] labels.
-//
-// Only the AGEING instant moves. The record keeps the stamp it was published
-// with ([tokens.Record.Timestamp]), which is what every screen shows of it —
-// an hour no clock has reached yet is how an operator finds the node whose
-// clock is wrong. Nor is a record stamped past the window's end left out of a
-// read: every fresh record from a node a few milliseconds ahead is one, and
-// nothing would re-push the rollup when it later fell inside.
+// A record ages by its own stamp, when its spend happened. A stamp AHEAD of
+// the clock (a fast node, a garbled year) would be counted in "the last 24
+// hours" until the clock passed it plus a day, and be the last record the count
+// cap dropped. Aged from its arrival, every ageing instant lies inside the
+// window [LiveState.Spend] labels. Only the AGEING instant moves: the record
+// keeps its published stamp ([tokens.Record.Timestamp]), so an operator can
+// find the node whose clock is wrong. A record stamped past the window's end is still read: nothing would
+// re-push the rollup when it fell inside.
 func ageingStamp(raw string, now time.Time) stamp {
 	at := newStamp(raw)
 	if at.valid && at.t.After(now) {
@@ -176,38 +159,18 @@ func length(payload map[string]any, key string) int {
 	return len(list)
 }
 
-// THE WINDOW IS HELD IN THE ORDER ITS RECORDS AGE OUT, which is what makes an
-// arrival in that order an append and what the window has aged past a prefix.
+// THE WINDOW IS HELD IN THE ORDER ITS RECORDS AGE OUT: the dated records
+// ([LiveState.spend]) are oldest first by ageing instant ([ageingStamp]), so
+// what the window has aged past, and the count cap's oldest, are a PREFIX. An
+// arrival in stamp order is an append; a late one (cross-topic race, lagging
+// clock) is inserted at its place under the lock.
 //
-// The dated records ([LiveState.spend]) are kept oldest first by the instant
-// each is aged from ([ageingStamp] — its stamp, or its arrival when the stamp is
-// ahead of the clock), records sharing an instant in the order they arrived, so
-// what the window has aged past is always a PREFIX, and the count cap's oldest
-// records are the same prefix. An arrival in stamp order — nearly every one,
-// and every one stamped ahead — is an append; one that lost a cross-topic race,
-// or was stamped by a node whose clock runs behind, is inserted at its place,
-// which costs a move of the records aged after it and nothing else. That cost
-// is proportional to how far out of order the arrival is, not constant: a
-// record lost to a cross-topic race moves the handful published beside it, but
-// a node whose clock lags an hour moves an hour of the company's records for
-// every one it publishes — about a thousand of them at the cap, which holds a
-// day — under the projection's lock.
+// Arrival order cannot be aged from the front: clocks disagree, so one recent
+// record at the head would stop a front-popping loop for good.
 //
-// The window used to be held in ARRIVAL order, and that order cannot be aged
-// from the front: a broadcast subscription reads across topics with no order
-// between them and a fleet's clocks disagree, so one recent record at the head
-// would have stopped a front-popping loop for good. So every arrival scanned
-// the whole window for an aged record, handing each 300-odd-byte entry to the
-// predicate by value — under the projection's lock, on every spend record the
-// company published: a scan of 24 000 records per arrival at the cap, and
-// quadratic to fill. The seed sorted the window into stamp order all the
-// while, so the two paths into it did not even agree on its order.
-//
-// A record whose stamp does not parse can be neither placed in that order nor
-// aged on time, so it is held apart ([LiveState.undatedSpend]), in arrival
-// order, and KEPT — for the reason the sandbox sweep keeps an undateable
-// entry: dropping it on that basis would be arbitrary. The count cap is what
-// bounds those, and it takes them first, as [stamp.chronological] orders them.
+// A record whose stamp does not parse can be neither placed nor aged, so it is
+// held apart ([LiveState.undatedSpend]) and KEPT. The count cap bounds those,
+// taking them first.
 
 // holdSpend places one record in the window.
 func (s *LiveState) holdSpend(e spendEntry) {

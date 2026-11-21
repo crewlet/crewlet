@@ -7,28 +7,26 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// A person's control over a running seat: pausing it, resuming it, a turn a
-// pause stopped, and a note a person sent a running turn. A pause itself is a
-// coordination record (coord.SeatPause); these are the fleet's account of each
-// change, published once by the writer whose compare-and-set won, so two people
-// pausing one seat at once put one row in the log rather than two.
+// A person's control over a running seat: pausing, resuming, a turn a pause
+// stopped, a note sent a running turn, and a wake handed to one. A pause itself
+// is a coordination record (coord.SeatPause); these are the fleet's account,
+// published once by the writer whose compare-and-set won.
 //
 // # Who did it, in three halves
 //
-// Every `…_by` here is the author iam.ActorFor names — the seat for a person
-// the identity directory binds to one, the login for anybody else — beside its
-// `…_by_kind` (iam.ActorKind's vocabulary: agent, human, operator, system) and
-// the `operator_id` the gesture came through (`pat:<id>`, `session:<lineage>`,
-// or the login where the principal is its own credential). The same three
-// facts every tracker and page record carries, under the same names, so
-// a feed row about a pause and the history row of the work it held up cannot
-// name two different people.
+// Every `…_by` is the author iam.ActorFor names, beside its `…_by_kind`
+// (iam.ActorKind) and the `operator_id` the gesture came through (`pat:<id>`,
+// `session:<lineage>`, or the login). Tracker and page records carry the same
+// three under the same names, so feed and history rows cannot name two people.
 
 func init() {
 	events.Register[SeatPaused]()
 	events.Register[SeatResumed]()
 	events.Register[AgentTurnStopped]()
 	events.Register[AgentTurnSteered]()
+	events.Register[AgentTurnJoined]()
+	events.Register[SeatPlaced]()
+	events.Register[SeatReleased]()
 }
 
 // SeatPaused records that a person paused a seat: it takes no new work until
@@ -176,19 +174,21 @@ const (
 	// on its executor's question holds its notes for whatever resumes it.
 	SteerExpired SteerOutcome = "expired"
 
-	// SteerMissed is a note a step took for its reader, which never had it.
-	// The take's write landed and its answer was lost, so the run's record
-	// marks the read unanswered, and no later launch whose job started was
-	// told the note: one that was records it read by its brief, which is then
-	// delivered there. Named at the step that took it, and reported by the
-	// turn's ending, since no step recorded handing it over.
+	// SteerMissed is a note a step took for its reader, which never had it:
+	// the take's answer was lost, so the record marks the read unanswered; or
+	// a Claude Code hook served it and every serve was lost, each a hook's
+	// serve its harness gave up or its job's whole session proves it never
+	// took, one the latter. And no later step read it: a later launch whose
+	// job started records it read by its brief, delivered there. Named at the
+	// step that took it or the last serve, reported by the turn's ending.
 	SteerMissed SteerOutcome = "missed"
 
-	// SteerUnconfirmed is a note the run's bridge handed to its executor's
-	// harness, one that takes notes as it polls (OpenCode's), which never
-	// confirmed putting it in front of its model before the turn ended. Its
-	// session may hold it, and nothing says it does. Named at the job it was
-	// handed to.
+	// SteerUnconfirmed is a note handed to its executor's harness, by a poll
+	// (OpenCode's) or a hook's answer (Claude Code's), which never confirmed
+	// it before the turn ended: OpenCode by its own confirmation, Claude Code
+	// by its session's record, its harness having given up each call that
+	// served it included, since an answer can outrun the cancel. Its session
+	// may hold it. Named at the step it was handed over at.
 	SteerUnconfirmed SteerOutcome = "unconfirmed"
 )
 
@@ -220,10 +220,12 @@ const (
 	// SteerBoundaryBrief — in the brief an executor was launched with.
 	SteerBoundaryBrief SteerBoundary = "brief"
 
-	// SteerBoundaryToolBatch — Claude Code, after a batch of tool calls.
+	// SteerBoundaryToolBatch — Claude Code, after a batch of tool calls, once
+	// the job's session showed its hook took it.
 	SteerBoundaryToolBatch SteerBoundary = "tool_batch"
 
-	// SteerBoundaryFinish — Claude Code, as the run was about to finish.
+	// SteerBoundaryFinish — Claude Code, as the run was about to finish, once
+	// the job's session showed its hook took it.
 	SteerBoundaryFinish SteerBoundary = "finish"
 
 	// SteerBoundaryStep — OpenCode, at its next step.
@@ -240,26 +242,17 @@ var SteerBoundaries = []SteerBoundary{
 func (b SteerBoundary) Valid() bool { return slices.Contains(SteerBoundaries, b) }
 
 // AgentTurnSteered records what became of one person's note to a running turn
-// (internal/agent/steer): read at a boundary of the turn, expired unread
-// because the turn ended first, missed by the step that took it, or handed to
-// an executor that never confirmed reading it ([SteerOutcome]).
+// (internal/agent/steer): read at a boundary, expired unread, missed by the
+// step that took it, or never confirmed by an executor ([SteerOutcome]).
 //
-// PUBLISHED BY THE NODE WHOSE STEP READ THE NOTE — the runner's node for a round
-// of the engine's loop or an executor's brief, the node serving the run's tool
-// bridge for a read inside the run — or BY THE NODE THAT FINISHED THE TURN'S
-// ENDING, for every note no step reported reading: expired, missed or
-// unconfirmed, as the run's record knows it, or delivered where a launch's brief
-// told it again ([AgentTurnSteered.Retold]). Never by the node that took the
-// request, which answered `pending` and cannot see the turn. A note to a turn with no run
-// record yet travels on an ephemeral scatter that leaves no record, and one
-// waiting on a run's record is deleted with it, so this row is the only durable
-// account that the note existed at all; that is why it carries the note's text.
+// PUBLISHED BY THE NODE WHOSE STEP READ THE NOTE, or BY THE NODE THAT FINISHED
+// THE TURN'S ENDING for notes no step reported ([AgentTurnSteered.Retold]);
+// never by the node that took the request, which cannot see the turn. Its other
+// records die with the turn, so this row carries the note's text.
 //
-// ONE CONSTRUCTOR builds every one, internal/agent/steer's Record, so the
-// runner, the bridge's run inbox and an ending cannot publish three shapes of
-// the same fact. It lives with its publishers rather than here, because a
-// payload literal outside this package is what the engine's publisher gate
-// reads as one (internal/engine's TestEveryRegisteredEventTypeIsPublishedSomewhere).
+// ONE CONSTRUCTOR, internal/agent/steer's Record, builds every one; it lives
+// with its publishers because a payload literal outside this package reads as
+// one to internal/engine's TestEveryRegisteredEventTypeIsPublishedSomewhere.
 type AgentTurnSteered struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`
@@ -341,4 +334,143 @@ func (e AgentTurnSteered) SummaryFor(actor string) string {
 	default:
 		return lead(actor, "was sent a note from "+e.SteeredBy)
 	}
+}
+
+// JoinOutcome is what became of a wake the engine handed a running turn's run
+// as an item of its job (internal/sandbox's RunNote.Wake).
+type JoinOutcome string
+
+const (
+	// JoinDelivered — a step of the run read the wake, so the turn worked it:
+	// its delivery is recorded worked and starts no turn of its own.
+	JoinDelivered JoinOutcome = "delivered"
+
+	// JoinUnconfirmed — the wake was handed to the run's harness, which never
+	// confirmed reading it, so its session may hold it. Its delivery stays on
+	// the seat's inbox and runs as a turn of its own.
+	JoinUnconfirmed JoinOutcome = "unconfirmed"
+
+	// JoinUnread — nothing handed the wake to the run before its job ended. Its
+	// delivery stays on the seat's inbox and runs as a turn of its own.
+	JoinUnread JoinOutcome = "unread"
+)
+
+// JoinOutcomes is every outcome this build records.
+var JoinOutcomes = []JoinOutcome{JoinDelivered, JoinUnconfirmed, JoinUnread}
+
+// Valid reports whether an outcome off the wire is one this build knows.
+func (o JoinOutcome) Valid() bool { return slices.Contains(JoinOutcomes, o) }
+
+// AgentTurnJoined records what became of one wake handed to a running turn's
+// run ([JoinOutcome]), once a wake and under one id: by the node whose read
+// confirmed it, and by the node that ended its job (a relaunch, or the turn's
+// ending). ONE CONSTRUCTOR, internal/agent/steer's Joined. It carries none of
+// the message's words, which the conversation it was written in keeps.
+type AgentTurnJoined struct {
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	// WorkKey is the unit of work the turn was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey string `json:"work_key,omitempty"`
+
+	// WakeID is the wake's identity as it was filed, and TriggerIDs the
+	// deliveries on the seat's inbox it stands for.
+	WakeID     string      `json:"wake_id"`
+	TriggerIDs []string    `json:"trigger_ids,omitempty"`
+	Outcome    JoinOutcome `json:"outcome"`
+
+	// LaunchID is the job the wake was handed to, and Boundary and Iteration
+	// the step that read a delivered one or served an unconfirmed one: where
+	// no step is known Boundary is absent, which tells Iteration's 0 apart.
+	LaunchID  string        `json:"launch_id"`
+	Boundary  SteerBoundary `json:"boundary,omitempty"`
+	Iteration int           `json:"iteration"`
+
+	// WrittenBy and WrittenByKind are who wrote the message, WrittenOn the
+	// surface it was written on, OwesAnswer whether it asked for an answer,
+	// and SentAt when it was written.
+	WrittenBy     string    `json:"written_by"`
+	WrittenByKind string    `json:"written_by_kind,omitempty"`
+	WrittenOn     string    `json:"written_on,omitempty"`
+	OwesAnswer    bool      `json:"owes_answer"`
+	SentAt        time.Time `json:"sent_at"`
+}
+
+// EventType is the "agent_turn_joined" wire type.
+func (AgentTurnJoined) EventType() string { return "agent_turn_joined" }
+
+// Role is the seat whose turn the wake joined.
+func (e AgentTurnJoined) Role() string { return e.RoleName }
+
+// AgentID is the instance whose turn the wake joined.
+func (e AgentTurnJoined) AgentID() string { return e.Agent }
+
+// SummaryFor names who wrote the message and what became of it, an outcome this
+// build does not know said as no more than the message having been handed over.
+func (e AgentTurnJoined) SummaryFor(actor string) string {
+	switch e.Outcome {
+	case JoinDelivered:
+		return lead(actor, "read a message from "+e.WrittenBy+" about its work")
+	case JoinUnconfirmed:
+		return lead(actor, "was handed a message from "+e.WrittenBy+" and never confirmed reading it")
+	case JoinUnread:
+		return lead(actor, "ended its job before reading a message from "+e.WrittenBy)
+	default:
+		return lead(actor, "was handed a message from "+e.WrittenBy)
+	}
+}
+
+// SeatPlaced records that a node took a seat: it runs on OnNode from Since,
+// the tenure's start on the lease store's clock, under Epoch, until a
+// [SeatReleased] of the same epoch, or until a later epoch's tenure begins
+// (the node stopped without saying so). With [SeatReleased] it is how long no
+// node held the seat, which nothing else keeps.
+type SeatPlaced struct {
+	Agent       string    `json:"agent_id"`
+	AgentHandle string    `json:"agent_handle"`
+	RoleName    string    `json:"role"`
+	OnNode      string    `json:"on_node"`
+	Epoch       int64     `json:"epoch"`
+	Since       time.Time `json:"since"`
+}
+
+// EventType is the "seat_placed" wire type.
+func (SeatPlaced) EventType() string { return "seat_placed" }
+
+// Role is the placed seat.
+func (e SeatPlaced) Role() string { return e.RoleName }
+
+// AgentID is the placed seat's instance.
+func (e SeatPlaced) AgentID() string { return e.Agent }
+
+// SummaryFor names the node the seat runs on.
+func (e SeatPlaced) SummaryFor(actor string) string {
+	return lead(actor, "now runs on "+e.OnNode)
+}
+
+// SeatReleased records that a node gave a seat up, or lost it: the tenure of
+// Epoch on OnNode ended, for Reason (the seat host's release reason).
+type SeatReleased struct {
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	OnNode      string `json:"on_node"`
+	Epoch       int64  `json:"epoch"`
+	Reason      string `json:"reason"`
+}
+
+// EventType is the "seat_released" wire type.
+func (SeatReleased) EventType() string { return "seat_released" }
+
+// Role is the released seat.
+func (e SeatReleased) Role() string { return e.RoleName }
+
+// AgentID is the released seat's instance.
+func (e SeatReleased) AgentID() string { return e.Agent }
+
+// SummaryFor names the node that let the seat go, and why.
+func (e SeatReleased) SummaryFor(actor string) string {
+	return lead(actor, "stopped running on "+e.OnNode+": "+e.Reason)
 }

@@ -18,27 +18,18 @@ import (
 // read.
 type DeferReason string
 
-// The records a node hands back because it has decided nothing about them
-// (#838):
+// The records a node hands back because it has decided nothing about them:
 //
-//   - DeferNewerRecord: the envelope decoded and the record is a version a
-//     newer build writes — a translator's future-version arm;
-//   - DeferNewerEnvelope: the frame opened and the envelope is one a newer
-//     build writes;
-//   - DeferUnknownKey: the frame is sealed under a key this node does not
-//     hold, which a peer that does can open;
-//   - DeferUntranslatable: the translator failed on a record this build
-//     should read — a defect, which an upgrade past it reads.
+//   - DeferNewerRecord: a newer build's record version (future-version arm);
+//   - DeferNewerEnvelope: a newer build's envelope;
+//   - DeferUnknownKey: sealed under a key this node lacks and a peer may hold;
+//   - DeferUntranslatable: the translator failed on a record this build should
+//     read, a defect an upgrade reads past.
 //
-// The first three are DEFERRALS to a peer that can read the record, counted as
-// `crewlet.tracker.feed.deferred` — a roll's ordinary minutes. The fourth is a
-// record no build on this node can read, counted as
-// `crewlet.tracker.feed.unreadable` and alarmed as `feed_unreadable`. All four
-// back off alike ([DeferDelay]) and are dead-lettered alike once a record is
-// [DeadLetterAge] old, under the reason that names them.
-//
-// A TAMPERED frame is none of them: no node should act on a frame this fleet
-// did not write, so it is acked as before.
+// The first three are DEFERRALS, counted as `crewlet.tracker.feed.deferred`;
+// the fourth as `crewlet.tracker.feed.unreadable`, alarmed as `feed_unreadable`.
+// All back off alike ([DeferDelay]) and are dead-lettered at [DeadLetterAge].
+// A TAMPERED frame is none of them: it is acked.
 const (
 	DeferNewerRecord    DeferReason = "newer_record"
 	DeferNewerEnvelope  DeferReason = "newer_envelope"
@@ -119,36 +110,18 @@ func DeferDelay(delivered uint64) time.Duration {
 	return min(d, DeferCap)
 }
 
-// DeadLetterAge is how old a deferred record grows — from the broker's
-// instant for it ([Record.StoredAt]) — before the feed stops handing it back
-// and dead-letters it.
+// DeadLetterAge is how old a deferred record grows ([Record.StoredAt]) before
+// the feed dead-letters it. WHY A BOUND: a delayed NAK stays pending against
+// MaxAckPending (the server's 1000, as the group sets none), and at that limit
+// the consumer delivers no NEW record (nats-server v2.15.2, consumer.go:3297-
+// 3313, 5019-5022, 697-705); a thousand unreadable records stall the wakes.
 //
-// WHY A BOUND AT ALL: a deferral is a NAK with a delay, and the broker keeps
-// a delayed NAK in the consumer's pending set until it is redelivered
-// (nats-server v2.15.2, server/consumer.go:3297-3313), where it counts
-// against MaxAckPending, and a consumer at that limit delivers no NEW record
-// (consumer.go:5019-5022). The feed's group consumer sets none, so the server
-// gives it 1000 (consumer.go:604, 697-705). A record no node will ever read —
-// a key retired fleet-wide, bytes corrupt past the MAC — circling for ever
-// would hold a slot for ever, and a thousand of them would stall every wake of
-// the domain.
-//
-// WHY AN HOUR — A JUDGMENT CALL, stated as one. The windows a deferral serves
-// are each one rolling restart of the fleet: a newer build's roll (ADR-0109
-// names that window minutes), and the keyring rotation runbook's, which adds
-// a key and restarts every node before anything is sealed under it
-// (docs/concepts/secret-store.md, "Rotating the keyring"). An hour is an order
-// of magnitude past either, so a roll's records reach a node that reads them
-// long before it; and filling 1000 slots inside an hour would take a record no
-// node can read every 3.6 seconds for the whole hour — which no retired key or
-// corrupt frame produces. docs/guides/fleet.md says it too: a roll finishes
-// within the hour, or its deferred wakes are dead-lettered (and replayed by
-// the first node that can read them).
-//
-// A RECORD ITS ESTATE DATES NOTHING FOR (a zero [Record.StoredAt]) IS NEVER
-// DEAD-LETTERED: nothing says how long it has been handed back, so it goes on
-// being handed back with the backoff. Every state log's delivery carries the
-// broker's instant, so only an estate that cannot say meets this.
+// WHY AN HOUR, a judgment call: a deferral serves one rolling restart
+// (ADR-0109, minutes; the keyring rotation, docs/concepts/secret-store.md). An
+// hour is an order of magnitude past either, and 1000 slots in it is an
+// unreadable record every 3.6 seconds, which nothing produces
+// (docs/guides/fleet.md). A ZERO [Record.StoredAt] IS NEVER DEAD-LETTERED: its
+// age is unknown.
 const DeadLetterAge = time.Hour
 
 // ErrForeignFrame is what [Records.Reopen] answers for a frame this fleet did
@@ -164,44 +137,27 @@ const DeadLetterVersion = 1
 // deadLetterDetailBytes is how much of what a node met an entry keeps
 // ([DeadLetter.Detail]).
 //
-// A QUARTER KIBIBYTE, because the header has to stay inside what a stored
-// record keeps beside its payload: a record at its log's ceiling
-// (statelog.MaxTransportRecordBytes, the transport's eight mebibytes less four
-// kibibytes) is a frame of that plus its seal, under three hundred bytes, and
-// the entry is that frame whole, so its header and what the transport frames
-// it with ([queue.LetterFraming]) share the 3.7 KiB left of the transport's
-// ceiling. Every other field is a name, a number or an instant; the detail is
-// an error's own words, whose first quarter kibibyte names its cause.
+// A QUARTER KIBIBYTE, because the header must fit beside the payload: a record
+// at its log's ceiling (statelog.MaxTransportRecordBytes, 8 MiB less 4 KiB) is
+// a frame plus a seal under 300 bytes, kept whole, so the header and the
+// transport's framing ([queue.LetterFraming]) share the 3.7 KiB left.
 //
-// THE WORST CASE IS A DETAIL OF CONTROL CHARACTERS: the header is ASCII
-// ([EncodeDeadLetter]), so every byte outside it is escaped, and the costliest
-// escape per byte the detail holds is a control character's — or a DEL, or a
-// byte that is not UTF-8 — at six bytes each, `\u001b`. A rune past the ASCII
-// costs less for each of its bytes: two bytes are one escape of six, three
-// bytes one of six, and four bytes — a rune above U+FFFF — a surrogate pair of
-// two escapes, twelve bytes, three for each. So the detail is a kibibyte and a
-// half at the worst, and the header stays inside the room for any record a
-// log admits.
+// THE WORST CASE IS CONTROL CHARACTERS: the header is ASCII
+// ([EncodeDeadLetter]), so a control character, a DEL or a non-UTF-8 byte
+// costs six bytes; a wider rune costs less per byte. So the detail is at
+// worst a KiB and a half, inside the room for any record a log admits.
 const deadLetterDetailBytes = 256
 
 // DeadLetter is what a feed records of one record it stopped handing back
-// ([DeadLetterAge]): what it was and why no node read it — the HEADER of the
-// entry it keeps, which the queue keeps beside the record's frame
-// ([queue.EventQueue.KeepDeadLetter]) and lists without it.
+// ([DeadLetterAge]): the HEADER of the entry it keeps beside the record's
+// frame ([queue.EventQueue.KeepDeadLetter]), which listings read without it.
 //
 // SELF-CONTAINED: the entry's body is the frame the broker delivered, so a
-// replay re-reads the record without its log — which trims it on its own
-// schedule, and could have trimmed it before the node able to read it starts —
-// and through the same verification a delivery passes ([Records.Reopen]),
-// never trusting what the node that gave up made of it. It is kept for as long
-// as every dead letter is (`CREWLET_DLQ`, the event stream's
-// `stream.event_retention_hours`), and then it expires.
-//
-// THE FRAME IS NOT A FIELD: everything that reads an entry's header — the
-// alarm's reading on every beat of every data node, an operator's listing, a
-// discard looking for its entry — reads it without the frame, and only the
-// replay, which acts on the record, reads the frame
-// ([queue.EventQueue.DeadLetterFrame]).
+// replay re-reads the record without its log (which may have trimmed it) and
+// through a delivery's verification ([Records.Reopen]), never trusting what
+// the node that gave up made of it. It expires with every dead letter
+// (`CREWLET_DLQ`, `stream.event_retention_hours`). THE FRAME IS NOT A FIELD:
+// only the replay reads it ([queue.EventQueue.DeadLetterFrame]).
 type DeadLetter struct {
 	V int `json:"v"`
 
@@ -243,29 +199,16 @@ func (d DeadLetter) at() Record {
 }
 
 // EncodeDeadLetter is d as the header its entry is kept under: one line of
-// compact JSON in printable ASCII ([queue.LetterHeader]), which the queue keeps
-// beside the frame and every listing answers.
+// compact JSON in printable ASCII ([queue.LetterHeader]), beside the frame.
 //
-// ASCII, because the JetStream backend carries the header as a header of the
-// message, `Crewlet-Dead-Letter`, and a NATS header's value is one line of
-// ASCII (internal/queue's LetterHeader has the transport's reason). Compact
-// JSON already escapes every control character, so no carriage return or line
-// feed reaches the line; every rune past the ASCII, and the one character
-// below it JSON leaves bare, DEL, is written as its JSON escape too —
-// `é` — and a rune above U+FFFF as its UTF-16 SURROGATE PAIR, two escapes,
-// `😀`, which is the only spelling JSON has for one: a single `\u`
-// escape names four hex digits, so `ὠ0` would be read back as U+1F60 and a
-// stray `0`. JSON reads the escapes back as the runes they spell
-// ([DecodeDeadLetter]), so a header carries any text it carried before, at the
-// cost [deadLetterDetailBytes] bounds.
-//
-// UNESCAPED `<`, `>` AND `&`, so a subject or a detail holding them costs its
-// own byte rather than six.
-//
-// NOT THE FRAME, which the queue keeps as the entry's body, raw: carried in
-// the header — or inside JSON at all, as base64, four bytes for every three —
-// a record at its log's ceiling could never be kept, and would circle at the
-// head of its consumer for ever.
+// ASCII, because JetStream carries it as the message header
+// `Crewlet-Dead-Letter`, one line of ASCII. Every rune past the ASCII, and
+// DEL, is a JSON escape, a rune above U+FFFF its UTF-16 SURROGATE PAIR (one
+// four-digit escape would read back as another rune plus a stray digit);
+// [DecodeDeadLetter] reads them back, at the cost [deadLetterDetailBytes]
+// bounds. `<`, `>` and `&` stay unescaped. NOT THE FRAME, which is the body,
+// raw: in the header, or as base64, a record at its log's ceiling could never
+// be kept.
 func EncodeDeadLetter(d DeadLetter) ([]byte, error) {
 	d.V = DeadLetterVersion
 	d.Detail = textcut.Within(d.Detail, deadLetterDetailBytes)

@@ -8,31 +8,17 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// WHICH OF A SERVER'S TOOLS ARE NOT OFFERED UNDER THEIR NAME, AND WHY.
+// Which of a server's tools are not offered under their name, and why: one
+// namespace of `tool_prefix` plus name, shared with built-ins and other servers.
 //
-// A tool is filed under its server's `tool_prefix` and its own name, run
-// together, in one namespace with the engine's built-ins and every other
-// server's tools, and every harness puts a prefix of its own in front of
-// that before its model sees it. Three things keep a name from reaching a
-// model, and each is decided where the engine can see it:
+//   - characters no tool name can hold, or a length past the longest harness
+//     prefix ([harnessprofile.ToolNameMax]): REFUSED when the bridge builds
+//     the tools. Never cut to fit: a shortened name is new and can collide;
+//   - a built-in's name: refused where a seat's surface is filed ([NameBuiltin]);
+//   - another server's tool's name: SHADOWED, the first server by name keeping
+//     it ([Bridge.ShadowedTools]), a shared server's beating a seat's own.
 //
-//   - a name holding characters no model's tool name can, or one too long
-//     to fit beside the longest harness prefix ([harnessprofile.ToolNameMax]), is
-//     REFUSED here, when the bridge builds the server's tools from a listing:
-//     it is never filed, so it is neither offered nor callable, and never
-//     shadows a tool that could be. Never cut short to fit: a shortened name
-//     is a new name, and two of them can collide;
-//   - a name a built-in already holds is refused where the engine files the
-//     tool into a seat's surface, since built-ins are filed first
-//     ([NameBuiltin]);
-//   - a name another server's tool holds is SHADOWED: the first server by
-//     name keeps it on a bridge ([Bridge.ShadowedTools]), and a shared
-//     server's keeps it against a seat's own server in that seat's surface.
-//
-// They used to be log lines alone (`tool_name_collision`, `mcp_tool_refused`),
-// which nobody reading the server's settings ever saw. Each is now a fact the
-// node's status record carries per server and the status answer per server across the
-// fleet, worded by [NameRefusal.Sentence] and [ShadowSentence].
+// Status carries each ([NameRefusal.Sentence], [ShadowSentence]).
 
 // NameRefusal is why a tool a server lists is not offered under its name.
 type NameRefusal string

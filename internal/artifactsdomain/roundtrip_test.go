@@ -54,8 +54,7 @@ func TestACreateWritesTheArtifactItsVersionAndItsObjectsInOneRecord(t *testing.T
 }
 
 // A RETRIED CREATE NAMES THE ARTIFACT ITS FIRST ATTEMPT MADE: the id is a
-// function of the operation, so the retry an unknown outcome asks for is
-// answered from the ledger with the same artifact rather than creating a second.
+// function of the operation, so the ledger answers a retry with that artifact.
 //
 // Mutation: mint the id per call instead of from the operation, and the retry
 // answers an artifact nothing holds.
@@ -220,11 +219,9 @@ func TestRetentionKeepsAHundredUnlabelledVersionsAndEveryLabelledOne(t *testing.
 }
 
 // A LABEL ANOTHER VERSION HOLDS AND A FULL SET OF LABELS ARE TWO REFUSALS,
-// because they send a caller to different places: a held label is a collision,
-// which another label avoids at once, and every kept label in use is the
-// artifact's own state, which no other label changes until one is removed. One
-// sentinel answered both, so a caller told to choose another label for a full
-// set chose one and was refused again.
+// because they send a caller to different places: another label avoids a
+// collision at once, but a full set is the artifact's state, which no other
+// label changes until one is removed.
 //
 // Mutation: refuse the full set with ErrLabelTaken in Publish or in Patch, or a
 // held label with ErrLabelsFull, and a case goes red.
@@ -616,11 +613,10 @@ func TestTheTrashPurgeTakesOnlyWhatWasTrashedBeforeItsCutoff(t *testing.T) {
 	}
 }
 
-// A PURGE IS COMMITTED BEFORE ITS DATA GOES: once its first step lands, the
-// artifact is in the trash, a restore is refused, and only a purge finishes
-// it. A purge that stopped part way (its dependent failed after the artifact
-// was committed) leaves an artifact nobody may bring back without its data,
-// which the trash reaper nominates whatever its trash term and finishes.
+// A PURGE IS COMMITTED BEFORE ITS DATA GOES: once its first step lands, a
+// restore is refused and only a purge finishes it. A purge stopped part way
+// (a dependent failed) leaves an artifact nobody may bring back, which the
+// trash reaper nominates whatever its trash term and finishes.
 //
 // Mutation: drop the applier's purging refusal from a restore and the
 // half-purged artifact comes back live; drop the begun purges from the trash
@@ -868,13 +864,12 @@ func TestNoCapabilityIsAnEmptySetOnTheWire(t *testing.T) {
 	}
 }
 
-// THE COMPANY TRAIL READS EVERY ARTIFACT'S HISTORY (D09): an administrator's
-// elevated read of bob's private page is found company-wide, beside every
-// other record, newest first in the log's order; narrowed to `read_elevated`
-// it is the overrides alone; a page and its cursor walk the whole trail with
-// nothing repeated or skipped; an op the log does not record and a cursor it
-// never minted are refused. Mutation: drop the op filter, or resume a page
-// at the cursor's row rather than after it, and this goes red.
+// THE COMPANY TRAIL READS EVERY ARTIFACT'S HISTORY (D09): an admin's elevated
+// read of bob's private page is found company-wide, newest first in log order;
+// narrowed to `read_elevated` it is the overrides alone; pages walk the whole
+// trail with nothing repeated or skipped; an unrecorded op and a foreign cursor
+// are refused. Mutation: drop the op filter, or resume a page at the cursor's
+// row rather than after it, and this goes red.
 func TestTheCompanyTrailReadsEveryArtifactsHistory(t *testing.T) {
 	t.Parallel()
 	n := newHarness(t)

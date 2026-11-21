@@ -15,6 +15,7 @@ import type {
 } from "~/protocol/index.ts";
 
 const HEADS = "refs/heads/";
+const TAGS = "refs/tags/";
 
 /** A find's page: a name matches any part of others', so the exact one may be on a later page. */
 const FIND_LIMIT = 20;
@@ -30,12 +31,23 @@ export interface BranchDetail {
 
 /** One branch read in detail by its name: the find's pages walked until its exact ref is met. */
 export function useBranchDetail(repo: string, branch: string, enabled = true): BranchDetail {
+  return useRefDetail(repo, HEADS + branch, enabled);
+}
+
+/** One branch or tag read in detail by its whole ref, as [useBranchDetail] reads a branch. */
+export function useRefDetail(repo: string, want: string, enabled = true): BranchDetail {
+  const tag = want.startsWith(TAGS);
   const params = useMemo(
-    () => ({ name: repo, contains: branch, detail: true, limit: FIND_LIMIT }),
-    [repo, branch],
+    () => ({
+      name: repo,
+      ...(tag ? { prefix: TAGS } : {}),
+      contains: want.slice(tag ? TAGS.length : HEADS.length),
+      detail: true,
+      limit: FIND_LIMIT,
+    }),
+    [repo, want, tag],
   );
   const first = useCodeQuery("code_refs", params, { enabled });
-  const want = HEADS + branch;
   const inFirst = first.data?.refs_detail?.find((r) => r.ref === want);
   const next = first.data?.next ?? "";
   const key = `${JSON.stringify(params)}\n${next}`;

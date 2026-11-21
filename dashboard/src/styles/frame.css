@@ -986,3 +986,10 @@
   border: 0;
   border-radius: 0;
 }
+
+/* GITLET'S QUERY CHIPS ARE QUALIFIERS, in the machine face (`.code-query__field`).
+   Here, not in gitlet.css: a lazy sheet may carry no kit rule. */
+.code-query__field .crewlet-tag__label {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+}

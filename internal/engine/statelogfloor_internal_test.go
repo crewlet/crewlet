@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -830,10 +831,11 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	s := c.log
 	if n.writer == nil || n.pages == nil || n.chat == nil || c.iamWriter == nil ||
 		c.artifactsWriter == nil || c.artifactDataWriter == nil || c.assistantWriter == nil ||
-		c.executorWriter == nil || c.accessWriter == nil || c.atlasWriter == nil {
+		c.executorWriter == nil || c.accessWriter == nil || c.atlasWriter == nil ||
+		c.advisorWriter == nil {
 		t.Fatal("the node runs no tracker writer, page store, chat store, identity " +
 			"writer, artifacts writer, datastore writer, assistant writer, executor writer, " +
-			"access writer or atlas writer")
+			"access writer, atlas writer or advisor writer")
 	}
 	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a node below a published
 	// floor may ask for a snapshot, and an adoption would race the writes.
@@ -938,6 +940,15 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 				By:   iam.Actor{Name: "ceo", Kind: iam.ActorHuman},
 				OpID: statelog.NewOpID(time.Now(), "op-"+strings.ToLower(key)),
 			}, claim, atlasdomain.NoIfMatch)
+			return err
+		},
+		// A FINDING KEY NOBODY HAS RECORDED is a subject nobody has written,
+		// so the duty's first episode of it is a write at zero.
+		advisordomain.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := c.advisorWriter.Open(ctx, advisordomain.Call{
+				By:   iam.Actor{Name: "engine", Kind: iam.ActorSystem},
+				OpID: statelog.NewOpID(time.Now(), "op-"+strings.ToLower(key)),
+			}, advisorOpening("floor.check:"+strings.ToLower(key)), advisordomain.IfNoRecord)
 			return err
 		},
 	}

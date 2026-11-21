@@ -5,11 +5,14 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
+	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
@@ -25,14 +28,14 @@ import (
 // conversation somebody else owns is one that does not exist (ADR-0053).
 
 // Conversations is one page of p's conversations, the most recently used
-// first.
+// first, only those whose title holds q where q is set.
 func (s *Service) Conversations(ctx context.Context, p iam.Principal, cursor string,
-	limit int) (wire.ConversationList, error) {
+	limit int, q string) (wire.ConversationList, error) {
 
 	if err := s.eligible(p); err != nil {
 		return wire.ConversationList{}, err
 	}
-	list, err := s.transcripts.Conversations(ctx, p.ID, cursor, limit)
+	list, err := s.transcripts.Conversations(ctx, p.ID, cursor, limit, q)
 	if err != nil {
 		return wire.ConversationList{}, s.readFailure(err)
 	}
@@ -40,6 +43,35 @@ func (s *Service) Conversations(ctx context.Context, p iam.Principal, cursor str
 		list.Conversations = []wire.ConversationSummary{}
 	}
 	return list, nil
+}
+
+// Rename gives p's conversation id the title they chose, under the operation
+// key, and answers it. The engine never writes over a title a person set.
+func (s *Service) Rename(ctx context.Context, p iam.Principal, id uuid.UUID, title,
+	key string) (wire.ConversationSummary, error) {
+
+	if err := s.eligible(p); err != nil {
+		return wire.ConversationSummary{}, err
+	}
+	title = strings.TrimSpace(title)
+	switch n := utf8.RuneCountInString(title); {
+	case n == 0:
+		return wire.ConversationSummary{}, invalid("title: a title needs words")
+	case n > wire.TitleMaxRunes:
+		return wire.ConversationSummary{}, invalid("title: at most %d characters, and this "+
+			"one is %d", wire.TitleMaxRunes, n)
+	case strings.IndexFunc(title, unicode.IsControl) >= 0:
+		return wire.ConversationSummary{}, invalid("title: one line of text, without control characters")
+	}
+	w := Write{Owner: p.ID, By: iam.ActorFor(p), Key: key, Steps: []string{"rename"}}
+	if err := s.records.TitleConversation(ctx, w, id, title, wire.TitleByPerson); err != nil {
+		return wire.ConversationSummary{}, s.writeFailure(err)
+	}
+	c, err := s.transcripts.Conversation(ctx, p.ID, id)
+	if err != nil {
+		return wire.ConversationSummary{}, s.readFailure(err)
+	}
+	return c.Summary(), nil
 }
 
 // conversationNamespace is the UUIDv5 namespace a conversation's id is derived
@@ -108,8 +140,9 @@ func (s *Service) render(t assistantdomain.Transcript, reader iam.Principal) wir
 	for _, pr := range t.Proposals {
 		proposals[pr.ID] = pr
 	}
+	now := s.now()
 	for _, c := range t.Cards {
-		out.Cards = append(out.Cards, shown(c, reader, proposals))
+		out.Cards = append(out.Cards, shown(c, reader, proposals, now))
 	}
 	for _, a := range t.AuditReads {
 		out.AuditReads = append(out.AuditReads, a.Wire())
@@ -141,9 +174,10 @@ func (s *Service) render(t assistantdomain.Transcript, reader iam.Principal) wir
 
 // shown is a stored card as reader is shown it now: a notice in its place
 // when they no longer hold every app it was built from ([cards.Visible]), and a
-// proposal card at its proposal's state now.
+// proposal card at its proposal's state at now ([proposal.StateNow]), so one
+// past its approval wait reads expired whether or not its expiry is recorded.
 func shown(c assistantdomain.Card, reader iam.Principal,
-	proposals map[uuid.UUID]assistantdomain.Proposal) wire.CardEvent {
+	proposals map[uuid.UUID]assistantdomain.Proposal, now time.Time) wire.CardEvent {
 
 	ev := c.Event()
 	visible, ok := cards.Visible(c.Apps, ev.Card, reader)
@@ -153,9 +187,9 @@ func shown(c assistantdomain.Card, reader iam.Principal,
 	}
 	if ev.Card.Type == wire.CardProposal && ev.Card.Proposal != nil {
 		if pr, ok := proposals[ev.Card.Proposal.ProposalID]; ok {
-			proposal := *ev.Card.Proposal
-			proposal.State, proposal.Receipt, proposal.Failure = pr.State, pr.Receipt, pr.Failure
-			ev.Card.Proposal = &proposal
+			pc := *ev.Card.Proposal
+			pc.State, pc.Receipt, pc.Failure = proposal.StateNow(pr, now), pr.Receipt, pr.Failure
+			ev.Card.Proposal = &pc
 		}
 	}
 	return ev
@@ -246,7 +280,7 @@ func (s *Service) nameConversation(ctx context.Context, t *turn, question, answe
 	}
 	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAssistantTitle,
 		TurnID: t.id.String()}
-	provider, _, err := s.models.Chain(ctx, t.person, use, Quick)
+	provider, _, err := s.models.Model(ctx, t.person, use)
 	if err != nil {
 		return err
 	}
@@ -269,7 +303,7 @@ func (s *Service) nameConversation(ctx context.Context, t *turn, question, answe
 		return errors.New("the model answered no title")
 	}
 	return s.records.TitleConversation(ctx, Write{Owner: t.person.ID, By: t.by, Key: t.key,
-		Steps: []string{"title"}}, t.conversation, title)
+		Steps: []string{"title"}}, t.conversation, title, wire.TitleByModel)
 }
 
 // conversationTitle is text as a conversation's title, the ONE rule for both

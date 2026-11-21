@@ -19,87 +19,15 @@ import (
 
 // THE PAGED LISTINGS, EACH PAGE ITS OWN READ.
 //
-// Three of the API's reads come back in pages: a stream's subjects under a
-// filter (100,000 a page, from the stream's leader), the stream names and a
-// stream's consumers (1,024 and 256 a page, from the metadata leader). Only
-// a leader answers any of them, so each is dropped without a word by a member
-// that still believes in a leader its group has just lost, exactly as a
-// message read is — and so each PAGE is asked as a metadata read is
-// ([jsprovision.ReadBoundedWith]): presumed lost after its term, asked again
-// with every earlier request still outstanding, the first answer taken, held
-// where its caller set no deadline to the client's own five-second default,
-// and never past the lookup ceiling. The client's own listers asked each page
-// once and held the WHOLE listing for the caller's deadline, or for the
-// client's five seconds where the caller had none — which a listing of a
-// million subjects, thirteen seconds long (below), could never finish inside:
-// the object collector's sweep runs on its duty's lifetime with no deadline,
-// so a bucket that size could never be listed. A page is the unit the bound
-// is kept for, as it is the unit asked again.
-//
-// # Never a whole listing as one read
-//
-// The client's listers send a page, wait for it, send the next. Asked whole
-// through the hedge, a listing whose answer takes longer than the term is
-// presumed lost and started again from its first page, every earlier one
-// still running and each costing the leader the whole listing again, until
-// the ceiling ends them all — and a subjects listing does take that long once
-// a stream holds enough subjects (below). A page is the unit the broker
-// answers, so a page is what is asked again: a dropped page costs one page,
-// and a slow one is never asked again as every page before it.
-//
-// # A page's term is what its answer legitimately takes
-//
-// A subjects page is not a fixed cost: the leader gathers and sorts EVERY
-// subject under the filter to cut each page out of them
-// (server/jetstream_api.go, jsStreamInfoRequest), so every page of a listing
-// costs what the whole listing does, and that grows faster than the set.
-// Measured on one solo member's file store over the object store's own piece
-// subjects (BenchmarkASubjectListing, one listing each on four cores), a page
-// came back in 0.13 seconds at a hundred thousand subjects, 0.39 at three
-// hundred thousand, 1.26 at a million and 4.22 at three million — a whole
-// listing 0.13, 1.36 (four pages), 13.2 (eleven) and 120 seconds
-// (thirty-one), and a page reaches the five seconds a caller with no
-// deadline keeps at about three and a half million. So a page is given the
-// read term beside what the last page this reader asked took — the same
-// work, asked of the same leader a moment later, measured as the round trip
-// of the request that was answered — and a reader's first page ever the read
-// term alone, the one figure nothing has measured: a listing of millions of
-// subjects asks its first page again once for every two seconds the page
-// takes, and never a page after it. A page NOBODY ANSWERED is measured too,
-// as at least as long as it was asked for, and only an answered page lowers
-// the figure again: a page that outgrows its bound is asked again inside it
-// only the first time, and every listing after it asks it once — where,
-// learnt from the answered pages alone, each began from the read term and
-// asked it at none, two and four seconds, three sorts of every subject on the
-// leader, for a page that could not be answered in time anyway.
-//
-// A consumers page is gathered by a scatter to every consumer's own leader,
-// which the metadata leader waits up to four seconds for
-// ([consumerListWait]), so its term is that wait beside the read term — five
-// seconds, the client's whole bound, so a page whose caller set no deadline
-// is asked once inside it, as the client asked it, and only a caller that
-// waits longer has it asked again. A stream names page is a sort of the
-// names, the read term's.
-//
-// # Every entry there throughout is listed, and none twice
-//
-// The leader cuts each page out of a sorted list it builds for that request
-// alone, so a page boundary is an offset into a list that moves between two
-// requests: an entry REMOVED before the boundary moves the one after it back
-// across it, into a page already read, and offset paging alone — the client's
-// own, which counted what it had to find the next page's offset — never reads
-// it. So each later page is asked from ONE ENTRY BEFORE where the last ended,
-// and must begin at or before the entry the last ended on: a page that begins
-// after it was cut after a removal, and is asked again from further back, the
-// step doubling, until one overlaps (a page from the list's start always
-// does). Nothing between two overlapping pages can be in neither, since each
-// page is a contiguous run of one sorted list. An entry a page repeats from
-// those before is not visited again, and one added or removed while the
-// listing ran may be visited or not. The overlap costs a quiet listing one
-// entry a page — a page more only where the last would have held fewer
-// entries than there were pages before it (a million subjects exactly, 11
-// pages for 10) — and a removal across a boundary a page more for each
-// doubling of the step.
+// Subjects, stream names and consumers come in pages that only a leader
+// answers: a member still believing in a leader its group lost drops each
+// without a word. So each PAGE is asked as a metadata read is
+// ([jsprovision.ReadBoundedWith]), never the whole listing as one read: asked
+// whole, a listing slower than the term restarts from its first page with every
+// earlier run still going, each costing the leader the whole listing again,
+// while a dropped page costs one page. The client's listers held the whole
+// listing to one deadline, which a 13-second million-subject listing never
+// meets. Terms: [Leader.Subjects], [consumerListWait]; overlap: [sorted].
 
 // ErrLeaderless is a page a member answered from its own copy while its group
 // had no leader — a stream's info is the leader's EXCEPT then
@@ -120,7 +48,9 @@ var ErrNoStream = errors.New("jsapi: no such stream")
 // has and names the rest missing: the vendored server's
 // jsClusteredConsumerListRequest, `const timeout = 4 * time.Second`. A page
 // is presumed lost only once that wait and a read term have passed, since the
-// leader is still gathering it until then.
+// leader is still gathering it until then. That is five seconds, the client's
+// whole bound, so a page whose caller set no deadline is asked once, as the
+// client asked it. A stream names page is a sort, the read term's.
 const consumerListWait = 4 * time.Second
 
 // requester is the one call a leader read or a listing's page makes of a
@@ -210,12 +140,16 @@ func page(ctx context.Context, conn requester, subject string, req any, term, bo
 	return took, true, nil
 }
 
-// sorted walks a listing its leader cuts into pages out of one list it sorts
-// by key for each request, calling visit with each page's entries that no
-// page before it held, until a page reaches the list's end or visit returns
-// an error, which sorted then returns. fetch asks for the page at offset,
-// answering its entries by key and how many the whole list held when it was
-// cut. See this file's head for what it guarantees and why it overlaps.
+// sorted walks a listing its leader cuts into pages out of a list sorted anew
+// per request, calling visit with each page's entries no earlier page held,
+// until the list's end or an error from visit. fetch asks for the page at
+// offset, answering its entries by key and the list's size when it was cut.
+//
+// An entry REMOVED before a boundary moves the next one back into a page
+// already read, which offset paging alone never reads. So each later page is
+// asked from ONE ENTRY BEFORE where the last ended and must begin at or before
+// that entry; one that begins after was cut after a removal and is asked again
+// from further back, the step doubling. A repeat is not visited again.
 func sorted[T any](fetch func(offset int) (entries map[string]T, total int, err error),
 	visit func(fresh map[string]T) error) error {
 
@@ -304,34 +238,31 @@ func (l *Leader) outlasted(took time.Duration) {
 }
 
 // Subjects calls visit with the subjects under filter that the stream's
-// LEADER holds a message on, each with how many it holds there, a page at a
-// time, until the last page or until visit returns an error, which Subjects
-// then returns. Each page is its own read, and every subject that holds a
-// message throughout the listing is visited once (see this file's head); a
-// page answered by a member of a group with no leader is [ErrLeaderless].
+// LEADER holds a message on, each with its count, a page at a time, until the
+// last page or an error from visit. Every subject held throughout is visited
+// once ([sorted]); a page a leaderless member answered is [ErrLeaderless].
+//
+// A page's term is what its answer takes: the leader sorts EVERY subject under
+// the filter to cut each page, so each costs the whole listing
+// (BenchmarkASubjectListing: 0.13 s a page at 100,000 subjects, 1.26 at a
+// million, 4.22 at three million). A page gets the read term beside the round
+// trip of the last page answered (the read term alone for a reader's first
+// ever); a page nobody answered counts as at least as long as it was asked
+// for ([Leader.outlasted]).
 func (l *Leader) Subjects(ctx context.Context, filter string, visit func(map[string]uint64) error) error {
 	_, err := l.SubjectsSince(ctx, filter, visit)
 	return err
 }
 
 // SubjectsSince is [Leader.Subjects], answering besides the stream's last
-// sequence as the leader stated it on the listing's FIRST page — what every
-// message the listing counted was stored at or after, short of one stored
-// while it ran.
-//
-// THE FIRST PAGE'S, the earliest the listing read: a message stored while
-// later pages were read may be counted on one of them, but never left out of
-// a later listing's last sequence, so a reader comparing two listings' last
-// sequences sees every message stored between their first pages move it. Read
-// from a later page, a message stored on an earlier page's subject after that
-// page and a message let go from the same subject would leave its count and
-// this sequence both where the next listing finds them. Within one page the
-// leader states the sequence before it counts the subjects (nats-server
-// v2.15.2, server/jetstream_api.go:2192 and 2207, jsStreamInfoRequest: the
-// state, then SubjectsTotals), which errs the same way.
-//
-// One request where the subjects fit one page, as a dead-letter subtree's
-// always do: it is the read a reader asks on every beat.
+// sequence as the leader stated it on the listing's FIRST page, the earliest
+// the listing read: a message stored while later pages were read may be counted
+// on one of them but is never left out of a later listing's sequence, so two
+// listings' sequences differ for every message stored between their first
+// pages. From a later page, a message stored on an earlier page's subject plus
+// one let go from it would leave count and sequence as the next listing finds
+// them. Within a page the leader states the sequence before it counts the
+// subjects (jsStreamInfoRequest), which errs the same way.
 func (l *Leader) SubjectsSince(ctx context.Context, filter string,
 	visit func(map[string]uint64) error) (uint64, error) {
 
@@ -389,29 +320,17 @@ func (l *Leader) SubjectsSince(ctx context.Context, filter string,
 	return last, nil
 }
 
-// Meta reads the listings only the METADATA leader answers — the stream
-// names, a stream's consumers — each page its own read (see this file's
-// head).
+// Meta reads the listings only the METADATA leader answers (the stream names,
+// a stream's consumers), each page its own read.
 //
-// # A client that answers its own pages
-//
-// The pages go on the connection of the client a Meta is built over, unless
-// that client answers requests itself — RequestWithContext, the one call a
-// page makes of a connection — when they go on the client. No client the
-// engine builds does: each is the vendored library's, made by [API.Client],
-// which answers none, and a test holds that. A TEST'S FAKE does, so that a
-// case can be the metadata leader inside a synctest bubble. A claim about the
-// clock — the bound a page was armed with, the instant a listing ended — is
-// exact only in a bubble, and no broker's reply can reach a request made in
-// one: the connection's reader hands each reply to a channel the request
-// made, from outside the bubble, which synctest refuses.
-//
-// The seam is BELOW the hedge: a page's term, its bound, its re-asks and the
-// paging are this package's own under a fake as in production. So a case that
-// answers through it holds that the pages it asked about were asked there —
-// a listing that put them anywhere else would otherwise pass it unheard —
-// and whether a caller's reads are asked again at all is still proved at the
-// broker ([jsapitest]).
+// The pages go on the client's connection unless the client answers requests
+// itself (RequestWithContext, the one call a page makes). No client the engine
+// builds does (each is made by [API.Client], and a test holds that); a TEST'S
+// FAKE does, so a case can be the metadata leader inside a synctest bubble:
+// no broker's reply can reach a request made in one, and a claim about the
+// clock is exact only there. The seam is BELOW the hedge, so a page's term,
+// bound, re-asks and paging are this package's own under a fake; whether a
+// caller's reads are asked again at all is proved at the broker ([jsapitest]).
 type Meta struct {
 	// conn is what the pages are put on: the client's connection, or the
 	// client itself where it answers requests ([requesterOf]).

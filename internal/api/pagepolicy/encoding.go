@@ -50,18 +50,16 @@ func GzipSmaller(data []byte, level int) []byte {
 
 // AcceptsGzip reports whether a request's Accept-Encoding admits gzip.
 //
-// ASKED, NEVER ASSUMED. RFC 9110 reads a request with no Accept-Encoding at
-// all as accepting any coding, and no browser sends such a request; the
-// clients that do are curl, a script and a health probe, which is to say the
-// ones that would print compressed bytes. So an absent or empty header is
-// identity, and so is one that names only codings this does not produce.
+// ASKED, NEVER ASSUMED. RFC 9110 reads an absent Accept-Encoding as accepting
+// any coding, but no browser omits it; curl, scripts and health probes do, and
+// would print compressed bytes. So an absent or empty header is identity, and
+// so is one naming only codings this does not produce.
 //
-// gzip is admitted by a `gzip` member (or `x-gzip`, which §12.5.3 has a
-// recipient treat as the same coding) with a weight above zero, or failing any
-// such member by a `*` with one. A member that names gzip outranks the
+// gzip is admitted by a `gzip` member (or `x-gzip`, §12.5.3) with a weight
+// above zero, else by a `*` with one. A member naming gzip outranks the
 // wildcard whatever the order, so `*, gzip;q=0` refuses it. A weight that is
-// not a qvalue admits nothing: identity is always a correct answer, and an
-// encoded body a client did not ask for is not.
+// not a qvalue admits nothing: identity is always correct, and an encoded body
+// nobody asked for is not.
 func AcceptsGzip(h http.Header) bool {
 	named, namedOK, wildOK := false, false, false
 	for _, field := range h.Values("Accept-Encoding") {

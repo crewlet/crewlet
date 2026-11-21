@@ -34,6 +34,16 @@
 // which is the same sixty seconds the alarm table already calls a stall: a
 // node serving stale identity is by definition a node already alarmed.
 //
+// # An expiry is decided first and announced to nobody
+//
+// A deadline needs no row, so an expired cookie is refused even by a node that
+// cannot read its estate. Nothing records the expiry: announcing each one once
+// would take a remembered set the size of every session a node had noticed, and
+// a second read to tell it from an ending a record had already announced. A
+// write on a node below the bearer's start position waits for it, up to
+// auth.SessionCatchUp, instead of answering 503: a sign-in answers before any
+// node applies its session, so the next request owes that wait.
+//
 // # The keyring is required, and a per-process key is refused
 //
 // A key of this process's own would be catastrophic here: every ingress node
@@ -123,16 +133,15 @@ const HostCookieName = "__Host-" + CookieBaseName
 // CookieName is what the bearer is set under for a deployment reachable at
 // externalURL.
 //
-// THE SCHEME DECIDES, and it has to be the CONFIGURED url rather than the
-// request: the engine sits behind a TLS-terminating proxy and reads no
-// `r.TLS`, so asking the request would make every deployment look like plain
-// http and drop the prefix on exactly the deployments that need it.
+// THE SCHEME DECIDES, from the CONFIGURED url rather than the request: behind
+// a TLS-terminating proxy the engine reads no `r.TLS`, so the request would
+// make every deployment look like plain http and drop the prefix where needed.
 //
-// ANYTHING THAT IS NOT PLAIN http TAKES THE PREFIX, including an unparseable
-// or empty value. The failure directions are not symmetric: a prefixed cookie
-// on a loopback http deployment does not stick and somebody notices during
-// setup, while an unprefixed cookie on a public https deployment works
-// perfectly and silently accepts one a sibling subdomain wrote.
+// ANYTHING THAT IS NOT PLAIN http TAKES THE PREFIX, an unparseable or empty
+// value included. The failures are not symmetric: a prefixed cookie on a
+// loopback http deployment visibly fails to stick during setup, while an
+// unprefixed one on public https works and silently accepts one a sibling
+// subdomain wrote.
 func CookieName(externalURL string) string {
 	if HostPrefixed(externalURL) {
 		return HostCookieName
@@ -180,19 +189,15 @@ func End(w http.ResponseWriter, externalURL string) {
 // SignOut is [End] for a person's own sign-out of this browser, which also
 // empties the browser's HTTP cache for this origin.
 //
-// ONLY HERE, because an answer kept from a request that names no reader (a
-// tab that opened an API route itself, with no Authorization and no reader
-// header) is keyed for whoever uses the browser next, signed in or not. The
-// sign-out is the one gesture where the person asks the browser to stop
-// holding their access, and it is one response, held once, at their request.
-// An expiry adds nothing a session left signed in does not already expose.
+// ONLY HERE, because an answer kept from a request naming no reader (a tab
+// opening an API route itself, with no Authorization header) is keyed for
+// whoever uses the browser next. Sign-out is the one gesture where the person
+// asks the browser to stop holding their access.
 //
-// A BROWSER HONOURS IT ONLY IN A SECURE CONTEXT (https, or a loopback address)
-// and only where it implements the directive: Chrome from 65, Safari from 17,
-// and Firefox from 63 to 93 and again from 138. Where it is not honoured, a
-// kept answer stays until the browser evicts it, which is why an answer may
-// be kept only where it is the same for every caller who may ask it
-// (internal/api/queries' Immutable).
+// A BROWSER HONOURS IT ONLY IN A SECURE CONTEXT (https, or loopback) and only
+// where implemented: Chrome from 65, Safari from 17, Firefox from 63 to 93 and
+// from 138. Elsewhere a kept answer stays until evicted, so one may be kept
+// only where it is the same for every caller (internal/api/queries' Immutable).
 func SignOut(w http.ResponseWriter, externalURL string) {
 	w.Header().Set(clearSiteData, clearCache)
 	End(w, externalURL)
@@ -210,22 +215,16 @@ const (
 
 // bearerCookie is the bearer as a browser must be given it.
 //
-// ONE PLACE THAT DECIDES THE ATTRIBUTES, because there are five of them and
-// every one is load-bearing: `HttpOnly` keeps it out of reach of any script
-// on the page, `Secure` is what the `__Host-` prefix requires, `Path=/` is
-// what it requires as well AND what makes one cookie cover the whole API,
-// `SameSite=Lax` is what stops a cross-site form posting as somebody, and NO
-// `Domain` attribute is the third thing the prefix requires. Written at each
-// call site they drift, and every one of them drifts SILENTLY — the sign-in
-// still works. UNEXPORTED, with [deletion] and [deletions], so a cookie is set
-// only through [Issue], [End] and [SignOut].
+// ONE PLACE THAT DECIDES THE ATTRIBUTES, five, each load-bearing: `HttpOnly`
+// keeps it from page scripts, `Secure`, `Path=/` and NO `Domain` are what the
+// `__Host-` prefix requires (`Path=/` also covers the whole API), and
+// `SameSite=Lax` stops a cross-site form posting as somebody. They drift
+// SILENTLY at call sites, so it is UNEXPORTED: a cookie is set only through
+// [Issue], [End] and [SignOut].
 //
-// THE EXPIRY IS THE ABSOLUTE DEADLINE, never the idle one. A browser that
-// dropped the cookie at the idle deadline would sign somebody out at exactly
-// the moment a re-issue was about to move it; one with no expiry at all holds
-// a cookie that can never work again, and re-presents it on every request for
-// ever. The absolute deadline is the one instant after which the value is
-// certainly dead.
+// THE EXPIRY IS THE ABSOLUTE DEADLINE, never the idle one: dropping the cookie
+// at the idle deadline would sign somebody out just as a re-issue was about to
+// move it, and no expiry keeps re-presenting a dead cookie for ever.
 func bearerCookie(externalURL, value string, expires time.Time) *http.Cookie {
 	return &http.Cookie{
 		Name:     CookieName(externalURL),
@@ -266,15 +265,12 @@ var CookieNames = []string{HostCookieName, CookieBaseName}
 //
 // ONE NAME, READ AS ISSUED, because the prefix is the whole of what keeps a
 // sibling host's cookie out: a browser sets `__Host-crewlet_session` only from
-// this exact host, while `crewlet_session` any host under the same registrable
-// domain can write, with a Domain covering this one. Read under either name —
-// as it was, so that a deployment moving from http to https kept its browsers
-// signed in — a sibling that planted ITS OWN valid session under the bare name
-// signed a visitor who held none in as that session's person: every change
-// they then made landed in an account the sibling's author can read, which is
-// the fixation the prefix exists to close. So a move to https signs each
-// browser in again once, and [Held] is what lets the sign-out still end what
-// the old name held.
+// this exact host, while any host under the same registrable domain can write
+// `crewlet_session`. Read under either name, a sibling that planted ITS OWN
+// valid session under the bare name signed a visitor in as that session's
+// person, every change landing in an account the sibling's author can read:
+// the fixation the prefix closes. So a move to https signs each browser in
+// again once, and [Held] lets sign-out still end what the old name held.
 func Presented(r *http.Request, externalURL string) string {
 	if c, err := r.Cookie(CookieName(externalURL)); err == nil {
 		return c.Value

@@ -130,23 +130,15 @@ func TestAConvergedOrganizationReportsNoOrphans(t *testing.T) {
 
 // A DISABLED ORPHAN IS ALREADY WHERE THE NOTE IS ASKING IT TO GET TO.
 //
-// The advisory's own remedy is "disable or delete the ones you do not want",
-// so an account that is already disabled is asking an operator for work
-// somebody has done. And mostly THIS ENGINE had done it: a `remove_seats`
-// disconnect disables the accounts it removes, so the ordinary
-// reconnect-with-a-smaller-roster cycle turned every correct teardown into a
-// row on the card. That is where the 36 measured `agent-cs-…` accounts came
-// from — every one of them inert, and the pile of them burying whatever else
-// the card had to say.
+// The advisory's remedy is "disable or delete the ones you do not want", so an
+// already disabled account asks for work somebody has done, mostly THIS
+// ENGINE: a `remove_seats` disconnect disables the accounts it removes, so
+// every correct teardown would otherwise become a row on the card, burying
+// whatever else it had to say. And an operator who disabled an account must
+// see the finding clear, so either half of "disable or delete" does.
 //
-// It also makes the instruction work. The filter looked only at the address,
-// so an operator who read the note and disabled an account watched the finding
-// come back unchanged on the next tick and learned that the card does not
-// respond to what it asks for. Now either half of "disable or delete" clears
-// it.
-//
-// The enabled one in the same organization still reports, which is the half
-// that must not go with it: that account can still act.
+// The enabled one in the same organization still reports: that account can
+// still act.
 func TestADisabledOrphanIsAlreadyWhereTheNoteAsks(t *testing.T) {
 	t.Parallel()
 	reg := newRegion(t)

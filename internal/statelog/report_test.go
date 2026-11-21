@@ -16,10 +16,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// reportAt is the instant every case in this file is assembled at. Fixed
-// rather than time.Now(), because half of what the report says is a
-// comparison against an instant and a moving one makes a boundary case a
-// flake.
+// reportAt is the instant every case is assembled at: fixed, because the
+// report compares against instants and a moving one makes a boundary flake.
 var reportAt = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
 
 // replayWindow is the shipped `min_age`, which the trim-blocked cases hold a
@@ -56,8 +54,8 @@ func healthyDomain(name string, feed bool) statelog.DomainInputs {
 		TrimFloor:      700,
 		Decision:       statelog.Trim(in.Terms()),
 		FloorState:     statelog.TrimFloorPublished,
-		// THE BACKUP THE TRIM ABOVE COUNTS, an hour old: a healthy log
-		// is covered, so a case that sets a backup policy is quiet on it.
+		// THE BACKUP THE TRIM ABOVE COUNTS, an hour old, so a case that
+		// sets a backup policy is quiet on it.
 		BackupAt: in.BackupAt,
 	}
 }
@@ -76,9 +74,8 @@ func term(t *testing.T, d statelog.DomainReport, name statelog.TermName) statelo
 
 // A TERM A DOMAIN DOES NOT HAVE IS `n/a`, NEVER ZERO AND NEVER UNKNOWN.
 //
-// A domain that declares no wake feed has none. Rendering that as `0` claims
-// the feed has scanned nothing, and rendering it as unreadable puts a block on
-// the screen of a fleet where nothing is wrong.
+// A domain with no wake feed has none: `0` claims the feed scanned nothing,
+// and unreadable puts a block on a healthy fleet's screen.
 func TestATermADomainDoesNotHaveIsAbsentRatherThanUnknown(t *testing.T) {
 	t.Parallel()
 	rep := statelog.NewReport(statelog.ReportInputs{
@@ -101,9 +98,8 @@ func TestATermADomainDoesNotHaveIsAbsentRatherThanUnknown(t *testing.T) {
 
 // EVERY TERM CARRIES A REMEDY, INCLUDING THE ONE THAT MEANS NOTHING IS WRONG.
 //
-// Five of the six name something to fix. The sixth binds on a healthy fleet,
-// and an operator reading five remedies and one blank concludes the surface
-// is incomplete rather than that the fleet is fine.
+// Five of the six name something to fix; the sixth binds on a healthy fleet,
+// and a blank there reads as an incomplete surface, not a fine fleet.
 func TestEveryTermCarriesARemedyIncludingTheHealthyOne(t *testing.T) {
 	t.Parallel()
 	rep := statelog.NewReport(statelog.ReportInputs{
@@ -127,8 +123,8 @@ func TestEveryTermCarriesARemedyIncludingTheHealthyOne(t *testing.T) {
 
 // THE BACKUP REMEDY NAMES THE OWNER, OR SAYS THERE IS NONE.
 //
-// `retention.backup_owner` reaches an operator in exactly one place, and this
-// is it. A remedy that never named it would make the field decorative.
+// `retention.backup_owner` reaches an operator only here; a remedy that never
+// named it would make the field decorative.
 func TestTheBackupRemedyNamesTheOwnerOrSaysThereIsNone(t *testing.T) {
 	t.Parallel()
 	named := statelog.NewReport(statelog.ReportInputs{
@@ -155,9 +151,8 @@ func TestTheBackupRemedyNamesTheOwnerOrSaysThereIsNone(t *testing.T) {
 
 // AN UNREADABLE CEILING IS NOT ZERO HEADROOM.
 //
-// The headroom alarm is the one an operator cannot ignore. Deriving it from a
-// ceiling nobody could read pages a whole fleet for a broker that was briefly
-// slow.
+// The headroom alarm is the one an operator cannot ignore; derived from an
+// unread ceiling it pages a whole fleet for a briefly slow broker.
 func TestAnUnreadableCeilingIsNotZeroHeadroom(t *testing.T) {
 	t.Parallel()
 	d := healthyDomain("tracker", true)
@@ -177,8 +172,7 @@ func TestAnUnreadableCeilingIsNotZeroHeadroom(t *testing.T) {
 
 // THE HEADROOM ALARM NAMES ITS DOMAIN.
 //
-// Two logs fill at different rates. An alarm that said only "10% left" would
-// send an operator to look at both.
+// Two logs fill at different rates; "10% left" alone sends an operator to both.
 func TestTheHeadroomAlarmNamesItsDomain(t *testing.T) {
 	t.Parallel()
 	full := healthyDomain("vectors", false)
@@ -208,9 +202,9 @@ func TestTheHeadroomAlarmNamesItsDomain(t *testing.T) {
 
 // A LOG TOO SMALL FOR ITS OWN REPLAY WINDOW IS NAMED, and only that log.
 //
-// Each domain has its own ceiling and its own rate, so the comparison is per
-// domain exactly as headroom is — an alarm that said only "a ceiling is too
-// small" would send an operator to resize every log they have.
+// Each domain has its own ceiling and rate, so the comparison is per domain,
+// as headroom is: "a ceiling is too small" would send an operator to resize
+// every log.
 func TestTheCeilingShortAlarmNamesItsDomain(t *testing.T) {
 	t.Parallel()
 	busy := healthyDomain("iam", true)
@@ -243,9 +237,9 @@ func TestTheCeilingShortAlarmNamesItsDomain(t *testing.T) {
 			fired[0].Detail)
 	}
 
-	// AND THE WINDOW IS WHAT IT IS COMPARED AGAINST: the same log under a
-	// three-day min_age fits, so a report that dropped the window would
-	// fire on every log with any rate at all or on none.
+	// AND THE WINDOW IS WHAT IT IS COMPARED AGAINST: under a three-day
+	// min_age the same log fits; a report ignoring the window fires on
+	// every log or none.
 	rep = statelog.NewReport(statelog.ReportInputs{
 		NodeID: "node-1", At: reportAt, ReplayWindow: 3 * 24 * time.Hour,
 		Domains: []statelog.DomainInputs{quiet, busy},
@@ -260,10 +254,9 @@ func TestTheCeilingShortAlarmNamesItsDomain(t *testing.T) {
 // A MEASURED ZERO GOES ON THE WIRE AS ZERO, AND AN UNMEASURED RATE AS
 // NOTHING.
 //
-// The two are opposite facts — a log that took in nothing, and a node that
-// cannot say — and every surface downstream renders from the JSON. Collapsed
-// into one representation, a dashboard would show an idle log on every node
-// that has not ticked yet.
+// Opposite facts (a log that took in nothing, a node that cannot say), and
+// every surface renders from the JSON: collapsed, a dashboard shows an idle
+// log on every node that has not ticked yet.
 func TestAMeasuredZeroRateSurvivesTheWireAndAnUnmeasuredOneIsAbsent(t *testing.T) {
 	t.Parallel()
 	idle := healthyDomain("pages", true)
@@ -293,11 +286,10 @@ func TestAMeasuredZeroRateSurvivesTheWireAndAnUnmeasuredOneIsAbsent(t *testing.T
 
 // THE BACKUP-AGE ALARM AGES EACH LOG'S OWN BACKUP, AND NAMES THE LOG.
 //
-// Under `backup_floor: operator` every log is acknowledged on its own, so the
-// logs' backups have one age each. The reading used to carry ONE age, the
-// newest point's, and an operator who had just acknowledged one log read a
-// green alarm beside a tracker log whose acknowledgement was days old and a
-// pages log that had none — both trims blocked, neither said.
+// Under `backup_floor: operator` each log is acknowledged on its own, so each
+// has its own backup age. One age per node (the newest point's) reads green
+// beside logs whose acknowledgement is days old or missing, their trims
+// blocked and unsaid.
 func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
 	t.Parallel()
 	fresh := healthyDomain("tracker", true)
@@ -390,18 +382,15 @@ func TestTheBackupAlarmAgesEachLogsOwnBackup(t *testing.T) {
 
 // A RESERVED LOG'S HEADROOM IS OF THE CEILING ITS ORDINARY WRITES MEET.
 //
-// On a log that keeps a gate reserve ordinary writes are refused at the ceiling
-// less the reserve, so that is where "full" is for everything the headroom
-// alarm warns about: measured against the broker's ceiling, the alarm fired a
-// sixteenth late and a log at 0% of its ordinary ceiling read as having room.
-// A log that keeps none is still measured against its whole ceiling, and the
-// reserve itself is reported beside the ceiling it is kept under.
+// On a log keeping a gate reserve, ordinary writes are refused at the ceiling
+// less the reserve, so that is "full" for the headroom alarm: against the
+// broker's ceiling it fires a sixteenth late. A log keeping none is measured
+// against its whole ceiling; the reserve is reported beside the ceiling.
 func TestAReservedLogsHeadroomIsOfItsOrdinaryCeiling(t *testing.T) {
 	t.Parallel()
-	// 12% of the broker's ceiling is left, and 6% of the 1500 MiB
-	// ordinary writes are held to: at this ceiling the sixteenth is the
-	// larger term of the reserve, the fleet term of a log whose largest
-	// append is four kibibytes being about a mebibyte.
+	// 12% of the broker's ceiling is left, 6% of the 1500 MiB ordinary
+	// one: here the sixteenth is the reserve's larger term (the fleet term
+	// for a 4 KiB largest append is about a mebibyte).
 	reserved := healthyDomain("tracker", true)
 	reserved.Bytes, reserved.MaxBytes = 1408<<20, 1600<<20
 	reserved.Reservation = statelog.Reservation{Kept: true, MaxAppend: 4 << 10}
@@ -448,10 +437,9 @@ func TestAReservedLogsHeadroomIsOfItsOrdinaryCeiling(t *testing.T) {
 
 // THE REPORT'S COUNTED SET IS THE GATE'S OWN, TO THE INSTANT.
 //
-// An eviction takes effect one fence window after the gesture. A screen that
-// called it effective a moment before the trim did would show a node dropped
-// from the set the gate is still waiting for — which is the operator
-// concluding the gesture worked and walking away.
+// An eviction takes effect one fence window after the gesture. A screen
+// calling it effective before the trim does shows a node dropped from the set
+// the gate still waits on, and the operator walks away.
 func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 	t.Parallel()
 	evicted := reportAt.Add(-statelog.EvictionFenceWindow)
@@ -496,9 +484,9 @@ func TestAnEvictionIsEffectiveExactlyWhenTheGateSaysSo(t *testing.T) {
 
 // A LIVE NODE WITH NO POSITION YET IS COUNTED, AND VISIBLE.
 //
-// It is a live data node whose row has not landed — its heartbeat's write
-// refused — and it blocks every term derived from the counted set. A row it
-// did not appear in would be a block with no visible cause.
+// A live data node whose row has not landed (its heartbeat's write refused)
+// blocks every term derived from the counted set; left out, the block has no
+// visible cause.
 func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 	t.Parallel()
 	d := healthyDomain("tracker", true)
@@ -526,12 +514,11 @@ func TestALiveNodeWithNoPositionIsCountedAndRendered(t *testing.T) {
 
 // THE COUNTED MARK IS THE TRIM'S SET, LOG BY LOG.
 //
-// A node is marked counted where some log's counted set holds it, each set over
-// that log's own rows and tombstones and the live data nodes: a node evicted
-// past the window on the only log its row names is counted nowhere, and one
-// evicted on one log and still reporting another is counted — on the other.
-// Folded into one set over every row, the first was marked counted while the
-// trim waited for it on no log.
+// A node is counted where some log's counted set holds it, each over that
+// log's own rows, tombstones and the live data nodes: one evicted past the
+// window on the only log its row names is counted nowhere; one evicted on one
+// log and reporting another is counted on the other. One set over every row
+// would mark the first counted while no log's trim waits for it.
 func TestTheCountedMarkIsTheTrimsSetLogByLog(t *testing.T) {
 	t.Parallel()
 	tracker := healthyDomain("tracker", true)
@@ -674,12 +661,11 @@ func TestTheExitCodeIsTheAlarms(t *testing.T) {
 // WHAT A BLOCKED TRIM IS KEEPING PAST THE WINDOW IS READ OFF THE LOG, not off
 // the clock.
 //
-// The report has both halves of the count: the published age term's own
-// sequence — the first record young enough to keep — and the log's first. A
-// block the clock says is old enough is still silent while those say the log
-// holds nothing past the window, which is every young fleet, every log nobody
-// writes to, and a stream this node could not read (whose bounds it does not
-// have). And the count, when there is one, is the one the alarm prints.
+// The report has both halves of the count: the age term's sequence (the
+// first record young enough to keep) and the log's first. A block old by the
+// clock stays silent while they say nothing is past the window: a young
+// fleet, an unwritten log, an unreadable stream (no bounds). A count, when
+// there is one, is what the alarm prints.
 func TestABlockedTrimsAlarmReadsWhatTheLogHoldsPastTheWindow(t *testing.T) {
 	t.Parallel()
 	old := reportAt.Add(-(replayWindow + statelog.TrimInterval + time.Hour))
@@ -749,16 +735,11 @@ func TestABlockedTrimsAlarmReadsWhatTheLogHoldsPastTheWindow(t *testing.T) {
 // A HELD RECORD AND AN UNREADABLE FLOOR ARE EACH LOG'S OWN MEASUREMENT, and
 // each says what is true of that log.
 //
-// What the deferral grace does is a log's: every log's copy is judged on its
-// own (ADR-0079), so past it a record held on one log has taken this node's
-// copy of THAT log out of service and no other's. The form this replaced
-// reduced the node to its OLDEST held record, so a node holding an identity
-// record for two hours and a tracker record for forty minutes raised one alarm
-// naming the identity record alone, while the tracker's copy had gone out of
-// service too. A floor is
-// the same: a read of one log refuses on that log's floor, and two logs
-// re-anchored while this node was not are two re-anchors, where the node's
-// longest named one.
+// Each log's copy is judged on its own (ADR-0079), so past the deferral grace
+// a record held on one log takes this node's copy of THAT log out of service
+// and no other's; reduced to the node's oldest held record, the alarm would
+// name one log while another's copy had gone too. A floor likewise: a read
+// refuses on its own log's floor, and two logs re-anchored are two re-anchors.
 func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 	t.Parallel()
 	identity := healthyDomain("iam", true)
@@ -836,22 +817,21 @@ func TestAHeldRecordAndAnUnreadableFloorAreEachLogsOwnAlarm(t *testing.T) {
 // THE ALARMS THE REPORT RAISES PER LOG ARE EXACTLY THE ONES THE TABLE FLAGS,
 // in both directions.
 //
-// The flag is what the published reference names them from, and what the
-// tracker writes a line pair per log for. So one log is put at the firing value
-// of every per-log condition beside a node reading that fires one of its own:
-// every alarm the report lists a log under must be a flagged kind, every
-// flagged kind must list it, and nothing the node raises may list a log.
+// The flag is what the published reference names them from and what the
+// tracker writes a line pair per log for. One log sits at the firing value of
+// every per-log condition beside a node reading firing its own: every alarm
+// listing a log must be flagged, every flagged kind must list it, and nothing
+// node-wide may list a log.
 func TestTheAlarmsRaisedPerLogAreTheOnesTheTableFlags(t *testing.T) {
 	t.Parallel()
 	d := healthyDomain("tracker", true)
 	// NEARLY FULL, and taking in a gibibyte a day against a gibibyte ceiling.
 	d.MaxBytes, d.Bytes = 1<<30, 1<<30-1
 	d.BytesPerDay = statelog.PerDay(1 << 30)
-	// BLOCKED ON A COUNTED SET NOBODY COULD READ, for longer than the
-	// window, with a hundred records past it — and covered by no backup.
-	// The applied term comes first, so the hold is trim_blocked's own: one
-	// on the backup term would be folded under this log's backup_age, and
-	// trim_blocked would list nothing.
+	// BLOCKED ON A COUNTED SET NOBODY COULD READ, past the window with a
+	// hundred records past it, and covered by no backup. The applied term
+	// comes first so the hold is trim_blocked's own: one on the backup term
+	// folds under backup_age, and trim_blocked would list nothing.
 	in := statelog.TrimInputs{
 		Now: reportAt, HoldsReadable: true,
 		BackupMaxAge: 24 * time.Hour, HasFeed: true, FeedReadable: true,
@@ -963,19 +943,13 @@ func TestAnUnreadableRegisterIsNotAnEmptyFleet(t *testing.T) {
 // the same way.
 //
 // `GET /worklet/retention` and `crewlet retention status --json` hand this
-// document to a script and to a dashboard, and both address fields by name.
-// [Alarm] shipped untagged, so the alarms array alone came back as
-// `Kind`/`Detail`/`Remedy` beside siblings spelling themselves `node_id` and
-// `first_seq`. Nothing reported it, and the reason is worth writing down: the
-// only consumer at the time was `crewlet retention status`, and Go's decoder
-// matches field names case-INSENSITIVELY, so the one reader that could have
-// noticed was the one reader that could not. Every case-sensitive reader —
-// the dashboard, `jq`, anything not written in Go — reads the field as absent
-// rather than as an error.
+// document to scripts and the dashboard, which address fields by name. Go's
+// decoder matches names case-INSENSITIVELY, so a Go reader misses an untagged
+// `Kind` beside `node_id` that every case-sensitive reader (the dashboard,
+// `jq`) reads as absent rather than as an error.
 //
-// A REFLECTION WALK rather than a golden document: a golden one is edited to
-// match whatever the code emits the day a field is added, which is precisely
-// how the untagged struct survived. This fails on the field.
+// A REFLECTION WALK, not a golden document: a golden one is edited to match
+// whatever the code emits the day a field is added. This fails on the field.
 func TestEveryFieldOfTheRetentionDocumentIsSnakeCase(t *testing.T) {
 	t.Parallel()
 
@@ -1026,15 +1000,11 @@ func TestEveryFieldOfTheRetentionDocumentIsSnakeCase(t *testing.T) {
 // THE REPORT NAMES THE LEVEL IT WAS SERVED AT, and it is DERIVED from whether
 // this node could measure its own distance from the log.
 //
-// This is the one answer that has to keep working during the outage it
-// describes, so it never takes a barrier — the barrier is the instrument and
-// its health is the subject. But `stale` is a claim about AGE, and a document
-// assembled while the lag could not be read cannot make one: the broker was
-// unreachable, or coordination was, which is the ordinary signature of what
-// somebody opened this page to diagnose. Weakening one step and NAMING it is
-// what keeps this answer inside the read-level contract instead of exempt from
-// it — an answer that quietly stopped carrying a level would be the silent
-// downgrade wearing a different hat.
+// This answer must keep working during the outage it describes, so it never
+// takes a barrier (the barrier's health is its subject). But `stale` claims an
+// AGE, which a document assembled while the lag could not be read cannot.
+// Weakening one step and NAMING it keeps the answer inside the read-level
+// contract; one that silently dropped its level would be the silent downgrade.
 func TestTheReportNamesTheLevelItCouldAnswerAt(t *testing.T) {
 	t.Parallel()
 	here := func(d statelog.DomainInputs) statelog.ReportInputs {
@@ -1066,10 +1036,9 @@ func TestTheReportNamesTheLevelItCouldAnswerAt(t *testing.T) {
 			unmeasured.ReadLevel)
 	}
 
-	// AND A NODE WITH NO ROW OF ITS OWN IS NOT A MEASURED ONE. That is
-	// the state during exactly the coordination outage this document is
-	// opened for, and reading "no domains reported" as "nothing unknown"
-	// would claim an age with no evidence at all.
+	// AND A NODE WITH NO ROW OF ITS OWN IS NOT A MEASURED ONE: that is the
+	// coordination outage this document is opened for, and "no domains
+	// reported" read as "nothing unknown" claims an age with no evidence.
 	absent := here(healthyDomain("tracker", true))
 	absent.Register = nil
 	if got := statelog.NewReport(absent).ReadLevel; got != statelog.ReadConsistentPrefix {
@@ -1077,9 +1046,8 @@ func TestTheReportNamesTheLevelItCouldAnswerAt(t *testing.T) {
 			"node block is not a measurement", got)
 	}
 
-	// NOR IS A NODE THAT MEASURED SOME OF ITS DOMAINS. A document that
-	// could state an age for the tracker and not for the pages log is one
-	// whose `stale` claim is true of half its rows.
+	// NOR IS A NODE THAT MEASURED SOME OF ITS DOMAINS: its `stale` claim
+	// would be true of half its rows.
 	partial := statelog.NewReport(statelog.ReportInputs{
 		NodeID:           "node-1",
 		At:               reportAt,
@@ -1101,18 +1069,13 @@ func TestTheReportNamesTheLevelItCouldAnswerAt(t *testing.T) {
 
 // A TERM THAT BINDS NOTHING SAYS SO, RATHER THAN PRINTING 2^64-1.
 //
-// [statelog.SeqUnbounded] is the identity for the minimum the trim takes
-// across the terms — chosen to lose a comparison, never to describe a
-// position. It reached the retention screen as a sequence anyway: a solo
-// fleet's snapshot floor and an unpinned log's min_hold both rendered
-// `18446744073709552000` beside their own prose saying nothing was pinning
-// anything. Not even the right digits, because a JSON number is a float64 and
-// 2^64-1 is two thousand short of representable in one — so a reader could not
-// have recovered the sentinel even knowing to look for it.
+// [statelog.SeqUnbounded] is the identity for the trim's minimum across the
+// terms, chosen to lose a comparison, never to describe a position; and a JSON
+// float64 cannot even hold 2^64-1, so a reader could not recover it.
 //
 // Both halves are asserted: the STATE the screen switches on, and the number
-// on the wire, because the state alone would let the sentinel keep riding
-// along in a field the type documents as meaningless.
+// on the wire, since the state alone would let the sentinel ride along in a
+// field the type documents as meaningless.
 func TestATermThatBindsNothingReportsUnboundedRatherThanTheSentinel(t *testing.T) {
 	t.Parallel()
 	in := statelog.TrimInputs{
@@ -1162,9 +1125,8 @@ func TestATermThatBindsNothingReportsUnboundedRatherThanTheSentinel(t *testing.T
 		}
 	}
 
-	// AND THE TRIM ITSELF IS UNAFFECTED. The sentinel's whole job is to lose
-	// the minimum, so a fleet with nothing pinning it trims to the lowest
-	// term that IS a position — never to 2^64-1, and never blocked.
+	// AND THE TRIM ITSELF IS UNAFFECTED: the sentinel loses the minimum, so
+	// an unpinned fleet trims to the lowest term that IS a position.
 	if got := rep.Domains[0].BlockedBy; got != "" {
 		t.Errorf("a healthy unpinned fleet reports blocked_by %q", got)
 	}
@@ -1177,12 +1139,9 @@ func TestATermThatBindsNothingReportsUnboundedRatherThanTheSentinel(t *testing.T
 // AND A TERM PERMITTING NOTHING YET IS DISTINGUISHABLE FROM ONE WITH NO
 // SEQUENCE AT ALL.
 //
-// `seq` carried `omitempty`, which drops exactly the value a young fleet's
-// binding term has. A term permitting removal up to 0 — the state that holds
-// the trim, and therefore the one an operator opened this screen to read —
-// went onto the wire looking identical to an unreadable term, and a reader
-// could only recover it by assuming an absent field meant zero, which for the
-// unreadable one it does not.
+// A term permitting removal up to 0 is a young fleet's binding term, the one
+// an operator opens this screen to read; with `seq` omitted at zero it is
+// identical on the wire to an unreadable term, whose absent seq is not zero.
 func TestASequenceOfZeroSurvivesTheWire(t *testing.T) {
 	t.Parallel()
 	in := statelog.TrimInputs{
@@ -1236,11 +1195,10 @@ func TestASequenceOfZeroSurvivesTheWire(t *testing.T) {
 // A DOMAIN THE TRIM HAS CONCLUDED NOTHING ABOUT SAYS SO, AND ITS TERMS ARE AN
 // EMPTY LIST.
 //
-// After every reanchor the domain's floor row is the old generation's, so the
-// report fills nothing from it until the trim's first tick on the adopted
-// stream. The row went out as `"terms": null` — which crashed the Fleet screen
-// and the domain page, the two things an operator opens to watch a reanchor
-// recover — and with no blocking term, which both screens drew as "advancing".
+// After every reanchor the floor row is the old generation's, so the report
+// fills nothing from it until the trim's first tick on the adopted stream.
+// `"terms": null` crashes the Fleet screen and the domain page, where an
+// operator watches a reanchor recover, and no blocking term reads "advancing".
 func TestADomainWithNoConclusionSaysSoAndCarriesNoNullTerms(t *testing.T) {
 	t.Parallel()
 	d := healthyDomain("pages", false)
@@ -1347,10 +1305,9 @@ func nulls(path string, v any) []string {
 
 // A POSITION FROM ANOTHER GENERATION IS LABELLED, NOT COMPARED.
 //
-// Its sequence is in a number space the log has left, and subtracting it from
-// the adopted stream's last read lag 0 whenever the old number was the larger —
-// so an operator told to readmit "at the log's current generation" saw a node
-// caught up that the readmission then refused.
+// Its sequence is in a number space the log has left: subtracted from the
+// adopted stream's last, it reads lag 0 whenever the old number is larger,
+// showing caught up a node that readmission then refuses.
 func TestAPositionFromAnotherGenerationIsLabelledRatherThanCompared(t *testing.T) {
 	t.Parallel()
 	d := healthyDomain("tracker", true)

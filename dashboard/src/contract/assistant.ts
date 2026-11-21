@@ -21,7 +21,7 @@
 import type { Remedy } from "./remedies.ts";
 
 /** The protocol version every frame and every request carries. */
-export const ASSISTANT_PROTOCOL_VERSION = 1;
+export const ASSISTANT_PROTOCOL_VERSION = 3;
 /** The longest question a turn takes, in characters (Unicode code points). */
 export const ASSISTANT_INPUT_MAX_RUNES = 4000;
 /** The most a turn's page context may encode to, in bytes. */
@@ -39,6 +39,8 @@ export const ASSISTANT_PAGE_SCREEN_PATTERN = "^[a-z][a-z0-9-]{0,63}$";
 export const ASSISTANT_PAGE_KEY_PATTERN = "^[a-z][a-z0-9_.]{0,63}$";
 /** The longest page title, in characters. */
 export const ASSISTANT_PAGE_TITLE_MAX_RUNES = 120;
+/** The longest title a person may give a conversation, in characters. */
+export const ASSISTANT_TITLE_MAX_RUNES = 60;
 /** The longest route parameter or query value, in bytes, and an action's enumerated or constant value. */
 export const ASSISTANT_PAGE_VALUE_MAX_BYTES = 512;
 /** The longest id the page context names (a resource, its version, a revision, a draft's id), in bytes. */
@@ -90,15 +92,10 @@ export const ASSISTANT_ACTION_REPORT_LINE_MAX_BYTES = 256;
 /** What opens a proposal's digest on the wire. */
 export const ASSISTANT_DIGEST_PREFIX = "sha256:";
 
-// --- deep work (im-deep) ---
-/** The most lines of a deep run's own account its step carries. */
-export const ASSISTANT_DEEP_ACTIVITY_LINES = 8;
-/** The largest file a person attaches or a run delivers. */
+/** The largest file a person attaches. */
 export const ASSISTANT_FILE_MAX_BYTES = 5242880;
 /** The most files one question carries. */
 export const ASSISTANT_ATTACHMENTS_PER_TURN = 4;
-/** The most files one deep run hands back. */
-export const ASSISTANT_DELIVERED_FILES_PER_RUN = 10;
 
 /** A frame's kind on the live stream. */
 export type AssistantEventKind =
@@ -133,15 +130,7 @@ type AssistantStepState = "running" | "done" | "failed" | "refused" | "stopped" 
 
 /** An engine-built card's kind. */
 export type AssistantCardKind =
-  | "table"
-  | "entity"
-  | "proposal"
-  | "open_in_app"
-  | "error"
-  | "notice"
-  | "oversize"
-  | "file"
-  | "brief";
+  "table" | "entity" | "proposal" | "open_in_app" | "error" | "notice" | "oversize" | "brief";
 
 /** Where a proposal stands. */
 type AssistantProposalState =
@@ -183,7 +172,6 @@ export type AssistantTaintSource =
   | "brand_voice"
   | "api_answer"
   | "page_context"
-  | "deep_work"
   | "repo_file"
   | "repo_patch"
   | "repo_commit"
@@ -276,7 +264,7 @@ type AssistantBriefActionKind = "open" | "ask";
 
 /** Why the assistant is not available to the viewer. */
 export type AssistantViewerReason =
-  "disabled" | "no_model" | "not_a_person" | "no_permission" | "model_not_ready";
+  "no_model" | "model_problem" | "not_a_person" | "no_permission" | "model_not_ready";
 
 /** Whether a page action asks for the person's approval. */
 type AssistantActionConfirm = "approve" | "none";
@@ -357,11 +345,6 @@ export interface AssistantStepEvent {
   duration_ms?: number;
   summary?: string;
   refusal?: AssistantRefusal;
-  // --- deep work (im-deep) ---
-  /** The deep-work step this step was made from. */
-  parent?: number;
-  /** The run a deep-work step is, re-sent as it progresses. */
-  deep?: AssistantDeepProgress;
 }
 
 /** The ordinary request a step made: its method and route pattern. */
@@ -445,8 +428,6 @@ export interface AssistantCard {
   error?: AssistantErrorCard;
   notice?: AssistantNoticeCard;
   oversize?: AssistantOversizeCard;
-  // --- deep work (im-deep) ---
-  file?: AssistantFileCard;
   brief?: AssistantBriefCard;
 }
 
@@ -576,13 +557,14 @@ export interface AssistantProposalCard {
   target?: string;
   changes: AssistantChange[];
   /** What the change does, above the rows, where the title does not say it: what a destructive change takes away. */
-  summary?: string;
-  /** The consequence, under the rows: whether and how the change can be reverted. */
-  note?: string;
+  summary?: AssistantPhrase;
+  /** The consequence, under the rows: whether and how the change can be reverted, and who it reaches. */
+  note?: AssistantPhrase;
   risk?: AssistantProposalRisk;
   /** The exact request, for an approver who administers the company; absent for everybody else. */
   technical?: AssistantTechnicalRequest;
-  audience?: string[];
+  /** Who will see the result where visibility changes, one phrase each. */
+  audience?: AssistantPhrase[];
   /** The surface of the outside text the turn read before proposing; absent for none. */
   taint?: AssistantTaintSource;
   /** Approving asks the person to confirm it is them first. */
@@ -615,12 +597,12 @@ interface AssistantChange {
   kind: AssistantChangeKind;
   field: string;
   label: string;
-  from?: string;
-  to?: string;
-  /** `to` as a list, one entry per item, where the value is a list of plain values. */
-  items?: string[];
+  from?: AssistantPhrase;
+  to?: AssistantPhrase;
+  /** `to` as a list, one entry per item, where the value is a list. */
+  items?: AssistantPhrase[];
   /** `from` as a list, likewise. */
-  from_items?: string[];
+  from_items?: AssistantPhrase[];
   words?: AssistantWord[];
   new?: boolean;
   note?: string;
@@ -632,9 +614,27 @@ interface AssistantWord {
   text: string;
 }
 
+/** A record a proposal or its receipt names: kind, id, shown name, an artifact's kind, its page. */
+export interface AssistantRef {
+  kind: AssistantResourceKind;
+  id: string;
+  name: string;
+  artifact_kind?: string;
+  open?: AssistantLink;
+}
+
+/** One run of a phrase: words, or exactly one record they name. */
+export interface AssistantPart {
+  text?: string;
+  ref?: AssistantRef;
+}
+
+/** Words that name records, run by run (`wire.Phrase`). */
+type AssistantPhrase = AssistantPart[];
+
 /** What an applied proposal did. */
 interface AssistantReceipt {
-  summary: string;
+  summary: AssistantPhrase;
   position?: string;
   open?: AssistantLink;
 }
@@ -798,9 +798,6 @@ export interface AssistantTurnRequest {
   page_context: AssistantPageContext | null;
   /** What the question asks for; absent is `ask`. A brief needs the page context. */
   mode?: AssistantTurnMode;
-  /** Think harder: this one question runs on the company's stronger chain. */
-  deliberate?: boolean;
-  // --- deep work (im-deep) ---
   /** Files uploaded to the conversation for this question. */
   attachments?: string[];
 }
@@ -876,7 +873,8 @@ export interface AssistantAuditReadRequest {
 /** The person's conversations, newest first. */
 export interface AssistantConversationList {
   conversations: AssistantConversationSummary[];
-  next_cursor?: string;
+  /** Continues the listing, null on its last page. */
+  next_cursor: string | null;
 }
 
 /** A conversation just created. */
@@ -885,14 +883,28 @@ export interface AssistantConversationCreated {
 }
 
 /** One conversation in a list. */
-interface AssistantConversationSummary {
+export interface AssistantConversationSummary {
   id: string;
-  title: string;
+  /** Null before the first question names it. */
+  title: string | null;
+  /** Who named it; a person's title is never replaced by the engine's. Null while untitled. */
+  title_set_by: AssistantTitleSource | null;
   created_at: string;
   updated_at: string;
   /** When it was last used: the moment the list is ordered by, and the one to show. */
   last_activity_at: string;
-  last_turn_state?: AssistantTurnState;
+  last_turn_state: AssistantTurnState | null;
+  /** The turn still running or parked, null for none. */
+  open_turn_id: string | null;
+}
+
+/** Who named a conversation. */
+type AssistantTitleSource = "model" | "person";
+
+/** A person's title for their conversation: `PATCH /assistant/conversations/{id}`. */
+export interface AssistantConversationRename {
+  protocol_version: number;
+  title: string;
 }
 
 /** A conversation as its owner reads it after a reload. */
@@ -923,7 +935,6 @@ interface AssistantMessage {
   text: string;
   created_at: string;
   page?: AssistantPageChip;
-  // --- deep work (im-deep) ---
   /** The files a user message was sent with. */
   attachments?: AssistantFileRef[];
 }
@@ -947,12 +958,20 @@ interface AssistantAuditRead {
 export interface AssistantViewerAssistant {
   available: boolean;
   reason?: AssistantViewerReason;
-  /** What a `model_not_ready` reason means for this person; absent for every other reason. */
-  model?: AssistantModelNotice;
-  /** A question's images are read: only deep work reads them, so absent where the company has none. */
-  reads_images?: boolean;
-  /** The company sets a stronger chain a question can ask for: the composer offers Think harder. */
-  deliberate?: boolean;
+  /** The model Ask Crewlet runs on; null where none is assigned. */
+  model: AssistantViewerModel | null;
+  /** What a `model_not_ready` reason means for this person; null for every other reason. */
+  notice: AssistantModelNotice | null;
+  /** The person may assign Ask Crewlet's model: they hold the company document's write. */
+  can_assign: boolean;
+  /** A question's images are read: only deep work reads them, so false where the company has none. */
+  reads_images: boolean;
+}
+
+/** A helper's model as anybody is shown it: its `providers.llm` key and the model it names. */
+interface AssistantViewerModel {
+  key: string;
+  label: string;
 }
 
 /**
@@ -997,29 +1016,10 @@ export const ASSISTANT_PAGE_ACTIONS = {
   "budgets.ceiling.prefill": { confirm: "approve" },
 } as const satisfies Record<string, { confirm: AssistantActionConfirm }>;
 
-// --- deep work (im-deep) ---
-
 /** What a person may attach: images, sniffed from their bytes by the engine. */
 export type AssistantAttachmentMediaType = "image/png" | "image/jpeg" | "image/webp" | "image/gif";
 
-/** Where a deep run stands. */
-type AssistantDeepState = "starting" | "running" | "waiting" | "finished" | "stopped" | "failed";
-
-/** A deep run as its step shows it. */
-export interface AssistantDeepProgress {
-  state: AssistantDeepState;
-  goal: string;
-  started_at: string;
-  deadline_at: string;
-  steps: number;
-  max_steps: number;
-  /** The share of the run's token cap it has used, 0..100. */
-  budget_percent: number;
-  activity?: string[];
-  reason?: string;
-}
-
-/** One stored file as a message or a card names it. */
+/** One stored file as a message names it. */
 export interface AssistantFileRef {
   file_id: string;
   name: string;
@@ -1027,11 +1027,6 @@ export interface AssistantFileRef {
   size: number;
   /** The owner's route for its bytes, served as an attachment. */
   download: string;
-}
-
-/** The files a deep run delivered. */
-export interface AssistantFileCard {
-  files: AssistantFileRef[];
 }
 
 /**

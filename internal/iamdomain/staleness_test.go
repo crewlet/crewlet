@@ -9,21 +9,13 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// A VOUCH STATES BOTH FACTS, and Resolve reads the same two.
-//
-// A Tier A token's seat binding and the record a login keeps its holder's work
-// under are directory rows read on every request, and the engine refuses to
-// honour one a node cannot vouch for: past the stall grace, or holding a newer
-// peer's record about that person's bucket. Asked about the lag alone, a
-// caught-up node holding exactly that record reads as current; asked about any
-// deferral at all, one record about somebody else would refuse every bound
-// credential on the node for the length of a rolling upgrade.
-//
-// This case holds the LAG half and the control of the deferral half — a node
-// that retained nothing covers nobody, a login nobody holds included. The
-// deferral half itself needs a record the node really retained, which only a
-// real applier produces: internal/engine's
-// TestARetainedRecordCoversExactlyItsPersonsBucket boots one and retains two.
+// A VOUCH STATES BOTH FACTS, the lag and a deferral covering that person's
+// bucket, and Resolve reads the same two. Lag alone misses a caught-up node
+// holding that person's newer record; any deferral at all would refuse every
+// bound credential for a whole rolling upgrade. This case holds the LAG half
+// and the deferral half's control (a node that retained nothing covers
+// nobody); the deferral half needs a real applier: internal/engine's
+// TestARetainedRecordCoversExactlyItsPersonsBucket.
 func TestAVouchIsTheLagAndNoDeferralWhereNothingIsRetained(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -54,8 +46,8 @@ func TestAVouchIsTheLagAndNoDeferralWhereNothingIsRetained(t *testing.T) {
 			t.Errorf("%s: a deferral on a node that retained nothing", tc.login)
 		}
 	}
-	// AND THE SESSION TABLE READS THE SAME TWO FACTS, so a token and a
-	// cookie can never be told different things about one person.
+	// AND RESOLVE READS THE SAME TWO, so a token and a cookie are never told
+	// different things about one person.
 	identity, err := reader.Resolve(t.Context(), "no-such-lineage", someone)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)

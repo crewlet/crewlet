@@ -13,17 +13,15 @@ import (
 // Coalescing: N events in one partition become ONE trigger.
 //
 // The companion of the broker's batched delivery. A seat's pending inbox is
-// partitioned by PARTITION KEY — the merge unit, which is either the
-// conversation identity or a finer cut of it — and a partition with more than
-// one event is merged here, so five comments on one issue, or a person typing
-// four messages in a row, cost one turn instead of five.
+// partitioned by PARTITION KEY (the conversation identity or a finer cut of
+// it) and a partition of several events is merged here, so five comments on
+// one issue cost one turn.
 //
-// What makes it safe is that the merged event is shaped so every existing
-// consumer keeps working unchanged. The flat fields mirror the LATEST
-// constituent, whose metadata carries the pointers a reply needs; the full
-// list is carried alongside for the workers that must observe every sender;
-// and the two fields that bound what a turn may do — recon and delegation
-// depth — merge conservatively rather than by taking the latest.
+// The merged event keeps every consumer working unchanged: the flat fields
+// mirror the LATEST constituent, whose metadata carries a reply's pointers;
+// the full list rides alongside for workers that observe every sender; and
+// the fields that bound a turn, recon and delegation depth, merge
+// conservatively rather than taking the latest.
 
 // Coalesce merges same-conversation notifications into one trigger.
 //
@@ -67,16 +65,14 @@ func Coalesce(prompts Prompts, evs []types.ExternalNotification, at []time.Time)
 // mergedOwes is the chat surface a merged trigger owes: the LATEST
 // constituent's that owes one.
 //
-// CARRIED THROUGH THE MERGE for the reason Addressed is: the flat fields
-// mirror the latest constituent, and an answer that promised a post, followed
-// in the same partition by a watcher's remark, would otherwise lose the
-// promise to whichever event the broker delivered last.
+// CARRIED THROUGH THE MERGE as Addressed is: a promised post followed in the
+// same partition by a watcher's remark would otherwise lose the promise to
+// whichever event the broker delivered last.
 //
-// ONE SURFACE, because a turn owes one ([turn.Reply] names one). That is not a
-// choice this makes between two promises: a source whose wakes can owe
-// different surfaces partitions them apart (the tracker cuts its key by the
-// surface owed), so every constituent here owes the same surface or none, and
-// latest-wins only ever picks among equals.
+// ONE SURFACE, because a turn owes one ([turn.Reply] names one). Sources whose
+// wakes can owe different surfaces partition them apart (the tracker cuts its
+// key by the surface owed), so every constituent owes the same surface or
+// none and latest-wins only picks among equals.
 func mergedOwes(ordered []constituent) string {
 	for i := len(ordered) - 1; i >= 0; i-- {
 		if owes := ordered[i].event.Owes; owes != "" {
@@ -146,17 +142,15 @@ func digest(prompt Prompt, ordered []constituent, superseded map[int]bool) strin
 
 // digestLine renders one earlier constituent as a bullet.
 //
-// NO LENGTH CAP on the body. The seat reads the digest as its trigger, so
-// truncating it hides content it may have to act on — and the one line that
-// mattered is as likely to be at the end of a long message as the start.
-// Continuation lines are indented so a multi-line body stays inside its
-// bullet rather than reading as the next one.
+// NO LENGTH CAP on the body: the seat reads the digest as its trigger, and the
+// line that mattered may be at the end. Continuation lines are indented so a
+// multi-line body stays inside its bullet.
 //
 // WHAT A CONSTITUENT'S PROMPT FENCED IS RENDERED FENCED. A source that fences
-// what somebody said ([ChatPrompt]) put the message in its own body under the
-// constituent's own token; the line carries those fences, moved onto fence —
-// the digest's token — in place of the raw message, which would hand the
-// seat an earlier speaker's words unlabelled beside a later one's fenced.
+// what somebody said ([ChatPrompt]) put it in its own body under the
+// constituent's own token; the line carries those fences re-keyed onto fence,
+// the digest's token, since the raw message would hand the seat an earlier
+// speaker's words unlabelled beside a later one's fenced.
 func digestLine(prompt Prompt, c constituent, duplicate bool, fence provenance.Boundary) string {
 	sender := c.event.Sender
 	if sender == "" {

@@ -117,16 +117,14 @@ func faults(ref objstore.ReferenceTable, columns, leading map[string][]string) [
 // TABLE THAT DOES — ADR-0026's enforcement, and ADR-0081's: every declaration
 // states its standing.
 //
-// The failure it exists for is silent and destroys data: a table naming
-// objects that nobody declared reads, to the collector, as no references at
-// all, and its files' bytes are deleted a day after they were written. And a
-// declaration is held to the columns it names — the digest and the size the
-// backup verifies a copy against, the owner it reports a lost object as — and
-// to an index LEADING WITH ITS KEY, because the collector seeks a batch of
-// keys and the audit and the backup page through them in key order, and
-// without one each is every row of the table. And it is held to a STANDING,
-// because every default is silent: a live table read as retired or derived is
-// audited by nobody and accounted for by no backup.
+// An undeclared table reads to the collector as no references at all, and its
+// files are deleted a day after they were written. A declaration is held to
+// the columns it names (the digest and size a backup verifies a copy against,
+// the owner a lost object is reported as) and to an index LEADING WITH ITS
+// KEY, because the collector seeks batches of keys and the audit and backup
+// page in key order, which without one reads every row. It is held to a
+// STANDING too: a live table defaulted to retired or derived is audited by
+// nobody and accounted for by no backup.
 func TestEveryTableThatNamesAnObjectIsDeclared(t *testing.T) {
 	t.Parallel()
 	columns, leading := schema(t)
@@ -364,23 +362,15 @@ func TestEveryDeclarationStatesItsStanding(t *testing.T) {
 // (see objstore.AssumedClockSkew).
 const twoClocks = 2 * objstore.AssumedClockSkew
 
-// A HOLD RECORD COVERS EVERY PASS IN FLIGHT (M3-decisions M3-O61). A turn that
-// takes its hold on a seat's scratch repository RECORDS it on the repository's
-// subject only where the repository has been idle gitlet.HoldRecordAfter or more,
-// by the holding node's clock read after the hold; under that it keeps the hold
-// in memory, or on its run row, alone — which the code-retention pass reads only
-// AFTER it has fixed its cutoff. That is safe only while a repository idle less
-// than the threshold is past no in-flight pass's cutoff, the pass's clock
-// against the same broker-stamped activity: the threshold and the two clocks'
-// disagreement together must not reach the shortest idle time a company may
-// set (config.CodeScratchIdleDaysFloor days). Otherwise a pass already deciding
-// could expire a repository a turn has just named and not recorded.
-//
-// A SEAT'S BRANCH BY THE SAME ARGUMENT (M3-decisions M3-O61, M3-O64): a hold on
-// one is recorded only where the branch has gone unset
-// gitlet.RefHoldRecordAfter or more, so the threshold and two clocks'
-// disagreement must not reach gitlet.RefExpiry, the idle window it is defined
-// from.
+// A HOLD RECORD COVERS EVERY PASS IN FLIGHT (M3-O61). A hold on a seat's
+// scratch repository is RECORDED only where it has been idle
+// gitlet.HoldRecordAfter or more (holding node's clock); under that it stays
+// in memory or on the run row, which the code-retention pass reads only AFTER
+// fixing its cutoff. Safe only while the threshold plus the two clocks'
+// disagreement stays under the shortest idle time a company may set
+// (config.CodeScratchIdleDaysFloor days), else a pass could expire a
+// repository a turn just named. A SEAT'S BRANCH likewise (M3-O64): against
+// gitlet.RefExpiry, with gitlet.RefHoldRecordAfter.
 //
 // Mutations: HoldRecordAfter at 23 h — red; RefHoldRecordAfter at RefExpiry
 // less one hour — red.
@@ -402,27 +392,17 @@ func TestAHoldRecordCoversEveryPassInFlight(t *testing.T) {
 }
 
 // THE GRACE OUTLASTS THE LONGEST AN UPLOAD CAN GO UNRECORDED — ADR-0027's
-// inequalities, pinned here because this is the one package every constant
-// they name can be imported into.
+// inequalities, pinned here because this package can import every constant.
 //
 // A key may be named by a write decided up to objstore.RecordWithin after it
-// was minted, by the deciding node's clock; the collector deletes it only
-// once it was minted more than collect.PendingGrace ago, by its own. So the
-// grace has to exceed the bound by more than the two nodes' clocks can
-// disagree, or a write could name a key a collection had just read as
-// nobody's — and two nodes may disagree by twice objstore.AssumedClockSkew
-// while neither raises `clock_skew`. And the bound itself has to outlast the
-// slowest upload the engine accepts — the largest object any declaring domain
-// stores (a file of worklet.MaxFileBytes, a pack bundle of gitlet.MaxPackBytes,
-// a part of a published layer of gitlet.LayerPartBytes, a failed check's log of
-// gitlet.MaxCheckLogBytes, an artifact's file or asset of
-// artifacts.MaxTextFileBytes, an assistant conversation's file of
-// wire.FileMaxBytes, a sealed executor session of
-// executorkeep.SealedMaxBytes) at the objstore.MiBPace floor — or a legal
-// upload would finish only to be refused.
-//
-// The controls show the first inequality is held to two nodes' clocks: a grace
-// past the bound by one node's skew and not two is refused.
+// was minted; the collector deletes it only once minted over
+// collect.PendingGrace ago. So the grace must exceed the bound by more than
+// two nodes' clocks can disagree (twice objstore.AssumedClockSkew), and the
+// bound must outlast the slowest upload: the largest object any declaring
+// domain stores (worklet.MaxFileBytes, gitlet.MaxPackBytes,
+// gitlet.LayerPartBytes, gitlet.MaxCheckLogBytes, artifacts.MaxTextFileBytes,
+// wire.FileMaxBytes, executorkeep.SealedMaxBytes) at objstore.MiBPace.
+// Controls: a grace past the bound by one node's skew, not two, is refused.
 func TestTheGraceOutlastsTheLongestUnrecordedUpload(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -528,12 +508,9 @@ var retirements = map[string]retirement{
 // outlast the longest read of that object by more than the clocks stamping
 // and sweeping the row can disagree.
 //
-// TWO MACHINES' CLOCKS, never one's against a reference: a retirement is
-// stamped by the broker member leading its domain's log and swept by the
-// clock of whichever node holds the sweep, and `clock_skew` holds each of
-// them to objstore.AssumedClockSkew of a third — the fleet's clock, the median
-// of the data nodes' clocks, on an embedded broker the stamping member's among
-// them.
+// TWO MACHINES' CLOCKS, never one's against a reference: the stamping broker
+// member and the sweeping node are each held by `clock_skew` to
+// objstore.AssumedClockSkew of the fleet's clock (the data nodes' median).
 func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]retirement) []string {
 	var out []string
 	retired := map[string]bool{}
@@ -582,19 +559,16 @@ func retirementFaults(declared []objstore.ReferenceTable, reviewed map[string]re
 }
 
 // A RETIRED TABLE IS SWEPT, AND OUTLIVES ITS LONGEST READ — the two
-// obligations ADR-0081 places on a retired declaration, which no other gate
-// can see: the collector deletes an object the moment nothing names it, so a
-// retired row nobody deletes keeps its object for ever, and one deleted before
-// the longest read of its object ends deletes the object under that read.
+// obligations ADR-0081 places on a retired declaration: a retired row nobody
+// deletes keeps its object for ever, and one deleted before the longest read
+// of its object ends deletes the object under that read.
 //
-// GITLET'S RETIRED PACKS ARE THE FIRST, and their entry is measured
-// here: gitlet.RetireGrace (24 h) against objstore.ReadBudget(gitlet.MaxPackBytes)
-// (21 h 21 min) plus the two hours the stamping broker and the sweeping node
-// may disagree by (twice objstore.AssumedClockSkew), which leaves 39 min. The
-// controls below show the gate fires on a retired declaration that lands
-// without a reviewed entry, and on every way such an entry can be wrong —
-// one only one machine's skew past the longest read included — whatever the
-// shipped list holds.
+// Gitlet's retired packs are measured here: gitlet.RetireGrace (24 h) against
+// objstore.ReadBudget(gitlet.MaxPackBytes) (21 h 21 min) plus twice
+// objstore.AssumedClockSkew (2 h), leaving 39 min. The controls show the gate
+// fires on a retired declaration with no reviewed entry and on every way an
+// entry can be wrong (one machine's skew past the longest read included),
+// whatever the shipped list holds.
 func TestARetiredTableIsSweptAndOutlivesItsLongestRead(t *testing.T) {
 	t.Parallel()
 	retired := worklet.FileObjectReferences

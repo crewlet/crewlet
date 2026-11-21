@@ -251,7 +251,7 @@ func (r ChecksRequest) op() OpKind {
 	case r.Rerun != nil:
 		return OpCheckQueued
 	case r.Report != nil:
-		op, _ := r.Report.record(r.Asker, time.Time{})
+		op, _ := r.Report.record(r.Asker, time.Time{}, false)
 		return op
 	}
 	op, _ := r.record()
@@ -885,10 +885,10 @@ func decideStarted(s CheckStarted, d checksDecision, held bool, named func(Check
 		// THE HOLDER'S OWN: its claim again, or its record naming its box.
 		switch {
 		case s.Placement != row.Placement:
-			return checksDecision{}, fmt.Errorf("%w: started.placement: %s is claimed for a %s cell, and its "+
+			return checksDecision{}, refusedf("%w: started.placement: %s is claimed for a %s cell, and its "+
 				"holder names %s", ErrInvalidProposal, named(s.CheckKey), row.Placement, s.Placement)
 		case s.Box != "" && row.Box != "" && s.Box != row.Box:
-			return checksDecision{}, fmt.Errorf("%w: started.box: %s runs in box %s, and its holder names "+
+			return checksDecision{}, refusedf("%w: started.box: %s runs in box %s, and its holder names "+
 				"%s — a holder names its one box once", ErrInvalidProposal, named(s.CheckKey), row.Box, s.Box)
 		case s.Box == "" || s.Box == row.Box:
 			d.unchanged = true
@@ -897,7 +897,7 @@ func decideStarted(s CheckStarted, d checksDecision, held bool, named func(Check
 		d.payload = s
 		return d, nil
 	case s.Box != "":
-		return checksDecision{}, fmt.Errorf("%w: started.box: %s holds no claim, and a box is named by its "+
+		return checksDecision{}, refusedf("%w: started.box: %s holds no claim, and a box is named by its "+
 			"claim's holder once its claim is recorded", ErrInvalidProposal, named(s.CheckKey))
 	}
 	d.payload = s
@@ -926,7 +926,7 @@ func decideFinished(f CheckFinished, d checksDecision, held bool, named func(Che
 		// A RUN'S ENDING OF AN UNCLAIMED ATTEMPT no writer forms: a runner
 		// names its claim's position as its floor, so this node holds the
 		// claim before it decides.
-		return checksDecision{}, fmt.Errorf("%w: finished.reason: %s holds no claim, and an attempt ends %s "+
+		return checksDecision{}, refusedf("%w: finished.reason: %s holds no claim, and an attempt ends %s "+
 			"only once a runner claimed it", ErrInvalidProposal, named(f.CheckKey), f.Reason)
 	}
 	if !d.row.Finished.IsZero() {

@@ -14,19 +14,12 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
-// HOW A TIER A TOKEN BECOMES A PRINCIPAL, and why the conversion lives here
-// rather than at each surface that needs one.
-//
-// A Tier A token is the DEPLOYMENT's own machine credential: break-glass, the
-// operator CLI, a pipeline. It is not a person and is never a stand-in for
-// one. What every surface downstream needs is the same thing a session cookie
-// (sessions.go) and a machine token (tokens.go) hand it — an [iam.Principal] —
-// so this file composes one from the token, the three credential shapes meet
-// in [Guard.Resolve] and nowhere else, and no route has to know which one
-// arrived.
-//
-// Every field below is derived from something the configuration already says.
-// Nothing is read from a store, which is what lets this run before any node
+// HOW A TIER A TOKEN BECOMES A PRINCIPAL. A Tier A token is the DEPLOYMENT's
+// machine credential (break-glass, the CLI, a pipeline), never a stand-in for a
+// person. This file composes the same [iam.Principal] a session cookie
+// (sessions.go) and a machine token (tokens.go) yield, so the three shapes meet
+// in [Guard.Resolve] only and no route knows which arrived. Every field is
+// derived from configuration, with no store read, so it runs before any node
 // has applied anything.
 
 // TokenNamespace is the UUIDv5 namespace a Tier A token's principal id is
@@ -45,28 +38,16 @@ var TokenNamespace = uuid.MustParse("6f1c2d5e-9a34-5b7c-8e10-4d2f6a8b3c91")
 
 // SeatBindings is what a Tier A token's seat binding is resolved through.
 //
-// # Two halves, and the second is the SESSION's
+// Directory answers which seat the token's login row is bound to. Chart answers
+// whether the credential may act as that seat NOW: the same [session.Chart] and
+// [session.ResolveSeat] a signed-in person's binding uses, so a token and a
+// cookie bound to one seat are told the same thing: served while the org holds
+// it as a human seat, 403 `seat_unavailable` once it does not, 503 while this
+// node cannot read the company. A plain handle lookup would let a token act as
+// a removed or agent seat.
 //
-// Directory answers what the identity directory says about the token's login:
-// the seat its row is bound to. Chart answers whether that seat is one the
-// credential may act as NOW — and it is the same [session.Chart] a signed-in
-// person's binding is resolved through, by the same [session.ResolveSeat], so
-// a token and a cookie bound to one seat are told the same thing about it:
-// served while the running org holds it as a human seat, refused 403
-// `seat_unavailable` NAMING the seat once it does not, and 503 while this node
-// runs no company or cannot read the one it runs.
-//
-// That is the whole reason this is not a lookup returning a handle. The one it
-// replaced was, and a token then went on acting as whatever handle a row
-// held: a seat the company had removed, or an agent's seat.
-//
-// # Zero means no binding source
-//
-// The zero value binds nothing, and every token acts as the bare credential,
-// which is what an API built without an identity directory — a suite standing
-// a handler up — honestly has. A Directory with no Chart is not that: it is a
-// binding that cannot be resolved, and every bound token answers 503, which is
-// [session.ResolveSeat]'s own reading of a missing chart.
+// The zero value binds nothing: tokens act as the bare credential. A Directory
+// with no Chart cannot resolve, so every bound token answers 503.
 type SeatBindings struct {
 	// Directory reads the identity directory's row for a login. Nil binds
 	// nothing.
@@ -176,36 +157,18 @@ func (g *Guard) principalFor(ctx context.Context, entry config.APIToken,
 	return p, iam.Resolved, seatRefusal(binding)
 }
 
-// Resolve answers who a request is, three-valued, over the THREE credential
-// shapes: a Tier A token (resolve.go), a machine token (tokens.go) and a
-// session cookie (sessions.go).
-//
-// THE THREE ARMS ARE THE POINT, and they are not the two a bare token
-// comparison answers ([Guard.entry]: matched, or not):
+// Resolve answers who a request is over a Tier A token, a machine token and a
+// session cookie, in THREE arms:
 //
 //   - a credential that names somebody is [iam.Resolved];
-//   - no credential at all, or one this node refuses, is [iam.Anonymous] — a
-//     finding, and the arm a guarded route answers 401 to;
-//   - a credential this node could not CHECK is [iam.Unknown]: a session
-//     whose rows it cannot read, or a Tier A token — itself a map in memory
-//     — whose seat binding it cannot resolve. A caller written against two
-//     arms would read "the store is down" as "you are nobody", and go on
-//     reading it that way for as long as the outage lasted, teaching
-//     everybody to go and check their password.
+//   - none, or one this node refuses, is [iam.Anonymous] (a guarded route 401s);
+//   - one this node could not CHECK is [iam.Unknown] (unreadable session rows,
+//     an unresolvable seat binding). Two arms would read "the store is down"
+//     as "you are nobody" for the whole outage.
 //
-// It attaches the answer to the context rather than returning it, because
-// [iam.From] is what every surface downstream reads and a second channel would
-// be a second answer.
-//
-// THE RESPONSE WRITER IS TAKEN rather than a value returned, for one reason:
-// resolving a SESSION can re-issue its cookie, and a re-issue that a caller
-// had to remember to write is one a caller eventually forgets to — leaving a
-// browser on a bearer whose idle deadline stops moving, signed out mid-work.
-// Nothing else is written here; the refusal is returned.
-//
-// AND THE INSTANT THE CREDENTIAL ENDS ON ITS OWN rides the context beside the
-// answer ([Lifetime]), for a caller that holds the credential past this
-// request.
+// The answer rides the context with the credential's end ([Lifetime]). The
+// writer is taken because a SESSION can re-issue its cookie, and a re-issue a
+// caller must remember to write gets forgotten, signing the person out.
 func (g *Guard) Resolve(w http.ResponseWriter, r *http.Request) (
 	*http.Request, *Refusal) {
 
@@ -312,28 +275,14 @@ func (g *Guard) bearer(r *http.Request, candidate string) (*http.Request, *Refus
 // exchanged is who a session exchanged from a Tier A token is: THE TOKEN, as
 // the entry this node holds for it says now.
 //
-// # Composed from the configuration, never from a directory row
-//
-// The token has no row — it is a line in a config file — so the session it
-// was exchanged for is validated against the ENTRY: [Sessions] has already
-// refused one whose entry this node no longer holds, and this composes the
-// principal through [Guard.principalFor], the one function the bearer itself
-// is composed through. So the grants are the entry's under this node's admin
-// posture on THIS request, a bound token acts as its seat exactly as the bearer
-// would (and is refused it exactly as the bearer would), and the session is
-// stepped up by construction for the reason the bearer is: presenting the
-// token was the proof, and a break-glass session that could reach no
-// step-up surface would be no use on the day it exists for.
-//
-// The session was once composed from the directory's row for the token's
-// DERIVED id, which no directory holds: once applied every request answered
-// 401 and cleared the cookie, and before that it served a grantless nobody.
-//
-// WHAT IT DIFFERS FROM THE BEARER IN is the one thing that is not the token's:
-// the credential the request came THROUGH, which is the session (via), and
-// which the operator column records beside the token as the author — so a
-// break-glass write from a browser names the sign-in that made it, as a
-// person's does.
+// Composed from the configuration, never a directory row: the token is a
+// config line, so [Sessions] has already refused a session whose entry this
+// node no longer holds, and the principal comes from [Guard.principalFor], as
+// the bearer's does: the entry's grants under this node's admin posture, its
+// seat bound as the bearer's. The session is stepped up by construction (the
+// token was the proof; a break-glass session reaching no step-up surface would
+// be useless). It differs in the credential the request came THROUGH, the
+// session (via), which the operator column records beside the token as author.
 func (g *Guard) exchanged(r *http.Request, entry config.APIToken, via string) (
 	*http.Request, *Refusal) {
 

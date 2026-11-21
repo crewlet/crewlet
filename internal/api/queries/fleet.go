@@ -41,7 +41,7 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		live[class] = leases
 	}
 	nodes, seats, duties := live[coord.ClassNode], live[coord.ClassSeat], live[coord.ClassWorker]
-	now := s.clock()
+	clocks := s.leaseClocks(ctx, live)
 
 	held := map[string]int{}
 	seatRows := make([]map[string]any, 0, len(seats))
@@ -50,16 +50,16 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		node := nodeOf(lease.Owner)
 		held[node]++
 		row := map[string]any{
-			"handle":     seatHandleOf(byID, lease.Resource),
-			"node":       node,
-			"owner":      lease.Owner,
-			"epoch":      lease.Epoch,
-			"expires_in": secondsLeft(lease.ExpiresAt, now),
+			"handle": seatHandleOf(byID, lease.Resource),
+			"node":   node,
+			"owner":  lease.Owner,
+			"epoch":  lease.Epoch,
 			// SINCE WHEN this node has held it: the tenure's start, which
 			// a renewal does not move, so "node-2 since 08:02" means the
 			// seat has not moved since 08:02.
 			"acquired_at": isoOrEmpty(lease.AcquiredAt),
 		}
+		clocks.expiresIn(row, coord.ClassSeat, lease)
 		seatRows = append(seatRows, row)
 	}
 	slices.SortFunc(seatRows, func(a, b map[string]any) int {
@@ -81,13 +81,13 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			// `unknown` for a kind this build does not know (a newer
 			// build's) — which the roles no longer imply: a node's broker
 			// is what its stream block makes it.
-			"broker":     profile.Broker.String(),
-			"labels":     profile.Labels,
-			"owner":      lease.Owner,
-			"protocol":   lease.Protocol,
-			"seats":      held[id],
-			"expires_in": secondsLeft(lease.ExpiresAt, now),
+			"broker":   profile.Broker.String(),
+			"labels":   profile.Labels,
+			"owner":    lease.Owner,
+			"protocol": lease.Protocol,
+			"seats":    held[id],
 		}
+		clocks.expiresIn(row, coord.ClassNode, lease)
 		status := applied[id]
 		row["config_epoch"] = status.Epoch
 		row["config_status"] = status.Status
@@ -165,22 +165,13 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			// AND WHETHER THIS NODE SERVES ADMIN — its own
 			// `api.auth.admin`, `serve` or `refuse`.
 			//
-			// The posture is applied at decision time and nothing is
-			// written when it changes, which is what makes turning a
-			// node to `refuse` immediate — and what makes a fleet
-			// whose nodes disagree a LEGAL state a rolling restart
-			// passes through, or a deliberate one (an admin node
-			// beside nodes published to the people who only use the
-			// company). Legal and invisible is the problem: whether
-			// somebody can administer the company would depend on
-			// which node a load balancer sent them to, with nothing
-			// anywhere saying so. Two postures on this view is that
-			// being said.
-			//
-			// ABSENT RATHER THAN EMPTY on a node that declares none,
-			// for the reason above it: a worker binding no API has
-			// no opinion, and a blank cell must not read as a node
-			// that refuses.
+			// Applied at decision time, nothing written when it changes, so
+			// `refuse` is immediate. A fleet whose nodes disagree is LEGAL (a
+			// rolling restart, or an admin node beside published ones), but
+			// whether somebody can administer would depend on the node a load
+			// balancer chose: two postures on this view say so. ABSENT
+			// RATHER THAN EMPTY on a node that declares none: a blank cell
+			// must not read as a node that refuses.
 			if live.AdminPosture != "" {
 				row["admin"] = live.AdminPosture
 			}
@@ -216,11 +207,12 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 
 	dutyRows := make([]map[string]any, 0, len(duties))
 	for _, lease := range duties {
-		dutyRows = append(dutyRows, map[string]any{
-			"duty":       nameIn(coord.ClassWorker, lease.Resource),
-			"node":       nodeOf(lease.Owner),
-			"expires_in": secondsLeft(lease.ExpiresAt, now),
-		})
+		row := map[string]any{
+			"duty": nameIn(coord.ClassWorker, lease.Resource),
+			"node": nodeOf(lease.Owner),
+		}
+		clocks.expiresIn(row, coord.ClassWorker, lease)
+		dutyRows = append(dutyRows, row)
 	}
 	slices.SortFunc(dutyRows, func(a, b map[string]any) int {
 		return cmp.Compare(a["duty"].(string), b["duty"].(string))
@@ -231,20 +223,13 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		"unplaceable":    s.unplaceable(profiles, seatRows),
 		"unmanned_roles": unmannedRoles(nodeRows, s.currentCompany()),
 		"this_node":      s.NodeID,
-		// What the fleet is converging ON, so a lagging node reads as
-		// "3 epochs behind 41" rather than as a number with nothing to
-		// compare it to.
-		// ONE READ, TWO FIELDS. `target_epoch` is what every node row is
-		// compared against; `activation` is what that number STANDS FOR
-		// — which revision, activated when, with the summary whoever
-		// activated it wrote. An operator reading "node-2 is two epochs
-		// behind" could not see any of the second half.
-		//
-		// Read once rather than once per field: they are the same
-		// pointer, and two reads of it inside one answer can disagree
-		// while an activation lands between them — a screen saying
-		// "target 42" beside "revision r-41" describes a fleet that
-		// never existed.
+		// What the fleet is converging ON, so a lagging node reads as "3
+		// epochs behind 41". ONE READ, TWO FIELDS: `target_epoch` is what
+		// every node row is compared against and `activation` is what that
+		// number STANDS FOR (revision, time, the activator's summary). Read
+		// once: two reads of the pointer can disagree while an activation
+		// lands between them, and "target 42" beside "revision r-41"
+		// describes a fleet that never existed.
 		"target_epoch": target.epoch,
 		"activation":   target.detail,
 	}
@@ -293,19 +278,49 @@ func (s Sources) applyStatus(ctx context.Context) map[string]coord.NodeApply {
 	return out
 }
 
+// leaseClocks is how long each listed class's leases have left, read on the
+// STORE's clock for the class ([coord.TimeLeft]), never this node's: on a node
+// whose clock runs ahead of the store's every lease would read as running out.
+type leaseClocks map[coord.Class]func(coord.Lease) time.Duration
+
+// leaseClocks reads the store's clock for each class live lists a lease of.
+// DEGRADES as [Sources.applyStatus] does: a class whose clock cannot be read
+// loses its countdown and keeps its rows.
+func (s Sources) leaseClocks(ctx context.Context, live map[coord.Class][]coord.Lease) leaseClocks {
+	out := leaseClocks{}
+	for class, leases := range live {
+		if len(leases) == 0 {
+			continue
+		}
+		left, err := coord.TimeLeft(ctx, s.Coord, class)
+		if err != nil {
+			log.WarnContext(ctx, "fleet_store_clock_unavailable", "class", string(class), "error", err)
+			continue
+		}
+		out[class] = left
+	}
+	return out
+}
+
+// expiresIn sets row's `expires_in`, the whole seconds lease has left, where its
+// class's clock was read. ABSENT where it was not, never 0, which reads as a
+// holder that stopped renewing.
+func (c leaseClocks) expiresIn(row map[string]any, class coord.Class, lease coord.Lease) {
+	if left := c[class]; left != nil {
+		row["expires_in"] = int(left(lease) / time.Second)
+	}
+}
+
 // activationTarget is the newest activation as this answer renders it.
 //
 // The epoch is 0 when there is none or it cannot be read, which is safe
-// because the client compares against it only when non-zero — an unknown
-// target renders as no comparison rather than as "every node is 41 epochs
-// behind".
+// because the client compares against it only when non-zero: an unknown
+// target renders as no comparison, not "every node is 41 epochs behind".
 //
-// The detail is NIL rather than an object of empty strings, because "nothing
-// has ever been activated" and "the pointer could not be read" both leave a
-// screen with nothing to render, and an empty object would have it render a
-// revision named "" activated at the zero time. The two are told apart in the
-// log, which is where an operator looks for a failure, rather than on a screen
-// that has no remedy to offer for either.
+// The detail is NIL rather than an object of empty strings: "never activated"
+// and "the pointer could not be read" both leave a screen nothing to render,
+// and an empty object would draw a revision named "" at the zero time. The
+// two are told apart in the log, where an operator looks for a failure.
 type activationTarget struct {
 	epoch  int64
 	detail any
@@ -494,18 +509,6 @@ func (s Sources) currentCompany() *config.Company {
 func nodeOf(owner string) string {
 	id, _, _ := strings.Cut(owner, ":")
 	return id
-}
-
-// secondsLeft is how long a lease has, floored at zero.
-//
-// Negative would be a lease already gone, which the live listing does not
-// return — but a clock that moved between the query and this line would
-// produce one, and "-3 seconds left" is not something to render.
-func secondsLeft(expires, now time.Time) int {
-	if expires.IsZero() {
-		return 0
-	}
-	return max(int(expires.Sub(now)/time.Second), 0)
 }
 
 func isoOrEmpty(t time.Time) string {

@@ -139,8 +139,8 @@ nothing, which the asking node refuses under no wait, its tool telling the
 assistant that called it that the keyring is what to fix (a person at the
 dashboard is answered in the refusal's code alone, ADR-0060), and as only a
 box's host can read the box, answers nothing, so
-the asker hears a host that did not answer and the host's own next poll
-announces the run again — and a MAC that fails under a key it holds is refused
+the asker hears a host that did not answer and the host's own waiter
+announces the run again on its schedule — and a MAC that fails under a key it holds is refused
 and logged at error, because no holder will ever accept it. The rule has ONE
 implementation, `internal/signedask`, for ADR-0008's reason: every channel
 keeping its own copy of the binding and the dispositions is how one of them
@@ -244,8 +244,10 @@ leaves the note waiting, with a warning naming the keys the node holds, and
 refuses a decision on the anchor as unavailable under no wait, the condition
 of the fleet the steer channel's own unheld key is; a seal that does not open, or
 opens as another turn's or another note's, is never handed to a model, carried
-or attributed, and is logged at error. The detail is `internal/engine`'s
-(runsteer.go).
+or attributed, and is logged at error. A wake the engine hands such a run, a
+message about its work, is signed the same way in a domain of its own
+(`seat.wake.item`), bound to the turn, its job and the wake, with the same two
+dispositions. The detail is `internal/engine`'s (runsteer.go, wakeitem.go).
 
 ## Amendment: the live relay is sealed too
 

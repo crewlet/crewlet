@@ -54,37 +54,16 @@ func TestATrainingTakesAtMostItsShareOfTheCores(t *testing.T) {
 }
 
 // A TRAINING RUNS ON ITS SHARE OF THE CORES — the public entry points, as the
-// duty calls them, measured twice: by how many workers are alive at once, and
-// by the CPU time this process spends against the wall-clock time they take.
+// duty calls them, measured by workers alive at once and by CPU time against
+// wall-clock time. At GOMAXPROCS 4 the share is two workers.
 //
-// The bound above is only a number until the training is held to it: a
-// TrainIVF or an Assign handing parallelRanges every core would pass every
-// other case here. At GOMAXPROCS 4 the share is two workers.
-//
-// THE WORKERS ARE COUNTED because that is the measure no load can hide: every
-// range is a goroutine, alive from its spawn to the end of its range, however
-// little CPU the machine gives it. The CPU time is the property itself — cores
-// the seats and the searches do not get — but it can only catch a training on
-// every core when the machine has those cores free: on this repository's
-// shared four-core container a training on every core measured 3.1 cores busy
-// when idle and 1.9 under two other test runs, below the bound. So the count
-// is what fails a build that trains on every core wherever it runs, and the
-// CPU time is what fails one whose workers are bounded and still take more.
-//
-// NOT PARALLEL, because both readings are the whole process's: a test running
-// beside it would add its own training's workers and its CPU time. Top-level
-// parallel tests wait until every sequential one has finished, so nothing else
-// in this package runs while it measures.
-//
-// And so FIVE THOUSAND CODES, at sixty-four lists: every other test in the
-// package waits on this one, and neither reading depends on the corpus's
-// size. The k-means sample is [IVFTrainPointsPerList] codes a list, so each
-// worker's range in a round is still 1 280 codes against every list — tens
-// of milliseconds under the race detector, against a sampler that looks every
-// two — and the training and filing together measured 1.5 to 2 s on the
-// shared container, long enough that the runtime's own work stays inside the
-// half core of slack below. At twenty thousand codes and 256 lists the same
-// readings held the whole package for 38 s.
+// WORKERS ARE COUNTED because no load can hide them. CPU time is the property
+// itself but catches every-core training only when the cores are free (1.9 busy
+// on a loaded four-core container, below the bound): the count fails a build
+// that trains on every core, the CPU time one bounded that still takes more.
+// NOT PARALLEL: both readings are the whole process's. FIVE THOUSAND CODES at
+// sixty-four lists keep it to 1.5 to 2 s, inside the half core of slack below;
+// 20 000 at 256 lists held the package 38 s.
 func TestATrainingRunsOnItsShareOfTheCores(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(4))
 	workers := ivfWorkers()
@@ -128,26 +107,15 @@ func TestATrainingRunsOnItsShareOfTheCores(t *testing.T) {
 	}
 }
 
-// workersAlive runs work and reports the most training workers that were at
-// work at once while it ran: the goroutines [parallelRanges] started, found by
-// what their stacks say created them, while they are inside [walkStrides].
+// workersAlive runs work and reports the most training workers alive at once:
+// goroutines [parallelRanges] started, found by their creator in the stack,
+// while inside [walkStrides].
 //
-// BY CREATOR, NOT BY COUNT. The process runs goroutines of its own beside the
-// training — the NATS server's process-statistics poll starts one on a timer
-// in every binary that links the server — and a count of every goroutine
-// read that one as a third worker beside a share of two.
-//
-// AND ONLY WHILE WALKING A RANGE. A worker that has signalled its WaitGroup
-// has finished its range but is still listed until it returns, and on a busy
-// machine it may not run again before the next k-means round has started its
-// own two: counted by creator alone, that exit read as a third worker beside a
-// share of two, and the case failed under `make test` while no worker ever
-// ran over its share.
-//
-// SAMPLED every two milliseconds: a k-means round's ranges each run for tens of
-// milliseconds and more, so a worker alive for a round cannot fall between two
-// samples, while a stack dump of a handful of goroutines costs the workers
-// little of their time.
+// BY CREATOR, NOT BY COUNT: the process runs goroutines of its own (the NATS
+// server's statistics poll), read as a third worker beside a share of two.
+// AND ONLY WHILE WALKING A RANGE: a worker that signalled its WaitGroup is
+// listed until it returns and may outlive the next round's start, reading as
+// a third. SAMPLED every two milliseconds, well inside a range's tens.
 func workersAlive(t *testing.T, work func()) int {
 	t.Helper()
 	creator := []byte("created by " +
@@ -264,17 +232,14 @@ func goroutineOf() string {
 // A TRAINING CUT OFF HANDS ITS CORES BACK WITHIN A STRIDE of its tick ending,
 // in every CPU-bound step it takes.
 //
-// The duty's tick is bounded — by the lease it renews as it runs, and by a
-// budget of progress its arithmetic is exempt from — and a step cut off
-// publishes nothing. The k-means looked at
-// its context only between rounds and the filing not at all, so a tick cut off
-// as the filing began went on filing every code on its share of the cores for
-// the better part of a minute, for a result it then threw away, on a node that
-// might no longer hold the duty.
+// The duty's tick is bounded (by the lease it renews, and by a progress budget
+// its arithmetic is exempt from) and a step cut off publishes nothing. A
+// k-means that read its context only between rounds, or a filing that never
+// did, would keep filing every code for the better part of a minute for a
+// discarded result, on a node that may no longer hold the duty.
 //
-// The split itself is held to it exactly: a worker reads the context before
-// each stride, so after it ends no worker starts another, and what was covered
-// is at most the stride each worker was in.
+// The split is held exactly: a worker reads the context before each stride, so
+// after the end none starts another and at most the stride each was in is covered.
 func TestATrainingStopsWithinAStrideOfItsTickEnding(t *testing.T) {
 	t.Parallel()
 	t.Run("the split", func(t *testing.T) {

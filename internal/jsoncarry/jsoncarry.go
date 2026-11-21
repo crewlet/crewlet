@@ -14,6 +14,14 @@
 // this build does understand, on exactly the path — an upgrade in progress —
 // where nobody is looking.
 //
+// # Known names come from the tags
+//
+// The known names are read off the struct's tags (Names), never off a marshalled
+// zero value. A zero value omits its omitempty fields, so every domain had to
+// list those by hand; four missed one (on a person, an invitation, a unit and a
+// seat). A missed field was decoded AND carried, so clearing it to its zero
+// value re-encoded the stale carried copy straight back.
+//
 // # Why it is a package
 //
 // It was written twice, in internal/doclet and the org chart's own domain, and
@@ -96,26 +104,15 @@ func Decode(data []byte, out any, known Fields) (map[string]json.RawMessage, err
 // Names is the JSON names a record type defines: every field encoding/json
 // would marshal, read off the TYPE rather than off a marshalled zero value.
 //
-// # Why the type, and never a marshalled value
+// A marshalled zero value omits the omitempty names and would need each caller
+// to LIST them: the trap the package doc warns of. The tags already say every
+// name. THE RULES ARE encoding/json's OWN: an unexported field or one tagged
+// `-` is skipped, an embedded struct with no name has its fields promoted, and
+// an untagged field is named by its Go name.
 //
-// It used to marshal a zero value and ask each caller to LIST the omitempty
-// names beside it, because a zero value does not marshal those. That was the
-// trap the package doc warns about, left for every domain to fall into by
-// hand: a name missing from the list is decoded into the struct AND carried as
-// unknown, so the next encode writes the stale carried copy back over what the
-// caller set — and it had been fallen into four times, silently (a field on a
-// person, on an invitation, on a unit and on a seat), each one a field that
-// could never be cleared back to its zero value. The tags already say every name; reading them is the only list
-// nobody has to remember to update.
-//
-// THE RULES ARE encoding/json's OWN: an unexported field is skipped, a field
-// tagged `-` is skipped, an embedded struct with no name of its own has its
-// fields promoted, and an untagged field is named by its Go name.
-//
-// IT PANICS rather than returning an error, because the only caller shape is a
-// package-level var over a type literal: a record type that is not a struct
-// is a build that cannot encode any record at all, and discovering that at the
-// first publish rather than at init is strictly worse.
+// IT PANICS rather than returning an error: the only caller shape is a
+// package-level var over a type literal, and a type that is not a struct is a
+// build that cannot encode any record, better found at init than at publish.
 func Names(v any) Fields {
 	t := reflect.TypeOf(v)
 	for t != nil && t.Kind() == reflect.Pointer {

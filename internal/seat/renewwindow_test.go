@@ -64,26 +64,15 @@ func statusTaking(d time.Duration) func(context.Context) (coord.NodeStatus, erro
 
 // A HEALTHY NODE ADMITS ITS SEAT THROUGH EVERY RENEW.
 //
-// The loop itself, on a synctest bubble's clock, against a store whose renews
-// take [renewRoundTrip] and which asks [Host.MayStart] about every held seat at
-// the last instant before each renew is answered — the oldest the proof it
-// admits on ever gets on a node renewing on time. Five heartbeats per case.
+// The loop itself on a bubble's clock, against a store whose renews take
+// [renewRoundTrip] and which asks [Host.MayStart] about every seat just before
+// each renew is answered, the oldest a proof gets. Five heartbeats per case.
 //
-// TWO FAILURES THE CASES ARE CHOSEN FOR, both measured here before the fix:
-//
-//   - The pass ran every heartbeat wherever the beat divided it, so a renew
-//     was sent at the very instant the proof it replaced stopped admitting:
-//     at 15 s, 30 s, 45 s and 90 s every renew was refused for its own round
-//     trip, five in five. 1 s, 3 s, 10 s and 20 s, where the rounding left
-//     slack, passed then and are kept as the controls.
-//   - The pass ran every so many RECEIVED beats, and a ticker drops the beats
-//     that come due while a pass is running, so a pass longer than two beats
-//     delayed the next. The status hook alone may take a fifth of the
-//     heartbeat: at 45 s a 2.5 s hook ran the renews 16 s apart, at 90 s a
-//     5 s one 34 s apart against a 30 s window.
-//
-// Two seats, so the probe covers every renewal of a pass, which are sent
-// together at its start, and their answers applied one after the other.
+// TWO FAILURES: a pass every heartbeat sends a renew as the proof it replaces
+// stops admitting (15 s, 30 s, 45 s, 90 s; 1 s, 3 s, 10 s, 20 s are controls);
+// and a pass every so many RECEIVED beats is delayed by a long pass, since a
+// ticker drops due beats (a 5 s status hook at 90 s ran renews 34 s apart).
+// Two seats cover a pass's renewals, sent together, answered in turn.
 func TestAHealthyNodeAdmitsItsSeatThroughEveryRenew(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

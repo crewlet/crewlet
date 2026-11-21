@@ -184,17 +184,14 @@ func (c *cancelAfter) Read(p []byte) (int, error) {
 // A DOWNLOAD WHOSE CONSUMER IS LOST PART WAY IS FINISHED BY ITS REPLACEMENT,
 // byte for byte, and within [lostConsumerBound].
 //
-// A get is an ordered consumer of the object's messages, and the broker can
-// take that consumer away under a reader — reaped while the reader was slow,
-// dropped in a leader change. The client then makes a new one from the last
-// message the reader took, once two of the broker's heartbeats have gone
-// missing — the path every one of those failures goes down, and every pull a
-// clustered fleet drops at a consumer's creation too — and the one this case
-// stages: the consumer is deleted a few messages into a 4 MiB read, past what
-// the read held in hand, so the rest can only come from a replacement. This
-// replaced a read paced over twelve seconds to outlast two of the consumer's
-// heartbeats; the vendored client arms none between reads, so that read
-// tripped nothing and never asserted that a replacement was made.
+// The broker can take a get's ordered consumer away under a reader (reaped
+// while slow, dropped in a leader change), and the client then makes a new one
+// from the last message taken once two heartbeats go missing: the path every
+// such failure goes down, a dropped first pull too. The consumer is deleted a
+// few messages into a 4 MiB read, past what the read held in hand, so the rest
+// can only come from a replacement. A slow read would not do: the vendored
+// client arms no heartbeat between reads, so nothing would assert a
+// replacement was made.
 func TestAReadWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 	t.Parallel()
 	client := memberClient(t)
@@ -572,18 +569,13 @@ func TestAnObjectWhosePiecesAreGoneReadsEmpty(t *testing.T) {
 // A LISTING WHOSE CONSUMER IS LOST PART WAY IS FINISHED BY ITS REPLACEMENT,
 // visiting every name exactly once, and within [lostConsumerBound].
 //
-// The listing is an ordered consumer over the metadata, holding
-// [natsobj.WalkAhead] messages at a time, so the bucket holds more names than
-// that: the consumer is deleted under the tenth, and everything past what the
-// listing already held can only come from the replacement the client makes
-// from the last name visited. A name visited twice or not at all is the
-// collector deleting or keeping the wrong object. Read slowly instead, as this
-// suite used to read it for twelve seconds, nothing was lost: the vendored
-// client arms no heartbeat between a listing's reads.
-//
-// THE NAMES ARE METADATA ALONE, published straight to the bucket's subjects: a
-// listing reads nothing else, and five hundred uploads would cost seconds to
-// stage what five hundred messages stage in a fraction of one.
+// The bucket holds more names than [natsobj.WalkAhead], and the consumer is
+// deleted under the tenth, so everything past what the listing held can only
+// come from the replacement made from the last name visited. A name visited
+// twice or not at all is the collector deleting or keeping the wrong object.
+// A slow read would not do: the client arms no heartbeat between a listing's
+// reads. THE NAMES ARE METADATA ALONE, published straight to the bucket's
+// subjects: five hundred uploads would cost seconds to stage.
 func TestAListingWhoseConsumerIsLostFinishesOnItsReplacement(t *testing.T) {
 	t.Parallel()
 	client := memberClient(t)
@@ -656,22 +648,15 @@ const lostConsumerBound = natsobj.QuietWait + 2*natsobj.PullHeartbeat + 5*time.S
 // A READ'S HEARTBEATS OUTLAST ITS HAND CROSSING A LINK AT THE FLOOR, TWICE
 // OVER — AND A CONSUMER LOST UNDER IT IS REPLACED INSIDE THE STALL.
 //
-// The client replaces a read's consumer when two heartbeats go missing while
-// it waits, and hears of a heartbeat or a message only once the whole of it
-// has arrived — on a compressed link, once the whole block the broker flushed
-// has, and a get's first pull puts its whole hand on the wire in one flush. So
-// on a link at [objstore.MiBPace], the slowest every object store leg accepts,
-// a healthy read can hear nothing for as long as its hand takes to cross, and
-// two heartbeats must outlast that or the reader is replaced before its hand
-// arrives, and again before its replacement's, and fails a minute later at
-// [objstore.Stall] having read nothing. Twice over, the room the stall
-// gives a mebibyte.
-//
-// And a consumer the broker loses under a read costs a quiet second, two
-// heartbeats and then its replacement's first hand — which must fit in the
-// stall, or the read the replacement was made for is ended before it arrives.
-// That is what bounds the hand: at eight messages, a mebibyte, the two could
-// not both hold.
+// The client replaces a consumer when two heartbeats go missing, and hears of
+// one only once the whole block the broker flushed has arrived, and a get's
+// first pull puts its whole hand in one flush. At [objstore.MiBPace] a healthy
+// read can hear nothing for as long as its hand takes to cross, and two
+// heartbeats must outlast that or the reader is replaced before its hand
+// arrives, and again before its replacement's, failing at [objstore.Stall]
+// having read nothing. And a lost consumer costs a quiet second, two
+// heartbeats and its replacement's first hand, which must fit in the stall:
+// that bounds the hand (at eight messages the two could not both hold).
 func TestAReadsHeartbeatOutlastsItsHandAtTheFloor(t *testing.T) {
 	t.Parallel()
 	hand := time.Duration(natsobj.ReadAhead*natsobj.MessageBytes) * objstore.MiBPace / objstore.MiB
@@ -689,23 +674,16 @@ func TestAReadsHeartbeatOutlastsItsHandAtTheFloor(t *testing.T) {
 
 // A READ ACROSS A LINK NEAR THE FLOOR FINISHES ON THE CONSUMER IT BEGAN WITH.
 //
-// A leaf reaches the bucket across its link to a member, and the link is held
-// to a quarter above [objstore.MiBPace]'s floor towards the leaf. The link is
-// compressed, as a leaf's is by default, so what the member flushes at once
-// arrives as one block: the read's first hand, [natsobj.ReadAhead] messages,
-// in twelve seconds and nothing of it sooner, then what its next pull asked
-// for. The object is a hand and a half, so the read waits on the link twice.
-// It also asks its consumer about its first message a second in — which the
-// consumer answers, behind the hand, as being read — and must not remake it.
-// At a heartbeat whose two went missing in either wait, the read's consumer
-// was replaced before its messages arrived, and again before each of the
-// replacement's, which queued behind what its predecessor had been sent: the
-// read never completed a message and failed when its deadline ran out.
-//
-// A QUARTER ABOVE THE FLOOR rather than at it, so a scheduler running late on
-// a loaded runner cannot push the link under the floor, where no heartbeat is
-// promised to hold; the floor itself is held by the arithmetic
-// ([TestAReadsHeartbeatOutlastsItsHandAtTheFloor]).
+// The leaf's link is held to a quarter above [objstore.MiBPace] and compressed,
+// so the first hand ([natsobj.ReadAhead] messages) arrives as one block in
+// twelve seconds, nothing sooner. The object is a hand and a half, so the read
+// waits on the link twice, and asks its consumer about its first message a
+// second in; the consumer answers, behind the hand, as being read, and must
+// not be remade. At a heartbeat whose two went missing in either wait, the
+// consumer was replaced before its messages arrived, and again behind what
+// its predecessor was sent: no message completed. A QUARTER ABOVE THE FLOOR so
+// a late scheduler cannot push the link under it; the floor itself is held by
+// [TestAReadsHeartbeatOutlastsItsHandAtTheFloor].
 func TestAReadAcrossALinkNearTheFloorKeepsItsConsumer(t *testing.T) {
 	t.Parallel()
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
@@ -957,16 +935,13 @@ func TestAReadOnAReplicaBehindTheLeaderReadsWhatTheLeaderHolds(t *testing.T) {
 // or fails — and a pass over the unfinished uploads fails with it, rather than
 // hand the collector the pieces of an upload the listing missed.
 //
-// The listing's consumer is made on whichever replica the broker places it,
-// and one still catching up has stored the metadata of the uploads before
-// "late" but not of "late" itself. Made there with nothing at all, it is made
-// again; made there part way through, it cannot go on from a consumer made
-// again — that would deliver every message past its end, superseded ones
-// among them — and fails, to be asked again. Taken for the end, the listing
-// named only "early", and [natsobj.Backend.Pending] answered "late"'s pieces
-// as an upload nobody finished: the collector abandons one of those a day
-// after it began, which purges the pieces of a whole object a replica a day
-// behind had not yet caught up on.
+// A replica still catching up has stored the metadata of the uploads before
+// "late" but not "late" itself. Made there with nothing at all, the consumer
+// is made again; made there part way through, it cannot go on from a consumer
+// made again (that would deliver superseded messages too) and fails, to be
+// asked again. Taken for the end, the listing named only "early" and
+// [natsobj.Backend.Pending] answered "late"'s pieces as an unfinished upload,
+// which the collector abandons a day later: purging a whole live object.
 func TestAListingOnAReplicaBehindTheLeaderNamesWhatTheLeaderHeld(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -1738,19 +1713,14 @@ func TestALookupNobodyAnswersFallsThroughToTheCreate(t *testing.T) {
 // the two ways it goes unanswered — through [jsprovision.Timing.Place], as
 // every replicated create at boot is.
 //
-// The lookup IS answered here — the bucket is not there — so the create is the
-// one request left to decide, and on a fleet booting together it is sent into
-// a metadata group that is still forming. That group either refuses to place
-// it ("no suitable peers", until enough members have joined) or drops it
-// unanswered (no leader yet), and both clear by asking again. Sent once, the
-// first is final to [jsprovision.Refused] and the second is read back into a
-// bucket nobody made: either way a node fails its boot over a fleet that is
-// merely starting. The lookup in front of the create absorbs neither, since it
-// was answered; [TestOpeningOnALeafWaitsOutItsLink] holds the case where it
-// is the lookup that goes unanswered.
-//
-// At a clustered timing with its two cadences scaled to milliseconds, because
-// the production ones ask again after a quarter of a second and a second.
+// The lookup IS answered (the bucket is not there), so the create is sent into
+// a metadata group still forming. It either refuses to place it ("no suitable
+// peers") or drops it unanswered (no leader yet), and both clear by asking
+// again. Sent once, the first is final to [jsprovision.Refused] and the second
+// is read back into a bucket nobody made: a node fails its boot over a fleet
+// merely starting. [TestOpeningOnALeafWaitsOutItsLink] holds the unanswered
+// lookup. The two cadences are scaled to milliseconds from production's
+// quarter of a second and a second.
 func TestABucketCreateTheClusterCannotAnswerYetIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	for name, refusal := range map[string]error{
@@ -1868,33 +1838,15 @@ func TestAFailedCreatesReadBackKeepsBothErrors(t *testing.T) {
 
 // EVERY READ OPEN MAKES IS ASKED AGAIN AT THE READ TERM, never at a write's.
 //
-// The bucket's lookup, the read-back after a create whose name was taken, and
-// the stream behind the bucket are all metadata READS, which the broker
-// answers when it processes them or never ([jsprovision.ReadTerm]). On a fleet
-// booting together a bucket another node has just asked for is in flight, and
-// every member but the one preferred to lead it drops a read of it without a
-// word: a read held for a write's term waits on a reply that does not exist,
-// and that was measured costing a fleet's boot sixteen idle seconds a lookup.
-// So a request nobody answers is presumed lost at the read term and the next
-// is sent a re-ask after it, the first still outstanding beside it; asked as
-// a write, the next would follow a write's term later.
-//
-// At an hour-long write term, so what tells the cadences apart is whether the
-// re-ask comes at all, never how long it took. A read asked at the write's
-// term, or not asked again, is still asking when [readOpenPatience] ends the
-// open. A read that abandons its lost request before asking again finds
-// nothing outstanding, so each of its requests is dropped in turn and it never
-// ends either. Measured instead against a gap of a read term past the cadence,
-// the queue's sibling of this case failed on a loaded race-detector run whose
-// re-ask came 63 ms behind its 70 ms timer: how late a timer's goroutine wakes
-// is the scheduler's latency, which the read never promised.
-//
-// Two opens on each topology. The first loses the create race as
-// [TestANodeThatLosesTheCreateRaceBindsItsPeersBucket] stages it: the lookup is
-// told the bucket is not there, and the create is told its name is taken by a
-// peer's, so the read-back runs. The second finds the bucket. Every read has
-// its first request dropped, and must be asked again with that request still
-// outstanding.
+// The lookup, the read-back after a lost create race and the stream behind the
+// bucket are metadata READS the broker answers when it processes them or never
+// ([jsprovision.ReadTerm]): booting together, members not preferred to lead a
+// bucket in flight drop them silently. A request nobody answers is presumed
+// lost at the read term and the next sent after it, the first still outstanding. The write term is an hour, so what tells the cadences apart is
+// whether the re-ask comes at all, never how long it took (timer wakeup latency
+// is the scheduler's): one asked at the write's term, or never again, is still
+// asking when [readOpenPatience] ends the open. Two opens per topology, the
+// first losing the create race ([TestANodeThatLosesTheCreateRaceBindsItsPeersBucket]).
 func TestEveryReadOpenMakesIsAskedAgainAtTheReadTerm(t *testing.T) {
 	t.Parallel()
 	for _, clustered := range []bool{false, true} {
@@ -2119,22 +2071,16 @@ func awaitLink(t testing.TB, c jetstream.JetStream) {
 
 // A BUCKET OPENED ON A LEAF WHOSE LINK IS NOT UP YET OPENS ONCE IT IS.
 //
-// A leaf's JetStream is across its link, and until the link forms nobody
-// answers: every request comes back "no responders" at once. The first one is
-// the bucket's LOOKUP, a read asked again for as long as nobody answers
-// ([jsprovision.ReadWith], under [jsprovision.LookupBudget]) — so on a link
-// that forms inside that ceiling it is the lookup that waits it out, and the
-// create is sent once the link is up. A create that goes unanswered itself is
-// asked again as well, through [jsprovision.Timing.Place], and
+// Until a leaf's link forms every request comes back "no responders" at once.
+// The first is the bucket's LOOKUP, asked again while nobody answers
+// ([jsprovision.ReadWith], under [jsprovision.LookupBudget]), so on a link
+// forming inside that ceiling it waits it out and the create follows. An
+// unanswered create is asked again too ([jsprovision.Timing.Place]);
 // [TestABucketCreateTheClusterCannotAnswerYetIsAskedAgain] holds that half.
-// What this case holds is the whole of it from the caller's side: the leaf is
-// started with no member at all, Open is left asking, and only then does the
-// member come up.
-//
-// THE LEAF DIALS A GATE THIS CASE HOLDS ([holdGate]), never the port its member
-// will bind: the address has to be named before the member exists, so it
-// cannot be the member's own [js.AnyPort], and a port reserved for the member
-// to bind later is released first, for anything else on the machine to take.
+// Here the leaf starts with no member, Open is left asking, then the member
+// comes up. THE LEAF DIALS A GATE ([holdGate]), never the port its member will
+// bind: the address is named before the member exists, and a port reserved
+// and released is free for anything else to take.
 func TestOpeningOnALeafWaitsOutItsLink(t *testing.T) {
 	t.Parallel()
 	gate := holdGate(t)
@@ -2335,21 +2281,17 @@ func later(a, b time.Time) time.Time {
 }
 
 // testCeiling is the reservation every case here opens the bucket with:
-// eight mebibytes, TWICE the largest object any case stores — the 4 MiB read
-// across a lost consumer ([TestAReadWhoseConsumerIsLostFinishesOnItsReplacement])
-// — which leaves the object's metadata and its pieces' message overhead room
-// with a whole second copy to spare. No case holds more at once: the 4 MiB puts
-// put_test.go stalls on a frozen link land a window of pieces at most, and are
-// purged when they fail, and the contract suite's largest object is two pieces
-// and a tail (some 256 KiB, a thirty-second of the ceiling). The margin asks
-// for nothing more: a case needs only its own bytes to fit, and a case about
-// the ceiling opens a bucket of its own size
-// ([TestAFullBucketLeavesTheCoordinationRemainder]). Every member it is
-// opened on declares its own limit ([brokertest.StoreMaxBytes]) rather than
-// read one off the runner's free disk, so whether it is granted does not
-// depend on the machine. The engine never
-// derives one this small (store.objects.nats_max_bytes takes a gibibyte at
-// least); the package itself takes any positive reservation.
+// eight mebibytes, TWICE the largest object any case stores (the 4 MiB read of
+// [TestAReadWhoseConsumerIsLostFinishesOnItsReplacement]), leaving room for
+// metadata, message overhead and a whole second copy. No case holds more at
+// once: put_test.go's 4 MiB puts on a frozen link land a window of pieces at
+// most and are purged, and the contract suite's largest object is some 256 KiB.
+// A case about the ceiling opens a bucket of its own size
+// ([TestAFullBucketLeavesTheCoordinationRemainder]). Every member declares its
+// own limit ([brokertest.StoreMaxBytes]), so the grant does not depend on the
+// runner's disk. The engine never derives one this small
+// (store.objects.nats_max_bytes takes a gibibyte at least); the package takes
+// any positive reservation.
 const testCeiling = 8 << 20
 
 // A BUCKET IS CREATED HOLDING ITS RESERVATION, and the ceiling Usage reports

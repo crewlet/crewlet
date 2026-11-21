@@ -13,54 +13,34 @@ import (
 
 // Appender is the broker, as narrowly as the framework needs it: one
 // conditional append, and the one query the rejection path discriminates
-// with.
-//
-// DECLARED HERE because the framework is the caller. It is deliberately not
-// the queue's own Publish: that path discards the PubAck, and the sequence
-// inside it is the object's new version, the applier's checkpoint and the
-// next writer's expectation all at once.
+// with. Not the queue's own Publish, which discards the PubAck: its sequence
+// is the object's new version, the applier's checkpoint and the next writer's
+// expectation at once.
 type Appender interface {
 	// Append publishes one record.
 	//
 	// expect is the per-subject last sequence this append is conditional
-	// on — nil for no expectation at all, which is the additive pattern
-	// and nothing else. A POINTER rather than a sentinel because zero is
-	// a real expectation with a specific meaning ("this subject holds
-	// nothing") and a sentinel would make the one branch that matters
-	// most indistinguishable from the branch that skips arbitration.
+	// on; nil is no expectation, the additive pattern and nothing else. A
+	// POINTER, because zero is a real expectation ("this subject holds
+	// nothing") that a sentinel would confuse with skipping arbitration.
 	Append(ctx context.Context, subject, msgID string, expect *uint64, body []byte) (seq uint64, duplicate bool, err error)
 
 	// LastSeq answers the last sequence on a subject, reporting false
 	// with a NIL error when the subject holds no message.
 	//
-	// THE DISCRIMINATOR, and it must be answered authoritatively. It is
-	// what tells a trimmed anchor from a lost race, and the two have
-	// opposite remedies: one publishes at zero and the other must never.
-	//
-	// "No message here" is a fact and not a failure, so it is the bool
-	// rather than an error: an implementation that returned the broker's
-	// not-found as an error would make every caller re-derive the same
-	// distinction, and the first one to forget would take the trimmed
-	// anchor's branch on a broker that was merely unreachable.
+	// THE DISCRIMINATOR, answered authoritatively: it tells a trimmed
+	// anchor (publish at zero) from a lost race (never). "No message" is a
+	// fact, so a bool: as an error, a caller that forgot to tell it apart
+	// would take the trimmed anchor's branch on an unreachable broker.
 	LastSeq(ctx context.Context, subject string) (seq uint64, found bool, err error)
 }
 
-// fault is what a publish attempt actually was.
-//
-// THREE FACTS AT THE CORE — on the stream, refused as stale, or no answer —
-// and the refusals that are neither a stale expectation nor an unanswered
-// append split three ways further, because each sends a different person to a
-// different knob: a log at its ceiling is the operator's retention, a record
-// too large for the broker is the writer's change or whichever of three limits
-// refused it ([tooLargeDetail]), and anything else the broker refused is the
-// broker's own words.
-// Folded into one, a record too large was told to raise a ceiling it was
-// nowhere near.
-//
-// AND ONE ANSWER IS NOT A REFUSAL AT ALL although the broker named it: an
-// error saying this operation's record may yet land ([faultUnsettled]). The
-// broker answered, so it is not the no-answer either — and it is the one
-// answer after which a probe finding nothing proves nothing.
+// fault is what a publish attempt actually was: on the stream, refused as
+// stale, or no answer. Other refusals split further, because each sends a
+// different person to a different knob: a full log is the operator's
+// retention, a record too large the writer's change or whichever limit refused
+// it ([tooLargeDetail]), anything else the broker's own words. One named
+// answer is no refusal: the record may yet land ([faultUnsettled]).
 type fault int
 
 const (
@@ -76,58 +56,29 @@ const (
 	faultFull
 
 	// faultTooLarge is a record larger than the broker takes in one
-	// message. Nothing about the log's size is involved, and nothing a
-	// retry does makes the record smaller.
-	//
-	// THREE LIMITS REACH IT, each moved by a different hand, so its detail
-	// names which one refused ([tooLargeDetail]): the NATS server's
-	// max_payload, the stream's own max_msg_size, and the file store's
-	// per-record limit. Folded into one remedy — raise max_payload — the
-	// second sent an operator to a server setting when the record was past
-	// the domain's own declared largest, and the third to a setting they
-	// had already turned past the limit that refused the record.
+	// message: not the log's size, and no retry makes it smaller. THREE
+	// LIMITS REACH IT, each moved by a different hand, so its detail names
+	// which refused ([tooLargeDetail]): one remedy for all sends an
+	// operator to a setting that cannot help.
 	faultTooLarge
 
-	// faultRefused is any other refusal the broker made and named, and
-	// one this framework has no remedy for — so it is reported with the
-	// broker's words rather than retried, and rather than dressed as one
-	// of the refusals above.
-	//
-	// FINAL ONLY BECAUSE [faultUnsettled] IS CARVED OUT OF IT FIRST. A
-	// named error is a decision about THIS append only when it also says
-	// the record will not be stored; the two that say the opposite are
-	// classified before anything reaches here.
+	// faultRefused is any other refusal the broker named and this
+	// framework has no remedy for: reported in the broker's words, not
+	// retried nor dressed as a refusal above. Final only because
+	// [faultUnsettled], the named errors saying the record may yet be
+	// stored, is classified first.
 	faultRefused
 
-	// faultUnsettled is the broker ANSWERING that this operation's record
-	// may yet land, which it does in two ways on a clustered stream:
-	//
-	//   - 10158, "duplicate message id is in process". A clustered leader
-	//     stages a record's message id the moment it PROPOSES it, and a
-	//     second append under the same id before that proposal applies is
-	//     answered with this. The second append is this write's own —
-	//     the id is the op id — re-sent after an earlier round's append
-	//     went unanswered while its commit was slow, or by a caller
-	//     retrying an `unknown` under the same operation, which is the
-	//     retry this framework tells every caller to make.
-	//   - 10077 whose store error is "store is closed". A clustered leader
-	//     answers that when its store closes under an entry raft has
-	//     ALREADY committed — a shutdown, a stream reset — so the record
-	//     is applied by every member that replays the entry, the leader
-	//     included once it comes back.
-	//
-	// Reported as a refusal, either one told a caller "asking again changes
-	// nothing" about a record that committed and applied a moment later —
-	// and a caller that believed it and re-filed under a fresh op id wrote
-	// the change twice. Resolved like an ambiguous append, then, with one
-	// difference that is the whole reason this is not [faultUnknown]: a
-	// probe that finds nothing of this write's does NOT mean nothing
-	// landed, because the record may be committed and not yet visible. A
-	// snapshot retaken there decides against a state about to hold this
-	// very write — a create would be told its own record already exists —
-	// so what the probe cannot settle is answered `unknown`, whose only
-	// retry is the same op id, and that retry gets the broker's duplicate
-	// acknowledgement once the record lands.
+	// faultUnsettled is the broker ANSWERING, on a clustered stream, that
+	// this operation's record may yet land: 10158 ("duplicate message id is
+	// in process": an earlier append under this op id is proposed, not yet
+	// applied) or 10077 with "store is closed" (the store closed under an
+	// entry raft already committed). As a refusal, a caller re-filing under
+	// a fresh op id wrote the change twice. Unlike [faultUnknown], a probe
+	// finding nothing of this write's proves nothing (committed, not yet
+	// visible; a retaken snapshot would tell a create its own record
+	// exists), so what the probe cannot settle is answered `unknown`, whose
+	// only retry, the same op id, gets the duplicate acknowledgement.
 	faultUnsettled
 
 	// faultUnknown is no answer: the append may or may not have landed,
@@ -135,60 +86,18 @@ const (
 	faultUnknown
 )
 
-// classify decides which fault a publish error was.
-//
-// # Why ONE rejection code, and why the other is no answer
-//
-// 10071 is the leader's decision: it compared the expectation with the
-// subject's last sequence and refused it, on a solo stream and a clustered one
-// alike. 10164 says the same three words without a number and decides nothing
-// — a clustered leader answers it while another write to the subject is still
-// in flight, which may be this node's own, already acknowledged (see
-// internal/jsinflight, which has the server source). The client's own comment
-// calls the two "equivalent", and this classifier believed it: a write whose
-// anchor was perfectly current was sent to the discriminator, re-decided
-// against the anchor it already had, and refused again for as long as the
-// write ahead took to clear — rounds a colleague's edit was then reported as
-// having taken. internal/queue/jetstream's DomainLog.Append waits 10164 out, so it reaches
-// here only as the no-answer an append still in flight at its deadline is;
-// and a raw one, if anything ever handed it here, is the same no-answer,
-// since the leader stored nothing of the append it refused.
-//
-// A design writing directly to a stream does not get the client's own
-// revision-mismatch mapping for free: that wrapper lives inside the key-value
-// layer. So the raw APIError is classified here, once.
-//
-// # And why a rejection's description is never parsed
-//
-// The server interpolates the sequence it actually found into the rejection's
-// description string and exposes it nowhere structured. Reading it back out
-// would be a parser against a message that is free to be reworded, for a
-// number the discriminator answers authoritatively — so the rejection is
-// treated as "stale, cause unknown" and LastSeq is asked.
-//
-// # Why a store failure's description IS compared, whole
-//
-// 10077 is the server's one code for "the stream would not store this", and
-// it covers a log at its ceiling, a message too large for the file store and
-// a store that closed under the append alike — the reason travels only as the
-// text of the server's own store error. The three have opposite remedies, so
-// they are told apart by comparing that text WHOLE against the server's
-// declared errors ([storeFailedMaxBytes], [storeFailedTooLarge],
-// [storeFailedClosed]), which a test pins to the vendored server's own
-// values: never a substring, never a parse. A wording this build does not
-// know is [faultRefused] carrying the words verbatim, so a reworded server
-// costs a less specific remedy and never a wrong one — which is what reading
-// every 10077 as a full log was.
-//
-// # And why only the append's own error is ever handed to it
-//
-// Everything that is not an APIError reads as NO ANSWER here, which is true
-// only of what the append itself returned. A refusal this node makes before
-// the append — fence 0's — is a decision, not an absence of one, and it ends
-// the write where it is made ([Publisher.attempt]): classified, it would send
-// a write that never reached the broker down the ambiguous path, which finds
-// nothing landed, retakes, is refused again, and reports a conflict once the
-// round budget is spent.
+// classify decides which fault a publish error was, from the raw APIError
+// (the client's revision-mismatch mapping lives only in its key-value layer).
+// Only 10071 is a rejection, the leader's comparison; 10164 decides nothing
+// (another write to the subject in flight, internal/jsinflight), so it is no
+// answer. A rejection's description, holding the sequence found, is never
+// parsed: LastSeq answers that authoritatively. A 10077's store error IS
+// compared, whole, with the server's declared errors (a test pins them): a
+// full log, a record too large and a closed store have opposite remedies, and
+// a wording this build does not know is [faultRefused] in its own words. Only
+// the append's own error is handed here: a non-APIError reads as no answer,
+// so a refusal this node made first (fence 0's, [Publisher.attempt]) would be
+// re-decided as ambiguous until the round budget ran out.
 func classify(err error) (fault, string) {
 	if err == nil {
 		return faultNone, ""
@@ -199,9 +108,10 @@ func classify(err error) (fault, string) {
 		case jetstream.JSErrCodeStreamWrongLastSequence:
 			return faultRejected, apiErr.Description
 		case jetstream.JSErrCodeStreamWrongLastSequenceConstant:
-			// ANOTHER WRITE STILL IN FLIGHT, not a comparison: see above.
-			// Nothing of this append was stored, so the ordered
-			// classification finds none of it and the write retakes.
+			// ANOTHER WRITE STILL IN FLIGHT, not a comparison, and nothing
+			// of this append stored, so the write retakes.
+			// internal/queue/jetstream's DomainLog.Append waits it out,
+			// so it arrives as a deadline's no-answer.
 			return faultUnknown, apiErr.Description
 		case codeStreamStoreFailed:
 			switch apiErr.Description {
@@ -210,9 +120,8 @@ func classify(err error) (fault, string) {
 			case storeFailedTooLarge:
 				return faultTooLarge, tooLargeDetail(limitFileStore, apiErr.Description)
 			case storeFailedClosed:
-				// A STORE THAT CLOSED UNDER AN ENTRY RAFT HAD
-				// COMMITTED, on a clustered leader: every member
-				// that replays the entry applies it.
+				// A STORE CLOSED UNDER A COMMITTED RAFT ENTRY: every
+				// member that replays the entry applies it.
 				return faultUnsettled, apiErr.Description
 			}
 		case codeStreamDuplicateMessageConflict:
@@ -220,46 +129,35 @@ func classify(err error) (fault, string) {
 			// applied: the message id is the op id.
 			return faultUnsettled, apiErr.Description
 		case codeStreamMessageExceedsMaximum:
-			// THE STREAM'S OWN PER-MESSAGE LIMIT, a structured code of
-			// its own: the domain's declared largest record, which the
-			// publisher refuses a record past before sending it — so
-			// reaching it here is a record something else sent, or a
-			// stream reconfigured under the engine — and it is still a
-			// record too large, not a log that is full.
+			// THE STREAM'S OWN PER-MESSAGE LIMIT, which the publisher
+			// checks before sending, so this is a record something else
+			// sent or a stream reconfigured under the engine: still too
+			// large, not a full log.
 			return faultTooLarge, tooLargeDetail(limitStreamMsgSize, apiErr.Description)
 		}
-		// ANY OTHER API ERROR is a refusal the server made and named —
-		// the two that say the record may yet land are settled above —
-		// and it is not one this framework knows how to act on, so it
-		// is reported with its code and its words rather than retried
-		// or passed off as a full log.
+		// ANY OTHER API ERROR is a named refusal with no remedy here:
+		// reported with its code and words, not retried or passed off as
+		// a full log.
 		return faultRefused, fmt.Sprintf("code %d: %s", apiErr.ErrorCode,
 			apiErr.Description)
 	}
-	// TOO LARGE IS A DECISION THE CLIENT MADE, before the append ever
-	// reached the broker, so it is not ambiguous and it must not be
-	// retried. Without this arm it fell through to the unknown answer
-	// below and the publisher re-decided the whole write for all sixteen
-	// rounds — then reported "the rows kept changing under this write",
-	// which is a sentence about contention and sends a reader looking for
-	// a peer that is not there. Nothing about the record changes between
-	// rounds; it is too big now and it will be too big in a millisecond.
+	// TOO LARGE IS THE CLIENT'S DECISION, made before the append left, so
+	// it is not ambiguous and must not be retried: as no answer, the
+	// publisher re-decided the write every round and reported contention.
 	if errors.Is(err, nats.ErrMaxPayload) {
 		return faultTooLarge, tooLargeDetail(limitMaxPayload, err.Error())
 	}
-	// NO ANSWER IS THE LAST VALUE. The client retries a no-responder
-	// twice on its own before giving up, so reaching here means the
-	// append may be on the stream and may not be, and only the ordered
-	// classification can say which.
+	// NO ANSWER IS THE LAST VALUE: the append may or may not be on the
+	// stream (the client already retried a no-responder twice), and only
+	// the ordered classification can say which.
 	return faultUnknown, err.Error()
 }
 
 // codeStreamStoreFailed is the server's "the stream would not store this"
 // code, codeStreamMessageExceedsMaximum its "larger than this stream's own
 // per-message limit", and codeStreamDuplicateMessageConflict its "a record
-// under this message id is proposed and not yet applied". None is exported by
-// the client, so each is written down here with what it covers rather than
-// left as a literal at the switch.
+// under this message id is proposed and not yet applied". The client exports
+// none of them.
 const (
 	codeStreamStoreFailed              jetstream.ErrorCode = 10077
 	codeStreamMessageExceedsMaximum    jetstream.ErrorCode = 10054
@@ -268,10 +166,9 @@ const (
 
 // storeFailedMaxBytes, storeFailedTooLarge and storeFailedClosed are the
 // store errors a 10077 carries that this framework reads, spelled exactly as
-// the server declares them (ErrMaxBytes, ErrMsgTooLarge and ErrStoreClosed in
-// its store). A test holds each against the vendored server, so a bump that
-// rewords one fails the build instead of turning a full log — or a record
-// that may yet land — into an unnamed refusal.
+// the server's ErrMaxBytes, ErrMsgTooLarge and ErrStoreClosed. A test holds
+// each against the vendored server, so a bump that rewords one fails the
+// build rather than turning it into an unnamed refusal.
 const (
 	storeFailedMaxBytes = "maximum bytes exceeded"
 	storeFailedTooLarge = "message too large"
@@ -283,45 +180,36 @@ type sizeLimit int
 
 const (
 	// limitMaxPayload is the NATS server's max_payload, which the client
-	// refuses against before the append leaves the process. The embedded
-	// broker's is the contract's own ceiling, and a connection held to less
-	// is refused when the queue opens, so a record inside its declaration
-	// meets this only on a server the client has RECONNECTED to since it
-	// booted, which is the one moment it reads a limit again — a cluster
-	// member configured apart from the one it checked, or a server restarted
-	// with a smaller limit. A limit lowered by a live reload reaches this
-	// arm only through such a reconnect: the server tells its connections
-	// nothing, the client sends, and the server closes the connection over
-	// the record. Where the client reads why, the close is final and the
-	// node stops for it (internal/queue/jetstream's connectionLoss); where
-	// its write failed first, it reconnects and reads the lowered limit. An
-	// operator raises it on every server, and on the account the node signs
-	// in to where that states a limit of its own.
+	// checks before the append leaves. A connection held below the
+	// contract's ceiling is refused when the queue opens, so a record
+	// inside its declaration meets this only after the client RECONNECTED,
+	// the one moment it rereads the limit: to a member configured apart, a
+	// server restarted with a smaller limit, or across a live reload that
+	// lowered it when the write failed before the client read the server's
+	// close over the record (read, the close is final and the node stops:
+	// internal/queue/jetstream's connectionLoss). Raised on every server,
+	// and on the account where that states its own.
 	limitMaxPayload sizeLimit = iota
 
-	// limitStreamMsgSize is the stream's own max_msg_size: every state
-	// log's is its declared largest record plus what a stored record
-	// carries beside it ([StreamSpec.MaxAppendBytes]). This build's
-	// publisher refuses a larger record before it is sent, so meeting it
+	// limitStreamMsgSize is the stream's own max_msg_size, the declared
+	// largest record plus its stored overhead ([StreamSpec.MaxAppendBytes]).
+	// The publisher refuses a larger record before sending, so meeting it
 	// means a peer that does not ask sent one, or the stream was
-	// reconfigured under the engine — and raising the server's
-	// max_payload changes nothing about it.
+	// reconfigured under the engine; max_payload does nothing for it.
 	limitStreamMsgSize
 
 	// limitFileStore is the file store's per-record limit, which no
 	// setting raises: an external server whose max_payload is above it
-	// accepts the message on the wire and refuses it at the store, so the
-	// operator has already turned the one knob a max_payload refusal
-	// names, and only a smaller record is stored.
+	// accepts the message and refuses it at the store, so only a smaller
+	// record is stored.
 	limitFileStore
 )
 
 // tooLargeDetail is a record too large, told by the limit that refused it and
 // what moves that limit, beside the words the refusal carried.
 //
-// ONE SENTENCE PER LIMIT, and never a generic one naming all three: a
-// refusal that lists every knob sends a reader to try each in turn, which is
-// the wrong-remedy bug with the right remedy somewhere in it.
+// ONE SENTENCE PER LIMIT, never a generic one naming all three, which sends a
+// reader to try each knob in turn.
 func tooLargeDetail(limit sizeLimit, words string) string {
 	switch limit {
 	case limitStreamMsgSize:
@@ -333,17 +221,10 @@ func tooLargeDetail(limit sizeLimit, words string) string {
 			"stored record may be (%s) — a limit of the store itself that no "+
 			"server setting raises, so split the change into smaller writes", words)
 	}
-	// NAMING WHEN AS WELL AS THE SETTING: a node refuses at boot a
-	// connection held to less than the contract, so an operator reading
-	// this has a node that started and a max_payload they may well have set
-	// — on the member it started against, and not on the one it reconnected
-	// to since. And only a RECONNECT: the client reads a limit from a
-	// server's INFO and nowhere else, so a limit lowered by a live reload is
-	// this refusal only once the client has reconnected across it, which it
-	// does when its write of the record the server refused failed before it
-	// read the refusal. Otherwise that close is final and the node stops
-	// naming it, so the reload is named here as the third way to be held to
-	// less, never as the only one.
+	// NAMING WHEN AS WELL AS THE SETTING: the node started, so its reader
+	// may well have set max_payload on the member it started against; the
+	// lower limit came with a reconnect ([limitMaxPayload]), of which a
+	// live reload is one way, never the only one.
 	return fmt.Sprintf("the NATS server's max_payload refused it (%s) — a "+
 		"connection held to less than the %d bytes this build sends at most is "+
 		"refused at boot, so this is a server this node reconnected to since "+

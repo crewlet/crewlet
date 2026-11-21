@@ -15,26 +15,17 @@ func mergeOverlay(row map[string]any, o Overlay) {
 }
 
 // mergeStatus writes everything the overlay says about a seat EXCEPT its call
-// in flight: what the seat is doing, why it stopped, its phase, its turn, its
-// last turn, its budget, its pause, its models' usage limit, what waits in
-// its inbox and its last error. Every other [Overlay] field is written here, and a test reads the
-// struct's tags to hold that, because a field the projection keeps and this
-// does not write reaches no client at all.
+// in flight: every other [Overlay] field (activity, stop reason, phase, turn,
+// budget, pause, usage limit, inbox, last error). A test reads the struct's
+// tags to hold that, because a field the projection keeps and this does not
+// write reaches no client at all.
 //
-// THE SIZE OF WHAT IT WRITES IS BOUNDED BY THE SEAT, NOT BY THE CALL. A call
-// in flight carries its prompt, its rounds and its tool executions, which grow
-// with the turn: measured on a live company, one seat's call was 8.8 KB of a
-// 9.7 KB row mid-turn. A read of every seat that carried each one's call was
-// therefore as large as the company's busiest turns, and a caller reading the
-// roster under a fixed budget (the assistant's 64 KiB step) was refused it
-// exactly while the company was working. The roster ([LiveState.MergeRoster])
-// writes this half alone; the call has its own question (`live_call`).
-//
-// THE STATE IS ALWAYS WRITTEN, like every key below. The row it is merged onto
-// is the roster's, which carries no state of its own (the projection is the
-// only place a seat's state is computed), and a client merges a pushed row over
-// what it holds, so a key left out reads as "unchanged" and a seat that
-// started again would keep the reason it had stopped for.
+// THE SIZE OF WHAT IT WRITES IS BOUNDED BY THE SEAT, NOT BY THE CALL, which
+// grows with the turn: a roster read carrying every call would exceed a fixed
+// budget like the assistant's 64 KiB step exactly while the company works. The
+// roster ([LiveState.MergeRoster]) writes this half alone; the call has
+// `live_call`. THE STATE IS ALWAYS WRITTEN, like every key below: a client reads
+// a missing key as "unchanged", so a restarted seat would keep its stop reason.
 func mergeStatus(row map[string]any, o Overlay) {
 	row["activity"] = o.Activity
 	row["stopped_reason"] = o.StoppedReason

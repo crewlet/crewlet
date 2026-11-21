@@ -32,7 +32,7 @@ import {
 import type { ModelsData } from "../../data.ts";
 import { CATEGORY_WORDS, FAST_NOTE } from "../../words.ts";
 import { emptyDraft, type Draft } from "../draft.ts";
-import { UseItFor, seatChangesOf } from "./UseItFor.tsx";
+import { UseItFor, seatChangesOf, summaryOf } from "./UseItFor.tsx";
 
 const data = modelsData({
   entries: [
@@ -41,7 +41,7 @@ const data = modelsData({
       used_by: [...runs("backend-engineer", ...EVERY_JOB), ...runs("pm", ...EVERY_JOB)],
     }),
   ],
-  assistant: { enabled: true, key: "default", fallbacks: [] },
+  assistant: { key: "default" },
 });
 
 let latest: Draft;
@@ -138,11 +138,98 @@ test("in an edit, choosing a category keeps the seats the model serves, never ev
   fireEvent.click(screen.getByRole("radio", { name: new RegExp(CATEGORY_WORDS.coding.label) }));
   expect(latest.intent).toBe("coding");
   expect(latest.uses.jobs.executor).toEqual(["backend-engineer", "qa"]);
-  // AN ADD still starts from every seat, where no model serves them yet.
+  // AN ADD takes no seat that already codes on a model: every seat here does.
   cleanup();
   render(<Harness company={split} start={{ key: "new" }} />);
   fireEvent.click(screen.getByRole("radio", { name: new RegExp(CATEGORY_WORDS.coding.label) }));
-  expect(latest.uses.jobs.executor).toEqual(["backend-engineer", "designer", "pm", "qa"]);
+  expect(latest.uses.jobs.executor).toEqual([]);
+});
+
+/**
+ * A NEW MODEL TAKES ONLY SEATS WITH NO MODEL FOR IT. Adding a model and
+ * choosing what it does selected every seat, so a save moved seats off the
+ * models they ran on. The Backend Engineer runs everything on `default`, the
+ * PM reviews on `reviewer` and nothing else, and the Quality Lead has no
+ * model at all.
+ */
+const partial = modelsData({
+  entries: [
+    modelEntry({ key: "default", used_by: runs("backend-engineer", ...EVERY_JOB) }),
+    modelEntry({ key: "reviewer", used_by: runs("pm", "review") }),
+  ],
+});
+
+const choose = (label: RegExp | string) =>
+  fireEvent.click(
+    screen.getByRole("radio", { name: label instanceof RegExp ? label : new RegExp(label) }),
+  );
+
+test("an add preselects, per job, only the seats with no model for any job it chooses", () => {
+  render(<Harness company={partial} start={{ key: "haiku" }} />);
+  // CODING: the PM codes on nothing, so it is picked beside the Quality Lead.
+  choose(CATEGORY_WORDS.coding.label);
+  expect(latest.uses.jobs.executor).toEqual(["pm", "qa"]);
+  // REVIEWS: the PM reviews on `reviewer`, so only the Quality Lead.
+  choose(CATEGORY_WORDS.reviews.label);
+  for (const job of CATEGORY_JOBS.reviews) expect(latest.uses.jobs[job]).toEqual(["qa"]);
+  // EVERYTHING: a seat with a model for even one job is left alone.
+  choose(/Everything/);
+  for (const job of SEAT_JOBS) expect(latest.uses.jobs[job]).toEqual(["qa"]);
+  const chip = (name: string) => screen.getByRole("button", { name: new RegExp(name) });
+  expect(chip("Quality Lead").getAttribute("aria-pressed")).toBe("true");
+  expect(chip("Product Manager").getAttribute("aria-pressed")).toBe("false");
+  expect(chip("Backend Engineer").getAttribute("aria-pressed")).toBe("false");
+});
+
+test("the switch picks exactly the seats without a model, and off picks none", () => {
+  render(<Harness company={partial} start={{ key: "haiku" }} />);
+  choose(CATEGORY_WORDS.coding.label);
+  const toggle = screen.getByRole("switch", { name: "Seats without a model" }) as HTMLInputElement;
+  expect(toggle.checked).toBe(true);
+  expect(screen.queryByRole("switch", { name: "All seats" })).toBeNull();
+  fireEvent.click(toggle);
+  expect(latest.uses.jobs.executor).toEqual([]);
+  expect(toggle.checked).toBe(false);
+  fireEvent.click(toggle);
+  expect(latest.uses.jobs.executor).toEqual(["pm", "qa"]);
+  // A HAND-PICKED SEAT WITH A MODEL is more than the switch picks: it reads off.
+  fireEvent.click(screen.getByRole("button", { name: /Backend Engineer/ }));
+  expect(latest.uses.jobs.executor).toEqual(["backend-engineer", "pm", "qa"]);
+  expect(toggle.checked).toBe(false);
+});
+
+test("a seat that has a model may still be picked, and its chip says picking it replaces that", async () => {
+  render(<Harness company={partial} start={{ key: "haiku" }} />);
+  choose(/Everything/);
+  const engineer = screen.getByRole("button", { name: /Backend Engineer/ });
+  expect(engineer.getAttribute("aria-pressed")).toBe("false");
+  // THE CHIP SAYS IT, in a few words: what the seat is on, and what picking does.
+  const tipOf = async (chip: HTMLElement) => {
+    fireEvent.pointerOver(chip);
+    const text = (await screen.findByRole("tooltip", { hidden: true })).textContent;
+    fireEvent.pointerOut(chip);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    return text;
+  };
+  expect(await tipOf(engineer)).toBe("On default now. Picking it replaces that.");
+  expect(await tipOf(screen.getByRole("button", { name: /Product Manager/ }))).toBe(
+    "On reviewer now. Picking it replaces that.",
+  );
+  // A seat with no model carries no such tip.
+  fireEvent.pointerOver(screen.getByRole("button", { name: /Quality Lead/ }));
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.queryByRole("tooltip", { hidden: true })).toBeNull();
+  fireEvent.click(engineer);
+  for (const job of SEAT_JOBS) expect(latest.uses.jobs[job]).toEqual(["backend-engineer", "qa"]);
+});
+
+test("when every seat has a model for it, no seat is picked, the switch is gone, and nothing asks for one", () => {
+  render(<Harness company={split} start={{ key: "new" }} />);
+  choose(/Everything/);
+  for (const job of SEAT_JOBS) expect(latest.uses.jobs[job]).toEqual([]);
+  expect(screen.queryByRole("switch", { name: "Seats without a model" })).toBeNull();
+  expect(screen.getByText("For which seats?")).toBeDefined();
+  expect(screen.queryByRole("alert")).toBeNull();
 });
 
 test("a line separates Everything from the categories, as one separates Not yet", () => {
@@ -171,22 +258,14 @@ test("the changes list names each seat that moves, where from and where to, and 
   ]);
 });
 
-test("the changes list keeps Ask Crewlet's fallbacks and names them", () => {
-  const chained = {
-    ...data,
-    assistant: { enabled: true, key: "default", fallbacks: ["spare", "haiku"] },
-  };
+// ONE MODEL: the change names the model Ask Crewlet leaves and the one it
+// moves to, and nothing else.
+test("the changes list says Ask Crewlet's model moving, and only that", () => {
   const ask = usesForIntent("assistant", [], true);
-  // The model it answers with first changes; the fallbacks behind it stay.
-  expect(seatChangesOf(chained, "big", noUses(), ask)).toEqual([
-    "Ask Crewlet: default → big, still falling back to spare and haiku",
-  ]);
-  // A fallback chosen to answer first is not named as its own fallback.
-  expect(seatChangesOf(chained, "haiku", noUses(), ask)).toEqual([
-    "Ask Crewlet: default → haiku, still falling back to spare",
-  ]);
-  // A chain of one model says nothing of fallbacks.
   expect(seatChangesOf(data, "big", noUses(), ask)).toEqual(["Ask Crewlet: default → big"]);
+  expect(seatChangesOf({ ...data, assistant: { key: null } }, "big", noUses(), ask)).toEqual([
+    "Ask Crewlet: no model → big",
+  ]);
 });
 
 test("a category the document split by hand reads back half-checked", () => {
@@ -226,22 +305,38 @@ test("the fast-model note shows only where a category carries one, and only for 
   for (const c of noted) expect(screen.queryByText(FAST_NOTE[c]!)).toBeNull();
 });
 
-test("the assistant asks for web tools denied, and one click denies them", () => {
+// ANY ENTRY OF A HARNESS THE ENGINE CAN RUN WITH NO TOOL OF ITS OWN may run
+// Ask Crewlet as it is: choosing it asks nothing of the entry's web tools, and
+// a harness that cannot be run that way is refused with its reason.
+test("Ask Crewlet takes any model of a harness a helper can run on, with nothing to change on it", () => {
   render(<Harness start={{ key: "chat" }} />);
   fireEvent.click(screen.getByRole("radio", { name: /Ask Crewlet/ }));
   expect(latest.uses.assistant).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Deny web tools for this model" }));
-  expect(latest.webDenied).toBe(true);
-  expect(screen.queryByRole("button", { name: "Deny web tools for this model" })).toBeNull();
+  expect(latest.webDenied).toBe(false);
+  expect(screen.queryByRole("button", { name: /Deny web tools/ })).toBeNull();
+  cleanup();
+  render(<Harness start={{ key: "review", harness: "codex" }} />);
+  const refused = screen.getByRole("radio", { name: /Ask Crewlet/ });
+  expect(
+    refused.getAttribute("aria-disabled") === "true" || (refused as HTMLInputElement).disabled,
+  ).toBe(true);
 });
 
-test("Everything on a model that allows web tools says the assistant cannot use it", () => {
-  const warning = "Ask Crewlet can't use this model while web tools are allowed.";
-  render(<Harness start={{}} />);
-  fireEvent.click(screen.getByRole("radio", { name: /Everything/ }));
-  expect(screen.getByText(warning)).toBeTruthy();
-  cleanup();
-  render(<Harness start={{ webDenied: true }} />);
-  fireEvent.click(screen.getByRole("radio", { name: /Everything/ }));
-  expect(screen.queryByText(warning)).toBeNull();
+// SAVED WITHOUT SEATS: Everything with no seat picked reads as no seat, never
+// as a sentence with nobody in it.
+test("the summary of Everything with no seat picked says no seat uses it", () => {
+  const draft = { ...emptyDraft(), key: "haiku", intent: "all" as const, uses: noUses() };
+  expect(summaryOf(split, draft)).toEqual([
+    "No seat uses haiku yet. Every seat stays on the model it has now.",
+  ]);
+});
+
+// M-018: PAST A FEW SEATS, a line counts them; the names stay a press away.
+test("the summary counts the seats past a few, and names them all when asked", () => {
+  const many = { ...emptyDraft(), key: "haiku", intent: "coding" as const, uses: noUses() };
+  many.uses.jobs.executor = ["backend-engineer", "designer", "pm"];
+  expect(summaryOf(split, many, 2)).toEqual(["3 seats will code with haiku."]);
+  expect(summaryOf(split, many)[0]).toBe(
+    "Backend Engineer, Product Manager, and Designer will code with haiku.",
+  );
 });

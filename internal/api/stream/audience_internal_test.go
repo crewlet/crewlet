@@ -104,18 +104,16 @@ func TestAnEventReachesOnlyAnAdmin(t *testing.T) {
 
 // AN INBOX FRAME NEEDS NO APP: it reaches exactly the sockets in its seat's
 // room, and a socket is in it only because its watch was decided as a read of
-// that person's inbox ([watching]) — so, as for an artifact room's frames, the
+// that person's inbox ([watching]); as for an artifact room's frames, the
 // room's own admission is the whole of who reads it, and the zero audience
-// still reads none.
+// reads none.
 //
-// It was WORKLET's, which put one domain's permission in front of every
-// domain's news: the frame names the domain whose half of the inbox moved, and
-// a domain other than Worklet announcing one would have been withheld from
-// a reader its own grant admits.
+// Declaring it WORKLET's would put one domain's permission in front of every
+// domain's news: the frame names the domain whose half moved, and another
+// domain's would be withheld from a reader its own grant admits.
 //
-// Mutation: declare KindInboxChanged Worklet's or admin's, or answer the
-// seat room's need with an app, and the reader holding no app receives
-// nothing.
+// Mutation: declare KindInboxChanged Worklet's or admin's, or answer the seat
+// room's need with an app, and the reader holding no app receives nothing.
 func TestAnInboxFrameNeedsNoApp(t *testing.T) {
 	t.Parallel()
 	need, gated := NeedOf(KindInboxChanged)
@@ -404,13 +402,12 @@ func TestAudiencesThatReadDifferentlyNeverShareAVariant(t *testing.T) {
 
 // EVERY APP IS A NEED AN AUDIENCE MEETS, and each one apart from the others.
 //
-// The app terms are derived from [iam.Apps] rather than written out per app,
-// so the next app needs no edit here — which holds only if every one of them
-// is a need this build declares, a holder of exactly that app has it and no
-// other, the refusal of its kinds names it, and two readers differing only in
-// it are two audiences with two variants: compared equal they would keep a
-// socket whose grants moved, and sharing a variant one encode would hand one
-// reader the other's frame.
+// The app terms derive from [iam.Apps], so the next app needs no edit here,
+// which holds only if every app is a declared need, a holder of exactly that
+// app has it and no other, the refusal of its kinds names it, and two readers
+// differing only in it are two audiences with two variants: compared equal
+// they would keep a socket whose grants moved, and sharing a variant would
+// hand one reader the other's frame.
 //
 // Mutation: drop an app from [NewAudience]'s loop, from [Audience.Equal] or
 // from the variant's name, or answer [Audience.Has] from the first app, and
@@ -539,13 +536,11 @@ func TestTheSandboxesPushNamesARunsEntryToAnAdminAlone(t *testing.T) {
 
 // THE AUDIENCE HOLDS EXACTLY THE APPS THE PRINCIPAL CAN.
 //
-// It held one field per app and a switch over them, so an app added to the
-// vocabulary reached no socket reader until somebody remembered a second edit
-// here. Walked over EVERY combination of the vocabulary, a name this build
-// does not know included: the audience uses exactly the apps
-// [iam.Principal.Can] says (an administrator every one), uses nothing that is
-// not an app, and receives the tracker's kinds exactly when it uses the
-// tracker. And two readers whose apps differ never share a variant nor
+// Walked over EVERY combination of the vocabulary, a name this build does not
+// know included, so an app added to it needs no second edit: the audience uses
+// exactly the apps [iam.Principal.Can] says (an administrator every one),
+// nothing that is not an app, and receives the tracker's kinds exactly when it
+// uses the tracker. Two readers whose apps differ never share a variant nor
 // compare equal, so a broadcast encoded once per variant never hands one the
 // other's frame and a reader who lost an app is closed for the reconnect.
 //

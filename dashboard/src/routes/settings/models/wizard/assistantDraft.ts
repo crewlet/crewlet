@@ -31,6 +31,7 @@ function seatsFor(draft: Draft, seats: readonly string[]): string {
     return on.length > 0 ? [`${CATEGORY_WORDS[c].label}: ${listed(on)}`] : [];
   });
   if (draft.uses.assistant) lines.push("Ask Crewlet");
+  if (draft.uses.advisor) lines.push("Advisor");
   return lines.length > 0 ? lines.join("\n") : "Nothing yet";
 }
 

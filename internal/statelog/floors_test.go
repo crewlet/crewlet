@@ -40,17 +40,9 @@ func readerOn(t *testing.T, db *stubStore, d statelog.Domain, waiter statelog.Wa
 // A READ THAT SPANS TWO LOGS WAITS ON THE CALLER'S FLOOR IN EACH, AND ON NO
 // OTHER LOG'S.
 //
-// One answer read from two logs — the company feed's work and pages — was
-// held up by one floor, on one of them: a caller that wrote both logs could
-// not read its writes back, because the half the floor did not name was
-// served from before the write. Each half takes its own log's floor
-// ([Freshness.On]) and waits for exactly that: a half handed the whole ask
-// would refuse the other log's floor rather than wait on it.
-//
-// AND A HALF WHOSE LOG THE CALLER NAMED NO FLOOR ON IS READ `stale`: a
-// `session` ask there would wait for the zero position and serve this node's
-// prefix labelled `session`, the wrong label every grammar refuses a bare
-// `session` over. Each half's answer says the level it was actually read at.
+// Each half of one answer (the company feed's work and pages) takes its own
+// log's floor ([Freshness.On]) and waits for exactly that. AND A HALF WHOSE
+// LOG CARRIES NO FLOOR IS READ `stale`, not `session` over a wait for nothing.
 //
 // Mutation: hand each half the whole ask instead of [Freshness.On]'s, or keep
 // every floor in On, and both halves refuse; keep `session` on a half with no
@@ -125,19 +117,11 @@ func TestAComposedReadWaitsOnEachLogsFloor(t *testing.T) {
 // A HALF OF A COMPOSED READ IS HANDED THE WHOLE ASK, ITS FLOORS NARROWED TO ITS
 // OWN LOG AND NOTHING ELSE CHANGED.
 //
-// The half is read on its own, so a part of the ask [statelog.Freshness.On]
-// leaves out is one nothing after it can put back: `max_lag_seq=250` on the
-// company feed would read both of its halves unbounded and still answer
-// `stale`. On built the half field by field, which carried a part only for
-// as long as its literal named it, and every case of a composed read asked
-// with no bound, so dropping both bounds passed them all. The half is
-// compared WHOLE here, against an ask that sets every part, so a part added
-// to the ask is held from the day it lands: the guard below fails until the
-// ask sets it, and the comparison then fails if a half drops it.
-//
-// AND THE ASK ITSELF IS LEFT AS IT WAS: each half is cut from the same ask,
-// so a half narrowing the ask's own slice in place would hand the next half
-// floors the first one cut.
+// Nothing after [statelog.Freshness.On] can restore a part it drops. The half
+// is compared WHOLE against an ask setting every part, so a part added to the
+// ask is held from the day it lands (the guard fails until the ask sets it).
+// AND THE ASK IS LEFT AS IT WAS: narrowed in place, the next half gets floors
+// the first one cut.
 //
 // Mutation: build the half as `Freshness{Level: f.Level}`, or leave out any
 // one part, and the comparison goes red; narrow `out.Floors` in place, and
@@ -184,14 +168,11 @@ func TestAHalfOfAComposedReadIsHandedTheWholeAsk(t *testing.T) {
 // A READ OF ONE LOG REFUSES A FLOOR ON ANOTHER BESIDE ITS OWN, AT EVERY LEVEL,
 // NAMING THE OTHER LOG — AND WAITS FOR NOTHING FIRST.
 //
-// With one floor per log a caller can name several, and a reader that waited
-// on its own and dropped the rest would answer a caller who believes every
-// floor was honoured: the other log's half of their write simply missing from
-// an answer that never reads it. Refused instead, as the request's mistake
-// ([statelog.ErrForeignPosition]) that every node answers the same, naming the
-// log the floor is on so the caller can see which floor it misplaced. The
-// rule is [statelog.Freshness.OnlyOn]'s, which a reader of one log outside
-// this framework holds a caller's floors to as well.
+// A reader that waited on its own floor and dropped the rest would answer a
+// caller who believes every floor was honoured. Refused instead as the
+// request's mistake ([statelog.ErrForeignPosition]), naming the floor's log;
+// the rule is [statelog.Freshness.OnlyOn]'s, which a reader of one log outside
+// this framework uses too.
 //
 // Mutation: hold only the floor on the read's own log to it (the first one,
 // or the one it waits for) and the second floor is dropped: red.
@@ -255,12 +236,10 @@ func TestASingleLogReadRefusesAnotherLogsFloor(t *testing.T) {
 
 // AN ANSWER COMPOSED OF HALVES IS AS FRESH AS ITS STALEST HALF.
 //
-// A half of a `session` read whose log carries no floor of the caller's is
-// read `stale`, so the composed answer's level is the weakest of its halves'
-// in the order the levels are listed: labelled by its other half it would
-// claim for these rows a level they were never read at. A half that read
-// nothing (an empty level) says nothing. Mutation: answer the first level, or
-// the strongest, and the mixed cases go red.
+// A `session` half with no floor is read `stale`, so the composed level is the
+// weakest of its halves': labelled by another half it would claim a level some
+// rows were never read at. An empty level says nothing. Mutation: answer the
+// first level, or the strongest, and the mixed cases go red.
 func TestAComposedAnswerIsAsFreshAsItsStalestHalf(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -284,11 +263,9 @@ func TestAComposedAnswerIsAsFreshAsItsStalestHalf(t *testing.T) {
 
 // ONE READ NAMES ONE FLOOR PER LOG, AND AT MOST FOUR.
 //
-// Two floors on one log are two answers to how far the caller has written
-// there, and the read waits on one: the grammar refuses the pair, naming the
-// log, rather than choose. And a list longer than [statelog.MaxFloors] is a
-// client sending every floor it holds rather than the ones this answer reads.
-// Mutation: drop either check and the case naming it goes red.
+// Two floors on one log are refused, naming the log, rather than chosen
+// between; more than [statelog.MaxFloors] is a client sending every floor it
+// holds. Mutation: drop either check and the case naming it goes red.
 func TestOneReadNamesOneFloorPerLogAndAtMostFour(t *testing.T) {
 	t.Parallel()
 	at := func(stream string, seq uint64) statelog.Position {

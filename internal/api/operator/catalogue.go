@@ -36,7 +36,8 @@
 // meets at an apply, long after its API started serving — and the knowledge
 // search beside them is whatever backend the company runs NOW, which an apply
 // can add. So [Options.Halves] is read at the start of every call, and a node
-// that has not met its company answers `503 no_active_revision`. A catalogue
+// that has not met its company answers `503 no_active_revision` (a company that
+// keeps the halves on a vendor has no route at all). A catalogue
 // built once, when the API was wired, served the halves the node had at that
 // moment for the life of the process: none, on the node a company was
 // bootstrapped on.
@@ -86,10 +87,27 @@
 // named by their handles, so every chat verb is SEATED and a principal no seat
 // binds is refused it — its reads included — by the table's own row
 // (`unauthorized`, reason `unseated`, no grant named), on every transport and
-// before any tool runs. A pipeline that should post is given a human seat and
-// its credential bound to it. The chat destructions that are said in nobody's
+// before any tool runs, and is never offered them on `viewer.acts`. A pipeline
+// that should post is given a human seat and its credential bound to it. The chat destructions that are said in nobody's
 // voice — an erase, a prune, a room's retention — are no seat's verb, so no
 // tool serves them and they are not in this catalogue.
+//
+// # What a person is told, and MCP's statelessness
+//
+// A refusal's WORDS are a [caveat.Refusal]'s (ADR-0060): the refusal
+// catalog's person phrasing as `detail`, or none where nobody has worded it,
+// so the code's own sentence stands alone. The tool's sentence names the next
+// call, so it goes only to the assistant's model, in process (FailTool), and
+// never to a person. [Fail] maps a result's CAUSE, never its sentence, to a
+// status; [FailIfMatched] is its one refinement, for a version stated in
+// `If-Match`, and changes only the stale-version arm (`412 version_moved`).
+//
+// MCP is served STATELESS: the SDK's stateful session answers every later
+// request through the context of the one that opened it, so a withdrawn
+// grant would keep working and any credential echoing the `Mcp-Session-Id`
+// would act as the opener. A body is read whole, so it is bounded at
+// [MCPMaxBody] (4 MiB); a larger file goes up through
+// `PUT /worklet/files/{project}/{path...}`, which streams to the object store.
 //
 // # A retry is the same operations
 //
@@ -98,8 +116,10 @@
 // who names the operation:
 //
 //   - the act route and the human write surface take it from the
-//     `Idempotency-Key` header (internal/api/opkey), SCOPED by the principal
-//     that sent it, and every write the call makes derives its id from that
+//     `Idempotency-Key` header (internal/api/opkey), SCOPED by the principal's
+//     ID (a login, token label or session lineage is moved by a rename or a
+//     step-up), REQUIRED on the act route (`400 op_id_invalid` names the
+//     header), and every write the call makes derives its id from that
 //     key (Worklet's through [builtin.Actor.WorkKey], Doclet's through
 //     [doclet.Actor.OpKey], chat's through [chatlet.Actor.OpKey]), so the
 //     request sent again is the first attempt's writes rather than new ones;
@@ -120,8 +140,9 @@
 // behind the ordinary request guard — it is not on the exemption list, and it
 // is under its own prefix rather than /mcp/. WHO MAY CALL WHAT is the
 // authority table's, through [Options.Authorize], for every principal the
-// guard resolved: nobody is refused for being unbound to a seat (ADR-0024),
-// because a credential acting as itself is a legitimate author and the table
+// guard resolved: nobody is refused for being unbound to a seat (ADR-0024;
+// ADR-0032 says who can be unbound: a Tier A token or service account, never
+// a person), because a credential acting as itself is a legitimate author and the table
 // already says what each one may do.
 //
 // # Every call that may write is audited, on every transport
@@ -134,7 +155,9 @@
 // became of it, never the arguments — and the event store writes it on this
 // node. It is done in the ONE dispatch every transport calls, so what is
 // recorded about a person cannot depend on which surface they used. [New]
-// refuses a surface with no [Options.Audit].
+// refuses a surface with no [Options.Audit]. A gesture with no tool
+// ([AuditGesture], `POST /backup`'s `backup_requested`) is recorded through
+// the same publisher, so the trail has no verb outside it.
 package operator
 
 import (
@@ -261,17 +284,13 @@ type Options struct {
 	// (`steer_turn`). Its Actor is set per call. REQUIRED (its Asker, and
 	// the Wire and Runs the tool is required with), with [Options.Runs] and
 	// [Options.Pauses]: the three are the fleet's own records, which every
-	// node reaches whatever its company runs, so a surface built without one
-	// is a wiring mistake rather than a company that does not want it — and
-	// they are what keep the catalogue from ever being empty once the
-	// company is up.
+	// node reaches, so a surface built without one is a wiring mistake, and
+	// they keep the catalogue from ever being empty once the company is up.
 	//
-	// EVERY SEAM A CONTROL IS REQUIRED WITH IS REQUIRED HERE TOO, not only
-	// the one that switches the tool on: [builtin.OperatorTools] offers a
-	// control on its record alone, and a control offered without its
-	// announcer, its chart, its signed wire or its run records refuses every
-	// call as `unavailable` — listed to an assistant, and failing on each use,
-	// which is the catalogue [builtin.OperatorTools] exists to never show.
+	// EVERY SEAM A CONTROL IS REQUIRED WITH IS REQUIRED HERE TOO:
+	// [builtin.OperatorTools] offers a control on its record alone, and one
+	// offered without its announcer, chart, signed wire or run records refuses
+	// every call as `unavailable`, listed yet failing on each use.
 	Steer builtin.SteerDeps
 
 	// Answer answers a person's question from the company's knowledge
@@ -472,17 +491,12 @@ func (s *Server) Tools() []string {
 // Annotations is the behavioural hints this surface advertises for one tool,
 // or the zero set for a name it does not serve now.
 //
-// It exists because the hints were invisible from outside: the surface
-// published a name, a description and a schema and nothing else, so an
-// operator's own assistant saw `search_work_items` and `remove_work_item` as
-// identically unannotated and had nothing to ask a person on before an
-// irreversible call. Exposing what is advertised is what lets that be
-// asserted rather than assumed.
+// It exposes what is advertised so a test can assert the hints an assistant
+// sees (it must ask a person before an irreversible call) rather than assume.
 //
-// A NAME THIS SURFACE DOES NOT SERVE ANSWERS THE ZERO SET: answering the
-// engine-wide hints for any name at all reported a verb the company does not
-// serve as annotated, so a check for "is this advertised with hints" passed on
-// a tool that was not advertised.
+// A NAME THIS SURFACE DOES NOT SERVE ANSWERS THE ZERO SET: the engine-wide
+// hints for any name would report an unserved verb as annotated, and a check
+// for "advertised with hints" would pass on a tool that was not advertised.
 func (s *Server) Annotations(name string) tools.Annotations {
 	if s == nil {
 		return tools.Annotations{}

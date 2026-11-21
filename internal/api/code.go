@@ -28,64 +28,37 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// GITLET ON THE API: smart HTTP under /git/ for a person's git client and two
-// downloads beside it, a file's bytes and a commit's ZIP, the cache's verify
-// under /gitlet/, and what every node answers when it serves none of Gitlet
-// now.
+// GITLET ON THE API: smart HTTP under /git/ for a person's git client, two
+// downloads beside it (a file's bytes, a commit's ZIP), the cache's verify under
+// /gitlet/, and what every node answers when it serves none of Gitlet now.
 //
-// Both prefixes are GUARDED, as every route the exemption list
-// ([auth.Unguarded]) does not name is, and neither is ever on api.public
-// ([auth.Public] names neither): a repository is the company's
-// source, and a person reaches it with their own bound token — the third person
-// transport beside the act route and the operator's MCP (ADR-0085). On a git
-// route, and on no other, that token may arrive as a Basic credential's
-// password, because a git client presents one no other way.
-//
-// /box/git/ is: a box's routes, Gitlet's third prefix, are published
-// beside a coding box's other two edges and admitted by the box's own token,
-// never by an operator token. The same three handlers serve them behind
-// Gitlet's box admission, which reads an executor's token — or a check's —
-// from git's Basic password and the run's row, or the check's attempt's, on
-// every request ([auth.BoxGitPrefix]); mounted on the route table itself, like
-// /mcp/ and /otlp/, never through the [authz.Router] the person's routes take,
-// since a box's request reaches the handler anonymous to the guard and a
-// router would refuse it before its admission ran. So is /box/gitlet/, a
-// check's box's reads of the commit its check measures by object id
-// ([auth.BoxGitletPrefix], boxcode.go): admitted by Gitlet's check
-// admission, then answered from the code domain's git reads as the engine's
-// own, held to that commit.
-//
+// Both prefixes are GUARDED and never on api.public ([auth.Unguarded],
+// [auth.Public]): a repository is the company's source, reached with a person's
+// own bound token (ADR-0085), which on a git route alone may arrive as a Basic
+// password, since a git client presents one no other way. /box/git/ and
+// /box/gitlet/ ([auth.BoxGitPrefix], [auth.BoxGitletPrefix], boxcode.go) are a
+// box's routes, admitted by the box's own token, never an operator's: mounted on
+// the route table like /mcp/ and /otlp/, not through [authz.Router], whose
+// refusal would come before the box's admission ran.
+
 // GITLET'S ROWS ARE QUESTIONS, not routes of this file: `code_repos`,
-// `code_repo` and `code_pushes`, registered in internal/api/queries and served
-// on their /gitlet/ paths through the named routes (rest.go), so a person, the
-// socket and the dashboard reading its own writes back at a session floor are
-// all answered by one implementation — and so is who read a unit's
-// repository, `code_repo_readers`, an admin's question on the same terms. This
-// file hands them the code domain's read and the usage domain's readers, per
-// question, with why this node has none ([codeQuestions]).
+// `code_repo`, `code_pushes` and `code_repo_readers` live in
+// internal/api/queries and are served on their /gitlet/ paths through rest.go's
+// named routes, so every reader is answered by one implementation. This file
+// hands them the code domain's read, per question ([codeQuestions]).
+
+// Whether the GIT routes exist is known at New: the node's Tier A roles name
+// `gitlet`, else a git request is the mux's own `no_route`. The READS are
+// questions on every API: a data node answers from its own copy, any other
+// through the estate router.
 //
-// # Mounted from what is known at New, served from what the engine has now
-//
-// Whether the GIT routes exist is a fact about THIS NODE, known when the app is
-// assembled: its Tier A roles name `gitlet`, or name none. A node without the role
-// mounts none of them, and a git request to it is the mux's own `no_route`,
-// exactly as a route this node's configuration does not enable has always
-// answered. The READS are questions on every API: a data node answers them
-// from its own copy, and any other node through the estate router.
-//
-// Whether a route or a question is SERVED is asked of the engine on every
-// request ([CodeSurface]), as the native halves are (native.go): Gitlet
-// and its reads are built with the native runtime, at boot or at the first
-// apply whose company sets code.backend: gitlet — on a node that booted with no
-// company, after the app was assembled. One that finds nothing answers WHY, as
-// the engine decides it from what the fleet activated
-// ([engine.Engine.CodeUnserved]): a company that hosts no code is a 404, and a
-// node that serves none of it now while the configuration the fleet activated
-// hosts code — or before this node has read whether it does — a 503 that says
-// which of four it is ([codeUnserved]). A coding box is told only once its
-// request presents a run token this fleet signed, and challenged until then
-// ([App.boxGitRoute]): its prefix is public, and the reason is the
-// deployment's state.
+// Whether a route or question is SERVED is asked of the engine on every request
+// ([CodeSurface]), as native.go does: Gitlet is built at boot or at the first
+// apply whose company sets code.backend: gitlet, possibly after the app was
+// assembled. A miss answers WHY ([engine.Engine.CodeUnserved]): a company
+// hosting no code is a 404, a node serving none now or not yet knowing a 503
+// naming which of four ([codeUnserved]). A box is told only once it presents a
+// run token this fleet signed ([App.boxGitRoute]).
 
 // GitRoutes is Gitlet as the API mounts it; *host.Server satisfies it. Raw
 // and Archive are a person's two downloads beside git (host/download.go).
@@ -252,30 +225,18 @@ type unserved struct {
 	detail     string
 }
 
-// codeUnserved is how a code route answers a node that serves none of Gitlet
-// now, by the engine's reason:
-//
+// codeUnserved is how a code route answers a node serving none of Gitlet now,
+// by the engine's reason:
 //   - not hosted: 404 `not_found`, [notHosted];
-//   - applying: 503 `applying` with Retry-After [codeApplyingRetryAfter] —
-//     the node is applying the configuration the fleet activated and answers
-//     once that apply ends. It says nothing of what that configuration holds:
-//     an apply is in flight before it has decoded the revision too, and a
-//     company that never set code.backend: gitlet must not be told Gitlet is
-//     coming;
-//   - apply failed: 503 `config_apply_failed` and no Retry-After — the node's
-//     apply of a configuration that hosts code failed, and nothing it waits
-//     for clears that; another node serves it;
-//   - unknown: 503 `code_unknown` and no Retry-After, saying instead that the
-//     node could not read the configuration the fleet activated and so cannot
-//     say whether the company hosts code — the apply failed before the
-//     revision was decoded, and config_apply_failed's sentence that it hosts
-//     code would state what the node never read;
-//   - needs restart: 503 `native_backend_needs_restart` and no Retry-After —
-//     the node's native runtime was running before Gitlet was turned on, and
-//     only its restart clears it; another node serves it.
+//   - applying: 503 `applying`, Retry-After [codeApplyingRetryAfter]; says
+//     nothing of what the configuration holds (not yet decoded);
+//   - apply failed: 503 `config_apply_failed`, no Retry-After; another node serves;
+//   - unknown: 503 `code_unknown`, no Retry-After: the apply failed before the
+//     revision was decoded, so it cannot say the company hosts code;
+//   - needs restart: 503 `native_backend_needs_restart`, no Retry-After;
+//     only a restart clears it.
 //
-// Any other error breaks the seam's contract: 500, logged by whichever
-// rendering answers it.
+// Any other error breaks the seam's contract: 500.
 func codeUnserved(err error) unserved {
 	switch {
 	case errors.Is(err, engine.ErrCodeNotHosted):
@@ -329,56 +290,18 @@ func servesGit(b *config.Bootstrap) bool {
 	return b != nil && b.Profile("").Roles.Has(seatplacement.RoleGitlet)
 }
 
-// mountCode registers Gitlet's routes — the git transport and the
-// cache's verify, on a node whose roles name gitlet and on no other — each
-// through [authz.Router] on the verb it is decided by, and refuses a route
-// mounted with no policy, as every guarded surface does. Gitlet's ROWS
-// are not among them, nor who read a unit's repository: they are questions, on
-// the named routes (rest.go).
+// mountCode registers Gitlet's routes on a node whose roles name gitlet, each
+// through [authz.Router] on the verb it is decided by. Its ROWS are questions.
+//   - THE GIT ROUTES and the two downloads admit every holder of the gitlet app
+//     ([authz.ActionCodeGit]) before any repository is read (ADR-0110); the
+//     per-repository grant is derived later (gitlet.GrantOf, ADR-0088).
+//   - A VERIFY AND ITS READ are admin's ([deploymentPolicy]): an operation on
+//     this node's copy, which no repository's grant decides.
 //
-// # Which verb, and why the guard alone was not enough
-//
-// They were mounted on the plain table, so they asked only what the guard in
-// front of every route asks — whether somebody resolved — and a person holding
-// nothing but the overview, or a machine token carrying one app, could start a
-// verify, and its repair, of every repository a Gitlet node keeps. Now:
-//
-//   - THE GIT ROUTES, and the two downloads beside them, decided as a
-//     fetch is, admit every holder of the gitlet app the guard resolved
-//     ([authz.ActionCodeGit]), as the code questions do, and refuse
-//     everybody else before any repository is read (ADR-0110):
-//     what a holder may fetch or push is the per-repository grant the serving
-//     node derives from the chart once the repository is read (gitlet.GrantOf,
-//     ADR-0088), which no route can ask before it.
-//   - A VERIFY AND ITS READ are the deployment's own controls, admin's as a
-//     backup is, decided by [deploymentPolicy] — a check of THIS NODE's copy
-//     that reads every byte of it and holds a maintenance slot, and with a
-//     repair rewrites what every fetch on the node is served from: an
-//     operation on the node, which no repository's grant decides.
-//
-// A GIT ROUTE'S REFUSAL IS IN GIT'S FORM ([gitRefusal]): git prints one line
-// of text and nothing of the JSON envelope a REST route answers.
-//
-// A BOX'S THREE ROUTES are mounted on the route table ITSELF, beside the
-// person's, as /mcp/ and /otlp/ are — never through a router. A router decides
-// every route it mounts on the request's iam principal ([authz.ContextGuard]),
-// and a box's request reaches the handler anonymous: the guard never resolves
-// a box's token, which is no credential of its, so behind a router every box
-// request would be refused before Gitlet's box admission — the box's
-// token and its run's row or its check's, read on every request — ever ran.
-// They are served through [App.boxGitRoute], resolved per request as the
-// person's are, so a node not serving Gitlet tells a box why in
-// the same words it tells a person — but only once the box's request presents
-// a token this fleet signed, since the route is public and the reason is the
-// deployment's state; and mounted where the person's are, on a node whose
-// roles name git. A CHECK'S BOX'S THREE READS ([auth.BoxGitletPrefix]) are
-// mounted the same way, on the same terms ([App.boxCodeRoute]). The table
-// keeps their patterns, so the listener walk publishes them (both prefixes
-// are public).
-//
-// The git patterns are the host's own constants, so the path a handler reads
-// its repository from is the path it was mounted at, and this file spells no
-// git path a classifier gate would have to allow.
+// A git refusal is git's one line of text ([gitRefusal]). A BOX'S ROUTES
+// ([App.boxGitRoute], [App.boxCodeRoute]) go on the route table ITSELF, never a
+// router: it decides on the iam principal ([authz.ContextGuard]) and a box's
+// request arrives anonymous, so it would be refused before the box's admission.
 func (a *App) mountCode(mux authz.Mux) error {
 	if !a.servesGit {
 		return nil
@@ -475,31 +398,16 @@ func (a *App) gitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 
 // boxGitRoute is [App.gitRoute] for a box's route, which tells WHY this node
 // serves none of Gitlet now only to a request presenting a token this fleet
-// signed — an executor's, or a check's ([CodeSurface.VerifyBox]) — and
-// answers any other with Gitlet's own challenge — the box admission's
-// credential step, [host.ChallengeBox].
+// signed ([CodeSurface.VerifyBox]) and answers any other with the box
+// admission's challenge, [host.ChallengeBox].
 //
-// # Why a box's route, and only a box's, waits on the token
-//
-// /box/git/ is PUBLIC: served on api.public, reached from wherever a sandbox
-// runs, so anybody who can reach the listener can ask it. Answered before any
-// credential, the reason told whoever asked the deployment's state — whether
-// the company hosts code (404), that this node is applying the configuration
-// the fleet activated, that its apply failed, that it could not read that
-// configuration, that its runtime is owed a restart (503), or that the seam
-// broke its contract (500). A box holding its token is told exactly what a
-// person is, since what it says is the box's to act on: retry, or ask another
-// node. A person's routes keep their answers: the guard stands in front of
-// them, so nobody reaches a reason there without a credential.
-//
-// THE SAME CHALLENGE THE ADMISSION ANSWERS, by the one step both run, so a box
-// whose credential helper has not answered yet — git's first request carries
-// no credential — is challenged in the same words by a node that serves
-// Gitlet and by one that serves none, and git asks its helper as it always
-// does: the token it presents then is told the reason. The token is verified
-// by the engine's own box tokens over the keyring every node holds, so a node
-// that has not built Gitlet — every node this answers for — verifies it as a
-// node serving Gitlet does.
+// Only a box's route waits on the token: /box/git/ is PUBLIC (api.public), so a
+// reason answered before any credential would tell anybody who reaches the
+// listener the deployment's state. A person's routes keep their answers: the
+// guard stands in front of them. The challenge is the admission's own step, so a
+// box whose helper has not answered yet (git's first request carries no
+// credential) is challenged in the same words whether or not the node serves
+// Gitlet; the keyring every node holds verifies the token either way.
 func (a *App) boxGitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g, why := a.code.GitRoutes()
@@ -592,24 +500,17 @@ func verificationPath(v host.Verification) string {
 }
 
 // serveCodeVerify begins a check of THIS node's cache of one repository
-// against its rows — and with `?repair=true` a repair of whatever it finds
-// out of place. The check reads every byte of the repository, which can
-// outlive a balancer's read timeout, so it runs on the node's own lifetime
-// rather than the request's (host.Server.StartVerify): the request waits for
-// it up to host.VerifyHold and answers `200` with the verification ended — a
-// small copy's check is answered where it was asked — or `202 Accepted` with
-// it running, its address in `Location`, where its caller reads the outcome
+// against its rows, and with `?repair=true` a repair of what it finds out of
+// place. It reads every byte, which can outlive a balancer's read timeout, so
+// it runs on the node's own lifetime (host.Server.StartVerify): the request
+// waits up to host.VerifyHold and answers `200` with the verification ended, or
+// `202 Accepted` with it running, its address in `Location`
 // ([App.serveCodeVerification]).
-//
-// WHAT IS REFUSED IS REFUSED AT ONCE, having read nothing of the repository:
-// not declared or not held here (404 — a node holding no copy has nothing to
-// check, and building one is a whole download), a full maintenance lane or
-// no room in the memory the background work shares (503, Retry-After
-// host.BusyRetryAfter), a node whose memory cannot hold the check at all
-// (500 with its sentence), a check of the other repair setting running
-// (409, naming it), and a stopping host (503, Retry-After
-// host.StoppingRetryAfter). A second asking for the check running is handed
-// it.
+// REFUSED AT ONCE, having read nothing: not declared or not held here (404; a
+// node with no copy has nothing to check), a full maintenance lane or no memory
+// for it (503, host.BusyRetryAfter), memory that cannot hold it at all (500),
+// the other repair setting running (409), a stopping host (503,
+// host.StoppingRetryAfter). A second asking is handed the running check.
 func (a *App) serveCodeVerify(w http.ResponseWriter, r *http.Request) {
 	g, why := a.code.GitRoutes()
 	if why != nil {

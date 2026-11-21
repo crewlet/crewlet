@@ -15,24 +15,16 @@ import (
 
 // Reading a directory of authored markdown, for the publishing CLIs.
 //
-// # What a knowledge doc IS, on disk
+// A knowledge doc on disk is a `.md` file: TITLE the first `# H1`, CONTAINER
+// its directory's name, BODY everything after the heading. Optional YAML
+// frontmatter can override title and container, name a PARENT page, and attach
+// LABELS, and nothing else: one that could redirect a doc anywhere would make
+// the tree meaningless, and `parent:` is the one thing a flat directory cannot
+// express about a wiki with trees.
 //
-// A `.md` file. Its TITLE is the first `# H1`, its CONTAINER is the name of
-// the directory holding it, and its BODY is everything after the heading.
-// Optional YAML frontmatter can override the title and the container, name a
-// PARENT page to nest under, and attach LABELS — and nothing else. A file's
-// location in the tree is the authoring convention, and a frontmatter that
-// could redirect a doc anywhere would make the tree meaningless; `parent:`
-// is not a redirection, it is the one thing a flat directory of files cannot
-// express about a wiki that has trees in it.
-//
-// # Why the title comes from the H1 rather than the filename
-//
-// The title is the page name at the backend AND half the idempotency key,
-// so a re-import has to derive the same one. A filename is the thing an
-// operator changes most casually — a rename would orphan the published page
-// and create a second one beside it — while the H1 is content they edit
-// deliberately.
+// The title comes from the H1, not the filename: it is the page name AND half
+// the idempotency key, so a re-import must derive the same one, and a casual
+// file rename would orphan the published page and create a second.
 
 // FrontmatterPattern splits a leading `---` block from the body.
 //

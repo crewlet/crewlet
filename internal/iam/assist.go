@@ -7,21 +7,17 @@ import (
 	"github.com/google/uuid"
 )
 
-// AssistPrefix is the class the Dashboard Assistant's grant carries where the
-// audit trail records which credential a request was made through:
-// `assist:<grant>` in the operator column, beside the person as the author
-// (ADR-0050).
+// AssistPrefix is the class the Dashboard Assistant's grant carries in the
+// audit trail's operator column, `assist:<grant>`, beside the person as the
+// author (ADR-0050).
 //
-// A THIRD CREDENTIAL CLASS beside [MachineTokenPrefix] and [SessionPrefix],
-// because a request the assistant makes is the person's own, decided by their
-// own grants, and still has to say in every row it writes that it came
-// through the assistant rather than from their keyboard. The grant names the
-// session it was derived from, the conversation and the turn, in the record
-// internal/api/auth keeps of it; the row only has to point there.
+// A THIRD CREDENTIAL CLASS beside [MachineTokenPrefix] and [SessionPrefix]: the
+// request is the person's own, decided by their grants, yet every row it writes
+// must say it came through the assistant. The grant's session, conversation and
+// turn live in internal/api/auth's record; the row only points there.
 //
 // A CLASS NO LOGIN MAY TAKE, for [MachineTokenPrefix]'s reason: a service
-// account enrolled as `assist:<something>` would read as the assistant in
-// every trail that records one.
+// account enrolled as `assist:<something>` would read as the assistant.
 const AssistPrefix = "assist:"
 
 // AssistBearerPrefix marks a bearer as an assistant grant by its SHAPE, so the
@@ -90,17 +86,15 @@ func (p Principal) Assisted() (uuid.UUID, bool) {
 
 // Assistable is why p may not use the Dashboard Assistant, or "" when it may.
 //
-// THE ONE PREDICATE every end asks: internal/api/auth of the principal it
-// derives a grant for and of the principal it re-composes one into, and
-// internal/assistant of the person whose question it answers and whose
-// `/viewer` says whether the Ask pill is lit. Written once here, in the leaf
-// both import, so a person the pill invites is never a person the guard then
-// refuses a grant (decision D04).
+// THE ONE PREDICATE every end asks (internal/api/auth when deriving or
+// re-composing a grant, internal/assistant for `/viewer`'s Ask pill), written
+// once in the leaf both import so a person the pill invites is never refused a
+// grant by the guard (decision D04).
 //
-// A PERSON, active, holding the human seat every person holds (ADR-0032), and
-// acting through a whole browser session: never a machine token, a service
-// account, a Tier A token or a session exchanged from one, and never a request
-// already riding a grant, so the assistant cannot mint itself a fresher one.
+// A PERSON, active, holding the human seat (ADR-0032), acting through a whole
+// browser session: never a machine token, service account, Tier A token or
+// session exchanged from one, and never a request already riding a grant, so
+// the assistant cannot mint itself a fresher one.
 func Assistable(p Principal) string {
 	switch {
 	case p.Kind != KindPerson:

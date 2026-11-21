@@ -45,30 +45,14 @@ type colleagueAnswer struct {
 }
 
 // colleague resolves free text to a seat through the SAME four tiers an
-// agent's `lookup_colleague` and `a2a_ask` resolve through.
+// agent's `lookup_colleague` and `a2a_ask` resolve through, so a person and an
+// agent reach the same seat. `match` is set only when the text names exactly
+// one seat (`agent/colleague`'s rule): the engine does not guess.
 //
-// ONE RESOLVER, because the question is the same one: a person typing "swe"
-// into the palette to hand a task over and an agent typing it to ask for help
-// both mean whoever the company calls that, and two rankings would send them
-// to different seats. It never picks between candidates — `match` is set only
-// when the text names exactly one seat — because work handed to the wrong
-// colleague on the strength of a suggestion was guessed at, and the engine
-// does not guess (`agent/colleague`'s rule).
-//
-// THE CHAT-ID TIER IS AN ADMIN'S. A seat's contact identities are read only
-// by whoever reads the company document — an admin (organization-model.md,
-// "What a signed-in reader can see about a seat") — and an exact-id tier
-// answered to everybody the overview is would be an oracle for them: paste an
-// id, learn whose it is. So a caller who is not an admin resolves over handles
-// and names alone, and an admin over everything the agent's lookup reads. An
-// AGENT's own `lookup_colleague` keeps every tier, because a seat mentions a
-// person by the id the chat surface knows them by and could not otherwise.
-//
-// AND A WITHHELD PERSON IS WITHHELD HERE TOO: the corpus is built with the
-// identity directory's withholding ([Sources.WithheldContacts]), exactly as a
-// seat's own lookup is, so a person the directory has suspended is not offered
-// as somebody to hand work to from a screen while every agent is told they
-// cannot be reached.
+// THE CHAT-ID TIER IS AN ADMIN'S: contact identities are read only by whoever
+// reads the company document, so an exact-id tier open to every caller would
+// be an oracle (paste an id, learn whose it is). An agent's own lookup keeps
+// every tier. A person withheld by [Sources.WithheldContacts] is not offered.
 func (s Sources) colleague(ctx context.Context, p Params) (any, error) {
 	text := strings.TrimSpace(p.String("q"))
 	if text == "" {

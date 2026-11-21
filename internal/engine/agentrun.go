@@ -101,54 +101,16 @@ type agentLauncher struct {
 
 var _ runner.AgentLauncher = (*agentLauncher)(nil)
 
-// LaunchExecutor starts the run and returns.
+// LaunchExecutor starts the run and returns. In this order:
 //
-// IN THIS ORDER, and each step before anything the next one opens:
-//
-//  1. The TURN'S FENCE ([runner.AgentRunRequest.Fence]): a seat this node no
-//     longer holds under the grant the turn was admitted under, or one a
-//     person stopped, launches nothing. The runner asked the same fence when
-//     its phase opened; the prompt it built since can take a model call of
-//     its own, and a seat that moved or a stop placed meanwhile must not still
-//     buy a box. Asked AGAIN of every refusal the steps below make
-//     ([agentLauncher.launch]), since the seat can move while they run.
-//  2. The node can launch at all: a sandbox runtime, the epoch's catalogue, a
-//     bridge something reaches, a surface bound to the seat.
-//  3. The BUDGET FLOOR ([executorHeadroom]): below it the launch is refused as
-//     a budget refusal, which the dispatcher answers by parking the seat
-//     rather than by a redelivery the floor would refuse again.
-//  4. The MEMBER, picked here and at every launch ([agentLauncher.member]),
-//     and the cell it runs in, which a box has to be able to reach the
-//     bridge from.
-//  5. The job, its bridge session, then the box.
-//
-// THE SESSION IS OPENED BEFORE THE RUN'S BOX EXISTS, and closed by every path
-// that ends one. A run whose box could dial a live session after the run
-// finished would hold a working key to a seat's whole tool surface — the
-// window this closes is the difference between a credential that expires with
-// a job and one that expires on a four-hour clock.
-//
-// AND UNDER THE JOB'S OWN NAME, which the store mints as the launch opens the
-// job — so the session is opened from inside the launch
-// ([sandbox.LaunchRequest.Opened]) rather than before it. The endpoint names
-// that job, and the job is on the run's durable row: a node that takes the
-// run over opens the same job's session again ([Engine.reopenAgentRun]), and
-// the token the box already holds reaches it.
-//
-// AND KNOWING THE RUN'S MODEL: the session carries the model the launch
-// points the harness at ([mcpbridge.Session.Model]), so every bridged call
-// is made on it and a seat's code write names it on its push, as a tool loop
-// round's call names its round's.
-//
-// AND WITH THE TURN'S NOTES (ADR-0067). The record the launch opens carries
-// the sealed anchor of the seat the run serves, the notes the brief carries
-// ([runner.AgentRunRequest.Notes]), read by the job the write opens, and — for
-// a turn's first segment — the notes its box still holds, filed waiting in the
-// same write, before the record exists for anybody to file on
-// ([steerDesk.handOver]); the job's session serves the run's note inbox, bound
-// to the same job as its ledger. A launch that fails after that write names the
-// job it opened ([runner.Launched.LaunchID]): the record then answers for every
-// note, and its ending reports what no job ran with.
+//  1. The turn's fence ([runner.AgentRunRequest.Fence]): a seat this node no
+//     longer holds under the admitting grant, or one a person stopped, buys no
+//     box. Asked again of every later refusal.
+//  2. The node can launch at all: sandbox runtime, catalogue, a reachable bridge.
+//  3. The budget floor ([executorHeadroom]): a budget refusal parks the seat
+//     rather than redelivering into the same refusal.
+//  4. The member ([agentLauncher.member]) and the cell its box reaches the bridge from.
+//  5. The job, its bridge session, then the box ([agentLauncher.launch]).
 func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunRequest) (_ runner.Launched, err error) {
 	defer origin.Stamp(&err)
 	// THE TURN'S OWN FENCE, the closure its runner was built with, asked
@@ -179,22 +141,15 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	if err == nil || turn.Stopped(err) || errors.Is(err, seatpkg.ErrSeatMoved) {
 		return launched, err
 	}
-	// AND AGAIN OF EVERY REFUSAL PAST IT, whatever the launch answered: the
-	// seat can move while the launch runs, and what the launch meets then
-	// need not say so. The box is made and set up between the run's row and
-	// its attach, minutes for some setups, and the seat's next holder ends a
-	// run it finds launching without fencing it ([sandbox.Coordinator.RecoverSeat]),
-	// so the attach meets that ending, or no record at all. Returned as it
-	// was, that refusal was a broken turn to the dispatcher, which handed the
-	// delivery back on the failure path's backoff, behind the conversation's
-	// newer mail, where a seat that moved is deferred to its holder at once
-	// and the attachment quiesced. So a closed fence is the move, with the
-	// launch's own refusal kept beside it: the run store's
-	// [sandbox.ErrSeatNotHeld] is what hands a resumed turn's relaunch on to
-	// the seat's holder ([sandbox.Coordinator.OnEvent]), and the launch's
-	// class, where it has one, is still read off it. Where the fence still
-	// holds, the refusal is the launch's alone, a newer lease's included:
-	// one this node has not noticed yet, which its heartbeat settles.
+	// Ask the fence again of every refusal, whatever the launch answered: the
+	// seat can move during setup, and the next holder ends a run it finds
+	// launching ([sandbox.Coordinator.RecoverSeat]), so the attach meets that
+	// ending or no record. Returned as is, that is a broken turn to the
+	// dispatcher, redelivered behind newer mail; a closed fence is the move
+	// that defers to the holder at once. The launch's refusal rides beside it:
+	// [sandbox.ErrSeatNotHeld] hands a resumed relaunch on
+	// ([sandbox.Coordinator.OnEvent]) and its class is still readable. Where
+	// the fence holds, the refusal is the launch's alone.
 	if moved := req.Fence(); moved != nil {
 		return launched, fmt.Errorf("%w (the launch it was making: %w)", moved, err)
 	}
@@ -203,6 +158,16 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 
 // launch is [agentLauncher.LaunchExecutor] past the turn's fence: steps 2 to 5
 // of its order.
+//
+// The bridge session opens before the box exists and closes on every path that
+// ends the run: a box dialling a live session after the run would hold a key
+// to the seat's whole tool surface. It opens from inside the launch
+// ([sandbox.LaunchRequest.Opened]) under the job's own name, which the store
+// mints there and the durable row keeps, so a node taking the run over reopens
+// the same session ([Engine.reopenAgentRun]). It carries the run's model
+// ([mcpbridge.Session.Model]) and serves the run's note inbox (ADR-0067). A
+// launch failing after its record is written names the job
+// ([runner.Launched.LaunchID]); the record answers for every note.
 func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) (_ runner.Launched, err error) {
 	defer origin.Stamp(&err)
 	e, company, handle := l.engine, l.company, l.seat.Handle()
@@ -429,7 +394,8 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		return runner.Launched{}, err
 	}
 	// AND THE RUN'S NOTE INBOX, which its session serves to its harness between
-	// steps, bound to the job with the ledger once the job has a name.
+	// steps, bound to the job with the ledger once the job has a name, and
+	// before the bridge files the session ([Engine.openBridge]).
 	inbox := e.runSteers.inbox(identityOfRef(ref), req.Round)
 	if inbox != nil {
 		session.Steer = inbox
@@ -448,19 +414,17 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		return runner.Launched{}, err
 	}
 
-	// THE TURN'S CODE HOLDS GO ON THE ROW THE LAUNCH OPENS, and the set is
-	// SEALED from the moment it is read until that row exists, so no hold is
-	// taken in between that neither the set this read nor the row would carry
-	// ([launchHolds]). The row's writer is attached when the job is named,
-	// before its bridge session opens, so every hold a bridged call of the box
-	// takes is on the row before its request: a run that parks, and a node
-	// that restarts under it, keep what the run's turn named. Sealed last,
-	// past every refusal above, which would otherwise have to unseal it.
-	// THE RUN'S CHECKOUTS: a round carried on keeps its job's ([runner.Continuation]),
-	// so the work it continues — in the asking job's box, or from its branch
-	// in a fresh one — reaches what that job checked out, and nothing more;
-	// any other launch starts with none, and its box checks each repository
-	// out through `code_checkout` as it needs it (ADR-0093).
+	// The turn's code holds go on the row the launch opens, sealed from the
+	// read until that row exists so no hold is taken in between that neither
+	// the set nor the row would carry ([launchHolds]). The row's writer attaches
+	// when the job is named, before its bridge session opens, so every hold a
+	// bridged call takes is on the row first and survives a park or restart.
+	// Sealed last, past every refusal above, which would have to unseal it.
+	//
+	// The run's checkouts: a round carried on keeps its job's
+	// ([runner.Continuation]) and reaches only what that job checked out; any
+	// other launch starts with none and checks out through `code_checkout`
+	// (ADR-0093).
 	grants, err := carriedGrants(ctx, pending, l.turn.RunID, req.Continue != nil)
 	if err != nil {
 		return runner.Launched{}, err
@@ -484,7 +448,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// opened, which the job's calls are numbered after.
 		bridgeFrom int
 	)
-	result, err := coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
+	result, err := coordinator.Launch(ctx, manager, withRunsOwn(req, sandbox.LaunchRequest{
 		Turn:       ref,
 		ReadBox:    e.boxUnread(ctx, company, handle, cell),
 		Spec:       spec,
@@ -572,7 +536,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// [sandbox.LaunchRequest.Fence]: a stop that lands while this
 		// launch is being built either finds the row or is refused here.
 		Fence: req.Fence,
-	})
+	}))
 	holds.settle(err)
 	if err != nil {
 		if recorded == "" {
@@ -585,6 +549,8 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 			// closing it closes its inbox.
 			e.bridge.Close(l.turn.RunID)
 		} else {
+			// NO SESSION OPENED: the inbox's close stops the view a bind
+			// made ahead of the bridge's refusal started.
 			inbox.Close()
 		}
 		// A LAUNCH A PERSON'S STOP ENDED UNDER IT — its row's ending decided
@@ -637,71 +603,18 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 const floorUnusedOutcome = "the launch offers the session told without the reading; " +
 	"executor_session_not_continued says so where the session itself is not continued"
 
-// continuedFloor is req as the seat's budget lets it be launched on member (the
-// member the launch picked, nil where it could pick none) and the floor it is
-// held to ([launchFloor]): the largest floor of every brief the launch may hand
-// its run. Its fresh brief, req.Brief, which its box starts a session of its
-// own on wherever it takes none up, holds it to the static floor with that
-// brief beside it, held where that is past the most room the seat's and the
-// company's capped windows can leave the launch, each window's ceiling less
-// what the launch's own turn charged in it before the launch ([windowRoom]):
-// at the static floor where that fits in the room, and at the room otherwise
-// ([launchFloor.fresh]). And each session the launch may still continue holds
-// it to that session's context with the brief that continues it, or, where no
-// capture measured that context, to the static floor with that brief beside
-// it: the turn's kept capture, in the longer of its two briefs, since which box
-// the launch gets is the launch's to learn; the session its conversation's last
-// turn left, with the brief that continues it in a box of its own, the one box
-// it is continued in; and the job before's own copy in its box with the brief
-// that carries it on, where inBox says the launch can continue in that box at
-// all ([agentLauncher.continuesInItsBox]).
-//
-// THE SESSION ONLY WHERE MEMBER RUNS THE HARNESS THAT WROTE IT
-// ([runner.SessionBasis.Harness]): a session is continued only by its own
-// harness, so a launch on a member running another starts a session of its own,
-// and is held to its fresh brief's floor rather than to a session it will not
-// send, as one whose member cannot continue in the job before's box is held to
-// no floor of that box's session.
-//
-// A FLOOR NO WINDOW CAN EVER LEAVE ROOM FOR ([launchFloor.fits]), one past that
-// room, is not waited for: req goes without the session it would continue at
-// that floor, and the line says why. A seat with no capped window carries any
-// session. Nor is a session one request of member's model cannot carry
-// ([launchFloor.carriedBy]), under the window its run is pinned to.
-//
-// EACH SESSION HELD TO ITS OWN FLOOR, never to the other's. A relaunch may be
-// offered both the session it was asked to continue in any box and the job
-// before's own copy in its box, each with a brief of its own, and its box
-// decides which it takes up as the run starts: the first where it can, and the
-// copy only where it cannot (internal/sandbox's continueSession). So a session
-// whose own floor no window or model can carry is dropped alone, and the launch
-// still offers the other; and it is held to the larger floor of the sessions it
-// still offers, since its box may take up either. Held both to the larger of
-// the two floors and dropped together where that one failed, a kept capture
-// whose short brief fits was dropped for the copy's longer brief, which the
-// launch sends only where its box cannot restore the kept one, and its run
-// started a session of its own. Where neither is left, its run starts a session
-// of its own on its fresh brief's floor, which a capped window can always be
-// given: where that floor is past the most room a window can leave the launch,
-// it is held at the static floor, or at the room where that is below it.
-//
-// AND THE BRIEFS TOLD BY A READING OF A KEPT CAPTURE ARE DROPPED ALONE
-// ([runner.SessionContinuation.Exact]): counted in that session's floor
-// ([keptFloor]), since its box may be handed them, and where they are what
-// makes that floor one the launch cannot carry, the session is still offered,
-// told by its save point, held to the floor of its own briefs, and the line
-// (`executor_session_holdings_unused`) says why; where its own briefs cannot be
-// carried either, the session is dropped whole, as above.
-//
-// AND A LAUNCH WHOSE EARLIER TRY WAS REFUSED BELOW ITS FLOOR waits for that
-// floor one turnover at most ([agentLauncher.refusedIn], [meter.turnedOver]):
-// in a window after the one that try was refused in, its fresh brief's floor
-// is held as one past the room is ([launchFloor.after]), and a session whose
-// floor the seat's windows still leave no room for, read once here, is dropped
-// as one past the room is, the line saying why ([launchFloor.stillShort]). A
-// floor within the room is past what a busy company's window leaves at the
-// launch's read wherever the other seats spend there first, and waited for in
-// every window, the launch went out in none.
+// continuedFloor is req as the seat's budget lets it launch on member (nil
+// where none was picked), and the floor ([launchFloor]) it is held to: the
+// largest of the briefs it may hand, capped at the room the windows leave
+// ([windowRoom], [launchFloor.fresh]).
+// A session survives only on the harness that wrote it
+// ([runner.SessionBasis.Harness]) and only if some window and model can carry
+// its floor ([launchFloor.fits], [launchFloor.carriedBy]); else it is dropped,
+// never waited for. Each session has its own floor, since the box takes the
+// first where it can (continueSession): one drops alone, the other stays, at
+// the larger floor of those offered ([agentLauncher.droppedAlone], [keptFloor]).
+// A try refused below its floor waits one turnover at most
+// ([agentLauncher.refusedIn], [launchFloor.after], [launchFloor.stillShort]).
 func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunRequest,
 	member *harness.Provider, inBox bool) (runner.AgentRunRequest, launchFloor) {
 
@@ -761,28 +674,28 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		return stillShort(f)
 	}
 	var keptWhy, inPlaceWhy string
+	// THE MODEL THE NEXT REQUEST GOES TO, whose rate the harness's estimate of
+	// a continued session's next request is read at ([continuedContext]).
+	var model string
+	if member != nil {
+		model = member.ModelArgument()
+	}
 	if s := req.Session; s != nil {
-		kept := keptFloor(static, s)
+		kept := keptFloor(static, s, model)
 		keptWhy = carried(kept)
-		// THE BRIEFS TOLD BY A READING DROPPED ALONE where theirs is the floor
-		// that cannot be carried and the session's own briefs' can: the
-		// session is still continued, told by its save point, which tells
-		// more and never less. On a copy of the session, never the caller's,
-		// whose continuation the runner still holds.
-		//
-		// AND WHERE THEIRS FAILS TOO, the session is dropped by its own
-		// briefs' floor, which its line names: the floor with the briefs told
-		// by a reading is one the session alone never needed.
-		if keptWhy != "" && s.Exact != nil {
-			without := *s
-			without.Exact = nil
-			told := keptFloor(static, &without)
-			if whyTold := carried(told); whyTold != "" {
-				keptWhy = whyTold
+		// THE BRIEFS TOLD BY A READING, AND THE UNHELD ONES, EACH DROPPED
+		// ALONE where theirs beside the session's own is a floor that cannot
+		// be carried and the session's own briefs' can; on a copy, never the
+		// caller's, which the runner still holds. Where the session's own
+		// floor fails too, it is dropped by that floor, which its line names.
+		if keptWhy != "" && (s.Exact != nil || s.Unheld != nil) {
+			own := *s
+			own.Exact, own.Unheld = nil, nil
+			if whyOwn := carried(keptFloor(static, &own, model)); whyOwn != "" {
+				keptWhy = whyOwn
 			} else {
-				log.InfoContext(ctx, "executor_session_holdings_unused", "seat", l.seat.Handle(),
-					"turn_id", l.turn.RunID, "detail", keptWhy, "outcome", floorUnusedOutcome)
-				req.Session, kept, keptWhy = &without, told, ""
+				without := l.droppedAlone(ctx, s, own, static, model, carried)
+				req.Session, kept, keptWhy = &without, keptFloor(static, &without, model), ""
 			}
 		}
 		if keptWhy == "" {
@@ -790,7 +703,11 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 		}
 	}
 	if c := req.Continue; c != nil && c.SessionID != "" && inBox {
-		inPlace := static.continuing(c.ContextTokens, harness.EstimateTokens(c.Brief))
+		// THE LONGER OF ITS TWO BRIEFS, never the summarized one dropped
+		// alone: it is what the launch hands where the box's point does not
+		// prove the held one whole ([runner.Continuation.Summarized]).
+		inPlace := static.continuing(continuedContext(c.NextRequest, c.ContextTokens, model),
+			max(harness.EstimateTokens(c.Brief), harness.EstimateTokens(c.Summarized)))
 		if inPlaceWhy = carried(inPlace); inPlaceWhy == "" {
 			floor = floor.atLeast(inPlace)
 		}
@@ -847,21 +764,46 @@ func (l *agentLauncher) continuedFloor(ctx context.Context, req runner.AgentRunR
 	return req, floor
 }
 
+// droppedAlone is s less each telling beside its own briefs whose floor, beside
+// own's, carried cannot carry ([agentLauncher.continuedFloor]): the briefs told
+// by a reading, logged, and the unheld briefs, marked dropped, so the launch
+// continues the session only in a box whose release the resume was read in.
+func (l *agentLauncher) droppedAlone(ctx context.Context, s *runner.SessionContinuation,
+	own runner.SessionContinuation, static launchFloor, model string,
+	carried func(launchFloor) string) runner.SessionContinuation {
+
+	without := *s
+	if s.Exact != nil {
+		with := own
+		with.Exact = s.Exact
+		if why := carried(keptFloor(static, &with, model)); why != "" {
+			log.InfoContext(ctx, "executor_session_holdings_unused", "seat", l.seat.Handle(),
+				"turn_id", l.turn.RunID, "detail", why, "outcome", floorUnusedOutcome)
+			without.Exact = nil
+		}
+	}
+	if s.Unheld != nil {
+		with := own
+		with.Unheld = s.Unheld
+		if carried(keptFloor(static, &with, model)) != "" {
+			without.Unheld, without.UnheldDropped = nil, true
+		}
+	}
+	return without
+}
+
 // refusedIn is every window an earlier try of this launcher's work was refused
-// below its floor in, none where none is known: on a resumed segment's
-// launcher, the one its run's job's record names
-// ([agentLauncher.relaunchRefusedIn]); on a dispatched one's, those the seat's
-// parks on this node recorded for the events its turn was dispatched for
-// ([agentLauncher.delivery], [floorWaits]), and never one recorded for another
-// delivery of the seat: the park's release hands the seat a person's message
-// from its priority lane before the delivery it deferred, and that message's
-// launch, which never waited, given the wait, went out below its own floor
-// while the delivery that waited was refused at its floor again.
+// below its floor in, none where none is known: on a resumed segment, the one
+// its job's record names ([agentLauncher.relaunchRefusedIn]); on a dispatched
+// one, those the seat's parks recorded for the events its turn was dispatched
+// for ([agentLauncher.delivery], [floorWaits]), never another delivery's: a
+// park's release hands the seat a person's message before the deferred
+// delivery, and that launch, given the wait it never made, would go out below
+// its own floor while the delivery that waited was refused again.
 //
-// READ, NEVER TAKEN: the record lasts as long as its delivery
-// ([Dispatcher.Gone]), so a try refused for anything but its floor, every
-// member of its chain at its limit among them, leaves the next try held as
-// it was.
+// Read, never taken: the record lasts as long as its delivery
+// ([Dispatcher.Gone]), so a try refused for anything but its floor (a chain at
+// its limit included) leaves the next try held as it was.
 func (l *agentLauncher) refusedIn() []sandbox.BudgetWindow {
 	if l.relaunchRefusedIn != nil {
 		return []sandbox.BudgetWindow{*l.relaunchRefusedIn}
@@ -878,19 +820,32 @@ func (l *agentLauncher) refusedIn() []sandbox.BudgetWindow {
 // keptFloor is the floor of a launch that continues s, the session it was asked
 // to continue in any box ([runner.AgentRunRequest.Session]): the turn's kept
 // capture, in the longest of its briefs (its two, and the two told by a
-// reading of what it holds where it carries them,
-// [runner.SessionContinuation.Exact], since which box the launch gets, and
-// which release that box's harness answers, are the launch's to learn), or the
+// reading, [runner.SessionContinuation.Exact], and for a box whose release the
+// resume was not read in, [runner.SessionContinuation.Unheld], where it carries
+// them, since which box and release the launch gets are its to learn), or the
 // session its conversation's last turn left, in its one; static where s names
-// neither.
-func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
+// neither. And the two told as a session that may be a summary, which the
+// launch hands where its box's point does not prove the others whole
+// ([runner.SessionContinuation.Summarized]), never dropped alone. The kept
+// capture's context is its harness's estimate of its next request at model's
+// rate where the capture holds one ([continuedContext]).
+func keptFloor(static launchFloor, s *runner.SessionContinuation, model string) launchFloor {
 	switch {
 	case s.Basis.Continues():
+		// THE KEPT CAPTURE'S OWN CONTEXT, as it measured it, never its job's
+		// copy's ([runner.SessionBasis.CopyContext]): that one sizes the
+		// in-place floor, and a restored capture sends what it holds.
 		brief := max(harness.EstimateTokens(s.Brief), harness.EstimateTokens(s.Replaced))
 		if x := s.Exact; x != nil {
 			brief = max(brief, harness.EstimateTokens(x.Brief), harness.EstimateTokens(x.Replaced))
 		}
-		return static.continuing(s.Basis.ContextTokens, brief)
+		if x := s.Summarized; x != nil {
+			brief = max(brief, harness.EstimateTokens(x.Brief), harness.EstimateTokens(x.Replaced))
+		}
+		if u := s.Unheld; u != nil {
+			brief = max(brief, harness.EstimateTokens(u.Brief), harness.EstimateTokens(u.Replaced))
+		}
+		return static.continuing(continuedContext(s.Basis.NextRequest, s.Basis.ContextTokens, model), brief)
 	case s.Basis.ContinuesBase():
 		// THE BASE'S OWN CONTEXT, never the job before's: that one sizes the
 		// in-place floor, and a base is continued only in a box of its own,
@@ -898,6 +853,25 @@ func keptFloor(static launchFloor, s *runner.SessionContinuation) launchFloor {
 		return static.continuing(s.Basis.Base.ContextTokens, harness.EstimateTokens(s.Replaced))
 	}
 	return static
+}
+
+// continuedContext is the context a continued session sends again before a
+// word of its brief, which its launch's floor is made of: next, its harness's
+// own estimate of its next request, at the rate of model, the model the
+// launch's member hands its harness ([sandbox.NextRequest.At]), where it holds
+// a figure; else last, its last request's input, which under-counts the next
+// request by its reply and all after it, the figure of every record holding no
+// estimate (an older build's, a capture settled off the executor log, a thread
+// not read whole, a harness whose reader estimates none). Never the larger:
+// past a compaction no request has followed, last is the compacted-away
+// conversation's and the estimate the nearer, though short of the request by
+// its system prompt and tools until a reply anchors it (the residual
+// internal/sandbox/executor's package doc states).
+func continuedContext(next sandbox.NextRequest, last int64, model string) int64 {
+	if n := next.At(model); n > 0 {
+		return n
+	}
+	return last
 }
 
 // uncarried is why no launch on member can carry f, "" where one can: one
@@ -932,23 +906,18 @@ func floorWindow(member *harness.Provider) sandbox.ExecutorWindow {
 	return w
 }
 
-// claudePlatform is the platform a Claude Code member reaches its model by, read
-// exactly off its entry, for the launch floor: Anthropic's own API for an entry
-// signed in with a login, a key or the host's own environment ([claudeRoute]);
-// for one signed in by its own env, the platform its env switches the harness
-// to, in the order Claude Code itself picks one (2.1.322: Bedrock, Foundry, the
-// platforms this build does not name, Vertex, and else Anthropic's API, which a
-// base URL and token of the entry's own reach as that API is reached), a switch
-// on where its value is one Claude Code reads as true (`1`, `true`, `yes` or
-// `on`, in any case). A platform this build cannot name, a gateway the
-// harness's host signs into, or a switch whose value is neither true nor false,
-// is [sandbox.ClaudeRouteElsewhere], the least window off Anthropic's API.
+// claudePlatform is the platform a Claude Code member reaches its model by,
+// read exactly off its entry, for the launch floor: Anthropic's API for a
+// login, key or host-environment entry ([claudeRoute]); for an env-signed one,
+// the platform its env switches to, in Claude Code's own order (2.1.322:
+// Bedrock, Foundry, unnamed platforms, Vertex, else Anthropic's API), a switch
+// being on where Claude Code reads it as true (`1`, `true`, `yes`, `on`, any
+// case). An unnamed platform, a gateway, or a switch neither true nor false is
+// [sandbox.ClaudeRouteElsewhere], the least window.
 //
-// EXACT HERE, where the telling's route is coarse ([claudeRoute]): a window read
-// smaller than the member's own costs the telling words, but costs the floor a
-// session, which starts fresh. The run environment the launch composes later (a
-// seat's own env, an image's) is not read: a platform switched there is the
-// floor's stated residual.
+// Exact, unlike the telling's coarse route: a too-small window costs the floor
+// a session. The launch's later run environment is not read; a platform
+// switched there is the floor's stated residual.
 func claudePlatform(member *harness.Provider) sandbox.ClaudeRoute {
 	mode := member.AuthMode()
 	if route := claudeRoute(mode); route == sandbox.ClaudeRouteAnthropic || mode != harness.AuthEnv {
@@ -1034,24 +1003,16 @@ func (l *agentLauncher) continuesInItsBox(ctx context.Context, pending sandbox.P
 
 // openBridge opens a job's bridge session under the job's own name, with its
 // ledger and its note inbox bound to the same job, and answers what the box is
-// given for it — its server entry, and where its harness asks for its turn's notes:
-// [sandbox.LaunchRequest.Opened], for the launch, and the same opening for a
-// run taken over while it works ([Engine.reopenAgentRun]), whose box already
-// holds the endpoint and is never handed the one minted here.
-//
-// THE SESSION NUMBERS ITS CALLS AFTER THE ONES THE LOG HOLDS
-// ([sandbox.OpenedJob.LastSeq]): a recovery's after its own job's, and a job
-// continuing one that asked a person after the asking job's, so the round's
-// calls keep the one order its collection reads them in.
-//
-// AND READS EACH CALL'S ID UNDER THE KEY THE JOB NAMES
-// ([sandbox.OpenedJob.CallIDMeta]): the one the runner starting the job's box
-// declares its harness sends it under, for the launch, and this node's runner
-// of the job's harness, for a run taken over while it works — each set here,
-// on the session the bridge opens, never on the launch's own literal.
-//
-// The inbox is bound once the session is open, never before: a session that
-// does not open serves no notes, and the caller closes the inbox.
+// given for it: its server entry, and where its harness asks for its turn's
+// notes ([sandbox.LaunchRequest.Opened]), for the launch and for a run taken
+// over while it works ([Engine.reopenAgentRun]), whose box already holds the
+// endpoint. The session numbers its calls after the ones the log holds
+// ([sandbox.OpenedJob.LastSeq]) and reads each call's id under the key the job
+// names ([sandbox.OpenedJob.CallIDMeta]), set here. THE INBOX IS BOUND BEFORE
+// THE BRIDGE FILES THE OPENING, which a recovery's box reaches at once: bound
+// after Open, it was served unbound until then. The caller closes the inbox of
+// a session that does not open. The package doc's "An OpenCode confirmation is
+// recorded once, and reported" says why.
 func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *bridgeLedger,
 	inbox *runInbox, job sandbox.OpenedJob,
 ) (_ sandbox.Opening, err error) {
@@ -1061,6 +1022,7 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 	// names it: what a collection on any node reads this process's liveness by.
 	ledger.runner = e.callRunner()
 	s.Launch, s.LastSeq, s.CallIDMeta = job.LaunchID, job.LastSeq, job.CallIDMeta
+	inbox.Bind(ctx, job.LaunchID, sessionFence(s.Surface))
 	endpoint := e.bridge.Open(ctx, s)
 	if endpoint == "" {
 		// UNREACHABLE past the refusals LaunchExecutor makes by name, which
@@ -1069,7 +1031,6 @@ func (e *Engine) openBridge(ctx context.Context, s *mcpbridge.Session, ledger *b
 		return sandbox.Opening{}, fmt.Errorf("the tool bridge opened no session for run %s's "+
 			"job %s; this node's log says why (mcp_bridge_*)", s.RunID, job.LaunchID)
 	}
-	inbox.Bind(ctx, job.LaunchID)
 	// AS LONG AS THIS NODE'S BRIDGE CAN TAKE TO ANSWER A CALL is how long the
 	// box's harness waits for one, on every server it is handed: the bridge
 	// keeps a running call's answer going, so nothing else bounds the wait
@@ -1122,16 +1083,33 @@ func bridgeOpening(endpoint string, s *mcpbridge.Session, steered bool, wait tim
 	return opening
 }
 
+// withRunsOwn is out with what req says of the run itself beside the launch's
+// decisions: its own context sources, which a launch charges an OpenCode
+// continuation in the box that holds its copy (internal/sandbox's RunSources),
+// what each server the run's bridge serves says it is for; the leads its fresh
+// brief opened with, which the launch keeps for its job; and the read its
+// briefs were built from ([sandbox.LaunchRequest.BriefRead]). Set beside
+// [agentLauncher.launch]'s literal rather than in it, since that literal is the
+// launch's decisions (member, cell, reach, environment, login), which
+// crewlet-operator mirrors, and none of these is one.
+func withRunsOwn(req runner.AgentRunRequest, out sandbox.LaunchRequest) sandbox.LaunchRequest {
+	out.MCPGuidance = mcpbridge.Guidance(req.Surface)
+	out.FreshOwn = req.FreshOwn
+	out.BriefRead = req.BriefRead
+	return out
+}
+
 // sandboxContinuation is the runner's carry-on of an asking run in the sandbox
-// layer's terms, nil for every other launch — with the read its briefs were
-// built from, past which the job's opening marks the round's calls late
-// ([sandbox.Continuation.BriefRead]).
+// layer's terms, nil for every other launch.
 func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 	if c == nil {
 		return nil
 	}
-	out := &sandbox.Continuation{SessionID: c.SessionID, Brief: c.Brief, BriefRead: c.BriefRead,
-		Told: c.Told, Fresh: c.Fresh}
+	out := &sandbox.Continuation{SessionID: c.SessionID, Brief: c.Brief, Told: c.Told, Fresh: c.Fresh}
+	if c.Summarized != "" {
+		out.Summarized, out.SummarizedTold = c.Summarized, c.SummarizedTold
+		out.Count, out.CountProvider = c.Count, c.CountProvider
+	}
 	switch {
 	case c.SignInReplaced:
 		out.Reason = sandbox.FollowUpSignInReplaced
@@ -1141,32 +1119,17 @@ func sandboxContinuation(c *runner.Continuation) *sandbox.Continuation {
 	return out
 }
 
-// member is the executor-chain member this launch runs on: the first one that
-// can take a run here and now.
-//
-// PICKED AT EVERY LAUNCH, not once for the turn: a turn the reviewer sends back
-// launches again, possibly an hour later, and an entry whose plan ran out in
-// between must be passed over then rather than relaunched into the same limit.
-// From the turn's pinned chain ([phase.Registry.Chain], the same resolution
-// config validates the chain by), walked in order:
-//
-//   - a member that is not a harness with an in-box runner is passed over
-//     SILENTLY. It is a fact of the configuration rather than a refusal of the
-//     moment — the seat's `llm` is shared with the reviewer and its other
-//     phases, where any harness is legitimate — and config warns about it once,
-//     where a hand-off announced on every launch would report a fallback
-//     nothing fell from;
-//   - a member sitting out its spent plan on this node
-//     ([harness.Provider.SittingOut]) is handed off like a call's fallback
-//     ([chain.Pick]), published against this turn through onFallback;
-//   - every runner member sitting out is a [*chain.Error] carrying each one's
-//     refusal, the same unavailability an exhausted call reports: a chain at
-//     its limit ([chain.Limited]), on which the dispatcher parks the seat and
-//     a resume waits ([Dispatcher.Provider], [resumeRefusal]), exactly as when
-//     a reviewer's call finds every member spent (ADR-0064).
-//
-// A run that meets its limit midway is not relaunched on the next member: its
-// box did the work it did, and the next launch is where the chain moves on.
+// member is the executor-chain member this launch runs on: the first that can
+// take a run now, picked at every launch (a plan may run out between
+// send-backs) from the pinned chain ([phase.Registry.Chain]). A member that is
+// no in-box-runner harness is passed over silently (the seat's `llm` is shared
+// with phases where any harness is legitimate; config warns once); one sitting
+// out its spent plan ([harness.Provider.SittingOut]) is handed off like a
+// call's fallback ([chain.Pick]) through onFallback; all sitting out is a
+// [*chain.Error], a chain at its limit ([chain.Limited]): the dispatcher parks
+// the seat and a resume waits ([Dispatcher.Provider], [resumeRefusal];
+// ADR-0064). A run that meets its limit midway is not relaunched on the next
+// member.
 func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
 	onFallback func(chain.Fallback)) (_ chain.Member, _ *harness.Provider, err error) {
 	defer origin.Stamp(&err)
@@ -1230,29 +1193,15 @@ func executorRunners(c *Company, seat *org.Role, manager *sandbox.Manager) (_ []
 
 // executorHeadroom refuses a launch below turn_engine.executor_min_budget_tokens.
 //
-// EVERY LAUNCH, the dispatch's and each relaunch a reviewer sends the turn back
-// for: a run's first request alone is its harness's own prompt and tool
-// definitions, the bridged tool array and the seat's system prompt, so a seat
-// with less room than that spends a box, a clone and a setup to be refused at
-// its first call.
-//
-// THREE-VALUED, like every other budget read in this engine: a seat with no
-// counter is uncapped and passes, a seat below the floor is refused, and a
-// read that FAILED is refused too — launching a box on an unknown budget is how
-// a company discovers its ceiling by spending past it.
-//
-// BELOW THE FLOOR IS A BUDGET REFUSAL ([toolloop.ErrBudgetExhausted]), which is
-// what makes it wait rather than fail, on both paths a launch is made from. On
-// a dispatch the dispatcher answers that error by asking the budget stage,
-// which recognises a seat whose windows leave less than the floor
-// ([meter.starved]) — so the seat waits for its window to turn over rather
-// than taking its redelivery into the same refusal until the broker
-// dead-letters it. In a resumed segment — a reviewer's send-back, or the run
-// a person's answer carries on — there is no delivery to park, and the resume
-// is HELD on the same window instead ([Engine.budgetHold],
-// [sandbox.ErrResumeHeld]): the job stays collected, its seat held, until the
-// window turns over. An unreadable counter is not one: it is the store's
-// moment, and a retry's backoff is what rides it out.
+// Every launch and relaunch: a run's first request alone carries the harness's
+// prompt and tool definitions, so a seat with less room spends a box to be
+// refused at its first call. Three-valued: no counter is uncapped, below the
+// floor is refused, and a failed read is too (an unknown budget is spent past).
+// Below the floor is a budget refusal ([toolloop.ErrBudgetExhausted]), so it
+// waits: a dispatch parks the seat via the budget stage ([meter.starved])
+// rather than redeliver into the same refusal; a resumed segment has no
+// delivery to park and is held on the window ([Engine.budgetHold],
+// [sandbox.ErrResumeHeld]). An unreadable counter is retried by backoff.
 func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor launchFloor) (err error) {
 	defer origin.Stamp(&err)
 	if floor.tokens() <= 0 || remaining == nil {
@@ -1274,26 +1223,16 @@ func executorHeadroom(ctx context.Context, remaining runner.Remaining, floor lau
 }
 
 // bridgeServers is the engine-side surface as entries of a box's MCP server
-// list, which the launch adds beside the seat's own servers in a map of the
-// job's own: an endpoint written into the seat's rendered map, whose values
-// the epoch owns, would follow the seat into its next run, where the token
-// names a job that is over.
+// list, a map of the job's own: an endpoint written into the seat's rendered
+// map, which the epoch owns, would follow it into its next run, where the
+// token names a job that is over.
 //
-// THE ENGINE'S OWN TOOLS under the reserved name, which config refuses to any
-// mcp_servers entry — so it can never shadow a server the seat scoped into its
-// box (see [config.ToolServerName] for why it is not the handle) — and ALWAYS
-// LOADED ([sandbox.MCPServer.AlwaysLoaded]): what the run reports through and
-// asks a person through is on every request. AND EACH OF THE SEAT'S MCP SERVERS
-// the surface offers a tool of, under its own name, at the route the bridge
-// serves it on ([mcpbridge.ServerURL]), left to the harness's own way of
-// keeping a large tool list out of each request. The names are the bridge's own
-// reading of the surface ([mcpbridge.Servers]), so a box is handed exactly the
-// servers its opening serves.
-//
-// EVERY ONE WAITED ON FOR A CALL AS LONG AS wait, the bridge's own bound for
-// one ([mcpbridge.Bridge.CallTimeout], [sandbox.MCPServer.CallTimeout]): a
-// call to a seat's MCP server is kept going and answered by the same bridge
-// as one to the engine's own tools, and may be served as one of them.
+// The engine's tools sit under the reserved name config refuses to any
+// mcp_servers entry ([config.ToolServerName]), so they never shadow a seat's
+// server, and are always loaded ([sandbox.MCPServer.AlwaysLoaded]). Each of the
+// seat's servers the surface offers a tool of follows under its own name at
+// its bridge route ([mcpbridge.ServerURL], [mcpbridge.Servers]). Every call
+// waits as long as wait ([mcpbridge.Bridge.CallTimeout]).
 func bridgeServers(endpoint string, surface mcpbridge.Surface, wait time.Duration) map[string]sandbox.MCPServer {
 	out := map[string]sandbox.MCPServer{config.ToolServerName: {
 		Name: config.ToolServerName, Transport: sandbox.TransportHTTP, URL: endpoint,
@@ -1306,28 +1245,17 @@ func bridgeServers(endpoint string, surface mcpbridge.Surface, wait time.Duratio
 	return out
 }
 
-// agentRunFor is THE construction path for a turn's executor launcher, used by
-// both RunnerFor call sites, over the turn's pinned company.
+// agentRunFor is THE construction path for a turn's executor launcher, over the
+// turn's pinned company.
 //
-// Nil only where there is nothing to launch for — no turn, no agent seat, or a
-// company with no models, which the no-model hold keeps from taking a turn at
-// all — and the runner refuses to be built without one: every executor is a
-// launched run, so there is no other runtime a nil could stand for.
+// Nil only where there is nothing to launch for (no turn, agent seat or
+// models); the runner refuses to be built without one. It returns the
+// interface so a nil is never a typed nil.
 //
-// A typed nil is not a nil interface, so this returns the interface rather
-// than the concrete type: assigning a nil *agentLauncher into
-// runner.Config.Launcher would hand the runner a launcher that dereferences
-// nothing on its first launch.
-//
-// conversation is what the turn's dispatch read of its conversation, which a
-// dispatched segment's one launch — the turn's first — continues and freezes;
-// nil for a resumed segment's, whose relaunches read what that launch froze.
-// delivery is the ids of the events a dispatched segment's turn was dispatched
-// for ([agentLauncher.delivery]); nil for a resumed one's. notes is a resumed
-// segment's notes on its run's record, which its relaunches' briefs are sealed
-// from ([agentLauncher.notes]); nil for a dispatched one's. relaunchRefusedIn
-// is a resumed segment's window its run's last relaunch was refused below its
-// floor in ([agentLauncher.relaunchRefusedIn]); nil for a dispatched one's.
+// conversation and delivery are set for a dispatched segment (its first launch
+// continues and freezes the conversation), notes and relaunchRefusedIn for a
+// resumed one; nil otherwise. See [agentLauncher.delivery],
+// [agentLauncher.notes] and [agentLauncher.relaunchRefusedIn].
 func (e *Engine) agentRunFor(company *Company, handle string, t *turnctx.Turn,
 	ask *sandbox.ColleagueAsk, conversation *conversationRead, told *toldTurn, delivery []uuid.UUID,
 	notes *rowSource, relaunchRefusedIn *sandbox.BudgetWindow,

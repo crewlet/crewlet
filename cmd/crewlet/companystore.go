@@ -18,74 +18,16 @@ import (
 
 // The company's secret store, as one CLI run reads and writes it.
 //
-// # One route for both sides of a run
-//
-// A command that reads the company READS its values — an instance's address, a
-// webhook signing secret, an entry's token — and a provisioning run RECORDS
-// what it mints and reads a seat's token back to decide whether to keep it,
-// while `crewlet llm login` and `export` store what they capture. All of it is
-// the company's secret store, the one the engine resolves every `${VAR}`
-// through, so all of it goes the one way [routeSecretStore] decides, once per
-// run ([companyStore.route]).
-//
-// It used to be decided twice: once for the reads, by a resolver that read the
-// store itself or asked the running node, and once for the sink and the llm
-// writes, by the route `crewlet secrets` takes. The two had different edges:
-// `-api` from a machine with no Tier A read the node and then could not
-// record, and an engine starting or stopping between the two decisions split
-// one run across two ways in, each with its own idea of what the company
-// held.
-//
-// # Through a node: the names it lists, in batches
-//
-// The run lists the node's names first (`GET /secrets`, which reveals
-// nothing), then asks `POST /secrets/reveal` for the variables the command
-// reads that the node lists — and, where a `-secret-store` sink will read a
-// seat's token back, those names in the same batch — at most
-// [secretsapi.MaxRevealNames] a request. Only listed names are sent, for three
-// reasons. The route refuses a whole request over one name outside the
-// reference grammar, and a file loaded only to run can name one
-// (`overrides.token_env: MY-TOKEN`) that no store can hold. A name the node
-// does not hold costs no request. And the node logs every name it is asked
-// for, so its log names only what it holds. A listed name answered missing —
-// removed since the listing — falls to the environment as an unheld one does,
-// and that environment is this shell's, not the engine's.
-//
-// A read the node refuses, or a node that does not answer, FAILS THE RUN
-// before it acts, and nothing is filled in from the environment in its place:
-// a value missing because the node could not be asked is not one the fleet
-// does not hold, and the environment's answer would be the stale export the
-// store exists to outrank.
-//
-// # With the engine stopped: the fleet's store itself
-//
-// While this node's engine is stopped, the run reaches the fleet's store
-// itself ([openFleetStore]) — the same store a running node serves through its
-// API, so a value is held or not held the same way whichever way the run went
-// in. It is read the same way too: the listing, then the values of the names
-// the command reads that the store lists, in one read of the store
-// ([github.com/crewlet/crewlet/internal/fleetsecrets.Store.Values]), which
-// opens no row it was not asked for. The first line says so, naming the broker
-// it was reached through. A member of a cluster cannot reach the store alone,
-// and is sent to a running member ([fleetStoreRemedy]); nor can a node that
-// holds no data, which is refused naming `-api` ([refuseScratchStore]).
-//
-// A run that reads no stored value decides no route at all and runs
-// anywhere: a dry run that resolves nothing, a plan with nothing in it — and
-// starts no broker for a store it never reads.
-//
-// # A run that only asks which names the store holds
-//
-// A provisioning run whose sink is an env file or its own output asks its
-// store which of the names the run can mint into it holds, since the store
-// outranks that sink ([sinkFlags.refuseOutranked]). That is a read of the
-// company's store like any other, by the run's one route.
-//
-// # No Tier A, and no -api
-//
-// With no Tier A file at `-config` and no `-api`, there is no store to read:
-// the run resolves from the environment alone and says so on its first line,
-// which is how these commands run on a machine that is not a node.
+// Reads of the company's values, a provisioning run recording what it mints and
+// reading a seat's token back, and `crewlet llm login` and `export` storing
+// what they capture all use the store the engine resolves every `${VAR}`
+// through, so all go the one way [routeSecretStore] decides, once per run
+// ([companyStore.route]). Two decisions (reads, then the sink) had different
+// edges: `-api` from a machine with no Tier A read the node and could not
+// record, and an engine starting between them split one run across two ways in.
+// A provisioning run whose sink is an env file asks the same route which names
+// the store holds, since the store outranks that sink
+// ([sinkFlags.refuseOutranked]).
 
 // storeFlags is the `-config` / `-api` pair every command that reads the
 // company's stored values takes.
@@ -118,6 +60,16 @@ func addStoreFlags(fs *flag.FlagSet) storeFlags {
 
 // companyStore is one run's route to the company's secret store, decided at
 // most once and shared by every read and write the run makes.
+//
+// Through a node, the run lists names (`GET /secrets`, revealing nothing), then
+// asks `POST /secrets/reveal` for the listed variables the command reads, plus
+// a `-secret-store` sink's read-back names, at most [secretsapi.MaxRevealNames]
+// a request. Only listed names are sent: the route refuses a whole request over
+// one name outside the reference grammar, an unheld name costs no request, and
+// the node logs every name asked. A listed name answered missing falls to this
+// shell's environment. A read the node refuses, or a node that does not
+// answer, FAILS THE RUN before it acts: filling in from the environment would
+// be the stale export the store exists to outrank.
 type companyStore struct {
 	environ       config.Source
 	bootstrapPath string
@@ -172,10 +124,17 @@ func companyBootstrap(bootstrapPath string) (*config.Bootstrap, error) {
 	return loadBootstrapForStore(bootstrapPath)
 }
 
-// route opens the run's store, once: nil where there is none — no Tier A file
-// and no `-api` — which is the environment-only run. A store the run cannot
-// reach — a cluster member with its engine stopped, a running node whose API
-// it cannot use — is answered here, before it has read anything.
+// route opens the run's store, once: nil where there is none (no Tier A file
+// and no `-api`), the environment-only run, which says so on its first line. A
+// store the run cannot reach is answered here, before it has read anything.
+//
+// With the engine stopped the run reaches the fleet's store itself
+// ([openFleetStore]), read the same way as through a node: the listing, then
+// the listed names in one
+// [github.com/crewlet/crewlet/internal/fleetsecrets.Store.Values]. A cluster
+// member is sent to a running member ([fleetStoreRemedy]); a node holding no
+// data is refused naming `-api` ([refuseScratchStore]). A run reading no stored
+// value decides no route and starts no broker.
 func (s *companyStore) route(ctx context.Context) (*secretTarget, error) {
 	if s.routed {
 		return s.target, s.routeErr
@@ -380,28 +339,14 @@ func (s *companyStore) holding(ctx context.Context, names []string, notes io.Wri
 // reached: a [config.Source] over that store's rows that reads only what is
 // asked of it, and the cache a `-secret-store` sink reads back from.
 //
-// # The command's scope is read before it runs
-//
-// Not one value at a time as the command reads it, which would read no more
-// and fail worse. A read is a [config.Source] lookup, which has no error to
-// return: a read that failed — a reveal the node refused, which it refuses a
-// machine token every one; a row sealed under a key the ring no longer holds —
-// could only come back as "unset", and unset is what tells a provisioning run
-// to MINT, so a GitLab provision would replace the key a working hook signs
-// with because it could not read the one in the store. Read up front, the same
-// failure stops the command before it has done anything. And only those names
-// are read, either way in: reached directly, a row sealed under a retired key
-// that the command never reads cannot fail it.
-//
-// # A read outside the scope is still answered from the store
-//
-// Read as it is made, one name in one request, and said on notes. A command
-// whose scope missed a field it reads — a new one, say — then resolves the
-// store's value rather than the environment's, which is the engine's answer;
-// resolving it as unset would be the same mint. That read has no error to
-// return either, so a failed one PANICS: the run stops where it is, as it would
-// on a vendor's own failure part way through, rather than going on to act on a
-// value it does not have.
+// The command's scope is read BEFORE it runs. A [config.Source] lookup has no
+// error to return, so a failed read (a reveal the node refuses a machine
+// token, a row sealed under a retired key) could only come back "unset", which
+// tells a provisioning run to MINT: a GitLab provision would replace the key a
+// working hook signs with. Read up front, the failure stops the command before
+// it acts. A read outside the scope is answered from the store one name per
+// request, said on notes, and a failed one PANICS rather than act on a value
+// it does not have.
 type storedValues struct {
 	// mu guards values and held: a provisioner may read from more than one
 	// goroutine, and a read is a request the lock holds across.

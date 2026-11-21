@@ -33,6 +33,35 @@ func aWrite() gitlet.EngineWrite {
 	}
 }
 
+// tagWrite is a tag write of kind any party may act on but for what a case
+// changes: at commit, or annotated with message.
+func tagWrite(kind gitlet.EngineWriteKind, ref, commit, message string) gitlet.EngineWrite {
+	return gitlet.EngineWrite{Kind: kind, RepoID: aWrite().RepoID, Principal: aWrite().Principal,
+		WrittenFor: aWrite().WrittenFor, OpID: aWrite().OpID, Ref: ref, Commit: commit, Message: message}
+}
+
+// A TAG WRITE NAMES A TAG: create_tag at a commit, annotated by a message; delete_tag the value
+// read. Mutation: read Annotates off the kind alone, red.
+func TestATagWriteNamesATag(t *testing.T) {
+	t.Parallel()
+	light := tagWrite(gitlet.WriteCreateTag, "refs/tags/release/1.0", oidOf("C"), "")
+	annotated := tagWrite(gitlet.WriteCreateTag, "refs/tags/v1", oidOf("C"), "The first release")
+	deleted := tagWrite(gitlet.WriteDeleteTag, "refs/tags/v1", "", "")
+	deleted.ExpectedHead = oidOf("T")
+	for _, w := range []gitlet.EngineWrite{light, annotated, deleted} {
+		if err := w.Validate(); err != nil {
+			t.Errorf("%s %s: %v", w.Kind, w.Ref, err)
+		}
+	}
+	if light.Annotates() || !annotated.Annotates() || deleted.Annotates() {
+		t.Errorf("Annotates: light %t, annotated %t, delete %t; want only the annotated create",
+			light.Annotates(), annotated.Annotates(), deleted.Annotates())
+	}
+	if !gitlet.WriteCreateTag.Tags() || !gitlet.WriteDeleteTag.Tags() || gitlet.WriteCreateBranch.Tags() {
+		t.Error("Tags is not exactly the two tag kinds")
+	}
+}
+
 // AN ENGINE WRITE IS HELD TO ONE RULE by the tool, the router and the building
 // Gitlet node alike, refused ErrInvalid naming the field: each kind takes only
 // its own fields; a seat names its turn (never an executor, whose box pushes
@@ -165,6 +194,18 @@ func TestAnEngineWriteIsHeldToOneRule(t *testing.T) {
 		"a delete of no head": {gitlet.EngineWrite{Kind: gitlet.WriteDeleteBranch, RepoID: aWrite().RepoID,
 			Principal: aWrite().Principal, WrittenFor: aWrite().WrittenFor, OpID: aWrite().OpID,
 			Ref: "refs/heads/x"}, "expected_head:"},
+		"a tag create on a branch": {tagWrite(gitlet.WriteCreateTag, "refs/heads/v1", oidOf("C"), ""), "ref:"},
+		"a branch create on a tag": {edit(tagWrite(gitlet.WriteCreateTag, "refs/tags/v1", oidOf("C"), ""),
+			func(w *gitlet.EngineWrite) { w.Kind = gitlet.WriteCreateBranch }), "ref:"},
+		"a tag named HEAD": {tagWrite(gitlet.WriteCreateTag, "refs/tags/HEAD", oidOf("C"), ""), "ref:"},
+		"a tag of nothing": {tagWrite(gitlet.WriteCreateTag, "refs/tags/v1", "", ""), "commit:"},
+		"a tag create on a head": {edit(tagWrite(gitlet.WriteCreateTag, "refs/tags/v1", oidOf("C"), ""),
+			func(w *gitlet.EngineWrite) { w.ExpectedHead = oidOf("H") }), "expected_head:"},
+		"a tag delete of no value": {tagWrite(gitlet.WriteDeleteTag, "refs/tags/v1", "", ""), "expected_head:"},
+		"a tag delete with a message": {edit(tagWrite(gitlet.WriteDeleteTag, "refs/tags/v1", "", ""),
+			func(w *gitlet.EngineWrite) { w.ExpectedHead, w.Message = oidOf("T"), "m" }), "message:"},
+		"an annotation git rewrites": {tagWrite(gitlet.WriteCreateTag, "refs/tags/v1", oidOf("C"), "a \uffff"),
+			"message:"},
 	} {
 		err := tc.w.Validate()
 		if !errors.Is(err, gitlet.ErrInvalid) || !strings.Contains(err.Error(), tc.names) {

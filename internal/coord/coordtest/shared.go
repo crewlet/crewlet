@@ -11,23 +11,17 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// RunShared certifies what ONE store answers through SEVERAL HANDLES on it —
-// the shape a fleet actually runs, where every node holds its own client of
-// one coordination store.
+// RunShared certifies what ONE store answers through SEVERAL HANDLES on it,
+// the shape a fleet runs: every node holds its own client of one store.
 //
-// [Run] hands each case one handle, and on a backend whose handles are all the
-// same process that is the whole story. It is not on a store REPLICATED across
-// the members of a cluster: a handle is connected to one member, and a read a
-// member answers from its own copy can be behind a write the quorum already
-// acknowledged. So a store certified through one handle on one member can
-// still break "a backend must serve its own writes, per resource"
-// ([coord.Backend]) — the promise every claim's own read-back rests on — the
-// moment its handles are spread across members.
-//
-// open returns the handles, every one on the same EMPTY store, and at least
-// one of them; a backend with a single process returns the same handle more
-// than once. Run it against a replicated store with the handles on different
-// members, or it certifies the easy case twice.
+// [Run] hands each case one handle, enough only where all handles are one
+// process. On a store REPLICATED across a cluster a handle is connected to
+// one member, whose copy can be behind an acknowledged write, so a store
+// certified through one handle can still break "a backend must serve its own
+// writes, per resource" ([coord.Backend]), which every claim's read-back
+// rests on. open returns at least one handle, all on the same EMPTY store
+// (a single-process backend repeats one); give a replicated store handles on
+// different members, or this certifies the easy case twice.
 func RunShared(t *testing.T, open func(t *testing.T) []coord.Backend) {
 	t.Helper()
 	for _, c := range sharedCases {
@@ -53,18 +47,14 @@ var sharedCases = []struct {
 // sharedClaims is how many fresh resources each handle claims, and
 // sharedConcurrency how many of one handle's are in flight at once.
 //
-// A RATE, NOT A CERTAINTY, and sized from the rate. The failure this catches
-// is a read racing a replica that has not applied a write yet, which a quiet
-// replica rarely loses: measured on the KV backend before its fix, with two
-// handles on the members of a five-member cluster that hold no copy of the
-// bucket, a claim answered a refusal for a lease it had won about once in a
-// thousand claims at sixty-four in flight per handle, so two runs in three
-// failed — against 743 in 10,000 under the fleet-scale load that found it (a
-// hundred nodes claiming at once). A replica falls behind a burst far more
-// readily than a trickle, which is why the claims go out concurrently, as a
-// node's placement sweep sends them. The KV backend's DETERMINISTIC form of
-// the same defect is its own cluster case, which cuts a member off and reads
-// through it; this case is what holds every backend to the promise.
+// A RATE, NOT A CERTAINTY, sized from the rate. The failure is a read racing
+// a replica that has not applied a write yet: on the KV backend before its
+// fix, with two handles on members of a five-member cluster holding no copy
+// of the bucket, about one claim in a thousand at sixty-four in flight per
+// handle was refused a lease it had won, so two runs in three failed (743 in
+// 10,000 at fleet scale). A replica falls behind a burst far more than a
+// trickle, so claims go out concurrently, as a placement sweep sends them.
+// The KV backend's DETERMINISTIC form is its own cluster case.
 const sharedClaims = 500
 
 const sharedConcurrency = 64
@@ -72,19 +62,14 @@ const sharedConcurrency = 64
 // A CLAIM THAT WON IS NEVER ANSWERED AS LOST, and what it won is what the
 // claimant reads next.
 //
-// Every resource here is claimed by exactly one handle, once, so nobody else
-// can hold it: a claim may answer UNKNOWN — the contract's third answer — but
-// never a refusal, which tells the caller somebody else holds a lease that is
-// in fact its own. And a claim that returned a lease is at once the claimant's
-// to read (Get answers it at the same epoch) and to renew. Both halves are one
-// promise, [coord.Backend]'s "a backend must serve its own writes": a claim's
-// own read-back is a read of its write, and one answered by a copy that is
-// behind reads the write as never made — and the lease is then held by this
-// owner in the store until its TTL while the owner believes a peer has it.
-// For a singleton duty that is the duty dark for a TTL on every node at once.
-//
-// Both gate settings are exercised, because they read the claimed record by
-// two different paths.
+// Each resource is claimed by one handle, once, so nobody else can hold it: a
+// claim may answer UNKNOWN (the third answer) but never a refusal, which says
+// somebody else holds a lease that is its own. A returned lease is at once the
+// claimant's to read (Get, same epoch) and renew. Both are [coord.Backend]'s
+// "a backend must serve its own writes": a read-back from a copy that is behind
+// reads the write as never made, so the owner believes a peer holds a lease it
+// holds until its TTL (a singleton duty dark on every node). Both gate
+// settings run, because they read the claimed record by two paths.
 func testAClaimThatWonIsNeverAnsweredAsLost(t *testing.T, handles []coord.Backend) {
 	ctx, cancel := context.WithTimeout(t.Context(), stallBudget)
 	defer cancel()

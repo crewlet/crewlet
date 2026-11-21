@@ -282,8 +282,9 @@ func TestACompanyWideShareAsksAStepUp(t *testing.T) {
 		d.Tool, d.Act, d.ChangesVisibility = "share_artifact", "share_artifact", true
 		d.Preview = proposal.Preview{
 			Title: "Share artifact", ApproveLabel: "Approve and share",
-			Changes:  []wire.Change{proposal.Changed("audience", "Who can view", "Only you", "Everyone")},
-			Audience: []string{"Everyone in the company"}, StepUp: true,
+			Changes: []wire.Change{proposal.Changed("audience", "Who can view",
+				wire.Plain("Only you"), wire.Plain("Everyone"))},
+			Audience: []wire.Phrase{wire.Plain("Everyone in the company")}, StepUp: true,
 			SourceRevision: "artifact:a1@2",
 			Request: exec.Request{Method: "PUT", Path: "/artifacts/a1/shares",
 				Body: []byte(`{"company":"viewer"}`)},
@@ -561,10 +562,10 @@ func TestAnAppliedWriteHandsTheTurnItsReceipt(t *testing.T) {
 	r := f.Turns.Resumed()[0]
 	switch {
 	case r.Receipt == nil || r.Receipt.Position != "CREWLET_TRACKER_LOG@1:42" ||
-		r.Receipt.Summary != "Created ENG-156":
+		r.Receipt.Summary.Text() != "Created ENG-156" || !namesTask(r.Receipt.Summary, "ENG-156"):
 		// THE RECEIPT NAMES WHAT WAS CREATED, from the act tool's own
 		// receipt, so the card says which task landed rather than
-		// "Applied".
+		// "Applied", and links it as the task.
 		t.Errorf("the receipt is %+v", r.Receipt)
 	case r.Invalidate == nil || r.Invalidate.Domain != "tracker" ||
 		r.Invalidate.Position != "CREWLET_TRACKER_LOG@1:42":
@@ -794,17 +795,15 @@ func TestARepeatedDecisionTheStoreCannotAnswerIsUnconfirmed(t *testing.T) {
 
 // A DECISION THE STORE REFUSED IS THE STORE'S OWN ERROR, never one nobody can
 // confirm: the record was not written, so the surface tells the refusal as
-// the condition or the fault it is. Every store error once came back as
-// Unconfirmed, and a person whose approval a full log refused was told it may
-// have landed and asked to approve again into the same refusal. So is a read
-// of the proposal, or of whether its turn may carry on, that failed before
-// anything was decided. A settlement the store refuses after the write was
-// SENT is still unconfirmed, because the write's own outcome stands whatever
-// kept its record out.
+// the condition or fault it is, not "may have landed, approve again" into the
+// same refusal. So is a failed read of the proposal, or of whether its turn
+// may carry on, before anything was decided. A settlement the store refuses
+// after the write was SENT is still unconfirmed: the write's own outcome
+// stands whatever kept its record out.
 //
-// Mutation: answer a failed move as Unconfirmed (as move did) and the first
-// two rows go red; answer either failed read as Unconfirmed and its row does;
-// return a failed settlement's error as it is and the last case does.
+// Mutation: answer a failed move as Unconfirmed and the first two rows go
+// red; answer either failed read as Unconfirmed and its row does; return a
+// failed settlement's error as it is and the last case does.
 func TestADecisionTheStoreRefusedIsTheStoresOwnError(t *testing.T) {
 	t.Parallel()
 	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
@@ -1001,4 +1000,11 @@ func TestARefusalNoChangeMendsIsNotPromisedOne(t *testing.T) {
 	if refusal.Hint != cards.RefusalSettled {
 		t.Errorf("the spent turn is hinted %q, want %q", refusal.Hint, cards.RefusalSettled)
 	}
+}
+
+// namesTask reports a phrase naming the task key as a task, linked to its page.
+func namesTask(p wire.Phrase, key string) bool {
+	refs := p.Refs()
+	return len(refs) == 1 && refs[0].Kind == wire.ResourceTask && refs[0].ID == key &&
+		refs[0].Open != nil && refs[0].Open.Href == "#/worklet/"+key
 }

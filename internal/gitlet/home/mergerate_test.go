@@ -285,7 +285,7 @@ func TestTheQueueCountsItsRoundsLandingsAndEjections(t *testing.T) {
 // bisect counts one `ejected` round alone, and the turn after never counts the
 // train `abandoned`. The two: a green train whose landing the rows refuse,
 // its first entry gate_unmet; a train whose base's checks file defines none of
-// its required checks, every entry ejected check_failed. Each is followed by
+// its required checks, every entry ejected checks_undefined. Each is followed by
 // a next train built over no abandoned round.
 //
 // Mutation: spell the outcome as another's (roundEjected = "bisected") → no

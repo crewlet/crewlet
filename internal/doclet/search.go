@@ -15,30 +15,15 @@ import (
 
 // Searcher answers the company's knowledge search over its own pages.
 //
-// It implements [knowledge.Searcher], which is what makes Doclet
-// a drop-in for Confluence: the turn-start prefetch and the `search_knowledge`
-// builtin both read through that seam, so neither knows which answered.
+// It implements [knowledge.Searcher], a drop-in for Confluence. An empty read
+// scope means the whole company, unlike Confluence, where it means what the
+// ASKING SEAT's own account can read (the shared org token would otherwise let
+// a seat read what its account never could). Doclet has no second account:
+// the engine IS the boundary, so [knowledge.Permitted] is not consulted.
 //
-// # What "unscoped" means here, and why it differs from Confluence
-//
-// On Confluence an empty read scope means "whatever the ASKING SEAT's own
-// account can read", and a credential-less seat gets nothing — because an
-// unscoped query on the shared org token is how one seat reads a page its own
-// account never could.
-//
-// On Doclet there is no second account. Every reader is a seat of one company,
-// the engine IS the boundary, and there is nothing to launder a read through.
-// So an empty scope means the whole company, and [knowledge.Permitted] is not
-// consulted: its selfAuth question has no meaning on a backend where identity
-// is not a credential.
-//
-// # Best effort, as the seam requires
-//
-// Every failure path is an empty result and a log line. A turn must not die
-// because an index was rebuilding — but "not indexed yet" and "nothing
-// matched" are different facts, and [Searcher.Building] is how a caller tells
-// them apart so a seat on a fresh node is not told the company has written
-// nothing down.
+// Best effort, as the seam requires: a failure is an empty result and a log
+// line. [Searcher.Building] tells "not indexed yet" from "nothing matched", so
+// a fresh node's seat is not told the company has written nothing down.
 type Searcher struct {
 	index *search.Indexer
 
@@ -185,20 +170,15 @@ func (s *Searcher) Search(ctx context.Context, q knowledge.Query) knowledge.Resu
 }
 
 // Answer is [Searcher.Search] with its failure kept: an ERROR rather than the
-// empty result Search degrades to, for a caller that answers somebody else —
-// the estate router, which carries a search between nodes and has to tell the
-// asking node "the knowledge base could not be searched" rather than hand it
-// an empty answer that reads as "nothing matched". The two send a seat to
-// different places: one to try again, the other to write down what it was
-// looking for, duplicating a page that exists.
+// empty result Search degrades to, for a caller that answers somebody else
+// (the estate router, which must tell the asking node "could not be
+// searched", not "nothing matched": one sends a seat to retry, the other to
+// write down what it sought, duplicating a page that exists).
 //
-// THE FUSED ORDER IS WALKED PAST WHAT CANNOT BE SHOWN, rather than cut first
-// and filtered after: a tool-skill page among the leaders, or one the index
-// named and could not read back, costs the answer that page and never a place,
-// so a company with many skills is not handed a short list. That is what the
-// over-fetch factor this replaced only approximated — three times the limit,
-// cut, then filtered — and a company whose skills filled two thirds of the cut
-// got the short list anyway.
+// THE FUSED ORDER IS WALKED PAST WHAT CANNOT BE SHOWN, not cut first and
+// filtered after: a tool-skill page among the leaders, or one the index named
+// and could not read back, costs the answer that page and never a place, so a
+// company with many skills is not handed a short list.
 func (s *Searcher) Answer(ctx context.Context, q knowledge.Query) (knowledge.Result, error) {
 	if s.index == nil || strings.TrimSpace(q.Text) == "" {
 		// THE PROBE: nothing runs and nothing is read, but the answer
@@ -265,17 +245,14 @@ func (s *Searcher) Answer(ctx context.Context, q knowledge.Query) (knowledge.Res
 // HitLabel is what a native hit's title and snippet are, as a model reads them
 // (ADR-0040): a page's body, at a COLLEAGUE'S trust with nobody named.
 //
-// NOBODY NAMED, because the index a hit is read back from keeps the page's
-// title and the opening of its body and not who wrote either: naming the
-// writers would be a read of every hit's revisions for a bullet the seat opens
-// in full anyway, where `get_page` names them.
+// NOBODY NAMED, because the index keeps the page's title and body opening, not
+// its writers: naming them would read every hit's revisions for a bullet the
+// seat opens in full anyway, where `get_page` names them.
 //
-// A COLLEAGUE'S TRUST ALL THE SAME, by the one rule for a surface the engine
-// hosts ([provenance.LabelForHosted]) that the same page's wake and get_page
-// read by too: every write to a page here is authenticated as a seat, a
-// person, an operator credential or the engine, so whoever wrote it was a
-// company principal, though never `own` — the unnamed writer may be anybody
-// who could write there.
+// A COLLEAGUE'S TRUST ALL THE SAME, by the rule for a hosted surface
+// ([provenance.LabelForHosted]) that the page's wake and get_page follow too:
+// every write here is authenticated as a company principal, though never
+// `own`, since the unnamed writer may be anybody who could write there.
 func HitLabel() provenance.Label {
 	return provenance.LabelForHosted("", provenance.SourcePageBody, nil, false)
 }

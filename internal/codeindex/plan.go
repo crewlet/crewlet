@@ -39,45 +39,31 @@ var (
 	ErrTooComplex = errors.New("codeindex: a pattern past the program a search runs")
 )
 
-// MaxProgram is the most instructions a pattern's program may hold — the
-// program Go's regexp runs it as, syntax.Compile of its simplified parse —
-// for a search to plan it; a larger one is REFUSED (ErrTooComplex).
+// MaxProgram is the most instructions a pattern's program (syntax.Compile of
+// its simplified parse, as Go's regexp runs it) may hold for a search to plan
+// it; a larger one is REFUSED (ErrTooComplex).
 //
-// What confirming a line costs is its bytes times the threads the regexp
-// steps at each of them, at most its program's instructions (MaxLineWork),
-// and a counted repetition compiles to as many copies of what it repeats:
-// .{0,999} alone is two thousand instructions, and the 398-byte "the" +
-// 49 × .{0,999} + "zzz" is 97 910, which took 1.5–2 ms a byte of a line
-// holding no match. What a person or a seat searches for compiles to a few
-// dozen — `func \w+\(` to ten, a hex object id's [0-9a-f]{40} to 42, a
-// literal or a word of MaxQueryBytes, folded, to about four hundred and
-// foo.{0,500}bar to 1 008 — so the bound refuses only a pattern a counted
-// repetition multiplied, and every pattern it plans runs on any line of
-// MaxLineWork/MaxProgram bytes (32 KiB) or fewer.
+// Confirming a line costs its bytes times the threads the regexp steps at each,
+// at most its program's instructions (MaxLineWork), and a counted repetition
+// compiles to copies of what it repeats: .{0,999} is two thousand instructions,
+// and "the" + 49 × .{0,999} + "zzz" 97 910 (1.5–2 ms a byte of a line with no
+// match). What a search is written with compiles to a few dozen to a thousand
+// (`func \w+\(` ten, [0-9a-f]{40} 42, foo.{0,500}bar 1 008), so the bound
+// refuses only a counted repetition's product, and every planned pattern runs
+// on any line of MaxLineWork/MaxProgram bytes (32 KiB) or fewer.
 const MaxProgram = 1 << 10
 
 // MaxLineWork bounds what confirming one line may cost, in the regexp's own
 // unit: the line's bytes times its program's instructions. Go's regexp steps
-// each instruction at most once a byte — its NFA queues each once a step, its
-// backtracker visits each pair of instruction and position once — so the
-// product bounds its work whatever the pattern and the line; and a run of it
-// cannot be stopped part way, so a line past the bound is NOT RUN: Confirm
-// counts it, for a caller to report among what the search did not read,
-// never among what holds no match.
-//
-// 2^25: a program of 32 instructions or fewer — a literal of about thirty
-// bytes, and most of the expressions a search is written with — runs on a
-// whole MaxFileBytes line, the longest a blob the index holds can have (a
-// minified file is one line), and one at MaxProgram on 32 KiB. Measured in
-// one bounded run (BenchmarkALineAtTheWorkBound, -benchtime 3x, one count,
-// no race detector, on two E-cores of a Core Ultra 7 265U), a regexp holding
-// every instruction live costs 6.3–6.7 ns an instruction-byte: 0.22 s for
-// MaxProgram's program over its 32 KiB, the bound exactly, and 0.16 s for 24
-// instructions over a whole mebibyte line — so a search that checks its
-// budget between lines (Confirm's context) overruns it by a quarter of a
-// second at most there. One exploratory run on the same cores found the same
-// 6.4–7.0 ns from 24 instructions to 2 006, and 15 ns at the 97 910 of the
-// pattern MaxProgram's doc names, whose program no cache holds.
+// each instruction at most once a byte, so the product bounds its work whatever
+// the pattern and line; a run cannot be stopped part way, so a line past the
+// bound is NOT RUN: Confirm counts it, for a caller to report among what the
+// search did not read, never among what holds no match. 2^25: a program of 32
+// instructions or fewer (most expressions a search is written with) runs on a
+// whole MaxFileBytes line, the longest a blob can have, and one at MaxProgram
+// on 32 KiB. At 6.3–6.7 ns an instruction-byte (BenchmarkALineAtTheWorkBound)
+// the bound is 0.22 s, so a search checking its budget between lines overruns
+// by a quarter second at most.
 const MaxLineWork = MaxFileBytes << 5
 
 // QueryError is a refused code search: which refusal, and the sentence a
@@ -232,21 +218,18 @@ func program(re *regexp.Regexp) (int, error) {
 	return len(prog.Inst), nil
 }
 
-// indexable is terms as a clause the index can look up, or false where one of
-// them is shorter than a trigram in the form the index holds it — a clause is
-// satisfied by any one of its literals, so a literal no trigram can find
-// leaves the whole clause unable to rule a blob out.
+// indexable is terms as a clause the index can look up, or false where one is
+// shorter than a trigram as the index holds it: any one literal satisfies a
+// clause, so one no trigram can find leaves it unable to rule a blob out.
 //
 // A folded literal is already lowered (regexlit.Term). A plain one is lowered
-// here, as the index lowered the blob: a blob holding it holds its lowering
-// in its own, since lowering goes rune by rune and the literal is whole runes
-// — so the lookup admits a blob that holds it in another case too, and never
-// misses one that holds it as it is.
+// here, as the index lowered the blob: lowering goes rune by rune over whole
+// runes, so a blob holding it holds its lowering; the lookup admits other-case
+// blobs but never misses one holding it as is.
 //
-// Its literals' trigrams are sorted into those every literal holds and each
-// one's rest (clause) here, once a plan, rather than once a segment
-// searched; which of them more than one place reads is the plan's to say
-// (Plan.share).
+// Trigrams are sorted into those every literal holds and each one's rest once a
+// plan, not once a segment searched; which more than one place reads is the
+// plan's to say (Plan.share).
 func indexable(terms []regexlit.Term) (clause, bool) {
 	var c clause
 	var trigrams [][]Trigram
@@ -383,42 +366,17 @@ func (p *Plan) share() {
 func (p *Plan) Regexp() *regexp.Regexp { return p.re }
 
 // Grep is what a search that reads a commit with git grep in place of an
-// index looks for (M6-D13): ONE extended regular expression (git grep -E)
-// that is nothing but an alternation of fixed strings, any one of which a
-// line must hold for p's expression to match it, and whether git compares
-// them ignoring case (-i) — so the lines git answers are a superset of the
-// lines the expression matches, which Confirm then holds to RE2 exactly as
-// the index path's candidates are. ok is false where no clause of p can be
-// looked for that way, and git must answer every line.
+// index looks for (M6-D13): ONE extended regular expression (git grep -E), an
+// alternation of fixed strings any one of which a line must hold for p's
+// expression to match, and whether git compares them ignoring case (-i). The
+// lines git answers are a superset, which Confirm holds to RE2. ok is false
+// where no clause of p can be looked for that way, and git answers every line.
 //
-// THE MOST SELECTIVE CLAUSE THAT GIT READS EXACTLY: the one whose shortest
-// string is longest, of the fewest strings. git's -i folds ASCII letters
-// alone and lowers no line, so a clause is exact only where every folded
-// literal of it is ASCII — a plain literal is looked for as written, its
-// other bytes compared as they are — and, where -i is set, each rune
-// outside ASCII that RE2 folds onto an ASCII letter, or that a folded
-// literal's lowering turned into one (asciiFolds: ſ for s, the Kelvin sign
-// for k, İ for i), is looked for too, admitting every line that holds one:
-// (?i)status matches ſtatus, which no ASCII fold finds, and (?i)İstanbul,
-// lowered to istanbul, matches İSTANBUL, which git's -i cannot see. A clause
-// folding a literal outside ASCII — (?i)école, whose É git's -i cannot
-// see — is not one git reads exactly, and is never chosen; nor is one with a
-// string holding a NUL, which no argument of a process can carry, or a
-// newline, at which git splits a pattern in two.
-//
-// ONE ALTERNATION, NEVER A STRING A PATTERN (-F -e s1 -e s2 …): git looks
-// ahead for the next line any of its patterns matches, scanning the rest of
-// the file for EACH pattern after every hit, so a second string a file lacks
-// costs a scan of the rest of it at every line the first matches —
-// quadratic in the file: a second for a 1 MiB file of matching lines; and
-// -F -i compiles each string outside ASCII as a case-folding expression of
-// its own: three and a half seconds for that file with the three
-// asciiFolds. One alternation is one pattern, whose look-ahead is linear:
-// 0.02 s for each (git 2.53 under LC_ALL=C, as gitproc runs it, one core,
-// a file of 46 000 lines each matching, every figure measured once). It is
-// no second dialect of the query: every byte of the expression syntax in a
-// string is escaped (ereMeta), so it matches exactly the lines -F would,
-// and the query is answered by RE2 alone (Confirm).
+// ONE ALTERNATION, NEVER A STRING A PATTERN (-F -e s1 -e s2 …): git scans the
+// rest of the file for EACH pattern after every hit, quadratic in the file (a
+// second for 1 MiB), and -F -i compiles each non-ASCII string as its own
+// case-folding expression (3.5 s). One alternation is linear (0.02 s). No
+// second dialect: ereMeta escapes every syntax byte, so RE2 alone answers.
 func (p *Plan) Grep() (pattern string, fold, ok bool) {
 	pieces, fold, ok := p.grepStrings()
 	if !ok {
@@ -445,6 +403,16 @@ const ereMeta = `\.[]()*+?{}|^$`
 
 // grepStrings is the strings of the clause Grep looks for, and whether git
 // compares them ignoring case.
+//
+// THE MOST SELECTIVE CLAUSE THAT GIT READS EXACTLY: the one whose shortest
+// string is longest, of the fewest strings. git's -i folds ASCII letters alone
+// and lowers no line, so a clause is exact only where every folded literal is
+// ASCII, and under -i each non-ASCII rune that RE2 folds onto an ASCII letter,
+// or that a folded literal's lowering turned into one (asciiFolds: ſ for s, the
+// Kelvin sign for k, İ for i), is looked for too: (?i)status matches ſtatus,
+// and (?i)İstanbul matches İSTANBUL, neither of which git's -i sees. A clause
+// folding a non-ASCII literal ((?i)école) is never chosen; nor is one with a
+// NUL (no process argument carries one) or a newline (git splits a pattern).
 func (p *Plan) grepStrings() (pieces []string, fold, ok bool) {
 	best, bestShort := -1, 0
 	for i, c := range p.index {
@@ -582,19 +550,16 @@ type Hit struct {
 
 // Confirm calls hit with every line of blob the plan's expression matches, in
 // order, until hit returns false: RE2's answer, whichever path offered the
-// blob. The expression runs on each line alone — exact, because the plan
-// admits only a pattern whose matches lie within a line (regexlit.LineLocal)
-// — and only on a line that holds what every match needs
-// (regexlit.Prefilter.Admits), so a blob of thousands of lines runs it on the
-// few that can match.
+// blob. The expression runs on each line alone (exact, since the plan admits
+// only a pattern whose matches lie within a line, regexlit.LineLocal) and only
+// on a line holding what every match needs (regexlit.Prefilter.Admits).
 //
-// What it spends is bounded where a run of the regexp cannot be stopped. A
-// line that holds what every match needs but is longer than LineBytes is NOT
-// RUN, and counted in long — what a search reports among what it did not
-// read, never among what holds no match. And ctx is checked between lines:
-// once it ends, Confirm runs no further line and returns its error, so a
-// caller's budget holds to within one line's run, which MaxLineWork bounds.
-// long counts the lines Confirm passed before it returned.
+// A run of the regexp cannot be stopped, so a line that holds what every match
+// needs but is longer than LineBytes is NOT RUN, and counted in long, which a
+// search reports among what it did not read, never among what holds no match.
+// ctx is checked between lines: once it ends, no further line runs and its
+// error returns, so a caller's budget holds to within one line's run, which
+// MaxLineWork bounds.
 func (p *Plan) Confirm(ctx context.Context, blob []byte, hit func(Hit) bool) (long int, err error) {
 	done, limit := ctx.Done(), p.LineBytes()
 	line := 0

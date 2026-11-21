@@ -11,18 +11,11 @@ import (
 // of the engine's tools in flight returned, to the next call or the end — and
 // stopped while any of the engine's tools runs.
 //
-// NOT THE WHOLE RUN, because a run is no longer one answer. A seat's harness drives
-// its own loop and calls the seat's tools in it, so one run is every model turn
-// of a phase: an executor thinking thirty seconds a turn over twenty-four turns
-// works twelve minutes, and a wall-clock cap derived for one answer (adaptive
-// thinking against the output cap, plus the launch) would kill a healthy phase
-// and hand it to the next member of the chain with nothing gained. Stopped
-// while a tool runs, because the tool's time is the tool's — each is bounded
-// by its own deadline and by the harness's tool timeout, which the engine answers
-// ahead of — and a model blocked on one is not working.
-//
-// A text function is one answer, and its clock is never stopped: one stretch
-// is the whole call, which is what timeout_seconds always bounded.
+// NOT THE WHOLE RUN, because a run is every model turn of a phase: twenty-four
+// thirty-second turns work twelve minutes, and a cap derived for one answer would
+// kill a healthy phase. Stopped while a tool runs, because the tool's time is the
+// tool's (bounded by its own deadline) and a model blocked on one is not working.
+// A text function is one answer, and its clock is never stopped.
 type stretch struct {
 	limit time.Duration
 

@@ -21,6 +21,10 @@ import (
 // saves through, so a write the assistant prepared and a write the person
 // clicked are one code path.
 
+// CreateTaskTool files a task, which is also how a task too big for one turn
+// reaches an agent seat that can do it.
+const CreateTaskTool = "create_task"
+
 // DeriveTier is a write's risk from the authority table and the act tool's own
 // hint: R3 (consequential) for a verb only a person takes, a verb that asks a
 // recent proof, or a tool that destroys or replaces what is there; R2
@@ -80,7 +84,7 @@ func appsOf(a authz.Action) []iam.Grant {
 // writeTools are the write tools, in the order a model meets them.
 func writeTools() []Tool {
 	out := []Tool{
-		write("create_task", authz.ActionWorkCreate, false, "file tasks",
+		write(CreateTaskTool, authz.ActionWorkCreate, false, "file tasks",
 			"Propose filing a task, or a question a colleague owes an answer to (ask). Search "+
 				"first. The person approves before anything is filed.",
 			object([]string{"title"}, map[string]*schema{
@@ -97,11 +101,11 @@ func writeTools() []Tool {
 				"labels":   names("Tags the project declares.", 20),
 			})),
 		write("update_task", authz.ActionWorkUpdate, true, "change tasks",
-			"Propose changing a task's fields. Read it with get_task first and pass its version "+
+			"Propose changing a task's fields. Read it first (GET /worklet/{id}) and pass its version "+
 				"as if_match, so the change applies to what the person saw.",
 			object([]string{"item", "if_match"}, map[string]*schema{
 				"item":     text("The task's key or id.", nameBytes),
-				"if_match": positive("The task's version from get_task.", 1<<30),
+				"if_match": positive("The task's version, as its read gives it.", 1<<30),
 				"title":    text("A new title.", lineBytes),
 				"body":     text("A new description, replacing the old one.", bodyBytes),
 				"status":   oneOf("A new status.", statuses...),
@@ -176,18 +180,18 @@ func writeTools() []Tool {
 			object([]string{"title", "body"}, map[string]*schema{
 				"title":     text("The page's title.", lineBytes),
 				"body":      text("The page, in Markdown.", bodyBytes),
-				"container": text("The space's key or name (list_spaces lists them). Default the person's team's.", nameBytes),
+				"container": text("The space's key or name (GET /containers lists them). Default the person's team's.", nameBytes),
 				"parent":    text("The id of the page it belongs under.", nameBytes),
 				"labels":    names("Labels.", 20),
 				"status":    oneOf("published (the default) or draft.", "published", "draft"),
 				"message":   text("One line on why the page exists.", lineBytes),
 			})),
 		write("edit_page", authz.ActionPageSave, true, "edit pages",
-			"Propose a new version of a page. Read it with "+GetPageTool+" first and pass "+
+			"Propose a new version of a page. Read it first (GET /doclet/pages/{id}) and pass "+
 				"its version as base_version.",
 			object([]string{"page", "base_version", "body"}, map[string]*schema{
 				"page":         text("The page's id.", nameBytes),
-				"base_version": positive("The page's version from "+GetPageTool+".", 1<<30),
+				"base_version": positive("The page's version, as its read gives it.", 1<<30),
 				"body":         text("The whole new body, in Markdown.", bodyBytes),
 				"title":        text("A new title.", lineBytes),
 				"message":      text("One line on what changed and why.", lineBytes),

@@ -233,23 +233,15 @@ func TestABootstrapSeedIsNeitherImportedNorRunOnAManagedDeployment(t *testing.T)
 // A MANAGED NODE OVER A REVISION THIS BUILD CANNOT RUN NAMES THE ONE WAY OUT
 // THAT CLEARS THE REFUSAL, and says nothing else.
 //
-// The refusal first named an offline `crewlet config import`, which a managed
-// deployment refuses, so the operator was sent to a second refusal; then the
-// managing system's write through a serving node, which moves the fleet and
-// never this node's store — the only thing this boot reads — so every restart
-// was refused the same way. And the ignored-seed warning had already been said
-// before the stored revision was read, so it stood beside the refusal that
-// stopped the boot.
+// An offline `crewlet config import` is refused on a managed deployment, and a
+// managing system's write through a serving node moves the fleet, never this
+// node's store. The ignored-seed warning must not precede the store read.
 //
-// So the case FOLLOWS THE REMEDY the refusal names — the list removed from
-// this node's Tier A, a corrected document imported offline, the node started,
-// the list restored — and holds the boot to deciding on the corrected company
-// at both starts.
-//
-// Mutations: name the offline import alone, or the write through a serving
-// node, and the remedy case fails; warn before reading the store and the
-// silence case does; refuse the offline import whatever Tier A says and the
-// remedy is never followed.
+// So the case FOLLOWS THE REMEDY the refusal names (list removed from Tier A,
+// corrected document imported offline, node started, list restored).
+// Mutations: name the offline import alone, or the serving-node write, and
+// the remedy case fails; warn before reading the store and the silence case
+// does; refuse the offline import whatever Tier A says and it never runs.
 func TestAManagedNodeOverARevisionItCannotRunNamesTheManagedRemedy(t *testing.T) {
 	t.Parallel()
 	dir := brokertest.TempDir(t)

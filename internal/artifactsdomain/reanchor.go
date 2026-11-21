@@ -8,14 +8,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ARTIFACTS LOG'S HALF OF A REANCHOR, and it is one record.
-//
-// [statelog.Reanchor] owns the steps and their order; this domain's part is to
-// say, in its own record format, that its log was adopted at a new generation.
-// The applier writes `artifacts_log_generations` from it. No version reset:
-// every row's version guard and every history row's position compares against
-// positions in the new generation, which are above every old one by
-// construction.
+// THE ARTIFACTS LOG'S HALF OF A REANCHOR is one record ([statelog.Reanchor]
+// owns the steps), from which the applier writes `artifacts_log_generations`.
+// No version reset: positions in the new generation are above every old one by
+// construction, so every version guard and history position still compares.
 
 // GenerationRecord is the artifacts log's [statelog.GenerationEncoder].
 type GenerationRecord struct{}
@@ -25,10 +21,9 @@ func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
 	return GenerationSubject(gen).framework(), true
 }
 
-// GenerationRecord encodes the reanchor's record for the new generation,
-// create-only on the generation's own subject, under the operation id the
-// framework derives ([statelog.GenerationFacts.OpID]) and authored by the
-// operator who ran it, recorded the way every write here is.
+// GenerationRecord encodes the new generation's record, create-only on its own
+// subject, under [statelog.GenerationFacts.OpID], authored by the operator who
+// ran the reanchor.
 func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.GenerationRecord, bool, error) {
 	subject := GenerationSubject(f.Generation)
 	actor := generationActor(f)
@@ -58,11 +53,9 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	}, true, nil
 }
 
-// generationActor is who a generation record names as its author: the party
-// the facts name, read by the one rule every log's generation record reads it
-// by ([statelog.GenerationFacts.Author]), already in the identity
-// vocabulary's actor kinds this log's columns hold. NOBODY NAMED IS THE NODE,
-// recorded under its own id as the engine.
+// generationActor is a generation record's author, by
+// [statelog.GenerationFacts.Author]; NOBODY NAMED IS THE NODE, recorded under
+// its own id as the engine.
 func generationActor(f statelog.GenerationFacts) iam.Actor {
 	party, named := f.Author()
 	if !named {

@@ -9,43 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// EACH TOOL OF AN MCP SERVER AT A LEVEL, set on its entry.
+// EACH TOOL OF AN MCP SERVER AT A LEVEL, set by `tools` on its entry
+// ([MCPToolPolicy]): `levels` names a tool by the server's own name (before
+// `tool_prefix`), `default` covers the rest. `allow` is offered and runs;
+// `approve` is offered and each call waits for a person; `blocked` is never
+// filed, so no agent is offered, lists or can call it, even from a box.
 //
-// `tools` on an `mcp_servers` entry sets the level each of the server's tools
-// runs at: `levels` names a tool by the server's own name (the one its listing
-// gives, before `tool_prefix`), and `default` is the level of every tool
-// `levels` does not name. A tool at `allow` is offered to every agent the
-// server reaches and runs when called; a tool at `approve` is offered too, and
-// each call waits for a person's answer before it runs; a tool at `blocked` is
-// never filed, so no agent is offered it, lists it or can call it, on the
-// engine host or from an executor's box.
+// A TOOL NOTHING SETS STARTS BY ITS HINTS (D1): read-only per its server, it
+// runs at `allow`, every other at `approve` (`mcp.StartingLevel`).
 //
-// A TOOL NOTHING SETS STARTS BY ITS HINTS (the series' decision D1): with no
-// level of its own and no `default`, a tool its server asserts read-only runs
-// at `allow`, and every other tool at `approve`, one whose hints say nothing
-// included. The reading is internal/mcp's (`mcp.RiskOf`, `mcp.StartingLevel`),
-// made where the tools are filed, with the operator's `tool_annotations`
-// applied, so the level an agent is held to and the one a reader is shown are
-// one reading of the same hints.
-//
-// ENFORCED WHERE THE TOOLS ARE FILED AND CALLED: the engine hands the levels to
-// the MCP client with the server's start (internal/mcp, `Spec.Levels`), which
-// leaves a blocked tool out of what the server contributes and marks one at
-// `approve` on every registry it is filed in, so every reader of a seat's
-// surface (the tool loop on the engine host, the bridge an executor dials, the
-// discovery tools) sees the same set. A call to a tool at `approve` is decided
-// by the seat's surface (internal/tools): an executor's run parks on a
-// person's answer, and a phase on the engine host, which has no run to park,
-// is refused the call (ADR-0077).
-//
-// AN EXECUTOR BOX REACHES A SERVER WHOLE: a server listed in a role's
-// `sandbox.mcp.servers` is dialled by the harness inside the box, past the
-// engine, so a box can neither leave one tool out nor ask anybody before a
-// call. Such a listing is refused for a server whose every tool is not
-// certain to run at `allow` ([Company.validateBoxToolLevels]): one whose
-// entry says `default: allow` and sets no other level. The engine gives no box
-// such a server whatever a stored revision says, and the seat still reaches
-// the server's tools over the bridge, each at its level.
+// ENFORCED WHERE TOOLS ARE FILED (`Spec.Levels`), so every reader of a seat's
+// surface sees one set; an `approve` call parks an executor's run on a person
+// and is refused to an engine-host phase (internal/tools, ADR-0077).
 
 // MCPToolLevel is the level a tool of an MCP server runs at.
 type MCPToolLevel string
@@ -69,6 +44,13 @@ var MCPToolLevels = []MCPToolLevel{MCPToolAllow, MCPToolApprove, MCPToolBlocked}
 func (l MCPToolLevel) Valid() bool { return slices.Contains(MCPToolLevels, l) }
 
 // MCPToolPolicy is the level of each of a server's tools ([MCPServer.Tools]).
+//
+// AN EXECUTOR BOX REACHES A SERVER WHOLE: the harness dials it past the engine,
+// so a box can neither leave out a tool nor ask before a call. A listing in
+// `sandbox.mcp.servers` is refused unless every tool is certain to run at
+// `allow` (`default: allow`, no other level; [Company.validateBoxToolLevels]).
+// The engine gives a box no such server whatever a stored revision says; the
+// seat still reaches its tools over the bridge, each at its level.
 type MCPToolPolicy struct {
 	// Default is the level of every tool Levels names none for. Unset, each
 	// such tool starts at the level its hints give it: allow for a tool its

@@ -44,15 +44,13 @@ import {
   Highlight,
   InlineCode,
   MARKDOWN_CALLOUT_NAMES,
-  markdownClosesFence,
-  markdownFenceOf,
-  markdownHeadingOf,
+  markdownCodeText,
   markdownInline,
   parseMarkdown,
+  parseMarkdownSpans,
   peelPunctuation,
   safeHref,
   type MarkdownBlock,
-  type MarkdownFence,
 } from "@crewlethq/ui";
 import { ColourCode, InlineToken, LabelledLink, TokenRun } from "~/components/InlineToken.tsx";
 import { codeColour, inlineTokens, type LinkMode } from "./inlineTokens.ts";
@@ -164,37 +162,31 @@ export function headingLines(source: string): HeadingLine[] {
 }
 
 /**
- * A document's lines, each with its offset and — outside a fenced block — the
- * heading it is, if it is one.
+ * A document's lines, each with its offset and the heading it is, if it is
+ * one of the document's own: a heading block at the top level.
  *
- * A FENCE SUSPENDS THE GRAMMAR, which is the whole reason this is not a
- * `split(/^#/m)`: `# install deps` inside a shell sample is a comment, and a
- * tool catalogue is full of them. ONE walk for both readers of a document's
- * headings, so the fence rule is written once.
+ * THE GRAMMAR DECIDES, through [parseMarkdownSpans], which names the lines
+ * of every top-level block. A walk of its own had to restate the grammar's
+ * rules line by line (a fence suspends it, `# install deps` in a shell
+ * sample is a comment) and fell behind it: a fence closes only on a run as
+ * long as its opening, a heading may be indented, and a heading inside a
+ * list item or a quote belongs to that block, not to the outline. Both
+ * split a source at the same line breaks (`\r\n`, `\r` or `\n`), so the
+ * span's line index is [readLines]' index.
  */
 function* walkLines(
   source: string,
 ): Generator<{ line: Line; at: number; heading: { level: number; title: string } | null }> {
-  // The fence marker currently open, or null outside one.
-  let fence: MarkdownFence | null = null;
+  const headings = new Map<number, { level: number; title: string }>();
+  for (const { block, start } of parseMarkdownSpans(source).spans) {
+    if (block.kind === "heading") headings.set(start, { level: block.level, title: block.text });
+  }
   let at = 0;
+  let index = 0;
   for (const line of readLines(source)) {
     const start = at;
     at += line.text.length + line.eol.length;
-    if (fence !== null) {
-      if (markdownClosesFence(line.text, fence)) fence = null;
-      yield { line, at: start, heading: null };
-      continue;
-    }
-    const opened = markdownFenceOf(line.text);
-    if (opened) {
-      fence = opened.marker;
-      yield { line, at: start, heading: null };
-      continue;
-    }
-    // Closing hashes are decoration, not content: the same reader
-    // [parseMarkdown] applies to the same line.
-    yield { line, at: start, heading: markdownHeadingOf(line.text) };
+    yield { line, at: start, heading: headings.get(index++) ?? null };
   }
 }
 
@@ -371,10 +363,11 @@ export interface RenderOptions {
    * doc's pictures are files of its version, fetched with the reader's own
    * credential and shown through an object URL, never loaded from an address
    * the text names. It answers null for a source it does not show (not a file
-   * of the version, or not loaded yet), which renders as the alt text. Without
-   * it, a source is shown only when it is a safe link ([safeHref]).
+   * of the version, or not loaded yet), which renders as the alt text, and
+   * undefined for a source it leaves to the rule used without it: shown only
+   * when it is a safe link on this origin ([shownImage]), else a link to it.
    */
-  image?: (src: string) => string | null;
+  image?: (src: string) => string | null | undefined;
   /**
    * `anchor` (the default): a link is a link. `text`: a link is its label and
    * an autolink its address, as plain text: for a run drawn INSIDE a control
@@ -389,8 +382,8 @@ export interface RenderOptions {
    * `lib/inlineTokens.ts`). For words written by an agent or a model that may
    * have read anything: the Dashboard Assistant's answers, the Inbox and a
    * an executor's question. Any other address is drawn inert, its label and
-   * then the host it names, in the quiet link ink, readable and copyable and
-   * never a control.
+   * then the address it names with that address's mark, in the text's own
+   * ink as a bare address is, readable and copyable and never a control.
    */
   links?: LinkMode;
   /**
@@ -470,9 +463,10 @@ export function renderInline(
       // AN ESCAPED CHARACTER IS ITSELF: `\*` is an asterisk somebody meant.
       out.push(createElement("span", { key }, g.esc));
     } else if (g.tick !== undefined) {
-      // A code span loses ONE leading and trailing space, which is how
-      // CommonMark lets a span start with a backtick of its own.
-      const code = (g.code ?? "").replace(/^ | $/g, "");
+      // A code span's text by CommonMark's rules, the grammar's own reader: a
+      // line ending is a space, and one space goes from each end only when
+      // both ends have one.
+      const code = markdownCodeText(g.code ?? "");
       // A SHORT SPAN IS ONE TOKEN to a reader: `nimbus jobs wait --node <n>`
       // split at a space reads as two commands, and the break always lands on
       // the flag. Up to [UnbrokenCode] characters it is kept on one line; a
@@ -494,14 +488,15 @@ export function renderInline(
       );
     } else if (g.src !== undefined) {
       const alt = g.alt ?? "";
-      const src = options.image ? options.image(g.src) : shownImage(g.src);
+      const given = options.image?.(g.src);
+      const src = given === undefined ? shownImage(g.src) : given;
       // A PICTURE FROM ANOTHER ORIGIN IS A LINK TO IT, labelled by its alt
       // text: the dashboard's policy (`img-src 'self' data: blob:`) refuses to
       // load it, so an `img` there was a broken picture, and loading it would
       // tell a third party who reads the page and when. The reader can still
       // follow it on purpose. Inside a link's own label it stays its alt text,
       // since a link inside a link is no link at all.
-      const elsewhere = !src && !options.image && live !== null ? safeHref(g.src) : null;
+      const elsewhere = !src && given === undefined && live !== null ? safeHref(g.src) : null;
       // AN IMAGE WITH A REFUSED SOURCE RENDERS AS ITS ALT TEXT, which is
       // what alt text is for — not as a broken image and not as nothing.
       out.push(
@@ -890,15 +885,20 @@ function renderBlock(
       // tables of the same columns (a runbook's two "Element, Text" tables)
       // drew two landmarks of the same name, which a landmark list cannot
       // tell apart; nor is a table a section of the page anybody jumps to.
+      //
+      // INSIDE A CONTROL (`links: "text"`) IT IS NO STOP: the control is, and
+      // a stop inside it is as unreachable as itself as a link there would be.
       return createElement(
         "div",
-        {
-          key,
-          className: "md-table",
-          tabIndex: 0,
-          role: "group",
-          "aria-label": `Table: ${block.head.map((cell) => plainText(cell)).join(", ")}`,
-        },
+        options.links === "text"
+          ? { key, className: "md-table" }
+          : {
+              key,
+              className: "md-table",
+              tabIndex: 0,
+              role: "group",
+              "aria-label": `Table: ${block.head.map((cell) => plainText(cell)).join(", ")}`,
+            },
         createElement(
           "table",
           null,
@@ -965,6 +965,31 @@ export function renderMarkdown(source: string, given: RenderOptions = {}): React
   // it are one computation and cannot disagree.
   const ids = anchorIds(blocks);
   return blocks.map((block, i) => renderBlock(block, `b${i}`, options, ids.get(i)));
+}
+
+/** Somebody's words, drawn for the sentence that quotes them ([renderQuoted]). */
+export type Quoted =
+  /** The one paragraph's inline runs, quoted in place in the sentence. */
+  | { inline: ReactNode }
+  /** Every block, drawn as [renderMarkdown] draws it, under the sentence. */
+  | { blocks: ReactNode[] };
+
+/**
+ * Somebody's words as a sentence about them quotes them: "You replied “Hold
+ * it a **week**.”". Words that are ONE paragraph are its inline runs, quoted
+ * in place; anything more (a list, a second paragraph) is its blocks, set
+ * under the sentence, since a list quoted inline reads as one line of dashes.
+ * One walk either way, so a paragraph reads the same in the sentence as in
+ * the thread that holds it. No anchors and no heading shift ([renderBlocks]).
+ */
+export function renderQuoted(source: string, given: RenderOptions = {}): Quoted {
+  const blocks = parseMarkdown(source ?? "");
+  const options: RenderOptions = { message: source ?? "", ...given };
+  const [first] = blocks;
+  if (blocks.length === 1 && first?.kind === "paragraph") {
+    return { inline: inlineOf(options)(first.text, "q0", opening(options)) };
+  }
+  return { blocks: renderBlocks(blocks, options, "q") };
 }
 
 /**

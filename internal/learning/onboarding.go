@@ -20,29 +20,14 @@ import (
 // company name, the KEY of every unit above the seat outermost-first, then the
 // seat's own HANDLE.
 //
-// It is what an onboarding marker is stamped with, and it is the entire
-// re-onboarding trigger. A seat that moves between teams or gains an ancestor
-// unit hashes differently; its stored marker stops matching, and the
-// first-turn pass fires again for the structure the seat is actually in now.
-// Content changes are deliberately NOT in it — an edited Onboarding page is
-// the seat's own business to re-read, and hashing page content would re-run a
-// full pass every time somebody fixed a typo.
+// It stamps an onboarding marker and is the whole re-onboarding trigger; content
+// is deliberately NOT in it (a typo fix would re-run a full pass).
+// IDENTITIES, NOT DISPLAY NAMES, so relabelling a division does not re-onboard
+// its seats: unit keys and seat handles are immutable (ADR-0013). THE COMPANY
+// NAME STAYS AS WRITTEN, being an input to [org.Organization.AgentIDFor] too.
 //
-// IDENTITIES AND NOT DISPLAY NAMES. Hashing the names meant relabelling a
-// division put every seat under it through a full onboarding turn, and
-// correcting one person's name put that person through one, although nobody
-// had moved and nothing about the structure had changed. A restructure is a
-// seat sitting somewhere else, and a unit's key and a seat's handle are
-// immutable (ADR-0013), so they do not move when somebody retypes a label.
-//
-// THE COMPANY NAME STAYS AS WRITTEN, because it is the one part that is an
-// identity here: it is an input to [org.Organization.AgentIDFor] as well, so
-// renaming the company re-derives every seat's id and orphans its whole
-// estate — the marker included. Folding it in under a second rule would be
-// this hash disagreeing with the derivation beside it.
-//
-// Empty for a nil org or seat. Both entry points that take a chain hash
-// refuse an empty one, so a nil can never become a marker nothing matches.
+// Empty for a nil org or seat; entry points taking a chain hash refuse an empty
+// one, so a nil never becomes a marker nothing matches.
 func ChainHash(o *org.Organization, r *org.Role) string {
 	if o == nil || r == nil {
 		return ""
@@ -63,20 +48,15 @@ func ChainHash(o *org.Organization, r *org.Role) string {
 // hashChain hashes the components as netstrings — each part's byte length, a
 // colon, then the bytes.
 //
-// The separator-joined form (sha256 over strings.Join(parts, "\n")) is
-// AMBIGUOUS, and not in theory: a company named "Acme\nOps" holding a
-// root-level seat joins to exactly the same bytes as company "Acme" holding
-// unit "Ops" holding that seat. Two different structures, one hash — so a
-// seat lifted out of a unit keeps a marker claiming it already onboarded
-// there and never re-reads. Nothing in the config layer forbids a newline in
-// a name — measured: Organization.Validate accepts one, and
-// TestJoiningTheChainWithASeparatorWouldCollide skips itself if that ever
-// changes — and picking a rarer separator only moves the collision somewhere
-// less likely to be found. Length prefixes are injective over arbitrary
-// bytes, which retires the question instead of narrowing it.
+// A separator-joined form (sha256 over strings.Join(parts, "\n")) is AMBIGUOUS:
+// company "Acme\nOps" with a root seat joins to the same bytes as company
+// "Acme" with unit "Ops" holding that seat, so a seat lifted out of a unit
+// would keep a marker claiming it already onboarded there. Organization.Validate
+// accepts a newline in a name (TestJoiningTheChainWithASeparatorWouldCollide
+// skips itself if that changes), and a rarer separator only hides the
+// collision; length prefixes are injective over arbitrary bytes.
 //
-// Changing this construction re-onboards every seat in the company once,
-// exactly as a restructure would. That is the price of ever touching it.
+// Changing this construction re-onboards every seat once.
 func hashChain(parts []string) string {
 	h := sha256.New()
 	for _, p := range parts {
@@ -185,21 +165,16 @@ func NewOnboarding(db *store.DB) *Onboarding { return &Onboarding{db: db} }
 
 // Onboarded reports whether this seat has already onboarded for this chain.
 //
-// THREE answers, and the third one is the point:
+// Three answers, the third is the point:
 //
 //	(true, nil)   — a marker stamped with chainHash. Skip the pass.
-//	(false, nil)  — definitively no matching marker: never marked, or the
-//	                seat moved and the stamped chain no longer matches.
-//	                Run the pass.
-//	(false, err)  — UNKNOWN. The store did not answer, which says nothing
-//	                at all about whether this seat onboarded. Skip the pass
-//	                and ask again next turn.
+//	(false, nil)  — definitively no matching marker (never marked, or the
+//	                chain moved). Run the pass.
+//	(false, err)  — UNKNOWN: the store did not answer. Skip, ask next turn.
 //
-// A caller that collapses the error into "not onboarded" re-runs a whole
-// pass — minutes of LLM rounds re-reading pages the seat has already read —
-// for every already-marked seat in the company on any store blip, against a
-// one-turn delay of a hint if it skips instead. That asymmetry is the entire
-// reason this returns an error rather than a bool.
+// Collapsing the error into "not onboarded" would re-run a whole pass (minutes
+// of LLM rounds) for every marked seat on any store blip, against a one-turn
+// delay of a hint if it skips. That asymmetry is why this returns an error.
 func (o *Onboarding) Onboarded(ctx context.Context, agentID, chainHash string) (bool, error) {
 	if agentID == "" || chainHash == "" {
 		// Deliberately not "definitively not onboarded". A pass run under
@@ -266,34 +241,15 @@ func (o *Onboarding) Mark(ctx context.Context, m Marker, at time.Time) error {
 
 // Claim takes the single-flight lease on one seat's onboarding pass.
 //
-// A held Pass means run the pass; the zero Pass means somebody else already
-// is, so skip. FAILS CLOSED: an error yields the zero
-// Pass, so a caller that only reads Held() still skips. Running a
-// possibly-duplicate onboarding is the expensive mistake here — two engines
-// re-reading the same pages and writing the same conventions — and not
-// running one costs a turn.
-//
-// The claim is ONE statement, and what that decision is about has changed
-// once already — so it is worth stating why it still holds. It used to be
-// about what the LOSER is told: store.Tx began DEFERRED, both claimants took
-// their snapshot before either wrote, and the loser learned it lost through
-// an ERROR, which is the one thing this package keeps distinct from a
-// definite answer. internal/store/begin.go removed that: a write transaction
-// takes the lock at BEGIN, so claimants serialise and the loser's read simply
-// sees the winner's lease.
-//
-// What the single statement buys now is the LOCK HOLD. A read-then-write
-// claim is correct, but it holds the database's one write lock across its
-// read, its decision and its write, for every claimant in the queue — on a
-// store whose write lock excludes every table in the file. The conditional
-// upsert evaluates the same predicate under that lock in one statement, so
-// the loser still gets (Pass{}, nil) — definitely somebody else's — without
-// the queue behind it paying a round trip each.
+// A held Pass means run; the zero Pass means skip. FAILS CLOSED: an error
+// yields the zero Pass (a duplicate onboarding is costly; a skip costs a turn).
+// ONE conditional upsert, for the LOCK HOLD: the write lock excludes every
+// table in the file, and read-then-write would hold it across read, decision
+// and write for every claimant queued. The loser still gets (Pass{}, nil); a
+// write transaction takes the lock at BEGIN (internal/store/begin.go).
 //
 // A claim for a never-marked seat INSERTS the row with an empty chain_hash,
-// which Onboarded reads correctly as "not onboarded" — the lease and the
-// marker share a row, and the row existing is not the same fact as the seat
-// having onboarded.
+// which Onboarded reads as "not onboarded": lease and marker share a row.
 func (o *Onboarding) Claim(ctx context.Context, agentID string, now time.Time, ttl time.Duration) (Pass, error) {
 	if agentID == "" {
 		return Pass{}, fmt.Errorf("learning: an onboarding claim needs an agent id")
@@ -333,24 +289,15 @@ func (o *Onboarding) Claim(ctx context.Context, agentID string, now time.Time, t
 }
 
 // Release gives the pass lease back early, so a pass that ended without
-// marking (the agent ran out of rounds, the turn failed) does not hold
-// re-onboarding hostage for the rest of the TTL.
+// marking does not hold re-onboarding hostage for the rest of the TTL.
 //
-// FENCED to the lease it took, which is not decoration. The TTL exists to
-// bound a claimant that DIED mid-pass — but a claimant that merely ran LONG
-// is indistinguishable from a dead one, and it comes back: its lease lapses,
-// a second engine claims and starts a pass, and then the first one finishes
-// and releases. An unfenced clear frees the second engine's live lease and a
-// third pass starts on top of it (measured — TestReleaseIsFencedToTheClaimItTook).
-// Under a forward-moving clock the deadlines strictly increase, so the token
-// is unique per claim: the second claim can only happen at or after the
-// first deadline, which puts its own deadline a whole TTL later.
+// FENCED to the lease it took: a claimant that ran LONG looks dead, a second
+// engine claims, and an unfenced release by the first would free the second's
+// live lease (TestReleaseIsFencedToTheClaimItTook). Deadlines strictly
+// increase, so Until is unique per claim.
 //
-// A Pass whose Until has been mangled by the caller simply matches nothing
-// and the lease runs to its TTL. That is the safe direction to fail.
-//
-// The zero Pass is a no-op, so a caller that skipped can still release
-// unconditionally.
+// A mangled Until matches nothing and the lease runs to its TTL, the safe
+// direction. The zero Pass is a no-op, so a skipper can release unconditionally.
 func (o *Onboarding) Release(ctx context.Context, p Pass, at time.Time) error {
 	if !p.Held() {
 		return nil
@@ -408,17 +355,14 @@ const OnboardingPageTitle = "Onboarding"
 // Hint is the instruction set an unmarked agent's onboarding pass is shown
 // (internal/agent/runner's onboarding pass, under its `## What to do`).
 //
-// It enumerates the SCOPES on the seat's chain — the org, then each unit from
-// the outermost down to its own — and leaves finding each page to the agent's
-// knowledge-base search. Naming scopes rather than page ids is what keeps the
-// hint valid across a knowledge base that gets reorganised: an id goes stale
-// silently and sends the agent to a 404, a scope name is what a search is for.
+// It enumerates the SCOPES on the seat's chain (the org, then each unit
+// outermost-first) and leaves finding each page to the agent's search. Scope
+// names, not page ids, stay valid across a reorganised knowledge base; an id
+// goes stale silently into a 404.
 //
-// THE STEPS AND NOTHING ELSE. How the pass reaches its knowledge-base tools is
-// the onboarding header's, and that `mark_onboarded` ends the pass for good is
-// that tool's own description, which reaches the model with the tool. This is
-// the one place that names the order — read, keep, mark — and the pages that
-// are this seat's alone.
+// THE STEPS AND NOTHING ELSE: how the pass reaches its tools is the onboarding
+// header's, and that `mark_onboarded` ends the pass is that tool's own
+// description. This names the order (read, keep, mark) and the seat's own pages.
 func Hint(o *org.Organization, r *org.Role) string {
 	if o == nil || r == nil {
 		return ""

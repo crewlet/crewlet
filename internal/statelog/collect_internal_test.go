@@ -15,12 +15,11 @@ import (
 
 // A JOIN'S EXPECTATION IS READ BESIDE ITS COLLECTION, AND THE WINDOW BOUNDS IT.
 //
-// The donors a join expects come from a listing of the fleet's live data
-// nodes, a coordination read. Read before the collection, a store slow to
-// answer added all of its time in front of the offer window, on a node that
-// refuses every read and write while it joins. Here the listing never answers
-// at all: the collection ends with the window regardless, and the listing has
-// returned by the time it does — nothing the collection started outlives it.
+// The donors a join expects come from a coordination read of the fleet's live
+// data nodes; read before the collection, a slow store would add its time in
+// front of the offer window, on a node refusing every read and write while it
+// joins. Here the listing never answers: the collection ends with the window,
+// and the listing has returned by then, so nothing it started outlives it.
 func TestAnExpectationSlowerThanTheWindowCostsOnlyTheWindow(t *testing.T) {
 	t.Parallel()
 	nc := offerBroker(t)
@@ -62,10 +61,9 @@ func TestAnExpectationSlowerThanTheWindowCostsOnlyTheWindow(t *testing.T) {
 // AN EXPECTATION THAT ARRIVES AFTER EVERY DONOR IT NAMES HAS ANSWERED ENDS
 // THE COLLECTION AS IT ARRIVES.
 //
-// The listing is slower than the donors here — the commonest order, since a
-// donor answers from memory — so by the time it names them nothing more is
-// coming, and a collection still waiting for a next answer would sit out the
-// whole window. The answers that came before it count.
+// The listing is slower than the donors here, the commonest order since a
+// donor answers from memory, so nothing more is coming and waiting for a next
+// answer would sit out the whole window. The answers before it count.
 func TestAnExpectationArrivingAfterItsDonorsEndsTheCollection(t *testing.T) {
 	t.Parallel()
 	nc := offerBroker(t)
@@ -97,9 +95,8 @@ func TestAnExpectationArrivingAfterItsDonorsEndsTheCollection(t *testing.T) {
 
 // AN EXPECTATION THAT FAILS LEAVES THE WINDOW TO DECIDE.
 //
-// A listing that could not be read names nobody, which is not the same as
-// naming an empty fleet: the collection goes on hearing whoever answers until
-// the window closes, as it did before there was any expectation.
+// A listing that could not be read names nobody, which is not naming an empty
+// fleet: the collection hears whoever answers until the window closes.
 func TestAnExpectationThatFailsLeavesTheWindowToDecide(t *testing.T) {
 	t.Parallel()
 	nc := offerBroker(t)
@@ -120,14 +117,12 @@ func TestAnExpectationThatFailsLeavesTheWindowToDecide(t *testing.T) {
 
 // AN ANSWER THAT ARRIVED WITH THE LAST ONE EXPECTED IS READ.
 //
-// The collection ends the moment the last donor it names has answered, and a
-// wait whose context has ended answers that end even with a message in hand —
-// so an answer already in the subscription when the last expected one was
-// read was never read at all, and the only offer there was could be dropped.
-// Here the donor the join names declines with an answer large enough that
-// reading it takes a while, and a donor it does not name offers right behind
-// it, into the subscription while that decline is read: the offer arrived in
-// time, and is taken.
+// The collection ends when the last donor it names has answered, and a wait
+// whose context has ended answers that end even with a message in hand, so an
+// answer already in the subscription could be dropped unread. Here the named
+// donor declines with an answer slow to decode, and a donor it does not name
+// offers right behind it, into the subscription while that decline is read:
+// the offer arrived in time, and is taken.
 func TestAnAnswerThatArrivedWithTheLastExpectedOneIsRead(t *testing.T) {
 	t.Parallel()
 	// FOUR MEBIBYTES of a field no build reads: tens of milliseconds to

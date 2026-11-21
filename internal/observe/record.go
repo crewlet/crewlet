@@ -21,19 +21,14 @@ import (
 
 // THE TAGS ARE [store.ExtractTags]'s, and that is the point.
 //
-// "Which agent does this event concern" is a RULE, not a field, and one copy
-// of it is all this codebase should have. This file used to hold a second
-// one — a map of wire field to tag name, beside the store's own, with nothing
-// asserting they agreed — and both halves of the divergence were live: the
-// store's list had `notification_source` and this one did not, so the tag the
-// Integrations room counts merges and drops by reached no row and every one
-// of those counts read zero; this one had `turn_id` and the store's did not,
-// so the one list that WAS exercised by a test was the one production never
-// called. This package imports the store, so it asks rather than answers.
+// "Which agent does this event concern" is a RULE, not a field, and one copy of
+// it is all this codebase should have: a second list beside the store's would
+// diverge unasserted (a tag missing from one reaches no row and its counts read
+// zero). This package imports the store, so it asks rather than answers.
 //
 // It is handed the BYTES it already marshalled, not a decoded map, so the
-// derivation is a shallow decode on the publishing goroutine — see
-// [store.ExtractTags].
+// derivation is a shallow decode on the publishing goroutine (see
+// [store.ExtractTags]).
 
 // encode is the event as the bytes the store row carries.
 //
@@ -97,6 +92,7 @@ func Record(ev *events.Event) (store.EventRecord, bool) {
 		Time:         at,
 		Category:     category,
 		Summary:      ev.Summary(),
+		Refs:         ev.References(),
 		Actor:        ev.Actor(),
 		TraceID:      ev.TraceID,
 		SpanID:       ev.SpanID,
@@ -153,6 +149,7 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 		Source:       ev.Source,
 		Actor:        ev.Actor(),
 		Summary:      ev.Summary(),
+		Refs:         ev.References(),
 		Category:     category,
 		TraceID:      ev.TraceID,
 		SpanID:       ev.SpanID,
@@ -175,19 +172,15 @@ type deliveryRow struct {
 	bytes []byte
 }
 
-// delivery reports how an [types.InboundDelivery] is filed: under the
-// delivery's own LABEL rather than the event's type, with the provider's own
-// BYTES as its payload.
+// delivery reports how an [types.InboundDelivery] is filed: under its LABEL
+// rather than the event's type, with the provider's own BYTES as payload.
 //
-// THE ONE EVENT FILED UNDER ANOTHER NAME, and it is the reason the type exists
-// rather than an exception to it: a delivery row has always been the
-// provider's event name (what an operator matches against their provider's
-// console, and what the dashboard's delivery panels show) over the bytes the
-// provider sent (what opening the row shows). Both inbound edges publish it so
-// that every delivery is filed by this one rule — written here, where both the
-// row and the live envelope are derived, so the two cannot disagree. The tags
-// still come from the whole event: the recipient, the provider's id and the
-// route are fields of the record, not of what the provider sent.
+// THE ONE EVENT FILED UNDER ANOTHER NAME, which is why the type exists: a row
+// is the provider's event name (what an operator matches in their provider's
+// console) over the bytes it sent. Both inbound edges publish it so one rule
+// files every delivery, written where the row and the live envelope are both
+// derived so they cannot disagree. Tags still come from the whole event:
+// recipient, provider id and route are fields of the record, not of the bytes.
 //
 // A record with no label or no body keeps the event's own: a row filed under
 // nothing would be unreadable, and an empty payload says less than the record.
@@ -247,7 +240,7 @@ func FeedRow(rec store.EventRecord) livestate.FeedRow {
 		// RFC3339Nano in UTC, the spelling [Envelope] gives a live row, so
 		// the two order against each other by instant.
 		Timestamp: rec.Time.UTC().Format(time.RFC3339Nano),
-		Source:    rec.Source, Actor: rec.Actor, Summary: rec.Summary,
+		Source:    rec.Source, Actor: rec.Actor, Summary: rec.Summary, Refs: rec.Refs,
 		Category: rec.Category, TraceID: rec.TraceID, SpanID: rec.SpanID,
 		ParentSpanID: rec.ParentSpanID, Topic: topic,
 		Failed: rec.Failed,

@@ -75,13 +75,31 @@ type documentedDetector struct {
 	class  Class
 	source source
 	detect func(c *config.Company, ev Evidence) []Finding
+	// silent, where set, says in words what of the company the class could
+	// not judge from ev and why, "" where it judged all of it (ADR-0166).
+	silent func(c *config.Company, ev Evidence) string
 }
 
 // documented is every class whose fix the document decides.
 var documented = []documentedDetector{
-	{ClassRoundCap, sourceRuns, roundCap},
-	{ClassBudgetStopped, sourceStops, budgetStopped},
-	{ClassWorkConcentrated, sourceWork, workConcentrated},
+	{ClassRoundCap, sourceRuns, roundCap, nil},
+	{ClassBudgetStopped, sourceStops, budgetStopped, nil},
+	{ClassWorkConcentrated, sourceWork, workConcentrated, nil},
+	{ClassWorkImbalance, sourceWork, workImbalance, nil},
+	{ClassBlockedNoCause, sourceWork, blockedNoCause, nil},
+	{ClassAlarmNoop, sourceLedger, alarmNoop, nil},
+	{ClassModelHeld, sourceFlow, modelHeld, nil},
+	{ClassModelLimit, sourceCapacity, modelLimit, nil},
+	{ClassWakeReasonWaste, sourceLedger, wakeReasonWaste, nil},
+	{ClassTurnCostOutlier, sourceLedger, turnCostOutlier, nil},
+	{ClassScheduleLoad, sourceFires, scheduleLoad, nil},
+	{ClassScheduleOverdue, sourceSkips, scheduleOverdue, nil},
+	{ClassAddSeat, sourceStaffing, addSeat, func(c *config.Company, ev Evidence) string {
+		return ev.StaffingWeek.unjudged(c, 1)
+	}},
+	{ClassRemoveSeat, sourceStaffing, removeSeat, func(c *config.Company, ev Evidence) string {
+		return ev.StaffingFortnight.unjudged(c, 2)
+	}},
 }
 
 // stallWords is each class's words, the same for every subject.
@@ -101,9 +119,40 @@ var stallWords = map[Class]said{
 	ClassWorkHeldByPerson: {"Agent work that needs no decision waits behind a person.",
 		"Agents could do this work now, but it waits on an item that waits on a person: their answer " +
 			"to a question on it, or the item they hold. It moves when they do."},
+	ClassAlarmNoop: {"An agent was woken on the engine's alarms for turns that changed nothing.",
+		"Every agent that holds the health grant is woken each time an alarm fires or clears, so an " +
+			"alarm another agent already answers still starts a turn here, and half or more of these " +
+			"changed nothing."},
+	ClassAddSeat: {"Work waited for a group of seats that was busy all week.",
+		"Day after day work wanted these seats and did not get them, while every one of them was busy most " +
+			"of the time it could take a turn, so the work waits on how many seats there are."},
+	ClassWakeReasonWaste: {"A kind of wake mostly changed nothing.",
+		"Every wake starts a turn on the seat's model, so a kind of wake whose turns change nothing is spend " +
+			"with nothing to show for it, across every seat it reaches."},
+	ClassTurnCostOutlier: {"Some seats' turns cost several times the others'.",
+		"A turn many times the company's typical cost is usually a long context, a large answer read again, or " +
+			"a run that loops, and it is paid on every turn the seat takes."},
+	ClassScheduleLoad: {"A seat's schedules keep it busy while its work waits.",
+		"Every scheduled run is a turn the seat spends on the check rather than on the work it holds, so its " +
+			"own items wait to start."},
+	ClassModelLimit: {"A model entry's usage limit kept its seats from working.",
+		"While an entry's usage limit stands, every seat on it waits, whatever it holds, so the hours it is " +
+			"out are hours those seats cannot work."},
+	ClassModelHeld: {"An agent's work waited on its model's limit.",
+		"While the model an agent runs on is at its limit, the agent takes no turn, so the work it " +
+			"holds stands still until the limit resets, however pressing it is."},
+	ClassPoolWaits: {"Callers queued for a database connection on a node.",
+		"The node's database pool had no connection free when callers asked, so they waited, and " +
+			"every request, turn and write on that node waited with them."},
 	ClassMergeNoChecks: {"Merges a delegate allowed went to a person because the branch requires no check.",
 		"A delegate's allow of a merge stands only where the code host shows the change passed CI, so " +
 			"in a repository whose branch requires no check every merge waits on a person."},
+	ClassWorkImbalance: {"One seat holds most of its job's open work while another seat doing that job holds little.",
+		"Work queued on the busy seat waits its turn there while a seat that could take it sits " +
+			"idle, so moving the work not yet started shortens the wait without adding a seat."},
+	ClassBlockedNoCause: {"Work is blocked on something nobody holds.",
+		"These items wait on an item nobody holds, an item that was removed, or a change nothing is " +
+			"moving, so no seat's turn will end the wait and the item records nothing more about why."},
 }
 
 // stallFinding is an owner's finding of class in its class's words.
@@ -371,10 +420,12 @@ func workConcentrated(c *config.Company, ev Evidence) []Finding {
 		}
 	}
 	var out []Finding
+	twinned := imbalances(c, ev)
 	for _, seat := range agents {
 		h := open[seat]
-		if h.Open < minHeldOpen || h.Open*100 < heldSharePercent*total {
-			continue
+		if h.Open < minHeldOpen || h.Open*100 < heldSharePercent*total ||
+			slices.ContainsFunc(twinned, func(i imbalance) bool { return i.busy.Handle == seat }) {
+			continue // a seat whose twin holds little is that class's, with a fix moving the work
 		}
 		idle := 0
 		for _, other := range agents {
@@ -413,12 +464,14 @@ func workBottleneck(ev Evidence, kind func(string) SeatKind) []Finding {
 		if kind(b.Holder) == SeatAgent {
 			subject = Subject{Kind: SubjectSeat, Seat: b.Holder}
 		}
-		out = append(out, stallFinding(ClassWorkBottleneck, AreaWork, subject,
+		f := stallFinding(ClassWorkBottleneck, AreaWork, subject,
 			fmt.Sprintf("%s: %s wait on it", b.Key, words.Count(b.Blocks, "item", "items")),
 			[]Fact{{Key: "waiting", Value: int64(b.Blocks)}, {Key: "ready", Value: int64(b.Ready)}},
 			recordsOf(RecordItem, append([]string{b.Key}, b.Waiting...)),
 			Fix{Kind: FixOpenPage, Page: PageItem, Target: b.Key, Options: []Option{},
-				Sentence: "Open the item: move it first, or take off the waits that need not be there."}))
+				Sentence: "Open the item: move it first, or take off the waits that need not be there."})
+		f.Focus = ItemFocus(b.Key)
+		out = append(out, f)
 	}
 	return out
 }
@@ -440,13 +493,15 @@ func workHeldByPerson(ev Evidence, kind func(string) SeatKind) []Finding {
 		if len(b.Asks) > 0 {
 			item += ", " + words.Count(len(b.Asks), "open question", "open questions")
 		}
-		out = append(out, stallFinding(ClassWorkHeldByPerson, AreaWork, Subject{Kind: SubjectSeat, Seat: who},
+		f := stallFinding(ClassWorkHeldByPerson, AreaWork, Subject{Kind: SubjectSeat, Seat: who},
 			item,
 			[]Fact{{Key: "ready", Value: int64(b.Ready)}, {Key: "waiting", Value: int64(b.Blocks)},
 				{Key: "questions", Value: int64(len(b.Asks))}},
 			recordsOf(RecordItem, append([]string{b.Key}, b.ReadyKeys...)),
 			Fix{Kind: FixOpenPage, Page: PageItem, Target: b.Key, Options: []Option{},
-				Sentence: "Open the item: answer what it waits on, or take the wait off the work behind it."}))
+				Sentence: "Open the item: answer what it waits on, or take the wait off the work behind it."})
+		f.Focus = ItemFocus(b.Key)
+		out = append(out, f)
 	}
 	return out
 }

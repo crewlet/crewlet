@@ -201,7 +201,7 @@ export const ACTIONS = {
   },
   write_project: {
     // A PROJECT'S OWN SETTINGS, on its page and nowhere else: "Edit project"
-    // (the lead's target date and default assignee), About's labels (declare,
+    // (the lead's target date, default assignee and stuck window), About's labels (declare,
     // rename, archive) and fields (the project's own declarations, sent whole),
     // and the page's Archive project. A project's settings are what every
     // seat's tracker reads, so this is a COMPANY write. The engine decides
@@ -212,6 +212,7 @@ export const ACTIONS = {
       "target_date",
       "default_assignee",
       "archived",
+      "stuck_after_hours",
       "fields",
       "tags_add",
       "tags_rename",
@@ -723,6 +724,23 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  // A TAG MADE AND DELETED (`routes/gitlet/repo/TagWrites.tsx`): made at a
+  // revision, annotated where a message is given, and deleted at the value the
+  // listing showed (`expected_target`).
+  code_create_tag: {
+    args: ["repo", "tag", "at", "message"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  code_delete_tag: {
+    args: ["repo", "tag", "expected_target"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
   // A FILE COMMITTED FROM THE BROWSER (`routes/gitlet/repo/FileWrites.tsx`): one
   // commit on a branch, at the head the file was read at (`expected_head`),
   // that writes, adds or deletes one file with the message the person gives.
@@ -769,8 +787,17 @@ export const ACTIONS = {
   },
   code_comment_on_change: {
     // THE CONVERSATION'S COMPOSER: a comment of its own; a reply to a thread
-    // or a finding; one on a line (`anchor`); and Resolve on a thread.
-    args: ["repo", "change", "body", "thread", "finding", "anchor", "resolve"],
+    // or a finding; one on a line (`anchor`); Resolve on a thread; and a
+    // comment's Edit (`edit`, its id).
+    args: ["repo", "change", "body", "thread", "finding", "anchor", "resolve", "edit"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  code_delete_comment: {
+    // A COMMENT'S DELETE, from its menu: its words cleared, its place kept.
+    args: ["repo", "change", "comment"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],
@@ -785,9 +812,10 @@ export const ACTIONS = {
     scope: "person",
   },
   code_update_change: {
-    // READY FOR REVIEW on a draft (`draft: false`), or a new title and
-    // description, against the version on screen.
-    args: ["repo", "change", "expected_version", "draft", "title", "body"],
+    // ONE EDIT A CALL, against the version on screen: Ready for review and
+    // Convert to draft (`draft`), the title and description, the work item,
+    // or the branch it merges into (`target`).
+    args: ["repo", "change", "expected_version", "draft", "title", "body", "work_item", "target"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],
@@ -848,10 +876,9 @@ export const ACTIONS = {
     scope: "person",
   },
   code_rerun_checks: {
-    // RE-RUN CHECKS: every check of the change's head whose latest attempt
-    // did not pass, each at its next attempt (`all_failed`), on the checks
-    // log the change's checks tab reads.
-    args: ["repo", "change", "all_failed"],
+    // RE-RUN CHECKS: a change's failed ones (`change`, `all_failed`), or one
+    // run of a commit's check (`sha`, `checked_for`, `checks`).
+    args: ["repo", "change", "all_failed", "sha", "checked_for", "checks"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],

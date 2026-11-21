@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactserve/ticket"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -65,6 +67,41 @@ func (c *clock) advance(d time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.at = c.at.Add(d)
+}
+
+// holding is the object store's backend, whose next read, once a case holds
+// it, waits until its context ends or the case fails it: a broker that has not
+// answered yet.
+type holding struct {
+	*memobj.Backend
+	mu   sync.Mutex
+	fail chan error
+	held chan struct{}
+}
+
+// hold arms the next read: held closes once it waits, and fail ends it.
+func (h *holding) hold() (held <-chan struct{}, fail chan<- error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.fail, h.held = make(chan error, 1), make(chan struct{})
+	return h.held, h.fail
+}
+
+func (h *holding) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
+	h.mu.Lock()
+	fail, held := h.fail, h.held
+	h.fail, h.held = nil, nil
+	h.mu.Unlock()
+	if fail == nil {
+		return h.Backend.Get(ctx, name, off, n)
+	}
+	close(held)
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("holding: get %s: %w", name, ctx.Err())
+	case err := <-fail:
+		return nil, err
+	}
 }
 
 // reads is the estate as the origin reads it, moved by hand.
@@ -252,6 +289,7 @@ type rig struct {
 	mode     artifacts.OriginMode
 	external string
 	backend  *memobj.Backend
+	holding  *holding
 	store    *objstore.Store
 	reads    *reads
 	creds    *creds
@@ -259,6 +297,7 @@ type rig struct {
 	local    *local
 	rec      *recorder
 	judged   *judged
+	meter    *objectives.Meter
 	embedded fstest.MapFS
 	handler  *artifactserve.Handler
 	frames   *artifactserve.Frames
@@ -280,13 +319,14 @@ func newRigWith(t *testing.T, mode artifacts.OriginMode, external string) *rig {
 	t.Helper()
 	c := &clock{at: time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)}
 	backend := memobj.NewAt(c.now)
-	store, err := objstore.NewStoreAt(backend, c.now)
+	holding := &holding{Backend: backend}
+	store, err := objstore.NewStoreAt(holding, c.now)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
 	r := &rig{
 		t: t, clock: c, keyring: runtoken.OneKey("k1", "the-fleet-key"), mode: mode,
-		external: external, backend: backend, store: store,
+		external: external, backend: backend, holding: holding, store: store,
 		reads:  &reads{versions: map[int]artifactsdomain.Version{}},
 		creds:  &creds{by: map[string]iam.Principal{}, how: map[string]iam.Resolution{}},
 		chart:  &chart{members: map[string]bool{}, leads: map[string]bool{}},
@@ -387,10 +427,14 @@ func (r *rig) build() {
 	if err != nil {
 		r.t.Fatalf("NewFrames: %v", err)
 	}
+	var judge artifactserve.Objectives = r.judged
+	if r.meter != nil {
+		judge = r.meter
+	}
 	r.handler, err = artifactserve.New(artifactserve.Deps{
 		Tickets: r.tickets, Origins: r.origins, Artifacts: r.reads, Objects: r.store,
 		Credentials: r.creds, Chart: r.chart, Local: r.local, Metrics: r.rec,
-		Objectives: r.judged, Embedded: r.embedded, Now: r.clock.now,
+		Objectives: judge, Embedded: r.embedded, Now: r.clock.now,
 	})
 	if err != nil {
 		r.t.Fatalf("New: %v", err)
@@ -459,6 +503,29 @@ func (r *rig) do(req request) *reply {
 		r.t.Fatalf("read the body: %v", err)
 	}
 	return &reply{StatusCode: res.StatusCode, Header: res.Header, data: data}
+}
+
+// whileHeld sends req under ctx with the store holding its read, runs act once
+// the read waits, and answers the status the origin wrote.
+func (r *rig) whileHeld(ctx context.Context, req request, act func(fail chan<- error)) int {
+	r.t.Helper()
+	held, fail := r.holding.hold()
+	hr := httptest.NewRequestWithContext(ctx, http.MethodGet, req.url, nil)
+	hr.Header.Set("Sec-Fetch-Dest", req.dest)
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.handler.ServeHTTP(w, hr)
+	}()
+	select {
+	case <-held:
+	case <-done:
+		r.t.Fatalf("%s was answered %d without reading the store", req.url, w.Code)
+	}
+	act(fail)
+	<-done
+	return w.Code
 }
 
 func (r *rig) document(f artifacts.Frame) *reply {

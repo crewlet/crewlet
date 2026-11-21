@@ -36,17 +36,13 @@ func (m ColorMode) Valid() bool { return slices.Contains(ColorModes, m) }
 // ParseColorMode reads $CREWLET_LOG_COLOR, with $NO_COLOR as the override
 // every other tool in a terminal already honours.
 //
-// NO_COLOR WINS OVER auto BUT NOT OVER always. The convention
-// (https://no-color.org) is that setting it to a non-empty value suppresses
-// colour a program would have added on its own initiative — which is exactly
-// what `auto` is. `CREWLET_LOG_COLOR=always` is not initiative, it is an
-// instruction about this specific program, so it keeps its colour rather
-// than being silently ignored by an environment variable the operator may
-// not even know their shell exports.
+// NO_COLOR WINS OVER auto BUT NOT OVER always. Per https://no-color.org it
+// suppresses colour a program adds on its own initiative, which is what `auto`
+// is; `CREWLET_LOG_COLOR=always` is an instruction about this program, not to
+// be ignored by a variable the operator's shell may export unknowingly.
 //
-// An unrecognised CREWLET_LOG_COLOR resolves to auto rather than failing:
-// this is decoration, and no spelling of it may be why a company will not
-// boot.
+// An unrecognised value resolves to auto rather than failing: this is
+// decoration, and no spelling may be why a company will not boot.
 func ParseColorMode(name string) ColorMode {
 	switch m := ColorMode(strings.ToLower(strings.TrimSpace(name))); {
 	case m == "":
@@ -86,33 +82,15 @@ func isTerminal(w io.Writer) bool {
 
 // consoleHandler renders one line per record for a PERSON to read.
 //
-// # Why this exists rather than slog.NewTextHandler
+// Not slog.NewTextHandler, whose `level= component= msg=` prefixes are a wall
+// to a person watching a boot: this puts the three facts an operator scans for
+// in fixed columns and dims the rest. `text` and `json` remain what a log
+// shipper reads.
 //
-// slog's text handler is `time=2026-08-29T19:55:12.482Z level=INFO
-// msg=seat_claimed component=seat.host seat=eng.alice` — every field
-// self-describing, which is what makes it greppable and what makes it a wall
-// of identical prefixes when a person is watching a company boot. The three
-// facts an operator scans for (how bad, which subsystem, what happened) are
-// the three that sit behind `level=`, `component=` and `msg=` on every
-// single line.
-//
-// This handler puts those three in fixed columns and dims everything else,
-// so the eye lands on the event name. `text` and `json` are unchanged and
-// remain what a log shipper should be pointed at.
-//
-// A line with NO component renders that column blank, which is deliberate. It
-// happens to anything reaching slog.Default without going through [Get] — the
-// stdlib `log` bridge, a dependency that took the default logger — and a
-// placeholder there would be indistinguishable from a real component while
-// putting punctuation in a column whose only job is alignment.
-//
-// # Why not a logging library
-//
-// The engine's logger is `*slog.Logger` because that is the interface the
-// ecosystem passes around, and a console encoder is the only thing zap or
-// zerolog would have been adopted for. Taking the dependency would put a
-// third-party type in every constructor signature in the tree to get one
-// handler that is a few hundred lines here.
+// NO component renders that column blank, deliberately: it is anything
+// reaching slog.Default without [Get], and a placeholder would pass for a real
+// component. Not a logging library: it would put a third-party type in every
+// constructor signature to save one few-hundred-line handler.
 type consoleHandler struct {
 	level slog.Level
 	// color and dateInTime are decided once, at construction, from the
@@ -386,20 +364,13 @@ func appendPadded(buf []byte, s string, width int) []byte {
 // appendComponent writes the component column, ESCAPED and then padded to
 // what it actually rendered as.
 //
-// # A column is not a reason to skip escaping
+// A column is not a reason to skip escaping: any `.With("component", x)`
+// reaches it, and x is one refactor from being an MCP server name or role
+// handle out of config. A newline forges a whole log line and an ESC repaints
+// an operator's terminal, so [appendValue]'s quoting must not depend on which
+// column a string lands in.
 //
-// The message and every attribute value go through [appendValue], which
-// quotes anything holding a control byte. The component used to be written
-// raw because every logging.Get in the tree passes a string literal — but
-// the column is reached by any `.With("component", x)`, x is one refactor
-// away from being an MCP server name or a role handle out of the company
-// config, and a component holding a newline forges an entire log line while
-// one holding an ESC repaints an operator's terminal. The defence the rest
-// of the line already has should not depend on which column a string
-// lands in.
-//
-// An EMPTY component renders as blank padding rather than as `""` — see the
-// type's doc comment for why the empty case is intentional.
+// An EMPTY component renders as blank padding, not `""` (see the type's doc).
 func appendComponent(buf []byte, component string, width int) []byte {
 	start := len(buf)
 	if component != "" {

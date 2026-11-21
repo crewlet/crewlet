@@ -12,22 +12,16 @@ import (
 )
 
 // AN AGENT'S WRITE THAT WAKES SOMEBODY CARRIES WHOM IT WAS WRITTEN FOR, AND
-// NOTHING ELSE DOES (ADR-0109), on the knowledge base's store as on the
-// tracker's. An agent's comment asking bob, made in a turn ada woke, records
-// that the turn worked for ada, at the version that carries it, which an older
-// build retains rather than waking bob for the agent. A quiet rename by the
-// same agent carries nobody and stays at the base version. A comment a turn
-// nobody woke makes carries nobody too, so it stays below the carrier's
-// version, at the one every agent comment's statement of whether it asks needs.
+// NOTHING ELSE DOES (ADR-0109). An agent's comment asking bob, made in a turn
+// ada woke, records that the turn worked for ada, at the version that carries
+// it, which an older build retains rather than waking bob for the agent. A
+// quiet rename, or a comment in a turn nobody woke, carries nobody and stays
+// below the carrier's version. THE TYPE REFUSES THE ACTOR THAT FORGOT: an agent
+// stating nobody it writes for writes nothing, nor does a person with a carrier.
 //
-// AND THE TYPE REFUSES THE ACTOR THAT FORGOT: an agent that states nobody it
-// writes for writes nothing, and a person handed a carrier writes nothing
-// either. An actor decoded off the estate's wire states it already.
-//
-// Mutation: leave the carrier off the record the store builds, and ada's
-// comment carries nobody; keep it on a record that wakes nobody, and the quiet
-// rename carries ada; drop the refusal in recordedFor, and the unstated
-// agent's comment lands.
+// Mutation: leave the carrier off the record, and ada's comment carries nobody;
+// keep it on a record that wakes nobody, and the quiet rename carries ada; drop
+// the refusal in recordedFor, and the unstated agent's comment lands.
 func TestAnAgentsPageWriteThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -91,21 +85,17 @@ func TestAnAgentsPageWriteThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing
 }
 
 // A PAGE ACTOR CROSSES THE WIRE AS IT WAS STATED (ADR-0109), under the rule of
-// the arguments it crosses in, as the estate's wire encodes and decodes them
-// (crewlet#910). Through the caller's own encoder every field at its zero is
-// left off, so an agent's actor stated for nobody goes out without the key,
-// byte for byte as a build without the field sends it, and one stated for
-// somebody carries them. Through the caller's own decoder it arrives stated,
-// whatever members did, so an older node's actor, which knows no carrier,
-// arrives as stated nobody; and a member nothing declares, in the actor or in
-// its carrier, is refused where it is rather than dropped below where that
-// rule can see. (That no node asks a page write whose actor may write nothing
-// is internal/estate's, and held there.)
+// the arguments it crosses in (crewlet#910). Through the estate's encoder every
+// zero field is left off, so an actor stated for nobody goes out without the
+// key, as a build without the field sends it. Through its decoder it arrives
+// stated, so an older node's actor arrives as stated nobody, and an undeclared
+// member, in the actor or its carrier, is refused where it is rather than
+// dropped below where the rule can see. (internal/estate holds that no node
+// asks a write whose actor may write nothing.)
 //
-// Mutation: give the actor an UnmarshalJSON over encoding/json in place of
-// its UnmarshalJSONFrom, and the member inside it is dropped; state the actor
-// only where a carrier arrives, and the older node's actor arrives stating
-// nothing.
+// Mutation: give the actor an UnmarshalJSON over encoding/json in place of its
+// UnmarshalJSONFrom, and the member inside it is dropped; state the actor only
+// where a carrier arrives, and the older node's actor arrives stating nothing.
 func TestAPageActorCrossesTheWireAsItWasStated(t *testing.T) {
 	t.Parallel()
 	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}

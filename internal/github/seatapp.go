@@ -9,40 +9,17 @@ import (
 )
 
 // Keeping the document's record of each agent's own GitHub App in step with
-// GitHub.
+// GitHub. It CREATES NOTHING: a person creates and installs an app, outside
+// any loop; the loop records what that left behind. What an agent may do,
+// and every finding, is the access sync's ([vendor]).
 //
-// # What this half can and cannot do
+// The installation is read back, never assumed: a stored id is a claim about
+// somebody else's account, revocable silently, so `GET /app/installations`
+// is the authority, and the only way to learn what it GRANTS.
 //
-// It CREATES NOTHING. An app is created by a person POSTing a manifest from a
-// browser, and installed by a person too, so the two acts this integration
-// depends on are outside any loop. What the loop does here is record what
-// those acts left behind: the installation a person made, an installation
-// GitHub no longer has, an app somebody deleted. What each agent may do, and
-// every finding about an agent, is the access sync's ([vendor]).
-//
-// # The installation is read back, never assumed
-//
-// A stored installation id is a claim about somebody else's account, and the
-// operator can revoke it at GitHub without telling anyone. So the authority
-// is `GET /app/installations`: an id that no longer appears there has been
-// uninstalled, and the seat is back to needing a click. Reading it back is
-// also the only way to learn what the installation actually GRANTS, which is
-// not what the manifest asked for whenever a person edited it or widened it
-// afterwards.
-//
-// # A failed read is not a finding
-//
-// Every conclusion here is drawn from an answer GitHub gave. Where GitHub
-// could not be reached the seat is left exactly as it was, because reporting
-// "no installation" on a timeout would tell an operator to redo a click that
-// was never undone.
-//
-// # A cancelled pass is not a failed read
-//
-// That rule is right for a timeout and a 5xx (GitHub was asked and could not
-// say) and wrong for a cancellation, which means this pass never asked at
-// all. A pass whose context is done RAISES, and the caller decides, which for
-// the loop means retrying rather than believing.
+// A failed read is not a finding: "no installation" on a timeout would send
+// an operator to redo a click never undone. A cancelled pass never asked, so
+// it RAISES.
 
 // SeatApp is one agent's own app, as the company document holds it.
 type SeatApp struct {
@@ -108,17 +85,14 @@ type SeatAppOptions struct {
 	// Forget clears the app a seat names when GitHub says that app no
 	// longer exists. Nil is a DRY RUN, exactly as Record's is.
 	//
-	// THE DOCUMENT IS WRONG AND NOTHING ELSE CAN CORRECT IT. An app is
-	// deleted from its settings page by a person, and GitHub tells the
-	// engine nothing: the record left behind names an app id that answers
-	// 404 to everything, so the seat mints no token, the install link
-	// GitHub itself 404s, and every surface reports a step that cannot be
-	// taken. Clearing it puts the seat back to the one thing that can be
-	// done, which is creating another.
+	// THE DOCUMENT IS WRONG AND NOTHING ELSE CAN CORRECT IT. A person
+	// deletes an app from its settings page and GitHub tells the engine
+	// nothing: the record names an app id that 404s, so the seat mints no
+	// token and every surface reports a step that cannot be taken. Clearing
+	// it leaves the one thing that can be done, creating another.
 	//
-	// The sealed key is left alone. It is named per seat, so creating the
-	// next app overwrites it, and deleting it here would be a destructive
-	// answer to a question GitHub is the only authority on.
+	// The sealed key is left alone: it is named per seat, so the next app
+	// overwrites it, and deleting it would answer for GitHub.
 	Forget func(ctx context.Context, handle string) error
 
 	// Client builds the app client for one seat. Nil takes the real one.
@@ -131,16 +105,14 @@ type SeatAppOptions struct {
 // GitHub, and reports nothing: what a seat still owes is the access sync's to
 // say ([seataccess.Sync] through this package's vendor).
 //
-// THE DOCUMENT WRITES THE TOKEN ISSUER DEPENDS ON, and only those. An
-// installation a person made since the last pass is recorded on the seat, an
-// installation GitHub no longer has is cleared, and an app GitHub no longer
-// has is forgotten, so the issuer never mints against an id GitHub has
-// forgotten. Off seats are kept in step too: a disconnect uninstalls their
-// suspended installations by the recorded id.
+// THE DOCUMENT WRITES THE TOKEN ISSUER DEPENDS ON, and only those: a new
+// installation is recorded, a vanished installation or app is cleared, so
+// the issuer never mints against an id GitHub has forgotten. Off seats are
+// kept in step too: a disconnect uninstalls their suspended installations by
+// the recorded id.
 //
-// A DRY RUN (Record or Forget nil) writes nothing and does nothing. A read
-// GitHub could not answer leaves the seat as it was; a write the store
-// refused is returned, joined with the rest, after every seat is tried.
+// A DRY RUN (Record or Forget nil) does nothing. An unanswered read leaves
+// the seat as it was; a refused write is returned, joined, after every seat.
 func AdoptSeatApps(ctx context.Context, opts SeatAppOptions) error {
 	if opts.Record == nil || opts.Forget == nil {
 		return nil

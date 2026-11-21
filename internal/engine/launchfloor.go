@@ -114,9 +114,11 @@ func staticFloor(c *Company) launchFloor {
 	return launchFloor{static: c.Config.TurnEngine.ExecutorFloor()}
 }
 
-// continuing is f for a launch that continues a session whose last request
-// carried context tokens (zero where nothing measured it), handed a brief of
-// about brief tokens.
+// continuing is f for a launch that continues a session whose next request
+// carries context tokens before its brief (its harness's estimate of that
+// request, or its last request's input where nothing estimated it,
+// [continuedContext]; zero where nothing measured it either), handed a brief
+// of about brief tokens.
 func (f launchFloor) continuing(context int64, brief int) launchFloor {
 	f.context, f.brief = max(context, 0), max(brief, 0)
 	return f
@@ -237,15 +239,15 @@ func (f launchFloor) stillShort(left int, w sandbox.BudgetWindow) string {
 		"turnover at most for the room its briefs need", f.tokens(), f.madeOf(), left, w.Period, w.Label)
 }
 
-// madeOf is what a session's floor f is made of, in a line's words: its last
-// request's context and its brief, or, where nothing measured that context,
-// the static floor and its brief.
+// madeOf is what a session's floor f is made of, in a line's words: what the
+// session sends before its brief ([continuedContext]) and its brief, or, where
+// nothing measured that context, the static floor and its brief.
 func (f launchFloor) madeOf() string {
 	if f.context <= 0 {
 		return fmt.Sprintf("nothing measured its context, so turn_engine.executor_min_budget_tokens, %d, "+
 			"and its brief, about %d", f.static, f.brief)
 	}
-	return fmt.Sprintf("its last request carried %d, and its brief about %d", f.context, f.brief)
+	return fmt.Sprintf("its session sends %d before its brief, and its brief about %d", f.context, f.brief)
 }
 
 // turnedOver reports whether w, the window a launch was refused below its floor
@@ -272,8 +274,8 @@ func (f launchFloor) carriedBy(w sandbox.ExecutorWindow) string {
 	if f.context <= 0 || w.Carries(f.context, f.brief) {
 		return ""
 	}
-	return fmt.Sprintf("a launch that continues the session sends %d tokens first (its last request "+
-		"carried %d, and its brief about %d), more than one request under the %d-token window Claude "+
+	return fmt.Sprintf("a launch that continues the session sends %d tokens first (the session %d, "+
+		"and its brief about %d), more than one request under the %d-token window Claude "+
 		"Code holds the launch's model to can carry", f.context+int64(f.brief), f.context, f.brief, w.Tokens)
 }
 
@@ -294,7 +296,7 @@ func (r *floorRefusal) Error() string {
 	switch {
 	case f.context > 0:
 		return fmt.Sprintf("this seat has %d tokens left and an executor run that continues its "+
-			"session needs at least %d: its session's last request carried %d tokens and its brief "+
+			"session needs at least %d: its session sends %d tokens before its brief, which "+
 			"is about %d (turn_engine.executor_min_budget_tokens is %d): %v", r.left, f.tokens(),
 			f.context, f.brief, f.static, toolloop.ErrBudgetExhausted)
 	case f.held():

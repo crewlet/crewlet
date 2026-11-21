@@ -25,26 +25,15 @@ import (
 
 // A MACHINE TOKEN MANAGES NO PROOF.
 //
-// A personal access token acts as its owner — a person, stepped up by
-// construction — so the two checks every proof-management route already had
-// (a person, and a fresh step-up) both pass for it. Without a refusal, whoever
-// holds a pipeline's environment could enrol their own second factor on the
-// owner's account or regenerate the recovery codes and read them back. The
-// two proof routes and the password change are refused by the AUTHORITY TABLE
-// (`token_refused`, the proof verb's row needing a person present) and the
-// step-up by its own check, since confirming who you are is no verb in the
-// table — in the table's own words, `token_refused`, because no proof the
-// caller could give would lift it and `step_up_required` asked for one. Every
-// row is held to the code as well as the reason. The token here
-// carries ADMIN, minted from an owner who holds it (ADR-0033 lets a token
-// carry it), so the refusal is the person-present rule's and no permission
-// could stand in for it. The request goes through the REAL guard so the
-// credential shape is the guard's own answer.
-//
-// Mutation: spare the proof verb's self arm in internal/authz and the recovery
-// codes are regenerated for the token's holder; drop the step-up's own check
-// and it answers something other than 403; answer the step-up
-// `step_up_required` again and its row goes red.
+// A token acts as its owner, stepped up by construction, so the person and
+// step-up checks both pass for it: whoever holds a pipeline's environment could
+// enrol a second factor or read regenerated recovery codes. The proof routes and
+// the password change are refused by the AUTHORITY TABLE (`token_refused`, the
+// proof verb needing a person present), the step-up by its own check. Both
+// answer `token_refused`, never `step_up_required`: no proof would lift it. The
+// token carries ADMIN (ADR-0033), so no permission stands in; the REAL guard runs.
+// Mutation: spare the proof verb's self arm in internal/authz, drop the
+// step-up's check, or answer `step_up_required` again, and a row goes red.
 func TestAMachineTokenManagesNoProof(t *testing.T) {
 	t.Parallel()
 	owner := uuid.Must(uuid.NewV7())

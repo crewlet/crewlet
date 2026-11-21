@@ -14,18 +14,13 @@ import (
 //
 // # Why counted, and by whom
 //
-// A seat's credential is that seat's identity at a vendor, and the incident
-// that made per-seat access a stored setting was one seat's provisioning sink
-// pointing at the variable a company block also read: the pass sealed the
-// seat's minted key over the company's organization key. Two readers of one
-// variable is the whole defect, so the question every rule here asks is "who
-// else names this variable", and it is answered for the whole document at
-// once rather than by each rule walking it again.
+// Two readers of one variable is the defect behind per-seat access: a seat's
+// provisioning sink pointed at a variable a company block also read, and the
+// pass sealed the seat's key over the company's. So every rule asks "who else
+// names this variable", answered once for the whole document.
 //
-// WALKED THROUGH THE WIRE SHAPE, not field by field: a reference can sit in any
-// string of any block, and a field added to a block next year is covered
-// without anybody remembering this function. Only names are collected, never
-// values.
+// WALKED THROUGH THE WIRE SHAPE, not field by field, so a field added later is
+// covered. Only names are collected, never values.
 type VariableReferences struct {
 	// Total counts every reference in the document.
 	Total map[string]int

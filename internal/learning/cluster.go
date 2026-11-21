@@ -18,46 +18,30 @@ import (
 	"github.com/google/uuid"
 )
 
-// Clustered synthesis: the pattern a seat repeats, rather than the turn it
-// just finished.
+// Clustered synthesis: the pattern a seat repeats, not the turn it just
+// finished. The inline synthesizer sees one turn and misses three unremarkable
+// tools run the same way eleven times, evidence invisible inside any one turn;
+// this pass groups the seat's recent turns by how similar their tool runs are
+// and drafts from a GROUP.
 //
-// # Why single-turn induction is not enough
-//
-// The inline synthesizer sees one turn and asks "was that a procedure?". It
-// catches the turn that was obviously one — five tools in a shape a model can
-// describe — and misses the shape a seat arrives at over a fortnight: three
-// tools, unremarkable on any single turn, run the same way eleven times. That
-// is the more valuable skill, because eleven repetitions is evidence a single
-// turn cannot offer, and it is invisible from inside any one of them.
-//
-// So this pass reads the seat's recent turns, groups them by how similar
-// their tool runs are, and drafts from a GROUP. `scheduler_enabled`,
-// `cluster_min_size`, `cluster_jaccard_threshold` and `episode_fetch_limit`
-// all validated and were read by nothing before it existed.
-//
-// # One draft per seat per pass, largest cluster first
-//
-// Not every qualifying cluster. Each draft costs an auxiliary completion and
-// the pass runs on a daily cadence, so a seat with three real patterns learns
-// them over three days rather than spending three calls in one tick — and the
-// strongest evidence goes first. A pass that drafted everything would also
-// make the per-seat cap reachable in a single tick, which is the one way a
-// catalogue fills with drafts nobody asked for.
+// One draft per seat per pass, largest cluster first: each draft costs an
+// auxiliary completion and the pass runs daily, so a seat with three patterns
+// learns them over three days, strongest evidence first. Drafting everything
+// would also make the per-seat cap reachable in one tick, the one way a
+// catalogue fills with unwanted drafts.
 
 // ClusterInterval is how often the clustering pass runs when
 // `scheduler_interval_seconds` says nothing. Hourly, matching that field's
 // shipped 3600.
 //
-// Its own constant rather than the curator's, even though both are loops over
-// the roster: they tick for unrelated reasons — the curator ages a catalogue
-// against a 30-day stale window, this one waits for repetitions to accumulate
-// — and sharing a constant would make tuning either silently move the other.
+// Its own constant rather than the curator's: they tick for unrelated reasons
+// (that one ages a catalogue against a 30-day stale window, this one waits for
+// repetitions), and sharing one would let tuning either move the other.
 //
-// Hourly is cheap because the expensive half is CONDITIONAL. A tick costs one
-// indexed scan per seat; the auxiliary call happens only when a cluster
-// crossed `cluster_min_size` and is not already a skill, which after the
-// first tick is rare. In exchange, a seat that has just repeated a procedure
-// for the third time learns it within the hour rather than the next day.
+// Hourly is cheap because the expensive half is CONDITIONAL: a tick costs one
+// indexed scan per seat, and the auxiliary call happens only when a cluster
+// crossed `cluster_min_size` and is not already a skill. A seat that just
+// repeated a procedure a third time learns it within the hour.
 const ClusterInterval = time.Hour
 
 // DefaultClusterWindow is how far back a pass looks when
@@ -234,22 +218,15 @@ func (s *Synthesizer) draftFromCluster(ctx context.Context, seat *org.Role,
 
 // clusterEpisodes groups a seat's turns by how similar their tool runs are.
 //
-// GREEDY and single-pass over the newest-first listing: each episode joins
-// the first cluster whose representative it is similar enough to, or starts
-// one. Not k-means and not hierarchical — the question is "did this seat do
-// the same thing repeatedly", and a greedy pass answers it in one traversal
-// with a representative that is a real run rather than a centroid nobody
-// performed.
+// GREEDY and single-pass over the newest-first listing: each episode joins the
+// first cluster whose representative it is similar enough to, or starts one.
+// Not k-means: "did this seat repeat itself" needs one traversal and a
+// representative that is a real run, not a centroid nobody performed.
 //
-// Only RAW, SETTLED turns with enough tools, inside the window, take part. A
-// compacted row is already a summary of a cluster and would count a fold as
-// one turn; an unsettled one is work the agent judged incomplete; a turn under
-// min_tool_calls is a step rather than a procedure, exactly as in the inline
-// path; and a turn older than the window is a procedure the seat may have
-// stopped using, which a draft would present as what it does now.
-//
-// Returned largest first, ties broken by the newest member so a pass is
-// deterministic over one snapshot of the table.
+// Only RAW, SETTLED turns with enough tools, inside the window, take part: a
+// compacted row would count a fold as one turn, an unsettled one is work
+// judged incomplete, and an older turn may be a procedure since dropped.
+// Returned largest first, ties by newest member, deterministic per snapshot.
 func clusterEpisodes(eps []Episode, minTools int, threshold float64,
 	since time.Time,
 ) []SkillCluster {

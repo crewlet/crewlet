@@ -18,8 +18,7 @@ import (
 // who is the person most cases here seal for.
 const who = "018f3a9c-0000-7000-8000-000000000001"
 
-// newSealer is a sealer over the rig's own keyring, for a case that needs no
-// estate.
+// newSealer is a sealer over the rig's keyring, for a case with no estate.
 func newSealer(t *testing.T) *iamdomain.Sealer {
 	t.Helper()
 	sealer, err := iamdomain.NewSealer(testCipher(t, testKeyring))
@@ -31,10 +30,9 @@ func newSealer(t *testing.T) *iamdomain.Sealer {
 
 // ONE PERSON'S SEALED VALUE DOES NOT OPEN AS ANOTHER'S.
 //
-// Every person's values are sealed under ONE keyring, so the key cannot tell
-// two people apart: the person half of the associated data is the whole of
-// what stops a row that acquired somebody else's sealed name — a restore, a
-// bad migration, a bug — from rendering it as its own.
+// One keyring seals everybody's values, so only the person half of the
+// associated data stops a row that acquired somebody else's sealed name (a
+// restore, a bad migration, a bug) from rendering it as its own.
 //
 // Mutation: drop the person id from [iamdomain.AADFor] and this opens.
 func TestOnePersonsSealedValueDoesNotOpenAsAnothers(t *testing.T) {
@@ -58,10 +56,8 @@ func TestOnePersonsSealedValueDoesNotOpenAsAnothers(t *testing.T) {
 
 // ONE PERSON'S OWN VALUES DO NOT OPEN AS EACH OTHER.
 //
-// The field half of the associated data: a person's name and address are
-// sealed under the same keyring for the same person, so an address that
-// reached the name column would otherwise decrypt cleanly and every surface
-// that renders a person would print it where their name goes.
+// The field half of the associated data: without it, an address that reached
+// the name column would open cleanly and render where the name goes.
 func TestOneFieldsSealedValueDoesNotOpenAsAnother(t *testing.T) {
 	t.Parallel()
 	sealer := newSealer(t)
@@ -81,11 +77,9 @@ func TestOneFieldsSealedValueDoesNotOpenAsAnother(t *testing.T) {
 
 // A SECOND FACTOR'S SEED OPENS ONLY AS THE CREDENTIAL IT WAS ENROLLED AS.
 //
-// Every seed a person ever enrolled is sealed for that one person, so the
-// person half cannot tell their current seed from the one they replaced,
-// sitting in an old backup. The credential id in the associated data is what
-// does: a seed pasted over another credential's opens as nothing, under the
-// same person or another, and so does one moved into the name column.
+// The person half cannot tell a current seed from the one it replaced, still
+// in an old backup; the credential id in the associated data does. A seed
+// pasted over another credential's, or into the name column, opens as nothing.
 //
 // Mutation: seal under [iamdomain.AADFor] alone and the re-enrolment row opens.
 func TestASecondFactorSeedOpensOnlyAsTheCredentialItWasEnrolledAs(t *testing.T) {
@@ -127,11 +121,10 @@ func TestASecondFactorSeedOpensOnlyAsTheCredentialItWasEnrolledAs(t *testing.T) 
 
 // AN INVITATION'S ADDRESS OPENS ONLY AS THAT INVITATION'S.
 //
-// An invitation's id is not a person's, but both are strings the one keyring
-// seals under: bound in a person's grammar, an invitation's sealed address
-// would open as the name or address of anybody whose id happened to be
-// spelled like it — and a person's address, pasted onto an invitation row,
-// would render as whom it was sent to.
+// Both ids are strings the one keyring seals under. Bound in a person's
+// grammar, an invitation's sealed address would open as the value of anybody
+// whose id was spelled like the invitation's, and a person's address pasted
+// onto an invitation row would render as its addressee.
 func TestAnInvitationsAddressOpensOnlyAsThatInvitation(t *testing.T) {
 	t.Parallel()
 	sealer := newSealer(t)
@@ -161,9 +154,9 @@ func TestAnInvitationsAddressOpensOnlyAsThatInvitation(t *testing.T) {
 
 // A SEALER WITH NO KEYRING, AND A CALL THAT NAMES NOBODY, ARE BOTH REFUSED.
 //
-// With no keyring a sealer would pass names, addresses and seeds through in
-// the clear; with no owner, every unidentified value would share one
-// associated data, under which any of them opens as any other.
+// With no keyring a sealer would pass values through in the clear; with no
+// owner, every unidentified value would share one associated data, under which
+// any opens as any other.
 func TestASealerRefusesWhatWouldSealForNobody(t *testing.T) {
 	t.Parallel()
 	if _, err := iamdomain.NewSealer(nil); err == nil {
@@ -184,8 +177,8 @@ func TestASealerRefusesWhatWouldSealForNobody(t *testing.T) {
 
 // AN EMPTY SEALED VALUE OPENS AS EMPTY.
 //
-// Most rows have an unset optional field, and every value a removal erased is
-// empty — rendering either is not a failure.
+// An unset optional field and an erased value are both empty; rendering
+// either is not a failure.
 func TestAnEmptySealedValueOpensAsEmpty(t *testing.T) {
 	t.Parallel()
 	sealer := newSealer(t)
@@ -218,9 +211,8 @@ var envelopeShape = regexp.MustCompile(`enc:v1:[^:"\s]+:[A-Za-z0-9+/]+=*`)
 // openable counts, per identity table, the sealed values one node's rows hold
 // that open as one of owner's — every table, every column, every document.
 //
-// EVERY TABLE, found rather than listed: a list of where the sealed values are
-// is the thing the erasure itself refused to keep, and a new table carrying
-// one would pass a scan that did not know to read it.
+// EVERY TABLE, found rather than listed: the erasure keeps no list of where
+// sealed values are, and a new table carrying one would pass a listed scan.
 func openable(t *testing.T, db store.ReplicatedHandle, sealer *iamdomain.Sealer,
 	owner owned) map[string]int {
 
@@ -331,11 +323,9 @@ func valuesOf(tx *sql.Tx, t *testing.T, table string) ([]string, error) {
 	return out, rows.Err()
 }
 
-// joinWithSeed enrols one person through an invitation, as everybody after the
-// first operator is enrolled, then gives them a second factor and a new name —
-// so every place a person's sealed values land holds one: their row, their
-// credential, the invitation that was addressed to them, and a trail row per
-// record.
+// joinWithSeed enrols one person through an invitation, then gives them a
+// second factor and a new name, so every place a person's sealed values land
+// holds one: their row, credential, invitation and a trail row per record.
 func joinWithSeed(t *testing.T, rig *writeRig, address, name string) owned {
 	t.Helper()
 	seat := rig.vacantSeat(seatOf(address))
@@ -352,8 +342,8 @@ func joinWithSeed(t *testing.T, rig *writeRig, address, name string) owned {
 		t.Fatalf("the redemption spent %s's invitation for %v", address, persons)
 	}
 	person := persons[0]
-	// A CREDENTIAL ID IS THE ROW'S KEY ACROSS EVERYBODY, as the sign-in
-	// surface's uuids are, so each person's is their own.
+	// A CREDENTIAL ID KEYS THE ROW ACROSS EVERYBODY, so each person's is
+	// their own.
 	credential := "app-" + person
 	seed, err := rig.sealer.SealCredential(person, credential, iamdomain.FieldTOTP,
 		"JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
@@ -392,21 +382,13 @@ func joinWithSeed(t *testing.T, rig *writeRig, address, name string) owned {
 
 // A REMOVAL LEAVES NO VALUE OF THEIRS THAT OPENS, ON ANY NODE.
 //
-// What a removal promises is that the company no longer holds anything that is
-// somebody's. Their rows go, and three kinds of row outlive them on purpose —
-// the invitation that was addressed to them, the authentication trail naming
-// what was done to them, and the tombstone — each still holding, before the
-// erasure, a sealed copy of their name, their address or their seed that the
-// keyring every node holds would open. So the scan asks the only question
-// that matters, of every identity table on the node: does ANY value here open
-// as theirs?
+// Three rows outlive a person on purpose (their invitation, their trail and
+// the tombstone), each holding a sealed value the shared keyring would open.
+// So the scan asks every identity table: does ANY value open as theirs?
 //
-// The CONTROL is the same scan before the removal, which finds their values
-// in their row, their credential, their invitation and their trail — so a
-// clean scan after says the values were erased, not that the scan read
-// nothing. The colleague beside them keeps every value, because the erasure is
-// about one person. And a second node that applies the same log from its first
-// record writes byte-identical rows, because every node erases.
+// The CONTROL is the same scan before the removal, which finds their values,
+// so a clean scan after means erased, not unread. A colleague keeps every
+// value; a second node applying the log writes identical rows (all erase).
 //
 // Mutation: drop the call to eraseSealed from the removal's apply and the
 // invitation and the trail still open.
@@ -444,8 +426,8 @@ func TestARemovalLeavesNoValueOfTheirsThatOpens(t *testing.T) {
 		t.Errorf("removing Sarah changed what opens as Pat's: %v, was %v",
 			got, colleague)
 	}
-	// THE TRAIL SURVIVES, which is why its rows were erased rather than
-	// deleted: who did what to whom is the audit a removal must never take.
+	// THE TRAIL SURVIVES, erased rather than deleted: who did what to whom
+	// is the audit a removal must never take.
 	if got := rig.column(`SELECT op FROM iam_history WHERE person_id = ?`,
 		sarah.person); len(got) == 0 {
 		t.Error("the removal deleted the trail")
@@ -468,13 +450,10 @@ func TestARemovalLeavesNoValueOfTheirsThatOpens(t *testing.T) {
 
 // AND A REMOVAL REACHES THE TRAIL OF AN INVITATION THE SWEEP HAS COLLECTED.
 //
-// An invitation's issue names nobody, so its trail row — which carries the
-// issuing record, the address sealed inside it — is filed under the ADDRESS it
-// was sent to, and a removal erases it by that address. Filed under the
-// invitation's own id, it would be found only through the invitation's row,
-// which the retention sweep collects a week after the redemption while the
-// trail row is kept for the change horizon: a removal after that left the
-// address sealed in the trail, opening under the keyring every node holds.
+// An issue names nobody, so its trail row, the address sealed inside, is
+// filed under that ADDRESS and erased by it. Filed under the invitation, it would be reachable
+// only through the invitation's row, which the sweep collects long before the
+// change horizon drops the trail row, leaving the address sealed there.
 //
 // Mutation: file an issue's trail row under its invitation, and erase through
 // the invitations that remain, and the trail row still opens here.
@@ -483,9 +462,9 @@ func TestARemovalErasesTheTrailOfAnInvitationTheSweepCollected(t *testing.T) {
 	rig := newWriteRig(t)
 	const address = "sarah.chen@example.com"
 	sarah := joinWithSeed(t, rig, address, "Sarah Chen")
-	// THE SWEEP COLLECTS HER SPENT INVITATION, through the applier, and
-	// keeps every trail row — its change horizon is zero here. Its instant
-	// is past the broker's clock, which stamped the redemption.
+	// THE SWEEP COLLECTS HER SPENT INVITATION and keeps every trail row
+	// (change horizon zero). Its instant is past the broker's clock, which
+	// stamped the redemption.
 	sweep := sweepRecord(t, iamdomain.Sweep{V: iamdomain.DocumentVersion,
 		Bucket:  iamdomain.BucketOf(blindOf(t, address)),
 		Expired: time.Now().Add(24 * time.Hour)})
@@ -534,17 +513,13 @@ func equalCounts(a, b map[string]int) bool {
 
 // NOTHING PERSONAL IS ON THE LOG IN THE CLEAR.
 //
-// The log is the write-ahead log every data node's rows derive from, and a
-// record is on the broker, on the cluster port, in every data node's deferred
-// table and in
-// every backup of the streams until the trim passes it — none of which a
-// removal can reach. So what a record carries must already be ciphertext when
-// it is published: the name, the address and the seed are sealed at the
-// WRITER, never at the applier.
+// A record sits on the broker, the cluster port, every data node's deferred
+// table and every stream backup until the trim passes it, where no removal
+// reaches; so name, address and seed are sealed at the WRITER, never the
+// applier.
 //
-// The CONTROL is the login, which is in the clear by design: the scan finds it
-// in the same records, so a clean scan says the values were sealed rather than
-// that it read the wrong bytes.
+// The CONTROL is the login, in the clear by design: the scan finds it in the
+// same records, so a clean scan means sealed, not misread.
 //
 // Mutation: publish the enrolment's name or address unsealed and the scan
 // finds it.
@@ -585,25 +560,22 @@ func TestNothingPersonalIsOnTheLogInTheClear(t *testing.T) {
 
 // A KEYRING ROTATION MOVES EVERYBODY'S VALUES, AND THE OLD KEY CAN THEN GO.
 //
-// A rotation adds a key and makes it active, re-seals what the old one
-// sealed, and drops it. Until the re-seal, a node holding both keys still
-// opens every value — which is what makes the rotation zero-downtime. The
-// re-seal is RECORDS, because these rows are derived from the log and a node
-// that rewrote its own would disagree with its peers; so it is one record per
-// person, every data node applies it, and after it a node holding ONLY the new
-// key opens every person's name, address and seed. A second pass finds nothing to
-// move and publishes nothing.
+// Until the re-seal, a node holding both keys opens everything (zero
+// downtime). The re-seal is RECORDS, one per person, since a node rewriting
+// its own derived rows would disagree with its peers; after it the new key
+// alone opens every name, address and seed, and a second pass publishes
+// nothing.
 //
-// The CONTROL is the new key alone before the re-seal, which opens nothing —
-// so what opens afterwards is what the re-seal moved.
+// The CONTROL is the new key alone before the re-seal, which opens nothing,
+// so what opens after is what the re-seal moved.
 //
 // Mutation: skip the seed in the re-seal and the new key alone cannot open it.
 func TestAKeyringRotationMovesEverybodysValues(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
 	sarah := joinWithSeed(t, rig, "sarah.chen@example.com", "Sarah Chen")
-	// AN INVITATION NOBODY HAS REDEEMED, which a re-seal does not move: it
-	// is counted, so the operator knows to wait out its window.
+	// AN UNREDEEMED INVITATION is not moved but counted, so the operator
+	// knows to wait out its window.
 	if _, err := inviteFor(t, rig, "sam@example.com",
 		rig.vacantSeat("sam-desk")); err != nil {
 		t.Fatalf("invite: %v", err)

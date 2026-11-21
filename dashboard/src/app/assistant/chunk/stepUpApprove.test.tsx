@@ -91,7 +91,11 @@ function resumed(): string {
   return [card, status, done].map(sse).join("");
 }
 
+// THE GOLDEN TURN'S OWN MOMENT, inside its cards' wait: the kit draws a card
+// past its wait as expired. Only the clock is held; timers run.
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-24T09:42:00Z"));
   resetSessionForTest();
   resetPageContextForTest();
   sessionStorage.clear();
@@ -100,6 +104,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const json = (body: unknown, status = 200) =>
@@ -211,7 +216,6 @@ function mount() {
                 unavailable={null}
                 model={null}
                 attach={null}
-                deliberate={false}
                 admin={false}
                 onClose={() => {}}
                 initialFocus="composer"

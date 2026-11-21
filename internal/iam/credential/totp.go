@@ -15,22 +15,16 @@ import (
 
 // RFC 6238, WRITTEN OUT, AND WHY IT IS NOT A DEPENDENCY.
 //
-// The whole of TOTP is an HMAC, a counter and a modulus — about forty lines
-// below. A module for it would bring its own release cadence, its own idea of
-// how much clock drift to tolerate and its own default for the digit count,
-// and every one of those is a security decision this file states in one place
-// where a reader can see it. The engine's dependency rule asks a module to
-// earn its place against what the standard library already does, and here the
-// standard library does all of it.
+// The whole of TOTP is an HMAC, a counter and a modulus, and the standard
+// library does all of it. A module would bring its own idea of clock drift and
+// digit count, each a security decision this file states in one place.
 //
 // # SHA-1, six digits, thirty seconds, and none of them is a choice
 //
-// They are what every authenticator app implements. An implementation that
-// reached for SHA-256 because SHA-1 is broken elsewhere would produce codes
-// no phone generates — and SHA-1's collision weakness has no bearing on an
-// HMAC over a 160-bit secret, where what matters is the secret's entropy. The
-// same goes for eight digits and for a sixty-second period: technically
-// stronger, and unusable.
+// They are what every authenticator app implements. SHA-256 would produce
+// codes no phone generates, and SHA-1's collision weakness has no bearing on
+// an HMAC over a 160-bit secret, where the secret's entropy matters. The same
+// goes for eight digits and a sixty-second period: stronger, and unusable.
 
 const (
 	// TOTPDigits is the code length: six.
@@ -180,17 +174,15 @@ func VerifyTOTP(secret, code string, at time.Time, last int64) (int64, bool) {
 
 // TOTPURI is the `otpauth://` string an authenticator app scans.
 //
-// THE ISSUER APPEARS TWICE, in the label and as a parameter, which is what
-// every app expects: the label is what it shows in its list and the parameter
-// is what it groups on. Writing only one of them produces an entry that says
-// `account` and nothing about which company it is for, on a phone that holds
-// twenty of them.
+// THE ISSUER APPEARS TWICE, in the label and as a parameter: the label is what
+// an app shows in its list and the parameter is what it groups on. Writing
+// only one yields an entry that never says which company it is for.
 //
-// NEITHER MAY CARRY A COLON, which the format forbids: the label's one colon
-// separates the two, and a reader may decode an escaped one before it splits,
-// so the issuer `localhost:18080` — an external URL with a port — read as the
-// issuer `localhost` and the account `18080:jane.doe`, disagreeing with the
-// issuer parameter. A colon in either becomes a space, in both places.
+// NEITHER MAY CARRY A COLON: the label's one colon separates the two, and a
+// reader may decode an escaped one before it splits, so the issuer
+// `localhost:18080` read as issuer `localhost` and account
+// `18080:jane.doe`, disagreeing with the parameter. A colon in either becomes
+// a space, in both places.
 func TOTPURI(issuer, account, secret string) string {
 	issuer = strings.ReplaceAll(issuer, ":", " ")
 	account = strings.ReplaceAll(account, ":", " ")

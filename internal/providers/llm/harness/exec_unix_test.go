@@ -260,21 +260,14 @@ func TestACallWithNoEnvironmentIsNotStarted(t *testing.T) {
 }
 
 // fakeLeaveHolder is the fake harness's leave-a-helper mode: it starts a
-// descendant that holds ONE of its streams — "stdout", "stderr" or "stdin" —
-// and returns, so the harness goes on to answer and exit 0 with the stream still
-// open behind it.
-//
-// The shape a launcher has when it exits before a helper it forked with that
-// stream inherited, and the one thing that tells the streams apart: a helper
-// holding all three, as [fakeStubborn]'s grandchild does, could not show that
-// a held stderr leaves the answer standing. The others go to the null device.
-// It stays in the harness's group, as a runtime's helper does, and announces its
-// pid ([fakeGrandchild]) so a case can end it — or see it ended.
-//
-// The harness WAITS FOR THAT ANNOUNCEMENT before it answers. Exiting at once would
-// let the call's grace run out while the holder is still starting, and a
-// holder reaped before it wrote its pid is one no case can account for: it
-// would read as a holder that never ran.
+// descendant that holds ONE of its streams ("stdout", "stderr" or "stdin")
+// and returns, so the harness answers and exits 0 with the stream still open.
+// Holding one tells them apart: a helper holding all three, as
+// [fakeStubborn]'s grandchild does, could not show that a held stderr leaves
+// the answer standing. The others go to the null device. It stays in the
+// harness's group and announces its pid ([fakeGrandchild]); the harness WAITS
+// FOR THAT before answering, else the grace could run out while the holder
+// starts, and a holder reaped before writing its pid reads as never run.
 func fakeLeaveHolder(stream string) {
 	holder := exec.Command(os.Args[0], "-test.run=TestFakeHarness")
 	holder.Env = append(os.Environ(), "FAKE_HOLD_STREAM=", "FAKE_GRANDCHILD=1")
@@ -332,14 +325,12 @@ func holderOf(t *testing.T, pidFile string) {
 
 // A STDOUT A HELPER STILL HELD IS NOT AN ANSWER, AND NOT A FATAL EITHER.
 //
-// The harness printed and exited 0, but something it started kept the stream open
-// past the grace, so what was read is cut wherever the grace ran out: a
-// launcher whose runtime was still writing the answer looks exactly like
-// this. No reading of it can be shown to be whole, so it is refused, as a
-// clipped stdout is, and as a SERVER failure, retryable and not sat out —
-// nothing about it says the engine could not make the call. It used to come
-// back from run as os/exec's ErrWaitDelay, which Complete read as a harness that
-// could not start: fatal, the seat's chain stopped at the head.
+// The harness printed and exited 0, but something it started kept the stream
+// open past the grace, so what was read is cut wherever the grace ran out. No
+// reading of it can be shown to be whole, so it is refused, as a clipped
+// stdout is, and as a SERVER failure, retryable and not sat out. run's
+// returning os/exec's ErrWaitDelay would read as a harness that could not
+// start: fatal, stopping the seat's chain at the head.
 //
 // Mutation: report a held stdout as run's error again, or stop refusing it in
 // completion, and the kind is wrong or the answer comes back.

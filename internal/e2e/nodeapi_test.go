@@ -26,30 +26,17 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// listenForBridge binds the listener a node's API — and with it the seat's
-// tool bridge — is served on, for the engine the node is built with to name as
-// the address a box on this host dials ([listenerURL],
-// [engine.Options.BoxHostURL]).
+// listenForBridge binds the listener a node's API and seat tool bridge are
+// served on, for the engine to name as the address a box on this host dials
+// ([listenerURL], [engine.Options.BoxHostURL]).
 //
 // BOUND BEFORE THE ENGINE, and held until the server that serves on it: the
-// engine takes the address once, when it builds its bridge
-// ([mcpbridge.Build]), and an httptest server picks its port only when it
-// starts — after the engine that has to name it. A port released in between
-// could be anybody's by the time a box dials it. Every node here serves its
-// bridge, as `crewlet run` does a seats node's: every agent seat's executor is
-// a run in a box that calls the seat's tools back over it, so a node without
-// one launches nothing.
-//
-// THE HOST ADDRESS AND NOT [mcpbridge.BaseURLVar], because that is what
-// `crewlet run` gives a seats node that binds a listener, and every box here
-// is in the `direct` cell: the harness runs the quickstart's shape, a node
-// with no bridge variable at all, rather than a configuration the quickstart
-// never asks for.
-//
-// ON addr, or on a port of the system's choosing where it is empty: a case
-// restarting a node binds the address the node it replaces bound, as a node
-// restarted on its own api.port does — the URL a box was handed addresses
-// that socket and no other.
+// engine takes the address once, building its bridge ([mcpbridge.Build]), and
+// an httptest server picks its port only when it starts; a port released in
+// between could be anybody's. Every node serves its bridge, as `crewlet run`
+// does a seats node's. The address is the host's, not [mcpbridge.BaseURLVar]
+// (every box here is `direct`). ON addr, or any port where empty: a restarted
+// node binds its predecessor's address, which the URL a box holds names.
 func listenForBridge(addr string) (net.Listener, error) {
 	ln, err := net.Listen("tcp", cmp.Or(addr, "127.0.0.1:0"))
 	if err != nil {
@@ -102,73 +89,22 @@ func serveAPI(
 //
 // # IT IS A SECOND COPY OF THE COMPOSITION ROOT, and that has a cost
 //
-// cmd/crewlet's own wiring is the other one, and the two are deliberately not
-// the same function: this one serves a subset of the surfaces, on a test
-// listener, with a sped-up tick and an amend hook. What they DO share is
-// every required seam, and nothing compares the two lists.
-//
-// So a required option added there and missed here is not a compile error —
-// it is [api.New] or [setupapi.New] refusing by name, at run time, in THIS
-// package. And this package declares internal/solo, so `make test` never
-// reaches it: the refusal lands only in `make test-solo`, which is a separate
-// CI job. Measured: a surface and a write path were added to cmd/crewlet and
-// missed here, and every cluster case failed four bring-up attempts with a
-// `setupapi: Options.… required` refusal while the shared suite stayed green.
-//
-// When you add a required seam to cmd/crewlet, add it here in the same
-// change, and run BOTH suites. CLAUDE.md says the same thing in one line: a
-// run of `make test` by itself has not exercised the fleet.
-//
-// THE HUMAN SURFACES ARE NOT COPIED, and they are the exception that shows the
-// cure. The sign-in surface, the identity directory, the human write surface
-// and the two credential arms beside them are built by
-// [api.NewHumanSurfaces], which `crewlet run` calls too — they lived in
-// package main, where nothing here could reach them, so this suite mounted
-// none of them and a fleet whose sessions did not cross between its members
-// left it green. A surface built here by a function the command also calls
-// cannot drift from the one it serves; a copy can.
-//
-// ONE WIRING FOR EVERY CASE HERE, because there is one wiring: the API is built
-// from the engine's own store, broker and coordination plane, and reads its
-// company off the live epoch rather than being told once that one is active.
-// The three harnesses in this package each assembled their own before, with no
-// runtime and no surfaces, which made every one of them a shape `crewlet run`
-// does not produce.
-//
-// THE TEARDOWN IS RETURNED rather than registered, in the order the pieces came
-// up, so the caller runs it in reverse: the listener before the projector that
-// feeds what it serves, the projector before the app, and all three before the
-// engine whose queue the projector reads. It is returned on failure too,
-// holding whatever did come up. The error is returned rather than raised
-// because a fleet member is built off the test's goroutine, where t.Fatalf
-// ends only that goroutine and leaves the test running with a nil member.
-//
-// THE NATIVE SOURCES ARE NOT COPIED EITHER — the read surface's board, pages,
-// backlinks, search and file listing, and the operator surface both transports
-// serve — and for the same cure: each is built by internal/api
-// ([api.NativeSources], and the operator inside [api.NewHumanSurfaces]) over
-// the engine, resolved per request, because a node meets its tracker and
-// knowledge base at its first company, which a node that booted with none
-// meets after its API is serving. So `/operator/act` here is the route a
-// person's dashboard writes through, and the viewer names the same verbs. The
-// file byte routes are IN too, served by the human write surface, because a
-// file's bytes crossing between members is something only a fleet here can
-// exercise.
-//
-// AND GITLET AND THE CODE READS, through [api.EngineCode],
-// the adapter `crewlet run` hands the API, asked per request, because
-// Gitlet is built with the native runtime, which a company applied after
-// boot brings up after this wiring ran.
-//
-// chatLive IS THE HUB THE NODE'S BOOT ATTACHED to its engine ([newEngine]),
-// and the socket is mounted over it, as `crewlet run` hands its own to
-// serveAPI. It is the process's rather than this surface's — built beside the
-// engine on a node that serves no API as well — so it is neither built nor
-// stopped here: its teardown is the engine's half, after this one.
+// The two serve different subsets (test listener, sped-up tick, amend hook)
+// and share every required seam, and nothing compares the lists. A required
+// option added to cmd/crewlet and missed here is not a compile error but
+// [api.New] or [setupapi.New] refusing by name at run time, in THIS package,
+// which declares internal/solo: only `make test-solo`, a separate CI job,
+// reaches it. Add a required seam in both in the same change, run BOTH suites.
+// A surface built by a function the command also calls cannot drift; a copy can.
 func wireAPI(
 	ctx context.Context, e *engine.Engine, boot *config.Bootstrap,
 	chatLive *stream.ChatHub, ln net.Listener, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
+	// THE TEARDOWN IS RETURNED rather than registered, in the order the pieces
+	// came up, so the caller runs it in reverse (listener, projector, app, then
+	// the engine whose queue the projector reads), and on failure too. The error
+	// is returned, not raised: a fleet member is built off the test's goroutine,
+	// where t.Fatalf would end only that goroutine.
 	var stops []func()
 	fail := func(what string, err error) (*api.App, *httptest.Server, []func(), error) {
 		return nil, nil, stops, fmt.Errorf("%s: %w", what, err)
@@ -250,8 +186,11 @@ func wireAPI(
 		return fail("backup", err)
 	}
 
-	// THE WAY IN, THE DIRECTORY AND THE HUMAN WRITE SURFACE, through the
-	// constructor cmd/crewlet builds them with — see above.
+	// THE HUMAN SURFACES ARE NOT COPIED, the exception that shows the cure: the
+	// sign-in surface, the identity directory, the human write surface and the
+	// two credential arms beside them come from [api.NewHumanSurfaces], which
+	// `crewlet run` calls too. Built in package main they were unreachable here,
+	// and a fleet whose sessions did not cross between members stayed green.
 	humans, err := api.NewHumanSurfaces(boot, e)
 	if err != nil {
 		return fail("human surfaces", err)
@@ -272,6 +211,9 @@ func wireAPI(
 		Runtime:      runtime,
 		Inbox:        e,
 		Credentials:  e,
+		// chatLive IS THE HUB THE NODE'S BOOT ATTACHED to its engine
+		// ([newEngine]), the process's rather than this surface's, so it is
+		// neither built nor stopped here: its teardown is the engine's half.
 		ChatLive:     chatLive,
 		Objectives:   e.Objectives(),
 		QueueBackend: backends.Queue.Backend(),
@@ -357,8 +299,9 @@ func wireAPI(
 		// THE ENGINE'S OWN TRAIL, as cmd/crewlet hands it: the guard
 		// reports every refused bearer and every token use through it.
 		AuthEvents: e.AuthEvents(),
-		// GITLET AND THE CODE READS, through the
-		// adapter `crewlet run` uses, asked per request.
+		// GITLET AND THE CODE READS, through [api.EngineCode], asked per
+		// request: Gitlet is built with the native runtime, which a company
+		// applied after boot brings up after this wiring ran.
 		Code: api.EngineCode(e),
 		// THE ENGINE'S OWN BRIDGE, as cmd/crewlet hands it: a run's
 		// session lives in the object that opened it, and an executor
@@ -381,8 +324,13 @@ func wireAPI(
 	// THE SAME HAND-OVER cmd/crewlet makes, which is the one place an
 	// absent surface stays absent rather than being mounted over a nil.
 	humans.Mount(&opts)
-	// AND THE NATIVE HALVES, per question, as cmd/crewlet hands them —
-	// through the one constructor, which sets every one or none.
+	// THE NATIVE SOURCES ARE NOT COPIED EITHER (board, pages, backlinks, search,
+	// file listing, the operator surface): [api.NativeSources] builds each over
+	// the engine, resolved per request, since a node that booted with no company
+	// meets its tracker and knowledge base only at its first, after its API is
+	// serving. So `/operator/act` is the route a person's dashboard writes
+	// through, and the file byte routes are IN, served by the human write
+	// surface: files crossing between members only a fleet here can exercise.
 	api.NativeSources(e).Into(&opts.Sources)
 	// AND SETTINGS › MODELS, through the one constructor cmd/crewlet calls.
 	modelSurface, err := api.NewModelSurface(e, configSurface, cipher, backends.Queue)

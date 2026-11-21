@@ -15,9 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE ATLAS DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE, from its
-// declaration through its envelope, determinism, idempotency, stamp, evictions
-// and node gates, as every other domain is.
+// THE ATLAS DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE, as every other
+// domain is.
 func TestTheAtlasDomainIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
@@ -107,8 +106,8 @@ func domain() atlasdomain.ScopeSet {
 	return atlasdomain.ScopeSet{Terms: []atlasdomain.ScopeTerm{{Kind: atlasdomain.TermDomain}}}
 }
 
-// entryOn is the subject of the suite's entry id: the suite names its objects,
-// and a record's subject is the id the writer derived, held to no grammar here.
+// entryOn is the subject of the suite's entry id, held to no grammar: the suite
+// names its objects.
 func entryOn(id string) atlasdomain.Subject {
 	return atlasdomain.Subject{Kind: atlasdomain.KindEntry, ID: id}
 }
@@ -142,9 +141,7 @@ func dependsClaim(from, to, opID string) atlasdomain.Claim {
 }
 
 // encodeSuiteRecord builds one valid record of each kind about id at any
-// version. The first three kinds are a real sequence: a claim writes an entry, a
-// purge of the value that is its key erases it, and a node's eviction writes the
-// gate.
+// version. The first three kinds are a real sequence ([atlasdomain.ObjectKinds]).
 func encodeSuiteRecord(kind, id, opID string, version int) ([]byte, error) {
 	subject, op, scope, payload := suitePayload(atlasdomain.ObjectKind(kind), id, opID)
 	body, err := json.Marshal(payload)

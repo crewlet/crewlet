@@ -10,25 +10,16 @@ import (
 
 // THE TYPED PAYLOADS, one per (kind, op).
 //
-// A small whole-document object — a container, a title claim, a gate — travels
-// as FULL POST-STATE: one document field, one upsert, and no patch semantics
-// to get wrong. A PAGE travels as a TYPED PATCH, because full post-state would
-// put a 512 KiB body on the wire for a label change.
-//
-// The patch's rule is the tracker's, and it is the right one: a nil field is
-// unchanged, and the POINTER is what tells "set this to empty" from "leave it
-// alone" — which a plain string cannot. Two rules travel with it:
-//
-//  1. A named scalar present in the patch carries its COMPLETE new value,
-//     never an excerpt and never a diff. The 600-byte excerpts live in the
-//     notification, where a card is what they are for; a woken seat reads a
-//     comment whole from the payload instead (wakeBody). A new page's wake
-//     keeps its excerpt, as a pointer to a page too large to carry, and a
-//     save's is its message, which [MaxMessage] bounds below an excerpt's
-//     length so it is never cut.
-//  2. A collection the write TOUCHES is carried whole; one it does not touch
-//     is absent. That is what makes a record able to rebuild the row, and it
-//     is affordable because every collection here is capped.
+// A small whole-document object (a container, a title claim, a gate) travels as
+// FULL POST-STATE: one upsert, no patch semantics. A PAGE travels as a TYPED
+// PATCH, since post-state would put a 512 KiB body on the wire for a label
+// change. As in the tracker, a nil field is unchanged and the POINTER tells "set
+// to empty" from "leave alone". A named scalar present carries its COMPLETE new
+// value, never an excerpt or diff (a woken seat reads a comment whole from the
+// payload, wakeBody; a new page's wake keeps an excerpt as a pointer to a body
+// too large to carry; a save's is its message, which [MaxMessage] bounds below
+// an excerpt's length). A collection the write TOUCHES is carried whole
+// (capped), one it does not is absent, so a record can rebuild the row.
 
 // CreatePayload makes a page. Its subject is the TITLE.
 //
@@ -297,26 +288,14 @@ func decodePayload[T any](rec MutationRecord) (T, error) {
 
 // EncodeBarrier renders the read index's payload-free append.
 //
-// # Why the framework cannot write this itself
+// The read index owns when a barrier goes out and what its acknowledgement
+// proves (a quorum-committed position); the domain owns its envelope, version
+// gate, subject grammar and the scope alphabet of its deferrals. This is where
+// they meet.
 //
-// The read index owns WHEN a barrier goes out and what its acknowledgement
-// proves — a quorum-committed position, which is the only client-visible fact
-// this broker offers that the responder confirmed its own authority for. The
-// DOMAIN owns what a record on its log looks like: this one's envelope, its
-// version gate, its subject grammar and the scope alphabet its applier files
-// deferrals under. Neither can write the other's half, and this function is
-// where they meet.
-//
-// Every other part of a barrier was already here — [KindBarrier], [OpBarrier],
-// [BarrierSubject], the applier's case and the scope sentinel — and the
-// encoder was the one piece missing, which is why the index could not be built
-// and every `linearizable` read on this domain refused for want of one.
-//
-// AN OP ID IS REFUSED, and that is a correctness rule rather than tidiness. An
-// op id becomes the Nats-Msg-Id; a repeat inside the duplicate window is
-// answered from the dedupe cache with no quorum round trip at all, and the
-// sequence it returns is then a position nothing confirmed — which is exactly
-// the claim a barrier exists to make and the one it must never fake.
+// AN OP ID IS REFUSED: it becomes the Nats-Msg-Id, and a repeat inside the
+// duplicate window is answered from the dedupe cache with no quorum round trip,
+// returning a position nothing confirmed, which a barrier must never fake.
 func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.BarrierKind {
 		return nil, fmt.Errorf("doclet: %q is not a barrier envelope", env.Kind)

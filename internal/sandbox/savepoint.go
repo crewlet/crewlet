@@ -8,74 +8,89 @@ import "slices"
 // round's log ([SessionCapture.placeAt]) after the pack: that harness answered
 // or gave up on every call and wrote every message first, so its session holds
 // every call the log took, bar [BridgeCall.Abandoned] and [BridgeCall.Late]
-// ones (internal/agent/runner's heldAt); reads counted without listing
-// ([SessionCapture.Omitted]) are told whatever the point. Any other capture — a
-// save, a job still working ([readCapture]), one cut off
-// ([SessionCapture.Interrupted]) — may lack calls answered before their message
-// streamed whole (measured on Claude Code 2.1.310), which a count off the log
-// would name and a continuation never be told, so [savePlaces] places it.
+// ones (internal/agent/runner's heldAt). Any other capture — a save, a job
+// still working ([readCapture]), one cut off ([SessionCapture.Interrupted]) —
+// may lack calls answered before their message streamed whole (measured on
+// Claude Code 2.1.310), so it is reserved at zero and raised after its take.
 
 // savePlaces is what a capture whose harness may not have written every call it
-// made — a save ([SessionTake.Save]; this version stamps none), the take of a
-// job still working, a capture of a job cut off — is placed by
+// made — a save ([Coordinator.saveTask]), the take of a job still working, a
+// capture of a job cut off — is raised by once its take is counted
 // ([SessionCapture.placeAtNewest]).
 type savePlaces struct {
 	// run is the run's row as the capture read it, its launch the one whose
-	// session is taken; its kept capture counts only where it is that
-	// launch's ([launchKept]).
+	// session is taken: its kept capture counts only where it is that
+	// launch's ([launchKept]), and its record names the capture the launch
+	// continued ([LaunchRecord.Continued]).
 	run PendingRun
 
-	// continued is the capture whose archive the launch's box took up
-	// ([LaunchRequest.Session]); nil where it continued none (a session of its
-	// own, its conversation's last turn's, or the copy left in the box) and
-	// where the reader cannot say: a launch records none on its row, so the
-	// take of a job still working or cut off hands none and is placed lower,
-	// which tells more, never less.
-	continued *SessionCapture
+	// resumeRead says the take's archive was written by a release whose
+	// resume this build read ([TakenSession.ResumeRead]): only such a Claude
+	// Code capture is raised.
+	resumeRead bool
 }
 
-// placeAtNewest places c at the NEWEST save point from.run's launch is known to
-// hold ([savePlaces.held]), sound since a session's archive only grows, or zero
-// where none states one: a continuation is told calls again
-// ([SessionCapture.Through]), never not at all, and a reading of the archive leaves out the held ones
-// ([ExactTelling], [Coordinator.HoldingsOf]). It reads no log, so a log the
-// store cannot read refuses no such capture ([Coordinator.takeCapture]). On a
-// fleet of this version alone the point is zero (a read-placed capture is final
-// and nothing of its launch is taken after it), so the brief and
-// internal/engine's continuedFloor grow by the round, within the prior-work
-// ledger's budgets. BridgeSeq, BridgeOpen and Omitted come off the same capture
-// as the point, so an older peer is never told less.
+// placeAtZero reserves c, a capture no read places, at a stated zero, with no
+// place an older build reads and no read left out, but every late call launch's
+// brief counted ([LaunchRecord.LateOmittedCalls]), whatever its place: a telling
+// is credited by the note cursor, never the save point (internal/agent/runner's
+// heldByTelling). What tells a continuation every call of the round, more,
+// never less. Its take raises it once counted ([SessionCapture.placeAtNewest]).
+func (c *SessionCapture) placeAtZero(launch LaunchRecord) {
+	c.Through = new(0)
+	c.BridgeSeq, c.BridgeOpen, c.Omitted = 0, nil, nil
+	c.LateOmitted = slices.Clone(launch.LateOmittedCalls())
+}
+
+// placeAtNewest raises c, reserved at zero and its take's count stamped, to the
+// newest save point a capture its launch's session holds states whose newest
+// compaction is the one c's count names ([launchKept], [LaunchRecord.Continued]),
+// Omitted the launch's at or below it ([LaunchRecord.OmittedCalls]), else
+// leaves it at zero: the package doc's "A capture no read places" says why.
+//
+// THE POINT IS RAISED AFTER THE TAKE, never at the place: whether the session
+// compacted since a capture it holds is known only from the take's own count,
+// which only the spool's whole read states, after the place is reserved. A
+// place is reserved at zero, which tells more, never less, and the outcome
+// states the raised point; a standby's takeover, reserved after its own take,
+// states that take's.
 func (c *SessionCapture) placeAtNewest(from savePlaces) {
-	var newest *SessionCapture
-	point := 0
-	for _, held := range from.held() {
-		if at, stated := held.SavePoint(); stated && (newest == nil || at > point) {
-			newest, point = held, at
+	newest, read := c.ResumedCount.Restarted()
+	if !read || (c.Harness == ClaudeCodeHarness && !from.resumeRead) {
+		return
+	}
+	run, point := from.run, 0
+	if kept := launchKept(run); kept != nil {
+		if at, stated := kept.SavePoint(); stated && sameRestart(restartOf(kept.ResumedCount), newest) {
+			point = at
 		}
 	}
-	c.Through = new(point)
-	c.BridgeSeq, c.BridgeOpen, c.Omitted = 0, nil, nil
-	if newest != nil {
-		c.BridgeSeq, c.BridgeOpen = newest.BridgeSeq, slices.Clone(newest.BridgeOpen)
-		c.Omitted = slices.Clone(newest.Omitted)
+	if p := run.Launch.Continued; p != nil && p.LaunchSeq > 0 && p.LaunchSeq == run.LaunchSeq-1 &&
+		run.Launch.SessionStart == SessionStartContinued && sameRestart(run.Launch.BasisRestart, newest) {
+		point = max(point, p.Through)
+	}
+	if point <= 0 {
+		return
+	}
+	raised := *c
+	raised.Through = new(point)
+	raised.Omitted = nil
+	for _, place := range run.Launch.OmittedCalls() {
+		if place <= point {
+			raised.Omitted = append(raised.Omitted, place)
+		}
+	}
+	if raised.Bounded() == nil {
+		*c = raised
 	}
 }
 
-// held is every capture p's launch's session is known to hold: its newest
-// landed capture ([launchKept]), and the capture it continued — only where the
-// launch carried its round on ([PendingRun.Round] names the job that opened
-// it), since a launch that opened a round numbers its calls from a new log. A
-// row that names no round is read as a new round's, the safe reading.
-func (p savePlaces) held() []*SessionCapture {
-	var held []*SessionCapture
-	run := p.run
-	if kept := launchKept(run); kept != nil {
-		held = append(held, kept)
-	}
-	if continued := p.continued; continued != nil && run.Round != "" && run.Round != run.LaunchID {
-		held = append(held, continued)
-	}
-	return held
+// sameRestart reports whether seen, a newest compaction a capture or a launch
+// read ([restartOf], [LaunchRecord.BasisRestart]), is newest: both read, and
+// one. Never [RestartedSince]'s rule, which reads an unknown basis as no
+// restart where the thread has none: a raise needs both identities read.
+func sameRestart(seen *string, newest string) bool {
+	return seen != nil && *seen == newest
 }
 
 // launchKept is run's kept capture ([PendingRun.Kept]) where it is the launch's

@@ -124,19 +124,12 @@ func TestADisconnectOnAnInstanceWithoutGroupHooksStillFinishes(t *testing.T) {
 
 // A DISCONNECT REMOVES THIS ENGINE'S HOOKS FROM EVERY PROJECT IN THE GROUP.
 //
-// The config is not a record of where the hooks ARE: a run that established
-// per-project hooks wrote them on the projects named AT THE TIME, so a
-// project dropped from `provisioning.projects` since — or a company that
-// connected with the group alone and never named one — left them unreachable,
-// and a teardown that visited only the current list reported success having
-// walked past them.
-//
-// Measured on a live disconnect: two hooks still on a project in the group,
-// pointing at dead trycloudflare tunnels from earlier runs, which nothing
-// would ever visit again. That hostname is re-issued to whoever asks next, so
-// those deliveries go on leaving the customer's GitLab — signed with a secret
-// the stranger does not have, so nothing can be forged INTO the engine, and
-// the payloads still leave.
+// The config is not a record of where the hooks ARE: hooks were written on the
+// projects named AT THE TIME, so a project since dropped from
+// `provisioning.projects` (or a group-only company) keeps them, and a teardown
+// visiting only the current list reports success past them. A dead
+// trycloudflare hostname is re-issued to a stranger, so those payloads would
+// keep leaving the customer's GitLab.
 func TestADisconnectSweepsEveryProjectTheGroupHolds(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()

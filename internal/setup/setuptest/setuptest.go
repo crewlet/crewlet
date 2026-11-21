@@ -37,6 +37,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/atlassianhost"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -127,17 +128,18 @@ func fields(v Vendor) (checkable, uncheckable []setup.Requirement) {
 }
 
 // check runs one probe call against a vendor answering with h, or, where
-// gone is set, against one whose server is closed before the probe is asked.
+// gone is set, against one whose server nothing reaches.
 func check(t TB, v Vendor, field string, h http.HandlerFunc, gone bool) (setup.Verdict, error) {
 	t.Helper()
-	srv := httptest.NewServer(h)
+	var srv *httptest.Server
+	if gone {
+		srv = httpxtest.Gone(t)
+	} else {
+		srv = httptest.NewServer(h)
+	}
+	defer srv.Close()
 	probe := v.Probe(srv)
 	values := v.Values(srv)
-	if gone {
-		srv.Close()
-	} else {
-		defer srv.Close()
-	}
 	verdict, err := probe(context.Background(), setup.Check{
 		Field: field,
 		Value: func(name string) string {

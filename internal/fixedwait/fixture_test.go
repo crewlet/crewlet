@@ -369,18 +369,15 @@ func TestABoundOnTimeUntilIsRefused(t *testing.T) {
 }
 
 // A time.Time'S Sub IS REFUSED WHEREVER ITS RECEIVER IS ONE, told by the
-// receiver's type: through a value, an alias (stamp = time.Time is
-// time.Time), an embedding that promotes it, a conversion back from a
-// defined type, and a method expression; in a file that does not import
-// time; and in an external test package that reads a name only the test
-// binary's variant of the package declares, which type-checks only against
-// that variant; through a bound method value (start.Sub), a pointer
-// (&start, and a *time.Time field), and in a support package's own non-test
+// receiver's type: through a value, an alias, an embedding that promotes it, a
+// conversion back from a defined type, a method expression, a bound method
+// value (start.Sub) and a pointer (&start, a *time.Time field); in a file that
+// does not import time; in an external test package reading a name only the
+// test binary's variant declares; and in a support package's own non-test
 // file, which reaches the type checker only as the package's own files. A
-// DEFINED type over time.Time (type instant time.Time) has none of
-// time.Time's methods — Go gives a defined type the methods its declaration
-// lists, never its underlying type's — so it has no Sub to call until it is
-// converted back, and that conversion's Sub is counted.
+// DEFINED type over time.Time has none of its methods (Go gives a defined type
+// only what its declaration lists), so it has no Sub until converted back, and
+// that conversion's Sub is counted.
 func TestATimeTimesSubIsRefusedByItsReceiversType(t *testing.T) {
 	t.Parallel()
 	expect(t, fixture(t, "elapsed-sub"),

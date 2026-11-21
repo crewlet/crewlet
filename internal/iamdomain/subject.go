@@ -8,6 +8,10 @@
 // query registry without any of them pulling in a store. This package is the
 // durable half, and it imports that leaf rather than restating it.
 //
+// Every node that holds the estate applies it, company or none, so every node
+// that validates a session reads its own identity rows; a node without `data`
+// asks a data node through internal/estate's identity reads.
+//
 // # ONE SUBJECT FOR THE DIRECTORY, and why that is the whole design
 //
 // The replicated estate forbids a UNIQUE index outside a primary key, because
@@ -59,6 +63,21 @@
 // that can connect the two, which is why it is on the envelope and readable at
 // every version.
 //
+// # A write answers its whole Result
+//
+// Every write returns the whole [statelog.Result], never a bare position: a
+// position cannot tell `applied` or `pending` from `unknown`, and a zero one
+// beside a nil error reads as success, which opens a session on a second
+// factor whose spend may not have landed.
+//
+// # Every statement over the directory is planned
+//
+// Every statement reading `iam_people`, `iam_invites` or `iam_history` is a
+// whole literal the plan gate registers and plans
+// (`TestTheDirectoryStatementsArePlanned`); a value's statement is picked from
+// a table of whole statements ([sightingQuery]), never formed from a column
+// name, which the gate could not match.
+//
 // # A seat is bound by its HANDLE (ADR-0013)
 //
 // A seat binding — the row's `seat_id`, an invitation's, the seat a removal's
@@ -83,6 +102,10 @@
 // ([ErrNoCompany]). The WRITER's decides are where the rule is enforced and
 // never the applier, which writes whatever a record says, because refusing a
 // record there stops the log on every data node.
+//
+// The company's FIRST person has no exemption: the Tier A token's invitation
+// is held to its grants ([Writer.MayConfer]) and names a human seat like any
+// other, so a company whose chart declares no human seat enrols nobody.
 package iamdomain
 
 import (
@@ -95,159 +118,90 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// ObjectKind is what a subject on the iam log addresses.
-//
-// A NAMED STRING TYPE whose Valid is false for a kind this build has never
-// heard of — and the literal is RETAINED either way: a newer peer publishes a
-// kind this build does not know, and the deferral this build files it under is
-// reported to an operator with that literal in it.
+// ObjectKind is what a subject on the iam log addresses. Valid is false for a
+// kind this build has never heard of, and the literal is RETAINED: the
+// deferral of a newer peer's record is reported to an operator by it.
 type ObjectKind string
 
-// The nine kinds.
-//
-// EXPORTED AND ENUMERATED because four readers that cannot see each other all
-// compare against them: the publisher builds the subject, the wake feed's
-// filter includes or excludes the kind, the applier's dispatch switches on it,
-// and the domain's own Tables declaration must classify every one.
+// The nine kinds, exported because the publisher, the wake feed's filter, the
+// applier's dispatch and the domain's Tables declaration all compare against
+// them.
 const (
 	// KindDirectory is the company's whole directory, on ONE subject with
-	// no id: every record that sets or frees a unique identity value — a
-	// person's login, their address and the seat they hold — and every
-	// record that creates or removes a person row. See the package doc.
+	// no id: every record that sets or frees a login, an address or a
+	// seat, and every record that creates or removes a person row (package
+	// doc, "ONE SUBJECT FOR THE DIRECTORY").
 	//
-	// ONE OBJECT, DELIBERATELY. Two administrators enrolling one address,
-	// a redemption racing an administrator's create, a rename racing an
-	// enrolment that takes the same login: each is a decide that reads
-	// the whole directory, and only one subject makes the snapshot it
-	// read the one the broker arbitrates against. Directory writes are an
-	// administrator's or an invitation's, so the serialisation costs
-	// nothing a person would notice.
-	//
-	// NOT ROOT-SCOPED, although it is about everybody's values: a record
-	// here declares the buckets of the rows its apply writes, so a node
-	// that cannot decode one holds back the people it is about rather
-	// than every sign-in in the company. What a decide here adds — that
-	// the WHOLE directory it read is complete — it asks of the deferral
-	// index itself ([wholeDirectory]).
+	// NOT ROOT-SCOPED: a record declares the buckets of the rows it
+	// writes, so a node that cannot decode one holds back only the people
+	// it is about. That the WHOLE directory a decide read is complete, it
+	// asks of the deferral index ([wholeDirectory]).
 	KindDirectory ObjectKind = "directory"
 
-	// KindPerson is one person, machine or human, by the uuid7 that was
-	// minted for them and that nothing ever renames.
-	//
-	// EVERYTHING ABOUT A PERSON THAT IS NOT UNIQUE arbitrates here: their
-	// name, their status, their grants, their credentials, and the
-	// REVOCATION EPOCH that ends every session they hold. Two
-	// administrators editing one person contend; two editing two people
-	// never do. A person's row is created and removed on the directory,
-	// never here.
+	// KindPerson is one person, machine or human, by the uuid7 minted for
+	// them, which nothing renames. Everything about them that is not unique
+	// arbitrates here, the REVOCATION EPOCH among it; their row is created
+	// and removed on the directory, never here.
 	KindPerson ObjectKind = "person"
 
 	// KindSession is one signed-in session's whole life, by its LINEAGE:
-	// the uuid7 the session was opened with, which never changes while it
-	// lives.
-	//
-	// ONE SUBJECT PER SESSION, so two requests closing one session contend
-	// and a thousand people signing in at nine o'clock do not contend at
-	// all. A re-issue is NOT a record: the idle deadline it moves is in the
-	// bearer's signed payload, so the busiest thing a session does writes
-	// nothing at all.
+	// the uuid7 it was opened with, so sign-ins never contend. A re-issue
+	// is NOT a record: the idle deadline it moves is in the bearer's signed
+	// payload.
 	KindSession ObjectKind = "session"
 
 	// KindInvalidation ends EVERY session in the company at once, on ONE
-	// subject for the whole domain, with no id.
+	// subject with no id.
 	//
-	// IT IS NOT CALLED A GENERATION, although the counter it moves is the
-	// one a bearer carries under that name and the row it writes is
-	// `iam_session_generation`. [KindGeneration] already means the LOG's
-	// own reanchor here and in every sibling domain, and two closed sets
-	// under one word is how a later change reaches for the wrong one while
-	// each side stays self-consistent — the same reason [iam.Stage] is not
-	// called a posture. So the kind is named for what it DOES, and the
-	// counter keeps the name the bearer already spells it by.
+	// NOT CALLED A GENERATION, though it moves the bearer's generation and
+	// writes `iam_session_generation`: [KindGeneration] means the LOG's
+	// reanchor in every domain, and one word for two closed sets invites a
+	// change to reach for the wrong one.
 	//
-	// ONE OBJECT, DELIBERATELY: two operators invalidating the company's
-	// sessions must contend, because the whole value of the gesture is that
-	// nothing issued before it survives, and two concurrent bumps that did
-	// not contend would each read the same current value and write the same
-	// new one — leaving every cookie minted between them valid.
-	//
-	// IT INSTALLS A GATE ([OpInvalidate]), which is what buys it the root
-	// scope: a node that could not decode it would go on honouring every
-	// bearer the company had just ended, with no later record that repairs
-	// that, and there is no bucket to file it under because it is about
-	// nobody in particular.
+	// ONE OBJECT so two invalidations contend: two that did not would write
+	// the same new value, leaving every cookie minted between them valid.
+	// It INSTALLS A GATE ([OpInvalidate]), hence the root scope: a node that
+	// could not decode it would keep honouring every ended bearer.
 	KindInvalidation ObjectKind = "invalidation"
 
-	// KindSweep is the retention sweep for ONE bucket, by the bucket
-	// number.
+	// KindSweep is the retention sweep for ONE bucket, by bucket number.
 	//
-	// A RECORD AND NOT A LOCAL DELETE, because the rows it removes are
-	// identity-claimed: a node that swept on its own clock would hold
-	// different bytes from its peers, and the claim that N copies are
-	// byte-identical would become a claim about how synchronised their
-	// clocks were. The record names a POSITION RANGE the publisher
-	// resolved once, so two nodes with skewed clocks delete identical
-	// rows.
-	//
-	// PER BUCKET rather than one record for the estate, because a sweep is
-	// bounded by the applier's row budget and a company-wide delete is
-	// not: sixty-four records spread one horizon's worth of deletions
-	// across sixty-four transactions instead of holding this store's only
-	// writer for the length of the largest one.
+	// A RECORD, not a local delete: the rows are identity-claimed, and a
+	// node sweeping on its own clock would hold different bytes from its
+	// peers. The record names a POSITION RANGE the publisher resolved once.
+	// PER BUCKET because a sweep is bounded by the applier's row budget: 64
+	// records spread the deletions over 64 transactions instead of holding
+	// this store's only writer for one large one.
 	KindSweep ObjectKind = "sweep"
 
-	// KindEviction is a node's removal from THIS log, or its readmission.
-	//
-	// ONE SUBJECT PER NODE, so two operators evicting two nodes never
-	// contend and two evicting one do. It is the domain's own copy of the
-	// gate every state log installs: the record states a POSITION, and
-	// every data node then reaches the same verdict about every record with no
-	// clock, no coordination read and no agreement beyond the order they
-	// already share.
+	// KindEviction is a node's removal from THIS log, or its readmission,
+	// one subject per node, the gate every state log installs. It states a
+	// POSITION, so every data node reaches the same verdict on every record
+	// with no clock and no coordination read.
 	KindEviction ObjectKind = "eviction"
 
 	// KindGeneration is a reanchor's own record, create-only at an
-	// expectation of zero on a fresh stream, by the generation number.
-	//
-	// THE LOG'S GENERATION, never a session's. What ends every session in
-	// the company is [KindInvalidation], which moves a different counter
-	// for a different reason — the distinction is stated at both constants
-	// because the word alone cannot carry it.
+	// expectation of zero on a fresh stream, by the generation number. It
+	// is THE LOG'S generation, never a session's ([KindInvalidation]).
 	KindGeneration ObjectKind = "generation"
 
 	// KindBarrier is the read index's payload-free append, on ONE subject
-	// for the whole domain.
-	//
-	// One of the two kinds that write no row of this domain's on any node —
-	// the other is [KindTrimmed] — which is why its table declaration is the
-	// EMPTY set stated explicitly rather than left out.
+	// for the whole domain. Like [KindTrimmed] it writes no row of this
+	// domain's, so its table declaration is the EMPTY set, stated.
 	KindBarrier ObjectKind = "barrier"
 
-	// KindTrimmed is the trim's record that removes the arbitration anchors
-	// below what the log no longer holds — [statelog.TrimmedKind], ADR-0080
-	// — on one subject per floor, which the subject's id names.
-	//
-	// THE FRAMEWORK REMOVES THE ANCHORS, in the transaction that applies the
-	// record, on every node at the same position; this domain writes nothing
-	// for it — no row and no trail — and has the case that says so, for the
-	// barrier's reason. Without it every directory, person and session
-	// subject this log ever carried kept an anchor on every data node for the
-	// life of the deployment, a session lineage per sign-in among them.
+	// KindTrimmed is the trim's record removing the arbitration anchors
+	// below what the log no longer holds ([statelog.TrimmedKind],
+	// ADR-0080), one subject per floor. The framework removes them in the
+	// applying transaction; this domain writes nothing for it, no row and
+	// no trail, and has the case that says so.
 	KindTrimmed ObjectKind = statelog.TrimmedKind
 )
 
-// ObjectKinds are the nine, and THE ORDER IS LOAD-BEARING.
-//
-// [statelogtest] publishes the FIRST THREE a domain declares, twice each, in
-// order — so the declaration decides what the framework's own suite certifies,
-// and reordering this list silently stops certifying whatever falls past the
-// third place.
-//
-// These three are a real sequence rather than three unrelated records: a
-// person is enrolled (the directory), their content changes (their own
-// subject), and they sign in (a session). A content record for a person
-// nobody enrolled is a record whose apply has nothing to change, so any other
-// order would certify a failure rather than a domain.
+// ObjectKinds are the nine, and THE ORDER IS LOAD-BEARING: [statelogtest]
+// certifies only the FIRST THREE a domain declares, in order. They are a real
+// sequence (a person enrolled, their content changed, a sign-in); any other
+// order certifies a record whose apply has nothing to change.
 var ObjectKinds = []ObjectKind{
 	KindDirectory, KindPerson, KindSession,
 	KindInvalidation, KindSweep, KindEviction, KindGeneration, KindBarrier,
@@ -258,24 +212,17 @@ var ObjectKinds = []ObjectKind{
 func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 
 // Arbitrated reports whether writes on this kind carry a per-subject
-// expectation.
-//
-// SEVEN OF NINE DO. The barrier shares one subject across the whole domain, so
-// an expectation there would serialise every linearizable read behind every
-// other one and write an anchor row per read into the transaction holding this
-// store's only writer. A trimmed record REMOVES anchors, and identical ones are
-// each meant to land, so an expectation would refuse every one after the first
-// and an anchor of its own would be the one row it exists not to leave behind.
+// expectation. Not the barrier: on its one domain-wide subject an expectation
+// would serialise every linearizable read and write an anchor per read. Not a
+// trimmed record: identical ones are each meant to land, and an anchor of its
+// own is the one row it exists not to leave.
 func (k ObjectKind) Arbitrated() bool {
 	return k != KindBarrier && k != KindTrimmed
 }
 
-// Identified reports whether this kind's subject carries an id.
-//
-// SIX OF NINE DO. The directory, the invalidation and the barrier are the
-// kinds with exactly one object in the whole domain, and each is a singleton
-// for a reason stated at its constant rather than because an id was hard to
-// choose.
+// Identified reports whether this kind's subject carries an id. The directory,
+// the invalidation and the barrier are singletons, each for the reason at its
+// constant.
 func (k ObjectKind) Identified() bool {
 	switch k {
 	case KindDirectory, KindInvalidation, KindBarrier:
@@ -285,16 +232,10 @@ func (k ObjectKind) Identified() bool {
 }
 
 // GatedByRemoval reports whether a record on this kind can be ABOUT a person,
-// and so whether a removal's tombstone may drop it ([markedPerson]).
-//
-// THREE OF NINE ARE: a person's own subject, which names them; and the
-// directory and a session, whose subjects name nobody and a lineage, and
-// whose person is in the record's payload. An invalidation, a sweep, an
-// eviction, a generation, a barrier and a trimmed record are about no person
-// at all, so no
-// tombstone holds one back — and stating that on the kind is what lets the
-// applier and the publisher's reader ask one rule rather than each decoding
-// whatever body it is handed.
+// and so whether a removal's tombstone may drop it ([markedPerson]): a person's
+// subject names them, and a directory or session record's payload does. On
+// the kind, the applier and the publisher's reader ask one rule instead of
+// decoding each body.
 func (k ObjectKind) GatedByRemoval() bool {
 	switch k {
 	case KindPerson, KindDirectory, KindSession:
@@ -304,27 +245,16 @@ func (k ObjectKind) GatedByRemoval() bool {
 }
 
 // RootScoped reports whether a record on this kind may state the whole estate
-// as its scope.
+// as its scope. The rule is tight: a deferred root-scoped record blocks every
+// read in the domain, freezing every login and revocation in the company
+// during a rolling upgrade.
 //
-// FIVE OF NINE MAY, and it is the tightest rule in this package because the
-// cost of the root term here is the highest in the tree: a deferred record at
-// the root blocks every read whose closure it covers, which is every read in
-// the domain — so one record a node cannot decode would freeze every
-// suspension, every revocation and every login in the company at once, during
-// an ordinary rolling upgrade.
-//
-// An EVICTION may and pays nothing for it, because it INSTALLS A GATE: a
-// version this build cannot read STOPS the applier rather than being filed at
-// a path every read queues behind. A GENERATION may and does pay it, correctly
-// — a node that cannot decode a record saying this log was reanchored cannot
-// certify any read over it either. A BARRIER may because its scope is the
-// framework's own [statelog.FrameworkScope], which intersects nothing, and what
-// it declares is never read — and a TRIMMED record for the same reason: its
-// scope resolves from its kind to that sentinel, and it is read by every build
-// for ever ([statelog.TrimmedVersion]). An INVALIDATION may for the eviction's reason and
-// must: it installs a gate too, so it is never deferred, and it is about
-// everybody — a bucket would be a claim that it ends one sixty-fourth of the
-// company's sessions.
+// An EVICTION and an INVALIDATION install a GATE, so an unreadable version
+// stops the applier instead of being deferred; an invalidation is about
+// everybody, so no bucket fits it. A GENERATION pays the cost correctly: a node
+// that cannot read a reanchor cannot certify any read over it. A BARRIER's and
+// a TRIMMED record's scope is [statelog.FrameworkScope], which intersects
+// nothing, and every build reads a trimmed record ([statelog.TrimmedVersion]).
 func (k ObjectKind) RootScoped() bool {
 	switch k {
 	case KindInvalidation, KindEviction, KindGeneration, KindBarrier, KindTrimmed:
@@ -339,12 +269,9 @@ type Subject struct {
 	ID   string     `json:"i,omitempty"`
 }
 
-// PersonSubject names one person by the id nothing renames.
-//
-// There is a constructor per kind rather than a Subject{Kind, ID} literal at
-// every call site, because several of these ids are DERIVED — a bucket number,
-// a generation — and a derivation written twice is a subject two writers
-// disagree about.
+// PersonSubject names one person by the id nothing renames. Each kind has a
+// constructor because several ids are DERIVED (a bucket, a generation), and a
+// derivation written twice is a subject two writers disagree about.
 func PersonSubject(personID string) Subject {
 	return Subject{Kind: KindPerson, ID: personID}
 }
@@ -360,29 +287,22 @@ func SessionSubject(lineage string) Subject {
 // InvalidationSubject is the company's one session-invalidation counter.
 func InvalidationSubject() Subject { return Subject{Kind: KindInvalidation} }
 
-// SweepSubject names one bucket's retention sweep.
-//
-// THE BUCKET IS RENDERED ZERO-PADDED, so the subject an operator reads sorts
-// the way the buckets do and a listing of sixty-four of them is in order
-// rather than in ASCII order.
+// SweepSubject names one bucket's retention sweep, ZERO-PADDED so subjects
+// sort as the buckets do.
 func SweepSubject(b Bucket) Subject {
 	return Subject{Kind: KindSweep, ID: b.String()}
 }
 
-// EvictionSubject names one node's gate on this log.
-//
-// The id is NOT folded: a node id is not an address a person types, it is what
-// that node published as its own writer, and folding it here would make the
-// gate miss every record the node wrote.
+// EvictionSubject names one node's gate on this log. The id is NOT folded: it
+// is what the node published as its writer, and folding it would make the gate
+// miss every record the node wrote.
 func EvictionSubject(nodeID string) Subject {
 	return Subject{Kind: KindEviction, ID: nodeID}
 }
 
-// GenerationSubject names one reanchor.
-//
-// The id is the generation number, which is what makes the record create-only:
-// a second reanchor to one generation is the same subject at an expectation
-// that is no longer zero, and the broker refuses it.
+// GenerationSubject names one reanchor by its number, which makes the record
+// create-only: a second reanchor to one generation meets a nonzero expectation
+// and the broker refuses it.
 func GenerationSubject(generation uint32) Subject {
 	return Subject{Kind: KindGeneration,
 		ID: strconv.FormatUint(uint64(generation), 10)}
@@ -392,14 +312,13 @@ func GenerationSubject(generation uint32) Subject {
 func BarrierSubject() Subject { return Subject{Kind: KindBarrier} }
 
 // TrimmedSubject names the trimmed record whose floor is floor, in the
-// framework's ONE spelling of it ([statelog.TrimmedSubject]) — the framework
-// reads the floor back from the id, and the dot inside it is no separator here
-// (see [Subject.Validate]).
+// framework's ONE spelling ([statelog.TrimmedSubject]), which it parses back;
+// the dot inside is no separator here ([Subject.Validate]).
 func TrimmedSubject(floor statelog.Position) Subject {
 	return Subject{Kind: KindTrimmed, ID: statelog.TrimmedSubject(floor).ID}
 }
 
-// String renders the subject's own path — what the framework appends to the
+// String renders the subject's own path, which the framework appends to the
 // domain's subject prefix.
 func (s Subject) String() string {
 	if s.ID == "" {
@@ -413,12 +332,10 @@ func (s Subject) Wire() string {
 	return topics.IamLogSubject(string(s.Kind), s.ID)
 }
 
-// Validate refuses a subject that cannot address an object.
-//
-// A KIND THIS BUILD DOES NOT KNOW IS NOT REFUSED HERE. It is refused where a
-// record is WRITTEN and accepted where one is READ, which is the asymmetry the
-// whole two-pass decode exists for: this build must be able to hold a newer
-// peer's record under its own subject without being able to act on it.
+// Validate refuses a subject that cannot address an object. An unknown kind
+// is NOT refused here: it is refused where a record is written and accepted
+// where read, so this build can hold a newer peer's record (the two-pass
+// decode).
 func (s Subject) Validate() error {
 	if s.Kind == "" {
 		return fmt.Errorf("iamdomain: a subject with no kind addresses the " +
@@ -439,17 +356,9 @@ func (s Subject) Validate() error {
 		return fmt.Errorf("iamdomain: subject id %q carries whitespace or a "+
 			"wildcard, which the broker would read as a subject pattern", s.ID)
 	}
-	// THE SCOPE SEPARATOR IS NOT REFUSED HERE, and the difference from the
-	// chart is worth stating rather than leaving as an omission: there, a
-	// unit key is a SEGMENT of every scope path its records are filed
-	// under, so a key carrying the separator would file the record where no
-	// probe reaches. Here a scope path is built from a BUCKET NUMBER and
-	// never from a subject id, so no id of any kind reaches a path — which
-	// is one of the things the bucketed scope buys.
-	//
-	// A DOT IS NOT REFUSED EITHER: a node id may carry one, and
-	// topics.IamLogPath splits only the FIRST dot, so an id keeps every
-	// dot it was published with.
+	// Unlike the chart's, the scope separator is not refused: a scope path
+	// is built from a bucket number, never a subject id. Nor is a dot: a
+	// node id may carry one, and topics.IamLogPath splits only the FIRST.
 	return nil
 }
 

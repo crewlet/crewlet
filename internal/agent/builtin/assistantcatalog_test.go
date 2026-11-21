@@ -147,14 +147,14 @@ func TestACuratedChatWriteTakesWhatTheRoomTakes(t *testing.T) {
 // ROOM'S.
 //
 // An agent that is not woken never reads the message, so a model left to
-// guess misleads the person: the tools that post to and read a room both state
-// the routing, and the `@channel` cap is the catalogue's copy of the domain's,
-// held to it here. Mutation: drop the paragraph from either tool, or move
+// guess misleads the person: the tool that posts to a room states the routing,
+// and the `@channel` cap is the catalogue's copy of the domain's, held to it
+// here. Mutation: drop the paragraph from the tool, or move
 // chatlet.MaxCollectiveRecipients without the catalogue's copy, and this
 // fails.
 func TestTheAssistantSaysWhoAChatMessageWakes(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"post_chat_message", "get_chat_room", "read_chat_messages"} {
+	for _, name := range []string{"post_chat_message"} {
 		tool, ok := catalog.Lookup(name)
 		if !ok {
 			t.Fatalf("the catalogue has no %s", name)

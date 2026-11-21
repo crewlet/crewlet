@@ -1,7 +1,9 @@
 package executor_test
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -66,11 +68,11 @@ func TestAHarnessKilledForMemoryEndedAtItsCeiling(t *testing.T) {
 }
 
 // THE SCRIPT'S MEMORY READ RUNS UNDER A PLAIN SH and prints only what the
-// collection parses: whatever the machine, it never fails the job, and where it
-// reads a domain it says something of it.
+// collection parses or a save's room reads: whatever the machine, it never
+// fails the job, and where it reads a domain it says something of it.
 //
-// Mutation: break the function's syntax, or print a line the parser does not
-// read, and this goes red.
+// Mutation: break the function's syntax, or print a line nothing reads, and
+// this goes red.
 func TestTheMemoryReadRunsUnderAPlainShell(t *testing.T) {
 	t.Parallel()
 	out, err := exec.Command("sh", "-c", sandbox.MemoryDomainScript+"\ncrewlet_memory").CombinedOutput()
@@ -79,12 +81,43 @@ func TestTheMemoryReadRunsUnderAPlainShell(t *testing.T) {
 	}
 	for line := range strings.Lines(string(out)) {
 		key, _, ok := strings.Cut(strings.TrimSpace(line), "=")
-		if !ok || !strings.Contains(" oom_kill limit total_kb total ", " "+key+" ") {
-			t.Errorf("the memory read printed %q, which nothing parses", line)
+		if !ok || !strings.Contains(" oom_kill limit total_kb total held avail_kb ", " "+key+" ") {
+			t.Errorf("the memory read printed %q, which nothing reads", line)
 		}
 	}
 	if m := sandbox.ParseMemoryDomain(string(out)); !m.Known() {
 		t.Errorf("the memory read on this machine said nothing of it: %q", out)
+	}
+}
+
+// WHAT A DOMAIN HOLDS IS ITS USAGE LESS THE PAGE CACHE ITS STAT COUNTS, PLUS
+// THE SHARED MEMORY THAT CACHE COUNTS: the bytes its kernel cannot reclaim
+// before it kills, which a save's room is the limit less. v2's stat names that
+// cache file, v1's cache; a usage that is no count holds nothing read.
+//
+// Mutation: hold the whole usage, leave the shared memory out, or read the
+// other version's key, and a row goes red.
+func TestWhatADomainHoldsIsItsUsageLessItsReclaimableCache(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ usage, key, stat, held string }{
+		"cgroup v2": {usage: "1000000", key: "file", stat: "anon 550000\nfile 400000\nshmem 50000\n",
+			held: "held=650000"},
+		"cgroup v1": {usage: "1000000", key: "cache", stat: "cache 300000\nrss 680000\nshmem 20000\n" +
+			"mapped_file 999\n", held: "held=720000"},
+		"no usage read": {usage: "", key: "file", stat: "file 400000\n", held: ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			stat := filepath.Join(t.TempDir(), "memory.stat")
+			if err := os.WriteFile(stat, []byte(tc.stat), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out, err := exec.Command("sh", "-c", sandbox.MemoryDomainScript+"\ncrewlet_held \"$1\" \"$2\" \"$3\"",
+				"sh", tc.usage, tc.key, stat).CombinedOutput()
+			if err != nil || strings.TrimSpace(string(out)) != tc.held {
+				t.Errorf("crewlet_held = %q, %v; want %q", out, err, tc.held)
+			}
+		})
 	}
 }
 

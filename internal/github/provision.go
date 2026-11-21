@@ -12,20 +12,13 @@ import (
 
 // Which seats hold a code-host identity, and where that identity lives.
 //
-// # The engine names no variable of its own
-//
-// A seat's GitHub credential lives in its `mcp_env.github` block, under
-// whichever key that seat's tool stack reads — the official MCP server takes
-// an Authorization header, the `gh` CLI reads GH_TOKEN, most everything else
-// reads GITHUB_TOKEN. So the scan looks under the keys the tools already use
-// rather than inventing CREWLET_GITHUB_TOKEN_<seat>, which would be a
-// variable nothing reads.
-//
-// ONE list, exported, read by both the engine's identity resolution and the
-// provisioner's report. A second copy beside either of them is how the two
-// come to look under different keys — and the failure is silent, because a
-// seat whose credential was not found looks exactly like a seat that has
-// none.
+// The engine names no variable of its own: a seat's GitHub credential lives in
+// its `mcp_env.github` block under whichever key its tool stack reads (the
+// MCP server's Authorization header, `gh`'s GH_TOKEN, GITHUB_TOKEN), so the
+// scan looks under those rather than inventing a variable nothing reads. The
+// key list is ONE, exported, read by both identity resolution and the
+// provisioner's report: a second copy drifts silently, since a seat whose
+// credential was not found looks exactly like one that has none.
 
 // SeatEnv is the mcp_env server whose credentials belong to the code host.
 //
@@ -43,26 +36,17 @@ var CredentialKeys = []string{
 	"Authorization",
 }
 
-// CredentialOf reads a seat's code-host credential.
+// CredentialOf reads a seat's code-host credential. The resolver is a plain
+// function so this package stays out of the config import graph.
 //
-// The resolver arrives as a plain function rather than the config resolver
-// itself, so this package stays out of the config import graph and the scan
-// is testable against a map.
+// A HUMAN seat holds none (its contact block has `github_login`) and is never
+// looked up.
 //
-// A HUMAN seat holds none and must never be looked up as though it did: it
-// is addressable through its own contact block — `github_login` — which the
-// party registry registers from the org.
-//
-// THE SEAT'S OWN APP TOKEN IS NOT ONE. A value naming
-// `${GITHUB_APP_TOKEN_<HANDLE>}` ([SeatVar] with [FieldAppToken]) is the
-// seat's app acting, and the app's account is its slug, which the engine
-// wrote down when it created the app: there is nothing to look up, and the
-// lookup this feeds (GET /user) is refused for every installation token
-// anyway. So such a key is passed over here, in [credentialSlot] and in
-// [CredentialReads] alike, and a seat whose only credential is its app's
-// token holds no personal credential at all. Before its app exists it
-// therefore waits for the app rather than being looked up with a token
-// nothing has issued yet.
+// THE SEAT'S OWN APP TOKEN IS NOT A CREDENTIAL HERE: a value naming
+// `${GITHUB_APP_TOKEN_<HANDLE>}` ([SeatVar] with [FieldAppToken]) is the app
+// acting, its account is the slug written at creation, and GET /user refuses
+// installation tokens anyway. Such keys are passed over here, in [credentialSlot]
+// and in [CredentialReads], so a seat with only an app token waits for its app.
 func CredentialOf(seat *org.Role, value func(string) string) string {
 	if seat == nil || seat.IsHuman() || value == nil {
 		return ""
@@ -156,18 +140,13 @@ func agentSeats(o *org.Organization) []*org.Role {
 // credentialSlot names the key a seat writes its code-host credential into,
 // and reports whether it writes one at all.
 //
-// THE OTHER HALF OF [CredentialOf], and the half that separates a broken
-// credential from an absent one. CredentialOf answers with the RESOLVED
-// value, so a seat that names `${GITHUB_TOKEN}` against an unset variable and
-// a seat that names nothing come back identically empty — and they are
-// opposite facts: the first is a variable somebody has to set, the second is
-// a seat whose identity is its own app. See [IdentityOutcome] for what
-// conflating them cost.
-//
-// It reads the RAW config value, because "did the operator write something
-// here" is a question about the document rather than about the environment,
-// and it returns the KEY so a caller can name the field without ever handling
-// what is in it.
+// THE OTHER HALF OF [CredentialOf], separating a broken credential from an
+// absent one: CredentialOf answers the RESOLVED value, so a seat naming
+// `${GITHUB_TOKEN}` against an unset variable and a seat naming nothing are
+// identically empty, yet one is a variable somebody must set and the other a
+// seat whose identity is its own app ([IdentityOutcome]). It reads the RAW
+// config value, because "did the operator write something here" is about the
+// document, and returns the KEY so callers never handle what is in it.
 func credentialSlot(seat *org.Role) (string, bool) {
 	if seat == nil || seat.IsHuman() {
 		return "", false

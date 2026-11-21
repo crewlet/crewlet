@@ -21,28 +21,16 @@ import (
 
 // Reader answers questions about pages from this node's own applied rows.
 //
-// # What replaced the hydration flag
+// EVERY READ GOES THROUGH [statelog.Reader], which makes the level a property of
+// the answer: the refusal ladder first (an evicted node, one below the trim
+// floor, one whose applier has stopped serves nothing), then the coverage probe
+// over what the read is ABOUT, then the freshness target (a quorum-committed
+// barrier for `linearizable`, the caller's own high-water mark for `session`, a
+// declared bound for `stale`), and only then the rows.
 //
-// The projection this reads in place of had a boolean: hydrated or not, with
-// no way to say by how much it was behind. An applier's position is a PLACE ON
-// A LOG, so a read here reports the level it answered at and a caller that
-// needs its own write back waits for its own position — which is the whole
-// reason the family moved off the bucket.
-// EVERY READ GOES THROUGH [statelog.Reader], which is what turns the level
-// from a word into a property of the answer: the refusal ladder first (an
-// evicted node, one below the trim floor, one whose applier has stopped serves
-// nothing), then the coverage probe over what the read is ABOUT, then the
-// freshness target — a quorum-committed barrier for `linearizable`, the
-// caller's own high-water mark for `session`, a declared bound for `stale` —
-// and only then the rows.
-//
-// AND ONE TRANSACTION, which this reader also did not have. Every statement
-// ran on `SQL()` directly, so a `Get` read the head, the comments, the
-// history, the children and the ancestors at five different instants: a page
-// answered with a comment thread from after the revision it reported, and a
-// child list that could contain a page the head knew nothing about. D119 says
-// every multi-statement answer runs inside one `BEGIN DEFERRED`, and the
-// framework's read is where that transaction now comes from.
+// AND ONE TRANSACTION: D119 says every multi-statement answer runs inside one
+// `BEGIN DEFERRED`, so a `Get` never reads head, comments, history, children and
+// ancestors at different instants. The framework's read supplies it.
 type Reader struct {
 	log *statelog.Reader
 }
@@ -502,25 +490,16 @@ var listFromStart = []listSpec{{}}
 
 // listResumes is where the window after the row a cursor names is read: the
 // arms of the order strictly after that row ([keyset.After]), nearest first,
-// each an equality prefix and one bound — one seek of the index the order is
-// served by — read in turn until the window is full.
+// each an equality prefix and one bound (one seek), until the window is full.
 //
-// NOT ONE PREDICATE. Spelled as the nested disjunction `container > ? OR
-// (container = ? AND (title > ? OR …))`, no conjunct bounds the leading
-// column, and the planner seeks nothing: measured, a later window read every
-// page the listing matched from the address index and sorted them all, so
-// paging a knowledge base cost the square of its size. The keyset package's
-// doc has the rest.
-//
-// A LISTING PINNED TO ONE CONTAINER resumes on its title and id alone. Its
-// container is the same on every row, so the order's leading arm — every
-// container after this one — holds nothing, and stated beside the listing's
-// own `p.container = ?` it is a predicate no index range can express: the
-// planner seeks the container and reads every page in it to find none past it,
-// on exactly the last window of a container, where the arms before it ran
-// out. A tree level under one parent keeps all three terms, because there
-// the container is no equality of the listing's and its arm is an empty
-// range of the parent index.
+// NOT ONE PREDICATE: as a nested disjunction no conjunct bounds the leading
+// column and the planner seeks nothing, so paging cost the square of the
+// knowledge base (the keyset package doc has the rest). A LISTING PINNED TO ONE
+// CONTAINER resumes on title and id alone: its leading arm (every later
+// container) holds nothing, and beside `p.container = ?` no index range can
+// express it, so the last window would read the whole container to find none
+// past it. A tree level under one parent keeps all three terms: there the
+// container is no equality and its arm is an empty range of the parent index.
 func listResumes(after listCursor, pinned bool, by ListOrder) []listSpec {
 	order, keys := listOrder, []any{after.Container, after.Title, after.ID}
 	switch {
@@ -627,21 +606,14 @@ func listFrom(spec listSpec) string {
 // which is nothing for a first window and one arm of a resume for a later one
 // ([listResumes]) — in the listing's order, and its arguments.
 //
-// THE BOUND IS BOUND HERE, not by the caller. The placeholders are positional,
-// so a caller that appended the window to its arguments itself would be one
-// reordering away from paging the listing by a filter value — and the caller
-// that got it right would still be stating the same numbers twice.
-//
-// NO CHILD COUNT IN IT: a count of each row's children written here as a
-// correlated subquery is one the planner may unnest, by cost, into a grouped
-// read of every page head in the company (`storetest.Decorrelated`, in
-// internal/store/storetest, states the rule) — measured, it did on the
-// workspace's listing. So the count is read for the window's rows after them
-// ([attachChildren]).
-//
-// A NEWEST-FIRST LISTING is read from the skill rows' own index
-// ([newestOrder]), and its instant is the skill row's copy of the head's, so
-// the cursor a window mints is the very value the next window resumes from.
+// THE BOUND IS BOUND HERE, not by the caller: the placeholders are positional,
+// so a caller appending the window to its arguments is one reordering away from
+// paging by a filter value. NO CHILD COUNT IN IT: written as a correlated
+// subquery the planner may unnest it into a grouped read of every page head in
+// the company (`storetest.Decorrelated` states the rule), so it is read for the
+// window's rows after them ([attachChildren]). A NEWEST-FIRST LISTING is read
+// from the skill rows' own index ([newestOrder]), whose instant is the skill
+// row's copy of the head's, so a window's cursor is the next one's resume value.
 func listRowsStatement(spec, from listSpec, limit int) (string, []any) {
 	where := strings.Join(append(slices.Clip(spec.where), from.where...), " AND ")
 	args := append(slices.Clip(spec.args), from.args...)
@@ -935,17 +907,14 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 // reference the caller named — inside the answer's own transaction, where the
 // framework probes it ([statelog.Query.Resolve]).
 //
-// THE PAGE'S OWN PATH, under the space it is filed in. An address adds its
-// title term as well, because a create or a rename arbitrates on the title and
-// is filed under it — a deferred rename that took this address is about this
-// read even while the page it resolved to still holds the name. The address's
-// container is canonical ([ContainerKey]), as every scope a record is filed
-// under is.
+// THE PAGE'S OWN PATH, under the space it is filed in. An address adds its title
+// term too, because a create or rename arbitrates on the title: a deferred
+// rename that took this address is about this read while the page still holds
+// the name. The container is canonical ([ContainerKey]), as every scope is.
 //
-// A REFERENCE THAT RESOLVES TO NOTHING STILL BOUNDS A SCOPE, because "no such
-// page" is a claim about rows a deferred create has not written: an address is
-// exactly the term such a create is filed under, and an id is decided by
-// [absentPageScope].
+// A REFERENCE THAT RESOLVES TO NOTHING STILL BOUNDS A SCOPE: "no such page" is a
+// claim about rows a deferred create has not written. An address is the term
+// such a create files under; an id is decided by [absentPageScope].
 func pageReadScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeSet, error) {
 	query := scopeByIDStatement
 	args := []any{ref}
@@ -976,31 +945,16 @@ func pageReadScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeS
 
 // absentPageScope is [pageReadScope] for an ID no row holds.
 //
-// A MINTED ID NAMES NO SPACE: the object path a create files it under names a
-// container the absent row cannot supply. So the page is about its object path
-// UNDER EVERY CONTAINER, and every term that contains such a path — the
-// domain, the containers' root, and ANY container's own term, since a scope is
-// the complete set of objects its apply may write and a container term covers
-// every page that may come to be in it. That is not a finite list of paths, so
-// it is answered as the retained records' own paths that fall inside it
-// ([mayHoldPage]) beside the id's object path in the containerless space,
-// whose every ancestor falls inside it too: the framework's probe then matches
-// exactly the records that may create the page. The domain term, the obvious
-// answer, refused an absent id under ANY retained record — one about another
-// page in another space included — and an object path in one space alone
-// served "no such page" past a record about a whole space that may be the one
-// creating it.
-//
-// ANYTHING ELSE names no page a record could create, because every page id is
-// minted: it is the containerless object path alone, which only a record about
-// the whole domain covers.
-//
-// THE CONTAINER IS MATCHED IN GO, segment by segment, rather than by a LIKE
-// pattern: `%` spans the separator, so a pattern for "any container's own
-// term" also matches every page path under every container, and LIKE folds
-// case where a path does not. The retained set it walks is this node's
-// undecodable records, which a node holds few of and a node holding many has
-// a louder problem than this read.
+// A MINTED ID NAMES NO SPACE: the container its create files it under is not on
+// the absent row. So the page is about its object path UNDER EVERY CONTAINER,
+// and so every term containing such a path (the domain, the containers' root,
+// ANY container's own term, which covers every page that may come to be in it).
+// That is no finite list, so it is answered as the retained records' own paths
+// inside it ([mayHoldPage]) plus the id's path in the containerless space: the
+// probe then matches exactly the records that may create the page. The domain
+// term refused an absent id under ANY retained record, and one space's object
+// path missed a whole-space record that may be creating it. ANYTHING ELSE is no
+// page a record could create (every id is minted): the containerless path alone.
 func absentPageScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeSet, error) {
 	id, minted := mintedID(ref)
 	if !minted {
@@ -1039,6 +993,12 @@ func absentPageScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.Scop
 // in SOME container: whether path is the page's object path, or any term
 // above it, with the container segment matching whatever it names — see
 // [absentPageScope].
+//
+// THE CONTAINER IS MATCHED IN GO, segment by segment, not by LIKE: `%` spans
+// the separator, so a pattern for "any container's own term" also matches every
+// page path under every container, and LIKE folds case where a path does not.
+// The retained set it walks is this node's undecodable records, of which a node
+// holds few.
 func mayHoldPage(path, id string) bool {
 	within := strings.Split(ScopeTerm{Kind: TermObject, Container: anyContainer,
 		ID: id}.Path(), statelog.ScopeSeparator)
@@ -1225,17 +1185,13 @@ func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) (
 
 // pageCounts is how many pages each container holds.
 //
-// ONE GROUP BY rather than a count per container: a company with forty spaces
-// would otherwise take forty round trips to draw one rail, and every one of
-// them inside the read transaction the containers were listed in.
-//
-// TRASHED PAGES ARE NOT COUNTED. A trashed page is invisible to every default
-// listing this reader serves, so counting it would put a number on the rail
-// that the list beside it cannot account for — a reader clicks "12" and finds
-// nine. The predicate restates the status rather than reading `trashed_at`,
-// because the container index carries the status after the listing's order
-// (`(container, title, id, status)`, replicated 0062), so this walk reads the
-// index alone and never a page's row.
+// ONE GROUP BY rather than a count per container: forty spaces would take forty
+// round trips inside the read transaction to draw one rail. TRASHED PAGES ARE
+// NOT COUNTED: no default listing shows them, so counting would put a number on
+// the rail the list beside it cannot account for. The predicate restates the
+// status rather than reading `trashed_at`, because the container index carries
+// the status after the listing's order (`(container, title, id, status)`,
+// replicated 0062), so this walk reads the index alone and never a page's row.
 func (r *Reader) pageCounts(ctx context.Context, tx *sql.Tx) (map[string]int, error) {
 	rows, err := tx.QueryContext(ctx, pageCountsStatement, string(StatusTrashed))
 	if err != nil {
@@ -1286,17 +1242,12 @@ func placeholders(n int) string {
 
 // SkillPages are the tool-skill pages in one container, with their bodies.
 //
-// # Why this is its own read rather than a List plus a Get each
-//
-// A listing deliberately carries no body — fifty pages at 512 KiB each is
-// twenty-five megabytes to draw a list of titles — so the caller that
-// genuinely needs bodies would otherwise issue one query per page. The
-// tool-skills container is the one place that is true, and it is small: a
-// company with twenty MCP servers has twenty skills, not twenty thousand.
-//
-// TRASHED PAGES ARE EXCLUDED. A skill somebody removed must leave the
-// registry, and a walk that returned it would put it straight back — the
-// replace is wholesale, so what this returns IS the registry.
+// This is its own read rather than a List plus a Get each: a listing carries no
+// body (fifty pages at 512 KiB is twenty-five megabytes to draw titles), but
+// the tool-skills container is small (twenty MCP servers, twenty skills) and
+// the registry genuinely needs bodies. TRASHED PAGES ARE EXCLUDED: a removed
+// skill must leave the registry, and the replace is wholesale, so what this
+// returns IS the registry.
 func (r *Reader) SkillPages(ctx context.Context, container string,
 	fresh statelog.Freshness) ([]Page, error) {
 
@@ -1366,11 +1317,9 @@ func pageLabelsStatement(n int) string {
 // pages of a container.
 //
 // THE REVISION LIST IS IN ITS KEY'S ORDER, newest first by the page's own
-// version number, which `pages_revisions`' key (page_id, edit_version) holds:
-// revision N is the body at version N, written in that order, so it is the
-// order of the log positions too. Ordered by the position column instead,
-// which no index of the table holds, it sought the page's revisions and then
-// sorted them all (measured).
+// version number, which `pages_revisions`' key (page_id, edit_version) holds
+// (revision N is the body at version N, so it is the log order too); ordered by
+// the position column, which no index holds, it sorted every revision.
 const (
 	derivedAsStatement       = `SELECT skill, onboarding FROM pages_skills WHERE page_id = ?`
 	scopeByIDStatement       = `SELECT id, container FROM pages_heads WHERE id = ?`

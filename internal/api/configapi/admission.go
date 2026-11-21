@@ -21,97 +21,70 @@ import (
 //
 // # Admin, or a lead inside their own subtree
 //
-// Whoever holds admin may change anything in the document. Anybody
-// else may write only when EVERY change is inside a subtree they lead, judged
-// on both sides of the write: [config.DiffOrg] states the places each change
-// reaches, and each is asked of the authority table as `config.org.write`
-// against the document it was read in — where an object was, against the
-// revision being replaced; where it lands and what its new references name,
-// against the revision proposed. A setting, a credential, a `${VAR}` in any
-// field, a key another system finds a seat or unit by — its project, page
-// space, channel, address or contact ids — and a grant a seat's role carries
-// (`health_tools`, the administrator's reads of the deployment) are never a
-// lead's: all five are asked as `config.write`, which is admin's.
+// Admin may change anything. Anybody else may write only when EVERY change is
+// inside a subtree they lead, judged on both sides: [config.DiffOrg] states
+// the places each change reaches, each asked as `config.org.write` against the
+// document it was read in (where an object was: the revision replaced; where
+// it lands and what its new references name: the one proposed). Settings,
+// credentials, a `${VAR}`, a key another system finds a seat or unit by and a
+// seat role's grants (`health_tools`, deployment reads) are `config.write`.
+
+// WIDENING AN MCP SERVER IS ADMIN'S TOO. A lead writes `mcp_limits` only to
+// hold a server back from their teams: every limit a write lifts or loosens
+// for an agent seat, by editing a block or moving a seat out from under one
+// ([config.OrgDiff.Widened]), is `config.write`.
 //
-// NOR IS WIDENING AN MCP SERVER. A lead writes their own seats' and units'
-// `mcp_limits` to hold a server back from their teams, and only that: every
-// limit a write lifts or loosens for an agent seat, by editing a block or by
-// moving a seat out from under one ([config.OrgDiff.Widened]), is asked as
-// `config.write` too, so an administrator grants and a lead narrows.
-//
-// A WRITE THAT CHANGES NOTHING IS NOT A LEAD'S EITHER. Storing the document
-// unchanged still makes a new revision and re-activates it on every node,
-// rebuilding every seat's tools, providers and MCP children — the gesture
-// `POST /config/reload` makes, which is admin's. Admitted because no
-// part of it was refused, anybody bound to a seat could force that fleet-wide
-// rebuild at will with `{"vision": null}`.
-//
-// ITS CHECK IS A LEAD'S, at the address of a seat or unit [Service.mayReach]
-// admitted them to: a dry run stores and re-activates nothing, which is the
-// whole of why the write is refused, and it is the one way a lead reads what
-// the engine derives of their unit as it stands, and the warnings the company
-// already carries that a change of theirs is compared against. Only there: a
-// check of the whole document is decided at no address, and answered would
-// hand the company's hierarchy and every warning to anybody bound to a seat
-// who sent `{}`.
+// A WRITE THAT CHANGES NOTHING IS NOT A LEAD'S: it still makes a revision and
+// re-activates it on every node, the gesture of `POST /config/reload`, so
+// anybody bound to a seat could force a fleet-wide rebuild with
+// `{"vision": null}`.
 //
 // FROM THE TWO DOCUMENTS, NEVER THE RUNNING COMPANY, so a node behind on its
-// applies decides a write exactly as a current one does.
-//
+// applies decides a write as a current one does.
+
+// ITS CHECK IS A LEAD'S, at the address of a seat or unit [Service.mayReach]
+// admitted them to: a dry run stores nothing, and it is the one way a lead
+// reads what the engine derives of their unit and the warnings their change is
+// compared against. A check of the whole document is decided at no address,
+// and would hand the hierarchy and every warning to anybody sent `{}`.
+
 // # The charter, on its own verb
 //
 // A charter write (`PUT /config/charter`) is admitted on
-// `config.principles.write`, the verb its route is decided by, and ONLY
-// WHILE WHAT IT CHANGES IS THE CHARTER: every changed setting one of
-// [config.CharterSettings] and no seat or unit touched. The verb is decided
-// as `config.write` is for a person, so an administrator's own Save is
-// admitted exactly as before; it differs only in the Dashboard Assistant's
-// column (ADR-0052), which is why the narrower write must never stretch to
-// anything else. A charter draft that reached past the charter would be a
-// fault in the draft, and is decided by the document's own rules instead, as
-// any other write is, which the assistant is never admitted to.
-//
+// `config.principles.write` ONLY WHILE EVERY CHANGE IS A
+// [config.CharterSettings] SETTING and no seat or unit is touched. It differs
+// from `config.write` only in the Dashboard Assistant's column (ADR-0052), so
+// it must never stretch further; a draft reaching past the charter is decided
+// by the document's own rules, which the assistant is never admitted to.
+
 // # What a refusal says
 //
-// THE ADDRESS IS DECIDED FIRST. A read or a write of one seat or unit
-// (`/config/roles/{id}`, `/config/units/{id}`) is decided where the id sits
-// in the active revision — at the root for an id it does not hold — before
-// the id is looked up, the body decoded or anything built ([Service.mayReach]),
-// so a seat in another team, a seat at the root and an id the company does
-// not have are refused in the same bytes, and only an admin is told an id is
-// missing.
+// THE ADDRESS IS DECIDED FIRST: a seat or unit route is decided where the id
+// sits in the active revision (the root for an unknown id) before the id is
+// looked up or the body decoded ([Service.mayReach]), so another team's seat,
+// a root seat and a missing id are refused in the same bytes.
 //
-// The chart's SHAPE is still no secret from anybody bound to a seat. A
-// refused write names the place each refused part reaches — the unit a seat
-// it names in `manages:` or `lead:` sits in — because that place is what the
-// caller is refused on, and whether a reference is refused at all already
-// depends on what sits outside their subtree; so a lead can learn which
-// seats exist and where they sit by naming them, as everybody's overview is
-// served the chart whole. What only a read serves is a seat's or a unit's
-// fields.
-//
-// THE ANSWER IS THE WRITE'S OWN DECISION, folded from every refused part in the
-// order the authority table asks its own checks ([authz.Combine]): a bar on
-// the caller — an agent's seat on the chart's verb — names no permission and
-// lists no part; a refusal on authority names the parts' reason where they
-// agree and `no_grant` where they do not, with the permission that admits
-// every part, and lists each part with its own reason and grants; and a write
-// refused only because the caller's proof lapsed is the `403
-// step_up_required` the route itself would have answered.
-//
+// The chart's SHAPE is no secret from anybody bound to a seat: a refusal names
+// the place each refused part reaches, because that is what the caller is
+// refused on and everybody's overview is served the chart whole. Only a read
+// serves a seat's or unit's fields.
+
+// THE ANSWER FOLDS EVERY REFUSED PART ([authz.Combine]): a bar on the caller
+// names no permission and lists no part; a refusal on authority names the
+// parts' shared reason or `no_grant`, the permission admitting every part, and
+// each part's reason and grants; a lapsed proof alone is `403 step_up_required`.
+
 // # Before validation, and before the seat-holder check
 //
-// A write its caller may not make is refused before the document is validated,
-// so a refusal says what the caller may not change rather than what is wrong
-// with parts of the company they cannot read; and before the identity
-// directory is asked who holds a seat the write removes, which is not the
-// caller's to learn about a seat they could not have removed.
+// A refused write is refused before the document is validated, so a refusal
+// says what the caller may not change rather than what is wrong in parts they
+// cannot read, and before the directory is asked who holds a seat the write
+// removes, which a caller who could not remove it must not learn.
 //
 // # Not asked of the engine's own writes
 //
 // [Service.Apply], [Service.ApplyEntity] and [Service.Reload] are the node's
-// own writers — the setup surface after its own grant check, the reconcile
-// loop — and carry no principal; only a request does ([draft.principal]).
+// own writers and carry no principal; only a request does ([draft.principal]).
 
 // RefusedChange is one part of a write its caller may not make, as a refusal
 // names it.
@@ -223,21 +196,15 @@ func principalOf(w http.ResponseWriter, r *http.Request) (*iam.Principal, bool) 
 
 // admit refuses next when p may not turn prior into it — see the file's header.
 // addressedCheck is a dry run of one seat or unit whose address the caller was
-// admitted to, which is answered when it changes nothing; charter is a write
-// of the charter alone.
+// admitted to; charter is a write of the charter alone.
 //
-// AT THE INSTANT THE ROUTE DECIDED ([authz.DecidedAt]): the route already
-// asked the caller's proof, and a proof it accepted that lapsed while the body
-// was read and the document built would otherwise refuse every part of the
-// write as stale — telling an administrator, on each, that they need admin.
+// AT THE INSTANT THE ROUTE DECIDED ([authz.DecidedAt]): a proof that lapsed
+// while the body was read would otherwise refuse every part as stale.
 //
-// THE ORG CHART'S OWN VERB IS ASKED OF THE WHOLE DOCUMENT TOO, beside
-// `config.write`, when the write changes the chart: whoever holds admin may
-// change anything in the document, and the chart's verb bars an agent's seat
-// whatever it holds ([authz.ActionOrgWrite] is human-only). The route decides
-// that verb on the org chart's routes, and the entity routes outside the chart
-// decide `config.write`, which bars nobody — so the admission asks it itself
-// rather than trusting that every route that reaches it asked first.
+// THE ORG CHART'S VERB IS ASKED OF THE WHOLE DOCUMENT TOO, beside
+// `config.write`, when the write changes the chart: it bars an agent's seat
+// whatever it holds ([authz.ActionOrgWrite] is human-only), while entity routes
+// outside the chart decide only `config.write`, which bars nobody.
 func admit(ctx context.Context, p iam.Principal, prior, next *config.Company,
 	addressedCheck, charter bool) error {
 

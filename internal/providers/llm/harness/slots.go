@@ -10,28 +10,16 @@ import (
 
 // A SLOT IS ONE LIVE HARNESS PROCESS, and max_concurrent is how many an entry may
 // have at once: the memory bound an operator sizes a host by (a harness is a
-// Node or Bun runtime of a few hundred megabytes). A run holds its slot for as
-// long as its process lives, through every tool call it makes.
+// runtime of a few hundred megabytes). A run holds it while its process lives.
 //
-// # Except for the calls made from inside those tool calls
-//
-// A tool can make a model call of its own — a condensing pass, a judge, an
-// answer drawn from the knowledge base — and the seat's chain usually puts it
-// on the same entry. With the entry's slots all held by runs blocked in such
-// calls, the nested call would wait for a slot only those runs can free, and
-// they free it only when it answers: at max_concurrent 1, every such call is a
-// deadlock until somebody's deadline.
-//
-// So a run LENDS its slot to the calls made inside its own tool calls, and to
-// nothing else: the run puts a [lease] on the context its calls run under
-// ([llm.ToolHost.Serve]), and a model call on the same entry carrying one takes
-// a free slot if there is one and the run's otherwise. One borrower at a time
-// per run — calls nested under one run share its slot in turn — and the slot
-// goes back to the pool only when the run and its borrower are both done. The
-// run's process is idle while a tool of its runs, so what is alive per slot is
-// bounded by how deep the nesting goes, never by how many seats are waiting —
-// which lending to the pool would not be: a slot handed to another seat while
-// its run's process lives is a process no slot counts.
+// A tool can make a model call on the same entry; with every slot held by runs
+// blocked in such calls, the nested call waits on a slot only those runs can
+// free (a deadlock at max_concurrent 1). So a run LENDS its slot to
+// calls inside its own tool calls and nothing else: it puts a [lease] on their
+// context ([llm.ToolHost.Serve]), and a call on the entry carrying one takes a
+// free slot if any, else the run's, one borrower at a time. The run's process
+// idles meanwhile, so live processes are bounded by nesting depth; lending to
+// the pool would leave a process no slot counts.
 
 // token is one of an entry's slots while it is out of the pool, and everyone
 // holding it.

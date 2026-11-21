@@ -17,41 +17,15 @@ import (
 
 // A CONSUMER'S PULLS, ASKED BY HAND ON ONE INBOX THE READER HOLDS.
 //
-// A reader of a consumer it made for one read — internal/queue/jetstream's
-// copy reads and its dead-letter listings, and internal/learning/memsync's
-// replays of a seat's tables — asks the consumer's pulls itself
-// (`CONSUMER.MSG.NEXT`), every one of them on ONE INBOX it holds until it is
-// done ([Pulls]), rather than through the client's fetch, which subscribes an
-// inbox for one pull and drops it when the CLIENT decides the pull is over: a
-// delivery the server made before then, still crossing a link when the client
-// gave up, lands on an inbox nobody holds, and a read that went on counted it
-// as lost. Held for the whole read, the inbox takes a delivery however late it
-// arrives, and the consumer's own count of its deliveries ([Pulls.Next])
-// tells a delivery that never arrived from one still on its way.
-//
-// # Every word the server sends about a pull, named
-//
-// A pull is answered with deliveries and with STATUSES — a status line and no
-// payload — and the reader is told each one for what it is ([Event]): a
-// delivery, an idle heartbeat (`100`) a pull asked with one is sent while the
-// consumer holds it with nothing to deliver, its expiry (`408`), the byte
-// bound the next message would pass (`409 Message Size Exceeds MaxBytes`),
-// the count filled with bytes to spare (`409 Batch Completed`), and anything
-// else, which is the pull REFUSED: the consumer deleted under it, its leader
-// moving, too many pulls waiting, nobody answering (`503`). And which of them
-// ENDS the pull ([Event.Ended]), counted as the server counts it — so a reader
-// that asks its next pull only once the last has ended never has one pull's
-// status read as the next one's end.
-//
-// # A quiet pull settled by the consumer's word
-//
-// A pull that hears nothing for a while asks the consumer what it says of
-// itself ([Pulls.Quiet]): a consumer that holds no pull and has delivered
-// nothing never got the pull — a cluster drops a new consumer's FIRST pull
-// routinely, and natsobj measured one read in twenty-five on a loaded
-// three-member fleet — and is made again ([FirstPullRemakes]); one that holds
-// the pull, or has delivered what has not arrived, is being read however
-// slowly, and is waited on, on the same inbox.
+// A reader of a consumer it made for one read (internal/queue/jetstream's copy
+// reads and dead-letter listings, internal/learning/memsync's replays) asks the
+// pulls itself (`CONSUMER.MSG.NEXT`), all on ONE INBOX it holds until done
+// ([Pulls]), not through the client's fetch, which drops its inbox when the
+// CLIENT decides the pull is over: a delivery the server made before then,
+// still crossing a link, lands on an inbox nobody holds and a read counted it
+// lost. Held for the whole read, the inbox takes a delivery however late, and
+// the consumer's own count ([Pulls.Next]) tells a delivery that never arrived
+// from one on its way. Statuses: [Event]; a quiet pull: [Pulls.Quiet].
 
 // The headers the connection parses a status line into: a status arrives as
 // `NATS/1.0 408 Request Timeout` with no payload, and the client library
@@ -442,18 +416,18 @@ func (s QuietSays) Valid() bool {
 	return false
 }
 
-// Quiet asks the consumer what it says of a reader that heard nothing from it
-// for a while, and answers its info with that — asked again while nobody
-// answers, as every read of a leader is ([jsprovision.ReadWith]): only the
-// consumer's leader answers its info, and a member that still believes in one
-// its group just lost drops the request without a word.
+// Quiet asks the consumer what it says of a reader that heard nothing for a
+// while, asked again while nobody answers ([jsprovision.ReadWith]): only the
+// consumer's leader answers, and a member believing in a leader its group lost
+// drops the request. A consumer holding no pull that delivered nothing never
+// got it (a cluster drops a new consumer's FIRST pull routinely) and is made
+// again ([FirstPullRemakes]); one holding the pull, or owing a delivery, is
+// waited on, on the same inbox.
 //
-// arrival is how long the answer may take to reach the reader behind what the
-// consumer delivered ahead of it, beyond the read term and the ceiling
-// ([jsprovision.Timing.Arriving]): the answer crosses the same link as the
-// deliveries, and a message arrives whole only once its last byte is in, so a
-// probe given less than a message still crossing was asked again behind it
-// until the ceiling, and failed a read whose message was on its way.
+// arrival is how long the answer may take behind what the consumer delivered
+// ahead of it, beyond the read term and ceiling ([jsprovision.Timing.Arriving]):
+// it crosses the same link and a message arrives whole only once its last byte
+// is in, so a smaller allowance failed a read whose message was on its way.
 func (p *Pulls) Quiet(ctx context.Context, arrival time.Duration) (QuietSays, *jetstream.ConsumerInfo, error) {
 	info, err := jsprovision.ReadWith(ctx, p.timing.Arriving(arrival),
 		func(ctx context.Context) (*jetstream.ConsumerInfo, error) { return p.cons.Info(ctx) }, nil)
@@ -481,17 +455,13 @@ func (p *Pulls) Owed(info *jetstream.ConsumerInfo) uint64 {
 
 // FirstPullRemakes is how many times a reader makes its consumer again after
 // one never got its first pull ([Unpulled]), before it waits for that
-// consumer's delivery like any other — this package's readers, on the same
-// inbox (internal/queue/jetstream's copy reads, which ask their one pull once
-// more there, and internal/learning/memsync's replays, which ask nothing more
-// of it, since a replay keeps one pull out at a time), and
-// internal/objstore/natsobj's gets and walks alike, since the drop is the
-// cluster's whoever reads.
+// consumer's delivery like any other. Every reader of one holds it
+// (internal/queue/jetstream, internal/learning/memsync,
+// internal/objstore/natsobj), since the drop is the cluster's whoever reads.
 //
 // THREE: a cluster dropped a first pull one read in twenty-five at the worst
-// measured, and a pull made again was dropped as often as a first one, so
-// after two remakes one read in fifteen thousand would still be waiting, and
-// after three one in four hundred thousand. A consumer still without its pull
-// after three is behind a link slow enough to hold the pull itself back, where
-// a fourth consumer only adds a create while the pull is on its way.
+// measured, and a remade consumer's pull as often, so after two remakes one
+// read in fifteen thousand would still wait, after three one in four hundred
+// thousand. A consumer still without its pull after three is behind a link slow
+// enough to hold the pull back, where a fourth only adds a create.
 const FirstPullRemakes = 3

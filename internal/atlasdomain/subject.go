@@ -18,10 +18,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ATLAS LOG'S SUBJECTS. An entry is one subject, so every person's claim on
-// it arbitrates there: a person's edit over an edit they did not see is refused
-// on the entry's own version, and two entries never serialize behind each
-// other. A purged value is a subject of its own, named by its digest.
+// THE ATLAS LOG'S SUBJECTS: an entry is one subject, arbitrated on its own
+// version (package doc, "One subject an entry"); a purged value is a subject of
+// its own, named by its digest.
 
 // ObjectKind is what an object on the atlas log is. A kind this build has never
 // heard of is retained as its literal, so a newer peer's records are deferred.
@@ -112,8 +111,8 @@ func GenerationSubject(gen uint32) Subject {
 }
 
 // Digest is a value's name on the log and in every row that marks it: the
-// SHA-256 of its text, in lowercase hex. A purge record and its marker carry
-// this and never the text, so erasing a value does not write it down again.
+// SHA-256 of its text, in lowercase hex, so erasing a value never writes it
+// down again.
 func Digest(text string) string {
 	sum := sha256.Sum256([]byte(text))
 	return hex.EncodeToString(sum[:])

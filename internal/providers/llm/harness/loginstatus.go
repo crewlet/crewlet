@@ -83,27 +83,18 @@ const maxStatusMethod = 64
 // which is what a person reading why the answer is unknown needs.
 const maxStatusDetail = 200
 
-// LoginStatus asks the harness whether it holds a login, and as whom, by its
-// profile's status_args run in the entry's login home ([Provider.Status] is
-// the same command in words, for a person).
+// LoginStatus asks the harness whether it holds a login, and as whom, by its profile's
+// status_args run in the entry's login home ([Provider.Status] is the same, in words).
 //
-// THE EXIT IS THE ANSWER: 0 is [LoginSignedIn], 1 is [LoginSignedOut], and
-// anything else is [LoginUnknown] with the first line the harness wrote on stderr as
-// its detail. What the command printed is read only for the profile's
-// status_fields, and only where it is JSON: Claude Code's `auth status` prints
-// `authMethod` beside `email` and `orgName`, and a harness whose status is a
-// sentence has no fields to read, so its answer is the exit alone.
-//
-// IN THE LOGIN HOME, as `crewlet llm status` runs it, so the harness reads the login
-// every seat is seeded from, and as a command that makes no login
-// ([syncRefresh]): a harness that refreshed its token while it looked carries the
-// refresh back over the login it was seeded from and over nothing else.
-//
-// AN ERROR IS A STATUS THAT COULD NOT BE ASKED, never an answer: a profile
-// with no status command ([ErrNoLoginCommand]), another `crewlet llm` command
-// holding the login home, a harness that could not be started, a home that could
-// not be prepared or carried out. A command that ran and did not say is
-// [LoginUnknown]. Bounded by [loginStatusTimeout].
+// THE EXIT IS THE ANSWER: 0 is [LoginSignedIn], 1 [LoginSignedOut], anything else
+// [LoginUnknown] with the first stderr line as detail. Output is read only for the
+// profile's status_fields, as JSON; a status that is a sentence has none, so its
+// answer is the exit alone. It runs IN THE LOGIN HOME, as `crewlet llm status`
+// does, and as a command that makes no login ([syncRefresh]): a refreshed token
+// is carried back over the login it was seeded from only.
+// AN ERROR IS A STATUS THAT COULD NOT BE ASKED, never an answer: no status command
+// ([ErrNoLoginCommand]), the login home held, a harness or home that failed. A
+// command that ran and did not say is [LoginUnknown]. Bounded by [loginStatusTimeout].
 func (p *Provider) LoginStatus(ctx context.Context) (LoginStatus, error) {
 	return p.loginStatus(ctx, loginStatusTimeout)
 }

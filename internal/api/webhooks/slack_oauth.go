@@ -18,12 +18,9 @@ import (
 // hash, and no script at all.
 //
 // html/template, not string concatenation: every value on this page comes from
-// a query string an attacker controls, and it is rendered into a browser. The
-// contextual escaping is the whole reason to use a template here rather than
-// build the markup by hand. And the page shares an origin with the dashboard,
-// whose requests carry a signed-in person's session: the template's escaping
-// is the first defence, and the policy is the one that holds if the escaping
-// is ever wrong.
+// an attacker-controlled query string. The page shares an origin with the
+// dashboard's signed-in sessions, so the template's escaping is the first
+// defence and the policy holds if the escaping is ever wrong.
 //
 // BUILT AT THE FIRST REQUEST THAT RENDERS IT, for [githubAppPage]'s reason:
 // every push's proc-receive hook is this binary, and runs every package's init.
@@ -142,22 +139,14 @@ type SlackInstaller interface {
 
 // slackOAuthLanding serves GET /webhooks/slack-oauth.
 //
-// Every Slack app this engine creates names this as its OAuth redirect. After
-// the operator clicks Allow, Slack redirects here with a temporary code and
-// the state the install link carried.
-//
 // THREE ARRIVALS, told apart by the state:
-//
 //   - A SIGNED STATE is an install link the Agents tab minted
-//     ([slack.Installs.Link]). The engine finishes it here: the state is
-//     verified and spent, the code exchanged, the app checked, and the bot
-//     token sealed under the seat's own name. Nothing Slack sent is shown.
-//   - ANY OTHER STATE is a link this engine no longer issues: the retired
-//     `crewlet slack provision` put the bare handle there. It is answered with
-//     where installs are made now, and the code is not shown, since nothing
-//     is waiting to use it.
-//   - NO STATE is somebody who pressed Install to Workspace on the app's own
-//     settings page, who needs the bot token on the page they just left.
+//     ([slack.Installs.Link]): verified and spent, the code exchanged, the
+//     bot token sealed under the seat's name. Nothing Slack sent is shown.
+//   - ANY OTHER STATE is the retired `crewlet slack provision`'s bare handle:
+//     answered with where installs are made now, the code not shown.
+//   - NO STATE is Install to Workspace pressed on the app's own settings
+//     page: the person needs the bot token on the page they just left.
 //
 // The code alone grants nothing without the app's client secret.
 func (r *Receiver) slackOAuthLanding(w http.ResponseWriter, req *http.Request) {

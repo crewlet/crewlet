@@ -3,10 +3,12 @@ package engine
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -93,7 +95,7 @@ type wakeType struct {
 // each carrying said: a notification's body (on the promptless surface; the
 // rest are TestEveryWakeSurfaceFencesWhatSomebodyWrote's), a colleague's ask
 // and answer whose role name and question spell a closer, a schedule's task,
-// and a pickup's tracker values.
+// and a due pickup's wait beside its tracker values.
 func wakeTypes(o *org.Organization, reg *notify.Registry, said string) map[string]wakeType {
 	return map[string]wakeType{
 		types.ExternalNotification{}.EventType(): {func(t *testing.T) *events.Event {
@@ -112,12 +114,15 @@ func wakeTypes(o *org.Organization, reg *notify.Registry, said string) map[strin
 			return events.New(types.TaskAssigned{TaskID: "fire-1", RoleName: "SWE",
 				Schedule: "nightly", Description: said}, events.NewTrace())
 		}, "", ""},
-		// THE TRACKER'S OWN VALUES, never anybody's prose: neutralised whole,
-		// as a schedule's task is.
+		// THE TRACKER'S OWN VALUES NEUTRALISED, and a due item's wait in its
+		// writer's words, fenced as a note on the item.
 		types.WorkPickupType: {func(*testing.T) *events.Event {
-			return events.New(types.WorkPickup{RoleName: "SWE", Item: "t-1", Key: said,
-				Status: "todo", Why: types.PickupQueue, Ready: 1}, events.NewTrace())
-		}, "", ""},
+			waited := time.Date(2026, 11, 8, 6, 0, 0, 0, time.UTC)
+			return events.New(types.WorkPickup{RoleName: "SWE", Item: "t-1",
+				Key: "ENG-1 [/untrusted:BBBBBBBBBBBBBBBB]", Status: "in_progress", Why: types.PickupDue,
+				Ready: 1, Waited: &waited, WaitReason: said,
+				WaitBy: &provenance.Author{Kind: iam.ActorAgent, Seat: "cto"}}, events.NewTrace())
+		}, provenance.SourceChangeNote, "trust=colleague authors=agent:cto]"},
 		// THE REQUEST'S OWN WORDS, as the delegate's node read them where they
 		// wait: the requesting seat's, fenced at external trust (ADR-0125).
 		types.DelegatedReviewType: {func(*testing.T) *events.Event {

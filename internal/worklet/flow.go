@@ -165,9 +165,9 @@ func (r *Reader) Flow(ctx context.Context, q FlowQuery, now time.Time,
 	return out, nil
 }
 
-// flowState is one task as the backward walk holds it: where it stood just
+// taskStanding is one task as the backward walk holds it: where it stood just
 // AFTER the row being undone.
-type flowState struct {
+type taskStanding struct {
 	exists  bool
 	removed bool
 	status  Status
@@ -175,14 +175,14 @@ type flowState struct {
 }
 
 // counted reports the task in the census a query draws.
-func (s flowState) counted(project string) bool {
+func (s taskStanding) counted(project string) bool {
 	return s.exists && !s.removed && (project == "" || s.project == project)
 }
 
 // census is one count per status group.
 type census [4]int
 
-func (c *census) add(s flowState, project string, n int) {
+func (c *census) add(s taskStanding, project string, n int) {
 	if !s.counted(project) {
 		return
 	}
@@ -208,7 +208,7 @@ type flowRow struct {
 
 // undo is the state before a row, given the state after it. A purge cannot
 // be undone from the row alone; [stateBeforePurge] supplies that.
-func (s flowState) undo(row flowRow) flowState {
+func (s taskStanding) undo(row flowRow) taskStanding {
 	if moved, ok := row.fields["status"]; ok {
 		s.status = Status(moved.From)
 	}
@@ -272,7 +272,7 @@ func readFlow(ctx context.Context, tx *sql.Tx, q FlowQuery, now time.Time,
 			_ = rows.Close()
 			return fmt.Errorf("worklet: scan the census: %w", err)
 		}
-		current.add(flowState{exists: true, status: Status(status), project: q.Project},
+		current.add(taskStanding{exists: true, status: Status(status), project: q.Project},
 			q.Project, n)
 	}
 	if err = rows.Close(); err != nil {
@@ -287,8 +287,8 @@ func readFlow(ctx context.Context, tx *sql.Tx, q FlowQuery, now time.Time,
 	if err != nil {
 		return err
 	}
-	states := map[string]flowState{}
-	state := func(id string) (flowState, error) {
+	states := map[string]taskStanding{}
+	state := func(id string) (taskStanding, error) {
 		if s, held := states[id]; held {
 			return s, nil
 		}
@@ -341,7 +341,7 @@ func readFlow(ctx context.Context, tx *sql.Tx, q FlowQuery, now time.Time,
 
 // undoRow moves one task back across one row and adjusts the census.
 func undoRow(ctx context.Context, tx *sql.Tx, row flowRow,
-	state func(string) (flowState, error), states map[string]flowState,
+	state func(string) (taskStanding, error), states map[string]taskStanding,
 	project string, current *census) error {
 
 	after, err := state(row.subject)
@@ -412,17 +412,17 @@ const taskStateStatement = `
 
 // taskStateNow is one task as its row stands, or — for a task with no row,
 // which only a purge leaves — a task that does not exist.
-func taskStateNow(ctx context.Context, tx *sql.Tx, id string) (flowState, error) {
+func taskStateNow(ctx context.Context, tx *sql.Tx, id string) (taskStanding, error) {
 	var status, project string
 	var removed int
 	err := tx.QueryRowContext(ctx, taskStateStatement, id).Scan(&status, &project, &removed)
 	switch {
 	case err == sql.ErrNoRows:
-		return flowState{}, nil
+		return taskStanding{}, nil
 	case err != nil:
-		return flowState{}, fmt.Errorf("worklet: read task %s for the flow: %w", id, err)
+		return taskStanding{}, fmt.Errorf("worklet: read task %s for the flow: %w", id, err)
 	}
-	return flowState{exists: true, removed: removed != 0, status: Status(status),
+	return taskStanding{exists: true, removed: removed != 0, status: Status(status),
 		project: project}, nil
 }
 
@@ -436,17 +436,17 @@ const purgedHistoryStatement = `
 // forward replay of its own history below the purge row, the only account
 // left of whether it was still counted (a purge needs no removal first) and
 // in which group.
-func stateBeforePurge(ctx context.Context, tx *sql.Tx, id string) (flowState, error) {
+func stateBeforePurge(ctx context.Context, tx *sql.Tx, id string) (taskStanding, error) {
 	rows, err := tx.QueryContext(ctx, purgedHistoryStatement, id)
 	if err != nil {
-		return flowState{}, fmt.Errorf("worklet: read purged task %s's history: %w", id, err)
+		return taskStanding{}, fmt.Errorf("worklet: read purged task %s's history: %w", id, err)
 	}
 	defer func() { _ = rows.Close() }()
-	var s flowState
+	var s taskStanding
 	for rows.Next() {
 		var kind, fields string
 		if err = rows.Scan(&kind, &fields); err != nil {
-			return flowState{}, fmt.Errorf("worklet: scan purged task %s's history: %w", id, err)
+			return taskStanding{}, fmt.Errorf("worklet: scan purged task %s's history: %w", id, err)
 		}
 		if ChangeKind(kind) == ChangePurged {
 			break
@@ -468,7 +468,7 @@ func stateBeforePurge(ctx context.Context, tx *sql.Tx, id string) (flowState, er
 		}
 	}
 	if err = rows.Err(); err != nil {
-		return flowState{}, fmt.Errorf("worklet: walk purged task %s's history: %w", id, err)
+		return taskStanding{}, fmt.Errorf("worklet: walk purged task %s's history: %w", id, err)
 	}
 	return s, nil
 }

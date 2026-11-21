@@ -74,6 +74,12 @@
 // Center, because that is what a self-hosted instance's address looks like
 // and it is the overwhelming case.
 //
+// Every caller hands [Of] the same declaration: a test fails a client
+// construction that omits it, because a client judging with none reads a
+// declared-Cloud company as Data Center. A ${VAR} where the host is stands for
+// whatever it expands to, so only the declaration can place it ([Unknown]
+// without one).
+//
 // Hosts compare the way DNS compares them — without case, and with an
 // absolute name's trailing dot ignored; nothing here reads a path, except to
 // tell a ${VAR} standing in the path from one standing where the host is.
@@ -128,18 +134,13 @@ var environments = []environment{
 // Of is the deployment the Jira or Confluence address raw is on, in a company
 // that declared declared ([Unknown] for one that declared nothing).
 //
-// A host this package recognises — a Cloud site or a gateway — is Cloud
-// whatever was declared. Any other host is what the company declared, and
-// Data Center when it declared nothing. An address whose host is a ${VAR} is
-// what the company declared too, and [Unknown] when it declared nothing:
-// Tier B holds a reference verbatim and the engine resolves it where the
-// client is built, so validation sees no host, and reading that as Data
-// Center refused a Cloud company for lacking a secret only Data Center needs.
-// A reference elsewhere in the address — its path — leaves the host written.
-//
-// A client is handed resolved addresses only, so for a client the answer is
-// Cloud or Data Center; an address with no host at all is Data Center, which
-// is what it always was.
+// A recognised host (a Cloud site or a gateway) is Cloud whatever was
+// declared. Any other host is what the company declared, else Data Center. A
+// ${VAR} host is likewise what was declared, else [Unknown]: Tier B holds the
+// reference verbatim, so validation sees no host, and reading that as Data
+// Center would refuse a Cloud company for lacking a secret only Data Center
+// needs. A reference in the path leaves the host written. A client is handed
+// resolved addresses only, so for it an address with no host is Data Center.
 func Of(raw string, declared Deployment) Deployment {
 	h, written := hostOf(raw)
 	switch {

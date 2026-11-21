@@ -11,33 +11,22 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// A LIVE ROW NAMING A SESSION READS AS IN PROGRESS. A turn that has not ended
-// and whose row names a session — the newest its runs have kept, a job's final
-// capture its collection took while the turn goes on, or one a loss left its
-// box to take — is read as a session in progress, in the one sentence every
-// surface carries ([executordomain.Session.InProgressNote]): that the turn has
-// not ended, that this is the newest session its runs have kept and when it
-// was captured, in UTC as every instant the engine words is, that its run may
-// have gone on past it and that its last call may have no result yet. Never as
-// an ended turn's session, and never as one saved as its run works, which
-// nothing on the row says. A live row naming no session yet is said by why it
-// names none; an ended row by how its turn left it — the note of one its turn
-// went on past, a lost turn's at its last word among them, or none — and a row
-// in progress is never told as one its turn went on past, nor an ended row as
-// one in progress. The sentence is the engine's words alone, so the row as held
-// and its shown form, which every reader is shown, say it alike; the went-on
-// note quotes what refused a capture, and its shown form is its redaction.
+// A live row naming a session reads as in progress, in the one sentence every
+// surface carries ([executordomain.Session.InProgressNote]): not ended, the
+// newest session its runs kept, captured when (in UTC), its run may have gone
+// on past it, its last call may have no result yet. Never as an ended turn's
+// session, nor as one saved as its run works. A live row naming no session is
+// said by why; an ended row by how its turn left it (went-on note or none), and
+// neither is told as the other. The engine's words alone, it reads alike held
+// and shown; the went-on note's shown form redacts what refused a capture.
 //
-// Mutation: read InProgress off the row's object alone, and the ended rows read
-// in progress; off the ending alone, and the live row naming no session does;
-// answer InProgressNote of an ended row, and the ended rows say they have not
-// ended; let WentOnNote answer of a live row, and the row in progress is told
-// its turn went on past it; drop the instant, word it in the capture's own
-// zone, or word a row's zero instant as a date, and a sentence reads wrong.
+// Mutation: read InProgress off the object or the ending alone, answer either
+// note of the other kind of row, or drop, mis-zone or zero-date the instant,
+// and a case fails.
 func TestALiveRowNamingASessionReadsAsInProgress(t *testing.T) {
 	t.Parallel()
-	// AN INSTANT OUTSIDE UTC, as the broker's clock is read on a node in
-	// another zone: the sentence words it in UTC.
+	// An instant outside UTC, as a node in another zone reads the broker's
+	// clock: the sentence words it in UTC.
 	at := time.Date(2026, 11, 8, 10, 30, 0, 0, time.FixedZone("CET", 3600))
 	object := objstore.Object{Key: objstore.KeyAt(at), Hash: objstore.Hash(strings.Repeat("a", 64)), Size: 4096}
 	row := func(kept objstore.Object, captured time.Time, ending *executorkeep.Ending) executordomain.Session {
@@ -56,9 +45,8 @@ func TestALiveRowNamingASessionReadsAsInProgress(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		row  executordomain.Session
-		// progress is the row's in-progress sentence, "" for a row not in
-		// progress, and wentOn whether it is told it is kept up to a session
-		// its turn went on past.
+		// progress is the in-progress sentence ("" for none), and wentOn
+		// whether the row is told its turn went on past its session.
 		progress string
 		wentOn   bool
 	}{
@@ -72,8 +60,8 @@ func TestALiveRowNamingASessionReadsAsInProgress(t *testing.T) {
 			row: row(object, at, &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted})},
 		{name: "an ended turn's row naming a session it went on past", row: row(object, at, wentOn),
 			wentOn: true},
-		// A LOST TURN'S ROW AT ITS LAST WORD is told it may not hold the last
-		// of what the turn did all the same, as every lost turn's row is.
+		// A lost turn's row at its last word is still told it may not hold
+		// the last of what the turn did, as every lost turn's row is.
 		{name: "a lost turn's row at its last word", row: row(object, at, &executorkeep.Ending{
 			Outcome: executorkeep.OutcomeLost, WentOn: true,
 			LastWord: &executorkeep.CapturePlace{LaunchSeq: 1, CaptureSeq: 1}}), wentOn: true},

@@ -12,12 +12,9 @@ import (
 // GENERATION OF THE ROWS IT WAS DECIDED FROM — handed to the decision by the
 // framework, and on the bytes the broker holds.
 //
-// The writer is what every applier's eviction gate compares against an
-// eviction, on a node that may not be able to decode the payload at all. No
-// write path in the tree set it: each domain's envelope declared the field,
-// the publisher held the node id, and every record reached every applier
-// naming nobody — so the gate that is the floor theorem's last clause dropped
-// nothing, for any node, ever.
+// The writer is what every applier's eviction gate (the floor theorem's last
+// clause) compares against an eviction, on a node that may not decode the
+// payload at all: a record naming nobody is one the gate never drops.
 func TestEveryRecordNamesItsWriterAndTheGenerationItWasDecidedIn(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -71,10 +68,9 @@ func TestEveryRecordNamesItsWriterAndTheGenerationItWasDecidedIn(t *testing.T) {
 // APPENDED, naming what it lacks.
 //
 // Checked by the publisher on the encoded bytes, through the domain's own
-// envelope reader, because a stamp a domain was merely HANDED is one it can
-// forget to write — which is what every domain in the tree did. A refusal on
-// the first write is the loud form of that mistake; the quiet form is a fleet
-// whose evictions drop nothing.
+// envelope reader, because a stamp a domain is merely HANDED is one it can
+// forget to write; the quiet form of that mistake is a fleet whose evictions
+// drop nothing.
 func TestARecordWithoutItsStampIsRefusedBeforeItIsAppended(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

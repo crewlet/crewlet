@@ -10,25 +10,15 @@ import (
 // TestTheVectorCorpusIsPagesAndTasksOnly is the gate behind ADR-0071, and the
 // decision it holds is a COST rather than a taste.
 //
-// Every member of [search.Sources] is a corpus the fleet-singleton embedding
-// duty walks, pays a provider for, writes a record per document for, and keeps
-// a vector per document of in the replicated estate — which every snapshot
-// copies and every joining node transfers. The duty's whole budget is about a
-// thousand sources a minute, shared across every corpus a company has.
+// Every member of [search.Sources] is a corpus the embedding duty walks, pays a
+// provider for and keeps a replicated vector per document of; its budget is
+// about a thousand sources a minute across every corpus. So the list is "what a
+// company can afford to embed": a year of chat at 20,000 messages a day is 7.3
+// million documents against a supported corpus of about a million (ADR-0028).
+// Chat has a keyword index (`chat_docs`, `chat_postings`), no semantic half.
 //
-// So the list is not "what could usefully be embedded"; it is "what a company
-// can afford to embed". Chat is the corpus that makes the difference visible:
-// at the declared census of 20,000 messages a day, one year is 7.3 million
-// documents against a supported vector corpus of about a million — a thousand
-// seats' first year, ADR-0028's sizing — several times the whole budget,
-// spent on the corpus with the lowest value per document, and taken from the
-// knowledge base's own embeddings to pay for it. Chat gets a keyword index of
-// its own instead (`chat_docs`, `chat_postings`), which is affordable, and no
-// semantic half at all.
-//
-// THE ENUM IS THE GATE because it is what the duty reads. A source added here
-// is a bill a company starts paying on its next boot, with nothing else in the
-// tree asking whether it can.
+// THE ENUM IS THE GATE because the duty reads it: a source added here is a
+// bill a company starts paying on its next boot.
 func TestTheVectorCorpusIsPagesAndTasksOnly(t *testing.T) {
 	t.Parallel()
 	want := []search.Source{search.SourcePage, search.SourceTask}

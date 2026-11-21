@@ -13,59 +13,17 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// TestNoClientSitsOnTheProcessGlobalPool fails the build when any package in
-// this module reaches for net/http's process-global client or transport.
-//
-// This package's doc already says the rule twice — every outbound client is
-// built here, and a round tripper that wraps another takes [Transport] as its
-// base — and [httpxtest] says the third half of it, that a test double
-// wrapping an httptest.Server takes THAT SERVER'S transport. All three were
-// prose, and prose is what the tree already had: gitlab, mattermost and
-// datadog's conformance helper each carried a paragraph about it, and seven
-// packages sat on the shared pool anyway. internal/sandbox lost
-// a CI run to it.
-//
-// # Why this fails the build rather than reporting
-//
-// In production the shared pool is a performance bug: MaxIdleConnsPerHost is
-// 2 for every client in the process at once, which is the whole reason this
-// package exists. In TESTS it is a CORRECTNESS bug, and that is the half
-// nobody expects — httptest.Server.Close ends by calling CloseIdleConnections
-// on http.DefaultTransport, for every server in the binary rather than its
-// own, and a bodyless response is handed back to the idle pool BEFORE its
-// caller has it. A close landing in that window fails a request the server
-// answered, with "net/http: HTTP/1.x transport connection broken: http:
-// CloseIdleConnections called". It is rare, it is load-dependent, and it is
-// reported as somebody else's flake.
-//
-// # What it flags
-//
-// In every package under internal/ and cmd/ except this one:
-//
-//   - http.DefaultTransport and http.DefaultClient, named anywhere;
-//   - http.Get, http.Head, http.Post and http.PostForm, which are
-//     http.DefaultClient under another spelling.
-//
-// The subject of the match is a LANGUAGE construct — a selector resolved
-// against the file's own import of net/http — rather than a line or a regexp
-// over source text. So a doc comment naming http.DefaultTransport (several
-// legitimately do, this file included) is not a hit, and a package that
-// renames the import is still covered.
-//
-// # Coverage boundary
-//
-// It does not see a client handed to a vendor SDK through a field it cannot
-// name — internal/api/mcpbridge's MCP client transport is one, where an unset
-// HTTPClient means http.DefaultClient and no selector says so — nor a
-// transport reached by reflection, nor an &http.Client{} whose Transport
-// field is simply absent. That last one is deliberate: the zero value is
-// legitimate for a client that never makes a request, and four of them exist.
-// What closes those gaps is [httpxtest] being the obvious thing to reach for,
-// not a matcher that tries to read intent.
-//
-// If this rule ever legitimately goes away, DELETE this guard rather than
-// weakening it. A guard kept alive past its subject is how an allowance list
-// quietly grows.
+// TestNoClientSitsOnTheProcessGlobalPool fails the build when any package
+// under internal/ and cmd/ except httpx names http.DefaultTransport or
+// http.DefaultClient, or calls http.Get, Head, Post or PostForm (the same
+// client). The shared pool is a performance bug in production
+// (MaxIdleConnsPerHost 2 for every client) and a CORRECTNESS bug in tests:
+// httptest.Server.Close calls CloseIdleConnections on the default transport
+// for every server in the binary, failing a request the server answered.
+// The match is a selector resolved against the file's net/http import, so doc
+// comments and renamed imports are handled. Not seen: a client handed to an
+// SDK through an unnameable field, reflection, or an &http.Client{} with no
+// Transport (legitimate if it never requests). If the rule goes, DELETE this.
 func TestNoClientSitsOnTheProcessGlobalPool(t *testing.T) {
 	t.Parallel()
 
@@ -156,18 +114,14 @@ type poolWalk struct {
 // walkForGlobalPool parses every .go file under internal/ and cmd/ that
 // imports net/http and collects the uses of its process-global client.
 //
-// BOTH halves of the tree, production and test, unlike the subject guard next
-// door: there the failure mode differs in kind between them, and here it is
-// the test half that carries the correctness bug.
+// BOTH halves of the tree, production and test: the test half carries the
+// correctness bug.
 //
-// THE IMPORTS ARE READ FIRST, and a file is parsed whole only if one of them
-// is net/http: every selector this judges is on that import, and a file
-// without it has none. The imports are PARSED rather than searched for as
-// text, because an import path is a string literal and a string can be
-// spelled with escapes its bytes never show; parser.ImportsOnly stops at the
-// first declaration that is not an import, which is a fraction of the file.
-// Parsing all of internal/ and cmd/ whole — both halves, 36 MB — was ten
-// seconds under the race detector.
+// IMPORTS ARE READ FIRST and a file is parsed whole only if one is net/http,
+// since every selector judged is on that import. They are PARSED, not
+// searched as text (an import path can be spelled with escapes);
+// parser.ImportsOnly stops at the first non-import declaration, and parsing
+// the whole tree took ten seconds under the race detector.
 func walkForGlobalPool(t *testing.T, root string) poolWalk {
 	t.Helper()
 

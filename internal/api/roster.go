@@ -16,36 +16,24 @@ import (
 // anything that has happened yet: who the seats are, how they are organised,
 // and what tools they can reach.
 //
-// They were the gap that made a freshly started company look empty. The
-// projection only ever holds what has HAPPENED — a turn's phase, a live call,
-// a spend — so it can say what a seat is doing and not that the seat exists.
-// Snapshot asked it for the agent list anyway, merging the live overlay onto a
-// static roster of nil, which is an empty list every time. The roster arrived
-// only as a side effect of a turn running, because an `agents` overlay for an
-// unknown role is appended by the client — so a company whose model was not
-// answering had no agents on screen at all, permanently, and one that was
-// working grew its roster a seat at a time as each happened to take a turn.
-//
-// The second of them, the org tree, is an anonymous surface with its own
-// explicit public shape, and lives in orgprojection.go.
+// The projection only holds what has HAPPENED (a turn's phase, a live call, a
+// spend), so it says what a seat is doing and not that the seat exists: the
+// roster comes from configuration, or a company whose model was not answering
+// would show no agents. The org tree is an anonymous surface with its own
+// explicit public shape, in orgprojection.go.
 
 // roster is the static seat rows the live overlay is merged onto.
 //
-// EVERY AGENT SEAT IN THE COMPANY, not the ones this node runs: the dashboard
-// is a view of the company, and a fleet's seats are spread across nodes. A
-// roster limited to local seats would show a different company depending on
-// which node the browser reached.
+// EVERY AGENT SEAT IN THE COMPANY, not the ones this node runs: a limited
+// roster would show a different company per node the browser reached.
 //
-// CONFIGURATION ONLY. What a seat is doing — `activity`, and why a stopped one
-// is stopped — is the projection's to say, over its turn, its runs, its pause,
-// its budget and its placement (livestate's activity.go); a state written here
-// as well is how a seat came to have two. The roster used to mark the seats
-// THIS node held as idle and leave every other seat stateless, which the client
-// drew as offline — so on a fleet, every seat a peer ran read as down.
+// CONFIGURATION ONLY. What a seat is doing (`activity`, why a stopped one is
+// stopped) is the projection's to say (livestate's activity.go); a state
+// written here too gives a seat two, and marking only THIS node's seats idle
+// drew every peer's seat as offline.
 //
-// Human seats are left out. They have no turn, no phase and no spend, and the
-// agent screen is about what is running; the org tree below carries them, which
-// is where a reader looks for who to talk to.
+// Human seats are left out: no turn, phase or spend, and the org tree carries
+// them.
 func roster(company func() (*config.Company, *org.Organization)) []map[string]any {
 	organization := agentOrganization(company)
 	if organization == nil {
@@ -108,16 +96,11 @@ func agentOrganization(company func() (*config.Company, *org.Organization)) *org
 // holds, keyed by AGENT ID — the input the seat-state vocabulary's
 // `stopped`/`unplaced` is computed from.
 //
-// FROM THE SEAT LEASES, which every node reads alike, rather than from which
-// seats THIS node runs: a seat a peer holds is placed. A seat's lease is named
-// by its agent id (coord.SeatResource), which is the key the projection holds
-// the seat under too, so the two meet without a name between them — keyed by
-// role name, two seats sharing a name read as one, and either one's lease
-// placed both. This node's own seats are added to what the listing returns,
-// because a prefix listing is free to lag a claim (coord's own contract) and a
-// seat this process is serving right now must never read as held by nobody on
-// its own dashboard; the runtime names those by handle, which the composed org
-// resolves to the seat they address.
+// FROM THE SEAT LEASES, which every node reads alike: a seat a peer holds is
+// placed. A lease is named by agent id (coord.SeatResource), the projection's
+// key too; by role name, two seats sharing one would read as one. This node's
+// own seats are added because a prefix listing may lag a claim (coord's
+// contract); the runtime names them by handle.
 //
 // An unreadable lease table is an error, never an empty answer: "no node holds
 // any seat" would stop every seat on every screen over a store blip.
@@ -171,17 +154,14 @@ func toolRows(runtime NodeRuntime) []queries.ToolRow {
 
 // placementTick reads the placement for the live channel.
 //
-// A CONTEXT OF ITS OWN, like [App.streamHealth]'s and for the same reason: the
-// read is made on the shared tick and on a socket's snapshot, neither of which
-// is a request with a context to inherit — see [tickReadBudget], whose own doc
-// names this caller. Bounded rather than Background alone, because the read
-// reaches the coordination plane and a push tick must not outlive the interval
-// that will fire the next one.
+// A CONTEXT OF ITS OWN, like [App.streamHealth]'s: the read is made on the
+// shared tick and a socket's snapshot, with no request context to inherit (see
+// [tickReadBudget]). Bounded, because it reaches the coordination plane and a
+// push tick must not outlive the interval that fires the next.
 //
-// A NAMED FUNCTION rather than a closure inside [New]: the two are identical
-// to run, but a closure built inside a constructor reads to contextcheck as
-// the constructor's own body — a background context created where the caller
-// had one to pass. streamHealth is a method for the same reason.
+// A NAMED FUNCTION, not a closure inside [New]: contextcheck reads a closure in
+// a constructor as the constructor's own body, a background context where the
+// caller had one to pass. streamHealth is a method for the same reason.
 func placementTick(company func() (*config.Company, *org.Organization), leases coord.Backend,
 	runtime NodeRuntime,
 ) (map[string]bool, error) {

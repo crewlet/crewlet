@@ -75,23 +75,16 @@ func (r *cutReader) Close() error { return r.body.Close() }
 var stale = statelog.Freshness{Level: statelog.ReadStale}
 
 // A SESSION RELEASED WHILE IT IS READ IS SAID AS RELEASED. A read holds
-// nothing, so the session a listing named — and whose first page was read —
-// can go before the next read of it: absorbed by a later turn's end, released
-// by the seat's budget, or captured again, its object then collected. A read
-// whose object fails, as it opens or as it streams, reads the turn's row once
-// more, at `linearizable` whatever it asked first, and says what the row says
-// now: no row is no session, said as one whose row went while it was read and
-// of which nothing more can be read; a row naming no object is none in the
-// domain's reason and the same; a row naming a newer capture is read from it
-// on a first page, and refuses a later page's cursor as one captured again.
-// Only where the row still names the object is the failure the store's own,
-// and a newer capture that fails too is said as it fails, the row not read a
-// third time. A later page whose row went, or names no object, before it was
-// read is said the same way, reading the row once.
+// nothing, so a listed session can go before its next read. A read whose
+// object fails, as it opens or streams, reads the turn's row once more, at
+// `linearizable`: no row is a session released while read; a row naming no
+// object is none in the domain's reason; a newer capture is read from on a
+// first page and refuses a later page's cursor as captured again. Only where
+// the row still names the object is the failure the store's own; a newer
+// capture that fails too is said as it fails, the row not read a third time.
 //
 // Mutation: answer the object's failure without reading the row again; read it
-// again at the level the read asked first; or read it again after a newer
-// capture fails too — and a case goes red.
+// again at the asked level; or again after a newer capture fails — a case goes red.
 func TestASessionReleasedWhileItIsReadIsSaidAsReleased(t *testing.T) {
 	t.Parallel()
 	store, backend := sessionStore(t)
@@ -224,20 +217,16 @@ func (o openedNothing) Open(context.Context, executordomain.Session) (io.ReadClo
 
 // A LIVE ROW WITH NO SESSION YET IS SAID AS SUCH, and one naming a session is
 // read as the session in progress it is. A turn's first launch begins its row
-// before anything of it is captured — its `begin`, naming the session it was
-// handed — so a read of that row is a row naming no object while the turn
-// runs: none, in the domain's sentence for a live turn that has captured
-// nothing yet, never the one for a turn whose run ended before its harness
-// packed one; the row read once, and no object opened. Once its runs have kept
-// a session, the read opens it and hands its entries out beside the row as the
-// log holds it — in progress, in the domain's sentence for one
-// (executordomain.Session.InProgressNote), which every surface carries — never
-// said as an ended turn's session, nor as nothing captured.
+// before anything is captured, so that row names no object while the turn
+// runs: none, in the domain's live-turn sentence, never the one for a turn
+// whose run ended before its harness packed one; read once, no object opened.
+// Once its runs have kept a session, the read opens it, in progress, in
+// executordomain.Session.InProgressNote's sentence, never as an ended turn's
+// session nor as nothing captured.
 //
 // Mutation: tell a live turn's nothing as an ended one's
 // (executordomain.Session.NotKept), answer a live row as none where it names a
-// session, or hand the surfaces a row other than the one read, and this goes
-// red.
+// session, or hand the surfaces another row than the one read, and this goes red.
 func TestALiveRowWithNoSessionYetIsSaidAsSuch(t *testing.T) {
 	t.Parallel()
 	begun := executordomain.Session{Handle: "ana", Turn: uuid.NewString(), ConversationKey: "chat:room",
@@ -287,14 +276,13 @@ func TestALiveRowWithNoSessionYetIsSaidAsSuch(t *testing.T) {
 }
 
 // A SESSION KEPT AGAIN SINCE ITS CURSOR IS READ AGAIN IN ITS ROW'S WORDS. A
-// later page's cursor names the object its page was read from, and a row that
-// names a newer one since refuses it, saying to read the transcript again from
-// its start: of a turn that has not ended, that its runs have kept its session
-// again — true whichever capture moved it, a later launch's or one taken as its
-// run works — and never that a run saved it, which no reader of the row can
-// know; of an ended turn, that its session was captured again, its final
-// capture landing before its end. Neither opens an object. The live words are
-// the one spelling the dashboard's banners say too (executorread.LiveKept).
+// later page's cursor names the object its page was read from; a row naming a
+// newer one refuses it, saying to read the transcript again from the start. Of
+// a turn that has not ended: its runs have kept its session again (whichever
+// capture moved it), never that a run saved it, which no reader of the row can
+// know. Of an ended turn: its session was captured again. Neither opens an
+// object. The live words are the one spelling the dashboard's banners use
+// (executorread.LiveKept).
 //
 // Mutation: word the refusal of a row in progress as an ended row's, or an
 // ended row's as one in progress, spell it apart from LiveKept, or say a run

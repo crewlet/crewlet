@@ -94,27 +94,15 @@ func TestEveryGuardedRouteNeedsACredentialWhateverTheMethod(t *testing.T) {
 // THE SURFACES THAT CARRY THE COMPANY ITSELF ARE GUARDED, reads included, and
 // so is everything beneath each of them.
 //
-// This used to be a declared list — `GuardedPrefixes` — because everything NOT
-// on it followed `allow_anonymous_read` and served by default. The list is gone
-// with that posture: guarded is what a route IS unless [auth.Unguarded] exempts
-// it. What still has to be asserted is that none of these ever lands on the
-// exemption list, because that is the one edit that would open them again, and
-// each is a surface whose READ is as sensitive as its write — or, for the last
-// two, whose every WRITE lands a record with an author:
+// None of these may land on [auth.Unguarded]'s exemption list, the one edit
+// that would open them; each READ is as sensitive as a write:
 //
-//   - /config: the whole company document — its org chart, its integrations,
-//     and every ${VAR} reference in it by name.
-//   - /secrets: the fleet's credential store. Even the listing, carrying no
-//     values, says which credentials a company holds and when each last
-//     changed, and one route returns a value outright.
-//   - /setup: the map of which credentials a company has NOT configured, which
-//     is worth as much to an attacker as the configuration.
-//   - /operator: the operator MCP surface, which files and moves work and
-//     writes the knowledge base. Deliberately not under /mcp/, which is exempt
-//     wholesale for the sandbox bridge.
-//   - /worklet and /doclet/pages: the human write surface over the tracker and the
-//     knowledge base. A write there with nobody behind it would be a record
-//     with no author, which is the one thing it exists never to write.
+//   - /config: the company document, org chart and ${VAR} names.
+//   - /secrets: even the listing says which credentials a company holds.
+//   - /setup: which credentials are NOT configured.
+//   - /operator: moves work, writes the knowledge base; deliberately not under
+//     /mcp/, exempt wholesale for the sandbox bridge.
+//   - /worklet, /doclet/pages: a write with nobody behind it has no author.
 func TestTheCompanysOwnSurfacesAreGuardedEvenForReads(t *testing.T) {
 	t.Parallel()
 	for _, prefix := range []string{
@@ -148,14 +136,12 @@ func TestOnlyTheDeclaredExemptionsAreUnguarded(t *testing.T) {
 
 // THE SIGN-OUT OF THIS SESSION IS EXEMPT, AND NO OTHER SIGN-OUT IS.
 //
-// A sign-out clears the cookie whatever the node can read, and guarded, a node
-// that could not read its identity estate answered it 503 before it ran — so
-// nobody could sign out on exactly the node that could vouch for nobody. The
-// one that ends THIS session verifies every bearer the browser holds itself,
-// so it needs no guard. Signing out everywhere and ending a named session act
-// on a caller the guard resolved, and exempting them — or a /auth/logout/
-// prefix, which would take both with it — would be a credential surface
-// behind no credential.
+// A sign-out clears the cookie whatever the node can read; guarded, a node that
+// could not read its identity estate would answer 503 and nobody could sign out
+// there. The one ending THIS session verifies every bearer itself, so needs no
+// guard. Signing out everywhere and ending a named session act on a caller the
+// guard resolved; exempting them, or a /auth/logout/ prefix, would be a
+// credential surface behind no credential.
 //
 // Mutation: drop the sign-out from the exact set and its row is guarded;
 // exempt a prefix and the last two rows are served without a credential.
@@ -705,13 +691,10 @@ func TestTokenIDsAreTheLabelsTheGuardAccepts(t *testing.T) {
 // decided on every request it presents.
 //
 // `api.auth.admin` is a decision-time bound: nothing is written when it
-// changes, so the one place it can act is where the bearer is composed. On a
-// node that serves admin a token listing it carries admin and every app it
-// confers; on one that refuses admin the same token keeps every app and loses
-// admin, so a founder's break-glass token still reaches the tracker and the
-// knowledge base while the node withholds the administration this deployment
-// chose not to serve. A token listing apps alone is the same on both, and a
-// posture this build cannot name confers nothing at all.
+// changes, so it can only act where the bearer is composed. Where admin is
+// served, a token listing it carries admin and every app; where refused, the
+// same token keeps every app and loses admin. A token listing apps alone is the
+// same on both, and a posture this build cannot name confers nothing.
 //
 // Mutation: compose the bearer from its own list, or under a fixed posture,
 // and this fails.

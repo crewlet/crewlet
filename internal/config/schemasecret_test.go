@@ -11,20 +11,15 @@ import (
 
 // THE SCHEMA CALLS A POSITION A CREDENTIAL EXACTLY WHERE REDACTION MASKS ONE.
 //
-// Two readers of one tag: the config read surface masks what `secret:"true"`
-// covers, and the published schema marks it with x-crewlet-secret so that
-// tooling outside the engine — an editor, a CI linter, a Kubernetes operator
-// refusing to render a literal secret — knows a credential's place without
-// the binary. If the two ever disagree, one of them is wrong in public: a
-// position redaction masks and the schema does not mark is one a consumer
-// will happily fill with a literal key, and a mark redaction does not back is
-// a field a consumer will refuse to write plainly for no reason.
+// Two readers of one tag: the config read surface masks `secret:"true"`, and
+// the schema marks it x-crewlet-secret for tooling outside the engine. A
+// position masked but unmarked gets filled with a literal key; one marked but
+// unmasked is refused for no reason.
 //
-// So the oracle is the REDACTOR'S OWN WALK, run, not a second reading of the
-// tag: every string of a fully populated document is a literal, redaction
-// masks what it masks, and the masked positions are compared with every
-// position the schema marks — in both directions, by the same path grammar
-// (a field's YAML key, `[]` for a list's members, `{}` for a map's values).
+// So the oracle is the redactor's own walk, run, not a second reading of the
+// tag: every string of a fully populated document is a literal, and masked
+// positions are compared with marked ones in both directions, by one path
+// grammar (a YAML key, `[]` for list members, `{}` for map values).
 func TestSchemaMarksExactlyWhatRedactionMasks(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

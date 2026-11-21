@@ -170,25 +170,14 @@ func Expand(value string, lookup func(name string) (string, bool)) (expanded str
 
 // Resolve reads a config value that may be a WHOLE ${VAR} reference.
 //
-// A literal comes back trimmed and unchanged. A whole reference comes back as
-// the variable's value, or EMPTY when the variable is unset — never as its
-// own literal text. That last rule is the reason this is one function rather
-// than a call to [Whole] at each site: a raw "${SLACK_BOT_TOKEN_CEO}" matches
-// nothing any vendor will accept, so passing it through turns a missing
-// variable into a seat that mysteriously authenticates as nobody, at a layer
-// far away from the config that named it.
+// A literal comes back trimmed. A whole reference comes back as the variable's
+// value, or EMPTY when unset, never its own literal text: a raw
+// "${SLACK_BOT_TOKEN_CEO}" matches nothing any vendor accepts, so passing it
+// through makes a seat authenticate as nobody, far from the config that named
+// it. A nil lookup reads the process environment.
 //
-// It was written twice, byte for byte, in the Slack and Mattermost
-// transports — the second carrying a comment saying it resolved to empty
-// "for the same reason it does everywhere else", which is an author noticing
-// the duplication and copying anyway.
-//
-// A nil lookup reads the process environment, which is what every caller
-// outside a test passes.
-//
-// NOT every caller wants this policy: internal/org deliberately keeps its own
-// walk, because it also skips a reference that resolves to EMPTY — leaving
-// the previous value in place rather than blanking it — which is correct
+// internal/org keeps its own walk: it also skips a reference that resolves to
+// EMPTY, leaving the previous value rather than blanking it, which is right
 // there and wrong here.
 func Resolve(value string, lookup func(name string) (string, bool)) string {
 	value = strings.TrimSpace(value)
@@ -210,18 +199,14 @@ func Resolve(value string, lookup func(name string) (string, bool)) string {
 // plus _SEAT for a value that belongs to one seat, upper-snaked
 // (`DATADOG_APP_KEY_SRE`, `GITHUB_APP_KEY_SENIOR_ENGINEER`).
 //
-// ONE NAMING FUNCTION for every layer that derives a name: the connect form's
-// requirements (setup.SecretNameFor), a seat's engine-owned credentials
-// (seataccess.SinkName), and the tool binding the org model injects for a seat
-// (config). It lives here, in the leaf, because config is below the other two
-// and all three must agree byte for byte.
+// The one naming function for setup.SecretNameFor, seataccess.SinkName and the
+// org model's tool binding (config): it lives in this leaf because config is
+// below the other two and all must agree byte for byte.
 //
-// Every character the grammar refuses becomes an underscore rather than being
-// dropped, which is what keeps two different seats on two different names: a
-// handle of `nova-1` and one of `nova1` are different seats, and dropping the
-// separator would seal one seat's credential under the other's name. The
-// grammar's leading-digit rule needs no guard: a derived name always begins
-// with the vendor's own kind, which is letters.
+// A character the grammar refuses becomes an underscore rather than being
+// dropped, so `nova-1` and `nova1` stay different seats instead of sealing one
+// seat's credential under the other's name. No leading-digit guard is needed:
+// a derived name begins with the vendor's own letters.
 func SealedName(vendor, field, seat string) string {
 	parts := []string{vendor, field}
 	if seat != "" {

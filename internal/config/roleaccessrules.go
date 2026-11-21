@@ -11,28 +11,16 @@ import (
 
 // THE DOCUMENT'S RULES FOR PER-SEAT ACCESS.
 //
-// ADMISSION RULES, refused on submit and reported as a warning on a stored
-// document ([Company.AdmissionWarnings]), for the reason every rule added after
-// companies existed is one: a stored revision from before them runs today as
-// it ran yesterday, and refusing to apply it would take a working company down
-// on upgrade over a rule its author never saw. The access sync holds the same
-// line again at the vendor, as defence in depth (internal/seataccess).
+// ADMISSION RULES, refused on submit and warned on a stored document ([Company.AdmissionWarnings]):
+// a revision stored before a rule runs as it did, and refusing it would take a working company down
+// on upgrade. The access sync holds the same line at the vendor (internal/seataccess). Refused:
 //
-// Four things are refused:
-//
-//   - a block that does not say `enabled`, one on a human seat, or one that
-//     turns a seat on at an integration the company has not connected;
-//   - access the vendor does not offer, where the vendor's set is fixed (a
-//     GitLab role, Mattermost roles, a GitHub permission); a live-listed id (a
-//     Datadog role, a Jira project role, a Confluence space role, a GitLab
-//     custom role) is checked by the integration's sync against the vendor,
-//     and one that no longer exists is a finding there;
-//   - a scope wider than the company's reach, so a seat cannot widen it, and
-//     no scope at all on a lane whose agents must name one;
-//   - a seat credential written where the engine owns it, shared with a
-//     company block or another seat, reading another seat's, or handed to a
-//     tool in the seat's box under a name its executor signs in by
-//     (seatcredentialrules.go).
+//   - a block that does not say `enabled`, one on a human seat, or one turning a seat on at an
+//     unconnected integration;
+//   - access the vendor does not offer where its set is fixed; live-listed ids are the sync's;
+//   - a scope wider than the company's reach, or none on a lane whose agents must name one;
+//   - a seat credential written where the engine owns it, shared, reading another seat's, or
+//     handed to a tool under a name its executor signs in by (seatcredentialrules.go).
 
 // seatAccessOnHuman is the refusal of a per-seat access block on a human seat.
 const seatAccessOnHuman = "a human seat holds no account the engine manages"

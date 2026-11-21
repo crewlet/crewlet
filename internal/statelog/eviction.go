@@ -12,26 +12,15 @@ import (
 // EvictionFenceWindow is how long an evicted node stays COUNTED after its
 // tombstone lands.
 //
-// # Why an eviction is two-phase at all
+// Two-phase because dropping a node from the counted set lets the trim pass
+// its position, after which its writes are records every applier drops, while
+// it may still believe it holds everything. The window is how long the fleet
+// waits for it to notice: FOUR HEARTBEATS, the engine's usual derivation for a
+// cached coordination fact (a node three beats late is still healthy).
 //
-// Dropping a node from the counted set is what lets the trim advance past its
-// position — and the moment it does, that node's own writes become records
-// every applier will drop, while it may still believe it holds everything it
-// held. The window is how long the fleet waits for it to notice.
-//
-// FOUR HEARTBEATS, the same derivation every other cached coordination fact in
-// this engine uses: a node may miss three beats and still be healthy, so a
-// tombstone older than four has been available for at least one beat it should
-// have read.
-//
-// # Nominally, and the honest worst case is zero
-//
-// A node three beats late reads its tombstone exactly when the trim may pass
-// it. So the window is a CONVENIENCE rather than the safety property — the
-// safety property is the applier's own eviction gate, which drops an evicted
-// node's records whatever it manages to publish and depends on nothing but the
-// log's own order. Widening the window buys nothing that gate does not already
-// give.
+// A CONVENIENCE, not the safety property: a node three beats late reads its
+// tombstone just as the trim may pass it. Safety is the applier's eviction
+// gate, which drops its records by log order alone; a wider window adds none.
 const EvictionFenceWindow = 4 * coord.ReconcileInterval
 
 // Tombstone is an operator's eviction of a node from a log, as the counted set
@@ -47,32 +36,26 @@ type Tombstone struct {
 	By string
 
 	// Generation is the domain's generation at the time. One from a
-	// previous generation is UNKNOWN rather than old, on the same rule
-	// every other position-bearing term uses.
+	// previous generation is UNKNOWN rather than old, as for every
+	// position-bearing term.
 	Generation uint32
 }
 
 // EvictionRow is one node's standing on ONE identity-claiming domain's log, as
-// that domain's own applied rows hold it — the APPLIED shape, where each
-// domain's eviction record is what wrote it.
+// that domain's applied rows hold it, written by its own eviction record.
 //
-// # Why every domain answers for its own log
-//
-// An eviction is a record on a log like any other, keyed on a position in that
-// log's own sequence space, so every data node applies it into that domain's
-// table and every node's copy is identical — which is what makes the applier's
-// eviction gate hold when coordination cannot be reached at all. The trim reads
-// the same rows for a different question: a node stops being counted on a log
-// once its tombstone THERE is older than the fence window. Asked of another
-// domain's table, the answer is about another number space; the trim asked the
-// tracker's table on behalf of the pages log, filtered on the pages stream,
-// found nothing, and counted an evicted node on that log for ever.
+// Each domain answers for its own log: an eviction is keyed on a position in
+// that log's sequence space and applied identically on every data node, which
+// lets the applier's eviction gate hold without coordination. The trim stops
+// counting a node on a log once its tombstone THERE is older than the fence
+// window; read from another domain's table, the answer is about another number
+// space and the node is counted for ever.
 type EvictionRow struct {
 	// NodeID is who was evicted.
 	NodeID string
 
-	// At is the broker's own instant for the eviction record — what the
-	// fence window is measured from, identical on every node — and By the
+	// At is the broker's own instant for the eviction record (what the
+	// fence window is measured from, identical on every node), and By the
 	// operator who ran it.
 	At time.Time
 	By string
@@ -86,50 +69,29 @@ type EvictionRow struct {
 	Back       bool
 }
 
-// Presence is a node the fleet says is there, whether or not it has reported a
-// position yet: a data node holding a live presence lease, which the eviction
-// gate refuses to evict and every log's counted set counts.
+// Presence is a node the fleet says is there, reported position or not: a
+// data node holding a live presence lease, which the eviction gate refuses to
+// evict and every log's counted set counts.
 //
-// A LIVE DATA NODE COUNTS FOR EVERY LOG. Every data node runs every domain,
-// the identity estate included, whatever its other roles, so a live data node
-// that has published no position for a log is one whose heartbeat has not yet
-// written its row — never one that declined the log and will never report.
+// A LIVE DATA NODE COUNTS FOR EVERY LOG: every data node runs every domain,
+// so one with no position for a log has not yet written its row, never
+// declined the log.
 type Presence struct {
 	NodeID string
 }
 
 // CountedSet is who the trim counts on ONE LOG: the positions register's rows
 // naming the log, UNION every live data node, MINUS any eviction tombstone
-// older than the fence window.
+// older than [EvictionFenceWindow].
 //
-// # Each of the three does something the others cannot
-//
-// The register is what carries a POSITION, and its keys never expire — which
-// is deliberate, and is why an offline node pins the floor rather than
-// vanishing from it.
-//
-// The live data nodes are what catch a node that holds a presence lease and
-// whose row has not landed — its heartbeat's first write refused, or not yet
-// made. It counts at position ZERO and blocks every term derived from the set
-// until the row lands, and the operator surface renders it as counted with no
-// position yet so the block has a visible cause. DATA nodes, because they are
-// the nodes that apply the log — every one of them applies every log from boot
-// — and a node without `data` applies none: counted at zero, it would pin
-// every log for as long as it ran.
-//
-// A BOOTING NODE IS NOT ONE OF THEM until after its first row: its heartbeat
-// publishes that row as its state log starts, and it claims its presence lease
-// only later. Between its boot and that row it is counted by the row an
-// earlier run of it left, or by nothing if it never ran — the interval the
-// package doc's write premise states. A node ADOPTING A SNAPSHOT is in that
-// interval for the whole transfer, since its join runs before its heartbeat
-// starts, and what keeps the tail it is about to replay is its own hold,
-// renewed for the whole transfer and kept until a row of its own counts the
-// tail ([AdoptDeps.Hold]).
-//
-// The tombstones are what let an operator advance a floor an absent node is
-// pinning, and they take effect only after the window — because a node that
-// has not yet noticed is a node still writing.
+// Register keys never expire, so an offline node pins the floor. A live data
+// node with no row yet counts at ZERO and blocks every derived term until its
+// row lands; only DATA nodes, since a node without `data` applies no log and
+// would pin them all. A booting node is not live until after its first row
+// (package doc, "Who may write a log: every writer is counted, but for its own
+// boot"); an adopter is kept by its own hold ([AdoptDeps.Hold]). Tombstones
+// unpin an absent node only after the window: one that has not noticed is
+// still writing.
 func CountedSet(now time.Time, reported []NodePosition,
 	live []Presence, tombs []Tombstone) []NodePosition {
 
@@ -139,13 +101,9 @@ func CountedSet(now time.Time, reported []NodePosition,
 	}
 	for _, p := range live {
 		if _, known := byID[p.NodeID]; !known {
-			// A LIVE DATA NODE WITH NO POSITION YET COUNTS AT ZERO and
-			// blocks: it applies every log, and nothing says where it
-			// stands until its row lands, so treating it as absent
-			// would let the trim advance past what it has still to
-			// apply. (A booting node is not live until after its first
-			// row; one adopting a snapshot is kept by its own hold — see
-			// the doc above.)
+			// At zero: it applies every log and nothing says where it
+			// stands yet, so absent would let the trim pass what it has
+			// still to apply.
 			byID[p.NodeID] = NodePosition{NodeID: p.NodeID}
 		}
 	}
@@ -163,15 +121,13 @@ func CountedSet(now time.Time, reported []NodePosition,
 }
 
 // Readers is the record version every node of a counted set reads on its log,
-// zero for one that has not said: the set a writer asks before it publishes a
+// zero for one that has not said: what a writer asks before it publishes a
 // record an older build cannot even defer.
 //
-// THE TRIM'S COUNTED SET, and deliberately the same one. It is every node that
-// applies the log — a live node whose row has not landed counts, at zero,
-// because it applies the log all the same — and a node on an old build that is offline
-// but not evicted applies the log the moment it returns: a record it cannot
-// read would stop it then, so it holds such a writer back exactly as it holds
-// back the trim, and an operator's eviction releases both.
+// Deliberately the trim's counted set: a live node with no row still applies
+// the log, and an offline, unevicted node on an old build applies it on return
+// and would stop on such a record, so it holds the writer back as it holds the
+// trim, and an eviction releases both.
 func Readers(counted []NodePosition) map[string]int {
 	out := make(map[string]int, len(counted))
 	for _, n := range counted {
@@ -198,28 +154,16 @@ func (e *EvictionRefusal) Tell() string {
 
 // PermitEviction decides whether a node may be evicted at all.
 //
-// # A LIVE LEASE REFUSES, unless the operator overrides it
+// A LIVE LEASE REFUSES unless forced: the node is reaching the fleet and almost
+// surely running, so it pins nothing its progress will not release, while an
+// eviction drops its writes on every applier and takes its copy of each log
+// out of service. The refusal stops a mistyped id taking a healthy machine
+// out; force is for what the lease cannot say (wedged but still renewing). The
+// fleet's data rests on neither: the eviction gate and the node's own fence,
+// read from its applied rows, hold anyway.
 //
-// A node holding a presence lease has renewed it within the last few
-// coordination round trips: it is reaching the fleet and, almost always,
-// running. Its position is advancing, so it pins nothing its own progress will
-// not release — and evicting it drops everything it writes above the eviction
-// on every applier, stops its own writes the moment its applier reaches the
-// eviction, and takes its copy of every log it is evicted from out of service.
-// Eviction is the gesture for a node that is NOT coming back, and a live lease
-// is the fleet's own evidence that this one is; the refusal is what stops a
-// mistyped node id taking a healthy machine out.
-//
-// It is about safety rather than permission, and an operator can know something
-// the lease does not say — a node wedged in a way that still renews — which is
-// what force is for. Nothing about the fleet's data rests on it either way: the
-// applier's eviction gate drops the evicted node's records whatever it manages
-// to publish, and its own fence refuses its writes from its own applied rows,
-// the one source still fresh when its coordination path is wedged.
-//
-// ASKED ONCE PER GESTURE, before any log is written — by the engine's node
-// gate, over every identity-claiming log — because judged per log it could
-// reach two answers about one node.
+// ASKED ONCE PER GESTURE, by the engine's node gate before any log is
+// written: judged per log, it could answer two ways about one node.
 func PermitEviction(nodeID string, live []Presence, force bool) error {
 	if nodeID == "" {
 		return &EvictionRefusal{Detail: "no node was named"}
@@ -236,12 +180,8 @@ func PermitEviction(nodeID string, live []Presence, force bool) error {
 }
 
 // Remedy is what the operator does about an eviction refusal: wait for the
-// lease to lapse, or force the eviction past it.
-//
-// IN NO SURFACE'S VOCABULARY — see [GateAction]: the command line renders
-// [GateForce] as -force and the dashboard as a separately confirmed control,
-// and a sentence spelling the flag was rendered word for word by a screen that
-// has none.
+// lease to lapse, or force the eviction past it. Worded in no surface's
+// vocabulary ([GateAction]): each surface renders [GateForce] its own way.
 func (e *EvictionRefusal) Remedy() GateRemedy {
 	if e.NodeID == "" {
 		return GateRemedy{Detail: "name the node to evict"}
@@ -255,15 +195,10 @@ func (e *EvictionRefusal) Remedy() GateRemedy {
 	}
 }
 
-// ReadmissionBound is one identity-claiming domain's bound, as the node that
-// is asked to write a readmission reads it.
-//
-// THE SAME TWO WITNESSES THE WRITE FENCE TAKES THE HIGHER OF, for the reason
-// the floor theorem gives: the published floor covers a purge in flight and
-// one the stream's own answer has not caught up with, and the stream's first
-// sequence covers what the floor cannot see — a floor published at another
-// generation reads as zero. A readmission judged against either alone would
-// clear a node the fence it is about to be subject to refuses.
+// ReadmissionBound is one identity-claiming domain's bound, as the node asked
+// to write a readmission reads it: the two witnesses the write fence takes the
+// higher of (package doc, "THE FLOOR THEOREM"). Judged against either alone, a
+// readmission would clear a node that fence refuses.
 type ReadmissionBound struct {
 	// Domain names the log, as the positions register keys it.
 	Domain string
@@ -285,12 +220,10 @@ type ReadmissionBound struct {
 // before it — [Replayable]'s boundary.
 func (b ReadmissionBound) Held() uint64 { return max(b.Floor, b.First) }
 
-// ReadmissionRefusal reports why an evicted node may not be taken back yet.
-//
-// A TYPED ERROR CARRYING EVERY NUMBER the refusal is about, because the
-// inequality IS the reason and the operator acts on the numbers: how far the
-// node is behind decides whether to wait for its applier or to go and find out
-// why it has not adopted a snapshot.
+// ReadmissionRefusal reports why an evicted node may not be taken back yet. It
+// carries every number the inequality turns on: how far behind the node is
+// decides whether the operator waits for its applier or finds out why it has
+// not adopted a snapshot.
 type ReadmissionRefusal struct {
 	// NodeID is who was refused and Domain the first log, in the register's
 	// own order, that refused it.
@@ -323,9 +256,8 @@ func (e *ReadmissionRefusal) Tell() string {
 	gone := fmt.Sprintf("records below %d may already be gone from the %s log "+
 		"(published floor %d, first surviving sequence %d)",
 		e.Bound.Held(), e.Domain, e.Bound.Floor, e.Bound.First)
-	// THE HEARTBEAT'S OWN INSTANT, because the position is a heartbeat old
-	// at best: a node that adopted a snapshot a moment ago is refused on
-	// the row it wrote before, and the instant is what says so.
+	// The heartbeat's instant, since the position is a heartbeat old at
+	// best: a node that just adopted a snapshot is refused on its old row.
 	reported := ""
 	if !e.ReportedAt.IsZero() {
 		reported = " (reported " + e.ReportedAt.UTC().Format(time.RFC3339) + ")"
@@ -347,13 +279,10 @@ func (e *ReadmissionRefusal) Tell() string {
 		e.NodeID, e.Domain, reported, e.Seq, gone)
 }
 
-// Remedy is what the operator does about it.
-//
-// NOTHING THAT FORCES IT. A node below the floor repairs itself — it replays
-// while the log still holds what it is missing, and adopts a peer's snapshot
-// where it does not, at boot or on the heartbeat that finds it there — and a
-// readmission is the gesture that follows that repair rather than one that
-// stands in for it.
+// Remedy is what the operator does about it: NOTHING THAT FORCES IT. A node
+// below the floor repairs itself (replaying what the log holds, adopting a
+// peer's snapshot where it does not), and a readmission follows that repair
+// rather than standing in for it.
 func (e *ReadmissionRefusal) Remedy() GateRemedy {
 	return GateRemedy{
 		Actions: []GateAction{GateWait},
@@ -393,45 +322,17 @@ func (e *ReanchorNotApplied) Error() string {
 func (e *ReanchorNotApplied) Unwrap() error { return ErrUnavailable }
 
 // PermitReadmission decides whether an evicted node may be counted again.
+// A readmission makes its position a term of the applied minimum, so a node the
+// floor has passed is refused until it has replayed or adopted a snapshot: its
+// position would drag the trim down, an offline one restoring the pin its
+// eviction lifted. Guidance, not the fence, so stale inputs need no lock: its
+// own fence (floor theorem clause (ii)), its readiness ([FloorReplaying],
+// [FloorBelow]) and the trim already hold a node below the floor safe.
 //
-// # What a readmission does, and why a node below the floor is refused one
-//
-// A readmission lifts the node's tombstone, so the trim counts it again and
-// its own position becomes a term of the applied minimum. A node the floor has
-// passed is missing records the log has lost or is licensed to lose: it is not
-// a replica again until it has replayed what is still there or adopted a
-// snapshot for what is not, and meanwhile its position drags every tick's
-// conclusion down to a point the log has already left. For a node that is
-// still offline that is the very pin the eviction was run to lift, put back.
-//
-// # It is guidance, not the fence — which is why a stale read is harmless
-//
-// Nothing about the fleet's data rests on this refusal. A readmitted node below
-// the floor is refused every write at an expectation of zero by its own fence,
-// verified within the call (the floor theorem's clause (ii)); its readiness
-// refuses every read — `behind` while the log still holds what it lacks and it
-// is replaying it ([FloorReplaying]), `below_floor` once those records are gone
-// from the log ([FloorBelow]); and the trim, counting it again, never purges
-// above it. So the two inputs that are stale by construction — a register row that is
-// a heartbeat old, a floor that may move between this check and the record
-// landing — can at worst admit a state those mechanisms already hold safe, and
-// there is no read-then-write race here worth a lock. What the refusal buys is
-// the operator being told the truth about the node before they act.
-//
-// # Every identity-claiming domain, in the register's own order
-//
-// A node is a replica of every log it runs or of none — one snapshot holds
-// them all — so a node behind in any of them is not one that can resume. A
-// domain its row does not name is skipped, on [CountedSet]'s rule that a node
-// which does not run a domain is not a node at position zero in it; a node
-// with NO row is judged at position zero, on that function's other rule.
-//
-// # And a comparison this node cannot make is not a refusal
-//
-// A row at a HIGHER generation than the asking node runs is a fleet that has
-// re-anchored the log while this node has not applied it yet. Nothing here can
-// judge that position, so the answer is [ErrUnavailable] — retry, or ask a
-// node that has caught up — rather than a refusal naming a fault in the node.
+// Every bound is judged, in the register's order: one snapshot holds every
+// log. A domain the node's row omits is skipped, a node with no row judged at
+// zero ([CountedSet]'s rules). A row at a HIGHER generation than this node runs
+// is a re-anchor not yet applied here: [ErrUnavailable], not a refusal.
 func PermitReadmission(nodeID string, register []coord.NodePositions,
 	bounds []ReadmissionBound) error {
 
@@ -470,43 +371,18 @@ func PermitReadmission(nodeID string, register []coord.NodePositions,
 	return nil
 }
 
-// GateStanding judges a retried node gate that this node's ledger answers:
-// whether the record its operation landed at the held position is still what
-// the node's standing on this log rests on. It is a node gate's
-// [Request.Standing], handed the node's own eviction row read in the same
-// snapshot ([EvictionRow], and held false for a node this log has no row for).
+// GateStanding is a node gate's [Request.Standing]: whether the record a
+// retried operation landed at the held position still decides the node's
+// standing, per its [EvictionRow] in the same snapshot (found false if none).
 //
-// # Why a ledger hit is not simply "applied"
-//
-// The ledger says a record under this id landed; it does not say that record
-// is still in force. An eviction retried under its id after a readmission took
-// the node back was answered "applied" at the eviction's old position while
-// every row said the node was counted — a success reported for an operation
-// the retry never performed. So the hit is checked against the node's own row:
-// an eviction stands while the row's eviction is this record and no
-// readmission follows it, a readmission while the row's readmission is this
-// record and no eviction has come after. Anything later is [ReasonSuperseded],
-// and a row that contradicts the ledger it was written beside is an error
-// rather than a guess.
-//
-// # Why inside the snapshot, and not in front of the write
-//
-// The publisher reads the ledger and this row in the transaction the decision
-// would have run in ([Snap.Held]), so a same-node retry through an applier that
-// has not reached the first record is not answered here at all: its snapshot
-// holds no row, its append is arbitrated on the node's own eviction subject,
-// the broker refuses an expectation below the first record, the publisher
-// waits for this node's applier to reach it, and the next round's snapshot
-// finds the row. So it ends applied at the first record's position, or refused
-// `behind` — never with a second record — and the broker's duplicate window
-// plays no part in the argument.
-//
-// # What it cannot answer for
-//
-// An operation whose ledger row is gone — swept past [OpsRetention] — is not
-// held, and it is judged by the ledger's watermark instead ([Publisher.vouches]):
-// minted before it, the retry answers `unknown` rather than writing the gate a
-// second time.
+// A ledger hit says a record landed, not that it is in force, so a retried
+// eviction after a readmission must not answer "applied". An eviction stands
+// while the row's eviction is this record and no readmission follows; a
+// readmission while the row's readmission is this record and no eviction
+// follows. Later is [ReasonSuperseded]; a row contradicting its ledger is an
+// error. A retry whose applier lacks the first record is not judged here
+// ([Snap.Held]): the broker refuses its append, so no second record. An op
+// swept past [OpsRetention] falls to [Publisher.vouches] and answers `unknown`.
 func GateStanding(opID, nodeID string, readmit bool, held Position,
 	row EvictionRow, found bool) error {
 
@@ -544,9 +420,8 @@ func GateStanding(opID, nodeID string, readmit bool, held Position,
 	}
 	switch {
 	case !found:
-		// A READMISSION OF A NODE THIS LOG NEVER EVICTED is a record that
-		// changed no row, and nothing since has made one: the node is
-		// counted, which is what the operation asked for.
+		// A readmission of a node this log never evicted changed no row,
+		// and the node is counted, which is what it asked for.
 		return nil
 	case row.Back && row.Readmitted == landed:
 		return nil

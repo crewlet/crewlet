@@ -7,26 +7,16 @@ import (
 
 // The trace-correlation carrier.
 //
-// # Why the carrier lives here and not in the tracing package
+// The carrier lives here, not in the tracing package: reading the OTel span
+// from ctx in the handler would put go.opentelemetry.io/otel/trace into the
+// dependency graph of every package that imports this one (78) to render two
+// hex strings. The carrier is self-contained, as `workkey` is, and
+// `internal/tracing` fills it when it starts a span.
 //
-// Exactly one thing is admitted into context.Context for this purpose: log
-// fields, whose consumer is this package. Reading the OTel span out of ctx
-// directly in the handler would be the idiomatic OTel route and is the wrong
-// one here —
-// `go list -deps ./internal/logging` returns only itself, and 78 packages
-// import it, so that one import would put go.opentelemetry.io/otel/trace into
-// every dependency graph in the tree to render two hex strings. The carrier
-// is instead self-contained, exactly as `workkey` is, and `internal/tracing`
-// fills it when it starts a span.
-//
-// # Why it is two fixed fields and not a field bag
-//
-// "Log fields" reads like an open map. An open map is a path for arbitrary
-// caller-supplied text to reach a terminal, and
-// TestNothingReachesTheTerminalRaw guards the ATTRIBUTE path, not this one —
-// an ESC repaints a terminal and a newline forges a whole log line. Two
-// validated hex fields carry everything a correlation needs and close that
-// door rather than guarding it.
+// It is two fixed fields, not a field bag: an open map is a path for
+// caller-supplied text to reach a terminal (an ESC repaints it, a newline
+// forges a log line) and TestNothingReachesTheTerminalRaw guards only the
+// ATTRIBUTE path. Two validated hex fields close that door.
 
 type traceKey struct{}
 

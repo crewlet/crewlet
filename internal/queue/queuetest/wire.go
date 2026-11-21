@@ -24,18 +24,14 @@ func init() { events.Register[carried]() }
 
 // runWire covers the property that a broker is a SERIALIZATION BOUNDARY.
 //
-// It is a group of its own because it is the one thing an in-process twin is
-// tempted to skip, and skipping it does not merely fail to catch bugs — it
-// certifies them. Every case here failed on this repo's own memory twin, which
-// handed consumers the publisher's pointer, and passed on the embedded broker
-// with no change: engine code that read its payload correctly against a real
-// broker read nothing at all against the twin, and the twin was what every
-// unit test ran on.
+// It is the one thing an in-process twin is tempted to skip, and skipping it
+// certifies bugs: a twin that hands consumers the publisher's pointer makes
+// engine code that reads its payload correctly against a real broker read
+// nothing at all, and the twin is what every unit test runs on.
 //
-// What this group does NOT assert: that a backend uses JSON, or any particular
-// encoding. It asserts only what a consumer can observe — an event that
-// survives the trip intact, decoded into this build's types, in a copy nobody
-// else holds.
+// It does NOT assert that a backend uses JSON or any particular encoding, only
+// what a consumer can observe: an event that survives the trip intact, decoded
+// into this build's types, in a copy nobody else holds.
 func (s *suite) runWire(t *testing.T) {
 	ctx := t.Context()
 
@@ -72,26 +68,14 @@ func (s *suite) runWire(t *testing.T) {
 
 	t.Run("a_free_form_payload_value_survives_whatever_type_it_lands_as", func(t *testing.T) {
 		t.Parallel()
-		// Event.Payload is the UNTYPED bag beside the registered body, and
-		// it is where a wire boundary shows first. Measured on this repo's
-		// twin: int -> float64, []string -> []any, string -> string. So a
-		// caller writing Payload["replicas"].(int) reads correctly on the
-		// publishing node and panics on every consumer.
-		//
-		// This asserts the VALUE survives, never the Go type it lands as.
-		// The contract leaves the encoding to the backend, so requiring
-		// float64 would forbid what it permits. Comparison is the
-		// canonical JSON of the map, under which int 3 and float64 3 are
-		// the same value and []string{"a"} and []any{"a"} are the same
-		// list — which is exactly the equivalence a caller is entitled to
-		// rely on, and nothing more.
-		//
-		// It exists because every other payload in this suite is a string,
-		// which survives any codec unchanged. A suite whose fixtures are
-		// already in the shape its backend produces is not testing the
-		// boundary, it is arranging not to look at it: a backend that
-		// silently DROPS a value it cannot encode passed every case here
-		// before this one.
+		// Event.Payload is the UNTYPED bag beside the registered body, where a
+		// wire boundary shows first: int becomes float64, so
+		// Payload["replicas"].(int) reads correctly on the publishing node and
+		// panics on every consumer. This asserts the VALUE survives, never the
+		// Go type it lands as (the contract leaves the encoding to the
+		// backend), by canonical JSON of the map. Every other payload here is a
+		// string, which survives any codec, so without this case a backend that
+		// silently DROPS a value it cannot encode passes.
 		q := s.start(ctx, t)
 		seen := make(chan *events.Event, 1)
 		subscribe(ctx, t, q, "wire.freeform", "g", func(_ context.Context, ev *events.Event) queue.Result {

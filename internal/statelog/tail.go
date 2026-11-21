@@ -7,55 +7,18 @@ import (
 	"time"
 )
 
-// WHAT A RESTORED LOG HOLDS THAT THE ROWS DO NOT.
-//
-// A reanchor of a broker restored from an older copy follows the log from its
-// END ([ReanchorRestored]): the rows already hold every record the copy kept,
-// and replaying them into a new generation would roll every object back. What
-// that assumes is that the log holds nothing ELSE — and it can. A node whose
-// rows were the copy's age sees a log that is its own history and writes it
-// before anybody re-anchors, and every one of those records sits below the end
-// the reanchor follows from: applied on no node, and lost to whoever it was
-// acknowledged to, with nothing anywhere saying so.
-//
-// # Why one record answers for all of them
-//
-// On a restored log every record past the copy was written after the restore,
-// so the records these rows hold are a prefix of it and the ones they do not
-// are its tail. So the question is asked of the NEWEST record that writes rows:
-// if these rows applied it, nothing written after the restore wrote any, and
-// following the log from its end discards nothing but records that write
-// nothing. The framework's own records write no domain row whatever their
-// history, and are stepped over: a barrier — a linearizable read's append,
-// which a node whose rows are the copy's age goes on making — and a trimmed
-// record, whose whole effect is to remove arbitration anchors, so one these
-// rows never applied leaves only anchors a write treats as a probe anyway
-// (ADR-0080). Neither carries an operation id, so the ledger could never say
-// these rows hold one, and a reanchor would refuse over a record that wrote
-// nothing until an operator discarded it.
-//
-// # How "these rows applied it" is established
-//
-// From the operation ledger, by the operation, the position AND the broker's
-// storage instant ([tables.appliedRecord]) — or from the retained records, by
-// position and instant, for one this build could not read. The ledger TRAVELS
-// inside every snapshot ([Domain.OpsTable]), instant and all, so a record
-// these rows hold because a donor applied it is named there exactly as one
-// this node applied itself: every node writes the same row from the same
-// record, and the broker's instant is the record's own rather than a node's.
-//
-// Every answer that is not "yes" is "no", and "no" is not always conclusive.
-// The ledger can LOSE rows — to its own sweeps, the table's ([OpsRetention])
-// and any subject kind's shorter one, or to its donor's, whose watermark
-// travelled with it — and it says how far back it may have
-// ([Rows.LostBefore]), for the record's own kind: for an operation minted before
-// that watermark, absence says nothing, and the record is named with the
-// watermark ([TailRecord.LedgerLostBefore]) so the refusal can say its rows
-// may hold it after all. The other false "no" is a record a gate dropped,
-// which writes no row. Each of them makes the reanchor refuse when it need
-// not, and the operator's word ([ReanchorGuard.Discard]) is what a false
-// refusal costs; none of them can make it skip a record without saying so,
-// which is the one failure this exists to rule out.
+// A restored reanchor follows the log from its END ([ReanchorRestored]),
+// assuming the log holds nothing these rows lack; but a node whose rows were
+// the copy's age may have written past it, records then lost silently. Past
+// the copy every record postdates the restore, so the rows hold a prefix of the
+// log and the question is its NEWEST row-writing record. Framework records
+// (barriers; trimmed records, ADR-0080) write no domain row and carry no
+// operation id, so they are stepped over. "Held": the ledger, which travels in
+// snapshots ([Domain.OpsTable]) so a donor's applies count, has the operation,
+// position AND broker instant ([tables.appliedRecord]), or a retained record
+// matches. A "no" may be false (lost ledger rows, [TailRecord.LedgerLostBefore];
+// a gate dropped the record), costing a refusal the operator overrides
+// ([ReanchorGuard.Discard]); no answer skips a record unsaid.
 
 // TailRecord is one record on a log, as a restored reanchor names it: the
 // newest record that writes rows and that this node's rows do not hold.
@@ -68,10 +31,9 @@ type TailRecord struct {
 	StoredAt time.Time `json:"stored_at"`
 
 	// LedgerLostBefore is set when the record's operation was minted before
-	// the instant this node's operation ledger may have lost rows from — so
-	// its absence there says nothing, and these rows may hold the record
-	// after all. Zero when the ledger's silence is conclusive: it has lost
-	// nothing, or nothing from before this operation. See the file doc.
+	// the instant this node's ledger may have lost rows from ([Rows.LostBefore]),
+	// so its absence there says nothing and these rows may hold the record
+	// after all. Zero when the ledger's silence is conclusive.
 	LedgerLostBefore time.Time `json:"ledger_lost_before,omitzero"`
 }
 
@@ -85,17 +47,14 @@ func (r TailRecord) String() string {
 		r.Kind, r.Subject, r.Seq, writer, r.OpID)
 }
 
-// UnheldTail walks a log back from last to first and answers the newest record
-// on it that writes rows and that this node's rows — at generation gen — do not
-// hold, or nil when every such record on it is one they hold (or it has none).
-// See this file's doc for why that one record is the whole question.
+// UnheldTail walks a log back from last to first and answers its newest record
+// that writes rows and that this node's rows, at generation gen, do not hold,
+// or nil when they hold it (or there is none); this file's doc says why that
+// one record is the whole question.
 //
-// A record the log cannot say anything about — its envelope does not decode —
-// is an error: whether it writes rows cannot be told, and a reanchor that
-// cannot tell refuses rather than guesses.
-//
-// log is the domain's log as a [VerifiedLog]: what the broker holds is the
-// signed frame, and a reader handed the frame decodes nothing.
+// A record whose envelope does not decode is an error: whether it writes rows
+// cannot be told, and a reanchor refuses rather than guesses. log is a
+// [VerifiedLog], since the broker holds signed frames that decode as nothing.
 func UnheldTail(ctx context.Context, d Domain, spec StreamSpec, db ReadEstate, log VerifiedReader,
 	gen uint32, first, last uint64) (*TailRecord, error) {
 
@@ -131,11 +90,10 @@ func UnheldTail(ctx context.Context, d Domain, spec StreamSpec, db ReadEstate, l
 			if held, readErr = t.retainedRecord(ctx, tx, at, storedAt); readErr != nil || held {
 				return readErr
 			}
-			// NOT HELD, and whether that is conclusive is the watermark's
-			// to say — read in the same transaction as the ledger, so a
-			// sweep cannot land between the two. An operation id that
-			// carries no instant reads as minted at the zero one, before
-			// every loss, exactly as the publisher reads it.
+			// NOT HELD; the watermark, read in the ledger's transaction so
+			// no sweep lands between, says whether that is conclusive. An
+			// id with no instant reads as minted at zero, before every
+			// loss, as the publisher reads it.
 			bound, lost, readErr := t.lostBefore(ctx, tx, env.Subject.Kind)
 			if readErr == nil && lost && mintedAt(env.OpID).Before(bound) {
 				lostBefore = bound.UTC()

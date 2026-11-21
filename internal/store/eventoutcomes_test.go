@@ -29,15 +29,10 @@ func outcome(t *testing.T, log *store.EventLog, id, kind, app string, at time.Ti
 // THE COUNT IS THE WINDOW'S, EDGE FOR EDGE: `[Since, At)`, half-open like
 // every window the log is asked about.
 //
-// The integrations answer names one window for the deliveries and their
-// outcomes, and the outcomes used to be the newest page of notification events
-// instead — whose span was its own. So the edges are the contract: a row at
-// Since is in, a microsecond under it is not, and a row at At — the instant the
-// window was named at — is past it, since a count stated beside a window must
-// not count what was written after the window was named. Only the two outcome
-// types count, each under the app its tag names — trimmed of any whitespace,
-// as the tag was always read, so two paddings of one app are one app — and a
-// row with no app is not guessed at.
+// The edges are the contract: a row at Since is in, a microsecond under it is
+// not, and a row at At is past it (a count must not count what was written
+// after the window was named). Only the two outcome types count, each under the
+// app its tag names, trimmed so two paddings are one app; no app is no guess.
 //
 // Mutation: drop either edge from [store.OutcomeQuery]'s statement, make the
 // top edge inclusive, or count by `category` rather than by type, and a row
@@ -147,14 +142,11 @@ func rowIDs(rows []store.UnsettledRow) []string {
 
 // A ROW THIS NODE DOES NOT YET KNOW IT KEEPS IS NAMED, NOT COUNTED.
 //
-// A stateless node's outcomes reach the data nodes in custody batches, and a
-// batch whose claim failed is written by a second keeper before the first has
-// learned it is not its own: until the first settles it, two logs hold the same
-// row, and a fleet summing their counts counted it twice. So the count is of
-// the rows this node keeps, and the window's rows of a batch it has written
-// and not settled are named beside it by identity, type and app — once each,
-// and only those the window and the count would hold. Settled as kept, they
-// are counted like any other; settled as another node's, they are gone.
+// A batch whose claim failed is written by a second keeper before the first
+// learns it is not its own, so a fleet summing counts counts the row twice. The
+// count is of rows this node keeps; the window's rows of an unsettled batch are
+// named beside it by identity, type and app, once each. Settled as kept they
+// are counted; as another node's they are gone.
 //
 // Mutation: count the unsettled rows in the maps as well as naming them, and
 // gitlab's drop is counted while it is named; name rows outside the window, or

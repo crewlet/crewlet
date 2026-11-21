@@ -10,10 +10,9 @@ import (
 
 // applySession dispatches the ops on [KindSession].
 //
-// TWO OPS AND NO MORE, which is what keeps this log's volume proportional to
-// SIGN-INS rather than to requests: a re-issue moves the idle deadline inside
-// the signed bearer and records nothing, so the busiest thing a signed-in
-// person does writes nothing here at all.
+// TWO OPS AND NO MORE, keeping this log's volume proportional to SIGN-INS, not
+// requests: a re-issue moves the idle deadline inside the signed bearer and
+// records nothing.
 func (a *Applier) applySession(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	switch at.record.Op {
 	case OpOpen:
@@ -44,11 +43,10 @@ func (a *Applier) writeSessionOpen(ctx context.Context, tx *sql.Tx,
 		return 0, fmt.Errorf("iamdomain: re-encode the session at %s: %w",
 			at.position, err)
 	}
-	// `start_position` IS THIS RECORD'S OWN, which is what a bearer
-	// carries so a node can tell a session opened before its own
-	// checkpoint from one it has simply not seen yet — the difference
-	// between a 401 and a 503, and the reason a stalled applier does not
-	// sign the whole company out.
+	// `start_position` IS THIS RECORD'S OWN, and a bearer carries it so a
+	// node tells a session opened before its checkpoint from one it has not
+	// seen yet: a 401 versus a 503, so a stalled applier does not sign the
+	// whole company out.
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_sessions
 			(lineage, person_id, epoch, start_position, absolute_expires_at,
@@ -71,10 +69,9 @@ func (a *Applier) writeSessionOpen(ctx context.Context, tx *sql.Tx,
 
 // writeSessionClose records one session ending, and keeps the row.
 //
-// THE ROW IS KEPT UNTIL THE SWEEP COLLECTS IT, rather than deleted, because
-// "this session was revoked, and why" is the sentence an investigation is
-// looking for — and a delete would leave the investigation with a session
-// that simply is not there, which reads as one that never existed.
+// THE ROW IS KEPT UNTIL THE SWEEP COLLECTS IT, not deleted: an investigation
+// looks for "this session was revoked, and why", and a deleted session reads
+// as one that never existed.
 func (a *Applier) writeSessionClose(ctx context.Context, tx *sql.Tx,
 	at applyContext) (int, error) {
 
@@ -83,10 +80,9 @@ func (a *Applier) writeSessionClose(ctx context.Context, tx *sql.Tx,
 		return 0, fmt.Errorf("iamdomain: the session record at %s: %w",
 			at.position, err)
 	}
-	// ENDED_AT IS SET ONCE. The guard is the column rather than the
-	// version, for the redemption's reason: two requests closing one
-	// session is not a stale write to skip, it is a race whose loser must
-	// see the reason the winner recorded rather than overwrite it.
+	// ENDED_AT IS SET ONCE, guarded on the column, not the version: two
+	// requests closing one session are a race whose loser must keep the
+	// winner's reason, not a stale write to skip.
 	result, err := tx.ExecContext(ctx, `
 		UPDATE iam_sessions
 		SET ended_at = ?, ended_reason = ?, version = ?

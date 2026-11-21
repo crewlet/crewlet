@@ -16,32 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The applier, and the rules that make it a PURE FUNCTION of the log.
+// The applier is a PURE FUNCTION of the log, so every data node's tables stay
+// byte-identical. That holds as long as:
 //
-// N nodes derive one SQL state from one ordered stream, and the identity claim
-// says their tables are byte-identical. That holds exactly as long as these do:
-//
-//  1. IT READS NO CONFIG, NO CLOCK AND NO OTHER DOMAIN. Whatever needs Tier A,
-//     IAM or the chart (the quota limits, the caller's role and kind) was
-//     decided at the API and STAMPED into the record; every instant written is
-//     the broker's ([statelog.ApplyOptions.StoredAt]). The one exception is
-//     the DIVERGENT notice table (apply_notices.go), whose rows the batch's instant
-//     and the epoch's inbox horizon decide, outside the identity claim.
-//  2. IT APPLIES NO RULE A LATER BUILD MAY CHANGE. The media table, the path
-//     grammar and every bound in internal/artifacts/limits.go are the
-//     writer's to enforce: an older node applying a newer node's record under
-//     its own older rules would refuse what its peers accept, and the fleet's
-//     copies would part. The applier enforces only what its own rows decide
-//     (a head that moved, a carried object no longer named, a quota against
-//     the stamped limits, a label already taken), and those deterministically.
-//  3. A REFUSAL IS A ROW, NEVER AN ERROR. A record the broker accepted that the
-//     rows refuse is applied as a no-op that writes its history row with the
-//     outcome `refused` and the reason, on every data node alike, and its writer
-//     reads its own verdict back by operation id. An error would stall every
-//     node's log on a record that is merely too late.
-//  4. EVERY RECORD THAT WRITES A HISTORY ROW IS APPLIED ONCE. The row is keyed
-//     by the record's position, and an apply that finds its own row already
-//     there has applied, so a redelivery writes nothing.
+//  1. It reads no config, no clock and no other domain: what Tier A, IAM or the
+//     chart decide is stamped into the record at the API, and every instant is
+//     the broker's ([statelog.ApplyOptions.StoredAt]). Only the notice table
+//     (apply_notices.go), outside the identity claim, reads the batch's instant
+//     and the epoch's inbox horizon.
+//  2. It applies no rule a later build may change, and a refusal is a row, never
+//     an error (package doc, "A refusal is a row").
+//  3. A record that writes a history row applies once: the row is keyed by the
+//     record's position, so a redelivery that finds it writes nothing.
 
 // Outcome is what an apply did with a record, as its history row says.
 type Outcome string
@@ -136,13 +122,11 @@ const (
 	RefusedFolderLimit Refusal = "folder_limit"
 )
 
-// The folder refusals above are decided by the WRITER from its snapshot of the
-// one tree subject, so for a well-behaved writer the apply never writes them:
-// it checks them again because a record is applied on every node, and a
-// writer's mistake must be a refusal every node agrees on rather than rows
-// that differ. An adoption's refusal of an absent version is
-// [RefusedVersionNotFound]. A brand's contrast is never an apply's question:
-// it is the writer's, refused before the append ([ErrBrandContrast]).
+// The folder refusals above are the WRITER's, from its snapshot of the tree
+// subject; the apply checks them again so a writer's mistake is a refusal every
+// node agrees on rather than rows that differ. An adoption of an absent version
+// is [RefusedVersionNotFound]; a brand's contrast is the writer's alone, refused
+// before the append ([ErrBrandContrast]).
 
 // The Tier A keys a quota refusal names, so the operator reading it knows what
 // to raise.
@@ -210,10 +194,9 @@ type BrandHistorySummary struct {
 }
 
 // historyPruneBatch is how many history rows past [artifacts.HistoryRetention]
-// one record removes: a bounded batch, so a node returning from months away
-// does not delete a year in the transaction holding the store's only writer,
-// while a company writing one record a day still retires rows faster than it
-// writes them.
+// one record removes: bounded, so a node back from months away does not delete
+// a year in a transaction holding the store's only writer, yet one record a day
+// still retires rows faster than it writes them.
 const historyPruneBatch = 64
 
 // Applier writes this node's copy of the artifacts estate.
@@ -239,12 +222,11 @@ type Applier struct {
 
 var _ statelog.RetentionHook = (*Applier)(nil)
 
-// NewApplier builds the artifacts applier for one node. committed is called
-// after a committed batch that moved anything, and inboxMoved after one whose
-// notices moved somebody's inbox, each AFTER the commit and never inside the
-// transaction: the store re-runs the body of an attempt that failed
-// transiently, and a listener told about rows that then rolled back would
-// decide from rows no node holds.
+// NewApplier builds the artifacts applier for one node. committed (after a
+// batch that moved anything) and inboxMoved (after one whose notices moved an
+// inbox) are called AFTER the commit, never inside the transaction: the
+// store re-runs a transiently failed attempt, and a listener told about rows
+// that then rolled back would decide from rows no node holds.
 func NewApplier(nodeID string, committed func([]Moved), inboxMoved func([]inbox.Movement)) *Applier {
 	return &Applier{NodeID: nodeID, committed: committed, inboxMoved: inboxMoved}
 }
@@ -269,9 +251,8 @@ func (a *Applier) Committed(context.Context) {
 }
 
 // Retained tells the listeners that a committed batch retained records this
-// build cannot read: whatever they are about may have moved with no row here to
-// say so, and the hook is handed a count rather than the records, so it names
-// everything ([MoveReset]).
+// build cannot read, which may have moved anything with no row here to say so:
+// the hook gets a count, not the records, so it names everything ([MoveReset]).
 func (a *Applier) Retained(context.Context, int) {
 	a.moved = append(a.moved, Reset())
 }
@@ -413,9 +394,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		// THE READ INDEX'S OWN APPEND writes no row on any node.
 		return 0, nil
 	case KindTrimmed:
-		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
-		// below the floor its subject names, in this same transaction
-		// (ADR-0080); this domain writes nothing for it, history included.
+		// THE TRIM'S OWN RECORD: the framework removes the anchors below its
+		// floor in this transaction (ADR-0080); this domain writes nothing.
 		return 0, nil
 	case KindEviction:
 		return a.applyEviction(ctx, tx, c)
@@ -595,8 +575,8 @@ func refuse(ctx context.Context, tx *sql.Tx, c applyContext, artifact string, op
 }
 
 // pruneHistory removes history rows past [artifacts.HistoryRetention] of broker
-// time, a bounded batch per record in one total order, so every data node removes the
-// same rows at the same position.
+// time, a bounded batch per record in one total order, so every data node
+// removes the same rows at the same position.
 func pruneHistory(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	if c.brokerAt.IsZero() {
 		return 0, nil
@@ -686,7 +666,7 @@ func stampedLimits(a artifacts.Authority) bool {
 	return a.Limits.Artifacts > 0 && a.Limits.CompanyBytes > 0
 }
 
-// actorKind is the kind column a share's granter is kept under.
+// actorKindOf is the kind column a share's granter is kept under.
 func actorKindOf(a iam.Actor) string { return string(a.Kind) }
 
 // sortedInts is a copy of xs sorted and unique.

@@ -200,7 +200,7 @@ func (p MergeProposal) Validate() error {
 func (p MergeProposal) ValidateUnstored() error {
 	if p.Merge.Pack != nil {
 		if !p.Merge.Pack.Object.IsZero() || p.Merge.Pack.Hash != "" {
-			return fmt.Errorf("%w: merge.pack: already stored as %s — Validate checks a stored pack",
+			return refusedf("%w: merge.pack: already stored as %s — Validate checks a stored pack",
 				ErrInvalidProposal, p.Merge.Pack.Object)
 		}
 		pack := *p.Merge.Pack
@@ -229,7 +229,7 @@ func (p MergeProposal) measure() (int, error) {
 	}
 	// Plus the room of the routing its committer stamps.
 	if bytes := len(encoded) + MaxRoutingBytes; bytes > EntryRoom {
-		return 0, fmt.Errorf("%w: merge: %d bytes with the routing it carries, past the %d one proposal may "+
+		return 0, refusedf("%w: merge: %d bytes with the routing it carries, past the %d one proposal may "+
 			"take of its record", ErrInvalidProposal, bytes, EntryRoom)
 	}
 	return len(encoded) + MaxRoutingBytes, nil
@@ -250,7 +250,7 @@ func (p MergeProposal) validFields() error {
 	}
 	switch why := p.Asker.invalid(); {
 	case why != "":
-		return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)
+		return refusedf("%w: asker: %s", ErrInvalidProposal, why)
 	case p.Asker.Run.RunID != "":
 		return badField("asker.run.run_id", "a merge is a tool call's, whose run is its turn: it names no "+
 			"executor")

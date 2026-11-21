@@ -150,7 +150,8 @@ func readDerivedOrder(ctx context.Context, tx *sql.Tx, q Query, read string,
 	if err != nil {
 		return err
 	}
-	rows, _, err := readPage(ctx, tx, set, resume, terms, PageDefault, planNow)
+	rows, _, err := readPage(ctx, tx, set, resume, terms, PageDefault,
+		rowsAt{dayStart: planNow, flow: planFlow})
 	if err == nil && len(rows) != PageDefault {
 		err = fmt.Errorf("the page holds %d rows, want %d", len(rows), PageDefault)
 	}

@@ -16,13 +16,11 @@ import (
 
 // A PERSON'S STOP ENDS THE EXECUTOR THE SEAT HAS OUT, END TO END.
 //
-// The run is the stand-in harness in a real `direct` box, held: nothing
-// will ever release it, so it would run for ever. A pause with `stop_running`
-// lands in the fleet's record, and the node holding the seat must carry it out
-// on the run itself: the run's record gone, its box reclaimed off the disk, its
-// turn never resumed into a review — and on the record, the run announced as
-// stopped (never lost) and the turn that was parked on it closed as stopped by
-// the person who paused the seat.
+// The run is the stand-in harness in a real `direct` box, held forever. A
+// pause with `stop_running` lands in the fleet's record, and the node holding
+// the seat must end the run: its record gone, its box reclaimed, its turn never
+// resumed into a review, the run announced as stopped (never lost) and the
+// parked turn closed as stopped by the person who paused the seat.
 //
 // Mutations: leave the pause watch's stop call out and the run is never ended;
 // announce the stop as a loss and an `executor_failed` is on the turn; close

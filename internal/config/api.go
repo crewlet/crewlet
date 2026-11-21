@@ -20,21 +20,13 @@ import (
 // DefaultAPIHost binds every interface, which is what a container needs.
 const DefaultAPIHost = "0.0.0.0"
 
-// DefaultAPIPort is the port this project's own examples, quickstart, image
-// and documentation all name.
-//
-// ONE NUMBER, because there were two. The examples, the quickstart and
-// `docs/getting-started/configuration.md` bind 8000; the Dockerfile's EXPOSE,
-// the control-plane page, the API reference and the Slack walkthrough said
-// 8080 — so a founder who followed the quickstart and then pasted a curl from
-// the reference got a connection refused, and the container published a port
-// nothing was listening on. 8000 wins because it is what the two things a
-// reader actually RUNS carry, and because it is not the port every other
-// service on a developer's laptop has already taken.
+// DefaultAPIPort is the port the examples, quickstart, image and docs all
+// name. 8000 rather than 8080: it is what the things a reader RUNS carry, and
+// not the port most developer machines already hold.
 //
 // It is NOT a default applied to [API.Port]: zero there means "serve no HTTP
-// at all", which is a real posture a default would take away. This constant is
-// what the flag, the image and every page quote.
+// at all", a real posture a default would take away. This constant is what
+// the flag, the image and every page quote.
 const DefaultAPIPort = 8000
 
 // API is the Tier A HTTP surface: where it binds, where a browser reaches it,
@@ -43,104 +35,43 @@ type API struct {
 	// Host is the bind address.
 	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Bind address for the HTTP surface."`
 
-	// Port is the bind port of this node's ONE listener, and node.roles
-	// decides what it carries. With the ingress role it is the whole HTTP
-	// surface: the dashboard, the REST API, the webhooks and the probes,
-	// less the routes [API.Public] moves to a listener of their own.
-	// Without it, the probes (/health and /ready) to the network, because
-	// an orchestrator runs every node and must be able to probe each, while
-	// the API is placed only where traffic is meant to arrive — and, on a
-	// node that runs seats, the two routes its own direct boxes dial, to
-	// this host's loopback alone (below). ONE PORT rather than a second
-	// setting for the probes: the probes are already on this listener on an
-	// ingress node, so a probe port beside it would be a second address for
-	// the same two routes there, and one Tier A file keeps working for both
-	// shapes. 0 binds nothing at all, on any node.
+	// Port is the bind port of this node's ONE listener; node.roles decides
+	// what it carries. With the ingress role it is the whole HTTP surface,
+	// less the routes [API.Public] moves to its own listener. Without it, only
+	// the probes (/health, /ready) face the network, so an orchestrator can
+	// probe every node. 0 binds nothing, on any node.
 	//
-	// THE BRIDGE IS THE EXECUTOR'S ALONE. A seat's executor is its harness's own
-	// run in a box, which may be another machine, so it reaches the seat's
-	// tools over HTTP; every other phase runs its harness beside the engine and
-	// reaches them through a unix socket in the engine's own session
-	// directory (internal/toolsession), so those need no port at all. A
-	// direct box is a process of this host, so on every node that runs
-	// seats it dials this listener on loopback — served to anyone on an
-	// ingress node, and to this host's loopback alone on a node without the
-	// role, which is why such a node derives the address only where it binds
-	// every interface or loopback; every other box dials
-	// CREWLET_MCP_BRIDGE_URL, the fleet's address, and the ingress node that
-	// answers relays each call to the node holding the seat over the broker
-	// (internal/api/mcpbridge). So a seats node without the ingress role runs
-	// its direct boxes with no fleet address once it binds this, and serves
-	// its other boxes' tools with this at 0.
-	//
-	// So a port is not what makes a node SERVE the API — a port and the
-	// ingress role together are ([Bootstrap.ServesAPI]), and only that pair
-	// asks for the authentication settings below.
+	// On a node that runs seats, its direct boxes dial the tool bridge and
+	// telemetry receiver here, on loopback alone; a remote box dials
+	// CREWLET_MCP_BRIDGE_URL instead (internal/api/mcpbridge). A port does not
+	// make a node SERVE the API; the port and the ingress role together do
+	// ([Bootstrap.ServesAPI]).
 	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"Bind port of this node's HTTP listener: the whole API with the ingress role (less the routes api.public moves to its own listener); without it, /health and /ready, and on a node with the seats role the tool bridge and telemetry receiver its own direct boxes dial, to this host's loopback alone. 0 binds nothing."`
 
-	// ExternalURL is where a BROWSER reaches this deployment — a person, a
-	// session cookie and every link a person follows — and, while no
-	// public listener is set, where a vendor and a sandbox box reach it
-	// too. REQUIRED once this node serves the API ([Bootstrap.ServesAPI]).
+	// ExternalURL is where a BROWSER reaches this deployment and, while no
+	// public listener is set, where a vendor and a sandbox box do too.
+	// REQUIRED once this node serves the API ([Bootstrap.ServesAPI]). Written
+	// scheme://host[:port] with no query or fragment: URLs append a path.
 	//
-	// # What reads it
-	//
-	//   - the session cookie's `Secure` flag and its `__Host-` prefix,
-	//     which follow this scheme. The engine sits behind a
-	//     TLS-terminating proxy and therefore cannot read `r.TLS` — the
-	//     request it sees is plain http on a loopback socket — so there
-	//     is nothing else to derive them from;
-	//   - the origin a non-GET request and a socket handshake are checked
-	//     against;
-	//   - every link a PERSON follows: a dashboard address in a
-	//     notification, a page-change link, a skill's `${crewlet_base_url}`;
-	//   - the base every vendor webhook and app manifest is built on —
-	//     UNLESS [API.Public] opens a listener of its own, in which case
-	//     those routes are served only there and [APIPublic.ExternalURL] is
-	//     their base ([API.WebhookBase]). A box's per-run sandbox endpoints
-	//     are built on neither: they come from CREWLET_MCP_BRIDGE_URL and
-	//     CREWLET_SANDBOX_OTEL_RECEIVER_URL, which name the same address.
-	//
-	// # Two sockets, two addresses, and no fallback between them
-	//
-	// It replaced the Tier B `integrations.public_base_url` and
-	// `integrations.dashboard_base_url`. One address cannot be right for
-	// both sides once the public routes have a socket of their own — the
-	// person reaches the admin listener and the vendor reaches the public
-	// one — so each socket names its own, and neither stands in for the
-	// other where they differ: a vendor handed this address once
-	// api.public is set would be handed a socket that answers 404 for the
-	// route it was given.
-	//
-	// # Why it is Tier A
-	//
-	// The old fields were Tier B, so each was a `${VAR}` a node resolved at
-	// the surface that used it — and a node that could not resolve one
-	// built a manifest from the literal seven characters. The cookie and
-	// the origin check cannot work that way: they are decided before a
-	// company document is loaded, and they are part of what authenticates
-	// the request that would go on to load one. A value the authentication
-	// path depends on belongs in the tier that holds the keyring.
-	//
-	// Written as scheme://host[:port], with no query or fragment: it is a
-	// BASE, and every URL built from it is this value with a path appended.
+	// It sets the session cookie's `Secure` flag and `__Host-` prefix (the
+	// proxy terminates TLS, so r.TLS cannot say), the origin checked on a
+	// non-GET and a socket handshake, and person-facing links. Vendor webhook
+	// and manifest URLs use it unless [API.Public] is set, then only
+	// [APIPublic.ExternalURL] ([API.WebhookBase]), with no fallback: a vendor
+	// handed this address would get a 404. It is Tier A because the cookie and
+	// origin check run before any company document loads.
 	ExternalURL string `yaml:"external_url,omitempty" json:"external_url,omitempty" desc:"Where a browser reaches this deployment, e.g. https://crewlet.example.com, and where a vendor does too unless api.public names its own. Required once this node serves the API: a port and the ingress role."`
 
 	// TrustedProxies are the peers whose `X-Forwarded-For` and
 	// `X-Forwarded-Proto` this deployment believes, as CIDR blocks.
 	//
-	// A CIDR LIST AND NEVER A BOOL. The question a forwarded header poses
-	// is not "does this deployment sit behind a proxy" — it is "is THIS
-	// peer the proxy", and a bool answers the first while the throttle,
-	// the audit trail and every per-source rule need the second. A bool
-	// set true trusts a header anybody can send, which hands an attacker
-	// the ability to choose their own rate-limit bucket and their own
-	// audit row; set false behind a real proxy it buckets the entire
-	// internet under one address, which throttles every honest person the
-	// moment one attacker arrives.
+	// A CIDR LIST, NEVER A BOOL: the question is "is THIS peer the proxy". True
+	// trusts a header anybody can send, letting an attacker pick their own
+	// rate-limit bucket and audit row; false behind a real proxy buckets the
+	// internet under one address and throttles every honest person.
 	//
-	// Empty is the default and means the peer address is the client
-	// address, which is correct for a node reached directly.
+	// Empty (the default) means the peer address is the client address, correct
+	// for a node reached directly.
 	TrustedProxies []string `yaml:"trusted_proxies,omitempty" json:"trusted_proxies,omitempty" desc:"CIDR blocks whose X-Forwarded-For is honoured. Empty trusts no forwarded header."`
 
 	// Public is the optional dedicated listener for the routes outside
@@ -157,17 +88,13 @@ type API struct {
 // ServesAPI reports whether this node serves the API surface: it binds a port
 // AND holds the ingress role.
 //
-// The one predicate the authentication rules turn on, in one place: a node
-// that serves the API needs an external URL, an admin posture and a
-// credential, and one that does not needs none of them. A PORT ALONE IS NOT IT
-// — a node without ingress binds api.port for its probes (and a seats node's
-// tool bridge) and serves no route anybody signs in to, so asking it for a
-// posture and a token would be ceremony every worker pays for a surface it
-// never opens. The keyring is not among them: every node needs it, serving or not
-// ([Bootstrap.validateTopology]).
-//
-// THE BOOTSTRAP'S RATHER THAN THE API BLOCK'S, because half of the answer is
-// the node block's roles, which the API block cannot see.
+// The one predicate the authentication rules turn on: a node that serves the
+// API needs an external URL, an admin posture and a credential; one that does
+// not needs none. A PORT ALONE IS NOT IT: a node without ingress binds
+// api.port for its probes (and a seats node's tool bridge) and serves no route
+// anybody signs in to. The keyring is not among them: every node needs it
+// ([Bootstrap.validateTopology]). It is the Bootstrap's because half of the
+// answer is the node block's roles, which the API block cannot see.
 func (b *Bootstrap) ServesAPI() bool {
 	return b.API.Port != 0 && b.Profile("").RunsIngress()
 }
@@ -185,18 +112,14 @@ func (a API) ExternalBase() string {
 
 // WebhookBase is where a VENDOR reaches this deployment: the base every
 // webhook, app manifest and app redirect URL is built on. A box's per-run
-// sandbox endpoints are not: a box is handed CREWLET_MCP_BRIDGE_URL and
-// CREWLET_SANDBOX_OTEL_RECEIVER_URL, which the operator points at this same
-// address, and a `direct` box on an ingress node dials its listener on
-// loopback.
+// sandbox endpoints are not: they come from CREWLET_MCP_BRIDGE_URL and
+// CREWLET_SANDBOX_OTEL_RECEIVER_URL.
 //
-// THE PUBLIC LISTENER'S OWN ADDRESS WHEN IT HAS ONE ([APIPublic.ExternalURL]),
-// and [API.ExternalBase] otherwise. No fallback between the two: once
-// api.public is set those routes are served ONLY on that socket, so the person's
-// address answers 404 for every one of them, and an empty answer — which a
-// caller reports as "no public address" — is the truthful one where the public
-// address is unset. The ONE accessor, so no caller branches on the listener
-// itself and two callers cannot answer the question differently.
+// It is the public listener's address when api.public is set
+// ([APIPublic.ExternalURL]), else [API.ExternalBase], with no fallback: those
+// routes are served ONLY on the public socket, so the person's address answers
+// 404 for them, and an empty answer ("no public address") is the truthful one
+// where it is unset. The one accessor, so no two callers answer differently.
 func (a API) WebhookBase() string {
 	if a.Public.Enabled() {
 		return a.Public.ExternalBase()
@@ -222,50 +145,18 @@ func (a API) WebhookBaseKey() string {
 // Addr is the API listener's bind address, host and port.
 func (a *API) Addr() string { return net.JoinHostPort(a.Host, strconv.Itoa(a.Port)) }
 
-// APIPublic is a second listener that serves the routes outside parties call
-// without an operator credential, and nothing else: the vendor webhooks and the
-// vendor app landings under /webhooks/, and the per-run sandbox endpoints
-// /otlp/{token} and /mcp/{token}. Once it is set those routes are served ONLY
-// here, and api.port answers 404 for them, so the address an integration or a
-// remote sandbox must reach is a different socket from the one that serves the
-// admin API, the dashboard and the probes.
+// APIPublic is a second listener that serves only the routes outside parties
+// call without an operator credential: vendor webhooks and app landings under
+// /webhooks/, and the sandbox endpoints /otlp/{token} and /mcp/{token}. Once
+// set they are served ONLY here and api.port answers 404 for them.
 //
-// # Why a listener rather than a path filter in a proxy
-//
-// Without it, a deployment that must accept vendor webhooks from the internet
-// but keep /config, /secrets and the read surface private has one socket to
-// expose and must filter it by path in front. That filter is an allow-list
-// somebody else maintains: one route it forgets, or one prefix it matches too
-// widely, puts the admin API on the internet, and nothing here can see it.
-// Two sockets make the split a fact about the network — the public one is
-// published, the other is not — and the engine itself decides which routes
-// each answers, from one predicate in the API's auth package.
-//
-// # Why the sandbox endpoints are public and the probes are not
-//
-// The sandbox endpoints are reached from INSIDE a box, which on E2B's cloud
-// is somebody else's network: a box can reach only what the deployment
-// publishes. They hold no operator credential by design — the signed per-run
-// token in the path is theirs — so they are exactly the routes this listener
-// is for, and leaving them on api.port would force that port public for any
-// company running remote sandboxes.
-//
-// The probes stay on api.port. /health describes the node — its seats, its
-// version, its posture — for whoever operates it, and an orchestrator or a
-// load balancer can probe a port other than the one it routes traffic to.
-//
-// # Never the sign-in routes
-//
-// /auth is a person's surface and is judged against [API.ExternalURL]'s origin
-// and cookie scope, so it is never among the routes this listener serves.
-//
-// # On a node without the ingress role
-//
-// Such a node serves its probes on api.port and nothing else, and binds no
-// listener here whatever this block says, so one file still works for every
-// role. Its seats' tool bridge is not a route on it: a box dials the ingress
-// nodes, which relay each call to the node holding the seat over the broker
-// (internal/api/mcpbridge).
+// A listener rather than a proxy path filter: that allow-list is somebody
+// else's, and one forgotten route puts the admin API on the internet unseen.
+// The sandbox endpoints are public because a box (on E2B, another network)
+// reaches only what is published; their signed token is the credential. The
+// probes stay on api.port; /auth is never served here (it is judged against
+// [API.ExternalURL]'s origin). A node without ingress binds no listener here;
+// its tool bridge is relayed over the broker (internal/api/mcpbridge).
 type APIPublic struct {
 	// Host is the bind address. Empty binds every interface, which is the
 	// point of a listener meant to be reached from outside.
@@ -507,91 +398,31 @@ func checkTrustedProxy(path Path, block string) error {
 	return p.err()
 }
 
-// APIAuth is how anyone — a person, a machine, this deployment's own operator
-// — proves who they are to the HTTP surface.
+// APIAuth is how anyone (a person, a machine, this deployment's own operator)
+// proves who they are to the HTTP surface.
 //
-// # What is not here any more, and why neither could be repaired
-//
-// `allow_anonymous_read` served every GET without a credential and defaulted
-// TRUE. Two things were wrong with it and only deleting it fixes either. The
-// exposure: the read surface carries LLM transcripts, diary entries, the whole
-// event stream and the roster, so the default posture published the company's
-// working memory to anyone who could reach the port. The shape: it was a bool
-// whose safe value was its zero, declared `omitempty`, so `false` did not
-// survive an export round trip — a deployment that had closed it re-opened
-// itself the first time its config went through `PUT /config`. A deliberately
-// public reader is now a named token holding the apps it reads and nothing else,
-// which is listable, revocable without a restart, and present in the audit log.
-//
-// `disabled` authenticated the EMPTY credential into full operator authority,
-// with no check on the bind address anywhere. `crewlet run -dev-principal`
-// replaces it: a flag rather than a field, because a field gets copied into an
-// image, and refused unless `api.host` BINDS loopback and the binary is a
-// development build. The bind rather than `api.external_url`, deliberately and
-// unlike [APIAuth.AcceptInsecure]'s rule: that one is about whether a cookie
-// crosses plaintext through a proxy, where the external address is the truth,
-// and this is about who can open a socket to this process, where the bind
-// is.
-//
-// `oidc` signed people in through an identity provider, and sign-in through a
-// third party is not something this engine does any more: a person proves who
-// they are with a password and a second factor held here.
-//
-// # Password sign-in is always on, so there is no backend to choose
-//
-// There was a `backend:` (`local` or `none`) and a `local:` block beneath it.
-// With third-party sign-in gone, `local` was the only backend that did
-// anything and `none` only switched password sign-in off — which a deployment
-// with nobody invited already is, since nobody holds a password to present.
-// So the selector went, and what the block held — whether a second factor is
-// required, the acknowledgement of an insecure posture, the password floor —
-// is stated here directly.
-//
-// `bootstrap` opened a second way in for the first person — a one-time code a
-// node wrote beside its store — beside the one every serving node already
-// requires. The Tier A token below IS the credential a company has before it
-// has anybody, so the first person is invited under it exactly as everybody
-// after them is, and the founder route, its race between two codes and its
-// setting went.
-//
-// All four are refused if they appear, as every key this build does not define
-// is: the loader decodes Tier A with unknown keys refused, so a file still
-// carrying one fails rather than running a posture it no longer describes.
+// There is no `allow_anonymous_read`, `disabled`, `oidc`, `backend`/`local` or
+// `bootstrap` key; each is refused as unknown, so a file carrying one fails
+// rather than running a posture it no longer describes. Reads need a
+// credential (they carry transcripts, diary entries and the event stream); a
+// public reader is a named token holding only the apps it reads. The dev
+// principal is the `crewlet run -dev-principal` flag, not a field (a field is
+// copied into an image), refused unless `api.host` BINDS loopback: the bind,
+// not the external URL, because it is about who can open a socket here.
+// The first person is invited under the Tier A token below.
 type APIAuth struct {
-	// Admin is whether THIS NODE grants admin to those who hold it
-	// (`serve`), or clamps admin away and keeps every app (`refuse`).
-	// REQUIRED once the API is served, and its zero is refused rather than
-	// read as either.
+	// Admin is whether THIS NODE grants admin to those who hold it (`serve`),
+	// or clamps admin away and keeps every app (`refuse`). REQUIRED once the
+	// API is served; the zero is refused, not read as either, because each
+	// default is a decision nobody made: `serve` publishes host access on a
+	// node meant for colleagues, `refuse` locks administrators out.
 	//
-	// # Why a node decides this at all, when every permission is declared
-	//
-	// Because the declarations are made in a tier this one does not trust.
-	// A person's permissions live in the replicated store and are written by
-	// whoever holds admin; admin is host access, and the operator who owns
-	// the machines may want some of them — a node published to the people
-	// who use the company, say — never to serve it whatever a row says.
-	// Tier A states that and never reads Tier B, which is the same direction
-	// every other Tier A posture runs in.
-	//
-	// ADMIN AND NOTHING ELSE, because an app is the company's ordinary work:
-	// a node that refused the tracker would refuse its own colleagues their
-	// board, and a ceiling over a list of permissions was a set an operator
-	// had to read to answer the one question they ever asked of it. The
-	// clamp keeps every app — [iam.AdminPosture.Effective] expands before it
-	// clamps — so an administrator signed in on a refusing node keeps the
-	// tracker, the knowledge base and the chat.
-	//
-	// It is applied at DECISION time, per node, per request: nothing is
-	// written when it changes, so changing it takes effect on the next
-	// request that node serves after a restart and needs no config apply
-	// and no migration. A fleet whose nodes disagree is therefore a LEGAL
-	// state — and one nobody could see, which is why each node publishes
-	// its own posture on its presence lease.
-	//
-	// REQUIRED RATHER THAN DEFAULTED, because either default would be a
-	// decision nobody made: `serve` publishes host access on a node an
-	// operator meant for colleagues, and `refuse` locks every administrator
-	// out of a node they meant to sign in on.
+	// A node decides because admin is host access, declared in a tier this
+	// one does not trust (permissions are written to the replicated store by
+	// whoever holds admin). Admin only: the clamp keeps every app
+	// ([iam.AdminPosture.Effective] expands first). Applied per node at
+	// decision time, nothing written, so nodes may disagree; each publishes
+	// its posture on its presence lease.
 	Admin iam.AdminPosture `yaml:"admin,omitempty" json:"admin,omitempty" js:"enum=serve|refuse" desc:"Whether this node grants admin to those who hold it (serve), or clamps admin away and keeps every app (refuse). Required once the API is served."`
 
 	// Limits bound the company's sign-in policy on this node (ADR-0152).
@@ -601,23 +432,17 @@ type APIAuth struct {
 	// Audit is how long the identity estate keeps what happened.
 	Audit APIAudit `yaml:"audit,omitempty" json:"audit,omitzero"`
 
-	// AcceptInsecure is the deliberate acknowledgement that this
-	// deployment is reachable off loopback with a posture that should not
-	// be. It is what lets `limits.second_factor: optional` stand on an
-	// address a browser reaches over the network, which
-	// [APIAuth.validateSecondFactor] refuses without it, and it is logged at
-	// WARN on every start for the whole life of the deployment.
+	// AcceptInsecure is the deliberate acknowledgement that this deployment is
+	// reachable off loopback with a posture that should not be. It lets
+	// `limits.second_factor: optional` stand on a network-reachable address,
+	// which [APIAuth.validateSecondFactor] refuses without it, and is logged at
+	// WARN on every start. It does not lift plain http off loopback, which is a
+	// warning either way ([API.warnings]).
 	//
-	// NOT what lets an `http://` external URL stand: plain http off
-	// loopback is a warning with or without it ([API.warnings]), never a
-	// refusal, so there is nothing for an acknowledgement to lift there.
-	//
-	// A FIELD RATHER THAN A FLAG, unlike `-dev-principal`, and the
-	// difference is what each one opens: the flag authenticates every
-	// request as somebody, which must never survive being copied into an
-	// image; this weakens a requirement while every credential still has
-	// to be presented, which a staging deployment may genuinely want to
-	// carry in its own config.
+	// A field rather than a flag, unlike `-dev-principal`: the flag
+	// authenticates every request as somebody and must never be copied into an
+	// image; this weakens a requirement while every credential is still
+	// presented, which a staging config may carry.
 	AcceptInsecure bool `yaml:"accept_insecure,omitempty" json:"accept_insecure,omitempty" desc:"Acknowledge an insecure posture on a routable address. Logged at WARN on every start."`
 
 	// Tokens are this deployment's own machine credentials: break-glass,
@@ -631,28 +456,18 @@ type APIAuth struct {
 	// logged-in operator visited read every unauthenticated endpoint.
 	AllowedOrigins []string `yaml:"allowed_origins,omitempty" json:"allowed_origins,omitempty" desc:"Additional browser origins this deployment is reached on. Empty = same-origin only."`
 
-	// CompanyWriters, when set, are the ids of the Tier A tokens that alone
-	// may CHANGE the company document, and no other credential may. Empty
-	// (the default) leaves every write to the authority table — an
-	// administrator, or a lead inside their own subtree — which is the
-	// posture of a company edited by people.
+	// CompanyWriters, when set, are the ids of the Tier A tokens that alone may
+	// CHANGE the company document. Empty leaves every write to the authority
+	// table, the posture of a company edited by people.
 	//
-	// It exists for a document something ELSE is the source of: a GitOps
-	// pipeline, or a Kubernetes operator rendering it from custom
-	// resources. Such a system overwrites the active revision with its own
-	// at every reconcile, so an edit a person made here survives only until
-	// then — and nothing told them. Listing the system's token turns that
-	// silent loss into a refusal at the moment of the edit, naming who
-	// manages the document. Reads are untouched, and so is everything that
-	// is not the document: a secret write, a reload of the revision already
-	// active.
+	// It is for a document something ELSE is the source of (a GitOps pipeline
+	// or Kubernetes operator) that overwrites the active revision at every
+	// reconcile: a person's edit would be lost silently, so it is refused here,
+	// naming who manages the document. Reads and non-document writes are free.
 	//
-	// A TOKEN ID LIST, NOT A ROLE OR A FLAG: a Tier A token acts under the
-	// login `token:<id>`, which every revision it writes records as both its
-	// author and the credential it came through, so "who may write" and
-	// "who wrote" are the same vocabulary. Each entry is held to the token
-	// id grammar ([iam.ValidTokenID]). [APIAuth.MayWriteCompany] is the one
-	// reading of it; see ADR-0030 for what counts as changing the document.
+	// A token id list: a Tier A token acts as login `token:<id>`, which every
+	// revision records as author and credential. Entries follow
+	// [iam.ValidTokenID]; [APIAuth.MayWriteCompany] reads it (ADR-0030).
 	CompanyWriters []string `yaml:"company_writers,omitempty" json:"company_writers,omitempty" desc:"Ids of the Tier A tokens that alone may change the company document. Empty = whoever the authority table admits."`
 }
 
@@ -661,25 +476,17 @@ type APIAuth struct {
 func (a *APIAuth) CompanyManaged() bool { return len(a.CompanyWriters) > 0 }
 
 // MayWriteCompany reports whether a write made as by may change the company
-// document.
+// document. It is the one reading of [APIAuth.CompanyWriters], for the config
+// write path and the viewer answer that tells the dashboard whether to offer
+// an edit.
 //
-// THE ONE READING of [APIAuth.CompanyWriters], for every surface that asks:
-// the config write path that enforces it and the viewer answer that tells the
-// dashboard whether to offer an edit.
-//
-// THE CREDENTIAL, NEVER THE AUTHOR. by's [iam.Actor.OperatorID] is the
-// credential the write came through, and a Tier A bearer's is its own login,
-// `token:<id>`: a listed id is admitted by that and by nothing else. A person's
-// session (`session:<lineage>`), a machine token acting as its owner
-// (`pat:<id>`) and a session exchanged from a Tier A token each name another
-// credential, so every one of them — a lead writing their own subtree
-// included — is refused while the document is managed, which is the managed
-// posture rather than an exception to it: a person's edit is exactly the one
-// the managing system's next reconcile overwrites.
-//
-// THE ENGINE ITSELF IS ADMITTED ([iam.ActorSystem]): its own writes — a chart
-// apply, a republish of the revision already active — are not an edit
-// somebody made here for the managing system to overwrite.
+// The credential, never the author: by's [iam.Actor.OperatorID] is the
+// credential the write came through, a Tier A bearer's being `token:<id>`. A
+// person's session, a `pat:<id>` token and a session exchanged from a Tier A
+// token each name another credential, so all are refused while the document is
+// managed, a lead in their own subtree included: the managing system's next
+// reconcile would overwrite exactly that edit. The engine itself is admitted
+// ([iam.ActorSystem]); a chart apply is not an edit somebody made here.
 func (a *APIAuth) MayWriteCompany(by iam.Actor) bool {
 	if !a.CompanyManaged() || by.Kind == iam.ActorSystem {
 		return true
@@ -804,21 +611,14 @@ type APIToken struct {
 	// Grants is what this credential may do: `admin`, `worklet`, `doclet`,
 	// `artifacts`, `chatlet`, `gitlet`, `atlas`. REQUIRED and non-empty: a
 	// credential's blast radius is stated at the pin, never inferred. The
-	// founder's break-glass token is `[admin]`; a CI pipeline that files work
-	// is `[worklet]`, one that fetches the company's code is `[gitlet]`
-	// (ADR-0110; a token bound to no seat fetches and never pushes, ADR-0085),
-	// and one that reads the company's map is `[atlas]` (ADR-0127). A token
-	// bound to a person's seat is held to this list as well as to the person.
+	// founder's break-glass token is `[admin]`; a CI pipeline that files work is
+	// `[worklet]`, one that fetches the company's code `[gitlet]` (ADR-0110; a
+	// token bound to no seat never pushes, ADR-0085), one that reads the map
+	// `[atlas]` (ADR-0127). A token bound to a person's seat is held to this
+	// list as well as to the person.
 	//
-	// THIS IS THE CHANGE THAT MAKES A TOKEN SAFE TO HAVE. Before it, one
-	// token was the whole operator surface — the config document, the
-	// secret store, the fleet, every transcript — so the CI pipeline that
-	// needed to file a work item held the credential that could read
-	// every key the company owns.
-	//
-	// STRICT, unlike a replicated row: a name this build does not know is
-	// refused here, naming the set, because a file an operator wrote is a
-	// typo rather than a newer peer's record.
+	// STRICT, unlike a replicated row: an unknown name is refused, naming the
+	// set, because a file an operator wrote has a typo, not a newer peer's record.
 	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do: admin, worklet, doclet, artifacts, chatlet, gitlet, atlas. Required and non-empty."`
 }
 
@@ -1031,22 +831,16 @@ func checkDurationRange(p *problems, path Path, raw string, lo, hi time.Duration
 
 // checkOrigin refuses an entry that cannot name the origin it reads as.
 //
-// # Why each of these is refused rather than accepted and ignored
-//
-// An allowance is compared against the browser's `Origin` header, which is
-// always `scheme://host[:port]`, both sides put in a browser's spelling
-// (auth.Origin). Every shape below is a value an operator plausibly writes
-// that either no browser can ever send — accepted, it is an allow-list that
-// looks configured, a fetch that fails in a console the engine never sees,
-// and nothing anywhere saying why — or, with a path, a query, a fragment or
-// a user, one that permits more than it reads as: everything but the scheme,
-// host and port is dropped before the comparison, so
+// An allowance is compared against the browser's `Origin` header, always
+// `scheme://host[:port]` in a browser's spelling (auth.Origin). Each refused
+// shape is either one no browser can send, an allow-list that looks configured
+// while every fetch fails unseen, or one that permits more than it reads as:
+// a path, query, fragment or user is dropped before comparison, so
 // `https://ops.example.com/dashboard` would admit every page of that host.
 //
-// `*` is the sharpest of them, and it is refused rather than honoured: it was
-// this field's own previous default, and what it does is let any site a
-// logged-in operator visits read every unauthenticated endpoint — which on
-// this API means LLM transcripts, diary entries and the whole event stream.
+// `*` is refused, not honoured: any site a logged-in operator visits could
+// read every unauthenticated endpoint (LLM transcripts, diary entries, the
+// whole event stream).
 func checkOrigin(path Path, origin string) error {
 	var p problems
 	switch {
@@ -1100,24 +894,17 @@ func checkPort(path Path, raw, port string) error {
 }
 
 // checkBrowserHost refuses an address a browser reaches whose host the
-// cross-site check could not compare: the check puts both sides in a
-// browser's spelling (auth.Origin), and these three are spellings a browser
-// changes in ways that need more than this engine knows. Kept, each refuses
-// every write from the address as it is written.
+// cross-site check cannot compare: a browser respells these in ways this
+// engine cannot reproduce (auth.Origin), so each would refuse every write.
 //
-//   - A host outside ASCII: a browser sends its ASCII form (`bücher.example`
-//     is `xn--bcher-kva.example`), and spelling it so needs the IDNA tables,
-//     which nothing else in the engine has a use for.
-//   - An IPv4 address written other than as four decimal octets: a browser
-//     reads any host whose last label is a number as IPv4, and rewrites
-//     `127.1`, `2130706433`, `0x7f.0.0.1` and `192.168.010.1` (whose leading
-//     zero is octal) into the dotted form it sends.
+//   - A host outside ASCII (`bücher.example` is `xn--bcher-kva.example`): the
+//     IDNA tables are needed and nothing else here uses them.
+//   - An IPv4 address not written as four decimal octets (`127.1`,
+//     `2130706433`, `0x7f.0.0.1`, `192.168.010.1`, octal): a browser rewrites it.
 //   - An IPv6 zone (`[fe80::1%25eth0]`), which no browser can address.
 //
-// The ASCII and dotted forms reach the same host from every browser and every
-// link, so they are the ones to write. Only the browser's addresses are held
-// to this — `api.external_url` and `api.auth.allowed_origins` — and never the
-// public listener's, which no origin is compared against.
+// Only the browser's addresses are held to this (`api.external_url`,
+// `api.auth.allowed_origins`), never the public listener's.
 func checkBrowserHost(path Path, raw, host string) error {
 	var p problems
 	switch {
@@ -1196,19 +983,15 @@ func (a API) warnings(serving bool) []Warning {
 	}
 
 	// AN `https://` EXTERNAL URL WITH NO TRUSTED PROXY is one client. The
-	// engine never terminates TLS itself, so an https address means
-	// something in front of it does — and unless that something is named
-	// here, every request's source is ITS address: the sign-in throttle,
-	// the audit trail's client and every per-source rule then see the whole
-	// company as one caller — the throttle keys every caller's attempts at
-	// one login together, so a stranger guessing at somebody's login puts
-	// that person's own sign-in behind the same wait, and every audit row
-	// names the proxy.
+	// engine never terminates TLS, so something in front does, and unless it
+	// is named here every request's source is ITS address: the sign-in
+	// throttle, the audit trail and every per-source rule see the company as
+	// one caller, so a stranger guessing at somebody's login puts that
+	// person's own sign-in behind the same wait.
 	//
-	// A WARNING RATHER THAN A REFUSAL because one front end is right with
-	// the list empty — a balancer that passes the client's own address
-	// through as the peer rather than in a header — and nothing in this
-	// file can tell the two apart.
+	// A WARNING, NOT A REFUSAL: one front end is right with the list empty (a
+	// balancer passing the client's address through as the peer) and nothing
+	// here can tell the two apart.
 	if strings.HasPrefix(a.ExternalBase(), "https://") && len(a.TrustedProxies) == 0 {
 		out = append(out, advisory(field("api.trusted_proxies"),
 			"this deployment uses https but trusts no proxy, so every caller "+

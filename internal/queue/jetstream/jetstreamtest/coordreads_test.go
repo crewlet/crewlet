@@ -20,45 +20,16 @@ import (
 
 // A COORDINATION READ IS NEVER ANSWERED BY A MEMBER THAT IS BEHIND.
 //
-// Every bucket the fleet shares is replicated, and only the stream leader's
-// copy is sure to hold every acknowledged write. The client's own read is a
-// DIRECT GET, served by whichever replica the server hands the request to —
-// and a member that is behind answers it from its own copy, as definitely as
-// a current one would. That is how a counter read straight after a charge
-// came back short and a run just written read back as absent on a fleet under
-// load, a few times in a hundred and never on one server.
-//
-// A race reproduces that a few times in a hundred, so this case stages the
-// limit of it instead: one member cut off from the other two, which go on
-// writing. The cut member is as far behind as a member can be and still
-// running, and the buckets' own allow_direct is ON — the configuration every
-// bucket an earlier build created still carries. Asked through that member, a
-// read may only say it could not tell.
-//
-// # The one member that may still answer, and for how long
-//
-// The leader read has a residue the server owns: a LEADER cut off from its
-// quorum goes on believing it leads until it notices the quorum is gone —
-// nats-server's lost-quorum interval, ten seconds checked every ten
-// (server/raft.go) — and answers from its own copy meanwhile, while every
-// write through it fails. So the member cut here is one that led neither
-// bucket, and each read is preceded by asking that member whether it believes
-// it leads: a member that does not can never come to (it has no quorum to win
-// an election), so a read it answers after saying so is a non-leader's
-// answer, which is the failure. One that still believes it leads is waited
-// out, and the case holds it to stopping.
-//
-// THE MEMBER IS ASKED IN PROCESS ([js.Server.LeadsStream]), never over the
-// network. A member that does not lead a stream answers a request about it
-// with silence, so over the network "no" could only be read off a timeout —
-// and a leader slow to answer on a loaded machine then read as a member that
-// did not lead, and failed the case over a read it was entitled to answer.
-// In process the answer is the predicate the server itself asks before it
-// answers a leader-only read, so a "no" is a no.
-//
-// Mutation: answer [coordkv.FleetStore]'s point reads through the client's
-// own Get rather than the leader's, and the cut member answers both from what
-// it had.
+// Only the leader's copy is sure to hold every acknowledged write; a DIRECT GET
+// is served by any replica, and one behind answers as definitely as a current
+// one. So the case cuts one member off, allow_direct ON, the other two writing:
+// a read through it may only say it could not tell.
+// A cut-off LEADER believes it leads for the lost-quorum interval (ten seconds,
+// server/raft.go), so the cut member led neither bucket and each read is
+// preceded by asking it whether it believes it leads: a no is final, so a later
+// answer is the failure. It is asked IN PROCESS ([js.Server.LeadsStream]), as
+// over the network a non-leader's no is silence read off a timeout.
+// Mutation: read via the client's Get, not the leader, and it answers stale.
 func TestACoordinationReadIsNeverAnsweredByAMemberThatIsBehind(t *testing.T) {
 	t.Parallel()
 	c := StartPartitionableCluster(t, 3, js.Config{})

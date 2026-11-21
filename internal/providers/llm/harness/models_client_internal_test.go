@@ -25,6 +25,7 @@ func TestTheModelsScreenNamesTheEnginesSignIns(t *testing.T) {
 	}{
 		{"ModelSignInRoute", names(SignInRoutes), false},
 		{"ModelLimitWindow", names(llm.LimitWindows), false},
+		{"ModelLimitState", names(llm.LimitStates), true},
 		{"ModelCheckName", names(checkOrder), true},
 	} {
 		got, err := clientsource.Union(tree, tc.name)

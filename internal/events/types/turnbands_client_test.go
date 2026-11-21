@@ -11,59 +11,25 @@ import (
 
 // The Turn screen's bands, held against the wire keys this package freezes.
 //
-// # What a band entry actually is
+// A band entry is a PREDICATE against this package's wire contract. The
+// dashboard's `lib/turnstory.ts` sorts one turn's non-phase events into the
+// Turn screen's panels by naming types in sets declared in
+// `contract/turnbands.ts`. Every row comes from ONE read, `EventLog.Turn`
+// (`WHERE turn_id = ?`), whose column is filled from the event's own top-level
+// `turn_id` FIELD (`store.ExtractTags`, `EventLog.Append`): a payload without
+// that key never matches, so naming such a type is a promise the wire cannot
+// keep. It fails EMPTY, the one way a panel cannot say it is broken.
+
+// This is the `internal/clientsource` idiom: the dashboard is a separate build
+// in another language that cannot import a Go identifier, so it carries its own
+// copy of a set the engine owns, and the check belongs on the engine side.
 //
-// The dashboard's `lib/turnstory.ts` sorts one turn's non-phase events into
-// the four panels the Turn screen draws, by naming event types in four sets —
-// declared in `contract/turnbands.ts`, the one home of every declaration an
-// engine gate holds.
-// Every row it sorts came from ONE read — `EventLog.Turn`, which is
-// `WHERE turn_id = ?` — and that column is filled from the event's own
-// top-level `turn_id` FIELD: `store.ExtractTags` pulls it out of the
-// marshalled envelope and `EventLog.Append` copies it onto the column. So a
-// payload that declares no `turn_id` key writes an empty column, never matches
-// the predicate, and cannot reach the client however it is banded.
-//
-// A band entry is therefore a PREDICATE against this package's wire contract,
-// not a statement about where a row belongs. Naming a type with no `turn_id`
-// is a promise the wire cannot keep.
-//
-// # Why it needed a gate
-//
-// Because it fails EMPTY, which is the one way a panel cannot say it is
-// broken. Eight types were named that way at once. The three A2A audit records
-// were the loudest — the "What else it did" band advertised "colleagues" on
-// their behalf, and an A2A ask had never been drawn under that heading on any
-// turn this engine has ever run — and the other five were quieter versions of
-// the same thing. Nothing failed, nothing logged, and a turn that asked three
-// colleagues rendered exactly like a turn that spoke to nobody.
-//
-// Four of the eight were repairs rather than facts, and all four have landed:
-// the three A2A records now carry the publishing turn (internal/a2a/service.go)
-// and skill_telemetry_write_failed carries the turn whose reflection tried the
-// write (internal/learning/skilluse.go). They are back in their bands, and the
-// stale check below is what made that a decision somebody took rather than one
-// nobody got to.
-//
-// This is the `internal/clientsource` idiom for the reason that package's own
-// doc gives: the dashboard is a separate build in a separate language that
-// cannot import a Go identifier, so where it must know a set this engine owns
-// it carries its own copy, and every such copy has drifted at least once. The
-// check belongs on the engine side because the engine owns the value.
-//
-// # Two-sided, like the roster it is built on — plus a third
-//
-// One direction stops a band naming a type that can never fill. The other
-// stops the repair being forgotten: [keptOutOfTurnBands] records each decision
-// with a reason, and an entry whose type GAINS a `turn_id` fails as stale — the
-// fix landed, so the row can be banded, and somebody has to decide that rather
-// than default to it. That half has already earned itself: it is what turned
-// four of the original eight from a note nobody re-read into a failing build
-// the day their payloads were repaired. A reason per entry rather than a
-// set for the reason `events.excluded` gives about its own map: an exclusion
-// and an oversight look identical from the outside, and writing the reason
-// down is what lets the next reader tell them apart. The third direction —
-// every stored, turn-scoped type is placed — is on the test itself.
+// It is two-sided, plus a third. One direction stops a band naming a type that
+// can never fill. The other stops a repair being forgotten: [keptOutOfTurnBands]
+// records each decision with a reason, and an entry whose type GAINS a
+// `turn_id` fails as stale, so somebody must decide to band it (a reason per
+// entry, as `events.excluded` gives: an exclusion and an oversight look alike).
+// The third, every stored, turn-scoped type is placed, is on the test itself.
 
 // turnBands are the declarations in `contract/turnbands.ts` whose members are
 // matched against a turn's rows.
@@ -76,38 +42,29 @@ var turnBands = []string{"WENT_WRONG", "GIVEN", "DID", "LEFT_BEHIND", "TURN_STOP
 
 // absorbedBand is the SIXTH classification, and it is a map rather than a set.
 //
-// A row in [ABSORBED] is not dropped — it is drawn somewhere better, and the
-// screen prints an inventory of them ("Already on this page") so a reader
-// checking a cut turn's event total can see where each kind went. That makes
-// it as much a promise against the query as the five bands are: a type here
-// with no `turn_id` never reaches the browser, and the inventory omits it
-// silently, which is the same EMPTY failure one band further along.
+// A row in [ABSORBED] is drawn somewhere better, and the screen prints an
+// inventory of them ("Already on this page"). That makes it as much a promise
+// against the query as the five bands: a type here with no `turn_id` never
+// reaches the browser, and the inventory omits it silently, the same EMPTY
+// failure.
 //
 // Its own declaration, because its shape is its own: the bands are
-// `new Set([...])` and this is `Record<string, string>` keyed on the type with
-// the destination as the value, so the bands are read as their strings and
-// this as its KEYS. Keeping them apart is also what lets the entry below be
-// about the map rather than about a band nobody would find it in.
+// `new Set([...])` and this is `Record<string, string>` keyed on the type, so
+// the bands are read as their strings and this as its KEYS.
 const absorbedBand = "ABSORBED"
 
 // notPersisted are absorbed types that never reach the event store at all, so
 // the `turn_id` question does not arise for them.
 //
-// A SEPARATE ROSTER FROM [keptOutOfTurnBands], because it answers a different
-// question and the two must not be confused: that roster is "this row could be
-// on the screen and is not, here is the repair owed", and this one is "this row
-// is not in the store to begin with". An entry here is permanent by
-// construction rather than by judgement — a stream-only event has no row for a
-// query to return however its payload is shaped.
+// A SEPARATE ROSTER FROM [keptOutOfTurnBands]: that one is a repair owed for a
+// row that could be on the screen; this one is a row not in the store at all,
+// permanent by construction.
 //
-// AND IT IS CHECKED AGAINST THE ENGINE, in both directions, because a roster
-// nothing contradicts is a comment. The classification asks whether the type
-// is appended at all BEFORE it asks about the turn id — see [turnScopedTypes]
-// — so an entry here is the only thing standing between a live-only absorbed
-// type and a silent pass, and an entry whose type gained a category is stale
-// the day it did. Asked in the other order the clause was unreachable: its one
-// member declares `turn_id` like every other phase event, so the turn-id
-// branch answered first and emptying this map left the gate green.
+// IT IS CHECKED AGAINST THE ENGINE in both directions: the classification asks
+// whether the type is appended BEFORE it asks about the turn id (see
+// [turnScopedTypes]); asked the other way the clause was unreachable, since its
+// one member declares `turn_id`, and emptying this map left the gate green. An
+// entry whose type gained a category is stale.
 var notPersisted = map[string]string{
 	"agent_turn_progress": "stream-only — published to the live socket and " +
 		"never appended to crewlet_events, so it is in no turn's answer by " +
@@ -118,17 +75,14 @@ var notPersisted = map[string]string{
 // keptOutOfTurnBands are the types a band named and had to give up, with the
 // reason each one cannot be there.
 //
-// Two shapes, and the difference is the whole value of writing them down. Some
-// of these will never carry a turn id, because no turn exists when they are
-// published or because they describe many turns at once — those entries are
-// permanent. The rest were events published INSIDE a turn by code that already
-// held its id and simply did not stamp it; those were a defect in this package,
-// and the stale check below is what announced the day each one was fixed.
+// Two shapes: events that never carry a turn id (no turn exists when they are
+// published, or they describe many turns), which are permanent, and events
+// published INSIDE a turn by code that held its id and did not stamp it, a
+// defect the stale check announces when fixed.
 //
-// EVERY ENTRY LEFT IS OF THE FIRST KIND, which is a state worth naming rather
-// than a coincidence to notice later: the four repairs are done, so a NEW entry
-// here is either a genuinely turn-less event or a repair somebody has decided
-// to defer, and the two must not be added under the same silence.
+// EVERY ENTRY LEFT IS OF THE FIRST KIND, so a NEW entry is either a genuinely
+// turn-less event or a repair somebody decided to defer, and the two must not
+// be added under the same silence.
 var keptOutOfTurnBands = map[string]string{
 	"task_assigned": "the SCHEDULER's cron fire (internal/schedule), published " +
 		"to wake a seat. It is the TRIGGER of a turn rather than work a turn " +
@@ -328,31 +282,16 @@ func TestTurnBandsNameOnlyTurnScopedEvents(t *testing.T) {
 	}
 }
 
-// turnScopedTypes reports the two conditions a row has to meet to be in a
-// turn's answer, and the whole set of registered types beside them.
+// turnScopedTypes reports the two conditions a row meets to be in a turn's
+// answer (written, and carrying the key), and the set of registered types.
+// Asking only the second passes a LIVE-ONLY type such as `agent_turn_progress`,
+// which stamps `turn_id` while `observe.Record` refuses it.
 //
-// TWO, BECAUSE THE QUERY HAS TWO. `EventLog.Turn` is `WHERE turn_id = ?` over
-// `crewlet_events`, so a row reaches the Turn screen only if it was written at
-// all and carries the key the predicate reads. A gate that asked the second
-// question alone passes a LIVE-ONLY type — and `agent_turn_progress` is
-// exactly one: it stamps `turn_id` like every other phase event and
-// `observe.Record` still refuses it, so the absorbed map's roster clause for
-// it sat behind a branch that answered first and never ran. Asked apart, each
-// failure names its own repair: give the payload a turn id, or say why the
-// type has no row.
-//
-// `stamped` is OFF THE MARSHALLED PAYLOAD, through the same `filled` the
-// wire-contract test uses, rather than off a struct field name or off
-// [wireTags]. The key is what `store.ExtractTags` reads and what the column is
-// filled from, so the key is what decides it — a field named TurnID under a
-// different tag would answer the Go question and the wrong one.
-//
-// `persisted` is the CATEGORY, which is the same value [observe.Record]
-// branches on when it decides whether an event becomes a row at all. Asked of
-// internal/events rather than restated here, for the reason that package's own
-// doc gives about a second copy of a placement map: two lists of which types
-// are stored disagree silently, and the half a test exercises is never the
-// half production writes through.
+// `stamped` is OFF THE MARSHALLED PAYLOAD, through the wire-contract test's
+// `filled`, because the key is what `store.ExtractTags` reads; a field named
+// TurnID under another tag would answer the wrong question. `persisted` is the
+// CATEGORY [observe.Record] branches on, asked of internal/events since two
+// lists of stored types disagree silently.
 func turnScopedTypes(t *testing.T) (stamped, persisted, known map[string]bool) {
 	t.Helper()
 	stamped = map[string]bool{}

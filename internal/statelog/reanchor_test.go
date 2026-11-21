@@ -25,9 +25,8 @@ import (
 )
 
 // reanchorCreated is the live stream's creation instant, WITH a fraction of a
-// second: the broker reports nanoseconds, and a confirmation check that only
-// held at whole seconds refused the very value the CLI told the operator to
-// paste back.
+// second, as the broker reports it: a confirmation checked only to the second
+// would refuse the value the CLI tells the operator to paste back.
 var reanchorCreated = time.Date(2023, 11, 14, 22, 13, 20, 123_456_789, time.UTC)
 
 // keyedCreated is the instant the probe domain's rows were keyed to before the
@@ -201,11 +200,9 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 
 // A REANCHOR REFUSED OVER A RE-ANCHORED PEER NAMES IT, AND HOW TO EVICT IT.
 //
-// The refusal sends the operator to a re-anchored peer, to adopt its snapshot
-// or to evict it if it is gone, and both need its name. It counted the peers,
-// and the names were glued on by the engine outside the sentence the operator
-// is told, so the route answered "1 peer(s) have already re-anchored" and the
-// names reached only the log. Mutation: refuse with the count, or without the
+// The refusal sends the operator to that peer, to adopt its snapshot or evict
+// it if it is gone, and both need its name in the sentence the operator is
+// told, not only in the log. Mutation: refuse with the count, or without the
 // evict command, and this fails.
 func TestARefusalOverAReanchoredPeerNamesIt(t *testing.T) {
 	t.Parallel()
@@ -779,20 +776,9 @@ func (secondProbeDomain) Stream() statelog.StreamSpec {
 
 // ---- the cases ------------------------------------------------------- //
 
-// A REANCHOR MOVES THE ONE DOMAIN IT NAMED, and every other domain's
-// checkpoint stays exactly where it was.
-//
-// The transition used to write every registered domain's checkpoint from the
-// one stream the operator named: the other domains came out keyed to that
-// stream's creation instant and positioned in its sequence space, so their
-// next boot found their own streams "recreated" and stopped their appliers —
-// and re-anchoring one of them did the same to the first. Two domains on two
-// streams here, because one domain hides exactly that.
 // A GENERATION RECORD NAMES ITS OPERATOR WHOLE: who, what kind of party, and
-// the credential they acted through — the three columns every other write
-// carries. The deps carried only the name, so the facts a domain encodes its
-// record from had an empty kind and credential on every reanchor, whatever the
-// domain did with them.
+// the credential they acted through, the three columns every other write
+// carries.
 //
 // Mutation: drop ByKind or OperatorID from the facts Reanchor builds and this
 // fails.
@@ -829,6 +815,11 @@ func TestAGenerationRecordCarriesItsOperatorWhole(t *testing.T) {
 	}
 }
 
+// A REANCHOR MOVES THE ONE DOMAIN IT NAMED, and every other domain's
+// checkpoint stays exactly where it was: keyed to another stream's instant and
+// positioned in its sequence space, another domain's next boot would find its
+// own stream "recreated" and stop its applier. Two domains on two streams,
+// because one domain hides exactly that.
 func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	t.Parallel()
 	f := newReanchorFixture(t)
@@ -902,8 +893,7 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	// AND GOES ON RUNNING across two more fetches it has answered and
-	// handled: a sleep here watched nothing on a runner that let no fetch
-	// happen during it.
+	// handled: a sleep would watch nothing if no fetch happened during it.
 	if runner.Stopped() == nil {
 		secondFetch.awaitAnswered(t, 2, "two fetches past the other domain's checkpoint")
 	}
@@ -1053,10 +1043,8 @@ func TestTheReanchorsStepsRunInTheOrderItsCrashMatrixAssumes(t *testing.T) {
 // A GENERATION RECORD THE BROKER REFUSES IS TOLD WITH ITS OWN REMEDY.
 //
 // A full log is cleared by raising its ceiling and re-running; a record too
-// large and any other refusal are not cleared by re-running at all. The three
-// were one sentence that said the broker refused and that this node's log had
-// its words, so nobody was told what to do. Mutation: fold the arms back into
-// one sentence and every row fails.
+// large and any other refusal are not cleared by re-running at all. Mutation:
+// fold the arms into one sentence and every row fails.
 func TestARefusedGenerationRecordIsToldWithItsRemedy(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1347,13 +1335,11 @@ func TestAnAnchorBelowTheNewGenerationWritesAtZero(t *testing.T) {
 // ALREADY HOLD.
 //
 // The restored case puts the new generation's checkpoint at the log's END, so
-// every record the copy kept is below it and was never consumed in the new
-// generation: the subject's anchor is still the one from the generation before.
-// The publisher used to read that as "a peer wrote this and I have not applied
-// it" and wait for the applier to reach the subject's last record — which it
-// already stood past, so the wait returned at once, the fresh snapshot read the
-// same anchor, and every write to every object the copy kept spent its sixteen
-// rounds and came back a conflict nobody was causing.
+// the subject's anchor is still the one from the generation before, and the
+// checkpoint covers it. Read by the publisher as "a peer wrote this and I have
+// not applied it", the wait returns at once, the fresh snapshot reads the same anchor, and every
+// write to an object the copy kept spends its rounds on a conflict nobody
+// causes.
 func TestAWriteAfterARestoredReanchorArbitratesOnTheRecordItsRowsHold(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -1483,20 +1469,15 @@ func derefAll(expects []*uint64) []string {
 
 // A RE-ANCHORED RUNNER FOLLOWS THE ADOPTED STREAM, WITH NO RESTART.
 //
-// The runner that stopped on a recreated stream is the one every subsystem on
-// the node holds, so the reanchor re-keys THAT runner and its loop is started
-// again: it loads the checkpoint the transition committed and applies the
-// adopted stream from its head, in the new generation. Before this the verdict
-// could not be cleared inside the process, and a runner resumed over the new
-// checkpoint would have placed the adopted stream's records in the generation
-// it had just left.
+// The reanchor re-keys THE runner every subsystem on the node holds and starts
+// its loop again: it loads the committed checkpoint and applies the adopted
+// stream from its head in the new generation, not the one it just left.
 //
-// TWO WAYS TO MEET A REBUILT STREAM, and the runner differs between them: built
-// at a boot AFTER the rebuild it already carries the live instant and stopped
-// at its checkpoint, while one that was running when a live reading found the
-// rebuild still carries the instant it was built with — which is the one a
-// re-key has to replace, or its next run compares the new checkpoint against
-// the old stream and stops again.
+// TWO WAYS TO MEET A REBUILT STREAM: a runner built at a boot AFTER the rebuild
+// already carries the live instant, while one running when a live reading
+// found the rebuild carries the instant it was built with, which the re-key
+// has to replace or its next run compares the new checkpoint against the old
+// stream and stops again.
 func TestAReanchoredRunnerFollowsTheAdoptedStream(t *testing.T) {
 	t.Parallel()
 	born := time.Date(2026, 9, 10, 12, 0, 0, 123_456_789, time.UTC)
@@ -1630,11 +1611,11 @@ func (anonymousProbe) ClaimsIdentity() bool { return false }
 // FROM THE FLEET'S NUMBER, and refuses the domain's reads and writes.
 //
 // A generation moves only by a reanchor, so a peer at a later one holds the
-// rows the log now continues from — and a node left behind whose own readings
+// rows the log now continues from, and a node left behind whose own readings
 // see nothing wrong (below a restored broker's end, or past it once something
-// wrote beyond its checkpoint) carried on serving and arbitrating from rows the
-// fleet had left. Never for a domain claiming no identity, where a peer ahead
-// is a per-node recovery in progress.
+// wrote beyond its checkpoint) would go on serving and arbitrating from rows
+// the fleet has left. Never for a domain claiming no identity, where a peer
+// ahead is a per-node recovery in progress.
 func TestAPeerReanchoringPastThisNodeIsEstablishedFromTheFleet(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -1757,13 +1738,11 @@ func TestARecordFromALaterGenerationStopsTheApplier(t *testing.T) {
 
 // A PASSED GENERATION NAMES THE REMEDY THAT EXISTS.
 //
-// Every refusal over a passed generation said this node would adopt a peer's
-// snapshot on its own. Twice that was false: a generation only an evicted node
-// opened has no snapshot to adopt — the join never asks, and the node waited
-// for a repair that could not come — and a record this node's own reanchor
-// appended before failing has no peer behind it at all. Each now names its own
-// remedy, and the one that moves while the verdict holds — an operator evicting
-// the peer, or readmitting it — is judged again on every beat.
+// Adopting a peer's snapshot is not always one: a generation only an evicted
+// node opened has no snapshot to adopt (the join never asks), and a record
+// this node's own failed reanchor appended has no peer behind it. Each names
+// its own remedy, and the one that moves while the verdict holds (the peer
+// evicted, or readmitted) is judged again on every beat.
 func TestAPassedGenerationNamesTheRemedyThatExists(t *testing.T) {
 	t.Parallel()
 	const self = "node-self"
@@ -1887,13 +1866,12 @@ func TestAPassedGenerationNamesTheRemedyThatExists(t *testing.T) {
 
 // A JOIN RE-KEYS THE RUNNER TO THE FLEET'S HISTORY, AND ONLY TO IT.
 //
-// Both verdicts used to outlive the adoption that answers them — the runner
-// stopped again on the checkpoint the join had just installed, so a node a peer
-// re-anchored past had no way back but deleting its database. They are
-// re-derived from the file as the join left it rather than cleared, because a
-// join that replaced nothing must change nothing: rows still keyed to another
-// stream keep the recreation, and rows still below the fleet's generation keep
-// the passed one.
+// Both verdicts end with the adoption that answers them, or the runner stops
+// again on the checkpoint the join installed and the node has no way back but
+// deleting its database. They are re-derived from the file as the join left
+// it rather than cleared, because a join that replaced nothing must change
+// nothing: rows still keyed to another stream keep the recreation, and rows
+// still below the fleet's generation keep the passed one.
 func TestAJoinReKeysTheRunnerOnlyToTheFleetsHistory(t *testing.T) {
 	t.Parallel()
 	born := time.Date(2026, 9, 10, 12, 0, 0, 123_456_789, time.UTC)
@@ -1963,12 +1941,11 @@ func TestAJoinReKeysTheRunnerOnlyToTheFleetsHistory(t *testing.T) {
 
 // A RE-RUN JUDGES ITS VERDICTS AGAINST THE CHECKPOINT IT LOADS.
 //
-// An adoption replaces every row, and the join then re-keys the runner to them
-// — but the restore of an estate a failed join left closed judges the file
-// against a live instant it may be unable to read, and the re-key does not
-// happen. A loop that trusted the verdicts it held stopped again on every
-// re-run, over rows that were the fleet's history, and nothing short of deleting
-// the database released it. A row that still bears a verdict out keeps it.
+// The join's re-key after an adoption can fail to happen (restoring an estate
+// a failed join left closed judges the file against a live instant it may be
+// unable to read), so a loop trusting the verdicts it holds would stop on
+// every re-run over rows that are the fleet's history, until the database was
+// deleted. A row that still bears a verdict out keeps it.
 func TestARerunJudgesItsVerdictsAgainstTheCheckpointItLoads(t *testing.T) {
 	t.Parallel()
 	born := time.Date(2026, 9, 10, 12, 0, 0, 123_456_789, time.UTC)
@@ -2113,17 +2090,15 @@ func rerun(t *testing.T, h *applyHarness, want uint64) error {
 
 // A GENERATION ANOTHER NODE OPENED IS NEVER OPENED AGAIN, FORCE OR NO FORCE.
 //
-// Two nodes that re-anchor independently each derive the same next generation
-// from their own checkpoints — the register could not be read and both forced,
-// or each read it before the other's row said anything. Exactly one generation
-// record lands on the subject, and the other append loses. The transition used
-// to read "the subject is taken" as its own earlier attempt and carry on, so
-// both committed a checkpoint in the generation over their own rows: two
-// histories under one number, which nothing on the log could reconcile. Now the
-// record that landed is read back, and one this node did not write refuses —
+// Two nodes re-anchoring independently derive the same next generation from
+// their own checkpoints (the register unreadable and both forced, or each read
+// before the other's row said anything), and exactly one generation record
+// lands. Taking "the subject is taken" as its own earlier attempt would commit
+// two histories under one number, which nothing on the log can reconcile. So
+// the landed record is read back, and one this node did not write refuses,
 // however the loss was reported: refused outright, unanswered and found by the
 // probe, or acknowledged as a duplicate by a clustered broker whose window
-// matched a message id before it checked the expectation.
+// matched the message id before it checked the expectation.
 func TestAGenerationAnotherNodeOpenedIsNeverOpenedAgain(t *testing.T) {
 	t.Parallel()
 	peer := func(t *testing.T, writer string) statelog.GenerationRecord {
@@ -2162,9 +2137,8 @@ func TestAGenerationAnotherNodeOpenedIsNeverOpenedAgain(t *testing.T) {
 			f.log.lose = true
 		}},
 		{"acknowledged as a duplicate of the peer's", func(t *testing.T, f *reanchorFixture) {
-			// A MESSAGE ID BOTH NODES WOULD HAVE USED, as the domains' ids
-			// once were: the clustered broker matches it in its window
-			// and never reaches the expectation.
+			// A MESSAGE ID BOTH NODES USE: the clustered broker matches it
+			// in its window and never reaches the expectation.
 			rec := peer(t, "node-b")
 			own, _, err := probeGeneration{keeps: true}.GenerationRecord(statelog.GenerationFacts{
 				Generation: 2, Writer: "node-a",
@@ -2386,9 +2360,9 @@ func (evictingProbe) Evicts(payload []byte) (bool, error) {
 // WHO OPENED EACH GENERATION IS READ OFF THE LOG, past what the register knows.
 //
 // A reanchor appends its record before it commits and before it publishes its
-// position, so a node that died in between opened a generation no row names —
-// and a later reanchor deriving that number from the register alone lost to
-// its record on every attempt.
+// position, so a node that died in between opened a generation no row names,
+// and a later reanchor deriving that number from the register alone would lose
+// to its record on every attempt.
 func TestWhoOpenedEachGenerationIsReadOffTheLog(t *testing.T) {
 	t.Parallel()
 	log := newReanchorLog(nil)
@@ -2465,14 +2439,13 @@ func holdRecord(t *testing.T, db store.ReplicatedHandle, seq uint64, opID string
 // A RESTORED REANCHOR FOLLOWS THE LOG FROM ONE BELOW ITS OWN RECORD, AND
 // WALKS WHAT LANDED BEFORE IT.
 //
-// The end it read is not where it follows from: a node whose rows were the
-// copy's age, whose fence was not yet established, wrote a record between the
-// reading and the append. Placed at the end as read, the checkpoint put that
-// record at the new generation on top of these rows. One below the generation
-// record, it is below the checkpoint instead — and the walk for what the
-// transition discards is taken again up to there, so the record is named: the
-// transition refuses without the operator's word, having opened the
-// generation and committed nothing else, and with it finishes naming what it
+// A copy-age node whose fence is not yet established can write between the
+// reading of the end and the append. At the end as read, the checkpoint would
+// put that record at the new generation on top of these rows; one below the
+// generation record, it is below the checkpoint, and the walk for what the
+// transition discards is taken again up to there. So the record is named:
+// without the operator's word the transition refuses, having opened the
+// generation and committed nothing else; with it, it finishes naming what it
 // discarded.
 func TestARestoredReanchorFollowsFromOneBelowItsOwnRecord(t *testing.T) {
 	t.Parallel()
@@ -2539,8 +2512,8 @@ func TestARestoredReanchorFollowsFromOneBelowItsOwnRecord(t *testing.T) {
 // checkpoint committed. The re-run reads the log's end after that record, and
 // its inputs name the record as its own (ReanchorInputs.Opened): the
 // transition races its own record, finds it, and puts the checkpoint one below
-// it — where the resumed applier applies it first. At the end as read, the
-// record sat below the checkpoint and was applied nowhere.
+// it, where the resumed applier applies it first. At the end as read, the
+// record would sit below the checkpoint and be applied nowhere.
 func TestARerunOfAnInterruptedRestoredReanchorFinishesBelowItsOwnRecord(t *testing.T) {
 	t.Parallel()
 	f := newReanchorFixture(t)
@@ -2584,10 +2557,10 @@ func TestARerunOfAnInterruptedRestoredReanchorFinishesBelowItsOwnRecord(t *testi
 // A REANCHOR FINISHES AFTER ITS CALLER HAS GONE.
 //
 // Once the generation record is on the log the generation is open, and every
-// later step is what makes this node the one the fleet continues from. On the
-// caller's context, a client that gave up — the operator's CLI waits a bounded
-// time, and the API runs this on the request's own context — cancelled the
-// consumer's rebuild halfway and left the generation open with nothing
+// later step is what makes this node the one the fleet continues from. The
+// operator's CLI waits a bounded time and the API runs this on the request's
+// context, so on the caller's context a client giving up would cancel the
+// consumer's rebuild halfway and leave the generation open with nothing
 // committed. The steps after the append run on a context of their own.
 func TestAReanchorFinishesAfterItsCallerHasGone(t *testing.T) {
 	t.Parallel()
@@ -2616,21 +2589,18 @@ func TestAReanchorFinishesAfterItsCallerHasGone(t *testing.T) {
 	}
 }
 
-// A RESTORED REANCHOR'S LOWER GENERATIONS AFTER ITS RECORD ARE VOID — AND THE
+// A RESTORED REANCHOR'S LOWER GENERATIONS AFTER ITS RECORD ARE VOID, AND THE
 // RULE TRAVELS WITH THE CHECKPOINT.
 //
-// The fleet's other nodes learn of a restored reanchor only when their
-// appliers reach its generation record or their heartbeat reads the fleet's
-// generation, and until then a node whose rows were the copy's age goes on
-// writing in the generation it was in — after the generation record, decided
-// from the rows the reanchor did not keep. The applier stopped only on a HIGHER
-// generation, and the abandoned range excludes the one the rows stood at, so
-// those records were applied on top of the kept rows. The transition now says
-// on the checkpoint where its record is, and every lower-generation record
-// after it is void: consumed and applied into no row. Records of the new
-// generation apply, and so does the generation record itself. And the rule is
-// on the checkpoint row, so a peer adopting the re-anchoring node's snapshot
-// before it got past them voids them too.
+// Until its applier reaches the generation record or its heartbeat reads the
+// fleet's generation, a copy-age node goes on writing in its old generation,
+// from rows the reanchor did not keep. The applier stops only on a HIGHER
+// generation and the abandoned range excludes the rows' own, so those records
+// would apply on the kept rows. The checkpoint says where the reanchor's record
+// is, and every lower-generation record after it is void: consumed, applied
+// into no row. New-generation records, the generation record included, apply.
+// The rule is on the checkpoint row, so a peer adopting the snapshot before
+// the re-anchoring node got past them voids them too.
 func TestARestoredReanchorsLowerGenerationsAfterItsRecordAreVoid(t *testing.T) {
 	t.Parallel()
 
@@ -2738,25 +2708,16 @@ func TestARestoredCheckpointsRuleTravelsInASnapshot(t *testing.T) {
 
 // A GENERATION'S AUTHOR IS READ ONE WAY FOR EVERY DOMAIN.
 //
-// The nine generation records — the tracker's, the knowledge base's, the
-// identity estate's, the artifacts log's, the artifact datastore's, the
-// Dashboard Assistant's, chat's, the executor log's and the code log's — name
-// the party a reanchor's facts name, and the audit feed reads those histories side by
-// side, so the facts are read by one rule ([statelog.GenerationFacts.Author])
-// rather than nine copies of it, and each domain's own test holds its record
-// to this one.
-// The kind is an ACTOR kind, the vocabulary the engine's reanchor passes, and
-// one that vocabulary does not hold — a principal's word among them — is an
-// operator; an operator with no credential beside it is a credential acting
-// under its own login, so its name is its credential and nobody else's is;
-// and a name of nothing but spaces names nobody, which is the node, as an
-// empty one does. The copies disagreed on that last: two read spaces as a
-// party.
+// Every domain's generation record names the party a reanchor's facts name,
+// and the audit feed reads them side by side, so one rule
+// ([statelog.GenerationFacts.Author]) reads them all and each domain's own
+// test holds its record to it. A kind outside the actor vocabulary (a
+// principal's word among them) is an operator; an operator with no credential
+// acts under its own login, so its name is its credential, and nobody else's
+// is; a name of only spaces names nobody, which is the node, as an empty one.
 //
-// Mutations: read a principal's word as its actor kind again and a person
-// named by `person` is a human rather than an operator; give every kind the
-// name as its credential and a person's handle lands in the credential
-// column; test the name untrimmed and the spaces are a party.
+// Mutations: read `person` as an actor kind, give every kind its name as its
+// credential, or test the name untrimmed, and a case fails.
 func TestAGenerationsAuthorIsReadOneWayForEveryDomain(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

@@ -18,7 +18,9 @@ func TestAFreshRunListsNothingAgain(t *testing.T) {
 	args := map[string]any{"channel": "C1", "text": "hi"}
 	closed := ledger.Call{Name: "slack_post", Args: args, Result: "done", Digest: turnctx.ArgsDigest(args)}
 	history := []ledger.Iteration{{Iteration: 1, Calls: []ledger.Call{closed}}}
-	told := []BridgedCall{{Call: closed, Seq: 1, Appended: 1, Late: true}}
+	late := closed
+	late.Late = true
+	told := []BridgedCall{{Call: late, Seq: 1, Appended: 1}}
 	opts := ledger.Format(nil, nil)
 	r := &Runner{}
 	for name, tc := range map[string]struct {

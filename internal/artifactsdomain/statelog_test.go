@@ -21,22 +21,19 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE ARTIFACTS DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE, from its
-// declaration through its envelope, determinism, idempotency, versioned fields,
-// stamp, evictions and node gates, exactly as every other domain is.
+// THE ARTIFACTS DOMAIN IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE, as every
+// other domain is.
 func TestTheArtifactsDomainIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
 			Domain:  artifactsdomain.Domain{},
 			Applier: artifactsdomain.NewApplier("suite-node", nil, nil),
-			// Migrate is nil: these tables ship in the replicated estate's
-			// own migration (0043), so a fresh store already has them.
+			// Migrate is nil: the replicated estate's migration 0043 ships
+			// these tables.
 			Encode: encodeSuiteRecord,
-			// THE VERSIONED-FIELD TABLE names what version 2 added (the
-			// folder tree, the brand, a move, a create's folder, a brand
-			// kit's create and a version's brand pin), and carrying builds a
-			// record of each.
+			// THE VERSIONED-FIELD TABLE names what each later version
+			// added, and carrying builds a record of each.
 			Fields:     artifactsdomain.VersionedFields(),
 			Carrying:   carryingSuiteRecord,
 			Kinds:      kindNames(),
@@ -45,8 +42,7 @@ func TestTheArtifactsDomainIsACertifiedDomain(t *testing.T) {
 			EncodeGate: encodeSuiteGate,
 			// THE PRODUCTION ENCODER the engine hands the trim (ADR-0080).
 			EncodeTrimmed: artifactsdomain.EncodeTrimmed,
-			// AND OF ITS READ INDEX'S BARRIER, which the engine registers
-			// for this log: certified to write no row.
+			// AND OF ITS READ INDEX'S BARRIER: certified to write no row.
 			EncodeBarrier: artifactsdomain.EncodeBarrier,
 		}
 	})
@@ -63,9 +59,8 @@ func TestTheArtifactsGateReaderKeepsTheSharedRule(t *testing.T) {
 			Candidate: statelogtest.Candidate{
 				Domain:  artifactsdomain.Domain{},
 				Applier: artifactsdomain.NewApplier("suite-node", nil, nil),
-				// RAW IDS: the family asks the reader about the very ids it
-				// handed out, so a record about one must name it on its
-				// subject as given.
+				// RAW IDS: the family asks the reader about the ids it
+				// handed out, so a record's subject names its id as given.
 				Encode: encodeRawRecord,
 				Kinds:  kindNames(),
 			},
@@ -106,8 +101,8 @@ func kindNames() []string {
 	return out
 }
 
-// suiteNamespace maps the suite's plain ids onto artifact ids, so the records
-// the apply cases run create, extend and pin real artifacts.
+// suiteNamespace maps the suite's plain ids onto artifact ids, so the apply
+// cases create, extend and pin real artifacts.
 var suiteNamespace = uuid.MustParse("0c6f4b8e-2a71-5d3c-9e14-7b2a5c8d1f60")
 
 // suiteArtifact is the artifact the suite's id names.
@@ -166,8 +161,7 @@ func suiteScope(subject artifactsdomain.Subject, artifact string) artifactsdomai
 
 // suitePayload is one valid (subject, op, payload) per kind.
 //
-// THE FIRST THREE KINDS ARE A REAL SEQUENCE: an artifact's create, an asset
-// added to it, and a reader pinning it.
+// THE FIRST THREE KINDS ARE A REAL SEQUENCE ([artifactsdomain.ObjectKinds]).
 func suitePayload(kind artifactsdomain.ObjectKind, artifact, id string) (
 	artifactsdomain.Subject, artifactsdomain.OpKind, any) {
 
@@ -206,8 +200,8 @@ func suitePayload(kind artifactsdomain.ObjectKind, artifact, id string) (
 	case artifactsdomain.KindBrand:
 		return artifactsdomain.BrandSubject(), artifactsdomain.OpAdopt, brandAdoptPayload(artifact)
 	case artifactsdomain.KindComment:
-		// THE SUBJECT IS SPELLED, NOT PARSED: a gate case names its
-		// artifact by a string no id parses.
+		// SPELLED, NOT PARSED: a gate case names its artifact by a string
+		// no id parses.
 		thread := uuid.NewSHA1(suiteNamespace, []byte("thread-"+id))
 		return artifactsdomain.Subject{Kind: kind, ID: artifact + "." + thread.String()},
 			artifactsdomain.OpCommentOpen, commentOpenPayload(id)
@@ -381,11 +375,10 @@ var baseRecordKinds = []artifacts.Kind{
 }
 
 // A KIND THE BASE FORMAT LACKED STAMPS ITS CREATE PAST IT: an older build's
-// create apply refuses a kind it does not serve, so a create stamped at the
-// base version would be refused by an older node and applied by a newer one,
-// and the fleet would diverge. Every kind served now and missing from the base
-// format must be held back by its own row. Mutation: drop the brand kind's row
-// and the brand kit's create is stamped 1.
+// apply refuses a kind it does not serve, so a create stamped at the base
+// version would be refused by older nodes and applied by newer ones, and the
+// fleet would diverge. Mutation: drop the brand kind's row and the brand kit's
+// create is stamped 1.
 func TestEveryArtifactKindTheBaseFormatLackedHasAVersionedRow(t *testing.T) {
 	t.Parallel()
 	for _, kind := range artifacts.Kinds {
@@ -469,8 +462,8 @@ func encodeSuiteGate(node string, readmit bool) ([]byte, error) {
 		artifactsdomain.OpEviction, evictionOf(node, readmit))
 }
 
-// suiteWrite is one write through the domain's own production writer, which is
-// where the framework's stamp is kept or lost.
+// suiteWrite is one write through the domain's production writer, where the
+// framework's stamp is kept or lost.
 func suiteWrite(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error {
 	w, err := artifactsdomain.NewWriter(artifactsdomain.WriterDeps{
 		Publisher: pub, DB: db, SeatKind: seatKinds,

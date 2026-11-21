@@ -69,7 +69,8 @@ export function gateLine(gate: CodeMergeGate): string {
         : "merged by its writers",
     gate.approvals === "one" ? "one approval" : "no approval",
   ];
-  if (gate.approvals_unless?.length) {
+  // AN EXEMPTION FROM NO APPROVAL holds no merge, so a line that said it would read unlike its twin.
+  if (gate.approvals !== "none" && gate.approvals_unless?.length) {
     parts.push(`none for a change of ${classWords(gate.approvals_unless)}`);
   }
   if (gate.human_paths?.length) parts.push(humanPathsWords(gate.human_paths));

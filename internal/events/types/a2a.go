@@ -6,38 +6,22 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Agent-to-agent channels: one ask, one answer, then closed. These events are
-// the audit trail of that exchange — the delivery itself rides the target
-// seat's durable inbox, never a second in-process path.
-//
-// # The three audit records name the turn that published them
+// the audit trail; delivery rides the target seat's durable inbox.
 //
 // [A2AChannelOpened], [A2AMessageSent] and [A2AChannelClosed] each declare a
-// `turn_id`, and that key is the whole of what puts them on the Turn screen:
-// EventLog.Turn is `WHERE turn_id = ?` over a column store.ExtractTags fills
-// from the payload's own top-level field, so a record without it writes an
-// empty column and can never be in a turn's answer however the client bands
-// it. All three went without one for as long as they have existed, which is
-// why the "What else it did" panel advertised colleagues and had never once
-// drawn an ask — and why it failed EMPTY, reading as a turn that talked to
-// nobody rather than as a broken panel.
-//
-// IT IS NOT THE ENVELOPE'S ParentTurnID, which the two WAKE types above carry
-// instead. That one points BACKWARDS, from a wake to the turn that asked for
-// it, and is read by whoever answers. This one is the publisher's own
-// identity, on a record that wakes nobody. A single field on a2a.Ask and
-// a2a.Answer supplies both, because the frame calling the service is both the
-// turn writing the record and the parent of the wake it triggers; they stay
-// two names where they land because two different readers ask two different
-// questions of them — "what else happened on this turn" and "what asked for
-// this".
-//
-// EMPTY IS A REAL ANSWER for exactly one producer: the maintenance sweep
-// closing a channel nobody answered belongs to no turn, publishes no wake, and
-// says so by naming neither a turn nor a closer. See [A2AChannelClosed].
+// `turn_id`, the whole of what puts them on the Turn screen: EventLog.Turn is
+// `WHERE turn_id = ?` over a column store.ExtractTags fills from that field, so
+// a record without it is never in a turn's answer (the panel fails EMPTY).
+// It is NOT the envelope's ParentTurnID, which the two WAKE types carry and
+// which points BACKWARDS to the turn that asked; this is the publisher's own
+// identity. One field on a2a.Ask and a2a.Answer supplies both, but two readers
+// ask different questions. EMPTY IS A REAL ANSWER for the maintenance sweep
+// closing an unanswered channel: no turn, no wake ([A2AChannelClosed]).
 
 // The two WAKE types an A2A exchange puts on a seat's inbox.
 //
@@ -221,9 +205,9 @@ func fencedBrief(b provenance.Boundary, lead, words string, label provenance.Lab
 // Actor is the colleague who asked, not the bus that relayed it.
 func (e A2ARequest) Actor() string { return e.Requester }
 
-// Summary is the dashboard's one-liner for the ask.
-func (e A2ARequest) Summary() string {
-	return lead(e.Requester, "asked a colleague on "+e.ChannelID)
+// PhraseFor is the dashboard's one-liner for the ask.
+func (e A2ARequest) PhraseFor(string) named.Line {
+	return leadLine(e.Requester, named.Words("asked a colleague on ").Name(named.ChannelRef(e.ChannelID)))
 }
 
 // A2AMessage is the wake an answer puts on the REQUESTER's inbox.
@@ -292,9 +276,9 @@ func (e A2AMessage) lead() string {
 // Actor is the colleague who answered.
 func (e A2AMessage) Actor() string { return e.Sender }
 
-// Summary is the dashboard's one-liner for the answer.
-func (e A2AMessage) Summary() string {
-	return lead(e.Sender, "answered a colleague on "+e.ChannelID)
+// PhraseFor is the dashboard's one-liner for the answer.
+func (e A2AMessage) PhraseFor(string) named.Line {
+	return leadLine(e.Sender, named.Words("answered a colleague on ").Name(named.ChannelRef(e.ChannelID)))
 }
 
 // A2AChannelOpened marks a channel being created between two agents.
@@ -354,18 +338,18 @@ type A2AMessageSent struct {
 // which is the inbox WAKE — this is the audit record of the same message.
 func (A2AMessageSent) EventType() string { return "a2a_message_sent" }
 
-// SummaryFor prefers the message's own sender over the actor: the publisher is
+// PhraseFor prefers the message's own sender over the actor: the publisher is
 // the A2A service, not the colleague whose answer this is.
-func (e A2AMessageSent) SummaryFor(actor string) string {
+func (e A2AMessageSent) PhraseFor(actor string) named.Line {
 	who := e.Sender
 	if who == "" {
 		who = actor
 	}
-	phrase := "sent A2A message on " + e.ChannelID
+	phrase := named.Words("sent A2A message on ").Name(named.ChannelRef(e.ChannelID))
 	if e.Recipient != "" {
-		phrase += " → " + e.Recipient
+		phrase = phrase.Words(" → " + e.Recipient)
 	}
-	return lead(who, phrase)
+	return leadLine(who, phrase)
 }
 
 // A2AChannelClosed marks a channel closing — the exchange is over, and a
@@ -381,7 +365,7 @@ func (e A2AMessageSent) SummaryFor(actor string) string {
 type A2AChannelClosed struct {
 	ChannelID string `json:"channel_id"`
 	// ClosedBy is the participant whose turn closed the channel, and EMPTY
-	// for the maintenance sweep — which is what [A2AChannelClosed.Summary]
+	// for the maintenance sweep, which is what [A2AChannelClosed.PhraseFor]
 	// reads as "system". It went unset on every path until the sweep gained
 	// a producer, so the one branch that says a participant closed it was
 	// dead code and every close in the engine's history was attributed to
@@ -403,14 +387,14 @@ type A2AChannelClosed struct {
 // EventType is the "a2a_channel_closed" wire type.
 func (A2AChannelClosed) EventType() string { return "a2a_channel_closed" }
 
-// Summary names who closed the channel, falling back to the engine itself for
+// PhraseFor names who closed the channel, falling back to the engine itself for
 // the idle sweep — see the branch below.
-func (e A2AChannelClosed) Summary() string {
+func (e A2AChannelClosed) PhraseFor(string) named.Line {
 	who := e.ClosedBy
 	if who == "" {
 		// An idle-close is the maintenance sweep's doing, not a participant's.
 		who = "system"
 	}
-	return fmt.Sprintf("%s closed A2A channel %s (%d messages)",
-		who, e.ChannelID, e.MessageCount)
+	return named.Words(who + " closed A2A channel ").Name(named.ChannelRef(e.ChannelID)).
+		Words(fmt.Sprintf(" (%d messages)", e.MessageCount))
 }

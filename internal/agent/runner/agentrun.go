@@ -24,39 +24,17 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The executor, run by its harness's own agentic loop.
+// The executor is its harness's own run in a box: its loop, shell and edits.
+// Its tools reach it over the MCP bridge, through the SAME tools.Surface every
+// engine-driven phase calls; the engine keeps the rest, refusing to fork it:
+//   - the PROMPT (identity, chart, memory, skills, workers), built once here;
+//   - the SURFACE and its skill guard: a tool denied to the seat is denied it;
+//   - the SUBMISSION (submit_work over the bridge), its outcomes and rescue;
+//   - the REVIEWER, the engine's own loop: it is not the thing reviewed.
 //
-// # What is the harness's, and what stays the engine's
-//
-// Every seat's executor is its harness's own run, in a box: its own loop,
-// its own shell, its own edits and commits. The seat's tools reach it over the
-// MCP bridge, which dispatches through the SAME tools.Surface every
-// engine-driven phase calls. So what the harness owns is how the executor's work
-// happens; everything around it stays the engine's, and each of those is a
-// deliberate refusal to fork:
-//
-//   - The PROMPT is the seat's: identity, chart, memory, skills and workers,
-//     built once here and handed to the harness as an appended system prompt and
-//     the brief it runs.
-//   - The SURFACE is built the same way as every phase's, with the same skill
-//     guard. The bridge executes against it, so a tool denied to the seat is
-//     denied to its run.
-//   - The SUBMISSION is the same tool. The harness ends its run by calling
-//     submit_work over the bridge, so the outcome vocabulary and the rescue
-//     path are the engine's.
-//   - The REVIEWER is the engine's own loop. The point of a reviewer is that
-//     it is not the thing being reviewed.
-//
-// # Why the turn parks
-//
-// An agentic run outlives its turn — that is what makes it worth doing — so it
-// is detached: the phase returns suspended, the row carries what a resume
-// needs, and the run's collection re-enters the same turn, possibly in another
-// process on another node. What it does NOT carry is a conversation: there is
-// no engine loop to re-enter, which is why [execstate.State] holds the turn's
-// bookkeeping and nothing a model said — and the context the turn froze at its
-// start, since a turn sent back for another iteration launches its next run
-// from the segment that collected this one.
+// The run outlives its turn, so the phase returns suspended and the collection
+// re-enters the turn, maybe on another node. No conversation is carried: only
+// [execstate.State] and the context the turn froze at its start.
 
 // AgentLauncher starts the executor as its harness's own agentic run.
 //
@@ -134,7 +112,7 @@ type AgentRunRequest struct {
 	// ([Runner.retold]). EVERY BRIEF THE LAUNCH MAY HAND ITS RUN TELLS EACH OF
 	// THEM AGAIN: the fresh one among every note the turn has read, and a
 	// continued session's, its job's own copy's included, from the first such
-	// read on ([Runner.notesHeldBy], [Runner.inPlaceNotes]). So the launch
+	// read on ([Runner.firstUnheld], [Runner.inPlaceNotes]). So the launch
 	// records each read by the job it opens, told again, at its take's own
 	// place among the reads (sandbox.NoteRead.Retold), and the turn's ending
 	// says it was delivered there where the job started. None of them is
@@ -182,6 +160,15 @@ type AgentRunRequest struct {
 	// ([prompts.CalledBefore]). Nil for every other launch.
 	Continue *Continuation
 
+	// BriefRead is the read of the round's log every brief of the launch was
+	// built from ([Resume.BridgedRead]), nil on a turn's first launch, which no
+	// read precedes. Its opening marks late every call of the round the log
+	// took after it, or carries them late into the new round a send-back
+	// starts (sandbox.LaunchRequest.BriefRead): calls of the job before that
+	// landed while the relaunch was readied, which no brief told. Every
+	// relaunch hands it, a send-back's as much as one carrying the round on.
+	BriefRead *sandbox.LogRead
+
 	// Session is the turn's kept session the launch continues, in whatever box
 	// it gets — the session of the job the relaunch follows, as the launcher
 	// said it would before the run's briefs were written ([SessionProber]) —
@@ -193,6 +180,12 @@ type AgentRunRequest struct {
 	// after all — the object unreadable, the box's harness too old, the
 	// seat's budget unable to carry it — starts fresh with Brief.
 	Session *SessionContinuation
+
+	// FreshOwn is the leads Brief opened with of its own where Continue is
+	// nil: a turn's first launch and a send-back, whose fresh brief opens a
+	// session of the run's own with the turn's task (freshLead). The launch
+	// keeps them whichever brief it hands its run (sandbox.LaunchRequest.FreshOwn).
+	FreshOwn []sandbox.Lead
 
 	// Decided is told how the launch decided its run takes up a session —
 	// the turn's kept capture, the job before's own copy in its box, or none
@@ -230,21 +223,18 @@ type AgentRunRequest struct {
 // Continuation is how a launch carries on an asking run — see
 // [AgentRunRequest.Continue].
 type Continuation struct {
-	// SessionID is the asking run's harness session; Brief its next prompt —
-	// what carries it on; where the job's harness is not known to have ended
-	// its own run, that the session was cut off or may have been, every call
-	// of the round and every note the turn has read, any of which such a copy
-	// may lack, and where it did, that a successful submission among the
-	// calls it holds does not stand, the reads its job's brief counted
-	// without listing them ([Resume.Owed]) and the calls the round's log took
-	// late, which no copy is known to hold ([Runner.inPlaceAfter]), and the
-	// notes from a read the record marks unanswered on; and the notes
-	// [AgentRunRequest.Notes] carries, which no copy has read — a served one
-	// told as a note it may already show ([Runner.inPlaceNotes]). The floor of a
-	// launch that continues the copy counts all of it: beside the copy's
-	// context where its job's newest capture or its job's record measured it
-	// ([Continuation.ContextTokens]), and beside the static floor where neither
-	// did (internal/engine's continuedFloor).
+	// SessionID is the asking run's harness session; Brief its next prompt,
+	// which carries it on. Where the job's harness is not known to have ended
+	// its run, Brief says the session was or may have been cut off and tells
+	// every call of the round and note the turn has read. Where it did, Brief
+	// says a successful submission among the calls the copy holds does not
+	// stand, and tells the reads its brief counted without listing
+	// ([Resume.Owed]), the late calls ([Runner.inPlaceAfter]) and the notes
+	// from a read no session of its job holds on. Either way it tells
+	// [AgentRunRequest.Notes], a served one as a note it may already show
+	// ([Runner.inPlaceNotes]). The launch's floor counts all of it beside the
+	// copy's measured context ([Continuation.ContextTokens]), else beside the
+	// static floor (internal/engine's continuedFloor).
 	SessionID string
 	Brief     string
 
@@ -259,23 +249,26 @@ type Continuation struct {
 	RequestRefused bool
 
 	// ContextTokens is what the last request of that session carried: the
-	// larger of its newest capture's measure ([SessionBasis.ContextTokens])
-	// and the job's record's, which the read that collected the job took off
-	// its run's own account of its requests, or carried along the copy's
-	// lineage where the job made none ([Resume.ContextTokens]). What the
-	// relaunch sends again before Brief where it continues the session in its
-	// box, which its floor is made of. Zero where neither measured it, which
-	// holds the launch to the static floor with Brief beside it.
+	// larger of its newest capture's measure, kept or not
+	// ([SessionBasis.CopyContext]), and the job's record's, which the read
+	// that collected the job took off its run's own account of its requests,
+	// or carried along the copy's lineage where the job made none
+	// ([Resume.ContextTokens]). What the relaunch sends again before Brief
+	// where it continues the session in its box, which its floor is made of.
+	// Zero where neither measured it, which holds the launch to the static
+	// floor with Brief beside it.
 	ContextTokens int64
 
-	// BriefRead is how many calls the round's log had taken at the read
-	// every brief of the launch was built from ([Resume.BridgedRead]): the
-	// launch's opening of the job's log marks every call of the round the log
-	// took after it late ([BridgedCall.Late]) — calls of the job before that
-	// landed while the relaunch was readied, which no brief told — but the
-	// call a person approved, which the lead tells. NIL marks none: a launch
-	// built from no such read.
-	BriefRead *int
+	// NextRequest is the harness's own estimate of that session's next
+	// request: the job's record's, which the read that collected the job made
+	// of the copy its box holds ([Resume.NextRequest]), where it holds a
+	// figure, else its newest capture's ([SessionBasis.CopyNextRequest]).
+	// What the relaunch's floor is made of where it holds a figure, in place
+	// of ContextTokens, which under-counts it by the last request's reply and
+	// everything after it, and over-counts it past a compaction no request
+	// has followed; never the larger of the two, which would put that
+	// compacted figure back.
+	NextRequest sandbox.NextRequest
 
 	// Told is what Brief told of the round, and Fresh what the launch's fresh
 	// brief, [AgentRunRequest.Brief], told of it (every call of the round,
@@ -288,6 +281,29 @@ type Continuation struct {
 	// them ([Resume.Owed], [SessionBasis.Owed]): a session holds what its brief
 	// told, never what its budgets left out.
 	Told, Fresh sandbox.BriefTold
+
+	// Summarized is the copy's brief told as a session that may be a
+	// summary, beside Brief, where the launch judges its first request in the
+	// box ([firstRequest.byBox]), and SummarizedTold what it told of the
+	// round: handed where the box's point does not prove Brief whole. ""
+	// elsewhere. Count and CountProvider are the job's record's count of the
+	// copy and its reply's provider ([Resume.Count]), which it is judged by.
+	Summarized     string
+	SummarizedTold sandbox.BriefTold
+	Count          *sandbox.ResumedCount
+	CountProvider  string
+}
+
+// inPlaceNextRequest is the estimate of the next request of the copy a job's
+// box holds that a relaunch continuing it in place is held to
+// ([Continuation.NextRequest]): record's, the read of the copy itself as its
+// job ended, where it holds a figure, and else captured's, the job's newest
+// capture's.
+func inPlaceNextRequest(record, captured sandbox.NextRequest) sandbox.NextRequest {
+	if record.Tokens > 0 {
+		return record
+	}
+	return captured
 }
 
 // SessionDecision is how a launch decided its run takes up a session, told
@@ -310,9 +326,17 @@ type SessionDecision struct {
 	// of what the kept session holds ([SessionContinuation.Exact]): its
 	// box's harness answered the release the reading was read for, so the
 	// run reads that telling's brief and holds what that telling held.
-	// False where the launch handed the brief told by the save point, or
-	// continues no kept session.
-	Exact bool
+	// Unheld says it is the one for a box whose release the resume was not
+	// read in ([SessionContinuation.Unheld]), whose telling the run reads
+	// in turn. Both false where the launch handed the brief told by the
+	// save point, or continues no kept session.
+	Exact, Unheld bool
+
+	// Summarized says the brief the launch handed is the one told as a
+	// session that may be a summary ([SessionContinuation.Summarized],
+	// [Continuation.Summarized]): the box's point did not prove the held one
+	// whole, so the run's guard arms nothing.
+	Summarized bool
 }
 
 // SessionContinuation is how a launch continues a session in whatever box it
@@ -346,6 +370,51 @@ type SessionContinuation struct {
 	// to every other box, and drops it alone where the seat's budget cannot
 	// carry it but carries the rest (internal/engine's continuedFloor).
 	Exact *ExactTelling
+
+	// Summarized is the briefs told as a session that may be a summary,
+	// beside Brief and Replaced, where the launch judges the first request
+	// in its box ([firstRequest.byBox]): handed where that box's point does
+	// not prove the brief it would hand sends the session whole. Never
+	// dropped alone: the floor counts it as it counts Brief. Count and
+	// CountProvider are what the launch judges by ([keptCount]).
+	Summarized    *SummarizedTelling
+	Count         *sandbox.ResumedCount
+	CountProvider string
+
+	// Unheld is the briefs for a box whose release the resume was not read
+	// in, beside Brief and Replaced; nil where they would tell the same
+	// ([UnheldTelling]). The launch hands one of them only to such a box.
+	Unheld *UnheldTelling
+
+	// UnheldDropped says the seat's budget could not carry Unheld's briefs,
+	// which internal/engine's continuedFloor dropped alone on its copy: the
+	// launch continues the session only in a box whose release the resume
+	// was read in. The runner never sets it.
+	UnheldDropped bool
+}
+
+// SummarizedTelling is a kept path's briefs told as a session that may be a
+// summary ([SessionContinuation.Summarized]): Brief for the box the session
+// was last worked in, Replaced for any other, and what they told of the round.
+type SummarizedTelling struct {
+	Brief, Replaced string
+	Told            sandbox.BriefTold
+}
+
+// UnheldTelling is a relaunch's briefs for a box whose harness answers a
+// release whose resume this build did not read (internal/sandbox/executor's
+// claudeResumeRead): a read at a hook's step is confirmed by what the job's
+// session showed, as a release the reading was read for resumes it, so such a
+// box holds none of them. Told as [SessionContinuation]'s briefs are, but the
+// notes from the first read at a hook's step on, as notes the session may
+// already show ([Runner.firstUnheld]), and every late call a hook took, which
+// they credit no telling of ([Telling.Hook]). Built only where they differ.
+type UnheldTelling struct {
+	Brief, Replaced string
+
+	// Told is what Brief and Replaced told of the round, as
+	// [SessionContinuation.Told] is theirs.
+	Told sandbox.BriefTold
 }
 
 // ExactTelling is a relaunch's briefs told by a reading of what the kept
@@ -355,12 +424,10 @@ type SessionContinuation struct {
 // tell every call after the session's save point.
 //
 // READ FOR THE RELEASE THAT WROTE THE SESSION ([SessionBasis.Release]), the
-// relaunch's best word for the release that resumes it, since the relaunch's
-// box is acquired inside the launch, after its briefs are written: so the
-// launch hands these briefs only where the box's harness, asked before its
-// brief is chosen, answers exactly Resumer (internal/sandbox's continueKept),
-// and every other box the briefs told by the save point, which tell more and
-// never less.
+// best word for the release that resumes it, since the box is acquired after
+// the briefs are written: these briefs go only to a box whose harness answers
+// exactly Resumer (internal/sandbox's continueKept); every other box gets the
+// save-point briefs, which tell more and never less.
 type ExactTelling struct {
 	// Resumer is the release the reading was read for
 	// (sandbox.HoldingsAsk.Resumer), "2.1.310": the one a box's harness must
@@ -405,22 +472,17 @@ type SessionBasis struct {
 	Release string
 
 	// Through and NoteCursor are what the session accounts for, so the brief
-	// that continues it carries what came after: its save point — how many of
-	// the round's calls the run's log had taken at the read the capture was
-	// placed by, its own or, where its harness may not have written every call
-	// it made, an earlier capture's (sandbox.SessionCapture.Through), every
-	// call the log took after it ([BridgedCall.Appended] past it) being one the
-	// session may not have been answered — and the last note read the run's
-	// record says it holds (sandbox.SessionCapture.NoteCursor), read only where
-	// its harness ended its own run: a session cut off is told every note the
-	// turn has read ([Runner.keptSession]). The cursor stops before the first
-	// read the record marks unanswered, and is stopped there again by the
-	// turn's carried reads where that mark landed after the capture was
-	// stamped ([Runner.notesHeldBy]). Zero holds none of the round's calls.
-	// Through is what the record says the session holds, the one test by the
-	// save point ([heldAt]); of a session cut off, a reading of its archive
-	// may find it holding more, by each call's own key ([HoldingsAsker]), and
-	// the brief told by that reading tells none of those either.
+	// that continues it carries what came after. Through is the save point:
+	// how many of the round's calls the log had taken at the read the capture
+	// was placed by, or an earlier capture's where the harness may not have
+	// written every call (sandbox.SessionCapture.Through); later calls
+	// ([BridgedCall.Appended] past it) may be unanswered. Zero holds no call.
+	// It is the one test ([heldAt]); a reading of a cut-off session's archive
+	// may find more, by call key ([HoldingsAsker]), and its brief omits those.
+	// NoteCursor is the last note the record says it holds, read only where the
+	// harness ended its run ([Runner.keptSession]); it stops before the first
+	// read no session of the job holds, and again by carried reads marked after
+	// the capture was stamped ([Runner.notesHeldBy]).
 	Through    int
 	NoteCursor int
 
@@ -433,30 +495,86 @@ type SessionBasis struct {
 	// none out, or the capture states none, an older build's.
 	Owed []int
 
+	// LateOwed is the late calls that brief counted without listing them
+	// (sandbox.SessionCapture.LateOmitted), apart from Owed: every brief tells
+	// them again, and the session, holding only that count of each, is
+	// credited no telling of one ([heldByTelling]).
+	LateOwed []int
+
 	// Interrupted says the session was captured from a harness that was cut
 	// off, so its transcript may end mid-call, and may lack the brief its job
 	// was handed and the notes its job read.
 	Interrupted bool
 
+	// WentOn says the kept capture the basis continues was taken while its
+	// job still worked (sandbox.SessionCapture.Final unset): its job's harness
+	// went on in its box past it, so the session ends where it was saved, not
+	// where its run stopped, and CapturedAt is when it was saved
+	// (sandbox.SessionCapture.At), zero where the capture states none. Told so
+	// in place of the cut-off words ([prompts.SavedSession], [Runner.keptSession]):
+	// told only that it was cut off, the run takes the session's end for where
+	// its work stopped. Such a capture is always cut off as well (Interrupted),
+	// so how its calls, leads and notes are told does not move. The names and
+	// shape of [BaseBasis.WentOn] and CapturedAt, so both bases say "the run
+	// went on past the session above" alike; false and zero, which say
+	// nothing, on a basis that continues no kept capture of the turn's.
+	WentOn     bool
+	CapturedAt time.Time
+
 	// Home is where the session was last worked: absolute paths in its
 	// transcript are under it.
 	Home string
 
-	// ContextTokens is what the last request of the session of the job the
-	// relaunch follows carried, as that job's newest capture measured it —
-	// kept or not, so set where the relaunch continues no kept capture too:
-	// what a launch that continues that session sends first, in a box it is
-	// restored into or the job's own, which the launch's floor is made of, in
-	// the job's own box beside what the job's record measured
-	// ([Continuation.ContextTokens]). Zero where no capture measured any.
+	// ContextTokens is what the last request of the kept capture the basis
+	// continues carried, as that capture measured it
+	// (sandbox.SessionCapture.ContextTokens): what a launch that restores it
+	// sends first, in whatever box it gets, which the floor of the session it
+	// was asked to continue in any box is made of (internal/engine's
+	// keptFloor). The capture's OWN, as Count, Owed and Interrupted are, and
+	// as [BaseBasis.ContextTokens] is the base's: a session restored from a
+	// capture sends what that capture holds, never what its job's copy went
+	// on to carry past it ([SessionBasis.CopyContext]). Zero where the basis
+	// continues no capture of the turn's, or the capture measured none.
 	ContextTokens int64
 
-	// Count is what Claude Code counts the kept capture's session at before
-	// its next request, as the take read its archive's main thread whole
+	// NextRequest is the harness's own estimate of the next request of the
+	// same kept capture's session, as its take read it
+	// (sandbox.SessionCapture.NextRequest): what that launch's floor is made
+	// of where it holds a figure, in place of ContextTokens. The capture's
+	// OWN, as ContextTokens is, never a newer capture's of its job it was
+	// continued past ([SessionBasis.CopyNextRequest]). Zero where the basis
+	// continues no capture of the turn's, or the capture estimated none.
+	NextRequest sandbox.NextRequest
+
+	// CopyContext is what the last request of the session of the job the
+	// relaunch follows carried, as that job's newest capture measured it,
+	// KEPT OR NOT, so set where the basis continues no kept capture too: the
+	// job's own copy in its box, which went as far as that newest capture
+	// and maybe further, and which a launch that carries the round on in that
+	// box sends first. Read only for the floor of that in-place session,
+	// beside what the job's record measured ([Continuation.ContextTokens]);
+	// never for a kept capture's, which is its own
+	// ([SessionBasis.ContextTokens]). Zero where no capture of that job
+	// measured any.
+	CopyContext int64
+
+	// CopyNextRequest is the harness's own estimate of the next request of
+	// that same copy, as the same newest capture's take read it, kept or not
+	// (sandbox.ContinuedSession.CopyNextRequest): the in-place floor's figure
+	// where the job's record holds none ([Continuation.NextRequest]); never a
+	// kept capture's ([SessionBasis.NextRequest]). Zero where that capture
+	// estimated none.
+	CopyNextRequest sandbox.NextRequest
+
+	// Count is what the session's harness counts the kept capture's session
+	// at before its next request, as the take read its archive whole
 	// (sandbox.SessionCapture.ResumedCount): what the kept path's first
 	// request is judged by ([firstRequest], [keptCount]). Nil where the
 	// capture counted nothing, which reads as a session that may compact.
-	Count *sandbox.ResumedCount
+	// CountProvider is the provider of the reply an OpenCode count is
+	// anchored on (sandbox.SessionCapture.CountProvider), "" for any other.
+	Count         *sandbox.ResumedCount
+	CountProvider string
 
 	// Window is what the seat's executor chain may hold a Claude Code run to:
 	// the least standard window over its Claude Code members, on each one's
@@ -528,18 +646,15 @@ type BaseBasis struct {
 }
 
 // SessionProber is an [AgentLauncher] that says, before a launch writes its
-// run's briefs, which session the launch may continue: on a relaunch, the kept
-// capture of the job it follows where its harness and format let a runner the
-// launch can pick restore it; else, and on a turn's first launch, the session
-// the conversation's last turn left, where the turn froze one and has kept none
-// of its own; or why neither. Which member the launch picks, and whether the
-// seat's budget can carry the session, are the launch's to decide, once the
-// briefs exist.
+// briefs, which session it may continue: on a relaunch, the kept capture of the
+// job it follows where a runner the launch can pick restores it; else, and on
+// a first launch, the session the conversation's last turn left; or why
+// neither. The member picked and the budget's room are the launch's to decide
+// once the briefs exist.
 //
-// ASKED FIRST, by every launch, because what the run is told depends on it: a
-// continued session is told what it lacks rather than everything. OPTIONAL: a
-// launcher without it continues no session, which every launch then starts
-// fresh, or in place.
+// ASKED FIRST, by every launch, because a continued session is told what it
+// lacks rather than everything. OPTIONAL: without it no session is continued
+// and every launch starts fresh, or in place.
 type SessionProber interface {
 	ProbeSession(ctx context.Context) SessionBasis
 }
@@ -561,19 +676,16 @@ type HoldingsAsker interface {
 
 // executeAsAgentRun launches the executor as a detached agentic run.
 //
-// It builds the surface and the prompt, hands them to the launcher, and
-// parks. The state it records carries no conversation — see [execstate.State]
-// — but everything a resume needs: the round, the ledger, the surface it may
-// still use, and the skills it had loaded.
+// It builds the surface and prompt, hands them to the launcher, and parks. The
+// recorded state carries no conversation ([execstate.State]) but all a resume
+// needs: the round, the ledger, the usable surface, the loaded skills.
 //
 // A LAUNCH THAT DOES NOT HAPPEN STILL CLOSES ITS PHASE. The started record is
-// published before the launch, carrying the fresh brief — the prompt a run
-// that starts a session of its own is sent, and where a relaunch continues the
-// session of the job it follows, the brief its launch hands it follows as the
-// phase's opening frame once the launch has chosen it ([Runner.sessionDecided]);
-// a launch refused after that publishes the phase's completion too — failed,
-// or stopped where a person stopped it — or the phase reads as still running
-// for ever on every screen that draws it.
+// published before the launch with the fresh brief; where a relaunch continues
+// a session, its own brief follows as the opening frame once the launch has
+// chosen it ([Runner.sessionDecided]). A launch refused after that publishes
+// the completion too (failed, or stopped by a person), or the phase reads as
+// running for ever.
 func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	history []ledger.Iteration,
 ) (_ turn.Work, _ turn.Surface, err error) {
@@ -650,8 +762,8 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		// AND JUDGED ON THAT LEAD, known before the budget is asked: where
 		// its harness may hand the session to its model as a summary, the
 		// telling of a session that may be one is handed ([firstRequest]).
-		briefs.kept, briefs.keptHolds, briefs.exact = r.keptTellings(ctx, basis, collected, round, nil, history,
-			built, fresh, "").led(ctx, r, r.sendBackLead(notes).Text, reviewLead(history))
+		briefs.kept, briefs.keptHolds, briefs.exact, briefs.unheldHolds = r.keptTellings(ctx, basis, collected,
+			round, nil, history, built, fresh, "").led(ctx, r, r.sendBackLead(notes).Text, reviewLead(history))
 		// THE COLLECTED JOB'S STATE AS ITS SESSION HOLDS IT ([Resume.parked]):
 		// the session this continues is that job's, and holds the skills its
 		// launch armed only where its box said it took them up.
@@ -689,21 +801,17 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 		r.steerReturn(ctx, Launched{}, fresh)
 		return turn.Work{}, turn.Surface{}, fmt.Errorf("runner: %s: %w", phase.Execute, refused)
 	}
-	// THE PROMPT REACHES THE RECORD, published here because nothing else
-	// will: the collection's own record deliberately carries no prompt (it
-	// collects a run rather than opening a conversation). Without this an
-	// operator reading a turn sees a run that finished and no sign of what
-	// it was asked.
+	// THE PROMPT REACHES THE RECORD, published here because the collection's
+	// record carries no prompt: otherwise an operator sees a finished run and
+	// not what it was asked.
 	//
-	// The surface travels too, whose definitions are NOT in the prompt
-	// below: they reach the harness over the MCP bridge, where the harness's own
-	// model is billed for every one of them. See [emitter.promptSize].
+	// The surface travels too; its definitions are NOT in the prompt but reach
+	// the harness over the MCP bridge, billed to its model. See
+	// [emitter.promptSize].
 	//
-	// ONE ROUND OF ONE, the cap the collected record states too: the
-	// engine's whole exchange with the run is this launch and its answer,
-	// and the harness's own turns inside it are bounded by the run's turn cap
-	// (`max_turns`) rather than by anything the engine states here. See
-	// [agentRunResult].
+	// ONE ROUND OF ONE, the cap the collected record states too: the engine's
+	// exchange is this launch and its answer; the harness's own turns are
+	// bounded by `max_turns`. See [agentRunResult].
 	emit := r.emitter()
 	began := time.Now()
 	caps := roundCaps{max: runRound, ceiling: runRound}
@@ -711,11 +819,16 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	decided := &launchDecided{}
 
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
-		System:     system.Text,
-		Brief:      user.Text,
-		Notes:      fresh,
-		Retold:     r.retold(),
+		System: system.Text,
+		Brief:  user.Text,
+		Notes:  fresh,
+		Retold: r.retold(),
+		// A SEND-BACK'S READ, the collection's this segment made, whose round
+		// its opening carries the unread calls of into the new one; none on a
+		// turn's first launch.
+		BriefRead:  sendBackRead(r.cfg.Resume),
 		Session:    briefs.kept,
+		FreshOwn:   freshLead(round, history, notes),
 		Decided:    r.sessionDecided(ctx, emit, round, system, surface, caps, briefs, decided),
 		Started:    r.sessionStarted(ctx, emit, round, system, surface, caps, briefs, decided),
 		Surface:    surface,
@@ -748,37 +861,29 @@ func (r *Runner) executeAsAgentRun(ctx context.Context, round int, notes string,
 	return turn.Work{Calls: calls(surface), Suspended: true}, describe(surface), nil
 }
 
+// sendBackRead is the read of the collected round's log a send-back's briefs
+// were built from ([Resume.BridgedRead]), nil where no collection precedes the
+// launch: a turn's first.
+func sendBackRead(resume *Resume) *sandbox.LogRead {
+	if resume == nil {
+		return nil
+	}
+	read := resume.BridgedRead
+	return &read
+}
+
 // continueAgentRun carries on a run that parked on a person's question, now
-// answered ([Asked]), whose job was lost with its host ([Lost]), which was
-// refused on a sign-in replaced while it ran ([Rotated]), or whose continued
-// session its provider refused ([Refused]): the SAME round,
-// relaunched rather than collected — continuing the session of the job it
-// follows, from that job's kept capture in whatever box the launch gets, or
-// as the job's own box holds it, and as a fresh run told what happened where
-// the session can be continued neither way, as a refused one never can. The
-// launch decides which, once it knows which box it has.
+// answered ([Asked]), lost with its host ([Lost]), refused on a replaced
+// sign-in ([Rotated]), or whose continued session was refused ([Refused]): the
+// SAME round, relaunched rather than collected, continuing the followed job's
+// session or else fresh. A round that may not be carried on ([Lost.Limit])
+// closes here as failed and ends the turn ([turn.ErrPermanent]).
 //
-// A ROUND THAT MAY NOT BE CARRIED ON AGAIN ([Lost.Limit]) is not relaunched:
-// its phase is closed here as failed, saying why, and the turn ends with it —
-// the refusal is permanent ([turn.ErrPermanent]), so neither path a turn
-// arrives by runs it again.
-//
-// THE ROUND'S SURFACE AND CLOCK CARRY ON. The surface is the job's as it left
-// it — the tools its launch had active and what its bridged calls did to it
-// since — and its calls so far are seeded into the turn's call log through
-// that surface before the relaunch, so the relaunched run's writes go on
-// counting from them: the one rebuild every segment that re-enters a run makes
-// ([Runner.rebuiltSurface]). ITS GUARD IS THE RELAUNCH'S: it holds what the
-// session the launch decides its run takes up holds — the job's own, which
-// loaded what it did, or none — and is empty from the relaunch's last step
-// before its launch until the launch decides ([Runner.sessionDecided]); the
-// call a person approved is made before that, under the asking session's
-// guard as the rebuild armed it. The round's launch time keeps accumulating from
-// the instant the round first launched. No new phase is opened: the round's
-// started record was published when it first launched, the prompt this
-// relaunch hands its run is published as the phase's opening frame once the
-// launch has chosen it, and the round's completion is the collection that
-// finally closes it — unless this relaunch is refused, which closes it here.
+// The surface is the job's as it left it, its calls seeded into the call log
+// ([Runner.rebuiltSurface]). ITS GUARD IS THE RELAUNCH'S: empty until the
+// launch decides ([Runner.sessionDecided]); the approved call is made before
+// that, under the asking session's guard. The round's launch time keeps
+// accumulating from its first launch; no new phase opens.
 func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteration,
 	state execstate.State, carry carried, bridgedCalls []BridgedCall,
 ) (_ turn.Work, _ turn.Surface, err error) {
@@ -848,7 +953,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// not known to have ended its own run, after every note the turn has
 	// read, which such a copy may lack ([Runner.inPlaceNotes]): a copy whose
 	// harness ended its own run holds every note it read, and its brief's,
-	// but a read its record marks unanswered.
+	// but a read its record marks unanswered or restarted.
 	fresh := r.steerBrief(ctx)
 	system, user := r.executorPrompt(ctx, "", history, built, fresh)
 	// ITS TOOL SKILLS HANDED AGAIN, as every launch hands them: the box's
@@ -857,20 +962,17 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// already holds.
 	handed := r.handSkills(ctx, built)
 	// AND THE SESSION OF THE JOB IT FOLLOWS, CONTINUED in whatever box the
-	// launch gets (continued.go), where its launcher says it can and the
-	// round may be continued from it at all: a round lost a second time
-	// starts fresh rather than replay the state it was lost in ([Lost]) —
-	// neither from the job's kept capture nor as its box holds it. ITS BRIEF
-	// BUILT HERE, all but its lead ([Runner.keptSession]): telling the session
-	// the calls after its save can call the seat's auxiliary model, which the
-	// budget asked below must count, and the lead says what the call a person
-	// approved returned, which is made only after that — so neither brief
-	// lists that call, which a later attempt at the answer finds in the
-	// round's log, beside the lead ([carried.tellsHeld]).
-	// THE PROBE IS ASKED OF EVERY RELAUNCH, a round lost a second time
-	// included: it continues nothing, but the session the probe read is the
-	// only record of what the round's jobs did in their boxes, and its run is
-	// told it may read it ([Runner.namingKeptSession]).
+	// launch gets (continued.go) where the launcher says it can; a round lost
+	// a second time starts fresh rather than replay the state it was lost in
+	// ([Lost]). ITS BRIEF IS BUILT HERE, all but its lead
+	// ([Runner.keptSession]): telling the calls after the save can call the
+	// auxiliary model, which the budget asked below must count, while the lead
+	// says what the approved call returned, made only after that. So neither
+	// brief lists that call; a later attempt finds it in the round's log
+	// ([carried.tellsHeld]). THE PROBE IS ASKED OF EVERY RELAUNCH: even a
+	// twice-lost round continues nothing, but the session read is the only
+	// record of what the jobs did, and the run may read it
+	// ([Runner.namingKeptSession]).
 	basis := r.sessionBasis(ctx)
 	// UNDER THE TURN'S OWN FENCE TOKEN, which the relaunched run's tools fence
 	// what they read with: a reply carried on is somebody's words, fenced as
@@ -900,18 +1002,14 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// person approved that one of them tells is in no list of them.
 	answers := r.turnsAnswers(state.Round, history, fence)
 	// AND EVERY CALL OF THE ROUND, for a run that starts a session of its own
-	// carrying the round on ([prompts.CalledBefore]): it remembers none of
-	// them, and told only that the run before it did things through the seat's
-	// tools, it could make them again: a second post, a second delegation.
-	// Told from the round's start, as a session that holds none of it is
-	// ([Runner.calledInPlace]), within the prior-work ledger's budgets; and
-	// built for EVERY relaunch carrying a round on, whatever else it offers,
-	// since its box falls back to this brief wherever it cannot take the
-	// session up after all. The base's continuation takes it whole. Never the
-	// call a person approved that the reseed's lead tells, which is made only
-	// after this, below, nor one an earlier answer it tells approved. And
-	// nothing of the closed rounds listed again: the run holds no session that
-	// shows them, and its brief renders every one of them as work already done.
+	// ([prompts.CalledBefore]): it remembers none, and told only that the run
+	// before it used the seat's tools, it could repeat a post or a delegation.
+	// Told from the round's start ([Runner.calledInPlace]), within the
+	// prior-work ledger's budgets, and built for EVERY relaunch, since its box
+	// falls back to this brief wherever it cannot take the session up. Never
+	// the approved call the reseed's lead tells (made after this), nor one an
+	// earlier answer approved. Closed rounds are not listed again: the brief
+	// already renders each as work done.
 	freshTold, freshOmitted, _ := r.calledAfter(ctx, round, new(0), nil, history, toldAs{fresh: true,
 		leads: slices.Concat(leadsHeld(carry, state.Round), answers.held), rendered: history}, built, fence)
 	// ASKED ONCE EVERY BRIEF'S REWRITES ARE SPENT, as a launch asks it
@@ -925,23 +1023,16 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	}
 	// THE CALL A PERSON APPROVED IS MADE HERE, once, through the surface the
 	// run carries on with, as the last step before the relaunch: after every
-	// check that could refuse the relaunch, so a round refused here never
-	// made it, and before the prompt, which tells the run what it returned
-	// (ADR-0077).
-	//
-	// UNDER THE GUARD OF THE SESSION THAT ASKED IT, as the rebuild armed it:
-	// the job's own loads, and the skills its launch armed where its box said
-	// it took that session up ([Resume.parked]). The surface still asks the
-	// guard of an approved call, and a guard emptied for the relaunch first
-	// refused a skill-covered call the person approved, recorded the refusal as
-	// the call's result, and so used up the approval. A guard that refuses it
-	// all the same — a skill made required while the call waited, or one the
-	// rebuild cannot hold for want of the box's word — is asked before the call
-	// is marked, which leaves the approval unused ([makeHeld]). And only of a
-	// call no attempt has marked: one an earlier attempt at the answer made, and
-	// whose relaunch was refused after it, is answered from its mark, since the
-	// guard decides whether a call nobody made may be made now, never whether
-	// one was.
+	// check that could refuse it, and before the prompt, which tells the run
+	// what it returned (ADR-0077). UNDER THE GUARD OF THE SESSION THAT ASKED
+	// IT, as the rebuild armed it ([Resume.parked]): the surface still asks
+	// the guard of an approved call, and a guard emptied for the relaunch
+	// refused a skill-covered call, recorded the refusal as its result and
+	// used up the approval. A guard that refuses anyway is asked before the
+	// call is marked, leaving the approval unused ([makeHeld]). Only a call no
+	// attempt has marked is guarded: one an earlier attempt made is answered
+	// from its mark, since the guard decides whether an unmade call may be
+	// made, never whether one was.
 	if asked, ok := carry.(*Asked); ok && asked.Held != nil {
 		if heldErr := makeHeld(ctx, surface, asked.Held); heldErr != nil {
 			r.steerReturn(ctx, Launched{}, fresh)
@@ -968,8 +1059,21 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	// notes, what the copy may lack of those the turn has read and the ones
 	// this brief is the first to read ([Runner.inPlaceNotes]).
 	lead := carry.continuation(fence)
-	picked, inPlaceHolds := inPlace.led(ctx, r, lead)
+	picked, inPlaceHolds, summed := inPlace.led(ctx, r, lead)
 	continued := picked.led(lead)
+	// AND, WHERE THE LAUNCH JUDGES THE COPY'S FIRST REQUEST IN ITS BOX, the
+	// copy told as a session that may be a summary, which it hands where the
+	// box's point does not prove the held brief whole.
+	var summarized string
+	var summarizedTold sandbox.BriefTold
+	var count *sandbox.ResumedCount
+	var countProvider string
+	if summed != nil {
+		summarized = summed.led(lead)
+		summarizedTold = sandbox.BriefTold{Omitted: summed.omitted.reads, LateOmitted: summed.omitted.late,
+			Own: own, Told: summed.told.refs, ToldUnread: summed.told.unread}
+		count, countProvider = r.cfg.Resume.Count, r.cfg.Resume.CountProvider
+	}
 	// A FRESH RUN'S BRIEF is the round's own, the turn's answers that carried
 	// its work on before, what became of the run before it (what it asked and
 	// was told, or how it was cut off) and every call of the round so far: it
@@ -989,7 +1093,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	if carry.keeps() {
 		switch {
 		case basis.Continues():
-			briefs.kept, briefs.keptHolds, briefs.exact = kept.led(ctx, r, lead, own)
+			briefs.kept, briefs.keptHolds, briefs.exact, briefs.unheldHolds = kept.led(ctx, r, lead, own)
 		case basis.ContinuesBase():
 			// A TURN THAT HAS KEPT NO SESSION OF ITS OWN — its job lost with
 			// its box before anything of it was kept — continues the one its
@@ -997,8 +1101,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// round's jobs did and what became of the last, and so leaves out
 			// what the reseed leaves out; and the turn's answers it tells
 			// after the task are told again with the task ([Runner.taskAgain]).
-			briefs.kept = r.baseSession(basis, reseed.Text, sandbox.BriefTold{Omitted: freshOmitted,
-				Own: append(taskLead(state.Round, history, ""), own...)})
+			briefs.kept = r.baseSession(basis, reseed.Text, sandbox.BriefTold{Omitted: freshOmitted.reads,
+				LateOmitted: freshOmitted.late, Own: append(taskLead(state.Round, history, ""), own...)})
 		}
 	} else {
 		// A ROUND LOST A SECOND TIME CONTINUES NOTHING, but the session its
@@ -1012,7 +1116,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	reseed = r.namingKeptSession(reseed, basis, built)
 	briefs.fresh = reseed
 	if inPlaceSession != "" {
-		briefs.inPlace = continued
+		briefs.inPlace, briefs.inPlaceSummarized = continued, summarized
 	}
 	decided := &launchDecided{}
 	launched, err := r.cfg.Launcher.LaunchExecutor(ctx, AgentRunRequest{
@@ -1028,22 +1132,35 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// it whether the turn kept it or not, or as the read that
 			// collected its job found its newest request carried, the larger
 			// of the two: the floor of a launch that continues it in its box.
-			ContextTokens: max(basis.ContextTokens, r.cfg.Resume.ContextTokens),
-			// AND THE READ EVERY BRIEF ABOVE WAS BUILT FROM, so the job's
-			// opening marks late what the log took after it: the job before's
-			// calls that landed while this relaunch was readied, the call a
-			// person approved but excepted, which the lead tells.
-			BriefRead: &read,
+			// THE COPY'S FIGURE, never the kept capture's own: the copy went
+			// as far as its job's newest capture, kept or not, and a kept
+			// capture is held to what it holds itself.
+			ContextTokens: max(basis.CopyContext, r.cfg.Resume.ContextTokens),
+			// AND WHAT ITS HARNESS ESTIMATES ITS NEXT REQUEST AT, the job's
+			// record's off the copy itself where it holds one, else the
+			// newest capture's: the floor's figure where either holds one.
+			NextRequest: inPlaceNextRequest(r.cfg.Resume.NextRequest, basis.CopyNextRequest),
 			// AND WHAT THE COPY'S BRIEF AND THE FRESH ONE LEFT OUT OF THE
 			// ROUND, which the launch records on the job it opens for the brief
 			// it hands its run.
 			// AND WHAT EACH OPENED WITH: its own leads, and the copy's the
 			// leads of its job's brief it told again, and those it was to and
 			// could not read.
-			Told: sandbox.BriefTold{Omitted: picked.omitted, Own: own, Told: picked.told.refs,
-				ToldUnread: picked.told.unread},
-			Fresh: sandbox.BriefTold{Omitted: freshOmitted, Own: own},
+			Told: sandbox.BriefTold{Omitted: picked.omitted.reads, LateOmitted: picked.omitted.late, Own: own,
+				Told: picked.told.refs, ToldUnread: picked.told.unread},
+			// The fresh one opens with the turn's task besides, which a session
+			// its run starts on it may lack once a compaction summarizes it.
+			Fresh: sandbox.BriefTold{Omitted: freshOmitted.reads, LateOmitted: freshOmitted.late,
+				Own: append(freshLead(state.Round, history, ""), own...)},
+			// AND THE SAME COPY TOLD AS A SESSION THAT MAY BE A SUMMARY, with
+			// the count the launch judges the held brief by in its box.
+			Summarized: summarized, SummarizedTold: summarizedTold, Count: count, CountProvider: countProvider,
 		},
+		// AND THE READ EVERY BRIEF ABOVE WAS BUILT FROM, so the job's opening
+		// marks late what the log took after it: the job before's calls that
+		// landed while this relaunch was readied, the call a person approved
+		// but excepted, which the lead tells.
+		BriefRead:  &read,
 		Session:    briefs.kept,
 		Decided:    r.sessionDecided(ctx, emit, state.Round, system, surface, caps, briefs, decided),
 		Started:    r.sessionStarted(ctx, emit, state.Round, system, surface, caps, briefs, decided),
@@ -1135,49 +1252,16 @@ func (r *Runner) recordAgentSuspension(round int, surface *tools.Surface, histor
 }
 
 // ReopenAgentRun rebuilds the tool surface an executor run's box is still
-// calling, for a node that has taken the run over while it works — this
-// process after a restart, or the seat's next holder — so the run's bridge
-// session can be opened again (internal/api/mcpbridge). It returns the
-// surface, and the meter the session's calls are counted on.
+// calling, for a node that has taken the run over, so the bridge session can
+// be reopened (internal/api/mcpbridge). It returns the surface and the meter.
 //
-// FROM THE RUN'S OWN STATE, by the one rebuild every segment that re-enters a
-// run makes ([Runner.rebuiltSurface]): the surface its launch recorded — its
-// active tools and the skills it had loaded — and then what the run did to it
-// since, read off the calls it made over the bridge, every tool it activated
-// and every skill it loaded. Rebuilt from the launch's record alone, the box
-// would find tools it had activated gone and the tools a loaded skill
-// unlocked refused again.
-//
-// AND ITS PLACE IN THE RUN. The turn's call log is seeded with its closed
-// rounds and every call the run has made over the bridge — the log's calls, the
-// identities of those it does not list (elided) and of those its calls' own
-// work made (absorbed) — by identity, in that same rebuild ([seedCalls]), so a
-// call made from here counts its
-// repeats from the whole run and derives the operation id the run's own
-// process would have; a submission cites those calls as well as the ones made
-// from here; and the meter starts from what the row says the run's bridged
-// calls have cost so far ([NewBridgedSpendFrom]). spent is that total and
-// bridged the log's calls, in any order.
-//
-// AND ITS GUARD, THE SESSION'S ITS BOX STARTED: the skills its launch armed
-// only where the job's record says its box took up the session the launch
-// continued (continued, [Resume.Continued]), and none but its own loads
-// otherwise, a record that says nothing included ([Resume.parked]). A box that
-// has not said yet says it on its first request to this opening, which
-// [ReopenedRun.Started] is told, before any call there is made.
-//
-// It launches nothing and parks nothing: the run is going already, and its
-// collection resumes the turn as it would have. THE SUBMISSION IT CAPTURES IS
-// NEVER READ, exactly as the launch's is not: every collection, in this
-// process or another, replays submit_work from the run's durable log into a
-// fresh decoder ([Runner.resumeAgentRun]). What its tool decides is only what
-// the run is told, and whether the log records the call as failed, which the
-// replay skips.
-//
-// AND THE CALLS ITS LOG HOLDS IN FLIGHT (unfinished, [Resume.Unfinished]), which
-// its call log counts by their identity: a call of the run still running on
-// the node it left, whose update has not landed, is a call made, and a call
-// made here that asks for something else must not derive its operation id.
+// Built from the run's own state by the one rebuild every re-entering segment
+// makes ([Runner.rebuiltSurface]): from the launch's record alone, tools the
+// run activated would be gone and skill-unlocked ones refused again. The call
+// log is seeded with every bridged call, elided and absorbed ones included
+// ([seedCalls]), so a call made here counts repeats across the whole run and
+// derives the operation id the run's own process would have. The meter starts
+// from spent, the row's bridged cost ([NewBridgedSpendFrom]).
 func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 	bridged, unfinished []BridgedCall, elided, absorbed []ledger.Elided, spent Bridged, continued bool,
 ) (ReopenedRun, error) {
@@ -1187,6 +1271,9 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 
 	snapshot := r.executorUniverse(r.seatSnapshot())
 	var surface *tools.Surface
+	// THE SUBMISSION IT CAPTURES IS NEVER READ: every collection replays
+	// submit_work from the durable log ([Runner.resumeAgentRun]), which skips a
+	// call recorded as failed.
 	submit := structured.NewContext(SubmitWorkTool, submitWorkDescription, workSchema,
 		typedPickup(r.cfg.Reply, r.pickupAnswer, keptWhole(makingWork(r.cfg.Reply,
 			func() []ledger.Call {
@@ -1195,6 +1282,9 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 			func() turn.Surface { return describe(surface) }))))
 
 	meter := NewBridgedSpendFrom(spent)
+	// UNFINISHED CALLS ([Resume.Unfinished]) count by identity: one still
+	// running on the node it left is a call made, and a different call made
+	// here must not derive its operation id.
 	built, err := r.rebuiltSurface(ctx, r.meterFor(meter), held, snapshot, submit, history,
 		roundCalls{of: state.Round, bridged: inAdmissionOrder(bridged), unfinished: inAdmissionOrder(unfinished),
 			elided: elided, absorbed: absorbed})
@@ -1203,6 +1293,10 @@ func (r *Runner) ReopenAgentRun(ctx context.Context, state execstate.State,
 	}
 	surface = built
 	own := ownCalls(inAdmissionOrder(bridged), state.BridgeFrom, nil, nil)
+	// THE GUARD IS THE SESSION'S ITS BOX STARTED: the launch's armed skills
+	// only where the box took up the continued session ([Resume.Continued]),
+	// else only its own loads ([Resume.parked]). A box that has not said yet
+	// says it on its first request, before any call is made.
 	return ReopenedRun{Surface: surface, Meter: meter,
 		Started: func(boxContinued bool) {
 			var loaded []string
@@ -1231,33 +1325,18 @@ type ReopenedRun struct {
 	Started func(continued bool)
 }
 
-// rebuiltSurface is a run's surface rebuilt by a later segment, as the run
-// left it, and the turn's call log seeded with the run's place in the turn —
-// the one rebuild every segment that re-enters a run makes: the one that
-// collects it ([Runner.resumeAgentRun]), one that carries it on
-// ([Runner.continueAgentRun]) and one that reopens it while it works
-// ([Runner.ReopenAgentRun]).
+// rebuiltSurface rebuilds a run's surface as it left it and seeds the call log
+// with the run's place in the turn: the one rebuild every re-entering segment
+// makes ([Runner.resumeAgentRun], [Runner.continueAgentRun],
+// [Runner.ReopenAgentRun]). A rebuild replaying half of what the run did is the
+// drift this stops: the collected surface is also what the record states the
+// run held (tools_available), so the guard is replayed though it calls nothing.
 //
-// AS THE RUN LEFT IT: the tools its launch recorded — every tool it can reach,
-// so nothing a run does over the bridge adds one — and the skills its guard
-// held then, with every skill the run's own job loaded since over the bridge
-// read off its calls ([Runner.observeLoads]): those numbered past the calls the
-// round held when the job opened ([execstate.State.BridgeFrom]), never an
-// earlier job's of the round, whose session the run's may not be. AND ITS
-// PLACE IN THE TURN: the closed rounds in history, and the round's calls as the
-// log beside its row holds them (round): the calls it lists, in the order the
-// bridge admitted them, and the identities of the ones it does not list and of
-// the ones their own work made, seeded into the call log through the rebuilt
-// surface ([seedCalls]), so a count read from here sees every call made before
-// it.
-//
-// ONE REBUILD FOR ALL THREE, because they drifted apart when each made its
-// own: the collection rebuilt the launch's record alone, on the reasoning that
-// it makes no gated call. That much is true, and it is beside the point,
-// because the collected surface is also what the round's record states the
-// run held (tools_available). The guard is replayed too, although nothing
-// calls through the collection's surface: a rebuild that replays half of what
-// the run did is the drift this rule exists to stop.
+// The surface is the launch's tools (all it can reach, so no bridge call adds
+// one) and guard, plus every skill its own job loaded since, read off its calls
+// ([Runner.observeLoads]) past [execstate.State.BridgeFrom], never an earlier
+// job's. The closed rounds and the round's calls are seeded through it
+// ([seedCalls]).
 func (r *Runner) rebuiltSurface(ctx context.Context, m meter, state execstate.State,
 	snapshot tools.Snapshot, submit tools.Callable, history []ledger.Iteration, round roundCalls,
 ) (_ *tools.Surface, err error) {
@@ -1339,21 +1418,16 @@ func thawed(f execstate.Frozen) (prefetch.Blocks, dispatched) {
 
 // resumeAgentRun turns a finished agentic run into the turn's Work.
 //
-// THE RUN'S OWN TOOL CALLS ARE THE RECORD, replayed from the durable log the
-// bridge wrote rather than from the surface: the process that resumes may not
-// be the one that launched, so the surface here is rebuilt as the run left it
-// ([Runner.rebuiltSurface]) and has served no call of its own. That log is
-// also where the submission is: the harness ended its run by calling submit_work
-// over the bridge, and replaying that call through a fresh submission tool is
-// what recovers the outcome it declared.
+// THE RUN'S OWN TOOL CALLS ARE THE RECORD, replayed from the bridge's durable
+// log, not the surface: the resuming process may not be the launching one, so
+// its surface ([Runner.rebuiltSurface]) has served no call. The submission is
+// in that log too; replaying submit_work through a fresh tool recovers the
+// declared outcome. An absent submission is NOT a value: a run that stopped
+// silent is rescued as incomplete and judged on its record, never given a
+// delivery inferred from its closing prose.
 //
-// An absent submission is NOT a value. A run that stopped without saying what
-// it did is rescued as incomplete and judged on its record, rather than having
-// a delivery inferred from the prose the harness happened to end with.
-//
-// `history` is the turn's closed rounds, which its submission's citations read
-// beside the run's own calls — see [turn.Record] — and `bridged` the run's
-// calls in the order the bridge admitted them ([inAdmissionOrder]).
+// `history` is the closed rounds ([turn.Record]); `bridged` the run's calls in
+// admission order ([inAdmissionOrder]).
 func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	state execstate.State, answer string, bridged []BridgedCall,
 ) (_ turn.Work, _ turn.Surface, err error) {
@@ -1443,48 +1517,16 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 
 // agentRunResult turns what the run actually did into the phase's record.
 //
-// This used to hand `finishWork` a zero [toolloop.Result] while holding the
-// whole record in `bridged`, so the published event carried no response, no
-// tool calls, no tokens, no rounds and no model. The card rendered EMPTY: it
-// draws a phase from its rounds, a record with nothing in its ledger has none
-// to draw, and the "composing its first round" placeholder is gated on a phase
-// being live, which a completed one is not. An operator
-// saw a decision word and a blank card for a run that made real tool calls.
-//
-// ONE ROUND, and that is not a stand-in for a number the engine failed to
-// count — it is the honest one. A round is an iteration of the ENGINE's
-// exchange with a model: one request, one answer. For the executor the engine
-// made a single request — the launch — and got a single answer back, however
-// many turns the harness took inside its own loop to produce it. The bridge's call
-// log carries no round of its own and inventing one per call would claim a
-// structure nobody observed, splitting one run into thirty rounds of one call
-// each. So the record's cap is that one round too: the engine allowed the
-// run one request, and its turns are bounded by the harness's own cap
-// (`max_turns`), which is the run's fact rather than this phase's.
-//
-// THE ROUND IS TIMED, from the launch (launchedAt, the phase's first instant)
-// to the collection (answered, when the run's answer came back), so a
-// timeline draws the run as the span the phase waited on and places each
-// bridged call inside it at the instant the bridge measured. Two clocks when
-// the launch and the collection ran on different nodes, which is why a skew
-// that would make the span negative states none. It carries NO TOKENS: what
-// the run spent is each launch's own fact, on the `executor_collected` record
-// its collection publishes, and repeating it here would charge every rollup
-// twice.
-//
-// EACH CALL WITH ITS TIMING AND WHO ANSWERED IT, as the bridge recorded them,
-// in the order the run made them: the bridge is where a run's calls are
-// measured, since they ran inside the harness's own loop and not one of the
-// engine's.
-//
-// THE MEMBER THAT RAN IT is the record's entry and model: the launch picked it
-// from the seat's executor chain, so the chain's head is not an answer, and a
-// record naming nobody files the run's spend under no provider.
-//
-// AND THE CALLS ITS RECORD DID NOT KEEP (elided): counted in its round's calls,
-// and said by tool beside the ones it lists ([phaseResult.RunElided]) — a long
-// run's record keeps their head and tail, and the phase's record, which
-// outlives the run's, would otherwise read the kept ones as all it did.
+// ONE ROUND, the honest count: a round is an iteration of the ENGINE's
+// exchange with a model, and the executor's is one request, the launch, and one
+// answer however many turns the harness took inside. A round per call would
+// claim a structure nobody observed; the cap is that round too (the run's
+// turns are bounded by `max_turns`). It is timed from launchedAt to answered
+// (two clocks across nodes, so a negative skew states no span) and carries NO
+// TOKENS: those are each launch's fact on `executor_collected`, and repeating
+// them would charge every rollup twice. The member is the entry the launch
+// picked, not the chain's head; elided calls ([phaseResult.RunElided]) are
+// counted so the kept head and tail are not read as all it did.
 func agentRunResult(answer string, bridged []BridgedCall, elided []ledger.Elided, run RunRecord,
 	launchedAt, answered time.Time,
 ) phaseResult {
@@ -1502,7 +1544,7 @@ func agentRunResult(answer string, bridged []BridgedCall, elided []ledger.Elided
 	for _, call := range bridged {
 		res.Executions = append(res.Executions, toolloop.Execution{
 			Round: runRound, Name: call.Name, Args: call.Args,
-			Output: call.Result, Failed: call.Failed,
+			Output: call.Result, OutputBytes: call.OutputBytes, Failed: call.Failed,
 			StartedAt: call.StartedAt, Duration: call.Duration,
 			Origin: call.Origin, Server: call.Server,
 			Source: call.Source, Refusal: call.Refusal,
@@ -1553,20 +1595,14 @@ func argsUnknown(call ledger.Call) toolloop.ArgsUnknown {
 // as its execute record lists them: at the run's one round ([runRound]), each
 // with the boundary that read it. Nil for a round whose jobs read none.
 //
-// THE ROUND'S JOBS, NOT THE COLLECTED JOB'S ALONE, because the record is the
-// round's: a job carried on with a person's answer continues the round of the
-// job that asked, and the record lists the asking job's calls and then its own
-// as one order (sandbox.OpenedJob.LastSeq). Keyed on the collected job, the
-// record drew the asking job's calls and none of the notes it read between
-// them, which were delivered all the same. A read of the round's execute phase
-// that names a job is one of those jobs': a reviewer's reads are review's, the
-// first segment's name no job, and an earlier round's run has a record of its
-// own.
-//
-// NEVER A READ MARKED UNANSWERED (steer.Reading.Unanswered): its take's write
-// landed and its answer never reached the job's harness, so the job did not read
-// it, whatever the record's read says — the turn's later phases carry it, and
-// the record of the step that never handed it over does not list it.
+// THE ROUND'S JOBS, NOT THE COLLECTED JOB'S ALONE: a job carried on with a
+// person's answer continues the asking job's round, and the record lists both
+// jobs' calls as one order (sandbox.OpenedJob.LastSeq); keyed on the collected
+// job it would drop the notes read between them. A read of the round's execute
+// phase naming a job is one of those jobs'; a reviewer's reads are review's.
+// NEVER A READ MARKED UNANSWERED (steer.Reading.Unanswered): its answer never
+// reached the harness, so the turn's later phases carry it. A restarted read
+// is listed: the harness took the note at that step.
 func runReads(reads []steer.Read, iteration int) []types.PhaseSteer {
 	var out []types.PhaseSteer
 	for _, read := range reads {
@@ -1585,33 +1621,18 @@ func runReads(reads []steer.Read, iteration int) []types.PhaseSteer {
 // under the call that spawned them.
 const runRound = 1
 
-// sinceAnswer is the calls of a round its submission may be read from — what
-// the collection replays ([replaySubmission]) and what says a lost job's round
-// was already submitted ([Resume.carriedRound]): those made after a person's
-// answer last carried it on, placed after `answered` ([Resume.Answered]), or
-// every call where no answer has — and none the log took late.
+// sinceAnswer is the calls of a round its submission may be read from, for the
+// replay ([replaySubmission]) and [Resume.carriedRound]: those placed after
+// `answered` ([Resume.Answered]), or all where no answer came.
 //
-// ONLY WHAT THE RUN DID KNOWING THE ANSWER. A run carried on by a person's
-// answer keeps the calls it made before the question (ADR-0068), and a
-// `submit_work` among them was made without the answer: replayed, it would
-// report the carried-on run as the work submitted before it, whether or not
-// the run went on to submit again. The cut is the place the row recorded when
-// the continuing job opened, never a search for the round's last ask: the log
-// is bounded and drops from the middle (sandbox.MaxBridgeCalls), so the ask
-// may be gone from it, and the asking job may have called `submit_work` after
-// its question as well as before it. A call with no place (zero) is not after
-// any answer.
-//
-// AND NEVER A LATE CALL ([BridgedCall.Late]): the log took it after its job
-// was replaced, so after the cut was taken — its place, which its own job's
-// session gave it, can fall past the cut though it was made before the answer
-// — and after the brief of the job carrying the round on was built. That job
-// was never told it, and every later continuation of the round is told it as
-// no submission of the round ([prompts.AfterSave.LateSubmission]): the
-// round's submission is the one a run carrying the round on makes. Replayed, a
-// late submission would stand for the carried-on run's work, or stand over it
-// where its place sorts after; read as the round's, a lost round would be
-// collected on it rather than carried on.
+// ONLY WHAT THE RUN DID KNOWING THE ANSWER: an earlier `submit_work` (calls
+// are kept on carry-on, ADR-0068) would report the run as that earlier work.
+// The cut is the place the row recorded when the continuing job opened, never
+// a search for the last ask, which the log may drop (sandbox.MaxBridgeCalls).
+// NEVER A LATE CALL ([ledger.Call.Late]): taken after its job was replaced,
+// its place can pass the cut though it predates the answer. Briefs tell it as
+// no submission of the round ([prompts.AfterSave.LateSubmission]); read as
+// one, a lost round would be collected on it rather than carried on.
 func sinceAnswer(bridged []BridgedCall, answered int) []BridgedCall {
 	out := make([]BridgedCall, 0, len(bridged))
 	for _, call := range bridged {
@@ -1636,27 +1657,17 @@ func inAdmissionOrder(bridged []BridgedCall) []BridgedCall {
 }
 
 // replaySubmission feeds the run's own submit_work call back through a fresh
-// submission tool, so the outcome the harness declared is the one the turn reports.
+// submission tool, so the outcome the harness declared is the one reported.
+// LAST WRITE WINS: a second call is a correction, so calls replay in admission
+// order ([sinceAnswer]'s). A call the decoder rejects is skipped: a malformed
+// submission is the "said nothing" case the rescue path is for.
 //
-// LAST WRITE WINS, which is the submission contract everywhere else: a second
-// call is a correction, and replaying in the order the run made its calls is
-// what makes that true here too. A call the decoder rejects is skipped rather than failing the resume —
-// the run happened, its other calls happened, and a malformed submission is
-// exactly the "said nothing" case the rescue path exists for.
-//
-// The caller hands it the calls a submission may come from: the round's since
-// a person's answer last carried it on ([sinceAnswer]), in the order the
-// bridge admitted them.
-//
-// A SUBMISSION ITS RECORD DID NOT KEEP WHOLE IS NEVER REPLAYED, and where it is
-// the newest, nothing is: the round reads as one that submitted nothing, which
-// it is rescued from as incomplete. Replayed, the record's marker would be the
-// round's summary — a cut that reads as the whole — and an older submission
-// replayed in its place would report an outcome the run had corrected. The
-// log keeps the newest successful submission whole (sandbox's
-// MaxSubmissionArgsBytes), and the live tool refuses one past what it keeps
-// ([keptWhole]), so this is a run whose own spelling took a submission the
-// tool accepted past what the log holds.
+// A SUBMISSION THE RECORD DID NOT KEEP WHOLE IS NEVER REPLAYED, and where it is
+// the newest, nothing is (rescued as incomplete): its marker would read as the
+// whole summary, and an older submission would report a corrected outcome. The
+// log keeps the newest successful one whole (sandbox's MaxSubmissionArgsBytes)
+// and the live tool refuses one past that ([keptWhole]), so this is a run
+// whose own spelling slipped past what the log holds.
 func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload], bridged []BridgedCall) {
 	newest := -1
 	for i, call := range bridged {

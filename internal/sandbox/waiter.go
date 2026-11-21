@@ -33,26 +33,14 @@ const DefaultPollInterval = 15 * time.Second
 // ConnectGiveUp is how long a box may stay unreachable before the waiter gives
 // up on it and fires completion anyway.
 //
-// The box is unreachable, so the run can never produce a result. The engine
-// keeps a running box alive on every tick, so this never fires merely because
-// a run is long — it means a genuine infra failure: the provider reclaimed the
-// box, a network partition, or the engine was down long enough that the
-// keepalive lapsed and the orphan was reaped. Firing lets the coordinator free
-// the seat instead of polling a dead box forever: a box its backend says is
-// GONE took its job with it, and its round is carried on ([LossBoxGone]); one
-// that is only unreachable is collected, retried, and settled FAILED.
+// The keepalive runs every tick, so this never fires merely because a run is
+// long: it means an infra failure. Firing frees the seat: a box its backend says
+// is GONE took its job with it and its round is carried on ([LossBoxGone]); one
+// only unreachable is collected, retried, and settled FAILED.
 //
-// A DURATION, NOT A TICK COUNT, and that is the fix rather than the style. It
-// was four consecutive failures, with the rationale written as "four ticks
-// ≈ 1 minute" — true only at [DefaultPollInterval]. The count is applied to
-// whatever interval the waiter was built with, so a deployment that polls
-// faster shrank the window with it: at the 100 ms cadence the e2e suite drives
-// this code at, four failures is 0.4 s, and a box that is briefly slow rather
-// than gone is declared dead. What follows is not a retry of the poll — the
-// completion fires, and the job is either recorded lost and its round started
-// again, or its collection cannot reconnect either and the coordinator settles
-// the run FAILED and tears the turn down. Giving up is terminal for the job,
-// so the window has to be measured in the unit its own reasoning uses.
+// A DURATION, NOT A TICK COUNT: a count scales with the waiter's interval (at
+// the e2e suite's 100 ms cadence, four failures is 0.4 s and a briefly slow box
+// is declared dead), and giving up is terminal for the job.
 const ConnectGiveUp = 60 * time.Second
 
 // MinConnectFailures is how many consecutive failures must have happened
@@ -68,26 +56,15 @@ const MinConnectFailures = 2
 // MaxConcurrentPolls is how many boxes the waiter works on at once — a poll,
 // or the reclaim of a pause past its TTL — across every pass in flight.
 //
-// CONCURRENT, because one box must never hold up another's keepalive. The
-// tick polled its boxes one after another, so a box whose envd accepted a
-// request and then said nothing held every box behind it for as long as that
-// request's own bound — ten minutes of silence for a command — with their
-// keepalives queued toward a box TTL of fifteen; two such boxes and the rest
-// of the company's were reaped while their jobs were working.
-//
+// CONCURRENT, because one box must never hold up another's keepalive: polled in
+// turn, a silent envd (command bound: ten minutes) held every box behind it past
+// the fifteen-minute box TTL, reaping boxes whose jobs were working.
 // SIXTEEN, half the shared transport's warm connections per host
-// ([httpx.MaxIdleConnsPerHost], 32): every remote box's control-plane calls
-// go to one API host, and the launches and collections running beside the
-// poll need the other half. At the default cadence that is a poll of a few
-// hundred running boxes inside one interval.
-//
-// WHAT A STUCK BOX COSTS ITS NEIGHBOURS IS A SLOT, never a tick. The next pass
-// starts on schedule whatever is still running ([Waiter.pass]) and hands the
-// free slots to the boxes whose last poll ended longest ago, so a box that sat
-// at its bound goes to the back of the order after its turn. With N boxes
-// stuck at the bound a healthy box waits at most ceil(N/16) bounds for a slot
-// — half a minute for every sixteen at the default cadence ([Waiter.deadline])
-// — against a fifteen-minute TTL.
+// ([httpx.MaxIdleConnsPerHost], 32): every remote box's calls go to one API
+// host, and launches and collections need the other half. A stuck box costs its
+// neighbours a slot, never a tick: passes start on schedule ([Waiter.pass]) and
+// serve the longest-unpolled first, so a healthy box waits at most ceil(N/16)
+// bounds ([Waiter.deadline]).
 const MaxConcurrentPolls = 16
 
 // pollBound is the most one box's poll — reaching it, keeping it alive and
@@ -215,37 +192,32 @@ type WaiterOptions struct {
 	// scrubbed by. REQUIRED WITH Refresh, since a token the refresh wrote that
 	// nothing recorded would be a live secret no capture is scrubbed of.
 	Record func(ctx context.Context, run PendingRun, value string, expires time.Time) error
+
+	// Save is offered every box this waiter's poll found running, not past
+	// its turn's cap, with the runner the poll asked and the stint of duty
+	// the poll's task began under ([SaveFunc]): the coordinator's
+	// [Coordinator.SaveRunning] in the engine. Nil offers nothing.
+	Save SaveFunc
 }
 
-// RefreshFunc brings one box's expiring credentials up to date for the job
-// running in it, or about to start there: the files a run was provisioned
-// with that carry a credential issued for a limited time, rewritten when the
-// credential behind them is renewed.
+// SaveFunc is offered a running box for a save of its job's session as it
+// works. stint is done once the waiter that offered it stands down from its
+// duty, or stops; the offer decides from memory, starts any work on a lifetime
+// of its own and returns at once, since the poll is the box's keepalive.
+type SaveFunc func(stint context.Context, run PendingRun, runner Runner)
+
+// RefreshFunc rewrites the files of a box's job that carry a limited-time
+// credential, when it is renewed: on every poll, since a job is never stopped on
+// a clock and a launch-time credential can expire hours in; and at the start of
+// a job in a kept box ([CoordinatorOptions.Refresh]). A FILE, because the
+// environment cannot change under a running process.
 //
-// ON THE POLL, because nothing else reaches a running box and the poll
-// already does, every interval, for as long as the job runs: a launched job is
-// never stopped on a clock, so a credential issued at launch can outlive its
-// own expiry by hours, and the job's git push is then refused halfway through
-// the work. The box's environment cannot be changed under a running process,
-// so what is kept current is a FILE, which a credential helper reads at the
-// moment of use.
-//
-// AND AT THE START OF A JOB IN A KEPT BOX, which no poll reached while it was
-// paused and no setup rewrites: the launch hands it over before the job
-// starts ([CoordinatorOptions.Refresh]). A fresh box needs no refresh; its
-// setup has just written every file.
-//
-// EVERY TOKEN IT WRITES IS RECORDED FIRST, through record: a value the launch
-// never saw is otherwise one no capture of the job's session is scrubbed of,
-// and an AWS session's token is printed bare by a transcript, which no shape
-// names. On the poll, record adds it to the sealed set beside the job's row
-// ([Coordinator.RecordHanded]); at a launch, to the set the job is sealed
-// with. A token record refuses is not written, and the poll after asks again.
-//
-// It decides nothing about the run and reports nothing to it: a refresh that
-// fails is the implementation's to log, and the job carries on with what it
-// holds. manager is the manager the poll, or the launch, reached the box
-// through.
+// EVERY TOKEN IT WRITES IS RECORDED FIRST, through record
+// ([Coordinator.RecordHanded]): a value the launch never saw is one no capture
+// of the session is scrubbed of, and an AWS token is printed bare by a
+// transcript. A token record refuses is not written; the next poll asks again.
+// A failed refresh is the implementation's to log. manager is the one the poll
+// or launch reached the box through.
 type RefreshFunc func(ctx context.Context, manager *Manager, run PendingRun, box Sandbox, record RecordHanded)
 
 // RecordHanded records value — a token a refresh is about to write into the
@@ -258,37 +230,15 @@ type RecordHanded func(ctx context.Context, value string, expires time.Time) err
 
 // Waiter is the completion poll and pause reaper for executors' detached jobs.
 //
-// TWO OF THEM, one per kind of box ([Drives]): the fleet's, under a duty, for
-// the boxes every node reaches, and every node's own, for the boxes on its
-// host — which also reclaims the boxes there that no run names any more
-// ([Waiter.sweep]) — while the fleet's finds the launch nodes that left for
-// good ([Waiter.goneAfter]).
-//
-// THIS POLL IS THE COMPLETION SIGNAL. A periodic tick reconnects to each still-
-// running box by id and asks the runner whether its background command has
-// finished — covering a clean finish (its done marker), a job whose process
-// group died before it could write one, a job lost with the engine that last
-// saw it running, and a box that vanished, so a detached run never hangs
-// forever. Nothing from inside the box replaces it:
-// only the poll can see a job that died before reaching its last step, and the
-// tick doubles as the box keepalive, so it must run at this cadence regardless.
-// What the bridge sees of a run only BRINGS IT FORWARD: a run that submits its
-// work over its bridge is about to exit, and the waiter that drives it is told
-// to poll it now and on a short schedule after ([Waiter.Nudge]), so its
-// completion is found within seconds of its exit rather than up to an interval
-// later — and a nudge that is lost costs that interval, never the run.
-//
-// On detected completion it publishes ExecutorFinished; the coordinator does
-// the at-most-once claim, the collection, and the resume of the suspended
-// Execute loop. A duplicate signal is harmless — successive ticks can both fire
-// before the first claim lands, and queue delivery is at-least-once, but the
-// coordinator claims once.
-//
-// The same tick is also the PAUSE REAPER. A run blocked on a person's answer
-// parks its box paused so a quick reply resumes exactly where the harness
-// stopped — but a paused box has no provider-side TTL, and the keepalive
-// deliberately does not touch it. Left alone, one unanswered question strands a
-// box forever.
+// TWO OF THEM ([Drives]): the fleet's, under a duty, for boxes every node reaches
+// (and launch nodes gone, [Waiter.goneAfter]), and every node's own, for boxes on
+// its host (and boxes no run names, [Waiter.sweep]). THE POLL IS THE COMPLETION SIGNAL: each tick asks every running box's runner
+// whether its command finished, catching what nothing inside the box can (a
+// process group dead without a done marker, a job lost with the engine, a
+// vanished box), and doubles as the keepalive. What the bridge sees only BRINGS
+// IT FORWARD ([Waiter.Nudge]). Completion publishes ExecutorFinished; duplicates
+// are harmless, the coordinator claims once. The same tick is the PAUSE REAPER:
+// a paused box has no provider-side TTL, so one unanswered question would strand it.
 type Waiter struct {
 	queue   Publisher
 	pending PendingStore
@@ -304,6 +254,7 @@ type Waiter struct {
 	now       func() time.Time
 	refresh   RefreshFunc
 	record    func(ctx context.Context, run PendingRun, value string, expires time.Time) error
+	save      SaveFunc
 
 	// pollBound is [pollBound], held on the value so a test can watch a box
 	// at its bound without waiting a minute for it.
@@ -353,6 +304,12 @@ type Waiter struct {
 	// sweeping is whether a sweep of this host's boxes is running: one at
 	// a time ([Waiter.sweep]).
 	sweeping bool
+	// stint is this waiter's current stint of its duty, which every task
+	// begun under it carries to [WaiterOptions.Save]: made by a pass that
+	// holds the duty, ended by [Waiter.standDown] (endStint), and with the
+	// waiter's life. Nil before the first such pass and after a stand-down.
+	stint    context.Context
+	endStint context.CancelFunc
 	// life is the context Start ran the loop under, which a nudge's
 	// schedule runs under too; nil before Start. closed is set as the loop
 	// ends, after which a nudge starts nothing ([Waiter.closeTasks]).
@@ -394,6 +351,7 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 		now:       opts.Now,
 		refresh:   opts.Refresh,
 		record:    opts.Record,
+		save:      opts.Save,
 		pollBound: pollBound,
 		slots:     make(chan struct{}, MaxConcurrentPolls),
 		failures:  map[string]connectStreak{},
@@ -509,30 +467,23 @@ type round struct {
 type task struct {
 	run  PendingRun
 	reap bool
+	// listed is when the pass asked the store for the listing run was read
+	// from, which an announcement its poll makes says ([rowAskedField]).
+	listed time.Time
 }
 
 // pass claims the duty, lists the runs, and starts a WALK that hands every
-// run needing work to a task of its own; it returns as soon as the walk has
+// run needing work to a task of its own, and returns as soon as the walk has
 // started. Nil with no error is a pass this node had no duty to run.
+// A PASS DOES NOT WAIT FOR ITS TASKS: one box held at its bound would stretch
+// every cadence and the pass past the duty's TTL, so the duty would lapse
+// mid-pass. A box whose task still runs is passed over ([Waiter.begin]).
+// A task's deadline is this pass's duty claim ([Waiter.deadline]), and a duty
+// lost stops them all at the next pass ([Waiter.standDown]).
 //
-// A PASS DOES NOT WAIT FOR ITS TASKS. Waiting for its slowest box would tie
-// every box's next poll — and the duty's renewal — to that box: one box held
-// at its bound would stretch the cadence of every other box from the interval
-// to the bound, and the pass past the duty's own TTL, so the duty would lapse
-// mid-pass and a peer poll the same boxes beside it. A box whose task is still
-// running is passed over by the next walk instead ([Waiter.begin]), and every
-// other box is polled on schedule.
-//
-// WHAT A TASK MAY DO IS BOUNDED BY WHAT AUTHORISED IT: its deadline is the
-// duty claim this pass made, not the pass ([Waiter.deadline]), so no task
-// outlives the duty — and a duty definitively lost stops them all at the next
-// pass ([Waiter.standDown]).
-//
-// ONE WALK AT A TIME. A walk still waiting for a free slot when the next pass
-// starts is stopped and replaced by one over the fresher listing; the tasks it
-// already started run on. A walk hands slots out to the runs whose last task
-// ended longest ago, so the runs the stopped walk never reached are the first
-// the new one serves.
+// ONE WALK AT A TIME: a walk still waiting for a slot when the next pass starts
+// is replaced by one over the fresher listing; slots go to the runs whose last
+// task ended longest ago, so the runs it never reached are served first.
 func (w *Waiter) pass(ctx context.Context) (*round, error) {
 	// THE INSTANT THE DUTY IS ASKED FOR, taken before the claim: the lease
 	// the claim takes runs from when the store applies it, no earlier than
@@ -544,6 +495,11 @@ func (w *Waiter) pass(ctx context.Context) (*round, error) {
 	deadline := w.deadline(asked)
 	w.mu.Lock()
 	w.dutyUntil = deadline
+	// A STINT MADE HERE, NEVER AT THE HOOK: a poll whose task began before a
+	// stand-down carries the stint that stand-down ended.
+	if w.stint == nil || w.stint.Err() != nil {
+		w.stint, w.endStint = w.newStint(ctx)
+	}
 	w.mu.Unlock()
 	// ONE MANAGER FOR THE WHOLE PASS, read once: a reload landing mid-pass
 	// must not poll half the runs through one catalogue and reap the rest
@@ -552,12 +508,16 @@ func (w *Waiter) pass(ctx context.Context) (*round, error) {
 	if manager == nil {
 		return nil, errors.New("sandbox: the waiter's manager source answered no manager")
 	}
+	// WHEN THE STORE WAS ASKED FOR THE LISTING, which every announcement made
+	// from it says ([rowAskedField]): that store answered this waiter after
+	// it, whatever a box's poll took before the announcement is made.
+	listed := w.now()
 	runs, err := w.pending.ListActive(ctx)
 	if err != nil {
 		return nil, err
 	}
 	w.forget(runs)
-	work := w.order(manager, runs)
+	work := w.order(manager, runs, listed)
 
 	// ONE CHILD OF ctx PER WALK, made once: ctx is the loop's, which lives
 	// as long as the process, and a child it was never told to forget —
@@ -647,7 +607,8 @@ func (w *Waiter) walkTasks(ctx, walkCtx context.Context, deadline time.Time, man
 			return
 		}
 		taskCtx, stop := context.WithDeadline(ctx, w.taskDeadline(deadline))
-		if !w.begin(walkCtx, t.run.TurnID, stop) {
+		stint, begun := w.begin(walkCtx, t.run.TurnID, stop)
+		if !begun {
 			stop()
 			<-w.slots
 			continue
@@ -664,7 +625,7 @@ func (w *Waiter) walkTasks(ctx, walkCtx context.Context, deadline time.Time, man
 				w.reapOne(taskCtx, manager, t.run)
 				return
 			}
-			if w.pollBounded(ctx, taskCtx, manager, t.run) {
+			if w.pollBounded(ctx, taskCtx, stint, manager, t.run, t.listed) {
 				r.fired.Add(1)
 			}
 		}()
@@ -694,8 +655,9 @@ func (w *Waiter) acquireSlot(walkCtx context.Context) bool {
 }
 
 // order is the runs needing a task, the one whose last task ended longest ago
-// first and the listing's own order between equals.
-func (w *Waiter) order(manager *Manager, runs []PendingRun) []task {
+// first and the listing's own order between equals; listed is when the store
+// was asked for that listing.
+func (w *Waiter) order(manager *Manager, runs []PendingRun, listed time.Time) []task {
 	now := w.now()
 	var work []task
 	for _, run := range runs {
@@ -711,24 +673,16 @@ func (w *Waiter) order(manager *Manager, runs []PendingRun) []task {
 			// the ending is reclaiming, and a reap would race the ending's
 			// own reclaim.
 		case run.Status == StatusRunning && run.SandboxID != "" && !run.Held(now):
-			work = append(work, task{run: run})
+			work = append(work, task{run: run, listed: listed})
 		case pauseExpired(run, now):
 			work = append(work, task{run: run, reap: true})
 		}
-		// Running is the ONLY pollable state, and the one it most obviously
-		// excludes is [StatusLaunching]: that run's job is already
-		// executing, but the turn that started it has not yet written the
-		// conversation a resume re-enters. Firing there hands the
-		// coordinator a claim it cannot resume, and the coordinator's only
-		// honest answer to that is to fail the run — so a job that
-		// finished inside the window destroyed the turn. The next pass finds
-		// it suspended.
-		//
-		// A running row with no box yet is passed over too: a launch writes
-		// the row first, so a crash in that window leaves a record rather
-		// than a box nothing names. A poll there has nothing to connect to
-		// and nothing to keep alive, and asking the provider for "" is how a
-		// nameless box comes to be created. The next pass finds it attached.
+		// Running is the ONLY pollable state. [StatusLaunching] is excluded:
+		// its turn has not yet written the conversation a resume re-enters, so
+		// a completion fired there is a claim the coordinator can only answer
+		// by failing the run, destroying the turn. A running row with no box
+		// yet is passed over too: asking the provider for "" is how a nameless
+		// box comes to be created. The next pass finds both.
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -764,25 +718,16 @@ func (w *Waiter) taskDeadline(duty time.Time) time.Time {
 }
 
 // rowContext is the context a task's write of a run's row is made under: the
-// bound ctx carries — the task's own, [Waiter.taskDeadline]'s pollBound from
-// its start or the duty's end where that comes first, or the duty's for the
-// fleet's look for launch nodes gone ([Waiter.goneAfter]) — and the time a
-// row at its bound takes to cross this node's connection to the store
-// besides ([RowBudget]). Under the waiter's own lifetime, so its stop ends the
-// write at once as it ends every task ([Waiter.Start]); a waiter driven pass by
-// pass ([Waiter.Tick]) has none, and the write is bounded by its deadline
-// alone, under ctx's values.
+// bound ctx carries ([Waiter.taskDeadline], or the duty's for [Waiter.goneAfter])
+// plus the time a row at its bound takes to cross this node's store connection
+// ([RowBudget]). It lives under the waiter's own lifetime, so a stop ends the
+// write ([Waiter.Start]); under [Waiter.Tick] only the deadline bounds it.
 //
-// THE BOUND IS A BOX'S AND A DUTY'S, NEVER A ROW'S: pollBound is how long a
-// box's provider may take to answer at all, and the duty's window is how long
-// this node's claim keeps a peer's tasks off the same boxes. A row of
-// megabytes written within either alone was cut while its bytes were still
-// crossing a slow link, and sent again from its first byte by the next pass,
-// for ever: a parked box past its pause never reaped, a gone node's runs never
-// released (crewlet/crewlet#1076). Past the window, a peer's task can write the
-// same row beside this one, and each of these writes is a compare-and-set the
-// row's own state decides, so the second finds the first's and changes
-// nothing.
+// THE BOUND IS A BOX'S AND A DUTY'S, NEVER A ROW'S: a row of megabytes written
+// within either alone was cut mid-transfer on a slow link and resent by every
+// pass, so a parked box was never reaped (crewlet/crewlet#1076). Past the window
+// a peer may write the same row; each write is a compare-and-set, so the second
+// changes nothing.
 func (w *Waiter) rowContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	deadline, bounded := ctx.Deadline()
 	if !bounded {
@@ -798,14 +743,19 @@ func (w *Waiter) rowContext(ctx context.Context) (context.Context, context.Cance
 }
 
 // pollBounded polls one box within its task's context and announces its
-// completion where the poll found one, reporting whether it did.
+// completion where the poll found one, reporting whether it did; stint is the
+// duty's stint the task began under ([Waiter.begin]), and read is when the
+// store was asked for the row run was read from, which the announcement says
+// ([rowAskedField]).
 //
 // THE ANNOUNCEMENT IS NOT UNDER THE BOUND: the bound is on reaching the box,
 // and a completion found a second before it ran out is still a completion. A
 // duplicate announcement is harmless — the coordinator claims once — so it
 // takes the pass's context, not the task's.
-func (w *Waiter) pollBounded(ctx, taskCtx context.Context, manager *Manager, run PendingRun) bool {
-	state := w.pollOne(taskCtx, manager, run)
+func (w *Waiter) pollBounded(ctx, taskCtx, stint context.Context, manager *Manager, run PendingRun,
+	read time.Time,
+) bool {
+	state := w.pollOne(taskCtx, stint, manager, run)
 	// A LOSS IS RECORDED BEFORE IT IS ANNOUNCED, as the fleet's verdict on a
 	// gone launch node is ([Waiter.endGone]): the completion only routes it to
 	// the seat's holder, which carries the round on from what the row says.
@@ -821,7 +771,7 @@ func (w *Waiter) pollBounded(ctx, taskCtx context.Context, manager *Manager, run
 		if !due {
 			return false
 		}
-		if err := w.publishCompletion(ctx, run, first); err != nil {
+		if err := w.publishCompletion(ctx, run, first, read); err != nil {
 			w.unannounce(run.TurnID)
 			log.WarnContext(ctx, "sandbox_completion_publish_failed",
 				"turn_id", run.TurnID, "error", err.Error())
@@ -851,25 +801,37 @@ func (w *Waiter) isBusy(turnID string) bool {
 	return busy
 }
 
+// newStint is a stint of the duty for a pass under ctx to hold
+// ([Waiter.stint]): made off the waiter's life, so it outlives the pass that
+// made it, and off ctx's values alone before Start, as [Waiter.rowContext]
+// is, so no pass leaves a child of its context behind. Its caller holds w.mu.
+func (w *Waiter) newStint(ctx context.Context) (context.Context, context.CancelFunc) {
+	if w.life == nil {
+		return context.WithCancel(context.WithoutCancel(ctx))
+	}
+	return context.WithCancel(w.life)
+}
+
 // begin claims the turn's box for one task, reporting false where a task is
 // already working on it or the walk starting it has lost its authority; stop
-// is what ends the task early.
+// is what ends the task early. It answers the stint of duty current as the
+// task begins ([Waiter.stint]), nil for none.
 //
 // THE WALK IS ASKED UNDER THE LOCK [Waiter.standDown] stops everything under,
 // so a task is either registered before a stand-down, and stopped by it, or
 // refused after it — never started in between, where nothing would stop it
 // while a peer holds the duty.
-func (w *Waiter) begin(walkCtx context.Context, turnID string, stop context.CancelFunc) bool {
+func (w *Waiter) begin(walkCtx context.Context, turnID string, stop context.CancelFunc) (context.Context, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if walkCtx.Err() != nil {
-		return false
+		return nil, false
 	}
 	if _, busy := w.busy[turnID]; busy {
-		return false
+		return nil, false
 	}
 	w.busy[turnID] = stop
-	return true
+	return w.stint, true
 }
 
 // end releases the claim [Waiter.begin] took and dates it for the next walk's
@@ -896,7 +858,8 @@ func (w *Waiter) replaceWalk(stop context.CancelFunc) {
 
 // standDown stops the walk and every task in flight: this node has
 // definitively lost the duty, so a peer may hold it and work the same boxes.
-// And it forgets every absence it had been timing ([Waiter.forgetAbsences]).
+// And it forgets every absence it had been timing ([Waiter.forgetAbsences]),
+// and ends its stint, so no save is offered under the duty it lost.
 //
 // UNDER THE LOCK, so a walk between taking a slot and registering its task
 // cannot slip a task past it ([Waiter.begin]). A cancel only closes channels,
@@ -906,6 +869,10 @@ func (w *Waiter) standDown() {
 	defer w.mu.Unlock()
 	w.dutyUntil = time.Time{}
 	clear(w.absent)
+	if w.endStint != nil {
+		w.endStint()
+	}
+	w.stint, w.endStint = nil, nil
 	if w.walk != nil {
 		w.walk()
 	}
@@ -1020,8 +987,10 @@ func lossOf(state pollState) LossCause {
 	return ""
 }
 
-// pollOne reconnects and asks the runner whether the job has finished.
-func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) pollState {
+// pollOne reconnects and asks the runner whether the job has finished, and
+// offers a job still running, within its turn's cap, for a save under stint
+// ([WaiterOptions.Save]).
+func (w *Waiter) pollOne(ctx, stint context.Context, manager *Manager, run PendingRun) pollState {
 	provider, err := manager.Provider(Placement(run.Placement))
 	if err != nil {
 		// A row naming a cell this build or this company does not have can
@@ -1141,41 +1110,24 @@ func (w *Waiter) pollOne(ctx context.Context, manager *Manager, run PendingRun) 
 				"the run is ended and its turn resumed with what it did")
 		return pollDone
 	}
+	if w.save != nil && stint != nil && stint.Err() == nil {
+		w.save(stint, run, runner)
+	}
 	return pollRunning
 }
 
 // reach is a running run's box, for the poll: attached WITHOUT resuming it
-// ([Provider.Attach]), and resumed only where the run's own record says a
-// paused box holds the running run's job and no collection has read that job
-// back. collected reports the paused box of a job one has: see below.
-//
-// THE POLL'S RECORD IS A MOMENT OLD. The collection claims a run off running,
-// reads its box and pauses it, and a poll that listed the run before the
-// claim and reconnected after the pause used to RESUME it — through Connect,
-// which wakes whatever it reaches. Nothing touched the box again, since the
-// poll keeps alive only running records, so on E2B the woken box ran out its
-// timer and the parked run lost the snapshot it had been paused to keep.
-//
-// A PAUSED BOX UNDER A RECORD STILL RUNNING THE SAME JOB, IN THE SAME BOX, is
-// the run's box again, and what the poll does with it turns on whether a
-// collection already read that job back ([LaunchRecord.Collected]):
-//
-//   - READ BACK: a collection read the box and paused it, and its resume then
-//     handed the claim back to running — refused for a condition it waits on
-//     (a model's limit its node holds the job for, [Coordinator.keepRefused]),
-//     or handed back for a retry. The job is over and its result was read, so
-//     there is nothing to poll and nothing to keep alive: the poll announces
-//     the job again and leaves the box asleep (collected), and the collection
-//     that next claims the job wakes the box as it reads it
-//     ([Manager.Reconnect]). Woken here, a job its node held for a model's
-//     limit had its box resumed and kept alive at every poll for as long as
-//     the hold lasted, up to the hour a vendor's window is benched for: a
-//     running E2B sandbox, or an unpaused container, for a job already done.
-//   - NOT READ BACK: a box paused under a job no collection handed back is
-//     woken, kept alive and polled, since only the poll can say whether that
-//     job finished.
-//
-// Anything else answers no box and no error: the run moved on.
+// ([Provider.Attach]), and resumed only where a paused box holds the running
+// run's job and no collection has read it back (collected reports one has).
+// THE POLL'S RECORD IS A MOMENT OLD: a poll listed before a collection claimed
+// the run must not RESUME the box after its pause (Connect wakes it, and only
+// running records are kept alive, so it would lose its snapshot to its timer).
+// A paused box under a record still running the same job turns on
+// [LaunchRecord.Collected]. READ BACK: the poll announces the job again and
+// leaves the box asleep for the next collection ([Manager.Reconnect]); woken, a
+// box held for a model's limit ([Coordinator.keepRefused]) would be kept alive
+// every poll for an hour. NOT READ BACK: woken, kept alive, polled. Anything
+// else answers no box and no error.
 func (w *Waiter) reach(ctx context.Context, provider Provider, run PendingRun) (box Sandbox, collected bool, err error) {
 	box, err = provider.Attach(ctx, run.SandboxID)
 	if !errors.Is(err, ErrBoxPaused) {
@@ -1226,19 +1178,15 @@ func (w *Waiter) succeed(turnID string) {
 // pauseExpired reports whether a run's paused box is past its pause TTL and
 // is the reaper's to reclaim.
 //
-// Scoped to runs parked on a clarification: that is the one state whose box is
-// deliberately held for an open-ended human wait, so it is the one that needs
-// an engine-side expiry. Every other paused box belongs to a tail that is
-// actively being driven — a completion being collected, an Execute loop
-// resuming — and is settled by that tail within the turn. Expiring those from
-// here would kill a box out from under live work.
+// Scoped to runs parked on a clarification, the one state whose box is held for
+// an open-ended human wait and so needs an engine-side expiry. Every other
+// paused box belongs to a tail being driven (a collection, a resuming Execute
+// loop) and is settled by it; expiring those would kill a box under live work.
 //
-// WHETHER A BOX IS HELD IS THE ROW'S ANSWER, NOT A STAMP'S. A parked row
-// naming a box describes a box being paid for whether or not the pause
-// instant was ever written, so the reading is [PendingRun.HeldSince] — see
-// there for why the deadline can be dated from the park itself. Skipping an
-// unstamped row instead made a run whose pause record failed — one warn-only
-// store write — a remote box billed until a person noticed.
+// WHETHER A BOX IS HELD IS THE ROW'S ANSWER, NOT A STAMP'S: a parked row naming
+// a box is being paid for whether or not the pause instant was written, so the
+// reading is [PendingRun.HeldSince]. Skipping an unstamped row left a remote box
+// billed after one warn-only store write failed.
 func pauseExpired(run PendingRun, now time.Time) bool {
 	// An ANSWERED run's box is held for as long as its resume waits, which
 	// on a seat nobody holds is open-ended — see [PendingStore.ExpirePause].
@@ -1314,16 +1262,12 @@ func (w *Waiter) reapOne(ctx context.Context, manager *Manager, run PendingRun) 
 	return true
 }
 
-// publishCompletion announces the completion and routes the resume to the
-// owner.
-//
-// TWO PUBLISHES, TWO PURPOSES. The crewlet.events.* copy is an ANNOUNCEMENT:
-// the dashboard's broadcast stream watches that subject space, and dropping it
-// would blank the running-sandboxes panel. The per-seat control copy is a
-// COMMAND, and it goes to the seat's own topic because only the node holding
-// that seat has the parked turn to resume — a single
-// fleet-wide group would hand it to a non-owner (N-1)/N of the time.
-func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun, public bool) error {
+// announcementOf is the completion of run's job, and a fresh announcement of
+// it, as the waiter that drives the job's box makes one: what a node that owes
+// the job's completion a re-fire with no delivery in hand offers its
+// coordinator ([Coordinator.RecoverSeat]), so the two never say the job
+// differently.
+func announcementOf(run PendingRun) (types.ExecutorFinished, *events.Event) {
 	completion := types.ExecutorFinished{
 		Agent:       run.AgentID,
 		AgentHandle: run.AgentHandle,
@@ -1342,6 +1286,19 @@ func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun, public b
 		TraceID: run.TraceID, ParentSpanID: run.SpanID,
 	})
 	announcement.Source = run.Role
+	return completion, announcement
+}
+
+// publishCompletion announces the completion and routes the resume to the
+// owner; read is when this waiter asked its store for the run's row it
+// announces the job from, which the announcement says ([rowAskedField],
+// [announcedAfter]). Two publishes: the crewlet.events.* copy is an
+// announcement the dashboard's running-sandboxes panel watches, and the
+// per-seat control copy is a command to the one node holding the seat, which a
+// fleet-wide group would hand to a non-owner (N-1)/N of the time.
+func (w *Waiter) publishCompletion(ctx context.Context, run PendingRun, public bool, read time.Time) error {
+	completion, announcement := announcementOf(run)
+	askedRow(announcement, read)
 
 	// THE EVENTS COPY ONCE PER JOB: it is the record that the job finished,
 	// which the dashboard and the event store keep, and a job announced

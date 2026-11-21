@@ -34,20 +34,14 @@ type AuditPublisher interface {
 // Audit publishes one runtime audit record, with the envelope's source set to
 // [types.OperatorSource].
 //
-// # It outlives the request
-//
-// WithoutCancel, because the record has to be written EXACTLY when the caller
-// has gone: a call interrupted by a closed tab may still have landed, and that
-// is the call an audit is opened to find. It is still bounded — the broker
-// gives a publish with no deadline its own default one — so a node that
-// cannot reach its broker answers a moment late rather than never.
+// It outlives the request: WithoutCancel, because the record must be written
+// EXACTLY when the caller has gone (a closed tab's call may still have
+// landed), bounded by the broker's default publish deadline.
 //
 // # A failure is logged, never answered
 //
-// The call it describes has already happened. Failing its answer would tell
-// the caller a write that landed did not, and a retry would not make the
-// audit any more publishable. The write's own history row, where it has one,
-// is unaffected.
+// The call has already happened: failing its answer would tell the caller a
+// write that landed did not.
 func Audit(ctx context.Context, pub AuditPublisher, data events.Payload) {
 	ev := events.NewFrom(data, tracing.TraceOf(ctx))
 	ev.Source = types.OperatorSource
@@ -154,17 +148,15 @@ func AuditRefusal(ctx context.Context, pub AuditPublisher, transport, verb,
 
 // auditCall publishes one dispatched call's record.
 //
-// A PROVEN READ IS NOT AUDITED, and the dispatch does not call this for one: it
-// changes nothing, and a row per question an assistant asked would bury the
-// writes an audit is read for. A tool whose read-only hint is unknown is
-// audited as the write it may be.
+// A PROVEN READ IS NOT AUDITED, and the dispatch does not call this for one: a
+// row per question would bury the writes an audit is read for. A tool whose
+// read-only hint is unknown is audited as the write it may be.
 //
 // A CALL THAT KEPT THE CALLER'S OWN BOOKKEEPING (a read cursor, an inbox's
 // marks, their pins: [builtin.OwnBookkeeping], tools that take no name and so
-// act for the caller alone) is the same record under a type of its own,
-// [types.OwnRecordMarked], which the company's activity feed leaves out: a
-// person reading their rooms filled Live's Activity card with "ran
-// mark_chat_read: applied", pushing out what the company did.
+// act for the caller alone) is the same record under [types.OwnRecordMarked],
+// which the company's activity feed leaves out, or reading rooms would push
+// out what the company did.
 func (s *Server) auditCall(ctx context.Context, c Call, result tools.Result, err error) {
 	s.audited(ctx, c, result, err, builtin.OwnBookkeeping(c.Tool))
 }

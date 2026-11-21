@@ -10,105 +10,58 @@ import (
 
 // VersionedField is one record field that did not exist in a domain's base
 // record format, and the record version a build must read before it may apply
-// a record carrying it.
+// a record carrying it. A record is stamped with the highest Since among the
+// fields it carries, never the build's version (package doc, "A record is
+// stamped with the lowest version that reads it").
 //
-// # Why a record is stamped with the MINIMUM version, never the build's
-//
-// A record above a build's [Domain.RecordVersion] is RETAINED rather than
-// applied, and so is everything whose scope meets it — which is the whole
-// safety of a rolling upgrade: an older node holds a record it would apply
-// lossily instead of applying it. That makes the stamp a statement about the
-// RECORD, and there are two ways to get it wrong:
-//
-//   - Stamped BELOW what its fields need, an older node reads the version, finds
-//     it readable, decodes the record, drops the field it has no home for and
-//     applies what is left. Its rows then differ from every upgraded node's for
-//     that object, permanently, on tables a fleet compares byte for byte —
-//     and nothing reports it, because every data node applied "the same" record.
-//   - Stamped at the BUILD's version, every record the new build writes is
-//     unreadable to an older node the moment the build's version moves — the
-//     ones that carry nothing new included. The older half of the fleet then
-//     retains every write in the company rather than the few that need a
-//     newer reader, and every scope any of them touches refuses reads for the
-//     length of the upgrade.
-//
-// So the writer computes the lowest version that is still honest: the highest
-// [VersionedField.Since] among the fields the record actually carries, or 1
-// when it carries none. A record that does not use a new field stays readable
-// by every build there is, and a record that does is held back only on the
-// nodes that would have lost it.
-//
-// # Presence is what a field is carried BY
-//
-// A field counts as carried when its key is present in the record's JSON with
-// any value but null. Not "non-zero": a new field whose zero value is written
-// out is a zero the writer meant, and an older build would drop it exactly as
-// it drops any other value. A field that should not stamp its zero declares
-// `omitempty` (or `omitzero`), which is the Go struct deciding presence rather
-// than a second rule here.
+// A field is carried when its key is present with any value but null, not
+// when it is non-zero: a written zero is a value an older build would drop
+// like any other. A field whose zero should not stamp declares `omitempty`
+// (or `omitzero`), so the struct decides presence.
 type VersionedField struct {
-	// Name is how the field is named to a person — the Go type and field,
-	// "TurnSpend.Workers" — for a failure message and nothing else.
+	// Name is how the field is named to a person — "TurnSpend.Workers" — for
+	// a failure message and nothing else.
 	Name string
 
-	// Since is the record version that introduced the field: the lowest
-	// version a build must read to apply a record carrying it. At least 2,
-	// because version 1 is the base format and needs no row.
+	// Since is the record version that introduced the field. At least 2:
+	// version 1 is the base format and needs no row.
 	Since int
 
-	// Op narrows the rule to records of one operation, spelled as the
-	// domain's own wire op. EMPTY means every op. It is what lets two
-	// payload shapes that happen to share a key — a task patch and a turn's
-	// spend both carrying some `workers` — be told apart without a path
-	// that knows which payload type sits under `mutation`.
+	// Op narrows the rule to records of one wire op; EMPTY means every op.
+	// It tells apart two payloads sharing a key (a task patch and a turn's
+	// spend both carrying `workers`) without a path knowing the payload type.
 	Op string
 
 	// Path is the JSON keys from the record's root to the field. An array
-	// met on the way is searched element by element, so a field inside a
-	// list of objects is carried when any element carries it.
+	// met on the way is searched element by element.
 	Path []string
 
-	// Equals narrows the rule to one VALUE at Path, compared as the JSON
-	// string it is written as. EMPTY means any value but null.
-	//
-	// It is what a new KIND or a new OP is: a value of a field every record
-	// has carried since the base format, so a row naming only the key would
-	// stamp every record the domain writes. Its row names the key and the
-	// value instead — a file kind is `subject.kind` equal to "file" — and
-	// an older build retains the records of the kind it has no applier for
-	// rather than faulting at the end of its dispatch.
+	// Equals narrows the rule to one VALUE at Path, compared as a JSON
+	// string; EMPTY means any value but null. It is how a new KIND or OP is
+	// declared (`subject.kind` equal to "file"): the key alone has been
+	// carried since the base format and would stamp every record, while
+	// key and value make an older build retain the records it has no
+	// applier for rather than fault at the end of its dispatch.
 	Equals string
 
 	// Gate marks a field a GATE may carry: a change to what a gate's APPLY
-	// does, which no older build can honour.
-	//
-	// Every other field is refused on a gate (each domain's encoder says
-	// why), because the one thing an older build does with a gate it cannot
-	// read is HALT at it — a deferred gate would license every record above
-	// it — and a halt takes that node out of service until it upgrades. A
-	// field marked here is the deliberate exception: a gate whose apply
-	// changed cannot be applied the old way without leaving that node's rows
-	// different from every newer node's for good, and cannot be deferred, so
-	// halting an older node is the one honest answer left. It is chosen per
-	// field, in the table a reviewer reads, never by a writer.
+	// does. Every other field is refused on a gate, because an older build
+	// HALTS at a gate it cannot read (deferring it would license every record
+	// above it). A gate whose apply changed can neither be applied the old
+	// way without diverging rows nor deferred, so halting older nodes is the
+	// one honest answer. Chosen per field in the table, never by a writer.
 	Gate bool
 }
 
 // RecordFields is a domain's table of every field its records have gained
-// since the base format.
-//
-// ONE TABLE PER DOMAIN, consulted by that domain's encoder and certified by
-// [internal/statelog/statelogtest]: a field added to a record without a row
-// here is the silent divergence the type exists to prevent, and a row here
-// that no build reads is a version nothing can apply.
+// since the base format: one per domain, consulted by its encoder and
+// certified by [internal/statelog/statelogtest]. A field missing here is a
+// silent divergence; a row no build reads is a version nothing can apply.
 type RecordFields []VersionedField
 
 // Minimum is the lowest record version a record may be stamped at, given its
-// op and its encoded JSON.
-//
-// One when it carries no versioned field. It refuses a record that is not a
-// JSON object, because every domain's record is one and a caller that handed
-// something else has encoded the wrong value.
+// op and its encoded JSON: 1 when it carries no versioned field. A record
+// that is not a JSON object is refused: the caller encoded the wrong value.
 func (f RecordFields) Minimum(op string, record []byte) (int, error) {
 	minimum := 1
 	if len(f) == 0 {
@@ -134,13 +87,11 @@ func (f RecordFields) Minimum(op string, record []byte) (int, error) {
 // [VersionedField.Gate] whose version is above the highest version among the
 // gate fields the record carries (1 where it carries none).
 //
-// THE GATE FIELDS DECIDE THE HALT, and anything at or below them halts nobody
-// they do not already halt: a build that cannot read such a field cannot read
-// the gate either, and stops there whether the field is carried or not. Only a
-// field ABOVE them takes an older node out of service that the gate's own rule
-// did not — for a field rather than for a rule it cannot honour — which is
-// what the encoder refuses. A barrier and a generation carry no gate field, so
-// every versioned field they carry is named here.
+// The gate fields decide the halt: a field at or below them halts no node the
+// gate does not already halt. Only a field ABOVE them takes an older node out
+// of service for a field rather than a rule, which the encoder refuses. A
+// barrier and a generation carry no gate field, so every field they carry is
+// named.
 func (f RecordFields) Ungated(op string, record []byte) []string {
 	var root map[string]json.RawMessage
 	if len(f) == 0 || json.Unmarshal(record, &root) != nil {
@@ -178,17 +129,13 @@ func (f RecordFields) Carried(op string, record []byte) []string {
 	return out
 }
 
-// Check refuses a table a build reading version reads cannot honour.
+// Check refuses a table a build reading version reads cannot honour:
 //
-// Two rules close the two ways the table and the build's version drift apart:
-//
-//   - Every field's version is one this build READS. A build that stamps a
-//     record at a version above its own retains its own writes.
-//   - The build reads EXACTLY the highest version its table knows, or 1 with
-//     no table. A build claiming to read a version no field introduced would
-//     accept a newer peer's record at that version and apply it without the
-//     field that version was minted for — the lossy apply the stamp exists to
-//     prevent, arriving from the other side.
+//   - Every field's version is one this build READS, or it retains its own
+//     writes.
+//   - The build reads EXACTLY the table's highest version, or 1 with no
+//     table. Claiming a version no field introduced, it would apply a newer
+//     peer's record at that version without the field it was minted for.
 func (f RecordFields) Check(reads int) error {
 	highest := 1
 	names := map[string]bool{}
@@ -281,7 +228,6 @@ func isNull(value json.RawMessage) bool {
 }
 
 // ReadableBy reports whether a build reading record version reads may decode
-// and apply this record. The ONE statement of the retain rule's comparison, so
-// the apply loop and a conformance case asking "would an older build hold
-// this back?" cannot disagree about which side of the boundary a version sits.
+// and apply this record: the ONE statement of the retain rule's comparison, so
+// the apply loop and the conformance suite cannot disagree about the boundary.
 func (e Envelope) ReadableBy(reads int) bool { return e.V <= reads }

@@ -168,13 +168,11 @@ func TestAPreflightIsAnsweredWithoutACredential(t *testing.T) {
 
 // A PERMITTED ORIGIN MAY SEND WHAT THE ROUTES READ, AND NO HEADER BEYOND IT.
 //
-// A permitted origin may write, and the act route refuses a request with no
-// `Idempotency-Key`, a `/config` write needs its `X-Summary` and its
-// precondition, a write that names its own request id is logged under it, and
-// a link's view takes its secret in a header: a preflight that did not allow
-// one made the browser refuse the whole request, so such an origin could never
-// make it at all. The reader header is the same-origin dashboard's alone and
-// is not offered. Which headers the routes read is held by
+// A permitted origin may write: the act route needs `Idempotency-Key`, a
+// `/config` write its `X-Summary` and precondition, a link's view its secret
+// header. A preflight not allowing one makes the browser refuse the whole
+// request. The reader header is the same-origin dashboard's alone. Which
+// headers the routes read is held by
 // TestTheCORSListsAreTheHeadersTheRoutesReadAndSet; this holds the preflight
 // to answering that list rather than the browser's question.
 //
@@ -207,14 +205,11 @@ func TestAPermittedOriginMaySendWhatTheRoutesReadAndNothingBeyondIt(t *testing.T
 
 // A PERMITTED ORIGIN'S SCRIPT MAY READ WHAT A CLIENT ACTS ON.
 //
-// A browser hides from a cross-origin page every response header that is not
-// CORS-safelisted unless the answer exposes it, so a page on an allowed origin
-// could read a `/config` document and never its `ETag` — the tag its next
-// write's `If-Match` must carry — nor the `Retry-After` of a `503`, nor the
-// engine's mark that says the answer is the engine's at all, nor the
-// `Location` a started verification of a Gitlet node's copy is read back at.
-// The exposure rides the ANSWER, which is where the browser reads it; a
-// preflight and an origin the allow-list does not name carry none.
+// A browser hides every non-safelisted response header from a cross-origin
+// page unless the answer exposes it: the `ETag` for the next `If-Match`, the
+// `Retry-After` of a `503`, the engine's mark, a verification's `Location`.
+// The exposure rides the ANSWER; a preflight and an origin the allow-list does
+// not name carry none.
 //
 // Mutation: drop the exposure from the answer and the first check fails; set
 // it on the preflight and the second does.

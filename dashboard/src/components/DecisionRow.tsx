@@ -62,6 +62,8 @@ import type { ExecutorRow, WorkAskRow } from "~/protocol/index.ts";
 import { itemAddress, itemPath, type ItemRef } from "~/lib/work.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "~/lib/access.ts";
 import { RunQuestionLine } from "./RunQuestion.tsx";
+import { Said } from "./Said.tsx";
+import { CHECKED_WORDS, renderQuoted } from "~/lib/markdown.ts";
 import { EscalationNote, ReleaseRequestFacts } from "./Delegation.tsx";
 import { delegationEscalated, releaseRequestOf } from "~/lib/delegation.ts";
 import { heldCallNamed, heldCallTitle, type HeldCallSubject } from "~/lib/heldCall.ts";
@@ -501,17 +503,22 @@ function AskGroup({
   );
 }
 
-/** What an ask was answered with, where its controls were. */
+/**
+ * What an ask was answered with, where its controls were. Words are drawn as
+ * the conversation draws them (`Said`), whole: they are the reader's own,
+ * written a moment ago.
+ */
 function AnsweredLine({ answer }: { answer: AskAnswer }) {
   return (
     <span className="decision-answered" role="status">
       <CheckGlyph size="sm" aria-hidden="true" />
       <span>
-        Answered{" "}
+        Answered
         {answer.kind === "reply" ? (
-          <strong>{`“${answer.text}”`}</strong>
+          <Said quoted={renderQuoted(answer.text, CHECKED_WORDS)} />
         ) : (
           <>
+            {" "}
             <strong>{answer.label}</strong>
             {answer.recommended && <span className="decision-answered-rec"> (Recommended)</span>}
           </>

@@ -14,44 +14,29 @@ import (
 
 // A TEAM'S LEAD NARROWS A SERVER; ONLY ITS ENTRY GRANTS IT.
 //
-// `mcp_limits` on a seat or a unit holds the MCP servers its agent seats are
-// granted to less than their entries give: a server turned off
-// (`enabled: false`), a tool at `approve` or `blocked` ([org.MCPLimits]). Each
-// agent seat is held to the strictest of its own block, every enclosing unit's
-// at any depth, and the server's own entry: [MCPServer.Grants] reads a limit
-// that turns its server off, and the engine holds each tool to the
-// stricter of its entry's level and the seat's limit where it cuts the seat's
-// surface (internal/engine, `grantedSurface`).
+// `mcp_limits` on a seat or unit holds its agent seats to less than the server
+// entries give: a server turned off (`enabled: false`), a tool at `approve` or
+// `blocked` ([org.MCPLimits]). Each seat is held to the strictest of its own
+// block, every enclosing unit's, and the entry: [MCPServer.Grants] reads a
+// limit turning a server off; the engine cuts each tool (`grantedSurface`).
 //
-// A LIMIT IS NOT A GRANT, so it is held to no grant: a team's lead may limit a
-// server before an administrator grants it to the team, and the limit holds
-// from the day the grant does. What a limit names must be a server the company
-// declares ([Company.validateMCPServerReferences]), so a removal of the server
-// clears its limits with it.
-//
-// A LEAD MAY ONLY NARROW. Seats and units are written under the org chart's
-// own verb, so a team's lead writes their own team's limits; a write that
-// lifts or loosens what any agent seat is held to is listed apart by
-// [DiffOrg] ([OrgDiff.Widened]) and is an administrator's.
+// A LIMIT IS NOT A GRANT: it may precede the grant and holds from the day the
+// grant does. It must name a declared server ([Company.validateMCPServerReferences]),
+// so removing the server clears its limits. A LEAD MAY ONLY NARROW: a write that
+// loosens anything is listed by [DiffOrg] ([OrgDiff.Widened]) and is an administrator's.
 
-// validateMCPLimits holds every `mcp_limits` block to what a limit can say,
-// and refuses an executor box listing of a server some of whose tools a seat's
+// validateMCPLimits holds every `mcp_limits` block to what a limit can say, and
+// refuses an executor box listing of a server some of whose tools a seat's
 // limits hold back.
 //
-//   - A block holding nothing back is refused: it reads as a limit and is
-//     none. So is `enabled: true`, which a limit cannot say: only the
+//   - A block holding nothing back is refused, as is `enabled: true`: only the
 //     server's own entry turns it on.
-//   - A tool is held at `approve` or `blocked`, and keyed by a name a server
-//     can list. `allow` is refused: it is the level the server's own entry
-//     sets, and a limit never loosens.
-//   - A box reaches a server whole, past the engine, so a server a seat's
-//     limits hold a tool of back is not given to its box, as a server whose
-//     entry holds one back is not ([Company.validateBoxToolLevels]).
+//   - A tool is held at `approve` or `blocked`, keyed by a name a server can
+//     list; `allow` is refused, a limit never loosens.
+//   - A box reaches a server whole, past the engine, so it is not given a server
+//     a seat's limits hold a tool of back ([Company.validateBoxToolLevels]).
 //
-// An ADMISSION rule: a stored revision that breaks it runs and warns. Its
-// limits hold as written, a level this build cannot read holding the tool
-// back as far as any does ([org.ToolLimit]), and its box is given no such
-// server.
+// ADMISSION rule: a stored revision breaking it runs and warns.
 func (c *Company) validateMCPLimits(o *org.Organization) error {
 	var p problems
 	for role, path := range c.EachRole() {
@@ -147,18 +132,14 @@ func heldBy(limit org.ServerLimit) string {
 
 // widened is every limit turning before into after lifts or loosens for an
 // agent seat both hold, judged by the servers after declares
-// ([OrgDiff.Widened]).
-//
-// ONLY WHERE IT CHANGES WHAT THE SEAT GETS:
-//   - a server that reaches the seat after, whether or not it is on
-//     ([MCPServer.Reach]), since a limit lifted from a server nobody grants
-//     the seat hands it nothing, while one lifted from a server turned off
-//     hands it the server the day it is turned back on;
+// ([OrgDiff.Widened]), ONLY WHERE IT CHANGES WHAT THE SEAT GETS:
+//   - a server that reaches the seat after, on or not ([MCPServer.Reach]): a
+//     limit lifted from a server nobody grants hands nothing, one lifted from a
+//     turned-off server hands it the day it is turned back on;
 //   - a tool whose entry does not already hold it as far, by its own level or
 //     the entry's default: what the entry leaves to a tool's hints is decided
-//     from a listing no document holds, so it is taken to run at allow, and a
-//     limit lifted there is a widening;
-//   - and no tool of a server still turned off for the seat, nor of one it was
+//     from a listing no document holds, so it is taken to run at allow;
+//   - no tool of a server still turned off for the seat, nor of one it was
 //     turned off before, which is listed once, as the server.
 func widened(before, after *org.Organization, c *Company) []OrgWidening {
 	if before == nil || after == nil {

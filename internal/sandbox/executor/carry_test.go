@@ -751,6 +751,78 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 	}
 }
 
+// THE CONTINUATION CHECK SAYS WHETHER THE BOX'S RESUME WAS READ. Only a Claude
+// Code release whose resume this build read (2.1.310, 2.1.322) rebuilds a
+// hook's note as the job's session showed it, so only its box is handed a brief
+// that counts such a read held: any other release, one the box printed that
+// cannot be read, a harness that does not answer, and OpenCode answer not read.
+//
+// Mutation: answer the resume read whatever the release, or for any Claude
+// Code release, and a row goes red.
+func TestTheContinuationCheckSaysWhetherTheBoxsResumeWasRead(t *testing.T) {
+	t.Parallel()
+	cc := executor.NewClaudeCode()
+	claude := sandbox.SessionArchive{Harness: executor.ClaudeCodeName, SessionID: "s",
+		Format: executor.ClaudeArchiveFormat, Version: "2.1.310"}
+	for name, tc := range map[string]struct {
+		runner  *executor.Runner
+		printed string
+		code    int
+		archive sandbox.SessionArchive
+		read    bool
+	}{
+		"claude 2.1.310":                {runner: cc, printed: "2.1.310 (Claude Code)\n", archive: claude, read: true},
+		"claude 2.1.322":                {runner: cc, printed: "2.1.322 (Claude Code)\n", archive: claude, read: true},
+		"claude 2.1.316":                {runner: cc, printed: "2.1.316 (Claude Code)\n", archive: claude},
+		"claude, an unreadable release": {runner: cc, printed: "Claude Code nightly\n", archive: claude},
+		"claude that does not answer":   {runner: cc, code: 127, archive: claude},
+		"opencode": {runner: executor.NewOpenCode(), printed: "opencode v2.1.4\n",
+			archive: sandbox.SessionArchive{Harness: executor.OpenCodeName, SessionID: "ses_s",
+				Format: executor.OpenCodeArchiveFormat, Version: "2.1.4"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var asked []string
+			check, err := tc.runner.CheckCarry(t.Context(), versionBox(tc.printed, tc.code, "command not found",
+				&asked), tc.archive)
+			if err != nil {
+				t.Fatalf("CheckCarry: %v", err)
+			}
+			if check.ResumeRead != tc.read {
+				t.Errorf("CheckCarry = %+v, want the resume read: %v", check, tc.read)
+			}
+		})
+	}
+}
+
+// A TAKE SAYS WHETHER ITS ARCHIVE'S RESUME WAS READ, by the predicate the
+// continuation check reports a box's by: a Claude Code archive of a release
+// whose resume this build read (2.1.310, 2.1.322) and of no other, the only
+// Claude Code archive whose capture is raised (internal/sandbox's placeAtNewest).
+//
+// Mutation: report it whatever the release, or never, and a row goes red.
+func TestATakeSaysWhetherItsArchivesResumeWasRead(t *testing.T) {
+	t.Parallel()
+	for release, want := range map[string]bool{"2.1.310": true, "2.1.322": true, "2.1.316": false} {
+		t.Run(release, func(t *testing.T) {
+			t.Parallel()
+			runner, b := sessionBox(t, release)
+			runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: takeBound})
+			if err != nil || taken.Body == nil {
+				t.Fatalf("TakeSession = %+v, %v", taken, err)
+			}
+			if err := taken.Body.Close(); err != nil {
+				t.Errorf("closing the take: %v", err)
+			}
+			if taken.ResumeRead != want {
+				t.Errorf("the take of an archive %s wrote says its resume was read: %v, want %v",
+					release, taken.ResumeRead, want)
+			}
+		})
+	}
+}
+
 // WHAT THE RUN DID IS ITS SCRIPT'S RECORD: the session the harness ran (the
 // result's, else the record's), whether it continued the one asked, why not, and
 // the release `--version` printed; a capture the box holds is described for that

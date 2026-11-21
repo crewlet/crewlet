@@ -7,19 +7,17 @@ import (
 )
 
 // TurnRow is what continuing a turn's kept session reads of the turn's row on
-// the executor log: whose turn it is, which session of which harness and
-// archive format the row names, the launch and the capture it was kept from,
-// when, and the sealed object holding it, whether the turn has ended and gone
-// on past that session, the conversation it served and why it names no object
-// where it names none.
+// the executor log: whose turn it is, the session, harness and archive format
+// the row names, the launch and capture it was kept from, when, the sealed
+// object holding it, whether the turn ended and went on past it, the
+// conversation it served, and why it names no object where it names none.
 //
 // HERE, NOT AS internal/executordomain's Session, because the restore that
-// reads it is the sandbox's (its restore.go), and the sandbox links no state
-// log (this package's doc): the row type of the log's domain carries the log's
-// positions and so its graph. One method of that domain makes it
-// (executordomain.Session.Kept), which the engine's restore and the read
-// surface both call, so the fields a relaunch decides on are copied in one
-// place and a reader is told what the launch would decide.
+// reads it is the sandbox's, and the sandbox links no state log (this
+// package's doc): the domain's row type carries the log's positions and so its
+// graph. One method makes it (executordomain.Session.Kept), called by the
+// engine's restore and the read surface, so the fields a relaunch decides on
+// are copied in one place and a reader is told what the launch would decide.
 type TurnRow struct {
 	Handle string
 	Turn   string

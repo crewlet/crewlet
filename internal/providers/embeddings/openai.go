@@ -21,56 +21,28 @@ const (
 	DefaultBaseURL = "https://api.openai.com/v1"
 
 	// EmbedTimeout bounds one [Provider.Embed] request: the ceiling for a
-	// caller that sets no tighter deadline of its own. An episode embedded
-	// after its turn has ended is held to the same fifteen seconds, by a
-	// deadline it sets for its own reason (learning.DefaultEmbedTimeout).
+	// caller that sets no tighter deadline (an episode embedded after its turn
+	// has the same fifteen seconds, learning.DefaultEmbedTimeout).
 	//
-	// SHORT, and much shorter than a completion's, because every caller of
-	// a single embedding has something waiting behind it and a cheap answer
-	// to a slow embedder — no vector, so no similarity search — while
-	// waiting two minutes to avoid that would be the wrong trade.
-	//
-	// A caller with a tighter budget sets a deadline on its context, which
-	// wins, and TWO BUDGETS of two seconds do. A search's query vector is
-	// held to search.QueryEmbedBudget, and so, BY REFERENCE to it
-	// (prefetch.EmbedBudget), are a turn's ask at turn start and the hint a
-	// recall tool passes: a person or a turn is waiting on each. A note as
-	// it is written is held to learning.DiaryEmbedBudget, a budget of its
-	// OWN that shares only the figure: the reflect_and_persist call keeping
-	// the note has a model waiting on it, and a note that misses the budget
-	// is filled later rather than lost. Changing one leaves the other where
-	// it is.
+	// Short: every caller has something waiting, and no vector (so no
+	// similarity search) beats waiting two minutes. A tighter context deadline
+	// wins, and two two-second budgets do: search.QueryEmbedBudget, shared BY
+	// REFERENCE by a turn's ask and a recall hint (prefetch.EmbedBudget), and
+	// learning.DiaryEmbedBudget, its OWN, sharing only the figure.
 	EmbedTimeout = 15 * time.Second
 
 	// BatchTimeout bounds one request of a [Provider.EmbedBatch] call.
 	//
-	// ITS OWN, because the two calls have nothing in common but the wire:
-	// a single Embed carries one short text, while a batch request carries
-	// up to the model's request total — 300 000 tokens on OpenAI — and a
-	// ceiling chosen for one input is not a figure about how long a server
-	// takes over that many.
+	// A batch request carries up to 300 000 tokens on OpenAI. Sixty seconds,
+	// from the caller's tick: the corpus duty (internal/search) sends at most
+	// thirty-two requests a tick and the engine cuts a tick off after five
+	// minutes without progress (embedTickBudget in internal/engine), so this is
+	// a fifth of that, never mistaken for a wedge.
 	//
-	// SIXTY SECONDS, derived from what the batch caller's tick allows. The
-	// knowledge corpus duty (internal/search) plans its own requests and
-	// sends each through a call of its own, at most thirty-two a tick on a
-	// one-minute interval, and the engine cuts a tick off once it has gone
-	// five minutes without progress (internal/engine's embedTickBudget),
-	// counting each answered request as progress. A request at this
-	// ceiling is a fifth of that budget, so one that runs to it is never
-	// itself mistaken for a wedge.
-	//
-	// NOTHING HAS MEASURED how long a server takes to embed a full request
-	// — not OpenAI's, and not a CPU-hosted one, which is the deployment
-	// most likely to need longer. The lever for a slow server is not this
-	// ceiling but the request's size: `max_batch_tokens` lowers what one
-	// request carries, and with it how long the server takes over it,
-	// without moving the bound a wedged call is held to. It is a timing
-	// lever only while it stays at or above the model's per-input window:
-	// one input must fit one request, so a request total below the window
-	// is also the bound one input may hold
-	// (config.EmbeddingProvider.InputBound), and lowering it there
-	// shortens the opening the corpus embeds of every long source — a new
-	// digest for each, and each embedded again.
+	// NOTHING HAS MEASURED a full request's time, on OpenAI or a CPU-hosted
+	// server. The lever for a slow one is `max_batch_tokens`, only at or above
+	// the per-input window: below it it is also the input bound
+	// (config.EmbeddingProvider.InputBound), re-embedding every long source.
 	BatchTimeout = time.Minute
 )
 
@@ -228,24 +200,16 @@ func (p *Provider) Endpoint() string { return p.endpoint }
 
 // EmbedBatch implements [BatchEmbedder].
 //
-// ONE-TO-ONE WITH THE INPUT, positionally, which is the contract's whole
-// content: the caller matches vectors to documents by index, so an empty or
-// unembeddable input must still occupy its slot. It does, as a nil vector,
-// rather than being dropped — dropping one would re-file every document after
-// it onto the wrong vector, silently, and the only symptom would be a search
-// that returns the wrong answers.
+// One-to-one with the input, positionally: an empty or unembeddable input
+// keeps a nil slot, since dropping one would silently re-file every later
+// document onto the wrong vector. Which input an item answers is the
+// provider's own index where present (results may be out of order), and a
+// mapping not covering every input once is refused ([Provider.assignment]).
 //
-// WHICH input an item answers is the provider's own index wherever the
-// response carries one, since the API documents that results may come back
-// out of order — and the mapping those indices describe is refused outright
-// unless it covers every input exactly once. See [Provider.assignment].
-//
-// AS MANY REQUESTS AS THE MODEL'S LIMITS NEED ([Limits.Requests]), one after
-// another, each under [BatchTimeout]: a batch is a caller's unit of work and a
-// request is the provider's, and the corpus's 128 inputs of up to 8 KiB are
-// over OpenAI's 300 000-token request total whenever the text runs under 3.5
-// bytes a token — code, markup, most scripts that are not Latin — which sent
-// as one request was a batch refused on every tick for ever.
+// As many requests as [Limits.Requests] says, sequential, each under
+// [BatchTimeout]: the corpus's 128 inputs of up to 8 KiB exceed OpenAI's
+// 300 000-token total when text runs under 3.5 bytes a token (code, markup,
+// non-Latin), and as one request were refused every tick for ever.
 func (p *Provider) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	out := make([][]float32, len(texts))
 	prepared := make([]string, len(texts))
@@ -342,18 +306,15 @@ func (p *Provider) named(err error) error {
 
 // classify turns an SDK failure into a classified [Error].
 //
-// A STATUS decides it where there is one ([classForStatus]). Without one, a
-// deadline and a network failure are transient — the provider's own timeout
-// and a caller's deadline alike, since asking again with more time may succeed
-// — while a CANCELLED context is the caller's own doing and is left
-// unclassified: it says nothing about the provider, and errors.Is(err,
-// context.Canceled) still answers through the wrap.
+// A status decides it where there is one ([classForStatus]). Without one, a
+// deadline or network failure is transient (asking again with more time may
+// succeed), while a cancelled context is the caller's own doing and stays
+// unclassified, still answering errors.Is(err, context.Canceled).
 //
-// WITH WHAT THE ENDPOINT SAID ([detail]) wherever it answered: the
-// SDK's error names the status alone, and the class is decided by the status —
-// but an operator told "it will refuse this request again unchanged" needs the
-// endpoint's reason to tell a context length from a `dimensions` the model does
-// not take, and only the error's fields still carry it.
+// Where the endpoint answered, its words ([detail]) ride along: the SDK's
+// error names the status alone, but an operator told "it will refuse this
+// request again unchanged" needs the reason to tell a context length from a
+// `dimensions` the model does not take, and only the error's fields carry it.
 func (p *Provider) classify(err error) error {
 	var apiErr *sdk.Error
 	if errors.As(err, &apiErr) {
@@ -379,52 +340,16 @@ func (p *Provider) classify(err error) error {
 
 // assignment resolves which input each item of a batch response answers.
 //
-// It returns one input position per item, in item order — a COMPLETE
-// one-to-one mapping onto the inputs — or an error, and there is no third
-// outcome: a response this cannot read as a bijection yields no vectors at
-// all rather than the ones it could place.
-//
-// # Why the mapping is verified whole rather than applied per item
-//
-// Counting the items says the answer is the right SIZE and says nothing about
-// where they go. Two items carrying the same index pass that count, and
-// writing each one as it arrives overwrites the first input's vector with the
-// second's and leaves some other input nil — a full-length slice with a hole
-// in it, which is the worst shape this can return. The embed duty that calls
-// this — search.Embedder — reads both halves of it as good news: it publishes
-// the overwritten vector as that document's own, which nothing can ever detect
-// afterwards because a stored vector carries no evidence of the text it came
-// from, and it reads the hole as "a document with nothing to embed", which
-// selects that document again on the next pass and every pass after it, for
-// ever. So the mapping is checked to be a bijection before it is used — every
-// index inside the batch, no index twice, and exactly as many items as inputs,
-// which together leave no input uncovered.
-//
-// # Why a MISSING index is a property of the response, not of an item
-//
-// The field is required by the API, but this backend also serves
-// OpenAI-compatible servers, and one that omits it decodes as index 0 on
-// every item — filing an entire batch onto the first input. The JSON
-// metadata is what separates "the server said 0" from "the server said
-// nothing", so presence is read there rather than from the value. It is then
-// read across the whole response: an item's arrival position and its index
-// are two different authorities about which input it answers, and a response
-// that offers one for some items and the other for the rest gives no way to
-// tell which of the two is lying, so it is refused rather than resolved.
-//
-// # And the field has THREE states, not two
-//
-// [respjson.Field.Valid] is false for a field that was OMITTED, one that came
-// back JSON `null`, and one whose value is not an index at all (an object, a
-// string that is not a number) — and only the first is a server making no
-// claim. Read as two states, a response whose every index is null or garbage
-// counts as "no indices at all" and silently takes the positional fallback:
-// the one outcome this whole function exists to refuse, arrived at by
-// reading a claim the server DID make and this code could not parse.
-// [respjson.Field.Raw] is what separates them — [respjson.Omitted] is the
-// empty string, `null` and an unreadable value are not — so a present index
-// that names no input is refused with the rest, and a server that simply
-// leaves the field out keeps working.
+// It returns a complete one-to-one mapping or an error. A matching count says
+// nothing about where items go: a repeated index would overwrite one vector
+// and leave a nil, which search.Embedder publishes as a document's own and
+// re-selects as "nothing to embed" for ever. So every index is in the batch
+// and none repeats. A missing index is a property of the whole response:
+// compatible servers may omit the field, decoding as 0 on every item, so
+// presence is read from the JSON metadata. Mixing indices with arrival order
+// is refused, two authorities with no way to tell which lies. Only omitted is
+// no claim ([respjson.Field.Valid] is false for `null` and garbage too), so
+// [respjson.Field.Raw] ([respjson.Omitted]) separates them.
 func (p *Provider) assignment(data []sdk.Embedding, inputs int) ([]int, error) {
 	if len(data) != inputs {
 		return nil, fmt.Errorf("embeddings: %s returned %d vectors for %d "+

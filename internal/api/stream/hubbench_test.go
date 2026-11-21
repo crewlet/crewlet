@@ -11,24 +11,15 @@ import (
 // BenchmarkHubBroadcast measures one push reaching N clients across M
 // postures.
 //
-// # What it is for, and what it is not
-//
-// It is the JUSTIFICATION for encoding once per posture rather than once per
-// client, and nothing gates on it: a benchmark is a measurement of one machine
-// on one day, so a threshold here would fail on a loaded CI runner and pass on
-// a fast laptop while saying nothing about either. The property is pinned by
+// It JUSTIFIES encoding once per posture rather than once per client, and
+// nothing gates on it: a threshold on one machine's timing would fail on a
+// loaded CI runner and pass on a fast laptop. The property is pinned by
 // TestAFrameIsEncodedOncePerPosture, which COUNTS encodes.
 //
-// The shape it is built to expose is the one the rewrite removed: the cost per
-// broadcast used to grow with the number of tabs open, because the envelope
-// travelled to every writer and every writer marshalled it again. Run it with
-// clients=1 against clients=64 — the per-push cost should now grow with the
-// DELIVERIES (a channel send each) and not with the encodes (one per posture,
-// whatever N is).
-//
-// It broadcasts KindHealth deliberately: it is the one fanned-out kind both
-// postures deliver, so postures=1 and postures=2 differ in the number of
-// ENCODES and in nothing else.
+// Run it with clients=1 against clients=64: the per-push cost should grow with
+// the DELIVERIES (a channel send each), not the encodes (one per posture). It
+// broadcasts KindHealth because both postures deliver it, so postures=1 and
+// postures=2 differ in ENCODES and nothing else.
 func BenchmarkHubBroadcast(b *testing.B) {
 	payload := map[string]any{
 		"role": "Engineering Lead", "state": "working", "handle": "lead",

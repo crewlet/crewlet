@@ -9,49 +9,27 @@ import (
 	"time"
 )
 
-// Recorder is the one place a measurement is written.
-//
-// It holds counters, gauges and fixed-bin histograms keyed by instrument name
-// and attribute set, and it is safe for concurrent use by every goroutine in
-// the process — which is the point: one atomic add is what makes a number on
-// the operator record and a number on a collector's panel the same number.
-//
-// # Why it is not the OTel API directly
-//
-// Two readers, not one. The OTel instruments are one; the rolling 24-hour
-// window the operator record renders is the other, and the OTel SDK offers no
-// way to read back what was recorded. A second counting path for the second
-// reader is the drift this design exists to prevent.
+// Recorder is the one place a measurement is written: counters, gauges and
+// fixed-bin histograms keyed by instrument name and attribute set, safe for
+// concurrent use. It is not the OTel API directly because the OTel SDK cannot
+// read back what was recorded, and the rolling window is a second reader
+// (package doc, "One recorder, two readers").
 type Recorder struct {
 	mu     sync.Mutex
 	series map[string]*series
 	byName map[string]Instrument
 
 	// sinks are the exporter's synchronous histogram instruments, bound
-	// after the provider exists.
-	//
-	// HISTOGRAMS ARE THE ONE KIND THAT CANNOT BE OBSERVED AFTER THE FACT:
-	// a counter and a gauge have a current value the exporter can ask for
-	// at export time, and a distribution does not — the observations have
-	// to reach it as they happen. So the recorder keeps its own copy (for
-	// the operator record, which reads back) and forwards to the sink (for
-	// the collector, which cannot).
-	//
-	// Nil until an exporter binds one, which is the ordinary state of a
-	// deployment with no collector: the recorder's own copy still answers.
+	// after the provider exists. Only a histogram needs one: a counter or
+	// gauge has a current value the exporter reads at export time, while a
+	// distribution's observations must reach it as they happen. Empty with
+	// no collector; the recorder's own copy still answers.
 	sinks map[string]func(float64, map[string]string)
 
-	// window is the ROLLING 24-hour view the operator record reads, fed
-	// from the same one write path as the cumulative series beside it.
-	//
-	// TWO VIEWS OF ONE MEASUREMENT, and both are needed. `series` is
-	// cumulative since this process started, which is what an exporter
-	// scrapes and diffs. The alarms cannot use it: `search_degraded` fires
-	// on a fraction being above zero, so against a monotone counter one
-	// degraded search after boot lights it for the life of the process and
-	// it can never go out — and `search_slow` and `barrier_slow` take a
-	// maximum, so one slow observation ever is permanent. That is the
-	// defect this window was written for and then never wired to.
+	// window is the rolling 24-hour view the alarms read, fed from the same
+	// write path as `series`, which is cumulative since start for an
+	// exporter to diff. An alarm on the cumulative series latches: one
+	// degraded search lights `search_degraded` for the life of the process.
 	window *Window
 }
 
@@ -85,25 +63,19 @@ func New() (*Recorder, error) {
 	}, nil
 }
 
-// Window is the rolling 24-hour view of everything recorded here.
-//
-// EVERY ALARM WITH A `_24h` IN ITS NAME READS THIS, and none may read the
-// cumulative series beside it. A threshold applied to a counter that only
-// ever grows is a threshold that latches: it fires at the first observation
-// past it and stays lit until the process restarts, which is an alarm an
-// operator learns to ignore rather than one they act on.
+// Window is the rolling 24-hour view of everything recorded here. Every
+// `_24h` alarm reads it, never the cumulative series: a threshold on a counter
+// that only grows latches until the process restarts.
 func (r *Recorder) Window() *Window {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.window
 }
 
-// BindHistogram attaches an exporter's instrument to a histogram.
-//
-// Called once per histogram by whoever installs the MeterProvider. A nil sink
-// is accepted and ignored — an instrument the exporter could not build records
-// through the recorder's own copy and nowhere else, which is the honest
-// degradation for telemetry.
+// BindHistogram attaches an exporter's instrument to a histogram, once per
+// histogram, by whoever installs the MeterProvider. A nil sink is ignored: an
+// instrument the exporter could not build records into the recorder's own copy
+// alone.
 func (r *Recorder) BindHistogram(name string, sink func(float64, map[string]string)) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -121,27 +93,18 @@ func (r *Recorder) BindHistogram(name string, sink func(float64, map[string]stri
 func (r *Recorder) WithClock(now func() time.Time) *Recorder {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// THE WINDOW IS THE ONLY THING HERE THAT READS A CLOCK: the recorder's
-	// own series are counters, gauges and histograms, none of which carries
-	// a timestamp. So the clock goes straight into the window whose expiry
-	// it exists to test, rather than onto a field that would advertise an
-	// injectability the recorder does not have.
+	// The window is the only clock reader here, so the clock goes into it
+	// rather than onto a recorder field that nothing else would read.
 	r.window = NewWindow(now)
 	return r
 }
 
-// Attrs is one instrument's dimensions for a single measurement.
-//
-// A MAP RATHER THAN A SLICE so a caller cannot silently swap two values of the
-// same type — `("tracker", "linearizable")` and `("linearizable", "tracker")`
-// are both two strings and only one is right.
+// Attrs is one instrument's dimensions for a single measurement. A map rather
+// than a slice so a caller cannot silently swap two string values.
 type Attrs map[string]string
 
-// Observe records one measurement into a histogram.
-//
-// A DURATION rather than a float, because every histogram in this catalogue is
-// a latency and a caller converting to milliseconds itself is a caller that
-// can convert to seconds by mistake.
+// Observe records one latency into a histogram. It takes a duration so no
+// caller converts to milliseconds itself and gets seconds by mistake.
 func (r *Recorder) Observe(name string, d time.Duration, attrs Attrs) {
 	r.record(name, KindHistogram, float64(d)/float64(time.Millisecond), attrs)
 }
@@ -158,9 +121,8 @@ func (r *Recorder) Add(name string, n uint64, attrs Attrs) {
 }
 
 // AddAt increments a counter by a whole number of events that happened at at,
-// which is where the rolling window files them ([Window.AddAt]). The cumulative
-// series counts them whenever they are recorded, since an exporter diffs its
-// own scrapes.
+// where the rolling window files them ([Window.AddAt]); the cumulative series
+// counts them when recorded, since an exporter diffs its own scrapes.
 func (r *Recorder) AddAt(name string, n uint64, at time.Time, attrs Attrs) {
 	if r == nil {
 		return
@@ -181,20 +143,14 @@ func (r *Recorder) Set(name string, v float64, attrs Attrs) {
 	r.record(name, KindGauge, v, attrs)
 }
 
-// Unset withdraws a gauge's series: from the next read on, neither reader —
-// the exporter nor the operator record — carries a value for it at all.
+// Unset withdraws a gauge's series from both readers, for a measurement that
+// became unknown, which is neither zero nor its last write. A gauge would
+// otherwise keep exporting its last value while every other surface shows it
+// unmeasured; a vanished series reads as "no data" on a collector's panel.
 //
-// FOR A MEASUREMENT THAT BECAME UNKNOWN, which is a different fact from one
-// that became zero and must not be shown as either. A gauge holds its last
-// write, so without this a log re-anchored under a running fleet went on
-// exporting the old stream's daily intake while the report, the CLI and the
-// screen — which read the same measurement — showed it as not measured: one
-// evaluation, two answers. A series that disappears reads as "no data" on a
-// collector's panel, which is exactly what an unmeasured quantity is.
-//
-// Only a gauge can be unset: a counter and a histogram are histories rather
-// than readings, and withdrawing one would rewrite what already happened. An
-// unknown name, a non-gauge and a series never written are all no-ops.
+// Only a gauge can be unset: a counter or histogram is a history, and
+// withdrawing it would rewrite what happened. An unknown name, a non-gauge and
+// a series never written are no-ops.
 func (r *Recorder) Unset(name string, attrs Attrs) {
 	if r == nil {
 		return
@@ -210,11 +166,9 @@ func (r *Recorder) Unset(name string, attrs Attrs) {
 	r.window.Forget(key)
 }
 
-// record is the one write path. An unknown name is DROPPED rather than
-// registered on the fly: a typo would otherwise become a time series with no
-// entry in the catalogue and no documentation, which is the state the
-// catalogue exists to make impossible. A nil Recorder (a node run without
-// metrics) records nothing, so no write site needs its own guard.
+// record is the one write path. An unknown name is dropped, not registered,
+// so a typo never becomes an undocumented series. A nil Recorder (a node run
+// without metrics) records nothing, so no write site needs a guard.
 func (r *Recorder) record(name string, kind Kind, v float64, attrs Attrs) {
 	if r == nil {
 		return
@@ -240,10 +194,8 @@ func (r *Recorder) record(name string, kind Kind, v float64, attrs Attrs) {
 		s.sum += v
 		s.n++
 		if sink := r.sinks[name]; sink != nil {
-			// FORWARDED UNDER THE LOCK, which is deliberate: the SDK's
-			// own Record is lock-free and cheap, and releasing here to
-			// re-acquire would let two observations reach the exporter in
-			// the opposite order to the recorder's own copy.
+			// Under the lock, so the exporter sees observations in the
+			// recorder's order; the SDK's Record is lock-free and cheap.
 			sink(v, s.attrs)
 		}
 	}
@@ -258,10 +210,8 @@ func (r *Recorder) seriesFor(inst Instrument, attrs Attrs) *series {
 	}
 	kept := map[string]string{}
 	for _, a := range inst.Attributes {
-		// ONLY DECLARED ATTRIBUTES. An undeclared one is dropped rather
-		// than carried: cardinality here is bounded by the catalogue, and
-		// a caller passing a task key would otherwise open a time series
-		// per task.
+		// Only declared attributes, so the catalogue bounds cardinality
+		// and a stray task key cannot open a series per task.
 		if v, ok := attrs[a]; ok {
 			kept[a] = v
 		}
@@ -299,10 +249,8 @@ type Snapshot struct {
 	Total uint64
 	Value float64
 
-	// Count, Sum, Counts and Bounds describe a histogram: how many
-	// observations, their total, and the per-bin counts against Bounds —
-	// its unit's boundaries ([Bounds]) — one count past the last boundary
-	// for the overflow.
+	// Count, Sum, Counts and Bounds describe a histogram: Counts has one
+	// bin per boundary of its unit ([Bounds]) plus one for the overflow.
 	Count  uint64
 	Sum    float64
 	Counts []uint64
@@ -310,15 +258,10 @@ type Snapshot struct {
 }
 
 // Quantile estimates the qth quantile of a histogram, in the instrument's own
-// unit.
-//
-// AN ESTIMATE, and the doc says so where a caller reads it: the answer is the
-// UPPER boundary of the bucket the qth observation falls in, so it is accurate
-// to within one bucket — a factor of two and a half — and never understates. A
-// p95 that reads 5 ms means "over 2 ms and at most 5 ms". A budget check
-// against it is EXACT where the budget is a boundary, since the quantile is
-// past the budget exactly when its bucket is — which is why every budget an
-// alarm holds a percentile to is one ([Bounds]).
+// unit: the UPPER boundary of the bucket the qth observation falls in, so it is
+// within a factor of two and a half and never understates (5 ms means "over
+// 2 ms and at most 5 ms"). A budget check is exact where the budget is a
+// boundary, which is why every alarm's percentile budget is one ([Bounds]).
 func (s Snapshot) Quantile(q float64) float64 {
 	if s.Count == 0 || q <= 0 || q > 1 {
 		return 0
@@ -337,13 +280,10 @@ func (s Snapshot) Quantile(q float64) float64 {
 	return math.Inf(1)
 }
 
-// ReadWindow returns every series as the ROLLING WINDOW holds it, in the same
-// shape and order as [Recorder.Read].
-//
-// The two differ in exactly one way and it is the whole point: `Total`,
-// `Count`, `Sum` and the bins here cover the last [Buckets] hours, where
-// Read's cover every hour since this process started. An alarm reads this one;
-// an exporter, which diffs successive scrapes itself, reads the other.
+// ReadWindow returns every series as the rolling window holds it, in the same
+// shape and order as [Recorder.Read], but with `Total`, `Count`, `Sum` and the
+// bins covering the last [Buckets] hours rather than since start. An alarm
+// reads this; an exporter, which diffs its own scrapes, reads Read.
 func (r *Recorder) ReadWindow() []Snapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -357,15 +297,12 @@ func (r *Recorder) ReadWindow() []Snapshot {
 		}
 		switch s.inst.Kind {
 		case KindGauge:
-			// A GAUGE'S WINDOW IS ITS PEAK. A gauge has no total to sum
-			// and its current value is not a fact about the window, so
-			// the honest windowed reading is the highest it reached.
+			// A gauge's windowed reading is its peak: its current value
+			// is not a fact about the window.
 			snap.Value = r.window.Peak(key)
 		case KindHistogram:
-			// THE BINS, so [Snapshot.Quantile] computes a WINDOWED p95
-			// with no second implementation. A max substituted here
-			// would fire every p95 alarm on the single worst
-			// observation in the window.
+			// The bins, not a max, so [Snapshot.Quantile] gives a windowed
+			// p95; a max would fire every p95 alarm on the worst outlier.
 			snap.Bounds = s.bounds
 			snap.Counts, snap.Count, snap.Sum = r.window.Bins(key, s.bounds)
 		}

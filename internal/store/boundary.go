@@ -113,31 +113,17 @@ var ErrVectorDimension = errors.New("store: embedding dimension mismatch")
 var ErrVectorNotFinite = errors.New("store: embedding holds a non-finite value")
 
 // EncodeVector packs an embedding into the byte layout the vector columns
-// hold: little-endian float32, no header — byte-identical to what Turso's
-// vector32() produces, so a Go-written row and a SQL-written one are the same
-// row and vector_distance_cos() reads either.
+// hold: little-endian float32, no header, byte-identical to Turso's vector32().
 //
-// The width is checked against the configured dimension rather than baked into
-// the column type. A `vector(N)` column is fixed at creation and the schema is
-// forward-only, so a width guessed at migrate time is irreversible: every
-// later insert raises against the mismatched column, forever. That risk is
-// what made the Postgres migrator a two-phase run; here a mismatch is one
-// error on one insert.
+// The width is checked against the configured dimension, not baked into the
+// column type: a `vector(N)` column is fixed at creation and the schema is
+// forward-only, so a width guessed at migrate time makes every later insert
+// raise. Here a mismatch is one error on one insert.
 //
-// # Why finiteness is checked here rather than tolerated on read
-//
-// A NaN or an infinity in a stored vector is not a bad memory, it is a
-// poisoned one: vector_distance_cos answers 0 for it — a PERFECT match — so
-// the row sorts ahead of every genuine hit in every recall that seat ever
-// runs. The read path drops such rows (learning.cosine refuses them), but it
-// drops them AFTER the database has already spent a slot of the LIMIT on one,
-// so a single poisoned row silently costs a real result on every recall.
-//
-// Refusing it here is the root fix: the value never reaches the table, the
-// LIMIT is spent on rows that can be returned, and the read-side guard goes
-// back to being verification rather than a filter that quietly under-delivers.
-// The cost is a bounded scan of a vector that has just come back from an HTTP
-// round trip — microseconds against tens of milliseconds.
+// Finiteness is checked here, not tolerated on read: a NaN or infinity makes
+// vector_distance_cos answer 0, a PERFECT match, so the row sorts ahead of
+// every genuine hit. The read path drops such rows (learning.cosine) only
+// AFTER spending a slot of the LIMIT on one. Refusing it here keeps it out.
 func (d *DB) EncodeVector(v []float32) ([]byte, error) {
 	if d == nil {
 		return nil, ErrNoEstate

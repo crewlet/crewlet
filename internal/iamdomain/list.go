@@ -13,66 +13,47 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE DIRECTORY READS: what an administrator and a person looking at their
-// own row actually ask for.
+// THE DIRECTORY READS, for a caller already authorised to see the directory:
+// pages, where read.go's request-path lookups are keyed and deliberately
+// narrow (a sign-in may not become a roster).
 //
-// read.go holds the lookups the REQUEST PATH takes — one person, one session,
-// resolved before anything can be decided — and they are deliberately narrow:
-// a sign-in may not become a roster. These are the opposite kind of read. They
-// are asked by somebody who has already been authorised to see the directory,
-// they are pages rather than keyed lookups, and what they answer is "who can
-// reach this company, and how".
+// Pages key on the person's uuid7 id, so id order is creation order and a
+// cursor is the previous page's last id. Nothing sorts on a sealed value:
+// ciphertext order means nothing to a reader.
 //
-// # Everything here pages on a key the applier writes
-//
-// A person's id is a uuid7, so ordering by it IS creation order and a cursor
-// is the last id of the previous page. Nothing sorts on a value this domain
-// seals — a name and an address are ciphertext in every row, so ordering by
-// one would be ordering by the ciphertext, which is a stable order that means
-// nothing to a reader.
-//
-// # And nothing here opens anything
-//
-// Opening a sealed name is the CALLER's to do: [PersonRow] carries the
-// ciphertext, and the surface opens what it is about to show somebody. A
-// reader that opened eagerly would put every name and address in the clear in
-// the memory of every read that only needed to know who may do what.
+// Nothing here opens a sealed value: [PersonRow] carries ciphertext and the
+// surface opens what it shows, so a read that only needs who may do what
+// never holds names and addresses in the clear.
 
-// PersonRow is one directory row as an administrator reads it.
-//
-// ITS OWN TYPE beside [Sighting], which is what a SIGN-IN resolves: that one
-// is bounded by what a refusal may disclose, and this one is the answer to
-// somebody already entitled to the whole directory. Folding them would mean
-// the sign-in path carrying fields it must never read.
+// PersonRow is one directory row as an administrator reads it. It is not
+// [Sighting], what a sign-in resolves: folding them would put fields a
+// refusal must never disclose on the sign-in path.
 type PersonRow struct {
 	ID    string
 	Kind  iam.Kind
 	Stage iam.Stage
 
-	// Login is in the CLEAR, unlike the name and the address. Blinding a
-	// value the dashboard prints on every row would cost an operator
-	// their own audit trail for nothing.
+	// Login is in the CLEAR, unlike the name and the address: the
+	// dashboard prints it on every row, and blinding it would cost an
+	// operator their audit trail for nothing.
 	Login string
 
-	// NameSealed and EmailSealed are ciphertext, under the fleet keyring.
-	// There is no row for somebody removed — a removal deletes it and
-	// leaves the tombstone in `iam_removed` — so a value that will not open
-	// is a key this node's ring does not hold: dropped before the value
-	// was moved off it, or a restore under a different keyring.
+	// NameSealed and EmailSealed are ciphertext under the fleet keyring. A
+	// removed person has no row (the tombstone is in `iam_removed`), so a
+	// value that will not open is a key this ring lacks: dropped before the
+	// value was moved off it, or a restore under another keyring.
 	NameSealed  []byte
 	EmailSealed []byte
 
-	// Seat is the handle of the seat this person is bound to, which is
-	// immutable (ADR-0013). A person always holds one ([Writer.Create],
-	// ADR-0032), and only a service account that acts as itself holds
-	// none.
+	// Seat is the handle of this person's seat, immutable (ADR-0013). A
+	// person always holds one ([Writer.Create], ADR-0032); only a service
+	// account acting as itself holds none.
 	Seat string
 
 	Grants []iam.Grant
 
-	// Epoch is the person's revocation epoch: every session and token
-	// they hold carries the value it was minted at, and anything below
-	// the current one is over.
+	// Epoch is the person's revocation epoch: a session or token minted
+	// below it is over.
 	Epoch uint64
 
 	CreatedAt time.Time
@@ -88,41 +69,32 @@ type PeopleQuery struct {
 	// at the beginning.
 	After string
 
-	// Limit is how many rows at most. Zero takes [DefaultPageSize] and
-	// anything above [MaxPageSize] is clamped rather than refused — a
-	// caller asking for a thousand wants "lots", and a refusal there
-	// sends them to write a loop that asks for a thousand pages of one.
+	// Limit is how many rows at most. Zero takes [DefaultPageSize]; above
+	// [MaxPageSize] is clamped, not refused: a caller asking for a
+	// thousand wants "lots", and a refusal sends them to loop instead.
 	Limit int
 
-	// Q narrows on the LOGIN and the SEAT, which are the only two
-	// identity values this estate holds in the clear. A name and an
-	// address are sealed in every row, so a search over them would have
-	// to open every person in the company to compare one — which is a
-	// fan-out of coordination reads an operator typing in a box would
-	// trigger per keystroke.
+	// Q narrows on the LOGIN and the SEAT, the only identity values held
+	// in the clear: a search over sealed names and addresses would open
+	// every person in the company per keystroke.
 	Q string
 
-	// Stage narrows to one enrolment stage: the people who may act, or
-	// the abandoned enrolments. Empty takes every stage.
+	// Stage narrows to one enrolment stage; empty takes every stage.
 	Stage iam.Stage
 }
 
-// DefaultPageSize and MaxPageSize bound a directory page.
-//
-// FIFTY AND TWO HUNDRED, and the numbers come from what the caller does with
-// a row rather than from the SQL: a surface renders every row it is given,
-// opening its name and address, and a directory row is the largest answer
-// this estate serves — a name, an address, a seat, a grant list, a stage and
-// an epoch. Fifty is a screen of people; two hundred is the point past which
-// an operator is better served by narrowing (`q=`, `stage=`) than by paging a
-// response the size of the whole company.
+// DefaultPageSize and MaxPageSize bound a directory page, sized by what a
+// caller does with a row rather than by the SQL: a surface opens and renders
+// every row, and a directory row is the largest answer this estate serves.
+// Fifty is a screen of people; past two hundred an operator is better served
+// by narrowing (`q=`, `stage=`).
 const (
 	DefaultPageSize = 50
 	MaxPageSize     = 200
 )
 
-// pageLimit is how many rows one directory page holds: [DefaultPageSize] for a
-// caller that named none, and at most [MaxPageSize] — clamped, never refused.
+// pageLimit is one directory page's row count: [DefaultPageSize] when none is
+// named, and at most [MaxPageSize].
 func pageLimit(limit int) int {
 	switch {
 	case limit <= 0:
@@ -155,11 +127,9 @@ const personRowSelect = `
 	FROM iam_people p
 	LEFT JOIN iam_revocation_epochs e ON e.person_id = p.id`
 
-// peoplePageStatement is one page of the directory, in the order of the
-// people's own key from past q.After, narrowed by q's stage and search term,
-// and limited to ONE MORE THAN ASKED FOR, which is how the cursor is derived
-// without a second count: the extra row is what says there IS a next page,
-// and it is dropped rather than returned.
+// peoplePageStatement is one directory page in id order past q.After,
+// narrowed by q's stage and term, limited to ONE MORE than asked: the extra
+// row says there is a next page without a second count, and is dropped.
 func peoplePageStatement(q PeopleQuery, limit int) (string, []any) {
 	query := strings.Builder{}
 	query.WriteString(personRowSelect + `
@@ -209,14 +179,12 @@ func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) 
 	return out, nil
 }
 
-// Removed answers which of ids carry a removal tombstone, in the order given:
-// the persons whose removal this node has applied. It is what another domain's
-// erasure is reconciled against (ADR-0053's Dashboard Assistant conversations),
-// because a removal is permanent and nothing names a removed person again.
+// Removed answers which of ids carry a removal tombstone, in the order given.
+// Another domain's erasure reconciles against it (ADR-0053's Dashboard
+// Assistant conversations): a removal is permanent.
 //
-// AN ORDINARY READ, never identity work ([store.Identity]): it is asked by a
-// background pass, never before a request can decide anything, so it must not
-// spend the connection the store holds back for the lookups that decide.
+// AN ORDINARY READ, never identity work ([store.Identity]): a background pass
+// must not spend the connection held back for the lookups requests decide on.
 func (r *Reader) Removed(ctx context.Context, ids []string) ([]string, error) {
 	out := []string{}
 	if len(ids) == 0 {
@@ -258,20 +226,18 @@ func (r *Reader) Removed(ctx context.Context, ids []string) ([]string, error) {
 }
 
 // removedChunk is how many ids one statement of [Reader.Removed] asks about:
-// five hundred, the object store's references batch, far under the driver's
-// bind limit and small enough that one statement never holds the reader long.
+// five hundred, the object store's references batch: far under the driver's
+// bind limit, and one statement never holds the reader long.
 const removedChunk = 500
 
 // personRowStatement is one directory row, by the person's key.
 const personRowStatement = personRowSelect + `
 	WHERE p.id = ?`
 
-// Person answers one directory row, or [ErrNotFound].
-//
-// THE SENTINEL IS DELIBERATE HERE, unlike [Reader.PersonByLogin]'s zero
-// value: this read runs for a caller the guard has already authorised, so
-// there is no enumeration to protect — and a surface needs 404 and 200 to be
-// different answers.
+// Person answers one directory row, or [ErrNotFound]. The sentinel is
+// deliberate, unlike [Reader.PersonByLogin]'s zero value: the guard has
+// already authorised the caller, so there is no enumeration to protect, and a
+// surface needs 404 apart from 200.
 func (r *Reader) Person(ctx context.Context, id string) (PersonRow, error) {
 	var out PersonRow
 	found := false
@@ -332,11 +298,9 @@ func scanPerson(rows *sql.Rows) (PersonRow, error) {
 	return out, nil
 }
 
-// escapeLike makes a caller's term a literal in a LIKE pattern.
-//
-// A SEARCH BOX IS NOT A PATTERN LANGUAGE. Without this a `%` typed into it
-// matches the whole directory and a `_` matches any character, so a narrowing
-// an operator believes they applied quietly does not apply.
+// escapeLike makes a caller's term a literal in a LIKE pattern: otherwise a
+// typed `%` matches the whole directory and `_` any character, and the
+// narrowing an operator believes they applied quietly does not apply.
 func escapeLike(term string) string {
 	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return r.Replace(term)
@@ -344,11 +308,8 @@ func escapeLike(term string) string {
 
 // CredentialRow is one credential as the directory reports it.
 //
-// NO VERIFIER. What a row carries here is what somebody DECIDES with — which
-// method, when it was minted, when it expires, whether it was revoked — and
-// the verifier is the one field that must never leave the estate: an argon2id
-// digest and a token hash are both offline-attackable, and a listing is the
-// surface most likely to be copied into a ticket.
+// NO VERIFIER: an argon2id digest or a token hash is offline-attackable, and a
+// listing is the surface most likely to be copied into a ticket.
 type CredentialRow struct {
 	ID        string
 	PersonID  string
@@ -357,22 +318,18 @@ type CredentialRow struct {
 	ExpiresAt time.Time
 	RevokedAt time.Time
 
-	// Label is what the mint called it, for a person who holds four
-	// tokens and needs to know which is which.
+	// Label is what the mint called it, telling a person's tokens apart.
 	Label string
 
-	// Grants are what a machine token was minted carrying — the ceiling on
-	// what it can do, re-cut to its owner's own grants on every request.
-	// Empty on every other method.
+	// Grants are what a machine token was minted carrying: its ceiling,
+	// re-cut to its owner's grants on every request. Empty on every other
+	// method.
 	Grants []iam.Grant
 
-	// Superseded marks a machine token a COUNTER ended rather than its own
-	// row: its owner's revocation epoch, or the company's session
-	// generation, moved past the value it was minted at — the comparison
-	// [credential.CheckToken] refuses it on. Neither writes `revoked_at`: a
-	// password change, "sign out everywhere" and an administrator ending
-	// somebody's sessions all move the epoch, so a listing that read the
-	// row alone reported every token they ended as in use.
+	// Superseded marks a machine token a COUNTER ended: its owner's
+	// revocation epoch or the company's session generation moved past its
+	// minted value ([credential.CheckToken]). Neither writes `revoked_at`,
+	// so the row alone would list those tokens as in use.
 	Superseded bool
 
 	// Spent is a reset link its person used — see [Credential.Spent].
@@ -386,10 +343,9 @@ func (c CredentialRow) Revoked(now time.Time) bool {
 		(!c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt))
 }
 
-// Credentials lists what one person proves themselves with.
-//
-// THE COUNTERS ARE READ IN THE SNAPSHOT THE ROWS ARE, so a token is reported
-// ended by exactly what ended it at that instant ([CredentialRow.Superseded]).
+// Credentials lists what one person proves themselves with. The counters are
+// read in the rows' snapshot, so a token is reported ended by exactly what
+// ended it then ([CredentialRow.Superseded]).
 func (r *Reader) Credentials(ctx context.Context, personID string) (
 	[]CredentialRow, error) {
 
@@ -449,15 +405,15 @@ func (r *Reader) Credentials(ctx context.Context, personID string) (
 
 // InvitationsQuery is one page of the invitations this estate holds.
 type InvitationsQuery struct {
-	// After is the last id of the previous page, exclusive; Limit is
-	// [PeopleQuery.Limit]'s. An invitation's id is a uuid7 at its issue's
-	// instant ([Blinder.InvitationID]), so id order is issue order.
+	// After is the previous page's last id, exclusive; Limit is
+	// [PeopleQuery.Limit]'s. An invitation's id is a uuid7 at its issue
+	// ([Blinder.InvitationID]), so id order is issue order.
 	After string
 	Limit int
 
-	// All includes the invitations that no longer open — redeemed, or
-	// past their expiry — which the estate holds until the sweep collects
-	// them. Without it a page is the OPEN ones alone, judged at Now.
+	// All includes the invitations that no longer open (redeemed or
+	// expired, held until the sweep). Without it a page holds the OPEN ones
+	// alone, judged at Now.
 	All bool
 	Now time.Time
 }
@@ -476,10 +432,9 @@ func invitationsPageStatement(q InvitationsQuery, limit int) (string, []any) {
 	query := `SELECT ` + invitationColumns + ` FROM iam_invites WHERE id > ?`
 	args := []any{q.After}
 	if !q.All {
-		// OPEN IS [InvitationRow.Spent]'s complement — not redeemed and a
-		// deadline still ahead — and the very predicate a directory
-		// decide holds a value against ([openInvitation]), so the listing
-		// shows exactly the invitations that hold something.
+		// OPEN is [InvitationRow.Spent]'s complement and the predicate a
+		// directory decide holds a value against ([openInvitation]), so
+		// the listing shows exactly the invitations that hold something.
 		query += ` AND ` + openInvitation
 		args = append(args, q.Now.UnixMilli())
 	}
@@ -487,12 +442,9 @@ func invitationsPageStatement(q InvitationsQuery, limit int) (string, []any) {
 	return query, append(args, limit+1)
 }
 
-// Invitations answers one page of the invitations this estate holds.
-//
-// THE ROW CARRIES THE VERIFIER, as [Reader.InvitationByID]'s does, and a
-// surface renders none of it: what a listing shows is who was invited, to
-// what, by whom and until when — never the link, which is shown once by the
-// issue that made it.
+// Invitations answers one page of the invitations this estate holds. The row
+// carries the verifier, as [Reader.InvitationByID]'s does; a surface renders
+// none of it, nor the link, which only the issue that made it shows, once.
 func (r *Reader) Invitations(ctx context.Context, q InvitationsQuery) (
 	InvitationPage, error) {
 
@@ -526,9 +478,9 @@ func (r *Reader) Invitations(ctx context.Context, q InvitationsQuery) (
 
 // SessionRecord is one session as the directory reports it.
 //
-// NO BEARER AND NOTHING DERIVED FROM ONE. A lineage is not a secret — it is
-// in every audit row — but the cookie is, and a listing that carried anything
-// a session could be resumed from would make this surface worth attacking.
+// NO BEARER, nor anything derived from one: a lineage is in every audit row,
+// but anything a session could be resumed from would make this listing worth
+// attacking.
 type SessionRecord struct {
 	Lineage   string
 	PersonID  string
@@ -538,9 +490,8 @@ type SessionRecord struct {
 	EndedAt   time.Time
 	EndedWhy  string
 
-	// EnrolmentOnly is a session that may only enrol a second factor — see
-	// [Session.EnrolmentOnly] — which an administrator reading somebody's
-	// sessions needs told apart from a whole one.
+	// EnrolmentOnly is a session that may only enrol a second factor
+	// ([Session.EnrolmentOnly]), told apart for an administrator.
 	EnrolmentOnly bool
 
 	// UserAgent and Remote are the browser that opened the session and the
@@ -550,21 +501,16 @@ type SessionRecord struct {
 	Remote    string
 
 	// Superseded marks a session a COUNTER ended: opened before the
-	// company's last invalidation, or at a revocation epoch its person has
-	// since moved past ([sessionSuperseded]). The company's invalidation
-	// writes no `ended_at`, and neither does an epoch move on a session
-	// whose start landed after it or that an estate held before moves wrote
-	// their reasons, so a listing that read the row alone reported those
-	// live.
+	// company's last invalidation, or below its person's current revocation
+	// epoch ([sessionSuperseded]). The invalidation writes no `ended_at`,
+	// nor does an epoch move on every session it ends (see
+	// [Reader.Sessions]), so the row alone would list those live.
 	Superseded bool
 }
 
 // Live reports a session nothing has ended: not ended, not past its absolute
-// deadline, and not superseded.
-//
-// THE ONE READING: the listing reports it and [Reader.SessionStanding] decides
-// a named sign-out by it, so a screen never offers to end a session the engine
-// would answer was already over.
+// deadline, not superseded. [Reader.SessionStanding] decides a named sign-out
+// by it too, so a screen never offers to end a session the engine calls over.
 func (s SessionRecord) Live(now time.Time) bool {
 	return s.EndedAt.IsZero() && !s.Superseded &&
 		(s.ExpiresAt.IsZero() || now.Before(s.ExpiresAt))
@@ -577,16 +523,11 @@ func sessionSuperseded(start, epoch, invalidated, current uint64) bool {
 	return start < invalidated || epoch < current
 }
 
-// Sessions lists one person's sessions, newest first.
-//
-// ENDED ONES INCLUDED, because "this session was revoked, and why" is the
-// sentence an investigation is looking for and a listing that showed only the
-// live ones could never carry it. The row is kept until the sweep
-// collects it for exactly that reason.
-//
-// THE COUNTERS ARE READ IN THE SNAPSHOT THE ROWS ARE, so a session is
-// reported ended by exactly what ended it at that instant
-// ([SessionRecord.Superseded]).
+// Sessions lists one person's sessions, newest first, ENDED ONES INCLUDED:
+// "this session was revoked, and why" is what an investigation looks for, and
+// the row is kept until the sweep for exactly that. The counters are read in
+// the rows' snapshot, so a session is reported ended by exactly what ended it
+// then ([SessionRecord.Superseded]).
 func (r *Reader) Sessions(ctx context.Context, personID string) (
 	[]SessionRecord, error) {
 
@@ -624,10 +565,9 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 				&created, &expires, &ended, &row.EndedWhy, &doc); err != nil {
 				return fmt.Errorf("iamdomain: scan a session: %w", err)
 			}
-			// A DOCUMENT THIS BUILD CANNOT OPEN is listed without the
-			// flag rather than failing the listing: every other column
-			// is the row's own, and this is the one fact that lives only
-			// in the document.
+			// A DOCUMENT THIS BUILD CANNOT OPEN lists the row without
+			// what only the document holds rather than failing the
+			// listing: every other column is the row's own.
 			if held, err := DecodeSession(doc); err == nil {
 				row.EnrolmentOnly = held.EnrolmentOnly
 				row.UserAgent, row.Remote = held.UserAgent, held.Remote
@@ -637,15 +577,12 @@ func (r *Reader) Sessions(ctx context.Context, personID string) (
 				invalidated, current)
 			if row.Superseded && ended == 0 {
 				// A COUNTER ENDED IT and the row holds no reason: say
-				// which, or the listing shows an ended session with no
-				// account of why — beside the deadline it never reached.
-				// An epoch move writes its own reason on every session it
-				// ends ([Applier.bumpEpoch]), so what is left here is the
-				// company's generation, which ends everybody's at once and
-				// writes no row per session, and a session a move had
-				// already ended without saying so on its row — its start
-				// landed after that move, or the row predates moves writing
-				// their reasons — which no later move re-describes.
+				// which. An epoch move writes its reason on every session
+				// it ends ([Applier.bumpEpoch]), so what is left is the
+				// company's generation, which writes no row per session,
+				// and a session a move ended without saying so on its row
+				// (its start landed after that move, or the row predates
+				// moves writing reasons), which no later move re-describes.
 				switch {
 				case uint64(start) < invalidated:
 					row.EndedWhy = "ended with every session in the company"
@@ -672,10 +609,9 @@ type HistoryRow struct {
 	Class HistoryClass
 
 	// ObjectKind and ObjectID are what the entry is filed under: a record's
-	// subject, or — for a directory record, whose subject names nobody — the
+	// subject, or for a directory record, whose subject names nobody, the
 	// person it is about (`person`) or an invitation's address blind
-	// (`email`). A trail column rather than a subject kind, so a plain
-	// string: `email` is no [ObjectKind] any more.
+	// (`email`). A trail column, not an [ObjectKind], so a plain string.
 	ObjectKind string
 	ObjectID   string
 	PersonID   string
@@ -696,16 +632,14 @@ type HistoryRow struct {
 	Summary string
 	At      time.Time
 
-	// Version is the log POSITION this entry was derived at, which is
-	// what the read pages on.
+	// Version is the log POSITION this entry was derived at, which the read
+	// pages on.
 	Version uint64
 }
 
-// HistoryQuery is one page of the trail.
-//
-// IT PAGES BY POSITION AND NEVER BY TIME, because two nodes' clocks are
-// compared nowhere in this engine: a caller holding a timestamp resolves it
-// to a position once, against the rows' own instants, and pages from there.
+// HistoryQuery is one page of the trail. It pages by POSITION, never by time:
+// no two nodes' clocks are compared, so a caller holding a timestamp resolves
+// it once ([Reader.PositionAt]) and pages from there.
 type HistoryQuery struct {
 	// Before is the position to page back from, exclusive. Zero starts at
 	// the newest entry.
@@ -734,15 +668,12 @@ type HistoryPage struct {
 	At statelog.Position
 }
 
-// historyPageStatement is one page of the identity estate's trail, newest
-// first, narrowed by q, limited to one more than asked for as
-// [peoplePageStatement] is.
+// historyPageStatement is one page of the trail, newest first, narrowed by q,
+// limited to one more than asked as [peoplePageStatement] is.
 //
-// THE LOGIN OF WHOEVER AN ENTRY IS ABOUT, joined from their row as it stands,
-// by its key: an entry names them by id, and a trail of id prefixes said whose
-// session opened and whose row changed to nobody reading it. A removed
-// person's row is gone, so their entries name nobody — the removal erases what
-// identified them, and the trail keeps the id.
+// Each entry joins, by key, the login its person holds now: bare ids tell a
+// reader nothing. A removed person's row is gone, so their entries keep only
+// the id: the removal erases what identified them.
 func historyPageStatement(q HistoryQuery, limit int) (string, []any) {
 	query := strings.Builder{}
 	query.WriteString(`
@@ -773,11 +704,9 @@ func historyPageStatement(q HistoryQuery, limit int) (string, []any) {
 	return query.String(), args
 }
 
-// History answers one page of the identity estate's own trail.
-//
-// NEWEST FIRST, which is what somebody investigating actually reads: the
-// question is almost always "what just happened", and a reader that started
-// at the beginning would page through years to reach it.
+// History answers one page of the identity estate's own trail, NEWEST FIRST:
+// an investigation asks "what just happened", which oldest-first would bury
+// under years of pages.
 func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, error) {
 	limit := q.Limit
 	switch {
@@ -827,12 +756,10 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 	return out, nil
 }
 
-// DefaultHistoryPage and MaxHistoryPage bound a page of the trail.
-//
-// A HUNDRED AND A THOUSAND, and they are larger than the directory's for one
-// reason: a trail entry is a small ROW, opened from nothing and joined to one
-// login, while a directory row carries a person whole and is opened before
-// anybody can render it. What bounds both is the response size.
+// DefaultHistoryPage and MaxHistoryPage bound a page of the trail. Response
+// size bounds both these and the directory's; these are larger because a trail
+// entry is a small row joined to one login, where a directory row carries a
+// person whole and is opened before it renders.
 const (
 	DefaultHistoryPage = 100
 	MaxHistoryPage     = 1000
@@ -845,22 +772,18 @@ const positionAtStatement = `
 	SELECT version FROM iam_history WHERE broker_at <= ?
 	ORDER BY version DESC LIMIT 1`
 
-// PositionAt resolves an instant to the newest trail position at or before it.
-//
-// ONCE, AT THE SURFACE, which is what lets everything else page by POSITION:
-// a caller holding a timestamp gets a number, and every page after that is
-// compared against values the applier wrote rather than against a clock some
-// node read for itself.
+// PositionAt resolves an instant to the newest trail position at or before it,
+// once, at the surface, so every later page compares values the applier wrote
+// rather than a clock some node read.
 func (r *Reader) PositionAt(ctx context.Context, at time.Time) (uint64, error) {
 	var version int64
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		err := tx.QueryRowContext(ctx, positionAtStatement,
 			at.UnixMilli()).Scan(&version)
 		if errors.Is(err, sql.ErrNoRows) {
-			// NOTHING AT OR BEFORE IT IS ZERO, which is the floor
-			// every page already reads as "no floor" — an instant
-			// before this company existed asks for everything, which
-			// is exactly what it means.
+			// NOTHING AT OR BEFORE IT IS ZERO, which every page reads
+			// as no floor: an instant before the company asks for
+			// everything.
 			return nil
 		}
 		return err
@@ -872,24 +795,19 @@ func (r *Reader) PositionAt(ctx context.Context, at time.Time) (uint64, error) {
 	return uint64(version), nil
 }
 
-// SeatBinding is one person's seat binding — the columns the request path's
-// seat table reads (internal/iam/session's PersonRow), the kind beside them,
-// and the holder's sealed display name.
-//
-// ITS OWN TYPE rather than a [PersonRow] with most fields left zero: a row
-// type whose document, grants and sealed address were silently absent would
-// be one a later caller read as a person with no grants.
+// SeatBinding is one person's seat binding: the columns the request path's
+// seat table reads (internal/iam/session's PersonRow), the kind, and the
+// holder's sealed display name. Its own type, not a [PersonRow] with fields
+// left zero, which a later caller would read as a person with no grants.
 type SeatBinding struct {
 	// Person is the directory id, Login the name the dashboard prints.
 	Person, Login string
 
-	// NameSealed is the bound principal's display name, sealed under the
-	// fleet keyring exactly as [PersonRow.NameSealed] is — the same column —
-	// for a surface that names who holds each seat to everybody: the org
-	// chart is everybody's overview, and a seat's holder shown only by a
-	// login would hand every colleague a sign-in name the overview has no
-	// business disclosing. Opened by the surface on its own keyring, never
-	// here; nil where the row carries none.
+	// NameSealed is the bound principal's display name, sealed as
+	// [PersonRow.NameSealed] (the same column), for a surface naming each
+	// seat's holder to everybody: the org chart would otherwise disclose
+	// every colleague's sign-in name. The surface opens it on its own
+	// keyring, never here; nil where the row carries none.
 	NameSealed []byte
 
 	// Kind is a person or a service account, which is what a remedy for a
@@ -957,31 +875,16 @@ const (
 		 ORDER BY seat_id, created_at DESC, id`
 )
 
-// SeatClaims answers [SeatClaims] at now — the instant an invitation is open
-// at, the caller's clock as every reader of an expiry here takes it.
+// SeatClaims answers [SeatClaims] at now, the caller's clock, as every expiry
+// read here takes it. Both halves come from ONE snapshot: a redemption spends
+// its invitation and binds its person in one record, so two snapshots could
+// show the seat held by neither (offered to the next administrator) or both.
 //
-// # One snapshot, because the two halves move together
-//
-// A redemption spends its invitation and binds its person in ONE record, so
-// read in two snapshots a redemption landing between them showed the seat as
-// held by neither — vacant, and offered to the next administrator to fill —
-// or by both. One read of both tables is the only shape in which every
-// answer is a state the directory was actually in.
-//
-// # What it costs
-//
-// The bindings are a walk of the people's partial seat index, bound rows only,
-// in seat order; the open invitations a walk of the invitations' OPEN index
-// (0041's `iam_invites_open_idx`, unredeemed rows only) and a sort of what it
-// finds. That index rather than the seat's: a range of the seat index above
-// the empty seat is every invitation that ever named a seat, the redeemed ones
-// included until the sweep collects them a week on, where the open index is
-// only the invitations still outstanding — the set this answers. Neither
-// decodes a document.
-//
-// Three-valued like everything here: an error is the unknown arm, and an
-// empty answer is a real one ("nobody holds or is invited to any seat").
-// [ClaimsBySeat] folds it to one claim per seat.
+// The bindings walk the people's partial seat index; the open invitations walk
+// `iam_invites_open_idx` (0041) and sort, because the seat index would also
+// range over redeemed invitations until the sweep collects them a week on.
+// Neither decodes a document. An error is the unknown arm and an empty answer
+// a real one; [ClaimsBySeat] folds it to one claim per seat.
 func (r *Reader) SeatClaims(ctx context.Context, now time.Time) (SeatClaims, error) {
 	var out SeatClaims
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
@@ -1039,11 +942,10 @@ func (r *Reader) SeatClaims(ctx context.Context, now time.Time) (SeatClaims, err
 	return out, nil
 }
 
-// SeatClaim is what one seat is claimed by: the principal bound to it, the
-// open invitation holding it, or — only where a build before invitations held
-// their seats left the two side by side — both. A surface rendering one answer
-// takes the holder: the invitation's redemption will be refused for the seat
-// they hold.
+// SeatClaim is what one seat is claimed by: its bound principal, the open
+// invitation holding it, or both, where an older build left them side by side.
+// A surface showing one shows the holder: the invitation's redemption will be
+// refused for that seat.
 type SeatClaim struct {
 	Holder     *SeatBinding
 	Invitation *SeatInvitation
@@ -1052,22 +954,14 @@ type SeatClaim struct {
 // ClaimsBySeat folds [SeatClaims] to one [SeatClaim] per seat; a seat nobody
 // holds or is invited to is absent.
 //
-// TWO ROWS BOUND TO ONE SEAT ARE THE UNKNOWN ARM, never a pick. The directory
-// decides every binding on one subject in one snapshot, so ordinary traffic
-// never produces two; a node that retained the record moving somebody off a
-// seat, and applied a later one binding it to somebody else, holds both until
-// it reprocesses the first — as a restore can. That node cannot say who holds
-// the seat, so another node answers.
-//
-// TWO OPEN INVITATIONS ON ONE SEAT ARE NOT. The same residue — a node that
-// retained the record cancelling one and applied a later one issuing the
-// other, or a restore — can leave one seat named twice, and an invitation
-// stays open until it ages out, a week at most; the newest is the one an
-// administrator acted on last and the one this answers, and the other stays
-// cancellable by its id from the invitation listing. An invitation is somebody
-// on their way to a seat rather than its holder, so nobody is mis-routed by
-// the pick, and refusing the whole answer over it would take the seat listing
-// down for every seat for as long as the older link stays open.
+// TWO ROWS BOUND TO ONE SEAT ARE THE UNKNOWN ARM, never a pick: the directory
+// decides every binding on one subject, so only a node that retained a record
+// moving somebody off the seat and applied a later one binding it (or a
+// restore) holds both, and another node must answer. TWO OPEN INVITATIONS ON
+// ONE SEAT, the same residue, are not: the newest (the last an administrator
+// acted on) is answered and the other stays cancellable by id. An invitation
+// routes nobody, and refusing would take down the whole seat listing until
+// the older link ages out, a week at most.
 func ClaimsBySeat(c SeatClaims) (map[string]SeatClaim, error) {
 	out := make(map[string]SeatClaim, len(c.Bindings)+len(c.Invitations))
 	for i := range c.Bindings {

@@ -37,6 +37,20 @@
 // one that goes by itself, so the decision is a property of the code, stated
 // once in [actions] and never guessed by a renderer from the sentence.
 //
+// # How each reader gets it
+//
+// A tool writes the model's words under its answer's one `warnings` key
+// through `builtin.caveated` and hands the caveats to `mcp.Result.Caveats`.
+// The act route answers `caveats` in the person's words and takes `warnings`
+// off the receipt, so a person never reads the model's phrasing. A refusal's
+// person half rides `mcp.Result.PersonRefusal` (`builtin.refusedBy` lifts it
+// from an error a writer wrapped with [Saying]), and `operator.Fail` takes that
+// typed value and nothing else; its remedy is answered as `remedy`. Both have
+// their own files here. `caveattest` holds the one check every walk over a
+// person's sentence shares, and finds a model's framing (a fence's line, a
+// defused marker, a model-only key) in any field of a person's answer, a
+// value's included.
+//
 // # Constructed here, or rebuilt from a peer at one boundary
 //
 // A caveat's fields are unexported and it does not decode from JSON, so the

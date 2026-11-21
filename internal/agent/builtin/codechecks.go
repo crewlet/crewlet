@@ -97,9 +97,10 @@ const (
 	// is 85 bytes before its step.
 	rerunStepBytes = 7
 	// checkListPages bounds the pages of a commit's checks one call reads: a
-	// head is listed by name and attempt, so four hold every attempt of every
-	// check a checks file defines.
-	checkListPages = 4
+	// head is listed by name and attempt, gitlet.MaxChecksPerPage a page, so
+	// these hold every attempt of every check a checks file defines.
+	checkListPages = (gitlet.MaxChecksPerFile*gitlet.MaxCheckAttempts + gitlet.MaxChecksPerPage - 1) /
+		gitlet.MaxChecksPerPage
 )
 
 // checkScope is the commit a check tool is about: a change's head, checked
@@ -164,7 +165,7 @@ func (d CodeDeps) attempts(ctx context.Context, turn *turnctx.Turn, tool string,
 	for range checkListPages {
 		answer, err := d.read(ctx, c, gitlet.ReadQuery{Kind: gitlet.ReadChecks, Repo: s.repo.Name, Fresh: seatRead,
 			Checks: &gitlet.CheckQuery{Change: s.change, OID: s.oid, Name: name}, Cursor: cursor,
-			Limit: gitlet.MaxSnapshotItems})
+			Limit: gitlet.MaxChecksPerPage})
 		if err != nil {
 			r := d.failed(ctx, turn, tool, c.asker, s.repo, err)
 			return nil, at, &r

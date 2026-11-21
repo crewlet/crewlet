@@ -7,19 +7,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// WHAT A COMMITTED BATCH MOVED, said after the commit.
-//
-// The serving origin keeps an authorization verdict per open document and the
-// socket hub keeps rooms per artifact, and both must hear the moment a share is
-// withdrawn, an artifact is trashed or a version lands. The apply is the only
-// thing that sees every record on EVERY data node (the change feed relays a
-// record to one), so each committed batch hands the engine what it moved, built
-// from the rows the apply wrote rather than re-read, and the engine fans it out
-// ([Engine.OnArtifactsMoved] in internal/engine).
+// WHAT A COMMITTED BATCH MOVED (package doc, "What a batch moved"). The apply,
+// not the change feed, reports it: only the apply sees every record on EVERY
+// data node; the feed relays a record to one.
 //
 // OVER-REPORTING IS THE SAFE DIRECTION: a body the store re-runs fills the list
-// twice, and a listener told twice re-reads once more and nothing else. Under-
-// reporting is a revoked share an open page keeps serving.
+// twice, and a listener told twice re-reads once more. Under-reporting is a
+// revoked share an open page keeps serving.
 
 // MoveKind is what one movement was.
 type MoveKind string
@@ -48,12 +42,10 @@ const (
 	// MoveTransfer is ownership moved.
 	MoveTransfer MoveKind = "transfer"
 
-	// MoveFolder is the artifact filed in another folder. Nothing about who
-	// may open it changed (a folder grants nothing), so it narrows nothing;
-	// it is told so an open page names the folder it is in now. A folder's
-	// removal, which re-files everything it held, tells nothing per
-	// artifact: an unbounded folder would be as many movements in one
-	// batch, for a label every page reads again on its own.
+	// MoveFolder is the artifact filed in another folder: it narrows nothing
+	// (a folder grants nothing), and is told so an open page names its folder.
+	// A folder's removal tells nothing per artifact: an unbounded folder would
+	// be as many movements in one batch, for a label pages re-read anyway.
 	MoveFolder MoveKind = "folder"
 
 	// MoveComment is a comment thread opened, a remark added, edited or
@@ -61,10 +53,10 @@ const (
 	// nothing: an open page re-reads its threads.
 	MoveComment MoveKind = "comment"
 
-	// MoveReset names NO artifact: every artifact on this node may have
-	// moved with no committed record to say which, because a batch retained
-	// a record this build cannot read, or an adoption replaced the whole
-	// estate. A listener drops everything it decided from these rows.
+	// MoveReset names NO artifact: any artifact on this node may have moved
+	// (a batch retained a record this build cannot read, or an adoption
+	// replaced the estate). A listener drops everything it decided from these
+	// rows.
 	MoveReset MoveKind = "reset"
 )
 
@@ -74,11 +66,9 @@ var MoveKinds = []MoveKind{
 	MoveTransfer, MoveFolder, MoveReset, MoveComment,
 }
 
-// Moved is one artifact's movement in a committed batch.
-//
-// TAGGED FOR THE WIRE, because a node whose copy is out of service hears a
-// sound peer's movements relayed (internal/engine's live relay), and a
-// relayed movement is this encoding.
+// Moved is one artifact's movement in a committed batch. It is TAGGED FOR THE
+// WIRE: a node whose copy is out of service hears a sound peer's movements
+// relayed in this encoding (internal/engine's live relay).
 type Moved struct {
 	// Artifact is the artifact that moved; zero for [MoveReset].
 	Artifact artifacts.ID `json:"artifact,omitzero"`
@@ -93,9 +83,8 @@ type Moved struct {
 	Head int `json:"head,omitempty"`
 
 	// Position is the record's position on the log, and At the broker's
-	// own instant for it: when the change was stored, which every node
-	// reads alike and what the socket's push of it is timed from
-	// (internal/objectives' change visibility).
+	// instant for it, which every node reads alike and the socket's push is
+	// timed from (internal/objectives' change visibility).
 	Position statelog.Position `json:"position,omitzero"`
 	At       time.Time         `json:"at,omitzero"`
 }

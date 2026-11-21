@@ -526,7 +526,7 @@ func (wr *writing) rules() (writeVerdict, error) {
 	if reason, words := gitlet.DefaultBranchRefusal(judged, repo.Name, repo.DefaultBranch); reason != "" {
 		return writeVerdict{reason: reason, detail: words}, nil
 	}
-	if w.Kind.Commits() && wr.sig == (Signature{}) {
+	if (w.Kind.Commits() || w.Annotates()) && wr.sig == (Signature{}) {
 		sig, err := s.o.Signer.Sign(w.Principal)
 		if err != nil {
 			return writeVerdict{}, err
@@ -557,9 +557,9 @@ const placeholder = "1111111111111111111111111111111111111111"
 func (wr *writing) judged() gitlet.Command {
 	c := gitlet.Command{Ref: wr.w.Ref, Old: wr.cmd.Old, New: placeholder}
 	switch wr.w.Kind {
-	case gitlet.WriteDeleteBranch:
+	case gitlet.WriteDeleteBranch, gitlet.WriteDeleteTag:
 		c.New = gitlet.ZeroOID
-	case gitlet.WriteCreateBranch:
+	case gitlet.WriteCreateBranch, gitlet.WriteCreateTag:
 		c.New = wr.w.Commit
 	}
 	return c
@@ -571,9 +571,9 @@ func (wr *writing) judged() gitlet.Command {
 func (wr *writing) refused(reason gitlet.Refusal, detail string) gitlet.EngineWriteResult {
 	c := wr.cmd
 	switch wr.w.Kind {
-	case gitlet.WriteCreateBranch:
+	case gitlet.WriteCreateBranch, gitlet.WriteCreateTag:
 		c.New = wr.w.Commit
-	case gitlet.WriteDeleteBranch:
+	case gitlet.WriteDeleteBranch, gitlet.WriteDeleteTag:
 		c.New = gitlet.ZeroOID
 	}
 	c.Result, c.Reason, c.Detail = gitlet.ResultNG, reason, detail
@@ -637,15 +637,16 @@ func (wr *writing) repoName() string {
 // runs the whole budget is too_large, since another node would take as long. A
 // commit_files' read of its paths (building.paths), costing the square of a
 // path's depth, is the build's, so it runs under the unit and the budget, never
-// in the check. A branch create or delete builds nothing and takes no unit.
+// in the check. A branch's or a lightweight tag's create or delete builds
+// nothing and takes no unit; an annotated tag builds its object.
 func (wr *writing) buildShared(ctx context.Context, sc *cache.Scratch, j judgement) (built,
 	gitlet.EngineWriteResult, bool, error) {
 
 	s, w := wr.s, wr.w
-	switch w.Kind {
-	case gitlet.WriteCreateBranch:
+	switch {
+	case w.Kind == gitlet.WriteCreateBranch, w.Kind == gitlet.WriteCreateTag && !w.Annotates():
 		return built{commit: w.Commit}, gitlet.EngineWriteResult{}, false, nil
-	case gitlet.WriteDeleteBranch:
+	case w.Kind == gitlet.WriteDeleteBranch, w.Kind == gitlet.WriteDeleteTag:
 		return built{commit: gitlet.ZeroOID}, gitlet.EngineWriteResult{}, false, nil
 	}
 	release, err := s.o.Share.Take(ctx, gitlet.SeatWorkWrite)
@@ -744,7 +745,7 @@ func (wr *writing) land(ctx context.Context, sc *cache.Scratch) (gitlet.EngineWr
 	}
 	if res.Outcome == statelog.OutcomeApplied || res.Outcome == statelog.OutcomePending {
 		res.Commit = wr.cmd.New
-		if w.Kind == gitlet.WriteDeleteBranch {
+		if w.Kind == gitlet.WriteDeleteBranch || w.Kind == gitlet.WriteDeleteTag {
 			res.Commit = ""
 		}
 	}
@@ -825,6 +826,9 @@ func shortID(id string) string {
 func (wr *writing) headSentence(head string) string {
 	w := wr.w
 	switch {
+	case w.ExpectedHead == "" && head != "" && w.Kind.Tags():
+		return fmt.Sprintf("%s already exists, at %s, and a tag never moves; name another tag, or delete it "+
+			"first", w.Ref, shortID(head))
 	case w.ExpectedHead == "" && head != "":
 		return fmt.Sprintf("%s already exists, at %s; read it with %s and write onto its head", w.Ref,
 			shortID(head), toolname.CodeResolve)

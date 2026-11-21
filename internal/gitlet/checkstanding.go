@@ -52,7 +52,7 @@ const MaxStandingCounted = 128
 // validateStanding is [ReadQuery.validateChecks] for a listing asked where each check stands: of
 // a repository or of every repository, in a window that ends now, narrowed by a name and a state.
 func (q ReadQuery) validateStanding() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	c := q.Checks
 	switch {
 	case !c.Standing.Valid():
@@ -295,6 +295,10 @@ type standingFact struct {
 	latest             bool
 }
 
+// reported reports an attempt a person's CI reported: it holds no queue, so no purpose
+// ([CheckReported]), and measures whatever its commit is for its branch.
+func (f standingFact) reported() bool { return f.purpose == "" }
+
 // standingEntry is a queue entry a candidate's attempt names: its change, the head it was
 // enqueued at, the candidate testing it, and whether it is its change's newest entry.
 type standingEntry struct {
@@ -306,8 +310,9 @@ type standingEntry struct {
 // [Reader.narrowedWindow] holds its places), then by its facts and the subject they name. A head's
 // is the live change into its branch at its commit, whichever change's dispatch queued it, as a
 // merge gate reads one; a candidate's is its queue entry, its change's newest and still tested by
-// that candidate, of a live change still into the candidate's branch; a tip's is its branch. Each
-// kind is one statement over the places' list, never one a place.
+// that candidate, of a live change still into the candidate's branch; a tip's is its branch. A
+// person's CI's report names no purpose, so it judges what its commit is: that live change, else
+// its branch at that tip. Each kind is one statement over the places' list, never one a place.
 func (sc standingScope) verdicts(ctx context.Context, tx *sql.Tx, places []standingPlace) ([]standingVerdict,
 	error) {
 
@@ -342,11 +347,14 @@ func (sc standingScope) verdicts(ctx context.Context, tx *sql.Tx, places []stand
 	for _, key := range granted {
 		switch f := facts[key]; {
 		case !f.latest:
-		case f.purpose == PurposeHead:
+		case f.purpose == PurposeHead || f.reported():
 			// ONE SEEK A HEAD, however many of its checks the places hold.
 			if head := [3]string{key.RepoID, key.Target, key.OID}; !sought[head] {
 				sought[head] = true
 				heads = append(heads, head)
+			}
+			if f.reported() {
+				tips = append(tips, [2]string{key.RepoID, key.Target})
 			}
 		case f.purpose == PurposeCandidate:
 			entries = append(entries, [2]string{key.RepoID, f.entry})
@@ -394,6 +402,12 @@ func (sc standingScope) verdicts(ctx context.Context, tx *sql.Tx, places []stand
 			v.changeHead = e.head
 		case f.purpose == PurposeTip:
 			v.stands = tipOf[[2]string{p.key.RepoID, p.key.Target}] == p.key.OID
+		case f.reported():
+			if change, v.stands = atHead[[3]string{p.key.RepoID, p.key.Target, p.key.OID}]; v.stands {
+				v.changeHead = p.key.OID
+			} else {
+				v.stands = tipOf[[2]string{p.key.RepoID, p.key.Target}] == p.key.OID
+			}
 		}
 		switch {
 		case !v.stands:

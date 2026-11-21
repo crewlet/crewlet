@@ -51,6 +51,12 @@
 // failure the store's or the archive's own. What the read already handed out
 // stands: every byte of it came from a chunk that authenticated.
 //
+// A row that cannot be read again leaves it unknown whether the session is
+// still kept: [ErrKeptUnknown], an [ErrUnavailable] naming the log, not the
+// store. A read its caller left (its own bound, a cancellation) is returned as
+// it left beside the row it was reading ([Page.Read]), so the caller can say
+// how large the session is and never says it holds nothing.
+//
 // # Why a package of its own
 //
 // The read needs the log's row — its object, the reason it names none, and the

@@ -195,30 +195,18 @@ func waitFor(t *testing.T, want int, got func() int) {
 	}
 }
 
-// toTheEnd runs body in a synctest bubble and returns once every goroutine the
-// bubble holds has exited — the fleet's own, and any the fleet started — so
-// what a recorder holds afterwards is everything the fleet will ever publish,
-// and an absence read then is one. body builds the fleet, [settle]s it and
-// stops it; the assertions follow toTheEnd rather than sit inside it.
+// toTheEnd runs body in a synctest bubble and returns once every goroutine in
+// it has exited, so a recorder then holds everything the fleet will ever
+// publish and an absence read is one. body builds, [settle]s and stops the
+// fleet; assertions follow toTheEnd.
 //
-// THE END OF EVERY GOROUTINE, rather than a moment the test picks. A fixed
-// sleep read the absence at an arbitrary instant, so a duplicate published a
-// little later passed, and the margin shrank with the runner's load. Reading
-// it when the pump came back for its next frame proved only what the pump
-// published itself: a duplicate handed to a goroutine of its own, however soon
-// it landed, came after the read. A bubble waits for that goroutine too. Its
-// clock moves only while everything in it is blocked, so once body has
-// returned the clock is moved [afterStop] on, at no wall-clock cost, and
-// anything the fleet left waiting on a timer runs where its publishes are
-// still counted. A goroutine still there after that — on a longer timer, or
-// blocked for good — ends the bubble in a deadlock panic, which fails the run
-// as surely as an assertion would.
-//
-// The fleet must be stopped inside: one left running beats its heartbeat for
-// ever, and the bubble's clock with it. And the stand-in server is built
-// OUTSIDE, reached through [bubbleClient]: its listener waits on the network,
-// which a bubble never counts as blocked, so inside it the bubble would never
-// settle.
+// THE END OF EVERY GOROUTINE, not a moment the test picks: a fixed sleep or the
+// pump's next read misses a duplicate handed to its own goroutine. After body
+// the bubble's clock moves [afterStop] on, at no wall-clock cost, so timers run
+// with publishes still counted; a goroutine left after that deadlocks the
+// bubble, failing the run. The fleet must be stopped inside, or its heartbeat
+// never ends. The stand-in server is built OUTSIDE ([bubbleClient]): network
+// waits are never counted as blocked in a bubble.
 func toTheEnd(t *testing.T, body func(t *testing.T)) {
 	t.Helper()
 	synctest.Test(t, func(t *testing.T) {

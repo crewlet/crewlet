@@ -10,49 +10,16 @@ import (
 
 // Carrying what this build cannot represent across a write.
 //
-// # Why a write has to carry fields it does not know
-//
-// A rolling upgrade puts two builds on one coordination store, and the
-// activation pointer carries the payload, so an older node holds, byte for
-// byte, a document a NEWER peer wrote: a seat, an MCP server or a whole block
-// with a setting this build has no field for. Every write decodes that
-// document into this build's [Company] somewhere, and a struct cannot hold
-// what it has no field for. A write that stored the struct's encoding deleted
-// the newer peer's setting and published the loss as the fleet's
-// configuration, and every newer node reconciled onto it.
-//
-// Merging the struct's encoding back over the stored bytes keeps a field only
-// where the merge reaches it, and a merge replaces a list wholesale. Most of a
-// company is lists (its seats, its units, its MCP servers), so a merge-back
-// lost the unknown keys of every member of every list it wrote.
-//
-// # What is carried
-//
-// Only a key THIS BUILD CANNOT DECODE, and only where the written document
-// does not name it. Which keys those are is read off this build's own types:
-// a key a struct has no JSON field for. A caller of this build can never name
-// such a key (the strict reader refuses it), so nobody writing through this
-// build can mean to remove one; a key this build knows and the write left out
-// was left out on purpose, and stays out.
-//
-// # Where from
-//
-// The written document is walked by this build's types, every value it holds,
-// beside the stored value it corresponds to where there is one: a struct field
-// by its JSON name, a map entry by its key. A LIST MEMBER IS MATCHED BY
-// IDENTITY, by the same rules as [Company.RestoreRedacted], because
-// position is not identity: a seat by its handle and a unit by its key,
-// anywhere in the document, so one that moved keeps its keys; an MCP server or
-// a setup step by its name within its own list. An identity that is empty or
-// held twice in the stored document matches nothing, since guessing which of
-// two members a key belonged to is how one seat's setting reaches another. A
-// list whose members have no identity carries nothing.
-//
-// Nothing below a value with a JSON encoding of its own is followed: its keys
-// are its encoder's business rather than a struct's fields, and a walk that
-// read them as fields would carry a key its decoder refuses. No type in this
-// build encodes itself as an object today (a toggle is a boolean, a provider
-// chain a string or a list), so the rule guards the next one that does.
+// A rolling upgrade leaves an older node holding a document a NEWER peer
+// wrote, with settings this build has no field for. Storing the struct's
+// encoding would delete them and publish the loss as the fleet's
+// configuration, and merging it back over the stored bytes still loses the
+// keys of list members, since a merge replaces a list wholesale. So only a
+// key this build cannot decode and the write does not name is carried. The
+// walk follows this build's types: a struct field by JSON name, a map entry
+// by key, a list member by IDENTITY (as [Company.RestoreRedacted] matches),
+// never position; an empty or duplicate identity matches nothing. Nothing
+// below a value with its own JSON encoding is followed: its keys are not fields.
 
 // CarryUnknown writes into written every value of stored that this build
 // cannot represent and written does not name. Both are company documents

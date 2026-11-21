@@ -14,21 +14,16 @@ import (
 )
 
 // TWO NODES WRITING ONE LOG AT ONCE CONVERGE, BYTE FOR BYTE, and a third node
-// replaying the log from nothing rebuilds the same estate.
+// replaying the log from nothing rebuilds the same estate: the identity claim
+// [artifactsdomain.Domain] declares, held across the hard cases (creates,
+// publishes racing on one artifact, carries, retention, shares and narrowings,
+// assets, work-item links, pins, a purge, the folder tree on its one subject
+// with artifacts filed in it, racing comment replies, edits and resolves),
+// through two independent publishers and appliers, every Replicated table
+// compared whole.
 //
-// This is the identity claim the domain declares ([artifactsdomain.Domain]
-// claims identity), held across the cases that make it hard: creates, publishes
-// that race on one artifact from both nodes, carries, retention, shares and
-// narrowings, assets, links to work items, pins, a purge, the folder tree
-// (chains, renames, moves and a removal on the one tree subject both nodes
-// write, and artifacts filed in it), and comment threads (replies racing on
-// one thread, edits, resolves), all through two independent publishers and
-// appliers. Every Replicated table is compared
-// whole.
-//
-// Mutation: write the applying node's own clock into any row (time.Now for a
-// history row's instant), or the capability list from an unsorted map, and the
-// two nodes' tables differ.
+// Mutation: write the applying node's clock into any row, or the capability
+// list from an unsorted map, and the two nodes' tables differ.
 func TestTwoNodesConvergeOnOneLogAndAReplayRebuildsTheirEstate(t *testing.T) {
 	t.Parallel()
 	log := openLog(t)
@@ -138,8 +133,7 @@ func TestTwoNodesConvergeOnOneLogAndAReplayRebuildsTheirEstate(t *testing.T) {
 			failures <- fmt.Errorf("%s resolve: %w", label, err)
 			return
 		}
-		// THE FOLDER TREE, ONE SUBJECT BOTH NODES WRITE AT ONCE: a chain,
-		// a rename, a move of a folder, and an artifact filed, each node
+		// THE FOLDER TREE, ONE SUBJECT BOTH NODES WRITE AT ONCE, each
 		// deciding against a tree the other keeps changing.
 		chain, err := n.writer.CreateFolders(ctx, c, artifactsdomain.FolderCreateInput{
 			Names: []string{"Team " + label, "Inbox"}, Parents: true,

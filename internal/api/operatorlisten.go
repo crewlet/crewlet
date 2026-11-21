@@ -14,51 +14,17 @@ import (
 )
 
 // OperatorListens tells every MCP client listening on this node that its
-// operator tools changed — when this node's catalogue moves, and when any
-// other node's does.
+// operator tools changed, when this node's catalogue moves or any other's.
 //
-// # Why there is anything to tell
-//
-// The operator surface reads its catalogue at the top of every call, so a
-// client's next request is always served what the node serves then. What a
-// connected assistant does NOT make is a request: a client of the 2026-07-28
-// protocol holds one stream open (`subscriptions/listen`) and lists its tools
-// again only when it is told they changed. The stream stays on the catalogue
-// its listen was answered from, and nothing told it anything, so an assistant
-// connected before a node's first company kept offering the tools it
-// connected to — none of the tracker's — until it was reconnected. The node's
-// one registry of streams is [operator.Listeners]; this decides WHEN to tell
-// them.
-//
-// # When: what a call would be served has moved
-//
-// [OperatorListens.Moved] compares the tools a call is served now
-// ([operator.Server.Tools]) with the ones it last compared, and tells the
-// streams only where they differ: the node runs it after every company it
-// publishes and every catalogue change a shared tool server makes, which is
-// where each fact the catalogue is built from moves — the native halves at a
-// node's first company, a knowledge backend added or retired, a tool server's
-// tools. A revision that moves none of them tells nobody. The company's NAME
-// is deliberately not compared: it titles the MCP server, which a client reads
-// once, at connect, and a tool-list notification would not make it read the
-// title again.
-//
-// # Told by the fleet, not by one node
-//
-// Every node applies a revision on its own clock — the activation reaches
-// each by a nudge and a poll, and a company's first apply builds the native
-// runtime, which takes seconds — while an assistant's next listing, with no
-// session to pin it, reaches whichever ingress node a load balancer picks.
-// Told only by the node holding its stream, an assistant listed again at once
-// and was often answered by a peer that had not applied yet; that peer's own
-// move later told only ITS listeners, so the assistant kept the old tools
-// until the next change: after a knowledge backend was removed it went on
-// offering `search_knowledge`, answered "unknown tool". So each move is
-// announced to the fleet (`operator_tools_changed`), and every node that hears
-// a peer's tells every stream it holds. The last thing an assistant hears
-// therefore follows the last node's move, and the listing it makes then is the
-// new catalogue wherever it lands — for as long as its stream is open and the
-// broker carries the nudge, which is best effort like every nudge.
+// A client of the 2026-07-28 protocol holds one stream open
+// (`subscriptions/listen`) and re-lists tools only when told they changed;
+// [operator.Listeners] is the registry, this decides WHEN to tell them.
+// [OperatorListens.Moved] compares the tools now served ([operator.Server.Tools])
+// with the last and tells only on a difference; the company's NAME is not
+// compared (a client reads it once). Told by the fleet, not one node: a
+// re-listing reaches whichever ingress node a load balancer picks, which may
+// not have applied yet, so each move is announced (`operator_tools_changed`)
+// and every node hearing a peer's tells its own streams. Best effort.
 type OperatorListens struct {
 	server    *operator.Server
 	listeners *operator.Listeners

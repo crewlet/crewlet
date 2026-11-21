@@ -24,7 +24,7 @@
  *
  * INLINE, the list stands in the flow under the field, for a picker inside a popover's scroll box.
  */
-import { useMemo, useRef, useState, type FocusEvent } from "react";
+import { useMemo, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import { Combobox, type ComboboxOption } from "@crewlethq/ui";
 import { ChevronDownGlyph } from "@crewlethq/icons/glyphs";
 import { isRepoPrefix } from "~/lib/code.ts";
@@ -46,6 +46,8 @@ export function RepoPicker({
   placeholder = "Choose a repository",
   size = "md",
   inline,
+  leading,
+  className,
 }: {
   /** The chosen repository's name, or "" for none. */
   repo: string;
@@ -61,6 +63,10 @@ export function RepoPicker({
   size?: "sm" | "md";
   /** The list always shown under the field, this many rows tall, rather than a popup. */
   inline?: number;
+  /** Words or a glyph inside the field before the name, as a labelled filter's. */
+  leading?: ReactNode;
+  /** The field's own class, where a row lays it out (the kit's `containerClassName`). */
+  className?: string;
 }) {
   // NULL UNTIL SOMEBODY TYPES, and again once they leave the field: the field
   // shows the chosen name, and the list is the listing from its first name.
@@ -133,6 +139,8 @@ export function RepoPicker({
     placeholder: every ?? placeholder,
     inputSize: size,
     width: "sm",
+    containerClassName: className,
+    leading,
     value: typed ?? repo,
     onFocus: (event: FocusEvent<HTMLInputElement>) => event.currentTarget.select(),
     options,

@@ -25,19 +25,16 @@ import (
 
 // ONE REFUSAL IS ONE DECISION ON ALL THREE SURFACES, IN EACH READER'S TERMS.
 //
-// The same verb is served three ways: a seat's own turn, the operator's
-// assistant over MCP, and this HTTP surface. "You may not" must be one
-// decision on all of them. The two that answer a MODEL answer the same
-// sentence, byte for byte. This surface answers a PERSON (ADR-0060): it
-// carries the same decision as values (the rule's reason and the grants that
-// would have admitted the caller) and never the models' sentence, which names
-// the tool and is written for a model to act on.
+// The same verb is served by a seat's turn, the operator's assistant over MCP
+// and this HTTP surface, and "you may not" must be one decision on all three.
+// The two that answer a MODEL give the same sentence byte for byte; this one
+// answers a PERSON (ADR-0060) with the same decision as values (the reason and
+// the grants that would have admitted the caller), never the models' sentence.
 //
-// So the three are asked the SAME question by a caller holding the same
-// access (create an item, holding Doclet and not Worklet). The HTTP surface
-// is the one that refuses at its ROUTE, before any tool runs, which is exactly
-// why it is the one that could drift: its reason and grants are held to the
-// decision the tool's own gate made.
+// All three are asked the same question by a caller with the same access
+// (create an item, holding Doclet and not Worklet). This surface refuses at
+// its ROUTE before any tool runs, so it is the one that could drift: its reason
+// and grants are held to the decision the tool's own gate made.
 func TestOneRefusalIsOneDecisionOnAllThreeSurfaces(t *testing.T) {
 	t.Parallel()
 	grants := []iam.Grant{iam.GrantDoclet}

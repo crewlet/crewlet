@@ -305,11 +305,13 @@ func TestAParkedRunsReplyIsReadOffItsRowDefensively(t *testing.T) {
 			}
 		})
 	}
-	for _, stored := range []string{"whisper", ""} {
+	for stored, elsewhere := range map[string]bool{"whisper": true, "": false} {
 		_, err := resumeReply(sandbox.PendingRun{TurnID: "wk-1", Reply: stored})
-		if !errors.Is(err, sandbox.ErrResumeUnavailable) {
+		if !errors.Is(err, sandbox.ErrResumeUnavailable) ||
+			errors.Is(err, sandbox.ErrResumeElsewhere) != elsewhere {
 			t.Fatalf("reply %q = %v, want a routing refusal so the completion "+
-				"reaches a node that can read it", stored, err)
+				"reaches a node that can read it, one another build can make = %v",
+				stored, err, elsewhere)
 		}
 	}
 }

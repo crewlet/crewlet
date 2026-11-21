@@ -186,16 +186,16 @@ func TestAHealthyLedgerRaisesNothing(t *testing.T) {
 // seat's id when the ledger carries none, so no finding is about nobody.
 func TestALedgerFindingNamesItsSeat(t *testing.T) {
 	t.Parallel()
-	unnamed := started("", "chat:message", "nothing", 20)
-	unnamed.AgentID = "id-gone"
+	unnamed, gone := started("", "chat:message", "moved", 10), absorbed("", 10)
+	unnamed.AgentID, gone.AgentID = "id-gone", "id-gone"
 	found := advisor.Detect(advisor.Evidence{Ledger: []usage.TurnLedgerRow{
-		started("app", "chat:message", "nothing", 20), unnamed}}, kindOf)
+		started("app", "chat:message", "moved", 10), absorbed("app", 10), unnamed, gone}}, kindOf)
 	var seats []string
 	for _, f := range found {
 		seats = append(seats, f.Subject.Seat)
 	}
 	if !slices.Equal(seats, []string{"app", "id-gone"}) {
-		t.Errorf("the no-op findings name %v, want app and the unnamed seat's id", seats)
+		t.Errorf("the ledger findings name %v, want app and the unnamed seat's id", seats)
 	}
 }
 
@@ -335,9 +335,9 @@ func TestThePatternsWindowIsAWeekAndAReviewIsIdleAfterADay(t *testing.T) {
 func TestAnUnreadSourceRaisesNothingAndIsNamed(t *testing.T) {
 	t.Parallel()
 	firing := advisor.Evidence{Work: worklet.WorkPatterns{Answers: 4, Moot: 4, Overtaken: []string{"c-1"}},
-		Ledger: []usage.TurnLedgerRow{started("app", "chat:message", "nothing", 20)},
+		Ledger: []usage.TurnLedgerRow{started("app", "lead_fallback", "nothing", 60)},
 		Backup: advisor.Backup{Standing: true}}
-	classes := []advisor.Class{advisor.ClassAskOvertaken, advisor.ClassNoopShare, advisor.ClassNoVerifiedBackup}
+	classes := []advisor.Class{advisor.ClassAskOvertaken, advisor.ClassWakeReasonWaste, advisor.ClassNoVerifiedBackup}
 	in := advisor.Inputs{Company: liveShape(t), Revision: "rev-1", Integrations: []integration.State{}}
 	read := advisor.ReadWithEvidence(in, firing)
 	if !slices.Equal(read.Unread, []string{}) {
@@ -422,7 +422,7 @@ func TestDecisionsTakenAsRecommendedAreTheOwnersToWeigh(t *testing.T) {
 			f := found[0]
 			if f.Class != advisor.ClassApprovalRubberStamp || f.Actor != advisor.ActorOwner ||
 				f.Severity != advisor.SeverityNote || f.Subject.Seat != "pm" ||
-				f.Fix.Kind != advisor.FixDraftWithAssistant || len(f.Fix.Options) != 0 {
+				f.Fix.Kind != advisor.FixAskCrewlet || len(f.Fix.Options) != 0 {
 				t.Errorf("finding = %+v, want the owner's note about pm with a draft to review", f)
 			}
 			for _, want := range []string{"owner", "pm", strconv.Itoa(tc.decided), "Show me the change"} {
@@ -583,5 +583,24 @@ func TestAnIdleReviewNamesWhoItWaitsOn(t *testing.T) {
 	}
 	if len(got) != 3 {
 		t.Errorf("raised findings about %d parties, want 3", len(got))
+	}
+}
+
+// A CLASS THE LIST NO LONGER STATES IS STILL READ FOR THE INSIGHTS IT SHARES: agents whose turns
+// mostly changed nothing are wake.reason_waste's to list, and wake.noop_share is kept apart for
+// the usage insights' published catalogue, never listed. Mutation: list it again, and one cause
+// reads twice.
+func TestANoopShareIsSharedNeverListed(t *testing.T) {
+	t.Parallel()
+	answer := richAnswer(t)
+	for _, f := range answer.Findings {
+		if f.Class == advisor.ClassNoopShare {
+			t.Errorf("listed %+v", f)
+		}
+	}
+	if len(answer.Shared) == 0 || !slices.ContainsFunc(answer.Shared, func(f advisor.Finding) bool {
+		return f.Class == advisor.ClassNoopShare
+	}) {
+		t.Errorf("shared %+v, want the agents whose turns changed nothing", answer.Shared)
 	}
 }

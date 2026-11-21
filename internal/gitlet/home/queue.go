@@ -404,8 +404,9 @@ func (w *queue) test(ctx context.Context, repoID string, d gitlet.QueueDue, memo
 // trainDefs is the checks file d's train is measured by: its base's (the
 // target's tip), never a candidate's own (M5-D15). Where it defines a
 // required check in no form that runs, no candidate can be green, so every
-// entry the train tests is EJECTED check_failed naming those checks and nil
-// answered: nothing the queue tests can land until the target defines them.
+// entry the train tests is EJECTED checks_undefined naming those checks and
+// nil answered: nothing the queue tests can land until the target defines
+// them. Never check_failed, which says a run measured the change.
 func (w *queue) trainDefs(ctx context.Context, repoID string, d gitlet.QueueDue, memo *defsMemo,
 	at statelog.Position) (*checksDefs, error) {
 
@@ -429,12 +430,12 @@ func (w *queue) trainDefs(ctx context.Context, repoID string, d gitlet.QueueDue,
 	about := fmt.Sprintf("target %s at %s", d.TargetRef, short(base))
 	w.log.Warn("code_queue_checks_undefined", "repo", repoID, "about", about, "checks", undefined,
 		"invalid", defs.invalid, "detail", "the target's checks file defines a required check in no form "+
-			"that runs, so no candidate can pass it: the train's entries are ejected check_failed")
+			"that runs, so no candidate can pass it: the train's entries are ejected checks_undefined")
 	var ejected []gitlet.Ejection
 	for _, c := range d.Train {
 		for _, commit := range c.Commits {
-			ejected = append(ejected, gitlet.Ejection{EntryID: commit.EntryID, Reason: gitlet.EjectCheckFailed,
-				Checks: undefined})
+			ejected = append(ejected, gitlet.Ejection{EntryID: commit.EntryID,
+				Reason: gitlet.EjectChecksUndefined, Checks: undefined})
 		}
 	}
 	return nil, w.eject(ctx, repoID, about, endOf(d, roundEjected), ejected, at)

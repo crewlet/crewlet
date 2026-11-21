@@ -52,12 +52,18 @@ const answers = {
 
 /** The company left Ask Crewlet off, as the frame tells every control. */
 const OFF = assistantUnavailableFor(
-  { anonymous: false, asking: false, assistant: "disabled" },
+  { anonymous: false, asking: false, assistant: "no_model" },
   "Acme",
 )!;
 
 function control(unavailable: AssistantControl["unavailable"]): AssistantControl {
-  return { open: false, unavailable, toggle: () => undefined, ask: () => undefined };
+  return {
+    open: false,
+    unavailable,
+    toggle: () => undefined,
+    ask: () => undefined,
+    draft: () => undefined,
+  };
 }
 
 afterEach(() => {

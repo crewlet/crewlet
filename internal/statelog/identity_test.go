@@ -12,13 +12,9 @@ import (
 )
 
 // A STREAM IS IDENTIFIED BY THE INSTANT ITS CREATOR STAMPED, never by the
-// broker's own when it carries one.
-//
-// The broker dates a stream made by a snapshot restore to the restore, while
-// the configuration the restore was handed — the stamp in it — is the
-// original's; read off the broker, every restored log was a recreated one. A
-// stream with no stamp is read exactly as it always was, and a stamp nobody can
-// parse identifies nothing: unknown is not same.
+// broker's own when it carries one ([statelog.CreatedAtKey]). A stream with no
+// stamp answers the broker's instant, and a stamp nobody can parse identifies
+// nothing: unknown is not same.
 func TestAStreamIsIdentifiedByTheInstantItsCreatorStamped(t *testing.T) {
 	t.Parallel()
 	stamped := time.Date(2031, 4, 2, 3, 0, 0, 418_226_517, time.UTC)
@@ -93,9 +89,8 @@ func TestAStreamIsIdentifiedByTheInstantItsCreatorStamped(t *testing.T) {
 	}
 }
 
-// THE STAMP IS ADDED TO A COPY. A stream specification is a value several
-// creates share, and writing the caller's map would hand the first create's
-// instant to every later one.
+// THE STAMP IS ADDED TO A COPY: writing the caller's map would hand the first
+// create's instant to every later create sharing that specification.
 func TestAStampLeavesTheCallersMetadataAlone(t *testing.T) {
 	t.Parallel()
 	mine := map[string]string{"owner": "probe"}

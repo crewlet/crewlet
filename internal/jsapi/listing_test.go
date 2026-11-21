@@ -253,27 +253,15 @@ func TestALaterPageIsGivenWhatThePageBeforeItTook(t *testing.T) {
 // A PAGE NOBODY ANSWERED STILL SAYS HOW LONG A PAGE TAKES — and a page that
 // is answered says it again.
 //
-// A reader learns a page's term from what the page before it took, and a page
-// that ran out its bound unanswered was the one measurement it did not keep:
-// every listing after it began from the read term alone and asked its first
-// page at none, two and four seconds — for a stream whose pages outgrow the
-// client's five seconds, three sorts of every subject in flight on the leader
-// for every listing, each of which failed anyway. Kept, as at least as long
-// as the page was asked for, the next listing's first page is given that
-// beside the read term and asked once. And an answered page sets the figure
-// back to what it took, so one long silence does not make every later listing
-// wait it out. The client here is given a default of 3.9 seconds, so a page
-// at the read term alone is asked at none and two seconds, twice, inside it.
+// An unanswered page teaches too: kept as at least as long as it was asked
+// for, the next listing's first page is given that beside the read term and
+// asked once, not three times. An answered page sets the figure back to what it
+// took. The client's default here is 3.9 seconds, so a page at the read term
+// alone is asked at none and two seconds, twice, inside it.
 //
-// EACH LISTING NOBODY ANSWERS RUNS IN A SYNCTEST BUBBLE, the broker outside
-// it, so its timers fire at exactly their instants: on the machine's clock the
-// bound and a page's third request were a tenth of a second apart, and the
-// verdict turned on how late a loaded runner woke — the object store's stream
-// info failed on CI with its third request sent past the same bound, which
-// the hedge no longer does ([jsprovision.ReadBoundedWith]). A listing's
-// requests are counted behind a fence on its own connection
-// ([jsapitest.Held.Fence]). The listing the leader answers runs outside, as
-// its answer comes from outside every bubble.
+// EACH LISTING NOBODY ANSWERS RUNS IN A SYNCTEST BUBBLE, so timers fire at
+// exactly their instants; its requests are counted behind a fence
+// ([jsapitest.Held.Fence]). The listing the leader answers runs outside.
 func TestASubjectPageNobodyAnsweredTeachesTheNextListingItsTerm(t *testing.T) {
 	t.Parallel()
 	const bound = 3900 * time.Millisecond

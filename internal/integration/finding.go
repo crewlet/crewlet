@@ -39,21 +39,14 @@ const (
 	FindingCredentialRejected FindingKind = "credential_rejected"
 
 	// FindingCredentialExpiring is a credential that WORKS TODAY and stops on
-	// a date the third-party app has already published: a personal access
-	// token with an `expires_at` inside [ExpiryWarning]. [Finding.ExpiresAt]
-	// carries the date.
+	// a date the third-party app has published: a personal access token with
+	// an `expires_at` inside [ExpiryWarning]. [Finding.ExpiresAt] carries it.
 	//
-	// ADVISORY, and the only advisory with a deadline. Nothing is broken, so
-	// the integration is ready — but it is the one ready note that turns
-	// into [FindingCredentialRejected] on its own, with every agent on the
-	// surface going quiet at once, and no retry and no pass can prevent it:
-	// only a person issuing a new token can. That is why it is reported
-	// weeks early rather than on the morning it lapses, and why the tool
-	// roll-up ([Rollup]) reads it as needing attention although the phase
-	// says ready.
-	//
-	// The OPERATOR's, like a rejected credential: the fix is a new value in
-	// this deployment's own secret store, whoever mints it at the vendor.
+	// ADVISORY, the only one with a deadline: ready now, but it turns into
+	// [FindingCredentialRejected] on its own, silencing every agent at once,
+	// and only a person issuing a new token prevents it. Hence reported weeks
+	// early, and [Rollup] reads it as needing attention though the phase says
+	// ready. The OPERATOR's: the fix is a new value in the secret store.
 	FindingCredentialExpiring FindingKind = "credential_expiring"
 
 	// FindingCredentialShared is a company credential an agent seat once
@@ -109,40 +102,26 @@ const (
 	// the third-party app does not have: a name nobody holds there, or one
 	// the person has since renamed.
 	//
-	// ITS OWN KIND, because none of the identity kinds is about a person.
-	// Those are the engine's agents — an account it creates, or failed to
-	// — while nothing here creates a person: they join the surface
-	// themselves, and the chart only says who they are there. What is lost
-	// is attribution. The person goes on posting and every agent reads it
-	// as a stranger's, their manager's word with no authority behind it,
-	// and an agent asked to reach them addresses a name that renders as
-	// plain text.
-	//
-	// The OPERATOR's, like an unknown tier: the fix is the company's own
-	// document — the name the person's profile actually shows — unless
-	// they have not joined yet, and either way nothing at the third-party
-	// app is misconfigured.
+	// ITS OWN KIND: the identity kinds are about the engine's agents, and a
+	// person joins the surface themselves. What is lost is attribution: agents
+	// read their posts as a stranger's, and one asked to reach them addresses
+	// a name that renders as plain text.
+	// The OPERATOR's: the fix is the name the person's profile shows, in the
+	// company document, unless they have not joined yet.
 	FindingContactUnknown FindingKind = "contact_unknown"
 
-	// FindingContactMoved is a HUMAN seat whose contact is a NAME that has
-	// come to hold another account than it held when the company was last
-	// applied: the person renamed themselves and somebody took the name, or
-	// the account was deleted and made again.
+	// FindingContactMoved is a HUMAN seat whose contact NAME now holds another
+	// account than when the company was last applied: the person renamed and
+	// somebody took the name, or the account was deleted and remade.
 	//
-	// ITS OWN KIND, because it is the opposite of an unknown contact: the
-	// third-party app has an account by that name, and the engine follows
-	// it, since the chart names the NAME and every node asks the same
-	// server. What it cannot know is whether the account now holding the
-	// name is the person, and what it would be giving away if it is not is
-	// the person's word — every post from that account reaching the agents
-	// as theirs, with their authority.
+	// The opposite of an unknown contact: the engine follows the NAME, but
+	// cannot know whether that account is the person; if not, its posts reach
+	// the agents with the person's authority.
 	//
-	// DEGRADED and the OPERATOR's: agents are working and somebody has to
-	// say whether that account is the person. An apply is that answer — the
-	// company stated again with the name — and clears it; a corrected name
-	// clears it too. So does an apply nobody meant as the answer, the
-	// re-activation a provisioning pass makes after sealing what it minted:
-	// the producer's log line is the record that outlasts this.
+	// DEGRADED and the OPERATOR's: an apply stating the company again with the
+	// name is the answer and clears it, as does a corrected name. So does an
+	// apply nobody meant as the answer (a provisioning pass's re-activation
+	// after sealing what it minted); the producer's log line outlasts this.
 	FindingContactMoved FindingKind = "contact_moved"
 
 	// FindingGrantExcess is a seat holding MORE than its tier asks for.
@@ -158,86 +137,40 @@ const (
 	// disabled, and a seat on it makes the gap a blocking finding instead.
 	FindingLevelUnavailable FindingKind = "level_unavailable"
 
-	// FindingRegistrationOrphaned is something this engine registered at
-	// the third-party app that it no longer manages, because the name it is
-	// held under changed.
+	// FindingRegistrationOrphaned is something this engine registered at the
+	// third-party app that it no longer manages, because its name changed.
 	//
-	// ALSO ADVISORY, and for a sharper reason than the excess grant's: the
-	// orphan still WORKS. A Datadog webhook definition is addressed by name,
-	// and that name is also the handle a monitor writes (`@webhook-crewlet`),
-	// so renaming `webhook_name` leaves the previous definition delivering to
-	// this same engine with this same token — correctly, for every monitor
-	// still naming it. Deleting it would silence exactly those monitors,
-	// which is why the engine does not, and Datadog serves no listing, so
-	// nothing can ever find it again.
-	//
-	// So it is REPORTED. Somebody has to repoint the monitors and remove the
-	// old definition, and this is the only place they can learn it exists.
+	// ADVISORY, because the orphan still WORKS: a Datadog webhook is addressed
+	// by the name monitors write (`@webhook-crewlet`), so renaming
+	// `webhook_name` leaves the old definition delivering for every monitor
+	// naming it. Deleting it would silence them, and Datadog serves no listing
+	// to find it again. So it is REPORTED: somebody must repoint the monitors
+	// and remove the old definition.
 	FindingRegistrationOrphaned FindingKind = "registration_orphaned"
 
 	// FindingCoveragePartial is an integration working exactly as it was
 	// asked to, over less than the whole of what it could reach.
 	//
-	// THE THIRD ADVISORY, and the mildest of the three: the other two are
-	// loose ends somebody may want to tidy, and this one is a DECISION
-	// already taken, reported so nobody has to infer it from silence.
-	// GitHub is the case it was added for — a company whose agents each
-	// carry their own app hears about the repositories those apps are
-	// installed on and nothing else in the organization, which is the
-	// arrangement the setup form recommends.
-	//
-	// IT EXISTS BECAUSE SILENCE WAS THE ONLY ALTERNATIVE. That coverage
-	// was reported two ways before, and both were wrong: as an
-	// ingress_blocked finding naming the organization token, which reads
-	// as Action required over agents that are receiving events perfectly
-	// well and sent an operator to install apps that can never carry the
-	// scope; or as a note the card does not render at all, which tells a
-	// person nothing about what their integration does and does not see.
-	// A working integration whose reach is narrower than a reader would
-	// assume is worth one sentence, and one sentence is what this is.
+	// THE MILDEST ADVISORY: a DECISION already taken, reported so nobody infers
+	// it from silence. GitHub is the case: agents each carrying their own app
+	// hear only of the repositories those apps are installed on, as the setup
+	// form recommends. The alternatives are wrong: ingress_blocked reads as
+	// Action required over agents receiving events well, and a note the card
+	// does not render tells nobody what the integration sees.
 	FindingCoveragePartial FindingKind = "coverage_partial"
 )
 
 // severity ranks the kinds from "nothing works" to "everything works, with a
 // note". [Classify] reports the lowest-ranked kind present.
 //
-// # The ordering IS the contract, and it is what the hand-written classifiers
-// it replaces disagreed about
-//
-// The control plane this was ported from wrote one classifier per
-// integration, five of them, each a switch over that integration's own
-// result struct. They had already drifted on the question that matters
-// most: WHERE THE EXCESS-ACCESS ADVISORY SITS. Because that advisory
-// reports READY, anything ranked below it disappears when both are present.
-//
-// Only one of the five got it right. Atlassian's ran the advisory in a second
-// pass, after every blocking condition. The other three that have one at all
-// return it early:
-//
-//   - GitLab checks excess inside the per-seat loop, immediately BEFORE the
-//     short-grant check, so a seat holding too much in one dimension and too
-//     little in another reports ready with a note and the block vanishes.
-//   - Datadog checks it before the failed-agent count, so a company with one
-//     over-granted agent and one that could not be provisioned at all reports
-//     ready.
-//   - GitHub checks its installation-level excess before the WEBHOOK check
-//     and before every per-seat check, so an app holding one spare permission
-//     reports ready while its deliveries reach nobody.
-//
-// Two more disagreements sit in the same place. Whether an unknown access
-// tier outranks a broken delivery path: GitLab says yes, Datadog says no.
-// And where a seat that could not be provisioned goes: it is the fallthrough
-// in all five, ranked below everything including the advisory.
-//
-// None of those is a hard bug to write. All of them are invisible from inside
-// one integration's function, which is why the ordering lives here, once, with a
-// test that pins it.
-//
-// The rule the order encodes: rank by HOW MUCH OF THE INTEGRATION IS NOT
-// WORKING, from "the pass could not authenticate" down to "it works, but
-// somebody should look". Within one level, engine-owned work is reported
-// before person-owned work, because telling a person to fix something the
-// engine is still mid-way through sends them to repair what is not broken.
+// The ordering IS the contract. A classifier per integration drifts on WHERE
+// THE EXCESS-ACCESS ADVISORY SITS: it reports READY, so anything ranked below
+// it disappears (a spare permission beside a broken webhook reads ready). So
+// the order lives here, once, with a test that pins it.
+// Rank by HOW MUCH OF THE INTEGRATION IS NOT WORKING, from "the pass could
+// not authenticate" to "it works, but somebody should look". Within a level,
+// engine-owned work comes before person-owned, so nobody is sent to repair
+// what the engine is mid-way through.
 func (f FindingKind) severity() int {
 	switch f {
 	case FindingCredentialMissing:
@@ -507,16 +440,12 @@ type Finding struct {
 	// Remedy is what to do about it — one sentence, imperative, addressed
 	// to the same actor.
 	//
-	// SEPARATE FROM [Detail] SO IT CAN BE LAID OUT. A card renders it as
-	// its own line at a quieter weight, which is what makes the problem
-	// scannable and the instruction findable; concatenated into the
-	// sentence, both are one paragraph and neither is either. It is also
-	// what lets a surface say what is wrong without claiming to know what
-	// to do, which several honestly do not.
+	// SEPARATE FROM [Detail] SO IT CAN BE LAID OUT: a card renders it as its
+	// own quieter line, making problem and instruction each findable. It also
+	// lets a surface say what is wrong without claiming to know the fix.
 	//
-	// It never repeats the screen the reader is on. "Create one per agent
-	// from the Integrations screen" was rendered ON the Integrations
-	// screen, beside that agent's own Create button.
+	// It never repeats the screen the reader is on ("from the Integrations
+	// screen" shown ON that screen, beside the agent's own Create button).
 	Remedy string `json:"remedy,omitempty"`
 	// ActionURL is where the person named by the actor goes to do it. Only
 	// meaningful for a kind whose actor is a person.
@@ -525,28 +454,12 @@ type Finding struct {
 	// Subjects is every thing this finding is about, when there are many
 	// and Subject cannot name them all.
 	//
-	// # Why the list is not just written into Detail
-	//
-	// Detail is the CARD'S STATUS LINE, and it is capped at
-	// [MaxDetailLength] — a cap that exists because an oversized status row
-	// is REFUSED by the store rather than truncated, which would stop the
-	// surface recording anything at all. So a finding that listed its
-	// subjects inline became a 500-character wall cut off mid-item.
-	// Measured: 36 Datadog service accounts, the card's one-line status
-	// ending `…@agents.cr…`.
-	//
-	// With this, Detail says the COUNT and the whole list travels here, for
-	// a reader that has room to lay it out. [Listed] is how a finding
-	// builds the pair, so the sentence and the list cannot disagree.
-	//
-	// The sentence used to name three of them inline as well, which put
-	// every short list on screen twice — once as prose inside the sentence
-	// and once as the list itself, a metre apart. One home for the list,
-	// and a reader that only has a string still learns how many.
-	//
-	// EMPTY IS THE ORDINARY CASE. A finding about one thing names it in
-	// Subject and leaves this nil; a reader with nothing to render finds
-	// nothing to render.
+	// Not written into Detail, the CARD'S STATUS LINE: [MaxDetailLength] caps
+	// it because the store REFUSES an oversized status row rather than
+	// truncating, which would stop the surface recording anything. So Detail
+	// says the COUNT (see [Count]) and the whole list travels here; naming a
+	// few inline too would show short lists twice.
+	// EMPTY IS THE ORDINARY CASE: one thing is named in Subject.
 	Subjects []string `json:"subjects,omitempty"`
 
 	// ExpiresAt is when the credential a [FindingCredentialExpiring] is
@@ -640,16 +553,13 @@ func worstOf(findings []Finding) (Finding, int) {
 
 // Promote returns findings with the one [Classify] reports FIRST.
 //
-// The order is the contract, and it exists because every reader wants the
-// same thing: the findings the report did NOT summarise. Without an order
-// they had to re-derive the winner, and the dashboard instead assumed it —
-// dropping element zero and rendering the tail — so whenever the worst
-// finding was not already first, a real finding was hidden and the headline
-// was re-printed as "1 more finding".
+// The order is the contract: every reader wants the findings the report did
+// NOT summarise, and one that assumes element zero is the headline hides a
+// real finding whenever the worst is not first, re-printing the headline as
+// "1 more finding".
 //
 // A STABLE ROTATION rather than a sort: the vendor's own order is meaningful
-// below the headline (a pass walks its seats in a stable order, so an
-// operator reading the list twice sees the same seats in the same places),
+// below the headline (seats walked in a stable order stay in the same places),
 // and sorting by severity would shuffle equals on every pass.
 func Promote(findings []Finding) []Finding {
 	if len(findings) < 2 {
@@ -668,16 +578,14 @@ func Promote(findings []Finding) []Finding {
 // Classify folds a pass's findings into the one report an operator reads.
 //
 // The worst finding wins, by [FindingKind.severity]. Ties keep the order the
-// third-party app emitted them in, so one that walks its seats in a stable
-// order reports a stable seat.
+// third-party app emitted them in, so a stable walk reports a stable seat.
 //
-// When several findings share the winning kind, the count is named. "an agent
-// needs maintainer on api-gateway" and "an agent needs maintainer on
-// api-gateway (and 4 more)" send an operator to two very different jobs, and
-// the difference is invisible from a single seat's sentence.
+// When several findings share the winning kind, the count is named: "(and 4
+// more)" sends an operator to a very different job than a single seat's
+// sentence does.
 //
-// No findings is [Ready]. That is the whole of the success path: a third-party app
-// that converged reports nothing, rather than having to remember to say so.
+// No findings is [Ready]: a converged third-party app reports nothing, rather
+// than having to remember to say so.
 func Classify(findings []Finding) Report {
 	if len(findings) == 0 {
 		return Ready()

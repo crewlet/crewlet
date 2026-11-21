@@ -44,42 +44,28 @@ const (
 
 // MaxChanges bounds the diff ONE ANSWER carries — never the comparison.
 //
-// The budget being spent is the transport's rather than the differ's, so the
-// cut belongs to whoever is rendering: [Service.Diff] answers over an HTTP
-// body and a socket frame, so it cuts to this and reports `changes_total`
-// beside the listing; `crewlet config diff` writes to a terminal, which has
-// no such budget and a pager, so it prints every change [Changes] found.
+// The budget is the transport's, so the cut belongs to whoever renders:
+// [Service.Diff] answers over an HTTP body and a socket frame, so it cuts to
+// this and reports `changes_total`; `crewlet config diff` writes to a
+// terminal and prints every change [Changes] found.
 //
-// 500 sits above a whole-document rewrite of a real company. The example
-// company in examples/ has 401 leaves and serializes to 40 KB of JSON, so a
-// diff that changed every one of them is ~110 KB and still arrives complete.
-// What the cap is for is the document several times that size, where one
-// change per leaf makes an answer a download — and it is REPORTED rather
-// than silent, because a diff that quietly stopped would be read as "that is
-// all that changed".
+// 500 sits above a whole-document rewrite of a real company: examples/ has 401
+// leaves, and a diff changing every one is ~110 KB. The cap is for documents
+// several times that, and it is REPORTED, because a diff that quietly stopped
+// would be read as "that is all that changed".
 const MaxChanges = 500
 
 // Changes compares two documents as they are STORED, oldest first, and reports
 // every value REDACTED.
 //
-// COMPLETE: every difference it found, however many that is. What to do about
-// a diff longer than anybody reads is a property of where the answer is going
-// rather than of the comparison — see [MaxChanges] — and the walk builds the
-// whole list before it can sort it anyway, so cutting in here bought no work
-// and cost the one caller with no size limit its answer.
+// COMPLETE: every difference found; cutting is the renderer's ([MaxChanges]).
 //
-// # Compared unredacted, reported redacted
-//
-// Reporting raw values would put the old and the new value of a rotated
-// credential in one response, which is strictly worse than the read this
-// surface already refuses to serve. Comparing redacted documents instead, as
-// this once did, is blind: every literal credential masks to the same marker
-// on both sides, so rotating one, or replacing one with a `${VAR}` that embeds
-// a literal, diffed to nothing, and a diff is exactly where an operator looks
-// to confirm a rotation landed. So each side is held in both forms, the
-// comparison reads the stored values, and every value a change carries comes
-// from the redacted copy at the same place. A rotated credential reads as a
-// change from the marker to the marker: that it changed, and never what to.
+// COMPARED UNREDACTED, REPORTED REDACTED: raw values would put a rotated
+// credential's old and new value in one response, and comparing redacted
+// documents is blind (every literal masks to one marker, so a rotation diffed
+// to nothing, where an operator looks to confirm one landed). Each side is held
+// in both forms, the comparison reads the stored values, and every value a
+// change carries comes from the redacted copy: marker to marker.
 func Changes(from, to *config.Company) ([]Change, error) {
 	before, err := sideOf(from)
 	if err != nil {

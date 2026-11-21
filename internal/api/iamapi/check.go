@@ -19,18 +19,16 @@ type FindingKind string
 
 const (
 	// KindNoAdminHolder is the one that locks a company out: no ACTIVE
-	// PERSON holding an ENROLLED credential — a password, a second factor,
-	// a token: a way in they have USED, so a link nobody has spent yet does
-	// not count — holds admin, so nobody can invite, grant or revoke ever
-	// again except through a Tier A token.
+	// PERSON holding an ENROLLED credential (a password, a second factor, a
+	// token: a way in they have USED, so an unspent link does not count)
+	// holds admin, so nobody can invite, grant or revoke again except
+	// through a Tier A token.
 	//
-	// PERSONS ONLY. A service account may hold admin, and its live token is
-	// an enrolled credential — but no administrative identity record is
-	// ever written through a machine token (internal/iamdomain refuses it,
-	// and internal/authz's presence rows refuse the routes in front of it),
-	// so a company whose only admin is a service account is one nobody can
-	// invite into, grant in or revoke in. Counted, it would read as
-	// administrable while it is locked.
+	// PERSONS ONLY. A service account's live token is an enrolled credential,
+	// but no administrative identity record is written through a machine
+	// token (internal/iamdomain refuses it, internal/authz's presence rows
+	// refuse the routes), so counting it would read as administrable a
+	// company that is locked.
 	KindNoAdminHolder FindingKind = "no_admin_holder"
 
 	// KindNoCredential is somebody active who holds no live way in at all:
@@ -93,21 +91,15 @@ type Finding struct {
 // Bindings is what the report asks about one person's seat binding: whether it
 // dangles, and if so the sentence that says which seat, why and what to do.
 //
-// ASKED, NEVER RESTATED. The rule is the request path's own seat table — a
+// ASKED, NEVER RESTATED. The rule is the request path's own seat table: a
 // binding dangles exactly when that table would refuse the person or hold them
-// off for want of the seat — and the engine applies it: internal/engine's
-// Engine.DanglingBinding has this type's shape and is what a node wires. The
-// predicate it replaced asked only whether the chart held a row by that handle,
-// so a person bound to an AGENT seat, refused on every request they made, was
-// one this report said nothing about.
+// off for want of the seat. internal/engine's Engine.DanglingBinding has this
+// type's shape and is what a node wires; a bare chart-row check would miss a
+// person bound to an AGENT seat.
 //
-// THREE-VALUED: an error is a node that cannot tell — one running no company
-// yet — and the report counts it as unchecked rather than reporting a dangling
-// binding it could not establish, which would send an administrator to move
-// somebody whose seat is there.
-//
-// NIL-ABLE, AND THE ABSENCE IS THE THIRD VALUE too: a node that cannot ask
-// skips the arm rather than guessing.
+// THREE-VALUED: an error (or NIL) is a node that cannot tell, counted as
+// unchecked rather than reported as dangling, which would send an administrator
+// to move somebody whose seat is there.
 type Bindings func(ctx context.Context, row iamdomain.PersonRow) (
 	dangling bool, detail string, err error)
 

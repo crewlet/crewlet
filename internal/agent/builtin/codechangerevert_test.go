@@ -77,3 +77,24 @@ func TestARevertsMergeIsStepTwo(t *testing.T) {
 		})
 	}
 }
+
+// A SECOND REVERT NAMES THE ONE UNDER WAY: its branch exists, so the write is refused stale,
+// naming the change the reverted one's read says reverts it.
+// Mutation: drop the read of what reverts it → the refusal names no change, red.
+func TestASecondRevertNamesTheOneUnderWay(t *testing.T) {
+	t.Parallel()
+	writer := &codeWrites{}
+	writer.write = func(w gitlet.EngineWrite) (gitlet.EngineWriteResult, error) {
+		return gitlet.EngineWriteResult{Command: gitlet.Command{Ref: w.Ref, Old: writtenOID, New: mainOID,
+			Result: gitlet.ResultNG, Reason: gitlet.RefusalStale, Detail: "the branch exists"}}, nil
+	}
+	f := siteChange()
+	f.detail.State = gitlet.ChangeStateMerged
+	f.detail.RevertedBy = &gitlet.ChangeName{Repo: "site", Ref: "site!9", Title: "Revert site!7",
+		State: gitlet.ChangeStateOpen}
+	got := callWrite(everyGrant(), t, codeRegistry(t, writeDeps(newChangeHost(f), writer)), writerTurn(t),
+		builtin.CodeRevertChangeTool, map[string]any{"change": "site!7"})
+	if !got.Failed || !strings.Contains(got.Output, "a revert of site!7 is under way: site!9, open") {
+		t.Fatalf("a second revert answered %q, want it refused naming site!9", got.Output)
+	}
+}

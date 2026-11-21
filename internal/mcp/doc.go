@@ -42,7 +42,8 @@
 //     package registry that logs its
 //     environment on a crash, forwards it to its own children and reports
 //     it in telemetry. A server that needs anything else says so in `env:`,
-//     where a `${VAR}` passes the host's value on by name. IT IS NOT
+//     where a `${VAR}` passes the host's value on by name, and a key a host may
+//     leave unset is listed in the server's `optional_keys`. IT IS NOT
 //     ISOLATION, and nothing here claims it is: the child runs as the
 //     engine's user and can read what that user can, the Tier A file and the
 //     engine's own /proc/<pid>/environ among it. What the allowlist removes
@@ -85,11 +86,33 @@
 // one made meanwhile waits and is made on the replacement if it lists the tool
 // unchanged, else refused unsent (replace.go). [Tool.CallBound] counts the wait.
 //
+// # Levels, digests and tests
+//
+// A tool's level is decided where it is filed ([Spec.Levels], by the server's
+// own name): a blocked tool is never built as a [Tool], only kept as a
+// definition ([Bridge.BlockedTools]), so every reader of a seat's surface
+// agrees it is absent; an approve tool is filed and never called through a
+// catalogue until a person answers (ADR-0077). [RiskOf] is the one reading of
+// hints as a risk, and an undeclared tool is destructive. Each running session
+// is listed again on the server's `ttlMs`, held between [RelistFloor] and
+// [RelistCeiling], and a tool whose definition moved is held for a person
+// ([Tool.Unreviewed], ADR-0078). The digest hashes only the server's own
+// definition, so a company's edit never reads as the server changing a tool.
+//
+// A failure's class ([FailureClass]) is decided where the facts are, never
+// parsed back from a sentence. A restart follows one schedule ([RestartWait])
+// whoever retries, and a per-role child starts only where its owner says so
+// ([Supervision.MayStart]), since the child is a seat's identity. [Test] and
+// [CheckAddress] never call a tool, and a remote connection follows a redirect
+// within its configured origin alone, sending its headers there alone.
+//
 // The wire vocabulary (content blocks, hints, tool defs) is this package's
 // own, not the SDK's. Nothing outside here should have to know which SDK the
 // engine speaks MCP with, and the SDK's typed surface is lossy in one place
 // that matters (again: annotations.go).
 //
 // A first-party tool may answer with images ([Result.Images], [CheckImages]);
-// an image cannot be fenced (ADR-0040), so its text says whose it is.
+// an image cannot be fenced (ADR-0040), so its text says whose it is. A record
+// keeps [ImageRecords] (type and size), never the bytes; a third-party server's
+// image stays a one-line descriptor.
 package mcp

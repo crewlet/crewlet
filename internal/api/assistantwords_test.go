@@ -26,7 +26,7 @@ var apiWords = regexp.MustCompile(`\b(GET|PUT|POST|PATCH|DELETE)\b|/|\{|_summary
 // title, its approve label, what it says above and under the rows, and every
 // row's label.
 func cardWords(p proposal.Preview) []string {
-	out := []string{p.Title, p.ApproveLabel, p.Summary, p.Note}
+	out := []string{p.Title, p.ApproveLabel, p.Summary.Text(), p.Note.Text()}
 	for _, c := range p.Changes {
 		out = append(out, c.Label)
 	}
@@ -44,18 +44,14 @@ var computedRows = []string{"object", "removes"}
 // EVERY GENERIC CARD SPEAKS THE PERSON'S WORDS.
 //
 // For every write route the App mounts for the assistant, a change previewed
-// against a resource is titled, labelled and noted in words: no method, no
-// path, no wildcard, no `_summary`, no "API", and no opaque id. The request
-// itself is the administrator's technical details, never a row. This is the
-// class "Change through the API" over `PUT /config/units/core` and a raw JSON
-// body belonged to. Every route is previewed twice: against a record with a
-// name, and against one known only by its id while every id its path takes is
-// a UUID, which the card names by what the record is called or in neutral
-// words, never by that id. A verb nothing undoes (authz.IrreversibleOf) is
-// destructive on every route it decides, and a route of one is never skipped.
-// Mutation: title a change by its method, put the request back among the
-// rows, name a record by the id its path carries, or rate a purge or an erase
-// by its method, and this fails.
+// against a resource is titled, labelled and noted in words: no method, path,
+// wildcard, `_summary`, "API" or opaque id. The request is the administrator's
+// technical details, never a row. Every route is previewed twice: against a
+// named record, and against one known only by its id (every path id is a UUID),
+// which the card names neutrally. A verb nothing undoes (authz.IrreversibleOf)
+// is destructive on every route it decides, never skipped.
+// Mutation: title a change by its method, restore the request among the rows,
+// name a record by its path id, or rate a purge or erase by its method.
 func TestEveryGenericCardSpeaksThePersonsWords(t *testing.T) {
 	t.Parallel()
 	routes := everySurfaceApp(t).AssistantRoutes()
@@ -134,7 +130,7 @@ func TestEveryGenericCardSpeaksThePersonsWords(t *testing.T) {
 			words := cardWords(p)
 			for _, c := range p.Changes {
 				if slices.Contains(computedRows, c.Field) {
-					words = append(words, c.To)
+					words = append(words, c.To.Text())
 				}
 			}
 			for _, w := range words {
@@ -202,9 +198,9 @@ func TestASeatIsAddedAndRemovedInThePersonsWords(t *testing.T) {
 		"body": map[string]any{"id": "engineering", "name": "Engineering",
 			"roles": []any{cto}}})
 	if p.Title != "Remove seat Senior Software Engineer" || p.Risk != wire.RiskDestructive ||
-		p.Summary != "This removes seat Senior Software Engineer from unit Engineering." ||
-		!strings.Contains(p.Note, "configuration history") {
-		t.Errorf("the seat's removal reads %q: %q, %q at risk %q", p.Title, p.Summary, p.Note,
-			p.Risk)
+		p.Summary.Text() != "This removes seat Senior Software Engineer from unit Engineering." ||
+		!strings.Contains(p.Note.Text(), "configuration history") {
+		t.Errorf("the seat's removal reads %q: %q, %q at risk %q", p.Title, p.Summary.Text(),
+			p.Note.Text(), p.Risk)
 	}
 }

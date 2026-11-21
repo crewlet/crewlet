@@ -9,42 +9,15 @@ import (
 
 // Webhook administration, on both deployments, at /rest/webhooks/1.0.
 //
-// # What was established against a live Cloud site, and what it means
-//
-// Confluence Cloud has no webhook page in its administration UI and no
-// documented REST surface for registering one: CONFCLOUD-36613 has asked for
-// exactly that since 2015. The endpoint below nonetheless answers on Cloud
-// (200 to a listing, 201 to a registration, 204 to a delete, with an ordinary
-// API token over Basic auth) and DELIVERS. Every fact in this file was
-// measured rather than read, because nothing to read exists:
-//
-//   - A delivery carries NO signature. The registration accepts a "secret"
-//     field and silently ignores it; the request that arrives has
-//     Content-Type, X-B3 tracing headers and the proxy's X-Forwarded ones,
-//     and nothing else. Jira's twin endpoint signs and says so (isSigned in
-//     its response); Confluence's response has no such field, and now we
-//     know why.
-//   - Userinfo in the registered URL (https://user:pass@host/) is stored
-//     verbatim and NOT turned into an Authorization header on delivery.
-//   - A query string in the registered URL IS delivered verbatim. It is the
-//     one channel through which anything secret reaches the receiver, which
-//     is why the Cloud target below carries its token that way.
-//   - "excludeBody" is ignored: the body arrives regardless.
-//   - The endpoint validates no event names. A registration for an event
-//     Confluence will never emit answers 201 and never fires, so "accepted"
-//     is not evidence of anything.
-//   - The payload carries no event name at all. Which event fired is known
-//     only from which hook was registered for it, so the engine registers
-//     ONE HOOK PER EVENT with the event in the path and lets the route stamp
-//     it back onto the body.
-//
-// # Undocumented means undocumented
-//
-// Atlassian has never stated this endpoint's support status, and can change
-// or remove it without notice. The failure mode for a self-hosted engine is
-// every deployment breaking at once with nobody to ask. That is stated in
-// the docs beside the feature rather than hidden here, and the Forge relay
-// remains the supported route for anyone who would rather not carry the risk.
+// Cloud documents no REST surface for registering a webhook (CONFCLOUD-36613),
+// yet this endpoint answers and DELIVERS with an API token over Basic auth.
+// Measured on a live site: a delivery carries NO signature (a registered
+// "secret" is ignored); userinfo in the URL is never sent as Authorization,
+// but a query string IS delivered verbatim; "excludeBody" is ignored; no event
+// names are validated, so a 201 is no evidence the hook fires; the payload
+// names no event ([WebhookEvents]). Atlassian can remove the endpoint without
+// notice; the docs state that risk and name the Forge relay as the supported
+// route.
 
 // hooksPath is the webhook administration prefix, relative to the client's
 // base (which already carries /wiki on a Cloud site).
@@ -56,7 +29,8 @@ const hooksPath = "/rest/webhooks/1.0/webhook"
 // keeping: a hook subscribed to more delivers payloads the parser drops,
 // which is bandwidth and an audit row per irrelevant workspace change; a
 // hook subscribed to less is an event class that silently never arrives. On
-// Cloud there is one hook per entry here, because the payload names no event.
+// Cloud there is ONE HOOK PER EVENT with the event in the path, because the
+// payload names none; the route stamps it back onto the body.
 var WebhookEvents = []string{
 	"page_created",
 	"page_updated",
@@ -165,20 +139,12 @@ func (c *Client) DeleteWebhook(ctx context.Context, id string) error {
 // with: the engine's Cloud route for that event, carrying the shared token in
 // the query.
 //
-// # Why the token rides in the URL
-//
-// Because it is the only place Confluence Cloud will carry one. It attaches
-// no signature, drops userinfo, and honours no header field on registration;
-// the query string is delivered verbatim and nothing else is. The engine
-// compares it constant-time, exactly as it does the fixed header Datadog
-// sends, and for the same reason: a provider that cannot sign a body leaves
-// a shared token as the strongest check available.
-//
-// The consequences are the same as Datadog's and are stated in the docs: a
-// replayed delivery is indistinguishable from a fresh one, and anyone holding
-// the token can forge an event. It is treated as a signing key, rotated like
-// one, and never logged. The route reads it from the query and NEVER echoes
-// the query string into a log line or an event row.
+// The token rides in the URL because the query string is the only channel
+// Cloud delivers verbatim. It is compared constant-time, as Datadog's fixed
+// header is: the strongest check a provider that cannot sign leaves. A replay
+// is indistinguishable from a fresh delivery and the holder can forge events,
+// so it is a signing key, rotated like one; the route NEVER echoes the query
+// string into a log line or an event row.
 func CloudWebhookTarget(base, token, event string) string {
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
 	if base == "" {

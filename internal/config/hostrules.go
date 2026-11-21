@@ -6,19 +6,14 @@ import "fmt"
 // document rather than on the document alone: today, that Claude Code cannot
 // run an executor as root.
 //
-// SEPARATE FROM [Company.Validate] ON PURPOSE. Everything there is a pure
-// function of the document, so the same file is valid or not on every machine
-// that reads it, in CI and on a laptop alike. Whether a launch can work also
-// depends on who the engine runs as, which a document does not say, so the
-// callers that judge a launch (`crewlet validate`, a node's boot and apply, a
-// write the API takes) hand over the user they run as and the document stays
-// portable everywhere else.
+// SEPARATE FROM [Company.Validate] ON PURPOSE: that is a pure function of the
+// document, valid or not on every machine. A launch also depends on who the
+// engine runs as, so callers that judge one (`crewlet validate`, boot, apply, an
+// API write) pass euid, the engine's effective user id.
 //
-// euid is the engine's effective user id.
-//
-// RUNNABLE, NOT ADMISSION: a revision that cannot launch on this node is not
-// one this node can run, however it was written, so a node refuses it at apply
-// instead of placing every seat on a box that fails its first launch.
+// RUNNABLE, NOT ADMISSION: a revision that cannot launch on this node is not one
+// it can run, so it is refused at apply instead of placing every seat on a box
+// that fails its first launch.
 func (c *Company) ValidateHost(euid int) error {
 	if euid != 0 {
 		return nil

@@ -10,7 +10,8 @@ import "~/styles/gitlet.css";
 /** The page's width from which the tree sits beside the stack (the sheet's 720 px fold). */
 export const TREE_BESIDE_FROM = 720;
 
-/** The files' tree in its own scroller beside the stack, its current row kept in the list's view. */
+/** The files' tree in its own scroller beside the stack, its current row kept in the list's view.
+ *  A nav, the diff's own navigation: an aside is a complementary landmark, nested in the page's region. */
 export function FilesPane({
   files,
   current,
@@ -43,14 +44,14 @@ export function FilesPane({
     }
   }, [current]);
   return (
-    <aside className="code-tree code-files__pane" aria-label={label}>
+    <nav className="code-tree code-files__pane" aria-label={label}>
       {head && <div className="code-tree__head">{head}</div>}
       <div ref={scroller} className="code-tree__scroll">
         <FileTree files={files} current={current} onOpen={onOpen} badges={badges} />
         {children}
       </div>
       <div className="code-tree__foot">{foot}</div>
-    </aside>
+    </nav>
   );
 }
 

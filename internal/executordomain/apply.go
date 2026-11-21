@@ -12,31 +12,24 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The applier, and the rules that make it a PURE FUNCTION of the log.
+// The applier is a PURE FUNCTION of the log, so every node's tables stay
+// byte-identical, as long as:
 //
-// N nodes derive one SQL state from one ordered stream, and the identity claim
-// says their tables are byte-identical. That holds exactly as long as these do:
-//
-//  1. IT READS NO CONFIG, NO CLOCK, NO KEYRING AND NO OTHER DOMAIN. Every
-//     value it writes is the record's or the broker's: the seat's byte budget
-//     rides the capture, and every instant a row records of its own is
-//     [statelog.ApplyOptions.StoredAt].
-//  2. A RECORD THE ROWS NO LONGER ADMIT WRITES NOTHING, NEVER AN ERROR. A
-//     capture of an ended turn, a stale capture, a capture the seat's budget
-//     cannot hold, a second end, a delete of a turn captured since its
-//     cutoff: each applies as no rows on every node alike, and its writer,
-//     which decided it from a snapshot of these rows, reads the rows back.
-//     An error would stall every node's log on a record that is merely late.
-//  3. EVERY WRITE IS GUARDED by the record's ordinals, the turn's tombstone
-//     or the record's position, so a redelivery writes nothing it has not
-//     written.
+//  1. IT READS NO CONFIG, NO CLOCK, NO KEYRING AND NO OTHER DOMAIN: every value
+//     is the record's or the broker's (the seat's byte budget rides the
+//     capture; a row's own instant is [statelog.ApplyOptions.StoredAt]).
+//  2. A RECORD THE ROWS NO LONGER ADMIT WRITES NOTHING, NEVER AN ERROR (a
+//     capture of an ended turn, a stale or over-budget one, a second end, a
+//     delete of a turn captured since its cutoff): its writer reads the rows
+//     back, and an error would stall every node's log on a merely late record.
+//  3. EVERY WRITE IS GUARDED by the record's ordinals, the turn's tombstone or
+//     the record's position, so a redelivery writes nothing new.
 
 // Applier writes this node's copy of the executor estate.
 //
-// IT HOLDS NOTHING: no keyring, no clock and no listener, which is the first
-// rule above made structural. A batch moves nothing another subsystem on this
-// node acts on: a turn's dispatch reads its conversation's head when it
-// starts.
+// IT HOLDS NOTHING (no keyring, clock or listener): rule 1 above made
+// structural. Nothing on this node waits on a batch: a turn's dispatch reads
+// its conversation's head when it starts.
 type Applier struct{}
 
 // NewApplier builds the executor applier.
@@ -125,9 +118,9 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		// THE READ INDEX'S OWN APPEND writes no row on any node.
 		return 0, nil
 	case KindTrimmed:
-		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
+		// THE TRIM'S OWN RECORD: the framework removes this log's anchors
 		// below the floor its subject names, in this same transaction
-		// (ADR-0080); this domain writes nothing for it.
+		// (ADR-0080).
 		return 0, nil
 	case KindEviction:
 		return applyEviction(ctx, tx, c, payload)

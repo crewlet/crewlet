@@ -18,57 +18,48 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// wiredLogBytes is the probe log's ceiling on a wired node: room for every
-// record a benchmark run publishes — some tens of thousands of records of a
-// few hundred bytes each, and the barriers between them — which the domain's
-// own sixteen mebibytes is not, and far under any machine's broker storage.
+// wiredLogBytes is the probe log's ceiling on a wired node: room for a
+// benchmark run's tens of thousands of few-hundred-byte records and their
+// barriers, which the domain's own 16 MiB is not.
 const wiredLogBytes = 1 << 30
 
-// wiredOpBudget bounds one write or one read on a wired node, so an applier
-// that STOPPED fails the case rather than holding it until the binary's
-// timeout — a write waits for this node's apply, and a stopped runner never
-// gets there. Thirty seconds: six of [statelog.DefaultBarrierBudget], and half
-// the [statelog.StallGrace] at which a node that has stopped applying is named
-// as stalled, where a healthy write here takes milliseconds.
+// wiredOpBudget bounds one write or read on a wired node, so a STOPPED applier
+// fails the case rather than holding it to the binary's timeout. Thirty
+// seconds: six [statelog.DefaultBarrierBudget]s and half [statelog.StallGrace];
+// a healthy write takes milliseconds.
 const wiredOpBudget = 30 * time.Second
 
-// wiredNode is one data node's write path with every seam of it real: the
-// publisher, the rows it snapshots ([statelog.NewRows] over a migrated
-// estate), the write fence ([wiredFence], the read every append makes of this
-// node's own eviction row, as a real domain's fence makes it), the read index,
-// and the runner applying the log from the broker's own consumer into that
-// estate.
-//
-// ONE FAKE IS LEFT, on a path a healthy write never takes: [fakeGates] is
-// asked only when the publisher resolves an ambiguous append.
+// wiredNode is one data node's write path with every seam real: the
+// publisher, its rows ([statelog.NewRows] over a migrated estate), the write
+// fence ([wiredFence]), the read index, and the runner applying from the
+// broker's own consumer. ONE FAKE IS LEFT: [fakeGates], asked only when the
+// publisher resolves an ambiguous append.
 type wiredNode struct {
 	pub    *statelog.Publisher
 	runner *statelog.Runner
 	index  *statelog.ReadIndex
 
-	// log is the node's handle on the probe log, which a benchmark reads the
-	// end of to count the barriers its reads appended.
+	// log is the node's probe log; a benchmark reads its end to count the
+	// barriers its reads appended.
 	log *js.DomainLog
 
-	// estate is the node's replicated estate, which a case writes an
-	// eviction row into to see the fence read it.
+	// estate is the node's replicated estate, where a case writes an
+	// eviction row for the fence to read.
 	estate store.ReplicatedHandle
 
 	// spec is the probe log as this node runs it.
 	spec statelog.StreamSpec
 
-	// start runs the applier until the case ends. Apart from building the
-	// node, because the drain benchmark builds the node — its estate, its
-	// migrations — outside its timer and starts the applier inside it.
+	// start runs the applier until the case ends. It is apart from building
+	// because the drain benchmark builds the node outside its timer and
+	// starts the applier inside it.
 	start func()
 
-	// stop ends the applier started, and then closes its consumer — before
-	// whoever stops the broker does, since a pull given up on a closed
-	// connection is logged as one that could not be — answering how the
-	// applier stopped if that was not by being asked to. Once, however
-	// often it is called: the case's own cleanup calls it, and so does a
-	// caller done with the node before the case is — the drain benchmark,
-	// between its bursts.
+	// stop ends the applier, then closes its consumer before the broker
+	// stops (a pull given up on a closed connection is logged as a failure),
+	// and answers how the applier stopped if not by being asked. It runs
+	// once however often called: by the case's cleanup, and by the drain
+	// benchmark between its bursts.
 	stop func() error
 }
 
@@ -143,8 +134,8 @@ func newWiredNodeWith(tb testing.TB, q *js.Queue, nodeID string, opts store.Opti
 	}); err != nil {
 		tb.Fatalf("create the probe domain's tables: %v", err)
 	}
-	// SIGNED AND VERIFIED under the keyring every case in this package
-	// shares, as every data node's records are.
+	// SIGNED AND VERIFIED under the package's shared keyring, as every data
+	// node's records are.
 	signer, err := recordseal.NewSigner(probeDomain{}.Name(), testRing())
 	if err != nil {
 		tb.Fatalf("NewSigner: %v", err)
@@ -195,10 +186,9 @@ func newWiredNodeWith(tb testing.TB, q *js.Queue, nodeID string, opts store.Opti
 	}
 	n := &wiredNode{pub: pub, runner: runner, index: index, log: log, estate: estate, spec: spec}
 	n.start = func() {
-		// THE CASE'S CONTEXT'S VALUES, NOT ITS END: the loop is stopped by
-		// [wiredNode.stop], which then says how it stopped — under the
-		// case's own context it would be cancelled before any cleanup ran,
-		// and a stop for any other reason would go unseen.
+		// THE CASE'S CONTEXT'S VALUES, NOT ITS END: [wiredNode.stop] stops
+		// the loop and says how it stopped; the case's context would cancel
+		// it before any cleanup ran and hide a stop for any other reason.
 		ctx, cancel := context.WithCancel(context.WithoutCancel(tb.Context()))
 		stopped := make(chan error, 1)
 		go func() { stopped <- runner.Run(ctx) }()
@@ -226,16 +216,14 @@ func running(n *wiredNode) *wiredNode {
 	return n
 }
 
-// wiredFence is the probe domain's write fence on a wired node, built as a
-// real domain's is (internal/worklet's Fence): its eviction half is ONE
-// INDEXED SINGLE-ROW READ of this node's own applied rows, made on every
-// append, and its zero half is the real [statelog.ZeroFence] over that read,
-// the log's live ends and the applier's checkpoint.
+// wiredFence is the probe domain's write fence, built as a real domain's is
+// (internal/worklet's Fence): ONE INDEXED SINGLE-ROW READ of this node's own
+// eviction row on every append, and the real [statelog.ZeroFence] over that
+// read, the log's live ends and the applier's checkpoint.
 //
-// Its trim floor is the one input left fake — production reads it from
-// coordination — and only a subject's FIRST write, published at an
-// expectation of zero, asks for it: every later write on the subject is
-// arbitrated against the anchor the one before it left.
+// Only its trim floor is fake (production reads coordination), and only a
+// subject's FIRST write, at an expectation of zero, asks for it; later writes
+// arbitrate against the anchor the previous one left.
 type wiredFence struct {
 	db     store.ReplicatedReader
 	nodeID string
@@ -243,10 +231,10 @@ type wiredFence struct {
 	zero   statelog.ZeroFence
 }
 
-// Evicted reads this node's own eviction row, as a real domain's fence does:
-// no row is not evicted, and a read that fails is unknown rather than "not
-// evicted", because publishing on a guess is how an evicted node collects
-// acknowledgements for records every peer drops.
+// Evicted reads this node's own eviction row: no row is not evicted, and a
+// failed read is an error rather than "not evicted", because publishing on a
+// guess lets an evicted node collect acknowledgements for records every peer
+// drops.
 func (f *wiredFence) Evicted(ctx context.Context) (bool, error) {
 	var from, readmitted sql.NullInt64
 	err := f.db.Read(ctx, func(tx *sql.Tx) error {
@@ -268,11 +256,10 @@ func (f *wiredFence) ClearForZero(ctx context.Context, cursor statelog.Position)
 	return f.zero.ClearForZero(ctx, cursor)
 }
 
-// write is one arbitrated write of a probe record onto subject, end to end:
-// the fence, the wait for this node to reach session — the caller's own last
-// write, as a seat's turn carries it, or the zero position for none — the
-// publisher's snapshot and decision, the append the broker arbitrates, and
-// this node's applier reaching it. Anything but applied is an error.
+// write is one arbitrated probe write onto subject, end to end: the fence, the
+// wait for this node to reach session (the caller's last write, as a seat's
+// turn carries it, or zero), the publisher's snapshot and decision, the
+// arbitrated append, and this node's apply. Anything but applied is an error.
 func (n *wiredNode) write(ctx context.Context, subject statelog.Subject, session statelog.Position) (statelog.Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, wiredOpBudget)
 	defer cancel()
@@ -299,11 +286,10 @@ func (n *wiredNode) barrier(ctx context.Context) (statelog.Position, error) {
 	return n.index.Read(ctx)
 }
 
-// read is what a linearizable read waits through before it reads its rows:
-// the barrier, and this node's applier reaching the record before it —
-// derived as [statelog.Reader] derives it ([statelog.WaitsThrough]) and waited
-// for as it waits ([statelog.Runner.WaitReached]), so a case and a benchmark
-// reading through this measure what a read waits for.
+// read is what a linearizable read waits through before reading its rows:
+// the barrier, then this node's applier reaching the record before it, as
+// [statelog.Reader] derives ([statelog.WaitsThrough]) and waits for it
+// ([statelog.Runner.WaitReached]), so what is measured here is a read's wait.
 func (n *wiredNode) read(ctx context.Context) (statelog.Position, error) {
 	ctx, cancel := context.WithTimeout(ctx, wiredOpBudget)
 	defer cancel()
@@ -314,10 +300,9 @@ func (n *wiredNode) read(ctx context.Context) (statelog.Position, error) {
 	return at, n.runner.WaitReached(ctx, statelog.WaitsThrough(at))
 }
 
-// reader is a read authority over n's log that waits through waiter — n's own
-// runner, or a wrapper a case watches it through — on a node that reports
-// itself level and sound, as one serving reads does, at its reached position
-// as the engine's read health does.
+// reader is a read authority over n's log that waits through waiter (n's
+// runner, or a wrapper a case watches it through), on a node reporting itself
+// level and sound at its reached position, as the engine's read health does.
 func (n *wiredNode) reader(tb testing.TB, waiter statelog.Waiter) *statelog.Reader {
 	tb.Helper()
 	r, err := statelog.NewReader(statelog.ReaderDeps{
@@ -360,11 +345,10 @@ func (w *enteringWaiter) WaitReached(ctx context.Context, p statelog.Position) e
 	return w.Waiter.WaitReached(ctx, p)
 }
 
-// A LINEARIZABLE READ STILL WAITS FOR THE RECORD BEFORE ITS BARRIER — here a
-// write, whose rows the read must see. Held at its commit, it leaves the read
-// appended after it waiting; released, the read is served WITH the write's
-// row. A read that waited for nothing, or for any record before the write,
-// would be served from the rows without it.
+// A LINEARIZABLE READ STILL WAITS FOR THE RECORD BEFORE ITS BARRIER, here a
+// write whose rows the read must see. Held at its commit, it leaves the read
+// waiting; released, the read is served WITH its row. A read that waited for
+// nothing, or for an earlier record, would be served without it.
 func TestALinearizableReadStillWaitsForTheRecordBeforeItsBarrier(t *testing.T) {
 	t.Parallel()
 	hold := storetest.HoldCommits(t)
@@ -427,20 +411,16 @@ func TestALinearizableReadStillWaitsForTheRecordBeforeItsBarrier(t *testing.T) {
 	}
 }
 
-// A WRITE RUNS THE WHOLE WRITE PATH ON A REAL APPLIER — the one case in this
-// package whose every seam is real, and the wiring every benchmark here
-// measures through.
+// A WRITE RUNS THE WHOLE WRITE PATH ON A REAL APPLIER: the one case here with
+// every seam real, and the wiring every benchmark measures through.
 //
-// Two writes on ONE subject both apply, the second at a higher sequence than
-// the first, because it was arbitrated against the anchor the first one's
-// apply advanced, and carrying the first one's position as its session, as a
-// seat's turn carries its own last write; then a linearizable read waits past
-// both. The second write holds only if the record NAMES ITS SUBJECT, since the
-// applier anchors an arbitrated record by its envelope's subject, and any
-// write holds only if the record DECLARES ITS SCOPE, since the applier stops
-// on one that does not. Every other case here fakes the publisher's side or
-// the applier's, so a record shape no applier accepts went unnoticed until
-// this one ran.
+// Two writes on ONE subject both apply, the second (its session the first's
+// position) at a higher sequence, arbitrated against the anchor the first's
+// apply advanced; then a linearizable read waits past both. The second holds
+// only if the record NAMES ITS SUBJECT (the applier anchors by the envelope's
+// subject), and any write only if it DECLARES ITS SCOPE (the applier stops
+// otherwise). Every other case fakes one side, so only this one catches a
+// record shape no applier accepts.
 func TestAWriteRunsTheWholeWritePathOnARealApplier(t *testing.T) {
 	t.Parallel()
 	n := running(newWiredNode(t, soloBroker(t, js.Config{SyncAlways: true}), "node-a"))
@@ -465,10 +445,9 @@ func TestAWriteRunsTheWholeWritePathOnARealApplier(t *testing.T) {
 	}
 }
 
-// A WIRED NODE'S EVERY WRITE READS ITS OWN EVICTION ROW: the fence is the
-// read a real domain's fence makes on every append, not an answer held in
-// memory. A row naming this node evicted refuses the next write, as evicted;
-// a readmission past it lets the one after that through.
+// A WIRED NODE'S EVERY WRITE READS ITS OWN EVICTION ROW, not an answer held
+// in memory: a row naming this node evicted refuses the next write as
+// evicted, and a readmission past it lets the one after that through.
 func TestAWiredNodeReadsItsOwnEvictionOnEveryWrite(t *testing.T) {
 	t.Parallel()
 	n := running(newWiredNode(t, soloBroker(t, js.Config{SyncAlways: true}), "node-e"))

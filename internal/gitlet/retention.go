@@ -269,7 +269,7 @@ func (r *Retention) Pass(ctx context.Context) (report RetentionReport, err error
 	}
 	retention := r.Retention()
 	if retention <= 0 {
-		return report, fmt.Errorf("%w: code.deleted_retention_days: %v is not a retention",
+		return report, refusedf("%w: code.deleted_retention_days: %v is not a retention",
 			ErrInvalid, retention)
 	}
 	now := time.Now()

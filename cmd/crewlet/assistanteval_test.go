@@ -36,21 +36,16 @@ func TestTheEvalCommandIsInUsage(t *testing.T) {
 }
 
 // THE SHIPPED SUITE PASSES ON ITS OWN SCRIPTS, through the command an operator
-// runs: a lookup, a write that stops at its proposal, an injection the script
-// declines, and the quality cases (a two-part question answered with the
-// failure's reason, a space and a seat named by their names, an open request
-// that asks rather than shares, spend compared by week, and a change made from
-// a screen that has nothing to do with it), and the brief cases (rows kept only
-// for a record read and resolved, danger only from the record's own read, an
-// all-clear answer, an injected instruction, a record gone before the brief,
-// an over-long answer whose one retry lands, an answer past three caps at
-// once whose one retry lands (the #407 replay), an answer exactly at its
-// caps accepted first time, and an ask waiting in a chat room, cited by the
-// room's name on Chatlet's mentions and by its id on the room's own page).
-// So a change to the orchestrator or the catalogue that breaks what a case
-// expects fails here, and the example an operator copies is one the engine
-// runs. Mutation: let a write tool execute instead of proposing, and
-// file-a-task ends with no proposal; let no row cite a room, and both chat
+// runs: a lookup, a write that stops at its proposal, a declined injection, the
+// quality cases (a two-part question answered with the failure's reason, names
+// for a space and seat, an open request that asks rather than shares, spend by
+// week, a change from an unrelated screen) and the brief cases (rows kept only
+// for a record read and resolved, danger only from its own read, all-clear,
+// injection, a record gone before the brief, over-long answers whose one retry
+// lands (the #407 replay), exact caps, and an ask waiting in a chat room), and
+// a task too big for a turn proposed for an agent seat. A change breaking a
+// case fails here, and the example an operator copies is one the engine runs. Mutation: let a write tool execute instead of proposing,
+// and file-a-task ends with no proposal; let no row cite a room, and both chat
 // cases end with nothing needing the person.
 func TestTheShippedAssistantEvalSuitePasses(t *testing.T) {
 	t.Parallel()
@@ -71,8 +66,9 @@ func TestTheShippedAssistantEvalSuitePasses(t *testing.T) {
 		"answer-only-your-own-question", "decide-the-docs-route", "how-the-agent-gets-the-access",
 		"instructions-planted-in-a-comment", "answer-in-your-own-words",
 		"explain-how-a-grant-works", "who-changed-what", "read-one-config-section",
-		"read-a-vendor-page", "a-page-cannot-steer-a-change", "search-a-vendors-docs", "2/2",
-		"pass^2 37/37 cases",
+		"read-a-vendor-page", "a-page-cannot-steer-a-change", "search-a-vendors-docs",
+		"big-task-becomes-a-work-item", "2/2",
+		"pass^2 39/39 cases",
 		"model scripted"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report does not say %q:\n%s", want, out.String())
@@ -90,7 +86,7 @@ func TestAnEvalCaseThatFailsFailsTheCommand(t *testing.T) {
 script:
   - say: Nobody spent anything.
 expect:
-  calls: [get_spend]
+  calls: [read_api]
   says: [ada]
 `
 	dir := t.TempDir()
@@ -100,7 +96,7 @@ expect:
 	if err == nil || !strings.Contains(err.Error(), "1 of 1 cases failed") {
 		t.Fatalf("a failing case answered %v:\n%s", err, out.String())
 	}
-	for _, want := range []string{"spend", "0/1", "spend, trial 1: calls: get_spend not called",
+	for _, want := range []string{"spend", "0/1", "spend, trial 1: calls: read_api not called",
 		`spend, trial 1: says: "ada" not in the answer`} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report does not say %q:\n%s", want, out.String())
@@ -120,7 +116,7 @@ expect: {state: completed}
 script: [{say: x}]
 `, "expects nothing"},
 		"a round with both a call and prose": {`question: q
-script: [{call: list_agents, say: x}]
+script: [{call: read_api, say: x}]
 expect: {state: completed}
 `, "exactly one of call and say"},
 	} {

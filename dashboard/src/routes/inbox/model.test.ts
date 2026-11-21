@@ -31,16 +31,20 @@ import {
   inboxResources,
   inboxSelection,
   inboxRows,
+  legacyRowKey,
   nextAfter,
+  noticeKeyRecord,
   noticeFloor,
   noticeNote,
   noticeRows,
+  noticeText,
   noticeTitle,
   pairAnswered,
   readThrough,
   rowItem,
   rowKey,
   rowName,
+  rowNamed,
   rowWho,
   snoozePresets,
   type InboxRow,
@@ -214,7 +218,24 @@ describe("the rows", () => {
     expect(
       rows.needs[0]!.kind === "decision" && rows.needs[0]!.notices.map((n) => n.record_id),
     ).toEqual(["r-1"]);
-    expect(rows.updates.map((r) => r.key)).toEqual(["r-2"]);
+    expect(rows.updates.map((r) => r.key)).toEqual(["notice:r-2"]);
+  });
+
+  // AN ITEM OF THE READER'S NOBODY IS MOVING WAITS ON THEM (ADR-0162): its
+  // notice is listed in Needs you after the decisions, never in the closed
+  // Updates group, until it is read.
+  test("a notice that an item is not moving is in Needs you, not Updates", () => {
+    const rows = inboxRows({
+      subjects: [ASK],
+      conditions: [],
+      notices: [
+        composed(notice("r-flow", { reason: "flow", kind: "flow", primary: true })),
+        composed(notice("r-2")),
+      ],
+    });
+    expect(rows.needs.map((r) => r.key)).toEqual([rows.needs[0]!.key, "notice:r-flow"]);
+    expect(rows.needs[0]!.kind).toBe("decision");
+    expect(rows.updates.map((r) => r.key)).toEqual(["notice:r-2"]);
   });
 
   test("Earlier lists only what is read, since the engine answers read and unread alike", () => {
@@ -228,7 +249,7 @@ describe("the rows", () => {
   test("a code notice is a change row, keyed apart from every tracker record", () => {
     const rows = noticeRows([composed(notice("r-1")), codeNotice("r-1")]);
     expect(rows.map((r) => [r.kind, r.key])).toEqual([
-      ["notice", "r-1"],
+      ["notice", "notice:r-1"],
       ["change", "change:r-1"],
     ]);
     expect(rowName(rows[1]!, null)).toBe("web!42");
@@ -239,7 +260,7 @@ describe("the rows", () => {
   test("an artifact notice is an artifact row, keyed apart from every other source's", () => {
     const rows = noticeRows([composed(notice("r-1")), codeNotice("r-1"), artifactNotice("r-1")]);
     expect(rows.map((r) => [r.kind, r.key])).toEqual([
-      ["notice", "r-1"],
+      ["notice", "notice:r-1"],
       ["change", "change:r-1"],
       ["artifact", "artifact:r-1"],
     ]);
@@ -966,7 +987,12 @@ describe("what was answered", () => {
   const answered = (extra: Partial<AnsweredWorkAsk> = {}): AnsweredWorkAsk => ({
     at: "2026-09-30T11:00:00Z",
     ask: ask as AnsweredWorkAsk["ask"],
-    answer: { by: "jane", at: "2026-09-30T11:00:00Z", choice: "hold", body: "Hold release" },
+    answer: {
+      by: "jane",
+      at: "2026-09-30T11:00:00Z",
+      choice: "hold",
+      body: "Chose \u201cHold release\u201d",
+    },
     ...extra,
   });
   const index = indexOrg(
@@ -1036,19 +1062,20 @@ describe("what was answered", () => {
     });
   });
 
-  // A CHOICE WITH WORDS OF ITS OWN KEEPS THEM: the record's body is the
-  // person's words where they wrote any beside the option, and the option's
-  // label only where they did not. Read as the label alone, the words were
-  // dropped from the row and the pane.
+  // A CHOICE WITH WORDS OF ITS OWN KEEPS THEM: the record's body states the
+  // choice and then the person's words (`worklet.ChoiceWords`), and the note
+  // is those words alone. Read as the label alone, the words were dropped from
+  // the row and the pane; read whole, the choice was said twice.
   //
-  // Mutation: drop `note`, or fill it with the label, and this fails.
+  // Mutation: drop `note`, fill it with the label, or keep the stated choice
+  // in it, and this fails.
   test("a choice keeps the words written beside it", () => {
     const withWords = answered({
       answer: {
         by: "jane",
         at: "2026-09-30T11:00:00Z",
         choice: "hold",
-        body: "Tell support before Thursday.",
+        body: "Chose \u201cHold release\u201d: Tell support before Thursday.",
       },
     });
     expect(answerWords(withWords, "jane", index)).toMatchObject({
@@ -1266,4 +1293,60 @@ describe("the closed question's composer", () => {
       "Reply to CTO. @mention to bring someone in.",
     );
   });
+});
+
+// AN ADDRESS NAMES ONE ROW, whichever group holds it now.
+describe("the row an address names", () => {
+  const run = (key: string, kind: "decision" | "answered") =>
+    ({ kind, key, at: "2026-09-30T10:00:00Z" }) as unknown as InboxRow;
+
+  // AN EXECUTOR NAMED BY ITS TURN is the question it asks now, and, with none
+  // open, the newest it answered. Mutation: match the turn's prefix on an open
+  // row, and a link to one answered question opens another.
+  test("an executor's turn opens its open question, else its newest answered one", () => {
+    const open = run("run:turn-7", "decision");
+    const first = run("run:turn-7:q2", "answered");
+    const older = run("run:turn-7:q1", "answered");
+    expect(rowNamed([open, first, older], "run:turn-7")).toBe(open);
+    expect(rowNamed([first, older], "run:turn-7")).toBe(first);
+    expect(rowNamed([first, older], "run:turn-7:q1")).toBe(older);
+    expect(rowNamed([first, older], "run:turn-8")).toBeUndefined();
+    expect(rowNamed([open], "")).toBeUndefined();
+  });
+
+  test("a notice's key names the record the engine reads it by, and nothing else does", () => {
+    expect(noticeKeyRecord("notice:r-1")).toBe("r-1");
+    expect(noticeKeyRecord("change:rec-9/change-42")).toBe("rec-9/change-42");
+    expect(noticeKeyRecord("artifact:a-5")).toBe("a-5");
+    expect(noticeKeyRecord("ask:c-12")).toBeNull();
+    expect(noticeKeyRecord("condition:x")).toBeNull();
+  });
+
+  // A `?row=` ADDRESS spelled a Worklet notice by its bare record id.
+  test("a `?row=` key is read in today's spelling", () => {
+    expect(legacyRowKey("r-1")).toBe("notice:r-1");
+    expect(legacyRowKey("ask:c-12")).toBe("ask:c-12");
+    expect(legacyRowKey("run:turn-7")).toBe("run:turn-7");
+    expect(legacyRowKey("change:c-5")).toBe("change:c-5");
+  });
+});
+
+// A FLOW NOTICE NAMES THE ITEM'S SEAT AS THE COMPANY NAMES IT. The engine
+// writes the handle, which a woken lead can ask; a screen names a person.
+test("a notice that an item is not moving names its seat, not its handle", () => {
+  const index = indexOrg(
+    withDerived({
+      name: "Acme",
+      roles: [{ handle: "riley-ops", name: "Riley Ops", kind: "human" }],
+    }) as never,
+  );
+  const said = noticeText(
+    notice("r-1", {
+      kind: "flow",
+      reason: "flow",
+      excerpt: "Its start passed and riley-ops has not picked it up since.",
+    }),
+    index,
+  );
+  expect(said).toBe("Its start passed and Riley Ops has not picked it up since.");
 });

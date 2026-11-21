@@ -90,8 +90,7 @@ test("the required checks change by what was added and what was removed", () => 
   expect(protectArgs(HELD, { ...asHeld, checks: "unit e2e, e2e" })).toEqual({
     checks: { add: ["e2e"], remove: ["lint"] },
   });
-  expect(protectArgs(HELD, { ...asHeld, approvals: "none", ownersApprove: true })).toEqual({
-    approvals: "none",
+  expect(protectArgs(HELD, { ...asHeld, approvals: "one", ownersApprove: true })).toEqual({
     owners_approve: true,
   });
 });
@@ -103,6 +102,26 @@ test("the classes that exempt a change from approval change by what moved", () =
   expect(protectArgs(HELD, { ...asHeld, approvalsUnless: ["comment_only"] })).toEqual({
     approvals_unless: { add: ["comment_only"], remove: ["whitespace_only"] },
   });
+});
+
+// EXEMPTIONS ARE SENT ONLY BESIDE AN APPROVAL ASKED; the form keeps the ticks for a return to
+// One approval. Mutation: send the ticks whatever Approvals holds, and this fails.
+test("the exempting classes are sent only where the gate asks an approval", () => {
+  expect(
+    protectArgs(undefined, { ...FORM, gated: true, approvalsUnless: ["comment_only"] }),
+  ).toEqual({ merge_by: "writers", approvals: "none" });
+  expect(protectArgs(HELD, { ...asHeld, approvals: "none" })).toEqual({
+    approvals: "none",
+    approvals_unless: { remove: ["whitespace_only"] },
+  });
+  expect(
+    protectArgs(undefined, {
+      ...FORM,
+      gated: true,
+      approvals: "one",
+      approvalsUnless: ["comment_only"],
+    }),
+  ).toEqual({ merge_by: "writers", approvals: "one", approvals_unless: { add: ["comment_only"] } });
 });
 
 // THE HUMAN PATHS MOVE BY GLOB: a new glob put, a dropped one removed, a kept

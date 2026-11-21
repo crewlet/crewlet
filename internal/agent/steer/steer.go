@@ -47,6 +47,30 @@
 // that record by the write that hands the note over, so the record's read notes
 // are the turn's carried notes ([Read]), which open every later phase.
 //
+// The launch hands the box's notes over in the write that creates the record
+// ([Box.HandOver]): they ride it waiting, ahead of any note filed there
+// directly. A launch that fails before the write gives them back
+// ([Box.Reopen]); one that fails after it leaves them to the record's ending.
+// A read the record marks unanswered or restarted ([Reading].Unanswered,
+// Restarted) is carried as read all the same, and no continuation of that job
+// holds it.
+//
+// # Who may steer
+//
+// Decided on the turn's SEAT: its lead, or admin. A turn whose run is out names
+// the seat on its record under a sealed anchor, which the asking node reads
+// itself, with no scatter. Before that the asking node cannot know the seat:
+// admin is admitted at once, a caller who leads nobody is refused at once, and
+// anybody else's call first sends a [Request.Probe], which offers nothing (one
+// nobody answers is `unavailable`), then is decided again on the seat it names
+// before the note is offered.
+//
+// The reviewer and every phase of the engine's own loop read notes; a worker,
+// the onboarding pass and the judge do not. A read note is carried into every
+// later phase, or the reviewer would grade against the task the person
+// corrected. So the source a runner reads ([runner.SteerSource]) is a box or the
+// record, never both: two sources would read one note twice.
+//
 // # What this package is
 //
 // The [Box] one segment holds, the wire a note crosses to reach it, and the
@@ -65,7 +89,45 @@
 // of a note already taken is answered [StatusAccepted] and adds nothing: the
 // note's id is the person's request id, so a retry after an answer that was lost
 // in transit is the same note, and a turn that read the same instruction twice
-// would act on it twice.
+// would act on it twice. A note's id is the request's Idempotency-Key as
+// internal/api/opkey scoped it to its principal, so an MCP call, which names
+// none, is a new note every time. The node running the turn remembers the last
+// 256 turns it ended, so a note that raced an end is answered closed rather than
+// by silence, which the asker reads as `unknown`.
+//
+// # What counts as unread
+//
+// "Unread" on a run's record, for the five notes a turn may hold waiting
+// ([MaxPendingNotes]), means waiting for a step to read it. A note a poll
+// served its harness (OpenCode's), which has not yet confirmed putting it in
+// front of its model at its next step, still counts. A note a hook's answer
+// handed to the model at the step it answered (a live hook serve on the run's
+// record, internal/sandbox's RunNote.LiveServe) does not, whatever its
+// session's record later says, and counts again once its serve is lost.
+//
+// # Where a brief tells a note
+//
+// A brief tells the notes the turn has read in the order the record numbered
+// their reads, never in the order its runner came to hold them. The reads a
+// segment makes reach it before the record has numbered them (Order zero), so
+// the source that recorded them says where they are ([Briefing].Orders, by
+// id): every note the segment's source handed it from the record, and every
+// note of the brief's own whose place the record holds already. That is one
+// the record's word reads already, a lost take's, whose settle handed it to
+// this brief, told at its take's place; and a waiting one a hook's serve
+// placed (internal/sandbox's RunNote.Place), which the launch's write reads at
+// that place, told at its first serve's. Neither is ever told after a note a
+// later take read, a correction of it among them. A note of the brief's it
+// places none of is read at the launch's own place, after every read; a
+// source that keeps no record places nothing.
+//
+// # A wake handed to a running run is no note
+//
+// The engine may hand a running run somebody's message about its work, a
+// [Wake], as an item of the run's job (internal/sandbox's RunNote.Wake): read
+// between its steps as a note is, in its writer's fence and never as a
+// person's correction, and reported as [types.AgentTurnJoined] ([Joined]).
+// The review reads none, and nothing here holds one.
 package steer
 
 import (
@@ -79,6 +141,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // MaxPendingNotes bounds the notes a turn holds unread.
@@ -88,9 +152,8 @@ import (
 // conversation, and a conversation belongs in chat or on the work item, where
 // it is threaded, kept and answered. The bound is also what keeps one step's
 // reading from being a wall of notes the model weighs against its own task.
-// "Unread" on a run's record means not yet recorded read, so a note a harness has
-// been handed and has not yet confirmed putting in front of its model still
-// counts.
+// A note a hook's live serve handed the model no longer counts as unread; one a
+// poll served does until its harness confirms it ("What counts as unread").
 const MaxPendingNotes = 5
 
 // MaxTurnNotes bounds the notes one turn takes in all, read or not.
@@ -191,6 +254,12 @@ type Note struct {
 
 	// At is when the box took it, in UTC.
 	At time.Time
+
+	// SentBefore says the source handed the note over after a note filed
+	// later that its reader already holds, so its reader is told it was sent
+	// before that one (prompts.SteerMessageSentBefore), never that it is the
+	// later word. Set by the source as it hands the note over, never filed.
+	SentBefore bool
 }
 
 // Validate reports what is wrong with a note's text, or nil. The ONE rule,
@@ -223,27 +292,36 @@ func (e *TooLongError) Error() string {
 // Reading is where a turn read a note: the phase, iteration and round, on the
 // phase's own one-based scale, the kind of step ([types.SteerBoundary]) and, for
 // an executor's read, the launch that read it; At is when.
-//
-// Order is the place of the write that recorded the read among the run's
-// record's reads (sandbox.NoteRead.Order) — what tells a read a saved session
-// accounts for from one made after it (sandbox.SessionCapture.NoteCursor) —
-// and zero for a read this segment made, which the record places after every
-// session its run was saved with before the segment began.
-//
-// Unanswered says the record marks the read as one whose take's answer was
-// lost (sandbox.NoteRead.Unanswered): the executor's harness named by Launch
-// was never handed the note at that step, though the turn carries it as read —
-// so no session of that job holds it from there, and a launch that continues
-// one is told it again.
 type Reading struct {
-	Phase      types.Phase
-	Iteration  int
-	Round      int
-	Boundary   types.SteerBoundary
-	Launch     string
-	At         time.Time
-	Order      int
+	Phase     types.Phase
+	Iteration int
+	Round     int
+	Boundary  types.SteerBoundary
+	Launch    string
+	At        time.Time
+
+	// Order is the place of the write that recorded the read among the run's
+	// record's reads (sandbox.NoteRead.Order) — what tells a read a saved
+	// session accounts for from one made after it
+	// (sandbox.SessionCapture.NoteCursor) — and zero for a read this segment
+	// made, which the record places after every session its run was saved
+	// with before the segment began.
+	Order int
+
+	// Unanswered says the record marks the read as one whose take's answer was
+	// lost (sandbox.NoteRead.Unanswered): the executor's harness named by
+	// Launch was never handed the note at that step, though the turn carries
+	// it as read — so no session of that job holds it from there, and a launch
+	// that continues one is told it again.
 	Unanswered bool
+
+	// Restarted says the record holds the read as a hook's serve its job's
+	// session showed taken before the session's last restart
+	// (sandbox.NoteRead.Restarted): the harness took the note, and a resume of
+	// that session rebuilds its conversation from the restart on, which is not
+	// known to hold it — so a launch that continues one tells it again, as a
+	// note it may already show.
+	Restarted bool
 }
 
 // Briefing is what a launch's brief takes of a turn's notes: Notes, the ones it
@@ -251,20 +329,12 @@ type Reading struct {
 // every note the turn has read whose read its record marks unanswered as the
 // brief read them, by id (sandbox.NoteRead.Unanswered).
 //
-// THE MARKS BESIDE THE NOTES, read off the same record: a mark is made off the
-// path of the take it settles, and can land after the segment that launches
-// read the record it resumed from — so a launch counts the record's marks as
-// they stand when it briefs, never only as its segment found them.
-//
-// Orders is the place among the record's reads (Reading.Order) of every note
-// the segment's source handed it from the record, and of every note of Notes
-// read already by the record's word — a lost take's, whose settle handed it to
-// this brief — by id; nil from a source that keeps no record. A brief tells
-// the notes the turn has read in the order the record numbered their reads, and
-// the reads a segment makes reach it before the record has numbered them (Order
-// zero), so the source that recorded them says where they are: a note a lost
-// take recorded is then told at its take's place, never after a note a later
-// take read — a correction of it among them.
+// The marks are read off the same record: a mark can land after the segment
+// read the record it resumed from, so a launch counts them as they stand when
+// it briefs. Orders is the place (Reading.Order) of every note the segment's
+// source handed it from the record, and of every note of Notes whose place the
+// record already holds, by id; nil from a source that keeps no record ("Where
+// a brief tells a note").
 type Briefing struct {
 	Notes      []Note
 	Unanswered []string
@@ -321,13 +391,14 @@ func Expired() End { return End{outcome: types.SteerExpired} }
 //
 // THE ONE CONSTRUCTOR of the record, which every publisher calls — the runner,
 // the bridge's run inbox and an ending — so no two of them build it differently:
-// every outcome but an expiry says where, an expiry never names a step, and the
-// send time is always UTC.
+// every outcome but an expiry says where, an expiry never names a step, the
+// send time is always UTC, and the note is redacted ([redact.Secrets]): the
+// run's record holds it sealed, and this record is read in the clear.
 func Record(turn Turn, note Note, end End) types.AgentTurnSteered {
 	ev := types.AgentTurnSteered{
 		Agent: turn.Agent, AgentHandle: turn.AgentHandle, RoleName: turn.Role,
 		TurnID: turn.TurnID, WorkKey: turn.WorkKey,
-		NoteID: note.ID, Outcome: types.SteerExpired, Note: note.Text,
+		NoteID: note.ID, Outcome: types.SteerExpired, Note: redact.Secrets(note.Text),
 		SteeredBy: note.By, SteeredByKind: string(note.ByKind), OperatorID: note.OperatorID,
 		SentAt: note.At,
 	}
@@ -339,6 +410,79 @@ func Record(turn Turn, note Note, end End) types.AgentTurnSteered {
 		ev.Phase, ev.Iteration, ev.Round = end.at.Phase, end.at.Iteration, end.at.Round
 		ev.Boundary, ev.LaunchID = end.at.Boundary, end.at.Launch
 		ev.Retold = end.retold
+	}
+	return ev
+}
+
+// MaxWakeRunes bounds the words a [Wake] carries. ONE THOUSAND: a wake is
+// rendered whole beside a person's widest note in one Claude Code hook answer,
+// in its writer's fence, and its conversation keeps whatever is past it, which
+// the rendering names ([Wake.Cut]).
+const MaxWakeRunes = 1000
+
+// Wake is somebody's message about a running turn's work, handed to the turn's
+// run as an item of its job and opened from the engine's seal: who wrote it,
+// where and for whom, whether it asks for an answer, its words, and the
+// completion-ledger keys that mark its delivery on the seat's inbox worked once
+// a step of the run reads it ([Joined]).
+type Wake struct {
+	// ID is the wake's identity as it was filed, and Triggers the ids of the
+	// deliveries on the seat's inbox it stands for.
+	ID       string
+	Triggers []string
+
+	// Keys are the completion-ledger keys that mark the deliveries worked: each
+	// one's own, and a chat message's identity on its backend where it has one.
+	Keys []string
+
+	// By and ByKind are who wrote it, by seat handle or else login, and what
+	// sort of writer that is; WorkingFor is whom it was written for, as its
+	// delivery names that one (notify.WorkingForKey), "" for nobody.
+	By         string
+	ByKind     iam.ActorKind
+	WorkingFor string
+
+	// Conversation and Partition are where it was written: its conversation's
+	// identity and its thread's stamped partition key, never split by writer.
+	Conversation, Partition string
+
+	// Label is the fence its words are handed over in, decided as the turn's
+	// own wake would decide it: the surface, the trust and the writers.
+	Label provenance.Label
+
+	// OwesAnswer says it asks for an answer, and At is when it was written.
+	OwesAnswer bool
+	At         time.Time
+
+	// Owes is the delivery obligation its delivery would have put on a turn
+	// of its own (turn.Reply's wire value), "" for none: what the turn whose
+	// run reads it is held to as well. Seen is the log position of the record
+	// it was derived from (notify.TriggerField), "" for a vendor's wake: how
+	// far its conversation is read once the run reads it (ADR-0120).
+	Owes, Seen string
+
+	// Text is its words, at most [MaxWakeRunes] of them, and Cut how many
+	// characters past those its message holds, which its conversation keeps.
+	Text string `untrusted:"fence"`
+	Cut  int
+}
+
+// Joined is the agent_turn_joined record of what became of w, handed to job:
+// outcome, at the step at names, nil where no step is known. THE ONE
+// CONSTRUCTOR of the record, which every publisher calls, so the send time is
+// always UTC and no record names a step its outcome came to none at.
+func Joined(turn Turn, w Wake, job string, outcome types.JoinOutcome, at *Reading) types.AgentTurnJoined {
+	ev := types.AgentTurnJoined{
+		Agent: turn.Agent, AgentHandle: turn.AgentHandle, RoleName: turn.Role, TurnID: turn.TurnID,
+		WorkKey: turn.WorkKey, WakeID: w.ID, TriggerIDs: slices.Clone(w.Triggers), Outcome: outcome,
+		LaunchID: job, WrittenBy: w.By, WrittenByKind: string(w.ByKind), WrittenOn: string(w.Label.Source),
+		OwesAnswer: w.OwesAnswer, SentAt: w.At,
+	}
+	if !ev.SentAt.IsZero() {
+		ev.SentAt = ev.SentAt.UTC()
+	}
+	if at != nil && outcome != types.JoinUnread {
+		ev.Boundary, ev.Iteration = at.Boundary, at.Iteration
 	}
 	return ev
 }

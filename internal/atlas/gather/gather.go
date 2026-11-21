@@ -9,6 +9,15 @@
 // that fails is reported as unread and the rest of the atlas still answers:
 // one slow store does not blank the map.
 //
+// Gitlet is read as the asker, never as the engine: a repository only its unit
+// may read reaches only that unit. Only repositories the settings do not
+// declare are read in detail, for their other hosts. The atlas's own log is one
+// more source ([SourceLog]): what people recorded folds beside what is
+// computed. A record source is the engine's own read as it stands, held by a
+// compile-time assertion, so it cannot drift from the engine's answer. A
+// connection test counts only against the server's current settings. An alarm
+// joins its tool server or model entry by its kind, never its sentence.
+//
 // The decision is ADR-0126.
 package gather
 
@@ -171,10 +180,6 @@ func hostsCode(c *config.Company) bool {
 	return c != nil && c.CodeBackendFor() == config.CodeGitlet
 }
 
-// maxRepoPage is the page a repository listing is read in: Gitlet's own
-// largest, so a company of a few hundred repositories is read in one or two.
-const maxRepoPage = 500
-
 // ErrNoSource is a source this node does not serve or the reader may not read.
 var ErrNoSource = errors.New("not served here, or not readable by this reader")
 
@@ -266,7 +271,7 @@ func readGitlet(ctx context.Context, reads GitletReads, s derive.Settings, req R
 	var summaries []gitlet.RepoSummary
 	for cursor := ""; ; {
 		page, err := reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadRepos, Asker: req.Asker, Fresh: req.Fresh,
-			Cursor: cursor, Limit: maxRepoPage})
+			Cursor: cursor, Limit: gitlet.MaxReposPerPage})
 		if err != nil {
 			cov.Reason = fmt.Sprintf("listing repositories: %v", err)
 			return nil, nil, cov

@@ -12,98 +12,20 @@ import (
 )
 
 // THE GATE RESERVE: the top of every identity-claiming log's byte ceiling,
-// which only the records that install a gate may use.
-//
-// # Why a full log needs room it refuses everybody else
-//
-// A log that fills refuses appends rather than dropping records, and what
-// fills one is almost always a trim that cannot advance — and the commonest
-// reason a trim cannot advance is a node that is gone and still counted,
-// pinning the applied term at its last position. The one gesture that unpins
-// it is an EVICTION, which is a record on that log. A log full to its ceiling
-// refuses that record like any other, so the operator was told `log_full`, ran
-// the eviction again, and was refused again, for ever: the only way out of a
-// full log was through the log. So the ceiling the broker enforces is not the
-// ceiling ordinary writes are held to. They are refused `log_full` at the SOFT
-// ceiling, [Reservation.Bytes] below it, and the records a gate is installed or
-// lifted by go on landing in the space between.
-//
-// # Which records are gate records
-//
-// An eviction and the readmission that inverts it — the two a node's standing
-// on a log is written by, and the two halves of one gesture an operator has to
-// be able to finish. A reanchor's generation record goes straight to the
-// broker too ([appendGeneration]): it is appended to a stream every node's
-// fence refuses to write until it lands, so it meets a log nothing else can
-// have filled, at most once per generation. A PURGE IS NOT ONE, although it
-// installs a deletion marker: it frees nothing — the records it gates stay on
-// the log until the trim removes them — and nothing bounds how many an
-// operator runs, so a purge allowed into the reserve could spend the room an
-// eviction is kept it for.
-//
-// # How usage is measured, and how stale a reading may be
-//
-// From the broker's own stream state, the one figure that counts every node's
-// writes, READ AFTER THE ADMISSION BEGAN: a reading an admission shares must
-// have started after that admission took its place, the arrival rule
-// [ReadIndex] applies to a barrier. So the only bytes a reading cannot see
-// are appends in flight beside it. This node's own are counted exactly: an
-// ordinary append holds its size in [Reserve]'s budget from before its
-// reading until the broker answers. What no node can see is its PEERS'
-// appends in flight at that instant, and those are what the reserve's fleet
-// term is sized against ([GateReserveDivisor]).
-//
-// # Where it applies
-//
-// Only on a log that claims identity ([ReservationOf]), because only such a
-// log carries gate records. The vector changelog and the usage log claim none:
-// a reserve there would refuse their ordinary writes early to keep room nothing
-// is ever written into.
+// which only the records that install or lift a node's gate may use, so a log
+// full for ordinary writes still takes the eviction that unpins it (package
+// doc, "The gate reserve").
 
-// GateReserveDivisor and GateReserveFleet size the reserve, which is the
-// larger of two terms ([Reservation.Bytes]): a SIXTEENTH of the log's byte
-// ceiling, and the FLEET TERM — what [GateReserveFleet] nodes' appends in
-// flight can carry a log past its soft ceiling, plus [GateRoom] for the gate
-// records themselves.
+// GateReserveDivisor and GateReserveFleet size the reserve, the larger of two
+// terms ([Reservation.Bytes]): a SIXTEENTH of the log's byte ceiling, and the
+// FLEET TERM — what [GateReserveFleet] nodes' appends in flight can carry a
+// log past its soft ceiling, plus [GateRoom] for the gate records themselves.
 //
-// # The fleet term, and why it is the log's and not the ceiling's
-//
-// The overshoot the reserve has to absorb is every ordinary append admitted
-// against a reading that could not see its peers' — the bytes the OTHER nodes
-// hold in flight at the instant the soft ceiling is crossed, since the
-// admitting node counts its own. Each node holds at most one log's
-// [StreamSpec.MaxAppendBytes] of ordinary appends in flight ([Reserve]'s
-// budget: the PUBLISH CONCURRENCY, in bytes), and no record is larger than
-// that ([StreamSpec.MaxRecordBytes], the MAXIMUM RECORD SIZE). So the
-// overshoot of a fleet of eight is seven of those: a function of the log's
-// LARGEST RECORD, and of nothing about its ceiling.
-//
-// IT WAS A SIXTEENTH ALONE, argued at one ceiling: a gibibyte, called Tier A's
-// floor for every domain, where a sixteenth is 64 MiB — seven records at the
-// transport's eight mebibytes, and room to spare. It was not every domain's
-// floor. The identity estate's Tier A floor is 64 MiB, where a sixteenth is
-// 4 MiB — less than ONE record at the size the budget admitted — so on exactly
-// the smallest log an eviction on a log full for ordinary writes could find the
-// reserve spent by appends it was kept against.
-// Stated per log, from the log's own largest record, the fleet term holds at
-// every ceiling a log may have, whatever its floor.
-//
-// # The sixteenth, and why it is still here
-//
-// It GROWS WITH THE CEILING while the fleet term does not, so a larger log
-// absorbs a larger fleet. On the corpus-sized logs — a gibibyte floor, records
-// up to the transport's eight mebibytes — it is the larger term from the floor
-// up: 64 MiB against 57. The identity estate's — a 64 MiB floor, records of at
-// most 128 KiB — are small enough that the sixteenth is the larger from its
-// floor up, 4 MiB against under 2.
-//
-// # What it costs
-//
-// The reserve is ceiling that ordinary writes never use — the headroom alarm
-// fires at a tenth of what is left for them, so an operator hears about a
-// filling log long before either line is reached. Past the reserve a gate
-// record is refused like any other, and the refusal says to raise the ceiling
-// (`crewlet retention set-capacity`), not to run the gesture again.
+// The fleet term is the log's, set by its largest record and not its ceiling,
+// so it holds on the smallest log; the sixteenth grows with the ceiling, so a
+// larger log absorbs a larger fleet (package doc, "The gate reserve"). Past
+// the reserve a gate record is refused like any other, and the refusal says to
+// raise the ceiling (`crewlet retention set-capacity`).
 const GateReserveDivisor = 16
 
 // GateReserveFleet is how many nodes' appends in flight the fleet term
@@ -112,23 +34,17 @@ const GateReserveDivisor = 16
 const GateReserveFleet = 8
 
 // GateRoom is what the fleet term keeps beyond the peers' appends, for the
-// gate records themselves.
-//
-// A MEBIBYTE: a thousand gate records at under a kibibyte each — an eviction
-// and a readmission per node per log, many times over. It is the one part of
-// the reserve that exists for the records it is kept for; the rest is what
-// the admission's blind spot may already have spent.
+// gate records themselves: a mebibyte, a thousand gate records at under a
+// kibibyte each. It is the one part of the reserve the admission's blind spot
+// cannot already have spent.
 const GateRoom = 1 << 20
 
 // appendOverhead bounds what a stored record carries beside its payload.
-//
-// FOUR KIBIBYTES: the signature frame is its magic, version, key id and a
-// 32-byte MAC — under three hundred bytes with the longest key id a keyring
-// may name — the file store frames a record in about thirty bytes, the two
-// headers an append carries are well under two hundred, and the longest
-// subject any domain writes — a page title's bounded token — is a few hundred.
-// Counted per append, so it also keeps a flood of tiny records from reading
-// as free.
+// FOUR KIBIBYTES covers the signature frame (under 300 bytes with the longest
+// key id a keyring may name), the file store's ~30-byte frame, the append's two
+// headers (under 200) and the longest subject any domain writes (a page
+// title's bounded token, a few hundred). Counted per append, it also keeps a
+// flood of tiny records from reading as free.
 const appendOverhead = 4 << 10
 
 // MaxTransportRecordBytes is the largest record the transport carries once it
@@ -136,67 +52,53 @@ const appendOverhead = 4 << 10
 // beside its payload ([appendOverhead]).
 //
 // THE CEILING EVERY DECLARATION IS HELD TO ([StreamSpec.Validate]), and what a
-// log whose records are bounded by caps of their own declares. The transport's
-// limit is on the whole MESSAGE — the signed payload and its headers — and not
-// on the payload a decide forms, so a declaration at the transport's own
-// number admitted a record the publisher passed and the broker then refused
-// past its max_payload: the declaration was no longer the one refusal a
-// record meets before it is sent, and the refusal it did meet named the
-// server's setting on the broker the engine configures itself.
+// log whose records have caps of their own declares. The transport's limit is
+// on the whole MESSAGE, signed payload and headers, so a declaration at the
+// transport's own number would admit a record the broker then refuses past its
+// max_payload: the declaration must stay the one refusal a record meets
+// before it is sent.
 const MaxTransportRecordBytes = queue.MaxPayloadBytes - appendOverhead
 
 // MaxDeliveryBytes is the most one stored record of ANY log is counted at when
 // the broker delivers it: the largest message the transport carries
-// ([queue.MaxPayloadBytes], a record's payload and headers together) and what a
-// delivery counts beside it against a pull's byte bound — the record's subject
-// and the acknowledgement subject, a few hundred bytes, which [appendOverhead]
-// holds with room to spare.
+// ([queue.MaxPayloadBytes], payload and headers) plus the record's subject and
+// the acknowledgement subject, which [appendOverhead] holds with room to spare.
 //
-// THE TRANSPORT'S, NOT A LOG'S ([StreamSpec.MaxAppendBytes]): a reader that
-// pulls one record at a time from a log it did not provision — the backup's
-// replay window — cannot know the declaration the log was made under, only
-// that the broker admitted nothing past the transport. A pull bounded below
-// this is refused a record at that ceiling with nothing delivered, on every
-// pull, so a reader sized by the payload alone stopped at that record for ever.
+// THE TRANSPORT'S, NOT A LOG'S ([StreamSpec.MaxAppendBytes]): a reader pulling
+// one record at a time from a log it did not provision (the backup's replay
+// window) knows only that the broker admits nothing past the transport. A pull
+// bounded below this is refused a record at that ceiling with nothing
+// delivered, on every pull, so the reader would stop at that record for ever.
 const MaxDeliveryBytes = queue.MaxPayloadBytes + appendOverhead
 
 // MaxAppendBytes is the most one append to this log is counted at: its
-// largest record ([StreamSpec.MaxRecordBytes]) and what a stored record
-// carries beside it.
+// largest record ([StreamSpec.MaxRecordBytes]) plus [appendOverhead].
 //
-// ONE NUMBER FOR THREE READERS, which is why it is a method rather than an
-// addition each does for itself: it is the per-node in-flight budget
-// [Reserve] admits against, the per-node term in the fleet term
-// ([Reservation.Bytes]), and the stream's max_msg_size the broker refuses a
-// larger message at — so the broker's refusal and the reserve's arithmetic
-// are about the same record.
+// ONE NUMBER FOR THREE READERS, so the broker's refusal and the reserve's
+// arithmetic are about the same record: [Reserve]'s per-node in-flight budget,
+// the per-node term in the fleet term ([Reservation.Bytes]), and the stream's
+// max_msg_size.
 func (s StreamSpec) MaxAppendBytes() int64 { return s.MaxRecordBytes + appendOverhead }
 
 // Reservation is how one log's byte ceiling divides between its ordinary
 // appends and the records that install or lift a gate.
 //
-// THE ZERO VALUE KEEPS NO RESERVE, which is the vector changelog's and the
-// usage log's shape and a real setting rather than an absent one: a log that
-// claims no identity carries no gate record, and a reserve there would refuse
-// its ordinary writes early to keep room nothing is ever written into.
+// THE ZERO VALUE KEEPS NO RESERVE, a real setting rather than an absent one:
+// the shape of a log that claims no identity and so carries no gate record.
 type Reservation struct {
 	// Kept reports that the log keeps a reserve: that it claims identity,
 	// which is what carries gate records ([ReservationOf]).
 	Kept bool
 
 	// MaxAppend is the log's [StreamSpec.MaxAppendBytes]: the most one
-	// peer's appends in flight can hold, which is what the fleet term is
-	// counted in.
+	// peer's appends in flight can hold, the fleet term's unit.
 	MaxAppend int64
 }
 
-// ReservationOf is d's reservation, read off its declaration: a reserve on a
-// log that claims identity, which is what carries gate records, and none on
-// one that does not.
-//
-// THE ONE ANSWER to whether a log keeps one, which the publisher's admission,
-// a ceiling's validation and the headroom alarm all ask — a predicate beside
-// it would be a second.
+// ReservationOf is d's reservation, read off its declaration: a reserve only on
+// a log that claims identity, which is what carries gate records. THE ONE
+// ANSWER the publisher's admission, a ceiling's validation and the headroom
+// alarm all ask; a predicate beside it would be a second.
 func ReservationOf(d Domain) Reservation {
 	if !d.ClaimsIdentity() {
 		return Reservation{}
@@ -204,15 +106,14 @@ func ReservationOf(d Domain) Reservation {
 	return Reservation{Kept: true, MaxAppend: d.Stream().MaxAppendBytes()}
 }
 
-// Bytes is how much of a byte ceiling of maxBytes is kept for gate records —
-// the larger of a sixteenth of it and the fleet term, see
-// [GateReserveDivisor] — and never more than the ceiling. Zero for a log that
-// keeps none and for an unbounded log.
+// Bytes is how much of a byte ceiling of maxBytes is kept for gate records:
+// the larger of a sixteenth of it and the fleet term ([GateReserveDivisor]),
+// never more than the ceiling. Zero for a log that keeps none and for an
+// unbounded log.
 //
 // ALL OF A CEILING SMALLER THAN THE FLEET TERM, which no Tier A floor comes
-// near: such a log has nowhere to put an ordinary write that the fleet's
-// appends in flight could not carry past it, so it refuses every one and
-// keeps the whole of itself for the records that can unpin it.
+// near: the fleet's appends in flight could carry any ordinary write past it,
+// so it refuses every one and keeps itself for the records that unpin it.
 func (r Reservation) Bytes(maxBytes uint64) uint64 {
 	if !r.Kept || maxBytes == 0 {
 		return 0
@@ -228,13 +129,11 @@ func (r Reservation) Ordinary(maxBytes uint64) uint64 {
 	return maxBytes - r.Bytes(maxBytes)
 }
 
-// Headroom is how much of the ceiling ordinary appends may use is still
-// unused, as a fraction — nil for a log with no ceiling, where a fraction
-// means nothing and zero is what the headroom alarm fires on — and zero on a
-// log whose reserve is all of it, where no ordinary append is admitted.
+// Headroom is the unused fraction of the ceiling ordinary appends may use: nil
+// for a log with no ceiling (zero is what the headroom alarm fires on), and
+// zero on a log whose reserve is all of it.
 //
-// OF THE ORDINARY CEILING, not the broker's, because the question it answers
-// is how long until writes are refused: at zero the log refuses every
+// OF THE ORDINARY CEILING, not the broker's: at zero the log refuses every
 // ordinary write and every linearizable read, while gate records still land.
 func (r Reservation) Headroom(bytes, maxBytes uint64) *float64 {
 	if maxBytes == 0 {
@@ -256,27 +155,22 @@ type Usage struct {
 // Reserve admits a node's ordinary appends to one reserved log.
 //
 // ONE PER LOG PER NODE, shared by that log's publisher and its read index,
-// because the budget it keeps is the node's appends in flight on the log,
-// whoever makes them.
+// because its budget is the node's appends in flight on the log, whoever
+// makes them.
 type Reserve struct {
 	stream string
 	read   func(ctx context.Context) (Usage, error)
 
-	// reservation is the log's, and maxAppend its
-	// [StreamSpec.MaxAppendBytes]: the budget's cap, and the largest
-	// append it admits.
+	// maxAppend is the log's [StreamSpec.MaxAppendBytes]: the budget's
+	// cap, and the largest append it admits.
 	reservation Reservation
 	maxAppend   int64
 
 	// budget is the node's ordinary appends in flight, in bytes, capped
 	// at maxAppend; inflight is what it holds now, which the semaphore
-	// does not expose.
-	//
-	// A WEIGHTED SEMAPHORE from the Go project's own extended library
-	// rather than one written here, for the two properties a buffered
-	// channel does not have: an acquire of many units that honours
-	// cancellation, and FIFO service, so a maximum record is not starved
-	// by a stream of small ones taking the room as it frees.
+	// does not expose. A WEIGHTED SEMAPHORE rather than a channel: a
+	// many-unit acquire that honours cancellation, and FIFO service, so a
+	// maximum record is not starved by small ones taking the room.
 	budget   *semaphore.Weighted
 	inflight atomic.Int64
 
@@ -300,13 +194,11 @@ type usageRun struct {
 }
 
 // NewReserve builds the reserve for the log spec declares, reading its usage
-// through read — the broker's own stream state.
+// through read, the broker's own stream state.
 //
-// THE SPEC AND NOT A NAME, because the budget is the log's own: one append of
-// its largest record ([StreamSpec.MaxAppendBytes]) is what one node may hold
-// in flight, and that is the per-node term the reserve above the soft ceiling
-// is sized in ([Reservation.Bytes]). A budget any larger would let this node
-// hold more in flight than every peer's reserve assumed of it.
+// THE SPEC AND NOT A NAME, because the budget is one append of the log's
+// largest record ([StreamSpec.MaxAppendBytes]): the per-node term every
+// peer's reserve assumes of this node ([Reservation.Bytes]).
 func NewReserve(spec StreamSpec, read func(ctx context.Context) (Usage, error)) (*Reserve, error) {
 	if read == nil {
 		return nil, fmt.Errorf("statelog: the reserve on %s has no usage reading", spec.Name)
@@ -328,12 +220,9 @@ func NewReserve(spec StreamSpec, read func(ctx context.Context) (Usage, error)) 
 // release once the broker has answered the append.
 func (r *Reserve) Admit(ctx context.Context, size int64) (release func(), err error) {
 	if size > r.maxAppend {
-		// A RECORD TOO LARGE, and its own reason rather than a full log's:
-		// the log may have room to spare, and nothing about its ceiling or
-		// its trim moves this limit. The detail names the one that did.
-		// The publisher refuses such a record against the same declaration
-		// before it is ever admitted; this is the budget's own guard, since
-		// an append above it would wait for room it can never hold.
+		// TOO LARGE, not a full log: no ceiling or trim moves this limit.
+		// The publisher refuses such a record first; this guard keeps it
+		// from waiting for room the budget can never hold.
 		return nil, &Unavailable{
 			Reason: ReasonRecordTooLarge,
 			Detail: fmt.Sprintf("the record needs %d bytes on %s and no append past "+
@@ -361,15 +250,15 @@ func (r *Reserve) Admit(ctx context.Context, size int64) (release func(), err er
 	if err != nil {
 		release()
 		if ended := ctx.Err(); ended != nil {
-			// THE CALLER'S OWN CONTEXT ENDED while it waited for the
-			// reading, which says nothing about the log.
+			// THE CALLER'S OWN CONTEXT ENDED, which says nothing about
+			// the log.
 			return nil, fmt.Errorf("statelog: read %s's usage before appending to it: %w",
 				r.stream, ended)
 		}
-		// TYPED HERE, the one place that knows the reading failed and
-		// nothing was appended: untyped, a committer reported the push
-		// unknown and never asked the runner-up. The broker's words go to
-		// the log ([Reserve.run]), never onto a detail a caller is sent.
+		// TYPED HERE, the one place that knows nothing was appended:
+		// untyped, a committer would call the push unknown and never ask
+		// the runner-up. The broker's words go to the log ([Reserve.run]),
+		// never onto a detail a caller is sent.
 		return nil, &Unavailable{
 			Reason: ReasonUsageUnknown,
 			Detail: fmt.Sprintf("%s's usage could not be read before appending to it, so "+
@@ -380,19 +269,16 @@ func (r *Reserve) Admit(ctx context.Context, size int64) (release func(), err er
 	}
 	usage := run.usage
 	if usage.MaxBytes == 0 {
-		// AN UNBOUNDED LOG, and nothing else: a bounded log whose reserve
-		// is all of it has an ordinary ceiling of zero too, and it refuses
-		// every ordinary append below rather than admitting them all.
+		// AN UNBOUNDED LOG only: a bounded log whose reserve is all of it
+		// has an ordinary ceiling of zero too, and refuses below.
 		return release, nil
 	}
 	ceiling := r.reservation.Ordinary(usage.MaxBytes)
-	// WHAT THE BROKER HELD, AND WHAT THIS NODE HAD IN FLIGHT WHEN IT WAS
-	// ASKED, this append included: an append in flight then either landed
-	// before the broker answered, and is counted twice — which only
-	// refuses a write a little early — or did not, and is counted once.
-	// Read when the reading STARTED rather than now, because an append
-	// that lands and releases while the reading is out would otherwise be
-	// in neither figure.
+	// WHAT THE BROKER HELD, AND WHAT THIS NODE HAD IN FLIGHT WHEN THE
+	// READING STARTED, this append included. One that landed before the
+	// broker answered is counted twice, which only refuses a little early;
+	// taken now instead, one that landed and released while the reading
+	// was out would be in neither figure.
 	if held := usage.Bytes + uint64(run.inflight); held > ceiling {
 		release()
 		return nil, &Unavailable{
@@ -410,21 +296,14 @@ func (r *Reserve) Admit(ctx context.Context, size int64) (release func(), err er
 }
 
 // fresh is a reading of the log's usage that STARTED after this admission
-// arrived — after its bytes were counted in flight.
+// arrived, after its bytes were counted in flight.
 //
-// SHARED, and only forward in the order readings start: a reading already
-// out when this caller arrived may have been answered before a peer's append
-// this caller must count, and it captured this node's in-flight bytes before
-// this caller's were among them — joining it would admit against figures
-// older than the admission. So an arrival is the number of the next reading
-// to start, taken under the lock every reading is started under, and a
-// reading below it is waited out rather than used.
-//
-// BY COUNT RATHER THAN BY CLOCK, because the count is taken under the same
-// lock as the in-flight figure a reading captures ([Reserve.claim]): a
-// reading numbered at or above an arrival is one whose figure includes that
-// arrival's bytes, which is the property the check below rests on, where two
-// clock readings taken on either side of the lock would only approximate it.
+// SHARED, and only forward: a reading already out on arrival may have been
+// answered before a peer's append this caller must count, and captured this
+// node's in-flight bytes without this caller's, so it is waited out. Arrival
+// is BY COUNT, not clock: the next reading's number, taken under the lock
+// [Reserve.claim] captures the in-flight figure under, so a reading numbered
+// at or above it is exactly one whose figure includes this caller's bytes.
 func (r *Reserve) fresh(ctx context.Context) (*usageRun, error) {
 	r.mu.Lock()
 	need := r.runs + 1

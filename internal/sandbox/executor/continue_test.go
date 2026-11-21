@@ -598,10 +598,45 @@ func TestAContinuedClaudeSessionRunsUnderTheEnginesWindow(t *testing.T) {
 		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
 		"CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "",
 		"CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP": "",
+		"DISABLE_AUTOUPDATER":                 "1",
 	}; !maps.Equal(settings.Env, want) {
 		got, _ := json.Marshal(settings.Env)
 		t.Errorf("the settings the harness was handed, %q, hold env %s, want the window pinned and both "+
 			"overrides and both of a resume's switches blank, over a repository's own", named, got)
+	}
+}
+
+// A BOX'S CLAUDE CODE RELEASE CANNOT CHANGE UNDER A SESSION IT CONTINUES IN
+// PLACE. Every run starts with DISABLE_AUTOUPDATER=1 over the seat's own value,
+// and the settings a release that takes the pin is handed set it too, over a
+// repository's own; so the release that wrote the box's copy resumes it (the
+// package doc's "A box's release is pinned").
+//
+// Mutation (claudecode.go): drop DISABLE_AUTOUPDATER from claudeSessionLayout's
+// pins or from claudeSettingsPin's block, and a check goes red.
+func TestABoxsClaudeCodeReleaseCannotChangeUnderItsSession(t *testing.T) {
+	t.Parallel()
+	runner, box := sessionBox(t, "2.1.310")
+	seat := map[string]string{"DISABLE_AUTOUPDATER": "0"}
+	_, ran := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "begin", Env: seat})
+	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID, Env: seat})
+	if !res.Continued {
+		t.Fatalf("the run did not continue its session:\n%s", boxFile(t, box, paths(box).Err()))
+	}
+	env := strings.Split(boxFile(t, box, box.Home()+"/env"), "\n")
+	if !slices.Contains(env, "DISABLE_AUTOUPDATER=1") {
+		t.Error("the harness's environment lacks DISABLE_AUTOUPDATER=1, the seat's own value replaced")
+	}
+	named := after(strings.Split(strings.TrimSpace(boxFile(t, box, box.Home()+"/argv")), "\n"), "--settings")
+	var settings struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal([]byte(boxFile(t, box, named)), &settings); err != nil {
+		t.Fatalf("the settings the harness was handed, %q, do not read: %v", named, err)
+	}
+	if got, set := settings.Env["DISABLE_AUTOUPDATER"]; !set || got != "1" {
+		t.Errorf("the settings the harness was handed, %q, set DISABLE_AUTOUPDATER to %q, want 1 over a "+
+			"repository's own", named, got)
 	}
 }
 

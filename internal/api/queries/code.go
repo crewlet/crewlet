@@ -14,70 +14,43 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// GITLET'S ROWS, AS QUESTIONS: `code_repos`, the repositories the asker
-// may read, a page at a time; `code_repo`, one repository in detail; and
-// `code_pushes`, one repository's push history. Each is decided PER
-// REPOSITORY, by the grant the serving node derives from its chart
-// (gitlet.GrantOf, ADR-0088) — a listing leaves out what the asker may not read,
-// and a read of one such repository is refused [NotPermitted] — BEHIND THE
-// GITLET APP: each is registered [Requires] [iam.GrantGitlet], which the
-// registry asks of every caller before an answer runs, so a principal without
-// it is refused with the app's own refusal and no repository is read for them
-// (ADR-0110). Registered [DecidedBy] `code.read`, as they once were, they
-// claimed a decision no answer made: none of them asks the authority table,
-// so the row could name the app and gate neither REST nor the socket.
-//
-// AND A CHANGE'S ROWS AND ITS ROUTING (codechange.go): `code_changes`,
-// `code_change`, `code_change_routing` and `code_reviews`, decided per
-// repository alike; AND A REPOSITORY'S CONTENT (codegit.go): `code_refs`,
-// `code_tree`, `code_find`, `code_blob`, `code_log`, `code_blame`,
-// `code_tree_commits`, `code_diff`, `code_tips`, `code_tags`, `code_compare`
-// and `code_commit`, decided per repository alike — the Gitlet node that
-// answers judges the grant again; AND ITS MERGE QUEUES AND ITS CHECKS
-// (codechecks.go): `code_queue`, `code_checks`, `code_check`,
-// `code_check_log` and `code_commit_marks`, the marks a history page's
-// commits carry (their checks and the changes they landed with), decided per
-// repository alike; AND A SEARCH OF ITS LINES
-// (codesearch.go): `code_search`, decided per repository alike by every Gitlet
-// node that answers a part of it, and read back at no session floor, since it
-// answers at the tip it names; AND GITLET'S SECTION COUNTS (codecounts.go):
-// `code_counts`, a scope's changes by state, the company's or one
-// repository's, decided per repository alike.
-//
-// AND WHO READ A UNIT'S REPOSITORY, `code_repo_readers`: the operator tool's
-// one answer (builtin.ReadersOf) — the repository read by name as the asker,
-// then a page of its readers from the usage domain — asked as a question of
-// this registry on the route an admin's script reads, so the route, the
-// generic form and the socket are one implementation, as the rows are. It is
-// registered [DecidedBy] its own verb, `code_repo_readers`, and decided inside
-// its answer before anything is read ([Sources.codeRepoReaders]): an admin's
-// and a person's, since the answer names the people, the credentials and the
-// seats that read a unit's code — an audit no repository's grant gives.
-//
+// GITLET'S ROWS, AS QUESTIONS: `code_repos`, `code_repo` and `code_pushes`, then
+// a change's rows and routing (codechange.go), a repository's content
+// (codegit.go), its merge queues and checks (codechecks.go), a search of its
+// lines (codesearch.go) and section counts (codecounts.go). Each is decided PER
+// REPOSITORY by the grant the serving node derives from its chart
+// (gitlet.GrantOf, ADR-0088): a listing leaves out what the asker may not read,
+// a read of one such repository is [NotPermitted], and the Gitlet node that
+// answers judges the grant again. All sit BEHIND THE GITLET APP, registered
+// [Requires] [iam.GrantGitlet], which the registry asks before an answer runs
+// (ADR-0110). [DecidedBy] `code.read` would claim a decision none makes: they
+// never ask the authority table, so it could gate neither REST nor the socket.
+
+// `code_repo_readers` is the operator tool's one answer (builtin.ReadersOf), asked
+// as a question of this registry so the route, the generic form and the socket
+// are one implementation. It is registered [DecidedBy] its own verb and decided
+// inside its answer ([Sources.codeRepoReaders]): an admin's, since it names the
+// people, credentials and seats that read a unit's code, an audit no
+// repository's grant gives.
+
 // # Why questions, and not Gitlet's own routes
 //
-// They were answered by routes of Gitlet's own (internal/api's
-// code.go), with a parameter reading and an error mapping of their own beside
-// the registry's — a second implementation of what a question is, reachable
-// only over REST. As questions they are answered by the same function on
-// every transport, under the same posture check, and they read the caller's
-// freshness through the one grammar every question does ([Freshness]): which
-// is what lets a screen read its own code writes back at `session`, the
-// position the write answered with as its floor (the dashboard's
-// SESSION_QUERIES), as every other domain's questions are read back. Their
-// REST paths are the ones Gitlet's routes had, through the named
-// routes, and no other.
-//
+// A second implementation of what a question is, reachable only over REST, is
+// what Gitlet's own routes were. As questions they are answered by one function
+// on every transport, under one posture check, with the caller's freshness read
+// through the one grammar ([Freshness]): a screen reads its own code writes
+// back at `session`, the position the write answered with (the dashboard's
+// SESSION_QUERIES). Their REST paths are the routes Gitlet had, and no other.
+
 // # Found per question
 //
-// The code reads come up with the native runtime, at boot or at the first
-// apply whose company sets code.backend: gitlet — after the API was assembled on a node
-// that booted with no company — so the source ([CodeSource]) is asked for them
-// on every question, and answers, where this node serves none now, WHY, in
-// this surface's own vocabulary: a company hosting no code is [NotFound]
-// (`not_hosted`), and a node applying, or failed to apply, a configuration
-// that hosts code is [ErrUnavailable] under a code of its own (internal/api's
-// code.go decides which, from the engine's reason, for the git routes too).
+// The code reads come up with the native runtime, at boot or at the first apply
+// whose company sets code.backend: gitlet, after the API was assembled, so the
+// source ([CodeSource]) is asked on every question and says, where this node
+// serves none now, WHY: a company hosting no code is [NotFound] (`not_hosted`);
+// a node applying, or failed to apply, a configuration that hosts code is
+// [ErrUnavailable] under a code of its own (internal/api's code.go decides
+// which, from the engine's reason, for the git routes too).
 
 // The reasons a code question's `not_found` names ([NotFound.Reason]), a word
 // a client acts on without reading the sentence, because the two are remedied
@@ -402,24 +375,18 @@ func askedFor(p Params, key string) (bool, error) {
 	}
 }
 
-// codeRefusal is a code read's failure in this surface's ONE vocabulary: a
-// repository that is not declared is [NotFound] (`not_declared`), naming it,
-// and so is a change it holds no such number of (`no_change`), an attempt of
-// a check it holds no row of (`no_check`), a ref no live
-// ref holds (`no_ref`) and an object or a path a revision does not hold
-// (`no_object`); no Gitlet node able to answer now is [ErrUnavailable];
-// a repository the asker's grant does not cover is [NotPermitted] with the
-// reader's own sentence; a level, a cursor or a parameter the reader refuses
-// is [ErrBadParams] with the reader's own sentence; and everything else — a
-// read this node could not serve, a floor on another log — is the registry's
-// to classify ([ClassifyFailure]), never a second list here of what clears by
-// waiting.
+// codeRefusal is a code read's failure in this surface's ONE vocabulary:
+// [NotFound] for an undeclared repository (`not_declared`), a change with no
+// such number (`no_change`), a check attempt with no row (`no_check`), a ref no
+// live ref holds (`no_ref`) and an object or path a revision lacks
+// (`no_object`); [ErrUnavailable] when no Gitlet node can answer now;
+// [NotPermitted] for a repository the grant does not cover; [ErrBadParams] for
+// what the reader refuses, with its own sentence; everything else is the
+// registry's to classify ([ClassifyFailure]).
 //
-// NOT PERMITTED IS A REFUSAL OF THE CALLER and never the failure everything
-// unnamed falls into: every node judging the same grant from the same chart
-// makes it alike, so no retry and no other node answers it otherwise, and its
-// sentence — who asked, which repository, the visibility that shut the asker
-// out and who does read it — is the whole of what the caller can act on.
+// NOT PERMITTED IS A REFUSAL OF THE CALLER, never an unnamed failure: every
+// node judging the same grant makes it alike, so no retry or other node
+// answers otherwise, and its sentence is all the caller can act on.
 func codeRefusal(repo string, err error) error {
 	switch {
 	case errors.Is(err, gitlet.ErrRepoNotFound):
@@ -470,30 +437,17 @@ func refusalSentence(err, sentinel error) string {
 }
 
 // codeRepoReaders answers who read a `visibility: unit` repository over a range
-// of company days, a page at a time: `name` (the path's repository), `from` and
-// `to` (company days, both inclusive — the [builtin.RepoReadersDefaultDays]
-// ending today where the request names neither), and `cursor` (the `next` of
-// the page before).
-//
-// THE OPERATOR TOOL'S ONE ANSWER ([builtin.ReadersOf]), so a person's script
-// and their assistant are told the same thing in the same pages: the
-// repository read by name as the caller, linearizable — a repository declared
-// a moment ago is never answered undeclared from an old copy, and no read
-// level is the caller's to choose, since what the page is read from is the
-// usage domain and not the code log — and, for a unit's repository, one page
-// of its readers summed over every node, the first page with how many readers
-// the per-day cap left out. A `visibility: company` repository's readers are
-// not recorded, and its answer says so.
-//
-// DECIDED FIRST, by its own verb ([authz.ActionCodeRepoReaders]) and before
-// anything else — whether this node serves Gitlet included — so a
-// caller who may not ask is refused alike by every node, as a route's mount
-// refused them: on grants alone ([authz.NoChart]), since the verb is admin's
-// and asks no relation. Then the source, so a node serving none says why;
-// then the read. A range or a cursor the read cannot take is [ErrBadParams] in
-// the tool's own words ([builtin.ReadersRefusal]) — this node's judgement,
-// before anything is read, or a peer's; everything else is a code read's
-// refusal ([codeRefusal]).
+// of company days, a page at a time: `name`, `from` and `to` (company days,
+// inclusive; [builtin.RepoReadersDefaultDays] ending today if neither is
+// named) and `cursor` (the previous page's `next`). It is THE OPERATOR TOOL'S
+// ONE ANSWER ([builtin.ReadersOf]): the repository read by name as the caller,
+// linearizable (a just-declared repository is never answered undeclared from an
+// old copy; the page comes from the usage domain, so no read level is the
+// caller's), then one page of readers summed over every node. A `visibility:
+// company` repository's readers are not recorded, and its answer says so.
+// DECIDED FIRST, by [authz.ActionCodeRepoReaders], on grants alone
+// ([authz.NoChart]), so every node refuses alike. A bad range or cursor is
+// [ErrBadParams] in [builtin.ReadersRefusal]'s words; else [codeRefusal].
 func (s Sources) codeRepoReaders(ctx context.Context, p Params) (any, error) {
 	const what = "code_repo_readers"
 	asking, err := caller(ctx, what)

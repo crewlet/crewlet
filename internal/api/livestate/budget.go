@@ -8,29 +8,16 @@ import (
 
 // applyBudget folds one meter report into the projection.
 //
-// Every node publishes a report of the SAME shared counter, each under its own
-// meter id (the node's incarnation), so a report is a complete snapshot of the
-// fleet's figures as one node read them at one moment. Three rules follow, and
-// each is load-bearing.
-//
-// A report REPLACES what is held rather than merging with it. Merging, or
-// taking a maximum, would pin a figure no later report could lower: a window
-// that turns over would leave its old figure on screen as a high-water mark.
-//
-// A report from the SAME meter with a seq at or below the one held is dropped.
-// Broker ordering holds only within a topic and the API reads a broadcast
-// subscription across all of them, so an older report can arrive after a newer
-// one and walk the meter backwards. The seq is the guard within one meter
-// because it is immune to that node's clock being stepped.
-//
-// A report from a DIFFERENT meter whose timestamp is older than the one held is
-// dropped too. Sequence numbers of two nodes are unrelated, so comparing them
-// would refuse a restarted node's first report as old; but accepting every
-// other meter's report unconditionally let a delayed frame from one node land
-// after a newer frame from another and walk the meter backwards just the same.
-// Their reads are of one counter, so the later READ is the truer one, and the
-// envelope timestamp is when it was read. Clock skew between nodes bounds how
-// wrong that can be: a node ahead by a second holds the meter for a second.
+// Each node reports the SAME shared counter under its own meter id (its
+// incarnation): a complete snapshot as that node read it. A report REPLACES what
+// is held; merging or a maximum would pin a figure a turned-over window could
+// never lower. A report from the SAME meter with a seq at or below the held one
+// is dropped: ordering holds only within a topic, so an older report can arrive
+// late, and seq is immune to a stepped clock. A report from a DIFFERENT meter
+// older by timestamp is dropped too: two nodes' seqs are unrelated (comparing
+// them would refuse a restarted node's first report), and the later READ of one
+// counter is the truer. Clock skew bounds the error: a node a second ahead holds
+// the meter a second.
 func (s *LiveState) applyBudget(env Envelope, payload map[string]any) (change Change) {
 	meterID := str(payload, "meter_id")
 	seq := num(payload, "seq")

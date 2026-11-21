@@ -22,53 +22,43 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// The transfer's subjects. Infrastructure names in an infrastructure estate:
-// they are not a domain's, so they carry no domain in their path.
+// The transfer's subjects: infrastructure, not a domain's, so no domain in
+// their path.
 const (
 	// SubjectOffer is where a joining node asks who can donate. Every
 	// hydrated node may answer.
 	SubjectOffer = "crewlet.statelog.snapshot.offer"
 
-	// SubjectFetchPrefix plus a donor's node id is where that donor
-	// streams its artefact from. Per donor rather than shared, because a
-	// joiner picks ONE offer and fetching from a shared subject would
-	// race every other donor into the same reply inbox. The body is the
-	// subject to deliver to, and the artefact chosen travels in a header
-	// ([HeaderFetchArtifact]).
+	// SubjectFetchPrefix plus a donor's node id is where that donor streams
+	// its artefact from: per donor, because a joiner picks ONE offer and a
+	// shared subject would race every donor into its reply inbox. The body
+	// is the deliver subject; the chosen artefact rides in
+	// [HeaderFetchArtifact].
 	SubjectFetchPrefix = "crewlet.statelog.snapshot.fetch."
 
 	// HeaderFetchArtifact names, on a fetch, the artefact the joiner chose
-	// from the offer — so the donor streams that copy or refuses, rather
-	// than whatever it holds by the time the fetch arrives. A fetch naming
-	// none is refused: streaming the newest instead is exactly the race the
-	// name exists to close.
-	//
-	// A HEADER rather than a field of the body, so the body stays the
-	// deliver subject and nothing else, which the donor reads without
-	// decoding anything.
+	// from the offer, so the donor streams that copy or refuses rather than
+	// whatever it holds by then. A fetch naming none is refused: streaming
+	// the newest is the race the name closes. A header, so the body stays
+	// the deliver subject alone, read without decoding.
 	HeaderFetchArtifact = "Crewlet-Snapshot-Artifact"
 )
 
-// TransferChunkWait bounds the wait for the NEXT chunk, not the transfer.
-//
-// It only has to outlast a healthy pause — a chunk read from disk plus the
-// round trip that returns its credit — because a stalled transfer is a failure
-// rather than something to wait out: the artefact is fetched to a temporary
-// path and a joiner that gives up simply asks again.
+// TransferChunkWait bounds the wait for the NEXT chunk, not the transfer. It
+// only has to outlast a healthy pause (a chunk read from disk plus its
+// credit's round trip): a stalled transfer fails rather than being waited out,
+// since the artefact lands at a temporary path and a joiner that gives up asks
+// again.
 const TransferChunkWait = 30 * time.Second
 
-// TransferReportEvery is how often a transfer still running says how far it
-// has got ([FetchArtefact]).
+// TransferReportEvery is how often a running transfer says how far it has got
+// ([FetchArtefact]).
 //
-// A JOIN AT BOOT IS INSIDE THE NODE'S RECOVERY, which a deployment bounds with
-// a startup probe sized partly by how long a join takes — and a transfer that
-// said nothing between its start and `statelog_adopted` gave that sizing
-// nothing to measure, and an operator watching a node that would not come up
-// nothing to tell a slow transfer from a stuck one by. TEN SECONDS, the
-// cadence the broker's own recovery reports at, so the two waits of one boot
-// read alike: often enough that a person watching learns why before they reach
-// for an interrupt, and rare enough that the longest join a rejoin window
-// admits (a day) is under nine thousand lines.
+// A join at boot is inside the node's recovery, whose startup probe is sized
+// partly by join time, so progress lines are what that sizing measures and
+// what tells an operator a slow transfer from a stuck one. TEN SECONDS, the
+// broker's own recovery cadence, so one boot's two waits read alike, and the
+// longest join a rejoin window admits (a day) stays under nine thousand lines.
 const TransferReportEvery = 10 * time.Second
 
 // Fetched is what a transfer wrote: how many bytes, and the SHA-256 of them
@@ -78,23 +68,20 @@ type Fetched struct {
 	SHA256 string
 }
 
-// transferPace is how a fetch waits and how it reports: [TransferChunkWait]
-// for each chunk and [TransferReportEvery] between progress lines, in
-// production. A value rather than the constants alone so a case about either
-// can run at a scale it can wait out.
+// transferPace is how a fetch waits and reports: [TransferChunkWait] and
+// [TransferReportEvery] in production, a value so a case about either can run
+// at a scale it can wait out.
 type transferPace struct {
 	wait   time.Duration
 	report time.Duration
 	log    *slog.Logger
 }
 
-// OfferWindow is the longest a joining node collects offers before choosing.
-//
-// Long enough that a busy donor answers, short enough that a node below the
-// floor — which is refusing every read and every write meanwhile — is not held
-// there by a peer that will never reply. It is a CEILING rather than the
-// collection's length: a joiner that names the donors it expects stops as soon
-// as each has answered ([CollectOffers]).
+// OfferWindow is the longest a joining node collects offers before choosing:
+// long enough for a busy donor to answer, short enough that a node below the
+// floor, refusing every read and write meanwhile, is not held by a peer that
+// never replies. A CEILING: a joiner that names the donors it expects stops
+// once each has answered ([CollectOffers]).
 const OfferWindow = 5 * time.Second
 
 // OfferRequest is what a joining node asks with.
@@ -114,31 +101,24 @@ type OfferRequest struct {
 	Generations map[string]uint32 `json:"generations"`
 
 	// StreamCreatedAt is, per domain, the creation instant of the stream
-	// the JOINER is live on.
-	//
-	// A SECOND IDENTITY TERM BESIDE THE GENERATION, because the two
-	// answer different questions and only one of them is answered by a
-	// number the fleet controls. A generation moves when an OPERATOR
-	// re-anchors; a stream that is deleted and rebuilt comes back at
-	// generation 0 with sequences counting from 1 again, and an artefact
-	// from before it matches on generation, matches on record version,
-	// matches on replay protocol, and names a history that no longer
-	// exists. The stream's creation instant ([StreamCreatedAt]) is the
-	// only value that separates them, which is why it is stamped into
-	// every checkpoint and carried in every manifest.
-	//
-	// Zero is NO CLAIM — a joiner that could not read its own stream's
-	// instant asks without one rather than refusing every donor.
+	// the JOINER is live on: a second identity term beside the generation,
+	// which only an operator's reanchor moves. A stream deleted and rebuilt
+	// returns at generation 0 counting from 1, and an artefact from before
+	// it matches on generation, record version and replay protocol while
+	// naming a history that no longer exists; only the creation instant
+	// ([StreamCreatedAt]) separates them, so every checkpoint and manifest
+	// carries it. Zero is NO CLAIM: a joiner that could not read its
+	// stream's instant asks without one rather than refusing every donor.
 	StreamCreatedAt map[string]time.Time `json:"stream_created_at,omitempty"`
 }
 
 // Offer is what a donor answers with: the artefact it holds, or — with no
 // Fetch — that it holds none ([Offer.Declined]).
 type Offer struct {
-	// Donor is the node that answered, on every answer — an offer and a
-	// decline alike — because it is what a joiner counts its expected
-	// donors off by ([CollectOffers]). Not the manifest's NodeID, which
-	// names who TOOK the artefact and is absent from a decline.
+	// Donor is the node that answered, on an offer and a decline alike,
+	// because a joiner counts its expected donors off it
+	// ([CollectOffers]). Not the manifest's NodeID, which names who TOOK
+	// the artefact and is absent from a decline.
 	Donor string `json:"donor"`
 
 	// Manifest is the artefact's own claim about itself, absent on a
@@ -157,24 +137,18 @@ func (o Offer) Declined() bool { return o.Fetch == "" }
 // known is every migration of the replicated estate this binary carries
 // ([store.KnownMigrations]).
 //
-// # Every clause is a refusal a joiner must make BEFORE it transfers
-//
-// A gigabyte-scale transfer that ends in a refusal is a gigabyte-scale
-// transfer nobody needed, and the refusals here are all answerable from the
-// manifest alone. That includes the SCHEMA: the adoption refuses a file
-// carrying a migration this binary does not have once it holds the file, and
-// the manifest lists the file's migrations — so an offer from a donor on a
-// newer schema is refused here, from that list, rather than fetched whole and
-// refused after. The file is still checked against its own list once it
-// arrives, which is what makes the list a claim worth reading.
+// Every clause is answerable from the manifest, so a joiner refuses BEFORE a
+// gigabyte-scale transfer nobody needed. That includes the schema: an offer
+// whose manifest lists a migration this binary lacks is refused here rather
+// than fetched and refused at adoption, which still checks the file against
+// its own list.
 func (o Offer) Usable(req OfferRequest, build map[string]Registered, known []string) error {
 	if o.Manifest.V != ManifestVersion {
 		return fmt.Errorf("the artefact is a version %d manifest and this build "+
 			"reads %d", o.Manifest.V, ManifestVersion)
 	}
-	// EXACTLY THE LOGS THIS BUILD REGISTERS: one the artefact names that
-	// this build does not run is a copy of rows no applier here keeps, and
-	// the loop below refuses one that is missing.
+	// EXACTLY THE LOGS THIS BUILD REGISTERS: a log this build does not run
+	// is rows no applier here keeps; the loop below refuses a missing one.
 	for name := range o.Manifest.Domains {
 		if _, ours := build[name]; !ours {
 			return fmt.Errorf("the artefact names the log %q, which this build does "+
@@ -189,9 +163,8 @@ func (o Offer) Usable(req OfferRequest, build map[string]Registered, known []str
 		pos, ok := o.Manifest.Domains[name]
 		if !ok {
 			// AN OFFER MISSING A DOMAIN IS REFUSED, never partially
-			// adopted: a build that registers a domain the artefact
-			// never named would otherwise conclude it is caught up on
-			// it, from a checkpoint the file has no rows for.
+			// adopted: this node would believe itself caught up on a
+			// domain the file has no rows for.
 			return fmt.Errorf("the artefact names no position for %q, which this "+
 				"build registers — an artefact is adopted wholesale, so a domain "+
 				"it does not name is one this node would believe it was caught "+
@@ -214,10 +187,8 @@ func (o Offer) Usable(req OfferRequest, build map[string]Registered, known []str
 				name, pos.Generation, gen)
 		}
 		// THROUGH [IdentityOf], never a bare Equal: the instant is stored
-		// at microsecond precision and the broker reports nanoseconds, so
-		// comparing them exactly makes every honest artefact look
-		// recreated. That rule has one implementation and this is a
-		// caller of it.
+		// at microseconds and the broker reports nanoseconds, so an exact
+		// compare makes every honest artefact look recreated.
 		if created, named := req.StreamCreatedAt[name]; named &&
 			IdentityOf(pos.StreamCreatedAt, created, true) == StreamRecreated {
 
@@ -238,20 +209,17 @@ func (o Offer) Usable(req OfferRequest, build map[string]Registered, known []str
 }
 
 // Newest is the highest position any domain in this offer reached, which is
-// how a joiner ranks offers.
-//
-// NEWER IS STRICTLY BETTER and an older offer is never preferable on age: the
-// only thing an older artefact buys is a longer replay.
+// how a joiner ranks offers: newer is strictly better, since all an older
+// artefact buys is a longer replay.
 func (o Offer) Newest() uint64 { return newestSeq(o.Manifest.Domains) }
 
 // Dialer opens a connection for a transfer.
 //
-// ITS OWN CONNECTION, from the same credentials. This tree's own note on the
-// projection package says why: "a blocked watch consumer stalls the node's
-// single NATS read loop and every seat mailbox with it" — and this transfer is
-// tens of gigabytes rather than a memory row. A second connection adds no
-// authority (same credentials, same account) and no configuration, and both
-// sides open one and close it when the transfer ends.
+// ITS OWN CONNECTION, from the same credentials: a blocked consumer stalls a
+// connection's single read loop and every seat mailbox with it (the projection
+// package's note), and a transfer is tens of gigabytes. A second connection
+// adds no authority and no configuration; both sides open one and close it
+// when the transfer ends.
 type Dialer func(ctx context.Context) (*nats.Conn, error)
 
 // DonorDeps is everything the donor half needs.
@@ -262,40 +230,33 @@ type DonorDeps struct {
 	// Dial opens the transfer's own connection.
 	Dial Dialer
 
-	// Newest answers this node's current artefact, reporting false when it
-	// has none to donate. It is a function rather than a value because a
-	// node's newest artefact changes under it.
+	// Newest answers this node's current artefact, false when it has none
+	// to donate: a function, because the newest artefact changes under it.
 	Newest func() (Manifest, bool)
 
 	// Path answers where an artefact's bytes are, given its manifest.
 	Path func(Manifest) string
 
-	// MaxTransfers bounds how many fetches this node streams at once.
-	// Zero takes [DefaultMaxTransfers].
-	//
-	// A BOUND RATHER THAN A QUEUE. Each transfer is a goroutine holding an
-	// open file and a credit window of chunks in flight, and the fetch
-	// subject is a fan-in every joiner in the fleet can reach at once — so
-	// with no bound, a fleet that restarts together spawns one goroutine
-	// per joiner on whichever node answered first. What is over the bound
-	// is TERMINATED with a reason rather than queued, because a joiner
-	// that is told no immediately asks the next donor, and one left
-	// waiting on a queue it cannot see spends its whole window on a node
-	// that was never going to answer.
+	// MaxTransfers bounds how many fetches this node streams at once; zero
+	// takes [DefaultMaxTransfers]. Each transfer holds a goroutine, an open
+	// file and a credit window, and every joiner in a fleet restarting
+	// together can reach the fetch subject at once. Over the bound a fetch
+	// is TERMINATED with a reason, never queued: a joiner told no asks the
+	// next donor, while one on a queue it cannot see spends its window on
+	// a node that will not answer.
 	MaxTransfers int
 
 	// Logger is where this writes. Nil is the package's own component
-	// logger, never silence: see loggerOr for what silence cost.
+	// logger, never silence (see loggerOr).
 	Logger *slog.Logger
 }
 
 // DefaultMaxTransfers is how many artefacts one node streams at once.
 //
-// FOUR, which is a disk rather than a network number: a transfer is a
-// sequential read of one large file, and a node serving four is already
-// seeking between four. It is deliberately not derived from GOMAXPROCS — the
-// cost being bounded here is the donor's disk and the joiners' patience, and
-// neither scales with this node's cores.
+// FOUR, a disk number rather than a network one: a transfer is a sequential
+// read of one large file, and a node serving four is already seeking between
+// them. Not derived from GOMAXPROCS: the donor's disk and the joiners'
+// patience do not scale with cores.
 const DefaultMaxTransfers = 4
 
 // Donor answers offer requests and streams its artefact.
@@ -304,12 +265,11 @@ type Donor struct {
 	log  *slog.Logger
 
 	// transfers admits at most [DonorDeps.MaxTransfers] concurrent
-	// streams. Buffered, and a send that cannot proceed is refused rather
-	// than waited on — see [DonorDeps.MaxTransfers].
+	// streams; a send that cannot proceed is refused, never waited on.
 	transfers chan struct{}
 
 	// serving is whether the server has confirmed [Donor.Serve] is
-	// listening — see [Donor.Serving].
+	// listening ([Donor.Serving]).
 	serving atomic.Bool
 }
 
@@ -343,11 +303,9 @@ func (d *Donor) admissionRefused(nc *nats.Conn, msg *nats.Msg) {
 		"detail", "this node is already streaming as many artefacts as it will "+
 			"at once; the joiner was told so rather than queued, so it can ask "+
 			"another donor inside its own collection window")
-	// 429 AND NOT 503. A 503 status header is what the broker itself sends
-	// for "no responders", and the client turns one into [nats.ErrNoResponders]
-	// before a subscriber ever sees the description — so a donor refusing
-	// with 503 would reach the joiner as "nobody is listening", which is a
-	// different fact with a different remedy.
+	// 429, NOT 503: the broker sends 503 for "no responders", and the
+	// client turns it into [nats.ErrNoResponders] before a subscriber sees
+	// the description, so the joiner would read "nobody is listening".
 	d.terminate(nc, deliver, 429,
 		fmt.Sprintf("this donor is streaming %d artefact(s) already, which is its "+
 			"limit; ask another node", cap(d.transfers)))
@@ -356,46 +314,34 @@ func (d *Donor) admissionRefused(nc *nats.Conn, msg *nats.Msg) {
 // FetchSubject is where this donor streams from.
 func (d *Donor) FetchSubject() string { return SubjectFetchPrefix + d.deps.NodeID }
 
-// ErrDonorConnectionClosed is what [Donor.Serve] returns when the connection it
-// was serving over was closed under it, which NATS does for good — no further
-// reconnect — on an error it does not retry. The donor had subscribed, whether
-// or not the server had confirmed it yet ([Donor.Serving]), so the caller's
-// answer is to dial again rather than to wait out a failure.
+// ErrDonorConnectionClosed is what [Donor.Serve] returns when NATS closed its
+// connection for good (no further reconnect). The donor had subscribed,
+// confirmed or not ([Donor.Serving]), so the caller redials rather than
+// waiting out a failure.
 var ErrDonorConnectionClosed = errors.New("statelog: the donor's connection was closed")
 
 // Serve answers offer requests and fetches until the context ends, or until
 // the connection it dialled is closed under it ([ErrDonorConnectionClosed]).
 //
-// # Why it returns rather than waiting on the context alone
-//
-// It used to block on the context and nothing else, so a connection the NATS
-// client closed for good — a server that refused a chunk past a max_payload
-// lowered under it, credentials it stopped accepting — left this donor
-// subscribed to nothing for the rest of the node's life while it went on
-// advertising an artefact through the snapshot register. The node ran on, as
-// it should: a donor serves peers, and its loss is not the node's
-// (see the engine's donor loop, which dials again). What has to happen is that
-// someone notices, and only the connection's owner can.
+// It returns on that close rather than waiting on ctx alone: a connection the
+// client closed for good (a chunk past a lowered max_payload, credentials no
+// longer accepted) would leave the donor subscribed to nothing while the
+// snapshot register still advertises its artefact. The node runs on, since a
+// donor's loss is not the node's; only the connection's owner can notice, and
+// the engine's donor loop redials.
 func (d *Donor) Serve(ctx context.Context) error {
 	nc, err := d.deps.Dial(ctx)
 	if err != nil {
 		return fmt.Errorf("statelog: open the donor's connection: %w", err)
 	}
 	defer nc.Close()
-	// BEFORE THE SUBSCRIPTIONS, so no close goes unheard: a status
-	// listener hears only the changes after it, and a connection closed
-	// before it is one the client refuses to subscribe on
-	// ([nats.ErrConnectionClosed]), which ends Serve below as a setup that
-	// failed.
-	//
-	// AND THAT IS THE ONLY WAY a connection that arrived closed is told,
-	// never as [ErrDonorConnectionClosed]: that error says the donor HAD
-	// subscribed, which the engine's loop answers as a new outage — a
-	// redial from its base a second later, logged every time — so a
-	// connection that arrived closed on every redial, called a close, would
-	// be redialled once a second with a line each time for as long as it
-	// went on. Arriving closed is a dial that gave the donor nothing, and
-	// it is redialled as a refused dial is, on the doubling wait.
+	// BEFORE THE SUBSCRIPTIONS, so no close goes unheard: a listener hears
+	// only later changes, and a connection already closed is refused at
+	// Subscribe ([nats.ErrConnectionClosed]), failing Serve as a setup.
+	// That is the only way an arrived-closed connection is told, never as
+	// [ErrDonorConnectionClosed]: the engine's loop redials that within a
+	// second, logging each time, while a dial that gave the donor nothing
+	// is redialled on the doubling wait.
 	closed := nc.StatusChanged(nats.CLOSED)
 	defer nc.RemoveStatusListener(closed)
 
@@ -415,10 +361,7 @@ func (d *Donor) Serve(ctx context.Context) error {
 				d.stream(ctx, nc, msg)
 			}()
 		default:
-			// REFUSED NOW, NAMING THE REASON. A joiner told no asks
-			// the next donor; one left on a queue it cannot see
-			// spends its whole collection window on a node that was
-			// never going to answer it.
+			// REFUSED NOW, never queued ([DonorDeps.MaxTransfers]).
 			d.admissionRefused(nc, msg)
 		}
 	})
@@ -427,12 +370,10 @@ func (d *Donor) Serve(ctx context.Context) error {
 	}
 	defer func() { _ = fetches.Unsubscribe() }()
 
-	// SERVING ONCE THE SERVER HAS BOTH SUBSCRIPTIONS, never when Subscribe
-	// returns: Subscribe only queues the interest on this connection, and a
-	// subscription is registered when that interest reaches the server. A join
-	// on this node asks on ANOTHER connection, so one that named this donor
-	// the instant Subscribe returned could publish its request first and wait
-	// out the whole [OfferWindow] for an answer nobody was asked for.
+	// SERVING ONCE THE SERVER HAS BOTH SUBSCRIPTIONS, not when Subscribe
+	// returns, which only queues the interest: a join on this node asks on
+	// ANOTHER connection, and could publish first and wait out the whole
+	// [OfferWindow] for an answer nobody was asked for.
 	defer d.serving.Store(false)
 	if err := d.confirmListening(ctx, nc); err != nil {
 		return err
@@ -456,23 +397,16 @@ func donorConnectionClosed(nc *nats.Conn) error {
 }
 
 // confirmListening returns once the server has acknowledged everything nc has
-// sent so far — [Donor.Serve]'s two subscriptions — or when ctx ends, or when
-// nc has closed for good.
+// sent so far ([Donor.Serve]'s two subscriptions), when ctx ends, or when nc
+// has closed for good.
 //
-// A CONFIRMATION THAT FAILS IS ASKED AGAIN rather than ending the donor. A
-// flush the client gave up on is not a subscription the server refused: both
-// stay on the connection, which sends them again when it reconnects, so the
-// donor answers whatever reaches it meanwhile and only waits to SAY it serves.
-// Ending Serve instead would end it for the node's whole life — nothing starts
-// a donor twice — over a broker that was slow for a moment at the wrong time.
-//
-// EACH ATTEMPT IS BOUNDED BY [OfferWindow], the longest a joiner listens for
-// an answer: a server that has not confirmed the subscriptions in that long
-// would have left a join that asked meanwhile unanswered anyway, so a longer
-// attempt buys nothing and a shorter one only asks the server more often while
-// it is not answering. No pause between attempts is needed: an attempt fails
-// at once only when its connection has just dropped, and the next one's ping
-// waits in the connection's reconnect buffer.
+// A failed confirmation is ASKED AGAIN, never ends the donor: the
+// subscriptions stay on the connection and are resent on reconnect, so the
+// donor answers meanwhile and only waits to SAY it serves, and ending Serve
+// over a moment's slow broker loses the donor for the node's life. Each
+// attempt is bounded by [OfferWindow], the longest a joiner listens, so longer
+// buys nothing. No pause between attempts: one fails at once only when the
+// connection just dropped, and the next ping waits in the reconnect buffer.
 func (d *Donor) confirmListening(ctx context.Context, nc *nats.Conn) error {
 	unconfirmed := false
 	for {
@@ -488,11 +422,9 @@ func (d *Donor) confirmListening(ctx context.Context, nc *nats.Conn) error {
 		case ctx.Err() != nil:
 			return ctx.Err()
 		case nc.IsClosed():
-			// CLOSED UNDER A DONOR THAT HAD SUBSCRIBED, and so
-			// [ErrDonorConnectionClosed] — a new outage its loop redials
-			// promptly — never the dial that gave it nothing, which a
-			// connection that arrived closed is: that one is refused
-			// at Subscribe, before anything here runs.
+			// CLOSED UNDER A DONOR THAT HAD SUBSCRIBED, so
+			// [ErrDonorConnectionClosed], which its loop redials promptly;
+			// one that arrived closed was refused at Subscribe instead.
 			return fmt.Errorf("statelog: the server had not confirmed the "+
 				"donor's subscriptions (%v): %w", err, donorConnectionClosed(nc))
 		}
@@ -510,32 +442,25 @@ func (d *Donor) confirmListening(ctx context.Context, nc *nats.Conn) error {
 }
 
 // Serving reports whether this donor is answering offer requests: from the
-// moment the server has confirmed [Donor.Serve]'s subscriptions until Serve
-// returns.
+// server's confirmation of [Donor.Serve]'s subscriptions until Serve returns.
 //
-// WHAT A JOIN ON THIS SAME NODE ASKS before it names this node among the
-// donors it waits for ([AdoptDeps.Donors]). A node's own donor is the one a
-// lone node below the floor ends its collection on, so it is named whenever it
-// answers — and never when it does not, which is every BOOT: the boot's join
-// runs before any donor starts, and a node naming itself there waited the
-// whole [OfferWindow] for an answer that could not come.
+// A join on this node asks it before naming this node among the donors it
+// waits for ([AdoptDeps.Donors]): a lone node below the floor ends its
+// collection on its own donor's answer, but at BOOT the join runs before any
+// donor starts, and naming itself there would wait out the [OfferWindow].
 func (d *Donor) Serving() bool { return d.serving.Load() }
 
 // answerOffer replies with this node's artefact, or with a decline when it
 // holds none.
 //
-// A DECLINE RATHER THAN SILENCE, because a joiner that knows whom to expect
-// stops collecting once each has answered ([CollectOffers]), and silence is
-// indistinguishable from a donor that has not heard the request yet — so a
-// silent donor held every joiner for the whole [OfferWindow], refusing every
-// read and write meanwhile. The commonest silent donor was the joiner's OWN:
-// every data node runs one, and a node that has never snapshotted holds
-// nothing, so a lone node below the floor waited five seconds on itself.
+// A DECLINE RATHER THAN SILENCE: a joiner that knows whom to expect stops once
+// each has answered ([CollectOffers]), and silence looks like a donor that has
+// not heard yet, holding the joiner, refusing reads and writes, for the whole
+// [OfferWindow]. The commonest such donor is the joiner's own, on a node that
+// has never snapshotted.
 //
-// THE REQUEST IS NOT READ. Every data node keeps the one replicated estate, so
-// there is only one thing a joiner can be asking for, and what makes an offer
-// usable — its generations, its floor, its record versions — is the joiner's
-// to judge from the manifest ([Offer.Usable]), never the donor's to guess.
+// THE REQUEST IS NOT READ: every data node keeps the one replicated estate,
+// and whether an offer is usable is the joiner's to judge ([Offer.Usable]).
 func (d *Donor) answerOffer(ctx context.Context, msg *nats.Msg) {
 	answer := Offer{Donor: d.deps.NodeID}
 	if m, ok := d.deps.Newest(); ok {
@@ -556,11 +481,10 @@ func (d *Donor) answerOffer(ctx context.Context, msg *nats.Msg) {
 // stream sends the artefact the fetch names to the deliver subject its body
 // names.
 //
-// THE ARTEFACT THE JOINER CHOSE, OR NONE: the joiner accepted an offer from its
-// manifest, so a copy taken since is refused with 410 rather than streamed and
-// refused only after the transfer, by a checksum it could never match. A fetch
-// naming no artefact ([HeaderFetchArtifact]) is refused with 400: it chose
-// nothing, and the newest artefact is not what it was offered.
+// THE ARTEFACT THE JOINER CHOSE, OR NONE: a copy taken since the offer is
+// refused with 410 rather than streamed and refused after by a checksum it
+// could never match, and a fetch naming no artefact ([HeaderFetchArtifact])
+// with 400, since the newest is not what it was offered.
 func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
 	deliver := string(msg.Data)
 	if deliver == "" {
@@ -592,9 +516,8 @@ func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
 	}
 	defer func() { _ = file.Close() }()
 
-	// THE CREDIT WINDOW. Every chunk carries a reply subject and the
-	// donor keeps at most a window's worth outstanding — which is what
-	// keeps a pipe full across a real round trip, where strict
+	// THE CREDIT WINDOW: every chunk carries a reply subject and at most a
+	// window's worth is outstanding, keeping the pipe full where
 	// stop-and-wait would cap the transfer at one chunk per round trip.
 	credits, err := nc.SubscribeSync(nats.NewInbox())
 	if err != nil {
@@ -622,11 +545,9 @@ func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
 			chunk := nats.NewMsg(deliver)
 			chunk.Reply = credits.Subject
 			chunk.Data = append([]byte(nil), buf[:n]...)
-			// THE PUBLISH ERROR MUST NOT LAND ON THE OUTER err: that
-			// one is file.Read's, and the EOF check below the block is
-			// what ends the transfer. Assigning here would either end
-			// the loop on a successful read or lose the read's own
-			// failure.
+			// THE PUBLISH ERROR MUST NOT LAND ON THE OUTER err, which is
+			// file.Read's and which the EOF check below reads: it would
+			// end the loop on a good read or lose the read's failure.
 			//nolint:govet // shadow: deliberate; see the paragraph above
 			if err := nc.PublishMsg(chunk); err != nil {
 				d.terminate(nc, deliver, 500, fmt.Sprintf("send a chunk: %v", err))
@@ -657,12 +578,10 @@ func (d *Donor) stream(ctx context.Context, nc *nats.Conn, msg *nats.Msg) {
 		"node", d.deps.NodeID, "bytes", m.Bytes, "sha256", m.SHA256)
 }
 
-// terminate ends a transfer with a verdict.
-//
-// AN EMPTY MESSAGE CARRYING A STATUS, which is the shape this tree's other
-// chunked transfer uses and for the same reason: every failure arrives looking
-// exactly like a normal end of stream, and the header is the only thing
-// between that and a truncated file reported as a snapshot.
+// terminate ends a transfer with a verdict: an empty message carrying a
+// status, since a failure otherwise looks exactly like a normal end of stream
+// and the header is all that keeps a truncated file from passing as a
+// snapshot.
 func (d *Donor) terminate(nc *nats.Conn, deliver string, status int, detail string) {
 	msg := nats.NewMsg(deliver)
 	msg.Header = nats.Header{}
@@ -674,51 +593,18 @@ func (d *Donor) terminate(nc *nats.Conn, deliver string, status int, detail stri
 	_ = nc.Flush()
 }
 
-// CollectOffers asks the fleet who can donate and returns what answers,
-// newest first. A donor's decline ([Offer.Declined]) is counted and never
-// returned.
+// CollectOffers asks the fleet who can donate and returns the offers, best
+// first, equals shuffled so a fleet restarting together spreads over donors
+// ([rankOffers]); a decline ([Offer.Declined]) is counted, never returned. It
+// collects for a window, since the fastest reply is not the newest artefact.
 //
-// It collects for a WINDOW rather than taking the first reply, because the
-// first reply is the fastest peer rather than the best artefact — and newer is
-// strictly better, since the only thing an older one buys is a longer replay.
-//
-// # Spread across equally good donors
-//
-// Ordering by the artefact alone makes every joiner in a fleet rank the same
-// offers the same way, so a fleet that restarts together sends every one of
-// them at the same node — which then refuses all but a few
-// ([DonorDeps.MaxTransfers]), and the rest spend a round asking again. Offers
-// that are equally good are shuffled among themselves first ([rankOffers]), so
-// the ordering is still "best artefact first" and the choice among the best is
-// this joiner's own.
-//
-// # Unless every donor it expects has answered
-//
-// expect names every donor that can answer — the engine names the live data
-// nodes and every node whose register row says it holds an artefact
-// ([AdoptDeps.Donors]) — and the collection ends the moment each has
-// answered, an offer or a decline, because no later answer can come from
-// anybody it is waiting for. With none named, the window decides. So an
-// expectation must be a SUPERSET of who can offer: a donor it does not name is
-// heard only while somebody named has still to answer, and its offer arriving
-// after the last named answer is not waited for. One it named that never
-// answers — not up yet, or gone — costs the window and nothing more, which is
-// the most an expectation can cost: the window was what every join paid
-// before it. The expectation may also be READ while the collection runs
-// rather than handed in, which is how [Adopter.Join] names its donors — see
-// [collectOffers].
-//
-// # What the context means
-//
-// The window is the joiner's patience, and ctx is its CALLER'S: whichever ends
-// first ends the collection. The window ending is the ordinary answer — what
-// arrived, possibly nothing. ctx ending is an ERROR wrapping ctx.Err(), never
-// an empty result, because "nobody answered" is acted on — through
-// [Adopter.Join] a boot comes up on the history it has and a runtime rejoin
-// backs off to ask again — and a node whose boot was interrupted or whose
-// state log is stopping must do neither. A connection that stops delivering
-// is an error for the same reason: a joiner that cannot hear has not been told
-// that nobody can donate.
+// expect names every donor that can answer ([AdoptDeps.Donors]); the collection
+// ends once each has, else at the window. It must be a SUPERSET of who can
+// offer: one it omits is heard only while a named one is still to answer.
+// Whichever of the window and ctx ends first ends the collection, but ctx
+// ending, like a connection that stops delivering, is an ERROR, never an empty
+// result: "nobody answered" brings a boot up on its own history or backs a
+// rejoin off, and an interrupted or deaf node must do neither.
 func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window time.Duration,
 	expect ...string) ([]Offer, error) {
 	var named func(context.Context) ([]string, error)
@@ -729,21 +615,16 @@ func CollectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 }
 
 // collectOffers is [CollectOffers] with its expectation READ BESIDE the
-// collection rather than before it: expect runs once, on a context the window
-// bounds, while the offers arrive, and the collection ends once every donor it
-// names has answered — those that answered before it returned included. Nil
-// expects nobody, and the window decides.
+// collection: expect runs once, on a context the window bounds, while offers
+// arrive, and donors that answered before it returned count. Nil expects
+// nobody. Beside, not before, because [Adopter.Join]'s expectation is a
+// coordination read, which run first would add a slow store's time ahead of
+// the window on a node refusing every read and write while it joins. A
+// listing still running at the window's close is abandoned; one that fails or
+// names nobody leaves the window to decide.
 //
-// BESIDE AND NOT BEFORE, because the expectation [Adopter.Join] reads is a
-// listing of the fleet's live data nodes, which is a coordination read: run
-// first, a slow or unreachable store added all of its time in front of the
-// window, on a node refusing every read and write while it joins — for an
-// expectation that is only ever a way to stop early. Read beside, it costs
-// nothing the window does not: a listing still running when the window closes
-// is abandoned, and one that fails or names nobody leaves the window to decide.
-//
-// expect must return once its context ends, because the collection waits for
-// it: nothing a collection starts outlives the call.
+// expect must return once its context ends: the collection waits for it, and
+// nothing a collection starts outlives the call.
 func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window time.Duration,
 	expect func(context.Context) ([]string, error)) ([]Offer, error) {
 	// A CALLER THAT HAS ALREADY GIVEN UP ASKS NOBODY: a request published
@@ -763,28 +644,26 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 	defer func() { _ = sub.Unsubscribe() }()
 
 	// THE WINDOW IS A CHILD OF THE CALLER'S CONTEXT, so one wait observes
-	// both ends. A deadline computed beside ctx — the shape this replaced —
-	// is a timer nothing else can interrupt: a SIGTERM during a boot's
-	// window, or a Stop during a runtime rejoin, sat out the rest of it.
+	// both ends: a SIGTERM or a Stop ends it, as a separate deadline could
+	// not.
 	collect, cancel := context.WithTimeout(ctx, window)
 	defer cancel()
 	if err := nc.PublishRequest(SubjectOffer, inbox, body); err != nil {
 		return nil, fmt.Errorf("statelog: ask for offers: %w", err)
 	}
-	// Bounded by the window as well: a broker that has not confirmed the
-	// ask by the time the window closes has asked nobody, which is a
-	// failure to ask rather than an answer — and it is the WINDOW's end,
-	// not the caller's, so it is named rather than wrapped.
+	// Bounded by the window too: a broker that has not confirmed the ask
+	// by then asked nobody, a failure rather than an answer, named as the
+	// window's end rather than wrapped as the caller's.
 	if err := nc.FlushWithContext(collect); err != nil {
 		return nil, boundedWaitErr(ctx, err, "flush the offer request",
 			fmt.Errorf("statelog: the broker did not confirm the offer request "+
 				"within the %s offer window, so no donor was asked", window))
 	}
 
-	// THE EXPECTATION, read on a goroutine of its own under the window. Its
-	// answer INTERRUPTS the wait below (arrived), because every donor it
-	// names may have answered already, and a wait for a next answer that is
-	// never coming would hold the collection to the window regardless.
+	// THE EXPECTATION, read on its own goroutine under the window. Its
+	// answer INTERRUPTS the wait below (arrived): every donor it names may
+	// have answered already, and a wait for an answer never coming would
+	// hold the collection to the window.
 	wait := collect
 	var expected chan []string
 	if expect != nil {
@@ -828,12 +707,11 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 			if ctx.Err() != nil {
 				return nil, fmt.Errorf("statelog: collect offers: %w", ctx.Err())
 			}
-			// THE EXPECTATION ARRIVING — its own interruption, with the
-			// window still open, and its answer sent before it: fold it
-			// in, less whoever has answered already, and go on waiting on
-			// the window alone. An answer that came in with it is still in
-			// the subscription, read on the next turn — or, when nobody
-			// it names is left to wait for, below.
+			// THE EXPECTATION ARRIVING, window still open, its answer sent
+			// before the interruption: fold it in, less whoever has
+			// answered, and wait on the window alone. An answer that came
+			// with it stays in the subscription, read next turn or in the
+			// drain below.
 			if expected != nil && wait.Err() != nil && collect.Err() == nil {
 				named := <-expected
 				expected, wait = nil, collect
@@ -847,29 +725,23 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 				}
 				continue
 			}
-			// The window closed, or the broker reported that nothing
-			// subscribes to the subject at all — which is the same
-			// answer sooner, and what a lone node hears at boot before
-			// its own donor has started.
+			// The window closed, or the broker reported no subscriber at
+			// all: the same answer sooner, which a lone node hears at boot
+			// before its own donor starts.
 			if collect.Err() != nil || errors.Is(err, nats.ErrNoResponders) {
 				break
 			}
-			// ANYTHING ELSE IS A JOINER THAT CAN NO LONGER HEAR — a
-			// closed connection, a dropped subscription — and ending
-			// the loop there would report a fleet it never heard from
-			// as a fleet with nothing to give.
+			// ANYTHING ELSE IS A JOINER THAT CAN NO LONGER HEAR (a closed
+			// connection, a dropped subscription), never a fleet with
+			// nothing to give.
 			return nil, fmt.Errorf("statelog: collect offers: %w", err)
 		}
 		take(msg)
 	}
-	// WHAT HAS ALREADY ARRIVED IS READ BEFORE RETURNING, without waiting for
-	// more. The loop ends the moment the last donor it expects has answered
-	// or the window closes, and a wait whose context has ended answers that
-	// end even with a message in hand — so an answer that reached the
-	// subscription in the same instant, from a donor the join did not name
-	// or as the window closed, is one that arrived in time and was never
-	// read. Left there, the only usable offer could be dropped while the
-	// join reports that nobody could donate.
+	// WHAT HAS ALREADY ARRIVED IS READ BEFORE RETURNING, without waiting: a
+	// wait whose context ended answers that end even with a message pending,
+	// so an answer arriving in the same instant (from an unnamed donor, or
+	// as the window closed) would be dropped, perhaps the only usable offer.
 	for {
 		msg, err := sub.NextMsg(0)
 		if err != nil {
@@ -877,9 +749,8 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 		}
 		take(msg)
 	}
-	// THE WINDOW CLOSING IS HOW A COLLECTION ENDS; the caller's own
-	// cancellation is not, and it is answered as itself rather than with
-	// whatever arrived before it.
+	// THE CALLER'S CANCELLATION is answered as itself, never with whatever
+	// arrived before it.
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("statelog: collect offers: %w", err)
 	}
@@ -887,35 +758,17 @@ func collectOffers(ctx context.Context, nc *nats.Conn, req OfferRequest, window 
 }
 
 // FetchArtefact streams an offer's bytes to dest and returns what it wrote.
+// dest must not exist: its path is deterministic, so a file there is this
+// function's debris, never a resume point. Every wait is bounded by
+// [TransferChunkWait] and by ctx, reported apart ([boundedWaitErr]).
 //
-// dest must not exist: a partial file from a previous attempt is debris rather
-// than a resume point, and the path is deterministic so the debris is always
-// this function's own.
-//
-// Every wait in it is bounded by [TransferChunkWait] as well as by ctx, and
-// the two ends are reported differently — see [boundedWaitErr].
-//
-// IT SAYS HOW FAR IT HAS GOT: `statelog_join_fetching` once the donor has
-// been asked, naming the donor, the artefact's size and the projected join
-// ([ProjectJoinSeconds]), and `statelog_join_progress` every
-// [TransferReportEvery] after that, with the bytes received, the total, the
-// elapsed seconds and the rate — which is what a startup probe sized for a join
-// is measured from. logger nil is the package's own.
-//
-// THE CHECKSUM IS TAKEN AS THE BYTES ARE WRITTEN ([Fetched.SHA256]), in the
-// order they reach the file. It is what a joiner compares with the manifest,
-// and it was a second read of the whole file once the transfer ended: as long
-// as the transfer again on a large estate, inside a boot's recovery, and the
-// one step of a join nothing could cancel. A dropped or reordered chunk changes
-// the stream exactly as it changes the file, since every write lands after the
-// one before it.
-//
-// A FAILURE WRITING THE COPY IS THIS NODE'S, and is marked as one
-// ([nodeFault]): creating, writing, flushing or closing dest fails on this
-// node's own disk, which every other donor's artefact would be written to as
-// well, so a join files it as the end of the join rather than as this donor's
-// refusal. Everything else here — a donor that stopped sending, a verdict it
-// sent, a link that dropped — is about the offer.
+// It logs `statelog_join_fetching` once the donor is asked (donor, size,
+// [ProjectJoinSeconds]) and `statelog_join_progress` every
+// [TransferReportEvery], which a join's startup probe is sized from; logger
+// nil is the package's own. The checksum ([Fetched.SHA256]) is taken as bytes
+// are written, in file order, so no uncancellable second read follows. A
+// failure creating, writing, syncing or closing dest is this node's disk
+// ([nodeFault]), ending the join rather than refusing this donor.
 func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 	logger *slog.Logger) (Fetched, error) {
 
@@ -924,24 +777,17 @@ func FetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 	})
 }
 
-// fetchArtefact is [FetchArtefact] with the transfer's own pace as a
-// parameter. Nothing in the engine passes anything but [TransferChunkWait] and
-// [TransferReportEvery]; a test of what happens when the bound fires, or of the
-// lines a long transfer writes, needs them shorter, or it spends thirty
-// seconds proving one comparison.
+// fetchArtefact is [FetchArtefact] with its pace a parameter, so a case about
+// the bound firing or the progress lines runs short.
 func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 	pace transferPace) (Fetched, error) {
 
 	wait := pace.wait
 
-	// A CALLER THAT HAS ALREADY GIVEN UP FETCHES NOTHING, for
-	// [CollectOffers]'s reason one step later. A request published now
-	// sets a donor sending into an inbox this function lets go of as soon
-	// as it notices: the donor opens the artefact, starts a goroutine and a
-	// credit subscription, publishes up to a full credit window
-	// ([SnapshotTransferWindow] chunks of [SnapshotChunkBytes]) that nobody
-	// reads, and then holds all three for [TransferChunkWait] waiting for a
-	// credit that never comes, before it ends the transfer with a 408.
+	// A CALLER THAT HAS ALREADY GIVEN UP FETCHES NOTHING: a request now
+	// has a donor publish a full credit window nobody reads, then hold its
+	// file, goroutine and credit subscription for [TransferChunkWait]
+	// before its 408.
 	if err := ctx.Err(); err != nil {
 		return Fetched{}, fmt.Errorf("statelog: fetch the artefact: %w", err)
 	}
@@ -951,9 +797,8 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 		return Fetched{}, fmt.Errorf("statelog: open the transfer inbox: %w", err)
 	}
 	defer func() { _ = sub.Unsubscribe() }()
-	// The subscription's own buffer, sized for the credit window: the
-	// donor is allowed a window of chunks in flight, so a smaller buffer
-	// here drops exactly what the window was for.
+	// Sized for the credit window: a smaller buffer drops exactly the
+	// chunks the window lets the donor have in flight.
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := sub.SetPendingLimits(SnapshotTransferWindow*4,
 		SnapshotChunkBytes*SnapshotTransferWindow*4); err != nil {
@@ -970,16 +815,11 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 	if err := nc.PublishMsg(fetch); err != nil {
 		return Fetched{}, fmt.Errorf("statelog: ask %s for the artefact: %w", offer.Fetch, err)
 	}
-	// THE FLUSH TAKES THE CALLER'S CONTEXT, and the patience every other
-	// step of a transfer gets. A plain Flush is bounded by the client's
-	// own ten seconds and by nothing the caller holds, so a Stop or a
-	// signal that landed while the broker was slow to confirm the request
-	// sat that out — the one wait in the transfer the caller could not
-	// end. The transfer's own bound rather than a figure of its own: a
-	// broker that has not confirmed the request in the time a donor is
-	// given to send a chunk is a stalled transfer by the same measure,
-	// and when that bound is what ends the wait it is reported by name,
-	// never as a deadline the caller did not set.
+	// THE FLUSH TAKES THE CALLER'S CONTEXT, so a Stop or signal ends it (a
+	// plain Flush waits the client's own ten seconds), bounded by the chunk
+	// wait: a broker that has not confirmed in the time a donor gets per
+	// chunk is a stalled transfer, reported by name, never as a deadline
+	// the caller did not set.
 	flushCtx, cancelFlush := context.WithTimeout(ctx, wait)
 	err = nc.FlushWithContext(flushCtx)
 	cancelFlush()
@@ -1017,8 +857,7 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 			return Fetched{}, err
 		}
 		if len(chunk.Data) == 0 {
-			// THE TERMINATOR CARRIES THE VERDICT. Every failure
-			// arrives looking exactly like a normal end of stream.
+			// THE TERMINATOR CARRIES THE VERDICT ([Donor.terminate]).
 			if verdict := transferVerdict(chunk); verdict != nil {
 				_ = os.Remove(dest)
 				return Fetched{}, verdict
@@ -1041,9 +880,8 @@ func fetchArtefact(ctx context.Context, nc *nats.Conn, offer Offer, dest string,
 				"elapsed_seconds", int(elapsed.Seconds()),
 				"bytes_per_second", int64(float64(written)/elapsed.Seconds()))
 		}
-		// THE CREDIT, returned before the next read rather than after
-		// it: the donor is waiting on this to send the chunk after
-		// next.
+		// THE CREDIT, returned before the next read: the donor waits on
+		// it to send the chunk after next.
 		if chunk.Reply != "" {
 			if err := chunk.Respond(nil); err != nil {
 				_ = os.Remove(dest)
@@ -1079,24 +917,18 @@ func nextTransferChunk(ctx context.Context, sub *nats.Subscription,
 	return msg, nil
 }
 
-// boundedWaitErr says whose end a bounded wait reached.
+// boundedWaitErr says whose end a bounded wait reached. Each wait (the ask's
+// flush, the fetch's flush, a chunk) is bounded by the caller's ctx and by
+// this package's own limit set as its child, so the child's error cannot say
+// which ended it:
 //
-// EACH WAIT IT JUDGES IS BOUNDED TWICE — the ask's flush, the fetch's flush,
-// the wait for a chunk: by the caller's context, and by a limit of this
-// package's own (the offer window, the chunk wait) set as a child of it.
-// Whichever ends first, the wait fails through the child, so its error cannot
-// say whose end it was, and reading only that once blamed a donor for a
-// caller's own deadline in a message naming a thirty-second wait the caller
-// never gave it. So:
-//
-//   - The CALLER'S end is tested on the parent and wrapped: errors.Is against
-//     context.Canceled or context.DeadlineExceeded is how a caller learns its
-//     own context ended.
-//   - The package's OWN bound is returned as own — named, and deliberately
-//     NOT wrapping DeadlineExceeded, because in the chain that would claim
-//     the caller's deadline had passed when the caller set none.
-//   - Anything else — a closed connection, a dropped subscription — is the
-//     transport's own failure, and keeps its %w.
+//   - the CALLER'S end is tested on the parent and wrapped, so errors.Is
+//     against context.Canceled or DeadlineExceeded tells the caller;
+//   - the package's OWN bound returns own, named and deliberately NOT
+//     wrapping DeadlineExceeded, which would claim a deadline the caller
+//     never set;
+//   - anything else (a closed connection, a dropped subscription) is the
+//     transport's, kept with %w.
 func boundedWaitErr(ctx context.Context, err error, step string, own error) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("statelog: %s: %w", step, ctx.Err())
@@ -1124,16 +956,12 @@ func transferVerdict(msg *nats.Msg) error {
 		status, detail)
 }
 
-// rankOffers puts the best artefact first and spreads the choice among equals
-// — see [CollectOffers].
-//
-// THE SEED IS A PARAMETER so a case can assert the spread rather than observe
-// it: a shuffle nobody can reproduce is a shuffle nobody can test. The
-// collection hands it a fresh one per join.
-//
-// The shuffle runs BEFORE the sort and the sort is stable, so the order among
-// offers at one position is this joiner's own while the order between
-// positions is exact. Sorting first and shuffling after would undo the sort.
+// rankOffers puts the best artefact first and shuffles equals, so joiners
+// restarting together do not all pick one donor past its
+// [DonorDeps.MaxTransfers]. The seed is a parameter so a case can assert the
+// spread; the collection passes a fresh one per join. The shuffle runs BEFORE
+// the stable sort, so order between positions is exact and among equals is
+// this joiner's own; shuffling after would undo the sort.
 func rankOffers(offers []Offer, seed uint64) []Offer {
 	spread := rand.New(rand.NewPCG(seed, 0))
 	spread.Shuffle(len(offers), func(i, j int) { offers[i], offers[j] = offers[j], offers[i] })

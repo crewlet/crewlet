@@ -21,28 +21,15 @@ import (
 // A DRAIN'S GIVE-BACKS SPEND ONE ALLOWANCE, and never one longer than the
 // lease they are racing.
 //
-// The store here answers a release only when the context it was asked on ends
-// — a member that has lost quorum — so nothing but the allowance decides how
-// long the drain spends learning that every give-back failed: the presence and
-// both seats. In both cases the caller's own context has ALREADY ENDED, the
-// deadline Drain's doc invites; a drain that handed it to the give-backs
-// would return nothing at all, which fleet_test.go's expired-deadline case
-// holds against a live store.
-//
-// The presence goes first and is the one give-back the allowance is still
-// whole for, so it must be asked on a LIVE context: one asked on the caller's
-// ended context fails before reaching any store, and this node goes on being
-// counted by its peers for a TTL. The seats after it are rightly asked on
-// contexts the presence's wait has already spent.
-//
-//   - A caller that is not an engine's stop carries no allowance, and the
-//     drain begins one from this node's own TTL: one heartbeat interval, a
-//     third of the lease. With none, the give-backs would wait on the store
-//     for ever.
-//   - A caller that IS one — an engine's stop, whose allowance its other
-//     steps draw on too — is held to what it carries, not handed a fresh
-//     allowance here; the TTL is long enough that this node's own could not
-//     pass for it.
+// The store answers a release only when its context ends (a member that lost
+// quorum), so only the allowance bounds the wait. The caller's context has
+// ALREADY ENDED (the deadline Drain's doc invites); handing it to the give-backs
+// would return nothing (fleet_test.go's expired-deadline case). The presence
+// goes first on a LIVE context: on the ended one it fails before reaching a
+// store and peers count this node for a TTL. A caller that is no engine's stop
+// carries no allowance, so the drain begins one from this node's TTL (a third
+// of the lease), else the give-backs wait for ever; an engine's stop is held to
+// what it carries, which its other steps draw on too.
 func TestADrainsGiveBacksSpendOneAllowance(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

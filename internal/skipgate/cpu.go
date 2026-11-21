@@ -4,31 +4,13 @@ package main
 //
 // A -timings file names each package's CPU beside its wall time, because the
 // parallel half's runners are CPU-bound and internal/solo/partition deals that
-// half by CPU: a package's wall time there grows with whatever shared the
-// machine with it. go test reports no package's CPU, only its own process
-// tree's, so the gate measures it where it can be read exactly — at each test
-// binary, through go test's own -exec.
-//
-// With -timings, the gate hands the `go test` it runs `-exec '<itself> exec'`,
-// and go test then starts every package's test binary as `skipgate exec
-// <binary> <args…>`, in the package's source directory. That mode runs the
-// binary on the same standard streams, hands it the signals go test sends
-// (SIGQUIT among them, which a test binary answers with every goroutine's stack
-// when go test gives up on it), and once it exits appends one line — the
-// directory and the CPU the binary and every process it waited for used
-// (os.ProcessState's UserTime and SystemTime: the git and the brokers a case
-// starts are inside its package's figure) — to the file the gate named in
-// [cpuFileVar]. It exits as the binary did.
-//
-// The gate reads that file once go test has exited and names each directory by
-// its import path, under the module the gate runs at the root of
-// ([importPathOf]).
-//
-// An estimate came first, and was wrong in the way that mattered: the run's CPU
-// shared out by each package's share of its tests' busy time charged a test
-// that sat waiting on git or a timer for CPU it never used, so the CPU-heavy
-// packages read light, and five shards dealt equal estimates used 1,117 to
-// 2,484 CPU-seconds, the one holding internal/engine ending the run.
+// half by CPU: a package's wall time grows with whatever shared the machine
+// with it. go test reports no package's CPU, so the gate measures it at each
+// test binary, through go test's own -exec ([runExec]). The gate reads that
+// file once go test has exited and names each directory by its import path
+// ([importPathOf]). An estimate from each package's share of its tests' busy
+// time is wrong: it charges a test waiting on git or a timer for CPU it never
+// used.
 
 import (
 	"bufio"
@@ -54,8 +36,13 @@ const cpuFileVar = "CREWLET_SKIPGATE_CPU"
 // wrapper rather than the gate.
 const execMode = "exec"
 
-// runExec is `skipgate exec <binary> <args…>`: run the test binary, hand it
-// go test's signals, record its CPU, and answer its exit status.
+// runExec is `skipgate exec <binary> <args…>`, the mode -timings hands go test
+// as `-exec '<itself> exec'`: run the test binary in the package's source
+// directory on the same streams, hand it go test's signals (SIGQUIT answers
+// with every goroutine's stack), record its CPU, and answer its exit status.
+// The CPU is the binary's and every process it waited for (os.ProcessState's
+// UserTime and SystemTime, so the git and brokers a case starts count),
+// appended with the directory to the file named in [cpuFileVar].
 func runExec(argv []string) int {
 	if len(argv) == 0 {
 		fmt.Fprintln(os.Stderr, "skipgate exec: no test binary to run")

@@ -13,22 +13,15 @@ import (
 // StoreObjects is where the company's files are kept: which backend every node
 // reads and writes their objects through (ADR-0026).
 //
-// # Why Tier A, and why every node
+// It is Tier A on every node: an endpoint, a bucket and credentials are the
+// operator's, and a node needs them before it can serve an upload. The fleet
+// records the first node's choice in the coordination store, so a node
+// configured with another backend refuses to boot rather than split the files
+// between two stores (coord.ObjectStores).
 //
-// The backend is infrastructure, like the stream: an endpoint, a bucket and
-// the credentials to reach it are the operator's, and a node needs them before
-// it can serve a single upload. Every node carries the same block — a node
-// without `data` uploads and downloads files exactly as a data node does — and
-// the fleet records the first node's choice in the coordination store, so a
-// node configured with another backend refuses to boot rather than splitting
-// the company's files between two stores (coord.ObjectStores).
-//
-// # Why no copies or failure domain here
-//
-// The backend keeps its own: the NATS backend's bucket is a stream replicated
-// at `stream.replicas` across the broker's members like every other, and a
-// bucket keeps whatever copies its provider promises. The engine places
-// nothing, so there is nothing for it to spread.
+// The backend keeps its own copies: the NATS bucket is a stream replicated at
+// `stream.replicas`, and any other keeps what its provider promises. The engine
+// places nothing, so there is no failure domain to spread.
 type StoreObjects struct {
 	// Backend is where the files' objects live. Empty is `nats`.
 	Backend ObjectBackend `yaml:"backend,omitempty" json:"backend,omitempty" desc:"Where the company's files are kept: nats (the default — a bucket on the fleet's own broker, replicated at stream.replicas) or s3 (an S3-compatible bucket, named under s3)."`
@@ -152,35 +145,17 @@ func (o StoreObjects) validate(path Path) error {
 }
 
 // checkS3Endpoint refuses an endpoint no request to the bucket can be sent to,
-// naming what is wrong with it. Empty is Amazon S3's own endpoint for the
-// region, and passes.
+// naming what is wrong. Empty is Amazon S3's own endpoint, and passes.
 //
-// ONLY WHAT CAN NEVER WORK, each because no attempt reaches a bucket:
+// Only what can never work refuses: not an http(s) URL with a host and no query
+// (the client refuses it at start; with no host a path-style request goes
+// nowhere); a port outside 1 to 65535; an IPv6 zone holding `]`, `%` or a space
+// (it splits the address where the dialer looks for a port). Each used to
+// surface 77 to 86 s into boot.
 //
-//   - one that is not an http or https URL with a host and no query: the S3
-//     client refuses at start an endpoint it cannot parse, one with no scheme
-//     or another, and one with a query, and one with no host at all sends a
-//     path-style request nowhere ("no Host in request URL") and a
-//     virtual-hosted one to the name `<bucket>.`;
-//   - a port outside 1 to 65535: the URL parser takes any digits, the dialer
-//     refuses 65536 and past as an invalid port on every attempt, and no
-//     listener ever holds port 0;
-//   - an IPv6 zone holding a `]`, a `%` or a space: a `]` splits the address
-//     where the dialer looks for its port ("missing port in address"), and the
-//     client refuses a zone it cannot write back into a URL, or dials one no
-//     interface carries.
-//
-// Before this a node found each at its boot's check of the bucket, after the
-// minute the client asks a failing request again for and the check's own
-// clean-up: 77 to 86 s to refuse an address it could never reach. The client
-// now gives such a dial up at its first attempt as well (s3obj's
-// unreachableByConstruction), for an address this cannot see: a proxy's.
-//
-// EVERY FORM THE CLIENT REACHES PASSES: a host with its scheme's own port
-// (`https://minio.example`), a port with leading zeros or none after its
-// colon, an upper-case scheme, a base path, a host outside ASCII, an IPv6
-// address in brackets with an interface's name or number as its zone, and an
-// empty host beside a port (`http://:9000`, this host, path-style).
+// EVERY FORM THE CLIENT REACHES PASSES: a scheme's own port, leading zeros or
+// none after the colon, an upper-case scheme, a base path, a non-ASCII host, a
+// bracketed IPv6 with a named or numbered zone, `http://:9000`.
 func checkS3Endpoint(path Path, raw string) error {
 	var p problems
 	if raw == "" {

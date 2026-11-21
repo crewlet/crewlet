@@ -11,18 +11,14 @@ import (
 
 // THE WIRE a scatter crosses: one [Request] on topics.CodeSearch, served by
 // every Gitlet node, each answering only for the repositories the request
-// assigns it, and one [Reply] from each of those.
-//
-// # Evolution
-//
-// Additive only, a protocol stamped on both halves: an answerer that does not
-// speak a request's protocol answers nothing, which its asker reads as a node
-// that did not answer and asks the runner-up of; an asker drops a reply at a
-// protocol it does not speak. A request is stamped with the lowest protocol
-// that carries what it asks ([requestProtocol]), so an older answerer still
-// answers every search it can answer whole; a reply carries its request's. An
-// estate request's shape and no record's, so the code domain's RecordVersion
-// does not move for it; the domain landed on main with it.
+// assigns it, and one [Reply] from each of those. Evolution is additive only,
+// a protocol stamped on both halves: an answerer that does not speak a
+// request's protocol answers nothing, which its asker reads as a node that did
+// not answer and asks the runner-up; an asker drops a reply at a protocol it
+// does not speak. A request is stamped with the lowest protocol that carries
+// what it asks ([requestProtocol]), so an older answerer still answers every
+// search it can whole; a reply carries its request's. No record has this
+// shape, so the code domain's RecordVersion does not move for it.
 
 // ContextProtocol is the protocol from which a request may ask context lines
 // and a per-file bound; a request asking neither is stamped baseProtocol,

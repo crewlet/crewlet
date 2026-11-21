@@ -22,19 +22,14 @@ import (
 // THE COMPANY'S PRINCIPLES: its mission, vision and standing policies, the one
 // part of the company document the assistant reaches (ADR-0052's exception).
 //
-// ONE RESOURCE, ONE WRITE PATH. The read and the write are the routes Company
-// › Principles itself sends (`GET` and `PUT /config/charter`), decided by
-// verbs of their own (`config.principles.read` and `.write`), so an approved
-// change is the same request, under the same rules, refusals and step-up, as
-// the person's own Save. Nothing else of the document is named here or
-// reachable through it.
+// ONE RESOURCE, ONE WRITE PATH. The read and write are the routes Company ›
+// Principles sends (`GET` and `PUT /config/charter`), under verbs of their own
+// (`config.principles.read` and `.write`), so an approval is the person's own
+// Save. Nothing else of the document is reachable through it.
 //
-// A CHANGE IS THE WHOLE OF EACH PART IT NAMES. The call names the parts it
-// changes (the mission, the vision, the policies), each replaced whole; the
-// preview reads the principles as they are now and fills in every part the
-// call leaves out, so the request the approval sends states all three, as the
-// route requires, and keeps what the call did not mean to touch exactly as it
-// is.
+// A CHANGE IS THE WHOLE OF EACH PART IT NAMES: each named part (mission,
+// vision, policies) is replaced whole, and the preview fills in every part the
+// call leaves out from the current principles, as the route requires all three.
 
 // The principles' two routes.
 const (
@@ -54,37 +49,6 @@ var (
 	policyBytes  = config.MaxPolicyChars * utf8.UTFMax
 )
 
-// principlesRead is get_company_principles.
-func principlesRead() Tool {
-	return Tool{
-		Name: "get_company_principles", Phrase: "read the company's principles",
-		Description: "The company's principles as Company › Principles shows them: its " +
-			"mission, its vision and its standing policies. Read them here, never by " +
-			"searching the knowledge base, whenever the person asks about or wants to " +
-			"change the mission, the vision or a policy.",
-		schema: object(nil, map[string]*schema{}),
-		Routes: []string{PrinciplesRoute},
-		// OFFERED AS THE ROUTE ADMITS: an administrator's, as the whole
-		// document is ([authz.ActionPrinciplesRead]). The page itself is
-		// everybody's, read from the org chart, which get_org_chart answers.
-		Apps: adminOnly,
-		// THE PRINCIPLES ARE PEOPLE'S PROSE, written by the company's own
-		// administrators: colleague text, fenced.
-		Fence: true,
-		Build: func(map[string]any) (exec.Request, error) {
-			return get(PrinciplesRoute, nil, nil)
-		},
-		Cards: one(cards.Spec{Entity: &cards.Entity{Kind: wire.ResourceUnit,
-			Name: "Company principles", Prose: true,
-			Facts: []cards.Fact{fact("Mission", "mission", tText),
-				fact("Vision", "vision", tText)},
-			Items: &cards.Items{Path: "policies", Kind: wire.ResourceUnit, Plain: true,
-				Prose: true, Noun: wire.Noun{One: "policy", Many: "policies"}},
-			Open: &cards.Open{Screen: "principles"}}}),
-		Label: func(map[string]any) string { return "Reading the company's principles" },
-	}
-}
-
 // principlesWrite is update_company_principles.
 func principlesWrite() Tool {
 	act := authz.ActionPrinciplesWrite
@@ -94,7 +58,7 @@ func principlesWrite() Tool {
 		Description: "Propose changing the company's mission, vision or standing policies. " +
 			"Give only the parts that change, each as its whole new text (policies as " +
 			"the whole new list); the parts you leave out stay exactly as they are. Read " +
-			"them with get_company_principles first. The person sees the before and " +
+			"them first (GET /config/charter). The person sees the before and " +
 			"after and approves it before anything is saved. Use this for any request " +
 			"to change them; propose_page_change into the Principles editor only " +
 			"drafts into a part the person has open and asked you to draft.",
@@ -185,8 +149,8 @@ func principlesPreview(t Tool) proposal.Previewer {
 		recency, _ := authz.RecencyOf(authz.Action(t.Act))
 		return proposal.Preview{Title: "Update the company's principles",
 			Target: "Company principles",
-			Note: "Every agent works from the principles, so each one follows the new " +
-				"wording from its next turn.",
+			Note: wire.Plain("Every agent works from the principles, so each one follows the new " +
+				"wording from its next turn."),
 			ApproveLabel: "Approve and save", Changes: c.rows(), Request: req,
 			// THE ROW'S OWN STEP-UP, shown on the card: the approval asks it
 			// either way (authz.RecencyOf), and the card says so beforehand.
@@ -240,9 +204,9 @@ func textChange(field, label, was, is string) []wire.Change {
 	case was == is:
 		return nil
 	case was == "":
-		return []wire.Change{proposal.Added(field, label, is, false)}
+		return []wire.Change{proposal.Added(field, label, wire.Plain(is), false)}
 	case is == "":
-		return []wire.Change{proposal.Removed(field, label, was)}
+		return []wire.Change{proposal.Removed(field, label, wire.Plain(was))}
 	}
 	return []wire.Change{proposal.Text(field, label, was, is)}
 }
@@ -282,11 +246,11 @@ func policyChanges(was, is []string) []wire.Change {
 			out = append(out, proposal.Text(field(j), label(j), was[i], is[j]))
 			i, j = i+1, j+1
 		case j < m && (i == n || lcs[i][j+1] >= lcs[i+1][j]):
-			out = append(out, proposal.Added(field(j), label(j), is[j], false))
+			out = append(out, proposal.Added(field(j), label(j), wire.Plain(is[j]), false))
 			j++
 		default:
 			out = append(out, proposal.Removed("policies.was."+strconv.Itoa(i+1),
-				label(i), was[i]))
+				label(i), wire.Plain(was[i])))
 			i++
 		}
 	}

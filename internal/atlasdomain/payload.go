@@ -12,9 +12,8 @@ import (
 )
 
 // THE TYPED PAYLOADS, one per (kind, op). A record carries its complete values,
-// decided and judged by the writer, so a replay from zero writes the rows the
-// first apply did. Vocabulary words travel as text: the applier stores them and
-// judges none, so two builds that know different words still write one row.
+// judged by the writer, so a replay from zero writes the rows the first apply
+// did; vocabulary words travel as text (package doc, "The applier judges no text").
 
 // Ref is an entry on the wire: its kind and its canonical key.
 type Ref struct {
@@ -25,9 +24,8 @@ type Ref struct {
 // refOf is a vocabulary ref on the wire.
 func refOf(r atlas.Ref) Ref { return Ref{Kind: r.Kind, Key: r.Key} }
 
-// Target is the other entry a claim names: its id, as the writer derived it
-// ([atlas.Ref.ID]), and its kind and key. The id travels so the applier keys
-// what it writes on it without deriving anything.
+// Target is the other entry a claim names: its kind, its key and its id as the
+// writer derived it ([atlas.Ref.ID]), so the applier derives nothing.
 type Target struct {
 	ID   string     `json:"id"`
 	Kind atlas.Kind `json:"kind"`
@@ -42,22 +40,20 @@ type Value struct {
 	Private bool            `json:"private,omitempty"`
 }
 
-// Source is who made a claim. The base format records a person, by the name
-// their record is kept under; another source joins at its own version: an
-// integration's read at 2, and at 3 an agent, by its seat's handle, with the
-// turn it recorded in and the evidence the engine checked behind it.
+// Source is who made a claim: a person by the name their record is kept under,
+// an integration's read from version 2, an agent by its seat's handle from 3.
 type Source struct {
 	Kind atlas.SourceKind `json:"kind"`
 	Name string           `json:"name"`
 
 	// Turn and Evidence are an agent's alone (ADR-0132): the run that made
-	// the claim, and the class of the call it cited, as the node that ran the
-	// turn derived it. No caller passes a confidence; it is read off these.
+	// the claim and the class of the call it cited, as the node that ran the
+	// turn derived it. Confidence is read off these, never passed.
 	Turn     string         `json:"turn,omitempty"`
 	Evidence atlas.Evidence `json:"evidence,omitempty"`
 
-	// Tool is an agent's too, from version 5: the tool whose answer the
-	// claim cited, by name, absent where the name is not one a record keeps.
+	// Tool is an agent's too, from version 5: the cited tool's name, absent
+	// where the name is not one a record keeps.
 	Tool string `json:"tool,omitempty"`
 }
 
@@ -71,23 +67,19 @@ func (s Source) vocabulary() atlas.Source {
 	return atlas.Source{Kind: s.Kind, Name: s.Name, Turn: s.Turn, Evidence: s.Evidence, Tool: s.Tool}
 }
 
-// Claim is one claim on one entry: the entry itself, one fact, one relation,
-// or two entries a person joined or kept apart, a person's denial of any of
-// them, or an agent's dispute of one. It is what [atlas.Claim] says, in the
-// log's own stable shape.
+// Claim is one claim on one entry, [atlas.Claim] in the log's own stable shape.
 type Claim struct {
 	V int `json:"v"`
 
-	// ID is the claim's own id, derived from the operation that recorded it
-	// ([ClaimID]): its row's key.
+	// ID is the claim's id, derived from its operation ([ClaimID]): its row's key.
 	ID string `json:"id"`
 
-	// Entry is the entry the claim is about. The record's subject is its id.
+	// Entry is the entry the claim is about; the record's subject is its id.
 	Entry Ref `json:"entry"`
 
-	// Slot is the one thing the claim fills on its entry ([atlas.Claim.Slot]),
-	// named by the writer, so a voice's newer claim replaces its older one
-	// where the fold reads it to and the applier needs no vocabulary.
+	// Slot is what the claim fills on its entry ([atlas.Claim.Slot]), named by
+	// the writer so the applier replaces a voice's older claim on it without
+	// knowing the vocabulary.
 	Slot string `json:"slot"`
 
 	Facet    atlas.FacetKind `json:"facet"`
@@ -106,8 +98,8 @@ type Claim struct {
 	Source Source `json:"source"`
 
 	// ObservedAt is when the source saw what it claims, never later than the
-	// log took it. Zero for a person, whose claim is seen when the log takes
-	// it, so the broker's own instant orders people's words.
+	// log took it. Zero for a person, seen as the log takes it, so the
+	// broker's instant orders people's words.
 	ObservedAt time.Time `json:"observed_at,omitzero"`
 }
 
@@ -150,17 +142,15 @@ func (c Claim) vocabulary(observed time.Time, position uint64) atlas.Claim {
 }
 
 // Read is one integration's read of one entry, as the collect duty records it
-// (ADR-0129): every claim the read holds on the entry that is new or changed,
-// each the voice's newest on its slot, and the slots of the voice's earlier
-// claims the read no longer holds, which the applier withdraws. An entry the
-// read stopped seeing is retired by a read carrying one denied exists claim
-// and withdrawing every other slot. A read that holds exactly what the log
-// already holds is never recorded.
+// (ADR-0129): its new or changed claims, each the voice's newest on its slot,
+// and the slots of the voice's earlier claims it no longer holds, which the
+// applier withdraws. An entry the read stopped seeing is retired: one denied
+// exists claim, every other slot withdrawn. A read holding exactly what the
+// log holds is never recorded.
 type Read struct {
 	V int `json:"v"`
 
-	// Source is the integration every claim is from and every withdrawal is
-	// of: the one voice a read speaks in.
+	// Source is the one voice of every claim and every withdrawal.
 	Source Source `json:"source"`
 
 	// ObservedAt is when the read saw what it records.
@@ -174,24 +164,22 @@ type Read struct {
 // fixed for good as [claimNamespace] is.
 var readClaimNamespace = uuid.MustParse("c2a7e1f4-3d58-4b06-9e2f-7a41c0d8e5b3")
 
-// ReadClaimID is the id of the claim a read under opID records on slot: one
-// claim a slot an operation, so a retry names the same claims.
+// ReadClaimID is the id of the claim a read under opID records on slot, so a
+// retry names the same claims.
 func ReadClaimID(opID, slot string) string {
 	return uuid.NewSHA1(readClaimNamespace, []byte(opID+"\x00"+slot)).String()
 }
 
-// Purge erases its subject everywhere: an entry with every claim on it and
-// every claim naming it, or a value with every claim carrying it and every
-// entry it is the key of. It carries nothing else: the subject names what is
-// erased, a value by its digest, so the record never writes the value down.
+// Purge erases its subject everywhere: an entry with every claim on or naming
+// it, or a value with every claim carrying it and every entry it keys. It
+// carries nothing: a value is named by its digest, never written down.
 type Purge struct {
 	V int `json:"v"`
 }
 
-// Expire removes the history past the retention through an instant: every
-// claim a newer claim of its voice replaced before Through, and every entry a
-// person retired that nothing was recorded about since before Through. Through
-// is never later than the retention's cutoff.
+// Expire removes the history before Through: every claim its voice replaced,
+// and every entry a person retired with nothing recorded about it since.
+// Through is never later than the retention's cutoff.
 type Expire struct {
 	V       int       `json:"v"`
 	Through time.Time `json:"through"`

@@ -26,16 +26,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE LARGEST RECORD FITS ITS DECLARATION (spike S4).
-//
-// The domain declares the largest record it publishes, and the declaration is
-// a LIMIT: the publisher refuses a record past it `record_too_large` after a
-// turn already showed the person what it was about to store. So the worst
-// record each bound admits is built here, through the real sealer and encoder,
-// and held under the declaration; and the declaration is held within the
-// transport's own ceiling and above a quarter of its worst record, so the gate
-// reserve it sizes is not room no append could use. Mutation: raise
-// ProposalBodyMaxBytes past what the declaration holds and this goes red.
+// THE LARGEST RECORD FITS ITS DECLARATION (spike S4): the publisher refuses a
+// record past it (`record_too_large`) after the person was already shown it.
+// The worst record each bound admits, through the real sealer and encoder, is
+// held under the declaration, and the declaration within the transport's
+// ceiling and at most four times the worst record, so the gate reserve it
+// sizes is room an append could use. Mutation: raise ProposalBodyMaxBytes past
+// what the declaration holds and this goes red.
 func TestTheLargestRecordFitsItsDeclaration(t *testing.T) {
 	t.Parallel()
 	sealer := newSealer(t)
@@ -115,15 +112,11 @@ func TestTheLargestRecordFitsItsDeclaration(t *testing.T) {
 	}
 }
 
-// THE APPLIER NEVER OPENS A SEALED VALUE.
-//
-// Every node must write identical rows from one record whatever keys its ring
-// holds, so the applier holds no keyring and calls nothing that opens one: its
-// type has no field to hold a sealer, no apply file imports the keyring's
-// package or names the sealer's methods, and a record whose sealed fields are
-// not envelopes at all applies with them written through byte for byte.
-// Mutation: give the applier a sealer and open a title in its create, and this
-// names the file and the call.
+// THE APPLIER NEVER OPENS A SEALED VALUE, so every node writes identical rows
+// whatever keys its ring holds: its type has no field, no apply file imports
+// the keyring's package or names the sealer's methods, and a non-envelope
+// sealed field is written through byte for byte. Mutation: give the applier a
+// sealer and open a title in its create, and this names the file and the call.
 func TestTheApplierNeverOpensASealedValue(t *testing.T) {
 	t.Parallel()
 	if fields := reflect.TypeFor[assistantdomain.Applier]().NumField(); fields != 0 {
@@ -185,9 +178,9 @@ func TestTheApplierNeverOpensASealedValue(t *testing.T) {
 }
 
 // otherDomains are the packages this domain may not reach at any depth: every
-// other domain's state and writer, the engine that wires them, and every
-// surface. A conversation is a copy of what one person was shown, and a
-// domain that could read another domain's rows could put more in it.
+// other domain, the engine that wires them, and every surface. A conversation
+// is a copy of what one person was shown; reading another domain's rows could
+// put more in it.
 var otherDomains = []string{
 	"internal/iamdomain", "internal/worklet", "internal/doclet", "internal/artifactsdomain",
 	"internal/artifactdata", "internal/search", "internal/usage", "internal/engine",
@@ -232,8 +225,7 @@ func TestTheAssistantDomainReadsNoOtherDomain(t *testing.T) {
 		t.Fatalf("the walk read %d packages, so it is not reading the tree it guards", walked)
 	}
 
-	// THE STATEMENTS ARE THE STRING LITERALS, read off the syntax tree so a
-	// comment's prose is never taken for a query.
+	// Statements are read from string literals, so prose is never a query.
 	table := regexp.MustCompile(`\b(?:FROM|INTO|UPDATE|JOIN)\s+([a-z_][a-z0-9_]*)`)
 	dir := filepath.Join(root, "internal", "assistantdomain")
 	entries, err := os.ReadDir(dir)

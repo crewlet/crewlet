@@ -57,6 +57,11 @@ type Across struct {
 	// node without `data` sends shares its one leaf link.
 	LeafBroker *js.Server
 
+	// Link is the relay between the two ([linktest.SlowEachWay]): a case
+	// reads what it has taken and carried of the leaf's bytes, or holds them
+	// back through [linktest.Link.Watch].
+	Link *linktest.Link
+
 	// MemberBroker is the member's own broker, the far end of the link: a
 	// case dials a connection of it to see, in the order they arrive, what the
 	// leaf's connections sent across the link.
@@ -94,6 +99,7 @@ func SlowLeaf(t testing.TB, rate int64) Across {
 		Leaf:         open(t, client(t, "leaf", leaf), kv.AcrossLink),
 		LeafBroker:   leaf,
 		MemberBroker: member,
+		Link:         link,
 	}
 }
 
@@ -140,23 +146,16 @@ func open(t testing.TB, c jetstream.JetStream, reach kv.Reach) *kv.FleetStore {
 	return store
 }
 
-// Holds is what the member holds of turnID's run now — its record, and
-// whether it has one — read ONCE: the first state of a watch of the run's key
-// on the member's own connection ([kv.FleetStore.WatchSandboxRun]), which a
-// consumer delivers whole and raw, certified against the bucket's key index.
-// Asked for as long as the broker's longest silence (jsprovision's
-// LookupBudget), each of the watch's requests answered within it by a broker
-// that answers at all.
+// Holds is what the member holds of turnID's run now, its record and whether
+// it has one, read ONCE: the first state of a watch of the run's key on the
+// member's own connection ([kv.FleetStore.WatchSandboxRun]), bounded by the
+// broker's longest silence (jsprovision's LookupBudget).
 //
-// NOT THE LEADER'S READ a change of the run makes. On a member's own
-// connection that read keeps the read term, asked again every two seconds
-// while nobody answers it, since a writer waits on it (internal/coord/kv's
-// holdingLarge); and its reply carries a row at its bound base64-encoded in
-// eight mebibytes, which a runner loaded and under the race detector takes
-// seconds to build and decode. Read back so, a case's row had another whole
-// reply built beside the first at every re-ask, and could run out the lookup
-// ceiling on the load the case is not about. A watch's first state is one
-// delivery of the record as it is.
+// NOT THE LEADER'S READ a change of the run makes: on a member's connection
+// it is re-asked every two seconds while nobody answers (internal/coord/kv's
+// holdingLarge), and its reply carries a row at its bound base64-encoded in
+// eight mebibytes, seconds to build under load and the race detector, so
+// each re-ask could run out the lookup ceiling on load the case is not about.
 func (a Across) Holds(t testing.TB, turnID string) (coord.Record, bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), jsprovision.LookupBudget)

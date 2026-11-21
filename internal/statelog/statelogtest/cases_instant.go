@@ -23,39 +23,16 @@ func runInstant(t *testing.T, new Factory) {
 }
 
 // BrokerInstant certifies that the domain's Replicated tables hold the same
-// bytes whichever way a record reached its applier: applied as it arrived on a
-// node east of UTC, applied as it arrived on a node west of it, and held back
-// on a third node and applied later. Each node runs the framework's own runner
-// over the domain's own applier, on a log whose broker instants carry a
-// sub-microsecond remainder.
-//
-// # Why that is a contract a domain must keep
-//
-// Because the broker's instant is the one instant an applier may write of its
-// own, and it reaches the framework in two shapes: as the broker client reports
-// it — nanoseconds, in the node's own zone — on a record applied as it arrives,
-// and in the store's encoding — UTC at a microsecond — on one the deferred
-// table kept until a later build or an arriving key could read it. A document
-// encodes the precision and the zone it is handed, so a framework that handed
-// each applier the shape its path produced had every domain that writes the
-// instant into a document hold different bytes for one record on two nodes —
-// chat's messages and the knowledge base's pages among them — under a claim
-// that two nodes at one checkpoint hold the same. The framework hands every
-// applier one value, and statelog's own test is what holds the framework to
-// it. This case holds the domain to it as far as the suite's records reach: it
-// goes red where they reach a document the instant is written into, and it
-// cannot see a domain that reads the instant in the process's own zone, since
-// the three nodes share one.
-//
-// # How a record is held back here
-//
-// SIGNED UNDER A KEY THE NODE DOES NOT HOLD YET, which every domain retains
-// alike and every domain applies once the key arrives — where a record from a
-// newer build would need a build this one is not. A record that installs an
-// apply gate is left out on every node: one this node cannot authenticate is a
-// stop, never a retention, and it is the other records that write documents.
-//
-// EXPORTED AND RETURNING THE VERDICT, for [Determinism]'s reason.
+// bytes however a record reached its applier: applied on arrival on a node
+// east of UTC, on one west of it, or held back and applied later, on a log
+// whose broker instants carry a sub-microsecond remainder. Live, the instant
+// is nanoseconds in the node's zone; from the deferred table, a microsecond in
+// UTC; a document encodes what it is handed, so the framework hands one value.
+// Blind to a domain reading the process's zone, which the three nodes share.
+// A record is held back by signing it under a key the node lacks yet, which
+// every domain retains alike; gate records are left out, since a gate the
+// node cannot authenticate stops the applier. Exported and returning the
+// verdict for [Determinism]'s reason.
 func BrokerInstant(t *testing.T, new Factory) error {
 	t.Helper()
 	c := new(t)
@@ -84,9 +61,7 @@ func BrokerInstant(t *testing.T, new Factory) error {
 	live := instantNode(t, new, records, east, false)
 	elsewhere := instantNode(t, new, records, west, false)
 	held := instantNode(t, new, records, east, true)
-	// BOTH COMPARISONS, reported together: a framework that hands on the
-	// broker's instant as it arrived fails each for its own reason, and a
-	// verdict that stopped at the first would hide the second.
+	// Both comparisons, reported together: each fails for its own reason.
 	var differ []string
 	if !maps.Equal(live, elsewhere) {
 		differ = append(differ, fmt.Sprintf("two nodes that applied one log as it "+
@@ -125,8 +100,7 @@ func instantNode(t *testing.T, new Factory, records []suiteRecord, zone *time.Lo
 		return time.Unix(1_700_000_000, 123_456_789).Add(time.Duration(seq) * time.Second).In(zone)
 	}
 
-	// THE KEY THE RECORDS ARE SIGNED UNDER: the suite's own on a live node,
-	// and on a held one a key its first build does not hold.
+	// A held node's records are signed under a key its first build lacks.
 	known := suiteRing()
 	later := recordseal.Keyring{ActiveID: "later", Keys: []recordseal.Key{
 		{ID: "later", Material: "statelogtest-material-later"},
@@ -149,8 +123,7 @@ func instantNode(t *testing.T, new Factory, records []suiteRecord, zone *time.Lo
 	if err != nil {
 		t.Fatalf("read the envelope of a %s %s record: %v", name, c.Kinds[0], err)
 	}
-	// ONE CLOCK ON EVERY NODE, so the broker's instant is the only value the
-	// three differ in.
+	// One clock on every node, so only the broker's instant differs.
 	clock := func() time.Time { return time.Unix(1_700_000_000, 0).UTC() }
 	run := func(applier statelog.Applier, ring recordseal.Keyring, at statelog.Checkpoint,
 		drained func()) *loop {
@@ -185,8 +158,8 @@ func instantNode(t *testing.T, new Factory, records []suiteRecord, zone *time.Lo
 			"there is no record held back to compare", name)
 	}
 
-	// THE KEY ARRIVES: the same database under a restarted build that holds
-	// it, which applies what the first one retained before its first fetch.
+	// The key arrives: a restarted build on the same database applies what
+	// the first retained before its first fetch.
 	at, found, err := statelog.CheckpointOf(t.Context(), db, spec.Name)
 	if err != nil || !found {
 		t.Fatalf("read %s's checkpoint: found %v, %v", name, found, err)
@@ -205,9 +178,8 @@ func instantNode(t *testing.T, new Factory, records []suiteRecord, zone *time.Lo
 	return tableContents(t, db, replicatedTables(c.Domain))
 }
 
-// replicatedTables is the domain's tables of the class the identity claim is
-// made over: the framework's own ledger and deferral tables, which record this
-// node's clock and its path, are of another.
+// replicatedTables is the domain's Replicated tables, which the identity claim
+// covers; the framework's ledger and deferral tables record node-local facts.
 func replicatedTables(d statelog.Domain) map[string]statelog.TableClass {
 	out := map[string]statelog.TableClass{}
 	for name, class := range d.Tables() {

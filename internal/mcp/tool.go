@@ -33,30 +33,17 @@ type Result struct {
 	// refused.
 	Failed bool
 
-	// Cause is WHY a failed call failed, as a value a caller can branch on:
-	// an authority refusal, a stale version, a node that could not decide.
-	// Nil on a success, and nil on a failure nothing in this engine
-	// classified — an MCP server's own, which reports prose and no class.
-	// A call the engine refuses ABOUT a server — one that is not running,
-	// or whose session ended under the call — is the engine's, and carries
-	// [RefusalUnavailable] (supervise.go).
+	// Cause is WHY a failed call failed, as a value a caller can branch on.
+	// Nil on a success and on a failure nothing here classified (an MCP
+	// server's own reports prose). A call refused ABOUT a server (not running,
+	// or its session ended under the call) carries [RefusalUnavailable].
 	//
-	// IT IS ALSO WHERE A FIRST-PARTY REFUSAL'S CLASS RIDES. A [Refusal] is
-	// an error, so a tool states its class as the cause itself — or beneath
-	// the error that caused it, through [Classify] — and [RefusalOf] and
-	// [UnknownOf] read it back out. ONE VALUE, never a class field beside
-	// it: two classifiers of one failure drift apart, and a stored "not
-	// unknown" beside a cause that says the write may have landed would
-	// have a person's screen report that nothing happened.
-	//
-	// NEVER RENDERED, and that is the one rule this field carries. Output is
-	// still the whole of what anybody reads — the incident this struct's doc
-	// describes was a reason living in a second field while the first was
-	// shown — so Cause adds nothing a model sees. It exists for the caller
-	// that answers in a protocol with STATUS CODES, where "you may not",
-	// "somebody edited it first" and "this node could not tell" are 403,
-	// 409 and 503, and reading those back out of a sentence would make the
-	// wording of a refusal an API.
+	// A first-party refusal's class rides here as the cause itself (or beneath
+	// it, through [Classify]), read back by [RefusalOf] and [UnknownOf]: never a
+	// class field beside it, since a stored "not unknown" beside a cause saying
+	// the write may have landed would tell a person nothing happened.
+	// NEVER RENDERED: Output is all anybody reads; Cause is for a caller
+	// answering with status codes (403, 409, 503), which must not parse wording.
 	Cause error
 
 	// Note is what the caller tells the MODEL beside Output: on a success,
@@ -94,20 +81,16 @@ type Result struct {
 	// person tells them less, and never a model's words.
 	PersonRefusal caveat.Refusal
 
-	// PersonReceipt is a call that LANDED, its answer as a surface
-	// answering a person answers it, where the tool wrote one apart from
-	// Output: an answer that echoes words other principals wrote — a
-	// room's topic, a parked run's question, a page's title — labels them
-	// in Output for a model, fenced or defused under an envelope that says
-	// how far to believe them, and here they are as they were stored. Nil
-	// where Output is that answer already, and on a failure, which a
-	// person's surface answers from PersonRefusal.
+	// PersonReceipt is a call that LANDED, its answer as a surface answering a
+	// person answers it, where the tool wrote one apart from Output: Output
+	// labels words other principals wrote (a room's topic, a parked run's
+	// question) fenced or defused for a model; here they are as stored. Nil
+	// where Output is that answer already, and on a failure (PersonRefusal).
 	//
-	// NEVER RENDERED, for Cause's reason: a model reads Output, labelled,
-	// and nothing here. It exists for the caller that answers a PERSON (the
-	// act route, ADR-0060), to whom the labels are a model's framing (a
-	// fence is a model's concern, ADR-0040): read off Output, a room's
-	// topic reached a person's answer wrapped in a fence's two lines.
+	// NEVER RENDERED, for Cause's reason: a model reads Output, nothing here.
+	// It is for the caller answering a PERSON (the act route, ADR-0060), to
+	// whom a fence is a model's concern (ADR-0040): read off Output, a topic
+	// reached a person wrapped in a fence's two lines.
 	PersonReceipt json.RawMessage
 }
 
@@ -164,25 +147,14 @@ var _ Callable = (*Tool)(nil)
 // toolsFor builds the server's contribution from a fresh listing, keeping the
 // Tool it already had for every entry the listing still describes exactly.
 //
-// KEPT rather than rebuilt, because a Tool's identity is what every registry
-// holding it compares: a restart that rebuilt them all would report every
-// name as changed, and each held seat's surface would be refiled for a server
-// that came back exactly as it went down. A tool whose description, schema
-// or hints moved IS rebuilt, so a registry is told to take the new one.
+// A Tool is kept, not rebuilt, because registries compare its identity: a
+// rebuild would refile every held seat's surface. One whose description,
+// schema or hints moved is rebuilt.
 //
-// A tool the entry BLOCKS ([Spec.Levels]) is never built as a Tool: it is
-// returned as a [Definition] beside the rest, in the listing's order, and
-// left out of the server's contribution, so no catalogue holds it, no model
-// is offered or lists it, and no call through a catalogue reaches it. It is
-// judged first, so a blocked tool whose name no model could be handed either
-// is blocked rather than refused: the operator's decision is the one that
-// holds it back.
-//
-// A tool whose name, prefix included, no model can be handed is REFUSED here
-// and returned beside the rest, never built ([nameRefusal]): left out of the
-// server's contribution, it is not offered, not callable, and shadows no
-// tool of another server that could be.
-//
+// A tool the entry BLOCKS ([Spec.Levels]) is never built: it returns as a
+// [Definition], held by no catalogue. Judged first, so a blocked tool with an
+// unusable name is blocked, not refused. A name no model can be handed, prefix
+// included, is REFUSED likewise ([nameRefusal]) and shadows nothing usable.
 // The caller holds the bridge's lock.
 func (s *server) toolsFor(defs []toolDef) (filed []*Tool, blocked []*Definition, refused []RefusedTool) {
 	spec := *s.spec()
@@ -384,17 +356,15 @@ func (t *Tool) CallBound() time.Duration {
 
 // Call runs the tool on its server.
 //
-// A failing tool is ORDINARY and comes back as a Result with Failed set: the
-// server's own words go to the model, which is expected to react to them. The
-// error return is reserved for the caller's context ending, because a turn
-// that is being torn down has nobody left to show a tool message to — and
-// because reporting a cancellation as a tool failure would teach the model
-// that the tool is broken.
+// A failing tool is ordinary and comes back as a Result with Failed set: the
+// server's own words go to the model. The error return is reserved for the
+// caller's context ending: a torn-down turn has nobody to show a message to,
+// and a cancellation reported as a failure would teach the model the tool is
+// broken.
 //
-// A server that is NOT RUNNING — down and being restarted, or stopped by its
-// owner — is refused by the engine in its own words rather than by whatever
-// error a dead pipe produces, and so is a call whose session ended under it.
-// See server.refusal. One its owner is replacing hands the call on (replace.go).
+// A server not running (down, or stopped by its owner), and a call whose
+// session ended under it, are refused in the engine's words, not a dead pipe's
+// (server.refusal). One its owner is replacing hands the call on (replace.go).
 func (t *Tool) Call(ctx context.Context, args map[string]any) (Result, error) {
 	c, h := t.srv.enter()
 	if h != nil {

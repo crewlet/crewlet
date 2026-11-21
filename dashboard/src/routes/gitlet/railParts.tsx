@@ -3,15 +3,23 @@
  * repository's rail and the rail beside Gitlet › Pushes, which live in different chunks.
  */
 
-import { useId, type ReactNode } from "react";
+import { useId, useMemo, type ReactNode } from "react";
 import { Skeleton } from "@crewlethq/ui";
 import { useNow } from "~/lib/clock.ts";
 import { plural } from "~/lib/format.ts";
 import { dateTimeFormat } from "~/lib/formatters.ts";
+import { joinEdges } from "~/lib/range.ts";
 import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { CodePusher, CodePushers, CodeRepoAnswer } from "~/protocol/index.ts";
-import { PUSHER_DAYS, PushSpark, SPARK_DAYS, useDayBounds } from "./activity.tsx";
+import {
+  PUSHER_DAYS,
+  PushSpark,
+  SPARK_DAYS,
+  SPARK_WINDOW,
+  boundsOf,
+  useDayBounds,
+} from "./activity.tsx";
 import { REFUSED_CODES, refusalSentence } from "./repo/marks.ts";
 import { pusherRest } from "./repo/rail.ts";
 import { Face, GITLET, useWhoName } from "./ui.tsx";
@@ -96,14 +104,22 @@ export interface PushActivityRead {
   read: QueryResult<CodeRepoAnswer>;
 }
 
-/** [PushActivityRead] for a repository, asked once by the screen that draws it. */
+/**
+ * [PushActivityRead] for a repository, asked once by the screen that draws it: the reader's days
+ * as the window's edges, and drawn as the answer's own (`lib/useCodeQuery.ts`).
+ */
 export function usePushActivity(name: string, pollMs: number): PushActivityRead {
-  const bounds = useDayBounds(PUSHER_DAYS);
+  const days = useDayBounds(PUSHER_DAYS);
   const read = useCodeQuery(
     "code_repo",
-    { name, repo_facts: true, day_bounds: bounds.join(",") },
-    { enabled: bounds.length > 0, pollMs },
+    { name, repo_facts: true },
+    {
+      enabled: days.length > 0,
+      pollMs,
+      window: { name: SPARK_WINDOW, edges: { day_bounds: joinEdges(days) } },
+    },
   );
+  const bounds = useMemo(() => boundsOf(read.edges), [read.edges]);
   return { bounds, read };
 }
 

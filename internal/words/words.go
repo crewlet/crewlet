@@ -28,7 +28,10 @@
 // A rule nobody checks decays, so this package's suite walks every package of
 // the module with its types and refuses any format call whose verb prints a
 // slice, an array or a map, and any such operand of a print that takes no
-// format (fmt.Sprint and its kin, which print every operand as %v does). It
+// format (fmt's Sprint, Print, Fprint and Append families and the log
+// package's Print, Fatal and Panic ones, which print every operand as %v does;
+// the callee names them, since a function taking only ...any is as often a
+// logger's key-value pairs). It
 // refuses a list joined by hand into a sentence too: a strings.Join whose
 // separator is a conjunction, one written beside one ("a, b" + " or " +
 // "c"), one that joins all but the last member, and a closed set joined by
@@ -38,13 +41,29 @@
 // one, names()). A value whose type says how it prints, through a String,
 // Error or Format method, is that type's own business, and a byte slice
 // under %s, %q or %x is text. It runs go list for the export data the type
-// checker reads, because the shape of an operand is a property of its type
+// checker reads, with this test binary's toolchain, -race and -tags, because the shape of an operand is a property of its type
 // and not of its spelling: `artifacts.Kinds` and `AuthorKinds()` look like
 // any other identifier and call.
 //
+// Not judged: test files and test-support packages (a name ending in "test"),
+// an interface operand, %T and %p, a format that is not a constant, operands
+// forwarded whole, and a list joined by commas alone, since nothing in its
+// shape says a reader takes it for a sentence rather than a column of names.
+// A walk that judged under 150 packages or 8,000 calls, or read under 300
+// joins, fails, because a walk reading nothing passes.
+//
+// The suite also holds every string literal of the trees a person reads the
+// sentences of (personFacing in emdash_test.go) to carry no em dash, outside a
+// log line, a panic, a struct tag and an em dash standing alone as a table
+// cell. The trees grow as the rest of the engine's sentences are rewritten.
+// The dashboard's own gate is app/copy.test.ts.
+//
+// # A leaf
+//
 // A LEAF over the standard library, held to it by a test, because its readers
 // sit at every height — the identity vocabulary and config, which import only
-// leaves, as much as the domains and the API.
+// leaves, as much as the domains and the API. It is admitted to the iam and
+// artifacts leaf sets.
 package words
 
 import (

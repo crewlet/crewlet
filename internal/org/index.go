@@ -5,96 +5,17 @@ import (
 	"strings"
 )
 
-// Index is the chart's durable lookups — a unit by reference, a seat by
-// handle, a unit's effective lead, and each seat's place in the hierarchy (its
-// manager and managers, its reports, its unit and its unit chain) — built
-// once, for a caller that asks them of many references against one chart:
-// Gitlet's validation and its reconcile resolve the
-// owner of every repository a document declares, up to ten thousand of them,
-// and its warnings and its grant roster ask the lead of every unit those
-// owners name; every apply asks the lead of every led unit (the leads'
-// automatic reports in [Organization.Normalize]) and of every unit with a
-// schedule run as its lead (a human lead's, in [Organization.Validate]), and
-// the home unit of every seat with a project of its own; the derived
-// hierarchy a configuration write answers with asks every question of every
-// seat and every unit; and a spend chart's per-unit bands and the schedules
-// listing ask every seat's unit and every lead-targeted schedule's lead.
+// Index is the chart's durable lookups (a unit by reference, a seat by handle,
+// a unit's effective lead, a seat's managers, reports, unit and unit chain),
+// built once for a caller that asks many references of one chart.
 //
-// # Why it exists
-//
-// [Organization.UnitByRef] is up to five passes over every unit — its key
-// exactly, then folded ([NormalizeKey]), a unit with an id before one keyed on
-// its name each time, then every name — and [Organization.SeatByHandle] a pass
-// over every seat, deriving each handle: the right shape for one lookup a
-// request makes, and quadratic for a document's worth. Ten thousand owners
-// looked up by unit and by seat on a chart of 300 units and 900 seats took
-// 4.3–4.5 s and 625 MB through them (measured while the chart's lookup was two
-// passes, folding each id and name, so a floor on what its five cost now),
-// and 2.4–2.6 ms and 0.61 MB through an Index, its build included
-// (BenchmarkResolvingADocumentsOwners, four vCPUs of a 2.8 GHz Xeon under a
-// load average near 15) — a cost every data node paid at every apply, inside
-// the apply. An Index costs one walk of the chart and then a map lookup a
-// reference.
-//
-// [Organization.EffectiveLead] has the same shape for the same reason: an
-// INHERITED lead — a team's lead named on the division above it, the usual
-// shape — is found by searching the unit's whole subtree for the handle and
-// then walking every seat of the chart by handle, so asking it of every unit,
-// or of every repository's owning unit, costs units × seats. Asked of every
-// unit of a chart of 1 100 units and 3 100 seats it took 53–64 ms and 26 MB
-// through the chart, and 4.7–7.9 ms and 1.5 MB through an Index built for the
-// purpose (BenchmarkAskingEveryUnitsLead, same machine and load; measured
-// while a lead was a seat's name — the chart's walk now derives every seat's
-// handle it compares, so it costs more, not less) — a map lookup and a walk
-// of the seats SHARING the lead's handle, which a chart that passed admission
-// has one of. The two passes of every apply that ask it — of every
-// led unit for the leads' automatic reports ([Organization.Normalize]), of
-// every unit with a schedule run as its lead for a human lead's
-// ([Organization.Validate]) — through an Index each, went on that chart from
-// 76–108 ms and 29 MB to 13–17 ms and 4.3 MB, and from 63–69 ms and 29 MB to
-// 19–23 ms and 4.6 MB with every unit carrying such a schedule, and on one of
-// 330 units and 930 seats from 6.3–7.5 ms to 4.1–4.6 ms and from 8.8–10 ms to
-// 6.1–8.2 ms (BenchmarkNormalizingAndValidatingALedChart, same machine under a
-// load average near 16). Each pass builds its Index at the first unit it asks
-// about, so a chart that names no lead pays nothing for one.
-//
-// [Organization.Manager], [Organization.Role] — and so [Organization.Reports]
-// — [Organization.UnitFor] and [Organization.UnitChainFor] are each a walk of
-// the chart too, and their callers asked them of every seat: a list of every
-// seat's managers and reports is seats² through them, and a map lookup a seat
-// here. Every seat's unit took 154–185 ms and 82 MB through the chart on 3 100
-// seats and 17–20 ms and 7.5 MB on 930 — UnitFor walks the units through an
-// iterator, three and a half million allocations on the larger chart — and
-// 7.9–12 ms and 2.1 MB and 2.6–3.6 ms and 0.8 MB through an Index, its build
-// included (BenchmarkAskingEverySeatsUnit, same machine under a load average
-// near 12).
-//
-// # The same answer, by construction and by test
-//
-// THE SAME RULE as the methods it stands for, and held to them for every
-// reference a chart can be asked (TestTheIndexAnswersWhatTheChartDoes): a unit
-// reference is a unit's KEY exactly, else its key under [NormalizeKey], a unit
-// with an id answering before one keyed on its name and within each the first
-// in walk order, else a name under the same fold that ONE unit alone carries
-// ([Organization.UnitByRef]); a handle is compared exactly, the first seat in
-// walk order answering ([Organization.Role] and [Organization.SeatByHandle]
-// alike); a unit's effective lead is the first seat whose handle is its lead in
-// its OWN subtree's walk order ([Unit.LeadRole]), else the first so named in
-// the chart's ([Organization.Role]); a seat's managers are every seat whose
-// manages lists its handle, once each, in walk order, the first of them its
-// manager; and its unit chain runs from the outermost unit down to the first in
-// walk order holding the seat itself, by pointer.
-//
-// A unit's subtree is ONE RUN of the chart's seat walk ([Organization.AllRoles]
-// visits a unit's own seats, then each child's subtree, before anything after
-// it), so the Index keeps each unit's run as a span of walk positions and each
-// handle's seats in walk order: the subtree's first seat of a handle is the
-// first of that handle at or past the span's start, inside it.
-//
-// BUILD IT FROM A FROZEN CHART, as everything that reads an organization is
-// ("Build it, wire it, then treat it as frozen" on [Organization]): it is a
-// snapshot of the chart it was built from, and a chart edited after it would
-// answer what the Index does not know.
+// The methods it stands for are each a walk of the chart: right for one lookup,
+// units × seats or seats² for a document's worth (BenchmarkResolvingADocumentsOwners
+// went from 4.3 s to 2.4 ms). It gives the SAME answer for every reference
+// (TestTheIndexAnswersWhatTheChartDoes), walk-order ties included; a unit's
+// subtree is ONE RUN of [Organization.AllRoles], kept as a span of positions.
+// BUILD IT FROM A FROZEN CHART: it is a snapshot and does not see later edits
+// ("Build it, wire it, then treat it as frozen" on [Organization]).
 type Index struct {
 	// keys is the four spellings [Organization.UnitByRef] tries before a
 	// name, in its order: a key exactly on a unit with an id, then on one

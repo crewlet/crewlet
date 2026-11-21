@@ -20,11 +20,9 @@ import (
 // EVICTION WINDOW — together with the publisher-side reader,
 // [statelog.Gates], that has to report them.
 //
-// A CANDIDATE OF ITS OWN rather than more fields on [Candidate], because not
-// every domain has the gates: the vectors gate nothing. A field a domain may
-// leave nil is a field a domain that DOES gate can forget with nothing
-// failing, while a separate entry point is one a gating domain's own test
-// file calls by name, beside [Run].
+// Its own type rather than optional fields on [Candidate] (the vectors gate
+// nothing): a field a domain may leave nil is one a gating domain can forget
+// with nothing failing.
 type GateCandidate struct {
 	Candidate
 
@@ -36,26 +34,18 @@ type GateCandidate struct {
 	// Purge publish on, and the one whose marker the history purges.
 	Kind string
 
-	// SubjectKinds is EVERY subject kind the domain's records carry —
-	// arbitrated or not, its gates' own included — and it holds Kind.
-	//
-	// The cases build a record of each kind about a purged object and
-	// about one nobody purged, through Encode, ask the APPLIER which of
-	// them the object's marker drops, and hold the reader to the same
-	// answer for every one. A marker may cover more than its object's own
-	// kind — a tracker turn is a record about its task — and a reader that
-	// asked about Kind alone passed every other case here while every
-	// applier dropped the rest, so a turn racing its task's purge resolved
-	// as a record applied without its ledger row. ALL the kinds rather
-	// than the ones the domain believes its marker covers, because that
-	// belief is the thing that drifted: the applier is asked, never told.
+	// SubjectKinds is EVERY subject kind the domain's records carry, its
+	// gates' own included; it holds Kind. The cases ask the APPLIER which
+	// records of each kind about a purged object its marker drops, and hold
+	// the reader to the same answer: a marker may cover more than its own
+	// kind (a tracker turn is a record about its task), and a reader asking
+	// about Kind alone resolves such a record as applied without its ledger
+	// row. All kinds, because the applier is asked, never told.
 	SubjectKinds []string
 
-	// The records the cases publish, each for the object (or node) id, the
-	// writer and the operation id given. Create brings an object of Kind
-	// into existence; Write is an ordinary change to one; Purge destroys
-	// one and writes its marker; Evict and Readmit are the inverse pair on
-	// a node.
+	// The records the cases publish, for the object (or node) id, writer
+	// and operation id given: Create, an ordinary Write, Purge (which writes
+	// the marker), and the node pair Evict and Readmit.
 	Create  func(id, writer, opID string) ([]byte, error)
 	Write   func(id, writer, opID string) ([]byte, error)
 	Purge   func(id, writer, opID string) ([]byte, error)
@@ -63,16 +53,11 @@ type GateCandidate struct {
 	Readmit func(node, writer, opID string) ([]byte, error)
 
 	// About is a record ABOUT object id published on a subject that does
-	// NOT name it, for a domain that has such records — the identity
-	// estate's directory records and sessions, which name their person in
-	// the payload while their subject names nobody, or a lineage. Nil for a
-	// domain whose every record names its object in its subject.
-	//
-	// Set, the cases ask the applier about one about a purged object
-	// (which it must drop) and one about a live object, and ask the reader
-	// about each WITH the record's body, as the publisher asks about its own append
-	// ([statelog.Gates.GatedAt]) — and a reader that ignores the body is
-	// one of the bent readers the family must catch.
+	// NOT name it (the identity estate's directory records and sessions name
+	// their person only in the payload); nil when every record's subject
+	// names its object. Set, the reader is asked about such records WITH
+	// the body, as the publisher asks ([statelog.Gates.GatedAt]), and a
+	// reader that ignores the body is one the family must catch.
 	About func(id, writer, opID string) (statelog.Subject, []byte, error)
 }
 
@@ -80,34 +65,17 @@ type GateCandidate struct {
 type GateFactory func(t *testing.T) GateCandidate
 
 // RunGates certifies a domain's gate reader against the rule
-// [statelog.Gates] states, on rows the domain's own applier wrote.
+// [statelog.Gates] states, on rows the domain's own applier wrote. One family
+// for every reader, because the rule is shared and each domain spells its own
+// queries.
 //
-// ONE FAMILY FOR EVERY READER, because the rule is shared and the readers are
-// not: each domain spells its own two queries, and the two readers agreed
-// only because their code looked alike — which is how one of them came to
-// answer the eviction first while the other answered the deletion.
-//
-// And it asks the APPLIER, for every subject kind the domain's records carry,
-// which records about a purged object its marker drops, and holds the reader
-// to the same answer for each — because the marker covers whatever subjects
-// the applier says it does, and the tracker's reader once covered the task's
-// own while its applier dropped the task's turns too. Where the domain has
-// records about an object on a subject that does not name it
-// ([GateCandidate.About]), the reader is asked about those WITH their bodies,
-// as the publisher asks about its own append, after the coverage probe.
-//
-// It then turns the same cases on the candidate's own reader bent each way a
-// reader has been, or could plausibly be, written wrong, and requires every
-// one of them to be reported. This package has no control domain that keeps
-// a deletion marker, so the candidate is its own control: a family that passes
-// a reader answering the eviction first certifies nothing about precedence.
-// And it bends the candidate's own APPLIER the way its deletion marker could
-// be widened past the reader's, and requires that reported too.
-//
-// And it holds the domain's NODE-GATE answer to the same records
-// ([GateNodeGates]): its eviction and readmission are node gates, and its
-// purge — the other gate, which [NodeGates] has no record of — is not. That
-// case is bent the same way, through the domain rather than the reader.
+// It holds the reader to the applier's drops for every subject kind
+// ([GateCandidate.SubjectKinds], [GateCandidate.About]), then bends the
+// candidate's own reader and applier each way they could be written wrong and
+// requires every bend reported: with no control domain that keeps a marker,
+// the candidate is its own control. It also holds the domain's node-gate
+// answer ([GateNodeGates]), bent likewise through the domain: eviction and
+// readmission are node gates, the purge is not.
 func RunGates(t *testing.T, new GateFactory) {
 	t.Helper()
 	t.Run("the reader reports the gate the rule names", func(t *testing.T) {
@@ -138,9 +106,8 @@ func RunGates(t *testing.T, new GateFactory) {
 		keyedOnPayload := new(t).About != nil
 		for name, bend := range gateLiars() {
 			if name == ignoresTheBody && !keyedOnPayload {
-				// NOTHING TO CATCH: with no record about an object on
-				// another subject, the body is never what a gate is
-				// keyed on, and a reader that ignores it keeps the rule.
+				// Nothing to catch: with no [GateCandidate.About] records,
+				// no gate is keyed on the body.
 				continue
 			}
 			t.Run(name, func(t *testing.T) {
@@ -159,9 +126,8 @@ func RunGates(t *testing.T, new GateFactory) {
 			})
 		}
 	})
-	// A PROBE THAT REACHES NO MARKER agrees with any reader at all, so the
-	// family refuses one rather than reporting the agreement: here every
-	// record the probe encodes is about an object nobody purged.
+	// A probe that reaches no marker agrees with any reader, so the family
+	// must refuse one: here every probe record is about an unpurged object.
 	t.Run("the cases catch a coverage probe that reaches no marker", func(t *testing.T) {
 		err := GateAgreement(t, func(t *testing.T) GateCandidate {
 			c := new(t)
@@ -215,10 +181,9 @@ type gateRecord struct {
 	label string
 	body  func(c GateCandidate) ([]byte, error)
 
-	// drops is every reason the APPLIER may drop the record under, and
-	// empty for a record it applies. A record both gates hold lists both:
-	// which one the applier counts a double drop under is its own
-	// business, and only the reader's answer is the rule's.
+	// drops is every reason the APPLIER may drop the record under, empty
+	// for one it applies. A record both gates hold lists both: the rule
+	// fixes only the reader's answer, not which the applier counts.
 	drops []statelog.Reason
 }
 
@@ -243,10 +208,9 @@ var (
 )
 
 // gateHistory is the one sequence every gate case reads, at positions 1..12.
-//
-// Each gate is held ALONE on some record and BOTH on another, the purge that
-// makes obj-1's marker lands ABOVE a record the eviction already dropped,
-// and the eviction window has records on both of its edges.
+// Each gate holds some record alone and one together with the other, obj-1's
+// purge lands above a record the eviction already dropped, and the eviction
+// window has records on both edges.
 var gateHistory = []gateRecord{
 	{label: "create obj-1", body: func(c GateCandidate) ([]byte, error) {
 		return c.Create(gateObj1, gateCounted, "gates-create-1")
@@ -309,28 +273,27 @@ var gateQuestions = []gateQuestion{
 	{name: "a record only the deletion drops",
 		id: gateObj3, writer: gateCounted, opID: "gates-deleted", seq: 10,
 		want: statelog.ReasonDeleted},
-	// THE PRECEDENCE: the marker is a fact about the object, which no
-	// readmission lifts, where the eviction is a fact about one writer.
+	// Precedence: the marker is about the object, which no readmission
+	// lifts; the eviction is about one writer.
 	{name: "a record both gates drop",
 		id: gateObj3, writer: gateEvicted, opID: "gates-both", seq: 8,
 		want: statelog.ReasonDeleted},
-	// THE MARKER HAS NO POSITION, as the applier's does not: it gates
-	// every record on its object that did not apply, so a record the
-	// eviction dropped is reported by the state its object is in NOW.
+	// The marker has no position, as the applier's has none: a record the
+	// eviction dropped is reported by its object's state NOW.
 	{name: "an evicted writer's record on an object purged after it",
 		id: gateObj1, writer: gateEvicted, opID: "gates-evicted-then-purged", seq: 6,
 		want: statelog.ReasonDeleted},
 	{name: "the purge's own record",
 		id: gateObj1, writer: gateCounted, opID: "gates-purge-1", seq: 9},
-	// THE FALL-THROUGH: the exemption says the MARKER did not drop the
-	// record, which is no answer about its writer.
+	// Fall-through: the purge's exemption from its marker says nothing
+	// about its writer.
 	{name: "the purge's own id under an evicted writer",
 		id: gateObj3, writer: gateEvicted, opID: "gates-purge-3", seq: 7,
 		want: statelog.ReasonEvicted},
 	{name: "a second purge of a purged object",
 		id: gateObj3, writer: gateCounted, opID: "gates-purge-3-again", seq: 12,
 		want: statelog.ReasonDeleted},
-	// THE WINDOW IS HALF-OPEN AT BOTH ENDS, as the applier's is.
+	// The window excludes both its ends, as the applier's does.
 	{name: "a record at the eviction's own position",
 		id: gateObj2, writer: gateEvicted, opID: "gates-at-eviction", seq: 4},
 	{name: "a record at the readmission's own position",
@@ -345,12 +308,8 @@ var gateQuestions = []gateQuestion{
 
 // GateAgreement applies the gate history through the candidate's own applier
 // and asks its reader the rule's questions, reporting every answer that
-// breaks it.
-//
-// EXPORTED AND RETURNING THE VERDICT, for the reason [Declaration] is: a case
-// that cannot be shown to fail is a claim rather than a check. The
-// *testing.T is for the infrastructure — a store that would not open, a
-// record that would not encode — and those still stop the test.
+// breaks it. Exported and returning the verdict for [Declaration]'s reason;
+// the *testing.T still stops the test on infrastructure failures.
 func GateAgreement(t *testing.T, new GateFactory) error {
 	t.Helper()
 	_, err := gateAgreement(t, new)
@@ -358,9 +317,7 @@ func GateAgreement(t *testing.T, new GateFactory) error {
 }
 
 // gateAgreement is [GateAgreement], also returning the subject kinds the
-// applier's marker on a purged object covers — which the kind liars need,
-// because a reader that asks about the object's own kind alone keeps the rule
-// exactly wherever that is the only kind the marker covers.
+// marker covers: a kind liar is caught only where it covers more than one.
 func gateAgreement(t *testing.T, new GateFactory) ([]string, error) {
 	t.Helper()
 	c := new(t)
@@ -414,18 +371,14 @@ func gateAgreement(t *testing.T, new GateFactory) ([]string, error) {
 		strings.Join(problems, "\n  "))
 }
 
-// gateCoverage asks the APPLIER, for every subject kind the domain's records
-// carry, whether the marker of the object purged at position 7 drops a record
-// of that kind about it — and about an object nobody purged — and requires the
-// reader to answer every one of those records exactly as the applier did. It
-// returns the kinds the marker covers, and every disagreement, and refuses a
-// probe that reached no marker at all: agreement there is agreement with any
-// reader.
+// gateCoverage asks the APPLIER, for every subject kind, whether obj-3's
+// marker drops a record of that kind about obj-3 and about the unpurged obj-2,
+// and requires the reader to answer each exactly as the applier did. It
+// returns the kinds the marker covers and every disagreement, and refuses a
+// probe that reached no marker, which would agree with any reader.
 //
-// AFTER the history, at positions above it, so the marker is in place and
-// nothing a probe does is a record the questions read: a probe is asked
-// about and never applied, since what is certified is the gate and an apply
-// would only be the domain's own business.
+// Probes sit above the history, so the marker is in place, and are asked
+// about but never applied: the gate is what is certified.
 func gateCoverage(t *testing.T, c GateCandidate, db store.ReplicatedHandle, gates statelog.Gates,
 	at func(uint64) statelog.Position) ([]string, []string) {
 
@@ -450,8 +403,7 @@ func gateCoverage(t *testing.T, c GateCandidate, db store.ReplicatedHandle, gate
 			if err != nil {
 				t.Fatalf("envelope a %s record about %s: %v", kind, id, err)
 			}
-			// THE MARKER ALONE: a writer no gate in the history holds, so
-			// whatever either side answers is the deletion gate's.
+			// A writer no eviction holds, so any answer is the marker's.
 			env.Writer = gateCounted
 			rec := statelog.Record{
 				Envelope: env, Position: at(seq), Payload: body, StoredAt: stored,
@@ -492,13 +444,10 @@ func gateCoverage(t *testing.T, c GateCandidate, db store.ReplicatedHandle, gate
 	return covered, problems
 }
 
-// applyGateHistory runs the history through the candidate's own gate and
-// state machine, as the framework's loop does, and reports every record the
-// applier dropped or applied other than the history says.
-//
-// THE APPLIER IS WHAT THE READER HAS TO AGREE WITH, so the history is only
-// the history the questions assume if the applier dropped exactly what it
-// says it did.
+// applyGateHistory runs the history through the candidate's own applier, as
+// the framework's loop does, and reports every record dropped or applied other
+// than the history says: the questions assume the applier dropped exactly
+// those.
 func applyGateHistory(t *testing.T, c GateCandidate, db store.ReplicatedHandle,
 	at func(uint64) statelog.Position) []string {
 
@@ -560,11 +509,8 @@ func applyGateHistory(t *testing.T, c GateCandidate, db store.ReplicatedHandle,
 // gateAbout asks the applier about a record about the purged obj-3 and one
 // about the live obj-2, each on a subject that does not name its object, and
 // asks the reader about each with its body: the first is the deletion gate's,
-// and the second is nobody's.
-//
-// THE APPLIER FIRST, for [applyGateHistory]'s reason: the reader has to agree
-// with what the applier dropped. AFTER the coverage probe's positions, and
-// asked about rather than applied for [gateCoverage]'s reason.
+// and the second is nobody's. Placed above the coverage probe's positions and
+// never applied, for [gateCoverage]'s reason.
 func gateAbout(t *testing.T, c GateCandidate, db store.ReplicatedHandle, gates statelog.Gates,
 	at func(uint64) statelog.Position) []string {
 
@@ -643,14 +589,10 @@ func gateLiars() map[string]func(statelog.Gates) statelog.Gates {
 }
 
 // deletionLiars are the readers that bend the deletion marker, each built from
-// an honest one so every domain gets the same controls for free.
-//
-// Each asks the honest reader a question that isolates one gate: under a
-// subject kind no deletion marker covers, it answers from the eviction
-// window alone, and with no writer, from the marker alone. The reader that
-// ignores the body is one of them because what a payload-keyed reader reads
-// out of a body is the marker's object — an eviction is a fact about the
-// writer, which the envelope always names.
+// an honest one. Each isolates one gate by asking the honest reader under
+// [ungatedKind] (the window alone) or with no writer (the marker alone). The
+// body-ignoring reader belongs here because a body names the marker's object;
+// the envelope always names the writer an eviction is about.
 var deletionLiars = map[string]func(statelog.Gates) statelog.Gates{
 	"answers the eviction before the deletion": func(g statelog.Gates) statelog.Gates {
 		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
@@ -665,8 +607,8 @@ var deletionLiars = map[string]func(statelog.Gates) statelog.Gates{
 		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
 			p statelog.Position, body []byte) (statelog.Reason, bool, error) {
 			// With no writer the honest reader answers from the marker
-			// alone, so an op id the marker exempts where another id on
-			// the same object is deleted is the purge's own.
+			// alone: an op id it exempts while another is deleted is the
+			// purge's own.
 			_, markerGates, err := g.GatedAt(ctx, subj, "", opID, p, body)
 			if err != nil {
 				return "", false, err
@@ -728,9 +670,8 @@ var windowLiars = map[string]func(statelog.Gates) statelog.Gates{
 			return evictionOnly(ctx, g, subj, writer, opID, prev, body)
 		}}
 	},
-	// A WRITER'S FACT REPORTED AS AN OBJECT'S. A caller told `deleted`
-	// gives up on the object for good, when a readmission would have let
-	// its next write through.
+	// A caller told `deleted` gives up on the object for good, where a
+	// readmission would have let its next write through.
 	"reports the eviction as a deletion": func(g statelog.Gates) statelog.Gates {
 		return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
 			p statelog.Position, body []byte) (statelog.Reason, bool, error) {
@@ -748,16 +689,16 @@ var windowLiars = map[string]func(statelog.Gates) statelog.Gates{
 type kindLiar struct {
 	bend func(own string, g statelog.Gates) statelog.Gates
 
-	// needsAnotherKind is a liar indistinguishable from an honest reader
-	// wherever the marker covers the object's own kind alone — the
-	// knowledge base's — so it is caught only where there is another.
+	// needsAnotherKind marks a liar indistinguishable from an honest reader
+	// where the marker covers only the object's own kind (the knowledge
+	// base's), so it is caught only where it covers another.
 	needsAnotherKind bool
 }
 
 // kindLiars are the readers the coverage probe must catch.
 var kindLiars = map[string]kindLiar{
-	// THE TRACKER'S OWN BUG: a reader that read a task's marker for the
-	// task's subject alone, while the applier dropped its turns too.
+	// Like a reader asking a task's marker about the task alone, while the
+	// applier drops its turns too.
 	"asks the marker about its object's own kind alone": {needsAnotherKind: true,
 		bend: func(own string, g statelog.Gates) statelog.Gates {
 			return liar{g, func(ctx context.Context, subj statelog.Subject, writer, opID string,
@@ -790,12 +731,9 @@ func evictionOnly(ctx context.Context, g statelog.Gates, subj statelog.Subject,
 // applierLiars are the appliers the gate cases must catch, each built from the
 // candidate's honest one and given the object's own kind.
 var applierLiars = map[string]func(own string, a statelog.Applier) statelog.Applier{
-	// A MARKER WIDER THAN THE READER'S, on the applier's side: a record of
-	// any kind about a purged object dropped as though it were the
-	// object's own. The history never puts another kind on a purged
-	// object's id, so only the coverage probe can see it — and a probe
-	// that asked about the object's own kind alone would certify this
-	// applier against a reader that covers nothing of it.
+	// A marker wider than the reader's: a record of any kind about a purged
+	// object dropped as the object's own. Only the coverage probe of every
+	// kind can see it; the history puts no other kind on a purged id.
 	"drops every kind's record about a purged object": func(own string, a statelog.Applier) statelog.Applier {
 		return applierLiar{a, func(ctx context.Context, tx *sql.Tx,
 			rec statelog.Record) (statelog.Reason, bool, error) {

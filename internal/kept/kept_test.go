@@ -111,6 +111,37 @@ func TestATextPastItsBudgetKeepsAnOpeningThatSaysSo(t *testing.T) {
 	}
 }
 
+// A TEXT KNOWN BY ITS OPENING IS CUT AS THE WHOLE TEXT IS. For texts of every
+// escape, at every budget from none to past the whole, an opening of budget
+// bytes and the whole's size keep exactly what the whole text keeps; and an
+// opening shorter than what fits is kept all, with the rest of the whole said
+// left out, so a caller can move a cut back by handing less.
+//
+// Mutation: decide a fit by the opening's length rather than the whole's, and
+// an opening that fits reads as the whole text; state the figures of the
+// opening, and the marker says less was left out than was.
+func TestATextKnownByItsOpeningIsCutAsTheWholeIs(t *testing.T) {
+	t.Parallel()
+	for name, text := range map[string]string{
+		"prose":  strings.Repeat("the build passed. ", 40),
+		"markup": strings.Repeat("<li>&amp;</li>\n", 40),
+		"runes":  strings.Repeat("日本語😀 ", 40),
+	} {
+		for budget := range kept.Quoted(text) + 8 {
+			want, wantWhole := run.Text(text, budget)
+			got, whole := run.TextOf(text[:min(len(text), budget)], len(text), budget)
+			if got != want || whole != wantWhole {
+				t.Fatalf("%s at %d: an opening kept %q (%d), the whole %q (%d)",
+					name, budget, got, whole, want, wantWhole)
+			}
+		}
+	}
+	got, whole := run.TextOf("the opening", 4096, 1024)
+	if want := "the opening…\n(3 KiB of 4 KiB not kept on the run's record)"; got != want || whole != 4096 {
+		t.Errorf("a short opening of a long text kept %q (%d), want %q", got, whole, want)
+	}
+}
+
 // commit is a code_commit_files call's arguments as the engine records them:
 // identifiers beside a body far past any record's budget.
 func commit(t *testing.T, content string) string {
@@ -276,17 +307,15 @@ func TestManySmallValuesGiveWayAsAContainerAndAShapeAsAWhole(t *testing.T) {
 // A VALUE A RECORD LEFT OUT IS KNOWN AS LEFT OUT, WHATEVER THE RECORD. A
 // reader comparing two calls' arguments reads a marker as a value that may
 // have been anything (internal/agent/runner's readAlike), so every marker
-// LeftOut writes, under each record's name the tree writes and at every unit
-// Size states, and every marker Args leaves in a tree, a leaf's and a
-// container's, is recognised; and so are arguments kept as nothing but their
-// marker, in Args' form and in the one notKept spells by hand. Text that is no
-// marker is not: a marker with text around it, a digest of another length or
-// case, a size Size never writes, a parenthesis with neither, a number, nil;
-// nor is an object holding the marker beside another key.
+// LeftOut writes, under each record's name and at every unit Size states, and
+// every marker Args leaves in a tree, leaf or container, is recognised, as are
+// arguments kept as nothing but their marker (Args' form and notKept's). Text
+// that is no marker is not: one with text around it, a digest of another
+// length or case, a size Size never writes, a number, nil, or an object
+// holding the marker beside another key.
 //
-// Mutation: accept any parenthesised text, accept one record's name only, or
-// read an object holding not_kept beside another key as not kept, and a case
-// goes red.
+// Mutation: accept any parenthesised text or one record's name only, or read
+// an object holding not_kept beside another key as not kept, and a case fails.
 func TestAValueARecordLeftOutIsKnownAsLeftOut(t *testing.T) {
 	t.Parallel()
 	for _, record := range []kept.Record{run, "the turn's record", "this record"} {

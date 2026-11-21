@@ -549,23 +549,16 @@ func (c *client) close(ctx context.Context) (bool, error) {
 
 // reapChild ends the process TREE, not just the process.
 //
-// A server is often launched through a package runner — uvx, npx — that forks
-// the real server underneath itself, and the transport's shutdown signals only
-// the process it started. So the group is signalled too, but only on evidence
-// the tree is still there, because signalling a group whose leader has been
-// reaped is a theoretical way to hit a recycled pid. Two things count as
-// evidence, and both are facts this package owns rather than inferences:
+// A package runner (uvx, npx) forks the real server, and the transport's
+// shutdown signals only the process it started. So the group is signalled too,
+// but only on evidence the tree is still there, as signalling a group whose
+// leader was reaped can hit a recycled pid. The evidence is a fact this
+// package owns: the stderr pipe has not reached EOF (some process still holds
+// the child's descriptor), or the transport's close did not finish inside the
+// caller's budget.
 //
-//   - the stderr pipe has not reached EOF, so some process still holds the
-//     descriptor handed to the child; or
-//   - the transport's own close did not finish inside the caller's budget, so
-//     nothing reaped anything.
-//
-// WHAT THIS DOES NOT CATCH: a descendant that closed the inherited stderr and
-// then went on living, after the transport reaped the leader. Nothing
-// available here can see it — there is no descriptor left to observe and no
-// pid we are entitled to signal — and saying so is better than a check that
-// looks like it covers the case.
+// NOT CAUGHT: a descendant that closed the inherited stderr and lived on after
+// the leader was reaped. No descriptor or pid we may signal remains to see it.
 func (c *client) reapChild(cleanClose bool) {
 	ch := c.child
 	if ch == nil {

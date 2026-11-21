@@ -137,16 +137,14 @@ func actRequest(t *testing.T, a *api.App, token, tool, args string) (int, string
 // never reached a write leaves none.
 //
 // The table is the runtime writes this build serves over HTTP outside the
-// configuration and credential surfaces — every act tool call, whatever
-// became of it (a refusal by the authority table included: that is a call
-// somebody made and was not allowed), and every backup, whatever became of it
-// — each driven through the real app behind the real guard. Each record must
-// be persisted (a category, so the event store writes it), carry the operator
-// source every audit reader selects on, name the caller in the three halves
-// every history row names one by — author, kind, credential — and say what
-// became of the call. The refusals before a call (a read on the write
-// transport, a backup with no destination) are the counterfactual: an audit
-// that recorded every request would pass the rest of the table.
+// configuration and credential surfaces: every act tool call whatever became
+// of it (an authority-table refusal included: somebody made that call), and
+// every backup, each driven through the real app behind the real guard. Each
+// record must be persisted (a category, so the event store writes it), carry
+// the operator source every audit reader selects on, name the caller by
+// author, kind and credential, and say what became of the call. The refusals
+// before a call (a read on the write transport, a backup with no destination)
+// are the counterfactual: an audit recording every request would pass the rest.
 func TestEachRuntimeWriteEmitsOneAuditedEvent(t *testing.T) {
 	t.Parallel()
 	type want struct {

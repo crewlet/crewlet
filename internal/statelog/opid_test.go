@@ -13,12 +13,8 @@ import (
 )
 
 // AN OPERATION ID CARRIES THE INSTANT IT WAS MINTED, so a retry that reuses the
-// id reuses the instant — and nothing a retry does can move it later.
-//
-// This is the property the pre-adoption arm rests on. It was a field beside the
-// id once, filled by every writer from its own clock at the call, so a retry
-// after an adoption stated an instant after the adoption for an operation
-// minted before it.
+// id reuses the instant — and nothing a retry does can move it later (package
+// doc, "An operation id carries the instant it was minted").
 func TestAnOperationIDCarriesTheInstantItWasMinted(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 23, 10, 11, 12, 345_678_901, time.UTC)
@@ -137,13 +133,9 @@ func TestAnOperationIDCarriesTheInstantItWasMinted(t *testing.T) {
 
 // A GENERATION RECORD'S ID IS ONE OPERATION PER NODE: the same on every re-run
 // of one node's reanchor, and a different one for a peer deriving the same
-// generation from the same stream.
-//
-// A clustered broker checks its duplicate window before the append's
-// expectation, so a peer sharing the id was acknowledged as a duplicate of the
-// first node's record — as though its own had landed — and opened the
-// generation over its own rows too. The transition reads back whose record
-// landed whatever the broker answered; this is the id no longer inviting it.
+// generation from the same stream: a clustered broker checks its duplicate
+// window before the append's expectation, so a peer sharing the id would be
+// acknowledged as a duplicate of the first node's record.
 func TestAGenerationRecordsIDIsOneOperationPerNode(t *testing.T) {
 	t.Parallel()
 	created := time.Date(2026, 9, 23, 10, 11, 12, 345_678_901, time.UTC)
@@ -177,17 +169,14 @@ func TestAGenerationRecordsIDIsOneOperationPerNode(t *testing.T) {
 // A VALUE WRITTEN INTO AN OPERATION'S NAME IS ONE STEP OF IT, AND NO TWO
 // VALUES ARE WRITTEN ALIKE.
 //
-// A dot in a name begins a step, so a path written as itself made a file
-// write's id read as a name and a step; a value past the bound or carrying a
-// space put into every ledger row and message-id header an id the engine's
-// own rule for a caller's id refuses. [OpNamePart] writes an identifier as
-// itself and everything else escaped — and escaped injectively, so a value
-// that spells another's escape is escaped too rather than kept.
+// A dot in a name begins a step, and a value past the bound or holding a space
+// makes an id [statelog.CheckCallerOpID] refuses. [OpNamePart] writes an
+// identifier as itself and anything else escaped, injectively: a value that
+// spells another's escape is escaped too.
 //
 // Mutation: return the value unchanged (the escaped rows fail), drop the
 // bound (the 65-byte and 1024-byte rows are kept), or drop the escape
-// marker's guard (the row spelling another's escape is kept, and two values
-// share a part).
+// marker's guard (two values share a part).
 func TestAValueIsWrittenIntoAnOperationNameAsOneStep(t *testing.T) {
 	t.Parallel()
 	asItself := []string{"ENG-1", uuid.NewString(), "ci:release", "workspace",
@@ -228,12 +217,11 @@ func TestAValueIsWrittenIntoAnOperationNameAsOneStep(t *testing.T) {
 // EVERY SEGMENT AN ID IS MINTED WITH IS ONE STEP OF IT — its name, and each
 // step a gesture appends.
 //
-// Nothing downstream holds the grammar, so the mint does: a name or a step
-// that holds a dot is written as one escaped segment rather than spelling
-// steps of its own, a name at the bound is kept and one past it escaped, and
-// [OpNamed] compares through the same rule, so a name the mint had to escape
-// still names its own id. A step that held a dot made two gestures one id:
-// `x` with the step `y.z`, and `x.y` with the step `z`.
+// Nothing downstream holds the grammar, so the mint does: a name or step
+// holding a dot is written as one escaped segment, a name at the bound is kept
+// and one past it escaped, and [OpNamed] compares through the same rule. A
+// step holding a dot would make `x` with step `y.z` and `x.y` with step `z`
+// one id.
 //
 // Mutation: drop the rule from the name's writer, the step's or [OpNamed],
 // and the matching assertion fails.
@@ -288,11 +276,10 @@ func TestEverySegmentAnIDIsMintedWithIsOneStepOfIt(t *testing.T) {
 
 // AN ID IS THE CALL IT WAS MINTED FOR, OR IT IS NOTHING.
 //
-// A surface that names the call in an id's name holds a brought-back id to
-// exactly that name: the same name with a step after it is a step's id — a NEW
-// call's operation — and a name that merely starts or ends the same way is
-// another call's. Each of those passing would answer a second gesture as the
-// first.
+// A surface holds a brought-back id to exactly its call's name: that name with
+// a step after it is a NEW call's operation, and a name that merely starts or
+// ends the same way is another call's. Either passing would answer a second
+// gesture as the first.
 func TestAnOperationIDIsNamedForExactlyOneCall(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
@@ -321,15 +308,12 @@ func TestAnOperationIDIsNamedForExactlyOneCall(t *testing.T) {
 
 // A KEYED WRITE IS ONE OPERATION FOR ONE ASK, and another for anything else.
 //
-// The ledger answers an operation it already holds before the write is
-// decided, so two writes under one id are one write: the second is answered
-// with the first's result and nothing of it lands. Each part of the
-// derivation is what keeps two different writes under one key apart — the
-// verb (a save and the rename after it), the object (two pages), and what
-// the write says (a second save with another body) — while a retry, which
-// resends all of it, has to land on the first attempt's id. And the content
-// is digested through its JSON encoding, so a map built in another order is
-// the same ask.
+// The ledger answers an operation it already holds before deciding, so two
+// writes under one id are one write: the second gets the first's result and
+// lands nothing. The verb, the object and the content each keep two writes
+// under one key apart, while a retry, resending all of it, lands on the first
+// attempt's id. Content is digested through its JSON encoding, so a map built
+// in another order is the same ask.
 //
 // Mutation: drop any part from the identity and its row collapses two writes.
 func TestAKeyedWriteIsOneOperationForOneAsk(t *testing.T) {
@@ -385,13 +369,11 @@ var keyedShapes = map[string]func(key, verb, object string, content any) (string
 // A KEYED ID CARRIES ITS KEY'S INSTANT, NAMED BY ITS VERB — or unnamed where
 // it is also the id of the object it makes.
 //
-// The instant is what the ledger vouches for a retry by, so an id that did
-// not carry the key's own would be read as minted at some other moment: at
-// the epoch, and answered `unknown` on every node whose ledger ever lost a
-// row; or at the call, and decided again after the loss. The name is how a
-// reader of the ledger finds the operation; an object's own id carries none,
-// because a reader addresses the object by it — and the two shapes of one
-// ask are two ids, so a comment and an operation under one key never collide.
+// The ledger vouches for a retry by the instant: the epoch's would answer
+// `unknown` wherever the ledger lost a row, and the call's would decide again
+// after the loss. A ledger reader finds the operation by its name; an object's
+// own id carries none, because a reader addresses the object by it. The two
+// shapes of one ask are two ids, so a comment and an operation never collide.
 //
 // Mutation: derive at the zero instant, name the object's id, or derive the
 // two shapes alike, and the matching assertion fails.
@@ -429,13 +411,10 @@ func TestAKeyedIDCarriesItsKeysInstant(t *testing.T) {
 }
 
 // A KEYED WRITE REFUSES WHAT IT CANNOT DERIVE FROM, rather than deriving an id
-// that reads as something else.
-//
-// A key that carries no instant would derive an id read as minted before
-// every loss — every such write `unknown` once the ledger had swept anything,
-// and never published. A verb that is not a name would put a step in the
-// grammar, or no name at all. Content that will not encode has no digest to
-// bind. Each is refused, with no id.
+// that reads as something else: a key with no instant reads as minted before
+// every loss (`unknown` once the ledger swept anything), a verb that is not a
+// name spells a step or no name, and content that will not encode has no
+// digest.
 func TestAKeyedWriteRefusesWhatItCannotDeriveFrom(t *testing.T) {
 	t.Parallel()
 	key := statelog.NewOpID(time.Now(), "")

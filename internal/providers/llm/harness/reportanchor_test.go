@@ -32,13 +32,12 @@ func spentInBerlin(t *testing.T) string {
 // A SENTINEL IN THE MODEL'S OWN WORDS IS AN ANSWER, ON EVERY SHIPPED PROFILE
 // THAT READS THE ANSWER FOR ONE.
 //
-// What a harness says on a healthy run is the model's prose and the arguments of
-// every tool call it makes, and the shipped sentinels include generic phrases
-// a model writes as readily as a vendor prints them: "rate limit", "quota",
-// "Usage limit reached". Matched anywhere in there, the answer was thrown away
-// as a spent plan and the entry sat out for every seat on the node — and the
-// redelivered turn wrote the same sentence a minute later. On a run the harness
-// did not report failed, a sentinel counts only where it opens what was said.
+// A healthy run says the model's prose and every tool call's arguments, and the
+// shipped sentinels include generic phrases a model writes as readily as a
+// vendor prints them ("rate limit", "quota", "Usage limit reached"). Matched
+// anywhere, the answer was thrown away as a spent plan and the entry sat out for
+// every seat on the node. On a run the harness did not report failed, a sentinel
+// counts only where it opens what was said.
 //
 // Mutation: match a clean run's answer anywhere ([haystack.find] ignoring
 // anchored), and every case here is thrown away and sits the entry out.

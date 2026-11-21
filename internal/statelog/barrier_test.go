@@ -14,15 +14,9 @@ func probeEncode(env statelog.Envelope) ([]byte, error) { return json.Marshal(en
 
 // A BARRIER CARRIES NO MESSAGE ID, AND THAT IS THE PROOF ITSELF.
 //
-// A linearizable read needs to know the log's end at or after the read
-// arrived, and a barrier's acknowledgement is what establishes it: the server
-// proposes rather than stores, and the acknowledgement is written from the
-// apply path, so a PubAck at N proves N is committed by a majority.
-//
-// A repeated message id inside the duplicate window is served straight out of
-// that window with NO quorum round trip at all. So a barrier carrying one
-// would hand back a sequence nothing confirmed — a stale position with a
-// quorum's authority behind it, which is the worst shape a read can have.
+// A PubAck at N proves N committed by a majority, but a repeated message id
+// inside the duplicate window is answered from the window with NO quorum round
+// trip: a barrier carrying one would hand back a sequence nothing confirmed.
 func TestBarrierNeverAcceptsADuplicateAck(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -61,12 +55,9 @@ func TestBarrierNeverAcceptsADuplicateAck(t *testing.T) {
 	}
 }
 
-// AND A DUPLICATE ACKNOWLEDGEMENT IS A REFUSAL RATHER THAN A POSITION.
-//
-// If the broker ever serves one — a client that started sending an id, a
-// server that collapses on something else — the read index must refuse rather
-// than hand back the sequence, because the sequence is the one thing the
-// duplicate did not establish.
+// AND A DUPLICATE ACKNOWLEDGEMENT IS A REFUSAL RATHER THAN A POSITION, however
+// the broker came to serve one: its sequence is the one thing it did not
+// establish.
 func TestABarrierServedFromTheDedupeWindowIsRefused(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -95,18 +86,12 @@ func (d duplicating) LastSeq(ctx context.Context, subject string) (uint64, bool,
 	return d.inner.LastSeq(ctx, subject)
 }
 
-// A READER MAY ONLY USE A BARRIER THAT STARTED AT OR AFTER IT ARRIVED.
+// A READER MAY ONLY USE A BARRIER THAT STARTED AT OR AFTER IT ARRIVED: one
+// already in flight was proposed before the reader existed, so its sequence
+// bounds nothing the reader asked about ([statelog.ReadIndex.Read]).
 //
-// Coalescing concurrent readers onto one append is what keeps a company's
-// read rate off the raft log, and readers that arrive while nothing is in
-// flight legitimately share the append one of them starts. But an append
-// ALREADY IN FLIGHT was proposed before this reader existed, so its sequence
-// is not a bound on anything this reader asked about — joining it would
-// answer a stale position with a quorum's authority behind it, which is the
-// worst shape a read can have.
-//
-// The staging is exact rather than timed: the first append is held open in a
-// gate, so the second reader provably arrives after it started.
+// The first append is held open in a gate, so the second reader provably
+// arrives after it started.
 func TestAReaderNeverJoinsABarrierThatWasAlreadyInFlight(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -125,9 +110,7 @@ func TestAReaderNeverJoinsABarrierThatWasAlreadyInFlight(t *testing.T) {
 		firstDone <- p
 	}()
 
-	// The first append is now in flight and cannot complete until this
-	// test lets it, so the second reader below arrives strictly after it
-	// started.
+	// The first append is in flight and held.
 	<-gate.started
 
 	secondDone := make(chan statelog.Position, 1)
@@ -164,11 +147,9 @@ func TestAReaderNeverJoinsABarrierThatWasAlreadyInFlight(t *testing.T) {
 	}
 }
 
-// AND CONCURRENT READERS ARE ALL SERVED ABOVE A BARRIER THAT PREDATES THEM.
-//
-// The sequential case is the easy half. This is the one that matters: sixteen
-// readers arriving at once, sharing whatever appends they legitimately can,
-// and not one of them handed a position from before it existed.
+// AND CONCURRENT READERS ARE ALL SERVED ABOVE A BARRIER THAT PREDATES THEM:
+// sixteen arriving at once share what appends they legitimately can, and not
+// one is handed a position from before it existed.
 func TestConcurrentReadersAreAllServedAboveTheirOwnArrival(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -208,23 +189,15 @@ func TestConcurrentReadersAreAllServedAboveTheirOwnArrival(t *testing.T) {
 	}
 }
 
-// READERS THAT ARRIVE DURING ONE BARRIER ARE ALL SERVED BY THE NEXT ONE.
+// READERS THAT ARRIVE DURING ONE BARRIER ARE ALL SERVED BY THE NEXT ONE: the
+// coalescing [statelog.ReadIndex.Read] rests on. A reader that retook its
+// arrival on waking would be held to a barrier started after IT WOKE, which
+// the first to wake has already claimed, and go round again.
 //
-// The arrival rule says a reader may use only a barrier that started after it
-// arrived — and so the barrier that starts once the one in flight is done
-// serves EVERY reader that arrived during it: that is the coalescing that
-// keeps a company's linearizable reads off the raft log, and the "at most one
-// extra round trip under contention" [statelog.ReadIndex.Read] promises. A
-// reader that took its arrival again each time it woke instead held itself to
-// a barrier started after IT WOKE, which the first reader to wake had already
-// claimed — so every waiter but one went round again, and sixteen readers on
-// one node made sixteen appends between them, measured.
-//
-// The staging is exact: the first barrier is held in a gate while fifteen
-// readers arrive and wait on it, and each reader's context reports every time
-// the reader settles to wait ([waitReporter]), so the second barrier is held
-// too until all fifteen are waiting on it. Released, it must serve all of them,
-// and no third barrier may start.
+// The first barrier is held in a gate while fifteen readers wait on it, each
+// reader's context reporting every settle to wait ([waitReporter]), and the
+// second is held until all fifteen wait on it. Released, it must serve them
+// all, and no third barrier may start.
 func TestReadersThatArriveDuringOneBarrierAreServedByTheNext(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -304,9 +277,8 @@ func TestReadersThatArriveDuringOneBarrierAreServedByTheNext(t *testing.T) {
 // only once it has claimed the barrier it will wait on, so the n-th report is
 // the reader waiting on its n-th.
 //
-// A REPORT NOBODY HAS ROOM FOR IS DROPPED rather than waited on: the staging
-// reads every report it stages on, and a reader that goes round more times
-// than that — the failure the case exists to catch — must still finish.
+// A report nobody has room for is DROPPED, not waited on, so a reader that
+// goes round more often than staged (the failure under test) still finishes.
 type waitReporter struct {
 	context.Context
 	waits chan<- struct{}
@@ -342,13 +314,8 @@ func (g *gatedBarrier) LastSeq(ctx context.Context, subject string) (uint64, boo
 	return g.inner.LastSeq(ctx, subject)
 }
 
-// A BARRIER'S RECORD VERSION IS ONE, FOR EVER.
-//
-// A record version is normally free to move. This one is not: a barrier a
-// build cannot decode would be DEFERRED, and a deferred barrier is a
-// self-inflicted permanent read outage on the node that deferred it. The
-// record has no payload to extend, so nothing a later version could carry is
-// worth that.
+// A BARRIER'S RECORD VERSION IS ONE, FOR EVER: a barrier a build cannot decode
+// is deferred, a permanent read outage on that node ([statelog.BarrierVersion]).
 func TestABarriersVersionIsPinnedAtOne(t *testing.T) {
 	t.Parallel()
 	if statelog.BarrierVersion != 1 {

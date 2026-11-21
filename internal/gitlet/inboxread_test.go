@@ -298,3 +298,46 @@ func TestANoticeCardsReadNamesWhatAPageCanNameEachChangeOnce(t *testing.T) {
 			answer.NoticeCards, err)
 	}
 }
+
+// A CODE NOTICE NAMED BY ITS RECORD IS THAT NOTICE, read, snoozed or unread; another person's,
+// an unknown one and an id naming no change answer nothing. Mutation: drop the record branch of
+// the scan (founder's whole inbox answers, red).
+func TestACodeNoticeIsReadByItsRecord(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	ids, at, repo, change := founderNotices(t, n, 2)
+	m := markerOn(t, n, n.pub)
+	mark(t, m, marking(gitlet.MarkGesture{Read: []string{ids[0]}}))
+	mark(t, m, marking(gitlet.MarkGesture{Snooze: []gitlet.MarkSnooze{{RecordID: ids[1],
+		Until: harnessAt.Add(48 * time.Hour)}}}))
+	for i, want := range []struct{ read, snoozed bool }{{true, false}, {false, true}, {false, false}} {
+		page, _ := readInbox(t, n, gitlet.InboxQuery{Record: ids[i], Snoozed: inbox.SnoozeInclude}, "", 0)
+		if got := idsOf(page); !slices.Equal(got, []string{ids[i]}) {
+			t.Fatalf("founder's read of %s answers %v, want that notice alone", ids[i], got)
+		}
+		if got := page.Notices[0]; got.Read != want.read || got.Snoozed != want.snoozed || got.Change == nil {
+			t.Errorf("the notice %s reads %+v, want read %v and snoozed %v with its change", ids[i], got,
+				want.read, want.snoozed)
+		}
+	}
+	if page, _ := readInbox(t, n, gitlet.InboxQuery{Record: ids[0], Unread: true}, "", 0); len(page.Notices) != 0 {
+		t.Errorf("an unread read of a read notice answers %v", idsOf(page))
+	}
+	if err := n.db.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO code_notifications (record_id, recipient,
+			recipient_kind, repo_id, change_id, change_ref, reason, addressed, fallback_only, fallback_rank, excerpt,
+			created_at, log_seq, log_stream, log_generation)
+			VALUES ('other-record', 'someone-else', 'person', ?, ?, 'web!1', 'mention', 1, 0, 0, '', ?, ?, ?, ?)`,
+			repo, change, store.EncodeTime(harnessAt), at[0].Packed(), at[0].Stream, at[0].Generation)
+		return err
+	}); err != nil {
+		t.Fatalf("seed somebody else's notice: %v", err)
+	}
+	for _, record := range []string{gitlet.NoticeID("other-record", change), gitlet.NoticeID("no-such", change),
+		"names-no-change"} {
+		page, _ := readInbox(t, n, gitlet.InboxQuery{Record: record, Snoozed: inbox.SnoozeInclude}, "", 0)
+		if len(page.Notices) != 0 {
+			t.Errorf("founder's read of %q answers %v, want nothing", record, idsOf(page))
+		}
+	}
+}

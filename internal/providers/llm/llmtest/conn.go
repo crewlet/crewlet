@@ -16,22 +16,16 @@ import (
 )
 
 // Conn is one harness run in progress against a host's session, driven response
-// by response — the half of [Script] a test drives itself when what the model
-// says next is not a fixed list of runs: a script chosen by the tools the run
-// was offered, or a reply worked out in Go from what the earlier calls were
-// answered.
+// by response: the half of [Script] a test drives itself when what the model
+// says next depends on the tools offered or earlier answers.
 //
-// THE SAME HARNESS [Script] is: it lists the tools, reports each response to the
-// host as the harness's record shows it, spends what the response cost, and makes
-// the response's calls over MCP. Two things it does as the measured harnesses do and
-// [Script] does not:
+// THE SAME HARNESS [Script] is, except that, as the measured harnesses do:
 //
-//   - A name it was not offered is refused LOCALLY, without reaching the host —
-//     every measured harness but two answers an unlisted name itself, so the host
-//     sees the model ask for it only in the record.
+//   - A name it was not offered is refused LOCALLY, without reaching the host:
+//     every measured harness but two answers an unlisted name itself.
 //   - It is stopped the moment the host ends its run, unless
-//     [ConnOptions.KillLatency] says otherwise: no response is played after
-//     that, and no further call of the response in flight is made.
+//     [ConnOptions.KillLatency] says otherwise: no later response is played and
+//     no further call of the one in flight is made.
 type Conn struct {
 	host   llm.ToolHost
 	req    llm.Request

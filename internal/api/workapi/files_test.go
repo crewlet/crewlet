@@ -35,20 +35,14 @@ import (
 )
 
 // The byte routes: an upload streamed into one object and then recorded, a
-// download streamed back out of one, checked against its row — and the pace
-// each is held to, which charges the client only for the time it is waited
-// on.
+// download streamed back out of one, checked against its row, and the pace
+// each is held to, which charges the client only for the time it is waited on.
 //
-// The pacing is asserted by CAPTURING the deadlines rather than waiting for
-// one to fire, for the reason internal/api/httpjson's own deadline test gives:
-// net/http already guarantees a deadline fires, and what is this package's
-// own is that one is set at all, how far out, and when.
-//
-// And on a CLOCK OF THE SUITE'S OWN ([workapi.Options.PaceClock]), moved by
-// exactly the time a fake store's work takes, never slept through — so every
-// deadline is measured exactly. The clock starts years from the wall clock,
-// which is what keeps that honest: a route that read the wall clock instead of
-// its pace clock would set deadlines decades from where this one stands.
+// Pacing is asserted by CAPTURING the deadlines, not waiting for one to fire
+// (net/http guarantees that; what is ours is that one is set, how far out and
+// when), on the suite's own clock ([workapi.Options.PaceClock]) moved by
+// exactly the time a fake store's work takes. It starts years from the wall
+// clock, so a route reading the wall clock would set deadlines decades away.
 
 // paceClock is a clock that moves only when a case says time passed.
 type paceClock struct {
@@ -451,19 +445,14 @@ func TestAnUploadIsChargedOnlyWhileTheClientIsWaitedOn(t *testing.T) {
 	}
 }
 
-// A BODY THAT STOPS ARRIVING IS THE CLIENT'S, not the store's: it answers 400
-// and records nothing. It answered 503 `unavailable`, which tells a client to
-// retry a request whose own connection was what failed.
+// A BODY THAT STOPS ARRIVING IS THE CLIENT'S, not the store's: 400, nothing
+// recorded (a 503 would tell it to retry a request whose connection failed).
+// A body cut short is one that stopped, never one that ended: net/http answers
+// a client that left mid-body with io.ErrUnexpectedEOF, which must not be
+// taken for the end of the file and recorded.
 //
-// AND A BODY CUT SHORT IS ONE THAT STOPPED, never one that ended: net/http
-// answers a client that went away mid-body with io.ErrUnexpectedEOF, which an
-// upload once took for the end of the file and RECORDED — the half that
-// arrived, as the file, answered 200.
-//
-// TOLD IN A PERSON'S WORDS ([paced.Unread]): the detail was the read's own
-// failure as Go spells it — "the body could not be read: unexpected EOF", "…:
-// i/o timeout" — which goes to the log. Mutation: answer err.Error() again
-// and both rows go red.
+// Told in a person's words ([paced.Unread]), not the read's own failure text,
+// which goes to the log. Mutation: answer err.Error() and both rows go red.
 func TestAnUploadWhoseBodyStopsIsRefusedAsTheClients(t *testing.T) {
 	t.Parallel()
 	for _, stop := range []error{errors.New("i/o timeout"), io.ErrUnexpectedEOF} {
@@ -666,16 +655,12 @@ func TestAnUploadTheStoreHasNoRoomForIsRefusedAsFull(t *testing.T) {
 // THE WRITER'S REFUSALS ABOUT THE FILE KEEP THEIR OWN CODES, and every other
 // refusal reads as it reads on every write here.
 //
-// A version moved past is HTTP's own `412` on the resource its ETag names, and
-// an upload too old to be named is `409 upload_expired` — the bytes are stored
-// and the write may no longer name them, and sending the request again is the
-// one thing that lands, where a 503 would invite the same doomed retry of the
-// record alone. A conflict the domain names, the project's state and a value
-// it refuses go through the one refusal mapping ([operator.Fail]), as they
-// would from any tool; the byte routes used to
-// answer every refusal they did not name with a 503, so a fault told a client
-// to retry for ever. And each is told in the writer's sentence: the codes of
-// their own answered the error's text, which opens with the package's name.
+// A version moved past is HTTP's own `412` on the resource its ETag names; an
+// upload too old to be named is `409 upload_expired` (the bytes are stored,
+// only resending the request lands, where a 503 would invite a doomed retry of
+// the record alone). A conflict, a project's state and a refused value go
+// through the one refusal mapping ([operator.Fail]), as from any tool. Each is
+// told in the writer's sentence, not the error's text, which names the package.
 //
 // Mutation: answer any of the file's own codes with err.Error() again and its
 // row names the package.
@@ -776,15 +761,11 @@ func TestARefusedPathIsToldInTheTrackersSentence(t *testing.T) {
 
 // A RETRY UNDER THE SAME KEY IS THE SAME OPERATION ONLY FOR THE SAME BYTES.
 //
-// The byte routes take their operation from the request's `Idempotency-Key`,
-// as every write on this surface does — they took an `op_id` query parameter
-// once, which no other write read — and the operation is bound to what the
-// request asks: the same content under the same key is the retry an unknown
-// answer asks for, so it derives the same operation and the ledger answers it
-// with the first copy's result; other content under that key is another
-// write, which must land rather than be answered with the first one's outcome.
-// And the answer names the key the retry must send, carrying the key's
-// instant.
+// The byte routes take their operation from `Idempotency-Key`, bound to what
+// the request asks: the same content under the same key is the retry an
+// unknown answer asks for, so the ledger answers it with the first result;
+// other content under that key is another write, which must land. The answer
+// names the key the retry must send, carrying the key's instant.
 //
 // Mutations: bind the operation to the key alone and the second content
 // collapses into the first; derive it per request and the retry is a second

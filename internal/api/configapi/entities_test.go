@@ -278,18 +278,15 @@ func TestAnEntityWriteNeedsASummary(t *testing.T) {
 // GET AND PUT ARE THE VERBS ON AN ENTITY PATH, and the refusal of the rest has
 // to be legible.
 //
-// The previous engine served DELETE here, so an operator carrying those
-// scripts forward will send one. They get 405 with an Allow header naming PUT
-// — a *routing* answer rather than a handler that 404s or, worse, one that
-// quietly succeeds having done nothing.
+// DELETE gets 405 with an Allow header naming PUT: a *routing* answer, not a
+// handler that 404s or quietly succeeds having done nothing.
 //
 // Removing a seat or a unit is a full-document edit on purpose: deleting a
-// seat strands its mailbox and its in-flight work, and deleting a unit every
-// `lead:` and `manages:` that names it. Each belongs in a document somebody
-// looked at. A model and an MCP server are removed by address, each with what
-// names it answered in the same write (removal.go, mcpremoval.go).
-// docs/guides/configure-via-api.md states this status code, which is why it is
-// asserted rather than assumed.
+// seat strands its mailbox and in-flight work, and deleting a unit every
+// `lead:` and `manages:` naming it; each belongs in a document somebody looked
+// at. A model and an MCP server are removed by address, each with what names
+// it answered in the same write (removal.go, mcpremoval.go).
+// docs/guides/configure-via-api.md states this status code.
 func TestAnEntityPathRefusesEveryVerbButGetAndPut(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)

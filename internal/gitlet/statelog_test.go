@@ -122,6 +122,15 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 	case "RecordEnvelope.Op viewed_key":
 		op, payload = gitlet.OpViewedKey, gitlet.ViewedKeyRecord{RepoID: repo,
 			Key: gitlet.ViewedKey(strings.Repeat("ab", gitlet.ViewedKeyBytes))}
+	case "RecordEnvelope.Op comment_edit", "RecordEnvelope.Op comment_delete":
+		const comment = "0190f3c4-0000-7000-8000-0000000000c2"
+		op, payload = gitlet.OpCommentEdit, gitlet.CommentEdit{RepoID: repo, ChangeID: change, CommentID: comment,
+			By: seat, Body: "Why a minute?"}
+		if field.Name == "RecordEnvelope.Op comment_delete" {
+			op, payload = gitlet.OpCommentDelete, gitlet.CommentDelete{RepoID: repo, ChangeID: change,
+				CommentID: comment, By: seat}
+		}
+		subject, scope = gitlet.ChangeSubject(change), gitlet.Scope{gitlet.RepoPath(repo), gitlet.ChangePath(change)}
 	case "PushEntry.Offered":
 		entry.Commands[0].Result, entry.Commands[0].Reason = gitlet.ResultNG, gitlet.RefusalProtectedDirect
 		entry.Via, entry.Offered = gitlet.ViaGit, 1
@@ -142,11 +151,32 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		}
 		op, payload = gitlet.OpCheckFinished, ended
 		subject, scope = gitlet.ChecksSubject(repo), gitlet.Scope{gitlet.ChecksPath(repo)}
+	case "CheckStarted.Required":
+		op, payload = gitlet.OpCheckStarted, gitlet.CheckStarted{CheckKey: gitlet.CheckKey{RepoID: repo,
+			OID: oidOf("B"), Target: mainRef, Name: "lint", Attempt: 1}, Placement: gitlet.PlacementExternal,
+			StartedAt: suiteAt, Required: true}
+		subject, scope = gitlet.ChecksSubject(repo), gitlet.Scope{gitlet.ChecksPath(repo)}
+	case "CheckFinished.Required":
+		op, payload = gitlet.OpCheckFinished, gitlet.CheckFinished{CheckKey: gitlet.CheckKey{RepoID: repo,
+			OID: oidOf("B"), Target: mainRef, Name: "lint", Attempt: 1}, State: gitlet.CheckStatePassed,
+			Reason: gitlet.CheckReasonReported, Reporter: &ada, Required: true,
+			FinishedAt: suiteAt}
+		subject, scope = gitlet.ChecksSubject(repo), gitlet.Scope{gitlet.ChecksPath(repo)}
+	case "Ejection.Reason checks_undefined":
+		op, payload = gitlet.OpEject, gitlet.Eject{RepoID: repo, Entries: []gitlet.Ejection{{
+			EntryID: "0190f3c4-0000-7000-8000-0000000000e1", Reason: gitlet.EjectChecksUndefined,
+			Checks: []string{"e2e"}}}}
 	case "Ejection.TestedIn":
 		op, payload = gitlet.OpEject, gitlet.Eject{RepoID: repo, Entries: []gitlet.Ejection{{
 			EntryID: "0190f3c4-0000-7000-8000-0000000000e1", Reason: gitlet.EjectCheckFailed, Checks: []string{"e2e"},
 			TestedIn: &gitlet.EjectionTrain{CandidateID: "0190f3c4-0000-7000-8000-0000000000d1",
 				BaseOID: oidOf("A"), CommitOID: oidOf("M")}}}}
+	case "ChangeOption.Reverts":
+		// A REVERT'S PUSH: its new branch opens the change that reverts change 1.
+		entry.Commands = []gitlet.Command{{Ref: "refs/heads/revert-1", Old: gitlet.ZeroOID, New: oidOf("B"),
+			Result: gitlet.ResultOK}}
+		entry.Change = &gitlet.ChangeOption{Target: mainRef, Title: "Revert web!1", Reverts: 1}
+		op, payload = gitlet.OpPush, gitlet.PushBatch{RepoID: repo, Pushes: []gitlet.PushEntry{entry}}
 	default:
 		return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 	}

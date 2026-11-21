@@ -16,7 +16,13 @@ afterEach(() => {
   act(() => setAssistantActivity("idle"));
 });
 
-const ready: AssistantControl = { open: false, unavailable: null, toggle: () => {}, ask: () => {} };
+const ready: AssistantControl = {
+  open: false,
+  unavailable: null,
+  toggle: () => {},
+  ask: () => {},
+  draft: () => {},
+};
 
 /** The words the kit's tooltip shows once the button takes keyboard focus. */
 function tipOnFocus(button: HTMLElement): string {
@@ -45,14 +51,14 @@ test("draws no keycap, and keeps its shortcut as its own property and in its too
 test("a held Ask says why on hover and focus, after its hint", () => {
   const held = {
     reason: "anonymous",
-    short: "An admin turned Ask Crewlet off.",
+    short: "No model is assigned to Ask Crewlet yet.",
     title: "",
     body: "",
   } as const;
   draw({ ...ready, unavailable: held });
   const button = screen.getByRole("button", { name: "Ask" });
   expect(button.getAttribute("aria-disabled")).toBe("true");
-  expect(tipOnFocus(button)).toMatch(/^Ask Crewlet.*\. An admin turned Ask Crewlet off\.$/);
+  expect(tipOnFocus(button)).toMatch(/^Ask Crewlet.*\. No model is assigned to Ask Crewlet yet\.$/);
 });
 
 test("wears the dot on the mark's corner, with the reason in its name and its tooltip", () => {

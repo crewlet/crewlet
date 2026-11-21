@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
@@ -75,7 +76,7 @@ func (p *googleCloudPass) run(ctx context.Context, _ setup.PassInput) ([]integra
 		//nolint:nilerr // Deliberate: reported as a finding on the document.
 		return []integration.Finding{{
 			Kind: integration.FindingCredentialMissing, Subject: subject,
-			Detail: strings.TrimPrefix(err.Error(), "googlecloud: "),
+			Detail: googleauth.Sentence(err),
 		}}, nil
 	}
 	// THE AGENTS' ACCOUNTS, which the orphan advisory spares: the ledger's.

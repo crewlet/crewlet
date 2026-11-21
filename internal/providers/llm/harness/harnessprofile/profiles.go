@@ -93,11 +93,11 @@ func BuiltinNames() []string {
 	return names
 }
 
-// AssistantEligible lists the built-in profiles the Dashboard Assistant can
-// run on, sorted: those whose web-denied run is left with no tool of its own
-// by construction ([Profile.ToolsOffProblem]). Derived from the table, as
-// [WebDeniable] is, of which it is a subset.
-func AssistantEligible() []string {
+// HelperEligible lists the built-in profiles a helper (Ask Crewlet, the
+// Advisor) can run on, sorted: those whose web-denied run is left with no tool
+// of its own by construction ([Profile.ToolsOffProblem]). Derived from the
+// table, as [WebDeniable] is, of which it is a subset.
+func HelperEligible() []string {
 	var out []string
 	for _, name := range WebDeniable() {
 		p, err := Load(name, map[string]any{"web_tools": string(WebToolsDenied)})
@@ -207,6 +207,21 @@ func (p Profile) Clone() Profile {
 				Seed: slices.Clone(dm.Seed)}
 		}
 	}
+	if p.WebSearch != nil {
+		search := *p.WebSearch
+		search.CompleteArgs = slices.Clone(search.CompleteArgs)
+		search.Args = make([][]string, len(p.WebSearch.Args))
+		for i, run := range p.WebSearch.Args {
+			search.Args[i] = slices.Clone(run)
+		}
+		search.Refuses = slices.Clone(search.Refuses)
+		out.WebSearch = &search
+	}
+	if p.ImageInput != nil {
+		image := *p.ImageInput
+		image.Args = slices.Clone(image.Args)
+		out.ImageInput = &image
+	}
 	if p.ToolsOff != nil {
 		args := make([][]string, len(p.ToolsOff.Args))
 		for i, run := range p.ToolsOff.Args {
@@ -260,21 +275,13 @@ var ErrOverrides = errors.New("overrides does not decode into a profile")
 // Load resolves the profile for one provider entry: the built-in table
 // entry for name, with overrides merged in, validated.
 //
-// The merge round-trips through YAML rather than reflecting over the struct,
-// which is what makes an override typo a VALIDATION failure at
-// `crewlet validate` instead of a field silently ignored until an agent's
-// first turn: the re-decode runs with KnownFields, so `complete_arg` is an
-// error naming itself.
-//
-// Validated as [Profile.Validate] validates any profile, and against the
-// built-in it was merged into besides: an override that moves a relocation
-// directory must move what the built-in keeps under it ([Profile.strandedBy]),
-// which only the pair can show.
-//
-// The profile it returns is the one the HARNESS RUNS: an entry whose merged stance
-// is `web_tools: denied` comes back with its [WebDenial] already applied, so
-// every caller (the backend that launches it, config validating it, the
-// doctor probing it) reads the same argv and the same seeded files.
+// The merge round-trips through YAML, so an override typo is a VALIDATION
+// failure at `crewlet validate` instead of a field ignored until a first turn:
+// the re-decode uses KnownFields, so `complete_arg` is an error naming itself.
+// Validated as [Profile.Validate] does, and against the built-in: an override
+// moving a relocation directory must move what the built-in keeps under it
+// ([Profile.strandedBy]). The profile it returns is the one the HARNESS RUNS: a
+// merged `web_tools: denied` comes back with its [WebDenial] applied.
 func Load(name string, overrides map[string]any) (Profile, error) {
 	builtin, ok := Builtin(name)
 	if !ok {
@@ -305,6 +312,9 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 				"works: set web_denial.mcp to what that run uses with web denied")
 		}
 		merged = merged.withWebDenied()
+	}
+	if merged.EffectiveWebTools() == WebToolsSearch && merged.CanSearchWeb() {
+		merged = merged.withWebSearch()
 	}
 	bad = append(bad, merged.problems()...)
 	if err := profileError(name, append(bad, merged.strandedBy(&builtin)...)); err != nil {

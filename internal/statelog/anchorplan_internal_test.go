@@ -12,24 +12,15 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// EVERY ANCHOR STATEMENT SEEKS ITS KEY — the plan gate behind a write's
-// snapshot costing one seek however many subjects its log has written.
-//
-// Every write a domain decides reads its subject's anchor, and the table has
-// two indexes that both lead with the stream: its primary key (stream,
-// subject) and the sweep's (stream, anchor). The pinned driver's planner,
-// with no statistics to go by, chose the sweep's for the exact-key read on
-// the stream alone and walked every anchor of the stream for the one it
-// wanted, so a write cost more the more subjects its log had written inside
-// the trim's window — a reconcile creating ten thousand repositories got
-// slower with every one it created. So each statement is explained over a
-// table holding two logs' anchors, and each must SEARCH its own index on
-// every column that index has for it: the read on the stream AND the subject,
-// the sweep and its count on the stream AND the anchor's range.
-//
-// The plan rather than a wall-clock ratio, because the plan is what decides
-// the cost and it is the same at any size: the walk it caused shows at a
-// production table, and the plan that causes it shows at any.
+// EVERY ANCHOR STATEMENT SEEKS ITS KEY, so a write's snapshot costs one seek
+// however many subjects its log has written. The table has two indexes leading
+// with the stream, the primary key (stream, subject) and the sweep's (stream,
+// anchor), and with no statistics the pinned driver's planner picks the
+// sweep's for the exact-key read and walks the stream's anchors. So each
+// statement is explained over two logs' anchors and must SEARCH its own index
+// on every column: the read on stream AND subject, the sweep and its count on
+// stream AND the anchor's range. The plan rather than a wall-clock ratio: the
+// plan decides the cost, and shows at any size.
 //
 // Mutation: drop anchorSQL's INDEXED BY and the read searches the sweep's
 // index on the stream alone.
@@ -91,18 +82,15 @@ func TestEveryAnchorStatementSeeksItsKey(t *testing.T) {
 }
 
 // BenchmarkReadingASubjectsAnchor is one write's read of its subject's anchor
-// ([tables.anchor]) in a read transaction of its own, at two table sizes —
-// twenty thousand anchors on the read log, about what ten thousand
-// repositories' creates leave on the code log, and three hundred thousand —
-// with as many of another log's beside them, as the logs share the table:
+// ([tables.anchor]) in a read transaction of its own, at twenty thousand
+// anchors on the read log (about what ten thousand repositories' creates leave
+// on the code log) and three hundred thousand, with as many of another log's
+// beside them, as the logs share the table:
 //
 //	go test ./internal/statelog -run '^$' -bench BenchmarkReadingASubjectsAnchor
 //
-// It is the number the plan gate above is about. Measured on a 4-core
-// 2.1 GHz Xeon: by the key, 0.16 ms a read at twenty thousand and 0.09 ms at
-// three hundred thousand — a read transaction's own cost, the same at both
-// sizes; walking the stream's anchors, as the planner chose to unnamed,
-// 4.0 ms and 84 ms.
+// It is the cost the plan gate above holds: by the key a read costs the same
+// at both sizes; a walk of the stream's anchors grows with them.
 func BenchmarkReadingASubjectsAnchor(b *testing.B) {
 	for _, anchors := range []int{20_000, 300_000} {
 		b.Run(fmt.Sprintf("anchors=%d", anchors), func(b *testing.B) {
@@ -153,10 +141,9 @@ func BenchmarkReadingASubjectsAnchor(b *testing.B) {
 	}
 }
 
-// writerPlans plans every statement in a transaction of the pinned writer's
-// own — the sweep is a DELETE, and a read transaction refuses even to explain
-// one — so [storetest.Plan] reads each through the connection the applier
-// writes on.
+// writerPlans plans every statement in a pinned-writer transaction, the
+// connection the applier writes on: the sweep is a DELETE, which a read
+// transaction refuses even to explain.
 type writerPlans struct{ w *store.Writer }
 
 func (h writerPlans) Read(ctx context.Context, fn func(*sql.Tx) error) error {

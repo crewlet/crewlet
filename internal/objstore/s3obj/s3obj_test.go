@@ -332,14 +332,13 @@ func TestAFailedUploadIsAbandoned(t *testing.T) {
 }
 
 // A WRITE THE PROVIDER HAS NO ROOM FOR IS REFUSED AS FULL: a bucket whose
-// provider refuses a write for want of room — MinIO's drives at their floor or
-// its bucket quota spent, Ceph's gateway out of space or past a quota, any
-// gateway's 507 — refuses the same write the same way until an operator makes
-// room, so the put is answered as the store having none ([objstore.Full], over
-// [objstore.ErrFull]), naming the provider's room ([s3obj.FullRemedy]) — on
-// the PutObject, on a part, on the completion and on the upload's start alike
-// — asked once, storing nothing and leaving no upload open. A refusal that is
-// no want of room stays what it was.
+// provider refuses a write for want of room (MinIO's drives at their floor or
+// quota spent, Ceph out of space, any gateway's 507) refuses it the same way
+// until an operator makes room, so the put is answered as the store having
+// none ([objstore.Full], over [objstore.ErrFull]), naming the provider's room
+// ([s3obj.FullRemedy]), on the PutObject, a part, the completion and the
+// upload's start alike, asked once and leaving no upload open. A refusal that
+// is no want of room stays what it was.
 //
 // Mutation: drop Put's classification and every case fails; drop a code from
 // fullCodes and its case fails; read only the status and the 400 and 403 cases
@@ -431,19 +430,14 @@ func TestAWriteTheProviderHasNoRoomForIsRefusedAsFull(t *testing.T) {
 }
 
 // A PART IS GIVEN ITS SHARE OF THE LINK. An upload's parts in flight cross ONE
-// link to the bucket together, so each moves at a share of it, and the floor
-// every leg is held to ([objstore.MiBPace]) is the UPLOAD's: a part given only
-// its own bytes at the floor misses its deadline on a link the upload as a
-// whole crosses at the floor, where one part at a time had crossed it. So
-// every part — a short last one too — is given its request's [s3obj.CallBudget]
-// and the time its bytes take at the floor with every part an upload may keep
-// in flight sharing that link: [s3obj.PartsInFlight] of them, whenever the
-// others were sent, because an upload sends parts behind one already on its
-// way — its first part goes alone, and three more join it as fast as the body
-// arrives.
+// link together, and the floor ([objstore.MiBPace]) is the UPLOAD's: a part
+// given only its own bytes at the floor misses its deadline on a link the
+// whole upload crosses at the floor. So every part, a short last one too, is
+// given [s3obj.CallBudget] and the time its bytes take at the floor with
+// [s3obj.PartsInFlight] parts sharing the link, whenever the others were sent.
 //
-// THE ARITHMETIC RATHER THAN A THROTTLED BUCKET: the budget of a part of the
-// production size is sixteen and a half minutes, which no case can wait out.
+// THE ARITHMETIC RATHER THAN A THROTTLED BUCKET: the budget of a production
+// part is sixteen and a half minutes, which no case can wait out.
 func TestAPartIsGivenItsShareOfTheLink(t *testing.T) {
 	t.Parallel()
 	for _, size := range []int64{1, objstore.MiB / 3, objstore.MiB, s3obj.PartBytes - 1, s3obj.PartBytes} {
@@ -459,25 +453,15 @@ func TestAPartIsGivenItsShareOfTheLink(t *testing.T) {
 // A REFUSED PART ENDS ITS UPLOAD AT ONCE: once the bucket's refusal of a part
 // reaches the upload, the upload cancels the parts still in flight, begins no
 // further read of its body and sends no other part, and fails with the refusal
-// — never a cancelled sibling's error. With parts in flight together, an
-// upload that noticed a failure only when it next needed a buffer went on
-// reading the client's body and sending parts behind it — up to three parts,
-// minutes of a slow client's body, for an upload already lost.
-//
-// THE MOMENT IS SEEN FROM THE BUCKET'S SIDE: the bucket refuses part 1 and
-// holds part 2 unanswered, so the hold reports when the upload cancels its
-// requests — which an upload does only once it has the refusal. The body hands
-// over the first two parts freely and waits at the third for that report, so
-// a read the upload begins after the report is one it began knowing it had
-// failed; and the refusal of part 1 is itself held back until the body has
-// reached its third part AND the bucket holds part 2 with its body read
-// ([s3fake.Server.PartHook]), so it arrives while the upload is reading, and
-// the cancellation it causes reaches a part the bucket is watching. Released
-// at the third part alone, the refusal now and then cancelled part 2 while
-// its body was still on its way, which no hold ever saw, and the case waited
-// out its minute (three runs in thirty). An upload that never acts on the
-// refusal is never reported, and the body gives up waiting after a minute,
-// so it fails this case rather than hanging it.
+// — never a cancelled sibling's error.
+// THE MOMENT IS SEEN FROM THE BUCKET'S SIDE: it refuses part 1 and holds part
+// 2 unanswered, so the hold reports when the upload cancels its requests. The
+// body hands over two parts and waits at the third for that report, so a read
+// begun after it began knowing the upload had failed. The refusal is held
+// until the body reached its third part AND the bucket holds part 2 with its
+// body read ([s3fake.Server.PartHook]); else it sometimes cancelled part 2
+// mid-body, unseen by any hold. An upload that never acts on it is never
+// reported; the body gives up after a minute, so the case fails, not hangs.
 func TestARefusedPartEndsItsUploadAtOnce(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
@@ -745,20 +729,14 @@ func (s *secondCrossingReader) Read(p []byte) (int, error) {
 // A BUCKET BEHIND A PRIVATE CERTIFICATE AUTHORITY IS REACHED THROUGH
 // AWS_CA_BUNDLE, and refused without it.
 //
-// What the bundle reaches is [s3obj.Open]'s own client — the engine's shared
-// transport with the bundle added to its roots for the bucket's requests only
-// — which no other case runs, because every other case reaches its fake over
-// plain http. It is also what the benchmark's https arm rests on: a bucket on
-// loopback with a certificate of its own, as real S3 is reached over TLS.
+// It reaches [s3obj.Open]'s own client, which no other case runs (they use
+// plain http); the benchmark's https arm rests on it too. NOT PARALLEL: it
+// sets the environment Open reads the bundle from.
 //
-// NOT PARALLEL, because it sets the environment, and the process's
-// environment is what Open reads the bundle from.
-//
-// THE REFUSAL IS AT ONCE: a certificate the node does not trust is refused the
-// same way every time, so it is never asked again — where every other failure
-// to reach the bucket is, until the request's deadline. Asked again, the check
-// at open would end at its deadline with the refusal reduced to text beside
-// it, so the refused half runs under a deadline of a few seconds.
+// THE REFUSAL IS AT ONCE: an untrusted certificate is refused the same way
+// every time, so it is never asked again. Asked again, the check at open
+// would end at its deadline with the refusal reduced to text, so the refused
+// half runs under a deadline of a few seconds.
 func TestABucketBehindAPrivateAuthorityIsReachedThroughItsBundle(t *testing.T) {
 	srv := s3fake.StartTLS(t, "files")
 

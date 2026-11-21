@@ -6,54 +6,36 @@ import (
 	"time"
 )
 
-// Buckets is how many hourly buckets a window keeps.
-//
-// TWENTY-FOUR PLUS THE CURRENT PARTIAL HOUR. A ring of whole hours makes the
-// window ROLLING rather than calendar: an operator reading at 09:00 sees the
-// last twenty-four hours, not "since midnight", and the two differ most
-// exactly when somebody is looking because something happened.
+// Buckets is how many whole hours a window keeps, plus the current partial
+// one. A ring of hours makes it rolling rather than calendar: read at 09:00 it
+// covers the last twenty-four hours, not "since midnight".
 const Buckets = 24
 
-// Window is a rolling 24-hour view over the recorder's counters and maxima.
+// Window is a rolling 24-hour view over the recorder's counters, maxima and
+// distributions, which is what `_24h` means: a maximum without a window lets
+// one slow transaction mask every later one.
 //
-// # Why this exists at all
-//
-// The estate it replaces said `_24h` forty-odd times and never said what a
-// `_24h` was: since when, reset how, per node or per fleet. A maximum was
-// "observed", with no window at all, so one sixteen-second transaction last
-// Tuesday masked every transaction after it.
-//
-// # A young window says so
-//
-// A node up for ten minutes reporting zero refusals is not a quiet node, and
-// the difference matters to whoever is deciding whether a deploy went well.
-// [Window.Since] is how long this window has actually been collecting, and
+// A young window says so: a node up for ten minutes reporting zero refusals is
+// not a quiet node. [Window.Since] is how long it has collected, and
 // [Window.Partial] is the flag a renderer shows beside a number younger than
-// its own period.
+// its period.
 type Window struct {
 	mu      sync.Mutex
 	started time.Time
 	now     func() time.Time
 
-	// ring is bucket index -> series key -> value. The index is the hour
-	// number, so a bucket is expired by comparing its hour rather than by
-	// sweeping: nothing runs on a timer to keep this correct.
+	// ring is bucket index -> series key -> value, and hours the hour each
+	// slot holds: a bucket expires by comparing its hour, so nothing runs on
+	// a timer to keep this correct.
 	ring  [Buckets + 1]map[string]bucketValue
 	hours [Buckets + 1]int64
 }
 
-// bucketValue is one series' contribution to one hour.
-//
-// IT CARRIES THE HISTOGRAM BINS, not just a maximum, and that is what makes a
-// windowed p95 possible at all. The alarms this window feeds compare a p95
-// against a budget — `barrier_slow` and `search_slow` both — and a maximum
-// substituted for a p95 is not a stale threshold but a different one: a
-// maximum is above the p95 by construction, so every such alarm would fire on
-// the single worst observation in the window rather than on a distribution
-// that had actually moved.
-//
-// The bins are the recorder's own, so a windowed quantile and a cumulative one
-// are computed the same way and can be compared.
+// bucketValue is one series' contribution to one hour. It carries the
+// histogram bins, not just a maximum, so `barrier_slow` and `search_slow` can
+// hold a windowed p95 to their budget; a maximum would fire them on the single
+// worst observation. The bins are the recorder's own, so a windowed and a
+// cumulative quantile are computed alike.
 type bucketValue struct {
 	total  uint64
 	max    float64
@@ -85,19 +67,12 @@ func (w *Window) Add(key string, n uint64) {
 }
 
 // AddAt contributes to a counter in the hour at names rather than the current
-// one: a count of things that HAPPENED at a known instant, filed where they
-// happened.
+// one, for an event observed later than it happened (a record the applier
+// reaches long after the broker stored it): filed when counted, a replayed
+// backlog would put days of events in one hour.
 //
-// It exists for a count taken where an event is observed LATER than it
-// occurred — a record applied from a log, counted when the applier reaches it
-// but committed when the broker stored it. Filed at the hour it was counted, a
-// node that replays a backlog files days of events into one hour, and every
-// windowed reading of them says the day just seen was that many days long.
-//
-// An instant older than the window counts toward nothing here — it happened
-// outside the period every reader of the window asks about — and one past the
-// current hour, which only a clock that disagrees with this one produces, is
-// filed in the current hour, the latest the window has.
+// An instant older than the window counts toward nothing; one past the current
+// hour (a clock disagreeing with this one) is filed in the current hour.
 func (w *Window) AddAt(key string, n uint64, at time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -112,9 +87,8 @@ func (w *Window) AddAt(key string, n uint64, at time.Time) {
 	idx := int(hour % int64(len(w.hours)))
 	if w.hours[idx] != hour {
 		if w.hours[idx] > hour {
-			// THE SLOT HOLDS A LATER HOUR, which inside the window is
-			// only possible once this node's clock has gone back: the
-			// later hour's count is the one still in the window.
+			// The slot holds a later hour (this node's clock went back),
+			// and that hour's count is the one still in the window.
 			return
 		}
 		w.hours[idx] = hour
@@ -148,15 +122,10 @@ func (w *Window) Forget(key string) {
 	}
 }
 
-// Observe contributes one measurement to a distribution in the current hour.
-//
-// Separate from [Window.Max] because a maximum and a distribution answer
-// different questions and the alarms need the second: "the worst barrier in a
-// day" is a fact about one request, and "the p95 barrier over a day" is a fact
-// about the service.
-//
-// bounds are the series' own ([Bounds] of its unit), the boundaries the
-// recorder's cumulative copy counts into.
+// Observe contributes one measurement to a distribution in the current hour;
+// the alarms need a p95 over the day, which [Window.Max] cannot give. bounds
+// are the series' own ([Bounds] of its unit), as the recorder's cumulative copy
+// counts into.
 func (w *Window) Observe(key string, bounds []float64, v float64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -175,13 +144,9 @@ func (w *Window) Observe(key string, bounds []float64, v float64) {
 }
 
 // Bins is one distribution's merged histogram over the window: its bin counts,
-// how many observations they hold and their sum.
-//
-// RETURNED TOGETHER because a [Snapshot] carries all three and a caller that
-// took them in three calls could take them across an hour boundary, pairing
-// counts from one window with a total from another.
-//
-// bounds are the series' own, the ones it was observed against.
+// how many observations they hold and their sum, taken together so an hour
+// boundary cannot fall between them. bounds are the ones it was observed
+// against.
 func (w *Window) Bins(key string, bounds []float64) (counts []uint64, n uint64, sum float64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -197,12 +162,9 @@ func (w *Window) Bins(key string, bounds []float64) (counts []uint64, n uint64, 
 	return counts, n, sum
 }
 
-// Count is how many observations a distribution holds over the window.
-//
-// ZERO IS AN ANSWER, and a different one from a quantile of zero: a series
-// nothing has observed has no p95, and an alarm that read a missing
-// distribution as "0 ms, well inside budget" would go quiet exactly when a
-// subsystem stopped running.
+// Count is how many observations a distribution holds over the window. Zero
+// means no p95, not a p95 of 0 ms: an alarm reading it as inside budget would
+// go quiet exactly when a subsystem stopped running.
 func (w *Window) Count(key string) uint64 {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -219,9 +181,8 @@ func (w *Window) bucket() map[string]bucketValue {
 	hour := w.now().UTC().Unix() / 3600
 	idx := int(hour % int64(len(w.hours)))
 	if w.hours[idx] != hour {
-		// A NEW HOUR REUSES THE SLOT, which is what makes this a ring
-		// rather than a growing map — and what makes expiry free: the
-		// bucket 25 hours ago is the one this hour overwrites.
+		// A new hour reuses the slot of the hour 25 hours ago, so
+		// expiry is free.
 		w.hours[idx] = hour
 		w.ring[idx] = map[string]bucketValue{}
 	}
@@ -270,11 +231,9 @@ func (w *Window) Keys() []string {
 	return out
 }
 
-// live returns the buckets inside the window. Callers hold the lock.
-//
-// The bound is the hour number rather than a sweep: a bucket whose hour is
-// more than [Buckets] behind the current one is stale ring memory that has not
-// been reused yet, and counting it would make the window longer than it says.
+// live returns the buckets inside the window. Callers hold the lock. A bucket
+// more than [Buckets] hours behind is stale ring memory not yet reused, and
+// counting it would make the window longer than it says.
 func (w *Window) live() []map[string]bucketValue {
 	hour := w.now().UTC().Unix() / 3600
 	out := make([]map[string]bucketValue, 0, len(w.hours))
@@ -294,8 +253,6 @@ func (w *Window) Since() time.Duration {
 	return w.now().UTC().Sub(w.started)
 }
 
-// Partial reports whether the window is younger than the period it names.
-//
-// A renderer that shows a `_24h` number without this is telling an operator
-// that a node up for ten minutes has had no refusals in a day.
+// Partial reports whether the window is younger than the period it names, so
+// a renderer does not show ten minutes of no refusals as a day of them.
 func (w *Window) Partial() bool { return w.Since() < Buckets*time.Hour }

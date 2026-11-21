@@ -18,35 +18,17 @@ import (
 )
 
 // HostWrites drives the WRITE CONTRACT of a box the engine writes from its own
-// host — a `direct` box, and a `container` box's host side of its mount — for
-// both writes ([sandbox.Sandbox.WriteFile], [sandbox.Sandbox.WriteStream]): a
-// write replaces only a regular file, or puts one where nothing is, and refuses
-// anything else at the path AT ONCE — a named pipe, a directory, a socket, and
-// a link wherever it leads — naming what it is, leaving it as the box made it,
-// writing nothing past the box and staging nothing beside it; and a streamed
-// write whose source fails part way stages nothing either.
-//
-// ONLY SUCH A BOX REFUSES THEM. A remote box is a machine of its own, so what
-// is at a path there is replaced, a link included ([sandbox.Sandbox.WriteFile]);
-// and the suite puts what it refuses at the path from the engine host's side,
-// which no box reached through the interface alone can be made to hold — so
-// [Box] certifies what every backend writes, and this what the engine host's
-// boxes refuse.
-//
-// WHY. The engine writes into a box after something has run in it — a coding
-// harness's configuration after the setup steps' commands, a token file under a
-// running job, a carried session's archive into a box a previous job used —
-// and what the box put at the path is the box's own: a plain write followed a
-// link there (one that leads nowhere passes the escape check as itself, so the
-// write CREATED a file wherever the link pointed on the engine host), and a
-// named pipe nobody reads blocked the write, and the launch behind it, for
-// good.
-//
+// host (`direct`, or a `container` box's host side) for both writes
+// ([sandbox.Sandbox.WriteFile], [sandbox.Sandbox.WriteStream]): a write replaces
+// only a regular file, or puts one where nothing is, and refuses anything else
+// at the path AT ONCE (pipe, directory, socket, a link wherever it leads),
+// staging nothing beside it. A remote box replaces whatever is there, so [Box]
+// certifies what every backend writes and this what the host's boxes refuse.
+// WHY: a plain write followed a dangling link, CREATING a file on the host.
 // fresh returns an empty box and the host directory its home is.
-//
-// Mutation: write with os.WriteFile, and the dangling link creates the host
-// file and the pipe never answers; or drop the look before the replacement,
-// and the link, the pipe and the socket are replaced by a file.
+// Mutation: write with os.WriteFile (the dangling link creates the host file,
+// the pipe never answers), or drop the look before the replacement (link, pipe
+// and socket are replaced by a file).
 func HostWrites(t *testing.T, fresh func(t *testing.T) (sandbox.Sandbox, string)) {
 	t.Helper()
 	kinds := map[string]func(t *testing.T, host, outside string){

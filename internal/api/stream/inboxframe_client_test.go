@@ -15,12 +15,10 @@ import (
 // `InboxChange` declares, and every key it declares is one the engine sends,
 // always.
 //
-// The frame is read by key: a key the engine sends that the client does not
-// declare is one no screen can tell apart from noise — the `source` that says
-// which domain's half of an inbox moved was exactly that the moment it was
-// added — and a key the client declares that the engine never sends is one
-// every screen trusting the type reads as undefined. Every key is sent on
-// every frame, a re-read's included, so the client declares each REQUIRED.
+// A key the engine sends that the client does not declare is noise to every
+// screen, and one the client declares that the engine never sends reads as
+// undefined. Every key is sent on every frame, a re-read's included, so the
+// client declares each REQUIRED.
 //
 // Mutation: drop or rename a field of [stream.InboxChange], or a member of the
 // dashboard's InboxChange, and this fails.

@@ -174,22 +174,16 @@ func (c *Client) Calls() int { return int(c.calls.Load()) }
 
 // UsersURL is where a person goes to act on this organization's users.
 //
-// THE LISTING, NOT ONE ACCOUNT. Datadog addresses a user page by its internal
-// id, and the page a person needs is the organization's user administration:
-// the enable control, the roles and the service accounts are all on it, and
-// those are what every failure this link is attached to is settled with.
+// THE LISTING, NOT ONE ACCOUNT: Datadog addresses a user page by internal id,
+// and the organization's user administration holds the enable control, roles
+// and service accounts that every failure this link serves is settled with.
 //
-// AND NO QUERY STRING. It carried `?filter=disabled` on the theory that a
-// re-enable starts from the disabled list — a parameter nothing here has
-// established Datadog honours, on a link that now serves several failures
-// that have nothing to do with a disabled account, so it was pointing at
-// a filter that HIDES the account an operator came to look at. A link that
-// lands somewhere unexpected costs the trip it was added to save, and the
-// page's own controls do the filtering better than a guessed parameter.
+// AND NO QUERY STRING: a guessed `?filter=disabled` nothing establishes
+// Datadog honours could HIDE the account the operator came to look at, and the
+// page's own controls filter better.
 //
-// Built from the SITE rather than from the API host, because they differ:
-// every region serves its console at `app.<site>` and its API at
-// `api.<site>`, and a link to the second is a JSON endpoint.
+// Built from the SITE, not the API host: every region serves its console at
+// `app.<site>` and its API at `api.<site>`, and the latter is a JSON endpoint.
 func (c *Client) UsersURL() string {
 	site := normalizeSite(c.site)
 	if site == "" {
@@ -351,18 +345,14 @@ type Org struct {
 
 // VerifyCredentials reads the organization the keys authenticate as.
 //
-// THE CONNECT-TIME CHECK, and it earns its call: a key pair that is wrong is
-// otherwise discovered by the first provisioning pass, minutes later, as a
-// refusal on a screen nobody is watching. It also names the ORGANIZATION,
-// which is the one thing an operator can check to see they connected the
-// account they meant to.
+// THE CONNECT-TIME CHECK: a wrong key pair is otherwise found by the first
+// provisioning pass as a refusal on a screen nobody is watching. It also names
+// the ORGANIZATION, which an operator can check against the account they meant.
 //
-// `/api/v1/org` rather than a v2 route, and it is not a preference: this was
-// `/api/v2/current_user/orgs`, which does not exist. Datadog answers a made-up
-// path with 404 rather than 401, so a correct key pair failed verification and
-// the pass reported the credentials refused. There is no v2 equivalent that
-// names the organization; the v1 route is current, not deprecated, and takes
-// the same key pair.
+// `/api/v1/org` rather than a v2 route, not a preference: no v2 route names the
+// organization, and Datadog answers a made-up path with 404 rather than 401, so
+// a guessed one fails a correct key pair as refused. The v1 route is current
+// and takes the same key pair.
 func (c *Client) VerifyCredentials(ctx context.Context, creds Credentials) (Org, error) {
 	var body struct {
 		Orgs []struct {
@@ -425,17 +415,14 @@ type User struct {
 	// Title is Datadog's job-title field, which this engine uses as the
 	// one durable place to record that IT disabled an account.
 	//
-	// AT THE VENDOR, BESIDE THE THING IT DESCRIBES. The obvious home is
-	// the surface's own status row, and that row is FORGOTTEN the moment
-	// the disconnect succeeds — destroyed on the success path of the very
-	// operation that would write it. A field on the account survives the
-	// disconnect, a fleet losing its coordination store, and a restore
-	// from backup, and it cannot drift from the account it is about.
+	// AT THE VENDOR, BESIDE THE THING IT DESCRIBES. The surface's status row
+	// is destroyed on the success path of the very disconnect that would
+	// write it; a field on the account survives that, a lost coordination
+	// store and a restore from backup, and cannot drift from the account.
 	//
-	// The title rather than the name: matching reads the name and the
-	// email, and a marker in either would be a second meaning loaded onto
-	// a field that already has one. Nothing else sets a job title on a
-	// service account.
+	// The title rather than the name: matching reads the name and the email,
+	// and a marker there would load a second meaning onto them. Nothing else
+	// sets a job title on a service account.
 	Title string
 
 	// RoleIDs are the roles the account holds, by id, as Datadog relates
@@ -521,14 +508,12 @@ const DisconnectedTitle = "crewlet:disconnected"
 // of users, and walking all of them to find the handful this engine made
 // spends a rate limit on rows nobody reads.
 //
-// TO EXHAUSTION, which the sibling enumerations in this tree already are and
-// this one was not: [atlassian.Client.ListServiceAccounts] gives the reason
-// in the same words — "stopping short would report an account that exists as
-// missing and this engine would then create a second identity on top of a
-// live one" — and this listing feeds both a create path and a decommission.
-// One page was not even 100 service accounts: Datadog's filter is a free-text
-// substring match, so every PERSON whose address is under the same domain
-// consumes a slot on page one and is then dropped by the check below.
+// TO EXHAUSTION, as [atlassian.Client.ListServiceAccounts] is: stopping short
+// would report an existing account as missing and create a second identity on
+// a live one, and this listing feeds both a create path and a decommission.
+// One page is not even 100 service accounts: the filter is a free-text
+// substring match, so every PERSON under the same domain consumes a slot and
+// is then dropped by the check below.
 func (c *Client) ListServiceAccounts(
 	ctx context.Context, creds Credentials, query string,
 ) ([]User, error) {
@@ -582,17 +567,15 @@ type usersPage struct {
 
 // walk reads a filtered v2 collection to exhaustion, handing each page to fn.
 //
-// A SHORT READ IS INDISTINGUISHABLE FROM A COMPLETE ONE, which is the whole
-// reason this exists: both callers treat "not in the answer" as "does not
-// exist at Datadog", and one then creates a second identity on top of a live
-// account while the other refuses the whole pass claiming the organization
-// has no role by that name.
+// A SHORT READ IS INDISTINGUISHABLE FROM A COMPLETE ONE: both callers treat
+// "not in the answer" as "does not exist at Datadog", and one then creates a
+// second identity on a live account while the other refuses the pass claiming
+// the organization has no role by that name.
 //
-// The stop condition is a short page rather than the reported total, with the
-// total used only as a sanity bound: a page that comes back smaller than what
-// was asked for is the end of the collection on every JSON:API implementation,
-// and trusting a count instead would loop for ever against a server that
-// reports one it will not serve.
+// The stop condition is a short page, with the reported total only a sanity
+// bound: a short page ends the collection on every JSON:API implementation,
+// and trusting a count would loop for ever against a server reporting one it
+// will not serve.
 func (c *Client) walk(
 	ctx context.Context, creds Credentials, path, query string, fn func(usersPage),
 ) error {

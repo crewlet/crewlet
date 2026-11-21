@@ -2,6 +2,7 @@ package mcpbridge_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -20,7 +21,6 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/recordseal"
@@ -56,7 +56,13 @@ type member struct {
 // holder.
 func newFleet(t *testing.T, n int, holderWait time.Duration) *fleetOf {
 	t.Helper()
-	f := &fleetOf{broker: memory.NewBroker(), leases: coordmemory.New(), held: map[string]*coord.Lease{}}
+	return newFleetOn(t, coordmemory.New(), n, holderWait)
+}
+
+// newFleetOn is [newFleet] over leases, the lease table its members share.
+func newFleetOn(t *testing.T, leases *coordmemory.Backend, n int, holderWait time.Duration) *fleetOf {
+	t.Helper()
+	f := &fleetOf{broker: memory.NewBroker(), leases: leases, held: map[string]*coord.Lease{}}
 	servers := make([]*httptest.Server, n)
 	muxes := make([]*http.ServeMux, n)
 	for i := range n {
@@ -161,9 +167,9 @@ func dialWith(t *testing.T, url string, relisted *atomic.Int32) *mcp.ClientSessi
 // fleet's address — one node — while the run's session lives on another, so
 // every gate, every activation's re-list and every cut box crosses the relay,
 // event stream included, and is held to exactly what a box dialling its
-// holder directly is. The session names its caller, as the suite's surface is
-// one that parks ([parking]), so it is relayed to the process that opened it;
-// a seat's route to its holder is held by the cases below.
+// holder directly is. The suite's surface is the seat's own wrapped to park
+// ([parking]), so its call is relayed to the seat's holder; the cases below
+// hold how a seat's holder is found.
 func TestTheRelayedBridgeKeepsTheToolSessionContract(t *testing.T) {
 	t.Parallel()
 	toolsessiontest.Run(t, func(t *testing.T, spec toolsessiontest.Spec) *toolsessiontest.Served {
@@ -173,8 +179,7 @@ func TestTheRelayedBridgeKeepsTheToolSessionContract(t *testing.T) {
 		surface := contractSurface(t, spec)
 		session := &mcpbridge.Session{
 			RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
-			Surface: surface, Caller: actingSeat{surface.Surface},
-			Ledger: calls, Fence: spec.Fence,
+			Surface: surface, Ledger: calls, Fence: spec.Fence,
 		}
 		f.hold(t, holder)
 		url := holder.bridge.Open(spec.Context, session)
@@ -248,6 +253,33 @@ func TestARunWhoseSeatMovedIsServedByItsNewHolder(t *testing.T) {
 	rows := recovered.rows()
 	if len(rows) != 1 || rows[0].Name != "post_message" || rows[0].Seq != 2 {
 		t.Errorf("the new holder recorded %+v, want the box's call as the run's second", rows)
+	}
+}
+
+// A BOX'S CALL IS RELAYED TO ITS SEAT'S HOLDER FROM A NODE WHOSE CLOCK RUNS
+// AHEAD of the lease table's by ninety seconds, so the seat's one-minute lease
+// is live by the store and past its deadline on the entry's clock. The entry
+// takes the store's word and relays the call (the coord package doc, "A lease
+// a read hands out is the store's word").
+//
+// Mutation: judge the lease on the entry's own clock (Bridge.forward), and the
+// call waits out its holder wait for a holder it never finds.
+func TestABoxsCallIsRelayedToItsHolderFromANodeWhoseClockRunsAhead(t *testing.T) {
+	t.Parallel()
+	fx := newFixture(t)
+	f := newFleetOn(t, &coordmemory.Backend{
+		Clock: func() time.Time { return time.Now().Add(-90 * time.Second) },
+	}, 2, 10*time.Second)
+	url := f.takeOver(t, f.members[1], &mcpbridge.Session{RunID: "run-1", Launch: "job-1",
+		Handle: "dev", Role: "Engineer", Surface: fx.surface, Ledger: fx.ledger})
+	if !strings.HasPrefix(url, f.members[0].server.URL) {
+		t.Fatalf("the endpoint %q is not the fleet's address", url)
+	}
+	if res := callTool(t, dialWith(t, url, nil), "read_page", map[string]any{}); res.IsError {
+		t.Fatalf("the call through the entry was refused: %s", text(res))
+	}
+	if rows := fx.ledger.rows(); len(rows) != 1 || rows[0].Name != "read_page" {
+		t.Errorf("the holder recorded %+v, want the box's one call", rows)
 	}
 }
 
@@ -358,6 +390,110 @@ func TestACallNoHolderAnswersIsUnavailable(t *testing.T) {
 	}
 }
 
+// A RELAYED CALL WHOSE OPENING LEFT AFTER ITS ADMISSION IS ANSWERED AS THE NODE
+// CAN ANSWER IT NOW (package doc, "The session is the seat holder's, and only
+// the token is the fleet's"), on the notes route, the skill route and the MCP
+// endpoint alike: refused where the run is over, closed or replaced by a
+// relaunch's job; turned away to ask again, a 503 with a Retry-After, where
+// the seat left this node; and served by the opening that serves the box now
+// where a recovery opened the job again.
+//
+// Mutation: refuse every relayed call whose opening is gone (the 401 whatever
+// the node can do now), and the seat's leaving goes red; turn every one away
+// (the 503 whatever), and the run's close and the relaunch go red.
+func TestARelayedCallWhoseOpeningLeftAfterItsAdmissionIsAnsweredAsTheNodeCanNow(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		end  func(t *testing.T, f *steerFixture)
+		// status is the answer to a call of either route, and code its
+		// refusal's: 0 where the node serves the call.
+		status int
+		code   string
+	}{
+		{"the run's close", func(_ *testing.T, f *steerFixture) { f.bridge.Close("run-1") },
+			http.StatusUnauthorized, "invalid_token"},
+		{"a relaunch's opening of the run's next job", func(t *testing.T, f *steerFixture) {
+			if f.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "run-1", Launch: "job-2", Handle: "dev",
+				Role: "Engineer", Surface: f.surface, Ledger: f.ledger, Steer: newFakeInbox()}) == "" {
+				t.Fatal("the relaunch minted no endpoint")
+			}
+		}, http.StatusUnauthorized, "invalid_token"},
+		{"the seat leaving this node", func(_ *testing.T, f *steerFixture) { f.bridge.ReleaseSeat(seat()) },
+			http.StatusServiceUnavailable, "unavailable"},
+		{"a recovery's opening of the same job", func(t *testing.T, f *steerFixture) {
+			if f.bridge.Open(t.Context(), f.session) == "" {
+				t.Fatal("the recovery minted no endpoint")
+			}
+		}, 0, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newSteerFixtureWith(t, time.Minute, func(s *mcpbridge.Session) { s.Skills = handed })
+			f.inbox.file(mcpbridge.SteerNote{Seq: 1, ID: "n-1", Inbox: "msg_1", Message: "use staging"})
+			// THE RELAY'S ADMISSION FOUND THE OPENING HERE: this node has
+			// finished taking the seat, and holds the job's opening.
+			f.bridge.SeatReady(seat())
+			relay := httptest.NewServer(mcpbridge.Relayed(f.bridge))
+			t.Cleanup(relay.Close)
+			endpoint := relay.URL + strings.TrimPrefix(f.url, f.server.URL)
+			tc.end(t, f)
+
+			poll := pollWith(t.Context(), t, relay.Client(), mcpbridge.SteerURL(endpoint)+"/notes")
+			if tc.status == 0 {
+				if poll.res == nil || poll.res.StatusCode != http.StatusOK || len(poll.notes) != 1 ||
+					poll.notes[0].ID != "n-1" {
+					t.Errorf("the relayed poll was answered %v %+v, want the note the recovery's opening serves",
+						poll.res, poll.notes)
+				}
+				return
+			}
+			for route, got := range map[string]polled{
+				"the notes route": poll,
+				"the skill route": postWith(t.Context(), t, relay.Client(), mcpbridge.SkillURL(endpoint),
+					`{"skill":"crewlet:mcp-github"}`),
+				"the MCP endpoint": postWith(t.Context(), t, relay.Client(), endpoint, `{}`),
+			} {
+				if got.res == nil {
+					t.Errorf("a relayed call of %s failed on the wire", route)
+					continue
+				}
+				if got.res.StatusCode != tc.status {
+					t.Errorf("a relayed call of %s was answered %d %q, want %d", route, got.res.StatusCode,
+						got.refusal, tc.status)
+					continue
+				}
+				if tc.status == http.StatusServiceUnavailable {
+					wantTurnedAway(t, got, tc.code)
+				} else if got.refusal != tc.code {
+					t.Errorf("a relayed call of %s was refused %q, want %q", route, got.refusal, tc.code)
+				}
+			}
+		})
+	}
+}
+
+// postWith is one POST of body to a route under the bridge's prefix through
+// client, read whole: the response, and the error code of a refusal.
+func postWith(ctx context.Context, t *testing.T, client *http.Client, url, body string) polled {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		return polled{}
+	}
+	defer res.Body.Close()
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	_ = json.NewDecoder(res.Body).Decode(&refusal)
+	return polled{res: res, refusal: refusal.Error}
+}
+
 // A STOPPING NODE ANSWERS A CALL WAITING FOR A HOLDER AT ONCE: draining, and
 // when to try again. Nothing of the call runs anywhere while it waits, so the
 // box's retry lands on a node that stays, where a node that went on waiting
@@ -455,101 +591,5 @@ func TestAFencedOpeningDefersToTheSeatsHolder(t *testing.T) {
 	}
 	if rows := recovered.rows(); len(rows) != 1 {
 		t.Errorf("the seat's holder recorded %d calls, want the box's one", len(rows))
-	}
-}
-
-// --- a caller's own session ------------------------------------------------
-
-// openDeep opens a deep-work-shaped session on m: a caller of its own, and so
-// no seat whose lease could name its holder.
-func openDeep(t *testing.T, m *member, probe *probeSurface, loopback bool) string {
-	t.Helper()
-	url := m.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "deep-1", Launch: "job-1",
-		Surface: probe, Caller: nobody{bound: true}, Loopback: loopback})
-	if url == "" {
-		t.Fatal("the session was not opened")
-	}
-	return url
-}
-
-// postPing sends a box's JSON-RPC ping to url and answers its status.
-func postPing(t *testing.T, url string) int {
-	t.Helper()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, url,
-		strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	res, err := httpxtest.Pool(t).Do(req)
-	if err != nil {
-		t.Fatalf("POST: %v", err)
-	}
-	_ = res.Body.Close()
-	return res.StatusCode
-}
-
-// A CALLER'S OWN SESSION IS SERVED BY THE PROCESS THAT OPENED IT, wherever its
-// box's call lands: it has no seat whose lease could name a holder, so its
-// token names its opener and the node the call lands on relays it straight
-// there — decided as the session's caller, never as the request. Once the
-// opener ends it, the run is over through every node.
-func TestACallersOwnSessionIsServedByItsOpenerThroughAnyNode(t *testing.T) {
-	t.Parallel()
-	f := newFleet(t, 2, 10*time.Second)
-	probe := &probeSurface{}
-	opener := f.members[1]
-	url := openDeep(t, opener, probe, false)
-	if !strings.HasPrefix(url, f.members[0].server.URL) {
-		t.Fatalf("the session's address %s is not the fleet's", url)
-	}
-	if got := text(callTool(t, dialWith(t, url, nil), "probe", nil)); got != string(iam.Unknown) {
-		t.Errorf("the relayed call was decided as %q, want its caller's %q", got, iam.Unknown)
-	}
-	if n := probe.calls.Load(); n != 1 {
-		t.Errorf("the opener's surface took %d calls, want the box's one", n)
-	}
-	opener.bridge.Close("deep-1")
-	if got := postPing(t, url); got != http.StatusUnauthorized {
-		t.Errorf("a call for a closed session answered %d through another node, want 401", got)
-	}
-}
-
-// A CALLER'S OWN SESSION ENDS WITH THE PROCESS THAT OPENED IT: nothing takes it
-// over, so once its node runs a later incarnation, a call for it is refused at
-// once rather than waiting for a holder that will never come.
-func TestACallersOwnSessionEndsWithItsOpener(t *testing.T) {
-	t.Parallel()
-	const wait = 10 * time.Second
-	f := newFleet(t, 2, wait)
-	opener := f.members[1]
-	url := openDeep(t, opener, &probeSurface{}, false)
-	if err := opener.leave(t.Context()); err != nil {
-		t.Fatalf("leave: %v", err)
-	}
-	f.join(t, &member{bridge: bridgeFor(t, mcpbridge.Options{
-		Material: runtoken.OneKey("k", "test-key"), BaseURL: f.members[0].server.URL,
-	}), node: opener.node}, wait)
-
-	began := time.Now()
-	if got := postPing(t, url); got != http.StatusUnauthorized {
-		t.Errorf("a call for a session whose opener restarted answered %d, want 401", got)
-	}
-	if took := time.Since(began); took >= wait {
-		t.Errorf("the refusal took %s, the whole wait for a holder", took)
-	}
-}
-
-// A LOOPBACK SESSION IS NEVER RELAYED: its token is worth something from its
-// opener's own loopback alone, and a call that lands on another node is
-// refused there rather than carried to it — though it arrived from that
-// node's loopback, which is what the address the entry carries would say.
-func TestALoopbackSessionIsNeverRelayed(t *testing.T) {
-	t.Parallel()
-	f := newFleet(t, 2, 10*time.Second)
-	url := openDeep(t, f.members[1], &probeSurface{}, true)
-	if got := postPing(t, url); got != http.StatusUnauthorized {
-		t.Errorf("a loopback session's call through another node answered %d, want 401", got)
 	}
 }

@@ -92,18 +92,14 @@ func TestNothingWrittenAfterTheEndIsRead(t *testing.T) {
 // A PIN LASTS WHILE ANY HOLDER HOLDS THE DESCRIPTION. A copy of the child's
 // write description kept open, as a helper that inherited it keeps one, holds
 // the capture pinned after the original is closed; closing every copy lets it
-// go — the instant a pipe's reader would have seen its end.
+// go, the instant a pipe's reader would have seen its end.
 //
-// Sequential: a child that any other case starts holds a copy of every
-// description open in this process from its fork until its exec, and a fork
-// landing before the last close would still pin the capture when the case
-// asks. While a top-level case runs sequentially no other case's body runs, so
-// no fork can land.
+// Sequential: a child another case starts holds a copy of every description
+// open from its fork until its exec, and a fork landing before the last close
+// would still pin the capture.
 //
-// Mutation: open the engine's description as a dup of the child's (the same
-// description, as darwin's /dev/fd gives): the probe then converts the pin
-// instead of being refused by it, and the capture is refused as one on a
-// filesystem without per-description locks.
+// Mutation: open the engine's description as a dup of the child's (as darwin's
+// /dev/fd gives): the probe then converts the pin instead of being refused.
 func TestAPinLastsWhileAnyHolderHoldsTheDescription(t *testing.T) {
 	c, w := testCapture(t, "stdout", streamSpec{kind: oneAnswer}, nil)
 	fd, err := unix.Dup(int(w.Fd())) //nolint:gosec // a descriptor fits an int
@@ -123,14 +119,12 @@ func TestAPinLastsWhileAnyHolderHoldsTheDescription(t *testing.T) {
 
 // WHAT WAS READ PAST THE BOUND IS GIVEN BACK, AND ROOM IS KEPT AHEAD OF THE
 // READING, through the platform's own calls: fallocate on linux, and on darwin
-// F_PUNCHHOLE, which capture_darwin.go calls itself, and F_PREALLOCATE, which
-// counts from the file's physical end. A stream read to its end is written 8
-// MiB past maxOutput and read as it goes, then measured once: the one punch
-// runs from the kept head's end to the reading, in whole blocks, and the
-// file's blocks drop by all of it; and the room ahead is reserved, so the
-// blocks cover the kept head and maxOutput past the reading, and writing that
-// maxOutput takes no block more (a mebibyte of slack for the filesystem's
-// own).
+// F_PUNCHHOLE and F_PREALLOCATE (which counts from the file's physical end). A
+// stream read to its end is written 8 MiB past maxOutput, then measured once:
+// the one punch runs from the kept head's end to the reading, in whole blocks,
+// and the file's blocks drop by all of it; the room ahead is reserved, so the
+// blocks cover the kept head and maxOutput past the reading and writing that
+// takes no block more (a mebibyte of slack for the filesystem's own).
 //
 // Mutation: give nothing back, and nothing is punched; reserve no room ahead
 // mid-run, and the blocks fall short of it.
@@ -305,13 +299,9 @@ func TestACaptureOnAFilesystemWithoutPerDescriptionLocksIsRefused(t *testing.T) 
 // included — while the holder still has the description; and once the holder
 // lets go, the next tick closes it.
 //
-// Sequential: a child that any other case starts holds a copy of every
-// description open in this process from its fork until its exec, this
-// capture's write description among them, and the janitor rightly keeps a
-// capture something still holds. A fork landing on the second tick would hold
-// the capture past it, and no tick the case could count would be the last.
-// While a top-level case runs sequentially no other case's body runs, so no
-// fork can land.
+// Sequential: a child another case starts holds a copy of every description
+// open from its fork until its exec, and the janitor rightly keeps a capture
+// something still holds; a fork landing on the second tick would hold this one.
 //
 // Mutation: open the engine's description read-only again: it can then neither
 // reserve nor truncate.

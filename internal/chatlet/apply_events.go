@@ -17,19 +17,15 @@ import (
 // THE ROOM EVENTS: what the applier writes into a room's transcript when a
 // record changes the room itself ([RoomEvent]).
 //
-// Three records write them, each in its own transaction and only when it
-// changed the room: a NAMED room's create (its founding members joined), a
-// membership record (who came and went), and a patch (the topic, the purpose,
-// or a template). A direct conversation writes none: its people are its
-// identity, so nobody joins or leaves one, and it has no topic to set. An
-// archive writes none either, because the room's header already says it is
-// archived and the transcript is what the archive closed.
+// Three records write them, only when they changed the room: a NAMED room's
+// create, a membership record, and a patch (topic, purpose, template). A direct
+// conversation writes none (its people are its identity), and neither does an
+// archive (the header already says so).
 //
 // WHAT AN EVENT SAYS IS DECIDED HERE, FROM THE ROWS, never carried by the
-// record. The record says what the room becomes; the applier holds what it
-// was, so "Ana added Ravi" is the difference between the two at this
-// position, identical on every node, and a writer could not make a line
-// claim a change the record did not make.
+// record: "Ana added Ravi" is the difference between what the record makes the
+// room and what the applier held, identical on every node, so a writer cannot
+// make a line claim a change the record did not make.
 
 // eventID is a room event's id: a function of the record that wrote it and
 // its place among that record's events.

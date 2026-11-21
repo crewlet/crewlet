@@ -19,19 +19,15 @@ import (
 
 // Finding the running node, and authenticating to it.
 //
-// Several of this binary's estates live inside the engine's own process rather
-// than in a file a second process can open: the company's secrets, on the
-// coordination KV, the fleet's activation pointer, and the live counters
-// `budgets` reads. On the default topology none of them listens on a socket,
-// so the running node's API is the only way in — and every command that wants
-// one has to answer the same two questions first: which address, and which
-// token.
+// Several of this binary's estates live inside the engine's own process, not
+// in a file a second process can open: the company's secrets, the fleet's
+// activation pointer, the live counters `budgets` reads. On the default
+// topology none listens on a socket, so the running node's API is the only
+// way in, and every such command first answers which address and which token.
 //
-// ONE PLACE FOR ALL OF THEM. This rule was written twice — once in
-// [nodeClient] and once inside the secrets client — and the two had already
-// drifted on what to do when Tier A lists no token at all, so the same
-// deployment got a clear refusal from one command and a bare 401 from the
-// other. A third copy was one `crewlet config -api` away.
+// ONE PLACE FOR ALL OF THEM. The rule was once written twice (in [nodeClient]
+// and in the secrets client) and the two drifted on what to do when Tier A
+// lists no token: a clear refusal from one command, a bare 401 from the other.
 
 // apiTokenEnv is where every node client reads the bearer token it sends, and
 // the ONLY place: not Tier A's `api.auth.tokens` (see [nodeTokenOrEmpty]) and
@@ -52,15 +48,11 @@ const nodeAPIFlagName = "api"
 // [nodeBaseURL] takes as its override. usage says what the command does there
 // and what the default is, which is all that differs between them.
 //
-// ONE SPELLING, REGISTERED IN ONE PLACE. Seven flag sets registered their own,
-// and the CLI ended up with two names for one address: `-api` on `iam`,
-// `config import`, `secrets`, `llm` and the provisioners (two of them), `-url`
-// on every command built on [nodeClientFor]. So an operator retrying an `iam` write through
-// another node and a `retention evict` through another node typed different
-// flags for the same thing. `-api` is the name kept: more commands took it,
-// and it names WHAT is addressed — the node's API, which Tier A's `api` block
-// is the default for — rather than the shape of the value, where `-url` would
-// sit beside a provisioner's `-public-url` naming something else entirely.
+// ONE SPELLING, REGISTERED IN ONE PLACE, so no command names one address two
+// ways (`-api` or `-url`). `-api` is the name kept: more commands took it, and
+// it names WHAT is addressed (the node's API, which Tier A's `api` block is the
+// default for), where `-url` would sit beside a provisioner's `-public-url`
+// naming something else entirely.
 func nodeAPIFlag(fs *flag.FlagSet, usage string) *string {
 	return fs.String(nodeAPIFlagName, "", usage)
 }
@@ -122,30 +114,14 @@ func nodeBaseURL(boot *config.Bootstrap, override, surface string) (string, erro
 //
 // # The environment, and nothing else
 //
-// It used to fall back to Tier A's FIRST token, which was wrong in a way the
-// identity estate makes plain: a write's author is now a person or a machine
-// with a row, a trail and grants of its own, and picking whichever credential
-// happened to be listed first meant an operator's `crewlet secrets set` landed
-// under a name they had not chosen and might not hold. `api.auth.tokens` is
-// what this node ACCEPTS; it is not a wallet the CLI helps itself from.
+// Never Tier A's first token: a write's author has a row, a trail and grants
+// of its own, so `crewlet secrets set` must not land under a credential the
+// operator had not chosen. `api.auth.tokens` is what this node ACCEPTS, not a
+// wallet, and a resolved `${VAR}` read from the config would hold a secret in
+// the clear. So the CLI carries `CREWLET_API_TOKEN` or says so, never a flag.
 //
-// It also read a value out of the config file it had just parsed — a resolved
-// `${VAR}`, in the clear, in a process that had no other reason to hold one —
-// which is the shape a credential leaks from.
-//
-// So the CLI carries its own credential or says so. `CREWLET_API_TOKEN` is
-// where it comes from, never a flag: a token on a command line lands in shell
-// history and in `ps`.
-//
-// # Whose environment
-//
-// The INVOCATION's, which [runIn] is handed — the process's own for every run
-// of the binary ([run]), so the rule above holds exactly as written. It is a
-// parameter rather than a read of the process, because a read of the process
-// is shared by everything running in it: a suite that runs its commands side
-// by side could only hand each its credential by setting the process's
-// variable, which Go refuses to a parallel test, and setting it from each case
-// would hand every concurrent command whichever case wrote last.
+// The INVOCATION's environment ([runIn]), not the process's, which parallel
+// cases share and Go refuses to set per case.
 func nodeTokenOrEmpty(environ config.Source) string {
 	token, _ := environ.Lookup(apiTokenEnv)
 	return strings.TrimSpace(token)
@@ -194,27 +170,14 @@ type seatClaims func(context.Context, time.Time) (iamdomain.SeatClaims, error)
 // unclaimedDetail is the sentence [announceUnclaimed] logs, and whether the
 // company is unclaimed at all.
 //
-// A PERSON IS ALWAYS INVITED ONTO A HUMAN SEAT (ADR-0032), so what comes next
-// depends on the company this node runs: with none, or with no human seat in
-// it, there is nowhere to invite anybody, and the step before the invitation
-// is the one to name — a company, or a seat in it.
+// A PERSON IS ALWAYS INVITED ONTO A HUMAN SEAT (ADR-0032), so with no company
+// or no human seat the step to name is a company, or a seat in it. Otherwise
+// ONLY THE VACANT SEATS are named: one held by a SERVICE ACCOUNT or an OPEN
+// INVITATION refuses an invitation, so the line says what holds it and what
+// frees it. A failed seat read names none, pointing at `iam seats -unheld`.
 //
-// WHERE THERE ARE SEATS, ONLY THE VACANT ONES ARE NAMED. "Nobody is in the
-// directory" counts people, and a seat can be held without one: by a SERVICE
-// ACCOUNT (a Tier A token's `token:<id>` row bound to it), or by an OPEN
-// INVITATION — the founder invited, the node restarted before the link was
-// redeemed. An invitation onto either is refused, so the line names what is
-// vacant, says an open invitation is the step already taken (its link is the
-// next one), and where nothing is vacant says what holds each seat and what
-// frees one. The seats are read in the snapshot `GET /iam/seats` reads them
-// in; where that read fails the line names no seat at all and points at
-// `crewlet iam seats -unheld`, which asks again, rather than listing seats it
-// cannot vouch are free.
-//
-// SILENT ON AN ESTATE THIS NODE CANNOT READ, or has not caught up with, rather
-// than telling an operator to invite somebody into a company that may have
-// started: at boot a node joining a fleet has usually applied none of its
-// identity log yet, and /health answers `unknown` for it.
+// SILENT ON AN ESTATE THIS NODE CANNOT READ or has not caught up with: at boot
+// a joining node has usually applied none of its identity log.
 func unclaimedDetail(ctx context.Context, anybody func(context.Context) (bool, error),
 	seats func() ([]session.Seat, bool), claims seatClaims, now time.Time) (string, bool) {
 

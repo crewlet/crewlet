@@ -19,16 +19,16 @@ import (
 //
 // The framework answers an operation its ledger already holds BEFORE it runs a
 // decide ([statelog.Snap.Held]), collapsed into the copy that landed
-// ([statelog.Result.Collapsed]) — so whatever a gesture computes inside its
-// decide is, on that answer, a value from a decision nothing published, or
-// from none at all. The cases here are the gestures whose answer IS such a
-// value, and each is held to handing out nothing it cannot vouch for.
+// ([statelog.Result.Collapsed]), so whatever a gesture computes inside its
+// decide is, on that answer, from a decision nothing published or from none.
+// Each case below is a gesture whose answer is such a value, held to handing
+// out nothing it cannot vouch for.
 
 // A RETRIED INVALIDATION IS NOT ANNOUNCED AGAIN.
 //
 // The generation an invalidation announces is read and incremented inside its
-// decide, and the retry the ledger answers never runs one — so it announced
-// generation zero, beside a row that says the company moved to one.
+// decide, and the retry the ledger answers never runs one, so announcing it
+// would say generation zero beside a row that says one.
 //
 // Mutation: announce a collapsed result and the retry announces generation 0.
 func TestARetriedInvalidationIsNotAnnouncedAgain(t *testing.T) {
@@ -57,12 +57,11 @@ func TestARetriedInvalidationIsNotAnnouncedAgain(t *testing.T) {
 
 // A RETRIED SESSION START HANDS OUT NO COUNTERS.
 //
-// A bearer carries the revocation epoch and the session generation its
-// session was OPENED at, and both are read inside the start's decide. The
-// retry the ledger answers never runs that decide, so the counters beside it
-// are zeros — a bearer carrying them is one the first revocation ended long
-// ago — and where a later round did run, they may be a round's that was not
-// the one that landed. The generation is on no record or row to read back.
+// A bearer carries the revocation epoch and session generation its session
+// was OPENED at, both read inside the start's decide. The retry the ledger
+// answers never runs it, so its counters are zeros (a bearer the first
+// revocation ended) or, where a later round ran, a round's that did not land.
+// The generation is on no record or row to read back.
 //
 // Mutation: hand a collapsed start's counters out and the retry answers nil.
 func TestARetriedSessionStartHandsOutNoCounters(t *testing.T) {
@@ -91,8 +90,8 @@ func TestARetriedSessionStartHandsOutNoCounters(t *testing.T) {
 		t.Fatalf("the retry answered %+v (%v), want %v on a collapsed result",
 			opened, err, iamdomain.ErrCollapsed)
 	}
-	// UNAVAILABLE, so every surface answers it as it answers a credential
-	// it could not mint — 503 — and never as a fault.
+	// UNAVAILABLE, so every surface answers it as a credential it could not
+	// mint (503), never as a fault.
 	if !errors.Is(err, statelog.ErrUnavailable) {
 		t.Errorf("the retry's refusal %v is not %v", err, statelog.ErrUnavailable)
 	}
@@ -100,10 +99,9 @@ func TestARetriedSessionStartHandsOutNoCounters(t *testing.T) {
 
 // A RETRIED MINT HANDS OUT NO GRANTS.
 //
-// What a token carries is cut, inside the decide, to what its owner holds in
-// that snapshot; the retry the ledger answers never ran that cut, so the grants
-// beside it describe no token. The copy that landed is a token nobody was
-// shown.
+// A token's grants are cut, inside the decide, to what its owner holds in
+// that snapshot; the retry the ledger answers never ran that cut, so its
+// grants describe no token, and the copy that landed is one nobody was shown.
 //
 // Mutation: hand a collapsed mint's grants out and the retry answers nil.
 func TestARetriedMintHandsOutNoGrants(t *testing.T) {
@@ -146,10 +144,10 @@ func TestARetriedMintHandsOutNoGrants(t *testing.T) {
 
 // A REDEMPTION RETRIED AFTER IT LANDED IS A LINK ALREADY USED.
 //
-// A retry of the enrolment a redemption made is answered by the ledger before
-// the decide that refuses a spent link runs — and answered as landed, the
-// sign-in surface opens a session on it: whoever holds the link and the first
-// password signs in, past any second factor the person enrolled since.
+// The ledger answers a retried redemption before the decide that refuses a
+// spent link runs; answered as landed, the sign-in surface would open a
+// session on it, letting whoever holds the link and first password past any
+// second factor enrolled since.
 //
 // Mutation: answer a collapsed redemption as it came back and the retry lands.
 func TestARedemptionRetriedAfterItLandedIsALinkAlreadyUsed(t *testing.T) {
@@ -173,12 +171,12 @@ func TestARedemptionRetriedAfterItLandedIsALinkAlreadyUsed(t *testing.T) {
 
 // A WRITE ABOUT A REMOVED PERSON IS REFUSED BEFORE IT IS PUBLISHED.
 //
-// A record whose subject is not the person's own — a session, a claim, a
-// spend — names its person in its payload, which the applier's removal gate
-// decodes and the publisher's reader of the gates is never handed. Published
-// for somebody already removed, it was dropped by every node and read back by
-// its own publisher as a record applied without a ledger row: an error that
-// said the estate was broken, about a person who simply was not there.
+// A record whose subject is not the person's own (a session, a claim, a
+// spend) names its person in its payload, which the applier's removal gate
+// decodes and the publisher's reader of the gates never sees. Published for a
+// removed person, every node would drop it and its publisher read back a
+// record applied without a ledger row: a broken-estate error about somebody
+// absent.
 //
 // Mutation: drop the refusal from the writer and the log moves, answering a
 // fault rather than the deletion.
@@ -219,15 +217,14 @@ func TestAWriteAboutARemovedPersonIsRefusedBeforeItIsPublished(t *testing.T) {
 
 // A RETRIED ISSUE OF AN INVITATION THE SWEEP COLLECTED IS A KEY ALREADY USED.
 //
-// The ledger answers the retry before the issue's decide runs, so its terms and
-// deadline are read back from the invitation's own row — and a row this node
-// APPLIED and no longer holds is one the retention sweep collected, which it
-// does only to an invitation redeemed or aged out. Read as "not applied here
-// yet", the retry was told to come back under the same key, and met the same
-// absence on every attempt for as long as the ledger kept the operation.
+// The ledger answers the retry before the issue's decide runs, so its terms
+// and deadline are read from the invitation's row, and a row this node APPLIED
+// and no longer holds is one the retention sweep collected (redeemed or aged
+// out). Read as "not applied here yet", the retry would be told to come back
+// under the same key, which can never find the row.
 //
-// Mutation: read an absent row as not yet applied whatever the result says, and
-// the retry answers unavailable.
+// Mutation: read an absent row as not yet applied whatever the result says,
+// and the retry answers unavailable.
 func TestARetriedIssueOfACollectedInvitationIsAKeyAlreadyUsed(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -235,8 +232,7 @@ func TestARetriedIssueOfACollectedInvitationIsAKeyAlreadyUsed(t *testing.T) {
 	mint := iamdomain.InviteMint{
 		Email: "lapsed@example.com", Grants: []iam.Grant{iam.GrantWorklet},
 		Seat: seat,
-		// LAPSED LONG BEFORE THE SWEEP BELOW RUNS, which is what makes the
-		// row one it collects.
+		// LAPSED LONG BEFORE THE SWEEP BELOW RUNS, so the sweep collects it.
 		ExpiresAt: brokerAt.Add(168 * time.Hour),
 		OpID:      operationKey(), Reason: "onboarding",
 	}
@@ -273,8 +269,8 @@ func TestARetriedIssueOfACollectedInvitationIsAKeyAlreadyUsed(t *testing.T) {
 			"want %v — a retry of the same key can never find the row again",
 			again.Result, err, iamdomain.ErrOperationReused)
 	}
-	// AND THE SEAT IS FREE, at a clock the collected invitation would still
-	// have been open at: the hold is read from the row, and it is gone.
+	// AND THE SEAT IS FREE, at a clock the collected invitation would still be
+	// open at: the hold is read from the row, which is gone.
 	if _, err := inviteFor(t, rig, "next@example.com", seat); err != nil {
 		t.Errorf("an invitation onto the seat a collected invitation named "+
 			"was refused: %v", err)
@@ -283,16 +279,15 @@ func TestARetriedIssueOfACollectedInvitationIsAKeyAlreadyUsed(t *testing.T) {
 
 // EVERY OPERATION A GESTURE DERIVES CARRIES ITS MINT INSTANT.
 //
-// The publisher judges whether its ledger can vouch for a retry by the instant
-// an id was minted at, read off the id itself; an id outside the grammar reads
-// as minted at the epoch, and once the ledger has lost a row of its kind —
-// every month for most kinds, every hour for a session's — every write under
-// one is answered `unknown` without being published. An enrolment is one
-// record under its caller's key, and the sweep, which once named itself with a
-// string of its own, derives its id from its plan's instant.
+// The publisher judges whether its ledger can vouch for a retry by the mint
+// instant read off the id; an id outside the grammar reads as minted at the
+// epoch, and once the ledger has lost a row of its kind (monthly for most
+// kinds, hourly for a session's) every write under one is answered `unknown`
+// unpublished. An enrolment is one record under its caller's key, and the
+// sweep derives its id from its plan's instant.
 //
-// Mutation: name the sweep outside the grammar again and the ledger holds an
-// id with no instant.
+// Mutation: name the sweep outside the grammar and the ledger holds an id with
+// no instant.
 func TestEveryOperationAGestureDerivesCarriesItsMintInstant(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -377,8 +372,8 @@ func enrolSomebody(t *testing.T, rig *writeRig, login string) string {
 	return person
 }
 
-// envelopeOf is the envelope of the record the ledger names for op, read back
-// off the log.
+// envelopeOf is the envelope of the record the ledger names for op, read off
+// the log.
 func (r *writeRig) envelopeOf(op string) iamdomain.RecordEnvelope {
 	r.t.Helper()
 	positions := r.column(`SELECT position FROM iam_ops WHERE op_id = ?`, op)

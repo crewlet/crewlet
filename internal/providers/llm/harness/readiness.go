@@ -11,35 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
-// WHETHER THE NEXT CALL CAN BE ANSWERED, known without making one: what a
-// caller that asks on a person's behalf (the Dashboard Assistant) checks before
-// it takes their question, so a model that is signed out or spent is said up
-// front, in its own words, rather than after the person has asked and waited.
+// WHETHER THE NEXT CALL CAN BE ANSWERED, known without making one, so a caller
+// asking for a person (the Dashboard Assistant) can say a signed-out or spent
+// model up front. [Provider.Unready] starts no process and calls no model: it
+// reads the entry's sit-out ([Provider.bench]), what its last call met and its
+// sign-in as `crewlet llm list` reads it ([Provider.signIn]).
 //
-// # Only what the entry already holds
-//
-// [Provider.Unready] never starts a process and never calls a model. It reads
-// three things the entry already has:
-//
-//   - its sit-out ([Provider.bench]): a spent plan, until the reset its harness
-//     named;
-//   - what its own last call met: a harness that reported its login expired or
-//     missing, or a harness that could not be started at all;
-//   - its sign-in as `crewlet llm list` reads it ([Provider.signIn]): nothing
-//     the engine hands the harness signs it in.
-//
-// # A verdict that cannot lock the entry out
-//
-// A login is not benched (bench.go): calls keep reaching the harness, so the next
-// seat to call finds a mended login. A caller that REFUSES on this verdict
-// breaks that loop, since the refusal is what stops the call that would clear
-// it. So a verdict lifts on its own three ways: a call through the entry
-// answers (a seat's, on the same entry); the login files change (`crewlet llm
-// login` from another process); or [readinessMemory] passes, after which the
-// entry is worth one call again and the verdict waits for what that call
-// meets. The last is what keeps a wrong verdict bounded: the sign-in reading
-// cannot see a credential a harness keeps where no profile names it, which is the
-// doctor's reason to let an answered smoke test overrule it.
+// A verdict must not lock the entry out: a login is not benched (bench.go), and
+// a refusing caller stops the call that would find a mended login. So it lifts
+// when a call through the entry answers, the login files change, or
+// [readinessMemory] passes, after which one call is owed. The last bounds a
+// wrong verdict: the sign-in reading cannot see a credential kept where no
+// profile names it, so the doctor lets an answered smoke test overrule.
 
 // readinessMemory is how long a verdict holds without new evidence: two of the
 // dashboard's reads of `/viewer` (every five minutes), so the person who opens

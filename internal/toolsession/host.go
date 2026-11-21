@@ -39,23 +39,16 @@ const socketNameBytes = 8
 
 // NewHost makes this process's session directory.
 //
-// # Created, then checked
-//
-// os.MkdirTemp creates a fresh directory under the system's temp root with a
-// random name, atomically and with mode 0700 — so another local user cannot
-// have made it first and swapped a socket of their own in. It is then looked at
-// rather than trusted: a directory, not a link, owned by this process's user,
-// and open to nobody else. That directory is the whole of what admits a
-// connection — a session's socket carries no token — so a directory that is
-// not exactly that is refused, never used.
+// os.MkdirTemp makes a fresh 0700 directory atomically, so no other user can
+// have swapped a socket in; it is still checked (a directory, not a link,
+// owned by this user, open to nobody else), since it alone admits a connection
+// (a session's socket carries no token).
 //
 // # And sized
 //
-// A unix socket's path is bounded (104 bytes on darwin, 108 on linux, the
-// terminating NUL included) and the temp root is whatever TMPDIR says — on
-// darwin a per-user directory of about fifty characters already. A path past
-// the bound fails at every bind, in every seat, with an error naming no
-// setting; so it is checked here, once, and refused naming TMPDIR.
+// A unix socket's path is bounded (104 bytes on darwin, 108 on linux, NUL
+// included) and the temp root is TMPDIR's: a longer path fails every bind
+// naming no setting, so it is refused here, naming TMPDIR.
 func NewHost() (*Host, error) {
 	relay, err := os.Executable()
 	if err != nil {

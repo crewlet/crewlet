@@ -10,16 +10,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// suiteLog is the suite's one broker: an ordered log of subjects, kept whole
-// and handed to every seam that reads or writes a log — the publisher's
-// appender and record reader, and the applier's fetcher and checkpoint log.
+// suiteLog is the suite's one broker: an ordered log of subjects handed to
+// every seam that reads or writes a log (the publisher's appender and record
+// reader, the applier's fetcher and checkpoint log).
 //
-// It keeps what a conditional append is judged by — each subject's last
-// SURVIVING sequence — and refuses an expectation that is not it with the
-// broker's own error, so the publisher classifies the refusal as the lost race
-// or trimmed anchor it would be. A purge removes everything below a sequence:
-// LastSeq, At and Bounds no longer see it, and the fetcher steps over it, as a
-// stream does.
+// It judges a conditional append by each subject's last SURVIVING sequence and
+// refuses a mismatch with the broker's own error, so the publisher classifies
+// it as the lost race or trimmed anchor it would be. A purge hides everything
+// below a sequence from LastSeq, At, Bounds and the fetcher, as a stream does.
 type suiteLog struct {
 	mu sync.Mutex
 
@@ -30,13 +28,12 @@ type suiteLog struct {
 	first   uint64
 	next    uint64
 
-	// expects is every expectation an append carried, in order — nil for
-	// none.
+	// expects is every expectation an append carried, in order; nil for none.
 	expects []*uint64
 
-	// stamp is the broker instant this log stamps sequence seq with, where a
-	// case names one; nil is [suiteStoredAt]. Set before the log is first
-	// read and never after, so it is read without the lock.
+	// stamp is the broker instant for sequence seq where a case names one;
+	// nil is [suiteStoredAt]. Set before the first read and never after, so it
+	// is read without the lock.
 	stamp func(seq uint64) time.Time
 }
 
@@ -82,8 +79,6 @@ func (l *suiteLog) Append(_ context.Context, subject, _ string, expect *uint64,
 	defer l.mu.Unlock()
 	l.expects = append(l.expects, expect)
 	if expect != nil && *expect != l.lastOn(subject) {
-		// THE BROKER'S OWN REFUSAL, so the publisher classifies it as the
-		// lost race it would be rather than as no answer at all.
 		return 0, false, &jetstream.APIError{
 			ErrorCode:   jetstream.JSErrCodeStreamWrongLastSequence,
 			Description: "wrong last sequence",
@@ -100,9 +95,8 @@ func (l *suiteLog) LastSeq(_ context.Context, subject string) (uint64, bool, err
 	return seq, seq > 0, nil
 }
 
-// At is the record the log holds at seq, which a resolution reads to learn
-// whose a record it did not append itself is, and the applier verifies its
-// checkpoint by.
+// At is the record at seq: a resolution reads it to learn who wrote a record
+// it did not append, and the applier verifies its checkpoint by it.
 func (l *suiteLog) At(_ context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -127,8 +121,7 @@ func (l *suiteLog) Ends(ctx context.Context) (statelog.LogEnds, error) {
 }
 
 // Fetch delivers the next records in order, waiting up to wait for the first
-// the way a pull consumer waits on its stream — an empty answer at once would
-// turn the apply loop into a spin.
+// as a pull consumer does: an empty answer at once would spin the apply loop.
 func (l *suiteLog) Fetch(ctx context.Context, maxMessages, _ int, wait time.Duration) ([]statelog.Message, error) {
 	deadline := time.Now().Add(wait)
 	for {

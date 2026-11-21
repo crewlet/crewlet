@@ -210,53 +210,15 @@ type operation struct {
 // opIDFor is the [operation] one gesture is published under, answering false
 // once it has refused the caller's key.
 //
-// THE CALLER'S OWN KEY WHERE THEY SENT ONE, which is what makes a retry after
-// an `unknown` land once: the ledger resolves it, and a fresh id per attempt
-// would defeat the mechanism that exists for exactly this case.
-//
-// AND A FRESH ONE PER REQUEST WHERE THEY DID NOT. An op id is the identity of
-// ONE operation, and the broker collapses a second publish carrying it inside
-// its duplicate window into the first. The id used to be derived from the
-// object alone — `people:update:<id>` — so a second, DIFFERENT edit of the
-// same person inside two minutes, a second "end every session" after signing
-// back in, or a second company-wide invalidation was acknowledged as the first
-// and silently never happened. A request with no key is a new operation; the
-// key is how a caller says it is not.
-//
-// # In the engine's grammar, both ways
-//
-// The publisher vouches for a retry by the instant its operation id carries
-// ([statelog.OpMintedAt]), against the point this node's ledger may have lost
-// rows from. The fresh id was `<name>:<uuid4>` and a caller's key was taken as
-// sent, and neither carried an instant: read as minted at the epoch, every such
-// write was answered `unknown` without being published once the ledger had
-// swept anything — and every step the domain derives from the id
-// ([statelog.StepOpID]) inherited the same nothing. So a fresh key is minted
-// through [statelog.NewOpID], and a caller's is held to
-// [statelog.CheckCallerOpID] and refused naming it ([opkey.Key]).
-//
-// # The published id is bound to the request
-//
-// The ledger answers an operation it already holds BEFORE the write is decided
-// ([statelog.Result.Collapsed]), so a gesture published under the key itself
-// made the same key sent with ANOTHER request — other grants for the same
-// person, a suspension where an unknown grant came back, somebody else's
-// sessions — the first request's operation: answered `applied` from the
-// ledger, with nothing of the second written. That is an administrator's
-// change reported as made and silently dropped, and `crewlet iam` sends
-// whatever key it is given with whatever subcommand it is given. So the
-// gesture is published under a STEP of the key named for the verb and a digest
-// of the request — the object its path names, its query and its decoded body
-// — which makes the same request the same operation however often it is sent,
-// and any other request under the key an operation of its own that lands as
-// asked. A step, rather than an id derived afresh, because it keeps the key as
-// its prefix, so the trail finds every write a key made by the key the caller
-// holds, and it inherits the key's instant, which is what the ledger vouches
-// for.
-//
-// name is the gesture's verb, which a reader of the ledger finds the operation
-// by; it never holds a dot, which in the grammar begins a step. asks is the
-// request's decoded body, nil for a route that takes none.
+// THE CALLER'S OWN KEY WHERE SENT, so a retry after `unknown` lands once; else a
+// fresh [statelog.NewOpID], as the broker collapses a repeated id in its window. A caller's key is held
+// to [statelog.CheckCallerOpID] ([opkey.Key]): the ledger vouches by the
+// instant an id carries ([statelog.OpMintedAt]). The gesture is published under
+// a STEP of the key named for name (the verb, no dot) and a digest of the
+// request (asks, the decoded body, nil if none), because the ledger answers a
+// held operation before the write is decided ([statelog.Result.Collapsed]):
+// the bare key would answer ANOTHER request under it `applied`, unwritten. A
+// step keeps the key as its prefix, so the trail finds a key's writes.
 func (s *Service) opIDFor(w http.ResponseWriter, r *http.Request, name string,
 	asks any) (operation, bool) {
 
@@ -277,40 +239,17 @@ func (s *Service) opIDFor(w http.ResponseWriter, r *http.Request, name string,
 }
 
 // createKey is the operation key a CREATE answers with, and the SEED the id it
-// creates is derived from — the caller's key where they sent one, and a fresh
-// one minted where they did not, either way scoped by the caller
-// ([opkey.Key]) — answering false once it has written the refusal. What the
-// create is PUBLISHED under is the create's own: an invitation's issue is
-// published under the seed and compares its terms with whatever that seed
-// issued ([iamdomain.Writer.Invite]); a person's is published under a step of
-// the key bound to the request ([Service.PostPeople]).
+// creates derives from: the caller's key or a fresh one, scoped by the caller
+// ([opkey.Key]); false once it has written the refusal. An invitation is
+// published under the seed ([iamdomain.Writer.Invite]), a person under a step
+// of the key ([Service.PostPeople]).
 //
-// # The id of what a create creates is derived from it
-//
-// A create is retried under the key its unknown answer handed back, and the
-// person or the invitation it names is derived from the seed
-// ([iamdomain.CreatedPersonID], [iamdomain.Blinder.InvitationID]) so the retry
-// names the same one — and so does a person's FIRST PASSWORD LINK, whose
-// credential and secret the domain derives from that person under the
-// company's key ([iamdomain.Blinder.PasswordLinkID]), so the retry hands back
-// the link its first attempt issued rather than one nobody recorded. Each used
-// to be minted per request, so the retry — or the ledger's answer to it —
-// named a second object nobody created: the documented retry of an unknown
-// could not recover what its first attempt made.
-//
-// # Two values, because the key is scoped and the seed is a uuid7
-//
-// The key is SCOPED BY THE CALLER — a uuid7 derived from the principal and the
-// key they sent, named by the principal's tag — so a key somebody copied names
-// an operation of the copier's, never the owner's create answered from the
-// ledger. The seed is that key's uuid: every id this estate creates is a bare
-// uuid7 whose instant is its creation, and a name after it would be a second
-// key naming the same object. Derived from the WHOLE key the caller sent, so
-// two keys that share a uuid and differ after it are two seeds — which is the
-// hazard a bare-uuid rule here once stood guard against, closed by the scope
-// itself. The answer hands back the KEY, which a retry sends unchanged: scoped
-// again it is taken as it is, so its uuid is the same seed and the retry the
-// same create.
+// The person or invitation ([iamdomain.CreatedPersonID],
+// [iamdomain.Blinder.InvitationID]) and the FIRST PASSWORD LINK
+// ([iamdomain.Blinder.PasswordLinkID]) derive from the seed, so a retry under
+// the handed-back key names the same objects and the link first issued.
+// The key is SCOPED BY THE CALLER, so a copied key names the copier's operation,
+// never the owner's. The seed is the whole key's uuid7 (every id here is one).
 func (s *Service) createKey(w http.ResponseWriter, r *http.Request) (key, seed string, ok bool) {
 	key, ok = opkey.Key(w, r, s.now())
 	if !ok {
@@ -346,20 +285,16 @@ func (s *Service) unavailable(w http.ResponseWriter, r *http.Request,
 	auth.UnavailableIdentity(w, err)
 }
 
-// sequence folds the answers of a gesture that is several records — an edit's
-// identity record, stage and document, a reset and its revocation — into the
-// one the caller is given, under the gesture's own op id.
+// sequence folds the answers of a multi-record gesture (an edit's identity,
+// stage and document records; a reset and its revocation) into one, under the
+// gesture's own op id.
 //
-// THE WEAKEST OUTCOME WINS, because the promise is about the whole: `200`
-// says the caller's next read HERE sees what they asked for, which is false
-// while any one record is only pending here, and a step nobody can confirm
-// makes the gesture unconfirmed. The position is the latest any step landed
-// at, which is what a caller reads at to see all of it.
-//
-// AN UNKNOWN STEP THIS NODE'S LEDGER CANNOT VOUCH FOR makes the whole one it
-// cannot vouch for ([statelog.Result.Unvouched]): the gesture retried here
-// meets that step's silence again, so the answer has to send the caller to
-// another node rather than back here.
+// THE WEAKEST OUTCOME WINS: `200` promises the next read HERE sees it, false
+// while any record is pending here, and an unconfirmable step leaves the whole
+// unconfirmed. The position is the latest any step landed at. AN UNKNOWN STEP
+// THIS LEDGER CANNOT VOUCH FOR makes the whole unvouched
+// ([statelog.Result.Unvouched]): a retry here meets the same silence, so the
+// caller must go to another node.
 func sequence(opID string, steps ...statelog.Result) statelog.Result {
 	out := statelog.Result{Outcome: statelog.OutcomeApplied, OpID: opID}
 	for _, step := range steps {
@@ -387,19 +322,14 @@ func landed(result statelog.Result) bool {
 }
 
 // ownLanding reports whether a write landed AS THIS CALL'S OWN: [landed], and
-// not [statelog.Result.Collapsed] — the one condition under which what its
-// decide computed describes the record that landed, and under which this
-// surface announces it.
+// not [statelog.Result.Collapsed], the one condition under which what its
+// decide computed describes the record that landed and this surface announces it.
 //
-// # Why a collapsed write is answered and never announced
-//
-// A retry under the key an earlier answer handed back is answered from the
-// ledger before this call's decide runs, so a verdict the decide reaches — a
-// credential found and revoked, the set a reset cleared — is empty, and the
-// write is announced by the call that MADE it, where that call saw a definite
-// outcome of its own ([iamdomain.Writer]'s own rule). Announced again here, one
-// reset was two rows in the trail; announced from an empty verdict, a
-// revocation that landed was reported as "nothing changed".
+// A retry under a handed-back key is answered from the ledger before its decide
+// runs, so the verdict (a credential revoked, the set a reset cleared) is empty,
+// and the call that MADE the write announces it ([iamdomain.Writer]'s own
+// rule). Announced again, one reset is two trail rows; from an empty verdict, a
+// landed revocation reads "nothing changed".
 func ownLanding(result statelog.Result) bool {
 	return landed(result) && !result.Collapsed
 }
@@ -429,87 +359,16 @@ func (s *Service) answerWrite(w http.ResponseWriter, r *http.Request, opID strin
 	s.answer(w, r, opID, result, err, http.StatusOK, extra)
 }
 
-// answer renders one identity write's outcome, with the status a route that
-// landed answers — `200`, or `201` for one that hands the caller something it
-// created.
+// answer renders one identity write's outcome with the status a landed route
+// answers (`200`, `201` where it hands back something created).
 //
-// # Refusals, each a different thing to do next
-//
-//   - A MACHINE TOKEN, [iamdomain.ErrTokenRefused]: 403 `token_refused`, the
-//     code the authority table's presence rows answer the same request with
-//     at the route — an administrative identity record needs a person
-//     present, and the remedy is to sign in rather than to be granted
-//     anything. Before the refusal arms below, whose refusal it is.
-//   - THE DASHBOARD ASSISTANT, [iamdomain.ErrAssistRefused]: 403
-//     `unauthorized` with the table's `assist_refused` reason, the answer its
-//     row gives the same request at the route: the person takes the gesture
-//     themselves. Before the refusal arms below, for the token's reason.
-//   - A PERMISSION THE CALLER LACKS, an [iamdomain.Refusal] naming grants:
-//     403 `unauthorized`, reason `no_grant` and the grants that would lift
-//     it — rendered by [authz.RefusalFields], the mapping the authority
-//     table's own refusals take, so its sentence names that permission.
-//   - THE RECORD'S OWN RULE, an [iamdomain.Refusal] naming none — a
-//     person's token asked for by somebody else, a permission the owner does
-//     not hold, an owner who may not act, a name this build does not know:
-//     403 `forbidden`, the domain's sentence in `detail` and no `reason` or
-//     `grants`, because no rule of the authority table decided it and no
-//     permission would change it. Both were one `unauthorized` naming no
-//     grant, so every one of them told an administrator to ask an
-//     administrator for access.
-//   - Neither lands however often it is retried. A bare [iamdomain.ErrRefused]
-//     is none of them: the domain builds every refusal as an
-//     [iamdomain.Refusal], so one that is not is unclassified, and answered
-//     as the fault below.
-//   - SOMEBODY ELSE HOLDS IT, [iamdomain.ErrTaken]: an address, a login or a
-//     seat, 409 naming who holds it — a person, or an open invitation.
-//   - A PERSON'S SEAT LEFT OUT: a person's gesture naming none, or clearing
-//     theirs, is `400 seat_required` ([iamdomain.ErrSeatRequired]), answered
-//     before the generic invalid value below because its remedy is one field.
-//   - A VALUE THE CALLER TYPED WRONG: 400 `invalid_body`, naming it.
-//   - NO COMPANY TO FIND A SEAT IN: a seat named on a node that runs no company
-//     is `409 no_active_revision` ([iamdomain.ErrNoCompany]) — never the 503 a
-//     lookup the node could not make is, since no wait imports a company.
-//   - A KEY THAT ALREADY NAMES SOMETHING ELSE, [iamdomain.ErrOperationReused]:
-//     409 `bad_params` with the op id — a new key resolves it, never a wait.
-//   - A LOST RACE, [statelog.ErrConflict]: 409 `stale`, which the same request
-//     resolves once read again.
-//   - THE PERSON REMOVED between the route's read and the record: 404.
-//   - A WRITE THAT LANDED AND CANNOT BE READ BACK HERE YET,
-//     [iamdomain.NotReadBack]: 503 with the op id and the write's own
-//     outcome (`pending` or `applied`, never `unknown`), saying what landed —
-//     the same request again under the same key hands back what it made.
-//   - AN ESTATE THAT COULD NOT DECIDE: 503 WITH the operation id and the
-//     Retry-After the refusal's own rule gives ([auth.RetryIdentity]). It used
-//     to be a bare 503, which a client cannot tell from a node that is gone
-//     for good — and then a 503 carrying the identity hint whatever refused
-//     it, which told a client to come back in two seconds for a record too
-//     large to place, a full log or an evicted node.
-//   - ANYTHING ELSE is a fault: 500, its own words to the log.
-//
-// # Three outcomes of a write that was published
-//
-// They are what the writer's answer used to hide — it answered a bare
-// position, so an `unknown` outcome read as 200:
-//
-//   - applied → the route's own status: the next read here sees it.
-//   - pending → 202 with the position: durable, and every node will apply
-//     it; this one has not yet.
-//   - unknown → 503 with the op id: nothing can be established from this
-//     node, and the only safe retry is the SAME id, sent back as the
-//     Idempotency-Key.
-//
-// # The op id is always the GESTURE's KEY
-//
-// It is the one a retry sends back as the Idempotency-Key — the key every id
-// this gesture publishes under derives from ([Service.opIDFor], and each step
-// of a sequence from that, [statelog.StepOpID]) — and never an id derived from
-// it, although a step's refusal and a step's result each name their own: an
-// id derived from the key, sent back as a key, is a NEW gesture, every one of
-// whose steps derives an id the first attempt never used — so the steps that
-// had landed were made again, as operations the ledger had never seen. The id
-// a refusal names goes to the log, where the trail finds it under the key it
-// begins with. A mint is published under its key itself, so for it the two are
-// one.
+// Each refusal is a different thing to do next. The machine-token and assistant
+// locks come BEFORE the refusal arms, whose refusal they are (sign in, or take
+// the gesture yourself). Outcomes: applied is the route's status, pending `202`
+// with the position, unknown `503` with the op id. The op id is always the
+// GESTURE's KEY, never an id derived from it: a derived id sent back as a key
+// is a NEW gesture whose landed steps are made again. A mint publishes under
+// its key itself, so there the two are one.
 func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 	result statelog.Result, err error, success int, extra map[string]any) {
 
@@ -590,19 +449,13 @@ func (s *Service) answer(w http.ResponseWriter, r *http.Request, opID string,
 			httpjson.Detail{"hint": noCompanyHint})
 		return
 	case errors.Is(err, iamdomain.ErrOperationReused):
-		// A KEY THAT ALREADY NAMES SOMETHING ELSE: another request's
-		// invitation or person, or one no longer open. A conflict the
-		// caller resolves with a new key, never by waiting — answered as
-		// every surface that takes a key answers one, `409 invalid_input`
-		// naming the header as the field to change: it was `bad_params`
-		// here, whose sentence is about a query parameter, while the act
-		// route said `invalid_input`, so one refusal read two ways under
-		// two codes. Where the STATE LOG refused it rather than the
-		// directory's own decide — an operation the key derives already
-		// names a write to another object — the domain's sentinel carries
-		// the framework's refusal after it, which names the operation and
-		// the subjects, so it is told in [opkey.Reused] as every surface
-		// taking a key tells it.
+		// A KEY THAT ALREADY NAMES SOMETHING ELSE (another request's
+		// invitation or person, or one no longer open): a conflict a new key
+		// resolves, never a wait. `409 invalid_input` naming the header, as
+		// every surface that takes a key answers it (`bad_params` is about a
+		// query parameter). Where the STATE LOG refused it, the sentinel
+		// carries the framework's refusal naming operation and subjects, so
+		// it is told in [opkey.Reused] as everywhere.
 		said := iamdomain.Sentence(err)
 		if errors.As(err, &refused) && refused.Reason == statelog.ReasonOpReused {
 			said = opkey.Reused
@@ -746,18 +599,14 @@ func logRefused(r *http.Request, opID string, status int, err error) {
 // holds: which value, in a sentence of the surface's own, and who holds it —
 // by the login this node's rows give them, and by id beside it.
 //
-// NOT THE DOMAIN'S ERROR, which is written for a log: it carried the package's
-// name, the holder's raw id and, for an address, its BLIND — a digest nobody
-// can read — into a dialog that shows a detail verbatim. And `invalid` rather
-// than `bad_params`, whose sentence is about a query parameter: the remedy is
-// to send a different value.
+// NOT THE DOMAIN'S ERROR, which is written for a log (package name, raw id, an
+// address's unreadable BLIND) and would reach a dialog that shows a detail
+// verbatim. `invalid` rather than `bad_params`, which is about a query
+// parameter: the remedy is a different value.
 //
-// AN OPEN INVITATION HOLDS AN ADDRESS OR A SEAT, and the sentence names which:
-// it said "that address" whatever the field, which was harmless while an
-// invitation held nothing else and wrong the moment it held its seat — an
-// administrator creating somebody onto a seat was told an address they never
-// typed was taken. A seat's value is a handle and no secret, so it is named;
-// an address's is a blind, so it is not.
+// AN OPEN INVITATION HOLDS AN ADDRESS OR A SEAT, and the sentence names which,
+// or a create onto a taken seat is told an address they never typed is taken. A
+// seat's value is a handle, so it is named; an address's is a blind, so it is not.
 func (s *Service) takenDetail(r *http.Request, taken *iamdomain.ErrTaken) httpjson.Detail {
 	what := "that address"
 	if taken.Field != iamdomain.UniqueEmail {

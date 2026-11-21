@@ -19,8 +19,8 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 	return statelog.NewRows(db, Domain{}, spec, guards)
 }
 
-// guards answers whether an entry or a value carries a purge marker, which is
-// permanent. No write here is a first-writer-wins create, so nothing guards one.
+// guards answers whether an entry or a value carries a (permanent) purge
+// marker. No write here is a first-writer-wins create, so nothing guards one.
 func guards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (deleted, guard bool, err error) {
 	if !ObjectKind(subj.Kind).Purgeable() {
 		return false, false, nil
@@ -30,9 +30,8 @@ func guards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (deleted, gu
 }
 
 // Fence refuses a write this node must not make: Evicted on every append, from
-// rows this node already has, and ClearForZero before an expectation of zero,
-// which pays a coordination round trip because being wrong there is a lost
-// update.
+// this node's rows, and ClearForZero before an expectation of zero, which pays a
+// coordination round trip because being wrong there is a lost update.
 type Fence struct {
 	db     store.ReplicatedReader
 	nodeID string
@@ -77,8 +76,7 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 }
 
 // ClearForZero verifies, freshly, that publishing at an expectation of zero is
-// safe from this node ([statelog.ZeroFence], the check every strict domain's
-// fence runs).
+// safe from this node ([statelog.ZeroFence]).
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
 	return statelog.ZeroFence{
 		Evicted: f.Evicted, Floor: f.Floor, Ends: f.Ends, Committed: f.Committed,
@@ -93,10 +91,10 @@ type Gates struct{ db store.ReplicatedReader }
 func NewGates(db store.ReplicatedReader) *Gates { return &Gates{db: db} }
 
 // GatedAt reports whether a record at p applies nowhere: THE PURGE MARKER
-// FIRST, the purge's own record exempt by its operation id, then the writer's
-// eviction window, in one transaction. A marker is a fact about an object no
-// readmission lifts, where the window is a fact about one writer. With the
-// record's body it reads every marker a claim is held to; without, the subject's.
+// FIRST (the purge's own record exempt by its operation id), since no
+// readmission lifts it, then the writer's eviction window, in one transaction.
+// With the record's body it reads every marker a claim is held to; without,
+// the subject's.
 func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	writer, opID string, p statelog.Position, body []byte) (statelog.Reason, bool, error) {
 

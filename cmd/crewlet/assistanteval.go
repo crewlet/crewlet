@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -23,18 +24,13 @@ import (
 //
 // # Why it runs in this process
 //
-// A case describes the company it is asked in as the answers its requests
-// receive, and runs through the assistant's real orchestrator and curated
-// catalogue over the same harness the engine's suites use
-// (internal/assistant/evals, production code the suites drive through the
-// test-only assistanttest). So nothing is read from or written to a
-// node, a case is repeatable, and the one thing that varies is the model:
-// each case's own script by default, which calls none and is how the engine's
-// tests run the shipped suite, or a `providers.llm` entry with -model, which
-// is how an operator measures a candidate before naming it in
-// `assistant.llm`. Permissions are not measured here: that a person's
-// assistant reads and writes exactly what the person may is held by the
-// deterministic suites in internal/api on every change.
+// A case describes its company as the answers its requests receive and runs
+// through the real orchestrator and curated catalogue (internal/assistant/evals,
+// driven by the test-only assistanttest). Nothing touches a node, a case is
+// repeatable, and the one variable is the model: the case's own script by
+// default (no model call), or a `providers.llm` entry with -model, to measure a
+// candidate before assigning it as `assistant.model`. Permissions are not measured:
+// the deterministic suites in internal/api hold them.
 func runAssistant(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
@@ -142,13 +138,13 @@ func evalModel(ctx context.Context, environ config.Source, companyPath string, s
 	if err != nil {
 		return nil, nil, err
 	}
-	company, keys, resolver, err := loadLLMConfig(ctx, companyPath, companySecrets, "eval", key,
+	company, _, resolver, err := loadLLMConfig(ctx, companyPath, companySecrets, "eval", key,
 		stderr)
 	if err != nil {
 		companySecrets.Close()
 		return nil, nil, err
 	}
-	provider, err := assistantProvider(company, keys, resolver, key)
+	provider, err := assistantProvider(company, resolver, key)
 	if err != nil {
 		companySecrets.Close()
 		return nil, nil, err
@@ -157,20 +153,16 @@ func evalModel(ctx context.Context, environ config.Source, companyPath string, s
 	return provider, companySecrets.Close, nil
 }
 
-// assistantProvider is the harness agent entry key names, refused when the
-// company may not run the assistant on it.
-func assistantProvider(company *config.Company, keys []string, resolver *config.Resolver,
+// assistantProvider is the run Ask Crewlet makes of the entry key names,
+// refused when no helper can run on it.
+func assistantProvider(company *config.Company, resolver *config.Resolver,
 	key string) (*harness.Provider, error) {
 
-	if problem := company.AssistantEntryProblems(key); problem != nil {
-		return nil, fmt.Errorf("crewlet assistant eval: %s may not run Ask Crewlet: %w",
-			key, problem)
-	}
-	providers, err := harnessProviders(company, keys, resolver)
+	provider, err := engine.BuildHelper(company, key, resolver, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("crewlet assistant eval: %s may not run Ask Crewlet: %w", key, err)
 	}
-	return oneProvider(providers, key)
+	return provider, nil
 }
 
 // reportEval prints one line per case (its passes, and the mean rounds,

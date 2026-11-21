@@ -15,28 +15,16 @@ import (
 
 // CONTRACT 1: A STREAM'S IDENTITY, and what a consumer must do when it moves.
 //
-// # The failure this exists for
+// A stream deleted and remade restarts its sequences at 1 and is EMPTY: every
+// position a node holds names a space that no longer exists, and a consumer
+// reading it sees nothing and reports nothing. Only the creation instant
+// detects it: a recreated stream's sequences are plausible, and an empty stream
+// and an emptied one have one count. WHICH instant, not simply the broker's,
+// is [StreamCreatedAt]'s to say ([CreatedAtKey]).
 //
-// A stream that is deleted and remade restarts its sequences at 1. Every
-// position a node holds then names a number in a space that no longer exists —
-// and the new stream is EMPTY, so a consumer that reads it sees nothing and
-// reports nothing. That is the shape of the failure: not an error, not a
-// refusal, but a successful read of a stream that has forgotten everything.
-//
-// The stream's creation instant is what detects it, and it is the only thing
-// that can: a sequence cannot, because a recreated stream's sequences are
-// perfectly plausible; a message count cannot, because an empty stream and an
-// emptied one are the same count. WHICH instant is [StreamCreatedAt]'s to say,
-// and it is not simply the broker's — see [CreatedAtKey].
-//
-// # Why it is a named contract rather than a check each consumer writes
-//
-// Every consumer of a durable stream inherits this hazard, whether or not it
-// is a state-log domain. [Runner] carries the instant beside its checkpoint
-// and answers with a generation; a COMPACTED changelog has no checkpoint and
-// no generation to answer with, so its only honest answer is to refuse the
-// work that depended on the stream. Both need the same comparison, and a
-// comparison written twice is one that is right in one place.
+// One named contract, because every consumer of a durable stream has the
+// hazard: [Runner] answers with a generation, a compacted changelog (no
+// checkpoint, no generation) refuses the work; both need one comparison.
 
 // StreamState is what a consumer has learned about a stream's identity.
 type StreamState int
@@ -55,13 +43,10 @@ const (
 	// gone.
 	StreamRecreated
 
-	// StreamUnknown is a creation instant that could not be established —
-	// the broker did not answer, or answered a zero instant.
-	//
-	// ITS OWN VALUE, because it is not "same". A consumer that read it as
-	// same would resume against a stream it cannot identify, which is the
-	// whole failure this contract is about; one that read it as recreated
-	// would tear down a healthy node over a broker blip.
+	// StreamUnknown is a creation instant that could not be established: the
+	// broker did not answer, or answered a zero instant. Read as same, a node
+	// resumes against a stream it cannot identify; read as recreated, it
+	// tears down a healthy node over a broker blip.
 	StreamUnknown
 )
 
@@ -78,54 +63,24 @@ func (s StreamState) String() string {
 	return "unknown"
 }
 
-// CreatedAtKey is the stream METADATA key under which the node whose create
-// made a stream stamps the stream's creation instant — the instant
-// [StreamCreatedAt] answers for it.
+// CreatedAtKey is the stream METADATA key the create that made a stream stamps
+// its creation instant under, the one [StreamCreatedAt] answers (ADR-0083).
 //
-// # Why a stream carries its own instant
-//
-// The broker's creation instant names one INSTANCE of a stream, and a
-// recreation is not the only thing that makes a new one. A SNAPSHOT RESTORE —
-// `nats stream restore`, or the JetStream restore request a restore of a
-// `crewlet backup` sends — gives back every record at its own sequence, with its
-// own subject and its own storage instant, every consumer at its own position,
-// and the configuration the request handed it; and it dates the stream to the
-// moment of the RESTORE. nats-server does so on both of its paths (a solo
-// server creates the stream afresh, a clustered one assigns it `time.Now()`),
-// and the archive a snapshot writes carries no creation instant to restore
-// from. Keyed to the broker's instant, a node restored from a backup exactly as
-// docs/guides/backup.md says found every log "recreated": its appliers stopped,
-// its reads and writes refused `wrong_stream`, the memory changelog refused
-// every seat — a restored company that served nothing until an operator had
-// re-anchored every log and cleared every node's identity rows by hand, and
-// whose re-anchor then read a log holding the whole history as a stream
-// holding none of it.
-//
-// What a restore DOES keep is the configuration, because its request names it.
-// So the instant rides there: stamped once, into the configuration of the
-// create that makes the stream ([StampCreatedAt]), it is in every snapshot and
-// handed back by every restore, while a stream the engine provisions again
-// after it was lost is stamped anew — which is the recreation this contract
-// exists to detect. A restored stream therefore answers its original's
-// instant, as a broker restored from a disk copy always did, and is judged by
-// the two findings that case already has: where the log ENDS
-// ([ErrAheadOfLog]) and which record it holds at the checkpoint
-// ([ErrLogDiverged]).
-//
-// A stream that carries no stamp — one an operator created by hand, a
-// coordination bucket, the object store's — answers the broker's own instant,
-// which is what it always answered; none of those is a stream any identity
-// check here reads, and one a check ever reads must be stamped by its creator,
-// or a restore of it is a recreation again. And an instant an operator copies
-// onto another stream is a DECLARATION that it is the same history, which is
-// exactly what the restore request makes it.
+// Not the broker's instant: a snapshot restore (`nats stream restore`, or a
+// `crewlet backup` restore) gives back every record and consumer position but
+// dates the stream to the RESTORE, so every restored log would read as
+// recreated. A restore keeps the configuration, so the stamp rides there
+// ([StampCreatedAt]); a restored stream is judged by where its log ends
+// ([ErrAheadOfLog]) and its record at the checkpoint ([ErrLogDiverged]), and
+// one the engine provisions after a loss is stamped anew. A stream an identity
+// check reads must be stamped by its creator, or its restore is a recreation
+// again; an operator copying a stamp onto another stream declares one history.
 const CreatedAtKey = "crewlet.created_at"
 
 // StampCreatedAt returns the metadata of a stream about to be created, with
 // its creation instant at stamped under [CreatedAtKey].
 //
-// A NEW MAP, so the caller's own is never written: a stream specification is
-// often a value several creates share.
+// A NEW MAP: a stream specification is often a value several creates share.
 func StampCreatedAt(metadata map[string]string, at time.Time) map[string]string {
 	out := make(map[string]string, len(metadata)+1)
 	maps.Copy(out, metadata)
@@ -137,15 +92,14 @@ func StampCreatedAt(metadata map[string]string, at time.Time) map[string]string 
 // instant stamped into its configuration when it was created ([CreatedAtKey]),
 // and the broker's own for a stream that carries none.
 //
-// THE ONE READING, for every consumer that compares an instant — a state log's
-// applier and every read of its log's state, the memory changelog's hydration
-// and the backup's read past its copy — because two of them reading different
-// instants for one stream is one of them calling a restored stream recreated.
+// THE ONE READING for every consumer that compares an instant (the applier and
+// its log's reads, the memory changelog, the backup), held by
+// TestOnlyStreamCreatedAtReadsAStreamsCreationInstant: two readings for one
+// stream is one of them calling a restored stream recreated.
 //
 // A STAMP THAT DOES NOT PARSE IS AN ERROR, never the broker's instant instead:
-// a stream that names a creation instant nobody can read is one this node
-// cannot identify, and unknown is not same ([StreamUnknown]). It names the key
-// and the value, because the remedy is the stream's configuration.
+// unknown is not same ([StreamUnknown]). It names the key and the value, since
+// the remedy is the stream's configuration.
 func StreamCreatedAt(info *jetstream.StreamInfo) (time.Time, error) {
 	if info == nil {
 		return time.Time{}, errors.New("statelog: the broker answered no stream " +
@@ -168,45 +122,29 @@ func StreamCreatedAt(info *jetstream.StreamInfo) (time.Time, error) {
 // identityResolution is the precision at which two observations of one instant
 // are the same observation.
 //
-// A MICROSECOND, because that is what [store.EncodeTime] keeps: an instant
-// written and read back is truncated there, while the broker reports its
-// stream's creation with nanosecond precision. Comparing the two exactly makes
-// EVERY boot after the first report a recreation — a node that refuses to
-// hydrate any seat, for ever, over a difference nothing can see.
+// A MICROSECOND, what [store.EncodeTime] keeps, while the broker reports
+// nanoseconds: compared exactly, every boot after the first reads a recreation.
 const identityResolution = time.Microsecond
 
 // AppliedInstant is the broker's instant for a record as every applier is
-// handed it ([Record.StoredAt], [ApplyOptions.StoredAt]): the store's own
-// encoding of it, UTC at a microsecond, read back through the store's own
-// decode.
+// handed it ([Record.StoredAt], [ApplyOptions.StoredAt]): the store's encoding
+// of it, UTC at a microsecond, read back through the store's decode.
 //
-// EXPORTED FOR A HARNESS THAT PLAYS THE LOOP BY HAND — reads a log, opens each
-// frame and calls a domain's applier itself — which hands the applier this of
-// the instant the log reports, as the loop does. Handed the broker's own, it
-// applies what no node is ever handed, and a domain that relies on the one
-// value (a column and a document read as the same instant) fails there while it
-// holds on every node.
-//
-// ONE VALUE ON EVERY NODE AND ON EVERY PATH, which the broker's own is not. A
-// record applied as it arrives carries what the broker client reported —
-// nanoseconds, in the node's local zone — and a record held back and applied
-// later (a version this build cannot read, a key it lacks) carries what the
-// deferred table kept, which is this encoding. An applier writes the instant
-// into its documents as it stands, and a document encodes the precision and the
-// zone it is handed, so two nodes that took one record by different paths, or
-// from one path in different zones, held different bytes for one record: the
-// difference [Domain.ClaimsIdentity] asserts there is none of.
-//
-// THE STORE'S HELPERS, NEVER A COPY, because the deferred table is written and
-// read through them: a second rule spelled here would drift from the one the
-// held-back path already follows, and the two paths would part again.
+// ONE VALUE ON EVERY NODE AND EVERY PATH, which the broker's own is not: the
+// client reports nanoseconds in the node's zone, a deferred record carries the
+// deferred table's encoding, and a document encodes what it is handed, so two
+// nodes would hold different bytes for one record, the difference
+// [Domain.ClaimsIdentity] asserts there is none of. Exported for a harness
+// that calls a domain's applier by hand, which must hand it this, as the loop
+// does. The store's helpers, never a copy: the deferred table is written
+// through them, and a second spelling would drift from it.
 func AppliedInstant(t time.Time) time.Time { return store.DecodeTime(store.EncodeTime(t)) }
 
 // IdentityOf compares a stream's current creation instant against the one this
 // node recorded.
 //
-// A PURE FUNCTION OVER TWO INSTANTS, so every consumer reaches the same verdict
-// and the verdict is testable without a broker.
+// A PURE FUNCTION, so every consumer reaches one verdict, testable without a
+// broker.
 func IdentityOf(recorded, current time.Time, known bool) StreamState {
 	if current.IsZero() {
 		return StreamUnknown
@@ -222,10 +160,9 @@ func IdentityOf(recorded, current time.Time, known bool) StreamState {
 
 // ErrStreamRecreated reports a stream that is not the one this node last saw.
 //
-// A SENTINEL, because the caller's response is specific and is never a retry:
-// what it holds derived from that stream is stale in a way no re-read repairs,
-// and the honest move is to refuse the work rather than to serve an empty
-// answer.
+// The caller's response is never a retry: what it derived from that stream is
+// stale in a way no re-read repairs, so it refuses the work rather than serve
+// an empty answer.
 var ErrStreamRecreated = errors.New("statelog: the stream was recreated")
 
 // foreignStream is a stream an applier's positions do not belong to: the
@@ -239,11 +176,9 @@ type foreignStream struct {
 // applier's stop, a read's `wrong_stream` and a write's — so an operator reads
 // the same two instants and the same remedy wherever they meet it.
 //
-// THE REMEDY IS THE OPERATOR'S, and never a retry: what this node holds is
-// derived from a history the live log no longer carries, so a re-read reads the
-// same mismatch, and the decision to follow the rebuilt stream from its head —
-// declaring whatever the old one held and this node never applied lost — is
-// not one a node may take on its own.
+// THE REMEDY IS THE OPERATOR'S, never a retry: a re-read reads the same
+// mismatch, and following the rebuilt stream declares lost whatever the old
+// one held that this node never applied, which no node may decide alone.
 func (f foreignStream) err(domain, stream string) error {
 	return fmt.Errorf("%w: %s's rows are keyed to the stream created at %s and "+
 		"the broker's %s was created at %s, so every position this node holds — "+
@@ -260,54 +195,36 @@ func (f foreignStream) err(domain, stream string) error {
 // the log does not hold.
 //
 // ITS OWN SENTINEL BESIDE [ErrStreamRecreated], because the creation instant
-// cannot show it. A broker restored from a copy older than this node's rows —
-// a disk snapshot of the store directory, an embedded broker brought back from
-// yesterday's volume — keeps the stream it had, instant and all, so every
-// identity check passes, and the one thing that differs is where the log ENDS.
-// Both refuse with the one word `wrong_stream` and take the one remedy; the
-// sentinel is what lets a caller tell which finding it was without parsing
-// prose.
+// cannot show it: a broker restored from a copy older than this node's rows
+// keeps its stream, instant and all, and only where the log ENDS differs. Both
+// refuse `wrong_stream` with one remedy; the sentinel tells them apart.
 var ErrAheadOfLog = errors.New("statelog: this node's checkpoint is past the log's end")
 
 // ErrGenerationPassed reports a domain a peer has re-anchored while this node's
 // rows stayed in the generation before: the fleet's history now continues from
 // the re-anchored peer's rows, which this node's are not.
 //
-// ITS OWN SENTINEL BESIDE [ErrStreamRecreated] and [ErrAheadOfLog], because
-// neither of them can see it and its remedy is not theirs. On a recreated
-// stream this node's own reading of the instant finds the rebuild, and on a
-// restored broker its checkpoint is past the log's end — but only for as long
-// as nothing has written past it, and a node whose checkpoint was below the
-// restored end never sees either: its log looks like its own history, its
-// applier runs on into the new generation's records, and its reads and writes
-// are served from rows missing everything the re-anchoring node held past the
-// copy. The remedy is not an operator's verb either, because the history this
-// node needs exists — on the peer that re-anchored — so the node ADOPTS that
-// peer's snapshot, on its own, through the ordinary join.
-//
-// EXCEPT WHERE NO PEER HOLDS IT, which is why the sentinel's own words name no
-// peer: a generation only an evicted node opened has no snapshot to adopt, and
-// one this node's own failed reanchor opened is finished by running it again.
-// The sentence each refusal carries names which ([passedGeneration.err]).
+// ITS OWN SENTINEL BESIDE [ErrStreamRecreated] and [ErrAheadOfLog]: a node
+// whose checkpoint was below a restored end sees neither, its log looks like
+// its own history, and its rows miss everything the re-anchoring peer held
+// past the copy. The history exists on that peer, so the node usually ADOPTS
+// its snapshot on its own, through the ordinary join; the words name no peer
+// because a generation only an evicted node opened has none to adopt, and one
+// this node's failed reanchor opened is finished by running it again
+// ([passedGeneration.err] names which).
 var ErrGenerationPassed = errors.New("statelog: the log moved past this node's generation")
 
 // ErrLogDiverged reports a log whose record at this node's checkpoint is not the
 // record this node consumed there: the log continues a history these rows are
 // not.
 //
-// ITS OWN SENTINEL BESIDE [ErrAheadOfLog], because it is the finding that one
-// could not make. A broker restored from an older copy is seen from a node
-// whose rows are newer only while its log ENDS below their checkpoint; once
-// anything writes it past that — a node whose own rows were not ahead of the
-// copy — the end is an ordinary end again, and a node booting then never saw
-// it below at all. What still separates the two histories is the record at
-// the checkpoint's sequence, which on one stream never changes: the checkpoint
-// names it ([Runner.VerifyCheckpoint]), and a different record there means
-// everything past it was decided from rows these are not. Unlike a reading of
-// the end it cannot come from a member that has not caught up — a member that
-// lacks a record answers that it has none, never with another one — so it is
-// STICKY: nothing on the log can bring these rows level, and applying the log
-// past the checkpoint would put a second history on top of them.
+// ITS OWN SENTINEL BESIDE [ErrAheadOfLog], whose finding lasts only while the
+// restored log ENDS below the checkpoint; once anything writes past it, what
+// still separates the histories is the record at the checkpoint's sequence,
+// which on one stream never changes ([Runner.VerifyCheckpoint]). A member not
+// caught up answers that it has no record, never another one, so the finding
+// is STICKY: nothing on the log brings these rows level, and applying past the
+// checkpoint would put a second history on top of them.
 var ErrLogDiverged = errors.New("statelog: the log's record at this node's checkpoint is not the one it consumed")
 
 // divergedLog is what established that a log diverged from an applier's rows:
@@ -323,9 +240,8 @@ type divergedLog struct {
 // err is the one sentence every refusal over a diverged log carries — the
 // applier's stop, a read's `wrong_stream` and a write's.
 func (d divergedLog) err(stream string) error {
-	// "AT", NEVER "PAST": another record reaching the checkpoint's own
-	// sequence is the whole finding, and a log written exactly that far —
-	// the other history's record landing AT it — holds nothing past it.
+	// "AT", NEVER "PAST": a log written exactly to the checkpoint's sequence
+	// holds the other history's record there and nothing past it.
 	return fmt.Errorf("%w: this node's checkpoint on %s is at sequence %d, on the "+
 		"record the broker stored at %s, and the log's record at %d was stored at "+
 		"%s — the broker was restored from a copy older than these rows and another "+
@@ -342,15 +258,11 @@ func (d divergedLog) err(stream string) error {
 // node on the same stream, in the same generation and not evicted, stands past
 // the log's end, or says the log diverged from its rows.
 //
-// ITS OWN SENTINEL, and a finding about the FLEET rather than about this node:
-// this node's rows are the log's own history, so its reads are served — but a
-// broker restored from an older copy is the one state in which a write from
-// here makes things worse whichever history the operator keeps. Kept, the
-// peer's rows (the restored reanchor) apply this node's write nowhere, and the
-// caller it was acknowledged to has lost it; kept the other way, the peer's rows
-// are replaced and nothing needed refusing. So the write waits for the
-// operator's choice instead of spending it. An eviction or a readmission is the
-// exception ([Request.NodeGate]): evicting the peer is one of the choices.
+// A finding about the FLEET, not this node: its rows are the log's own
+// history, so its reads are served, but its writes wait for the operator's
+// choice. If the peer's rows are kept (a restored reanchor), a write from here
+// applies nowhere after it was acknowledged. An eviction or a readmission is
+// the exception ([Request.NodeGate]): evicting the peer is one of the choices.
 var ErrLogTruncated = errors.New("statelog: the log lost records a peer's rows hold")
 
 // Truncation is what established that the log lost records a peer's rows hold:
@@ -383,11 +295,9 @@ func (t Truncation) err(stream string) error {
 // HoldsRecord reports whether log holds, at seq, the record the broker stored at
 // storedAt — a checkpoint's record, named by its sequence and its instant.
 //
-// FALSE for everything that is not that record: a sequence the log no longer
-// holds or never reached, another record there, and an instant of zero, which
-// names no record at all. So a caller asking whether a peer's history is the
-// log's gets "yes" only where the log itself says so, and weighs every other
-// answer as history the log may have lost.
+// FALSE for everything else: a sequence the log no longer holds or never
+// reached, another record there, a zero instant. A caller weighs every false
+// as history the log may have lost.
 func HoldsRecord(ctx context.Context, log LogReader, seq uint64, storedAt time.Time) (bool, error) {
 	if seq == 0 || storedAt.IsZero() {
 		return false, nil
@@ -418,36 +328,28 @@ type passedGeneration struct {
 }
 
 // passedHolder is who holds the generation a log moved to past this node's
-// rows, as far as this node can tell — the one fact the remedy turns on.
+// rows, as far as this node can tell: the fact the remedy turns on.
 type passedHolder int
 
 const (
-	// passedByPeer: a peer re-anchored the log, and a live one holds the
-	// generation — or nothing yet says it does not. This node adopts its
-	// snapshot on its own.
+	// passedByPeer: a live peer holds the generation, or nothing yet says
+	// none does. This node adopts its snapshot on its own.
 	passedByPeer passedHolder = iota
 
-	// passedByEvicted: only nodes the fleet has evicted ever held it, so no
-	// snapshot exists to adopt, and the remedy is a reanchor of this node's
-	// own — the abandoned case, which makes that generation void.
+	// passedByEvicted: only evicted nodes ever held it, so there is no
+	// snapshot to adopt; the remedy is this node's own reanchor, which voids
+	// that generation.
 	passedByEvicted
 
-	// passedByOwnAttempt: the record opening it is this node's own, appended
-	// by a reanchor that did not complete. The remedy is running it again,
-	// which completes it from that very record.
+	// passedByOwnAttempt: the record opening it is this node's own, from a
+	// reanchor that did not complete; running it again completes it.
 	passedByOwnAttempt
 )
 
 // err is the one sentence every refusal over a passed generation carries — the
-// applier's stop, a read's `wrong_stream` and a write's.
-//
-// THE REMEDY FOLLOWS WHO HOLDS THE GENERATION. The one sentence there used to be
-// — this node adopts a peer's snapshot on its own — was false twice over: for a
-// generation only an evicted node held, there is no peer to adopt from and the
-// join never asks, so a node waited for ever on a repair that could not come;
-// and for this node's own reanchor that appended its record and then failed,
-// there was no peer at all, and the one thing that finishes it is the reanchor
-// run again.
+// applier's stop, a read's `wrong_stream` and a write's. THE REMEDY FOLLOWS
+// [passedHolder]: promising adoption where no peer holds the generation leaves
+// a node waiting for ever on a repair that cannot come.
 func (p passedGeneration) err(domain, stream string) error {
 	lead := fmt.Sprintf("%s's rows are at generation %d of %s", domain, p.at.Generation, stream)
 	who := "a peer"
@@ -486,11 +388,9 @@ func (p passedGeneration) err(domain, stream string) error {
 // pastEnd reports a checkpoint past a log's last sequence — [Health.AheadOfLog],
 // the zero fence's own reading and [Runner.ObserveEnd] ask it in one spelling.
 //
-// ONE PREDICATE for the reason [Replayable] is one: the question is asked on
-// the read path, on the write path and by the verdict both consult, and three
-// spellings of one inequality are three places for its boundary to drift. A
-// checkpoint EQUAL to the end is not past it — it is a node that has applied
-// the log's last record, which is every caught-up node there is.
+// ONE PREDICATE, so the read path, the write path and their verdict cannot
+// drift on the boundary. A checkpoint EQUAL to the end is not past it: it is
+// every caught-up node.
 func pastEnd(checkpoint, last uint64) bool { return checkpoint > last }
 
 // aheadOfLog is one reading that found an applier's checkpoint past its log's
@@ -501,16 +401,12 @@ type aheadOfLog struct {
 }
 
 // err is the one sentence every refusal over a checkpoint past the log's end
-// carries — a write's at fence 0 and at the zero fence alike — so an operator
-// reads the same two numbers and the same remedy wherever they meet it.
-//
-// IT NAMES WHY NO WRITE CAN BE ANSWERED, not only that the rows are old:
-// whatever the log appends next lands at a sequence this node's applier has
-// already passed, so it is a record this node will never apply and its own
-// resolution can never find — an arbitrated write is reported as a ledger
-// contract violation, an additive one as applied, and either way the record is
-// on the log for every other node. The remedy is the operator's for the reason
-// [foreignStream.err] gives.
+// carries, a write's at fence 0 and at the zero fence alike. It names why no
+// write can be answered: the log's next append lands at a sequence this node's
+// applier has passed, a record it never applies nor resolves (an arbitrated
+// write would read as a ledger contract violation, an additive one as
+// applied), yet one on the log for every other node. The remedy is the
+// operator's ([foreignStream.err]).
 func (a aheadOfLog) err(stream string) error {
 	return fmt.Errorf("%w: this node's checkpoint on %s is at sequence %d and the "+
 		"log ends at %d, so its rows hold records at sequences the log has never "+
@@ -526,15 +422,11 @@ func (a aheadOfLog) err(stream string) error {
 // RecordedIdentity reads the creation instant this node last recorded for a
 // stream, from its OWN estate.
 //
-// # Why the node estate and not the replicated one
-//
-// This is a per-node observation, not shared state: two nodes can legitimately
-// have seen a stream at different moments, and a donated snapshot must not
-// carry the donor's answer. The framework's own checkpoint table is in the
-// replicated estate and is walked by the backup manifest and the adoption
-// path, both of which read every row as a DOMAIN — so a row for a stream that
-// is not a domain would put a phantom domain in an artefact's manifest, and a
-// recipient refuses an artefact naming a domain it does not register.
+// A per-node observation: two nodes may have seen a stream at different
+// moments, and a donated snapshot must not carry the donor's answer. Not the
+// replicated checkpoint table either: the backup manifest and adoption read
+// its every row as a DOMAIN, and a recipient refuses an artefact naming a
+// domain it does not register.
 func RecordedIdentity(ctx context.Context, db *store.DB, stream string) (
 	time.Time, bool, error) {
 
@@ -556,10 +448,8 @@ func RecordedIdentity(ctx context.Context, db *store.DB, stream string) (
 
 // RecordIdentity writes what this node has seen.
 //
-// LAST WRITER WINS, deliberately: a node that has decided to follow a
-// recreated stream records the new instant, and the next boot then reads it as
-// the same stream. The decision to follow one is the OPERATOR's — a reanchor —
-// and this is the record of it rather than a second opinion about it.
+// LAST WRITER WINS: it records the operator's decision (a reanchor) to follow
+// a recreated stream, so the next boot reads it as the same stream.
 func RecordIdentity(ctx context.Context, db *store.DB, stream string,
 	created, now time.Time) error {
 

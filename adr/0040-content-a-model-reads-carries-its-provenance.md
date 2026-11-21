@@ -21,8 +21,8 @@ never an instruction, and every read result says so.** One package,
   a change they made, a monitor's alert, a notification from an integration
   that names no surface of its own, a colleague's ask or answer on an agent-to-agent channel, the question a
   seat's executor stopped to ask a person, and what the Dashboard Assistant
-  reads as the person it acts for: a route's answer, what that person's open
-  screen says about itself and a deep-work run's account of what it did), who
+  reads as the person it acts for: a route's answer and what that person's open
+  screen says about itself), who
   wrote it (by kind and seat handle),
   and how far the reader may trust it (its own words, a colleague's, an outside
   party's, a page anybody may edit, or what an administrator adopted for the
@@ -104,9 +104,9 @@ an exhausted onboarding pass gets more rounds, which reads the fences of the
 turn's ask moved onto its own call's token and whose reason reaches the seat
 defused. Every
 function in the tree that builds a model's input, a provider request or the
-launch of a coding CLI's run (every seat's executor, and the Dashboard
-Assistant's deep work), names the test that holds its fences, or why it reads
-nobody's words, and a walk refuses one that does not. A relaunch that continues
+launch of a coding CLI's run (every seat's executor), names the test that
+holds its fences, or why it reads nobody's words, and a walk refuses one that
+does not. A relaunch that continues
 its turn's harness session hands the model one context holding what earlier
 segments read, each fenced under that segment's token, beside what this
 segment hands it, fenced or defused under its own — and by then the model has
@@ -132,10 +132,9 @@ a fence would tell the run not to follow the instruction it waited for. What a
 seat's executor puts to a person (its question, the context it gives with
 it, the options it offers) is read by one rule wherever it reaches a model,
 answered, listed among the decisions waiting on a person or read back once
-answered: as a vendor's coding CLI's words, `external`, the way a deep-work
-run's report is. A write the same CLI makes through the seat's tools is a
-record on a surface the engine hosts, made as the seat and read by the hosted
-rule with every other writer there; a run's ask is no such record, but the
+answered: as a vendor's coding CLI's words, `external`. A write the same CLI
+makes through the seat's tools is a record on a surface the engine hosts,
+made as the seat and read by the hosted rule with every other writer there; a run's ask is no such record, but the
 CLI's own account, composed from a brief that may be an outside message or a
 webhook's payload and from whatever it read in its box, and put to a person to
 decide on, which whoever reads it takes as data. A model that rewrites a text to fit a budget reads it the

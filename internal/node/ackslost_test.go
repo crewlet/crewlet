@@ -25,22 +25,16 @@ func (q losingQueue) AcksLost() <-chan struct{} { return q.acks }
 // when that interval came round is caught rather than passed.
 const cutBound = 2 * fleetTTL
 
-// A DRAIN WHOSE ACKNOWLEDGEMENTS ARE GONE ENDS AT ONCE AND CANCELS ITS TURNS —
-// and a drain whose acknowledgements still land waits for them as it always did.
+// A DRAIN WHOSE ACKNOWLEDGEMENTS ARE GONE ENDS AT ONCE AND CANCELS ITS TURNS,
+// and one whose acknowledgements still land waits for them.
 //
-// Once the queue's own broker connection is closed for good, nothing a running
-// turn concludes can be acknowledged: the broker hands its delivery to whichever
-// node takes the seat, which runs it again. Waiting for the turn bought only a
-// second copy of every side effect it made and a later exit. The turns here
-// record their cancellation and then go on blocking, so a drain that cancelled
-// them and then waited for them to unwind reads as the defect it is.
-//
-// The third row is the other arm: a node that stopped because a SECOND
-// connection closed (the coordination store's, on an embedded broker) still
-// acknowledges over the queue's own, so its turns are worth finishing.
+// With the queue's broker connection closed for good no turn can be
+// acknowledged and the broker redelivers it, so waiting buys only a second copy
+// of every side effect. Row three: a SECOND connection closing (the
+// coordination store's) still acknowledges over the queue's own.
 //
 // Mutation: stop asking the queue for its signal in node.New, drop the cancel
-// in Drain, or drop the watcher (the cut then waits out the drain's ten-second
+// in Drain, or drop the watcher (the cut then waits out the ten-second
 // interval) and the first two rows go red; read a queue that merely HAS the
 // signal as one that lost its acks and the third does.
 func TestADrainWhoseAcksAreLostEndsAtOnceAndCancelsItsTurns(t *testing.T) {

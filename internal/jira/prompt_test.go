@@ -79,18 +79,13 @@ func TestOnlyTheLeadFallbackIsToldWhyItWasRouted(t *testing.T) {
 // THE HANDLING BLOCK NEVER CONTRADICTS THE DELIVERY CHECK, AND NEVER HANDS A
 // COLLEAGUE'S ISSUE AWAY: Worklet's two rules, in Jira's routings.
 //
-//   - STAYING OUT IS FOR AN UNADDRESSED ROUTING ONLY, through the same rule
+//   - STAYING OUT IS FOR AN UNADDRESSED ROUTING ONLY, by the rule
 //     [jira.Prompt.Addressed] answers with. A mentioned seat may not end its
-//     turn in silence — the decoder refuses it — and on the issue it was
-//     mentioned on the assignee is ordinarily somebody else, so "stay silent"
-//     there is an instruction the engine sends back for a second round. A
-//     routing with no reason is framed as watching and held to no answer, so
-//     it is told to stay out like a watcher.
-//   - REASSIGNING IS FOR THE ASSIGNEE ONLY. A mentioned seat is asked about
-//     an issue that is not its to move, and a watcher is not asked at all.
-//
-// And the rule the engine enforces itself, that an ask may not end in silence,
-// is not restated: the executor's contract says it and the decoder refuses it.
+//     turn in silence (the decoder refuses it), so "stay silent" there is
+//     sent back for a second round. A routing with no reason is framed as
+//     watching, so it is told to stay out like a watcher.
+//   - REASSIGNING IS FOR THE ASSIGNEE ONLY: a mentioned seat's issue is not
+//     its to move, and a watcher is not asked at all.
 func TestTheHandlingBlockFitsTheRouting(t *testing.T) {
 	t.Parallel()
 	const (

@@ -65,10 +65,10 @@ const JANE: ViewerState = {
   failedRefusal: null,
   configWriter: true,
   configManagedBy: [],
-  assistant: "disabled",
+  assistant: "no_model",
   assistantModel: null,
   assistantReadsImages: false,
-  assistantDeliberate: false,
+  assistantCanAssign: false,
   chatVendors: [],
 };
 
@@ -318,6 +318,36 @@ test("editing a project sends only the facets that moved, and archiving says so 
   fireEvent.click(within(dialog).getByRole("button", { name: "Archive project" }));
   await waitFor(() => expect(sent).toHaveLength(2));
   expect(sent[1]!.body.args).toEqual({ project: "ENG", archived: true });
+});
+
+// A PROJECT'S STUCK WINDOW IS THE LEAD'S TO SET HERE (ADR-0162), within the
+// engine's bounds: a number outside them is held before Save, and an empty
+// field restores the default, which the tool reads as `null`.
+test("editing a project sets its stuck window, holds one out of bounds, and clears it", async () => {
+  mount(<EditProjectButton project="ENG" name="Core platform" stuck={4} />);
+  fireEvent.click(screen.getByRole("button", { name: "Edit project" }));
+  let dialog = await screen.findByRole("dialog", { name: "Edit Core platform" });
+  const save = () => within(dialog).getByRole("button", { name: "Save" });
+  const field = () => within(dialog).getByLabelText(/Stuck after/) as HTMLInputElement;
+  expect(field().value).toBe("4");
+  fireEvent.change(field(), { target: { value: "200" } });
+  expect(save().getAttribute("aria-disabled")).toBe("true");
+  expect(
+    within(dialog).getAllByText("A whole number of hours from 1 to 168.").length,
+  ).toBeGreaterThan(0);
+  fireEvent.change(field(), { target: { value: "1" } });
+  fireEvent.click(save());
+  await waitFor(() => expect(sent).toHaveLength(1));
+  expect(sent[0]!.body.args).toEqual({ project: "ENG", stuck_after_hours: 1 });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(document.body.textContent).toContain("Items in Core platform now read stuck after 1 hour");
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit project" }));
+  dialog = await screen.findByRole("dialog", { name: "Edit Core platform" });
+  fireEvent.change(field(), { target: { value: "" } });
+  fireEvent.click(save());
+  await waitFor(() => expect(sent).toHaveLength(2));
+  expect(sent[1]!.body.args).toEqual({ project: "ENG", stuck_after_hours: null });
 });
 
 // THE PROJECT'S OWN RULE, BEFORE ANYTHING IS FILLED: a project's settings

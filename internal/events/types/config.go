@@ -18,20 +18,13 @@ func init() {
 // activated (a config write, a per-entity edit, a revert, or a harness import).
 //
 // Every node fetches the payload from the DB and applies it. Deliberately thin:
-// the event is a nudge, and the authoritative path is the epoch pointer, so
-// losing one costs a poll interval rather than a revision.
-//
-// The tempting shape redeclares the envelope's own `source` field. It is NOT a
-// payload field here: the envelope owns that key and drops a colliding one, so
-// declaring it would produce a field that silently never arrives. Read the
-// envelope's Source instead.
-//
-// CreatedBy is the revision's AUTHOR, and CreatedByKind and OperatorID are the
-// two facts every other trail records beside one: what sort of author, in
-// iam.ActorKind's vocabulary (agent, human, operator, system), and the
-// credential the write was made through — empty on a write no credential
-// made. Additive, so a peer that knows neither round-trips both, and a kind
-// this build does not know is a value on the row rather than a refused event.
+// the event is a nudge and the authoritative path is the epoch pointer, so
+// losing one costs a poll interval, not a revision. There is no `source` payload
+// field: the envelope owns that key and drops a colliding one, so read the
+// envelope's Source. CreatedBy is the revision's AUTHOR, CreatedByKind its
+// iam.ActorKind (agent, human, operator, system) and OperatorID the credential
+// the write was made through, empty if none. Additive: a peer that knows
+// neither round-trips both, and an unknown kind is a value, not a refusal.
 type ConfigRevisionActivated struct {
 	RevisionID      string `json:"revision_id"`
 	RevisionSummary string `json:"revision_summary"`

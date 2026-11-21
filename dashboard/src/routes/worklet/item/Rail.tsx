@@ -59,7 +59,9 @@ import type { SetBy } from "~/app/frame/ObjectHeader.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
 import { SeatChip } from "~/components/common.tsx";
 import { AssignButton } from "~/components/writes.tsx";
-import { PriorityMark, StatusMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
+import { FlowTag, PriorityMark, StatusMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
+import { badgedFlow, flowBadgeText, flowWhy } from "~/lib/flow.ts";
+import { seatPath } from "~/lib/seats.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { andList } from "~/lib/words.ts";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
@@ -102,6 +104,8 @@ import type { ActResult } from "~/protocol/act.ts";
 import type {
   WorkFieldDef,
   WorkFieldValue,
+  WorkFlow,
+  WorkItem,
   WorkItemDetail,
   WorkLink,
   WorkProjectDetail,
@@ -211,6 +215,24 @@ function useItemFields(props: RailProps): Property[] {
       ),
       setBy: by("status"),
     },
+    // WHY IT IS OR IS NOT MOVING, as the engine reads it (ADR-0162).
+    ...(detail.flow
+      ? [
+          {
+            label: "Flow",
+            value: (
+              <FlowValue
+                flow={detail.flow}
+                now={now}
+                item={item}
+                address={address}
+                chrome={chrome}
+                stuckHours={project?.stuck_after_hours}
+              />
+            ),
+          },
+        ]
+      : []),
     {
       label: "Priority",
       // `none` IS A VALUE THE ENGINE MINTS, not an absence: a create
@@ -365,15 +387,10 @@ function useItemFields(props: RailProps): Property[] {
           },
         ]
       : []),
-    // WHY IT WAITS, as whoever set the wait said it: plain text, one line. Once
-    // its start has come the reason is what it waited for.
+    // WHY IT WAITS, as whoever set the wait said it: plain text, one line.
+    // Whether the start has come is the engine's flow, never this clock.
     ...(item.wait_reason
-      ? [
-          {
-            label: item.start_at && Date.parse(item.start_at) > now ? "Waits for" : "Waited for",
-            value: <span>{item.wait_reason}</span>,
-          },
-        ]
+      ? [{ label: waitLabel(detail.flow), value: <span>{item.wait_reason}</span> }]
       : []),
     {
       label: "Estimate",
@@ -385,12 +402,102 @@ function useItemFields(props: RailProps): Property[] {
   ];
 }
 
+/** The wait's words, labelled by the flow: still waited for, waited for, or neither known. */
+function waitLabel(flow: WorkFlow | null): string {
+  if (flow?.cause === "start") return "Waits for";
+  return flow?.state === "due" ? "Waited for" : "Wait reason";
+}
+
 /**
- * The four fields a person opens a task to read or change on a phone. Where the
+ * The rail's flow: its badge, or the ordinary case's words, why it holds, and
+ * where its cause is lifted.
+ */
+function FlowValue({
+  flow,
+  now,
+  item,
+  address,
+  chrome,
+  stuckHours,
+}: {
+  flow: WorkFlow;
+  now: number;
+  item: WorkItem;
+  address: string;
+  chrome: RowChrome;
+  stuckHours: number | undefined;
+}) {
+  const zone = useCompanyZone();
+  const words = {
+    zone,
+    assignee: item.assignee,
+    seatName: chrome.seatName,
+    seatKind: chrome.seatKind,
+    stuckHours,
+  };
+  const why = flow.cause === "start" ? "" : flowWhy(flow, words);
+  return (
+    <span className="task-flow">
+      {badgedFlow(flow) ? (
+        <FlowTag flow={flow} assignee={item.assignee} chrome={chrome} stuckHours={stuckHours} />
+      ) : (
+        <span>{flowBadgeText(flow, now, zone)}</span>
+      )}
+      {why && <span className="t-caption">{why}</span>}
+      <FlowRemedy flow={flow} item={item} address={address} chrome={chrome} />
+    </span>
+  );
+}
+
+/**
+ * Where a hold is lifted: the seat's own page for a stopped seat (its pause
+ * reason and Resume), the models for a model limit, and a hand-off for an
+ * item whose assignee left or that has none.
+ */
+function FlowRemedy({
+  flow,
+  item,
+  address,
+  chrome,
+}: {
+  flow: WorkFlow;
+  item: WorkItem;
+  address: string;
+  chrome: RowChrome;
+}) {
+  const handle = item.assignee ?? "";
+  const name = handle ? (chrome.seatName?.(handle) ?? handle) : "";
+  switch (flow.cause) {
+    case "paused":
+    case "unplaced":
+    case "budget":
+    case "parked_elsewhere":
+      return handle ? (
+        <a className="t-link" href={href(seatPath({ handle, name: "" }))}>
+          {`Open ${name}`}
+        </a>
+      ) : null;
+    case "limit":
+      return (
+        <a className="t-link" href={href(["settings", "models"])}>
+          Open the models
+        </a>
+      );
+    case "departed":
+    case "nobody":
+      return item.removed ? null : (
+        <AssignButton item={address} label={item.key} version={item.version} assignee={handle} />
+      );
+  }
+  return null;
+}
+
+/**
+ * The fields a person opens a task to read or change on a phone. Where the
  * rail cannot stand beside the column they lead it, under the title, so what
  * holds a task never depends on how long its feed has grown.
  */
-const LEAD_FIELDS: ReadonlySet<string> = new Set(["Status", "Priority", "Assignee", "Due"]);
+const LEAD_FIELDS: ReadonlySet<string> = new Set(["Status", "Flow", "Priority", "Assignee", "Due"]);
 
 /** The fields that lead the column where the rail has fallen below it. */
 export function ItemLead(props: RailProps) {
@@ -1124,7 +1231,7 @@ function EntryLinks({ detail }: { detail: WorkItemDetail }) {
   );
   if (viewer.loading) return null;
   if (!holds(viewer.grants, ATLAS)) {
-    const count = detail.entries_withheld ?? ids.length;
+    const count = detail.entries_withheld;
     if (count === 0) return null;
     return (
       <section className="task-rail-section" aria-label="Atlas entries">

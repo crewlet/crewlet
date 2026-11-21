@@ -19,16 +19,14 @@ import (
 // heartbeatLoop renews this node's leases, and is the duty the watchdog
 // watches.
 //
-// It beats far faster than it renews. The beat is what proves the goroutine
-// is turning — a pass hung inside a hook or deadlocked on a lock freezes the
-// stamp, and past the lease TTL that means this node's seats have moved to a
-// peer while its queue client is still attached and still holding their
-// mail. See [Watchdog].
+// It beats far faster than it renews. The beat proves the goroutine is
+// turning: a pass hung in a hook or on a lock freezes the stamp, and past the
+// lease TTL this node's seats have moved to a peer while its queue client
+// still holds their mail. See [Watchdog].
 //
-// TWO TICKERS, the renew pass on one of its own ([Host.renewPeriod]) rather
-// than every so many beats: a ticker drops the ticks that come due while its
-// receiver is busy, so counting the beats the loop RECEIVED delayed the pass
-// after a long one by every beat it dropped — see renewPeriod.
+// TWO TICKERS, the renew pass on one of its own ([Host.renewPeriod]): a ticker
+// drops ticks that come due while its receiver is busy, so counting received
+// beats would delay the pass after a long one.
 func (h *Host) heartbeatLoop(ctx context.Context) {
 	beats := time.NewTicker(h.beatInterval())
 	defer beats.Stop()
@@ -52,64 +50,22 @@ func (h *Host) heartbeatLoop(ctx context.Context) {
 // renewPeriod is how often the heartbeat loop renews: ONE BEAT INSIDE THE
 // HEARTBEAT.
 //
-// A FUNCTION rather than an expression inside the loop, for the reason this
-// tree gives everywhere the arithmetic is the decision: a rule exercised only
-// by starting a goroutine and watching a clock is a rule nobody re-measures.
-// [TestAHealthyNodeNeverRefusesItsOwnSeat] calls it directly, over a range of
-// TTLs, and [TestAHealthyNodeAdmitsItsSeatThroughEveryRenew] runs the loop on
-// a bubble's clock around it.
-//
-// # The heartbeat is a deadline for a renew to LAND
-//
 // [Host.MayStart] refuses a seat whose last renew is more than one heartbeat
-// old, so one heartbeat after a renew is when the next one must have been
-// ANSWERED. The stamp it leaves is the instant it was SENT — [Host.Heartbeat]
-// reads the clock before the store call, the earliest instant the store can
-// have counted the lease's new deadline from — and it is recorded only once
-// the store says the renew succeeded, since one still in flight may yet fail. So a pass run
-// every heartbeat sends each renew at the very instant the proof it replaces
-// stops admitting, and the seat refuses its own work for the renew's whole
-// round trip: in EVERY cycle, at every TTL whose beat divides its heartbeat —
-// the shipped 45 s, 30 s, 15 s and 90 s among them, five refusals in five
-// renews at each. internal/node defers a delivery landing there and quiesces
-// the seat's consumer until that renew lands. Sent a beat early, the renew has
-// the beat to land in.
-//
-// Neither of the other two quantities is the wrong one. A stamp taken when the
-// answer arrives would credit the node with the round trip it never held,
-// which [Host.Provable] and the unreachable-store grace measure from too; and
-// MayStart's window is what certifies every turn it admits owned for at least
-// ttl - heartbeat, so widening it by the renew's duration would admit on a
-// proof older than that promise. The schedule was the quantity read against
-// the wrong end of the window.
-//
-// A BEAT because it is this loop's resolution and the lateness the watchdog
-// already reads as behind ([Watchdog.Lag]): a renew that lands more than a
-// beat after its schedule is a loop that has fallen behind — a store that
-// slowed between passes, a pass longer than a period — which is what the
-// deferral and the resume on the next successful renew are for
-// ([Host.NoteDeliveryDeferred]). A beat is a second from 5 s up, against a
-// store round trip measured in milliseconds; below that [Host.beatInterval]
-// keeps it to half the heartbeat, so the pass never runs more than twice a
-// heartbeat.
-//
-// # On a ticker of its own
-//
-// It used to run every so many beats, counted as the loop received them. A
-// ticker drops the ticks that come due while its receiver is busy, so a pass
-// longer than two beats delayed the next pass by every beat it dropped — and a
-// pass is that long without anything being wrong, because the status hook it
-// renews presence with may spend a fifth of the heartbeat
-// ([StatusBudgetRatio]): three beats at the shipped TTL, and at 90 s a
-// five-second hook ran the renews 34 s apart against a 30 s window. A ticker of
-// its own keeps the schedule it started with whatever a pass costs, short of a
-// pass longer than the period itself, which is lateness.
-//
-// Shorter than the heartbeat is safe in the direction that matters: it renews
-// MORE often than the ratio needs, never less, so no lease is ever closer to
-// lapsing than it was. What it costs is a renew per seat every fourteen
-// seconds rather than fifteen at the shipped TTL.
+// old. The stamp is the instant a renew was SENT ([Host.Heartbeat] reads the
+// clock before the store call), recorded once it succeeded, so a pass every
+// heartbeat would send each renew just as the proof it replaces stops
+// admitting, and the seat would refuse its own work for the round trip
+// (internal/node defers the delivery). Sent a beat early, the renew has the
+// beat to land in. A function so [TestAHealthyNodeNeverRefusesItsOwnSeat]
+// calls it over a range of TTLs.
 func (h *Host) renewPeriod() time.Duration {
+	// A BEAT is the watchdog's resolution of lateness ([Watchdog.Lag]); a renew
+	// landing later is what [Host.NoteDeliveryDeferred] and the resume are for.
+	// Stamping at the answer would credit a round trip the node never held, and
+	// widening MayStart's window would admit on a proof older than its
+	// ttl - heartbeat promise. Shorter than the heartbeat renews MORE often,
+	// never less.
+	//
 	// Positive whatever a host was built with, because a ticker panics on
 	// anything else: beatInterval is at most half the heartbeat, so this is
 	// at least a beat for every heartbeat of two nanoseconds or more.
@@ -118,18 +74,15 @@ func (h *Host) renewPeriod() time.Duration {
 
 // beatInterval is how often the heartbeat goroutine proves it is turning.
 //
-// A CEILING scaled to the threshold the watchdog fires at, which is the
-// lease TTL. Five beats must fit inside it so a healthy pass can never look
-// stalled — at a tight TTL, a beat sized for production would have a
-// perfectly healthy node report itself a whole threshold behind and shoot
-// itself. Invisible at the shipped values (45 s vs 1 s) and lethal to anyone
-// who lowers the TTL, so it is enforced rather than documented.
+// A CEILING scaled to the lease TTL, the threshold the watchdog fires at: five
+// beats must fit inside it so a healthy pass never looks stalled and a node
+// does not shoot itself at a tight TTL. Invisible at the shipped values (45 s
+// vs 1 s), so it is enforced rather than documented.
 //
 // And never more than HALF the heartbeat: the renew pass runs a beat inside
-// the heartbeat ([Host.renewPeriod]), so a beat longer than half of it would
-// leave the pass less than a beat after the one before. That binds only below
-// a 6 s TTL, where the ceiling is a fifth of the TTL and the heartbeat a
-// third, and where it also keeps the beat from lagging the work it proves.
+// the heartbeat ([Host.renewPeriod]), so a longer beat would leave the pass
+// less than a beat after the one before. That binds only below a 6 s TTL,
+// where it also keeps the beat from lagging the work it proves.
 func (h *Host) beatInterval() time.Duration {
 	d := beatCeiling(h.ttl)
 	if half := h.heartbeat / 2; half < d {
@@ -155,28 +108,15 @@ type heartbeatTarget struct {
 
 // renewConcurrency is how many of a pass's renewals are in flight at once.
 //
-// A pass renewed its seats one after another, so its length was the seat count
-// times a renewal's round trips — two, a read and a write, before a renewal
-// was one: across a link whose round trip is a hundred milliseconds, twenty
-// seats filled the floor TTL's four-second renew period and seventy-five
-// outran the fifteen-second TTL itself, so their leases lapsed between
-// renewals. Sent together, a pass takes the round trips of its batches.
+// Renewed one at a time, seventy-five seats over a 100 ms link outran the
+// fifteen-second TTL; sent together, a pass takes ⌈N/64⌉ round trips.
 //
-// 64 IS ABOVE WHAT THE SLOWEST LINK THE ENGINE ALLOWS CAN CARRY AT ONCE, so on
-// such a link the link sets the pace and never this bound: at the object
-// store's floor, thirty seconds a mebibyte (34,952.5 bytes a second), and a
-// satellite's 0.6 s round trip, the link holds 0.6 × 34,952.5 ≈ 20,972 bytes
-// in flight, about 36 renewals of some 573 bytes each. On a fast link a pass
-// of N seats is ⌈N/64⌉ round trips: a hundred seats at 100 ms, 0.2 s.
-//
-// AND FAR BELOW WHAT THAT LINK'S REQUEST TERM COULD CARRY: a batch's last
-// renewal waits behind the other 63's bytes, 63 × 573 ≈ 36 KB, about 1.03 s at
-// the floor, where what a request may wait behind and still be answered inside
-// its term is its term less a read's (jsapi.RequestTerm − jsprovision.ReadTerm,
-// 4 s) — room for some 244 renewals' bytes. So the bound is never what makes a
-// renewal late on a link the engine allows, and it is a bound: a node holding
-// thousands of seats holds 64 goroutines and 64 requests on its connection for
-// its pass, not thousands.
+// 64 IS ABOVE WHAT THE SLOWEST LINK THE ENGINE ALLOWS CAN CARRY AT ONCE, so the
+// link sets the pace, never this bound: at the object store's floor (34,952.5
+// bytes a second) and a 0.6 s round trip it holds about 36 renewals of some
+// 573 bytes. It is FAR BELOW WHAT THE REQUEST TERM COULD CARRY: a batch's last
+// renewal waits behind 63 × 573 ≈ 36 KB, about 1.03 s at the floor, against
+// the 4 s room (jsapi.RequestTerm − jsprovision.ReadTerm).
 const renewConcurrency = 64
 
 // renewal is one seat's renewal as the store answered it.
@@ -189,30 +129,16 @@ type renewal struct {
 
 // Heartbeat renews every held lease and returns the seats that were LOST.
 //
-// A lost seat is dropped immediately and locally: its lease is gone and a
-// peer may already be running it, so anything this node does for it from
-// here is a zombie's work. Fencing catches the writes; this is what stops
-// the rest.
+// A lost seat is dropped immediately and locally: a peer may already be
+// running it, so anything this node does for it is a zombie's work. Fencing
+// catches the writes; this stops the rest.
 //
-// THE RENEWALS GO TOGETHER, up to [renewConcurrency] in flight, and the
-// presence's claim beside them, so a pass over N seats is ⌈N/64⌉ round trips
-// rather than N. Each is still stamped at its own send ([Host.renewAll]), and
-// their answers are still applied one at a time, in the order
-// [Host.heartbeatTargets] gives, each under the locks it always took — so what
-// a pass decides about a seat does not depend on which of its renewals the
-// store happened to answer first.
-//
-// THE BEAT AS EACH ANSWER IS APPLIED, as well as as each renewal is asked and
-// answered: applying one can run a seat's release hook — a lost seat's
-// teardown, an undead seat's retried one — and a hook may wait out its own
-// bound (the engine's lifecycle publish waits five seconds on a stream that
-// will not acknowledge). The renewals answer within their batches' round
-// trips, long before the answers are all applied, so stamped only by them, a
-// pass that dropped ten seats at the default TTL read as a wedge and the
-// watchdog ended the process. Stamped here, the
-// beat is never older than one renewal or one application, as when the pass
-// renewed and applied one seat at a time; and a renewal that hangs still
-// freezes it, because this loop waits on each answer in order.
+// The renewals go together, up to [renewConcurrency] in flight, each stamped
+// at its own send ([Host.renewAll]); the answers are applied one at a time in
+// the order [Host.heartbeatTargets] gives, so a decision about a seat does not
+// depend on which answered first. THE BEAT IS STAMPED AS EACH ANSWER IS
+// APPLIED: a release hook can wait out its own bound (five seconds), and a
+// pass that dropped ten seats at the default TTL read as a wedge otherwise.
 func (h *Host) Heartbeat(ctx context.Context) []string {
 	h.beatMu.Lock()
 	defer h.beatMu.Unlock()
@@ -350,30 +276,17 @@ func (h *Host) Heartbeat(ctx context.Context) []string {
 }
 
 // renewAll asks the store to renew every target, at most [renewConcurrency] at
-// once, and hands back one channel per target, in the targets' order, on
-// which that target's answer arrives; wait returns once every renewal has
-// answered and every goroutine it started has ended.
+// once, and hands back one answer channel per target, in the targets' order;
+// wait returns once every renewal has answered and its goroutines have ended.
 //
-// THE CLOCK IS READ PER SEAT, AS IT IS SENT, never once for the pass: the
-// stamp a success records is the instant that renewal was asked, the earliest
-// the store can have counted its new deadline from, so a seat sent in a later
-// batch is not credited with a renewal earlier than it happened — which would
-// narrow its grace and its admission window as the seat count grows.
-//
-// THE BEAT AS EACH RENEWAL IS ASKED AND AS EACH ANSWERS, not only once the
-// whole pass has answered, because the pass is turning for as long as its
-// renewals return. A renewal the store leaves unanswered is held to its read's
-// whole bound — five seconds, where nothing set a deadline — so a pass over
-// many seats on a node that cannot reach its store spends that bound per
-// batch, doing exactly what an unreachable store asks of it: keeping each seat
-// until its own lease's TTL, then dropping it. Stamped only at the pass's end,
-// that read as a wedge once the bounds summed past the TTL, and the watchdog
-// ended the process. A renewal that hangs still freezes the beat, once the
-// renewals beside it have answered, because [Host.Heartbeat] waits on each
-// answer in order: that is the wedge the watchdog is for.
-//
-// A renewal that panics is answered as unknown, logged with its stack, so it
-// costs its own seat a renewal and never the process or the rest of the pass.
+// THE CLOCK IS READ PER SEAT, AS IT IS SENT, never once for the pass, so a
+// later batch's seat is not credited with an earlier renewal. THE BEAT IS
+// STAMPED AS EACH RENEWAL IS ASKED AND ANSWERS: an unanswered one is held to
+// its read's whole bound (five seconds), so a pass on a node that cannot
+// reach its store spends that bound per batch, and stamped only at the end it
+// read as a wedge once the bounds summed past the TTL. A renewal that hangs
+// still freezes the beat, since [Host.Heartbeat] waits on each answer in
+// order. A renewal that panics is answered as unknown, costing its own seat.
 func (h *Host) renewAll(ctx context.Context, targets []heartbeatTarget) ([]chan renewal, func()) {
 	answers := make([]chan renewal, len(targets))
 	for i := range answers {
@@ -501,25 +414,17 @@ func (h *Host) dropLostSeat(ctx context.Context, t heartbeatTarget) bool {
 	}
 	delete(h.held, t.handle)
 	delete(h.unprovenAdmission, t.handle)
-	// Stand back from this seat, the same negative stickiness a failed
-	// acquire gets and for the same reason: this node has just demonstrated
-	// it cannot hold this seat, so a peer should get the next attempt.
+	// Stand back from this seat, the negative stickiness a failed acquire
+	// gets: this node has just shown it cannot hold it, so a peer should get
+	// the next attempt. Without it a node whose renews fail while its claims
+	// succeed (a degraded store, as a timeout under load looks) re-takes the
+	// seat on its next sweep and loses it a TTL on, an unbroken claim/lose
+	// cycle that respawns the seat's runtime each time and abandons its
+	// in-flight work while a healthy peer never wins a race.
 	//
-	// Without it a node whose renews fail while its claims succeed — a
-	// store degraded rather than down, which is what a timeout under load
-	// looks like — re-takes the seat on its next sweep, roughly a hundred
-	// milliseconds later, and loses it again one TTL on. Measured in the
-	// fleet suite: an unbroken claim/lose cycle for as long as the
-	// degradation lasts, tearing down and respawning that seat's whole
-	// runtime every TTL and abandoning its in-flight work each time, while
-	// a healthy peer that could serve it never wins a race. The seat is
-	// nominally served the entire time.
-	//
-	// One backoff is AcquireBackoff, which defaults to the lease TTL —
-	// exactly long enough for a peer to claim and prove it can renew. The
-	// cost when there is no peer is one TTL of darkness on a seat this node
-	// could not prove it owned anyway; a blip shorter than the TTL never
-	// reaches here, because an unreachable store KEEPS the seat.
+	// One backoff is AcquireBackoff, defaulting to the lease TTL: long enough
+	// for a peer to claim and prove it can renew. A blip shorter than the TTL
+	// never reaches here, because an unreachable store KEEPS the seat.
 	h.acquireBackoffs[t.handle] = h.now().Add(h.acquireBackoff)
 	h.mu.Unlock()
 

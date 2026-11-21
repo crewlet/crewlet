@@ -16,48 +16,26 @@ import (
 
 // MCP is how a harness is handed one run's tools.
 //
-// A phase's tools reach its harness as ONE MCP server, named `crewlet`, which the
-// harness starts as a stdio command — `crewlet mcp-relay <socket>`, a relay into a
-// unix socket this engine serves for that one run (internal/toolsession) — and
-// calls natively, in its own loop. What differs from harness to harness is only how it
-// is TOLD about that server and its limits, and every one of those is here:
-// arguments, a configuration file written into the call's working directory,
-// environment, the allowlist that lets the model call the server's tools
-// without a person to approve them, and the harness's own per-call timeout.
+// A phase's tools reach its harness as ONE MCP server, `crewlet`, started as
+// `crewlet mcp-relay <socket>` into a unix socket this engine serves for that
+// run (internal/toolsession). Harnesses differ only in how they are TOLD of it.
 //
-// NIL ON A PROFILE THAT CANNOT BE HANDED TOOLS. Such an entry still answers a
-// text function — a judge, a classifier, a summary — and a seat's phase on it
-// is refused naming this field, rather than run with no tools.
+// NIL ON A PROFILE THAT CANNOT BE HANDED TOOLS: it still answers text functions;
+// a seat's phase on it is refused naming this field.
 //
-// # Placeholders
-//
-// Every string in args, allow_args, complete_args, usage_args, seed content,
-// env values and the serve lifecycle's arguments may carry these, substituted
-// per run:
-//
-//	{relay_command}         the relay's executable, as a path
-//	{relay_command_json}    the same as a JSON string, quotes included
-//	{relay_args_json}       the relay's arguments as a JSON array
-//	{relay_argv_json}       the executable and its arguments as one JSON array
-//	{socket}                the run's socket path
-//	{tool_timeout_seconds}  ToolTimeoutSeconds
-//	{tool_timeout_ms}       the same in milliseconds
-//	{work}                  the call's working directory, where seeds are written
-//	{<as>}                  a serve lifecycle's ready value ([Serve.Ready]),
-//	                        everywhere but seeds and serve.args
-//
-// The JSON forms are encoded without HTML escaping, so each is also a valid TOML
-// value — a string or an array — for a harness configured in TOML.
-//
-// PER RUN, NEVER PER SEAT. The socket is the run's own and goes when the run
-// ends, so it may be written only where the run alone reads it: argv, the
-// environment, and a file in the call's own working directory. A seed in the
-// seat's home is shared by every call of the seat at once and seeded once per
-// generation, so it would hand one run another's socket — which is why a seed
-// here is written into the working directory and nowhere else.
+// PER RUN, NEVER PER SEAT: the socket dies with the run, so it goes only in
+// argv, env or the call's working directory; a seat-home seed is shared by
+// concurrent calls and would hand one run another's socket.
 type MCP struct {
 	// Args are added to the argv of a run with tools, after the model and
 	// session arguments and before the system prompt and the prompt.
+	//
+	// Strings in args, allow_args, complete_args, usage_args, seed content, env
+	// values and serve arguments take per-run placeholders: {relay_command},
+	// {relay_command_json}, {relay_args_json}, {relay_argv_json}, {socket},
+	// {tool_timeout_seconds}, {tool_timeout_ms}, {work} (where seeds are written)
+	// and {<as>} (a serve ready value, [Serve.Ready]; not in seeds or serve.args).
+	// JSON forms skip HTML escaping, so each is also a valid TOML value.
 	Args []string `yaml:"args,omitempty"`
 
 	// AllowArgs are the harness's allowlist for the server's tools, added after
@@ -784,53 +762,18 @@ const (
 // Valid reports whether s is a source this package knows.
 func (s RequestSource) Valid() bool { return s == SourceStdout || s == SourceFile }
 
-// Requests is how a harness's own record of a run shows each MODEL REQUEST it made
-// — its prose, the calls it asked for, which model answered, why it stopped
-// and what it cost — read while the run goes.
+// Requests is how a harness's own record of a run shows each MODEL REQUEST it
+// made, read while the run goes. The engine sees only the harness's calls to its
+// server, so the round budget is charged as each request's usage is read. No such
+// record is not refused: the whole run is one round.
 //
-// The engine sees every call the harness makes to its server and nothing else: not
-// the requests between them, not their prose, not what each cost. A round of a
-// phase is one model request, the round budget counts them, and the budget is
-// charged as each one's usage is read, so a phase is gated while it runs
-// rather than once at its end. A harness whose record shows no requests — this
-// block absent — is not refused: the whole run counts as one round, and its
-// cost is charged when it ends.
-//
-// # How the record is read
-//
-// Each line of the record is one JSON event. Every rule in Events whose Match
-// holds is applied to it, in order:
-//
-//   - opens begins a new request; an event with an id belongs to the request
-//     of that id, opened by it if none is; any other event belongs to the
-//     request open now;
-//   - closes ends the request open now, once the rest of the rule is applied.
-//     A record whose rules close requests marks where each one ENDS rather
-//     than where it begins — Codex's rollout ends a response with its usage,
-//     Qwen Code's stream ends one with the results of its calls — so in such a
-//     record an event that reads into the request open now, while none is,
-//     begins the next one;
-//   - id, model, stop and usage set the request's (a usage figure takes the
-//     LAST value read for that request, so a stream's running count works);
-//   - text appends to the request's prose and delta streams text as it is
-//     written; call reads one call; blocks reads an array of content blocks,
-//     each by the first of its rules that matches;
-//   - whole says the event carries its request WHOLE, as it stands now, so
-//     what it reads replaces the prose and calls earlier events of the request
-//     read rather than adding to them — for a harness that writes a response's
-//     entry again as it grows (Gemini CLI, which adds a response's calls to its
-//     entry once they have run);
-//   - tools is the list of tools the harness offers its model, which the doctor
-//     reports.
-//
-// # When a request is told to the host
-//
-// As soon as the record shows it saying something — its prose or a call — so
-// the host has it before the calls it asked for arrive, and places each call
-// on the request that asked for it. A record that shows a request's calls only
-// once they have RUN (LateCalls) is told one request at a time once the record
-// has moved past it instead: told as read, the host would hold a call it is
-// about to run for a request it has already been told asked for none.
+// Every Events rule whose Match holds applies to each line, in order: opens
+// begins a request (an id joins the request of that id), closes ends the one
+// open, so a closing record marks where requests END (Codex, Qwen Code) and an
+// event read while none is open begins the next. Usage takes the LAST value
+// read; whole replaces prose and calls (Gemini CLI). The host is told a request
+// once it shows prose or a call, but with LateCalls only once the record has
+// moved past it, or it would hold a call about to run for a request told to have none.
 type Requests struct {
 	// Source is stdout or file.
 	Source RequestSource `yaml:"source,omitempty"`

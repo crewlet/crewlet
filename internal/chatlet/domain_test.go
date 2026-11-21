@@ -97,18 +97,15 @@ func TestEveryRecordThisDomainPublishesLandsInsideItsOwnStream(t *testing.T) {
 
 // THE FRAMEWORK'S VIEW OF A RECORD CARRIES BOTH HALVES OF THE GATE QUESTION.
 //
-// [chatlet.RecordEnvelope.InstallsGate] is the rule and it has TWO conditions —
-// an eviction by its KIND, an erase and a prune by their OP on an ordinary
-// channel subject — but the framework never sees a chat envelope. It sees the
-// [statelog.Envelope] this domain translated, and asks the domain back. So the
-// gate rests on that translation carrying the op as well as the kind, and a
-// translation that dropped one would be silent: an unreadable erase would be
-// DEFERRED rather than stopping the applier, this node would go on serving
-// what every other node destroyed, and there is no inverse that repairs it.
+// [chatlet.RecordEnvelope.InstallsGate] has TWO conditions (an eviction by its
+// KIND, an erase and a prune by their OP), but the framework sees only the
+// [statelog.Envelope] this domain translated. A translation dropping the op or
+// the kind is silent: an unreadable erase would be DEFERRED, and this node
+// would go on serving what every other node destroyed.
 //
-// It runs over records as they are actually published — encoded, then read
-// back through [chatlet.Domain.Envelope] — because a hand-built envelope would
-// assert the translation against itself.
+// It runs over records as published, encoded then read back through
+// [chatlet.Domain.Envelope]: a hand-built envelope would assert the
+// translation against itself.
 func TestTheFrameworksViewOfARecordCarriesBothHalvesOfTheGateQuestion(t *testing.T) {
 	t.Parallel()
 	d := chatlet.Domain{}

@@ -13,50 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/textindex"
 )
 
-// A SEAT'S SEARCH OF ITS OWN SESSIONS, by the words of their rows.
-//
-// A seat's run finds an earlier session of its own by what its turn was asked,
-// the conversation it served, and how it ended — the reviewer's account of
-// what landed, what blocked a round, why it was stopped, what failed. Those are
-// the row's words, and the row is in the replicated estate, so the search is
-// one read on the node that holds the rows: no session's object is opened, and
-// no row is shipped to be filtered somewhere else. A transcript is searched one
-// session at a time, by a read of that session (internal/executorread); every
-// transcript at once would be tens of objects fetched, unsealed and decoded per
-// call.
-//
-// MATCHED AS EVERY OTHER LEXICAL SEARCH OF THE ENGINE MATCHES: the query's terms
-// as internal/textindex's analyzer makes them — case folded, split on anything
-// that is not a letter or a digit, terms of two characters or more, no stemming
-// — and a row matches when its words hold every term, each as a whole term. So
-// a word typed is a word searched, and a term found only as part of a longer
-// one finds nothing, which is also what keeps a hit from confirming a
-// credential's prefix a letter at a time.
-//
-// MATCHED ON WHAT A READER IS SHOWN: the row's words as its one redaction
-// leaves them ([Session.Redacted]), and of those only the row's own — never a
-// word of a marker the redaction wrote (redact.OwnWords) — so a term found
-// only inside a credential the redaction takes out is no hit, and no hit says
-// a row holds what its reader is never shown: read with a marker's words, a
-// password that was the very word its marker spells was found. The row's
-// words as the log holds them are asked one thing first, which costs no
-// redaction: whether they could hold every term at all, each inside one of
-// them (textindex.Reading.MayHold), which no row whose redaction shows every
-// term fails, so it decides nothing — only a row it lets through is redacted
-// and matched. Asked whether they held every term WHOLE instead, it decided:
-// a word a redaction's marker ends, `deploy` before a token the redaction now
-// takes out, is a piece of a longer word as the row holds it, so the row was
-// passed over unless a credential the redaction took out held the word whole,
-// and a hit then said what that credential held. A row this build wrote holds its
-// words redacted already (executorkeep.Excerpt); one a rule added since
-// reaches is what the redaction here is for.
-//
-// NEWEST BEGUN FIRST, UNRANKED, and paged as a seat's sessions are paged, by
-// where each row began: a seat's own history is read by recency, and a ranked
-// page could carry no cursor a scan goes on from. A page examines at most
-// [SearchScanRows] rows and says how many it did and whether they reached the
-// seat's oldest, so a search that stopped short is never read as one that
-// found nothing.
+// A SEAT'S SEARCH OF ITS OWN SESSIONS (package doc, "A seat searches its own
+// rows by their words"); not of transcripts, since every one at once is tens
+// of objects fetched, unsealed and decoded per call. A term matches only
+// WHOLE, so no hit confirms a credential's prefix a letter at a time, and only
+// in the row's own words as its redaction shows them ([Session.Redacted],
+// redact.OwnWords), never in a redacted credential or a marker. The raw words
+// are first asked only whether they MAY hold every term
+// (textindex.Reading.MayHold), which no shown row fails; asked for whole terms
+// instead, they would miss a word a marker now ends, `deploy` before a token
+// (TestTwoRowsThatRedactAlikeAreSearchedAlike). Rows are redacted as written
+// (executorkeep.Excerpt); this redaction catches rules added since. Unranked,
+// newest begun first: a ranked page could carry no cursor a scan goes on from.
 
 // SearchField is one field of a session's row a search matches, by the name a
 // reader of a hit is told it by.
@@ -71,8 +39,7 @@ const (
 	SearchConversation SearchField = "conversation"
 
 	// SearchCompletedWork is what the turn's reviewer said landed, the first
-	// of the four accounts of how the turn ended (internal/executorkeep's
-	// Ending) a search matches.
+	// of the four fields of internal/executorkeep's Ending a search matches.
 	SearchCompletedWork SearchField = "completed_work"
 
 	// SearchBlockedOn is what the turn's executor said blocked it.
@@ -119,10 +86,9 @@ type SearchHit struct {
 	// [SearchFields]' order, as the row's redaction shows its own words.
 	Matched []SearchField
 
-	// Snippet is the window of the matched field that holds the most of the
-	// query's terms — the first of them, where several hold as many — around
-	// the earliest term it shows of its own, never a marker's, redacted: at
-	// most [SearchSnippetBytes], marked where it was cut.
+	// Snippet is a redacted window of the first field holding the most terms,
+	// around its earliest term of its own, never a marker's: at most
+	// [SearchSnippetBytes], marked where it was cut.
 	Snippet string `untrusted:"fence"`
 }
 
@@ -137,8 +103,8 @@ type SearchPage struct {
 
 	// Scanned is how many rows the page examined, at most
 	// [SearchScanRows], and Exhausted whether they reached the seat's oldest
-	// row: a page that is not exhausted searched those rows and no older
-	// one, which its reader is told rather than that nothing older matches.
+	// row, so a page that stopped short is never read as nothing older
+	// matching.
 	Scanned   int
 	Exhausted bool
 
@@ -151,13 +117,10 @@ type SearchPage struct {
 
 // Search is one page of a seat's sessions whose words hold every term of
 // ask's query, the latest begun first, after ask's cursor, at the level fresh
-// asks for — in one read of the seat's rows, examining at most
-// [SearchScanRows] of them.
+// asks for, in one read examining at most [SearchScanRows] rows.
 //
-// THE SEAT'S OWN PAGE STATEMENT, read past the page by one row, so a page
-// that stops — its hits full, or its rows examined to the bound — knows
-// whether a row older than the last it examined exists, and says it reached
-// the seat's oldest only where none does.
+// It reads the seat's page statement one row past the page, so a page that
+// stops knows whether an older row exists.
 func (r *Reader) Search(ctx context.Context, handle string, ask SessionSearch,
 	fresh statelog.Freshness) (SearchPage, error) {
 
@@ -256,17 +219,10 @@ func joined(texts []searchedText) string {
 }
 
 // searchHit is s as a search for terms finds it, and false where the words a
-// reader is shown of it do not hold every one of them: its words as the log
-// holds them are asked first whether they could hold every term at all, and
-// only a row they could is redacted and matched, on its own words alone — a
-// term only a credential the redaction takes out held, and one only a marker
-// it wrote spells, is no hit.
-//
-// THE FIELDS JOINED, as the log holds them and as their redaction shows them:
-// a field's redaction copies the field's words as they stand around the
-// markers it writes, and the line break joining two fields is no letter and no
-// digit, so every word of a stretch of the redacted fields is a piece of a word
-// of the fields themselves — what textindex.Reading.MayHold asks of them.
+// reader is shown of it do not hold every term of their own (see atop this
+// file). MayHold may be asked of the joined raw fields because a redaction
+// keeps the words around its markers and the joining line break is no letter
+// or digit, so every word of the redacted fields is a piece of a raw word.
 func searchHit(s Session, terms []string) (SearchHit, bool) {
 	if !textindex.Plain.MayHold(joined(searchedTexts(s)), terms) {
 		return SearchHit{}, false
@@ -288,9 +244,8 @@ func searchHit(s Session, terms []string) (SearchHit, bool) {
 		}
 	}
 	// CENTRED ON THE FIRST TERM THE FIELD SHOWS OF ITS OWN, as the hit was
-	// decided: on the first anywhere, the snippet showed the same letters in a
-	// marker before it — `token` in `[REDACTED:github-token]` — and in a field
-	// longer than the snippet, never the word the row was found by.
+	// decided, not on the same letters in a marker before it (`token` in
+	// `[REDACTED:github-token]`), which in a long field misses the found word.
 	hit.Snippet = textindex.SnippetFrom(best, SearchSnippetBytes, func(folded string) int {
 		at, _ := textindex.Plain.FindIn(redact.OwnWords(folded), terms)
 		return at

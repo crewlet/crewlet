@@ -67,23 +67,30 @@ type Call struct {
 	// arguments are not known, never as the tool called with none.
 	Unfinished bool `json:"Unfinished,omitempty"`
 
-	// ArgsUnread is a call made with arguments in text that could not be
-	// read: its record holds them as text that does not read back
-	// (internal/tools' ReadArgs answers nil for it), a record something
-	// truncated or damaged; or the bridge could not parse what the model
-	// wrote and answered the call unrun, recording no text
-	// (internal/sandbox's BridgeCall.ArgsUnparsed). Args are nil on it, as
-	// they are on a call its record says was made with none (no text at
-	// all), so this says which of the two it is. Its line says its arguments
-	// could not be read whatever Args holds ([FormatCalls]), and every reader
-	// that compares or counts calls by their arguments reads it as a call of
-	// its tool whose arguments are not known: drawn or counted as the tool
-	// called with none, it is a different call.
+	// ArgsUnread is a call whose arguments text could not be read: the record
+	// holds text that does not read back (internal/tools' ReadArgs answers
+	// nil), or the bridge could not parse what the model wrote and answered
+	// the call unrun (internal/sandbox's BridgeCall.ArgsUnparsed). Args are
+	// nil, as on a call made with none, so this says which it is. Every
+	// reader that compares or counts calls by arguments reads it as a call of
+	// its tool with unknown arguments, never as the tool called with none
+	// ([FormatCalls] says so in its line).
 	//
-	// ADDITIVE ON THE WIRE: a build before it drops the key where a parked
-	// turn's closed rounds carry it, and draws and counts the call as it
-	// always did, as one with no arguments.
+	// ADDITIVE ON THE WIRE: an older build drops the key and counts the call
+	// as one with no arguments.
 	ArgsUnread bool `json:"ArgsUnread,omitempty"`
+
+	// Late is a call of an earlier run of the work: an executor run's log took
+	// it after the job that made it was replaced (internal/sandbox's
+	// BridgeCall.Late). The round's record carries it, so the round's reviewer
+	// reads the call's line ending in words that say an earlier run made it
+	// (internal/agent/prompts' ReviewLateCall, a [FormatOptions.Notes] note; no
+	// line this package draws marks it), while the submission's citations and
+	// every delivery check count it as the turn's, as they count a closed
+	// round's: what one of them refuses another must not accept
+	// (internal/agent/turn's Record). ADDITIVE ON THE WIRE, as ArgsUnread is:
+	// a build before it drops the key and reads the call unmarked.
+	Late bool `json:"Late,omitempty"`
 }
 
 // FormatOptions controls how a run of calls renders.
@@ -114,20 +121,21 @@ type FormatOptions struct {
 	// A piece missing from it renders whole.
 	Fitted Fitted
 
+	// OneLine draws every line break in a tool's name or its error as a
+	// space ([CallLine]): a brief's lists and an item's call, where a line a
+	// tool's text starts could read as an entry of its own. Off, they are
+	// drawn as the tool handed them, as Review's evidence log reads them.
+	OneLine bool
+
 	// Notes is words a call's line ends with, per group of a
-	// [FormatCallGroups] render ([FormatCalls]: its one group) and per call
-	// of the group BY ITS PLACE IN THE GROUP: "" for none, and a group or a
-	// place past the end of it for none at all, so nil renders every line as
-	// it was. The caller's own words, rendered as given: never a piece, never
-	// fitted ([CallPieces] does not read them), and never counted against a
-	// budget. A call the render leaves out carries none, its note printed
-	// nowhere, since a note names the call whose line it ends.
+	// [FormatCallGroups] render and per call BY ITS PLACE IN THE GROUP: ""
+	// or a place past the end for none, so nil renders every line as it was.
+	// Rendered as given: never a piece, fitted or counted against a budget.
+	// A call the render leaves out prints no note.
 	//
-	// BY PLACE, NEVER BY SHOWN POSITION: a caller knows which call it means
-	// by where it stands in the group it handed over, and the render leaves
-	// out skipped names and reads past the cap from anywhere in a group, so
-	// the k-th line printed is not the group's k-th call. [ShownIndices] is
-	// the walk by place, for a caller that must know which places are shown.
+	// BY PLACE, NEVER BY SHOWN POSITION: skipped names and reads past the cap
+	// are left out from anywhere in a group, so the k-th line printed is not
+	// the group's k-th call. [ShownIndices] is the walk by place.
 	Notes [][]string
 }
 
@@ -146,7 +154,7 @@ type FormatOptions struct {
 func Format(skip, reads []string) FormatOptions {
 	return FormatOptions{
 		Skip: skip, Reads: reads,
-		ValueLimit: ValueLimit, MaxReadCalls: MaxReadCalls,
+		ValueLimit: ValueLimit, MaxReadCalls: MaxReadCalls, OneLine: true,
 	}
 }
 
@@ -191,25 +199,17 @@ func ShownIndices(groups [][]Call, opts FormatOptions) [][]int {
 }
 
 // ShownCallGroups is the calls each group of a [FormatCallGroups] render of
-// groups under opts shows: the group's own calls, in its order, with exactly
-// the skipped names and the reads past the one read cap left out, COUNTED
-// ACROSS THE GROUPS in the order given, so a group shows only the reads the
-// groups before it left of the cap. It is the walk the render draws its lines
-// from, so a call is here exactly where its line is printed, and a group whose
-// reads all fall past the cap shows only its writes. Of the groups'
-// concatenation, [visible] shows exactly these calls, in the same order.
+// groups under opts shows: the group's calls, in its order, minus the skipped
+// names and the reads past the one read cap, COUNTED ACROSS THE GROUPS in the
+// order given, so a group shows only the reads the earlier groups left of the
+// cap. It is the walk the render draws its lines from: the calls at the
+// places [ShownIndices] walks, which a caller needing a place reads instead.
 //
-// WHAT A CALLER MAY RELY ON: each group's shown calls are a subsequence of the
-// group, in its order, each the very value given; a write is never left out;
-// and the reads a group leaves out past the cap are the group's LAST reads,
-// after every read of it the render showed. So a caller that must name the
-// calls a render left out (internal/agent/runner's leftOut, which records the
-// reads a brief counted without listing them) walks each group beside its
-// shown calls, in order: a call is shown where it is the next shown call, else
-// it is left out. Read off this walk rather than off a second rule, the calls
-// a caller names left out are never other than the ones the render counted.
-// It is the calls at the places [ShownIndices] walks, which a caller that must
-// know a shown call's place reads instead.
+// A CALLER MAY RELY ON: each group's shown calls are a subsequence of the
+// group, each the very value given; a write is never left out; the reads left
+// out are the group's LAST reads. So a caller naming the calls a render left
+// out (internal/agent/runner's leftOut) walks each group beside its shown
+// calls, never a second rule, and names exactly the ones the render counted.
 func ShownCallGroups(groups [][]Call, opts FormatOptions) [][]Call {
 	at := ShownIndices(groups, opts)
 	out := make([][]Call, len(groups))
@@ -226,39 +226,26 @@ func ShownCallGroups(groups [][]Call, opts FormatOptions) [][]Call {
 // FormatCalls renders an evidence-only summary of tool calls.
 //
 // Each line is `- name(args) → success | error: text`, with a trailing
-// "(read)" when the tool is positively annotated read-only, and last the words
-// the caller ends the call's line with ([FormatOptions.Notes]). A call whose
-// arguments are not known says why in their place, never `name()`, which reads
-// as the tool called with none: every record withholds them
-// ([Call.Withheld]), they were in text that could not be read
-// ([Call.ArgsUnread]), or its outcome is unknown and no record keeps them
-// ([Call.Unfinished]).
-//
-// No calls — or none that survive Skip — renders "(none)" rather than an empty
-// string, so a reader sees an explicit "no action taken" signal rather than an
-// absent section. The difference matters: a missing section reads as a section
-// the engine forgot to fill in.
-//
-// It is [FormatCallGroups]' render of one group, so the two never part.
+// "(read)" when the tool is annotated read-only, and last the call's
+// [FormatOptions.Notes]. Unknown arguments say why in their place, never
+// `name()`, which reads as none: [Call.Withheld], [Call.ArgsUnread] or
+// [Call.Unfinished]. No surviving calls render "(none)", not an empty string,
+// which reads as a section the engine forgot to fill in. It is
+// [FormatCallGroups]' render of one group, so the two never part.
 func FormatCalls(calls []Call, opts FormatOptions) string {
 	return FormatCallGroups([][]Call{calls}, opts)[0]
 }
 
 // FormatCallGroups renders the lists of calls one brief tells under headings
-// of its own (internal/agent/runner's calledAfter: the late ones, those still
-// in flight among them; the calls after a session's save; the reads an
-// earlier brief counted without listing them; and the calls the session holds
-// that a told call could be taken for, listed again), one string per group in
-// the order given, each as [FormatCalls] renders a
-// list, "(none)" and its omitted line included, UNDER ONE READ CAP:
-// [FormatOptions.MaxReadCalls] counts the read lines of every group together,
-// spent in the order the groups are given, and each group's omitted line counts
-// the reads of that group the cap left out. A shown call's line ends with the
-// words [FormatOptions.Notes] gives its place in its group, where it gives any.
+// of its own (internal/agent/runner's calledAfter), one string per group in
+// the order given, each as [FormatCalls] renders a list, "(none)" and its
+// omitted line included, UNDER ONE READ CAP: [FormatOptions.MaxReadCalls]
+// counts the read lines of every group together, spent in the order given,
+// and each group's omitted line counts its reads the cap left out. A shown
+// call's line ends with the [FormatOptions.Notes] for its place in its group.
 //
-// ONE CAP, NEVER ONE PER GROUP: the cap bounds what one render tells of a round,
-// and a brief rendering a round's calls as N lists capped apart is told N times
-// the reads the cap allows. Fit them with [CallPieces] over the groups'
+// ONE CAP, NEVER ONE PER GROUP: N lists capped apart would tell N times the
+// reads the cap allows. Fit them with [CallPieces] over the groups'
 // concatenation, which names exactly what this shows.
 func FormatCallGroups(groups [][]Call, opts FormatOptions) []string {
 	at := ShownIndices(groups, opts)
@@ -282,49 +269,17 @@ func renderCalls(calls []Call, at []int, notes []string, opts FormatOptions) str
 	readsShown := 0
 	for _, j := range at {
 		call := calls[j]
-		isRead := slices.Contains(opts.Reads, call.Name)
-		outcome := "success"
-		if call.Failed {
-			// FITTED, like the arguments beside it. Call.Result is the
-			// tool's own output, which is a PAYLOAD by this package's
-			// definition — authored outside the engine and unbounded, so a
-			// failed HTTP call can put a whole error document on one
-			// ledger line, re-sent on every round of every later phase.
-			// The full text is on the phase event this line summarises.
-			text := call.Result
-			if over(text, opts.ValueLimit) {
-				text = opts.Fitted.text(Piece{Kind: PieceError, Text: text, Limit: opts.ValueLimit})
-			}
-			outcome = "error: " + text
-		}
 		marker := ""
-		if isRead {
+		if slices.Contains(opts.Reads, call.Name) {
 			marker = " (read)"
 			readsShown++
-		}
-		args := renderArgs(call.Args, opts)
-		switch {
-		case call.Withheld:
-			// SAID, never drawn as `()`: a call whose arguments every record
-			// withholds made a call with arguments, and `tool()` reads as
-			// the tool called with none — a different call, and a repeat a
-			// reader takes for a retry of nothing.
-			args = withheldArgs
-		case call.ArgsUnread:
-			// SAID WHATEVER ARGS HOLDS, as a withheld call's are: its record
-			// says only that it was made with some.
-			args = unreadArgs
-		case call.Unfinished && len(call.Args) == 0:
-			// SAID, for the same reason: its entry kept its identity alone,
-			// so no record says what it was called with. One that carries
-			// arguments is drawn with them.
-			args = unkeptArgs
 		}
 		note := ""
 		if j < len(notes) && notes[j] != "" {
 			note = " " + notes[j]
 		}
-		lines = append(lines, "- "+call.Name+"("+args+") → "+outcome+marker+note)
+		called, outcome := CallLine(call, opts)
+		lines = append(lines, "- "+called+" → "+outcome+marker+note)
 	}
 	if dropped := readsIn(calls, opts) - readsShown; dropped > 0 {
 		// Only READS are ever omitted, and they are re-runnable by
@@ -336,6 +291,67 @@ func renderCalls(calls []Call, at []int, notes []string, opts FormatOptions) str
 		return noCalls
 	}
 	return strings.Join(lines, "\n")
+}
+
+// CallLine is the two halves of call's line as [FormatCalls] draws it under
+// opts: what was called, `name(args)`, and its outcome, `success` or `error: `
+// and the error, fitted as the render fits it. A line joins them with ` → `,
+// and a render adds its read marker and note after.
+//
+// ONE LINE EACH under [FormatOptions.OneLine]: every line break in the tool's
+// name or its error (\r, \n, U+2028, U+2029) is drawn as a space, so a tool's
+// own text can never start a line of a brief or an item, where a heading at a
+// line's start is an entry of its own (internal/sandbox/executor,
+// transcript.go). The arguments are JSON, which escapes its line breaks.
+func CallLine(call Call, opts FormatOptions) (called, outcome string) {
+	outcome = "success"
+	if call.Failed {
+		// FITTED, like the arguments beside it. Call.Result is the
+		// tool's own output, which is a PAYLOAD by this package's
+		// definition — authored outside the engine and unbounded, so a
+		// failed HTTP call can put a whole error document on one
+		// ledger line, re-sent on every round of every later phase.
+		// The full text is on the phase event this line summarises.
+		text := call.Result
+		if over(text, opts.ValueLimit) {
+			text = opts.Fitted.text(Piece{Kind: PieceError, Text: text, Limit: opts.ValueLimit})
+		}
+		outcome = "error: " + oneLine(text, opts)
+	}
+	args := renderArgs(call.Args, opts)
+	switch {
+	case call.Withheld:
+		// SAID, never drawn as `()`: a call whose arguments every record
+		// withholds made a call with arguments, and `tool()` reads as
+		// the tool called with none — a different call, and a repeat a
+		// reader takes for a retry of nothing.
+		args = withheldArgs
+	case call.ArgsUnread:
+		// SAID WHATEVER ARGS HOLDS, as a withheld call's are: its record
+		// says only that it was made with some.
+		args = unreadArgs
+	case call.Unfinished && len(call.Args) == 0:
+		// SAID, for the same reason: its entry kept its identity alone,
+		// so no record says what it was called with. One that carries
+		// arguments is drawn with them.
+		args = unkeptArgs
+	}
+	return oneLine(call.Name, opts) + "(" + args + ")", outcome
+}
+
+// oneLine is text with every line break drawn as a space where opts draws a
+// call on one line ([FormatOptions.OneLine]), and text as it is otherwise.
+func oneLine(text string, opts FormatOptions) string {
+	if !opts.OneLine {
+		return text
+	}
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\r', '\n', '\u2028', '\u2029':
+			return ' '
+		}
+		return r
+	}, text)
 }
 
 // withheldArgs is what [FormatCalls] renders in place of the arguments of a
@@ -375,46 +391,30 @@ func readsIn(calls []Call, opts FormatOptions) int {
 
 // Iteration is one completed executor → reviewer round of a single turn.
 //
-// Appended by the turn engine immediately before a self_iterate loops back, so
-// it is a CLOSED snapshot: the phases it describes have finished and none of
-// them will run again. Every record describes a self_iterate round — the done
-// and failed branches end the turn instead of appending — so the review
-// decision is implied and is not stored.
+// Appended just before a self_iterate loops back, so it is a CLOSED snapshot.
+// Every record is a self_iterate round (done and failed end the turn), so the
+// review decision is implied and not stored. ONE CALL LIST: one phase makes
+// the calls.
 //
-// ONE CALL LIST, because one phase makes the calls. It was two while the turn
-// planned in one conversation and acted in another, and the split was
-// load-bearing then: the delivery gate took a different view of each. Nothing
-// takes two views of one list.
-//
-// JSON tags are load-bearing, not decoration: a detached executor ends the
-// turn's segment and its completion starts a NEW one, so without
-// round-tripping the ledger through the pending run's persisted state the
-// resumed turn would forget every earlier round and could re-fire its
-// deliveries.
+// JSON tags are load-bearing: a detached executor ends the turn's segment and
+// its completion starts a NEW one, so without round-tripping the ledger
+// through the pending run's state the resumed turn would forget every earlier
+// round and could re-fire its deliveries.
 type Iteration struct {
 	Iteration int `json:"iteration"`
 
-	// Through is the last round this entry stands for where it stands for a
-	// SPAN of rounds — Iteration the first, and Through the same round for a
-	// span of one — and zero for a round as the loop closed it, which every
-	// entry the loop appends is.
+	// Through is the last round this entry stands for as a SPAN of rounds
+	// (Iteration the first), and zero for a round as the loop closed it.
 	//
-	// A SPAN IS ROUNDS A PARK DROPPED: a parked turn whose closed rounds still
-	// outgrow their share of the run's row once their payloads are condensed
-	// folds whole rounds into one entry (internal/agent/execstate), keeping of
-	// them what every reader of a closed round reads and none of their prose.
-	// Their calls, in the span's two tallies by tool, never a tool's name
-	// folded away: a resumed call log seeds them, and a delivery check reads
-	// them by name and outcome ([Called]), so a reply a dropped round posted is
-	// still the turn's. And the [Iteration.ArtifactHash] of its LAST round,
-	// which is the round before whatever follows the span, so the turn's stall
-	// guard still compares each round with the one before it. Not what the
-	// rounds set out to do, produced, or were told: [RenderIterations] says
-	// those are not kept rather than drawing a round that said nothing.
-	//
-	// An added field every reader defaults: a build that reads no span reads
-	// one as its first round, holding every call the span counts, which is the
-	// safe direction for each of those readers.
+	// A SPAN IS ROUNDS A PARK DROPPED: a parked turn whose closed rounds
+	// outgrow their share of the run's row folds whole rounds into one entry
+	// (internal/agent/execstate). It keeps their calls in two tallies by tool,
+	// never a name folded away: a resumed call log seeds them and a delivery
+	// check reads them by name and outcome ([Called]). It keeps the
+	// [Iteration.ArtifactHash] of its LAST round, so the stall guard still
+	// compares each round with the one before. Intent, output and briefs are
+	// not kept ([RenderIterations]). An older build reads a span as its first
+	// round holding every call, the safe direction.
 	Through int `json:"through,omitempty"`
 
 	// Intent is what the round set out to do, in the executor's own words.

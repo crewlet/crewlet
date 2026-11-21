@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"slices"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -326,14 +326,13 @@ func TestTheOpenDraftReachesTheModelFencedAndRedacted(t *testing.T) {
 // The person applies the turn's draft change, the page reports it with the
 // screen as it is now, and the turn resumes: its model reads the draft the
 // change left, and a second change to the same draft is proposed, not refused
-// as an action the screen does not accept. A decision that carries no screen
-// resumes on the one the turn parked on, which still accepts the action. What
-// the page reported of the change is the page's own word, which the engine
-// cannot verify: the model reads it fenced at the page's trust (ADR-0040).
-// Mutation: resume with no page and the second change is refused
+// as an action the screen does not accept. A decision carrying no screen
+// resumes on the parked one, which still accepts the action. The page's report
+// is its own word, unverifiable: the model reads it fenced at the page's trust
+// (ADR-0040). Mutation: resume with no page and the second change is refused
 // "the screen does not accept that page action"; resume on the parked page
-// alone and the model never reads the applied value; fence the page's report
-// at any other trust and its label fails.
+// alone and the model never reads the applied value; fence the report at any
+// other trust and its label fails.
 func TestAResumedTurnRunsOnTheScreenTheDecisionWasMadeFrom(t *testing.T) {
 	t.Parallel()
 	for _, carried := range []bool{true, false} {
@@ -367,7 +366,7 @@ func TestAResumedTurnRunsOnTheScreenTheDecisionWasMadeFrom(t *testing.T) {
 		resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
 			Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: first.ID,
 			Read: f.Grant("report"), State: wire.ProposalApplied, ClientReported: true,
-			Receipt: &wire.Receipt{Summary: "Applied to Brand › Set up"},
+			Receipt: &wire.Receipt{Summary: wire.Plain("Applied to Brand › Set up")},
 			Card:    cardAt(first, wire.ProposalApplied), Page: now})
 		if err != nil {
 			t.Fatal(err)
@@ -431,7 +430,7 @@ func TestADecisionNeverAttachesAPageTheQuestionLeftOut(t *testing.T) {
 	resumed, err := f.Svc.Resume(ctx, approval.Resumption{Owner: f.Person.ID,
 		Conversation: f.Conversation, Turn: accepted.TurnID, Proposal: p.ID,
 		Read: f.Grant("approve"), State: wire.ProposalApplied,
-		Receipt: &wire.Receipt{Summary: "Created ENG-8."}, Card: cardAt(p, wire.ProposalApplied),
+		Receipt: &wire.Receipt{Summary: wire.Plain("Created ENG-8.")}, Card: cardAt(p, wire.ProposalApplied),
 		Page: draftPage()})
 	if err != nil {
 		t.Fatal(err)
@@ -467,11 +466,12 @@ func TestADraftChangeIsNamedByTheScreensLabels(t *testing.T) {
 		}
 		rows[c.Label] = c
 	}
-	if rows["Voice"].To != "Plain and warm." {
+	if rows["Voice"].To.Text() != "Plain and warm." {
 		t.Errorf("the voice row reads %+v, want the screen's label and the value", rows["Voice"])
 	}
-	if got := rows["Avoid"].Items; !slices.Equal(got, []string{"Jargon", "Exclamation marks"}) {
-		t.Errorf("the list field's items are %q, want each line its own item", got)
+	if got := rows["Avoid"].Items; !reflect.DeepEqual(got, []wire.Phrase{wire.Plain("Jargon"),
+		wire.Plain("Exclamation marks")}) {
+		t.Errorf("the list field's items are %+v, want each line its own item", got)
 	}
 }
 

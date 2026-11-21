@@ -277,18 +277,14 @@ func TestTheBucketClientsRetriesNeverRunOut(t *testing.T) {
 }
 
 // A THROTTLE SLOWS THE WHOLE CLIENT. The moment one answer is a throttle, the
-// client's gate holds back every attempt the node sends to the prefix, each
-// waiting for a place under its own context: a request the bucket throttles
-// once is asked again and answered, and afterwards, of ten attempts asked
-// for at once, the client lets out only the few its gate has places for,
-// where before the throttle it let out all ten.
+// client's gate holds back every attempt the node sends to the prefix: a
+// request throttled once is asked again and answered, and afterwards, of ten
+// attempts asked for at once, only the few the gate has places for go out.
 //
 // A throttle is S3's SlowDown and MinIO's SlowDownRead, a 429, and a 503 to a
-// HEAD whatever the bucket meant by it, since a HEAD's answer carries no body
-// to name a code in and reaches the client as `ServiceUnavailable`. A server
-// error is not, nor is a 503 naming a gateway's own failure — MinIO's
-// `XMinioReadQuorum`, one object it cannot rebuild — which slowed every
-// request of the node at each attempt of the one that asked about it.
+// HEAD (its answer has no body to name a code in). A server error is not, nor
+// is a 503 naming a gateway's own failure such as MinIO's `XMinioReadQuorum`,
+// which would slow every request of the node at each attempt of one.
 func TestAThrottleSlowsTheWholeClient(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -356,19 +352,13 @@ func TestAThrottleSlowsTheWholeClient(t *testing.T) {
 
 // A THROTTLE KEEPS SEVEN TENTHS OF THE NODE'S WIDTH, wherever in the node's
 // work it lands. The cut is a share of the most attempts the node has had out
-// at once — the width the bucket has seen it run at since its last cut — and
-// never of a rate it had to measure, nor of the instant the throttle came
-// back. The SDK's adaptive mode had measured no rate on a fresh client, so a
-// throttle answered to the first attempt of a burst of thirty-two dropped the
-// whole client to half a request a second; and a cut of what was out at that
-// instant dropped a node between two bursts — a throttle answered to its one
-// HEAD while a fleet sat at the prefix's rate — to ONE place, so its next
-// burst of thirty-two climbed back a place a round. Here a throttle at a
-// burst's start and one answered to a lone attempt after the node ran a burst
-// each leave the gate letting out ⌊0.7 × the width⌋ at once — the node's OWN
-// width, so one that never ran wider than four is cut to two rather than to a
-// share of a width it never had — and every lone throttle after it takes
-// seven tenths again.
+// at once since its last cut, never of a rate it had to measure (a fresh
+// client's first throttle dropped to half a request a second) nor of the
+// instant the throttle came back (a lone HEAD's throttle between bursts left
+// ONE place). A throttle at a burst's start and one to a lone attempt after a
+// burst each leave the gate letting out ⌊0.7 × the width⌋ at once, the node's
+// OWN width (one never wider than four is cut to two), and every lone
+// throttle after it takes seven tenths again.
 func TestAThrottleKeepsSevenTenthsOfTheNodesWidth(t *testing.T) {
 	t.Parallel()
 	enter := func(t *testing.T, b *s3obj.Backend, n int) []s3obj.Attempt {
@@ -1192,23 +1182,16 @@ func TestTheLastAttemptIsSentAtTheBound(t *testing.T) {
 }
 
 // THE LAST ATTEMPTS OF REQUESTS THAT BEGAN FAILING TOGETHER ARE SPREAD over the
-// minute's last third, each at its own span's bound — where one bound of a
-// minute for every request sent every last attempt in one instant, on the
-// minute: every write open on every node when the bucket fell over, onto a
-// bucket that may just be recovering. And what a failing request sends before
-// it is given up is a distribution the backoff decides, derived here once for
-// the docs to quote.
-//
+// minute's last third, each at its own span's bound: one bound for every
+// request sent every last attempt in one instant, onto a bucket that may just
+// be recovering. What a failing request sends is derived here for the docs.
 // Two thousand heads, one at a time, against a bucket failing every request,
-// through the production backoff and bounds — each seeded, so every run draws
-// alike — on a clock of the client's own that the backoff moves by each wait
-// and by a modelled first byte of 100 ms (S3's, at its lower end): every head
-// is given up forty seconds to a minute after its first failure (and its last
-// attempt's first byte), no tenth of a second holding more than one in fifty
-// of their last attempts; and their attempts run to a median of nine, twelve
-// at the 95th percentile and fourteen at the most — the figures
-// judge.giveUpAfter's doc, newRetryer's and docs/concepts/object-store.md
-// quote, so a change to the backoff or the rule that moves them fails here.
+// through the seeded production backoff and bounds, on a clock the backoff
+// moves by each wait and a modelled 100 ms first byte: every head is given up
+// forty seconds to a minute after its first failure, no tenth of a second
+// holds more than one in fifty last attempts, and attempts run to a median of
+// nine, twelve at the 95th percentile and fourteen at most (the figures
+// docs/concepts/object-store.md quotes).
 func TestAFailingRequestsLastAttemptsAreSpreadOverTheirBounds(t *testing.T) {
 	t.Parallel()
 	const (

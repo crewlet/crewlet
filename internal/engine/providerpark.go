@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -20,149 +21,74 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tracing"
 )
 
-// THE PROVIDER PARK: A SEAT WHOSE MODELS ARE ALL LIMITED WAITS FOR THEM, IT
-// DOES NOT RETRY INTO THE LIMIT.
+// The provider park: a seat whose models are all limited waits for them, it
+// does not retry into the limit. The backend sits a limited entry out until the
+// vendor's reset (internal/providers/llm/harness), but a turn whose every chain
+// member refused for a rate limit ([chain.Limited]) used to fail and be
+// redelivered a second later, so every seat failed a turn about once a second.
+// It now parks its seat with the budget park's machinery (seatpark.go): a hold
+// under [pauseReasonProvider] on its inbox, its delivery DEFERRED to keep its
+// place at the head, and the seat joined to the probe of the chain that
+// refused. `seat_provider_parked` says when the vendors said the limit lifts, so
+// every screen draws one steady condition. Only a chain limited throughout
+// parks: a spent head with a fallback failing for an unlasting reason keeps the
+// ordinary retry, and a fallback that answers is working.
+
+// The probe is not the held mail. Lifting the hold to let the head message run
+// into the limit spent a delivery per probe and walked it to the dead-letter
+// boundary (24 probes for a limit named 40 hours out). So one alarm per limited
+// chain, armed for [chain.Limit.RetryAt], makes one short call through the
+// refusing members outside any delivery ([Engine.probeLimit], [limitProbes]),
+// and its answer settles every seat parked on the same entries, order and
+// registry; per-seat alarms made five full harness runs to learn one fact. It
+// answers or fails for a non-limit reason: each hold is lifted with
+// `seat_provider_released` and the mail redelivered once, priority lane first.
+// Limited again: the alarm is re-armed, the parked line republished, no inbox
+// touched.
+
+// What a probe costs: a full harness run, charged under the background stage
+// (`provider_probe`) to the parked seat that sorts first, on whose harness home
+// ([llm.WithSeat]) the call is made. Members still sitting out refuse without
+// a process, so a retry instant costs one run for every seat at once.
 //
-// A model's usage limit has an end the vendor usually names: Claude Code's
-// "You've hit your 5-hour limit · resets 4:30pm (America/Vancouver)". The
-// backend reads it and sits its entry out until then
-// (internal/providers/llm/harness), so a call in that window is refused
-// without a process being started. Before this park, nothing above the backend
-// used it. A turn every member of whose chain was refused failed, the
-// dispatcher NAKed its delivery, and the redelivery a second later ran a turn
-// that was refused the same way: with ten task partitions per seat and new
-// notifications joining them, every seat started and failed a turn about once
-// a second for the whole afternoon. Every one moved the seat between working,
-// failed and stopped on every screen that draws it.
+// A resume that meets the limit parks its seat too ([Engine.parkResumeOnLimit]):
+// a seat's plan usually runs out inside a run, the segment collecting it benches
+// the entry, and its review or relaunch is refused, yet no delivery ran, so
+// nothing parked the seat and each held resume ran into the vendor's window at
+// every instant the entry was benched until. So does a completion whose review's
+// models already know the limit ([Engine.collectedRefusal]), refused after
+// collection, not at the turn gate before its claim.
+
+// A parked seat starts no turn by any road: the turn gate refuses every resume
+// on it until release ([Engine.providerParkRefusal]); a completion refused
+// before its claim is one already collected ([Engine.seatCannotRun]).
+// Released by a new set of models: an apply installing another registry
+// releases the parks ([Engine.reconcileProviderParks]); the redelivery asks the
+// new entries and re-parks at the cost of one delivery and no process, since
+// the same account's sit-out lives on the node's registry ([harness.Plans]). A
+// park is not carried across: whether the chain still refuses is the new
+// company's to say. A seat whose mail its run holds has no delivery to come, so
+// the release re-fires its held completion ([Engine.readmitResumes]), refused on
+// the carried limit and parking the seat again ([Engine.collectedRefusal]).
+
+// A park outlives no seat. A seat's release detaches its inbox, dropping every
+// hold, and forgets its parks ([Engine.forgetProviderPark]), waiting for none of
+// the turns that can park it, so a park can land during or after the release. One
+// taken while the seat was held asks again once it is whole and undoes itself
+// where the release took it ([Engine.unparkReleased]); one asked after the
+// detach is refused by the queue and records nothing (seatinbox.go). Left
+// standing, its probe kept publishing the seat parked while a peer ran it.
 //
-// So a turn that failed because EVERY member of its chain refused for a rate
-// limit ([chain.Limited]) parks its seat, with the machinery the budget park
-// uses (seatpark.go):
-//
-//   - a pause hold under [pauseReasonProvider] is taken on its inbox, so
-//     nothing more is delivered to it, and the delivery is DEFERRED, which
-//     keeps its place at the head of the inbox;
-//   - the seat joins the PROBE of the chain that refused: one alarm, armed
-//     for the instant the first member is tried again
-//     ([chain.Limit.RetryAt]), which makes one short call through the members
-//     that refused, outside any delivery, for every seat parked on that chain
-//     at once ([limitProbes]);
-//   - and `seat_provider_parked` says so, with when the vendors said the
-//     limit lifts, so every screen draws one steady condition rather than a
-//     seat that blinks.
-//
-// THE PROBE IS NOT THE HELD MAIL. It used to be: the alarm lifted the hold,
-// the head of the inbox ran a turn into the limit, and that turn parked the
-// seat again by deferring its delivery. A deferral spends one of the
-// message's deliveries, so a limit that outlasted the backend's hourly retry
-// (a weekly plan, a day's quota) walked the held message to the dead-letter
-// boundary one probe at a time: 24 probes, a day, for a limit named 40 hours
-// out, and about five and a half hours for one whose reset nobody named. So
-// the alarm asks the models itself ([Engine.probeLimit]), and the answer
-// decides for every seat parked on the chain:
-//
-//   - the call answers, or fails for a reason that is not a limit: each hold
-//     is lifted, `seat_provider_released` says why, and each seat's mail is
-//     delivered again once, its priority lane first and then the held head,
-//     having spent only the one delivery its park did;
-//   - every member refuses for a limit again: the alarm is armed for the new
-//     instant, `seat_provider_parked` is published again for each seat with
-//     what the vendors now say, and no inbox is touched.
-//
-// ONE PROBE PER LIMITED CHAIN, NOT PER SEAT. The limit is the entries', and so
-// is its end: five seats on one spent subscription each arming its own alarm
-// made five calls at every retry instant, each a full run of the harness, to learn
-// one fact. Seats parked on the same entries, in the same order, of the same
-// registry share one probe, and its answer settles them all; a seat on another
-// chain has its own.
-//
-// WHAT A PROBE COSTS. It is a full run of the entry's harness: a process launched,
-// and a request carrying the harness's own fixed overhead (its harness, which a
-// one-word prompt does not shrink), far more than the prompt itself. It is
-// spend like any other auxiliary call, charged and recorded through the seam
-// under the background stage (`provider_probe`), where the Spend screen
-// shows it, to the seat the probe runs as: the parked seat that sorts first,
-// on whose harness home ([llm.WithSeat]) the call is made. Members still sitting
-// out refuse without a process being started, so each retry instant costs
-// one such run, to the member whose window is over, for every seat at once.
-//
-// ONLY A CHAIN THAT IS LIMITED THROUGHOUT. A seat whose head is spent and whose
-// fallback failed for a reason nothing says will last keeps the ordinary
-// retry, and one whose fallback answers is never parked at all: it is working.
-//
-// RELEASED BY A NEW SET OF MODELS. Every epoch builds its providers afresh, so a
-// park decided under one registry is released by an apply that installs
-// another ([Engine.reconcileProviderParks]): the redelivery asks the new
-// entries, and a limit that still holds parks the seat again at the cost of one
-// delivery. An entry that still calls as the same account finds the sit-out
-// its sign-in is serving on the node's registry ([harness.Plans]), so that
-// re-park costs the delivery and no process: the entry refuses before any harness
-// is started. The park is not
-// carried across instead, because whether the seat's chain is still the one
-// that refused is the new company's to say (its `llm`, the entries it names),
-// and its first turn is what asks. A SEAT WHOSE MAIL ITS RUN HOLDS has no
-// delivery to come: the release re-fires its run's held completion
-// ([Engine.readmitResumes]), which is collected again and refused on the
-// carried limit before its turn runs, and that parks the seat again
-// ([Engine.collectedRefusal]), at the cost of one collection and no process.
-// Parked by nothing until then, it read released, left the probe, and its job
-// was collected and reviewed into the vendor's window once the sit-out ended.
-//
-// A RESUME THAT MEETS THE LIMIT PARKS ITS SEAT TOO ([Engine.parkResumeOnLimit]).
-// A seat's executor is its harness's own run in a box, so the usual way a
-// plan runs out is inside a run: the run ends on its vendor's limit report, the
-// segment that collects it sits the entry out, and the review or the relaunch
-// that segment makes is refused, every member sitting out. That segment is no
-// delivery, and the dispatcher never ran for the seat, whose mail the run
-// holds, so nothing parked it: the seat read idle with a failed turn, never the
-// one steady condition above, and joined no probe, so each held resume ran its
-// review or launched a box into the vendor's window at every instant the
-// backend benched the entry until, an hour at a time. The resume parks the seat
-// as the dispatcher would, and its job waits for the park.
-//
-// SO DOES A COMPLETION WHOSE REVIEW'S MODELS ALREADY KNOW THE LIMIT, once its job
-// is collected ([Engine.collectedRefusal]): the entry one seat's run spent is
-// benched for every seat on it, and each of their completions is collected,
-// charged in its window and its box paused, then refused before its turn runs
-// and its seat parked, rather than refused at the turn gate before its claim,
-// uncollected, its box kept awake, its seat parked by nothing.
-//
-// A PARKED SEAT STARTS NO TURN, whatever road the turn comes by: its mail waits
-// on its inbox, and the turn gate refuses every resume on it until the park is
-// released ([Engine.providerParkRefusal]), whichever chain the resume's first
-// call would take. A probe that meets the limit again keeps it so; the
-// instant a completion's own refusal named passes under a park that still
-// stands. A completion it refuses before its claim is one already collected:
-// a parked seat holds no job no collection has read (see
-// [Engine.seatCannotRun]).
-//
-// A PARK OUTLIVES NO SEAT. A seat's release takes the seat out of this node's
-// hands, detaches its inbox, which drops every hold on it, and forgets its
-// parks ([Engine.forgetProviderPark]); it waits for none of the turns that can
-// park the seat: a lost lease detaches the inbox under a running delivery, and
-// a resume runs in no delivery at all, its review minutes long. So a park can
-// land while the seat is being released, or after. One taken after the
-// release forgot the seat's parks asks for the seat again once it is whole,
-// and undoes itself where it is gone ([Engine.unparkReleased]); one taken
-// between the detach and the forget has its hold lifted by the forget
-// ([seatParks.forget]). Left standing, such a park outlived the seat here: its
-// probe went on calling the models and publishing the seat parked while a peer
-// ran it, and its hold kept the seat's inbox shut on this node with no park
-// left to lift it.
-//
-// A RELEASE IS ALSO A SIGNAL to the resumes waiting on the same condition
-// ([waitProvider]): a launch's completion or a person's answer refused
-// because the models were limited is re-checked the moment a park lifts, on
-// any seat, since the entries are the node's and not the seat's, rather than
-// at its own clock or the waiter's next announcement.
-//
-// WHO HAS TO AGREE ON IT: this node alone, like the budget park. A restart, or
-// the seat moving to a peer, asks the models again on the first delivery.
+// A release also signals the resumes waiting on the same condition
+// ([waitProvider]) on any seat, since the entries are the node's, rather than
+// leaving them to their own clock. Who has to agree: this node alone, like the
+// budget park; a restart or a move asks the models again on the first delivery.
 
 // pauseReasonProvider is the hold name the provider park takes on a seat's
 // inbox; see [parkSpec.hold].
@@ -209,15 +135,13 @@ type limitProbes struct {
 	// which the Models page and the `llm_limit_waiting` alarm measure from
 	// ([Engine.parkedByEntry]).
 	//
-	// THE SEAT'S, NOT A PROBE'S: an apply that brings new models releases
-	// every park decided under the old ones, and the seat's next delivery
-	// parks it again at once on the same limit, under a new probe. Dated by
-	// the probe, the wait restarted at every apply, so a seat stuck for an
-	// hour read as parked for seconds and the alarm that turns red at
-	// fifteen minutes went out and came back with every config change. A wait
-	// ends when the chain answers (or stops reporting a limit) or the seat
-	// leaves this node; a park that follows a release for any other reason
-	// within [parkCarryWindow] is the same wait.
+	// THE SEAT'S, NOT A PROBE'S: an apply that brings new models re-parks
+	// the seat at once under a new probe, and dated by the probe the wait
+	// restarted at every apply. A wait ends when the chain answers (or stops
+	// reporting a limit) or the seat leaves this node; a park that follows a
+	// release within [parkCarryWindow] is the same wait, and so is one taken
+	// in a release's own window ([Engine.unlessParked]). The package doc's
+	// "A provider park's release and its wait" says more.
 	waits map[uuid.UUID]parkWait
 }
 
@@ -342,21 +266,21 @@ func (e *Engine) providerPark(ctx context.Context, handle string, limit chain.Li
 
 // unparkReleased undoes a provider park taken on a seat this node no longer
 // holds ([Engine.providerPark]): its hold lifted, its place on the chain's
-// probe left, and the seat said released, as the release says of a park it
-// forgets ([Engine.forgetProviderPark]).
+// probe left, the seat said released and its wait forgotten, as the release
+// does with a park it forgets ([Engine.forgetProviderPark]).
 //
-// WHETHER OR NOT ITS RECORD IS LEFT. The release's forget can land between the
-// park's take and this, dropping the record and lifting the hold, and still
-// come before the park joined the probe or said the seat parked: with no
-// record to release, the place on the probe stayed, its alarm went on calling
-// the models as the seat, and the seat read parked on every screen while a
-// peer ran it. So the probe is left and the release said either way.
+// WHETHER OR NOT ITS RECORD IS LEFT, and the wait either way: the release's
+// forget can land between the park's take and this, dropping the record and
+// the wait before the park joined the probe, said the seat parked and began
+// the wait again, and left, the probe called the models as the seat and the
+// wait outlived it here. The package doc's "A provider park's release and its
+// wait" says why.
 func (e *Engine) unparkReleased(ctx context.Context, seat uuid.UUID, handle string, basis providerBasis) {
-	if e.releaseProviderPark(ctx, seat, seatReleasedHere) {
-		return
+	if !e.releaseProviderPark(ctx, seat, seatReleasedHere) {
+		e.leaveLimitProbe(seat, basis)
+		e.publishProviderPark(ctx, handle, types.SeatProviderReleased{Reason: seatReleasedHere})
 	}
-	e.leaveLimitProbe(seat, basis)
-	e.publishProviderPark(ctx, handle, types.SeatProviderReleased{Reason: seatReleasedHere})
+	e.forgetParkWait(seat)
 }
 
 // parkResumeOnLimit parks handle's seat on the limit a resumed segment met
@@ -377,10 +301,20 @@ func (e *Engine) parkResumeOnLimit(ctx context.Context, handle string, err error
 // Nothing for a limit that names no instant, which no probe could be armed for.
 //
 // THE PARK IS NO DELIVERY'S, so a hold it could not take is said and
-// otherwise left: the resume is reverted and waits on its refusal either way,
-// as it did before it parked anything.
+// otherwise left: the resume is reverted and waits on its refusal either way.
+// A seat this node has let go of under the resume is refused its park, which
+// the queue refuses for the ended attachment its hold names; that is said at
+// debug, since the node that takes the seat asks its own models (the package
+// doc's "A provider park's release and its wait").
 func (e *Engine) parkOnLimit(ctx context.Context, handle string, limit chain.Limit) {
-	if _, _, err := e.providerPark(ctx, handle, limit); err != nil {
+	_, _, err := e.providerPark(ctx, handle, limit)
+	switch {
+	case errors.Is(err, queue.ErrAttachmentGone):
+		log.DebugContext(ctx, "seat_provider_park_attachment_ended", "seat", handle,
+			"providers", strings.Join(limit.Keys, ","),
+			"detail", "the seat was let go of here under its resume; the node that takes "+
+				"it asks its own models on its first delivery")
+	case err != nil:
 		log.WarnContext(ctx, "seat_provider_park_not_taken", "seat", handle,
 			"providers", strings.Join(limit.Keys, ","), "error", err.Error(),
 			"detail", "the resume met its models' limit and the seat could not be parked "+
@@ -392,26 +326,13 @@ func (e *Engine) parkOnLimit(ctx context.Context, handle string, limit chain.Lim
 // this node has the seat parked on its models' limit: [waitProvider], which
 // the park's release signals, until the instant the chain's probe makes its
 // next call where that is still to come. False for a seat not parked here.
-//
-// EVERY RESUME, WHICHEVER CHAIN ITS FIRST CALL TAKES. A park is this node's
-// word that the seat waits for its models, and a resume is a turn. The case it
-// decides is a completion whose review sends its run back to runners every one
-// of which sits out: its reviewer is ready, so asking the review's chain
-// ([Engine.providerRefusing]) admits it the moment its own hold's instant
-// passes, and it was collected and reviewed again, and its box launched again,
-// into a window the probe had just found still spent.
-//
-// AN INSTANT STILL TO COME, OR NONE. A refusal's Until is when it lifts on the
-// clock alone, and an answer's retry re-checks at it
-// ([sandbox.Coordinator.waitOwed]). From the instant the probe's alarm fires
-// until its call comes back, a full run of the entry's harness, that instant is
-// past and the park still stands: named, it told every answer waiting on the
-// seat to re-check at once, and each one did, thousands of times a second for
-// as long as the call was out, every pass re-reading its run, opening its
-// answer's seal, taking and giving back the node's admission and saying so in
-// the log. A probe that is due or asking names nothing ([Engine.limitProbeNext]),
-// because what ends that wait is its answer: the park's release, which signals
-// [waitProvider], or a renewal, whose instant the next check is told.
+// Every resume is refused whichever chain its first call takes: a completion
+// whose reviewer is ready would otherwise be admitted by its own chain
+// ([Engine.providerRefusing]) into a window the probe found still spent. Until
+// is an instant still to come, or none: while the probe's call is out the
+// instant is past and the park stands, and naming it made every waiting answer
+// re-check thousands of times a second. A due probe names nothing
+// ([Engine.limitProbeNext]); its answer, the release, ends the wait.
 func (e *Engine) providerParkRefusal(handle string) (sandbox.Refusal, bool) {
 	seat, err := e.seatID(handle)
 	if err != nil {
@@ -625,25 +546,59 @@ func (e *Engine) endLimitProbe(ctx context.Context, key probeKey, probe *limitPr
 			e.releaseProviderParking(ctx, seat, parking, why)
 		}
 		// THE WAIT IS OVER: the chain answered, or stopped reporting a
-		// limit.
+		// limit, unless the seat met it again in the release's window and
+		// stands parked on it ([Engine.unlessParked]). After the release,
+		// whose park, standing, would keep it.
 		e.endParkWait(seat)
 	}
 }
 
 // parkReleased marks seat's wait as released at this instant, without ending
-// it: a park within [parkCarryWindow] continues it.
+// it: a park within [parkCarryWindow] continues it. A park of the seat that
+// stands keeps it unmarked ([Engine.unlessParked]).
 func (e *Engine) parkReleased(seat uuid.UUID) {
+	e.unlessParked(seat, func(p *limitProbes) {
+		if wait, known := p.waits[seat]; known {
+			wait.releasedAt = e.now()
+			p.waits[seat] = wait
+		}
+	})
+}
+
+// endParkWait forgets when seat began waiting, its wait over, unless a park of
+// the seat stands, which keeps it ([Engine.unlessParked]).
+func (e *Engine) endParkWait(seat uuid.UUID) {
+	e.unlessParked(seat, func(p *limitProbes) { delete(p.waits, seat) })
+}
+
+// unlessParked settles seat's wait record under the probes' lock, unless a
+// provider park of the seat stands, which owns the record.
+//
+// A release marks the wait released, or a probe's answer ends it, only after
+// its resume, and a turn that meets the limit again in between parks the seat
+// on the record first: landed on that park's record, the late mark or end made
+// its next re-park begin a new wait, though the seat had waited throughout.
+// UNDER THE PARKS' LOCK, which a park records itself under before it joins a
+// probe, taken before the probes' one here as in [seatParks.releaseParking],
+// and nowhere the other way round. The package doc's "A provider park's
+// release and its wait" says why.
+func (e *Engine) unlessParked(seat uuid.UUID, settle func(p *limitProbes)) {
+	parks := &e.providerParks
+	parks.mu.Lock()
+	defer parks.mu.Unlock()
+	if parks.seats[seat] != nil {
+		return
+	}
 	p := &e.limitProbes
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if wait, known := p.waits[seat]; known {
-		wait.releasedAt = e.now()
-		p.waits[seat] = wait
-	}
+	settle(p)
 }
 
-// endParkWait forgets when seat began waiting: its wait is over.
-func (e *Engine) endParkWait(seat uuid.UUID) {
+// forgetParkWait forgets when seat began waiting, whatever park stands: the
+// seat has left this node ([Engine.forgetProviderPark],
+// [Engine.unparkReleased]).
+func (e *Engine) forgetParkWait(seat uuid.UUID) {
 	p := &e.limitProbes
 	p.mu.Lock()
 	delete(p.waits, seat)
@@ -710,26 +665,15 @@ func (e *Engine) probeModels(ctx context.Context, c *Company, handle string, key
 // providerRefusing reports whether every model the first call of route's turn
 // on handle's seat could take is at a usage limit it already reported, refusing
 // on [waitProvider] with the reason naming them and when the first is tried
-// again: the provider stage's question ASKED WITHOUT A DELIVERY, for a resume,
-// which has no mail of its own to hold, as [Engine.budgetHold] answers for the
-// budget. Asked of what the entries already know ([chain.Unready]), so it
-// launches nothing; a chain whose entries know of no limit is not refusing, and
-// the resume finds out by running.
-//
-// THE CHAIN OF THE ROUTE'S FIRST CALL ([firstCallMembers]), because the two
-// differ wherever the seat names a reviewer of its own: a seat whose executor
-// sits out a spent plan while its `llm_review` answers has a finished run to
-// review and deliver, and held on its executor's limit it waited out the
-// vendor's window, an hour at a time, with its mail behind it. A call the turn
-// makes later, a review's send-back to a spent runner, meets its own limit
-// mid-turn and waits there ([resumeRefusal]).
-//
-// AND THE CHAIN'S LIMIT, where every member sits one out with an instant it is
-// tried again ([chain.KnownLimit]): the limit a call through the chain would
-// have met, which a completion's collected resume parks its seat on
-// ([Engine.collectedRefusal]). No keys where a member refuses for another
-// reason, a login somebody has to mend, which no park waits out: the refusal
-// stands, until the instant the spent member is tried again.
+// again: the provider stage's question without a delivery, for a resume with no
+// mail to hold ([Engine.budgetHold]'s twin), asking only what the entries know
+// ([chain.Unready]). It takes the chain of the route's first call
+// ([firstCallMembers]), which differs where the seat names its own reviewer: a
+// seat whose executor sits out a spent plan while its `llm_review` answers has
+// a run to review, and held on the executor's limit it waited out the vendor's
+// window. A later call meets its own limit mid-turn ([resumeRefusal]). The
+// returned [chain.KnownLimit] is what a collected resume parks on
+// ([Engine.collectedRefusal]), keyless where a member refuses otherwise.
 func (e *Engine) providerRefusing(ctx context.Context, c *Company, handle string,
 	route sandbox.ResumeRoute,
 ) (sandbox.Refusal, chain.Limit, bool) {
@@ -760,31 +704,16 @@ func (e *Engine) providerRefusing(ctx context.Context, c *Company, handle string
 }
 
 // collectedRefusal is what a launch's completion is refused for once its
-// job is collected, and before its turn runs: a usage limit every model its
-// review could take already reported ([Engine.providerRefusing], for
-// [sandbox.ResumeCompletion]), on which the seat is parked at once, as the turn
-// that called through the chain would have parked it ([Engine.parkOnLimit]).
-// The coordinator holds the job on this node until the instant the refusal
-// names ([sandbox.Coordinator.OnCompleted]), and from then the seat's park
-// refuses it at the turn gate, before its claim, until the park's release.
-//
-// AFTER THE COLLECTION, AND NEVER AT THE GATE. The job is over and its tokens are
-// spent, so the claim collects it first: charged in the window it ran in, its
-// box paused and left asleep by the waiter from then on, its run on the
-// record as read back. Refused at the gate instead, before the claim, the
-// usual case was every seat on a shared plan: the plan is spent inside runs,
-// so every run on it ends on the vendor's limit, the first completion's resume
-// sits the entry out, and every later one whose review takes that entry was
-// refused there and left uncollected, uncharged, its box kept awake by the
-// waiter at every poll, for as long as the entry sat out: up to the hour the
-// backend benches it, and another hour each time a probe re-benched it. Its
-// seat was never parked either, so it read idle with no steady condition and
-// joined no probe, and an apply that released a park carrying the entry's
-// sit-out left the seat whose mail its run held parked by nothing.
-//
-// A SEAT A PERSON STOPPED is refused nothing here: its turn is closed as
-// stopped at its first round, before any model call, so no limit can refuse
-// it (see [Engine.seatCannotRun]).
+// job is collected, before its turn runs: a usage limit every model its review
+// could take already reported ([Engine.providerRefusing],
+// [sandbox.ResumeCompletion]), on which the seat is parked at once
+// ([Engine.parkOnLimit]). The coordinator holds the job until the refusal's
+// instant ([sandbox.Coordinator.OnCompleted]), then the park refuses it at the
+// turn gate. After the collection, never at the gate: the claim collects the
+// finished job first (charged, box paused, run recorded), else every seat on a
+// shared plan left later completions uncollected with boxes awake at every poll
+// and seats unparked, in no probe. A seat a person stopped is refused nothing
+// ([Engine.seatCannotRun]).
 func (e *Engine) collectedRefusal(ctx context.Context, c *Company, handle string) (sandbox.Refusal, bool) {
 	if e.seatStopping(handle) {
 		return sandbox.Refusal{}, false
@@ -863,15 +792,29 @@ func (e *Engine) releaseProviderPark(ctx context.Context, seat uuid.UUID, why st
 // releaseProviderParking lifts the hold parking took, if it is still the
 // seat's park, says so, and signals the resumes waiting on a limit (see the
 // file's doc), reporting whether it did.
+//
+// THE SEAT TAKEN OFF ITS PROBE AND ITS RELEASE NOTED AS THE RECORD IS DROPPED,
+// under the parks' lock ([seatParks.releaseParking]), and the notice published
+// once the release has let go: a park taken in the release's window joins the
+// probe and notes the seat parked after the drop, where after the queue's
+// resume the release would take it off that probe and draw it released. The
+// probes' and the notices' locks are taken under the parks' one here and
+// nowhere the other way round (the package doc's "A provider park's release
+// and its wait").
 func (e *Engine) releaseProviderParking(ctx context.Context, seat uuid.UUID, parking *providerParking, why string) bool {
-	if !e.providerParks.releaseParking(ctx, e, providerParkSpec, seat, parking, why) {
+	released := e.providerParks.releaseParking(ctx, e, providerParkSpec, seat, parking, why, func() {
+		e.leaveLimitProbe(seat, parking.basis)
+		e.noteProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: why})
+	})
+	e.parkNotices.flush(ctx, e.publishParkNotice)
+	if !released {
 		return false
 	}
-	e.leaveLimitProbe(seat, parking.basis)
 	// RELEASED, NOT ANSWERED: a park soon after continues this wait
-	// ([limitProbes.waits]); one that ends it forgets it after this.
+	// ([limitProbes.waits]); one that ends it forgets it after this. A park
+	// taken in this release's window stands on the wait, and is left it
+	// ([Engine.unlessParked]).
 	e.parkReleased(seat)
-	e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: why})
 	e.readmitResumes(waitProvider)
 	return true
 }
@@ -895,8 +838,8 @@ func (e *Engine) reconcileProviderParks(ctx context.Context, next *Company) {
 // (see [seatParks.forget]), and says the seat no longer waits here: the node
 // that takes it asks its own models on the first delivery.
 func (e *Engine) forgetProviderPark(ctx context.Context, seat uuid.UUID) {
-	e.endParkWait(seat)
-	if parking, ok := e.providerParks.forget(ctx, e, providerParkSpec, seat); ok {
+	e.forgetParkWait(seat)
+	if parking, ok := e.providerParks.forget(seat); ok {
 		e.leaveLimitProbe(seat, parking.basis)
 		e.publishProviderPark(ctx, parking.handle, types.SeatProviderReleased{Reason: seatReleasedHere})
 	}
@@ -932,6 +875,14 @@ func (e *Engine) stopProviderParks() {
 // backoff while the broker refuses. The park holds whether or not a screen
 // hears of it.
 func (e *Engine) publishProviderPark(ctx context.Context, handle string, payload events.Payload) {
+	e.noteProviderPark(ctx, handle, payload)
+	e.parkNotices.flush(ctx, e.publishParkNotice)
+}
+
+// noteProviderPark hands handle's seat's notice to [parkNotices] without
+// publishing it, for a release that decides it under the parks' lock and
+// publishes it once it has let go ([Engine.releaseProviderParking]).
+func (e *Engine) noteProviderPark(ctx context.Context, handle string, payload events.Payload) {
 	if e.backends == nil || e.backends.Queue == nil {
 		return
 	}
@@ -955,7 +906,7 @@ func (e *Engine) publishProviderPark(ctx context.Context, handle string, payload
 		return
 	}
 	ev.Source = role.Name
-	e.parkNotices.post(ctx, e.publishParkNotice, handle, ev)
+	e.parkNotices.note(ctx, handle, ev)
 }
 
 // publishParkNotice hands one park notice to the broker.

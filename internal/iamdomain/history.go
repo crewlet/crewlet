@@ -8,17 +8,14 @@ import (
 // HistoryClass is which retention horizon one authentication-trail row falls
 // under.
 //
-// TWO, and they are two because they answer different questions. "Who
-// suspended this person, and when" is an audit somebody asks a year later, and
-// in several jurisdictions is one they are required to be able to ask. "Who
-// signed in on Tuesday" is operational: it answers an investigation that is
-// days old and is a location-adjacent record of a person's working hours for
-// as long as it is kept, so keeping it as long as the first would be storing
-// more about people than the company has a reason to.
+// TWO, because they answer different questions. "Who suspended this person,
+// and when" is an audit asked a year later, which some jurisdictions require.
+// "Who signed in on Tuesday" answers a days-old investigation and records a
+// person's working hours, so keeping it as long would store more about people
+// than the company has reason to.
 //
-// THE CLASS IS DERIVED FROM THE OP, never carried on the record. A writer that
-// stated its own class could put a suspension in the short horizon, and the
-// row would simply be gone when somebody went looking.
+// THE CLASS IS DERIVED FROM THE OP, never carried on the record: a writer
+// stating its own could put a suspension in the short horizon.
 type HistoryClass string
 
 const (
@@ -37,14 +34,12 @@ var HistoryClasses = []HistoryClass{ClassChange, ClassSession}
 // Valid reports whether a class off the wire is one this build knows.
 func (c HistoryClass) Valid() bool { return slices.Contains(HistoryClasses, c) }
 
-// historyClass is the op's class, and the ABSENCE of an op from this table is
-// how a record says it writes no history row at all.
+// historyClass is the op's class; an op absent from it writes no history row.
 //
-// ONE TABLE BESIDE THE ENUM rather than a switch in the applier, because two
-// readers need it — the applier writing the row and the sweep resolving a
-// horizon — and a switch in one of them is a classification the other cannot
-// see. [ClassOf]'s exhaustiveness is a build failure, so an op added without a
-// class fails here rather than silently writing no trail.
+// ONE TABLE BESIDE THE ENUM, not a switch in the applier: the applier writing
+// the row and the sweep resolving a horizon both read it.
+// [CheckHistoryClasses] fails an op added without a class rather than let it
+// silently write no trail.
 var historyClass = map[OpKind]HistoryClass{
 	OpInvite:   ClassChange,
 	OpCancel:   ClassChange,
@@ -59,34 +54,22 @@ var historyClass = map[OpKind]HistoryClass{
 	OpOpen:  ClassSession,
 	OpClose: ClassSession,
 
-	// AN INVALIDATION IS A CHANGE TOO, although what it does is end
-	// sessions, and the two arguments that separate the horizons both
-	// point the same way here. The short horizon exists because a sign-in
-	// row is a location-adjacent record of one person's working hours —
-	// and this row names nobody, so none of that applies. The long one
-	// exists because "who did this, and when" is asked a year later — and
-	// ending every session in the company is exactly the gesture somebody
-	// comes back to an audit trail for.
+	// AN INVALIDATION IS A CHANGE although it ends sessions: the short
+	// horizon guards a record of one person's working hours, and this row
+	// names nobody; ending every session in the company is exactly what
+	// somebody asks an audit trail about a year later.
 	OpInvalidate: ClassChange,
 }
 
-// unrecorded are the ops that write NO history row, stated as a list rather
-// than as the absence of a map entry.
+// unrecorded are the ops that write NO history row, listed rather than left
+// out of the map so [CheckHistoryClasses] can tell a deliberately silent op
+// from one somebody forgot to classify:
 //
-// The difference matters because [ClassOf] must be able to tell "this op is
-// deliberately silent" from "somebody added an op and forgot to classify it",
-// and a missing map key is both. Each of these writes no trail for a reason
-// of its own:
-//
-//   - a BARRIER writes no row anywhere, by definition, and a TRIMMED record
-//     writes none of this domain's — the framework removes the log's
-//     anchors in its transaction, and an anchor is the framework's
-//     bookkeeping rather than anybody's identity;
-//   - a SWEEP's whole job is deleting trail rows, and a trail row per sweep
-//     would make the table grow from being swept;
-//   - an EVICTION and a GENERATION are facts about the LOG rather than about
-//     anybody's identity, and the state log has its own operator surface for
-//     both.
+//   - a BARRIER writes no row anywhere, and a TRIMMED record none of this
+//     domain's: the framework removes the log's anchors, its own bookkeeping;
+//   - a SWEEP deletes trail rows, and a row per sweep would grow the table;
+//   - an EVICTION and a GENERATION are facts about the LOG, with the state
+//     log's own operator surface.
 var unrecorded = []OpKind{OpSweep, OpBarrier, OpTrimmed, OpEviction, OpGeneration}
 
 // ClassOf is the history class one op's row falls under, and whether it writes
@@ -99,12 +82,9 @@ func ClassOf(op OpKind) (HistoryClass, bool) {
 // CheckHistoryClasses reports an op this build knows that is neither
 // classified nor deliberately silent.
 //
-// EXPORTED so the domain's own suite can assert it over [OpKinds] without
-// reaching into the map — and so the failure names the op rather than being a
-// count that goes green when one omission is fixed and another appears. It is
-// two-sided: an op that is BOTH classified and listed as silent is a
-// contradiction the applier would resolve by writing a row the sweep's
-// horizons do not cover.
+// EXPORTED so the domain's suite asserts it over [OpKinds] and a failure names
+// the op rather than a count. TWO-SIDED: an op both classified and silent
+// would have the applier write a row the sweep's horizons do not cover.
 func CheckHistoryClasses() error {
 	for _, op := range OpKinds {
 		_, classified := historyClass[op]

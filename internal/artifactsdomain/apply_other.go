@@ -194,14 +194,13 @@ func (a *Applier) removeAsset(ctx context.Context, tx *sql.Tx, c applyContext, a
 // applyReader writes one person's own state about one artifact.
 //
 // A PIN, AN UNPIN AND AN OPENED MARK WRITE NO HISTORY: they are one person's
-// browsing, and the artifact's history is what happened to the artifact. Each
-// is a total function of the record and the row, so a redelivery writes the
-// same row again. A record about an artifact this log holds no row of (purged
-// between the decide and the apply) writes nothing at all: there is nothing to
-// pin.
+// browsing, not something that happened to the artifact. Each is a total
+// function of the record and the row, so a redelivery rewrites the same row. A
+// record about an artifact this log holds no row of (purged between the decide
+// and the apply) writes nothing.
 //
-// AN ELEVATED READ IS HISTORY (D09): the artifact's owner and editors see that
-// the admin path opened it.
+// AN ELEVATED READ IS HISTORY (D09): the owner and editors see that the admin
+// path opened it.
 func (a *Applier) applyReader(ctx context.Context, tx *sql.Tx, c applyContext) (int, error) {
 	if c.record.Op == OpInboxMarks {
 		return a.applyMarks(ctx, tx, c)

@@ -8,16 +8,13 @@ import (
 // ExpiryWarning is how far ahead of a credential's published expiry a pass
 // reports it as [FindingCredentialExpiring].
 //
-// TWO WEEKLY REVIEWS. A token is rotated by a person — a new one minted at the
-// vendor and sealed into this deployment's secret store — and the person who
-// reads Company › Integrations does it on their own schedule, usually once a
-// week. Fourteen days means the warning is on screen for at least two of
-// those looks before the credential lapses, so one missed week is not an
-// outage. Shorter and a holiday is one; longer and the note sits on a working
-// integration for so long that people stop reading it. A constant rather than
-// a knob because no company has a reason to be warned later than it can act,
-// and a settled surface is re-read on the settled interval, so the finding
-// appears within one interval of the window opening whatever the value.
+// TWO WEEKLY REVIEWS. A person rotates a token, and reads Company ›
+// Integrations on their own schedule, usually weekly. Fourteen days puts the
+// warning on screen for at least two looks before the credential lapses, so
+// one missed week is not an outage. Shorter and a holiday is one; longer and
+// the note sits on a working integration until people stop reading it. A
+// constant, not a knob: no company has a reason to be warned later than it
+// can act, and a settled surface is re-read on the settled interval.
 const ExpiryWarning = 14 * 24 * time.Hour
 
 // ExpiresSoon reports whether a credential expiring at `at` is inside
@@ -49,14 +46,11 @@ type ToolSurface struct {
 // # Why the engine groups surfaces at all
 //
 // A company thinks in tools: it connected Atlassian, not "the atlassian,
-// confluence, jira and forge surfaces". The dashboard drew one card per tool
-// and derived that card's state itself, with its own copy of the phase order
-// and its own rules for which surface's word wins — a second classifier, in a
-// second language, over the same rows [Classify] had already judged. It
-// drifted the way the vendor classifiers [Classify] replaced had drifted: a
-// disconnect drew neutral on the card and amber on the surface it named.
-// So the grouping is declared here, once, and the dashboard's copy is held
-// against it (`INTEGRATION_TOOLS`, `TestTheDashboardGroupsSurfacesAsTheEngineDoes`).
+// confluence, jira and forge surfaces". A dashboard deriving each card's state
+// with its own phase order and winner rules is a second classifier over rows
+// [Classify] already judged, and drifts. So the grouping is declared here,
+// once, and the dashboard's copy is held against it (`INTEGRATION_TOOLS`,
+// `TestTheDashboardGroupsSurfacesAsTheEngineDoes`).
 type Tool struct {
 	Key      string
 	Surfaces []ToolSurface
@@ -205,28 +199,16 @@ type verdict struct {
 
 // Rollup is one tool's state, from the rows of its configured surfaces.
 //
-// # The rules, in the order they apply
-//
-//  1. NOTHING CONFIGURED is not in use. A tool nobody set up has nothing to
-//     report, and a fault list of every tool a company does not use is not a
-//     catalogue.
-//  2. A TEARDOWN WINS. A tool being taken away is not one anybody should be
-//     sent to fix, and showing it connected invites a second Disconnect.
-//  3. Otherwise each configured surface is judged on its own, and the tool
-//     takes the surface whose state comes first in [ToolStates] — so a
-//     surface a person owes something on outranks one the engine is still
-//     bringing up, which is the question the state answers. Within one
-//     state the least ready phase ([Phases]) wins, then the catalogue order.
-//
-// One surface is judged by its reported phase, through [Report.Outcome] — who
-// has to act, not what failed: settled is connected, blocked is attention,
-// waiting is not connected. Over a READY phase two more facts are read,
-// because the loop says nothing about them: a delivery path that cannot work
-// (a secret that did not resolve, no parser routing it, a registration at an
-// address that moved) needs action, and so does a credential about to expire.
-// A surface with no report is paused where its block is off, judged on those
-// same ingress facts where no pass converges it (Slack), unavailable where
-// this node could not read the status, and connecting otherwise.
+// Rules, in order: NOTHING CONFIGURED is not in use. A TEARDOWN WINS: nobody
+// is sent to fix a tool being taken away. Otherwise each configured surface
+// is judged alone and the tool takes the one whose state comes first in
+// [ToolStates] (a surface a person owes something on outranks one the engine
+// is bringing up); within a state the least ready phase ([Phases]) wins, then
+// catalogue order. A surface is judged by its reported phase through
+// [Report.Outcome] (who has to act); over READY, a delivery path that cannot
+// work and an expiring credential also need action. With no report: paused if
+// its block is off, judged on those ingress facts where no pass converges it
+// (Slack), unavailable if unreadable, else connecting.
 func Rollup(tool Tool, present []SurfaceStatus) ToolRollup {
 	out := ToolRollup{Key: tool.Key, Surfaces: make([]string, 0, len(tool.Surfaces))}
 	names := map[string]string{}

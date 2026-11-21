@@ -52,7 +52,19 @@ func BenchmarkATranscriptLikeLine(b *testing.B) {
 	benchmarkLine(b, []byte(line))
 }
 
-// benchmarkLine reads line three ways, each a reading of the whole line per iteration.
+// BenchmarkALongTextPastASCII reads a line holding 16 MiB of text past ASCII, CJK and emoji, three and four
+// bytes a character, among plain words: the shape a counted text costs most on, every character decoded
+// for its units ([jsonscan.Scanner.CountUnits]).
+func BenchmarkALongTextPastASCII(b *testing.B) {
+	var text strings.Builder
+	for text.Len() < 16<<20 {
+		text.WriteString("日本語のテキスト 😀🚀 한국어 текст, words between them ")
+	}
+	benchmarkLine(b, []byte(`{"type":"text","text":"`+text.String()+`"}`))
+}
+
+// benchmarkLine reads line four ways, each a reading of the whole line per iteration: read, passed over by
+// Skip, passed over by Skip counting its units, and by jsontext.
 func benchmarkLine(b *testing.B, line []byte) {
 	b.Run("read", func(b *testing.B) {
 		b.SetBytes(int64(len(line)))
@@ -101,6 +113,26 @@ func benchmarkLine(b *testing.B, line []byte) {
 			}
 			if _, err := s.Next(); !errors.Is(err, io.EOF) {
 				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("skip_counting", func(b *testing.B) {
+		b.SetBytes(int64(len(line)))
+		b.ReportAllocs()
+		r := bytes.NewReader(line)
+		s := jsonscan.New(r)
+		for b.Loop() {
+			r.Reset(line)
+			s.Reset(r)
+			s.CountUnits(true)
+			if _, err := s.Next(); err != nil {
+				b.Fatal(err)
+			}
+			if err := s.Skip(); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := s.Next(); !errors.Is(err, io.EOF) || s.Units() < int64(len(line))/4 {
+				b.Fatal(err, s.Units())
 			}
 		}
 	})

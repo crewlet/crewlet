@@ -14,50 +14,27 @@ import (
 
 // A WAKE REACHES A MAILBOX OR IS REFUSED, never dropped on the way.
 //
-// A seat's inbox lives on an interest-retention stream: an event published to a
-// subject no consumer covers is discarded by the broker the moment it is
-// stored, and the publisher is told it succeeded. A seat's mailbox is two such
-// consumers, its inbox's and its priority lane's ([queue.HasLane]), and until
-// both exist a wake published to it is lost with nothing anywhere to say so.
+// A seat's inbox is on an interest-retention stream: an event published to a
+// subject no consumer covers is discarded and the publisher told it succeeded.
+// A mailbox is two consumers, the inbox's and the priority lane's
+// ([queue.HasLane]), and until both exist a wake is lost silently.
 //
-// The mailbox pass ([Node.EnsureMailboxes]) is what makes them exist, and on
-// its own it could only be a race against the producers: a node boots its
-// scheduler, its change feeds and its inbound consumer before the pass has
-// run, and a feed replaying a person's message at boot publishes a priority
-// wake onto a lane that is not there yet. Ordering the boot so the pass runs
-// first would close that one window and leave the rest: a seat whose create
-// the broker refused on the pass, and a mailbox the pass has not reached yet.
-//
-// So the boot makes every mailbox before it starts a producer, and an apply
-// makes a revision's before it can route to them; and the guarantee is held
-// where a wake is sent as well, as the backstop for a create the broker
-// refused. Every producer of a seat's wake (the inbound router, the scheduler,
-// the agent-to-agent asks, a park) publishes through [Node.Wakes], and a
-// publish to a seat this node has not confirmed a complete mailbox for runs
-// the pass first. A mailbox it still cannot confirm refuses the publish with
-// [queue.ErrUnavailable] instead of handing the wake to a broker that would
-// discard it, and each producer retries rather than drops: the inbound router
-// NAKs the delivery, so the broker redelivers it; a park's NAK returns the
-// partition; and the scheduler and the agent-to-agent asks ask
-// [Node.ConfirmMailbox] BEFORE they spend a claim or open a channel, so a
-// refusal leaves nothing half done for the retry to trip over.
-//
-// THE CONFIRMED SET IS THIS NODE'S MEMORY ([mailboxes]): once a seat is in it,
-// a wake costs a map lookup and no broker call. It is keyed on the seat's id,
-// which is what the mailbox is named by, so no revision can give a seat a
-// different mailbox; and it answers for the revision being served, because
-// every pass prunes it to that revision's seats and an apply runs one, so a
-// seat a revision removed and a later one restored is confirmed again.
+// The boot makes every mailbox before it starts a producer and an apply makes a
+// revision's before it routes to them, but a feed replaying at boot, a create
+// the broker refused or a mailbox not yet reached would still race. So the
+// guarantee is held where a wake is sent too ([Node.Wakes]).
 
 // Wakes is the node's queue for publishing a seat's wakes: every verb is the
 // queue's own, and Publish to a seat's inbox reaches a complete mailbox or is
-// refused.
+// refused with [queue.ErrUnavailable] rather than handed to a broker that would
+// discard it. Producers retry, not drop: the inbound router and a park NAK; the
+// scheduler and agent-to-agent asks call [Node.ConfirmMailbox] BEFORE spending a
+// claim or opening a channel, so a refusal leaves nothing half done.
 //
-// A seat this node has confirmed costs one lookup in its own set and no broker
-// call. A topic that is not a seat's inbox, and a seat that is not in the
-// company, are published exactly as the queue would: a seat outside the
-// company is one whose mailbox the retirement sweep owns, and recreating it
-// from a publish would undo that sweep.
+// THE CONFIRMED SET IS THIS NODE'S MEMORY ([mailboxes]): a confirmed seat costs
+// a lookup, no broker call; it is pruned to the revision served on every pass.
+// A topic that is no seat's inbox, and a seat outside the company (its mailbox
+// is the retirement sweep's to own), are published as the queue would.
 func (n *Node) Wakes() queue.EventQueue {
 	return wakes{EventQueue: n.cfg.Queue, n: n}
 }
@@ -79,21 +56,17 @@ func (w wakes) Publish(ctx context.Context, topic string, ev *events.Event) erro
 }
 
 // ConfirmMailbox returns once the seat's mailbox is complete, or reports why
-// the node cannot say it is, with an error that is [queue.ErrUnavailable]. A
-// seat outside the company the node serves is not this node's to make a
-// mailbox for, and answers nil.
+// the node cannot say it is, as [queue.ErrUnavailable]. A seat outside the
+// company the node serves answers nil: not its mailbox to make.
 //
 // EXPORTED FOR THE PRODUCERS THAT SPEND SOMETHING BEFORE THEY PUBLISH: the
-// scheduler claims a fire and the agent-to-agent service opens a channel, and
-// a refusal after either would leave a claimed fire no tick retries or a
-// channel nobody is woken for. Asked first, a refusal leaves nothing behind.
+// scheduler claims a fire and the agent-to-agent service opens a channel, and a
+// refusal after either would strand them.
 //
-// THE WHOLE PASS, not a create for this seat alone: it is the one place that
-// registers a mailbox before creating it, reads the broker's own listing
-// rather than this node's memory, and treats a mailbox missing its lane as
-// missing ([queue.Subscription.Partial]). Serialised with every other pass, so
-// a wake waits for one already in flight instead of proposing the same create
-// beside it, and a pass with nothing missing makes no broker call.
+// THE WHOLE PASS, not a create for this seat alone: the one place that
+// registers before creating, reads the broker's listing rather than this node's
+// memory, and counts a mailbox missing its lane as missing
+// ([queue.Subscription.Partial]). Serialised: a wake waits for a pass in flight.
 func (n *Node) ConfirmMailbox(ctx context.Context, id uuid.UUID) error {
 	if n.mail.has(id) {
 		return nil

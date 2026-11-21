@@ -223,7 +223,7 @@ func TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads(t *testing.T) {
 			{"login", one(facts, "login"), login},
 			{"effortNote", one(facts, "effortNote"), p.EffortNote},
 			{"webDeniable", one(facts, "webDeniable"), map[bool]string{true: "true"}[slices.Contains(harnessprofile.WebDeniable(), name)]},
-			{"assistant", one(facts, "assistant"), map[bool]string{true: "true"}[slices.Contains(harnessprofile.AssistantEligible(), name)]},
+			{"assistant", one(facts, "assistant"), map[bool]string{true: "true"}[slices.Contains(harnessprofile.HelperEligible(), name)]},
 		} {
 			if tc.got != tc.want {
 				t.Errorf("%s: %s %q, want the profile's %q", name, tc.field, tc.got, tc.want)

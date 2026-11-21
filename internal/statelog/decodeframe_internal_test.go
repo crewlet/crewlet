@@ -12,19 +12,12 @@ import (
 
 // THE APPLIER IS HANDED THE BODY AND THE DEFERRED TABLE KEEPS THE FRAME.
 //
-// This is ADR-0031 at the one field every applier reads, and it is the case
-// the suite above it structurally cannot provide: [statelogtest] builds a
-// [Record] by hand and hands it straight to an applier, so it certifies what a
-// domain does with a record and never what the framework puts in one.
-//
-// It shipped the other way round, and the failure is worth naming because it
-// looks like anything but a signature bug. Every domain's applier decodes
-// `Record.Payload`, so with the frame still on it every record in the company
-// came back `invalid character 'c' looking for beginning of value` from inside
-// the apply transaction. The applier retried the same record for ever, its
-// position never moved, health reported the node merely BEHIND rather than
-// broken, and the seats it was holding were shed to a peer that would have
-// done exactly the same thing.
+// ADR-0031 at the one field every applier reads, and the case [statelogtest]
+// cannot provide: it builds a [Record] by hand, so it certifies what a domain
+// does with a record, never what the framework puts in one. With the frame on
+// `Record.Payload` every domain's decode fails inside the apply transaction,
+// the applier retries the record for ever, and health reports the node only
+// BEHIND while its seats shed to peers that fail the same way.
 func TestTheApplierIsHandedTheBodyAndTheTableTheFrame(t *testing.T) {
 	t.Parallel()
 	body, err := json.Marshal(Envelope{
@@ -45,10 +38,9 @@ func TestTheApplierIsHandedTheBodyAndTheTableTheFrame(t *testing.T) {
 	}
 	framed := signer.Seal(body)
 
-	// THE CONTROL that makes this case able to fail: the frame is opaque
-	// to the domain's own decoder, so handing it on is not merely untidy.
-	// Without this the assertions below would pass against a framework
-	// that never framed anything.
+	// THE CONTROL that makes this case able to fail: the frame is opaque to
+	// the domain's own decoder, so without it the assertions below would pass
+	// against a framework that never framed anything.
 	if _, err := (frameProbeDomain{}).Envelope(framed); err == nil {
 		t.Fatal("the domain's decoder read the frame, so handing it the framed " +
 			"bytes would be invisible and this case proves nothing")

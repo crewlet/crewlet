@@ -21,34 +21,16 @@ import (
 
 // THE INVITATION, AND WHY ITS TWO METHODS ARE DIFFERENT OPERATIONS.
 //
-// A GET RENDERS AND NEVER SPENDS. A link is followed by things that are not
-// the person it was sent to: a mail client prefetching, a security scanner
-// opening every URL in a message, a chat app building a preview card. Every
-// one of those is a GET, and an invitation spent by one is an account created
-// for somebody who never saw it — or, more often, a person told their link was
-// already used by whoever scanned their mailbox.
+// A GET RENDERS AND NEVER SPENDS: prefetchers and scanners follow links, and an
+// invitation spent by one is an account for somebody who never saw it.
 //
-// So the GET answers what the form needs to render — which address it is for,
-// who sent it, whether it is still good — and changes nothing. The POST is the
-// person, having typed a password.
+// ONLY THE ID IS EVER IN A PATH. The secret rides in the URL FRAGMENT, which no
+// browser sends, then in the [InviteSecretHeader] header (view) or JSON body
+// (redemption); the estate keeps only its verifier
+// ([iamdomain.InvitationRow.Admits]).
 //
-// THE LINK IS AN ID AND A SECRET, AND ONLY THE ID IS EVER IN A PATH.
-//
-// A link reads `<api.external_url>/dashboard#/invite/<id>.<secret>`: the
-// dashboard's invitation screen, with the credential in the FRAGMENT, which a
-// browser never sends to any server — so neither half reaches a proxy's access
-// log by the person following it. The screen then calls these routes with the
-// id in the path and the secret beside it, never in a URL: the view in the
-// [InviteSecretHeader] header and the redemption in its JSON body. The id
-// alone is in every snapshot, backup
-// and access log and opens nothing; what the estate keeps of the secret is its
-// verifier ([iamdomain.InvitationRow.Admits]).
-//
-// A WRONG SECRET IS AN ABSENT INVITATION: one refusal, in the same bytes, for
-// every way a link fails to open ([Service.refuseInvitation]), and counted as a failed
-// attempt exactly as an id nobody issued is — answered differently, a guessed
-// secret against a real id would say the id exists, and the id is the half
-// that leaks.
+// A WRONG SECRET IS AN ABSENT INVITATION ([Service.refuseInvitation]), or a
+// guessed secret would reveal the id exists.
 
 // InviteSecretHeader carries an invitation link's secret to the view.
 //
@@ -272,22 +254,17 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 			V: iamdomain.DocumentVersion, ID: uuid.New().String(),
 			Method: iamdomain.MethodPassword, Verifier: verifier,
 		},
-		// WHAT THE INVITATION SAID, and not a word more. The grants were
-		// decided once, by whoever issued it, rather than again by
-		// whoever happens to process the redemption —
-		// which is also what stops a redemption being a way to ask for
-		// more than was offered.
+		// WHAT THE INVITATION SAID, and not a word more: the grants were decided
+		// once, by its issuer, so a redemption cannot ask for more.
 		//
-		// AND THE INVITATION IS NAMED AS THE AUTHORITY, so the domain
-		// holds the enrolment to it in the snapshot the grants land
-		// from rather than to the node's own writer, which holds none
-		// of what an invitation usually confers.
+		// THE INVITATION IS NAMED AS THE AUTHORITY, so the domain holds the
+		// enrolment to it in the snapshot the grants land from, not to the
+		// node's own writer, which holds none of what an invitation confers.
 		//
-		// THE SECRET GOES WITH IT, checked again where the grants land,
-		// and so does the seat the invitation holds: refused as the
-		// link's own refusal — never as a request missing a seat, which
-		// the invitee could not fix — if the chart no longer holds it as
-		// a human seat, and 409 if somebody was bound to it since.
+		// THE SECRET AND THE SEAT GO WITH IT, checked again where the grants
+		// land: the link's own refusal (never a missing-seat error the invitee
+		// cannot fix) if the chart no longer holds a human seat, 409 if
+		// somebody was bound to it since.
 		Grants:           held.Grants,
 		Invitation:       held.ID,
 		InvitationSecret: in.Secret,
@@ -325,18 +302,16 @@ func (s *Service) RedeemInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 // redemptionOpID is the operation an invitation's redemption is published
-// under: DERIVED from the invitation, so every attempt at one redemption is
-// the same operation — a retry after `unknown` whose first attempt landed is
-// answered from the ledger, and refused as the link already used, rather than
-// enrolling a second person on one link.
+// under: DERIVED from the invitation, so every attempt is the same operation
+// and a retry after `unknown` whose first attempt landed is answered from the
+// ledger, refused as the link already used, never enrolling a second person.
 //
-// AT THE INVITATION'S OWN INSTANT, which its id carries (a uuid7 minted when it
-// was issued — [iamdomain.Blinder.InvitationID]), in the grammar the ledger
-// vouches for a retry by: it was `invite:<id>`, which carries none and read as
-// minted at the epoch, so once this node's ledger had swept anything every
-// redemption was answered `unknown` without being published. The issue is at
-// most the invitation window ago, well inside the month the ledger keeps an
-// identity operation for.
+// AT THE INVITATION'S OWN INSTANT, which its id carries (a uuid7 minted at
+// issue, [iamdomain.Blinder.InvitationID]), in the grammar the ledger vouches
+// for a retry by: an id without an instant reads as minted at the epoch, so
+// once the ledger swept anything every redemption answered `unknown` unpublished.
+// The issue is at most the invitation window ago, well inside the month the
+// ledger keeps an identity operation.
 func redemptionOpID(invitation string) string {
 	at, _ := statelog.OpMintedAt(invitation)
 	return statelog.DeriveOpID(at, "invite-redeem", redemptionNamespace, invitation)
@@ -347,43 +322,17 @@ func redemptionOpID(invitation string) string {
 // redemption retried across the change a second operation.
 const redemptionNamespace = "crewlet.authapi.invite-redeem"
 
-// refuseEnrolment answers an enrolment the domain did not land, and it is the
-// one place this surface decides which of those failures are the caller's.
+// refuseEnrolment answers an enrolment the domain did not land: the one place
+// deciding which failures are the caller's. Not one 503, which says "try
+// again": a REFUSED login changes nothing on retry. What was TYPED is 400
+// naming the rule, a name somebody holds is 409 (never saying whom, unlike the
+// domain's refusal), only an unpublished or unapplied record is 503.
 //
-// # Why this is not one 503
-//
-// The one enrolment this surface performs — an invitation's redemption — used
-// to answer every failure `503 unavailable`, which is the status that says
-// "the engine is having a moment, try again". For a login the domain REFUSED
-// that is false twice over: nothing will change on a retry, and the person is
-// left resubmitting the same name at a form that never says what is wrong with
-// it. So the refusals that are about what was
-// TYPED are 400 naming the rule, a name somebody else already holds is 409,
-// and only what is left — a record that could not be published or applied —
-// is 503.
-//
-// # What the 409 does and does not say
-//
-// It says the login or the seat is taken, which the person needs in order to
-// choose another login or ask for another link, and it does NOT say by whom.
-// The domain's own refusal names the holder's id, which is right for an
-// administrator and wrong here: the caller is holding an invitation link,
-// which is evidence of who THEY are and of nothing about anybody else.
-//
-// AN ADDRESS SOMEBODY IS ENROLLED UNDER is the 410 every way a link stops
-// working is: the person the link was for already exists. So is a link whose
-// seat the record refuses — one the chart no longer holds as a human seat —
-// which [iamdomain.Writer.Redeem] answers
-// [iamdomain.ErrRefused] and never [iamdomain.ErrSeatRequired]: the invitee
-// left nothing out, and the 400 that asks for a seat would send them looking
-// for a field the form does not have.
-//
-// # The invitation by id goes to the log, and only there
-//
-// Every line here names the invitation the redemption was for, because the
-// domain's sentences name it as "this invitation" — what the invitee reads —
-// and the operation id a redemption is published under is derived from the
-// invitation one way: an operator holding the op id could not get back to it.
+// AN ADDRESS SOMEBODY IS ENROLLED UNDER is the 410 every dead link gets, as is
+// a seat the chart no longer holds as human, which [iamdomain.Writer.Redeem]
+// answers [iamdomain.ErrRefused], never [iamdomain.ErrSeatRequired]: a 400
+// would send the invitee looking for a field the form lacks. The invitation id
+// goes to the log only; the op id derives from it one way.
 func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID,
 	invitation string, err error) {
 	var taken *iamdomain.ErrTaken
@@ -423,15 +372,13 @@ func refuseEnrolment(w http.ResponseWriter, r *http.Request, event, opID,
 // the id a route's path names and the secret presented beside it — answering
 // false once it has written the refusal.
 //
-// ONE REFUSAL FOR ABSENT, REDEEMED, EXPIRED AND A SECRET THAT IS NOT THE
-// LINK'S, because the first three have one remedy — ask for a new one — and
-// telling them apart would say "this was already used" to somebody whose link
-// merely aged out, sending them to find out who used it; and the fourth told
-// apart would say which ids exist to anybody guessing secrets against them.
-// Counted only where the link did not prove itself: see
-// [Service.refuseInvitation]. NOT PADDED: what separates an id nobody issued
-// from a real one with a wrong secret is one indexed read and a SHA-256, and
-// the secret behind a real id is 256 bits nobody walks.
+// ONE REFUSAL FOR ABSENT, REDEEMED, EXPIRED AND A WRONG SECRET: the first three
+// share a remedy (ask for a new link), and telling them apart would say "used"
+// to somebody whose link aged out, while telling the fourth apart would say
+// which ids exist. Counted only where the link did not prove itself
+// ([Service.refuseInvitation]). NOT PADDED: the difference between an unissued
+// id and a wrong secret is one indexed read and a SHA-256, and a real id's
+// secret is 256 bits nobody walks.
 func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 	adm admission, id, secret string) (iamdomain.InvitationRow, bool) {
 
@@ -461,20 +408,12 @@ func (s *Service) presentedInvitation(w http.ResponseWriter, r *http.Request,
 // presented with a secret that is not its link's. ONE ANSWER for all of them,
 // in the same bytes, for [Service.presentedInvitation]'s reason.
 //
-// # A failed attempt only where the link did not prove itself
-//
-// The link is the credential, and walking ids and secrets is how somebody
-// without one looks for one — so an id nobody issued and a secret that is not
-// its link's are FAILED ATTEMPTS, in the audit trail's failure count. A link
-// that DID prove itself and no longer works — redeemed, aged out — is not a
-// guess: it is the link's holder, or a mail scanner that fetched it for them,
-// and those fetch the same link again and again. Counted,
-// a scanner re-reading one spent link put the address it scans from in the
-// count as a guesser — and while a link was on its source's curve, it put that
-// address on the curve, which on a deployment behind one proxy address was the
-// whole company. The difference is invisible to a caller who does not hold the
-// link — every one of them is refused the same way — so it tells a guesser
-// nothing.
+// A FAILED ATTEMPT ONLY WHERE THE LINK DID NOT PROVE ITSELF: an unissued id or
+// a wrong secret is somebody walking for a credential, so it counts. A link
+// that DID prove itself and no longer works is its holder, or a mail scanner
+// re-fetching it; counted, the scanner's address would be a guesser in the
+// failure count and on the curve, which behind one proxy address is the whole
+// company. A caller without the link cannot see the difference.
 func (s *Service) refuseInvitation(w http.ResponseWriter, r *http.Request,
 	adm admission, proved bool) {
 

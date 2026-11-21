@@ -26,31 +26,16 @@ import (
 
 // ---- a project's file BYTES -------------------------------------------- //
 //
-// The listing is a question like every other read (`GET /worklet/files`, the
-// `work_files` query). What is here is what cannot be one: a download STREAMS
-// a file back and an upload streams one in — neither holding the file in
-// memory and neither passing through a model. The rows go through the
-// tracker's half — the SAME file reader and writer the file tools are handed
-// ([builtin.WorkDeps.Files], [builtin.WorkDeps.FileWriter]) — and the bytes
-// through this node's object store ([Halves.Objects]), the upload always
-// bytes first: a file that is listed is a file that can be read.
+// Downloads and uploads STREAM, never held in memory or passed through a
+// model. Rows go through the SAME reader and writer the file tools get
+// ([builtin.WorkDeps.Files], [builtin.WorkDeps.FileWriter]), bytes through the
+// object store ([Halves.Objects]), the upload bytes first: a listed file can
+// be read.
 //
-// THREE VERBS NO TOOL MAKES, on this surface's terms for one: each is decided
-// on the project its path names by the same rows the file tools are
-// ([authz.ActionFileRead], [authz.ActionFileWrite], [authz.ActionFileRemove]),
-// a write is attributed to the request's principal as every write here is
-// ([Service.actor]), takes its operation from the request's `Idempotency-Key`
-// ([operationKey]) bound to what it asks ([keyedOp]), leaves the
-// `operator_acted` record a tool's call does ([operator.AuditGesture]), and
-// answers a refusal the writer did not name for files through the one refusal
-// mapping ([operator.FailWrite]).
-//
-// WHAT IS THE BYTES' OWN KEEPS ITS OWN CODE: a path no project keeps a file
-// under, an If-Match that is not a version, a body that stopped arriving or
-// outgrew the cap, an upload too old to be named, content the store will not
-// vouch for — and the writer's three refusals about a FILE as a resource with
-// an ETag: no project, no file, and a version moved past, which is HTTP's own
-// `412` for a failed If-Match on the resource it names.
+// Each verb is decided on the path's project by the file tools' rows
+// ([authz.ActionFileRead], [authz.ActionFileWrite], [authz.ActionFileRemove]);
+// a write is attributed ([Service.actor]), keyed ([operationKey], [keyedOp]),
+// audited ([operator.AuditGesture]) and refused via [operator.FailWrite].
 
 // filesPattern is the path every byte route answers on.
 const filesPattern = "/worklet/files/{project}/{path...}"
@@ -432,28 +417,15 @@ func fileReadFailed(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 // bytesFailed answers an upload whose bytes did not reach the store: a body
-// that stopped arriving is the CLIENT'S (400, never a 503 telling it to retry
-// a request whose own connection failed), one over the cap is the one
-// spelling of a 413 every JSON surface answers, a store with no room for them
-// ([objstore.Full]) is a 507 naming the room an operator makes, in the store's
-// own words for it, since no wait makes it, and any other store that did not
-// take them is a CONDITION in its own words and under its own hint
-// ([operator.AnswerCondition]): a full one that names no room
-// ([objstore.ErrFull] alone) is `503` with no Retry-After and says who makes
-// room, one that did not answer is `503` under an election's wait
-// ([objstore.ErrUnanswered]), and the upload ran out of its pace or was
-// abandoned the same way. Anything else is a FAULT of this node, `500`, its
-// words the log's.
-//
-// THE FIRST TWO IN A PERSON'S WORDS ([paced.Unread], [fileTooLarge]), never the
-// error's: it opens with the store's or the reader's package words
-// ("objstore: the object is over its size limit (1073741824 bytes)") and ends
-// with the read's own failure as Go spells it, which goes to the log.
-//
-// ONE READING WITH EVERY SURFACE THAT STORES A FILE — an artifact's upload,
-// write_project_file and the artifact tools answer the same failures the same
-// way, because the store classifies them once: an unclassified failure was a
-// 503 inviting a retry here and a 500 there.
+// that stopped arriving is the CLIENT'S (400, never a retry-inviting 503), one
+// over the cap the 413 every JSON surface answers, a store with no room
+// ([objstore.Full]) a 507 naming the room to make, and other store failures a
+// CONDITION under its own hint ([operator.AnswerCondition]): [objstore.ErrFull]
+// alone `503` with no Retry-After, [objstore.ErrUnanswered] `503` under an
+// election's wait, as for a paced-out upload. Anything else is a FAULT, `500`.
+// The first two use a person's words ([paced.Unread], [fileTooLarge]), never
+// the error's text, which goes to the log; every surface storing a file answers
+// the same failure the same way, since the store classifies once.
 func bytesFailed(w http.ResponseWriter, r *http.Request, err error, key string) {
 	var full *objstore.Full
 	switch {

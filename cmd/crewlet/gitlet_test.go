@@ -233,18 +233,13 @@ func hermeticGitWith(t *testing.T, more string) string {
 // configuration file, for the case that hands the operator's git a setting of
 // their own, and the HOME it gives git.
 //
-// What it replaces is every input of git's the suite's scrub cannot remove
-// ([scrubGitEnv] takes git's own variables out of the whole process): the
-// FILES git reads beside them — no system configuration or attributes, the
-// global configuration named, and a HOME and a configuration home of its own,
-// since git takes its global attributes and ignore files from
-// $XDG_CONFIG_HOME/git before HOME, whatever GIT_CONFIG_GLOBAL says — the
-// LOCALE, which translates the sentences of git's a case reads; and curl's
-// PROXY variables, the scheme's own and ALL_PROXY with NO_PROXY, under which
-// even a request to the node on this machine goes to the person's proxy.
-// Pinned on git alone rather than taken from the suite: the process keeps its
-// HOME and XDG_CACHE_HOME for the store's per-user cache, and its locale and
-// proxies are the person's to keep for everything that is not git
+// It replaces every input the suite's scrub cannot remove ([scrubGitEnv] takes
+// git's variables out of the whole process): no system configuration or
+// attributes, the named global configuration, a HOME and configuration home of
+// its own (git reads global attributes and ignore files from
+// $XDG_CONFIG_HOME/git before HOME), the LOCALE, and curl's PROXY variables.
+// Pinned on git alone: the process keeps its HOME, XDG_CACHE_HOME, locale and
+// proxies for everything that is not git
 // ([TestTheOperatorsGitInTheSuiteReadsNothingOfTheMachine]).
 func hermeticGitIn(t *testing.T, global, more string) (git, home string) {
 	t.Helper()
@@ -258,16 +253,12 @@ func hermeticGitIn(t *testing.T, global, more string) (git, home string) {
 }
 
 // THE OPERATOR'S GIT A CASE STARTS READS NOTHING OF THE MACHINE THROUGH WHAT
-// THE SCRUB CANNOT REACH ([hermeticGit], [scrubGitEnv]). The CLI hands its git
-// the whole environment, as it must an operator's, and three of git's inputs
-// there are no GIT_ variable: the configuration home, where git finds its
-// global attributes and ignore files whatever GIT_CONFIG_GLOBAL says (a
-// developer's `* -delta` there turned deltas off and moved the
-// repository-limit case's refusal a step later); the locale, which translates
-// every sentence of git's a case reads; and curl's proxy variables, through
-// which even a request to this machine's own node goes to the person's proxy.
-// Planted here as a developer's shell holds them, and read back through git
-// itself, run the way the CLI runs it, over this process's environment.
+// THE SCRUB CANNOT REACH ([hermeticGit], [scrubGitEnv]). Three inputs of git's
+// are no GIT_ variable: the configuration home (global attributes and ignore
+// files, whatever GIT_CONFIG_GLOBAL says), the locale (translates the sentences
+// a case reads), and curl's proxy variables (even this machine's node goes to
+// the person's proxy). Planted as a developer's shell holds them, read back
+// through git run as the CLI runs it.
 //
 // Mutation: drop hermeticGitIn's XDG_CONFIG_HOME → the planted attributes and
 // ignore files answer (red). Drop its LC_ALL → the locale row (red). Drop its
@@ -607,16 +598,14 @@ func (g operatorGit) runInput(t *testing.T, stdin string, args ...string) (strin
 
 // ---- status -----------------------------------------------------------------
 
-// A CODE READ'S ANSWER IS READ BY THE READER'S OWN BOUND. The reader ends a page
-// on the row that crosses gitlet.MaxPageBytes and keeps it, so an answer carries
-// up to that budget, one row more and its envelope; the CLI reads code answers
-// up to codeAnswerBytes, which must hold the largest. Built here from the
-// bounds that make a row large AT THEIR WORST ENCODING — every byte of every
-// ref, every protection pattern and the default branch a `<`, legal in all
-// three and written by JSON as six bytes — so a bound that grows, or an
-// encoding that does, fails this rather than an operator's command. And the
-// pages the reader then serves are past the cap every other answer is read
-// by, which is why the code reads have their own.
+// A CODE READ'S ANSWER IS READ BY THE READER'S OWN BOUND. The reader ends a
+// page on the row that crosses gitlet.MaxPageBytes and keeps it, so an answer
+// carries that budget plus one row and its envelope; the CLI reads up to
+// codeAnswerBytes, which must hold the largest. Built from the bounds at THEIR
+// WORST ENCODING (every byte of every ref, protection pattern and the default
+// branch a `<`, written by JSON as six bytes), so a bound or encoding that
+// grows fails this rather than an operator's command. Those pages pass the cap
+// every other answer is read by, hence their own.
 //
 // Mutation: read the code answers by maxNodeResponseBytes, or size
 // codeRowBytes by a row whose refs nothing escapes, and this goes red.
@@ -1129,22 +1118,16 @@ func TestGitletCommandsSayWhenNothingIsDeclared(t *testing.T) {
 
 // `crewlet gitlet verify` CHECKS THE NODE'S CACHE, ALL OF IT, AND SAYS WHAT IT
 // FOUND: a copy that is its rows is ok; one the node does not hold is passed
-// over, since nothing there can be damaged; a damaged copy is named with
-// every problem and the command exits non-zero — the hook a cron runs on each
-// Gitlet node — and -repair rebuilds it whole. A name nobody declared is refused
-// in the node's words, naming code.repos, and counted.
+// over; a damaged copy is named with every problem and the command exits
+// non-zero (the hook a cron runs on each Gitlet node); -repair rebuilds it
+// whole. A name nobody declared is refused in the node's words, and counted.
 //
-// The damage is to the README's blob, whose bytes no git process on the node
-// reads on its own — not the maintainer's graph or bitmap, nor the check's
-// connectivity-only fsck, nor the code index, since web is searched with
-// grep — so the node's scrub is never asked and only the verify finds it:
-// damage a git process does read, reported, is repaired by the node behind
-// the serving before an operator could ask, and a case damaging the middle of
-// the pack met that repair first in five runs of five. An INDEXED web read
-// it: the indexer reads every blob of the default branch's tip through one
-// cat-file, ordered by nothing against these steps, and on a loaded runner it
-// came after the damage, so the node rebuilt the copy and the repair found it
-// whole (#817). A verify checks no index, so grep costs this case nothing.
+// The damage is to the README's blob, which no git process on the node reads
+// on its own, so only the verify finds it: damage a git process reads is
+// repaired behind the serving first. An INDEXED web reads every blob of the tip
+// through one cat-file, unordered against these steps, and could rebuild the
+// copy before the damage (#817); a verify checks no index, so grep costs this
+// case nothing.
 func TestGitletVerifyChecksTheNodesCache(t *testing.T) {
 	t.Parallel()
 	h := codeNode(t, "    - name: web\n      owner: {seat: founder}\n      search: grep\n"+
@@ -1328,16 +1311,14 @@ func TestARepairIsToldAsTheNodeMadeIt(t *testing.T) {
 	}
 }
 
-// A VERIFY WAITS FOR THE NODE'S CHECK, AS THE NODE SAYS TO. Against the routes'
-// contract, scripted: a check that ended while its request waited is answered
-// at once, with no read after; a refusal the node says clears by waiting is
-// asked again after its Retry-After, and the check is read until it ends; one
-// still refused past the time the command gives refusals is reported; a node
-// that forgot the check, one that goes silent past the contact the command
-// keeps, a check that failed, and one still running past the deadline the
-// node stated for it are each a verify that did not end clean, said as what
-// it is; a copy the node does not hold is passed over; and the verify asks at
-// the floor it is given.
+// A VERIFY WAITS FOR THE NODE'S CHECK, AS THE NODE SAYS TO, against the
+// routes' contract, scripted: a check that ended while its request waited is
+// answered with no read after; a refusal that clears by waiting is asked again
+// after its Retry-After; one still refused past the time given refusals is
+// reported. A node that forgot the check, one silent past the command's
+// contact limit, a failed check, and one running past its stated deadline each
+// end unclean, said as what they are. A copy not held is passed over, and the
+// verify asks at the floor it is given.
 //
 // Mutation: ignore the Retry-After, and the busy repository fails; ignore
 // the node's deadline, and the late one is waited for until the case gives up.

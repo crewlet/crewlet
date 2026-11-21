@@ -9,49 +9,16 @@ import (
 
 // WHAT THE LEXICAL INDEX COVERS, as a seam rather than as SQL in the walk.
 //
-// # Why this exists at all
+// A source owns its own SQL and nothing else, so pages are not hard-wired into
+// the walk, sweep and readiness gate (silently wrong for [TaskCorpus]). Sources
+// and index are in DIFFERENT ESTATES ([Indexer]), so the walk asks four batch
+// questions: ids and versions, bodies, which indexed ids still exist, a count.
 //
-// The index was written for pages and said so three times in three places:
-// the walk selected from `pages_heads`, the orphan sweep read `kb_docs` with
-// `source = 'page'` spelled into the predicate, and the readiness gate counted
-// published pages. Every one of them was correct for pages and silently wrong
-// for everything else — and there WAS something else, because the embedding
-// duty has carried [TaskCorpus] the whole time. A company paid for a vector on
-// every work item, stored it in the replicated estate, replicated it,
-// snapshotted it and backed it up, while the lexical half held no task row at
-// all and the one ranked reader asked for pages only.
-//
-// So the three spellings become one list. A source owns its own SQL and
-// nothing else; the walk, the cursors, the batching, the estate boundary and
-// the posting writes stay where they were.
-//
-// # Four queries, because the walk asks four questions
-//
-// The sources and the index are in DIFFERENT ESTATES and no read joins them
-// (see [Indexer]), so every comparison is a batch from each side. That makes
-// the questions: which ids exist and at what version, what are the bodies of
-// these particular ones, which of these indexed ids still exist, and how many
-// documents are there.
-//
-// # Why the scan and the fetch are separate queries
-//
-// Because they cost three orders of magnitude apart, and a walk that asked
-// one question paid the expensive price on every step of a corpus that had
-// not changed. Reading id and version is an index-only read; reading the BODY
-// is tens of kilobytes per row. Fused, a quiet ten-thousand-document company
-// re-read its own bodies to establish that none of them had moved — so the
-// walk was paced to twenty documents per idle tick and a page saved just
-// behind the cursor waited a full lap, which at that size is about seventeen
-// minutes rather than the "idle tick plus one batch" the pacing constant
-// claims.
-//
-// Split, a lap over a quiet corpus is a handful of cheap scans and the bodies
-// are read only for the documents that actually moved.
-//
-// Each takes the replicated estate's own transaction, opened by the indexer:
-// a source that opened its own would be a second read at a second instant, and
-// the walk's whole correctness argument is that a batch is compared against
-// one snapshot of the other side.
+// Scan and fetch are separate because they cost three orders of magnitude
+// apart (id and version are index-only, a BODY is tens of kilobytes): fused, a
+// quiet corpus re-reads every body to learn nothing moved. Each takes the
+// transaction the indexer opened, since a source opening its own would read at
+// a second instant, not one snapshot.
 
 // LexicalSource is one corpus the lexical index walks, stated as the four
 // questions the walk asks and nothing else.
@@ -200,16 +167,14 @@ func PageCountRead() (string, []any) {
 //
 // # What a work item's text IS
 //
-// Its title and its description, which is where the words somebody would
-// search for live. Deliberately NOT its comment thread: a thread is a
-// conversation about the item rather than a statement of it, indexing it would
-// make one busy item outrank every concise one on any word said in passing,
-// and a comment is already reachable through the item it is on.
+// Its title and description. Deliberately NOT its comment thread: that is a
+// conversation about the item, indexing it would let one busy item outrank
+// concise ones on any word said in passing, and a comment is reachable through
+// its item.
 //
-// REMOVED ITEMS ARE OUT, which is the same rule the page source applies to a
-// trashed page: the trash is reachable on purpose, by asking for it, and a
-// ranked search that surfaced it would put work nobody is doing in front of
-// an agent looking for work to do.
+// REMOVED ITEMS ARE OUT, as a trashed page is: the trash is reachable by asking
+// for it, and ranked search surfacing it would put work nobody is doing in
+// front of an agent looking for work.
 type TaskSource struct{}
 
 // Source implements [LexicalSource].

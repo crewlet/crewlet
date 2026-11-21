@@ -1,188 +1,3 @@
-// Package sandbox is the executor runtime: every agent seat's executor is its
-// harness's own run, inside a box placed in one of the catalogue's cells.
-//
-// The shape that matters is that a run is DETACHED. The launch starts it, the
-// turn SUSPENDS, and the engine RESUMES the same turn with the run's report
-// when the run completes — possibly minutes later, possibly in a different
-// process after a restart, possibly on a different node. Nothing
-// here parks a goroutine on a running job: a goroutine cannot survive a
-// restart, and a harness legitimately runs for longer than a deployment
-// window.
-//
-// A run that stops to ask a person something is that same shape one step
-// further: the seat goes FREE while the question waits, and the answer is
-// matched back to the run by the CONVERSATION it was asked in rather than by
-// the inbox batch the question arrived in. A person answers where they are
-// talking, and the engine's own chat prompt routinely puts their reply in a
-// finer partition than the question was asked from — so a match on the batch
-// lost the answer outright. The rule is [ConversationRef.Answers], and
-// [ConversationRef.Best] chooses between the runs it admits.
-//
-// AND BY WHEN IT WAS WRITTEN, against when the question was asked
-// ([PendingRun.AskedAt]): the first reply posted after the question is the
-// answer, and it is RECORDED on the run ([StatusAnswered]) before anything is
-// done with it. Resuming with it is then this package's job, retried on its
-// own schedule with the seat's inbox held behind it, never the inbox's — a
-// person's message handed back to the broker returns behind their next one,
-// which then took the question. See answerowed.go.
-//
-// AND IT REACHES THE SEAT ONCE, whatever becomes of the run. A recorded reply
-// is either TAKEN by a resumed turn — written on the row at the last moment
-// before the turn runs ([RecordedAnswer.TakenAt], [ResumeRequest.Begin]) — or
-// LET GO back to the seat the way it came, through an outbox on the row
-// ([PendingRun.HandBack]) — a chat reply to the seat's inbox, an answer by turn
-// to its control topic ([handBackSubject]): after its attempts are spent, by an
-// ending no turn reached, or by the seat's next holder reaping a claim whose
-// node stopped before its turn took it ([Coordinator.RecoverSeat]) once the claims of that
-// answer have died too often or for too long. Short of that, such a claim is
-// REVIVED — the answer given back to the run and the run resumed with it
-// ([PendingStore.ReviveAnswer], [Coordinator.revivable]) — because a claim that
-// never reached its turn used nothing. The take is exclusive with both, in the
-// store's own compare-and-set: an ending is DECIDED on the row before any of
-// it is done ([RecordedEnding]), no turn takes an answer from a row whose
-// ending is decided ([ErrRunEnding]) or from a revived run, which holds no
-// claim, and a take that landed first is seen by the decision or the revival
-// and the reply goes with the run as used — whichever lands first wins,
-// whatever any lease says. And no ending deletes a row still
-// holding a reply it owes the seat ([ErrAnswerOwed]). The reply's delivery is
-// recorded as worked when the reply leaves the run, either way
-// ([CoordinatorOptions.Spent]) — but a refused reply's only once a turn that
-// took its refusal keeps it, since the delivery itself is what goes back to the
-// seat when the refusal is let go of ([AnswerRefused]).
-//
-// AND A LOST RUN IS ANNOUNCED ONCE: the announcement goes out before the record
-// is deleted, under the identity its decided ending recorded, so whichever node
-// finishes the ending publishes the same event ([Coordinator.announceEnding]).
-// So is a STOPPED one — a person's pause with `stop_running` ends the seat's
-// launching and running runs at once ([Coordinator.StopSeat]) — as a stop and
-// never as a loss, with who stopped it recorded in the deciding write
-// ([PendingRun.Stop]), its job ENDED and its spend read off the box and charged
-// before the box goes, and the turn parked on it closed as stopped
-// ([CoordinatorOptions.CloseStopped]).
-//
-// AND A STOPPED OR LOST JOB IS ENDED BEFORE ITS SESSION IS TAKEN, and so is
-// one still working when its turn's cap has passed, since the cap is an end:
-// the read sends its script a request to end it — SIGUSR1 to the pid the script
-// recorded in its box ([Sandbox.EndJob], [JobEnder]) — which stops its harness
-// and packs its session as its own end does, and kills what is left past the
-// wait ([Sandbox.KillJob]), so what is taken is final wherever the job ended.
-// See endjob.go.
-//
-// The reap fences the row to its lease before it revives or lets go of
-// anything — and the revival stamps that lease on the row itself — and a take
-// under an older lease — or under none — is refused, which holds because every
-// claim stamps the CLAIMANT's lease on the row ([PendingStore.ClaimForResume])
-// and every launch the lease that launched it ([CoordinatorOptions.Lease]).
-//
-// EVERY SUBJECT A RUN IS REACHED ON IS NAMED BY THE ROW'S SEAT ID — its
-// completion and start on the seat's control subject, an answer by turn and a
-// reply handed back on its inbox — through one parse of the id the row carries
-// as text ([controlSubject], [inboxSubject]), because a seat's mailbox is named
-// by its id, derived from its immutable handle (ADR-0013). The handle the row
-// carries beside it is a label and this node's bookkeeping key, never an
-// address: the coordinator's per-seat counts, holds and retries are keyed by it,
-// and whatever maps one of them onto a lease or a mailbox maps the handle to
-// the id first. An answer by turn is stamped with that same id
-// ([AnswerDesk.Deliver]) and dropped by any seat whose run does not carry it
-// ([Coordinator.AnswerByTurn]).
-//
-// WHO ANSWERED is recorded as iam.ActorFor makes it of a principal — the
-// author, its kind and the credential it came through ([AnswerWords]) —
-// on the row and on every announcement of what became of the answer, never as a
-// seat beside an actor.
-//
-// AND THE ANSWER IS SEALED: its words and who gave them are on the row only
-// inside a seal under the fleet keyring, bound to the run's turn, the question
-// it answers and its deliveries, like every other instruction channel
-// (ADR-0031), and every reader opens it before anything of it is used. An answer
-// whose seal does not open is never handed to a turn or attributed to anybody.
-// See answerseal.go.
-//
-// AND A REPLY TOO LARGE TO BE THE ANSWER IS THE QUESTION'S REFUSAL (ADR-0114):
-// past what the row carries as an answer ([MaxAnswerBytes]), decided against the
-// run as the store finds it still waiting on the question
-// ([PendingRun.takesAnswer]), a chat reply is not taken; what the row records as
-// the question's outcome instead is its refusal — its deliveries by id, when it
-// was posted and the figures, sealed, and none of its words
-// ([PendingStore.RecordRefusal], [PendingRun.AnswerRefusal]) — and announced
-// as `executor_answered` too_large under one identity per run, question and
-// delivery ([tooLargeRecord]). The refusal is then resumed exactly as an
-// answer is: the run is told, in the engine's words and through the same
-// channel an answer reaches it ([AskedRun.Refused]), that the person replied
-// and the reply was too large to hand it, and either asks again with a question
-// of its own, whose own [PendingRun.AskedAt] leaves everything written before
-// it the ordinary message it is, or carries on without it. While the refusal
-// is the run's the question waits no more, so nothing the person writes
-// meanwhile is taken for its answer. The reply itself stays where it was: in
-// the conversation, and in its delivery, kept on the seat's inbox until the
-// refusal leaves the run ([AnswerRefused]) — spent once a turn that took the
-// refusal keeps it ([Coordinator.spendRefused]), and back to the seat as the
-// ordinary message it is when the refusal is let go of. A refusal let go of —
-// declined after its attempts, or a seal that does not open — puts the
-// question back to waiting under the anchor it was asked at, as an answer let
-// go of does, and the next qualifying reply answers it; the let-go is announced
-// as `executor_answered` declined ([Coordinator.announceRefusalLetGo]). A
-// reply within the share is the run's answer word for word, and an answer by
-// turn is held to [MaxAnswerTextBytes] at both its ends, on one string.
-//
-// AND A CALL TO A TOOL AT NEEDS APPROVAL PARKS ITS RUN IN THE SHAPE A RUN'S ASK
-// DOES (ADR-0077): the job's question is the call ([PendingRun.HeldCall]), its
-// arguments sealed beside it ([CallSeal]); only its approval route answers it,
-// never a chat reply ([ConversationRef.Answers]) or an answer by turn that does
-// not name it ([Coordinator.AnswerByTurn]); and the resume that makes the call
-// marks it first, so no attempt at the same answer makes it twice
-// ([PendingStore.MarkHeldCall]). See heldcall.go.
-//
-// AND A RUN'S VALUES ARE HELD TO A BYTE BUDGET: one value in the coordination
-// store is held to what a key holds, so the run's row and the log beside it are
-// each held to [RowBytes], in the bytes their encoder writes, and every field
-// has a share of its value's. The log's calls have theirs ([BridgeLogBytes]),
-// each call held to its own and the calls it counts without listing kept as
-// identities ([ElidedCall]); on the row, the parked state has its own
-// ([ExecuteStateBytes]), which its park condenses to fit and the store refuses
-// past, and the rest is every other field held by the write that puts it there
-// — a person's reply, a held call's sealed arguments and a box's word on its
-// session included — with room stated for what a later build adds. Every call
-// carries the identity its run's call log admitted it under
-// ([BridgeCall.Digest]), but for one whose arguments are withheld
-// ([BridgeCall.Withheld]), so neither a cut argument nor a dropped call moves an
-// operation id a resumed segment derives; and the id its harness gave it, where
-// the box sent one the log keeps whole ([BridgeCall.CallID]), which is no part
-// of that identity. See rowbytes.go.
-//
-// AND A BOX IN A `direct` OR `container` CELL IS TOUCHED ONLY ON ITS LAUNCHING
-// NODE'S HOST ([PendingRun.LaunchNode], ADR-0065): that node's own waiter polls,
-// keeps alive, reaps and reclaims it, a seat's holder elsewhere asks the host to
-// read it ([BoxReader]), and a launching node whose presence stays lapsed for
-// the box timeout has its running jobs lost with it. See boxhost.go.
-//
-// AND A JOB LOST WITH ITS HOST IS CARRIED ON, NEVER COLLECTED: one its
-// engine's restart killed — which the box tells from one that crashed by the
-// engine process that last saw it running ([JobLost], local_witness.go) — one
-// whose box is gone, and one whose node left. The waiter that drives the box
-// records the loss on the row ([PendingRun.Lost]), and the seat's holder reads
-// what the job spent where its box is left and resumes the turn to relaunch the
-// same round, at most [MaxRoundLosses] times a round. See lost.go.
-//
-// AND WHAT A RUN PUSHED TO GITLET is the push record's
-// account, never the run's: a collection of a run given a repository there to
-// push to reads the rows Gitlet wrote under its launch ([RunPushes],
-// [Result.Pushed]) and the run's report states what each ref became, the run
-// having been told its own report need not name them. A record that cannot be
-// read is SAID to be unknown rather than retried — a collection held until
-// Gitlet answers holds a finished run's seat for as long as the host is
-// down — and never left out, since silence reads as "nothing pushed".
-//
-// AND A RUN'S HARNESS SESSION CAN LEAVE ITS BOX: a run names its session before
-// its harness starts ([RunHandle.SessionID]), says whether it continued the one it
-// was asked to, and why not where it did not ([Result.Continued],
-// [Result.FellBack]), and packs it when the harness exits
-// ([Result.Captured]); a run handed a session packed in another box
-// ([RunRequest.Carried]) restores it before its harness takes it up, and a box
-// takes the archive streamed rather than whole ([Sandbox.WriteStream]). See
-// carry.go.
-//
-// See docs/concepts/code-sandbox.md.
 package sandbox
 
 import (
@@ -221,17 +36,15 @@ var log = logging.Get("sandbox")
 
 // DefaultHome is where a box that says nothing else keeps its artefacts.
 //
-// Every run artefact — the result, the done marker, the ask signal, the
-// findings — lives under <home>/.crewlet. It is a per-SANDBOX property rather
-// than a constant, which it was for as long as a remote VM was the only
-// backend: many local boxes share one filesystem, and a shared home would have
-// every run reading its neighbour's done marker.
+// Every run artefact (result, done marker, ask signal, findings) lives under
+// <home>/.crewlet. Home is per SANDBOX, not global: many local boxes share one
+// filesystem, and a shared home would have every run reading its neighbour's
+// done marker.
 //
-// It is [hostbox.ContainerHome], declared there beside [hostbox.InHome],
-// which judges a container box's paths against it — for both local boxes and
-// for config validation, all of which already import that leaf package: the
-// remote templates' one account has it as its home, and a container box
-// mounts its own there so a path reads the same in both.
+// This is [hostbox.ContainerHome], declared beside [hostbox.InHome], which
+// judges a container box's paths against it: the remote templates' one account
+// has it as its home, and a container box mounts its own there, so a path
+// reads the same in both.
 const DefaultHome = hostbox.ContainerHome
 
 // ExecResult is one shell command's outcome inside a box.
@@ -243,24 +56,16 @@ type ExecResult struct {
 
 // Limits are the caps handed to a harness.
 //
-// Zero means UNSET for each field, and the runner falls back to the agent's own
-// default. Note what is not here: a run deadline. The engine imposes no
-// wall-clock limit on a launched job — it runs as long as it needs, and
-// completion is detected by tracking the job rather than by a clock. There WAS
-// a TimeoutSec here, read by nobody, contradicting the paragraph above it.
+// Zero means UNSET for each field: the runner uses the agent's own default.
+// There is no run deadline; a job runs as long as it needs, tracked to
+// completion rather than timed.
 //
-// MaxTurns comes from the resolved [Spec] — providers.sandbox.default_max_turns
-// overlaid with role.sandbox.max_turns — and is zero, uncapped, unless the
-// company or the seat sets a cap: a job is deliberately never stopped on a
-// clock, so this is the one bound on its rounds, and it is the operator's to
-// choose.
+// MaxTurns comes from the resolved [Spec] (providers.sandbox.default_max_turns
+// overlaid with role.sandbox.max_turns), zero (uncapped) unless set: with no
+// clock it is the one bound on a job's rounds, the operator's to choose.
 //
-// NO DOLLAR CAP. The fleet's own token meter already post-charges a collected
-// run against the seat's budget, and a second cap denominated in the
-// operator's dollars would fight it: two ceilings on one spend, disagreeing,
-// with the harness's the one that silently wins. A MaxBudgetUSD field stood
-// here, set by nobody while the runner turned it into a flag, and went the way
-// TimeoutSec did.
+// NO DOLLAR CAP: the fleet's token meter already post-charges a run against
+// the seat's budget, and a second cap would be two disagreeing ceilings.
 type Limits struct {
 	MaxTurns int
 }
@@ -268,20 +73,14 @@ type Limits struct {
 // Spec is what it takes to mint and drive one box.
 //
 // AN EXTERNAL HOST'S REPOSITORY IS NOT HERE. Which repository on GitHub or
-// GitLab to work in is task context the executor puts in the brief, and the
-// harness clones it with the token the config injects — a spec field for it
-// would make one repository per role a structural fact when it is a per-turn
-// one. A repository on Gitlet, the engine's own git host, is here ([Spec.Repos]),
-// because naming one is a GRANT: the run row carries it and the box's
-// credential is judged by it, which a brief cannot be.
+// GitLab to work in is task context the executor puts in the brief; the
+// harness clones it with the token the config injects. A Gitlet repository is
+// here ([Spec.Repos]), because naming one is a GRANT: the run row carries it
+// and the box's credential is judged by it, which a brief cannot be.
 //
-// There are deliberately NO CPU, MEMORY OR DISK FIELDS, and no TEMPLATE either.
-// A remote box's resources are a property of its template, fixed when the
-// template is built, and the create APIs accept no resource arguments; a local
-// box is sized by providers.sandbox.local.run_args. Both are configured on the
-// BACKEND, once, so a spec field for either would be a second answer to a
-// question the catalogue has already settled — and the last one, Template, was
-// set by nobody while looking exactly like a wired knob.
+// There are NO CPU, MEMORY, DISK OR TEMPLATE FIELDS: a remote box's resources
+// belong to its template and a local box is sized by
+// providers.sandbox.local.run_args, both configured once on the BACKEND.
 type Spec struct {
 	// Placement is WHICH configured backend runs this box. Resolved from
 	// the run_in of the providers.llm entry the launch picked, over
@@ -358,30 +157,17 @@ type Spec struct {
 }
 
 // MaxRunRepos is the most repositories one executor is given: each costs a
-// clone before the harness starts, and a run that needs more is a task
-// that should be split.
+// clone before the harness starts.
 //
-// THE CLONES ADD UP. They run one after another, after the operator's steps
-// and the box's git check, each to its own budget ([DefaultSetupTimeout]), so
-// eight are up to eighty minutes on top of the rest of the box's provisioning
-// — five times the box's TTL ([DefaultBoxTimeout]), which is why the launch
-// keeps the box's timer refreshed for as long as it provisions it
-// ([keepProvisioning]) rather than leaving the sum to the timer the box was
-// made with. What a run waits for before its harness starts is that sum.
+// The clones run one after another, each to its own budget
+// ([DefaultSetupTimeout]): eight are up to eighty minutes, five times the box's
+// TTL ([DefaultBoxTimeout]), so the launch keeps the timer refreshed
+// ([keepProvisioning]). Never at once: an index-pack keeps an entry per commit
+// and tree (1.37 million per gigabyte of history, internal/gitlet/host's
+// BenchmarkBoxClone), too much memory for a box sized for one harness.
 //
-// ONE AFTER ANOTHER, never at once, which would cut that wait to the slowest
-// clone's: a clone's index-pack keeps an entry for every commit and tree it
-// receives while it writes their index — 1.37 million of them for a gigabyte
-// of history (internal/gitlet/host's BenchmarkBoxClone) — and eight at once
-// would share a box its template sized for one harness. In turn, the
-// clones cost a run with many repositories time; at once, they would cost
-// its box memory.
-//
-// NEVER PAST gitlet.MaxRunRepos, the most a read of a run's pushes names: a run
-// given more would have every collected result's "what it pushed" refused,
-// seen only as the sentence that its push record was unread. internal/engine's
-// TestARunGivenItsMostRepositoriesHasItsPushesReadWhole holds the two to each
-// other.
+// Never past gitlet.MaxRunRepos, the most a read of a run's pushes names; held
+// by internal/engine's TestARunGivenItsMostRepositoriesHasItsPushesReadWhole.
 const MaxRunRepos = 8
 
 // MaxConePaths is the most directories one repository's cone names
@@ -393,23 +179,16 @@ const MaxConePaths = 64
 
 // MaxConePathBytes is the longest directory a cone names: 255 bytes, the bound
 // a ref has (gitref.MaxRefNameBytes) and a single file name has on every
-// filesystem git runs on (NAME_MAX). A cone names a directory a few
-// components below a repository's root, which a person or a model types out;
-// none comes near it.
+// filesystem git runs on (NAME_MAX); real cones come nowhere near it.
 //
 // THE BOUND KEEPS THE CLONE STEP WHOLE. A box runs each setup command as ONE
-// argument of a shell (`sh -c`, `bash -l -c` through E2B's envd), and Linux
-// refuses an argument past 128 KiB (MAX_ARG_STRLEN) before the shell starts,
-// with a failure that names nothing the run asked for. [MaxConePaths] of
-// these, quoted at their worst — a path of nothing but single quotes is four
-// times its length once quoted ([ShellQuote]), and each takes its two quotes
-// and a space — come to at most 64 × 1 023 = 65 472 bytes of the step, and the
-// rest of it (the names and the commands) to a few KiB more;
-// TestTheWorstCloneStepIsOneShellArgument builds that step and holds it under
-// the limit. It bounds what a run's grants add to its row
-// too, which every node's completion poll reads whole: at most [MaxRunRepos] ×
-// 64 × 255 bytes of paths, about 128 KiB before the JSON on the row escapes
-// them.
+// shell argument, and Linux refuses one past 128 KiB (MAX_ARG_STRLEN) before
+// the shell starts, with a failure naming nothing the run asked for.
+// [MaxConePaths] paths quoted at their worst (all single quotes: four times
+// the length, plus two quotes and a space, per [ShellQuote]) are at most
+// 64 × 1 023 = 65 472 bytes; TestTheWorstCloneStepIsOneShellArgument holds the
+// step under the limit. It also bounds what grants add to a run's row, which
+// every node's completion poll reads whole: about 128 KiB at most.
 const MaxConePathBytes = 255
 
 // RepoAccess is what a run may do with a repository it was given. A named
@@ -470,31 +249,17 @@ type RunRepo struct {
 }
 
 // ValidateFor holds a RunRepo to the grammar of the box it is given to for
-// purpose. EVERY PURPOSE: a repository name of either form
-// (gitref.ValidRepoName), a canonical repository id, a base that is "" or a
-// whole commit id, a valid access, and at most [MaxConePaths] cone paths, each
-// a clean directory inside the repository ([ConePathProblem] says what that
-// holds a path to). Then by purpose:
+// purpose: a repository name (gitref.ValidRepoName), a canonical id, a base
+// that is "" or a whole commit id, a valid access, and at most [MaxConePaths]
+// clean cone paths ([ConePathProblem]).
 //
 //   - [CloneCoding]: a branch name git and Gitlet both take
-//     (gitref.ValidBranch), since the run works on one; a change it works on
-//     named by its id and its number; and a change it asks to open given
-//     write, never beside a change it works on — whose branch heads that
-//     change already — and proposing its branch into another
+//     (gitref.ValidBranch); a change it works on, by id and number; a change
+//     it asks to open needs write, never beside one it works on
 //     ([OpenChange.problem]);
-//   - [CloneSingleSHA], a CHECK's: a base — the commit it measures — no
-//     branch, since a check is given one commit and works on none, and read
-//     access, since its box's credential fetches and never pushes.
+//   - [CloneSingleSHA], a CHECK's: a base, no branch or change, read access.
 //
-// A value a purpose does not read is REFUSED rather than ignored: a branch on
-// a check's repository, or a change on one, is a caller that meant another
-// purpose, and a box made from it would be told one thing and do
-// another.
-//
-// ONE GRAMMAR for every reader: the launch that resolves a run's repositories
-// refuses a request with it, and the clone step is written only for a
-// RunRepo it passes ([CloneRecipe]), so nothing a box is told to run carries a
-// value no RunRepo can.
+// A value a purpose does not read is REFUSED: the caller meant another one.
 func (r RunRepo) ValidateFor(purpose ClonePurpose) error {
 	switch {
 	case !purpose.Valid():
@@ -554,21 +319,14 @@ func (r RunRepo) ValidateFor(purpose ClonePurpose) error {
 // ConePathProblem is why p cannot be a directory of a repository's cone — ""
 // when it can be one. A cone path is relative to the repository's root and
 // already clean: no leading or trailing slash and no empty, "." or ".."
-// component, so one directory has one spelling and none reaches outside the
-// repository; valid UTF-8, because it crosses JSON on the run's row, which
-// replaces an invalid byte, so two paths would arrive as one; no control
-// character, since NUL, a newline and a carriage return each break the
-// line-based file git keeps a cone in and none of the others is ever meant;
-// no space at either end, which git trims from a cone's directory before it
-// writes one (sparse-checkout's strbuf_trim), so " src" would check out src;
-// and at most [MaxConePathBytes].
+// component, so one directory has one spelling and none escapes the
+// repository; valid UTF-8 (JSON on the run's row replaces an invalid byte); no
+// control character (they break git's line-based cone file); no space at
+// either end, which git trims; and at most [MaxConePathBytes].
 //
-// EXPORTED FOR THE ONE OTHER PLACE A CONE IS WRITTEN: a repository's
-// .crewlet/checks.yaml names the cone its check's box checks out
-// (internal/gitlet's ParseChecks), and that cone becomes a box's clone step as a
-// run's does, so a file is held to the rule the step is written under rather
-// than to a second reading of it — one the box would refuse at setup, after
-// the check had taken its box.
+// EXPORTED because .crewlet/checks.yaml names a check's cone too
+// (internal/gitlet's ParseChecks): the file is held to this rule, not a second
+// reading the box would refuse at setup, after the check had taken its box.
 func ConePathProblem(p string) string {
 	switch {
 	case p == "":
@@ -745,16 +503,34 @@ type Result struct {
 	// runner's collection, beside its result.
 	ReportedWindow int64
 
-	// ResumedCount is what Claude Code counts the copy of the session the
+	// ResumedCount is what its harness counts the copy of the session the
 	// job's box holds at before its next request, as the read that collected
 	// this result found it in one read of the job's main thread
 	// ([Coordinator.readMainThread]), with ReportedWindow beside it: recorded
 	// on the job's record with HarnessEnd, in that read's one write
 	// ([LaunchRecord.ResumedCount]), and carried back for the claim it
 	// collects for. Set by the coordinator, never by a runner; nil where the
-	// read asked nothing (a stop's, a loss's, another harness's job), and from
-	// a host of an older build, which reads as a copy that may compact.
+	// read asked no count (a stop's, a loss's, a job of neither Claude Code
+	// nor OpenCode, [asksMainThread]), and from a host of an older build,
+	// which reads as a copy that may compact.
 	ResumedCount *ResumedCount
+
+	// CountProvider is the provider of the reply an OpenCode ResumedCount is
+	// anchored on, off the same read: recorded beside the count on the job's
+	// record ([LaunchRecord.CountProvider]) and carried back with it. "" for a
+	// Claude Code count, where no reply anchored one, and from a host of an
+	// older build.
+	CountProvider string
+
+	// NextRequest is the harness's own estimate of the next request of the
+	// copy the job's box holds, as the read that collected this result found
+	// it in the same read of the job's main thread as ResumedCount: recorded
+	// on the job's record with HarnessEnd, in that read's one write
+	// ([LaunchRecord.NextRequestTokens]), and carried back for the claim it
+	// collects for. Set by the coordinator, never by a runner; zero where the
+	// read made none, and from a host of an older build, which leaves the
+	// record what it held.
+	NextRequest NextRequest
 
 	// Turns is how many model turns the run's harness says its own loop took —
 	// each one a provider call the engine neither made nor saw — and zero
@@ -788,19 +564,16 @@ type Result struct {
 	// by the coordinator.
 	DeliveredRefsElided int
 
-	// Pushed are the refs the run moved on Gitlet, read
-	// from the push rows Gitlet wrote under its launch ([RunPushes]):
-	// each repository the run was given to push to in turn, its refs in the
-	// order the run first pushed them, held with the run's own refs to
+	// Pushed are the refs the run moved on Gitlet, read from the push rows
+	// Gitlet wrote under its launch ([RunPushes]): per repository, in the
+	// order first pushed, held with the run's own refs to
 	// [MaxDeliveredRefBytes] ([boundPushed]). PushedElided is how many more
-	// the push record names than Pushed lists. PushedUnread is why the
-	// record could not be read — set, the run's pushes are UNKNOWN, and an
-	// empty Pushed beside it never means "none".
+	// the record names. PushedUnread is why the record could not be read: set,
+	// the pushes are UNKNOWN, and an empty Pushed never means "none".
 	//
-	// The ENGINE'S account of the run's delivery there, which the run's own
-	// `Delivered:` lines are not: a box writes those as it likes. Set by the
-	// coordinator, never by a runner — whatever a runner put here is
-	// replaced at the collection, which reads the record itself.
+	// The ENGINE'S account of delivery, unlike the run's own `Delivered:`
+	// lines, which a box writes as it likes. Set by the coordinator, never a
+	// runner: whatever a runner put here is replaced at the collection.
 	Pushed       []PushedRef
 	PushedElided int
 	PushedUnread string
@@ -848,19 +621,25 @@ type Result struct {
 	// [MaxRunEventBytes] ([boundBox]).
 	Event string
 
+	// Limits is the run's last limit report line, verbatim, read by
+	// harness.Provider.RunEnded; empty past [MaxRunEventBytes] ([boundBox]).
+	Limits string
+
 	// Transcript is the agent's activity log — what it said, each tool it
 	// called and the first line of what it ran — rebuilt from its own
 	// output, or its stderr where the harness streams nothing better. It is the
 	// observability surface for an agent that emits no telemetry of its
-	// own. A runner returns it WHOLE and redacted; the coordinator holds it
-	// to the record's bound ([Coordinator.fitResult]) and redacts it again
-	// at publish.
+	// own. A runner returns it redacted, whole up to the most the engine
+	// reads one text whole and past it as the record keeps it; the
+	// coordinator holds it to the record's bound ([Coordinator.fitResult])
+	// and redacts it again at publish.
 	Transcript string
 
 	// TranscriptElidedLines and TranscriptElidedBytes are how much of the
 	// transcript's middle the record's bound left out: whole lines, and
-	// every byte not kept. Zero for a transcript kept whole. Set by the
-	// coordinator, never by a runner.
+	// every byte not kept. Zero for a transcript kept whole. Set by a runner
+	// that bounded the transcript as it read it, and added to by the
+	// coordinator ([boundBox]).
 	TranscriptElidedLines int
 	TranscriptElidedBytes int
 
@@ -922,113 +701,81 @@ type Sandbox interface {
 	// engine process that last saw it running ([JobState]).
 	//
 	// ASKED OF THE BOX, because only the backend knows what its handle
-	// names. Inside a remote VM or a container the handle is a pid in the
-	// box's own process namespace, where nothing but the box's own work
-	// can hold it. On the engine host it is a host pid, which the kernel
-	// hands to any process once the job is gone: a probe that took the pid
-	// on trust would read a stranger as the job and hold a dead run open
-	// until the stranger exits. And only a box on the engine host can lose
-	// its job with the engine: a remote box answers running or ended. An
-	// error means the box could not be asked, which is not proof of any
-	// answer.
+	// names. In a remote VM or container it is a pid in the box's own
+	// namespace, which nothing but the box's work can hold. On the engine host
+	// it is a host pid the kernel hands to any process once the job is gone,
+	// so a probe taking it on trust would read a stranger as the job and hold
+	// a dead run open. Only a box on the engine host can lose its job with the
+	// engine; a remote box answers running or ended. An error means the box
+	// could not be asked, which proves no answer.
 	Job(ctx context.Context, commandID string) (JobState, error)
 
 	// EndJob asks the job commandID names to END: SIGUSR1 to script, ONE
-	// process of it — the run's script, by the pid it recorded in the box
+	// process of it, the run's script by the pid it recorded in the box
 	// (internal/sandbox/executor's Paths.JobScript). The script ends its
 	// harness and packs its session as its own exit does ([JobEnder],
-	// endjob.go). SIGUSR1 and not SIGTERM, which is a teardown's to every
-	// process of the job at once, server and exporter with it, where an end
-	// needs them alive to pack through.
+	// endjob.go). Not SIGTERM, which a teardown sends to every process of the
+	// job, and an end needs them alive to pack through.
 	//
 	// [ErrNotJobProcess] where script is no living process of the job: on the
-	// engine host, no member of the job's recorded process group, held to it
-	// engine-side ([procgroup.Leader.SignalMember]), since the pid is the job's
-	// word and the job runs as the engine's own user; in a container or a VM,
-	// no process of that pid in the box's own namespace. A pid below 2 is
-	// refused unsent everywhere: 1 is the namespace's init, which in a
-	// container forwards a signal to the container's main process. Any other
-	// error is a box that could not be asked.
+	// engine host, no member of its recorded group, checked engine-side
+	// ([procgroup.Leader.SignalMember]) since the pid is the job's word and it
+	// runs as the engine's user; in a box, no such pid in its namespace. A pid
+	// below 2 is refused unsent (1 is init). Other errors: box not askable.
 	EndJob(ctx context.Context, commandID string, script int) error
 
 	// KillJob ends every process of the job commandID names and KEEPS the box
-	// and its files for the read that follows: SIGTERM, [JobStopGrace] for
-	// them to go, SIGKILL, [JobStopGrace] for the kernel to take them
-	// ([JobKillWait]). On the engine host that is the job's recorded group,
-	// continued first as Close continues it. In a container it is the job's
-	// group in its container — recorded on the engine host as the job
-	// started, or, for a job an older build started, which recorded none, read
-	// off the job's first process where an exec's own session leads it — never
-	// every process the box's user may signal, which would take the
-	// container's main process and stop the container the read still execs
-	// its pack in. In an E2B VM it is every process of the box's user: envd
-	// starts a job in envd's own process group, which no signal may reach,
-	// and runs as root, out of reach of the user's; and no job runs in the box
-	// after it — a stop's and a loss's ending reclaims it right after, and a
-	// collection past its turn's cap pauses it for a turn that starts no round
-	// past that cap.
-	//
-	// NEVER A PART OF THE JOB FOR THE WHOLE: a box that can name no process
-	// group of the job's own signals nothing of it and answers [ErrNoJobGroup].
-	// The job's first process alone is no kill of the job — the run's script
-	// and its harness are that process's children, and go on without it — and
-	// it is the process a box answers [Sandbox.Job] by, so a kill of it alone
-	// had a job still working read as one that had ended.
-	//
-	// A job that is already over is nothing to kill. Any other error is a box
-	// that could not be asked; whether what it killed is over is the job's
-	// poll to say.
+	// and its files for the read that follows: SIGTERM, [JobStopGrace], SIGKILL,
+	// [JobStopGrace] for the kernel ([JobKillWait]). On the engine host that is
+	// the job's recorded group, continued first as Close does; in a container,
+	// the job's group there, never every process the box's user may signal
+	// (that would stop the container the read execs its pack in); in an E2B
+	// VM, every process of the box's user, since envd's group takes no signal.
+	// NEVER A PART OF THE JOB FOR THE WHOLE: a box naming no process group of
+	// the job signals nothing and answers [ErrNoJobGroup]. Killing the first
+	// process alone leaves its children (script, harness) running, yet it is
+	// what [Sandbox.Job] answers by, so a working job would read as ended. A
+	// job already over is nothing to kill; other errors: box not askable.
 	KillJob(ctx context.Context, commandID string) error
 
-	// WriteFile puts content at path whole, by REPLACING the file there: the
-	// content is staged under a fresh name beside the path and renamed over
-	// it, so a process in the box reading the file meanwhile — a git
-	// credential helper reading the token file the completion poll keeps
-	// current under a running job — finds the old file or the new one,
-	// never an empty or part-written one. A write that fails removes what it
-	// staged, or says it could not, where a remote box stopped answering.
-	// The new file has the mode the backend writes every file with,
-	// whatever the replaced one had.
+	// WriteFile puts content at path whole, by REPLACING the file: staged under
+	// a fresh name beside the path and renamed over it, so a process reading
+	// meanwhile (a git credential helper reading the token file the completion
+	// poll keeps current) finds the old file or the new one, never a
+	// part-written one. A failed write removes what it staged, or says it could
+	// not. The new file has the mode the backend gives every file.
 	//
-	// A backend that writes the box from the engine host replaces only a
-	// regular file where it lies, or puts one where nothing is, and refuses
-	// anything else at the path with [ErrNotRegularFile], leaving it as the
-	// box made it: the rename writes through no link, and a named pipe is
-	// never opened to be waited on. A remote box is a machine of its own, so
-	// what is at the path there is replaced, a link included.
+	// A backend writing from the engine host replaces only a regular file, or
+	// puts one where nothing is, and refuses anything else with
+	// [ErrNotRegularFile], leaving it as the box made it: the rename writes
+	// through no link, and a named pipe is never opened to be waited on. A
+	// remote box is a machine of its own, so a link there is replaced too.
 	WriteFile(ctx context.Context, path string, content []byte) error
 
 	// WriteStream puts what content yields at path whole, exactly as
-	// [Sandbox.WriteFile] puts a byte slice there — staged beside the path
-	// and renamed over it, the same refusals on the engine host — for content
-	// the engine must not hold in memory: a harness's session archive,
-	// carried into a box from the object store, which grows with the session
-	// it packs.
+	// [Sandbox.WriteFile] puts a byte slice there (staged and renamed, the same
+	// refusals on the engine host), for content the engine must not hold in
+	// memory: a harness's session archive from the object store, which grows
+	// with the session.
 	//
 	// READ ONCE, A PIECE AT A TIME, and only while ctx lasts: a write whose
-	// caller gave up stops at the next piece rather than reading its source
-	// to the end. A source that fails part way fails the write, and the file
-	// at the path is the one that was there before — the staged one is
-	// removed, never moved over it — so an archive cut short in transit is
-	// never a file the box reads as whole. The caller keeps content: the
-	// write neither closes it nor reads it once it has returned.
+	// caller gave up stops at the next piece. A source that fails part way
+	// fails the write and leaves the file as it was (the staged one is
+	// removed), so an archive cut short is never read as whole. The caller
+	// keeps content: the write neither closes it nor reads it after returning.
 	WriteStream(ctx context.Context, path string, content io.Reader) error
 
-	// ReadFile reads a file the engine means to read WHOLE — a report, a
-	// question, a marker, a result line — and REFUSES one past
-	// [MaxFileBytes] ([ErrFileTooLarge], as a [*FileTooLargeError] naming the
-	// cap it refused at) rather than returning its first part, because a
-	// clipped report reads as a finished one. Empty on missing: a poll for a
-	// marker that is not written yet is not an error.
+	// ReadFile reads a file the engine means to read WHOLE (a report, question,
+	// marker, result line) and REFUSES one past [MaxFileBytes]
+	// ([ErrFileTooLarge], a [*FileTooLargeError] naming the cap) rather than
+	// return a first part, because a clipped report reads as a finished one.
+	// Empty on missing: polling for an unwritten marker is not an error.
 	//
-	// NEVER FOR A MACHINE STREAM. A harness's event log and its stderr
-	// grow with the run and have no size a whole read could honestly refuse
-	// at — the engine keeps a bounded share of them in the end — so they
-	// are read with [Sandbox.OpenFile] or [Sandbox.ReadTail] instead.
-	//
-	// A path that names something other than a regular file is refused with
-	// [ErrNotRegularFile] by a backend that reads the box from the engine
-	// host, for all three reads, because opening one there could block.
+	// NEVER FOR A MACHINE STREAM: a harness's event log and stderr grow with
+	// the run, so they use [Sandbox.OpenFile], [Sandbox.ReadTail],
+	// [Sandbox.OpenTail] or [Sandbox.OpenRange]. A non-regular file is refused
+	// with [ErrNotRegularFile] by a backend reading from the engine host, for
+	// every read: opening one could block.
 	ReadFile(ctx context.Context, path string) ([]byte, error)
 
 	// OpenFile streams a file front to back, for a MACHINE STREAM decoded
@@ -1058,6 +805,18 @@ type Sandbox interface {
 	// file is a reader that yields nothing and a size of 0, as the others
 	// answer; the caller closes it.
 	OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error)
+
+	// OpenRange streams at most n bytes of a file from byte off, as the file stood
+	// when it was opened, with the file's whole size then: a MACHINE STREAM read on
+	// from where an earlier read of it stopped (a run's event stream, followed live
+	// from its start). Its cost is the bytes read, never the file before off: a
+	// remote box sends only the range, a box on the engine host seeks. An offset at
+	// or past the end streams nothing and answers the size, so a file that shrank
+	// says so; a missing file is nothing and a size of 0, as the others answer. It
+	// may stream fewer than n bytes where its server cannot serve a range; the
+	// caller reads on from where it ended. A negative off or n is refused
+	// ([ErrRangeNegative]). The caller closes it.
+	OpenRange(ctx context.Context, path string, off, n int64) (io.ReadCloser, int64, error)
 
 	// SetTimeout resets the box's wall-clock TTL to seconds from now.
 	//
@@ -1130,6 +889,19 @@ func tailOf(content []byte, n int) FileTail {
 	return FileTail{Data: content[len(content)-n:], Size: int64(len(content))}
 }
 
+// ErrRangeNegative is [Sandbox.OpenRange]'s refusal of a negative offset or
+// length, which names no bytes of any file.
+var ErrRangeNegative = errors.New("sandbox: a range's offset and length are never negative")
+
+// rangeRefused is [ErrRangeNegative] for a range of path that names no bytes,
+// and nil for one every backend reads.
+func rangeRefused(path string, off, n int64) error {
+	if off < 0 || n < 0 {
+		return fmt.Errorf("%w: %s from byte %d for %d bytes", ErrRangeNegative, path, off, n)
+	}
+	return nil
+}
+
 // ExecOptions are the per-command knobs both exec shapes take.
 type ExecOptions struct {
 	Env        map[string]string
@@ -1139,17 +911,14 @@ type ExecOptions struct {
 
 // JobState is what is known of a detached job ([Sandbox.Job], [Runner.Poll]).
 //
-// THREE ANSWERS, because "not running" is two facts that a run is carried
-// forward from differently. A job that ENDED finished, or died while an engine
-// that had seen it running was still there to see it go: what it left is the
-// round's result, a crash included, and it is collected. A job that was LOST
-// went with the engine process that last saw it running, before any engine
-// could see it end: a `direct` box's process tree is the engine host's, and
-// the restart that replaces the engine — its container restarted, its systemd
-// unit stopped with every process in its control group, its host rebooted —
-// kills the job in the same instant, mid-step, with nothing written to say so.
-// What it left is not a result, and its round is carried on rather than
-// collected ([PendingRun.Lost]).
+// THREE ANSWERS, because "not running" is two facts a run is carried forward
+// from differently. A job that ENDED finished, or died while an engine that
+// had seen it running was there to see it go: what it left is the round's
+// result, a crash included, and it is collected. A job that was LOST went with
+// the engine process that last saw it running: a `direct` box's process tree
+// is the engine host's, so a restart of the engine (container, systemd unit,
+// host) kills the job mid-step with nothing written. What it left is not a
+// result, and its round is carried on, not collected ([PendingRun.Lost]).
 type JobState string
 
 const (
@@ -1226,15 +995,13 @@ type Provider interface {
 	// completion poll.
 	//
 	// THE READ MUST CHANGE NOTHING, and through Connect it could not: a
-	// reader that took a running record, then reached the box after the
-	// collection had read it and paused it, woke the box back up — and on
-	// E2B, where nothing renews a box once its record stops running, the
-	// woken box was killed at its TTL and the parked run lost the snapshot
-	// it had been paused to keep. A box this backend cannot read while it
-	// is paused is refused with [ErrBoxPaused]; one whose files the engine
-	// host reads directly is handed back as it is, paused or not. A box
-	// that is gone is [ErrBoxGone], as for Connect. Nothing about the box's
-	// timer or its state moves.
+	// reader reaching a box the collection had just paused would wake it, and
+	// on E2B, where nothing renews a box whose record stopped running, the
+	// woken box was killed at its TTL and the parked run lost its snapshot. A
+	// box this backend cannot read while paused is refused with
+	// [ErrBoxPaused]; one whose files the engine host reads directly is handed
+	// back as it is. A box that is gone is [ErrBoxGone], as for Connect.
+	// Neither the box's timer nor its state moves.
 	Attach(ctx context.Context, sandboxID string) (Sandbox, error)
 
 	// Kill terminates a box by id WITHOUT resuming it.
@@ -1284,13 +1051,11 @@ type Runner interface {
 // [OpenedJob.CallIDMeta]) — `claudecode/toolUseId` for Claude Code — and ""
 // for a harness that sends none.
 //
-// OPTIONAL, as [SessionTaker] is: a runner that declares no key — a harness
-// whose `_meta` carries no id of the call, OpenCode's, or a test's — has every
-// call of its runs recorded with none, each read by its place as every call an
-// older build recorded is. EXPORTED so a runner asserts it implements it, as
-// internal/sandbox/executor's does: a method renamed out from under it would
-// read as a harness that declares nothing, and every id would be dropped
-// without a word.
+// OPTIONAL, as [SessionTaker] is: a runner declaring no key (OpenCode's, a
+// test's) has every call recorded with none, read by its place. EXPORTED so a
+// runner asserts it implements it, as internal/sandbox/executor's does: a
+// renamed method would read as a harness declaring nothing, and every id would
+// be dropped without a word.
 type CallIdentifier interface{ CallIDMeta() string }
 
 // RunRequest is one launch's inputs.
@@ -1310,40 +1075,29 @@ type RunRequest struct {
 	Brief string
 
 	// Resume is the harness's own session the run CONTINUES, as an earlier run in
-	// the same box reported it ([Result.SessionID]): the conversation, its
-	// tool results and its working files are where that run left them, and
-	// Brief is its next message — Claude Code's `--resume <id>`, OpenCode's
-	// `--session <id>`. A seat's job sets it on every relaunch of its turn that
-	// continues the turn's session — the turn's kept capture, in whatever box
-	// the job gets ([LaunchRequest.Session]), or the session the asking job's
-	// box holds ([LaunchRequest.Continue]); the assistant's deep work, where
-	// its run parked on a proposal and the approval has come. Empty starts a
-	// new session.
-	//
-	// THE HARNESS'S SESSION AND NOT A SUMMARY OF IT, because the run that asked
-	// knew what it had read, tried and decided, and a fresh conversation
-	// told only the question and the answer starts that work again. It holds
-	// in the box the session lives in, or in a box the session is carried
-	// into ([RunRequest.Carried]). A runner whose harness cannot continue a
-	// session refuses a run that asks it to, rather than start a new
-	// conversation its caller believes is the old one; and a run whose box
-	// turns out to hold the session neither way starts a new one and says so
-	// ([Result.Continued]).
+	// the same box reported it ([Result.SessionID]): its conversation, tool
+	// results and files are where that run left them, and Brief is its next
+	// message (Claude Code's `--resume <id>`, OpenCode's `--session <id>`).
+	// A seat's job sets it on every relaunch continuing the turn's session
+	// ([LaunchRequest.Session], [LaunchRequest.Continue]); empty starts anew.
+	// THE HARNESS'S SESSION, NOT A SUMMARY OF IT: the run that asked knew what
+	// it had read, tried and decided, and a conversation told only the
+	// question and answer redoes that work. A runner whose harness cannot
+	// continue a session refuses the run rather than start a conversation its
+	// caller believes is the old one; a box holding no session starts a new one
+	// and says so ([Result.Continued]).
 	Resume string
 
 	// Carried is the session Resume names, packed in another box
 	// ([SessionArchive]), for this run's box to restore before its harness takes
-	// it up: written into the box as the run starts, after the previous
-	// run's artefacts are cleared, and restored by the run's own script — or
-	// not, in a box whose own copy of the session already holds this archive
-	// (one the box packed, or restored before), which is never written over:
-	// that copy is the archive's or newer — unless the archive is one its
-	// harness was cut off in ([CarriedSession.Replace]), which replaces the
-	// copy whatever it holds. A box holding a copy that does not hold the
-	// archive has it replaced by the archive. Nil for a run that
-	// continues a session its box already holds, or none. Its session must
-	// be Resume's, and its harness and format the runner's, or the run is
-	// refused.
+	// it up: written into the box as the run starts, after the previous run's
+	// artefacts are cleared, and restored by the run's own script, except in a
+	// box whose copy already holds this archive, which is never written over
+	// (that copy is the archive's or newer) unless the archive is one its
+	// harness was cut off in ([CarriedSession.Replace]). A copy not holding the
+	// archive is replaced by it. Nil for a run continuing a session its box
+	// already holds, or none. Its session must be Resume's, and its harness and
+	// format the runner's, or the run is refused.
 	Carried *CarriedSession
 
 	// FreshBrief is the brief a run asked to continue a session is started
@@ -1383,27 +1137,11 @@ type RunRequest struct {
 	// a control.
 	MCPServers map[string]MCPServer
 
-	// OnlyMCPServers holds the run to MCPServers alone: no server its
-	// harness's own configuration, a repository's or a plugin's declares,
-	// and no connector of the account it signs in with, starts beside them
-	// (Claude Code's --strict-mcp-config).
-	//
-	// The assistant's deep work sets it: it acts for a person, confined on
-	// the engine host, and reaches exactly the tools it is handed. A seat's
-	// executor leaves it false, and its harness starts what it would start
-	// for a person running it — the box's own configuration's servers, the
-	// repository's, a plugin's, the signed-in account's connectors — beside
-	// the ones the engine hands it: what those reach is the run's cell's to
-	// bound, never the engine's to decide. A runner whose harness has no way
-	// to be held to the servers it is handed refuses a run that sets it.
-	OnlyMCPServers bool
-
 	// Steer is how the run's harness reaches a person's notes to its turn while
 	// it works — see [SteerWiring]. The zero value takes no note inside the
 	// run: its notes wait for whatever reads the turn next, which is what a
-	// run with no tool bridge — the assistant's deep work — has. NEVER
-	// PERSISTED: it names the job's own endpoint, and a resumed turn's next
-	// launch is handed its own.
+	// run with no tool bridge has. NEVER PERSISTED: it names the job's own
+	// endpoint, and a resumed turn's next launch is handed its own.
 	Steer SteerWiring
 
 	// ReportedRepos are the repositories on Gitlet this
@@ -1430,16 +1168,14 @@ type RunRequest struct {
 	// FreshWiring is how the run's harness reaches the seat's tools where its
 	// script starts a session of its own in place of the one Resume names:
 	// MCPServers, Steer and SkillLoads as they are but under the job's OTHER
-	// bridge token, the one the bridge reads as the box having started a
-	// session of its own (internal/api/mcpbridge). The run's script installs
-	// exactly one of the two once its restore has come to whatever it came
-	// to, and removes the other from the box before its harness starts, so the
-	// token its harness dials IS the box's word on which session it started —
-	// one the run's model can neither forge nor take back, holding only the
-	// token of the session it is in. Nil where Resume is empty, which a
-	// runner refuses a run that sets it for, and where the run has no bridge
-	// to tell (the assistant's deep work). NEVER PERSISTED, for the reason
-	// Steer is not.
+	// bridge token, which the bridge reads as the box having started a session
+	// of its own (internal/api/mcpbridge). The run's script installs exactly
+	// one of the two once its restore settles and removes the other before its
+	// harness starts, so the token the harness dials IS the box's word on which
+	// session it started, one the run's model can neither forge nor take back.
+	// Nil where Resume is empty (a runner refuses a run that sets it) and where
+	// the run has no bridge to tell. NEVER PERSISTED, for the reason Steer is
+	// not.
 	FreshWiring *Wiring
 
 	// Attribution is the credit every commit the run authors as itself
@@ -1541,24 +1277,17 @@ type SkillWiring struct {
 func (w SkillWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL != "" }
 
 // CommitAttribution asks a run's runner to credit Crewlet on every commit the
-// run authors as itself: `Co-authored-by: Crewlet <noreply@crewlet.ai>`, the
-// one trailer GitHub renders as a participant in the commit; where Seat is
-// set, the seat that made the commit and the work item its turn is charged
-// to; and, where Run is set, the run that wrote it, which leads a reader of
-// the history back to the run's page.
+// run authors as itself: `Co-authored-by: Crewlet <noreply@crewlet.ai>`; where
+// Seat is set, the seat and work item charged; where Run is set, the run.
 //
-// GIT ADDS IT, NOT THE MODEL. The runner installs a hook in the box that git
-// runs on every commit the run makes (internal/sandbox/executor's
-// attribution.go), so the credit is there whether or not the agent remembered
-// an instruction — and only on a commit whose author is the identity the run
-// commits as, so a person's commit the run amends, cherry-picks or rebases is
-// never credited to Crewlet.
+// GIT ADDS IT, NOT THE MODEL: a hook the runner installs in the box
+// (internal/sandbox/executor's attribution.go) runs on every commit authored
+// by the run's identity, never on a person's commit the run amends or rebases.
 //
-// A CLAIM, NEVER EVIDENCE: the box can delete the hook or write any trailer
-// it likes, so nothing in the engine reads a pushed commit's trailers — a box
-// push's provenance is stamped from the run's own row at its admission. The
-// trailers carry that provenance where the row does not reach: a mirror of
-// the repository, and a commit older than Gitlet's push horizon.
+// A CLAIM, NEVER EVIDENCE: the box can delete the hook or write any trailer,
+// so nothing in the engine reads trailers; a box push's provenance is stamped
+// from the run's row at admission. Trailers carry it where the row does not
+// reach: a mirror, and commits older than Gitlet's push horizon.
 type CommitAttribution struct {
 	// Run is what the run's commits name it by, the identifier its page is
 	// addressed by: a seat's job is its turn's, so every job of one turn —
@@ -1571,9 +1300,8 @@ type CommitAttribution struct {
 	// WorkItem the item its turn is charged to (nil for none, which the
 	// commit says as "none" rather than leaving out, since a rewritten
 	// commit's trailer is replaced, never kept). Empty for a run that is no
-	// seat's — deep work for a person — which names neither; a WorkItem
-	// without a Seat, or one with no backend, is the engine's own bug and is
-	// refused.
+	// seat's, which names neither; a WorkItem without a Seat, or one with no
+	// backend, is the engine's own bug and is refused.
 	Seat     string
 	WorkItem *types.WorkItem
 }

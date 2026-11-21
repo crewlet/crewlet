@@ -143,25 +143,17 @@ const (
 	RowGone Row = "gone"
 
 	// RowBehind is no row, on a node whose applied position is BELOW the
-	// bearer's start position, within the stall grace. It serves reads —
-	// the signature and the epoch are proof the sign-in happened, and the
-	// bearer's own scope says what the session may reach — and refuses
-	// writes with 503.
-	//
-	// A WRITE REACHES THAT 503 ONLY AFTER A WAIT, and the wait is the
-	// request guard's rather than this table's (internal/api/auth's
-	// session arm): a sign-in answers before any node applies the session
-	// it opened, so the first write a client makes straight after one lands
-	// here on EVERY node for the few hundred milliseconds an apply takes.
-	// The guard waits, bounded, for the start position this bearer states
-	// and asks this table again; the cell below is what a node still short
-	// of it after that answers.
+	// bearer's start position, within the stall grace. It serves reads (the
+	// signature and epoch prove the sign-in; the bearer's scope says what it
+	// may reach) and refuses writes with 503, but only AFTER A WAIT in the
+	// request guard (internal/api/auth's session arm): a sign-in answers before
+	// any node applies its session, so the first write after one lands here on
+	// EVERY node for an apply's milliseconds.
 	//
 	// THIS ROW IS WHY THE START POSITION IS IN THE BEARER. Without it
-	// [RowGone] and this row are one answer, and whichever one it was
-	// would be wrong half the time: 401 signs out every person whose
-	// request reached a node that is a second behind, and serving would
-	// honour a session that ended.
+	// [RowGone] and this row are one answer, wrong half the time: 401 signs
+	// out everyone whose request reached a node a second behind, and serving
+	// would honour a session that ended.
 	RowBehind Row = "behind"
 
 	// RowStalled is a node that cannot answer: the applier is more than
@@ -384,16 +376,13 @@ func (s *Signer) Validate(ctx context.Context, directory Directory,
 }
 
 // ValidateOpen is [Signer.Validate] for the bearer an OPEN CONNECTION was
-// opened with — a live socket, decided again long after its handshake — and it
-// differs in two respects, both because a connection can never be handed a
-// cookie.
+// opened with (a live socket, decided again long after its handshake). A
+// connection can never be handed a cookie, so two things differ.
 //
-// THE IDLE DEADLINE IS SET ASIDE. A re-issue on a REST response is what moves
-// it, and a connection holds the bearer its handshake presented, so its idle
-// deadline is the handshake's plus the idle limit however busy the tab has been since.
-// An open live view is activity: the session is decided on its ROWS — a record
-// ending it, its person's epoch or stage, the company's generation — and on its
-// ABSOLUTE deadline, which no re-issue moves and which still ends it here.
+// THE IDLE DEADLINE IS SET ASIDE: only a re-issue on a REST response moves it,
+// so a connection's stays the handshake's plus the idle limit however busy the
+// tab. An open live view is activity: the session is decided on its ROWS and
+// its ABSOLUTE deadline, which no re-issue moves.
 //
 // AND NOTHING IS RE-ISSUED, since there is no response to carry it.
 func (s *Signer) ValidateOpen(ctx context.Context, directory Directory,
@@ -518,24 +507,15 @@ func standing(b Bearer, identity Identity, err error) Validation {
 	return Validation{Row: RowValid, Bearer: b}
 }
 
-// StandingByName is the row one read of the estate puts a session on for a caller that
-// holds the session's NAME rather than its bearer: a view ticket minted for the
-// session's holder, decided again on the artifact origin, where no cookie ever
-// travels.
+// StandingByName is the row one read of the estate puts a session on for a
+// caller holding the session's NAME rather than its bearer: a view ticket,
+// decided again on the artifact origin, where no cookie travels.
 //
-// THE SAME TABLE AS A BEARER, over the facts the rows keep. A bearer carries
-// three facts of its own (the epoch and fleet generation its session was
-// opened at, and the position its start landed at), and this reads each from
-// the session's own row instead: the epoch the row was opened at, the
-// generation this node holds, and a start the rows have already applied. So a
-// person whose revocation epoch moved past the session, a person who may not
-// act, a session the row says ended and an identity copy that cannot vouch for
-// its rows all land on the rows they land on for a cookie. What the row cannot
-// say is the company's generation at the session's start and the two
-// deadlines the bearer signs: the caller decides those first, over the same
-// rows ([iamdomain.Reader.SessionStanding] judges the generation and the
-// absolute deadline together; a ticket never outlives the deadline it was
-// minted under).
+// THE SAME TABLE AS A BEARER, over the facts the rows keep: the epoch and start
+// the bearer carries are read from the session's own row, so every state lands
+// where it does for a cookie. The row cannot say the generation at the
+// session's start or the two signed deadlines: the caller decides those first
+// ([iamdomain.Reader.SessionStanding]; a ticket never outlives its deadline).
 //
 // A serving row comes back with the person and the session filled in, for the
 // caller to compose a principal from.

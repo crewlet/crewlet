@@ -17,18 +17,12 @@ import (
 
 // THE SPEND ANSWERS, `tokens` and `token_series`, and where each one reads.
 //
-// TWO SOURCES, one aggregation. The live projection holds the phase records of
-// its own rolling window and answers that instantly — it is what the `tokens`
-// push carries and what the dashboard's live views read. EVERY NAMED WINDOW is
-// company days read from the replicated `usage` domain (ADR-0020): every
-// node's day, so the answer is the same on whichever node is asked, reaches
-// back the domain's 181 days rather than the event log's 30, and still counts
-// a node that has left the fleet. It replaced a scan of THIS node's event log,
-// which answered for a third of a three-node fleet under the company's name and
-// drew a ninety-day chart over thirty days of rows.
-//
-// The two are folded by internal/tokens into one shape, so a reader moving
-// from the live window to a named one compares like with like.
+// TWO SOURCES, one aggregation ([tokens] folds both into one shape). The live
+// projection holds the phase records of its own rolling window and is what the
+// `tokens` push and the live views read. EVERY NAMED WINDOW is company days
+// read from the replicated `usage` domain (ADR-0020): every node's day, so any
+// node answers the same, counting a node that has left the fleet. A scan of
+// THIS node's event log answers for only its share.
 
 // spendWindow is a named spend window as its parameters asked for it.
 type spendWindow struct {
@@ -351,17 +345,13 @@ func (w spendWindow) label(r tokens.Rollup) tokens.Rollup {
 
 // tokenSeries answers the spend WITH A TIME AXIS.
 //
-// `tokens` answers what a window cost, split six ways, and every one of its
-// rows is a sum over the whole window — so it cannot say when. That is the
-// question a cost explorer is for: a total with no shape is a number nobody
-// can act on, and the shape is what a spike, a runaway loop or a quiet weekend
-// looks like.
+// `tokens` sums each row over the whole window, so it cannot say when; the
+// shape is what a spike, a runaway loop or a quiet weekend looks like.
 //
-// A SECOND QUESTION rather than a flag on the first, because the two answers
-// have different shapes: one is a breakdown and one is a series, and a query
-// that returned either depending on a parameter is a client branch at every
-// call site. It has no live path: its buckets are company days and ISO weeks,
-// which only the usage domain holds.
+// A SECOND QUESTION rather than a flag on the first: a query returning either
+// shape by parameter is a client branch at every call site. It has no live
+// path: its buckets are company days and ISO weeks, which only the usage
+// domain holds.
 func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 	group := tokens.Group(p.String("group"))
 	if group == "" {
@@ -412,27 +402,21 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 // guessing.
 //
 // KEYED BY AGENT ID, the one identifier a spend record and a usage row carry
-// that neither a rename nor a namesake can move. It was keyed by role name,
-// which two seats may share: both of their rows linked to whichever seat the
-// map was built from last, and a per-unit band keyed on a unit's NAME pooled
-// two teams that shared one.
+// that neither a rename nor a namesake can move; role names and unit NAMES
+// collide (rows link to the wrong seat, two teams pool).
 //
-// Exported because the live stream needs the same directory for the rollup it
-// pushes: two derivations of it is how a pushed row and a queried one come to
-// link to different pages.
+// Exported because the live stream needs the same directory: two derivations
+// let a pushed row and a queried one link to different pages.
 func (s Sources) Seats() tokens.Seats {
 	out := tokens.Seats{}
 	organization := s.organization()
 	if organization == nil {
 		return out
 	}
-	// EVERY SEAT THE COMPANY RUNS: a walk of the document's top-level
-	// list missed every seat inside a unit.
-	//
-	// AND EVERY SEAT'S UNIT THROUGH ONE INDEX of the chart
-	// ([org.Index.UnitFor]): the chart's own [org.Organization.UnitFor]
-	// walks every unit's seats until one holds the seat, so asked of every
-	// seat it cost seats² a chart drawn.
+	// EVERY SEAT THE COMPANY RUNS (a walk of the document's top-level list
+	// misses seats inside a unit), AND EACH SEAT'S UNIT THROUGH ONE INDEX
+	// ([org.Index.UnitFor]): [org.Organization.UnitFor] walks every unit's
+	// seats, so asked of every seat it costs seats² a chart drawn.
 	homes := organization.Index()
 	for role := range organization.AllRoles() {
 		seat := tokens.Seat{Handle: role.Handle(), Name: role.Name}

@@ -95,6 +95,7 @@ import type {
 } from "~/protocol/index.ts";
 
 const row = (id: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
+  flow: null,
   id,
   key: "ENG-" + id,
   project: "ENG",

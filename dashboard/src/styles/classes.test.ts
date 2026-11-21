@@ -539,6 +539,11 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
+    name: "crewlet-prose",
+    why: "uilet's Prose writes it on its root and sizes its own measure there. styles/screens.css names it only to leave it out of the dashboard's `.prose` measure, which, later in the cascade, overrode the measure every caller of Prose chose (an Ask Crewlet answer ran at 78ch). A rule about OUR class, kept off the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-modal__body--fill",
     why: "uilet's Modal writes it on a body one child fills, and stretches every child of that body. The dashboard's Modal keeps a place for a refused control's refusal inside the body, and styles/screens.css holds that place to its own height there, so a filled body never gives the refusal a share of its height. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
@@ -556,6 +561,11 @@ const ALLOWED: Allowed[] = [
   {
     name: "crewlet-select__menu",
     why: "uilet's Select writes it on its listbox panel, which it portals out of the field. styles/screens.css raises the panel's height for My work's whose-day picker (`.whose-day-menu`, the Select's `menuClassName`), whose options are two lines each where the kit sizes the panel for six one-line rows — at 1440×900 it showed three people and cut a group heading in half. The kit's variable is declared on the panel itself, so only a rule on the panel can set it. Another rule about OUR composition of the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
+    name: "crewlet-tag__label",
+    why: "uilet's Tag writes it on a chip's words, and ChipField draws its chips as Tags with no monospace option. styles/frame.css sets Gitlet › Changes' query bar chips (`.code-query__field`) in the mono face, since each is a qualifier the reader types; the shell's sheet, since a lazy one may carry no kit rule. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
   },
   {
@@ -984,14 +994,15 @@ describe("every class the dashboard names", () => {
 // brand's (Company › Brand, a kit's view and its gallery cover),
 // `folders.css`, the folders' (their tiles, dialogs, row and fact),
 // `comments.css`, the comments' (the pin layer, Comment mode and the panel),
-// `models.css`, Settings › Models' (its list, model page, wizard and By job),
+// `models.css`, Settings › Models' (its one page, model page and wizard),
 // `integrations.css`, Company › Integrations' (the directory's detail, an
 // app's tabs, its setup form and disconnect dialog), `access.css`, the
 // agents' access table an integration's Agents tab and an agent's Access tab
 // share, `chatlet-frame.css`, Chatlet's frame (its grid, top bar and Rooms
 // panel), `chatlet-room.css`, a Chatlet room's transcript and composer,
 // `chatlet-panes.css`, Chatlet's panes, dialogs and views, `atlas.css`,
-// Company › Atlas's (its map's box, lists, hops and claims), `gitlet.css`,
+// Company › Atlas's (its map's box, lists, hops and claims), `advisor.css`,
+// the Advisor's (its page's head, rows, reports and a week's measures), `gitlet.css`,
 // the Gitlet workspace's (a repository's code, history and settings, a
 // change's conversation and files, the listings), which every module drawing
 // a `code-` class imports — Home's changes waiting on a person and Settings ›
@@ -1052,6 +1063,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "atlas.css": {
     importer: "routes/atlas/parts.tsx",
     owns: /\.atlas-[a-z_-]+\b/,
+  },
+  "advisor.css": {
+    importer: "routes/advisor/index.ts",
+    owns: /\.advisor-[a-z_-]+\b/,
   },
   "gitlet.css": {
     importer: "routes/gitlet/ui.tsx",

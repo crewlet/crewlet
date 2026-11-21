@@ -23,8 +23,8 @@ func preview() proposal.Preview {
 	return proposal.Preview{
 		Title: "Create task", Target: "ENG", ApproveLabel: "Approve and create",
 		Changes: []wire.Change{
-			proposal.Added("title", "Title", "Payroll review", false),
-			proposal.Fact("project", "Project", "ENG"),
+			proposal.Added("title", "Title", wire.Plain("Payroll review"), false),
+			proposal.Fact("project", "Project", wire.Plain("ENG")),
 		},
 		Request: exec.Request{Method: "POST", Path: "/operator/act/create_work_item",
 			Body: []byte(`{"args":{"project":"ENG","title":"Payroll review"}}`)},
@@ -70,7 +70,7 @@ func TestAProposalIsDrawnFromItsPreviewAlone(t *testing.T) {
 		t.Errorf("the card shows digest %q and the proposal holds %q", card.Digest, n.Digest)
 	case card.State != wire.ProposalProposed:
 		t.Errorf("a new proposal's card is %s", card.State)
-	case !n.ExpiresAt.Equal(noon.Add(proposal.DefaultTTL)) || !card.ExpiresAt.Equal(n.ExpiresAt):
+	case !n.ExpiresAt.Equal(noon.Add(proposal.TTL)) || !card.ExpiresAt.Equal(n.ExpiresAt):
 		t.Errorf("expires %v on the proposal and %v on the card", n.ExpiresAt, card.ExpiresAt)
 	case card.Changes[0].Kind != wire.ChangeFact:
 		t.Errorf("the first row is a %s: facts come first (D10)", card.Changes[0].Kind)
@@ -137,7 +137,7 @@ func TestAVisibilityChangeNamesItsAudience(t *testing.T) {
 	if _, err := proposal.New(d); !errors.Is(err, proposal.ErrInvalid) {
 		t.Errorf("a share with no audience was proposed: %v", err)
 	}
-	d.Preview.Audience = []string{"Everyone in the company"}
+	d.Preview.Audience = []wire.Phrase{wire.Plain("Everyone in the company")}
 	d.Preview.StepUp = true
 	n, err := proposal.New(d)
 	if err != nil {
@@ -384,8 +384,9 @@ func TestAChangeRowSaysWhatMoved(t *testing.T) {
 		t.Error("an unchanged value is a row")
 	}
 	rows := proposal.Rows([]wire.Change{
-		proposal.Text("body", "Body", "a", "b"), proposal.Removed("x", "X", "1"),
-		proposal.Changed("s", "Status", "open", "done"), proposal.Fact("p", "Project", "ENG"),
+		proposal.Text("body", "Body", "a", "b"), proposal.Removed("x", "X", wire.Plain("1")),
+		proposal.Changed("s", "Status", wire.Plain("open"), wire.Plain("done")),
+		proposal.Fact("p", "Project", wire.Plain("ENG")),
 	})
 	for i, want := range []wire.ChangeKind{wire.ChangeFact, wire.ChangeChanged,
 		wire.ChangeRemoved, wire.ChangeText} {
@@ -406,11 +407,11 @@ func TestAChangeTooLargeToShowIsNotProposed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a change that fits as runs was refused: %v", err)
 	}
-	if c := n.Card.Proposal.Changes[0]; c.From != "" || len(c.Words) == 0 {
+	if c := n.Card.Proposal.Changes[0]; len(c.From) > 0 || len(c.Words) == 0 {
 		t.Errorf("the oversized text change kept its whole values or lost its runs")
 	}
 	huge := strings.Repeat("x", assistantdomain.CardMaxBytes)
-	d.Preview.Changes = []wire.Change{proposal.Added("body", "Body", huge, false)}
+	d.Preview.Changes = []wire.Change{proposal.Added("body", "Body", wire.Plain(huge), false)}
 	if _, err := proposal.New(d); !errors.Is(err, proposal.ErrTooLarge) {
 		t.Errorf("a change too large for any card was proposed: %v", err)
 	}

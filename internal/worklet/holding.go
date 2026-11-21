@@ -142,11 +142,11 @@ func heldByAsksStatement() (string, []any) {
 // then the page. agents are the company's agent seats, whose items the rows
 // and the summary count.
 func readHolding(ctx context.Context, tx *sql.Tx, handle string, agents map[string]bool,
-	dayStart time.Time) ([]HoldingRow, ClaimTotal, HoldingAgents, error) {
+	at rowsAt) ([]HoldingRow, ClaimTotal, HoldingAgents, error) {
 
 	block := holdingBlock(handle)
 	set := tasksWhere(block.where, block.args)
-	candidates, more, err := readTasks(ctx, tx, set, block.terms, MaxHoldingCandidates, dayStart)
+	candidates, more, err := readTasks(ctx, tx, set, block.terms, MaxHoldingCandidates, at)
 	if err != nil {
 		return nil, ClaimTotal{}, HoldingAgents{}, err
 	}
@@ -154,7 +154,7 @@ func readHolding(ctx context.Context, tx *sql.Tx, handle string, agents map[stri
 	if err != nil {
 		return nil, ClaimTotal{}, HoldingAgents{}, err
 	}
-	asked, askedMore, err := readHeldByAsks(ctx, tx, handle, dayStart)
+	asked, askedMore, err := readHeldByAsks(ctx, tx, handle, at)
 	if err != nil {
 		return nil, ClaimTotal{}, HoldingAgents{}, err
 	}
@@ -251,7 +251,7 @@ func (r *HoldingRow) countAgents(waiting []waiter, agents map[string]bool) []str
 // from their newest [MaxHoldingCandidates] questions, and whether there were
 // more.
 func readHeldByAsks(ctx context.Context, tx *sql.Tx, handle string,
-	dayStart time.Time) ([]HoldingRow, bool, error) {
+	at rowsAt) ([]HoldingRow, bool, error) {
 
 	statement, open := heldByAsksStatement()
 	args := append(append([]any{handle, handle}, open...), MaxHoldingCandidates+1)
@@ -287,7 +287,7 @@ func readHeldByAsks(ctx context.Context, tx *sql.Tx, handle string,
 		return nil, false, nil
 	}
 	tasks, _, err := readTasks(ctx, tx, tasksWhere("t.id IN ("+placeholders(len(ids))+")", ids),
-		[]sortTerm{{Column: "t.id"}}, len(ids), dayStart)
+		[]sortTerm{{Column: "t.id"}}, len(ids), at)
 	if err != nil {
 		return nil, false, err
 	}

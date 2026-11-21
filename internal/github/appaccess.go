@@ -14,16 +14,13 @@ import (
 //
 // # What the app's own key can do, and what it cannot
 //
-// The engine holds every seat app's private key, so as the app it can read
-// its own registration, suspend and unsuspend its installation, and uninstall
-// it. Those are the off switch, the back-on switch and the remove the Agents
-// tab offers.
+// As the app, the engine can read its own registration, suspend and unsuspend
+// its installation, and uninstall it: the Agents tab's off, back-on and remove.
 //
-// What it cannot do is change the registration. GitHub has no endpoint that
-// edits an app's permissions or deletes an app: both are a person's acts on
-// the app's settings pages ([PermissionsURL], [ManageURL]). So a raise past
-// what the app is registered with waits for its owner, and a removal ends
-// with a link (D5).
+// It cannot change the registration: GitHub has no endpoint that edits an
+// app's permissions or deletes an app, only a person on its settings pages
+// ([PermissionsURL], [ManageURL]). So a raise past what the app is registered
+// with waits for its owner, and a removal ends with a link (D5).
 
 // Registration is what an app is registered with at GitHub: what it asks
 // every installation for.

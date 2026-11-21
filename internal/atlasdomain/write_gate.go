@@ -15,10 +15,9 @@ import (
 // ---- node gates --------------------------------------------------------- //
 
 // GateWriter publishes this log's node gates: a node's eviction and its
-// readmission. ITS OWN TYPE beside [Writer], because a gate names a machine and
-// reads nothing of the atlas: the node gate writes every
-// identity-claiming log at once, and none of its writers should need more than
-// the log.
+// readmission. ITS OWN TYPE beside [Writer]: the node gate writes every
+// identity-claiming log at once and reads nothing of the atlas, so its writers
+// need only the log.
 type GateWriter struct {
 	publisher *statelog.Publisher
 	now       func() time.Time
@@ -33,9 +32,8 @@ func NewGateWriter(publisher *statelog.Publisher) (*GateWriter, error) {
 }
 
 // EvictNode installs the gate that drops a node's records on this log, AS the
-// actor who ran the gesture, under the operation id the engine's node gate
-// derived. UNJUDGED HERE: whether the node may be evicted is asked once, by the
-// node gate, before the first log is written.
+// actor who ran it, under the node gate's operation id. UNJUDGED HERE: the node
+// gate asks once, before the first log is written, whether the node may go.
 func (w *GateWriter) EvictNode(ctx context.Context, by iam.Actor, opID, node string) (statelog.Result, error) {
 	return w.gateNode(ctx, by, opID, node, false)
 }
@@ -45,9 +43,9 @@ func (w *GateWriter) ReadmitNode(ctx context.Context, by iam.Actor, opID, node s
 	return w.gateNode(ctx, by, opID, node, true)
 }
 
-// gateNode publishes one eviction record on the node's own subject. A retry is
-// answered by the framework from this node's ledger, judged by whether the
-// record its operation landed is still in force ([statelog.GateStanding]).
+// gateNode publishes one eviction record on the node's own subject. The
+// framework answers a retry from this node's ledger, by whether its operation's
+// record is still in force ([statelog.GateStanding]).
 func (w *GateWriter) gateNode(ctx context.Context, by iam.Actor, opID, node string,
 	readmit bool) (statelog.Result, error) {
 

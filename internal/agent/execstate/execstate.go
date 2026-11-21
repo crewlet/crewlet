@@ -28,7 +28,10 @@
 // So it carries an explicit Version, and decoding an unknown one is a LOUD
 // REFUSAL that leaves the row untouched rather than a best-effort read: a
 // resumed turn acting on a half-understood state is worse than a run that
-// waits for a node which understands it.
+// waits for a node which understands it. [VersionOf] reads the version alone,
+// as [Decode] reads it first and with nothing else of the state built, for a
+// caller that asks only which build may read a row (internal/engine's resume
+// give-up, on every failure another node or build may get past).
 //
 // Evolution is additive WITHIN a version — new fields get defaults, nothing is
 // removed or repurposed — and a shape that cannot be read that way takes a new
@@ -53,7 +56,8 @@
 // removed within a version guards a field whose absence some reader would
 // misread, and no other. So 4 lost its notes field (`steered`), whose notes
 // are on the run's record now, read there by every segment that resumes the
-// turn (internal/engine, runsteer.go); and the prior-turns block
+// turn (internal/engine, runsteer.go), where a second copy here could
+// disagree with it; and the prior-turns block
 // (`conversation`), which images of main wrote, gave way to how the
 // conversation's earlier turns ended ([Frozen.Endings]): a build that resumes
 // a row the other parked reads none of the block it does not know, and its
@@ -100,14 +104,10 @@ import (
 // reader can default is not a bump; a changed meaning for an existing field
 // is.
 //
-// It is 4 because 2 and 3 described a parked engine conversation — a tool
-// loop stopped on an unanswered call, 3 the one a harness drove over MCP — with a
-// flag marking the states that were not one. Every state is a parked run now
-// and the conversation is gone, so a build that read a new row as 3 would
-// take it for a conversation with no messages; a number is never reused, so a
-// blob carrying 3, 2 or 1 is refused as a version this build does not read,
-// never decoded as this one. Images of main wrote rows of 3, which is why that
-// number is retired rather than taken over.
+// 2 and 3 described a parked engine conversation, so a build reading a new row
+// as 3 would take it for a conversation with no messages. A number is never
+// reused: a blob carrying 3, 2 or 1 is refused as a version this build does
+// not read, never decoded as this one.
 const Version = 4
 
 // State is a turn parked on its executor's run.
@@ -158,18 +158,13 @@ type State struct {
 	Round int `json:"iteration"`
 
 	// LaunchMS is how long the executor phase's LAUNCHING segment took, in
-	// milliseconds: from the phase opening — its started record — to the
-	// run being under way, the prompt, the member pick, the box and its
-	// setup included.
+	// milliseconds: from the phase's started record to the run being under way,
+	// the prompt, member pick, box and setup included.
 	//
-	// HERE because the executor is one phase in two segments and ONE record:
-	// the launch publishes the phase's start and nothing else, and the
-	// collection publishes its completion, whose duration covers both
-	// segments and not the run between them (types.AgentPhaseCompleted's
-	// DurationMS). The launch's half is known only to the segment that
-	// launched, and the collection is often another process. Without it the
-	// record measured the collection alone — a millisecond — and every
-	// reader drew an executor that took no time.
+	// Carried because the phase is two segments and ONE record: the collection's
+	// completion duration covers neither the launch's half nor the run between
+	// (types.AgentPhaseCompleted's DurationMS), and the collection is often
+	// another process. Without it the record measured the collection alone.
 	LaunchMS int `json:"launch_ms,omitempty"`
 
 	// LaunchedAt is when that launching segment opened the phase — its
@@ -219,37 +214,28 @@ type State struct {
 	// charged for yet — the half before a park, when nothing at dispatch
 	// named an item and the segment that parked could not conclude one.
 	//
-	// HERE for the reason Written is: a turn charged at its END by a sole
-	// write is charged by a segment that is not the one that spent most of
-	// it. Without this the resumed segment would pay only its own share,
-	// and a turn that filed its task, launched its run and resumed
-	// would be charged for the collection and not for the work — and never
-	// counted as a turn at all, since only the first segment counts one.
-	// When the finishing segment is charged, it pays this as well; when it
-	// is not, nothing ever is, which is what an unattributed turn is.
+	// Carried for the reason Written is: the segment that charges at the turn's
+	// END is not the one that spent most of it, and would pay only its own share
+	// and never count the turn, since only the first segment counts one. The
+	// finishing segment pays this as well when it is charged; when it is not,
+	// nothing ever is, which is what an unattributed turn is.
 	//
-	// Nil when nothing is owed: the half before the park was charged to the
-	// item its dispatch named.
+	// Nil when nothing is owed: the first half was charged to the item its
+	// dispatch named.
 	Uncharged *Uncharged `json:"uncharged,omitempty"`
 
 	// SoFar is what the turn's segments before this one MEASURED — their
 	// spans and their reviews — for the record that ENDS the turn to state
 	// the whole of it ([types.TurnCompleted.Turn]).
 	//
-	// HERE for the reason Written is: the segment that ends a turn is often
-	// in another process, and the turn's earlier records are in the event
-	// log of whichever node the earlier segments ran on — or of whichever
-	// data node kept their custody batch. Summed from those records, every
-	// node counted the turn from the part it held. Carried on every park,
-	// charged or not, since it is a measurement rather than a charge — a
-	// zero one as `{}`, never omitted.
+	// Carried for the reason Written is: the ending segment is often another
+	// process and the earlier records sit in whichever node's log ran them. On
+	// every park, charged or not, being a measurement; a zero one as `{}`.
 	//
-	// NIL ON A RESUMED TURN MEANS ITS PAST IS UNMEASURED: the park was made
-	// by a build before this field, so what the segments before it ran is
-	// unknown rather than zero. The resumed turn then hands none on at a
-	// park of its own and its ending record states no tally
-	// ([types.TurnCompleted.Turn]), which the usage reader sums from the
-	// turn's records instead.
+	// NIL ON A RESUMED TURN MEANS ITS PAST IS UNMEASURED: a build before this
+	// field made the park, so the earlier segments are unknown, not zero. The
+	// resumed turn hands none on and its ending record states no tally; the
+	// usage reader sums its records instead.
 	SoFar *TurnSoFar `json:"so_far,omitempty"`
 
 	// Iterations is the closed-round ledger of the parked TURN. The resume
@@ -280,20 +266,15 @@ type State struct {
 
 	// Interactions is who spoke to the seat and what they said — one per
 	// constituent of the trigger, as the dispatch read them — parked for the
-	// reason Ask is: the segment that settles the turn re-reads no trigger.
-	// Each keeps the label its body was read under
-	// ([types.InboundInteraction.Provenance]), which that segment could no
-	// more decide again than it could AskProvenance.
+	// reason Ask is: the segment that settles the turn re-reads no trigger. Each
+	// keeps the label its body was read under
+	// ([types.InboundInteraction.Provenance]), as AskProvenance does.
 	//
-	// TWO READERS, both in that segment. Its completed-turn event carries
-	// them, and that event is the one every post-turn worker that waits for
-	// a settled turn reads — the persist decider attributes each fact to the
-	// interaction that stated it, and every executor's turn parks, so
-	// without these every turn settled with nobody having said anything.
-	// And who ASKED is read off them as a dispatch reads it
-	// (turnctx.Turn.Senders): a refresh_memory call re-runs the turn-start
-	// memory filter, whose per-subject rule is judged against exactly that
-	// list. Empty for a turn no interaction woke.
+	// Two readers, both in that segment: its completed-turn event, for every
+	// post-turn worker (the persist decider attributes each fact to the
+	// interaction that stated it), and who ASKED, read off them as a dispatch
+	// does (turnctx.Turn.Senders) for refresh_memory's per-subject memory
+	// filter. Empty for a turn no interaction woke.
 	Interactions []types.InboundInteraction `json:"interactions,omitempty"`
 
 	// Context is what the turn fetched and rendered ONCE, at its start, that
@@ -312,19 +293,15 @@ type State struct {
 }
 
 // Frozen is a turn's start-of-turn context as a park carries it: each
-// prefetched block's rendered text, and how the conversation's earlier turns
-// ended.
+// prefetched block's rendered text, and how earlier turns ended.
 //
-// MIRRORED rather than the prefetch package's own type, for the reason
-// [Uncharged] is: this package is the parked turn's wire format, and a type
-// embedded whole would put on the row everything that type ever grows — the
-// knowledge hits behind a block, the turn's embedding — none of which a
-// launch's prompt reads.
+// Mirrored rather than the prefetch package's own type, for the reason
+// [Uncharged] is: this is the parked turn's wire format, and embedding that
+// type would put on the row everything it ever grows.
 //
-// BOUNDED where it is rendered, not here: each block by its own source and the
-// endings by theirs (internal/agent/prompts' EndingsMaxBytes, which measures
-// the block as [Encode] writes it, escapes included), so the row carries the
-// strings the first launch's prompt did and nothing more.
+// Bounded where it is rendered, not here: each block by its source and the
+// endings by internal/agent/prompts' EndingsMaxBytes (measured as [Encode]
+// writes them, escapes included).
 type Frozen struct {
 	ThreadContext       string `json:"thread_context,omitempty"`
 	PersonalMemory      string `json:"personal_memory,omitempty"`
@@ -462,27 +439,15 @@ func Encode(s State) (json.RawMessage, error) {
 // a crash between launching the job and persisting the park — and the caller
 // settles it rather than treating it as a broken store.
 func Decode(blob json.RawMessage) (State, bool, error) {
-	if len(blob) == 0 {
-		return State{}, false, nil
-	}
 	// The version FIRST, off the raw blob, because which shape to decode
 	// into is exactly what it answers. Decoding into the current State and
 	// checking afterwards would silently zero every field another format
 	// spells differently before the version was ever looked at.
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(blob, &fields); err != nil {
-		return State{}, false, fmt.Errorf("execstate: decode: %w", err)
+	version, parked, err := VersionOf(blob)
+	if err != nil || !parked {
+		return State{}, false, err
 	}
-	if len(fields) == 0 {
-		return State{}, false, nil
-	}
-	var version float64
-	if raw, ok := fields["version"]; ok {
-		// A version that is not a number leaves zero, which no build has
-		// ever written and which therefore takes the refusal below.
-		_ = json.Unmarshal(raw, &version)
-	}
-	switch int(version) {
+	switch version {
 	case Version:
 		var s State
 		if err := unmarshalExact(blob, &s); err != nil {
@@ -497,8 +462,52 @@ func Decode(blob json.RawMessage) (State, bool, error) {
 		// format it does not know would act on a half-understood state;
 		// a newer one waits for a node that reads it, and a retired one is
 		// settled by the engine once no live node does ([ErrRetired]).
-		return State{}, false, &VersionError{Found: int(version)}
+		return State{}, false, &VersionError{Found: version}
 	}
+}
+
+// VersionOf reads the version a state was written at, and nothing else of it:
+// the step [Decode] takes first, for a caller that asks only which build may
+// read a state (internal/engine's parkedStateVersion, on every resume failure
+// another node or build may get past, which would otherwise decode a state
+// that may be large once more beside the resume's own). parked is false for no
+// state at all, as Decode reads one: no bytes, a JSON null or an object with no
+// keys. An object is the version it names, and zero where it names none or
+// names it as no number, which no build has ever written. Any other bytes,
+// JSON that is no object or no JSON at all, are an error. A state whose body
+// this build would refuse still names its version here.
+func VersionOf(blob json.RawMessage) (version int, parked bool, err error) {
+	if len(blob) == 0 {
+		return 0, false, nil
+	}
+	// ONE FIELD, and every other skipped unread: the scan still checks the
+	// whole blob is JSON, but builds nothing of the state.
+	var probe struct {
+		Version json.RawMessage `json:"version"`
+	}
+	if err := json.Unmarshal(blob, &probe); err != nil {
+		return 0, false, fmt.Errorf("execstate: decode: %w", err)
+	}
+	if probe.Version == nil {
+		return 0, !emptyObject(blob), nil
+	}
+	// A version that is not a number leaves zero, which no build has ever
+	// written and which therefore takes Decode's refusal.
+	var named float64
+	_ = json.Unmarshal(probe.Version, &named)
+	return int(named), true, nil
+}
+
+// emptyObject reports whether blob, valid JSON that decodes into an object, is
+// one with no keys or a JSON null: no state ([VersionOf]). It reads the first
+// two tokens alone.
+func emptyObject(blob json.RawMessage) bool {
+	dec := json.NewDecoder(bytes.NewReader(blob))
+	open, err := dec.Token()
+	if err != nil || open == nil {
+		return err == nil
+	}
+	return !dec.More()
 }
 
 // unmarshalExact decodes with every number kept as the digits it was written

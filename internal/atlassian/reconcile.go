@@ -69,24 +69,12 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 // GrantPropagation is how long Atlassian takes to make a new service
 // account's product access actually work.
 //
-// # Why a window rather than a read
+// Atlassian exposes no read of a service account's product access, so nothing
+// can ask whether a grant is in force; the product refusing the credential is
+// the grant still landing inside this window and needs a person outside it.
 //
-// Atlassian exposes no read of a service account's product access at all:
-// account-management answers no GET for a single account, the service-account
-// listing carries identity and metadata only, and the routes that do return
-// product access are directory-user routes, which a service account is not.
-// So nothing can ask whether a grant is in force. What CAN be observed is the
-// product refusing the account's credential, and that observation means two
-// different things depending only on how long ago the credential was sealed:
-// inside this window it is the grant still landing, and outside it, it is
-// something a person has to look at.
-//
-// MEASURED, not chosen: on a live Cloud site the gateway accepted a
-// seconds-old token and Jira answered its own 401 ("Client must be
-// authenticated to access this resource") for about seventy seconds, twice in
-// a row, then worked. Five minutes is a four-times margin over that, which is
-// the honest shape for a provider's internal propagation with no published
-// bound — and it is short enough that a grant which is NOT landing becomes
-// somebody's work inside one settled interval rather than waiting for ever
-// under "the provider is working on it".
+// MEASURED: Jira answered 401 to a seconds-old token for about seventy
+// seconds, twice, then worked. Five minutes is a four-times margin on an
+// unpublished bound, short enough that a grant that is NOT landing becomes
+// somebody's work within one settled interval.
 const GrantPropagation = 5 * time.Minute

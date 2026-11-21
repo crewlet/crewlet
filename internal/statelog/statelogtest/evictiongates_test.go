@@ -14,15 +14,9 @@ import (
 )
 
 // THE EVICTION-ONLY FAMILY COMES BACK CLEAN on a control whose one apply
-// gate is the eviction window, and catches every bend of it.
-//
-// The family certifies a reader against its own domain's applier, so it has
-// no control domain of the kind [statelogtest.Run] ends with — the candidate
-// is its own control. That leaves it with nothing to run against until a
-// domain of its shape registers, and a family no domain runs is a claim:
-// every bend it requires reported, and the coverage probe that has to reach
-// every kind, would pass for a family that asked nothing. This is the domain
-// it runs against meanwhile, and stays the one that says it can pass at all.
+// gate is the eviction window, and catches every bend of it. The family has
+// no built-in control (the candidate is its own), so without this domain its
+// required bends and coverage probe would pass for a family that asked nothing.
 //
 // Mutation: drop windowCoverage from the agreement and the applier that drops
 // its object's own kind alone passes; close the window here at the
@@ -47,8 +41,8 @@ func windowControl() statelogtest.EvictionGateCandidate {
 		Candidate: c,
 		Reader:    func(db store.ReplicatedReader) statelog.Gates { return windowGates{db} },
 		Kind:      "widget",
-		// THE EVICTION RECORD TOO: the window is a fact about the writer,
-		// so it gates a record of every kind the control publishes.
+		// The eviction record too: the window is a fact about the writer,
+		// so it gates every kind the control publishes.
 		SubjectKinds: []string{"widget", controlGateKind},
 		Create:       windowWidget,
 		Write:        windowWidget,
@@ -58,7 +52,7 @@ func windowControl() statelogtest.EvictionGateCandidate {
 		Readmit: func(node, writer, opID string) ([]byte, error) {
 			return windowGate(node, writer, opID, true)
 		},
-		// THE EVICTION IS ITS ONLY GATE, said with an empty map.
+		// Empty, not nil: the eviction is its only gate.
 		ApplyGates: map[string]func(id, writer, opID string) ([]byte, error){},
 	}
 }

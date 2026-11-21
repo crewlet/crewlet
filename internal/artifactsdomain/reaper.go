@@ -9,17 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 )
 
-// THE TRASH TERM'S PURGE: what the trash reaper (internal/trashreap) asks of
-// this domain once an artifact has been in the trash past
-// [artifacts.TrashRetention], or once a purge has begun on it and stopped part
-// way. The reaper's listing may be a moment old, so the purge is GUARDED: an
-// artifact restored since, or trashed again more recently, is refused
-// [ErrNotInTrash]. The guard is judged where the purge is COMMITTED, in the
-// snapshot of its first step ([OpPurgeBegin]), before any dependent's state is
-// removed; from that step on a restore is refused, so the guard can no longer
-// turn false and the purge only finishes. Judged after the dependents, as it
-// once was, a restore landing between the two left a live artifact whose
-// datastore was gone for good.
+// THE TRASH TERM'S PURGE, asked by internal/trashreap past
+// [artifacts.TrashRetention] or to finish a stopped purge. The reaper's listing
+// may be stale, so the purge is GUARDED ([ErrNotInTrash] for an artifact
+// restored or re-trashed since), and the guard is judged in the snapshot of the
+// first step ([OpPurgeBegin]), before any dependent is removed: from then on a
+// restore is refused, so the guard cannot turn false. Judged after the
+// dependents, a restore landing between them leaves a live artifact whose
+// datastore is gone.
 
 // ErrNotInTrash refuses a purge of the trash for an artifact that is not in the
 // trash, or went in at or after the cutoff the purge was asked for.

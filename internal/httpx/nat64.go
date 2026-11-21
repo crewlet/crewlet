@@ -39,28 +39,17 @@ var wellKnownIPv4Only = [...]netip.Addr{
 	netip.AddrFrom4([4]byte{192, 0, 0, 171}),
 }
 
-// discoverNAT64 asks r for the network-specific NAT64 prefixes of the network
-// it resolves on, by RFC 7050's discovery: an AAAA lookup of ipv4only.arpa,
-// which a DNS64 resolver answers by synthesizing from the name's A records
-// with each prefix it translates through.
+// discoverNAT64 asks r for the network's NAT64 prefixes by RFC 7050: an AAAA
+// lookup of ipv4only.arpa, which a DNS64 resolver synthesizes per prefix.
 //
-// NO RECORD IS AN ANSWER: the name has no AAAA record of its own, so NODATA
-// (or NXDOMAIN, which Go reports alike, as a not-found DNS error) means no
-// DNS64 here, and the well-known prefix alone applies. Any other failure is
-// the resolver's own, returned for [Rule.Public] to refuse the address that
-// needed the answer with: an address is never judged on a guess about which
-// prefixes are translated.
+// NO RECORD IS AN ANSWER: NODATA or NXDOMAIN means no DNS64 here, so the
+// well-known prefix alone applies. Any other failure is returned for
+// [Rule.Public] to refuse the address that needed it, never a guess.
 //
-// A PREFIX COUNTS ONLY WHERE THE ANSWER CANNOT WIDEN THE RULE ([honoured]).
-// Every answer is read first, so RFC 7050's reading of an ambiguous answer
-// sees all of them, and a prefix that does not count is then dropped: the
-// addresses under it are judged as on a network that names none.
-//
-// A [Rule] asks it at most once, for the first address whose verdict its
-// answer can change, and nothing keeps the answer longer than that one dial
-// or resolve: one AAAA lookup beside the host's own, against a dial that is
-// about to fetch a file or a repository, is cheaper than a cache whose
-// lifetime would have to track the network's.
+// A prefix counts only where it cannot widen the rule ([honoured]); all
+// answers are read first, then non-counting prefixes dropped. A [Rule] asks at
+// most once per dial and caches nothing: a lookup is cheaper than a cache
+// tracking the network's lifetime.
 func discoverNAT64(ctx context.Context, r Resolver) ([]netip.Prefix, error) {
 	answers, err := r.LookupNetIP(ctx, "ip6", ipv4onlyArpa)
 	if err != nil && !noRecord(err) {
@@ -70,38 +59,16 @@ func discoverNAT64(ctx context.Context, r Resolver) ([]netip.Prefix, error) {
 	return slices.DeleteFunc(named, func(p netip.Prefix) bool { return !honoured(p) }), nil
 }
 
-// honoured reports whether a NAT64 prefix the network's resolver named is one
-// the rule takes its word for: one lying where that word cannot widen the rule
-// into a network that is not on the internet.
-//
-// THE RESOLVER IS NOT TRUSTED WITH WHERE A PREFIX LIES. An address under a
-// prefix that counts is judged by the 32 bits it carries and by nothing else,
-// so a resolver that answered ipv4only.arpa falsely (a poisoned cache, a rogue
-// resolver a DHCP lease handed out) would otherwise choose which addresses
-// those are. Naming a unique-local prefix, it would have the rule call public
-// an internal host whose low 32 bits read as a public IPv4 address, and the
-// rule exists to keep a dial out of exactly that space. So a prefix counts in
-// two places alone, wholly inside one of them:
-//   - global unicast outside the blocks the allowlist refuses there. Every
-//     address of such a prefix is public by the allowlist already, and judging
-//     one by the address it carries can only refuse it, so a false answer
-//     there makes the rule stricter, never wider. The whole prefix is held
-//     clear of those blocks, not its first address alone: a block added
-//     there later may be smaller than a prefix, and lie inside one.
-//   - RFC 8215's local-use block, 64:ff9b:1::/48, and no wider: it is
-//     reserved for translation and nothing else, so that a network's own
-//     prefix need not be unique-local.
-//
-// A prefix named anywhere else is ignored, and the allowlist refuses every
-// address under it. The well-known prefix needs no naming ([wellKnownNAT64]).
-// The cost falls on a DNS64 network whose translator uses a unique-local or
-// other non-global prefix: through it, the rule reaches no host that has only
-// an IPv4 address. Such a network translates through the well-known prefix, a
-// prefix in 64:ff9b:1::/48 or one in its own global unicast space, or its
-// dialer reaches the host through a proxy its caller trusts.
-//
-// [namedCanHold] states the same two places for one address, and changes with
-// them.
+// honoured reports whether the rule takes the resolver's word for a NAT64
+// prefix. THE RESOLVER IS NOT TRUSTED WITH WHERE A PREFIX LIES: an address
+// under a counted prefix is judged by its low 32 bits alone, so a false
+// ipv4only.arpa answer naming a unique-local prefix would call an internal
+// host public. A prefix counts only when wholly inside global unicast clear
+// of the blocks the allowlist refuses there (a stricter rule at worst; a
+// later, smaller block may lie inside a prefix) or RFC 8215's 64:ff9b:1::/48.
+// Others are ignored; the well-known prefix needs no naming
+// ([wellKnownNAT64]). Cost: a DNS64 network on a unique-local prefix reaches
+// no IPv4-only host. [namedCanHold] states the same places; change both.
 func honoured(p netip.Prefix) bool {
 	if within(p, localUseNAT64) {
 		return true
@@ -117,19 +84,16 @@ func honoured(p netip.Prefix) bool {
 	return true
 }
 
-// namedCanHold reports whether ip lies where a prefix the network names counts
-// ([honoured]): in 64:ff9b:1::/48, or in global unicast outside the blocks the
+// namedCanHold reports whether ip lies where a network-named prefix counts
+// ([honoured]): 64:ff9b:1::/48, or global unicast outside the blocks the
 // allowlist refuses there. Only there can the network's prefixes change ip's
 // verdict, so only for such an address does a [Rule] ask for them.
 //
-// IT IS honoured's TWO PLACES, STATED FOR AN ADDRESS, and the two change
-// together: every address of a prefix that counts must be one this answers
-// true for. Otherwise an address under a counted prefix would be judged as on
-// a network naming none, and one inside 2000::/3 carrying 10.0.0.5 would be
-// called public by the allowlist alone. The well-known prefix lies in neither
-// place, so an address in it is judged by what it carries, whatever the
-// network names. An address with a zone lies in no block (netip.Prefix.Contains
-// answers false), and is refused without the resolver being asked.
+// IT IS honoured's TWO PLACES FOR AN ADDRESS, and they change together: else
+// an address under a counted prefix is judged as on a network naming none, and
+// one in 2000::/3 carrying 10.0.0.5 passes. The well-known prefix is in
+// neither place, so it is judged by what it carries. An address with a zone
+// lies in no block and is refused without asking the resolver.
 func namedCanHold(ip netip.Addr) bool {
 	return localUseNAT64.Contains(ip) || allowlisted(ip)
 }
@@ -146,20 +110,16 @@ func noRecord(err error) bool {
 	return ok && dnsErr.IsNotFound
 }
 
-// synthesizedPrefixes reads the prefixes a DNS64 resolver synthesized
-// answers with, by RFC 7050 section 3: each answer holds 192.0.0.170 or
-// 192.0.0.171 at one of RFC 6052's positions, and the address up to that
-// position is the prefix.
+// synthesizedPrefixes reads the prefixes a DNS64 resolver synthesized answers
+// with, by RFC 7050 section 3: 192.0.0.170 or 192.0.0.171 at one of RFC 6052's
+// positions, the address up to it being the prefix.
 //
-// THE OTHER ADDRESS DECIDES WHEN ONE IS AMBIGUOUS. A prefix's own bits can
-// hold the value searched for at another position, so RFC 7050 has the value
-// found exactly once in an answer, and has the search repeated with the other
-// well-known address when an answer holds it twice. The switch is for the
-// whole search, not the one answer: the answer synthesized from the other
-// address carries the first one in the same prefix bits, ONCE, and read on
-// its own it would name a prefix nothing translates through. The second
-// address is searched for, too, when no answer holds the first: a resolver
-// may answer with the one record it synthesized for 192.0.0.171 alone.
+// THE OTHER ADDRESS DECIDES WHEN ONE IS AMBIGUOUS: a prefix's own bits can
+// hold the searched value elsewhere, so it must be found exactly once, and an
+// answer holding it twice repeats the WHOLE search with the other address (the
+// other synthesis carries the first value once, and alone would name a prefix
+// nothing translates through). The second is also searched when no answer
+// holds the first.
 func synthesizedPrefixes(answers []netip.Addr) []netip.Prefix {
 	for _, wka := range wellKnownIPv4Only {
 		if found, ambiguous := searchFor(wka, answers); !ambiguous && len(found) > 0 {

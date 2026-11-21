@@ -192,24 +192,24 @@ type ChainResult struct {
 // field): the one rule the home that asks it and the builder both hold it to.
 func (b ChainBuild) Validate() error {
 	if id, err := uuid.Parse(b.RepoID); err != nil || id.String() != b.RepoID {
-		return fmt.Errorf("%w: repo_id: %q is not a repository's id", ErrInvalid, b.RepoID)
+		return refusedf("%w: repo_id: %q is not a repository's id", ErrInvalid, b.RepoID)
 	}
 	if id, err := uuid.Parse(b.ChainID); err != nil || id.String() != b.ChainID || id.Version() != 7 {
-		return fmt.Errorf("%w: chain_id: %q is not a canonical UUIDv7, which names the chain's scratch and "+
+		return refusedf("%w: chain_id: %q is not a canonical UUIDv7, which names the chain's scratch and "+
 			"its pack", ErrInvalid, b.ChainID)
 	}
 	if branch, ok := strings.CutPrefix(b.TargetRef, "refs/heads/"); !ok || !gitref.ValidBranch(branch) {
-		return fmt.Errorf("%w: target_ref: %q is not a branch", ErrInvalid, b.TargetRef)
+		return refusedf("%w: target_ref: %q is not a branch", ErrInvalid, b.TargetRef)
 	}
 	if !gitref.ValidOID(b.Base) || b.Base == ZeroOID {
-		return fmt.Errorf("%w: base: %q is not a whole commit id", ErrInvalid, b.Base)
+		return refusedf("%w: base: %q is not a whole commit id", ErrInvalid, b.Base)
 	}
 	if b.Seen.IsZero() {
-		return fmt.Errorf("%w: seen: a chain is built from rows read at a position of the %s log", ErrInvalid,
+		return refusedf("%w: seen: a chain is built from rows read at a position of the %s log", ErrInvalid,
 			topics.CodeLogStream)
 	}
 	if n := len(b.Entries); n == 0 || n > MaxChainEntries {
-		return fmt.Errorf("%w: entries: %d, where a chain merges 1 to %d", ErrInvalid, n, MaxChainEntries)
+		return refusedf("%w: entries: %d, where a chain merges 1 to %d", ErrInvalid, n, MaxChainEntries)
 	}
 	seen := make(map[string]bool, len(b.Entries))
 	for i, e := range b.Entries {

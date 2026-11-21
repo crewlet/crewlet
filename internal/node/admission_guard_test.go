@@ -18,51 +18,15 @@ import (
 
 // EVERY TURN START IS ADMITTED BY THE NODE (ADR-0063).
 //
-// A turn runs in exactly two frames, [engine.Engine.runTurn] (a mailbox
-// delivery's) and [engine.Engine.resumeTurn] (a suspended turn re-entered), and
-// each is reachable only through a frame that holds the node's admission. This
-// pins every edge of those two chains, so a new road to a turn fails here
-// rather than in a drain:
-//
-//   - a mailbox delivery: node.runTurn admits ([node.Node.AdmitTurn]) and then
-//     calls the configured Turn, which the engine sets to its unexported
-//     mailboxTurn, in New and nowhere else; mailboxTurn is the one frame that
-//     enters the dispatcher, whose Turn is Engine.runTurn, installed in
-//     buildDispatcher alone;
-//   - a resume: Engine.resumeTurn is reached only from the engine's resumer,
-//     whose Resume the sandbox coordinator reads only in resumeAndSettle,
-//     which takes an admission no frame but admitTurn makes, and which is
-//     called only from the two frames that claim under one
-//     (completeAdmitted, resumeOwedAdmitted), each called only from the frame
-//     that asked the gate (OnCompleted, attemptOwed).
-//
-// # What it reads, and what it cannot
-//
-// It is SYNTACTIC: it parses every non-test Go file in the module
-// ([sourcetree.Walk] from the module root, so the root package and any new
-// top-level directory are read too) and matches identifiers and selectors,
-// never types. So each rule is written to survive the moves that defeat a name
-// match. turn.Run is matched through whatever name the file imports the turn
-// package under (an alias, a dot import, which is refused outright), in every
-// package, at package scope as in a function. Every other edge is an unexported
-// name matched on ANY operand, so a copy of the receiver (`eng := e`) or of the
-// field (`d := e.dispatch`) reaches the same rule. The admission type is
-// matched on ANY MENTION, in a signature as in a body (a declared variable,
-// new, a conversion, an alias, a field), because its zero value assigned field
-// by field is an admission as surely as a literal is. What it cannot see is a
-// value that carries a guarded function out of the frames it pins (a method
-// value stored and called later from elsewhere) or a call through reflection.
-// Review holds those; the ADR says so.
-//
-// A rule names the frames allowed to reach what it guards, as
-// "<directory>.<Receiver>.<Function>", and each must still find what it
-// guards, so a rename cannot leave it passing over nothing.
-//
-// Mutation: call turn.Run from a third frame or another package, under any
-// import name; reach mailboxTurn, the dispatcher's Dispatch or the coordinator's
-// resumer outside their frames, through a copy of the receiver or not; mint an
-// admission outside admitTurn, or take a slot outside AdmitTurn, and this names
-// the frame. TestTheAdmissionGuardFindsEveryRoad makes each of those moves.
+// A turn runs in two frames, [engine.Engine.runTurn] and
+// [engine.Engine.resumeTurn], each reachable only through a frame holding the
+// node's admission; this pins every edge (admissionRules), so a new road to a
+// turn fails here, not in a drain. It is SYNTACTIC ([sourcetree.Walk], names
+// never types), so rules survive aliased imports and copies of the receiver,
+// and the admission type is matched on ANY MENTION; a stored method value or
+// reflection is for review. A rule must still find what it guards. Mutation:
+// reach a guarded frame from outside its allowed ones and this names the frame;
+// TestTheAdmissionGuardFindsEveryRoad makes each move.
 func TestEveryTurnStartIsAdmitted(t *testing.T) {
 	t.Parallel()
 	rules := admissionRules()

@@ -36,6 +36,15 @@
 // anywhere else under internal/api or internal/gitlet/host, the two places a
 // client's connection is served. The one other such deadline there is
 // httpjson.ReadBody's, which bounds a small body as a whole and is not a pace.
+// The gate judges what a deadline is set on (a ResponseController, a
+// ResponseWriter asserted to a deadline interface, a hijacked connection
+// followed through the function that took it), typed from net/http's and
+// net's own declarations, never by the method's name. Its exemptions are
+// functions, never files: this package's Read, Write and End and ReadBody, so
+// a second loop beside them is a finding, and each exempt function must still
+// set one. A connection that leaves the function that took it, or a receiver
+// the walk cannot type, is reported; a bound on a socket the server accepted
+// itself (the hook relay's handshake) is no pace.
 //
 // # Measured
 //
@@ -117,25 +126,16 @@ func newBody(r io.Reader, rc *http.ResponseController, pace time.Duration, now f
 }
 
 // Read reads the body, inside what is left of the current mebibyte's budget.
-//
-// THE CALLER DRIVES THE READS — a store asks for the next piece once it has
-// done whatever it does with the last one — so the pace is kept HERE, on the
-// time spent inside Read, which is the only time the client is the one being
-// waited on. Each Read is given the rest of its mebibyte's budget as its
-// deadline, and what it took is charged against it; a mebibyte that arrives
-// opens the next one's whole budget. A deadline re-armed whole at every Read
-// would admit a byte every twenty-nine seconds for ever, and one charged by
-// the wall clock would bill the client for the server's own work.
-//
-// http.ErrNotSupported is ignored, as httpjson.ReadBody ignores it: a
-// writer that cannot carry a deadline has no connection to bound — and the
-// budget is still kept, so a trickle is refused here even where no deadline
-// could be set.
-//
-// A failure is tagged as the client's ([ErrBody]) — a body cut short, which
-// net/http answers as io.ErrUnexpectedEOF, included. The end of the body,
-// io.EOF itself, is passed through untouched: the store ends an object only
-// there ([objstore.Fill]), and a tagged one would read as a failure.
+// THE CALLER DRIVES THE READS, so the pace is kept HERE, on the time spent
+// inside Read, the only time the client is being waited on. Each Read's
+// deadline is the rest of its mebibyte's budget, and what it took is charged
+// against it; a mebibyte that arrives opens the next one's whole budget. A
+// deadline re-armed whole at every Read would admit a byte every twenty-nine
+// seconds for ever, and a wall-clock charge would bill the client for the
+// server's own work. http.ErrNotSupported is ignored, as httpjson.ReadBody
+// ignores it: the budget is still kept. A failure is tagged as the client's
+// ([ErrBody]); io.EOF passes untouched, since the store ends an object only
+// there ([objstore.Fill]) and a tagged one would read as failure.
 func (b *Body) Read(p []byte) (int, error) {
 	if b.left <= 0 {
 		b.left, b.budget = objstore.MiB, b.pace
@@ -165,42 +165,17 @@ func (b *Body) Read(p []byte) (int, error) {
 }
 
 // Writer writes to a client at [Pace] a mebibyte, charged only for the time
-// spent inside the connection's Write and Flush, FLUSHING AFTER EVERY WRITE.
+// inside the connection's Write and Flush, FLUSHING AFTER EVERY WRITE: a git
+// process's keepalives and progress lines must reach the client when written,
+// or a balancer's idle timeout cuts a transfer that is merely working. [Send]
+// is this Writer fed pieces, so both keep one pace.
 //
-// WHY IT EXISTS beside [Send]: a git process writes its answer into an
-// io.Writer as it produces it — a keepalive every five seconds while it
-// counts objects, a progress line, the engine's own wait line — and each has
-// to reach the client when it is written, or a balancer's idle timeout cuts a
-// transfer that is merely working. Send fills a piece before it writes,
-// which is right for a file the store hands back and wrong for a stream of
-// small writes, which would wait in its buffer until a piece had gathered.
-// Both keep one pace, because Send is this Writer fed its pieces.
-//
-// The accounting is [Body]'s, mirrored: each mebibyte opens a budget of
-// Pace; before each write the connection's write deadline is the budget
-// left; the time the write and its flush took is charged — the flush's above
-// all, since a write of a few bytes lands in net/http's buffer at once and it
-// is the flush that waits on the client; a mebibyte taken opens the next
-// one's whole budget. http.ErrNotSupported from the controller is ignored (a
-// writer with no deadline has no connection to bound) and the budget still
-// kept.
-//
-// ONE DEPARTURE FROM THE MIRROR, because a write is not a read: a Read
-// returns whatever has arrived, so one that crosses into the next mebibyte
-// never waits for more than the bytes already there, while a Write returns
-// only once ALL of p is taken. So a write that would cross a mebibyte's end
-// is written as two pieces, each written and flushed under its own
-// mebibyte's deadline, the first under what is left of this mebibyte's
-// budget and the rest under the next one's — or a client keeping the pace
-// exactly, near the end of a mebibyte's budget, would be given the leftover
-// of that budget for the next mebibyte's bytes too, and cut.
-//
-// A response written through a Writer is ENDED through it too: the handler
-// defers [Writer.End] as it makes the Writer, so the end of the response —
-// which net/http writes itself — is held to what the client has left of its
-// pace, measured from the moment the handler returns.
-//
-// Not safe for concurrent use, as the http.ResponseWriter beneath it is not.
+// The accounting mirrors [Body]'s, except that a Write returns only once ALL
+// of p is taken: a write crossing a mebibyte's end is two pieces, each flushed
+// under its own mebibyte's deadline, or a client keeping the pace exactly
+// would be given the leftover budget for the next mebibyte's bytes too, and
+// cut. The handler defers [Writer.End] as it makes the Writer. Not safe for
+// concurrent use, as the http.ResponseWriter beneath it is not.
 type Writer struct {
 	w    http.ResponseWriter
 	rc   *http.ResponseController
@@ -284,27 +259,17 @@ func (w *Writer) Write(p []byte) (int, error) {
 }
 
 // End gives the connection's write deadline what is left of the current
-// mebibyte's budget — a whole [Pace] once the last write completed a mebibyte
-// — measured from now, for the bytes net/http writes after the handler
-// returns.
+// mebibyte's budget (a whole [Pace] once the last write completed a mebibyte),
+// measured from now, for the bytes net/http writes after the handler returns.
 //
-// WHY: net/http writes the end of a response itself once the handler returns
-// — a chunked response's terminator — under the write deadline in force, and
-// resets it only after. The deadline the last Write set was measured from
-// that write's START, so everything the handler did after it — reaping a git
-// process, publishing an audit record — would come out of the client's
-// budget, which this package never charges: a client on its last mebibyte
-// near the floor would be handed a chunked response cut short of its
-// terminator, and git reports a fetch or a push that succeeded as a failed
-// RPC. A handler therefore defers End as soon as it makes the Writer, so it
-// runs as the handler returns, after the last of its own work.
-//
-// A budget already spent leaves net/http no time at all: the deadline is now,
-// and the end of the response is refused, as the next write would have been.
-// End reports nothing, because nobody is left to act on it — the handler is
-// returning, and net/http answers a write that fails by closing the
-// connection whatever this says; http.ErrNotSupported, from a writer with no
-// connection to bound, is the common case of that.
+// WHY: net/http writes the end of a response itself (a chunked terminator)
+// under the write deadline in force. The last Write's deadline was measured
+// from that write's START, so the handler's later work (reaping a git process,
+// publishing an audit record) would come out of the client's budget, which
+// this package never charges: a client near the floor would get a response
+// cut short of its terminator, and git reports a succeeded fetch or push as a
+// failed RPC. A handler defers End as it makes the Writer. A spent budget
+// sets the deadline to now. End reports nothing: the handler is returning.
 func (w *Writer) End() {
 	budget := w.budget
 	if w.left <= 0 {
@@ -355,30 +320,18 @@ func Send(w http.ResponseWriter, src io.Reader, now func() time.Time) error {
 	}
 }
 
-// sendPiece is how much of a stored file [Send] reads before it writes — and
-// so the memory every download in flight holds for as long as it runs. A
-// client at the floor takes a mebibyte every thirty seconds, so a slow
-// download holds its piece for hours, and nothing bounds how many run at
-// once.
+// sendPiece is how much of a stored file [Send] reads before it writes, and so
+// the memory every download in flight holds while it runs: a client at the
+// floor takes a mebibyte every thirty seconds, and nothing bounds how many
+// downloads run at once.
 //
-// 64 KiB, the size of the pieces a git response is written in
-// (gitproc.CopyBuffer). NOT A MEBIBYTE, which it was while the deadline was
-// set afresh at every write and the write therefore had to be the unit the
-// pace is given per: the Writer now carries each mebibyte's budget across
-// writes of any size, so the piece is chosen on what it costs. Measured in
-// the session the package doc's figures come from (BenchmarkConnection/send:
-// a 64 MiB file over loopback, the three sizes interleaved over five rounds):
-// 1.22–1.42 GB/s in 64 KiB pieces (median 1.35), 1.22–1.32 GB/s in 256 KiB
-// (1.27) and 1.41–1.66 GB/s in a mebibyte (1.45). The mebibyte's lead —
-// fewer write calls — is under a tenth at the median and inside the spread
-// of the runs, and it shows only where nothing but the CPU limits the
-// transfer: on loopback every size moves about what a 10 Gb/s interface
-// carries, so behind a real link — a client's, which is what paces a
-// download — the difference is CPU time and never a download's speed. A
-// sixteenth of the memory is worth more: a thousand downloads held open by
-// slow clients hold 64 MiB rather than a gibibyte. A node whose downloads
-// turn out CPU-bound is the measurement that would argue for the mebibyte
-// back.
+// 64 KiB, the size of a git response's pieces (gitproc.CopyBuffer). Not a
+// mebibyte: the Writer carries each mebibyte's budget across writes of any
+// size, so the piece is chosen on cost. BenchmarkConnection/send over loopback
+// (64 MiB file): 1.35 GB/s median in 64 KiB pieces, 1.27 in 256 KiB, 1.45 in a
+// mebibyte. That lead is inside the runs' spread and shows only where the CPU
+// alone limits the transfer, never behind a real link, while a sixteenth of
+// the memory holds a thousand slow downloads to 64 MiB rather than a gibibyte.
 const sendPiece = 64 << 10
 
 // sendPieces keeps [Send]'s pieces between downloads, so a download — an

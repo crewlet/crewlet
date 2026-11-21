@@ -19,36 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// CHECKING AN ADDRESS BEFORE IT IS ADDED: what a remote server at it is, and
-// how it is signed in to.
+// CHECKING AN ADDRESS BEFORE IT IS ADDED: a [Test] with nothing configured.
+// A server listing tools with no credential needs no sign-in; a 401 with a
+// Bearer challenge wants OAuth, read from its protected-resource metadata
+// (RFC 9728) and the first authorization server's (RFC 8414 or OpenID
+// Connect); a refusal without one wants a header credential.
 //
-// A check is a [Test] of the address with nothing configured: no header, no
-// prefix, no override. Where the server answers its handshake and lists its
-// tools to a request that carries no credential, it needs no sign-in. Where it
-// answers 401 with a Bearer challenge, it wants an OAuth sign-in, and the
-// check reads how one is made: the server's protected-resource metadata
-// (RFC 9728), at the address its challenge names or at the well-known address
-// on its own origin, and the metadata of the first authorization server that
-// names (RFC 8414, or OpenID Connect discovery where only that is published).
-// A server that refuses without a Bearer challenge wants a credential in a
-// header.
-//
-// # Whose address each request goes to
-//
-// The address a person typed is the operator's, and is dialled as the server
-// would be once added, a private address included (ADR-0072): typing it is
-// what adding it would make the engine dial. Every other address the check
-// reaches is one the SERVER named, in its challenge or its metadata, and is
-// fetched through the public-address guard ([httpx.Guarded]) unless it is on
-// the typed address's own origin, which the operator already chose. A
-// metadata address on another origin is https or it is not fetched, no fetch
-// follows a redirect, every body is read to [maxMetadataBody] and no further,
-// and every fetch is bounded by [metadataFetchBudget]. Nothing the check sends
-// carries a credential: it has none.
-//
-// An address the guard refuses ends the discovery with [FailBlockedAddress]:
-// the server's sign-in points somewhere the engine does not follow, which its
-// vendor fixes.
+// The typed address is the operator's, dialled as the added server would be,
+// a private address included (ADR-0072). Every address the SERVER named goes
+// through the public-address guard ([httpx.Guarded]) unless on the typed
+// origin; on another origin it must be https. No fetch follows a redirect,
+// bodies stop at [maxMetadataBody], fetches at [metadataFetchBudget], and none
+// carries a credential. A refusal ends discovery: [FailBlockedAddress].
 
 // AddressCheck is what checking an address found.
 type AddressCheck struct {
@@ -231,11 +213,11 @@ func discoverOAuth(ctx context.Context, raw, challenge string) *OAuthDiscovery {
 	if !ResourceServes(prm.Resource, raw) {
 		out.Failure = &Failure{Class: FailNotMCP, At: time.Now().UTC(), Said: fmt.Sprintf(
 			"the server's protected-resource metadata names the resource %s, which is not the "+
-				"server at %s", redact.URL(word(prm.Resource)), redact.URL(raw))}
+				"server at %s", shownAddress(prm.Resource), redact.URL(raw))}
 		return out
 	}
 	for _, issuer := range prm.AuthorizationServers[:min(len(prm.AuthorizationServers), maxAuthorizationServers)] {
-		out.AuthorizationServers = append(out.AuthorizationServers, redact.URL(word(issuer)))
+		out.AuthorizationServers = append(out.AuthorizationServers, shownAddress(issuer))
 	}
 	if len(prm.AuthorizationServers) == 0 {
 		out.Failure = &Failure{Class: FailNotMCP, At: time.Now().UTC(),
@@ -269,10 +251,10 @@ func discoverOAuth(ctx context.Context, raw, challenge string) *OAuthDiscovery {
 	if strings.TrimSuffix(asm.Issuer, "/") != strings.TrimSuffix(issuer, "/") {
 		out.Failure = &Failure{Class: FailNotMCP, At: time.Now().UTC(), Said: fmt.Sprintf(
 			"the authorization server's metadata names the issuer %s, not %s, which asked for it",
-			redact.URL(word(asm.Issuer)), redact.URL(word(issuer)))}
+			shownAddress(asm.Issuer), shownAddress(issuer))}
 		return out
 	}
-	out.Issuer = redact.URL(word(issuer))
+	out.Issuer = shownAddress(issuer)
 	if len(out.Scopes) == 0 {
 		out.Scopes = words(asm.ScopesSupported)
 	}
@@ -338,11 +320,11 @@ func ResourceServes(resource, raw string) bool {
 func ServerNamedClient(server, address string, budget time.Duration) (*http.Client, *url.URL, error) {
 	typed, err := url.Parse(server)
 	if err != nil || typed.Host == "" {
-		return nil, nil, fmt.Errorf("the server %s is not an address", redact.URL(word(server)))
+		return nil, nil, fmt.Errorf("the server %s is not an address", shownAddress(server))
 	}
 	u, err := url.Parse(address)
 	if err != nil || u.Host == "" {
-		return nil, nil, &badDocument{address: redact.URL(word(address)), class: FailNotMCP,
+		return nil, nil, &badDocument{address: shownAddress(address), class: FailNotMCP,
 			why: "is not an address"}
 	}
 	client := httpx.Client(budget)
@@ -413,7 +395,7 @@ func resourceMetadataAddresses(typed *url.URL, challenge string) []string {
 func authorizationServerAddresses(issuer string) ([]string, error) {
 	u, err := url.Parse(issuer)
 	if err != nil || u.Host == "" {
-		return nil, fmt.Errorf("the authorization server %s is not an address", redact.URL(word(issuer)))
+		return nil, fmt.Errorf("the authorization server %s is not an address", shownAddress(issuer))
 	}
 	path := strings.TrimSuffix(u.EscapedPath(), "/")
 	base := url.URL{Scheme: u.Scheme, Host: u.Host}
@@ -541,6 +523,10 @@ func unwrapURLError(err error) error {
 
 // word is s cut to [maxMetadataWord], on a character boundary.
 func word(s string) string { return textcut.Bytes(s, maxMetadataWord) }
+
+// shownAddress is an address as an answer or an error shows it: redacted
+// whole ([redact.URL]), then cut by [word].
+func shownAddress(s string) string { return word(redact.URL(s)) }
 
 // words is the first [maxScopes] of in, each cut by [word], and an empty list
 // for none: the most of any list a metadata document gives that an answer or

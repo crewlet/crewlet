@@ -164,22 +164,14 @@ func (r *room) localMembers() []Member {
 // replaces everything the room held from that node, except what a newer frame
 // already said.
 //
-// # A late frame fills in; it never undoes
-//
-// Frames from one node arrive in the order it sent them, with one exception:
-// the answer to this node's join-time ask is sealed when the peer answers and
-// travels to this node's reply mailbox, not the room's subject, so the peer's
-// broadcasts can overtake it and say what changed since. Applied as a
-// replacement, that answer deleted every member the peer gained in between,
-// and the room showed them again only at the peer's next rebroadcast,
-// [Rebroadcast] later: measured (internal/artifactspike,
-// S6), a room of fifty joined at once across three nodes took fifteen seconds
-// to show everybody everywhere, against the second the join objective allows.
-// So every member carries the instant of the frame that last said it, and a
-// frame changes or deletes a member only where it is newer than that, and
-// never brings back a member a newer frame said left. A leave is always
-// applied: a session id is never reused, so a leave is final whenever it
-// arrives.
+// A LATE FRAME FILLS IN; IT NEVER UNDOES. Frames from one node arrive in
+// order, except the answer to this node's join-time ask: it travels to the
+// reply mailbox, so the peer's broadcasts can overtake it. As a replacement it
+// would delete every member the peer gained meanwhile until the next
+// rebroadcast (internal/artifactspike, S6: fifteen seconds against the join
+// objective's one). So every member carries the instant of the frame that
+// last said it, and a frame changes or deletes one only where it is newer. A
+// leave is always applied: a session id is never reused.
 func (r *room) hear(f Frame, now time.Time) bool {
 	moved := false
 	if f.Full {
@@ -340,15 +332,14 @@ func (r *room) rosterFor(joiner Member) Roster {
 // shown to p, whether there is anything to tell, and whether members were
 // held back for the next fan-out.
 //
-// AT MOST [FrameMembers] MEMBERS ARE RE-PRESENTED, the one
-// whose change has waited longest first (then the most recently active), so
-// every changed member is told within a few fan-outs however many others keep
-// moving: ordered by recency alone, a member who moved once in a room where
-// ten others move all the time would never be told. What the sockets were
-// shown moves only by what was told, so a member held back is told in a
-// fan-out that follows. Every member leaving the presentation is told at
-// once: a leave is a session id, and a socket showing somebody gone is the one
-// error presence must not make.
+// AT MOST [FrameMembers] MEMBERS ARE RE-PRESENTED, the one whose change has
+// waited longest first (then the most recently active), so every changed
+// member is told within a few fan-outs however many others keep moving:
+// ordered by recency alone, a member who moved once among ten constantly
+// moving would never be told. What the sockets were shown moves only by what
+// was told, so a held-back member is told in a later fan-out. Every leaving
+// member is told at once: a socket showing somebody gone is the one error
+// presence must not make.
 func (r *room) diff(p presentation, now time.Time) (Change, bool, bool) {
 	c := Change{Room: r.id, Upsert: []Member{}, Leave: []string{},
 		Counts: p.counts, Truncated: p.counts != nil}

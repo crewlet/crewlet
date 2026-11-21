@@ -66,6 +66,7 @@ import {
 import { PERIOD_ADJECTIVE } from "~/lib/budget.ts";
 import { runAskTexts } from "~/lib/runs.ts";
 import { conditionKey, type Attention } from "~/lib/attention.ts";
+import { INBOX_ITEM_KINDS, type InboxItemKind } from "~/app/routes.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { subjectKey } from "~/components/DecisionRow.tsx";
@@ -126,6 +127,11 @@ export type NoticeRow = Extract<InboxRow, { kind: "notice" | "change" | "artifac
 /** Whether a row is an update a reader marks, from any source. */
 export function isNoticeRow(row: InboxRow): row is NoticeRow {
   return row.kind === "notice" || row.kind === "change" || row.kind === "artifact";
+}
+
+/** A Worklet notice's row key: the record id behind the prefix that names its kind in the URL. */
+export function noticeRowKey(recordId: string): string {
+  return `notice:${recordId}`;
 }
 
 /**
@@ -249,7 +255,8 @@ export interface InboxRows {
  * NEEDS YOU IS NEWEST FIRST with the conditions after the decisions, the order
  * `decisionSubjects` hands the decisions in: a condition is the engine's own
  * reading of the company and stays until it clears, while a decision is
- * somebody waiting on an answer.
+ * somebody waiting on an answer. Between them, the unread notices that an item
+ * of the reader's is not moving (reason `flow`).
  *
  * WAITING ON OTHERS is what the engine says the reader may answer though it
  * is put to somebody else (`lib/decisions.ts`' `splitDecisions`): a group of
@@ -278,13 +285,17 @@ export function inboxRows(input: {
   };
   const { yours, others } = splitDecisions(subjects);
   const needs: InboxRow[] = yours.map(row);
+  // AN ITEM OF THEIRS NOBODY IS MOVING waits on them (ADR-0162): its notice
+  // is listed with what they decide, until they read it.
+  const unmoved = (n: InboxNotice) => n.source === "tracker" && n.extra.reason === "flow";
+  needs.push(...noticeRows(notices.filter((n) => !attached.has(n.record_id) && unmoved(n))));
   for (const item of conditions) {
     needs.push({ kind: "condition", key: conditionKey(item.id), at: item.at, item });
   }
   return {
     needs,
     others: others.map(row),
-    updates: noticeRows(notices.filter((n) => !attached.has(n.record_id))),
+    updates: noticeRows(notices.filter((n) => !attached.has(n.record_id) && !unmoved(n))),
   };
 }
 
@@ -301,9 +312,34 @@ export function noticeRows(notices: readonly InboxNotice[]): InboxRow[] {
       case "artifacts":
         return { kind: "artifact", key: artifactRowKey(n.record_id), at: n.at, notice: n.extra };
       case "tracker":
-        return { kind: "notice", key: n.record_id, at: n.at, notice: n.extra };
+        return { kind: "notice", key: noticeRowKey(n.record_id), at: n.at, notice: n.extra };
     }
   });
+}
+
+/** The kinds of row key a notice is listed under, each its source's. */
+const NOTICE_KEY = /^(notice|change|artifact):(.+)$/;
+
+/** The record id a notice's row key names (`inbox{record}`), or null for a key that names no notice. */
+export function noticeKeyRecord(key: string): string | null {
+  return NOTICE_KEY.exec(key)?.[2] ?? null;
+}
+
+/**
+ * The row an address names: the row of its key, or, for an executor named by
+ * its turn alone (`run:<turn>`) with no question open, the newest it answered.
+ */
+export function rowNamed(rows: readonly InboxRow[], key: string): InboxRow | undefined {
+  if (!key) return undefined;
+  const exact = rows.find((r) => r.key === key);
+  if (exact || !/^run:[^:]+$/.test(key)) return exact;
+  return rows.find((r) => r.kind === "answered" && r.key.startsWith(`${key}:`));
+}
+
+/** The row key a `?row=` address named, in today's spelling: a Worklet notice was its bare record id. */
+export function legacyRowKey(row: string): string {
+  const kind = row.slice(0, row.indexOf(":"));
+  return INBOX_ITEM_KINDS.includes(kind as InboxItemKind) ? row : noticeRowKey(row);
 }
 
 /**
@@ -834,6 +870,11 @@ function findingCounts(counts: Readonly<Record<string, number>> | undefined): Fi
  */
 export function noticeText(notice: WorkInboxNotice, index: OrgIndex): string {
   const said = plainText(notice.excerpt ?? "");
+  // A FLOW NOTICE NAMES THE ITEM'S SEAT, never its author (ADR-0162).
+  if (notice.kind === "flow") {
+    const names = nameOfIn(index);
+    return index.seats.reduce((text, seat) => nameAuthor(text, seat.handle, names), said);
+  }
   if (!ENGINE_SENTENCES.has(notice.kind)) return said;
   return nameAuthor(said, authorOf(notice), nameOfIn(index));
 }
@@ -1302,10 +1343,9 @@ export function holdingLead(h: WorkHoldingAgents | undefined): string | null {
  * colleague may answer a question put to you.
  *
  * A CHOICE CAN CARRY WORDS of its own (a choice with a note), on a work
- * item's answer and a run's alike, and those words are the answer's `body`:
- * the record holds the option's label there only where nothing else was
- * written. Read as the label alone, they were dropped, and the person read
- * back an answer shorter than the one they gave.
+ * item's answer and a run's alike, and those words are in the answer's
+ * `body` ([noteBeside]). Read as the label alone, they were dropped, and the
+ * person read back an answer shorter than the one they gave.
  */
 export interface AnswerWords {
   who: string;
@@ -1321,6 +1361,20 @@ export interface AnswerWords {
   recommended: boolean;
   /** What now covers a withdrawn question, where its asker named it. */
   replaced?: WorkWithdrawn["replaced_by"];
+}
+
+/**
+ * What an answer that chose wrote beside its option. An ask's answer opens with
+ * the line stating its choice, which the engine writes on every such answer so
+ * every reader sees what was chosen (`worklet.ChoiceWords`: "Chose “Hold
+ * release”: tell support first"), and the note is what follows it; an
+ * executor's answer carries its words alone, or the label where it wrote none.
+ */
+export function noteBeside(body: string, label: string): string {
+  const words = body.trim();
+  const stated = `Chose \u201c${label}\u201d`;
+  const note = words.startsWith(stated) ? words.slice(stated.length).replace(/^:\s*/, "") : words;
+  return note === label.trim() ? "" : note;
 }
 
 export function answerWords(
@@ -1345,12 +1399,11 @@ export function answerWords(
   const decision = "run" in answered ? answered.run.decision : answered.ask.decision;
   const option = a.choice ? decision?.options.find((o) => o.id === a.choice) : undefined;
   if (option) {
-    const body = a.body.trim();
     return {
       who,
       verb: "chose",
       said: option.label,
-      note: body === option.label.trim() ? "" : body,
+      note: noteBeside(a.body, option.label),
       kind: "choice",
       recommended: decision?.recommended === option.id,
     };

@@ -289,16 +289,12 @@ func TestWithoutTheFlagAnUnauthenticatedRequestIsStillRefused(t *testing.T) {
 // THE BUILD CHECK IS ASSERTED AGAINST THE SOURCE, because nothing a running
 // test can do reaches it.
 //
-// [version.IsDevelopment] resolves once per process from link-time state, and
-// the binary running this IS a development build — so the check passes
-// whatever it is, and deleting it changes nothing any case above can see. That
-// is precisely the shape of a guard that rots: it protects the one deployment
-// no test is ever run on.
-//
-// Asked of the source, it is a small claim and an exact one — this function
-// consults that predicate — which is what makes deleting the check a failing
-// build rather than a silent bypass on every release from then on. It is the
-// same idiom resolution_test.go uses for the same reason.
+// [version.IsDevelopment] resolves once per process from link-time state and
+// this binary IS a development build, so deleting the check changes nothing a
+// case above can see: a guard that protects the one deployment no test runs on.
+// Asked of the source, the claim is exact (this function consults that
+// predicate), so deleting it fails the build instead of silently bypassing on
+// every release. Same idiom as resolution_test.go.
 func TestTheDevPrincipalConsultsTheBuildPredicate(t *testing.T) {
 	t.Parallel()
 	parsed, err := parser.ParseFile(token.NewFileSet(), "devprincipal.go", nil, 0)

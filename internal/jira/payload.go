@@ -34,20 +34,15 @@ var adfBlocks = map[string]bool{
 }
 
 // Flatten turns an Atlassian Document Format tree into the text a model
-// reads.
+// reads. Jira Cloud sends bodies as ADF, a nested {type, content, text,
+// attrs} tree; Data Center sends wiki-markup strings. Both come out as prose.
 //
-// Jira Cloud sends comment bodies and issue descriptions as ADF — a nested
-// {type, content, text, attrs} tree — while Data Center sends wiki-markup
-// strings. Both arrive here and both come out as prose; a caller never
-// branches on which it got.
-//
-// A MENTION KEEPS ITS NAME where the node carries one, because the sentence
-// stops meaning anything without it: "can @ look at this" is not the message
-// somebody sent. A node carrying only an account id renders in Jira's own
-// [~accountid:…] form rather than vanishing, for the same reason.
+// A MENTION KEEPS ITS NAME where the node carries one: "can @ look at this"
+// is not the message somebody sent. A node with only an account id renders as
+// Jira's own [~accountid:…] rather than vanishing.
 //
 // Deliberately lossy about everything else: the consumer is a model reading
-// prose, not a browser rendering a document.
+// prose, not a browser.
 func Flatten(node any) string {
 	return strings.TrimSpace(flatten(node))
 }

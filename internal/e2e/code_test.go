@@ -181,20 +181,17 @@ func commitBatches(n *node) uint64 {
 }
 
 // awaitRouting waits until every member's estate router names every member
-// as a data node it asks ([engine.Engine.RoutedDataNodes]) — the set a
-// repository's committer is the first of, by rendezvous order — and answers
+// as a data node it asks ([engine.Engine.RoutedDataNodes]), the set a
+// repository's committer is the first of by rendezvous order, and answers
 // the members, sorted.
 //
-// WAITED FOR, because a router routes by a LISTING of the fleet's presence: a
-// member it has not yet heard claim is not in it. Each router's view hears
-// every member's claim and lists again within about a second (internal/coord's
-// LeaseView), so a fleet booted at once agrees on every committer about a
-// second after the last member's claim — and this claim, which counts the
-// batches each member committed, must not race that second: a push routed
-// inside it is committed by a member that has not heard the committer join,
-// which lands it, the broker arbitrating, and is not the one committer this
-// claim is about. A fresh presence listing ([cluster.whole]'s) is not this,
-// since it can name a member a router has not listed yet.
+// WAITED FOR because a router routes by a LISTING of the fleet's presence, and
+// hears a member's claim and lists again within about a second (internal/coord's
+// LeaseView). A push routed inside that second is committed by a member that
+// has not heard the committer join, so it lands (the broker arbitrating) but is
+// not the one committer this claim counts. A fresh presence listing
+// ([cluster.whole]'s) is not this: it can name a member a router has not
+// listed yet.
 func (c *cluster) awaitRouting(t *testing.T) []string {
 	t.Helper()
 	var members []string
@@ -260,24 +257,16 @@ func (c *cluster) awaitEpoch(t *testing.T, epoch int64) {
 
 // PERSONS PUSH AND FETCH ACROSS THE FLEET.
 //
-// A person's own git, with their own bound token as its credential, against
-// three engines each serving git on its API: a push through one member is
-// visible through every member AT ONCE, under both protocols — the
-// advertisement is linearizable, so a member whose copy has not applied the
-// push waits for it rather than answering what it holds — and a clone through
-// another holds it whole. The repository's pushes meet at one committer
-// whichever member received them — the three that land go through three
-// members, and one member, the first of the repository's rendezvous order,
-// commits all three — and archiving the repository in the company's
-// configuration — written once, on one member, through the route the
-// dashboard writes — makes every member refuse a push in git's own words while
-// each still serves a fetch.
+// A person's own git and bound token against three engines each serving git on
+// its API: a push through one member is visible through every member AT ONCE
+// under both protocols (the advertisement is linearizable, so a member that has
+// not applied it waits), and a clone through another holds it whole. The pushes
+// meet at one committer whichever member received them. Archiving the
+// repository in the configuration (written once, through the dashboard's route)
+// makes every member refuse a push in git's own words yet still serve a fetch.
 //
-// THE CONFIGURATION IS GIVEN BACK before the claim ends: the agreement claim
-// after it compares every replicated row of every member, a settled repository
-// among them. The document written is member 0's — its scripted model's
-// address included — and every member applies it as one company's one
-// document; nothing after this claim runs a turn.
+// THE CONFIGURATION IS GIVEN BACK: the agreement claim after it compares every
+// replicated row. The document is member 0's, which every member applies.
 func claimPersonsPushAndFetchAcrossTheFleet(t *testing.T, c *cluster) {
 	// THE BOOT DECLARED IT, beside the boot rather than inside it: the
 	// declaration is decided by each member's code reconciler, so it is

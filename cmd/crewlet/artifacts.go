@@ -33,28 +33,17 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// `crewlet artifacts`: the company's artifacts from a shell, through the same
-// HTTP surface the dashboard is built on (`/artifacts`), as whoever
-// CREWLET_API_TOKEN stands for. Every gesture is decided by the node on that
-// principal exactly as the dashboard's is: a share is the owner's, a publish an
-// editor's with the artifacts app, a purge an administrator's with a person
-// present.
+// `crewlet artifacts`: the company's artifacts from a shell, through the
+// dashboard's HTTP surface (`/artifacts`), as whoever CREWLET_API_TOKEN stands
+// for. The node decides every gesture on that principal as for the dashboard.
 //
 // # A publish moves only the bytes the artifact does not hold
-//
-// `publish` always begins with an upload intent: every file's path, digest and
-// size are declared first, the node answers which of them the artifact already
-// holds (those are carried and no byte moves) and how each of the rest is
-// transferred (straight to the bucket on a presigned put where the object
-// store offers one, through the node otherwise), and only then are the new
-// files sent and the version published, based on the head it read.
+// `publish` begins with an upload intent declaring every file's path, digest
+// and size; the node answers which the artifact holds and how to send the rest.
 //
 // # A retry is the same operation
-//
 // Every write mints its operation id before the first request and sends it as
-// the Idempotency-Key; an answer whose outcome is unknown, or none at all,
-// prints it, and `-op-id` sends it again, so a retry is the first attempt's
-// operation rather than a second one.
+// the Idempotency-Key; an unknown outcome prints it, and `-op-id` resends it.
 
 // artifactsUsage is the command's usage. THE KINDS ARE THE TABLE'S, never a
 // list typed here: a typed list went stale the day a kind was added, and

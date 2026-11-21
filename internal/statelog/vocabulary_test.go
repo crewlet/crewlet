@@ -17,55 +17,22 @@ import (
 )
 
 // TestNoWithdrawnIdentifierSurvives fails the build when a name or a sentence
-// this design retired is still written down anywhere in the repository.
+// this design retired is still written down anywhere in the repository: a
+// paragraph describing a mechanism nobody built reads like one the reader has
+// not found yet, and to an agent it is an instruction to build it.
 //
-// # Why an absence needs a test at all
-//
-// Every entry below was withdrawn from a design that was, at the time, partly
-// implemented and thoroughly described — in code, in package docs, in the
-// published documentation and in this file's own neighbours. What a
-// withdrawal leaves behind is not a compile error. It is a paragraph that
-// describes a mechanism nobody built, or a symbol nobody can find, and the
-// next reader cannot tell it from a mechanism they simply have not located
-// yet. That reader is often an agent, and the failure is worse than confusion:
-// an accurate-sounding paragraph about a home partition is an instruction to
-// build one.
-//
-// # What is on the list, and what is deliberately NOT
-//
-// The list is the names and phrases whose ONLY correct number of occurrences
-// is zero. Five words that read like them are deliberately absent, and adding
-// any of them would break working code:
-//
-//   - `partition` survives on its own, as the LexoRank shape partition and as
-//     the batch loop's key partitioning. Only the compound forms are gone.
-//   - `search_shard` is the surviving column, and is what a prefix grep for
-//     the retired sharding vocabulary would otherwise catch.
-//   - `scoped_through` survives unqualified; only its `_partition` sibling
-//     left.
-//   - `original_max_bytes` survives as a field of the capacity record, where
-//     it is the value the pending classification compares against — deleting
-//     it would delete the reconcile.
-//   - `chunk` survives on its own in four live senses — a JetStream snapshot
-//     arrives in chunks, a statelog snapshot transfer is sent in chunks, a
-//     batched SQL statement binds a chunk of ids (`slices.Chunk`), and the
-//     dashboard's bundle is split into chunks. Only the names the
-//     content-addressed file store spelled are gone.
-//
-// # What it can and cannot see
-//
-// It is a text scan and it says so. A grep cannot see a PARAPHRASE: a
-// paragraph that describes a home partition without using the words passes
-// here. What keeps the retired designs from coming back is that there is one
-// implementation of each surviving mechanism, not that this check will find
-// every prose copy of a dead one. The list is a floor.
+// The list holds only names whose one correct count is zero. Words that read
+// like them but are live (`partition`, `search_shard`, `scoped_through`,
+// `original_max_bytes`, `chunk`) are deliberately absent, and the negative
+// controls below hold them live. A text scan cannot see a paraphrase: the
+// list is a floor.
 func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
 
-	// The matcher is exercised on strings whose verdict is known BEFORE it
-	// is run over the tree. A guard asserting an absence passes identically
-	// when the thing is absent and when the guard has gone inert.
+	// The matcher is exercised on strings of known verdict BEFORE the tree:
+	// a guard asserting an absence passes identically when the thing is
+	// absent and when the guard has gone inert.
 	for _, positive := range []string{
 		"tracker.partitions: 4",
 		"the SearchPlan is computed from",
@@ -102,9 +69,8 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		"crewlet_chunk_locks",
 		"Crewlet seat, presence and object-store membership leases",
 		"nothing said so until the object store's membership, a lease,",
-		// The folded expression reads U+017F as `s`; the hand-rolled
-		// prefilter this gate once had lowered the line with
-		// strings.ToLower, which does not, and skipped this line.
+		// The folded expression reads U+017F as `s`; a prefilter built
+		// on strings.ToLower would not, and would skip this line.
 		"the tracker_taſk_home column",
 	} {
 		if hits := matchWithdrawn(positive); len(hits) == 0 {
@@ -112,9 +78,10 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 				"not flag it", positive)
 		}
 	}
-	// THE FOUR NAMED NEAR-MISSES, plus the senses that legitimately
-	// survive. Every one of these is working code or live prose, and a
-	// matcher that flagged them would send somebody to delete it.
+	// THE NEAR-MISSES and the senses that legitimately survive: each is
+	// working code or live prose (`original_max_bytes` is the pending
+	// classification's reconcile), and flagging one sends somebody to
+	// delete it.
 	for _, negative := range []string{
 		"the shape partition a rank is minted under",
 		"per-partition acking, and the two places a batch loop",
@@ -153,13 +120,10 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		}
 	}
 
-	// THE PREFILTER IS WHAT MAKES THIS CHECK AFFORDABLE. It is derived
-	// from the patterns (regexlit.Required), whose own suite certifies
-	// that it never rejects a text a pattern matches; what is held here is
-	// that it still filters: a pattern that yields nothing to look for — or
-	// only a fragment a few characters long — makes the prefilter admit
-	// nearly every line of the tree, which is the seventeen seconds it
-	// exists to avoid.
+	// THE PREFILTER IS WHAT MAKES THIS CHECK AFFORDABLE. regexlit.Required's
+	// own suite proves it never rejects a matching text; held here is that
+	// it still filters: a pattern without a literal of four characters or
+	// more admits nearly every line of the tree.
 	for _, pattern := range withdrawnScan().order {
 		need := regexlit.Required(regexp.MustCompile("(?i)" + pattern))
 		clauses := need.Clauses()
@@ -171,9 +135,9 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		}
 	}
 
-	// AND THE SUPPRESSION PATH ITSELF, on inputs whose verdict is known.
-	// The walk below only ever reaches it with real occurrences, so a
-	// suppression that has swallowed everything would report a clean tree.
+	// AND THE SUPPRESSION PATH ITSELF, on inputs of known verdict: the walk
+	// reaches it only with real occurrences, so a suppression that swallowed
+	// everything would report a clean tree.
 	if !offends("internal/somewhere/live.go", `home_partition`) {
 		t.Error("control: an unallowed occurrence is not reported as one, so " +
 			"every hit in the tree is being suppressed and this guard reports " +
@@ -203,9 +167,8 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
-		// THIS FILE IS THE LIST. Every withdrawn name appears here by
-		// construction, so scanning it would report the inventory as the
-		// inventory's own violation.
+		// THIS FILE IS THE LIST, so it holds every withdrawn name by
+		// construction.
 		if rel == listFile {
 			return nil
 		}
@@ -215,9 +178,8 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 			return err
 		}
 		// A FILE IS SPLIT ONLY IF A LINE OF IT COULD MATCH, which the
-		// prefilter settles for the whole file at once; one that cannot
-		// still counts every line it holds, so the floor below measures
-		// what was read rather than what was matched.
+		// prefilter settles for the whole file; one that cannot still
+		// counts its lines, so the floor below measures what was read.
 		if !withdrawnScan().needs.Admits(body) {
 			scanned += bytes.Count(body, []byte("\n")) + 1
 			return nil
@@ -250,9 +212,8 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 			"reader is often an agent, for whom it is an instruction.")
 	}
 
-	// THE ALLOWANCE IS EXACT IN BOTH DIRECTIONS. An entry whose occurrence
-	// has since been removed must be deleted, or the list becomes a place a
-	// future occurrence can hide behind a stale excuse.
+	// THE ALLOWANCE IS EXACT IN BOTH DIRECTIONS: an entry whose occurrence
+	// is gone must be deleted, or a future occurrence hides behind it.
 	for key, why := range allowedWithdrawal {
 		if !seen[key] {
 			t.Errorf("allowedWithdrawal still excuses %q in %s, but the walk no "+
@@ -264,25 +225,15 @@ func TestNoWithdrawnIdentifierSurvives(t *testing.T) {
 		files, scanned, len(withdrawn))
 }
 
-// withdrawn is the list, with the reason each name is gone beside it.
+// withdrawn is the list, with the reason each name is gone beside it. A
+// pattern stands in for a literal wherever a bare word would catch a live one:
+// each `partition` compound is anchored to the compound that left.
 //
-// A pattern rather than a literal wherever a bare word would catch a live one:
-// the compound forms of `partition` are gone and the word itself is not, so
-// each is anchored to the compound that left.
-//
-// # Two designs divided the estate, and both are gone
-//
-// A withdrawn design once divided the tracker's log, and a later one divided
-// the whole replicated estate into numbered partitions under a layout, each
-// with its own file, its own logs and an estate map saying which node held
-// which. Every data node holds the ONE estate whole now, every domain names
-// its own stream, and nothing maps an object, a record or a log to a part of
-// it — so both vocabularies are listed here, each with the reason it stays
-// gone.
+// Two designs divided the estate (the tracker's log, then numbered partitions
+// under a layout and an estate map), and both vocabularies are listed: every
+// data node holds the ONE estate whole and every domain names its own stream.
 var withdrawn = map[string]string{
-	// THE ESTATE IS ONE, held whole by every data node: there is no count
-	// of parts to configure, and a field for one would describe a division
-	// nothing performs.
+	// THE ESTATE IS ONE, held whole by every data node: no count of parts.
 	`tracker\.partitions`: "the estate is not divided, so there is no partition count",
 	// The four read levels are per LOG, and every log is read whole.
 	`partition_linearizable`: "the read levels are per log, and a log is not divided",
@@ -329,10 +280,9 @@ var withdrawn = map[string]string{
 	// Read levels: four, and `frozen` is not one of them.
 	`\bfrozen\b\s+read|read\s+level\s+.?frozen`: "the level is consistent_prefix",
 
-	// THE PARTITIONED ESTATE: a layout of numbered partitions, each a file
-	// with one log per domain, placed on nodes by an estate map. Every data
-	// node holds the one estate whole, and a domain declares its own
-	// stream ([Domain.Stream]), so nothing names a part of it.
+	// THE PARTITIONED ESTATE: numbered partitions, each a file with one log
+	// per domain, placed by an estate map. A domain declares its own stream
+	// ([Domain.Stream]), so nothing names a part of the estate.
 	`\bpartitionOf\b`:     "nothing maps an object or a record to a part of the estate",
 	`ScopePartition`:      "a record's scope is checked against its own log, which is the domain's",
 	`OnlyPartition`:       "a domain has one log, so there is no partition to look one up by",
@@ -354,13 +304,10 @@ var withdrawn = map[string]string{
 	`CREWLET_L[0-9]`:      "a state log's stream is its domain's own name, never a layout's",
 	`crewlet\.l[0-9]`:     "as above, for its subjects",
 
-	// THE CONTENT-ADDRESSED FILE STORE: files cut into 1 MiB chunks named
-	// by their SHA-256, a manifest listing them on the file's row, a table
-	// of chunk rows beside it, and a coordination lock per chunk around a
-	// deletion and a re-put. Every upload is ONE object under a key minted
-	// for it and never reused now, so nothing is shared, nothing is locked
-	// and a row names one object. What survives is the chunk table's
-	// migration history, allowed by name below.
+	// THE CONTENT-ADDRESSED FILE STORE: SHA-256-named 1 MiB chunks, a
+	// manifest, a chunk table and a lock per chunk. Every upload is ONE
+	// object under a never-reused key, so nothing is shared or locked; the
+	// chunk table's migrations are allowed by name below.
 	`tracker_file_chunks`: "a file row names one object; migration 0038 dropped the chunk table",
 	`chunk_locks`:         "no build opens or deletes the lock bucket",
 	`LockChunk`:           "a deletion takes no lock (ADR-0027)",
@@ -375,12 +322,10 @@ var withdrawn = map[string]string{
 	`objstore\.Manifest`:  "a row names one objstore.Object, not a list of chunks",
 	`\bchunk lock`:        "a deletion takes no lock (ADR-0027)",
 
-	// THE PLACED OBJECT STORE: object bytes on chosen data nodes, a lease
-	// per member saying which nodes kept them, and a repair duty that read
-	// that membership. The store is one the fleet shares now (natsobj or
-	// s3obj) and keeps its own copies, so no node claims a membership of
-	// it and the seat lease bucket holds seats and presence alone, in
-	// either of the two ways the prose spelled it.
+	// THE PLACED OBJECT STORE: bytes on chosen data nodes under a lease per
+	// member. The store is one the fleet shares (natsobj or s3obj), so no
+	// node is a member and the seat lease bucket holds seats and presence
+	// alone; both prose spellings are listed.
 	`\bobject-store membership`:   "no node is a member of the object store; it is one shared store",
 	`\bobject store's membership`: "as above",
 }
@@ -388,19 +333,14 @@ var withdrawn = map[string]string{
 // listFile is this file, which cannot be its own violation.
 const listFile = "internal/statelog/vocabulary_test.go"
 
-// matchWithdrawn returns the withdrawn patterns one line carries.
-//
-// ONE COMBINED EXPRESSION over every pattern rather than a loop of matches:
-// this runs on every line of the repository, and twenty-six separate scans of
-// each was measured at half a minute where one pass is under a second.
+// matchWithdrawn returns the withdrawn patterns one line carries, from ONE
+// combined expression: it runs on every line of the repository, where a scan
+// per pattern costs half a minute and one pass under a second.
 func matchWithdrawn(line string) []string {
 	scan := withdrawnScan()
-	// THE FAST PATH IS A SUBSTRING SCAN, not a regular expression. This
-	// runs on every line of a file that could match, and a case-insensitive
-	// alternation with word boundaries costs about 36 µs per line — over
-	// the tree's 475 000, seventeen seconds. A line that fails the
-	// prefilter cannot match any pattern, and a substring search settles
-	// that in nanoseconds.
+	// THE FAST PATH IS A SUBSTRING SCAN: the folded alternation costs about
+	// 36 µs a line, seventeen seconds over the tree, and a line the
+	// prefilter rejects cannot match any pattern.
 	if !scan.needs.AdmitsString(line) {
 		return nil
 	}
@@ -414,9 +354,8 @@ func matchWithdrawn(line string) []string {
 			hits = append(hits, pattern)
 		}
 	}
-	// A LINE MAY CARRY MORE THAN ONE, and the single pass above reports
-	// only the leftmost alternation that matched. The rest are found by
-	// re-running from just past it, which is bounded by the line.
+	// A LINE MAY CARRY MORE THAN ONE, and a pass reports only the leftmost
+	// match, so re-run from just past it.
 	for at := loc[1]; at < len(line); {
 		next := scan.re.FindStringSubmatchIndex(line[at:])
 		if next == nil {
@@ -443,17 +382,10 @@ type vocabularyScan struct {
 	order []string
 	// re is every pattern, folded, as one alternation.
 	re *regexp.Regexp
-	// needs is what re cannot match without.
-	//
-	// DERIVED from the expression rather than typed out beside it, so a
-	// pattern added to the list is covered by adding nothing else — a
-	// hand-maintained second list is exactly how a prefilter starts
-	// rejecting lines its regex would have matched, which is a guard that
-	// has silently stopped guarding. This gate's own hand-rolled core did:
-	// it lowered a line with strings.ToLower, which leaves U+017F as it is,
-	// while the folded expression reads it as `s` — so a withdrawn name
-	// spelled with a long s passed. regexlit.Required admits any text
-	// holding such a rune, by a rule derived from the Unicode tables.
+	// needs is what re cannot match without, DERIVED from re rather than
+	// typed beside it: a hand-kept prefilter drifts into rejecting lines re
+	// matches (strings.ToLower leaves U+017F, which the fold reads as `s`),
+	// and regexlit.Required follows the Unicode tables.
 	needs regexlit.Prefilter
 }
 
@@ -486,13 +418,9 @@ func shortestLiteral(clause []string) int {
 type withdrawalKey struct{ file, hit string }
 
 // offends reports whether one occurrence is a violation rather than an
-// allowed one.
-//
-// A FUNCTION rather than a condition inside the walk, so the controls above
-// can exercise it directly. A guard whose suppression path is only ever
-// reached with real input passes identically when nothing is wrong and when
-// the suppression has swallowed everything — which is a check that has
-// stopped checking and reports a clean tree while it does.
+// allowed one. A function so the controls above exercise it directly: reached
+// only with real input, a suppression that swallowed everything would report
+// a clean tree.
 func offends(file, hit string) bool {
 	return allowedWithdrawal[withdrawalKey{file, hit}] == ""
 }
@@ -501,11 +429,9 @@ func offends(file, hit string) bool {
 // the reason. Every entry is a place the name is HISTORY rather than a live
 // claim, and each says which.
 var allowedWithdrawal = map[withdrawalKey]string{
-	// AN APPLIED MIGRATION IS HISTORY, NOT SOURCE. schema_migrations keys
-	// on the filename, so editing one that already ran silently never
-	// re-runs it: every database that applied it keeps the old shape while
-	// the code assumes the new one. These three name the projection's
-	// tables because they created and dropped them.
+	// AN APPLIED MIGRATION IS HISTORY, NOT SOURCE: schema_migrations keys
+	// on the filename, so an edit never re-runs. These created, reshaped
+	// and dropped the projection's tables.
 	{"internal/store/schema/node/0020_the_projection_lands.sql", `projection_keys`}:      "the migration that created it",
 	{"internal/store/schema/node/0020_the_projection_lands.sql", `projection_cursor`}:    "the migration that created it",
 	{"internal/store/schema/node/0021_pages_normalised_titles.sql", `projection_keys`}:   "a migration that reshaped it",
@@ -513,9 +439,7 @@ var allowedWithdrawal = map[withdrawalKey]string{
 	{"internal/store/schema/node/0025_the_projection_leaves.sql", `projection_keys`}:     "the migration that dropped it",
 	{"internal/store/schema/node/0025_the_projection_leaves.sql", `projection_cursor`}:   "the migration that dropped it",
 
-	// THE CHUNK TABLE'S MIGRATIONS, for the same reason: the three that
-	// created and reshaped it and the one that dropped it, plus the test
-	// that carries a database holding chunk rows through that drop.
+	// THE CHUNK TABLE'S MIGRATIONS, for the same reason.
 	{"internal/store/schema/replicated/0031_a_project_keeps_files.sql", `tracker_file_chunks`}:            "the migration that created it",
 	{"internal/store/schema/replicated/0032_a_chunk_row_names_its_slot.sql", `tracker_file_chunks`}:       "a migration that reshaped it",
 	{"internal/store/schema/replicated/0036_a_chunk_row_names_only_its_chunk.sql", `tracker_file_chunks`}: "a migration that reshaped it",
@@ -547,8 +471,7 @@ func itoa(n int) string {
 func skipDir(name string) bool {
 	switch name {
 	case "dist", "static":
-		// static/ is a committed BUILD OUTPUT — never hand-edited, and
-		// a minified bundle is not prose anybody reads.
+		// static/ is a committed BUILD OUTPUT, not prose anybody reads.
 		return true
 	}
 	return false

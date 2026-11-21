@@ -67,25 +67,22 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/named"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // failureEventTypes are the events that ARE a failure by their very type,
 // independent of any payload flag.
 //
-// Named here, beside the events themselves, because three layers need the same
-// answer — the live projection stamping its feed, the event store reading a row
-// back out of history, and the API serializing a push — and a second copy is
-// how the same turn ends up red on one surface and not on another.
+// Named here, beside the events, because three layers need the same answer
+// (the live projection, the event store reading history, the API serializing
+// a push); a second copy leaves one turn red on one surface and not another.
 //
-// UNEXPORTED, and that is the whole of the guarantee. It was exported under a
-// doc line asking callers to treat it as read-only, which is the one thing a Go
-// map cannot be: an exported map is writable by every importer that can name
-// it, so `delete(types.FailureEventTypes, "budget_exhausted")` compiled and
-// would have silently unfailed every turn refused at the budget gate, in every
-// layer at once. A comment is not an access modifier. [Failed] answers the
-// one-type question and [FailureEventNames] enumerates; between them nothing
-// outside this package needs the map itself.
+// UNEXPORTED, and that is the whole of the guarantee: an exported map is
+// writable by every importer, so a `delete` of "budget_exhausted" would
+// silently unfail every budget-refused turn in every layer at once. [Failed]
+// answers the one-type question and [FailureEventNames] enumerates.
 var failureEventTypes = map[string]struct{}{
 	"llm_unavailable":   {},
 	"budget_exhausted":  {},
@@ -114,19 +111,15 @@ func Failed(eventType string, payloadFailed, tagFailed bool) bool {
 // FailureEventNames is every type in the failure set, sorted, as a copy the
 // caller owns.
 //
-// [Failed] cannot serve a caller that has to ENUMERATE the set rather than test
-// one value against it — a SQL `IN (…)` clause needs the names and their bound
-// arguments, and it needs them in the same order twice, because the predicate
-// is spelled once and used for both a column and a filter. That is what sent
-// internal/store's turn aggregate reaching into the map the doc asked it not
-// to.
+// [Failed] cannot serve a caller that has to ENUMERATE the set, such as a SQL
+// `IN (…)` clause, which needs the names and their bound arguments in the same
+// order twice (the predicate is spelled once, used for a column and a filter).
 //
-// SORTED, so the statement a caller builds is byte-stable: Go randomises map
-// iteration, so ranging it produced a different SQL string on every process
-// start — one that works, and one no two runs of a test could compare.
+// SORTED, so the statement a caller builds is byte-stable: ranging the map
+// would give a different SQL string on every process start.
 //
-// A COPY, so a caller that sorts, appends to or trims what it is handed cannot
-// reach the catalogue through the slice header.
+// A COPY, so a caller that sorts, appends to or trims it cannot reach the
+// catalogue through the slice header.
 func FailureEventNames() []string {
 	return slices.Sorted(maps.Keys(failureEventTypes))
 }
@@ -162,9 +155,14 @@ type IntegrationTrigger interface {
 type Trigger struct {
 	ID   string
 	Type string
-	// Summary is the waking event's one line ([events.Event.Summary]), held
-	// to [MaxTriggerSummaryBytes] where the descriptor is built.
-	Summary   string
+	// Summary is the waking event's one line ([events.Event.Summary]),
+	// redacted, then held to [MaxTriggerSummaryBytes] where the descriptor is
+	// built.
+	Summary string
+	// Refs is what Summary names ([events.Event.References]). A ref whose
+	// words the bound cut off or the redaction replaced is kept: a reader
+	// that cannot find its words leaves it unmarked.
+	Refs      []named.Ref
 	Actor     string
 	Timestamp time.Time
 
@@ -263,7 +261,8 @@ func DescribeTrigger(e *events.Event) Trigger {
 	t := Trigger{
 		ID:        e.ID.String(),
 		Type:      e.Type,
-		Summary:   textcut.Within(e.Summary(), MaxTriggerSummaryBytes),
+		Summary:   triggerSummary(e.Summary()),
+		Refs:      e.References(),
 		Actor:     e.Actor(),
 		Timestamp: e.Timestamp,
 	}
@@ -287,13 +286,30 @@ func DescribeTrigger(e *events.Event) Trigger {
 	return t
 }
 
+// triggerSummary is an event's summary as every record of its turn keeps it:
+// redacted, then held to [MaxTriggerSummaryBytes], never cut inside a marker.
+// A summary can be somebody's words (a mail's subject, a page's title); the
+// model reads the trigger through the turn's brief, never through this.
+func triggerSummary(summary string) string {
+	shown, whole := redact.Prefix(summary, MaxTriggerSummaryBytes+redact.LongestMarker())
+	if whole <= MaxTriggerSummaryBytes {
+		return shown
+	}
+	kept := textcut.Opening(shown, MaxTriggerSummaryBytes)
+	// Its words end where the cut's own marker (an Opening of nothing) begins.
+	if begin, _, inside := redact.MarkersAround(shown, len(kept)-len(textcut.Opening("", 0))); inside {
+		return textcut.Opening(shown[:begin], MaxTriggerSummaryBytes)
+	}
+	return kept
+}
+
 // IsZero reports whether this descriptor names no trigger at all.
 //
 // FIELD BY FIELD because Origins, a slice, makes the struct incomparable, so
 // `t == Trigger{}` no longer compiles. A field added to Trigger must be added
 // here too; TestTriggerIsZeroSeesEveryField fails until it is.
 func (t Trigger) IsZero() bool {
-	return t.ID == "" && t.Type == "" && t.Summary == "" && t.Actor == "" &&
+	return t.ID == "" && t.Type == "" && t.Summary == "" && len(t.Refs) == 0 && t.Actor == "" &&
 		t.Timestamp.IsZero() && t.Integration == "" && t.Sender == "" &&
 		t.SourceEventType == "" && t.Origin.IsZero() && len(t.Origins) == 0
 }
@@ -319,6 +335,9 @@ func (t Trigger) Map() map[string]any {
 		"summary":   t.Summary,
 		"actor":     t.Actor,
 		"timestamp": timestamp,
+	}
+	if len(t.Refs) > 0 {
+		descriptor["refs"] = t.Refs
 	}
 	if t.Integration != "" {
 		descriptor["integration"] = t.Integration
@@ -362,6 +381,7 @@ type triggerWire struct {
 	ID              string          `json:"id"`
 	Type            string          `json:"type"`
 	Summary         string          `json:"summary"`
+	Refs            []named.Ref     `json:"refs"`
 	Actor           string          `json:"actor"`
 	Timestamp       string          `json:"timestamp"`
 	Integration     string          `json:"integration"`
@@ -383,7 +403,7 @@ func (t *Trigger) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("unmarshal trigger: %w", err)
 	}
 	*t = Trigger{
-		ID: wire.ID, Type: wire.Type, Summary: wire.Summary, Actor: wire.Actor,
+		ID: wire.ID, Type: wire.Type, Summary: wire.Summary, Refs: wire.Refs, Actor: wire.Actor,
 		Integration: wire.Integration, Sender: wire.Sender,
 		SourceEventType: wire.SourceEventType,
 		Origin:          wire.Origin, Origins: wire.Origins,
@@ -399,22 +419,33 @@ func (t *Trigger) UnmarshalJSON(data []byte) error {
 // lead renders an actor-led summary line: "Engineer completed task T-42".
 //
 // Its first argument is normally the RESOLVED actor an ActorSummarizer is
-// handed, so the payload never has to know how the chain reached it. A few
-// lines lead with a party the payload names itself instead — an A2A channel's
-// requester, a message's own sender — and those pass that party.
+// handed; a few lines lead with a party the payload names itself (an A2A
+// channel's requester, a message's sender) and pass that instead.
 //
-// An empty actor opens the sentence with its verb rather than with a blank.
-// The envelope always resolves one (worst case, the engine itself), so that
-// branch is for a direct caller and for the payload-named parties, which can
-// genuinely be absent.
+// An empty actor opens the sentence with its verb, not a blank. The envelope
+// always resolves one, so that branch is for a direct caller and for
+// payload-named parties, which can be absent.
 //
-// The phrases are ASCII by construction, so this needs none of the locale
-// machinery a general title-caser would carry.
+// The phrases are ASCII by construction, so no locale-aware title-casing.
 func lead(actor, phrase string) string {
 	if actor == "" {
 		return upperFirst(phrase)
 	}
 	return actor + " " + phrase
+}
+
+// leadLine is [lead] for a line that names what a person can open.
+func leadLine(actor string, l named.Line) named.Line {
+	if actor != "" {
+		return named.Words(actor + " ").Then(l)
+	}
+	// A line opening on a reference keeps its words as written: upper-cased,
+	// they would no longer be the words the reference is found by.
+	if len(l.Refs) > 0 && strings.HasPrefix(l.Text, l.Refs[0].Text) {
+		return l
+	}
+	l.Text = upperFirst(l.Text)
+	return l
 }
 
 // subject renders the "who, doing what" that the turn-engine summaries open

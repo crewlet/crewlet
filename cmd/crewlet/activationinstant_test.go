@@ -13,15 +13,13 @@ import (
 
 // A NODE'S HISTORY KEEPS THE INSTANT THE POINTER PUBLISHED IT AT.
 //
-// The pointer publishes an instant later than the activation it replaces
-// (coord.ActivationAt), so a node whose clock runs behind the one that
-// activated last is published later than it asked. Its history row's
-// `activated_at` is the instant its config history shows for the activation
-// and the one the retention sweep dates the row by — so the row has to carry
-// the pointer's, or the history dates an activation the fleet never made.
+// The pointer publishes later than the activation it replaces
+// (coord.ActivationAt), so a node whose clock runs behind is published later
+// than it asked. The row's `activated_at` is what the history shows and the
+// retention sweep dates it by, so it must carry the pointer's.
 //
-// Asserted before any tick, because the tick records the same instant when it
-// meets the pointer: what is held here is the import's own record of its write.
+// Asserted before any tick, which records the same instant on meeting the
+// pointer: what is held is the import's own record of its write.
 //
 // Mutation: drop the activation note after an import lands and the row carries
 // no instant at all.

@@ -554,19 +554,12 @@ func waitFor(t *testing.T, want func() bool, why string) {
 //
 // # The branch, and why nothing else reaches it
 //
-// A read has two failure paths and they are not the same. The query failing
-// outright is the one every technique reaches — close the database and it
-// happens. The other is the result set failing DURING ITERATION, after the
-// query succeeded and some rows have already been scanned. That path decides
-// whether a caller gets "nothing is known" or a silent PARTIAL answer, and
-// only [storetest.FailReadsAfter] arms it.
-//
-// It matters most here. [Indexer.Search] RAISES rather than answering empty —
-// the adapter above it is what turns a failure into an answer that says the
-// search did not run — so a missing rows.Err() check does not surface as an
-// error at all. It surfaces as a shorter list of hits, which is
-// indistinguishable from a company that has written less down, and a seat acts
-// on it by writing a page that already exists.
+// A query failing outright is reached by any technique. The result set failing
+// DURING ITERATION decides between "nothing is known" and a silent PARTIAL
+// answer, and only [storetest.FailReadsAfter] arms it. [Indexer.Search] RAISES
+// rather than answering empty, so a missing rows.Err() check surfaces as a
+// shorter list of hits, indistinguishable from a company that has written less
+// down; a seat then writes a page that exists.
 func TestAReadThatFailsPartWayThroughIsNotAShortAnswer(t *testing.T) {
 	t.Parallel()
 	fault := storetest.FailReadsAfter(2, errors.New("the result set gave up"))

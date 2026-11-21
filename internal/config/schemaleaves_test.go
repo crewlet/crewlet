@@ -63,26 +63,18 @@ func resolvedFor(site schemaSite) []string {
 	return out
 }
 
-// THE SUBSET INVARIANT AT EVERY POSITION OF BOTH TIERS, rather than over a
-// table of documents somebody remembered to write.
+// THE SUBSET INVARIANT AT EVERY POSITION OF BOTH TIERS, not over a table of
+// documents somebody remembered to write.
 //
-// Each position the generator emits is offered each literal probe, and
-// where the decoder reads the probe into a value the field's own rule
-// accepts, the position's fragment must admit it — or the schema underlines
-// a line the engine runs. Every hole this closed was one the parity table
-// had no row for: an empty `level:`, `org_webhook: false` as the GitHub guide
-// writes it, `enabled: yes`, a label value of `true`.
+// Each position is offered each literal probe; where the decoder reads it into
+// a value the field's rule accepts, the fragment must admit it, or the schema
+// underlines a line the engine runs (an empty `level:`, `enabled: yes`).
 //
-// In Tier A each position is ALSO offered a reference — a whole one, and one
-// with text around it — and there the check is exact in both directions: the
-// fragment admits each if and only if the resolver and decoder can turn it
-// into some value the field accepts. A reference the schema refused where the
-// engine takes one is the bug this test was written for (`node.id:
-// "${HOSTNAME}"`, which the deployment guide recommends, and `api.port:
-// "${API_PORT}"`, which the engine could not read at all until a resolved
-// value was read as the field reads a literal); one it admitted where no value
-// could ever decode — text around a reference in a port — would be a schema
-// telling an operator a config works that cannot boot.
+// In Tier A each position is also offered a whole reference and one with text
+// around it, checked exactly both ways: the fragment admits each if and only if
+// the resolver and decoder can turn it into an accepted value. Refusing
+// `node.id: "${HOSTNAME}"` is the bug this was written for; admitting text
+// around a reference in a port would promise a config that cannot boot.
 func TestEveryPositionAdmitsWhatTheDecoderReads(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

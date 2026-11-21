@@ -66,18 +66,15 @@ func (n *node) executorRows(t *testing.T, handle string) []executordomain.Sessio
 
 // GATE G6 — the golden coding turn.
 //
-// A real local sandbox, a real detached process, the real suspend and the real
-// resume. Every agent seat's executor is its harness's own run, so this is
-// the path every turn takes; what this gate adds is the box's whole life seen
-// from outside — its argv, its stream, its park on a question, the reaper, and
-// a restart in the middle of a run.
+// A real local sandbox, detached process, suspend and resume: the path every
+// turn takes. This gate adds the box's whole life seen from outside: its argv,
+// its stream, its park on a question, the reaper, and a restart mid-run.
 //
-// The harness is the stand-in of codingcli_test.go: this binary, installed
-// as `claude` on the box's PATH by the catalogue's setup step, asking the same
-// scripted model the seat's phases on this host do. That makes the whole detached
-// protocol real — a process group, a background job, a done marker, a result
-// line, an ask signal, the bridge — while leaving what the agent DOES up to
-// the test, through role.sandbox.env ([codingModeEnv]).
+// The harness is the stand-in of codingcli_test.go: this binary, installed as
+// `claude` on the box's PATH by the catalogue's setup step, asking the same
+// scripted model the seat's phases use. The detached protocol is all real
+// (process group, done marker, result line, ask signal, bridge); what the agent
+// DOES is the test's, through role.sandbox.env ([codingModeEnv]).
 
 // sandboxCompanyDoc is the golden coding company, filled by [sandboxCompany]:
 // one agent seat whose executor runs in a `direct` box (see [codingSandbox] for
@@ -103,13 +100,14 @@ providers:
         FAKE_AGENT_VERSION: "${FAKE_AGENT_VERSION}"
         FAKE_AGENT_TOKEN: "${FAKE_AGENT_TOKEN}"
         FAKE_AGENT_PUSH_LOG: "${FAKE_AGENT_PUSH_LOG}"
-      # Only the cases that read the argv, hold the run, run an older release
-      # or keep what a push run's git saw (its token, its log) set these
-      # five. Declared optional, a case that sets none runs without them;
-      # undeclared, every such run starts without what it never needed and
-      # logs the gap.
+        FAKE_AGENT_CANCEL_TAKE: "${FAKE_AGENT_CANCEL_TAKE}"
+      # Only the cases that read the argv, hold the run, run an older release,
+      # keep what a push run's git saw (its token, its log) or give a hook's
+      # call up set these six. Declared optional, a case that sets none runs
+      # without them; undeclared, every such run starts without what it never
+      # needed and logs the gap.
       optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE, FAKE_AGENT_VERSION, FAKE_AGENT_TOKEN,
-        FAKE_AGENT_PUSH_LOG]
+        FAKE_AGENT_PUSH_LOG, FAKE_AGENT_CANCEL_TAKE]
   - name: Founder
     kind: human
     contact:
@@ -400,21 +398,18 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	if m < 0 || m == len(argv)-1 || argv[m+1] != codingModel {
 		t.Fatalf("the harness was not handed the coder entry's model %s: %v", codingModel, argv)
 	}
-	// AND THE CONVERSATION'S NEXT TURN WILL FIND IT. A turn that ends on the
-	// resume path ends a conversation's turn as surely as one that ends on the
-	// inbox path, and its end on the executor log is what the conversation's
-	// next turn is told — and its row's session what that turn continues —
-	// each read under the conversation the row names.
+	// AND THE CONVERSATION'S NEXT TURN WILL FIND IT. A turn ending on the resume
+	// path ends a conversation's turn like one on the inbox path: its end on the
+	// executor log and its row's session are what the next turn is told and
+	// continues, each read under the conversation the row names.
 	//
-	// End to end because the two halves are in different processes' worth of
-	// code: the LAUNCH writes the conversation onto the run's record, and the
-	// RESUME — which cannot see the trigger any more — ends the turn under it.
+	// End to end because the LAUNCH writes the conversation onto the run's
+	// record and the RESUME, which cannot see the trigger, ends the turn under it.
 	//
-	// AND UNDER THE CONVERSATION RATHER THAN THE BATCH, which only a DM-shaped
-	// wake can assert: the launch copies two values off the turn into two
-	// fields of the record, and a crossed pair compiles — both are strings —
-	// so the key on the turn's row is the only end-to-end proof they did not
-	// swap.
+	// UNDER THE CONVERSATION RATHER THAN THE BATCH, which only a DM-shaped wake
+	// can assert: the launch copies two string values off the turn into two
+	// record fields, and a crossed pair compiles, so the row's key is the only
+	// proof they did not swap.
 	var ended executordomain.Session
 	waitFor(t, "the turn's end to reach the executor log", func() bool {
 		for _, row := range n.executorRows(t, "swe") {
@@ -438,22 +433,11 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 // The clarification park AND the answer that ends it: the agent asks, the seat
 // is freed, the person replies, and the SAME turn resumes.
 //
-// END TO END BECAUSE NOTHING SHORTER REACHES THE BUG. The answer is an ordinary
-// chat message arriving at a seat with nothing holding it, and every layer in
-// its way has to agree it might be an answer: the coordinator has to say a
-// question is open, the screening has to offer the delivery before a turn
-// consumes it, and the match has to find the row from the conversation the
-// reply arrived on. A test that injected the screening's conditions by hand
-// asserted the last two and assumed the first — which was the one that was
-// false, for the whole life of the feature, so the answer ran as an unrelated
-// turn and the box waited out its pause TTL.
-//
-// AND THE ASKING JOB'S CALLS ARE ON ITS RUN'S LOG UNDER THE IDS ITS HARNESS
-// GAVE THEM: the scripted harness hands each bridged call its tool_use id in
-// `_meta`, under Claude Code's key, as Claude Code does, and the runner of the
-// job's harness — the real Claude Code runner — declares that key, so the
-// bridge records each call under its own. Read off the parked run, whose log
-// outlives its job: a run's log goes with its record once the run ends.
+// END TO END: every layer must agree a chat message might be an answer (the
+// coordinator, the screening before a turn consumes it, the match); injecting
+// the screening's conditions would assume the one that was false. AND THE
+// JOB'S CALLS ARE ON ITS RUN'S LOG UNDER THEIR HARNESS'S IDS (tool_use id in
+// `_meta`), read off the parked run.
 //
 // Mutation: name the job without its runner's key (launch-names-no-key), and
 // the parked run's calls are on its log with no id.
@@ -685,11 +669,10 @@ func withBoxRepo(doc string) string {
 // AN EXECUTOR CHECKS A REPOSITORY OUT, PUSHES IT AND IS HELD TO ITS GRANT
 // (ADR-0093), end to end: the run is launched with the box's git environment
 // and no repository; its model calls `code_checkout` for web over the bridge,
-// the row is granted web to write, and the stand-in harness runs the commands the
-// answer gave, commits one file and pushes its branch by git alone. Gitlet
-// records the push as the agent's, through this launch, on the seat's
-// branch for the run, its commit carrying the run's trailers; and once the
-// run has ended its token admits nothing.
+// the row is granted web to write, and the stand-in harness runs the answer's
+// commands, commits one file and pushes by git alone. Gitlet records the push
+// as the agent's, through this launch, on the seat's branch for the run, its
+// commit carrying the run's trailers; once the run ends its token admits nothing.
 //
 // Mutations: a launch whose RunEnv sets no git variables → the clone has no
 // credential and the run fails, red; code_checkout granting nothing on the

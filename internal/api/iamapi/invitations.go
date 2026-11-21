@@ -146,18 +146,14 @@ func (s *Service) openInvitation(r *http.Request, id, sealed string) (
 }
 
 // DeleteInvitation is `DELETE /iam/invitations/{id}`: an invitation nobody has
-// redeemed, withdrawn — its link opens nothing from now on, exactly as an id
-// nobody issued, and the address and the seat it held are free: the seat for
-// a create, another invitation or a move, the address for a new invitation.
+// redeemed, withdrawn: its link opens nothing from now on, exactly as an id
+// nobody issued, and the address and the seat it held are free.
 //
 // A REDEEMED ONE IS 409 `stale`, NAMING WHOM IT CREATED: the link is spent,
-// and what undoes it is removing that person. `stale` because the caller is
-// acting on a reading the redemption has overtaken — the remedy is to read the
-// directory again, where the person now is — and in a sentence of the
-// surface's own, because the domain's error is written for a log, package
-// prefix and ids included, and the dashboard shows a detail verbatim. It was
-// `bad_params`, whose sentence is about a query parameter, beside that error.
-// An id the estate does not hold is 404.
+// and removing that person undoes it. `stale` because the caller acted on a
+// reading the redemption overtook (read the directory again), in a sentence of
+// the surface's own, because the domain's error is written for a log and the
+// dashboard shows a detail verbatim. An id the estate does not hold is 404.
 func (s *Service) DeleteInvitation(w http.ResponseWriter, r *http.Request) {
 	writer, ok := s.writerFor(r.Context())
 	if !ok {

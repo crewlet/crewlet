@@ -190,10 +190,11 @@ func credentialArg(tool string, args map[string]any) (string, *tools.Result) {
 	case envref.ValidName(name) && name == strings.ToUpper(name):
 		return "${" + name + "}", nil
 	}
-	r := failed(fmt.Sprintf("%s: `credential` is the NAME of the variable that holds the source's token, "+
-		"in upper case (such as GITHUB_TOKEN) — one code.remote_credentials declares for the source's host — "+
-		"resolved from the secret store or the environment when Gitlet dials, never the token itself, "+
-		"which every record of the repository's settings would carry. An administrator stores the token "+
-		"with `crewlet secrets set <NAME>` and declares the NAME for its host; name it here.", tool))
+	r := failedArg("credential",
+		fmt.Sprintf("%s: `credential` is the NAME of the variable that holds the source's token, "+
+			"in upper case (such as GITHUB_TOKEN) — one code.remote_credentials declares for the source's host — "+
+			"resolved from the secret store or the environment when Gitlet dials, never the token itself, "+
+			"which every record of the repository's settings would carry. An administrator stores the token "+
+			"with `crewlet secrets set <NAME>` and declares the NAME for its host; name it here.", tool))
 	return "", &r
 }

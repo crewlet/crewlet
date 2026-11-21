@@ -112,18 +112,16 @@ func TestASignOutEndsTheBearerUnderEitherName(t *testing.T) {
 
 // A SIGN-OUT ENDS A SESSION ONLY WHILE THE ROWS STILL HOLD IT.
 //
-// The sign-out read the cookie under its signature alone, so every cookie ever
-// signed under a live key — past its deadline, revoked, a session a record had
-// already ended — published a close and announced another `iam_session_ended`
-// on every post: a row per request, authored by whoever held a cookie the
-// engine no longer accepts, and a second ending for a session whose ending the
-// trail already held. What a sign-out claims is that the session was live
-// until now, and only this node's rows can say so.
+// A cookie valid under its signature alone (past its deadline, revoked, already
+// ended) must not publish a close or announce another `iam_session_ended`: that
+// would be a row per request authored by a cookie the engine no longer accepts.
+// A sign-out claims the session was live until now, and only this node's rows
+// can say so.
 //
 // EVERY CASE CLEARS THE COOKIE AND ANSWERS 200, whatever the rows said: a
-// person walking away from a shared machine is signed out of it either way.
-// A node too far behind to read the rows still records the close the person
-// asked for, and announces nothing it cannot say was live.
+// person leaving a shared machine is signed out either way. A node too far
+// behind to read the rows still records the close, and announces nothing it
+// cannot say was live.
 func TestASignOutEndsOnlyASessionStillLive(t *testing.T) {
 	t.Parallel()
 	live := func(r *signInRig) session.Identity {
@@ -287,21 +285,13 @@ func TestEndingANamedSessionAlreadyOverWritesNothing(t *testing.T) {
 // ENDING SOMEBODY ELSE'S NAMED SESSION IS THE AUTHORITY TABLE'S TO DECIDE.
 //
 // `POST /auth/logout/{lineage}` and `DELETE /iam/people/{id}/sessions` are one
-// gesture — ending a person's sessions — and the route used to answer it with
-// a check of its own: the owner, or the deployment's operating permission for
-// anybody's, with no step-up. That permission may be minted onto a machine
-// token, so a leaked pipeline token, or a week-old cookie, could end any
-// session whose lineage it knew, while the table said ending somebody else's
-// takes an administrator, a recent proof and a person present. Each refusal is
-// the table's own, in its own envelope: every app and no admin is refused for
-// the permission, admin through a machine token for the person who is not
-// present, and admin on a stale proof for the proof. The controls are an
-// administrator a minute after proving, who ends it and is recorded as
-// revoking it, and the person themselves on a stale proof, which their own
-// sessions never ask for.
-//
-// Mutation: decide it here again on admin alone, with no step-up or presence,
-// and the token and stale-proof cases end the colleague's session.
+// gesture, so the route may not check on its own: the operating permission may
+// sit on a machine token, and a leaked token could end any session. Ending
+// somebody else's takes an administrator, a recent proof and a person present;
+// each refusal is the table's own (no admin: the permission; machine token: the
+// person not present; stale proof: the proof). The controls are an admin a
+// minute after proving and the person themselves on a stale proof.
+// Mutation: decide on admin alone and the token and stale-proof cases end it.
 func TestEndingSomebodyElsesNamedSessionIsTheTablesToDecide(t *testing.T) {
 	t.Parallel()
 	const lineage = "0192f00d-0000-7000-8000-0000000000bb"

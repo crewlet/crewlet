@@ -6,14 +6,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// CONTAINMENT IS NOT A SHARED ANCESTOR, and the difference is the whole
-// predicate.
+// CONTAINMENT IS NOT A SHARED ANCESTOR, in both directions.
 //
-// Two sibling projects sit under the same family, so a probe that read a
-// shared ancestor as an intersection would refuse every write in the company
-// the moment one record anywhere was deferred. And a probe that only walked
-// upward would miss a record deferred on an object BENEATH what a write is
-// rewriting — which is silent data loss rather than an over-refusal.
+// A probe reading a shared ancestor as an intersection refuses every write in
+// the company once one record anywhere is deferred; one walking only upward
+// misses a record deferred BENEATH what a write rewrites, which is silent data
+// loss.
 func TestAScopeIntersectsOnlyWhatItActuallyCovers(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -65,11 +63,9 @@ func TestAScopeIntersectsOnlyWhatItActuallyCovers(t *testing.T) {
 			if got := tc.a.Intersects(tc.b); got != tc.want {
 				t.Errorf("%v.Intersects(%v) = %v, want %v", tc.a.Paths, tc.b.Paths, got, tc.want)
 			}
-			// SYMMETRIC, always. The probe runs the query's scope
-			// against a stored one and a stored one against the
-			// query's, and an asymmetric predicate would answer
-			// differently depending on which side the deferred record
-			// happened to be.
+			// SYMMETRIC: the probe runs each side against the other, so an
+			// asymmetric predicate would answer by which side the deferred
+			// record sits.
 			if got := tc.b.Intersects(tc.a); got != tc.want {
 				t.Errorf("reversed = %v, want %v — the predicate must be "+
 					"symmetric or the probe answers differently depending on "+
@@ -79,13 +75,10 @@ func TestAScopeIntersectsOnlyWhatItActuallyCovers(t *testing.T) {
 	}
 }
 
-// THE PROBE'S TWO CLAUSES ARE THE TWO DIRECTIONS, and each one alone misses
-// the other's case.
-//
-// The closure walks UP — every path that could cover something the query is
-// about. The roots are what a descendant test walks DOWN from. A probe with
-// only the first is blind to a record deferred on one task inside a project
-// this write is rewriting.
+// THE PROBE'S TWO CLAUSES ARE THE TWO DIRECTIONS, and each alone misses the
+// other's case: the closure walks UP, the roots are where a descendant test
+// walks DOWN from, and a probe with only the closure misses a record deferred
+// on one task inside a project this write rewrites.
 func TestTheClosureAndTheRootsAreTheTwoHalvesOfTheProbe(t *testing.T) {
 	t.Parallel()
 	s := statelog.ScopeSet{Paths: []string{"project/ENG/task/7"}}
@@ -124,13 +117,10 @@ func TestAScopeIsNormalisedBeforeItIsStored(t *testing.T) {
 	}
 }
 
-// A PATH BUILT FROM A MISSING ID HAS NO HOLE IN IT.
-//
-// Every domain builds its scope paths through [statelog.ScopePath], so a
-// blank or padded segment cannot make one domain's path for an object differ
-// from another's — and a path with an empty level would be one [Ancestors]
-// reads as a different hierarchy, where the deferral probe misses a record
-// deferred on the object's container.
+// A PATH BUILT FROM A MISSING ID HAS NO HOLE IN IT: a blank or padded segment
+// must not make one domain's path for an object differ from another's, or
+// [Ancestors] reads a different hierarchy and the deferral probe misses a
+// record deferred on the object's container.
 func TestAScopePathSkipsWhatIsMissing(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

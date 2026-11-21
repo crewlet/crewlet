@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -16,50 +17,18 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 )
 
-// A GENERIC CHANGE IS NAMED FOR WHAT IT DOES TO WHAT THE PERSON CALLS IT.
-//
-// The route table says how a change is sent and decided (its verb, its check,
-// whether it replaces); it says nothing a person reads. A card titled by its
-// method ("Change through the API") over the route and the body asked a
-// founder to review JSON to learn that it adds a Technical Writer. So the card
-// is described here, from the same diff of the resource as it is now against
-// what the change makes of it that its rows are drawn from, by one rule for
-// every route:
-//
-//   - The NOUN is what the person calls the resource: [resources] names the
-//     ones whose path says it wrong (`/config/roles/{id}` is a seat), and every
-//     other route takes the noun its path names ([RequestTitle]).
-//   - A resource that holds a list of named members (a unit's seats) is
-//     titled for the members a change adds or removes: "Add seat Technical
-//     Writer", "Remove seat QA Engineer". Any other change is titled by its
-//     verb and the record's name: "Change seat QA Engineer", "Create MCP
-//     server linear", "Delete task ENG-4".
-//   - A change that deletes, removes a member, or removes fields of what it
-//     replaces is DESTRUCTIVE ([wire.RiskDestructive]): its summary says what
-//     goes, and its note whether it can be reverted, so a removal is never one
-//     struck-through row among sixty.
-//   - A POST is titled by what its route declares it does
-//     ([authz.Effect]), since its method says nothing: a create by what it
-//     creates, a call on the act route by the tool it calls ([called]), and
-//     anything else by its action and what it acts on ([acted]): "Purge item
-//     ENG-1", "Restore page Runbook".
-//   - A change NOTHING UNDOES is destructive whatever its method: a POST
-//     that destroys, and any change decided by a verb whose row says it is
-//     irreversible ([authz.IrreversibleOf]: a purge, a room's horizon, which
-//     is a PUT). A family the registry reads further is titled and
-//     summarised from what it sends ([resource.Title], [resource.Goes]):
-//     "Erase 2 messages from #general", "Keep #general's messages for 7
-//     days"; one that takes nothing (a horizon kept for ever) is not
-//     destructive.
-//   - A record is named by what it is called, read where its path cannot
-//     say it ([generic.named]: a room by its name), else by a key a person
-//     types, else in neutral words ("the room"), never by an opaque id,
-//     which reads as nothing to anybody.
-//
-// Nothing here is the model's: the names are read from the representation,
-// the request the digest binds and a read of what it acts on, and the risk is
-// computed from the route's own declaration and its verb's row, never from
-// the model.
+// A GENERIC CHANGE IS NAMED FOR WHAT IT DOES TO WHAT THE PERSON CALLS IT: a card
+// titled by method asks a founder to review JSON, so one rule serves every
+// route, from the diff its rows are drawn from.
+//   - The NOUN is [resources]' where the path says it wrong, else the path's
+//     ([RequestTitle]).
+//   - A list of named members is titled for those a change adds or removes
+//     ("Add seat Technical Writer"); any other change by verb and record name.
+//   - A POST is titled by its declared [authz.Effect] ([called], [acted]); a
+//     record is named where its path cannot say it ([generic.named]), never by
+//     an opaque id. DESTRUCTIVE ([wire.RiskDestructive]): see [resource.Goes].
+// Nothing here is the model's: risk comes from the route's declaration and its
+// verb's row, names from the representation and a read of what it acts on.
 
 // resource is what a person calls the records one route family serves.
 type resource struct {
@@ -67,9 +36,16 @@ type resource struct {
 	Path string
 	// Noun is one record, in the lower case a title says it in ("seat").
 	Noun string
+	// Kind is the dashboard object one record here is, and ID the path
+	// wildcard holding its id: its card names it as a [wire.Ref].
+	Kind wire.ResourceKind
+	ID   string
+	// Record is where a read's answer holds the record's identity (its id,
+	// title, subtitle and page), so a generic read of it is its typed card.
+	Record *cards.Entity
 	// Members are the record's lists of named members, by field, each with
-	// the noun one member is called ("roles" holds seats).
-	Members map[string]string
+	// what one member is ("roles" holds seats).
+	Members map[string]memberList
 	// Title, where set, names a change the diff cannot, from what it sends
 	// and what it acts on ([subject]): a create whose body names what it
 	// creates by reference (a brand kit's version), an erase by how many
@@ -79,7 +55,14 @@ type resource struct {
 	// sentence its card leads with, or "" for one that takes nothing (a
 	// room's horizon set to keep everything): what the card's risk is
 	// decided by on a route whose verb nothing undoes.
-	Goes func(s subject) string
+	//
+	// A change is DESTRUCTIVE ([wire.RiskDestructive]) when it deletes, removes
+	// a member or fields of what it replaces, or NOTHING UNDOES it whatever its
+	// method: a verb row marked irreversible ([authz.IrreversibleOf]: a purge,
+	// a room's horizon, which is a PUT). Its summary says what goes and its
+	// note whether it can be reverted, so a removal is never one struck-through
+	// row among sixty.
+	Goes func(s subject) wire.Phrase
 	// Of is the path of the record a change here is about, where that is not
 	// what its own path names: a room's horizon is the room's. A best-effort
 	// read of it names the record on the card ([generic.named]).
@@ -100,6 +83,18 @@ type resource struct {
 	Singleton bool
 }
 
+// memberList is what each member of a record's list is: its noun and its kind.
+type memberList struct {
+	Noun string
+	Kind wire.ResourceKind
+}
+
+// The member lists a configuration document holds.
+var (
+	seatMembers = memberList{Noun: "seat", Kind: wire.ResourceSeat}
+	unitMembers = memberList{Noun: "unit", Kind: wire.ResourceUnit}
+)
+
 // historyNote is what a change to a route that keeps a revision history can
 // say about being undone: every revision stays, and any one of them can be
 // reverted to (`POST /config/revisions/{id}/revert`).
@@ -119,9 +114,24 @@ const readsNote = "This changes nothing: it only asks."
 // is right for most: a project is a project.
 var resources = []resource{
 	{Path: "/config", Noun: "company configuration", Singleton: true,
-		Members: map[string]string{"roles": "seat", "units": "unit"}},
-	{Path: "/config/roles/{id}", Noun: "seat"},
-	{Path: "/config/units/{id}", Noun: "unit", Members: map[string]string{"roles": "seat"}},
+		Members: map[string]memberList{"roles": seatMembers, "units": unitMembers}},
+	{Path: "/config/roles/{id}", Noun: "seat", Kind: wire.ResourceSeat, ID: "id"},
+	{Path: "/config/units/{id}", Noun: "unit", Kind: wire.ResourceUnit, ID: "id",
+		Members: map[string]memberList{"roles": seatMembers},
+		Record:  &cards.Entity{ID: "id", Title: "name", Subtitle: "mission"}},
+	// THE RECORDS A READ IS DRAWN AS by kind, where its answer is the record.
+	{Path: "/artifacts/{id}", Noun: "artifact", Kind: wire.ResourceArtifact, ID: "id",
+		Record: &cards.Entity{ID: "id", Title: "title", Subtitle: "kind"}},
+	{Path: "/agents/{id}", Noun: "agent", Kind: wire.ResourceSeat, ID: "id",
+		Record: &cards.Entity{ID: "handle", Title: "role", Subtitle: "handle"}},
+	{Path: "/worklet/{id}", Noun: "task", Kind: wire.ResourceTask, ID: "id",
+		Record: &cards.Entity{ID: "task.key", Key: "task.key", Title: "task.title"}},
+	{Path: "/worklet/projects/{key}", Noun: "project", Kind: wire.ResourceProject, ID: "key",
+		Record: &cards.Entity{ID: "key", Key: "key", Title: "name", Subtitle: "purpose"}},
+	{Path: "/doclet/pages/{id}", Noun: "page", Kind: wire.ResourcePage, ID: "id",
+		Record: &cards.Entity{Root: "page", ID: "id", Title: "title"}},
+	{Path: "/atlas/{id}", Noun: "atlas entry", Kind: wire.ResourceAtlasEntry, ID: "id",
+		Record: &cards.Entity{Root: "entry", ID: "id", Title: "name", Subtitle: "ref.kind"}},
 	{Path: "/config/llm-providers/{id}", Noun: "model provider"},
 	{Path: "/config/mcp-servers/{id}", Noun: "MCP server"},
 	{Path: "/config/charter", Noun: "company charter", Singleton: true},
@@ -139,12 +149,15 @@ var resources = []resource{
 		Summary: "The company has no brand until another version is adopted."},
 	// A ROOM IS CALLED BY ITS NAME, as every sentence anybody writes about it
 	// does ("#general"), never by its id; a direct conversation has none.
-	{Path: "/chatlet/channels/{channel_id}", Noun: "room", Named: func(doc any) string {
-		if name := value(doc, "channel.name"); name != "" {
-			return "#" + name
-		}
-		return ""
-	}},
+	{Path: "/chatlet/channels/{channel_id}", Noun: "room", Kind: wire.ResourceRoom,
+		ID: "channel_id", Record: &cards.Entity{Root: "channel", ID: "id", Title: "name",
+			TitlePrefix: "#", Key: "name", KeyPrefix: "#", Room: "id"},
+		Named: func(doc any) string {
+			if name := value(doc, "channel.name"); name != "" {
+				return "#" + name
+			}
+			return ""
+		}},
 	// CHAT'S THREE DESTRUCTIONS, each read from what it sends: an erase's
 	// messages in its body, a prune's cutoff in its query, a horizon in its
 	// body, each of them about the room ([chatRoom]).
@@ -191,6 +204,15 @@ var resources = []resource{
 // nobody holds, so its card says no more than the read did.
 func chatRoom(s subject) string { return firstOf(s.named, "the room") }
 
+// chatRoomRef is [chatRoom] as a sentence names it: the room as a ref where a
+// read named it.
+func chatRoomRef(s subject) wire.Phrase {
+	if len(s.ref) > 0 {
+		return s.ref
+	}
+	return wire.Plain(chatRoom(s))
+}
+
 // chatEraseTitle titles an erase by how many messages it takes and from
 // where: "Erase 2 messages from #general".
 func chatEraseTitle(s subject) (string, string) {
@@ -198,8 +220,9 @@ func chatEraseTitle(s subject) (string, string) {
 }
 
 // chatEraseGoes is what an erase takes.
-func chatEraseGoes(s subject) string {
-	return "This erases " + erased(s) + " from " + chatRoom(s) + " for good."
+func chatEraseGoes(s subject) wire.Phrase {
+	return wire.Plain("This erases " + erased(s) + " from ").Then(chatRoomRef(s)).
+		Plain(" for good.")
 }
 
 // erased is how many messages an erase's body names, each once, as a phrase.
@@ -227,9 +250,9 @@ func chatPruneTitle(s subject) (string, string) {
 }
 
 // chatPruneGoes is what a prune takes.
-func chatPruneGoes(s subject) string {
-	return "This deletes everything said in " + chatRoom(s) + " before " + cutoff(s) +
-		" for good."
+func chatPruneGoes(s subject) wire.Phrase {
+	return wire.Plain("This deletes everything said in ").Then(chatRoomRef(s)).
+		Plain(" before " + cutoff(s) + " for good.")
 }
 
 // cutoff is a prune's `?cutoff=` as a person reads an instant: the date, and
@@ -268,21 +291,21 @@ func chatRetentionTitle(s subject) (string, string) {
 
 // chatRetentionGoes is what a room's horizon takes: whatever is older than
 // what it keeps from now on, which a horizon kept for ever takes nothing of.
-func chatRetentionGoes(s subject) string {
-	room := chatRoom(s)
+func chatRetentionGoes(s subject) wire.Phrase {
+	room := chatRoomRef(s)
 	days, set, ok := retained(s)
 	switch {
 	case !ok:
-		return "This changes how long " + room + " keeps messages, and what it no " +
-			"longer keeps is deleted for good."
+		return wire.Plain("This changes how long ").Then(room).Plain(" keeps messages, " +
+			"and what it no longer keeps is deleted for good.")
 	case !set:
-		return "From now on " + room + " keeps messages only as long as the company's " +
-			"setting does, and anything older is deleted for good."
+		return wire.Plain("From now on ").Then(room).Plain(" keeps messages only as long " +
+			"as the company's setting does, and anything older is deleted for good.")
 	case days == 0:
-		return ""
+		return nil
 	}
-	return "From now on " + room + " keeps messages for " + daysPhrase(days) +
-		", and anything older is deleted for good."
+	return wire.Plain("From now on ").Then(room).Plain(" keeps messages for " +
+		daysPhrase(days) + ", and anything older is deleted for good.")
 }
 
 // retained is a horizon's `retention_days`: a whole number of days, 0
@@ -369,19 +392,24 @@ func representationName(doc any) string {
 
 // described is a generic change as the person reads it: its title and
 // approve label, what it does where the title does not say it, whether it
-// can be reverted, its risk, and the record it acts on ("item ENG-1").
+// can be reverted, its risk, and the record it acts on ("item ENG-1"), the
+// record a ref where its kind is known.
 type described struct {
-	Title, ApproveLabel, Summary, Note, Object string
-	Risk                                       wire.ProposalRisk
+	Title, ApproveLabel string
+	Summary, Note       wire.Phrase
+	Object              wire.Phrase
+	Risk                wire.ProposalRisk
 }
 
 // subject is what a change is shown against beyond its route and its diff:
-// the body and the query it sends, and the name a best-effort read of the
-// record it acts on answered ("#general"), or "" where nothing could be read.
+// the body and the query it sends, the name a best-effort read of the record
+// it acts on answered ("#general"), or "" where nothing could be read, and
+// that record as a ref where its kind is known.
 type subject struct {
 	body  map[string]any
 	query url.Values
 	named string
+	ref   wire.Phrase
 }
 
 // describe names the change req makes on route to the resource read as before
@@ -409,7 +437,11 @@ func describe(route Route, req string, creates bool, before, after any, s subjec
 		name = firstOf(recordName(after), representationName(before), s.named,
 			addressValue(address))
 	}
-	d := described{Object: phrased(noun, name)}
+	own := refOf(res, address, name)
+	if rec, ok := recordOf(route, req); ok && rec.Path != res.Path {
+		s.ref = refOf(rec, address, s.named)
+	}
+	d := described{Object: withRef(phrased(noun, name), own)}
 	var verb, action string
 	switch {
 	case res.Title != nil:
@@ -417,11 +449,13 @@ func describe(route Route, req string, creates bool, before, after any, s subjec
 	case req == http.MethodDelete:
 		d.Title, verb = titled("Delete", noun, name), "delete"
 	case req == http.MethodPost && acts(route.Effect):
-		action, d.Object = acted(route, res, address, s.named)
-		d.Title = capitalised(strings.TrimSpace(action + " " + d.Object))
+		var object string
+		action, object = acted(route, res, address, s.named)
+		d.Object = withRef(object, s.ref)
+		d.Title = capitalised(strings.TrimSpace(action + " " + object))
 		verb, _, _ = strings.Cut(action, " ")
 		if route.Effect == authz.EffectReads {
-			d.Note = readsNote
+			d.Note = wire.Plain(readsNote)
 		}
 	case req == http.MethodPost || creates:
 		d.Title, verb = titled("Create", noun, name), "create"
@@ -432,9 +466,9 @@ func describe(route Route, req string, creates bool, before, after any, s subjec
 		}
 	}
 	d.ApproveLabel = "Approve and " + verb
-	d.Summary = res.Summary
+	d.Summary = wire.Plain(res.Summary)
 	if res.Note != "" {
-		d.Note = res.Note
+		d.Note = wire.Plain(res.Note)
 	}
 
 	gone, gonePaths := removedMembers(res, before, after, l)
@@ -444,10 +478,10 @@ func describe(route Route, req string, creates bool, before, after any, s subjec
 	// what such a change takes, and one that takes nothing is not.
 	irreversible, _ := authz.IrreversibleOf(route.Action)
 	destroys := irreversible || (req == http.MethodPost && route.Effect == authz.EffectDestroys)
-	goes := ""
+	var goes wire.Phrase
 	if res.Goes != nil {
 		goes = res.Goes(s)
-		destroys = destroys && goes != ""
+		destroys = destroys && len(goes) > 0
 	}
 	destructive := req == http.MethodDelete || destroys || len(gone) > 0 || len(removals) > 0
 	if !destructive {
@@ -457,18 +491,22 @@ func describe(route Route, req string, creates bool, before, after any, s subjec
 	// WHAT GOES LEADS THE CARD, above every row (ADR-0055): the members a
 	// change removes by name, then every other field a replace removes,
 	// which only the person's own request may (the call's `removes`).
-	var said []string
+	var said []wire.Phrase
 	switch {
-	case goes != "":
+	case len(goes) > 0:
 		said = append(said, goes)
 	case req == http.MethodDelete:
-		said = append(said, "This deletes "+d.Object+".")
+		said = append(said, wire.Plain("This deletes ").Then(d.Object).Plain("."))
 	case destroys && action != "":
-		said = append(said, "This "+strings.TrimSpace(thirdPerson(action)+" "+d.Object)+".")
+		said = append(said, wire.Plain("This "+thirdPerson(action)+" ").Then(d.Object).Plain("."))
 	case destroys:
-		said = append(said, "This changes "+d.Object+" for good.")
+		said = append(said, wire.Plain("This changes ").Then(d.Object).Plain(" for good."))
 	case len(gone) > 0:
-		said = append(said, "This removes "+inWords(gone)+fromName(noun, name)+".")
+		from := wire.Phrase(nil)
+		if name != "" {
+			from = wire.Plain(" from ").Then(withRef(noun+" "+name, own))
+		}
+		said = append(said, wire.Plain("This removes ").Then(andPhrases(gone)).Then(from).Plain("."))
 	}
 	var fields []string
 	for _, r := range removals {
@@ -481,19 +519,74 @@ func describe(route Route, req string, creates bool, before, after any, s subjec
 		if len(said) == 0 {
 			also = "This removes "
 		}
-		said = append(said, also+inWords(fields)+". Approve only if you asked for that.")
+		said = append(said, wire.Plain(also+inWords(fields)+". Approve only if you asked for that."))
 	}
 	if len(said) > 0 {
-		d.Summary = strings.Join(append(said, d.Summary), " ")
-		d.Summary = strings.TrimSpace(d.Summary)
+		d.Summary = wire.Join(append(said, d.Summary), " ")
+		if n := len(d.Summary); n > 0 && d.Summary[n-1].Text == " " {
+			d.Summary = d.Summary[:n-1]
+		}
 	}
-	if d.Note == "" {
-		d.Note = noUndoNote
+	if len(d.Note) == 0 {
+		d.Note = wire.Plain(noUndoNote)
 		if route.Summary {
-			d.Note = historyNote
+			d.Note = wire.Plain(historyNote)
 		}
 	}
 	return d
+}
+
+// readRecord is the identity of the one record a read on route answers, where
+// [resources] says its kind: its id, title, subtitle and page, so its card is
+// that record's ([cards.Infer]); nil for any other route.
+func readRecord(route string) *cards.Entity {
+	method, path, _ := strings.Cut(strings.TrimSpace(route), " ")
+	res, ok := resourceAt(path)
+	if method != http.MethodGet || !ok || res.Record == nil || res.Kind == "" {
+		return nil
+	}
+	e := *res.Record
+	e.Kind = res.Kind
+	if screen, param, ok := refScreen(res.Kind); ok {
+		e.Open = &cards.Open{Screen: screen, Params: map[string]string{param: e.ID}}
+	}
+	return &e
+}
+
+// recordOf is the record a change on route is about where [resources] says
+// its kind: the route's own, else the one its family is about ([resource.Of])
+// or a POST acts on ([actedOn]).
+func recordOf(route Route, method string) (resource, bool) {
+	res, _ := resourceOf(route)
+	if res.Kind != "" {
+		return res, true
+	}
+	path := res.Of
+	if path == "" && method == http.MethodPost && acts(route.Effect) {
+		path = actedOn(route.Path())
+	}
+	rec, ok := resourceAt(path)
+	return rec, ok && path != "" && rec.Kind != ""
+}
+
+// refOf is res's record at address as a ref, shown as name; nil where its
+// kind, its id or a name a person reads is unknown, so no ref shows an id.
+func refOf(res resource, address map[string]string, name string) wire.Phrase {
+	id := address[res.ID]
+	if res.Kind == "" || res.ID == "" || id == "" || name == "" {
+		return nil
+	}
+	return naming(res.Kind, id, name)
+}
+
+// withRef is words that end in a record's name, the name as ref; the words
+// alone where ref is nil or they do not end in its name.
+func withRef(words string, ref wire.Phrase) wire.Phrase {
+	name := ref.Text()
+	if len(ref) == 0 || !strings.HasSuffix(words, name) {
+		return wire.Plain(words)
+	}
+	return wire.Plain(strings.TrimSuffix(words, name)).Then(ref)
 }
 
 // firstOf is the first of values that says something, or "".
@@ -521,14 +614,12 @@ func phrased(noun, name string) string {
 // approved by the tool's verb, the first word of every operator tool's name
 // ("Approve and react").
 //
-// A CALL, NOT A CREATE. The act route's path names a tool, and the tool alone
-// decides what the call changes: it may add, rewrite or take away. Titled as a
-// POST elsewhere was ("Create act react_to_message"), the card told the person
-// that a tool which replaces or removes what is there only adds to it. The
-// preview reads nothing for a call, so nothing about what it removes is
-// computed here: a write whose effect turns on what is there is a curated
-// write, whose preview reads it, and a call one of them makes is refused
-// ([curatedCall]).
+// A CALL, NOT A CREATE: the act route's path names a tool, which alone decides
+// whether the call adds, rewrites or takes away, so titling it a create would
+// tell the person a replacing tool only adds. The preview reads nothing for a
+// call, so nothing about what it removes is computed here: a write whose effect
+// turns on what is there is a curated write, whose preview reads it, and a
+// call one of them makes is refused ([curatedCall]).
 func called(tool string) described {
 	verb, _, _ := strings.Cut(tool, "_")
 	return described{Title: RequestTitle(ActRoute, map[string]string{"tool": tool}),
@@ -655,15 +746,6 @@ func titled(verb, noun, name string) string {
 	return strings.TrimSpace(verb + " " + noun + " " + name)
 }
 
-// fromName is " from <noun> <name>" for a sentence naming what a removal
-// leaves, empty where the resource has no name.
-func fromName(noun, name string) string {
-	if name == "" {
-		return ""
-	}
-	return " from " + noun + " " + name
-}
-
 // addressValue is the record a path names, where it names one a person reads:
 // its single path value, unless that is an opaque id ([shown]).
 func addressValue(address map[string]string) string {
@@ -705,7 +787,7 @@ func memberTitle(res resource, noun, name string, before, after any, l labeller)
 	}
 	var added, removed []string
 	member := ""
-	for _, field := range slicesSorted(res.Members) {
+	for _, field := range slices.Sorted(maps.Keys(res.Members)) {
 		was, _ := b[field].([]any)
 		is, _ := a[field].([]any)
 		plus, minus := memberMoves(field, was, is, l)
@@ -715,7 +797,7 @@ func memberTitle(res resource, noun, name string, before, after any, l labeller)
 		if member != "" {
 			return "", "", false
 		}
-		member, added, removed = res.Members[field], plus, minus
+		member, added, removed = res.Members[field].Noun, plus, minus
 	}
 	switch {
 	case member == "" || (len(added) > 0 && len(removed) > 0):
@@ -754,23 +836,27 @@ func memberMoves(field string, before, after []any, l labeller) (added, removed 
 }
 
 // removedMembers are the named members a change removes from the resource,
-// each as its noun and name ("seat QA Engineer"), and their paths, across
-// every member list it holds.
-func removedMembers(res resource, before, after any, l labeller) (names, paths []string) {
+// each as its noun and the member as a ref ("seat QA Engineer"), and their
+// paths, across every member list it holds.
+func removedMembers(res resource, before, after any, l labeller) (names []wire.Phrase,
+	paths []string) {
+
 	b, _ := before.(map[string]any)
 	a, _ := after.(map[string]any)
 	if b == nil {
 		return nil, nil
 	}
-	for _, field := range slicesSorted(res.Members) {
+	for _, field := range slices.Sorted(maps.Keys(res.Members)) {
 		was, wasKeyed := keyed(asList(b[field]))
 		is, isKeyed := keyed(asList(a[field]))
 		if !wasKeyed || (!isKeyed && len(asList(a[field])) > 0) {
 			continue
 		}
+		m := res.Members[field]
 		for _, e := range was {
 			if find(is, e.id) == nil {
-				names = append(names, res.Members[field]+" "+l.member(join(field, e.id), e.id))
+				names = append(names, wire.Plain(m.Noun+" ").Then(
+					naming(m.Kind, e.id, l.member(join(field, e.id), e.id))))
 				paths = append(paths, join(field, e.id))
 			}
 		}
@@ -782,7 +868,7 @@ func asList(v any) []any { list, _ := v.([]any); return list }
 
 // without is a record without the given fields, for comparing what else of
 // it a change moves.
-func without(record map[string]any, fields map[string]string) map[string]any {
+func without(record map[string]any, fields map[string]memberList) map[string]any {
 	out := make(map[string]any, len(record))
 	for k, v := range record {
 		if _, member := fields[k]; !member {
@@ -790,15 +876,6 @@ func without(record map[string]any, fields map[string]string) map[string]any {
 		}
 	}
 	return out
-}
-
-func slicesSorted(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
 }
 
 // labeller names a change's rows as a person reads them: a member of a list
@@ -878,23 +955,17 @@ func (l labeller) label(field string) string {
 }
 
 // value is a row's value as a person reads it: a field that refers to other
-// members by identity names them ([refFields]).
-func (l labeller) value(field, v string) string {
-	if !slices.Contains(refFields, lastKey(field)) {
-		return v
+// seats by handle names each as a ref by its name ([refFields]).
+func (l labeller) value(field, v string) wire.Phrase {
+	if !slices.Contains(refFields, lastKey(field)) || v == "" {
+		return wire.Plain(v)
 	}
-	if name, ok := l.ids[v]; ok {
-		return name
-	}
-	return v
+	return naming(wire.ResourceSeat, v, firstOf(l.ids[v], v))
 }
 
 // items is [labeller.value] over a list's items.
-func (l labeller) items(field string, items []string) []string {
-	if !slices.Contains(refFields, lastKey(field)) || len(items) == 0 {
-		return items
-	}
-	out := make([]string, len(items))
+func (l labeller) items(field string, items []string) []wire.Phrase {
+	out := make([]wire.Phrase, len(items))
 	for i, item := range items {
 		out[i] = l.value(field, item)
 	}
@@ -916,6 +987,15 @@ func moreRows(n int, technical bool) string {
 		line += " Technical details has the whole change."
 	}
 	return line
+}
+
+// capitalisedOf is a phrase whose first run, where it is words, opens with a
+// capital, for a value that opens a row.
+func capitalisedOf(p wire.Phrase) wire.Phrase {
+	if len(p) == 0 || p[0].Ref != nil {
+		return p
+	}
+	return wire.Plain(capitalised(p[0].Text)).Then(p[1:])
 }
 
 // capitalised is s with its first letter in capitals, for a value that opens

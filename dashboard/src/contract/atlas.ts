@@ -678,6 +678,8 @@ export interface AtlasEntryWorkAnswer<Row> {
   recent: Row[];
   open_total: AtlasWorkTotal;
   recent_total: AtlasWorkTotal;
+  /** The rows' flow read the seats' live facts. */
+  flow_live: boolean;
 }
 
 /** One asked id and the entry it names: `id` exactly as asked, and the

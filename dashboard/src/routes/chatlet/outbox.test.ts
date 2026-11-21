@@ -54,6 +54,7 @@ const refusal = (code: "conflict" | "unavailable", retryable: boolean): ActResul
   detail: "",
   hint: "",
   hostRefusal: "",
+  fields: [],
   grants: [],
   reason: "",
   retryable,

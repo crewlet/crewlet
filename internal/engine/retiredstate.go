@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -79,6 +80,40 @@ func (e *Engine) retiredState(ctx context.Context, decoded error) (*sandbox.Unre
 			"(version %d; this build reads %d), so after the upgrade it is ended rather than "+
 			"retried and its question is withdrawn; the work it pushed, if any, is on its branch",
 		version.Found, execstate.Version)}, nil
+}
+
+// resumableElsewhere is [sandbox.CoordinatorOptions.ResumableElsewhere]:
+// whether a live node other than this one reads the version of run's parked
+// state ([Engine.fleetReadsParkedState]), so a resume this node cannot make
+// for want of the build that wrote the state ([sandbox.ErrResumeElsewhere]) is
+// not counted toward the resume give-up while one can, and is once none can.
+// A run whose parked state names no version is read by no node. A REPLY KIND
+// THIS BUILD DOES NOT READ ([resumeReply]) is bounded by the live nodes' builds
+// instead ([Engine.anotherBuildLive]): the kind is no part of the state's
+// version, and read by it, two nodes of this build after a rollback held the
+// seat for as long as both lived. The package doc's "A resume another node or
+// build can make" says why.
+func (e *Engine) resumableElsewhere(ctx context.Context, run sandbox.PendingRun) (bool, error) {
+	if _, err := resumeReply(run); errors.Is(err, sandbox.ErrResumeElsewhere) {
+		return e.anotherBuildLive(ctx)
+	}
+	version, ok := parkedStateVersion(run.ExecuteState)
+	if !ok {
+		return false, nil
+	}
+	return e.fleetReadsParkedState(ctx, version)
+}
+
+// parkedStateVersion is the version a parked state was written at, read
+// alone ([execstate.VersionOf]): never a decode of the whole state, which
+// every failure another node or build may get past would otherwise make
+// beside the resume's own. False for none, or for bytes that are no state. A
+// state of this build's version whose body this build refuses still names the
+// version another node reads: its body's own failure is met, and counted,
+// where a node decodes it.
+func parkedStateVersion(blob json.RawMessage) (int, bool) {
+	version, parked, err := execstate.VersionOf(blob)
+	return version, parked && err == nil
 }
 
 // fleetReadsParkedState reports whether another live node may still read

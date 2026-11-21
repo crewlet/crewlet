@@ -25,8 +25,8 @@ func turnsOf(sessions []Session) []string {
 // and the failed turn — older than that head, naming no session — is still
 // shown to it, and absorbed only by the end of the turn it was shown to.
 //
-// Mutation: read the endings as the turns newer than the head alone, as the
-// read once did, and the failed turn is shown to nobody.
+// Mutation: read the endings as the turns newer than the head alone, and the
+// failed turn is shown to nobody.
 func TestAHeadShowsEveryTurnNoEndedTurnWasShown(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -101,25 +101,18 @@ func (e *estate) agreedHead(handle, conversationKey, turn string) string {
 	return dispatch
 }
 
-// A CONVERSATION'S HEAD IS THE TURN THAT READ IT LAST, never simply the one
-// that ended last: of the ended turns whose rows still name a session, the
-// newest READ first; among turns that read the conversation at one position,
-// the newest END; and a turn that read nothing (its read failed, its
-// read_through 0) after every turn that read, however late it ended. A turn
-// parked on a person's question frees its seat, so a turn that read the
-// conversation later runs beside it and ends first; the parked one, which read
-// the conversation before that turn did and continued none of what it left,
-// then ends after it — and is told and offered beside the head, never
-// continued, and absorbed by the next end. At every step the launch's read, a
-// page of the seat and a read of one row name the same head (agreedHead).
-// TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued holds a schedule's
-// line of fires beside a parked one.
+// A CONVERSATION'S HEAD IS THE TURN THAT READ IT LAST, not the one that ended
+// last: among ended turns whose rows name a session, the newest READ wins, then
+// the newest END among turns that read at one position, and a turn that read
+// nothing (read_through 0) loses to every turn that read. A turn parked on a
+// person reads before the turn beside it but ends after it, so it is told and
+// offered beside the head, never continued, and absorbed by the next end. The
+// three reads that name a head agree at every step (agreedHead).
 //
-// Mutation: order the head by its end alone, by where its turn first wrote, or
-// by its read with the older end first among turns that read alike, or put a
-// turn that read nothing before the turns that read, and a check goes red;
-// answer a page's or a row's head in another order than a launch's read, and
-// the agreement goes red.
+// Mutation: order the head by its end alone, by its first write, or by its
+// read with the older end first among ties, or put a turn that read nothing
+// first, and a check goes red; order a page's or a row's head unlike a
+// launch's read, and the agreement goes red.
 func TestAConversationsHeadIsTheTurnThatReadItLast(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -188,20 +181,16 @@ func TestAConversationsHeadIsTheTurnThatReadItLast(t *testing.T) {
 	}
 }
 
-// A FIRE THAT ENDS AFTER THE FIRES BESIDE IT IS TOLD, NOT CONTINUED. A fire is
-// never the answer to a question, so a schedule's next fires run beside one
-// parked on a person's question: F10 continues F09 and parks; F11 fires beside
-// it, continues F09 too and ends; F12 continues F11 and ends; and F10,
-// answered hours later, ends last of all. The schedule's line is F11 then F12,
-// so F13 continues F12 — as a launch's read, a page of the seat and a read of
-// F10's own row all name it (agreedHead), and F13's begin holds it as its base
-// — is told how F10 ended and is offered its session, and F13's end absorbs
-// both. It runs the shipped applier's and reader's own statements over a
-// migrated estate.
+// A FIRE THAT ENDS AFTER THE FIRES BESIDE IT IS TOLD, NOT CONTINUED. A fire
+// answers no question, so a schedule's next fires run beside one parked on a
+// person: F10 continues F09 and parks; F11 continues F09 and ends; F12
+// continues F11 and ends; F10 ends last. F13 continues F12 (all three reads
+// agree, agreedHead, and its begin holds F12 as its base), is told how F10
+// ended and offered its session, and its end absorbs both. It runs the
+// shipped applier's and reader's statements over a migrated estate.
 //
-// Mutation: order headStatement by end_seq alone, as the head was ordered
-// before, and F13 is handed F10's session, which never saw F11 or F12: the
-// case goes red.
+// Mutation: order headStatement by end_seq alone, and F13 is handed F10's
+// session, which never saw F11 or F12.
 func TestAFireThatEndsAfterTheFiresBesideItIsToldNotContinued(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -322,8 +311,8 @@ func TestAHeadBoundsWhatItHandsOutAndWhatItLeavesStays(t *testing.T) {
 // began, which nothing moves, so a row captured again, ended or released
 // between two pages is neither skipped nor repeated.
 //
-// Mutation: page by the row's version, as the read once did, and the row
-// captured again between the pages jumps above the cursor and is never listed.
+// Mutation: page by the row's version, and the row captured again between the
+// pages jumps above the cursor and is never listed.
 func TestASeatsPagesKeepEveryRowInItsPlace(t *testing.T) {
 	t.Parallel()
 	e := newEstate(t)
@@ -502,19 +491,17 @@ func TestTheSeatsHoldingRowsAreListed(t *testing.T) {
 	}
 }
 
-// A ROW THAT NAMES NO SESSION SAYS WHICH OF THREE REASONS, told apart off the
-// row the applier leaves: a turn that captured nothing — so far, while it is
-// live, its row its begin's; at all, once it ended; one whose end took its older
-// capture off because its newest was not kept, saying which capture and why;
-// and one whose session the seat's budget released, whose end named an unkept
-// capture that had landed first and so released nothing itself — or whose end
-// said the turn went on past the session, which kept it beside a newer capture
-// not kept, until the budget took it: said as the budget's, with that newer
-// capture. A row that names a session says nothing.
+// A ROW THAT NAMES NO SESSION SAYS WHICH OF THREE REASONS, off the row the
+// applier leaves: the turn captured nothing (so far while live, at all once
+// ended); its end took its older capture off because its newest was not kept
+// (which capture, and why); or the seat's budget released it, including after
+// an end whose unkept capture had landed or whose turn went on past the
+// session, said as the budget's with the end's newer unkept capture. A row
+// that names a session says nothing.
 //
-// Mutation: read every released row as the budget's, ignore the place the
-// unkept capture names, tell a live turn's nothing as an ended one's, or tell
-// the session its end kept as one its unkept capture took off, and a case goes
+// Mutation: read every released row as the budget's, ignore the unkept
+// capture's place, tell a live turn's nothing as an ended one's, or tell the
+// session its end kept as one its unkept capture took off, and a case goes
 // red.
 func TestARowThatNamesNoSessionSaysWhichOfThreeReasons(t *testing.T) {
 	t.Parallel()
@@ -579,14 +566,12 @@ func TestARowThatNamesNoSessionSaysWhichOfThreeReasons(t *testing.T) {
 }
 
 // AN END'S UNKEPT CAPTURE STANDS ONLY WHERE IT IS NEWER THAN THE ROW'S PLACE.
-// The end names the turn's newest capture as not kept where the run's record
-// says so, and the apply decides on the row's own place, in log order: an
-// unkept capture newer than the one the row keeps took that one off, and is
-// why the row names none; one at the row's own place landed after all — its
-// record, sent before the end was decided, taken before the end — and is the
-// session the row keeps. [Session.Unkept] is the one reading every account of
-// an end takes, so the landed row is told as kept everywhere and the released
-// one says which capture was not kept, and why.
+// The apply decides in log order on the row's place: a newer unkept capture
+// took the row's session off and is why it names none; one at the row's place
+// landed after all (its record taken before the end) and is the session the
+// row keeps. Every account of an end reads [Session.Unkept], so the landed row
+// is told as kept everywhere and the released one says which capture was not
+// kept, and why.
 //
 // Mutation: answer Session.Unkept off the ending alone, or hold it at or past
 // the row's place, and the landed row tells its own session as not kept;

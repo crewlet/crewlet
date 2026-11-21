@@ -27,25 +27,16 @@ func gitAdmits(t *testing.T, line []byte, pattern string, fold bool) bool {
 
 // GIT GREP'S STRINGS MISS NO LINE THE EXPRESSION MATCHES (M6-D13).
 //
-// The grep path's promise beside the index's: git grep -E, over the
-// alternation of the strings of the clause Grep chose, answers a superset of the lines the expression
-// matches, which the search then confirms with Go's regexp — so a repository
-// read with git grep answers the lines the index would. Held first on what
-// git's ASCII-only -i cannot see — the long s and the Kelvin sign, which RE2
-// folds onto s and k, and İ, which a folded literal's lowering turns into i,
-// all of which Grep looks for as strings of their own — and on a
-// clause folding a letter outside ASCII, which git cannot read exactly and is
-// never chosen; and on strings holding the expression syntax, which the
-// alternation escapes; then over the generated patterns and blobs of the plan's own
-// property (TestAPlanNeverRejectsAMatchGoRegexpFinds), every line Go's regexp
-// matches required among git's.
-//
-// Mutation: drop asciiFolds from a folded clause's strings (Grep) — the long
-// s's status is missed; take no rune whose lowering is ASCII (asciiFolds'
-// case ranges) — İSTANBUL is missed; choose a clause whatever its folded literals (Grep's
-// exact) — (?i)école is answered with strings git's -i misses ÉCOLE by;
-// escape nothing (Grep's ereMeta) — a+b.c is read as an expression and the
-// line holding it is missed.
+// git grep -E over the chosen clause's strings answers a superset of the lines
+// the expression matches, which the search confirms with Go's regexp. Held on
+// what git's ASCII-only -i cannot see (the long s and Kelvin sign, which RE2
+// folds onto s and k, and İ, which lowering turns into i; Grep looks for each
+// as its own string), on a clause folding a non-ASCII letter (never chosen),
+// on strings holding expression syntax (escaped), then over the generated
+// cases of TestAPlanNeverRejectsAMatchGoRegexpFinds.
+// Mutation: drop asciiFolds from a folded clause's strings (Grep); take no rune
+// whose lowering is ASCII (asciiFolds' ranges); choose a clause whatever its
+// folded literals (Grep's exact); escape nothing (Grep's ereMeta).
 func TestGitGrepsStringsMissNoLineTheExpressionMatches(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

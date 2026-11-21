@@ -218,21 +218,15 @@ func copyObjects(t *testing.T, bucket *s3fake.Server, dir string, m backup.Manif
 
 // A RESTORED NODE SERVES EVERY REF WHOLE.
 //
-// The claim the backup exists for, for Gitlet: a node restored from
-// `crewlet backup` — its store files, its stream snapshots, and the backup's
-// objects copied into a new, empty bucket — answers a clone with every
-// branch, the tag and its peeled line exactly as the node backed up did, and
-// the clone is a whole repository, a 2 MiB blob in a pack of its own
-// included. The restored node's cache starts empty, so every byte it serves
-// came from the rows the restore put back and the objects the backup carried:
-// a backup that carried a pack's row and not its object, or a restore whose
-// code log no longer matched its rows, is a clone that fails here.
+// A node restored from `crewlet backup` (its store files, stream snapshots and
+// the objects copied into a new, empty bucket) answers a clone with every
+// branch and the tag as before, a 2 MiB blob in its own pack included. Its
+// cache starts empty, so a backup that lost a pack's row or object, or a
+// restore whose code log no longer matched its rows, fails here.
 //
-// THE CONTROL is the runbook's own warning: restored WITH the old store's
-// record, a node pointed at the new bucket is refused by the object store
-// agreement, which names the backed-up node's store as the fleet's beside the
-// new one — the defect the "into a new bucket" step exists for, and the
-// failure dropping the skip from the main case turns it into.
+// THE CONTROL: restored WITH the old store's record, a node pointed at the new
+// bucket is refused by the object store agreement, which names the old store.
+// That is what the runbook's "into a new bucket" step prevents.
 func TestARestoredNodeServesEveryRefWhole(t *testing.T) {
 	t.Parallel()
 	// Every node this case boots hosts code: its git, held to the node floor.

@@ -8,14 +8,12 @@ import (
 	"time"
 )
 
-// EACH UNIT'S BOUNDARIES RESOLVE A VALUE TO WITHIN A FACTOR OF TWO AND A HALF,
-// ascending, over the range the unit's doc states: the millisecond and count
-// sets the 1-2-5 series from their floors to their tops, the byte set every
-// power of two from a kibibyte to two gibibytes. Bounds hands out a copy, so a
-// caller that writes into it changes no histogram.
+// EACH UNIT'S BOUNDARIES ascend in steps of at most 2.5x over the range and
+// series its doc states (1-2-5 for milliseconds and counts, powers of two for
+// bytes), and Bounds hands out a copy no caller can write through.
 //
-// Mutation: put the twenty-one powers of two back as one set for every unit,
-// or let Bounds hand out the package's own slice, and this fails.
+// Mutation: count every unit into one set, or let Bounds hand out the
+// package's own slice, and this fails.
 func TestEachUnitCountsIntoItsOwnBoundaries(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -71,12 +69,9 @@ func TestEachUnitCountsIntoItsOwnBoundaries(t *testing.T) {
 	}
 }
 
-// A PERCENTILE IS READ AGAINST ITS OWN UNIT'S BOUNDARIES, from the cumulative
-// series and from the rolling window alike: a push's 100 MiB bundle reads as
-// the 128 MiB boundary above it rather than as the overflow of a set that
-// ended at 65 536, a five-hour backup as the 2·10⁷ ms above it, and a 300 ms
-// scan as the 500 ms boundary — the budget of the alarm that reads it, which
-// it is therefore not past.
+// A PERCENTILE IS READ AGAINST ITS OWN UNIT'S BOUNDARIES, cumulative and
+// windowed alike: a 100 MiB bundle reads as 128 MiB, a five-hour backup as
+// 2·10⁷ ms, and a 300 ms scan as 500 ms, its alarm's budget, so not past it.
 //
 // Mutation: count every histogram into one set, or read a snapshot's quantile
 // against any boundaries but its own, and this fails.

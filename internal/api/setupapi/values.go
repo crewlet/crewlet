@@ -74,19 +74,15 @@ func mintInto(values map[string]string, reqs []setup.Requirement, generate []str
 
 // mint produces a shared token.
 //
-// crypto/rand's own text encoding: 26 base32 characters over 128 bits of
-// entropy, URL-safe and safe to paste into a third-party app's header field, which is
-// where every token this mints ends up. The same generator the provisioning
-// passes already use, so a token minted from the dashboard and one minted
-// from the CLI are the same kind of thing.
+// crypto/rand's text encoding: 26 base32 characters over 128 bits of entropy,
+// URL-safe for a third-party app's header field. The same generator the
+// provisioning passes use.
 //
-// NOT EVERY MINTABLE FIELD TAKES ONE. A field the third-party app accepts in
-// exactly one form says so with [setup.Requirement.Shape], and this is what
-// the rest get. Minting a token into GitLab's signing secret produced a value
-// that could not be the HMAC key for any delivery, and every check that would
-// have caught it is closed by construction: the value goes to the secret
-// store and the document gets a `${VAR}`, which is the one thing config
-// validation cannot check the shape of.
+// NOT EVERY MINTABLE FIELD TAKES ONE. A field the app accepts in exactly one
+// form says so with [setup.Requirement.Shape], and this is what the rest get.
+// Config validation cannot check the shape of the `${VAR}` the document gets,
+// so a token minted into GitLab's signing secret would be no HMAC key for any
+// delivery and nothing else would catch it.
 func mint() string { return rand.Text() }
 
 // refuseEmpty rejects a submission that clears a required field.
@@ -123,23 +119,15 @@ func refuseEmpty(values map[string]string, reqs []setup.Requirement) error {
 // refuseUngated refuses a submission that turns a gate on without answering
 // the field it opens.
 //
-// # Against the SUBMITTED values, never the stored ones
+// It reads the SUBMITTED values, never the stored ones:
+// [setup.Requirement.Needed] answers from the document as it is, the wrong
+// question when this request changes the answer (organization-wide coverage
+// with no token would read the replaced value, "not required yet"). So the
+// gating field comes from the submission, and from the document only where the
+// submission is silent: the state the write leaves behind.
 //
-// [setup.Requirement.Needed] answers from the document as it is, which is the
-// right question for a status row and the wrong one here: this request is what
-// changes the answer. A submission choosing GitHub's organization-wide
-// coverage and sending no token would have every gate read the value it is
-// replacing — "not required yet" — and store the choice it cannot carry out,
-// leaving a company one apply later with a demand for a hook and nothing to
-// register it with.
-//
-// So the gating field is read from the submission first and from the document
-// only where the submission is silent about it, which is the state the write
-// will actually leave behind.
-//
-// UNANSWERED, NOT EMPTY. An empty string for a gated secret is already caught
-// by [refuseEmpty] above as a value that would clear a credential; what this
-// adds is the field being absent altogether, which that one never sees.
+// UNANSWERED, NOT EMPTY. An empty gated secret is caught by [refuseEmpty];
+// this adds the field being absent altogether.
 func refuseUngated(values map[string]string, reqs []setup.Requirement) error {
 	after := func(field string) string {
 		if v, sent := values[field]; sent {

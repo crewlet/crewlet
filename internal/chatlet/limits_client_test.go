@@ -10,31 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 )
 
-// TestTheDashboardsChatLimitsAreTheEngines holds the five bounds the chat
-// screens enforce — in the composer, the name field, the room settings and the
-// participant picker — against the ones this package actually refuses on.
+// TestTheDashboardsChatLimitsAreTheEngines holds the bounds the chat screens
+// enforce against the ones this package actually refuses on.
 //
-// THE DASHBOARD CANNOT IMPORT A GO CONSTANT, so where a screen must refuse
-// early it carries its own copy, in `dashboard/src/contract/chat.ts`, and every
-// copy of an engine-owned value in this tree has drifted at least once (see
-// [clientsource]). This pair drifts SILENTLY IN BOTH DIRECTIONS, and neither
-// direction looks like a bug from the side that sees it:
+// THE DASHBOARD CANNOT IMPORT A GO CONSTANT, so it carries its own copy in
+// `dashboard/src/contract/chat.ts` (see [clientsource]), which drifts SILENTLY
+// IN BOTH DIRECTIONS:
 //
-//   - the client's copy too LOW greys out `send` on a message the engine would
-//     have taken. Nothing is logged and nothing is refused, so the person
-//     concludes the limit is whatever the screen says it is.
-//   - the client's copy too HIGH accepts what the write path then rejects, so
-//     the refusal arrives after the typing rather than during it — which for a
-//     32 KiB body is the one case where losing the draft costs something.
+//   - too LOW greys out `send` on a message the engine would take, unlogged.
+//   - too HIGH accepts what the write path then rejects, after the typing.
 //
-// The engine side is where the check belongs, because the engine owns the
-// value: the screen's copy is a convenience and this package's constant is the
-// rule.
-//
-// The link previews' bound is not one of these: it is one wave of the
-// socket's queries, the contract's MAX_IN_FLIGHT_QUERIES, which
-// `internal/api/stream` holds to `stream.MaxInFlightQueries`, the package that
-// owns that number.
+// The engine owns the value. The link previews' bound is not one of these: it
+// is MAX_IN_FLIGHT_QUERIES, held by `internal/api/stream`.
 func TestTheDashboardsChatLimitsAreTheEngines(t *testing.T) {
 	t.Parallel()
 	tree := clientsource.Tree(t)
@@ -71,29 +58,15 @@ func TestTheDashboardsChatLimitsAreTheEngines(t *testing.T) {
 // TestTheDashboardsChannelNameGrammarIsTheEngines holds the room-name rule the
 // create dialog refuses on against [chatlet.ValidName].
 //
-// THE PATTERN IS THE FRAGILE HALF OF THIS MIRROR. A number that drifts is
-// wrong by an amount somebody notices; a character class that drifts is wrong
-// for one input in a thousand, and the direction decides who finds out:
+// THE PATTERN IS THE FRAGILE HALF: a class drifts for one input in a thousand.
+// A client STRICTER than the engine makes a legal name unreachable from this
+// dashboard, silently; LOOSER costs a round trip.
 //
-//   - the client STRICTER than the engine makes a legal name unreachable from
-//     this dashboard, with nothing anywhere to say so. `name.ts` names that as
-//     the failure it must never have, and nothing was holding it to that.
-//   - the client LOOSER costs a round trip, which is the cheap direction and
-//     still not free: the point of the copy is that somebody learns while the
-//     caret is in the field.
-//
-// COMPARED BY BEHAVIOUR RATHER THAN BY SPELLING. Two engines' regex dialects
-// can write one rule two ways, so asserting the source text matched would fail
-// on a change that altered nothing — and asserting it did NOT match would pass
-// a rule that reads the same and decides differently. What both sides owe is
-// the same ANSWER, so the probes are the edges of the rule: the first
-// character's narrower class, the length ceiling, the case folding the
-// normaliser is supposed to have already done, and the characters a subject
-// token cannot carry.
-//
-// THE CLIENT'S PATTERN IS A STRING, read as one literal and compiled here the
-// way `name.ts` compiles it, because a contract module declares data and
-// nothing else — and a string is the one shape both dialects compile.
+// COMPARED BY BEHAVIOUR, NOT SPELLING: two regex dialects can write one rule
+// two ways, so matching source text fails on a no-op change and passes a rule
+// that reads the same and decides differently. The probes are the rule's edges
+// (first character's class, length ceiling, case folding, subject-token
+// characters). The pattern is a string compiled here as `name.ts` does.
 func TestTheDashboardsChannelNameGrammarIsTheEngines(t *testing.T) {
 	t.Parallel()
 	src, err := clientsource.Scalar(clientsource.Tree(t), "CHANNEL_NAME_PATTERN")
@@ -132,14 +105,12 @@ func TestTheDashboardsChannelNameGrammarIsTheEngines(t *testing.T) {
 
 // THE DASHBOARD ASKS A PENDING POST AGAIN ONCE THE APPLIER HAD ITS WAIT.
 //
-// A post answered `pending` was published and not yet decided on the node that
-// answered, and a message is decided where it is applied — so the outbox
-// (`routes/chatlet/outbox.ts`) asks again under the same operation key until the
-// operation ledger answers with the verdict. Its first wait is
-// [chatlet.DecisionWait], the read budget the answering node's applier is given
-// to reach a record before the change feed stops waiting for it: asked sooner,
-// the same node answers `pending` again; later, a refused post sits on screen
-// as sent for longer than the engine took to decide it.
+// A post answered `pending` was published but not yet decided where it is
+// applied, so the outbox (`routes/chatlet/outbox.ts`) asks again under the same
+// operation key until the ledger answers. Its first wait is
+// [chatlet.DecisionWait], the applier's read budget before the change feed
+// stops waiting: sooner, the node answers `pending` again; later, a refused
+// post sits on screen as sent longer than the engine took to decide.
 //
 // Mutation: change PENDING_REASK_MS in contract/chat.ts, or DecisionWait here,
 // and this goes red.

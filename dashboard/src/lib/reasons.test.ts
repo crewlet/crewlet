@@ -5,7 +5,7 @@
  *
  * The COMPLETENESS half of this is a Go test — `TestEveryWakeReasonReadsAs
  * EnglishOnTheClient` reads this same table from source and walks the engine's
- * eighteen — because the authority on which reasons exist is the engine, and a
+ * nineteen — because the authority on which reasons exist is the engine, and a
  * list restated here would only ever agree with itself. What is left is the
  * behaviour a table alone cannot state: what happens to a reason this build
  * has never heard of.
@@ -14,7 +14,7 @@
 import { describe, expect, test } from "vitest";
 import { reasonAbout, reasonPhrase, reasonWhy } from "./reasons.ts";
 
-/** The engine's eighteen, as this table spells them. The Go gate
+/** The engine's nineteen, as this table spells them. The Go gate
  *  `TestEveryWakeReasonReadsAsEnglishOnTheClient` is what keeps this in step
  *  with the engine; here it is the set the two-voice rule is walked over. */
 const KNOWN = [
@@ -27,6 +27,7 @@ const KNOWN = [
   "unassigned",
   "reporter",
   "thread",
+  "flow",
   "unblocked",
   "routed_to",
   "parent_assignee",

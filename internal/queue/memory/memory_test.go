@@ -21,20 +21,13 @@ import (
 // TestConformance is nearly the whole test surface of this package.
 //
 // Almost everything the twin does is the EventQueue contract, so a memory-only
-// test is usually a second, weaker statement of the same thing that can drift
-// away from the suite the other backends answer to. Anything shared belongs in
-// queuetest, where every backend has to satisfy it.
+// test is a weaker second statement that can drift from the suite the other
+// backends answer to. Anything shared belongs in queuetest.
 //
-// "Nearly" is doing real work, and this paragraph used to say "the whole" and
-// "no behaviour of its own". That was untested and false, and a defect had
-// already moved into the gap: this backend's DEFAULT delivery budget is a
-// property of this backend alone, so the shared suite cannot assert it, and
-// does not. It configures the budget explicitly in every case that touches
-// one, which is correct for a portable suite and means the default is
-// exercised by nothing — the default was one attempt out of step with the
-// broker it tracked for as long as it existed, and the suite passed
-// identically before and after the fix. A per-backend default is exactly the
-// shape of thing "it all belongs in the shared suite" cannot hold.
+// "Nearly": this backend's DEFAULT delivery budget is its own, so the portable
+// suite cannot assert it and configures the budget explicitly in every case
+// that touches one. The default is exercised by nothing else, and once sat one
+// attempt out of step with the broker it tracks with the suite passing.
 func TestConformance(t *testing.T) {
 	t.Parallel()
 	queuetest.RunWith(t,
@@ -67,12 +60,10 @@ func TestConformance(t *testing.T) {
 			WithDeliveryAttempts: func(_ *testing.T, attempts int) queue.EventQueue {
 				return memory.New(memory.WithMaxRedeliveries(attempts - 1))
 			},
-			// Total, so there is no failure to report — which is the
-			// point of the signature rather than an exemption from it: the
-			// twin cannot fail to answer, and the backend that can must say
-			// so instead of answering "nothing".
-			Backlog: func(_ *testing.T, q queue.EventQueue, topic, group string) []*events.Event {
-				return q.(*memory.Queue).Backlog(topic, group)
+			// A started client beside q on its broker, as JetStream's admin
+			// client is: a case reads the mail q left once stopped.
+			Inspect: func(t *testing.T, q queue.EventQueue) queue.EventQueue {
+				return inspectorOf(t, q.(*memory.Queue))
 			},
 			DeadLetters: func(_ *testing.T, q queue.EventQueue, topic, group string) []*events.Event {
 				return q.(*memory.Queue).DeadLetters(topic, group)
@@ -185,45 +176,17 @@ func TestAPassedCopyAtTheTransportsCeilingIsKeptWhole(t *testing.T) {
 }
 
 // TestDefaultDeliveryBudgetMatchesJetStream pins the DEFAULT budget, which the
-// conformance suite cannot: the correct value is a property of one backend, so
-// the suite sets it explicitly in every case that reads one.
+// conformance suite cannot: the value is one backend's, so the suite sets it
+// explicitly in every case.
 //
 // Twenty-five TOTAL attempts, matching internal/queue/jetstream's maxDeliver.
-// The two constants are written in different currencies — this backend counts
-// redeliveries after the first, JetStream counts total deliveries — so they
-// agree at 24 and 25 respectively, and agreeing at 25 and 25 is the bug this
-// catches. Asserted on the OBSERVABLE (how many times a handler runs) rather
-// than on the constant, because the constant is the half that can be wrong
-// while reading correct.
-//
-// JetStream is the twin to track because it is the only broker this engine
-// ships. Its budget is 25 rather than the 10 a free-handoff broker needs
-// because every path back to it — the Nak a deferral, a hold, a pause or a
-// detach returns through — spends an attempt.
-//
-// THAT REASONING NOW APPLIES TO BOTH BACKENDS, and this paragraph used to say
-// the opposite twenty lines under the capability note that retired it: it
-// argued the default had to be 25 because "this twin defers for free and would
-// otherwise sit on less than half the production budget". The twin has not
-// deferred for free since b1cff6f — it spends one for the same reason the
-// broker does — so what makes the value load-bearing is no longer a
-// divergence to compensate for but the plain fact that a handoff costs the
-// same on both, and a twin sized differently would calibrate every test
-// written against it to a broker nobody runs.
-//
-// SCOPE, measured by counterfactual rather than assumed, because a landing
-// check on this test proves only that the test reads the constant. The one
-// consumer of the default is internal/node's fleet suite, which builds the twin
-// with no options — and instrumenting the redelivery counter shows it reaches a
-// depth of 0 there: the fleet suite never Naks a message, so the budget is
-// unreachable from it (positive control: the same instrument reads a non-zero
-// depth on this package's own tests, so the 0 is a real absence and not a dead
-// probe).
-//
-// So this test is the only thing holding the value, and that is the honest
-// claim rather than "it fixes a live bug" — a twin that silently disagrees
-// with its subject is a latent hazard for the day a case does reach the
-// branch, which is reason enough to keep it.
+// This backend counts redeliveries after the first and JetStream total
+// deliveries, so they agree at 24 and 25; 25 and 25 is the bug caught. Asserted
+// on the OBSERVABLE (handler runs), since the constant can read correct while
+// wrong. Every path back (deferral, hold, pause, detach through Nak) spends an
+// attempt on BOTH backends, so a differently sized twin calibrates tests to a
+// broker nobody runs. This test alone holds the value: internal/node's fleet
+// suite, the default's one consumer, never Naks (redelivery depth 0 there).
 func TestDefaultDeliveryBudgetMatchesJetStream(t *testing.T) {
 	t.Parallel()
 	const jetstreamTotalAttempts = 25
@@ -269,22 +232,16 @@ func TestDefaultDeliveryBudgetMatchesJetStream(t *testing.T) {
 }
 
 // TestPublishRefusesAnUnencodablePayloadWithoutRecordingIt covers the twin's
-// serialization boundary, which the conformance suite structurally cannot
-// reach: every payload it publishes is a string, documented there as a
-// deliberate choice so partitioning assertions never depend on a codec. That
-// makes json.Marshal succeed in every shared case, so the failure branch is
-// exercised by nothing portable and has to be pinned here.
+// serialization boundary, which the conformance suite cannot reach: every
+// payload it publishes is a string, so json.Marshal succeeds in every shared
+// case and the failure branch is pinned only here. Returning nil on a marshal
+// failure passes BOTH packages, yet the caller would see a successful publish
+// that is never delivered.
 //
-// Measured before writing this: making the marshal failure return nil instead
-// of an error passes BOTH packages. A caller would get a successful publish
-// with the event never delivered, which on a queue is close to the worst silent
-// failure available.
-//
-// Two observables, because "returns an error" is only half of it. A publish
-// that refuses correctly but has already recorded the event tells the caller no
-// while leaving the event behind — refusing and mutating are independent, and
-// only the second assertion sees the difference. That is why the serialization
-// sits above the lock in Publish, and this is what holds it there.
+// Two observables, because refusing and mutating are independent: a publish
+// that errors but already recorded the event leaves it behind, and only the
+// second assertion sees that. It is why the serialization sits above the lock
+// in Publish, and this holds it there.
 func TestPublishRefusesAnUnencodablePayloadWithoutRecordingIt(t *testing.T) {
 	t.Parallel()
 	q := memory.New()
@@ -340,7 +297,7 @@ func TestPublishRefusesAnUnencodablePayloadWithoutRecordingIt(t *testing.T) {
 		t.Errorf("a refused publish recorded %d events in history, want 0; "+
 			"serialization must happen before anything is mutated", len(got))
 	}
-	if got := q.Backlog("topic", "grp"); len(got) != 0 {
+	if got := mailOf(t, q, "topic", "grp"); len(got) != 0 {
 		t.Errorf("a refused publish left %d events in the subscription mail, want 0", len(got))
 	}
 	select {
@@ -399,22 +356,12 @@ func TestHistoryTrimKeepsTheNewestEntries(t *testing.T) {
 
 // TestABlockedDrainRestoresBeforeAFailureNotBehindIt pins the one twin
 // mechanism the shared return-order case cannot reach: a batch drain whose
-// earlier partition FAILED and whose later partition DEFERRED, on a mailbox
-// that held nothing else — and the same drain whose earlier partition PASSED,
-// which returns behind the waiting mail as a failure does.
-//
-// The deferral stops the drain, and what the drain never dispatched goes back
-// as a hand-back — at the head, behind the deferred partition. The failure is
-// a retry, which goes BEHIND everything that was waiting. The splice that puts
-// the undispatched partitions back finds the deferral's run by scanning the
-// mailbox's leading events for this chunk's own, and with nothing else in the
-// mailbox the failed partition was the next of them: counted into the run, it
-// put the undispatched partition behind a retry the broker serves after it.
-//
-// Three conversations, one event each, published while held so one chunk
-// carries all three: a fails (or passes), b defers, c is never dispatched.
-// The mailbox must then hold b (the deferral, at the head), c (handed back
-// behind it), a (the retry, behind both).
+// earlier partition FAILED (or PASSED) and whose later one DEFERRED, on an
+// otherwise empty mailbox. Undispatched partitions go back at the head, behind
+// the deferred one, and the retry BEHIND everything waiting; the splice scans
+// the leading events for this chunk's own, so a failed partition counted into
+// the run would put c behind a retry. Three conversations published while
+// held (a fails or passes, b defers, c undispatched) leave b, c, a.
 //
 // Mutation: leave a passed partition in the chunk's set, and c is spliced in
 // behind the passed a.
@@ -457,7 +404,11 @@ func TestABlockedDrainRestoresBeforeAFailureNotBehindIt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("SubscribeBatch: %v", err)
 			}
-			if err := q.PauseTopic(ctx, "topic", "grp", "test"); err != nil {
+			at, err := q.Attachment(ctx, "topic", "grp")
+			if err != nil {
+				t.Fatalf("Attachment: %v", err)
+			}
+			if err := q.PauseTopic(ctx, "topic", "grp", at, "test"); err != nil {
 				t.Fatalf("PauseTopic: %v", err)
 			}
 			base := time.Now().UTC()
@@ -470,10 +421,10 @@ func TestABlockedDrainRestoresBeforeAFailureNotBehindIt(t *testing.T) {
 					t.Fatalf("Publish(%s): %v", label, err)
 				}
 			}
-			if err := q.ResumeTopic(ctx, "topic", "grp", "test"); err != nil {
+			if err := q.ResumeTopic(ctx, "topic", "grp", at, "test"); err != nil {
 				t.Fatalf("ResumeTopic: %v", err)
 			}
-			if got := q.Backlog("topic", "grp"); !slices.EqualFunc(got, []string{"b", "c", "a"},
+			if got := mailOf(t, q, "topic", "grp"); !slices.EqualFunc(got, []string{"b", "c", "a"},
 				func(ev *events.Event, label string) bool { return ev.Type == label }) {
 				labels := make([]string, 0, len(got))
 				for _, ev := range got {
@@ -489,9 +440,46 @@ func TestABlockedDrainRestoresBeforeAFailureNotBehindIt(t *testing.T) {
 			// their own timestamps (queue.OrderForDispatch) — the mailbox
 			// order above is what decides which DRAIN a message is in, not
 			// which call goes first.
-			if got := q.Backlog("topic", "grp"); len(got) != 0 {
+			if got := mailOf(t, q, "topic", "grp"); len(got) != 0 {
 				t.Fatalf("%d message(s) still waiting after the attachment resumed", len(got))
 			}
 		})
 	}
+}
+
+// mailOf is what a twin's subscription holds, read through the contract's
+// [queue.EventQueue.Backlog]: a refused read fails the case rather than reading
+// as an empty mailbox.
+func mailOf(t *testing.T, q *memory.Queue, topic, group string) []*events.Event {
+	t.Helper()
+	evs, err := q.Backlog(t.Context(), topic, group, 1<<12)
+	if err != nil {
+		t.Fatalf("Backlog(%s, %s): %v", topic, group, err)
+	}
+	return evs
+}
+
+// inspectors is each queue's inspection client ([inspectorOf]).
+var inspectors sync.Map
+
+// inspectorOf is a started client on q's broker, made once per queue and
+// stopped with the test that first asked for it.
+func inspectorOf(t *testing.T, q *memory.Queue) *memory.Queue {
+	t.Helper()
+	if c, ok := inspectors.Load(q); ok {
+		return c.(*memory.Queue)
+	}
+	c := q.Client()
+	if err := c.Start(context.WithoutCancel(t.Context())); err != nil {
+		t.Fatalf("start the inspection client: %v", err)
+	}
+	if held, loaded := inspectors.LoadOrStore(q, c); loaded {
+		_ = c.Stop(context.WithoutCancel(t.Context()))
+		return held.(*memory.Queue)
+	}
+	t.Cleanup(func() {
+		inspectors.Delete(q)
+		_ = c.Stop(context.Background())
+	})
+	return c
 }

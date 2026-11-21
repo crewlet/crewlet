@@ -229,13 +229,12 @@ func TestATokenRemovedFromTheConfigEndsItsSession(t *testing.T) {
 
 // AN EXCHANGED SESSION ANSWERS TO ITS TOKEN'S ID, NOT ITS VALUE.
 //
-// The guard re-composes the session from the entry this node holds under the
-// token's id on every request: a new value put under the same id leaves it
-// working until its hour ends, carrying whatever the entry now grants — the
-// documented residual, which an operator who must cut a leaked value's
-// sessions off at once closes by giving the token a new id. That ends them on
-// the next request, on a node that has not applied the session's start record
-// too, because the configuration is never late.
+// The guard re-composes the session from the entry under the token's id on
+// every request: a new value under the same id leaves it working until its
+// hour ends, carrying what the entry now grants (the documented residual). An
+// operator cutting off a leaked value gives the token a new id, which ends the
+// sessions on the next request, even on a node that has not applied the
+// session's start record, because the configuration is never late.
 //
 // Mutations: answer the subject from the value and the rotated entry's session
 // is refused; leave a renamed-away entry's subject able to act and the old

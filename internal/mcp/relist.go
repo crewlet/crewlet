@@ -7,38 +7,16 @@ import (
 
 // LISTING A RUNNING SERVER AGAIN (ADR-0078).
 //
-// A server lists its tools when it starts, and is free to change them while
-// it runs: a new release behind the same address, a tool's description
-// reworded, a hint dropped. The engine sees what a server lists only when it
-// asks, so a server it never asked again could change a tool under a level
-// decided on the old definition, and nothing would hold the tool for a person
-// to look at. Each session is therefore listed again on a schedule the server
-// states, bounded both ways, and whenever the server says its list changed.
+// A tool changed under a level decided on the old definition must be held for
+// a person, so each session is listed again when the `ttlMs` its `tools/list`
+// states runs out, held between [RelistFloor] and [RelistCeiling] (the engine's
+// bounds: the server is the party watched), at the ceiling when none is
+// stated, and when it says its list changed.
 //
-// # On the server's own schedule, bounded both ways
-//
-// A `tools/list` result may say how long it stays fresh (`ttlMs`, the
-// specification's cache hint). The engine lists the session again when that
-// runs out, held between [RelistFloor] and [RelistCeiling], and at the ceiling
-// when the server states none. The bounds are the engine's, not the server's,
-// because the server is the party whose changes are being watched for.
-//
-// # A notification is a request, not an order
-//
-// A server that says its tool list changed (`notifications/tools/list_changed`)
-// is listed again, but never sooner than [RelistFloor] after the session was
-// last listed: the notification moves the next listing earlier, and a server
-// sending a thousand of them gets the one listing a minute it could have had
-// by stating a short `ttlMs`.
-//
-// # Never from the SDK's cache
-//
-// The SDK keeps a listing for the `ttlMs` the server stated, and would answer
-// a listing the engine asks for inside it from that copy, without asking the
-// server: a server stating a day would be listed again from a copy it sent a
-// day before. The probe reads the hint off the wire and hands the SDK a
-// listing that is never fresh (probe.go), so every listing the engine asks
-// for reaches the server.
+// A `notifications/tools/list_changed` is a request, not an order: it never
+// brings a listing within [RelistFloor] of the last, so a thousand of them get
+// one listing a minute. Never from the SDK's cache, which would answer inside
+// `ttlMs` without asking; the probe hands it a never-fresh listing (probe.go).
 
 const (
 	// RelistFloor is the soonest a running session is listed again after

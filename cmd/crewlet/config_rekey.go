@@ -12,30 +12,16 @@ import (
 
 // `crewlet config rekey` — the config document's half of a keyring rotation.
 //
-// # Why the secret store's rekey is not enough
+// A company's credentials live in two places sealed under the same Tier A
+// keyring: the secret store (`crewlet secrets rekey`) and the config document,
+// which may carry literals. Without this, following the rotation and dropping
+// the retired key leaves the company configuration unreadable on every node at
+// the next apply, with no way back short of a key backup.
 //
-// A company's credentials live in two places sealed with the same Tier A
-// keyring: the secret store, and the config document itself, which a founder
-// may legitimately carry literals in. `crewlet secrets rekey` moves the
-// first. Without this, the second stays sealed under whatever key sealed it
-// — so an operator who follows the documented rotation, sees `secrets rekey`
-// report success and drops the retired key has just made their company
-// configuration unreadable on every node, at the next apply, with no way back
-// short of restoring the key from a backup.
-//
-// # A NEW REVISION, never an edit
-//
-// Revisions are immutable and the activation pointer is append-only, which is
-// what makes the history a record rather than a claim. Re-sealing writes a new
-// revision carrying the same document, exactly as `import` and `revert` do.
-//
-// # The revision this node BOOTS on
-//
-// That is the row the next start must open, so it is the one that has to move
-// off a retired key — on a node that refused the fleet's revision, not the
-// fleet's. The re-sealed copy is offered over what the boot row was built on: a
-// rekeyed copy of a revision the fleet has moved past is this node's alone, and
-// is never published over the company that replaced it.
+// Re-sealing writes a NEW revision (revisions are immutable) of the revision
+// this node BOOTS on, the row the next start opens, offered over what that row
+// was built on: a copy of a revision the fleet moved past is never published
+// over its replacement.
 
 // rekeyConfig re-seals the revision this node boots on under the keyring's
 // active key.

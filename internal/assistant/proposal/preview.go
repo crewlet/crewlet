@@ -36,11 +36,11 @@ type Preview struct {
 	// Title is the action in sentence case ("Create task"), Target what it
 	// changes ("ENG-142"), Summary what it does where the title does not say
 	// it (what a destructive change takes away), and Note its consequence in
-	// one sentence (whether it can be reverted).
+	// one sentence (whether it can be reverted, who it reaches).
 	Title   string
 	Target  string
-	Summary string
-	Note    string
+	Summary wire.Phrase
+	Note    wire.Phrase
 
 	// Risk is how much care the approval asks, computed from what the
 	// change does ([wire.RiskDestructive]); empty for an ordinary change.
@@ -59,8 +59,8 @@ type Preview struct {
 
 	// Audience is who will see the result where the write changes who can
 	// see something: a share, an unshare, a comment others are notified of
-	// (decision D09).
-	Audience []string
+	// (decision D09), one phrase each.
+	Audience []wire.Phrase
 
 	// StepUp is a write whose approval asks the person to confirm it is
 	// them: a verb whose row asks a recent proof, or a share to the whole
@@ -123,31 +123,31 @@ func (p Preview) Check(changesVisibility bool) error {
 }
 
 // Fact is a plain row: the scope, the target, a consequence.
-func Fact(field, label, value string) wire.Change {
+func Fact(field, label string, value wire.Phrase) wire.Change {
 	return wire.Change{Kind: wire.ChangeFact, Field: field, Label: label, To: value}
 }
 
 // Changed is a value that moves from one value to another.
-func Changed(field, label, from, to string) wire.Change {
+func Changed(field, label string, from, to wire.Phrase) wire.Change {
 	return wire.Change{Kind: wire.ChangeChanged, Field: field, Label: label, From: from, To: to}
 }
 
 // Added is a value set where there was none. isNew marks a field the record
 // did not carry before.
-func Added(field, label, to string, isNew bool) wire.Change {
+func Added(field, label string, to wire.Phrase, isNew bool) wire.Change {
 	return wire.Change{Kind: wire.ChangeAdded, Field: field, Label: label, To: to, New: isNew}
 }
 
 // Removed is a value that is cleared.
-func Removed(field, label, from string) wire.Change {
+func Removed(field, label string, from wire.Phrase) wire.Change {
 	return wire.Change{Kind: wire.ChangeRemoved, Field: field, Label: label, From: from}
 }
 
 // Text is a long text shown as a word diff, with the whole change behind a
 // disclosure: From and To are the whole values, Words the runs between them.
 func Text(field, label, from, to string) wire.Change {
-	return wire.Change{Kind: wire.ChangeText, Field: field, Label: label, From: from, To: to,
-		Words: WordDiff(from, to)}
+	return wire.Change{Kind: wire.ChangeText, Field: field, Label: label,
+		From: wire.Plain(from), To: wire.Plain(to), Words: WordDiff(from, to)}
 }
 
 // LongTextRunes is where a value stops being a value and becomes a text: past
@@ -159,28 +159,43 @@ const LongTextRunes = 80
 // added, a removed, a changed or (for a long or multi-line value) a text row.
 // Equal values are no change, and answer false.
 func Value(field, label, from, to string) (wire.Change, bool) {
-	switch {
-	case from == to:
+	if !long(from) && !long(to) {
+		return ValueOf(field, label, wire.Plain(from), wire.Plain(to))
+	}
+	if from == to {
 		return wire.Change{}, false
-	case from == "":
+	}
+	return Text(field, label, from, to), true
+}
+
+// ValueOf is [Value] for values that name records (an assignee, an owner):
+// added, removed or changed, never a word diff, which would split a record
+// from its name. Equal values are no change.
+func ValueOf(field, label string, from, to wire.Phrase) (wire.Change, bool) {
+	switch {
+	case same(from, to):
+		return wire.Change{}, false
+	case len(from) == 0:
 		return Added(field, label, to, false), true
-	case to == "":
+	case len(to) == 0:
 		return Removed(field, label, from), true
-	case long(from) || long(to):
-		return Text(field, label, from, to), true
 	}
 	return Changed(field, label, from, to), true
 }
 
-// List is the row for a list of plain values moving from from to to: the
-// items ride beside the joined line ([wire.Change.Items]), so a card draws a
-// list as a list rather than one comma-joined line, and never as a word diff,
-// which would read a list's order as prose. Equal lists are no change.
+// List is the row for a list of plain values moving from from to to.
 func List(field, label string, from, to []string) (wire.Change, bool) {
-	if slices.Equal(from, to) {
+	return ListOf(field, label, plains(from), plains(to))
+}
+
+// ListOf is the row for a list moving from from to to, its items beside the
+// joined line ([wire.Change.Items]) so a card draws a list, never a word diff.
+// Equal lists are no change.
+func ListOf(field, label string, from, to []wire.Phrase) (wire.Change, bool) {
+	if slices.EqualFunc(from, to, same) {
 		return wire.Change{}, false
 	}
-	was, is := strings.Join(from, ", "), strings.Join(to, ", ")
+	was, is := wire.Join(from, ", "), wire.Join(to, ", ")
 	switch {
 	case len(from) == 0:
 		row := Added(field, label, is, false)
@@ -194,6 +209,21 @@ func List(field, label string, from, to []string) (wire.Change, bool) {
 	row := Changed(field, label, was, is)
 	row.FromItems, row.Items = from, to
 	return row, true
+}
+
+// same reports two phrases that say the same words and name the same records.
+func same(a, b wire.Phrase) bool {
+	return a.Text() == b.Text() && slices.EqualFunc(a.Refs(), b.Refs(),
+		func(x, y wire.Ref) bool { return x.Kind == y.Kind && x.ID == y.ID })
+}
+
+// plains are plain values as phrases.
+func plains(values []string) []wire.Phrase {
+	out := make([]wire.Phrase, len(values))
+	for i, v := range values {
+		out[i] = wire.Plain(v)
+	}
+	return out
 }
 
 // long reports a value shown as a text.

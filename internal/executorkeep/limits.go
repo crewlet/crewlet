@@ -16,16 +16,16 @@ const (
 	// SessionMaxBytes bounds one captured session's ARCHIVE, before it is
 	// sealed: a harness's transcript and its sidecars, packed.
 	//
-	// THIRTY-TWO MEBIBYTES. A Claude Code or OpenCode session of a day's
-	// work compresses to one or two mebibytes, and the long ones that read
-	// whole files into their context reach the low tens; past thirty-two a
-	// transcript is a context the harness could not resume within its own
-	// window anyway. The bound is also what one capture or restore costs a
-	// node while it streams (one chunk, [secrets.StreamChunkBytes]) and the
-	// object store at rest ([SealedMaxBytes]), and it is pinned against
-	// objstore.RecordWithin at the objstore.MiBPace floor in
+	// FORTY-EIGHT MEBIBYTES: one whole-file read at a harness's limit beside
+	// about 8 MiB of ordinary work. Claude Code keeps a whole 20 MiB PDF read
+	// as 40.13 MiB (gzip level 7), OpenCode the same file as an image as
+	// 20.1 MiB; a session holding more media than that is still not kept
+	// (crewlet/crewlet#1626), since compaction keeps every line before its
+	// boundary. A capture or restore streams it a chunk at a time
+	// ([secrets.StreamChunkBytes]), the store keeps [SealedMaxBytes], and it is
+	// pinned against objstore.RecordWithin at objstore.MiBPace in
 	// internal/objstore/references.
-	SessionMaxBytes = 32 << 20
+	SessionMaxBytes = 48 << 20
 
 	// CompletedWorkMaxBytes and BlockedOnMaxBytes bound the reviewer's
 	// account of what landed and the executor's evidence of what stopped a
@@ -73,21 +73,17 @@ const (
 	HarnessVersionMaxBytes = 64
 	SessionIDMaxBytes      = 128
 
-	// TurnIDMaxBytes bounds a turn's id: a run id is a UUIDv7, thirty-six
-	// bytes, and the bound refuses anything that is plainly not one.
-	//
-	// HarnessMaxBytes bounds the harness's name as the box reported it.
+	// TurnIDMaxBytes bounds a turn's id (a 36-byte UUIDv7) and HarnessMaxBytes
+	// the harness's name as the box reported it.
 	//
 	// PathMaxBytes bounds the writer box's home and workspace paths, which a
-	// resumed launch maps onto its own box. The engine lays a box out under
-	// paths of a few dozen bytes; a kibibyte bounds a seat's own image
-	// moving them without admitting a path no box would mount.
+	// resumed launch maps onto its own box: the engine's are a few dozen
+	// bytes, and a kibibyte admits a seat's own image without a path no box
+	// would mount.
 	//
 	// HERE, BESIDE THE VERSION'S AND THE SESSION ID'S, for their reason: the
 	// executor log refuses a row past any of them, and the sandbox holds a
-	// capture's stamp on a run's row to the same bounds before the row
-	// carries it (sandbox.SessionCapture.Bounded) — the launch it was taken
-	// in, the harness, and the paths the box names.
+	// capture's stamp to the same bounds first (sandbox.SessionCapture.Bounded).
 	TurnIDMaxBytes  = 64
 	HarnessMaxBytes = 32
 	PathMaxBytes    = 1024

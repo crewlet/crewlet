@@ -9,26 +9,17 @@ import (
 )
 
 // THE COST-WEIGHTED WRITE LIMITS (D28): per node, per principal on a store and
-// per store, token buckets weighed by what a write costs the applier rather
-// than by how many records it is. A record's cost is the rows its apply
-// writes, and every data node applies every record through one writer, so a
-// write is weighed by those rows.
+// per store, token buckets weighed by the rows a write's apply writes.
 //
 // THE ROWS ARE THE DOCUMENT'S, NOT THE OP'S. An apply rewrites a changed
-// document's whole field index (deleted and inserted in one statement each,
-// writeDoc), so a merge naming one cell of a twelve-column row writes the
-// document row and every one of its index entries twice; spike DS-1 measured
-// 21 rows for such a cell edit and 2,804 for a pasted block of 100 rows. The
-// writer therefore reads, from this node's copy, how many index entries each
-// document the batch names holds now ([Writer.cost]), and [Cost] weighs each
-// op by them. A count read from a copy a little behind the log is still the
-// right order of magnitude, which is all a guard needs.
+// document's whole field index (writeDoc), so one cell of a twelve-column row
+// writes the document row and every index entry twice (spike DS-1: 21 rows for
+// a cell edit, 2,804 for a pasted block of 100). The writer reads how many
+// index entries each named document holds ([Writer.cost]) and [Cost] weighs
+// each op by them; a count slightly behind the log is good enough for a guard.
 //
-// PER NODE, AND SAID SO: a bucket (internal/costlimit's, which the dashboard's
-// live source reads share) protects this node's applier queue and the fleet's
-// one log from one client. It is not a fleet quota (that is the stamped
-// footprint), it is not shared across nodes, and it never locks anybody out: a
-// refusal names when the bucket holds the cost again.
+// PER NODE: it protects this node's applier queue and the one log from one
+// client, not a fleet quota (the stamped footprint is).
 
 // rowsPerUnit is how many rows one unit of cost covers: a cell edit on a
 // twelve-column row (about thirty rows: the document, its index deleted and

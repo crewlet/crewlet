@@ -310,25 +310,18 @@ type ListOptions struct {
 	// ExcludeStale drops ageing rows. Off by default: stale is a marker on a
 	// skill that still works and still revives on use, not a hidden state.
 	ExcludeStale bool
-	// Limit bounds the ORDERED listings — [Skills.List] and [Skills.ListFor]
-	// — so a caller rendering a page of N pays for N rows rather than for
-	// the seat's whole library. A skill row carries its content and its
-	// frontmatter, so the difference is real I/O and real allocations, not
-	// a slice header.
+	// Limit bounds the ORDERED listings ([Skills.List], [Skills.ListFor]) so a
+	// page of N pays for N rows, each carrying content and frontmatter.
 	//
-	// ZERO MEANS UNBOUNDED, and that is a setting rather than a missing
-	// value: every read here that is not a page — the prefetch's offer, the
-	// refiner's view of what is live, the promotion pass's candidate set —
-	// wants the whole set, and a default of "some" would silently truncate
-	// each of them. Any non-positive value reads the same way, which is
-	// SQLite's own reading of LIMIT -1.
+	// ZERO MEANS UNBOUNDED, a setting rather than a missing value: every
+	// non-page read (the prefetch's offer, the refiner's live view, the
+	// promotion candidates) wants the whole set, and a default of "some"
+	// would silently truncate them. Non-positive reads the same, as SQLite's
+	// LIMIT -1.
 	//
-	// [Skills.Count] and [Skills.ToolSequences] deliberately ignore it. The
-	// count's whole job is the true total a bounded listing cannot report —
-	// capping it would answer the page's own length, which is the bug a
-	// total exists to remove — and the near-duplicate check must see every
-	// sequence the seat already holds, or it re-synthesizes a skill sitting
-	// just past the bound.
+	// [Skills.Count] and [Skills.ToolSequences] ignore it: the count exists to
+	// report the true total, and the near-duplicate check must see every
+	// sequence or it re-synthesizes a skill just past the bound.
 	Limit int
 	// Order is the order the listing is read in; the zero value is
 	// [SkillsNewest]. [Skills.Count] ignores it.
@@ -549,20 +542,16 @@ func (s *Skills) ToolSequences(ctx context.Context, handle string, opts ListOpti
 
 // Update replaces a live skill's body, archiving what it replaced.
 //
-// ONE TRANSACTION, and that is the load-bearing part. The archive row and the
-// live row must never be able to disagree, and doing them as two statements
-// gives two ways to disagree: archive-then-fail leaves a history entry for a
-// body that is still live, and update-then-fail loses the superseded body
-// permanently — which is the one thing the history table exists to prevent.
-// (The second shape is the tempting one: update the live row, then insert the
-// version row.) A failed attempt here rolls back to
-// both-unchanged, so the retry below cannot leave a stray version row either.
+// ONE TRANSACTION: the archive row and the live row must never disagree.
+// Archive-then-fail leaves history for a body still live; update-then-fail
+// (the tempting order) loses the superseded body, the one thing the history
+// table exists to prevent. A failed attempt rolls back to both-unchanged.
 //
-// Last writer wins on the body, deliberately: a competing refinement is not
-// lost, it is demoted to history and recoverable through [Skills.Rollback].
+// Last writer wins on the body, deliberately: a competing refinement is
+// demoted to history, recoverable through [Skills.Rollback].
 //
-// The refinement does not touch the lifecycle: refining a stale skill leaves
-// it stale. Only use revives (see [Skills.MarkUsed]).
+// Refining does not touch the lifecycle: a stale skill stays stale. Only use
+// revives (see [Skills.MarkUsed]).
 func (s *Skills) Update(ctx context.Context, skillID string, rev Revision, r Refinement) (Skill, error) {
 	if skillID == "" {
 		return Skill{}, fmt.Errorf("%w: no id given", ErrUnknownSkill)
@@ -754,21 +743,15 @@ type Use struct {
 
 // MarkUsed records that a skill was offered to a turn, and revives it if it was stale.
 //
-// IT CANNOT FAIL A LOAD, and the signature is how that is guaranteed rather
-// than promised: there is no error to propagate, so no caller can turn a
-// telemetry write into a failed skill load. A false Recorded is for the caller
-// to publish SkillTelemetryWriteFailed on — operators need to see a degraded
-// health rollup before the curator archives a skill whose last-used stamp
-// stopped refreshing.
+// IT CANNOT FAIL A LOAD: there is no error to return, so no telemetry write
+// can become a failed skill load. A false Recorded is for the caller to
+// publish SkillTelemetryWriteFailed on, so operators see a degraded rollup
+// before the curator archives a skill whose last-used stamp stopped moving.
 //
-// The revival is part of the same transaction as the bump, deliberately: a
-// skill used again is visible to the very next turn-start prefetch, not only after
-// the curator's next tick, which on the default schedule is up to a day later.
-//
-// An archived row's counters still move and it stays archived. Loading one is
-// refused upstream, so reaching here with one means a caller bypassed that —
-// and silently resurrecting a row the curator aged out, on a path whose whole
-// contract is that it cannot fail anything, is not the place to decide that.
+// Revival shares the bump's transaction, so a skill used again is visible to
+// the next prefetch, not up to a day later at the curator's tick. An archived
+// row's counters move and it stays archived: loading one is refused upstream,
+// and resurrecting it is no decision for a path that cannot fail anything.
 func (s *Skills) MarkUsed(ctx context.Context, skillID string, at time.Time) Use {
 	return s.mark(ctx, skillID, at, false)
 }
@@ -866,18 +849,15 @@ type Transition struct {
 
 // Transition moves a skill to a new state and stamps the matching timestamp.
 //
-// Reports whether a row moved. FALSE IS NOT AN ERROR and an error is not a
-// false: a guard that no longer holds — someone used the skill between the
-// curator's read and this write — is the mechanism working, while a store that
-// cannot be written is an outage. Returning false for both makes a database
-// outage render on the dashboard as the race guard doing its job.
+// Reports whether a row moved. FALSE IS NOT AN ERROR: a guard that no longer
+// holds (the skill was used between the curator's read and this write) is the
+// mechanism working, while an unwritable store is an outage; conflating them
+// would render an outage as the race guard doing its job.
 //
-// No version row is archived: a transition is out-of-band metadata, not a body
-// change, and the history table is reserved for bodies.
+// No version row is archived: the history table is reserved for bodies.
 //
-// A pinned row is NOT refused here. Pinning exempts a skill from AUTOMATIC
-// transitions (see [CuratorPolicy.Next]); an operator archiving one by hand is
-// exactly the case pinning is not meant to block.
+// A pinned row is NOT refused: pinning exempts a skill from AUTOMATIC
+// transitions (see [CuratorPolicy.Next]), not an operator archiving by hand.
 func (s *Skills) Transition(ctx context.Context, t Transition) (bool, error) {
 	if !validState(t.To) {
 		return false, fmt.Errorf("%w: %q", ErrSkillState, t.To)
@@ -1016,17 +996,13 @@ type StateChange struct {
 // put.
 //
 // Pure: it decides, it does not write. The pinned exemption is enforced here
-// as well as in the candidate query — the query is the fast path, and this is
-// the invariant. A caller that assembles candidates any other way must not be
-// able to lose it.
+// as well as in the candidate query (the fast path), so a caller assembling
+// candidates another way cannot lose it.
 //
-// Idleness is measured from the last use, or from creation for a skill that
-// has never been used. A never-used skill therefore ages out too, which is the
-// point: the drafts nobody loads are exactly what the machine is for.
-//
-// Archived is terminal for the machine. Coming back is an operator's explicit
-// [Skills.Transition], because an automatic un-archive would fight the pass
-// that archived it and the pair would flip on alternate ticks.
+// Idleness is measured from the last use, or from creation for a never-used
+// skill, which therefore ages out too. Archived is terminal for the machine:
+// coming back is an operator's explicit [Skills.Transition], since an
+// automatic un-archive would flip against the archiving pass on alternate ticks.
 func (p CuratorPolicy) Next(sk Skill, now time.Time) (StateChange, bool) {
 	p = p.normalized()
 	if sk.Pinned {

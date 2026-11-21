@@ -25,24 +25,15 @@ import (
 // Workspace owns one harness's share of a state directory: the shared login, and a
 // home per seat, all under <state dir>/<harness>.
 //
-// One per (RESOLVED state directory, harness), from a package-level registry,
-// because entries that point at the same directory AND drive the same harness are
-// meant to share it — that is how per-phase models work off a single
-// `crewlet llm login`. Two Workspace values over one directory would each
-// believe they owned the pruning, and the opus entry's prune would delete the
-// sonnet entry's live session.
+// One per (RESOLVED state directory, harness), from a package-level registry:
+// entries on the same directory AND harness share it, so per-phase models work
+// off one `crewlet llm login`. Two values over one directory would each believe
+// they owned the pruning and delete the other entry's live session.
 //
-// KEYED BY THE HARNESS TOO, ON DISK AND IN THE REGISTRY, because two harnesses agree
-// on nothing a workspace keeps: which files are credentials, which are
-// conversation memory, how a login is stored. Keyed by the directory alone, a
-// codex entry on a directory Claude Code had written would seed its seats'
-// homes from, and prune, a login it cannot read — so the registry refused the
-// second harness for the life of the process, and an ordinary edit (moving a key
-// from claude-code to codex) produced a revision every running node refused
-// to apply while a restarted one applied it, splitting the fleet. Under its
-// own subdirectory each harness's files never meet another's: switching an
-// entry's harness opens a login directory of its own, signed out until it is
-// signed in, and switching back finds the old login where it was left.
+// KEYED BY THE HARNESS TOO, ON DISK AND IN THE REGISTRY: harnesses agree on
+// nothing a workspace keeps. Keyed by directory alone, a second harness would
+// prune a login it cannot read, and the registry's refusal would split the
+// fleet (a running node refusing a revision a restarted one applies).
 type Workspace struct {
 	// stateDir is the resolved state directory, as the entry names it, and
 	// root is this harness's share of it, <stateDir>/<harness>, under which every
@@ -246,22 +237,14 @@ const slugReadable = 48
 
 // seatSlug makes a seat handle safe as one path element, INJECTIVELY.
 //
-// Not a hash outright: an operator looking at a state directory to see whose
-// home is filling a disk needs to recognise the seat. But not a lossy
-// rendering either — this directory is a seat's HOME, holding its harness
-// session, its history and its credentials, and two seats that land on one
-// slug get one home. That is the first thing this package's doc says must
-// never happen: seven seats on one subscription reading each other's
-// transcripts.
+// Not a hash outright: an operator seeing whose home fills a disk must
+// recognise the seat. Not lossy either: the directory is a seat's HOME (session,
+// history, credentials), and two seats on one slug would read each other's
+// transcripts, which this package's doc says must never happen.
 //
-// The old rendering could collide two ways. Characters outside the safe set
-// all folded to '-', and the result was cut at 64 — so any two handles
-// sharing a 64-character prefix shared a home. Nothing bounded a handle's
-// length, so that was reachable from a config a founder could write.
-//
-// So: the readable form when it represents the handle EXACTLY, and otherwise
-// the readable prefix plus a digest of the whole handle. Distinct handles
-// cannot meet, whatever a vendor's API or a founder's YAML supplies.
+// So: the readable form when it represents the handle EXACTLY, otherwise the
+// readable prefix plus a digest of the whole handle, so distinct handles cannot
+// meet whatever a vendor's API or a founder's YAML supplies.
 func seatSlug(seat string) string {
 	seat = strings.TrimSpace(seat)
 	var b strings.Builder
@@ -336,38 +319,18 @@ type Checkout struct {
 	released bool
 }
 
-// Acquire prepares a place for one call to run.
+// Acquire prepares a place for one call to run. The FIRST concurrent call into a
+// seat prunes and seeds; a later one shares the home untouched (pruning would
+// delete the parent's state mid-call). It OPENS A
+// GENERATION under the seat's lock ([Workspace.lockSeat]), held until the last
+// call is out, after SWEEPING other seats' open idle generations
+// ([Workspace.sweep]: a failed release holds the only copy of a rotated refresh
+// token) and finishing its OWN last one ([Workspace.carryOut]); if that cannot
+// be carried out the call is refused, classified so the chain moves on.
 //
-// The FIRST concurrent call into a seat prunes and seeds; a second call
-// arriving while the first is still running shares the same home untouched.
-// Batched sub-agents belong to the same agent, so sharing memory between an
-// agent and its own sub-agents is harmless by definition — and pruning under
-// them would delete the parent's state mid-call.
-//
-// The first call OPENS A GENERATION, under the seat's generation lock
-// ([Workspace.lockSeat]), which the generation holds until its last call is
-// out. Before it seeds anything it does two things a seed from the shared
-// login depends on:
-//
-//   - it SWEEPS every other seat's generation left open and idle
-//     ([Workspace.sweep]): a release whose carry-out failed keeps its home's
-//     login, and with most vendors rotating the refresh token, that home is
-//     the only place the working one exists — so until it is carried out,
-//     every other seat seeding from the shared login is seeded with the
-//     token the vendor rotated away. Left to that seat's own next call, it
-//     was for as long as that seat stayed idle, which for a scheduled role
-//     is days;
-//   - it finishes its OWN last generation ([Workspace.carryOut]), and a seat
-//     whose old login cannot be carried out does not run on it, and does not
-//     discard it: the call is refused, classified so the fallback chain can
-//     move on, and the next call tries again.
-//
-// store imports a login the harness keeps in its own database ([loginStore]); it is
-// asked only by a profile that declares a [harnessprofile.CredentialStore], and the
-// generation's [Checkout.Release] exports through the same one — as does the
-// sweep, for the other seats' homes, which is sound because a workspace drives
-// ONE HARNESS ([Shared]) and an export reads that harness's database whichever entry
-// runs it.
+// store imports a login kept in the harness's own database ([loginStore]);
+// Release and the sweep export through it, sound as a workspace drives ONE
+// HARNESS ([Shared]).
 func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store loginStore) (*Checkout, error) {
 	dir := w.SeatDir(seat)
 	checkout, err := w.checkOut(dir, callID, func(state *seatState) error {
@@ -385,20 +348,12 @@ func (w *Workspace) Acquire(ctx context.Context, seat, callID string, store logi
 // an entry under auth.mode api-key, or inherit-env handing it the engine's own
 // key — in the seat's key home ([Workspace.KeySeatDir]).
 //
-// A HOME APART FROM THE LOGIN'S, because a harness may keep what a key signs it in
-// to in the very file its login lives in. Cursor Agent exchanges
-// CURSOR_API_KEY for a session and writes the session, and the key itself, to
-// the auth.json a login is kept in; on its next start it prefers the key that
-// file holds to the variable (read from the 2026.10.22 bundle). In the login
-// home that file was carried back over the login of record, and every
-// subscription seat on the workspace then signed in with the key — or, left
-// in the home, it outlived a switch to subscription and went on signing that
-// seat in with it.
-//
-// So a key home is never seeded with the login, and nothing in it is carried
-// out: each generation opens and closes it with no credential file in it
-// ([Workspace.dropCopies]), so a key the harness wrote down stays no longer than
-// the calls it was handed to.
+// A HOME APART FROM THE LOGIN'S: a harness may keep what a key signs it in to in
+// its login's own file (Cursor Agent writes the session and key to auth.json and
+// next prefers that key to the variable). Carried back it would overwrite the
+// login of record and sign every subscription seat in with the key. So a key
+// home is never seeded with the login and nothing is carried out: each
+// generation opens and closes it with no credential file ([Workspace.dropCopies]).
 func (w *Workspace) AcquireForKey(ctx context.Context, seat, callID string) (*Checkout, error) {
 	dir := w.KeySeatDir(seat)
 	checkout, err := w.checkOut(dir, callID, func(state *seatState) error {
@@ -549,23 +504,15 @@ func (w *Workspace) openGeneration(
 
 // Release returns the seat share, and is safe to call twice.
 //
-// The LAST call out of a seat carries a refreshed login back to the shared
-// directory and prunes. Carrying it back matters more than it looks: OAuth
-// access tokens expire in hours and most vendors rotate the refresh token with
-// them, so discarding the login the harness rewrote logs the whole fleet out at the
-// next expiry.
+// The LAST call out carries a refreshed login back to the shared directory and
+// prunes: vendors rotate the refresh token, so discarding it logs the fleet out
+// at the next expiry. A FAILED CARRY PRUNES NOTHING: the home holds the only
+// copy, kept with the generation's record for the next generation to carry out
+// ([Workspace.sweep]). Either way the lock is let go, telling a sweep it is idle.
 //
-// A FAILED CARRY PRUNES NOTHING. The home then holds the only copy of what the
-// call refreshed, so it is kept as it is, with the generation's record beside
-// it, for the next generation to open in this workspace to carry out before it
-// seeds — this seat's own next call, or any other seat's first one, whichever
-// comes first ([Workspace.sweep]). Either way the generation's lock is let go,
-// which is what tells a sweep the home is idle.
-//
-// ctx bounds the export a login held in the harness's own database leaves through.
-// A caller hands it [context.WithoutCancel] of its own: a release is a teardown,
-// and a call that ended BECAUSE its context was cancelled still has a refreshed
-// token to write back.
+// ctx bounds the export of a login in the harness's own database. A caller hands
+// it [context.WithoutCancel]: a call ended BY cancellation still has a
+// refreshed token to write back.
 func (c *Checkout) Release(ctx context.Context) error {
 	if c == nil || c.released {
 		return nil
@@ -607,28 +554,18 @@ func (c *Checkout) Release(ctx context.Context) error {
 	return errors.Join(workErr, pruneErr, clearGeneration(c.record))
 }
 
-// carryRefreshed carries a login the harness refreshed WHILE ITS CALL GOES ON back
-// to the shared directory, and moves the generation's baseline to the login
-// the shared directory then holds — on disk too, so a later carry-out compares
-// against it.
+// carryRefreshed carries a login the harness refreshed WHILE ITS CALL GOES ON
+// back to the shared directory, moving the generation's baseline (on disk too)
+// to the login then shared.
 //
-// A call is a seat's whole phase now, its harness alive through every tool it
-// calls, and a generation stays open for as long as any call of the seat runs:
-// carried out only at the last release, a token the harness refreshed an hour into
-// a phase would sit in this home while every other seat seeded from the shared
-// login the vendor had already rotated away, and failed its own refresh. So it
-// is carried at each tool call the harness makes, which is when its process waits
-// on the engine rather than writing to its home.
+// Carried only at release, a token refreshed an hour into a phase would leave
+// other seats seeding the rotated-away one, so it is carried at each tool call,
+// when the harness waits on the engine rather than writing to its home.
 //
-// THE BASELINE MOVES WITH THE WRITE, WHOLE: the shared login now holds what
-// this home holds, and the next carry — another refresh, or the release — is
-// judged against that login, under the same compare-and-swap of the whole
-// login ([Workspace.carry]). Left on the old baseline, the release would find
-// the shared login changed since the seed, by this very write, and drop the
-// second refresh as superseded. A carry a newer login superseded moves
-// nothing, so this home's next refresh is dropped as that one was.
-//
-// A key home carries nothing ([Workspace.AcquireForKey]).
+// THE BASELINE MOVES WITH THE WRITE, WHOLE: the next carry is judged against the
+// login now shared ([Workspace.carry]); on the old one the release would see this
+// very write and drop the next refresh as superseded. A carry a newer login
+// superseded moves nothing. A key home carries nothing.
 func (c *Checkout) carryRefreshed(ctx context.Context) error {
 	if c == nil || c.keyed || c.released {
 		return nil
@@ -729,43 +666,18 @@ func (w *Workspace) emptyLoginHome() error {
 		clearGeneration(filepath.Join(w.root, loginGenerationFile)))
 }
 
-// seed copies the shared login into a home, and opens the home's [generation]
-// under mode — its baseline: the SHA-256 of each shared credential file copied
-// in and of the document imported, by name, a name left out being a file that
-// was absent; and, for a command that makes a login, the operator epoch the
-// login was read at ([generation.SeededEpoch]), which is also the one its
-// login is ordered after until it finishes ([generation.After]).
+// seed copies the shared login into a home and opens its [generation] under
+// mode: the baseline is the SHA-256 of each file copied in and the document
+// imported (a missing name is an absent file) and, for a login-making command,
+// the operator epoch ([generation.SeededEpoch], [generation.After]).
 //
-// A COPY rather than a symlink into the shared directory: the harness rewrites
-// this file in place when it refreshes, and seven seats sharing one inode
-// would have seven writers on it. The copy back out is [syncCredentialsOut],
-// which runs once, when the seat's last call finishes.
-//
-// THE WHOLE LOGIN IS READ AT ONCE, under the shared login's lock
-// ([Workspace.seedFrom]), before any of it is copied: read a file at a time it
-// could straddle a write — a seat seeded with the token of one sign-in beside
-// the config.toml of another — and the lock is what keeps a writer out between
-// two reads, as the journal is what keeps a killed writer's half out of every
-// read ([hostbox.WriteCredentials]).
-//
-// The digest is of the very bytes written into the home: a digest read
-// separately could describe a newer file than the one the harness started from,
-// and the baseline would then excuse a write it should have refused.
-//
-// A login held in the harness's own database is IMPORTED last, after the home's
-// own settings files, because the import is the harness itself starting in this
-// home and reads whatever global settings a home holds: see
-// [Workspace.importLogin]. The one profile with a credential store today,
-// OpenCode, seeds nothing in the home — its settings are each call's own
-// ([harnessprofile.Profile.WorkConfigEnv]) — so its import reads only the
-// database location the home's variables name.
-//
-// AN IMPORT THE HARNESS REFUSED ([*loginRefusedError]) still returns the
-// generation, the refused document's digest included, beside the error: a seat
-// stops there, but a command that MAKES a login replaces a document the harness
-// cannot read, and what it stores is judged against — and written over —
-// exactly that document ([Provider.runInCredentialHome]). Every other failure
-// returns none.
+// A COPY, not a symlink: the harness rewrites in place and seven seats would
+// share one inode. The login is read whole under the shared lock
+// ([Workspace.seedFrom]) or it could straddle a write; the digest is of the very
+// bytes written. A login in the harness's database is IMPORTED last, after the
+// settings files ([Workspace.importLogin]). A REFUSED IMPORT
+// ([*loginRefusedError]) still returns the generation: a login-making command
+// judges what it stores against that document ([Provider.runInCredentialHome]).
 func (w *Workspace) seed(
 	ctx context.Context, home, cache string, store loginStore, mode syncMode,
 ) (generation, error) {
@@ -911,25 +823,17 @@ func (e *loginRefusedError) Error() string {
 
 func (e *loginRefusedError) Unwrap() error { return e.err }
 
-// acquireFailureKind classifies a seat that could not be made ready to run,
-// which since a seat's generation began running the harness is no longer only a
-// filesystem fact.
-//
-//   - A command that ran out of time — the auxiliary bound, or the call's own
-//     deadline — is a TIMEOUT, as the call's own is in [Provider.completion]:
-//     a busy host, not a request nobody can serve, so the chain may try
-//     another member and the credential is not benched.
-//   - A shared login the harness refused to import is AUTH: this entry's login is
-//     unusable until somebody signs in again, which is what an auth failure
-//     says, so the chain moves on — and the next call tries the login again,
-//     since `crewlet llm login` mends it and that call must find it.
-//   - Any other command that ran and did not succeed — exited non-zero, or
-//     exited 0 without being seen to its end — is a SERVER failure: the local
-//     harness failed to answer, as a 5xx is a vendor failing to, and the login it
-//     holds is fine, merely not out (or in) yet. The export a previous
-//     generation's login is carried out through is the usual one.
-//   - Everything else is a filesystem failure on this host, or a harness it could
-//     not start, and stays FATAL.
+// acquireFailureKind classifies a seat that could not be made ready to run:
+//   - A command that ran out of time (the auxiliary bound or the call's own
+//     deadline) is a TIMEOUT, as in [Provider.completion]: a busy host, so the
+//     chain may try another member and the credential is not benched.
+//   - A shared login the harness refused to import is AUTH: unusable until
+//     somebody signs in again, so the chain moves on, and the next call tries
+//     the login again so `crewlet llm login` mends it.
+//   - Any other command that ran and did not succeed (non-zero, or exit 0
+//     without being seen to its end) is a SERVER failure, like a vendor 5xx; the
+//     login is fine. The export carrying out a previous login is the usual one.
+//   - Everything else is a filesystem failure or an unstartable harness: FATAL.
 func acquireFailureKind(err error) llm.ErrorKind {
 	var refused *loginRefusedError
 	var exit *auxiliaryExitError
@@ -1165,17 +1069,14 @@ type carryRetry struct {
 // carryRetryFloor and carryRetryCeiling bound a sweep's backoff on a seat whose
 // carry-out keeps failing.
 //
-// The FIRST sweep after a release's own carry failed is immediate, because
-// that is the point of sweeping: every other seat starting now would otherwise
-// be seeded with a rotated-away token. After that the attempts double from a
-// minute — which is how long a transient cause (an export that timed out on a
-// host busy with max_concurrent harnesses, a harness killed for memory) takes to
-// clear — to half an hour, because each attempt is a harness export of up to
-// [auxiliaryTimeout] made inside some OTHER seat's call, and a carry that fails
-// for good (a harness upgrade that broke its export) must not cost every seat's
-// first call that long. Half an hour holds that cost to one attempt per
-// half-hour per wedged seat across the whole workspace, while the seat's own
-// next call still tries every time ([Workspace.Acquire]).
+// The FIRST sweep after a release's own carry failed is immediate: other seats
+// starting now would otherwise be seeded with a rotated-away token. Then the
+// attempts double from a minute, how long a transient cause (a timed-out export
+// on a busy host, a memory kill) takes to clear, to half an hour, because each
+// attempt is an export of up to [auxiliaryTimeout] inside some OTHER seat's
+// call and a permanent failure must not cost every seat's first call that long:
+// one attempt per half-hour per wedged seat, while the seat's own next call
+// still tries every time ([Workspace.Acquire]).
 const (
 	carryRetryFloor   = time.Minute
 	carryRetryCeiling = 30 * time.Minute
@@ -1213,33 +1114,17 @@ func (w *Workspace) carryFailed(slug string) time.Duration {
 	return wait
 }
 
-// sweep carries out every OTHER seat's generation that is open and idle — a
-// release whose carry failed, or one a process that ended mid-call never ran —
-// before the calling seat seeds from the shared login.
+// sweep carries out every OTHER seat's open idle generation (a failed release,
+// or a process that ended mid-call) before the calling seat seeds.
 //
-// IDLE IS THE SEAT'S GENERATION LOCK, taken without waiting: a generation holds
-// it from its first call in to its last call out, so a lock that can be taken
-// is a home no call is running in — in this process or in another, since the
-// lock is an flock on a file in the seat's directory, and two engines started
-// by one user share the derived state directory. A record on disk with no seat
-// in memory is found the same way, which is how a generation left open by an
-// engine that stopped mid-call is carried out by the next one's first call
-// into ANY seat, rather than only by that seat's.
-//
-// BEST EFFORT for the calling seat: a carry that fails is logged
-// (`harness_carry_out_failed`), paced ([carryRetryFloor]) and left for the
-// next attempt, and the calling seat seeds from the shared login regardless —
-// as it does while another seat is mid-call, which is the same not-knowing
-// whether that seat's harness has refreshed. Refusing it instead would turn one
-// seat's broken export into every seat's outage.
-//
-// THE SEATS ARE LISTED, NEVER GLOBBED: the state directory is the operator's
-// path (state_dir, CREWLET_LLM_HARNESS_HOME or HOME), and a pattern built from it
-// reads a `[`, `*` or `?` in it as syntax — `crewlet[prod]` matched nothing,
-// and an unclosed `[` was a malformed pattern whose error was dropped — so
-// every seat was seeded with the token a kept refresh had rotated away. A
-// listing that fails for any reason but the seats directory not existing yet
-// is logged (`harness_sweep_failed`) rather than read as nothing to sweep.
+// IDLE IS THE SEAT'S GENERATION LOCK, taken without waiting: a takeable flock
+// means no call runs in the home, in this process or another.
+// BEST EFFORT: a failed carry is logged (`harness_carry_out_failed`), paced
+// ([carryRetryFloor]) and retried later, and the caller seeds regardless;
+// refusing would turn one seat's broken export into every seat's outage. SEATS
+// ARE LISTED, NEVER GLOBBED: the state directory is the operator's path and a
+// pattern reads `[`, `*`, `?` as syntax. A listing failing but for a missing
+// directory is logged (`harness_sweep_failed`).
 func (w *Workspace) sweep(ctx context.Context, store loginStore, own string) {
 	who := ""
 	if store != nil {
@@ -1305,37 +1190,15 @@ func (w *Workspace) sweepOne(ctx context.Context, store loginStore, dir, record 
 // syncCredentialsOut carries a login a home's harness CHANGED back to the shared
 // directory, and reports whether the home holds a login at all.
 //
-// CHANGED IS JUDGED AGAINST THE GENERATION'S BASELINE, never against the shared
-// directory as it is now. Compared with the shared file, an idle home — whose
-// export reproduces its import byte for byte — differs from it the moment
-// anybody else has written a newer login, and writing it back REVERTED that
-// write: another seat's refresh, carrying a refresh token the vendor had
-// already rotated away, or an operator's new login, which the next expiry then
-// logged the whole fleet out of. So a home that holds what it was seeded with
-// writes nothing at all, whatever the shared directory holds.
-//
-// What did change is decided under the shared login's lock, by the
-// generation's [syncMode]: a refresh only over the login it was seeded from, a
-// login over anything ([Workspace.carry]). A login that lost to a newer one is
-// logged as `harness_login_superseded` and dropped.
-//
-// Neither kind of home deletes the shared directory's SEEDED COPY of a file its
-// harness REMOVED: a credential file a call removed, or a database exporting no login
-// — what a harness that dropped a credential it could not refresh leaves — is not a
-// login worth keeping over the shared one — whether that is the copy the home
-// was seeded with or a seat's refresh of it. A login does REPLACE a file
-// another sign-in wrote — one it never held, or one it removed that an
-// operator's write has replaced since it was seeded — see [Workspace.carry].
-//
-// Everything is READ before anything is written, the export included, so an
-// export that fails writes nothing: a carry is retried whole
-// ([Workspace.carryOut]).
-//
-// And whatever it writes is ONE WRITE of the whole login
-// ([Workspace.writeLoginLocked]): every other seat's next generation is seeded
-// from the shared directory, and a carry that replaced one file and was killed
-// before the next left a login made of two sign-ins, which every reader then
-// took for one.
+// CHANGED IS JUDGED AGAINST THE GENERATION'S BASELINE, never the shared
+// directory as it is now: an idle home differs from a newer shared login, and
+// writing it back would REVERT another seat's refresh or an operator's login.
+// It is decided under the shared lock by [syncMode] ([Workspace.carry]); a loser
+// is logged `harness_login_superseded`. Neither kind deletes the shared SEEDED
+// COPY of a file its harness REMOVED. Everything is READ before anything is
+// written, so a failed export writes nothing and the carry retries whole
+// ([Workspace.carryOut]); the write is ONE ([Workspace.writeLoginLocked]), as a
+// kill between files would leave two sign-ins.
 func (w *Workspace) syncCredentialsOut(
 	ctx context.Context, home, cache string, store loginStore, gen generation,
 ) (bool, error) {
@@ -1478,56 +1341,18 @@ func (w *Workspace) carryChanged(
 	return holds, digestsOf(login), nil
 }
 
-// carry decides what a home's changed login makes of the shared one, read as
-// current under the shared login's lock — the whole login the carry writes,
-// or nil for none — from the files the home holds (held) and those of them it
-// changed, by the generation's [syncMode]:
+// carry decides, under the shared lock, what a home's changed login makes of
+// the shared one (current), by the generation's [syncMode]:
+//   - a LOGIN is written as the WHOLE LOGIN ITS SIGN-IN LEFT and NO FILE THE HOME
+//     NEVER HELD (another sign-in's). A seeded file the home dropped is NOT
+//     REMOVED ([Workspace.syncCredentialsOut]) and goes back as shared while that
+//     is still the seeded login, refreshed; once an operator's write replaced it
+//     it is ANOTHER SIGN-IN'S and dropped, told by the OPERATOR EPOCH
+//     ([Workspace.onlyRefreshedSince]);
+//   - a REFRESH is a COMPARE-AND-SWAP OF THE WHOLE LOGIN: only while the shared
+//     login is EXACTLY the seeded one, of seeded files only.
 //
-//   - a LOGIN is written over whatever the shared directory holds, as the
-//     WHOLE LOGIN ITS SIGN-IN LEFT: every file the home holds, the ones the
-//     sign-in left as they were seeded included, so a file another writer —
-//     a seat's refresh included — replaced while the sign-in ran goes back to
-//     this sign-in's copy, the one its harness left beside its new token, rather
-//     than staying beside that token; and NO FILE THE HOME NEVER HELD — one
-//     it was not seeded with and does not hold is another sign-in's, landed
-//     while this one ran (a restore into the directory it found empty, an
-//     operator's other login), and kept it would make a login of two. Written
-//     as the changed files alone, as it once was, a sign-in that refreshed its
-//     token and left its config.toml as it was put that token beside whichever
-//     config.toml the last writer left. A file the home was seeded with and no
-//     longer holds is NOT REMOVED — a harness's removal is never carried
-//     ([Workspace.syncCredentialsOut]), because a harness that dropped a file is
-//     no reason to log the fleet out of the login it was seeded with — so it
-//     goes back as the shared login holds it, for as long as that is still
-//     the seeded login: the copy the home was seeded with, or that copy as a
-//     seat's or a local box's refresh has rewritten it since, which is the
-//     same login, newer — and the harness left no copy of its own to prefer to
-//     it. Once an operator's write has replaced the login instead — a
-//     `-from-host`, or a logout and an import after it — its copy is ANOTHER
-//     SIGN-IN'S, and is dropped like a file the home never held: kept, as it
-//     once was, a sign-in that renewed its token and removed its config.toml
-//     put that token beside the config.toml of the login an operator wrote
-//     while it ran. A refreshed file and another sign-in's are alike as bytes
-//     — each is a file that is not the seed — so which wrote it is read off
-//     the OPERATOR EPOCH ([Workspace.onlyRefreshedSince]). What the drop costs
-//     is that file: the login written is the one the sign-in itself left,
-//     without it;
-//   - a REFRESH is a COMPARE-AND-SWAP OF THE WHOLE LOGIN: made only while the
-//     shared login is still EXACTLY the one the home was seeded from, every
-//     file and every absence, and then only of the files the home was seeded
-//     with — a refresh never creates a login, nor a file of one. Judged a
-//     file at a time, as it once was, a refresh of one file was written beside
-//     a newer sign-in's other file, and the shared login became one no harness
-//     ever wrote.
-//
-// A home whose changes the shared login already holds — two homes that
-// refreshed to the same login, or a carry repeated after its write landed —
-// writes nothing and says nothing.
-//
-// It answers the login the shared directory holds once the carry is made, and
-// whether that is a write: the login to write, true; the shared login as it
-// is, false, when it already holds this home's; nil, false, when a newer login
-// superseded the refresh.
+// It answers the login then shared and whether to write it.
 func (w *Workspace) carry(
 	ctx context.Context, who string, gen generation, current, held, changed map[string][]byte,
 ) (map[string][]byte, bool, error) {
@@ -1622,28 +1447,17 @@ func homeHolds(gen generation, login, held map[string][]byte) bool {
 	return true
 }
 
-// onlyRefreshedSince reports whether every write the shared login has taken
-// since a login command's home was seeded was a REFRESH of the login it was
-// seeded from, under the shared login's lock the caller holds: whether the
-// operator epoch is still the one read with the seed ([generation.SeededEpoch]).
+// onlyRefreshedSince reports, under the shared lock the caller holds, whether
+// every write since a login command's home was seeded was a REFRESH of its
+// seed: whether the epoch is still [generation.SeededEpoch].
 //
-// The epoch is a witness to exactly that because of who writes the shared
-// login while a sign-in runs. A seat's or a local box's refresh moves no epoch,
-// and is a compare-and-swap of the WHOLE login against the one it was seeded
-// from that never adds a file nor removes one, so a chain of them starting from
-// the sign-in's seed is that login, refreshed. Every other writer moves the
-// epoch, in the same hold as its write and before it ([Workspace.bumpLoginEpoch])
-// — `-from-host`, an import, a logout (one whose epoch cannot move still
-// removes the login, which leaves no copy of any file to keep), and so does a
-// restore of a configured bundle that REPLACES a login ([Provider.RestoreBundle]),
-// except two, neither of which can reach a file the sign-in was seeded with:
-// a restore into a directory holding no login, which a sign-in seeded with a
-// login never meets, and another login command, which is refused while this one
-// holds the login home ([Workspace.lockLoginHome]).
-//
-// A record without a seeded epoch vouches for nothing, so it answers false: the
-// shared copy is then dropped as another sign-in's, which loses a file rather
-// than putting one sign-in's file beside another's.
+// A seat's or box's refresh moves no epoch and is a compare-and-swap of the
+// WHOLE login, so a chain of them is the seed, refreshed. Every other writer
+// moves it first ([Workspace.bumpLoginEpoch]), a bundle restore only when it
+// REPLACES a login ([Provider.RestoreBundle]); another login command is
+// refused meanwhile ([Workspace.lockLoginHome]). A record without a seeded
+// epoch vouches for nothing: the shared copy is dropped, losing a file rather
+// than mixing two sign-ins'.
 func (w *Workspace) onlyRefreshedSince(gen generation) (bool, error) {
 	if gen.SeededEpoch == nil {
 		return false, nil
@@ -1655,27 +1469,16 @@ func (w *Workspace) onlyRefreshedSince(gen generation) (bool, error) {
 	return epoch == *gen.SeededEpoch, nil
 }
 
-// orderPendingLogin records on a login command's open generation, at record,
-// the operator epoch its login is ordered after now that its own carry has
-// failed ([generation.After]) — the login is then carried out by a later
-// command, and lands only while no operator has written since this instant.
+// orderPendingLogin records on a login command's open generation the epoch its
+// login is ordered after ([generation.After]) now its own carry failed: a later
+// command carries it out, landing only while no operator has written since.
 //
-// READ IN A HOLD OF ITS OWN of the shared login's lock, as the seed's is
-// ([Workspace.seedFrom]), because every operator's write moves the epoch in
-// the hold its write is made in, and moves it FIRST ([Workspace.bumpLoginEpoch]).
-// Read without the lock, the read could land inside such a hold, after the
-// epoch moved and before the write: the kept login was then ordered after a
-// `-from-host` that landed after this read, and the next command carried it out
-// over that login. Under the lock the read sees the epoch as of before an
-// operator's whole hold or after it. One it waited out is a write its own carry,
-// had it landed, would have waited out and been written over too, the later of
-// two sign-ins winning; one made after the read moves the epoch past it.
-//
-// A lock that cannot be taken in its bounded wait, or an epoch that cannot be
-// read, leaves the record as it is — ordered after the epoch read with the seed
-// ([Workspace.seed]) — which errs towards the operator: a write of theirs that
-// landed while the sign-in ran then outranks it too, but none made after it
-// finished ever loses to it. Only a record that cannot be written is an error.
+// READ IN A HOLD OF ITS OWN of the shared lock, as the seed's is
+// ([Workspace.seedFrom]): operators move the epoch FIRST, so an unlocked read
+// could fall between epoch and write and order the login after a `-from-host`
+// that lands later. A lock not taken, or an unreadable epoch, leaves the seed's
+// epoch ([Workspace.seed]), erring towards the operator; only an unwritable
+// record is an error.
 func (w *Workspace) orderPendingLogin(ctx context.Context, record string, gen generation) error {
 	if epoch, err := w.lockedLoginEpoch(ctx); err == nil {
 		gen.After = &epoch
@@ -1707,29 +1510,17 @@ func (w *Workspace) superseded(ctx context.Context, who, dst, how string) {
 		"path", dst, "shared", how)
 }
 
-// lockShared takes the shared login's lock for one compare-and-swap, or one
-// read of the login, and hands back its release.
+// lockShared takes the shared login's lock for one compare-and-swap or read.
 //
-// ONE LOCK FOR EVERY TAKER: an flock on a file every writer of the directory
-// opens ([hostbox.LockCredentials], whose file is [Workspace.sharedLock]) — this
-// process's seats, every `crewlet llm` command, each a process of its own, and
-// a local sandbox's teardown, in this process or another. Every write to the
-// shared directory takes it — a seat's carry, a login's, `-from-host`, a
-// bundle, a logout's removal and the operator epoch beside them — because a
-// compare-and-swap is only one against writers that agree to the same lock.
-// And EVERY READ of the login takes it ([Workspace.Login]) — a seed, the
-// doctor, an export, a restore's look for a login already there — because a
-// login is a set of files, and the lock is what keeps a writer out between a
-// reader's first file and its last.
+// ONE LOCK FOR EVERY TAKER: an flock ([hostbox.LockCredentials],
+// [Workspace.sharedLock]) that seats, `crewlet llm` commands and a sandbox's
+// teardown take for EVERY write (a compare-and-swap only holds against writers
+// sharing it) and EVERY READ ([Workspace.Login]): a login is a set of files.
 //
 // NO IN-PROCESS MUTEX IN FRONT OF IT. An flock belongs to the open file
-// description, so two takers in this process exclude each other exactly as
-// two processes do, and each waits for the lock on its OWN context and for its
-// OWN [hostbox.CredentialLockWait]. A mutex queued ahead of the flock waited
-// on neither: every seat starting reads the login under this lock, and while
-// a stopped `crewlet llm` command held the flock each queued seat waited out
-// the one before it's whole ten seconds, so the k-th waited about k times
-// that, whatever its call's deadline.
+// description, so takers here exclude each other like processes, each waiting
+// on its OWN context and [hostbox.CredentialLockWait]. A queued mutex waited on
+// neither: the k-th seat behind a stopped command waited about k times as long.
 func (w *Workspace) lockShared(ctx context.Context) (func(), error) {
 	return hostbox.LockCredentials(ctx, w.CredentialsDir())
 }
@@ -1737,16 +1528,14 @@ func (w *Workspace) lockShared(ctx context.Context) (func(), error) {
 // seatLockWait bounds how long the first call into a seat waits for the seat's
 // generation lock ([Workspace.lockSeat]).
 //
-// Held by somebody else only for a SWEEP's carry-out of this seat — one export,
-// bounded by [auxiliaryTimeout]; one wait for the shared login's lock, bounded
-// by [hostbox.CredentialLockWait]; and one write of a login of a few files, each
-// under [hostbox.MaxCredentialBytes], for which a second is three orders of
-// magnitude of headroom — or by ANOTHER PROCESS running this
-// seat's generation, an engine that lost the seat's lease and is still
-// finishing a call in its home, which no wait this call can afford outlasts.
-// So the bound is the sweep's, and the second case is refused as a timeout the
-// fallback chain moves past rather than run in a home somebody else's harness is
-// using.
+// Held by somebody else only for a SWEEP's carry-out of this seat (one export,
+// [auxiliaryTimeout]; one wait on the shared login's lock,
+// [hostbox.CredentialLockWait]; one write of a few files each under
+// [hostbox.MaxCredentialBytes], where a second is ample) or by ANOTHER PROCESS
+// running this seat's generation, an engine that lost the lease and still
+// finishes a call, which no affordable wait outlasts. So the bound is the
+// sweep's, and the second case is refused as a timeout the fallback chain moves
+// past rather than run in a home another harness is using.
 const seatLockWait = auxiliaryTimeout + hostbox.CredentialLockWait + time.Second
 
 // lockSeat takes a seat's GENERATION LOCK, and hands back its release.
@@ -1771,18 +1560,13 @@ const seatHolder = "another process running a call in this seat's home — an en
 // lockLoginHome takes the login home's lock for the whole of one auth command,
 // or reports that another command holds it.
 //
-// Held from the leading prune to the trailing one, because everything between
-// them is the login home: a second command pruning it ran `RemoveAll` under a
-// login still waiting on its browser flow, which then stored its credential in
-// a database nothing could find again and was told it had written a login.
+// Held from the leading prune to the trailing one: a second command's
+// `RemoveAll` under a login awaiting its browser flow strands the credential it
+// then stores. ONE PER WORKSPACE (state directory and harness), not per entry.
 //
-// ONE PER WORKSPACE — a state directory and a harness — not per entry: entries
-// that share a state_dir and drive one harness share one login home, so a command
-// for one refuses a command for the other.
-//
-// NOT WAITED ON. The holder may be a person part way through a sign-in, for
-// minutes, and a `crewlet llm status` that sat silent behind it would read as
-// a wedged command; saying so at once is the answer an operator can act on.
+// NOT WAITED ON. The holder may be a person mid sign-in for minutes, and a
+// silent `crewlet llm status` would read as wedged; refusing at once is the
+// answer an operator can act on.
 func (w *Workspace) lockLoginHome(ctx context.Context) (func(), error) {
 	path := filepath.Join(w.root, loginHomeLockFile)
 	release, err := hostbox.LockFile(ctx, path, 0, "another `crewlet llm` command")
@@ -1828,41 +1612,15 @@ func (w *Workspace) loginEpoch() (uint64, error) {
 // bumpLoginEpoch moves the OPERATOR EPOCH on, under the shared login's lock the
 // caller holds, BEFORE the write it counts.
 //
-// The epoch counts the operator's writes of the login of record that are not a
-// login command's own (`-from-host`, an import, a logout, and the automatic
-// restore of a bundle newer than the login it replaces, which writes over a
-// login exactly as `-from-host` does) and nothing else: a seat's refresh is not
-// one, and a restore into a directory holding no login is not one. It is read
-// twice:
+// It counts operator writes that are not a login command's own (`-from-host`,
+// an import, a logout, a bundle restore over a login), not a seat's refresh. An
+// unmoved epoch proves no operator write landed, for a LATE write
+// ([generation.After]) and a file a sign-in REMOVED
+// ([Workspace.onlyRefreshedSince]).
 //
-//   - for the one write that is made LATE: a login whose export failed is kept
-//     in the login home and carried out by the next command, which may be days
-//     later, and a login carried out then over whatever the shared directory
-//     holds undid every operator write in between. So the login's record
-//     carries the epoch as of when it finished ([generation.After]), and it
-//     lands only if the epoch has not moved since — a seat's refresh of the
-//     older login still loses to it, and an operator's write made after it
-//     always wins;
-//   - for a file a sign-in REMOVED, which goes back as the shared login holds
-//     it only while that is still the login the sign-in was seeded from, as
-//     seeded or refreshed: an unmoved epoch since the seed is what says no
-//     operator has written in between ([Workspace.onlyRefreshedSince]).
-//
-// Both readers take an unmoved epoch as proof that no operator's write landed,
-// so the epoch moves FIRST, and DURABLY — the file synced, then the directory
-// holding its rename — before the write it counts is begun. An epoch that moved
-// over a write that then failed, or was killed, errs towards the operator: a
-// kept login is dropped as replaced, a removed file's refreshed copy as another
-// sign-in's. A write that landed with no epoch behind it — killed between the
-// two, as it could be while the epoch came second, or a power loss that kept
-// the write's rename and not the epoch's — read as no write at all: a kept
-// login was carried out over it, and its copy of a file a sign-in removed went
-// beside that sign-in's new token.
-//
-// A login command's own write needs no step of its own: login commands take
-// the login home's lock one at a time, and each begins by carrying out the
-// login the last one left, so no pending login is ever older than a login that
-// lands.
+// So it moves FIRST and DURABLY (file synced, then its directory): an epoch
+// over a failed write errs towards the operator; a write with no epoch behind
+// it would read as no write at all.
 func (w *Workspace) bumpLoginEpoch() error {
 	epoch, err := w.loginEpoch()
 	if err != nil {
@@ -1884,13 +1642,10 @@ func (w *Workspace) bumpLoginEpoch() error {
 // written again ([Workspace.clearLoggedOut]).
 //
 // A RECORD, because the empty directory a logout leaves is exactly what a
-// bundle restores into: with nothing beside it, the engine's next boot or
-// apply, or the next `crewlet llm status`, put back the very login the operator
-// had just removed — revoking a compromised login lasted until the next
-// command. IN THE WORKSPACE'S ROOT, beside the operator epoch and outside
-// credentials/, so no bundle and no coding box ever carries it — and so a
-// fresh state volume holds none, and its bundle restores there, which is what a
-// container rebuilt on every deploy is configured for.
+// bundle restores into: without it the next boot, apply or `crewlet llm status`
+// would put back the login just revoked. IN THE WORKSPACE'S ROOT, outside
+// credentials/, so no bundle or box carries it and a fresh state volume holds
+// none, so a container rebuilt on every deploy still restores its bundle.
 func (w *Workspace) markLoggedOut() error {
 	path := filepath.Join(w.root, loggedOutFile)
 	if err := hostbox.ReplaceFile(path, strings.NewReader(loggedOutNote)); err != nil {
@@ -2041,22 +1796,16 @@ func (w *Workspace) readLoginLocked() (map[string][]byte, error) {
 	return login, nil
 }
 
-// writeLoginLocked makes the shared login EXACTLY login — every file it holds
-// written, every other file the login may hold removed — in ONE committed
-// step, under the shared login's lock the caller holds
-// ([hostbox.WriteCredentials]).
+// writeLoginLocked makes the shared login EXACTLY login (every file written,
+// every other removed) in ONE committed step, under the shared lock the caller
+// holds ([hostbox.WriteCredentials]).
 //
-// A write that COMMITTED and could not be put in place at once is written: it
-// is the login of record, and every reader puts it in place before it reads
-// ([Workspace.readLoginLocked]), so it is logged
-// (`harness_login_unapplied`) rather than reported as a login that did not
-// land — the caller's steps after a write (the operator epoch, the logout's
-// record) follow it, and a reader that still cannot put it in place says so
-// itself.
+// A write that COMMITTED but could not be put in place at once is written: every
+// reader puts it in place first ([Workspace.readLoginLocked]), so it is logged
+// (`harness_login_unapplied`), not failed, and the caller's later steps follow.
 //
-// THE INSTALL RECORD IS LEFT AS IT IS ([LoginInstall]): this is the write of a
-// login that was not installed, a refresh carried back, which is the same
-// sign-in. A write that installs one, or removes one, is
+// THE INSTALL RECORD IS LEFT AS IT IS ([LoginInstall]): this writes a refresh of
+// the same sign-in. A write that installs or removes one is
 // [Workspace.installLoginLocked].
 func (w *Workspace) writeLoginLocked(ctx context.Context, who string, login map[string][]byte) error {
 	return w.commitLoginLocked(ctx, who, w.loginNames(), login)

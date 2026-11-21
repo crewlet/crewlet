@@ -11,20 +11,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The reader's own views of the company's chat: Activity, the threads they
-// follow, what they saved, what they sent, a room's shared links, and one
-// message read in place.
+// The reader's own views of the company's chat: Activity, followed threads,
+// saves, sent messages, a room's shared links, and one message read in place.
 //
 // # The record is read here and crosses as a value
 //
-// Each view needs the reader's own record (where they have read to, the
-// threads they marked, what they saved), which is coordination's, while the
-// rows are the copy's that serves the read. So this surface reads the record
-// ([Sources.chatReadState]) and hands what the view needs to the reader as a
-// value ([chatlet.ReaderMarks]), as the rail hands it the cursors. A record
-// that could not be read is said, never counted from zero: the views answer
-// `read_state: false`, and Activity's unread alone, which only the record can
-// tell, is refused unavailable rather than answered empty.
+// Each view needs the reader's own record (read cursors, marked threads, saves),
+// which is coordination's, while the rows are the serving copy's. So this
+// surface reads the record ([Sources.chatReadState]) and hands it to the reader
+// as a value ([chatlet.ReaderMarks]). An unreadable record is said, never
+// counted from zero: the views answer `read_state: false`, and Activity's
+// unread alone, which only the record can tell, is refused unavailable.
 
 // ChatReaderViews is the reader's own views as this surface calls them.
 type ChatReaderViews interface {

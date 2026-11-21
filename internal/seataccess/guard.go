@@ -8,18 +8,14 @@ import (
 
 // THE DEFENCE IN DEPTH under the document's rules.
 //
-// The document's rules already refuse a seat variable that a company block or
-// another seat names, on submit, and report one on a stored document. A pass
-// does not trust that alone: a stored document from before the rule, or one an
-// operator wrote around the dashboard, reaches the pass all the same, and the
-// pass is the one about to WRITE. So every sync refuses to seal into a name
-// anything but the seat itself references, and nothing forgets one.
-//
-// The test is "named anywhere but in this seat's own role entry". The engine
-// derives a seat's sealed names and binds them to its tools itself (D4), so no
-// company block, unit or other seat has a legitimate reason to name one; the
-// seat's own entry may, only while a stored document still carries a retired
-// credential field the migration has not rewritten.
+// The rules refuse a seat variable that a company block or another seat names,
+// but a stored document from before the rule, or one an operator wrote around
+// the dashboard, still reaches the pass, and the pass is the one about to WRITE.
+// So every sync refuses to seal into a name anything but the seat itself
+// references, and nothing forgets one. The test is "named anywhere but in this
+// seat's own role entry": the engine derives a seat's sealed names and binds
+// them to its tools itself (D4), so only the seat's own entry may, while a stored
+// document still carries a retired credential field the migration has not rewritten.
 
 // SharedSinks is every sealed name of handle's at cat's kind that something
 // outside the seat's own role entry references, sorted. Non-empty refuses the

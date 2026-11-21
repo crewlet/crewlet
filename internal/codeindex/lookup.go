@@ -9,76 +9,35 @@ import (
 
 // HOW A PLAN IS LOOKED UP IN A SEGMENT (Plan.Candidates): each clause's blobs,
 // intersected. A clause is an OR of literals and a literal an AND of its
-// trigrams, so a clause's blobs are those holding every trigram of one of
-// its literals — and, where it holds a folded literal, every blob holding an
-// escape.
-//
-// A LOOKUP READS EACH LIST ITS PLAN NAMES ONCE. A clause's literals share
-// trigrams: an alternation crossed with a word holds the word in every
-// literal — (?i)(create|delete|update)User is three literals that each hold
-// "use" and "ser" — and an alternation of names holds their common parts in
-// some of them; a plan's clauses share them too, foo_a.*foo_b's two holding
-// foo's; and the commonest trigrams have a segment's longest lists. Looked
-// up a literal at a time, a list was read once for every literal holding it,
-// and decoded whole each time into a buffer of its own: work and garbage
-// k·L for a list k literals hold, where L would do — a clause of 64 words
-// sharing lists over 2 048 blobs read 289 280 bytes of postings and
-// allocated 1 457 152, where reading each list once reads 12 288 and
-// allocates 100 288. So a plan sorts its trigrams by where a lookup reads
-// them (clause, ref), and each is read once:
-//
-//   - THE TRIGRAMS EVERY LITERAL OF A CLAUSE HOLDS (clause.shared) are
-//     hoisted out of the union of what its literals admit: the blobs holding
-//     them all, C, are read once, and each literal admits only blobs among
-//     them — ∪ᵢ(C ∩ Rᵢ) = C ∩ ∪ᵢRᵢ, Rᵢ the blobs holding literal i's other
-//     trigrams. A literal holding nothing beyond them admits all of C, and
-//     so the clause does.
-//   - A TRIGRAM MORE THAN ONE PLACE READS — two literals' trigram, of one
-//     clause or of two, or a clause's shared trigram that some other place
-//     reads too — is decoded once a lookup for all of them (Plan.held,
-//     decoded), and only as far as the furthest blob one of them needs.
-//     Hoisting alone reads such a list once a literal holding it, and an
-//     alternation whose one literal lacks a list the rest share —
-//     (createUser|deleteUser|findAccount) — hoists nothing at all.
-//   - A TRIGRAM ONE PLACE READS is read there alone, as that place narrows
-//     what it admits: into nothing, and only until the list passes the last
-//     blob it keeps (reading.listed).
-//
-// And a clause another implies — every blob the other admits, it admits
-// too — is not looked up at all (unimplied): a pattern repeating a part,
-// (foo.*){100}, is a hundred clauses of foo to regexlit.Required, each of
-// which would hold every blob holding foo.
-//
-// A LITERAL READS FIRST THE LEAST OF WHAT IT MUST HOLD, as one looked up
-// alone read its shortest list first: a list of its own decoded straight
-// into the clause's union, or blobs decoded for other places too, which it
-// does not narrow where they lie but into the union, by its next need. Each
-// other need then narrows what the union holds of the literal, in place: a
-// list of its own read as it is intersected, decoded blobs searched by steps
-// that double (gallop) — so what narrowing by C or a shared list costs a
-// literal is what it holds, never the length of what it shares
-// (TestGallopLooksAtAFewOrdinalsForEachItLooksFor). A lookup so allocates
-// each clause's C, each list more than one place reads decoded once, and
-// what its literals admit, in the two buffers the union merges them between;
-// and it reads no list twice, nor a list it narrows by past the furthest
-// blob a place reading it keeps. Its reading counts the bytes, which the
-// suite holds every lookup to (TestAClauseReadsEachListItNamesOnce,
-// TestAPlanReadsEachListItsClausesNameOnce,
-// TestALookupReadsAListOnlyAsFarAsTheBlobsItKeeps,
-// TestALookupAdmitsWhatItsLiteralsLookedUpAloneAdmit).
-//
-// WHAT IT COSTS IN TIME (BenchmarkLookup, over a segment of 65 536 blobs,
-// in bounded runs — -benchtime 200x -count 1, no race detector, two E-cores
-// of a Core Ultra 7 265U — each beside the per-literal lookup's own loop):
-// decoding a list of 65 536 ordinals takes 137 µs, against 220 µs for the
-// loop over its bytes the posting reader replaced, and 334 µs while the
-// reader's every step was a call (ordinals); the candidates of
-// handlerequest, one literal, whose lists of every blob it narrows by it
-// reads to their ends — blobs sit in id order, so what it keeps runs to the
-// segment's last — take 2.5 ms and allocate 7 560 bytes, against 3.9 ms and
-// 10.6 MB looked up a literal at a time, and 3.5 ms while a step was a call;
-// and of handle(request|response|record|reply), four literals sharing
-// handle's lists, 2.6 ms and 27 280 bytes, against 9.4 ms and 24.7 MB.
+// trigrams; where it holds a folded literal, every blob holding an escape also
+// counts. A LOOKUP READS EACH LIST ITS PLAN NAMES ONCE: literals and clauses
+// share trigrams ((?i)(create|delete|update)User holds "use" in all three), and
+// the commonest have the longest lists, so a list looked up per literal costs
+// k·L work and garbage where L would do. So a plan sorts its trigrams by where
+// a lookup reads them (clause, ref), in three kinds below. A clause another
+// implies is not looked up at all (unimplied): (foo.*){100} is a hundred
+// clauses of foo to regexlit.Required.
+
+// THE TRIGRAMS EVERY LITERAL OF A CLAUSE HOLDS (clause.shared) are hoisted out
+// of the union: the blobs holding them all, C, are read once, and
+// ∪ᵢ(C ∩ Rᵢ) = C ∩ ∪ᵢRᵢ, Rᵢ the blobs holding literal i's other trigrams.
+// A TRIGRAM MORE THAN ONE PLACE READS is decoded once a lookup for all of them
+// (Plan.held, decoded), only as far as the furthest blob any needs; hoisting
+// alone fails when one literal lacks a list the rest share
+// ((createUser|deleteUser|findAccount) hoists nothing). A TRIGRAM ONE PLACE
+// READS is read there alone, until the list passes the last blob that place
+// keeps (reading.listed).
+
+// A LITERAL READS FIRST THE LEAST OF WHAT IT MUST HOLD, as one looked up alone
+// read its shortest list first: a list of its own decoded straight into the
+// clause's union, or blobs decoded for other places too, narrowed by its next
+// need. Each other need narrows the literal's share in place (own lists as
+// intersected, decoded blobs by doubling steps, gallop), so narrowing costs what
+// the literal holds, never the length of what it shares
+// (TestGallopLooksAtAFewOrdinalsForEachItLooksFor). The reading counts bytes, and
+// TestAClauseReadsEachListItNamesOnce, TestAPlanReadsEachListItsClausesNameOnce,
+// TestALookupReadsAListOnlyAsFarAsTheBlobsItKeeps and
+// TestALookupAdmitsWhatItsLiteralsLookedUpAloneAdmit hold it. Time: BenchmarkLookup.
 
 // reading is one lookup's reads of a segment's posting lists — every clause
 // of one plan, in one segment — and the bytes of them it has read, each list
@@ -342,18 +301,17 @@ func (r *reading) decode(list []byte, dst []uint32) ([]uint32, error) {
 }
 
 // gallop appends to dst the ordinals of set that sorted holds too, both
-// ascending. Each of set's is looked for from where the one before it was:
-// by a step doubled until it passes it, then a binary search back. So a few
-// ordinals against many cost the few times the logarithm of the distance
-// between them, never a walk of sorted — which a clause's literals, each
-// narrowing a few blobs by blobs they all share, would otherwise take once
-// a literal. dst may be set[:0], since what is kept is never ahead of what is
-// read.
+// ascending. Each of set's is looked for from where the one before it was: by
+// a step doubled until it passes it, then a binary search back. So a few
+// ordinals against many cost the few times the log of the distance between
+// them, never a walk of sorted, which each literal narrowing by shared blobs
+// would otherwise take. dst may be set[:0]: what is kept is never ahead of what
+// is read.
 //
-// probes is the ordinals of sorted it looked at, at most 2(⌊log₂ n⌋+2) for
-// each of set's, n sorted's length. That is gallop's whole point, and what
-// it keeps does not show it, since a walk keeps the same: so the probes are
-// what the suite holds it to (TestGallopLooksAtAFewOrdinalsForEachItLooksFor).
+// probes is the ordinals of sorted it looked at, at most 2(⌊log₂ n⌋+2) per
+// element of set, n sorted's length. What it keeps cannot show gallop's point
+// (a walk keeps the same), so the suite holds the probes
+// (TestGallopLooksAtAFewOrdinalsForEachItLooksFor).
 func gallop(dst, set, sorted []uint32) (kept []uint32, probes int) {
 	lo := 0
 	for _, x := range set {

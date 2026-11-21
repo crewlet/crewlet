@@ -15,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
 // shapedKey is a credential only its shape gives away.
@@ -49,25 +51,18 @@ func TestTheDigestIsPOSIXCksums(t *testing.T) {
 	}
 }
 
-// A TRANSCRIPT LINE STAYS JSON, AND LOSES EVERY SECRET IN IT. A value the engine
-// named; a key's lines inside one string, which only the decoded string has as
-// lines; a string or a number under a credential's own key; and a cloud
-// session a run obtained by itself, as a tool's result holds it — its key id
-// by its shape, its secret and its token by their keys, whether the result
-// names them as members or a command printed them as text, and a Google
-// access token by its shape — all gone, the line still one JSON value. A line
-// that is not JSON — a torn last line — is scrubbed and redacted as text, the
-// engine's value taken out in the form a JSON string escapes it in, which is
-// the only form a torn line holds it in.
+// A transcript line stays JSON and loses every secret in it: a value the engine
+// named, a key's lines inside one string (only the decoded string has them as
+// lines), a string or number under a credential's key, and a cloud session a
+// run obtained itself (key id by shape, secret and token by key, as members or
+// printed text; a Google access token by shape). A torn, non-JSON last line is
+// scrubbed as text, the engine's value taken out in its JSON-escaped form.
+// A key is a string like any other: a tool's result can name a member by a
+// secret.
 //
-// Mutation: redact the raw line alone, the strings alone, write a key as it
-// came, keep a number under a credential's key, take out only a value's raw
-// form, rewrite a line of two values as one, drop a session token's words
-// from a credential's, or a session's keys from redact's, and a case here goes
-// red.
-//
-// AND A KEY IS A STRING LIKE ANY OTHER: a tool's structured result can name a
-// member by anything, a secret included.
+// Mutation: redact the raw line or the strings alone, keep a key as it came or
+// a number under a credential's key, take out only a raw form, merge a line of
+// two values, or drop session words from redact, and a case goes red.
 func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 	t.Parallel()
 	pem := "-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat("MIIEowIBAAKCAQEAu7Jx9f3Lm2Pq8Rt5Vw1Yz4Bc6De9Fg0Hi3Jk5Lm7No9Pq2Rs4\n", 6) +
@@ -112,7 +107,7 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 				`export AWS_SESSION_TOKEN=Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+Ab3+==\n"}`,
 			gone: []string{"ASIAEXAMPLESESSION01", "Qw3/Qw3/", "Ab3+Ab3+"}},
 	} {
-		got := rewriteLine(tc.line, s, testBounds)
+		got := rewriteLine(t, tc.line, s)
 		if !json.Valid([]byte(got)) {
 			t.Errorf("%s: the line is no longer JSON: %q", name, got)
 		}
@@ -122,26 +117,71 @@ func TestATranscriptLineStaysJSONAndLosesEverySecret(t *testing.T) {
 			}
 		}
 	}
-	if got := rewriteLine(`{"text":"cut off mid opaque-engine-value`, s, testBounds); strings.Contains(got,
+	if got := rewriteLine(t, `{"text":"cut off mid opaque-engine-value`, s); strings.Contains(got,
 		"opaque-engine-value") {
 		t.Errorf("a line that is not JSON kept its secret: %q", got)
 	}
 	// A TORN LINE HOLDS A VALUE AS ITS STRING ESCAPED IT, and nothing decodes
 	// the string before the scrub reads it: only the escaped form is there.
-	if got := rewriteLine(`{"text":"cut off see with\"quote-value`, s, testBounds); strings.Contains(got,
+	if got := rewriteLine(t, `{"text":"cut off see with\"quote-value`, s); strings.Contains(got,
 		"quote-value") {
 		t.Errorf("a torn line kept the escaped form of a value: %q", got)
 	}
 	// TWO VALUES ON ONE LINE are not the one JSON value a transcript's line
 	// is: the line is redacted as the text it is, rather than split in two.
-	if got := rewriteLine(`{"a":"opaque-engine-value"} {"b":1}`, s, testBounds); strings.Contains(got,
+	if got := rewriteLine(t, `{"a":"opaque-engine-value"} {"b":1}`, s); strings.Contains(got,
 		"opaque-engine-value") || strings.Contains(got, "\n") || !strings.HasSuffix(got, `} {"b":1}`) {
 		t.Errorf("a line of two values was kept as %q", got)
 	}
 }
 
-// testBounds is the scrub of an archive at a session's bound.
-var testBounds = boundsFor(32 << 20)
+// testBounds is the scrub at the plaintext a kept session's scrub reads.
+var testBounds = plainBounds(256 << 20)
+
+// rewriteLine is one line of a transcript, with no break, as the scrub keeps
+// it ([keptLines]).
+func rewriteLine(t testing.TB, line string, s scrubber) string {
+	t.Helper()
+	return keptLines(t, line, s)
+}
+
+// keptLines is a transcript's text as both readings of a tar keep it, each
+// staging its texts as a take's do, the first read again where a take's is
+// ([firstReadings]): what the second writes, held to the size the first
+// counted.
+func keptLines(t testing.TB, text string, s scrubber) string {
+	t.Helper()
+	var size int64
+	plan, err := firstReadings(strings.NewReader(text), func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(text)), nil
+	}, s, scrubBounds{}, func(src io.Reader, s scrubber, plan *tarPlan) error {
+		from, _, err := plan.memberAt(0, src)
+		if err != nil {
+			return err
+		}
+		if plan.carry == nil {
+			s.unitBegins()
+		}
+		plan.markMember(0, 0, from, s)
+		size, err = measureLines(src, s, plan)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("the first reading of the transcript: %v", err)
+	}
+	var out bytes.Buffer
+	if err = writeLines(&out, strings.NewReader(text), s.secondReading(plan, nil), plan,
+		plan.lines.count()); err != nil {
+		t.Fatalf("the second reading of the transcript: %v", err)
+	}
+	if !plan.lines.done() || !plan.cuts.done() || plan.pending {
+		t.Fatal("the second reading of the transcript left some of the plan unread")
+	}
+	if int64(out.Len()) != size {
+		t.Fatalf("the first reading counted %d bytes and the second wrote %d", size, out.Len())
+	}
+	return out.String()
+}
 
 // A VALUE TOO SHORT TO BE A CREDENTIAL IS NEVER TAKEN OUT BY VALUE, and a long
 // one that begins with another is taken out whole.
@@ -159,37 +199,18 @@ func TestTheScrubTakesOutCredentialsNotWords(t *testing.T) {
 	}
 }
 
-// A CREDENTIAL'S KEY IS READ HOWEVER ITS WORDS ARE JOINED, AND A TRANSCRIPT'S
-// OWN KEYS ARE NO CREDENTIAL'S. A cloud session's token sits under a key of its
-// own wherever it is written — `SessionToken` in what STS answers,
-// `sessionToken` in what Roles Anywhere does, `aws_session_token` in AWS's
-// credentials file, and `X-Amz-Security-Token`, AWS's own name for it, as a
-// request's header — and each spelling is a credential's key, as an API key's
-// and a token's are under a header's hyphens: `x-api-key`, `X-Auth-Token`,
-// GitLab's `PRIVATE-TOKEN`. So are the other names a credential carries: the
-// token that refreshes a login, the authorization a request carries, a
-// client's credentials, an API token, a bearer token, and an OpenID Connect ID
-// token under its own words, however they are joined; and what a Docker config
-// holds for a registry, its `auth` (the user and password, encoded), its
-// identity token and its registry token.
+// A credential's key is read however its words are joined (`SessionToken`,
+// `aws_session_token`, `X-Amz-Security-Token`, `x-api-key`, `PRIVATE-TOKEN`,
+// refresh, authorization, client credentials, API, bearer and ID tokens, and a
+// Docker config's `auth`, identity and registry tokens), and a transcript's own
+// keys are no credential's.
 //
-// A harness counts its tokens and names its sessions under keys of its own,
-// an access key's id names no secret, a cache's key no credential, and a
-// session's expiry is no secret: none of those is one. Nor is a count whose
-// name spells `idtoken` by chance (`paid_tokens`), since an ID token's `id` is
-// a word of its own, nor a commit's author or a server's OAuth settings, since
-// only the whole key is read as `auth`.
+// Not credentials: token counts, session names, an access key's id, a cache's
+// key, a session's expiry, `paid_tokens` (an ID token's `id` is a word of its
+// own), and a commit's author or OAuth settings (only the whole key is `auth`).
 //
-// Mutation: drop any one name from the list — the session's, the refresh
-// token's, the authorization's, the credential's, the API token's, the auth
-// token's, the private token's, the bearer token's — and its rows are no
-// credential's; read the words in the key with its separators kept, and the
-// headers' and the credentials file's are not; read `token` or `key` anywhere
-// in a key, and every transcript's usage counts, an access key's id and a
-// cache's key are; read an ID token's `id` anywhere, and the paid tokens are,
-// and as no word at all, the ID tokens are not; drop `auth`, or Docker's
-// identity or registry token, and a Docker config's rows are no credential's,
-// and read `auth` anywhere in a key, and the author and the OAuth settings are.
+// Mutation: drop any name from the list, keep separators, or read `token`,
+// `key`, `id` or `auth` anywhere in a key, and a case goes red.
 func TestACredentialsKeyIsReadHoweverItsWordsAreJoined(t *testing.T) {
 	t.Parallel()
 	for key, want := range map[string]bool{
@@ -264,7 +285,7 @@ func TestAHandedKeysArmourStaysForTheShapePass(t *testing.T) {
 		"the handed key":        handed,
 		"a key the run printed": printed,
 	} {
-		got := rewriteLine(`{"type":"tool_result","content":`+jsonString(t, "cat k\n"+text)+`}`, s, testBounds)
+		got := rewriteLine(t, `{"type":"tool_result","content":`+jsonString(t, "cat k\n"+text)+`}`, s)
 		if strings.Contains(got, "QyNTUxOQAAACDhRunsOwnPrintedKeyBodyLineOfBase64Chars0123456789ab") ||
 			strings.Contains(got, "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtz") {
 			t.Errorf("%s: a line of a key's body survived: %q", name, got)
@@ -449,19 +470,21 @@ func reopenOf(archive []byte) func() (io.ReadCloser, error) {
 	return func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(archive)), nil }
 }
 
-// THE SCRUB HOLDS NOTHING PAST ITS BOUNDS, whatever the box's own code wrote: a
-// gzip that expands past the plaintext one reading admits — a tar's or an
-// export's — a line, a string or a run of blanks the decoder would hold past
-// the piece, a stretch a redaction holds unsettled past it (a key with no END),
-// and a value nested past the rewrite's depth are each refused; the same
-// archive within its bounds, and a value at the depth, are not.
+// THE SCRUB READS NOTHING PAST ITS BOUNDS, AND REFUSES NOTHING FOR ITS LENGTH,
+// whatever the box's own code wrote: a gzip that expands past the plaintext one
+// reading admits, a tar's or an export's, is refused, the same archive within
+// its bounds is not; a transcript's line, a document's string, a run of blanks
+// and a stretch the redaction reads on (a key with no END) each far longer than
+// the scanner's and the redaction's windows are kept; and a value nested past
+// the scanner's depth is no JSON value, one at the depth is.
 //
-// Mutation: drop the plaintext's bound, the line's, the token's, the blanks',
-// the held stretch's or the depth's, and something below is read to its end.
-func TestTheScrubHoldsNothingPastItsBounds(t *testing.T) {
+// Mutation: drop the plaintext's bound, and something below is read to its
+// end; hold a line, a string or a stretch to a bound below them, and it is
+// refused.
+func TestTheScrubReadsNothingPastItsBoundsAndRefusesNothingForItsLength(t *testing.T) {
 	t.Parallel()
 	s := newScrubber(nil)
-	small := scrubBounds{plain: 1 << 20, piece: 64 << 10}
+	small := scrubBounds{plain: 1 << 20}
 	bomb := tarOf(t, map[string]string{
 		"projects/p/s.jsonl": strings.Repeat(`{"text":"ordinary"}`+"\n", (2<<20)/20),
 	})
@@ -472,34 +495,30 @@ func TestTheScrubHoldsNothingPastItsBounds(t *testing.T) {
 		t.Errorf("the same tar within its bounds: %v", err)
 	}
 	export := gzipOf(t, `{"messages":[`+strings.Repeat(`"ordinary",`, (2<<20)/11)+`"end"]}`)
-	if err := scrubDocument(bytes.NewReader(export), io.Discard, s, small); !errors.Is(err, errScrubBound) {
+	if err := scrubDocument(bytes.NewReader(export), reopenOf(export), io.Discard, s,
+		small); !errors.Is(err, errScrubBound) {
 		t.Errorf("an export expanding past its plaintext's bound: %v, want errScrubBound", err)
 	}
-	long := strings.Repeat("a", 128<<10)
+	long := strings.Repeat("a", 3<<20)
 	for name, files := range map[string]map[string]string{
-		"a transcript line past the piece":   {"projects/p/s.jsonl": `{"text":"` + long + `"}` + "\n"},
-		"a document's string past the piece": {"tasks/s/1.json": `{"text":"` + long + `"}`},
-		"a key with no END held past the piece": {"projects/p/s/tool-results/out.txt": "-----BEGIN RSA PRIVATE KEY-----\n" +
-			strings.Repeat(keyLine+"\n", (128<<10)/len(keyLine))},
+		"a transcript line":   {"projects/p/s.jsonl": `{"text":"` + long + `"}` + "\n"},
+		"a document's string": {"tasks/s/1.json": `{"text":"` + long + `"}`},
+		"a run of blanks":     {"tasks/s/1.json": `{"text":` + strings.Repeat(" \n", 1<<20) + `"a"}`},
+		"a key with no END": {"projects/p/s/tool-results/out.txt": "-----BEGIN RSA PRIVATE KEY-----\n" +
+			strings.Repeat(keyLine+"\n", (3<<20)/len(keyLine))},
 	} {
 		archive := tarOf(t, files)
-		if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), io.Discard, s,
-			small); !errors.Is(err, errScrubBound) {
-			t.Errorf("%s: %v, want errScrubBound", name, err)
+		if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), io.Discard, s, testBounds); err != nil {
+			t.Errorf("%s: %v, want it kept", name, err)
 		}
 	}
-	// BLANKS ARE HELD AS A TOKEN IS: the decoder skips them only once it
-	// sees the token after them.
-	blanks := `{"text":` + strings.Repeat(" \n", 64<<10) + `"a"}`
-	if err := rewriteDocument(io.Discard, strings.NewReader(blanks), s, small); !errors.Is(err, errScrubBound) {
-		t.Errorf("a run of blanks past the piece: %v, want errScrubBound", err)
-	}
 	deep := func(n int) string { return strings.Repeat("[", n) + `"x"` + strings.Repeat("]", n) }
-	if err := rewriteDocument(io.Discard, strings.NewReader(deep(scrubDepthMax+1)), s,
-		testBounds); !errors.Is(err, errTooDeep) {
-		t.Errorf("a value nested past the depth: %v, want errTooDeep", err)
+	var fault *jsonscan.Error
+	if err := rewriteDocument(io.Discard, strings.NewReader(deep(jsonscan.MaxDepth+1)), s, pieceGate{}); !errors.As(err, &fault) ||
+		fault.Fault != jsonscan.FaultDepth {
+		t.Errorf("a value nested past the depth: %v, want the scanner's FaultDepth", err)
 	}
-	if err := rewriteDocument(io.Discard, strings.NewReader(deep(scrubDepthMax)), s, testBounds); err != nil {
+	if err := rewriteDocument(io.Discard, strings.NewReader(deep(jsonscan.MaxDepth)), s, pieceGate{}); err != nil {
 		t.Errorf("a value nested at the depth: %v", err)
 	}
 }
@@ -587,7 +606,8 @@ func TestAnExportIsOneDocumentKeptScrubbed(t *testing.T) {
 	doc := `{"info":{"id":"ses_1"},"messages":[{"text":"the token opaque-engine-value and ` + shapedKey +
 		`"},{"opaque-engine-value":"named","input":{"password":"opaque-but-keyed"}}]}`
 	var out bytes.Buffer
-	if err := scrubDocument(bytes.NewReader(gzipOf(t, doc)), &out, s, testBounds); err != nil {
+	archive := gzipOf(t, doc)
+	if err := scrubDocument(bytes.NewReader(archive), reopenOf(archive), &out, s, testBounds); err != nil {
 		t.Fatalf("scrubDocument: %v", err)
 	}
 	zr, err := gzip.NewReader(&out)
@@ -606,9 +626,11 @@ func TestAnExportIsOneDocumentKeptScrubbed(t *testing.T) {
 			t.Errorf("the export kept %q: %s", secret, kept)
 		}
 	}
-	if err := scrubDocument(bytes.NewReader(gzipOf(t, doc+"\n"+doc)), io.Discard, s,
-		testBounds); !errors.Is(err, errNotOneValue) {
-		t.Errorf("an export of two documents: %v, want errNotOneValue", err)
+	twice := gzipOf(t, doc+"\n"+doc)
+	var fault *jsonscan.Error
+	if err := scrubDocument(bytes.NewReader(twice), reopenOf(twice), io.Discard, s,
+		testBounds); !errors.As(err, &fault) || fault.Fault != jsonscan.FaultTrailing {
+		t.Errorf("an export of two documents: %v, want the scanner's FaultTrailing", err)
 	}
 }
 
@@ -625,7 +647,7 @@ func TestALoadedToolDefinitionTheScrubRenamedIsLeftOut(t *testing.T) {
 	record := `{"type":"attachment","uuid":"u-1","attachment":{"type":"deferred_tools_record","entries":[` +
 		`{"name":"mcp__cloudhost__backup_list","description":"Lists <b>backups</b>","input_schema":{"type":"object"}},` +
 		`{"name":"mcp__monitor__search","description":"Searches","input_schema":{"type":"object"}}]}}`
-	got := rewriteLine(record, s, testBounds)
+	got := rewriteLine(t, record, s)
 	var kept struct {
 		UUID       string `json:"uuid"`
 		Attachment struct {
@@ -657,17 +679,17 @@ func TestALoadedToolDefinitionTheScrubRenamedIsLeftOut(t *testing.T) {
 			t.Errorf("providerToolName(%q) = %v, want %v", name, !want, want)
 		}
 	}
-	if rewriteLine(record, s, testBounds) != got {
+	if rewriteLine(t, record, s) != got {
 		t.Error("two rewrites of one record differ, and a tar's two readings must write the same bytes")
 	}
 
 	untouched := `{"type":"attachment","attachment":{"type":"deferred_tools_record","entries":[` +
 		`{"name":"mcp__monitor__search","description":"Searches <b>all</b>"}]}}`
-	if got := rewriteLine(untouched, s, testBounds); got != untouched {
+	if got := rewriteLine(t, untouched, s); got != untouched {
 		t.Errorf("a record the scrub renamed nothing in was rewritten: %q", got)
 	}
 	call := `{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__cloudhost__backup_list"}]}}`
-	if got := rewriteLine(call, s, testBounds); !strings.Contains(got, "tool_use") ||
+	if got := rewriteLine(t, call, s); !strings.Contains(got, "tool_use") ||
 		!strings.Contains(got, scrubMarker) {
 		t.Errorf("a call's own line was not kept as rewritten: %q", got)
 	}
@@ -711,16 +733,12 @@ func ltAnnounced(definitions ...string) string {
 		`],"nameOnlyAnnouncements":["mcp__seat__later"]},"type":"attachment"`, 1)
 }
 
-// A LOADED TOOL DEFINITION THE SCRUB RENAMED IS CUT OUT OF ITS LINE AS WRITTEN:
-// the definition goes with the comma that joined it to its list, and every
-// other byte of the line stays where it was, the record's keys in the order
-// written above all: a line that began `{"parentUuid":` (the bytes Claude
-// Code's prune of a session file past 5 MiB finds a record by) still does, and
-// a subagent's `"isSidechain":true` stays in its line's first 256 bytes (where
-// 2.1.310's reading of such a file looks for it). Over each shape the record
-// is written in (a main thread's and a subagent's, as 2.1.310 and 2.1.322
-// write them; one with the names announced alone after the list; and the
-// shape the scrub's first case held), with the renamed definition first,
+// A loaded tool definition the scrub renamed is cut out of its line as written:
+// the definition goes with its joining comma and every other byte stays, key
+// order above all: a line that began `{"parentUuid":` (where Claude Code's
+// prune of a session file past 5 MiB finds a record) still does, and a
+// subagent's `"isSidechain":true` stays in the first 256 bytes (where 2.1.310
+// looks for it). Over each record shape, with the renamed definition first,
 // between two kept, last, alone and twice.
 //
 // Mutation: write the record again from a map, drop nothing, cut the
@@ -748,7 +766,7 @@ func TestALoadedToolDefinitionIsCutOutOfItsLineAsWritten(t *testing.T) {
 			"twice, together":  {[]string{ltEcho, ltRenamed, ltRenamed, ltSend}, []string{ltEcho, ltSend}},
 		} {
 			line, want := record(tc.written...), record(tc.kept...)
-			got := rewriteLine(line, s, testBounds)
+			got := rewriteLine(t, line, s)
 			if got != want {
 				t.Errorf("%s, the renamed definition %s: kept\n%s\nwant\n%s", shape, placed, got, want)
 			}
@@ -763,14 +781,13 @@ func TestALoadedToolDefinitionIsCutOutOfItsLineAsWritten(t *testing.T) {
 // THE CUT TAKES NOTHING BUT THE DEFINITION AND ITS COMMA, whatever else the
 // line holds: blanks between its tokens, inside the list as much as outside
 // it, and in its other values escapes, a line separator raw and escaped, a lone
-// surrogate's escape and a byte that is no UTF-8, each kept as written and
-// never decoded and written again. A line the rewrite hands the cut has no
-// blank between its tokens, and every key and string in it written as
-// [jsonRewrite.writeString] writes one; the cut is held to every byte of any
-// line all the same.
+// surrogate's escape and a byte that is no UTF-8. The line is kept as the
+// rewrite writes it, no blank between its tokens and every key and string
+// written as [jsonStringWriter] writes one, so what the cut takes is held to the
+// rewrite of the same line less the definition: nothing else of it moves.
 //
-// Mutation: write the record again from a map, or the list again from its
-// kept definitions, and the blanks or the escapes go.
+// Mutation: cut the definition beside the renamed one, or keep a cut one's
+// comma, and the line differs from its rewrite less the definition.
 func TestTheCutTakesNothingButTheDefinitionAndItsComma(t *testing.T) {
 	t.Parallel()
 	renamed := `{"name": "mcp__` + scrubMarker + `__backup_list", "description": "Lists backups"}`
@@ -786,25 +803,21 @@ func TestTheCutTakesNothingButTheDefinitionAndItsComma(t *testing.T) {
 	} {
 		line := `{"parentUuid": "` + ctUUID(1) + `" , "isSidechain": false, "attachment": {"type": ` +
 			`"deferred_tools_record", "entries": ` + tc.list + `}, "type": "attachment", "text": ` + text + `}`
-		want := strings.Replace(line, tc.cut, "", 1)
-		if got := withoutBrokenDefinitions(line); got != want {
+		want := rewriteLine(t, strings.Replace(line, tc.cut, "", 1), newScrubber(nil))
+		if got := rewriteLine(t, line, newScrubber(nil)); got != want {
 			t.Errorf("the renamed definition %s: kept\n%q\nwant\n%q", placed, got, want)
 		}
 	}
 }
 
-// A LINE THE CUT HAS NOTHING TO TAKE FROM IS HANDED ON AS IT CAME: a line
-// that holds no marker, which the rewrite renamed nothing in, even where its
-// writer named a definition outside the pattern; a record whose definitions
-// keep their names (a marker in a description renames nothing), an empty list
-// and a null one, and every line that is not the loaded tools' record as
-// JSON.parse reads it: a list that is an object, another attachment's list, a
-// record with no attachment or one that is a string, a torn line, a line of
-// two values, a list of records, and a record whose key is written twice,
-// which JSON.parse reads by its last value (a list or an attachment the
-// record reads past, a type that is another's). Where the list it reads is
-// written twice, only the one JSON.parse reads is cut, and the one it reads
-// past stays as written.
+// A line the cut has nothing to take from is handed on as it came: a line with
+// no marker (even where its writer named a definition outside the pattern), a
+// record whose definitions keep their names (a marker in a description renames
+// nothing), an empty or null list, and every line that is not the loaded
+// tools' record as JSON.parse reads it (another attachment's list, a list that
+// is an object, no attachment or a string one, a torn line, two values, a list
+// of records, a key written twice read by its last value). Where the list is
+// written twice, only the one JSON.parse reads is cut.
 //
 // Mutation: judge the definitions of a line that holds no marker, read a key
 // by its first value, or cut a line that is more than one object, and a case
@@ -838,14 +851,14 @@ func TestALineTheCutHasNothingToTakeFromIsHandedOnAsItCame(t *testing.T) {
 		"an attachment the record reads past": `{"parentUuid":null,"attachment":{"type":"deferred_tools_record",` +
 			`"entries":[` + renamed + `]},"attachment":{"type":"date"}}`,
 	} {
-		if got := withoutBrokenDefinitions(line); got != line {
+		if got := rewriteLine(t, line, newScrubber(nil)); got != line {
 			t.Errorf("%s: handed on as\n%s\nwant it as it came\n%s", name, got, line)
 		}
 	}
 	twice := loaded(`{"type":"deferred_tools_record","entries":[` + described + `],"entries":[` + renamed + `,` +
 		described + `]}`)
 	want := loaded(`{"type":"deferred_tools_record","entries":[` + described + `],"entries":[` + described + `]}`)
-	if got := withoutBrokenDefinitions(twice); got != want {
+	if got := rewriteLine(t, twice, newScrubber(nil)); got != want {
 		t.Errorf("a list written twice: kept\n%s\nwant\n%s", got, want)
 	}
 }
@@ -881,30 +894,25 @@ func TestTheCutReadsEachKeyByItsExactName(t *testing.T) {
 		"entries spelled with escapes": `{"parentUuid":null,"attachment":{"type":"deferred_tools_record",` +
 			`"\u0065ntries":LIST},"type":"attachment"}`,
 	} {
-		line, want := strings.Replace(record, "LIST", written, 1), strings.Replace(record, "LIST", kept, 1)
-		if got := withoutBrokenDefinitions(line); got != want {
+		line := strings.Replace(record, "LIST", written, 1)
+		want := rewriteLine(t, strings.Replace(record, "LIST", kept, 1), newScrubber(nil))
+		if got := rewriteLine(t, line, newScrubber(nil)); got != want {
 			t.Errorf("%s: kept\n%s\nwant\n%s", name, got, want)
 		}
 	}
 }
 
-// A LOADED TOOL DEFINITION IS JUDGED BY THE NAME CLAUDE CODE SENDS IT UNDER:
-// its `name`, that key exactly and the last written of it, as JSON.parse
-// reads one, since 2.1.310 and 2.1.322 key each definition they send again by
-// it. A renamed `name` beside a sound `NAME` is cut, a renamed `Name` beside a
-// sound `name` is not, and a definition named only by a `Name` names nothing
-// Claude Code reads and is cut, as one with no name is; of a `name` written
-// twice, the last is the one judged, whatever the one before it holds, and a
-// last one that is no string (a number, an object, a null) names nothing the
-// provider takes, so the definition is cut whatever the `name` before it
-// said.
+// A loaded tool definition is judged by the name Claude Code sends it under:
+// its `name`, that key exactly and the last written of it, as JSON.parse reads
+// one (2.1.310 and 2.1.322 key each definition by it). A renamed `name` beside
+// a sound `NAME` is cut, a renamed `Name` beside a sound `name` is not, and a
+// definition with only a `Name` or no name is cut. Of a `name` written twice
+// the last is judged; one that is no string names nothing the provider takes,
+// so the definition is cut.
 //
-// Mutation: read the name with encoding/json's decode, which fills it from a
-// key in any case, and three cases go red; read it with any decode of the
-// definition into a name, which fails at a `name` that is no string, and a
-// number or an object before a sound name has the definition cut; pass a
-// `name` that is no string over, or judge the first `name`, and a sound name
-// followed by a number, an object or a renamed name is kept.
+// Mutation: read the name with encoding/json's case-folding decode, decode the
+// whole definition into a name, pass a non-string `name` over, or judge the
+// first `name`, and a case goes red.
 func TestALoadedToolDefinitionIsJudgedByTheNameClaudeCodeSends(t *testing.T) {
 	t.Parallel()
 	renamed := "mcp__" + scrubMarker + "__backup_list"
@@ -931,24 +939,21 @@ func TestALoadedToolDefinitionIsJudgedByTheNameClaudeCodeSends(t *testing.T) {
 		if tc.cut {
 			want = strings.Replace(line, `,`+tc.definition, "", 1)
 		}
-		if got := withoutBrokenDefinitions(line); got != want {
+		if got := rewriteLine(t, line, newScrubber(nil)); got != want {
 			t.Errorf("%s: kept\n%s\nwant\n%s", name, got, want)
 		}
 	}
 }
 
-// THE SCRUB KEEPS EVERY RECORD WHERE CLAUDE CODE FINDS IT, whatever it takes
-// out of a session: each transcript keeps every line, and each line's record
-// its uuid, its parentUuid and its type as written and every key, at every
-// depth, in the order written, so a line that began `{"parentUuid":` still
-// does and a subagent's `"isSidechain":true` stays where 2.1.310 looks for it;
-// what a record loses is a loaded tool definition the scrub cut, its keys with
-// it. Over a line of every record kind the thread layer's cases shape as
-// 2.1.118, 2.1.310 and 2.1.322 write them, in a main thread and a subagent's,
-// beside the loaded-tools records the probes hold, through the scrub of a
-// whole archive: it takes the session's id out of every line, as a value the
-// launch handed the box would be, so that every line is rewritten, and a tool
-// server's name out of a definition and a call.
+// The scrub keeps every record where Claude Code finds it, whatever it takes
+// out of a session: every line, and each record's uuid, parentUuid, type and
+// every key at every depth in the order written, so a line that began
+// `{"parentUuid":` still does and a subagent's `"isSidechain":true` stays where
+// 2.1.310 looks for it; a record loses only a cut loaded tool definition. Over
+// a line of every record kind in 2.1.118, 2.1.310 and 2.1.322, main thread and
+// subagent, beside the probes' loaded-tools records, through the scrub of a
+// whole archive that takes the session's id out of every line (so every line
+// is rewritten) and a tool server's name out of a definition and a call.
 //
 // Mutation: write a loaded-tools record again from a map, or lose a line's
 // break, and a line here goes red.

@@ -74,24 +74,19 @@ func seatKinds(_ context.Context, handle string) (iam.ActorKind, error) {
 	return iam.ActorHuman, nil
 }
 
-// harnessCeiling is the byte ceiling every harness provisions its log at.
-//
-// A QUARTER OF TIER A'S FLOOR, and tighter is the honest direction: at this
-// ceiling the gate reserve still takes its full fleet term out of the top of
-// the log, so every write here is admitted against an ordinary ceiling smaller
-// than any production log has. What the broker reserves for it is accounting
-// against that broker's own declared limit ([brokertest.StoreMaxBytes]) and
-// claims nothing on disk, so the figure is chosen for the gate and not for the
-// machine running the suite.
+// harnessCeiling is the byte ceiling every harness provisions its log at: a
+// quarter of Tier A's floor, because tighter is the honest direction (the gate
+// reserve still takes its full fleet term, so every write is admitted against
+// a smaller ordinary ceiling than any production log's). The broker's reserve
+// is accounting against its declared limit ([brokertest.StoreMaxBytes]), not
+// disk, so the figure serves the gate, not the runner.
 const harnessCeiling = config.ArtifactsLogMaxBytesFloor / 4
 
 // openLog stands up a broker and the artifacts log on it, at [harnessCeiling].
 func openLog(t *testing.T) *js.DomainLog {
 	t.Helper()
-	// THE BROKER DECLARES ITS SIZE, for brokertest's reason: left to derive
-	// its cap from the runner's free space it takes three quarters of it,
-	// and would refuse even this log's quarter gibibyte on a runner with
-	// less than a third of one free, whatever the case under it does.
+	// THE BROKER DECLARES ITS SIZE ([brokertest.StoreMaxBytes]): a cap derived
+	// from the runner's free space refuses this log on a runner short of disk.
 	q, err := js.Open(t.Context(), js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes})
 	if err != nil {

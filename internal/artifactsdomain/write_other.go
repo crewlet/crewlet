@@ -72,9 +72,8 @@ func (w *Writer) AddAsset(ctx context.Context, c Call, in AssetInput) (Asset, Wr
 					"assets, the most an asset store keeps", ErrInvalid, id, count)
 			}
 			if bytes+in.Object.Size > artifacts.MaxAssetBytesPerArtifact {
-				// IN A PERSON'S UNIT, the limit and nothing they have
-				// to divide: "would hold 1073741825 bytes, and at most
-				// 1073741824" said the same in two numbers.
+				// IN A PERSON'S UNIT: the limit in words, not two
+				// byte counts the reader must compare.
 				return statelog.Decision{}, fmt.Errorf("%w: %s: this asset would take "+
 					"this artifact's assets over %s, the most they can hold", ErrInvalid,
 					id, objstore.SizeWords(artifacts.MaxAssetBytesPerArtifact))
@@ -84,8 +83,8 @@ func (w *Writer) AddAsset(ctx context.Context, c Call, in AssetInput) (Asset, Wr
 				return statelog.Decision{}, err
 			}
 			if elsewhere {
-				// NOT THE OBJECT'S KEY, which the store minted for the
-				// upload and nobody reading this chose.
+				// NOT THE OBJECT'S KEY, which the store minted and
+				// nobody reading this chose.
 				return statelog.Decision{}, fmt.Errorf("%w: %s: the upload this asset "+
 					"names is already used by another file, so upload its bytes again",
 					ErrInvalid, id)

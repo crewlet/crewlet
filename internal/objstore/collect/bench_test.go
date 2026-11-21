@@ -20,29 +20,15 @@ import (
 )
 
 // BenchmarkAudit measures what the audit's bound buys across the walk's page
-// reads: how many references a second it gets through, how many questions it
-// keeps out on average against its bound of [auditConcurrency], and how many
-// requests each reference costs — over a store that answers each request after
-// a fixed latency and an estate whose every page read takes one of its own.
+// reads: references a second, questions out against its bound
+// [auditConcurrency], and requests per reference, at fixed modelled latencies.
 //
-// MANY PAGES of references, so the walk reads on while questions are out —
-// the claim under test is that a page read does not drain the bound — and
-// four stores. One asked about each object by name ("by_name"), as a store
-// that keeps no order is once its listing has failed. Two that keep no order
-// and are listed whole, a window at a time, as the broker's is: in one window
-// ("listed") and in eight ("listed_windows", the window cut to an eighth of
-// the references) — where each listing names every object again, which is
-// what [auditWindow] trades. And one that lists ranges in order a page of
-// [rangePage] names a request, as S3 does, given more references than its
-// bound has ranges out at once, and holding objects no required row names
-// between them — one in fifty, one in five, as the last day's keys may, and one
-// beside every reference ("ranged_derived"), the most an index kept over packs
-// puts among them — since what a range holds besides its references is
-// what the walk's measured cut answers ([auditor.cut]). The latencies are the
-// model's inputs, not a measurement of any store
-// (a whole listing's is a name's cost at the broker's measured pace, about
-// eighty thousand names a second): what comes out is the depth the audit
-// keeps and the requests it makes, which no store's speed changes.
+// MANY PAGES, so the walk reads on while questions are out (the claim: a page
+// read does not drain the bound), over four stores: asked by name
+// ("by_name"); unordered, listed whole in one window ("listed") or eight
+// ("listed_windows", what [auditWindow] trades) as the broker's is; and
+// ordered ranges of [rangePage] names as S3 does, with unreferenced objects
+// between references, which [auditor.cut] answers.
 //
 //	go test -run '^$' -bench BenchmarkAudit -benchtime 3x ./internal/objstore/collect/
 func BenchmarkAudit(b *testing.B) {

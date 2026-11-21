@@ -61,6 +61,8 @@ import {
   ITEM_KEY_SHAPE,
   KEY_SHAPE,
   artifactStandalonePath,
+  inboxItemKey,
+  inboxItemPath,
   pagePath,
   resolve,
   resolves,
@@ -208,6 +210,10 @@ describe("navigation identity", () => {
       home: "h",
       inbox: "i",
       me: "m",
+      // `q`, a question: `a` is the Org chart's.
+      ask: "q",
+      // `v`: `a` is the Org chart's and `d` Schedules'.
+      advisor: "v",
       company: "c",
       brand: "e",
       org: "a",
@@ -268,18 +274,18 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // SIXTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
+  // NINETEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
   // them and nothing else from the table: a section that became a sidebar row
   // is a second column of navigation arriving one row at a time. Workspace
   // runs in the order `nav.ts` argues: the work and its code, then the
   // talking, then what the talking produced (so Gitlet sits after Worklet, and
-  // Chatlet after Gitlet and before Doclet). The SEVENTEENTH is the reader's own
+  // Chatlet after Gitlet and before Doclet). The TWENTIETH is the reader's own
   // Account, which has no row (the user block at the sidebar's foot is the
   // reader, and its menu links it) and is a workspace all the same, so the
   // palette and its chord reach it.
-  test("the sidebar's rows are seventeen workspaces, in the story's order, and the menu holds the eighteenth", () => {
+  test("the sidebar's rows are nineteen workspaces, in the story's order, and the menu holds the twentieth", () => {
     const run = (place: string) => WORKSPACES.filter((w) => w.place === place).map((w) => w.key);
-    expect(run("you")).toEqual(["home", "inbox", "me"]);
+    expect(run("you")).toEqual(["home", "inbox", "me", "ask", "advisor"]);
     expect(run("company")).toEqual([
       "company",
       "brand",
@@ -324,7 +330,7 @@ describe("the navigation grammar", () => {
     for (const s of workspaceRow("settings")!.sections) (groups[s.group ?? ""] ??= []).push(s.key);
     expect(groups).toEqual({
       Company: ["general"],
-      Runtime: ["models", "ask-crewlet", "mcp-tools", "secrets", "limits", "advisor"],
+      Runtime: ["models", "mcp-tools", "secrets", "limits"],
       Spend: ["spend", "spend-tasks"],
       Access: ["people", "service-accounts", "tokens", "sign-in", "delegated-decisions", "audit"],
       Engine: ["nodes", "config", "backups", "storage", "gitlet", "diagnostics"],
@@ -605,6 +611,73 @@ describe("the navigation grammar", () => {
 
 describe("the resolver", () => {
   const uuid = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f";
+
+  // EVERY INBOX ITEM HAS AN ADDRESS OF ITS OWN, read back to the row key it was written from.
+  // Mutation: join a code notice's record and change with anything but `/`, or drop an
+  // executor's launch, and the key that comes back names another row.
+  test("an Inbox item's address names its row and is the Inbox", () => {
+    for (const [key, path] of [
+      [`ask:${uuid}`, ["inbox", "ask", uuid]],
+      ["run:turn-7", ["inbox", "run", "turn-7"]],
+      ["run:turn-7:q1", ["inbox", "run", "turn-7", "q1"]],
+      ["seat:pm", ["inbox", "seat", "pm"]],
+      ["condition:seat-state-pm", ["inbox", "condition", "seat-state-pm"]],
+      [`notice:${uuid}`, ["inbox", "notice", uuid]],
+      [`change:${uuid}/change-42`, ["inbox", "change", uuid, "change-42"]],
+      [`artifact:${uuid}`, ["inbox", "artifact", uuid]],
+    ] as const) {
+      expect(inboxItemPath(key), key).toEqual(path);
+      expect(inboxItemKey(path.slice(1)), key).toBe(key);
+      expect(resolve([...path]), key).toMatchObject({ screen: "inbox", item: key });
+      // ONE RECENT AND ONE STAR for the Inbox, whichever item is open.
+      expect(pagePath(path), key).toEqual(["inbox"]);
+    }
+    expect(resolve(["inbox"])).toMatchObject({ screen: "inbox" });
+    expect(resolve(["inbox"])).not.toHaveProperty("item");
+    // A KIND THE INBOX DOES NOT LIST, or no id, is no item.
+    expect(resolve(["inbox", "task", "ENG-1"]).resolved).toBe(false);
+    expect(resolve(["inbox", "ask"]).resolved).toBe(false);
+    expect(inboxItemPath("r-1")).toEqual(["inbox"]);
+  });
+
+  // ASK CREWLET IS A PAGE OF ITS OWN, everybody's, on one conversation by id
+  // or on none; its settings page is gone, the model being chosen on it.
+  test("Ask Crewlet's page is its own address, on a conversation by id or on none", () => {
+    const id = "6c1d8b63-52b5-4a1f-8e1f-3c9a2d4f0b21";
+    expect(resolve(["ask"])).toMatchObject({ screen: "ask", workspace: "ask" });
+    expect(resolve(["ask"])).not.toHaveProperty("conversation");
+    expect(resolve(["ask", id])).toMatchObject({ screen: "ask", conversation: id });
+    expect(resolve(["ask", "payroll"]).resolved).toBe(false);
+    expect(resolve(["ask", id, "x"]).resolved).toBe(false);
+    expect(resolve(["settings", "ask-crewlet"]).resolved).toBe(false);
+  });
+
+  // THE ADVISOR IS A PAGE OF ITS OWN with two tabs and a page per finding;
+  // its settings page is gone.
+  test("the Advisor's page is its tabs, a finding by its id and a report by its week", () => {
+    const id = "1f2e3d4c-5b6a-4978-8877-665544332211";
+    expect(resolve(["advisor"])).toMatchObject({ screen: "advisor", section: "findings" });
+    expect(resolve(["advisor", "history"])).toMatchObject({
+      screen: "advisor",
+      section: "history",
+    });
+    expect(resolve(["advisor", "findings", id])).toMatchObject({ screen: "advisor-finding", id });
+    expect(resolve(["advisor", "findings", "x"]).resolved).toBe(false);
+    expect(resolve(["advisor", "findings"]).resolved).toBe(false);
+    expect(resolve(["settings", "advisor"]).resolved).toBe(false);
+    expect(resolve(["advisor", "reports"])).toMatchObject({
+      screen: "advisor",
+      section: "reports",
+    });
+    expect(resolve(["advisor", "reports", "2026-W47"])).toMatchObject({
+      screen: "advisor-report",
+      week: "2026-W47",
+    });
+    // A REPORT IS NAMED BY ITS ISO WEEK, and nothing else.
+    for (const bad of ["2026-W00", "2026-W54", "2026-47", "w47", id]) {
+      expect(resolve(["advisor", "reports", bad]).resolved).toBe(false);
+    }
+  });
 
   // THE SIGN-IN SCREENS take exactly the tail their address has. An
   // invitation and a reset link are the exceptions: each screen answers a link
@@ -893,6 +966,20 @@ describe("the resolver", () => {
       "Repositories",
       "web",
     ]);
+  });
+
+  // AN OLD NAME'S ADDRESS IS TITLED BY THE NAME ITS PAGE RESOLVED, the page
+  // and the trail naming one repository. Mutation: name the crumb from the
+  // address alone, and this fails.
+  test("a renamed repository's old address is crumbed by its new name", () => {
+    expect(crumbsFor(["gitlet", "repos", "old"], { old: "new" }).map((c) => c.label)).toEqual([
+      "Gitlet",
+      "Repositories",
+      "new",
+    ]);
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const commit = crumbsFor(["gitlet", "repos", "old", "commits", sha], { old: "new" });
+    expect(commit[2]).toMatchObject({ label: "new", path: ["gitlet", "repos", "new"] });
   });
 
   // A COMMIT'S PAGE NAMES ITS COMMIT WHOLE, and a comparison is its

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -34,6 +35,19 @@ const caseStall = 2 * time.Second
 func openStalling(t *testing.T, srv *s3fake.Server) *s3obj.Backend {
 	t.Helper()
 	b := openFake(t, srv, "")
+	s3obj.SetStall(b, caseStall)
+	return b
+}
+
+// openOnClock is the backend cfg opens, its stall bound [caseStall] and its
+// time kept by now: a case whose link or bucket runs at a pace dates its
+// watches on that pace, which a loaded process's timers fall behind.
+func openOnClock(t *testing.T, cfg s3obj.Config, now func() time.Time) *s3obj.Backend {
+	t.Helper()
+	b, err := s3obj.OpenRetrying(t.Context(), cfg, nil, s3obj.Clock{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
 	s3obj.SetStall(b, caseStall)
 	return b
 }
@@ -530,7 +544,7 @@ func (b *slowBody) Read(p []byte) (int, error) {
 // mebibytes, four seconds, as it holds two minutes of the floor — so the
 // transport goes that long between two reads of the body while the socket
 // drains, and only the socket's count of what the far end acknowledged shows
-// the write moving.
+// the write moving. Timed by what the link has carried at its pace.
 func TestAWriteAcrossALinkAtTheFloorIsNeverEnded(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -543,14 +557,10 @@ func TestAWriteAcrossALinkAtTheFloorIsNeverEnded(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			srv := s3fake.Start(t, "files")
-			link := pacedRelay(t, srv.Listener.Addr().String(), 1<<20)
+			link, carried := pacedRelay(t, srv.Listener.Addr().String(), 1<<20)
 			cfg := fakeConfig(srv, "")
 			cfg.Endpoint = "http://" + link
-			b, err := s3obj.Open(t.Context(), cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			s3obj.SetStall(b, caseStall)
+			b := openOnClock(t, cfg, carried)
 			ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 			defer cancel()
 			began := time.Now()
@@ -566,12 +576,17 @@ func TestAWriteAcrossALinkAtTheFloorIsNeverEnded(t *testing.T) {
 // software reads a write slowly from its first byte never lets its kernel's
 // buffer grow, so every byte it reads is one the node's socket sees
 // acknowledged — and that, never the body's reads, is what shows the write
-// moving once the whole of it sits in the node's send buffer.
+// moving once the whole of it sits in the node's send buffer. Timed by what
+// the bucket has read at its pace.
 func TestABucketReadingAtTheFloorFromTheStartIsNeverEnded(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
-	srv.BodyBytesPerSecond = 128 << 10
-	b := openStalling(t, srv)
+	const rate = 128 << 10
+	srv.BodyBytesPerSecond = rate
+	opened := time.Now()
+	b := openOnClock(t, fakeConfig(srv, ""), func() time.Time {
+		return opened.Add(time.Duration(srv.PacedRead()) * time.Second / rate)
+	})
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	began := time.Now()
@@ -626,20 +641,23 @@ func stallingBackend(t *testing.T) (objstore.Backend, time.Duration, time.Durati
 // pacedRelay listens on loopback and carries every connection to target, the
 // bytes towards it at no more than rate a second for every connection
 // together — a link at a pace of a case's choosing — until the case ends. It
-// answers the address it listens on.
-func pacedRelay(t *testing.T, target string, rate int64) string {
+// answers the address it listens on, and the link's clock: when it opened
+// plus what it has carried towards target at rate.
+func pacedRelay(t *testing.T, target string, rate int64) (string, func() time.Time) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var (
-		wg    sync.WaitGroup
-		mu    sync.Mutex
-		due   time.Time
-		conns []net.Conn
-		shut  bool
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		due     time.Time
+		conns   []net.Conn
+		shut    bool
+		carried atomic.Int64
 	)
+	opened := time.Now()
 	track := func(c net.Conn) bool {
 		mu.Lock()
 		defer mu.Unlock()
@@ -664,6 +682,7 @@ func pacedRelay(t *testing.T, target string, rate int64) string {
 				if _, werr := dst.Write(buf[:n]); werr != nil {
 					return
 				}
+				carried.Add(int64(n))
 			}
 			if err != nil {
 				return
@@ -707,7 +726,9 @@ func pacedRelay(t *testing.T, target string, rate int64) string {
 		mu.Unlock()
 		wg.Wait()
 	})
-	return ln.Addr().String()
+	return ln.Addr().String(), func() time.Time {
+		return opened.Add(time.Duration(carried.Load()) * time.Second / time.Duration(rate))
+	}
 }
 
 // later is the later of a and b.

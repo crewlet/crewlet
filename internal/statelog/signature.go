@@ -7,21 +7,16 @@ import (
 	"github.com/crewlet/crewlet/internal/recordseal"
 )
 
-// EVERY RECORD ON A DOMAIN'S LOG IS SEALED ON ITS WAY TO THE APPENDER, and
-// this is where. The seal itself — the frame, the keyring, the signer, the
-// verifier and the three verdicts — is [recordseal]'s, a leaf, because every
-// other channel whose messages are instructions seals under the same frame and
-// none of them reads a log (ADR-0031). What is the state log's is that no
-// record of its leaves unsealed and none reaches a domain unopened: the
-// appender below, and [VerifiedLog] and the apply loop on the way back.
+// EVERY RECORD ON A DOMAIN'S LOG IS SEALED ON ITS WAY TO THE APPENDER, here.
+// The seal (frame, keyring, signer, verifier, verdicts) is [recordseal]'s, a
+// leaf because every channel carrying instructions shares it and none reads a
+// log (ADR-0031); the state log's
+// part is that no record leaves unsealed and none reaches a domain unopened:
+// the appender below, and [VerifiedLog] and the apply loop on the way back.
 
-// signedAppender signs every body on its way to the log.
-//
-// WRAPPING THE APPENDER rather than signing at each call site is what makes
-// the rule impossible to forget: there are three appends in this package
-// that sign their own records today (a write authority's, a read index's
-// barrier and the anchor sweep's trimmed record), and the next one somebody
-// adds is signed by construction rather than by review.
+// signedAppender signs every body on its way to the log. WRAPPING THE APPENDER
+// rather than signing at each call site signs the next append somebody adds by
+// construction rather than by review.
 type signedAppender struct {
 	Appender
 	signer *recordseal.Signer

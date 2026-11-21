@@ -12,43 +12,16 @@ import (
 
 // WHERE A SEAT'S CREDENTIAL MAY BE WRITTEN, AND WHO ELSE MAY READ IT.
 //
-// A seat's credential at a vendor is its identity there, and the incident that
-// made per-seat access a stored setting was one variable read by two parties:
-// a seat's provisioning sink pointed at the variable the company's own block
-// read, and the pass sealed the seat's minted key over the organization's. So
-// every variable a seat's credential lives in has exactly one reader, and who
-// writes it is decided per integration ([Company.SeatCredentialMode], D4b):
-//
-//   - ENGINE MODE, where the engine provisions the integration: the engine
-//     mints the seat's credential and seals it under the seat's own name
-//     ([envref.SealedName]). The document names none: a `${VAR}` under a
-//     seat's or unit's `mcp_env.<kind>` is refused, and a role credential
-//     position may name only the seat's own sealed name, which the engine
-//     itself writes there (a GitHub App's key from the manifest flow).
-//   - EXTERNAL MODE, where somebody outside Crewlet holds the account: the
-//     seat names its credential's variable in `mcp_env.<kind>` or the role
-//     credential position, and the engine never writes, rotates or forgets it
-//     (D4a). That variable must be exclusive to the seat and may not be
-//     anybody's sealed name.
-//
-// In both modes, anywhere in a seat's role entry, a reference to ANOTHER
-// seat's sealed name or to a variable a company `integrations` block reads is
-// refused: that is one seat reading another's identity, or the company's. A
-// seat's own sealed names stay readable everywhere in its own entry, which is
-// how its executor box reaches its own GitLab token for git.
-//
-// AND IN ITS BOX, NEVER UNDER A NAME ITS EXECUTOR SIGNS IN BY. A box CLI reads
-// the seat's credential from a variable the seat's box sets (doctl's
-// DIGITALOCEAN_ACCESS_TOKEN, glab's GITLAB_TOKEN), and the seat's executor
-// harness runs in the same environment. A harness that reads its model
-// provider's key from its environment reads those very names (OpenCode keys
-// its DigitalOcean and GitLab providers by them), so a seat whose executor
-// entry signs in by one would make every model call with the seat's tool
-// credential: the second reader this file exists to refuse
-// ([Company.validateSeatSignIns]).
-//
-// ADMISSION RULES like the rest of roleaccessrules.go; the access sync holds
-// the same line again at the vendor (internal/seataccess).
+// Two readers of one variable is why per-seat access is a stored setting: each
+// variable holding a seat's credential has one reader; who writes it is per
+// integration ([Company.SeatCredentialMode], D4b).
+//   - ENGINE MODE: the engine seals it under the seat's own name
+//     ([envref.SealedName]); the document names none.
+//   - EXTERNAL MODE: the seat names its variable in `mcp_env.<kind>` or the
+//     role position (D4a); exclusive to the seat, nobody's sealed name.
+// In both, another seat's sealed name or a company `integrations` variable is
+// refused (a seat's own stays readable in its entry), as is, in the box, a name
+// its executor signs in by ([Company.validateSeatSignIns]). Admission rules; internal/seataccess holds it at the vendor.
 
 // seatField is one value the engine holds for an agent seat at an
 // integration, by the field name the vendor's catalog gives it.

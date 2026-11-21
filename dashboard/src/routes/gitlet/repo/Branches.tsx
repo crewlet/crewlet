@@ -39,11 +39,11 @@ import { ago } from "~/lib/ago.ts";
 import { useClock, useNow } from "~/lib/clock.ts";
 import { CHECK_HISTORY_DAYS, rollupFor, rollupTitle } from "~/lib/checks.ts";
 import { changeRef, refName, repoPath, shortOID } from "~/lib/code.ts";
-import { civilAt, civilKey, fmtDateTime, plural, readerDay, relTime } from "~/lib/format.ts";
-import { zone } from "~/lib/prefs.ts";
-import { dayStartIn } from "~/lib/range.ts";
-import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
+import { fmtDateTime, plural, readerDay, relTime } from "~/lib/format.ts";
+import type { ClockEdge } from "~/lib/range.ts";
+import { codeRest, useCodeQuery, type CodeEdges, type CodeWindow } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
+import { contentHeld } from "~/lib/repoWrites.ts";
 import {
   QueryError,
   type CodeCommitMark,
@@ -57,12 +57,15 @@ import {
 import { ChangeRefPill } from "../ChangeRow.tsx";
 import { protectionTitle, useBranchDetail, type BranchDetail } from "../branchDetail.ts";
 import { useListKeys } from "../CodeList.tsx";
+import { dayStartBack } from "../when.ts";
 import { moverOf } from "../movers.ts";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
 import { BranchChip, CheckRollupMark, Face, useWhoName } from "../ui.tsx";
 import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
+import { DeleteTagButton, NewTagButton } from "./TagWrites.tsx";
 import { useCommitMarks } from "./marks.ts";
 import { ProtectButton } from "./Protect.tsx";
+import { GoneContent } from "./RepoLife.tsx";
 import "~/styles/gitlet.css";
 
 /** A branch moved in the last 90 days is active; the rest are stale. */
@@ -96,20 +99,16 @@ const viewOf = (raw: string): View =>
 const viewHref = (repo: string, view: View) =>
   href(repoPath(repo), { tab: "branches", ...(view === "overview" ? {} : { view }) });
 
-/** The first instant of the reader's day ACTIVE_DAYS back, RFC 3339. */
-function activeSince(today: string): string | undefined {
-  const todayAt = civilAt(today);
-  if (todayAt === null) return undefined;
-  const start = dayStartIn(civilKey(todayAt - ACTIVE_DAYS * DAY_MS), zone());
-  return start === null ? undefined : new Date(start).toISOString();
-}
-
 /** The repository's branches in views by when each moved, and its tags. */
 export function Branches({ repo }: { repo: CodeRepoDetail }) {
   const [rawView, setView] = useParam("view", "");
   const [q, setQ] = useParam("q", "");
   const view = viewOf(rawView);
-  const since = activeSince(useClock((t) => readerDay(t)));
+  // THE FIRST INSTANT OF THE READER'S DAY ACTIVE_DAYS BACK, moving at the reader's midnight.
+  const since = dayStartBack(
+    useClock((t) => readerDay(t)),
+    ACTIVE_DAYS,
+  );
   return (
     <>
       <PageToolbar>
@@ -124,11 +123,15 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
         />
         <span className="spacer" />
         {view !== "tags" && <FindBranch q={q} onQ={setQ} />}
-        <NewBranchButton repo={repo} />
+        {view === "tags" ? <NewTagButton repo={repo} /> : <NewBranchButton repo={repo} />}
       </PageToolbar>
       <div className="code-refs-boxes">
         {view === "tags" ? (
-          <TagsView repo={repo} />
+          contentHeld(repo) ? (
+            <GoneContent repo={repo} what="tags" />
+          ) : (
+            <TagsView repo={repo} />
+          )
         ) : view === "overview" && !q ? (
           <Overview repo={repo} since={since} />
         ) : (
@@ -172,27 +175,39 @@ function FindBranch({ q, onQ }: { q: string; onQ: (q: string) => void }) {
 
 type Params = Record<string, string | number | boolean>;
 
-/** A listing's parameters: by when each moved, read in detail. */
-function listingParams(
-  repo: string,
-  view: View,
-  q: string,
-  since: string | undefined,
-  limit: number,
-): Params {
+/** A listing's parameters: by when each moved, read in detail; its window apart ([movedSince]). */
+function listingParams(repo: string, q: string, limit: number): Params {
   return {
     name: repo,
     order: "moved",
     detail: true,
     limit,
-    ...(view === "active" && since ? { moved_since: since } : {}),
-    ...(view === "stale" && since ? { moved_before: since } : {}),
     ...(q ? { contains: q } : {}),
   };
 }
 
+/**
+ * A view's window: when a branch last moved, against the reader's midnight ACTIVE_DAYS back, by
+ * its name (`lib/useCodeQuery.ts`'s window), so the reader's midnight is no new question. `counted`
+ * adds the active count, which only a first page asks.
+ */
+function movedSince(view: View, since: ClockEdge | undefined, counted: boolean): CodeWindow {
+  return {
+    name: view,
+    edges: {
+      ...(view === "active" ? { moved_since: since } : {}),
+      ...(view === "stale" ? { moved_before: since } : {}),
+      ...(view === "active" && counted ? { active_since: since } : {}),
+    },
+  };
+}
+
+/** A later page's edges: the first page's window, without the count a cursor is refused. */
+const pageEdges = (edges: CodeEdges | null): CodeEdges | null =>
+  edges && { moved_since: edges.moved_since, moved_before: edges.moved_before };
+
 /** The Overview: the default branch, the active branches, and the newest tags. */
-function Overview({ repo, since }: { repo: CodeRepoDetail; since: string | undefined }) {
+function Overview({ repo, since }: { repo: CodeRepoDetail; since: ClockEdge | undefined }) {
   const found = useBranchDetail(repo.name, repo.default_branch);
   const active = useActiveBranches(repo, since);
   // ONE MARKS READ for the heads of both boxes, asked once both are here.
@@ -206,7 +221,7 @@ function Overview({ repo, since }: { repo: CodeRepoDetail; since: string | undef
       <FactsNote facts={facts} repo={repo} />
       <DefaultBox repo={repo} found={found} facts={facts} />
       <ActiveBox repo={repo} active={active} facts={facts} />
-      <TagsBox repo={repo} />
+      {!contentHeld(repo) && <TagsBox repo={repo} />}
     </>
   );
 }
@@ -268,15 +283,9 @@ function UnreadDefault({ repo }: { repo: CodeRepoDetail }) {
 }
 
 /** The Overview's active branches: up to ten, the default branch left out, and their count. */
-function useActiveBranches(repo: CodeRepoDetail, since: string | undefined) {
-  const params = useMemo(
-    () => ({
-      ...listingParams(repo.name, "active", "", since, OVERVIEW_ACTIVE + 1),
-      ...(since ? { active_since: since } : {}),
-    }),
-    [repo.name, since],
-  );
-  const read = useCodeQuery("code_refs", params);
+function useActiveBranches(repo: CodeRepoDetail, since: ClockEdge | undefined) {
+  const params = useMemo(() => listingParams(repo.name, "", OVERVIEW_ACTIVE + 1), [repo.name]);
+  const read = useCodeQuery("code_refs", params, { window: movedSince("active", since, true) });
   const rows = (read.data?.refs_detail ?? [])
     .filter((r) => r.ref !== HEADS + repo.default_branch)
     .slice(0, OVERVIEW_ACTIVE);
@@ -354,23 +363,17 @@ function BranchView({
   repo: CodeRepoDetail;
   view: View;
   q: string;
-  since: string | undefined;
+  since: ClockEdge | undefined;
 }) {
   const shown = view === "overview" || view === "tags" ? "all" : view;
-  const params = useMemo(
-    () => listingParams(repo.name, shown, q, since, PAGE_LIMIT),
-    [repo.name, shown, q, since],
-  );
+  const params = useMemo(() => listingParams(repo.name, q, PAGE_LIMIT), [repo.name, q]);
   // ONLY A FIRST PAGE COUNTS THE ACTIVE BRANCHES: the engine refuses the count on a cursor.
-  const counted = useMemo(
-    () => (shown === "active" && since ? { ...params, active_since: since } : params),
-    [params, shown, since],
-  );
-  const first = useCodeQuery("code_refs", counted);
+  const first = useCodeQuery("code_refs", params, { window: movedSince(shown, since, true) });
   const paged = usePaged(
     first,
-    counted,
-    (cursor) => codeRest.query("code_refs", { ...params, cursor }),
+    { ...params, view: shown },
+    (cursor, edges) =>
+      codeRest.query("code_refs", { ...params, cursor }, undefined, pageEdges(edges)),
     (a: CodeRefsAnswer) => a.refs_detail ?? [],
     (r: CodeRefListing) => r.ref,
     (a: CodeRefsAnswer) => a.next ?? "",
@@ -976,7 +979,7 @@ function TagDate({ tag, now }: { tag: CodeTagRow; now: number }) {
   return <span title={TAG_UNDATED_TITLE}>{TAG_UNDATED}</span>;
 }
 
-/** One tag: its name opening its files at its whole ref, the commit it names and when, and its controls. */
+/** One tag: its name opening its files at its whole ref, the commit it names and when, and its controls, Delete among them. */
 function TagRow({
   repo,
   tag,
@@ -1047,6 +1050,7 @@ function TagRow({
           >
             Compare
           </ButtonLink>
+          <DeleteTagButton repo={repo} tag={tag} />
         </span>
       </td>
     </tr>

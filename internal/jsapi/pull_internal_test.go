@@ -9,16 +9,13 @@ import (
 
 // EVERY STATUS A PULL ENDS WITH IS NAMED.
 //
-// A pull is answered with deliveries and with statuses, and a reader that
-// reads the wrong one as the end of its pull either waits out a pull the
-// server has finished or takes a status meant for one pull as the end of the
-// next. So each status the server sends a pull is named for what it is, and
-// every one but a heartbeat ends the pull: its expiry, the byte bound the next
-// message would pass, the count filled with bytes to spare — and anything
-// else, which is the pull refused, carrying its code and its text. The
-// statuses are nats-server v2.15.2's: the `404` only a no-wait pull is sent,
-// the `408 Interest Expired` of a pull whose reader went away, a server
-// shutting down, and the `400` of a request it could not take.
+// A reader that reads the wrong status as the end of its pull either waits out
+// a pull the server has finished or takes a status meant for one pull as the
+// end of the next. So each status is named for what it is, and every one but a
+// heartbeat ends the pull: its expiry, the byte bound the next message would
+// pass, the count filled with bytes to spare, and anything else, which is the
+// pull refused, carrying its code and text. The statuses are nats-server
+// v2.15.2's, including the `404` only a no-wait pull is sent.
 //
 // Mutation: read a heartbeat as an end, or a refusal as an expiry, and its row
 // goes red.

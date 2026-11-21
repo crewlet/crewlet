@@ -15,12 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// MACHINE TOKENS, through the real writer, applier and reader.
-//
-// What a token may carry is a fact about its owner NOW, so the mint reads the
-// owner inside the snapshot it forms the credential in, and verification reads
-// the token and the owner in one snapshot again. Each half is a claim about a
-// broker and a store, which is why these cases run against both.
+// MACHINE TOKENS, through the real writer, applier and reader. What a token
+// may carry is a fact about its owner NOW: the mint reads the owner in the
+// snapshot it forms the credential in, and verification reads token and owner
+// in one snapshot again. Each half claims something of a broker and a store,
+// so these run against real ones.
 
 // tokenOwner enrols one person holding a spread of grants, and returns them.
 func tokenOwner(t *testing.T, rig *writeRig, login string) string {
@@ -71,11 +70,9 @@ func mintFor(t *testing.T, rig *writeRig, w *iamdomain.Writer,
 		Position: uint64(minted.Result.Position.Packed()), Secret: secret}, err
 }
 
-// asOwner is a person's own party — the principal a person minting their own
-// token signs in as — holding grants, or every grant when none are given.
-//
-// EVERY CASE BUT THE ONES ABOUT WHO MAY MINT mints through it: they are about
-// what a token carries, and a person's token is theirs alone to mint.
+// asOwner is a person's own party, as when minting their own token, holding
+// grants, or every grant when none are given. Every case but those about who
+// may mint uses it: a person's token is theirs alone to mint.
 func asOwner(rig *writeRig, owner string, grants ...iam.Grant) *iamdomain.Writer {
 	if len(grants) == 0 {
 		grants = iam.AllGrants
@@ -146,10 +143,9 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 			iamdomain.ErrRefused},
 		{"a name this build does not know", asOwner(rig, owner),
 			iamdomain.TokenMint{Grants: []iam.Grant{"swarm"}}, iamdomain.ErrRefused},
-		// THE OWNER THEMSELVES, signed in holding less than their row
-		// declares — a node that refuses admin, say: whoever mints a token
-		// sees its value, so it carries nothing the minting party does not
-		// hold.
+		// The owner signed in holding less than their row declares (a node
+		// that refuses admin, say): whoever mints sees the value, so a token
+		// carries nothing the minting party does not hold.
 		{"a permission the MINTING party does not hold",
 			asOwner(rig, owner, iam.GrantWorklet),
 			iamdomain.TokenMint{Grants: []iam.Grant{iam.GrantDoclet}},
@@ -198,23 +194,15 @@ func TestAMintRefusesWhatATokenMayNotCarry(t *testing.T) {
 // A PERSON'S TOKEN IS THEIRS ALONE TO MINT, AND A SERVICE ACCOUNT'S IS AN
 // ADMINISTRATOR'S — DECIDED ON THE WRITER'S OWN PARTY.
 //
-// Whoever mints a token is shown its value, and the token acts as its owner —
-// so an administrator minting on a person's account was holding a credential
-// that acts as them, with nothing but the mint to say so. Admin covers the
-// accounts nobody can mint for as themselves: a service account has no login
-// page.
-//
-// WHO IS MINTING IS THE PARTY'S, and a caller holding a writer cannot restate
-// it. It was a field of the mint the caller filled in, so any caller could
-// hand a writer acting as the deployment — the node's own, or a Tier A token
-// holding every grant — a mint naming the owner as its own minter, and the
-// domain's rule was only as strong as the one route that filled it honestly.
-// Now the id comes from the principal the writer was derived for. Mutations:
-// decide the person arm on anything but the party's id and the Tier A party
-// mints; drop the person arm and the administrator mints; drop the
-// machine-token refusal and jane's own token mints another; read the token's
-// name rather than its class and a malformed one does; drop the machine arm
-// and a party without admin mints for a pipeline.
+// Whoever mints a token sees its value, and the token acts as its owner, so an
+// administrator minting for a person would hold a credential acting as them; a
+// service account has no login page, so admin mints for it. Who mints is the
+// writer's principal, never a mint field a caller could fill in as the owner.
+// Mutations, each red: decide the person arm on anything but the party's id
+// (Tier A mints), drop it (the administrator mints), drop the machine-token
+// refusal (jane's token mints another), read the token's name, not its class
+// (a malformed one mints), drop the machine arm (a non-admin mints for a
+// pipeline).
 func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -255,9 +243,8 @@ func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 		t.Errorf("jane's own token answered %q (%s)", got.Answer, got.Detail)
 	}
 	// AND NOT THROUGH ONE OF HER OWN TOKENS: a party is composed as the
-	// token's owner, so without its own refusal this would pass the person
-	// arm as jane — a token minting the next, a year at a time, with nobody
-	// present.
+	// token's owner, so without its own refusal a token mints the next, a
+	// year at a time, with nobody present.
 	throughToken := iam.Principal{
 		ID: uuid.MustParse(owner), Kind: iam.KindPerson, Login: "jane.doe",
 		Stage: iam.StageActive, Grants: iam.AllGrants,
@@ -308,15 +295,14 @@ func TestAPersonsTokenIsMintedByThatPersonAlone(t *testing.T) {
 
 // A TOKEN IS NEVER MINTED THROUGH THE ASSISTANT.
 //
-// A person's token is theirs alone to mint, decided on the party's own id, and
-// the Dashboard Assistant is composed as its person: without a lock of its
-// own, a turn could mint a credential acting as them that a model is one step
-// from holding. So a mint whose operator is an assistant grant, composed
-// through [iamdomain.Writer.As] as the request path composes one, is refused
-// [iamdomain.ErrAssistRefused] (wrapping [iamdomain.ErrRefused]) and so is one
-// whose operator merely names the assistant's class; nothing is minted. The
-// CONTROL is jane at her own keyboard, whose mint lands. Mutation: drop the
-// assistant's lock from mayMintFor and the person arm mints for it.
+// The Dashboard Assistant is composed as its person, so without its own lock a
+// turn could mint a credential acting as them that a model is one step from
+// holding. A mint whose operator is an assistant grant (composed through
+// [iamdomain.Writer.As] as the request path does), or merely names the
+// assistant's class, is refused [iamdomain.ErrAssistRefused] wrapping
+// [iamdomain.ErrRefused] and mints nothing. The CONTROL is jane at her own
+// keyboard. Mutation: drop the assistant's lock from mayMintFor and the person
+// arm mints for it.
 func TestATokenIsNeverMintedThroughTheAssistant(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -390,12 +376,11 @@ func TestSigningTheOwnerOutEverywhereEndsTheirTokens(t *testing.T) {
 
 // INVALIDATING EVERY CREDENTIAL ENDS EVERY TOKEN MINTED BEFORE IT.
 //
-// The restore runbook's last step: a backup taken before a token was revoked
-// restores it unrevoked, and nothing can say which ones were, so the session
-// generation's bump has to reach a token as it reaches a cookie. A token minted
-// after the bump works. Mutation: drop the generation from the mint and the
-// token after the bump is refused too; drop the check and the one before it
-// survives.
+// The restore runbook's last step: a backup restores tokens revoked after it,
+// unrevoked, and nothing says which, so the session generation's bump reaches
+// a token as it reaches a cookie. A token minted after the bump works.
+// Mutation: drop the generation from the mint and the later token is refused
+// too; drop the check and the earlier one survives.
 func TestInvalidatingEverythingEndsTokensMintedBeforeIt(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -466,12 +451,11 @@ func revokeToken(t *testing.T, rig *writeRig, owner, id string) {
 
 // A TOKEN IS ITS OWNER NOW, read back in the snapshot verification takes.
 //
-// The mint stated what it conferred; what the token CARRIES on a request is
-// that set cut to what the owner still holds, and whether it works at all
-// follows the owner's stage — both read off the rows as they are after the
-// mint, never frozen into the credential. Mutation: read the owner's grants
-// off the mint's record, or their stage off the document the suspension left
-// stale, and the demoted or suspended owner's token goes on working as before.
+// What it carries on a request is the mint's set cut to what the owner still
+// holds, and whether it works follows the owner's stage, both read off the rows
+// after the mint, never frozen into the credential. Mutation: read the owner's
+// grants off the mint's record, or their stage off the document the suspension
+// left stale, and the demoted or suspended owner's token works as before.
 func TestATokenFollowsItsOwnersStandingAfterTheMint(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -524,14 +508,12 @@ func TestATokenFollowsItsOwnersStandingAfterTheMint(t *testing.T) {
 //
 // Admin is mintable: what keeps a token off the gestures that need a person
 // present is the authority table's presence and this domain's refusal of an
-// administrative record written through one, not a permission it cannot hold.
-// So an administrator's token asked for nothing carries everything they hold,
-// admin included, and one minted [admin] carries every app through it — and
-// both are cut, per request, to what the owner still holds: an administrator
-// demoted to the knowledge base leaves a token minted [admin] carrying the
-// knowledge base, still valid. Mutation: refuse admin at the mint and the
-// first case goes red; read the mint's list without expanding it and the
-// demoted owner's token carries nothing.
+// administrative record written through one. So an administrator's token asked
+// for nothing carries admin too, one minted [admin] carries every app through
+// it, and both are cut per request to what the owner keeps: demoted to the
+// knowledge base, the [admin] token carries that, still valid. Mutation: refuse
+// admin at the mint and the first case goes red; read the mint's list without
+// expanding it and the demoted owner's token carries nothing.
 func TestATokenMintedAdminCarriesWhatItsOwnerKeeps(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -600,17 +582,13 @@ func TestATokenMintedAdminCarriesWhatItsOwnerKeeps(t *testing.T) {
 
 // A TOKEN ASKED FOR NOTHING CARRIES WHAT ITS MINTER MAY CONFER.
 //
-// Whoever mints a token is shown its value, so it carries nothing the minting
-// party does not hold, and the default is held to that rule rather than
-// refused by it. On a node whose `api.auth.admin` is `refuse`, an administrator
-// signs in carrying their apps alone; asked for nothing, their own token
-// defaulted to everything their row holds, admin included, and was then
-// refused for the admin they cannot confer there — so `crewlet iam token
-// -login`, which sends no list unless -grants names one, minted nothing at all
-// on such a node. It now carries their apps; on a node that serves admin it
-// carries admin too.
-// Mutation: default to the owner's whole set again and the refusing node's
-// mint is refused.
+// A token carries nothing the minting party does not hold, and the default is
+// held to that rather than refused by it: on a node whose `api.auth.admin` is
+// `refuse`, an administrator signs in with their apps alone, so their token
+// asked for nothing carries those apps (else `crewlet iam token -login`, which
+// sends no list unless -grants names one, mints nothing there); where admin is
+// served it carries admin too. Mutation: default to the owner's whole set and
+// the refusing node's mint is refused.
 func TestATokenAskedForNothingCarriesWhatItsMinterMayConfer(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

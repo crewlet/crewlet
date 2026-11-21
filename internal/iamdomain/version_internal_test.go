@@ -11,23 +11,15 @@ import (
 // THE STAMP IS THE LOWEST VERSION THAT READS WHAT A RECORD CARRIES, AND A
 // VERSION SET BELOW IT, OR ON A RECORD EVERY BUILD MUST READ, IS REFUSED.
 //
-// A record above a peer's decode ceiling is DEFERRED on that peer, and a
-// deferred record blocks every later record in its scope there. So the ceiling
-// is what this build reads and never what it writes: [Encode] stamps an
-// unstamped record from the fields it carries, which is what makes a field a
-// later build adds hold back only the records that carry it. And the two ways a
-// caller can put a version on a record by hand are each refused for the
-// failure they would cause: one below what its fields need is applied lossily
-// by exactly the builds it exists to hold back, and a gate, a barrier or a
-// generation carrying a field is one an older node defers or retains — a
-// deferred removal is a person off-boarded still signing in there. The one
-// field a gate MAY carry is a change to its own apply
-// ([statelog.VersionedField.Gate]): stamped at the version that reads it, every
-// older build halts there rather than apply the old rule, while a field beside
-// it the gate did not need is still refused. The table is empty today, so the
-// case states fields a later build would add. Mutation: stamp at the table's
-// ceiling, drop either refusal, or read every gate field as refused, and a
-// case fails.
+// A record above a peer's decode ceiling is deferred there and blocks its
+// scope, so [Encode] stamps an unstamped record from its fields: a later field
+// holds back only records carrying it. Refused: a hand-set version below that
+// (applied lossily where it should hold back), and a gate, barrier or
+// generation carrying a field (an older node defers or retains it; a deferred
+// removal is an off-boarded person signing in), save a change to the gate's
+// own apply ([statelog.VersionedField.Gate]), halting older builds, though a
+// field beside it is still refused. The (empty) table gets later fields here.
+// Mutation, each red: stamp at the ceiling, drop a refusal, refuse gate fields.
 func TestTheStampIsTheLowestVersionThatReadsTheRecord(t *testing.T) {
 	t.Parallel()
 	person := "0192f00d-0000-7000-8000-0000000000aa"
@@ -122,12 +114,10 @@ func TestTheStampIsTheLowestVersionThatReadsTheRecord(t *testing.T) {
 
 // A CREDENTIAL RIDES EVERY RECORD ITS PARTY WRITES, the gates included.
 //
-// A token acts as its owner, so a record's actor is the owner either way; the
-// credential is what tells the two gestures apart, and a record that leaves it
-// off is one more trail row reading a token's gesture as the owner's own — a
-// removal and a company-wide invalidation above all, the gestures somebody
-// comes back to an audit trail for. A party that acted through nothing — the
-// node's own writer, which writes every sign-in and every duty — carries none.
+// A token acts as its owner, so the actor is the owner either way and the
+// credential alone tells the gestures apart; without it a trail row reads a
+// token's gesture as the owner's, worst on a removal or a company-wide
+// invalidation. The node's own writer, acting through nothing, carries none.
 // Mutation: leave it off the gates, or off every record, and a row goes red.
 func TestACredentialRidesEveryRecordItsPartyWrites(t *testing.T) {
 	t.Parallel()

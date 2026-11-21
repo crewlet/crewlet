@@ -21,26 +21,16 @@ import (
 
 // WHO READ A PAGE, WHO LOADED IT AS A SKILL, AND WHO LINKS TO IT.
 //
-// Three signals a wiki cannot give and this engine can, because its readers
-// are seats whose every read is a recorded act (`knowledge_read`, E-A2) and
-// whose every body is indexed on this node:
+// Three signals from recorded reads (`knowledge_read`, E-A2):
+//   - `page_reads{page, days}`: who READ the page, how and in which turn, up to
+//     [PageReadsMaxDays] days, from the replicated `usage` domain (ADR-0020).
+//   - `page`'s `skill_loaded_by`: the seats a TOOL-SKILL page was loaded or
+//     offered to, from the same rows.
+//   - `page`'s `linked_from`: the pages and tasks whose bodies carry this page's
+//     address ([search.Backlinks]; ADR-0079).
 //
-//   - `page_reads{page, days}` — the seats that READ the page, how, how often
-//     and in which turn, over up to [PageReadsMaxDays] company days, from the
-//     replicated `usage` domain (ADR-0020): every data node's reads, a
-//     departed node's included, the same on whichever node answers.
-//   - the `page` answer's `skill_loaded_by` — the seats a TOOL-SKILL page was
-//     loaded or offered to, from the same rows.
-//   - the `page` answer's `linked_from` — the pages and tasks whose bodies
-//     carry this page's address, from a data node's own index
-//     ([search.Backlinks]) — the one the estate's router picks, whose copies
-//     of both the knowledge base and the tracker serve (ADR-0079).
-//
-// ALL THREE ARE THE KNOWLEDGE BASE'S, and two of them carry the TRACKER'S rows
-// beside its own: the tasks that link a page, and the task each read happened
-// on. Those are shown to whoever holds Worklet and left out for anybody
-// else ([shows], ADR-0033): a person who reads the pages without Worklet
-// is not told what the company is working on through the pages' margins.
+// Linking tasks and each read's task are TRACKER rows: shown to Worklet holders
+// only ([shows], ADR-0033), so a page's margins do not reveal the company's work.
 
 // PageReadsMaxDays is how far back a page's readers are read: thirty company
 // days, the event log's own retention and the window a knowledge base is

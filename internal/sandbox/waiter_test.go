@@ -486,6 +486,153 @@ func TestACompletionCarriesTheOriginalTrace(t *testing.T) {
 	}
 }
 
+// AN ANNOUNCEMENT SAYS WHEN ITS WAITER ASKED THE STORE FOR THE ROW IT WAS MADE
+// FROM, NEVER WHEN IT WAS MADE. The seat's holder reads that instant as the
+// store of the box's host answering since it found that store silent, which
+// ends its renewal of the job's completion ([announcedAfter]), and the box is
+// polled between the read and the announcement: a poll that takes a minute
+// leaves the announcement a minute after the read, and a silence that began in
+// between, read off the announcement's own instant, was read as over while it
+// lasted.
+//
+// Mutation: say the instant the announcement is made, or none, and the read it
+// says is a minute late, or missing.
+func TestAnAnnouncementSaysWhenItsRowWasRead(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	rig.launch("t1")
+	clock := &stepClock{at: rig.now}
+	waiter, err := NewWaiter(WaiterOptions{
+		Queue: rig.queue, Pending: rig.pending, Manager: rig.managers, Drives: rigDrives(Direct),
+		Now: clock.now,
+	})
+	if err != nil {
+		t.Fatalf("NewWaiter: %v", err)
+	}
+	// THE POLL TAKES A MINUTE, and finds the job over.
+	rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
+		clock.advance(time.Minute)
+		return JobEnded, nil
+	}
+	read := clock.now()
+	if fired, err := waiter.Tick(t.Context()); err != nil || fired != 1 {
+		t.Fatalf("the pass announced %d completions, %v; want the finished job announced", fired, err)
+	}
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	announced := 0
+	for _, p := range rig.queue.published {
+		if _, ok := p.event.Data.(*types.ExecutorFinished); !ok {
+			continue
+		}
+		announced++
+		if asked := rowAsked(p.event); !asked.Equal(read) {
+			t.Fatalf("the announcement to %s says its row was read at %v; want %v, when the pass asked the "+
+				"store for its listing, a minute before the poll ended", p.topic, asked, read)
+		}
+	}
+	if announced == 0 {
+		t.Fatal("the pass announced nothing")
+	}
+}
+
+// steppingRows is a run store whose every read of a run's row, and every
+// record of a job's loss, takes step on clock before it answers: the time the
+// store takes, on the case's clock, so an instant taken after the store was
+// asked is not the instant it was asked.
+type steppingRows struct {
+	PendingStore
+	clock *stepClock
+	step  time.Duration
+}
+
+func (s *steppingRows) Get(ctx context.Context, turnID string) (PendingRun, bool, error) {
+	s.clock.advance(s.step)
+	return s.PendingStore.Get(ctx, turnID)
+}
+
+func (s *steppingRows) MarkLost(ctx context.Context, turnID, launch string, loss JobLoss) (bool, error) {
+	s.clock.advance(s.step)
+	return s.PendingStore.MarkLost(ctx, turnID, launch, loss)
+}
+
+// rowAskedOfEvery holds every completion rig's queue carried to the instant
+// want, the one its waiter asked its store at, and fails the case where none
+// was announced.
+func rowAskedOfEvery(t *testing.T, rig *waiterRig, want time.Time, why string) {
+	t.Helper()
+	rig.queue.mu.Lock()
+	defer rig.queue.mu.Unlock()
+	announced := 0
+	for _, p := range rig.queue.published {
+		if _, ok := p.event.Data.(*types.ExecutorFinished); !ok {
+			continue
+		}
+		announced++
+		if asked := rowAsked(p.event); !asked.Equal(want) {
+			t.Errorf("the announcement to %s says its row was read at %v; want %v, %s", p.topic, asked, want, why)
+		}
+	}
+	if announced == 0 {
+		t.Fatal("nothing was announced")
+	}
+}
+
+// A NUDGE'S ANNOUNCEMENT AND A GONE NODE'S SAY WHEN THEIR STORE WAS ASKED,
+// NEVER WHEN THEY WERE MADE: the read's or the record's instant, as a pass's
+// says its listing's (TestAnAnnouncementSaysWhenItsRowWasRead), since a later
+// instant reads a silence that began after the ask as over ([announcedAfter]).
+//
+// Mutation: stamp the instant the announcement is made, or one taken after the
+// store was asked, on either road, and its announcement says a later read.
+func TestEveryRoadsAnnouncementSaysWhenItsStoreWasAsked(t *testing.T) {
+	t.Parallel()
+	// waiterOn builds rig's waiter on clock, its store taking a second on
+	// the clock for each read of a run's row and each record of a loss, and
+	// every poll of a box a minute, which finds the job over.
+	waiterOn := func(t *testing.T, rig *waiterRig, clock *stepClock) *Waiter {
+		t.Helper()
+		rig.runner.PollFunc = func(context.Context, Sandbox) (JobState, error) {
+			clock.advance(time.Minute)
+			return JobEnded, nil
+		}
+		waiter, err := NewWaiter(WaiterOptions{
+			Queue: rig.queue, Pending: &steppingRows{PendingStore: rig.pending, clock: clock, step: time.Second},
+			Manager: rig.managers, Drives: rigDrives(Direct), Now: clock.now,
+		})
+		if err != nil {
+			t.Fatalf("NewWaiter: %v", err)
+		}
+		return waiter
+	}
+
+	t.Run("a nudge's", func(t *testing.T) {
+		t.Parallel()
+		synctest.Test(t, func(t *testing.T) {
+			rig := newWaiterRig(t)
+			run := rig.launch("t1")
+			clock := &stepClock{at: rig.now}
+			waiter := waiterOn(t, rig, clock)
+			asked := clock.now()
+			waiter.follow(t.Context(), Nudge{TurnID: "t1", LaunchID: run.LaunchID, Why: NudgeSubmitted})
+			rowAskedOfEvery(t, rig, asked, "when the nudge asked the store for the run's row, a second "+
+				"before it answered and a minute before the poll ended")
+		})
+	})
+
+	t.Run("a gone launch node's", func(t *testing.T) {
+		t.Parallel()
+		rig := newWaiterRig(t)
+		run := rig.launch("t1")
+		clock := &stepClock{at: rig.now}
+		waiter := waiterOn(t, rig, clock)
+		asked := clock.now()
+		waiter.endGone(t.Context(), run, rig.now.Add(-time.Hour), rig.now.Add(-time.Minute))
+		rowAskedOfEvery(t, rig, asked, "when the waiter asked the store to record the job's loss, a second "+
+			"before it answered")
+	})
+}
+
 // A completion event is a pure control signal — the outcome is read at collect
 // time, so nothing about the result may ride on the wire.
 func TestACompletionCarriesTheIdentityAndNotTheOutcome(t *testing.T) {
@@ -684,7 +831,7 @@ func TestThePollNeverWakesABoxItsRunHasMovedOnFrom(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := rig.waiter.pollOne(t.Context(), rig.manager, listed); got != pollRunning {
+	if got := rig.waiter.pollOne(t.Context(), t.Context(), rig.manager, listed); got != pollRunning {
 		t.Errorf("the poll of a run that moved on = %v; want nothing done", got)
 	}
 	if !box.Paused() {
@@ -1401,7 +1548,7 @@ func TestEveryPollHandsTheRunningBoxToTheRefresh(t *testing.T) {
 			if err := moved.provider.Box(listed.SandboxID).Pause(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			moved.waiter.pollOne(t.Context(), moved.manager, listed)
+			moved.waiter.pollOne(t.Context(), t.Context(), moved.manager, listed)
 			if calls != 0 {
 				t.Error("a box its run has moved on from was handed to the refresh")
 			}

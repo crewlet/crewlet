@@ -228,28 +228,18 @@ func stream(ctx context.Context, t *testing.T, conn *nats.Conn, name string) *je
 	return s.CachedInfo()
 }
 
-// A RESTORED STREAM HOLDS WHAT WAS SNAPSHOTTED — every record at its own
-// sequence with its own subject, headers, body and storage instant, the
-// duplicate window those headers rebuild at the restore and keep across its
-// broker's next start, the stream's identity, a durable reader at its own
-// position, and a bucket's revisions.
+// A RESTORED STREAM HOLDS WHAT WAS SNAPSHOTTED: every record at its own
+// sequence with its subject, headers, body and storage instant, the duplicate
+// window the Nats-Msg-Id headers rebuild (at restore and next start), the
+// stream's identity, a durable reader's position, and a bucket's revisions.
 //
-// Each is something a restored node stands on. Its rows name records by
-// sequence and its checkpoint names the record it stands on by the broker's
-// instant for it. A state log publishes every append under its operation id
-// (Nats-Msg-Id), and a stream rebuilds its duplicate window from those headers
-// — what collapses an append repeated inside the window onto the record it
-// already landed as; the server rebuilds it at the restore itself, and again
-// when it recovers the stream from its store at its next start (package doc).
-// Every row is keyed to the
-// stream's identity, which the broker does NOT keep — it dates a restored
-// stream to the restore — so it is read as the instant the stream's creator
-// stamped, carried in the configuration the restore hands back. A mailbox is a
-// durable reader, and one restored at its first record redelivers everything
-// it had acknowledged. And the coordination store's create-only and
-// compare-and-set records are judged by revision, so a bucket restored at other
-// revisions would take a create over a live record or refuse every write to
-// one.
+// Rows name records by sequence and the checkpoint by the broker's instant.
+// Rows are keyed to the stream's identity, which the broker does NOT keep (it
+// dates a restored stream to the restore), so it is the creator's stamp,
+// carried in the configuration the restore hands back. A mailbox restored at
+// its first record redelivers everything acknowledged. Create-only and
+// compare-and-set records are judged by revision, so other revisions take a
+// create over a live record.
 func TestARestoredStreamHoldsWhatWasSnapshotted(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

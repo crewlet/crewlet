@@ -11,12 +11,9 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
-	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
-	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
-	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // roomPath and threadPath are where [assistanttest.World] holds its chat room
@@ -53,20 +50,16 @@ func sentArgs(t *testing.T, p proposal.Preview) map[string]any {
 
 // A ROOM'S MEMBERSHIP CHANGE REMOVES ONLY WHAT IT NAMES (ADR-0055).
 //
-// A membership is stated whole, so the card shows it as the change it makes to
-// the room as it is now: who is added and who is removed, each a row, the
-// removals said again at the top of the card, which is destructive, and who
-// reads the room after, by name, since only its members read a private room
-// (D09). A member given by handle alone keeps how they follow the room,
-// written into the request; a member the call leaves out without naming them
-// in removes refuses the step, naming them, and so does a removal named for a
-// member who stays or for somebody not in the room. A member who stays may be
-// a seat the chart no longer lists, and one who joins may not. A change that
-// moves nobody, a unit's own room and a direct conversation are refused before
-// any card. Mutation: drop removalsNamed or the summary, send removes to the
-// tool, drop the membership the card read from the request's expectation,
-// let a bare handle reset how a member follows, or add a handle no seat
-// holds, and a case here fails.
+// A membership is stated whole, so the card shows who is added and removed,
+// each a row, the removals repeated atop the destructive card, and who reads
+// the room after, by name (D09). A bare handle keeps how the member follows;
+// a member left out without being named in removes refuses the step, as does a
+// removal named for one who stays or is not in the room. A staying member may
+// be a seat the chart no longer lists; a joining one may not. A no-op, a
+// unit's room and a direct conversation are refused before any card.
+// Mutation: drop removalsNamed or the summary, send removes to the tool, drop
+// the membership read from the request's expectation, let a bare handle reset
+// how a member follows, or add a handle no seat holds, and a case here fails.
 func TestARoomMembershipChangeRemovesOnlyWhatItNames(t *testing.T) {
 	t.Parallel()
 	read := reader(assistanttest.World())
@@ -78,23 +71,24 @@ func TestARoomMembershipChangeRemovesOnlyWhatItNames(t *testing.T) {
 	}
 	got := rows(p)
 	if added := got["members.engineer"]; added.Kind != wire.ChangeAdded ||
-		added.To != "Backend engineer (engineer)" {
+		added.To.Text() != "Backend engineer" {
 		t.Errorf("the engineer joins as %+v", added)
 	}
 	if removed := got["members.ada"]; removed.Kind != wire.ChangeRemoved ||
-		removed.From != "Ada Lovelace (ada)" {
+		removed.From.Text() != "Ada Lovelace" {
 		t.Errorf("ada leaves as %+v", removed)
 	}
 	if kept, shown := got["members.pm"]; shown {
 		t.Errorf("pm stays as they follow the room and is a row: %+v", kept)
 	}
 	if !slices.Equal(p.Removes, []string{"Ada Lovelace (ada)"}) ||
-		p.Summary != "This removes Ada Lovelace (ada) from #launch." ||
+		p.Summary.Text() != "This removes Ada Lovelace from #launch." ||
 		p.Risk != wire.RiskDestructive {
-		t.Errorf("the card leads with %q (%q) at risk %q", p.Summary, p.Removes, p.Risk)
+		t.Errorf("the card leads with %q (%q) at risk %q", p.Summary.Text(), p.Removes, p.Risk)
 	}
-	if !slices.Equal(p.Audience, []string{"Product manager (pm)", "Backend engineer (engineer)"}) {
-		t.Errorf("the private room's readers after the change are %q", p.Audience)
+	if got := chatTexts(p.Audience); !slices.Equal(got, []string{"Product manager",
+		"Backend engineer"}) {
+		t.Errorf("the private room's readers after the change are %q", got)
 	}
 	sent := sentArgs(t, p)
 	want := []any{map[string]any{"handle": "pm", "follow_all": true},
@@ -144,11 +138,12 @@ func TestARoomMembershipChangeRemovesOnlyWhatItNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	if moved := rows(p)["members.pm"]; moved.Kind != wire.ChangeChanged ||
-		moved.From != "Follows the whole room" || moved.To != "Follows only what names them" {
+		moved.From.Text() != "Product manager (follows the whole room)" ||
+		moved.To.Text() != "Product manager (follows only what names them)" {
 		t.Errorf("pm's following moves as %+v", moved)
 	}
-	if p.Risk != "" || p.Summary != "" {
-		t.Errorf("a change that takes nobody out reads %q at risk %q", p.Summary, p.Risk)
+	if p.Risk != "" || len(p.Summary) != 0 {
+		t.Errorf("a change that takes nobody out reads %q at risk %q", p.Summary.Text(), p.Risk)
 	}
 	// A SEAT THE CHART NO LONGER LISTS STAYS AS THE ROOM HOLDS IT, and a
 	// handle no seat holds does not join.
@@ -238,16 +233,15 @@ func TestEveryFaultOfAMembershipIsOneRefusal(t *testing.T) {
 // A CHAT CHANGE IS BOUND TO THE ROOM OR THE MESSAGE IT WAS SHOWN AGAINST
 // (ADR-0051).
 //
-// A change of a room binds the room as its card shows it, its settings and
-// its whole membership, and an edit or a delete binds the message's position.
-// Each re-reads as itself until somebody changes what the card showed, and
-// then as another, so the approval is refused as stale; a room or a message
-// gone since is gone. A message said in the room meanwhile moves the room's
-// own revision and changes nothing the card showed, so it leaves the change
-// standing: bound to that revision, every change to a room anybody talks in
-// would go stale before it was approved. Mutation: bind the room's
-// `revision`, bind no revision, or bind an edit to the room rather than the
-// message, and a case here fails.
+// A change of a room binds the room as its card shows it, settings and whole
+// membership; an edit or a delete binds the message's position. Each re-reads
+// as itself until something the card showed changes, then as another, so the
+// approval is refused as stale; a room or message gone since is gone. A
+// message said meanwhile moves the room's own revision but nothing the card
+// showed, so the change stands: bound to that revision, every change to a
+// room anybody talks in would go stale. Mutation: bind the room's `revision`,
+// bind no revision, or bind an edit to the room rather than the message, and
+// a case here fails.
 func TestAChatChangeIsBoundToWhatItWasShownAgainst(t *testing.T) {
 	t.Parallel()
 	read := reader(assistanttest.World())
@@ -334,19 +328,16 @@ func TestAChatChangeIsBoundToWhatItWasShownAgainst(t *testing.T) {
 
 // A CHAT CARD NAMES THE ROOM AND WHO READS IT (D09).
 //
-// A post names the room as people do and who will read it, the members of a
-// private room by name and the whole company for a public one; a room closed
-// to new messages refuses a post before any card. A room the call names as
-// people write it ("#launch") is read by that name, and the write is sent to
-// the id the read answered. A reply quotes the message it answers, a direct
-// message names everyone it reaches, an edit shows the old words beside the
-// new, a delete the words it takes down, redacted, and a leave the person
-// going, each of those two destructive and saying what goes above the rows. A
-// message already taken back refuses an edit and a delete, and somebody else's
-// message refuses an edit. Mutation: name the room by its id, send the name
-// the call gave in place of the room's id, show the call's own words in place
-// of the stored ones, or draw a delete or a leave as an ordinary change, and a
-// case here fails.
+// A post names the room and who will read it (a private room's members by
+// name, the company for a public one); a closed room refuses a post before
+// any card. A room named "#launch" is read by that name and written by the
+// id the read answered. A reply quotes its message, a direct message names
+// everyone it reaches, an edit shows old beside new words, a delete the
+// redacted words it takes down, a leave the person going; delete and leave
+// are destructive. A message already taken back refuses an edit and a delete,
+// and somebody else's refuses an edit. Mutation: name the room by its id,
+// send the call's name for the room's id, show the call's words for the
+// stored ones, or draw a delete or leave as ordinary, and a case here fails.
 func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	t.Parallel()
 	preview := func(name string, world map[string]any, args map[string]any) (proposal.Preview, error) {
@@ -360,16 +351,16 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	// WHOM IT WOULD REACH is the post's own decision run dry, read from
 	// the room's reach: pm follows the room whole.
 	p, err := preview("post_chat_message", assistanttest.World(), nil)
-	if err != nil || p.Target != "#launch" || rows(p)["room"].To != "#launch" ||
-		rows(p)["body"].To != "Ship it on Friday." ||
-		rows(p)["reaches"].To != "Product manager (pm) following every message" ||
-		!slices.Equal(p.Audience, []string{"Product manager (pm)", "Ada Lovelace (ada)"}) {
+	if err != nil || p.Target != "#launch" || rows(p)["room"].To.Text() != "#launch" ||
+		rows(p)["body"].To.Text() != "Ship it on Friday." ||
+		rows(p)["reaches"].To.Text() != "Product manager following every message" ||
+		!slices.Equal(chatTexts(p.Audience), []string{"Product manager", "Ada Lovelace"}) {
 		t.Errorf("a post previews %+v, %v", p, err)
 	}
 	public := chatWorld(func(room map[string]any) { room["kind"] = "public" }, nil)
 	if p, err := preview("post_chat_message", public, nil); err != nil ||
-		!slices.Equal(p.Audience, []string{"The whole company"}) {
-		t.Errorf("a post in a public room names %q, %v", p.Audience, err)
+		!slices.Equal(chatTexts(p.Audience), []string{"The whole company"}) {
+		t.Errorf("a post in a public room names %q, %v", chatTexts(p.Audience), err)
 	}
 	archived := chatWorld(func(room map[string]any) {
 		room["archived_at"] = "2031-04-01T09:00:00Z"
@@ -417,8 +408,8 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	}
 
 	if p, err := preview("reply_in_chat_thread", assistanttest.World(), nil); err != nil ||
-		rows(p)["reply_to"].To != "Product manager (pm): The old words." ||
-		rows(p)["reaches"].To != "Product manager (pm) following every message" {
+		rows(p)["reply_to"].To.Text() != "Product manager: The old words." ||
+		rows(p)["reaches"].To.Text() != "Product manager following every message" {
 		t.Errorf("a reply previews %+v, %v", p, err)
 	}
 	// A DRAFT THAT WOULD REACH NO AGENT SAYS SO, and why, before the person
@@ -427,18 +418,18 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	quiet[roomPath+"/reach"] = map[string]any{"channel_id": assistanttest.RecordID,
 		"reach": map[string]any{}, "quiet": "no_agent"}
 	if p, err := preview("post_chat_message", quiet, nil); err != nil ||
-		!strings.HasPrefix(rows(p)["reaches"].To, "No agent.") {
-		t.Errorf("a post that reaches no agent previews %q, %v", rows(p)["reaches"].To, err)
+		!strings.HasPrefix(rows(p)["reaches"].To.Text(), "No agent.") {
+		t.Errorf("a post that reaches no agent previews %q, %v", rows(p)["reaches"].To.Text(), err)
 	}
 	if p, err := preview("send_direct_message", assistanttest.World(), nil); err != nil ||
-		!slices.Equal(rows(p)["to"].Items, []string{"Ada Lovelace (ada)"}) ||
-		!slices.Equal(p.Audience, []string{"Product manager (pm)", "Ada Lovelace (ada)"}) {
+		!slices.Equal(chatTexts(rows(p)["to"].Items), []string{"Ada Lovelace"}) ||
+		!slices.Equal(chatTexts(p.Audience), []string{"Product manager", "Ada Lovelace"}) {
 		t.Errorf("a direct message previews %+v, %v", p, err)
 	}
 
 	p, err = preview("edit_chat_message", assistanttest.World(), nil)
 	if body := rows(p)["body"]; err != nil || body.Kind != wire.ChangeChanged ||
-		body.From != "The old words." || body.To != "The new words." {
+		body.From.Text() != "The old words." || body.To.Text() != "The new words." {
 		t.Errorf("an edit previews %+v, %v", p.Changes, err)
 	}
 	if _, shown := rows(p)["links"]; shown {
@@ -458,17 +449,18 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	})
 	p, err = preview("delete_chat_message", leaked, nil)
 	if body := rows(p)["body"]; err != nil || body.Kind != wire.ChangeRemoved ||
-		strings.Contains(body.From, secret) || !strings.Contains(body.From, "[REDACTED") {
+		strings.Contains(body.From.Text(), secret) ||
+		!strings.Contains(body.From.Text(), "[REDACTED") {
 		t.Errorf("a delete previews %+v, %v", p.Changes, err)
 	}
 	if links := rows(p)["links"]; links.Kind != wire.ChangeRemoved ||
-		!slices.Equal(links.FromItems, []string{"https://example.com/plan"}) {
+		!slices.Equal(chatTexts(links.FromItems), []string{"https://example.com/plan"}) {
 		t.Errorf("a delete takes down the links as %+v", links)
 	}
 	if p.Risk != wire.RiskDestructive ||
-		p.Summary != "This deletes the message Product manager (pm) wrote in #launch, for "+
+		p.Summary.Text() != "This deletes the message Product manager wrote in #launch, for "+
 			"everyone who can read it." {
-		t.Errorf("a delete leads with %q at risk %q", p.Summary, p.Risk)
+		t.Errorf("a delete leads with %q at risk %q", p.Summary.Text(), p.Risk)
 	}
 	taken := chatWorld(nil, func(root map[string]any) {
 		message := root["message"].(map[string]any)
@@ -481,196 +473,94 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	}
 
 	p, err = preview("leave_chat_room", assistanttest.World(), nil)
-	if err != nil || rows(p)["member"].From != "Product manager (pm)" ||
-		!slices.Equal(p.Audience, []string{"Ada Lovelace (ada)"}) ||
-		!strings.Contains(p.Note, "no longer read") ||
-		p.Summary != "This removes you from #launch." || p.Risk != wire.RiskDestructive {
+	if err != nil || rows(p)["member"].From.Text() != "Product manager" ||
+		!slices.Equal(chatTexts(p.Audience), []string{"Ada Lovelace"}) ||
+		!strings.Contains(p.Note.Text(), "no longer read") ||
+		p.Summary.Text() != "This removes you from #launch." || p.Risk != wire.RiskDestructive {
 		t.Errorf("leaving previews %+v, %v", p, err)
 	}
 }
 
-// A CHAT READ SAYS THE ROOM AS PEOPLE WRITE IT.
-//
-// A read about one room takes it by its name ("#launch") as by its id, sent
-// as the room's questions read it, and its step and its card's title say
-// where the read is: "#launch" where the call did, and where the call named it
-// by its id, the room as the turn reads it, a direct conversation by the
-// people in it beside the reader, never the id; with nothing to read it by,
-// "the room". So two direct conversations, which only an id names, are two
-// titles and two reads to the drawer. Its card opens the chat screen at the
-// room the answer carries, labelled by what it opens; a room is drawn with the
-// "#" every screen draws and is keyed by it, so the answer's "#launch" is its
-// chip, and the room's card heads a direct conversation, which has no name and
-// so no key, by its people, as the rail draws one. Mutation: say the call's id
-// in the step, title two conversations alike, open the screen by anything but
-// the answer's room, draw or key a room without its "#", key a conversation,
-// or head one by its id or by what it is alone, and a case here fails.
-func TestAChatReadSaysTheRoomAsPeopleWriteIt(t *testing.T) {
-	t.Parallel()
-	room := assistanttest.RecordID
-	withAda, withEngineer := "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e21",
-		"0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e22"
-	world := assistanttest.World()
-	for id, other := range map[string]string{withAda: "ada", withEngineer: "engineer"} {
-		world["/chatlet/channels/"+id] = map[string]any{"channel": map[string]any{"id": id,
-			"kind": "dm"}, "members": []any{map[string]any{"handle": "pm"},
-			map[string]any{"handle": other}}}
+// chatTexts are phrases as their words.
+func chatTexts(phrases []wire.Phrase) []string {
+	out := make([]string, 0, len(phrases))
+	for _, p := range phrases {
+		out = append(out, p.Text())
 	}
-	names := catalog.NewResolver(reader(world))
-	said := cards.Options{SeatName: func(h string) (string, bool) {
-		return names.SeatName(t.Context(), h)
-	}, Room: func(ref string) (cards.Room, bool) { return names.Room(t.Context(), ref) }}
-	get, _ := catalog.Lookup("get_chat_room")
-	messages, _ := catalog.Lookup("read_chat_messages")
-	for _, c := range []struct {
-		ref      string
-		o        cards.Options
-		get, msg string
-	}{
-		{"#launch", cards.Options{}, "Reading #launch", "Reading the messages, in #launch"},
-		{"Launch", cards.Options{}, "Reading #launch", "Reading the messages, in #launch"},
-		{room, said, "Reading the room", "Reading the messages, in #launch"},
-		{withAda, said, "Reading the room", "Reading the messages, with Ada Lovelace"},
-		{withEngineer, said, "Reading the room", "Reading the messages, with Backend engineer"},
-		{room, cards.Options{}, "Reading the room", "Reading the messages"},
-	} {
-		if got := get.StepLabel(map[string]any{"channel": c.ref}, c.o); got != c.get {
-			t.Errorf("a read of the room %q is the step %q, want %q", c.ref, got, c.get)
-		}
-		if got := messages.StepLabel(map[string]any{"channel": c.ref}, c.o); got != c.msg {
-			t.Errorf("a read of %q's messages is the step %q, want %q", c.ref, got, c.msg)
-		}
-	}
-	// A PERSON WHOSE OWN SEAT CANNOT BE READ (one the chart no longer holds,
-	// which chat still answers as) is still told two conversations apart:
-	// each by all of its people.
-	unseated := maps.Clone(world)
-	delete(unseated, "/viewer")
-	blind := catalog.NewResolver(reader(unseated))
-	for id, want := range map[string]string{withAda: "Product manager and Ada Lovelace",
-		withEngineer: "Product manager and Backend engineer"} {
-		if r, ok := blind.Room(t.Context(), id); !ok || r.With != want {
-			t.Errorf("a conversation read by a person whose seat cannot be read is said as "+
-				"%+v (%t), want with %s", r, ok, want)
-		}
-	}
-	req, err := messages.Request(map[string]any{"channel": "#launch"})
-	if err != nil || req.Path != "/chatlet/channels/%23launch/messages" {
-		t.Errorf("the messages of #launch are asked as %s (%v)", req.Path, err)
-	}
-
-	shape := func(tool catalog.Tool, args catalog.Args, o cards.Options, answer string) wire.Card {
-		t.Helper()
-		res, err := catalog.Shape(tool, args, exec.Response{Status: http.StatusOK,
-			Body: []byte(answer)}, provenance.NewBoundary(), wednesday, o)
-		if err != nil || len(res.Cards) == 0 {
-			t.Fatalf("%s shaped %+v (%v)", tool.Name, res, err)
-		}
-		return res.Cards[0]
-	}
-	card := shape(messages, catalog.Args{"channel": "#launch"}, cards.Options{},
-		`{"channel_id":"`+room+`","messages":[{"message":{"id":"m1","author":"pm",`+
-			`"body":"Ship it.","created_at":"2031-04-16T14:00:00Z"}}],"next_cursor":"41"}`)
-	if table := card.Table; table == nil || table.Title != "Messages, in #launch" ||
-		table.Open == nil || table.Open.Href != "#/chatlet/"+room || table.Open.Label != "Open room" {
-		t.Errorf("the messages of #launch are carded as %+v", card.Table)
-	}
-	var titles []string
-	for _, id := range []string{withAda, withEngineer} {
-		titles = append(titles, shape(messages, catalog.Args{"channel": id}, said,
-			`{"channel_id":"`+id+`","messages":[{"message":{"id":"m1","author":"pm",`+
-				`"body":"Hi.","created_at":"2031-04-16T14:00:00Z"}}]}`).Table.Title)
-	}
-	if !slices.Equal(titles, []string{"Messages, with Ada Lovelace",
-		"Messages, with Backend engineer"}) {
-		t.Errorf("two direct conversations read by their ids are titled %q", titles)
-	}
-	card = shape(get, catalog.Args{"channel": "#launch"}, cards.Options{}, `{"channel":{"id":"`+
-		room+`","kind":"public","name":"launch"}}`)
-	if entity := card.Entity; entity == nil || entity.Title != "#launch" ||
-		entity.Key != "#launch" || entity.Kind != wire.ResourceRoom {
-		t.Errorf("a room is headed %+v", card.Entity)
-	}
-	rooms, _ := catalog.Lookup("list_chat_rooms")
-	card = shape(rooms, catalog.Args{}, cards.Options{}, `{"channels":[{"channel":{"id":"`+room+
-		`","kind":"public","name":"launch"},"unread":2},{"channel":{"id":"`+room+
-		`","kind":"dm"},"participants":["pm","ada"],"unread":0}]}`)
-	if table := card.Table; table == nil || len(table.Rows) != 2 || table.Rows[0][0] != "#launch" ||
-		table.Rows[1][0] != nil || table.Rows[1][1] != "pm, ada" {
-		t.Errorf("the rail is carded as %+v", card.Table)
-	}
-	direct := `{"channel":{"id":"` + withAda + `","kind":"dm"},"members":[{"handle":"pm"},` +
-		`{"handle":"ada"}]}`
-	card = shape(get, catalog.Args{"channel": withAda}, said, direct)
-	if entity := card.Entity; entity == nil || entity.Title != "Direct conversation with Ada Lovelace" ||
-		entity.Key != "" || entity.Kind != wire.ResourceRoom || len(entity.Items) != 2 ||
-		entity.Open == nil || entity.Open.Href != "#/chatlet/"+withAda {
-		t.Errorf("a direct conversation is carded as %+v", card.Entity)
-	}
-	if entity := shape(get, catalog.Args{"channel": withAda}, cards.Options{}, direct).Entity; entity == nil ||
-		entity.Title != "Direct conversation" {
-		t.Errorf("a direct conversation no read can say again is headed %+v", entity)
-	}
+	return out
 }
 
-// A CHAT READ IS TOLD APART BY EVERYTHING IT ASKS: a search by its words and
-// whose they are, a thread by its first words, and the rooms by whether they
-// are only those with something unread; and it is one page, asked for one
-// (ADR-0061). Mutation: drop search_chat's author from its scope, head a
-// thread by "Thread" alone or by all of its first message, or let the rooms
-// read ask the whole rail, and a case here fails.
-func TestAChatReadIsToldApartByWhatItAsks(t *testing.T) {
+// chatRefs are every record a preview's card names: in its rows, its summary,
+// its note and its audience.
+func chatRefs(p proposal.Preview) []wire.Ref {
+	var out []wire.Ref
+	add := func(phrases ...wire.Phrase) {
+		for _, ph := range phrases {
+			out = append(out, ph.Refs()...)
+		}
+	}
+	for _, c := range p.Changes {
+		add(c.From, c.To)
+		add(c.Items...)
+		add(c.FromItems...)
+	}
+	add(p.Summary, p.Note)
+	add(p.Audience...)
+	return out
+}
+
+// A CHAT CARD NAMES ITS ROOM AND ITS PEOPLE AS RECORDS: the room by its id,
+// every author, member, recipient and reader a seat by its chart name, linked.
+// Mutation: name a seat by its handle, or write it into a sentence's words.
+func TestAChatCardNamesItsRoomAndItsPeopleAsRecords(t *testing.T) {
 	t.Parallel()
-	search, _ := catalog.Lookup("search_chat")
-	if a, b := search.StepLabel(map[string]any{"q": "launch", "author": "ada"}, cards.Options{}),
-		search.StepLabel(map[string]any{"q": "launch", "author": "engineer"},
-			cards.Options{}); a != "Searching chat, “launch”, by ada" || a == b {
-		t.Errorf("one search by two authors is the steps %q and %q", a, b)
-	}
-
-	thread, _ := catalog.Lookup("get_chat_thread")
-	world := assistanttest.World()
-	answer := func(body string) []byte {
-		root := world["/chatlet/channels/"+assistanttest.RecordID+"/threads/"+
-			assistanttest.RecordID].(map[string]any)["root"].(map[string]any)
-		root["message"].(map[string]any)["body"] = body
-		raw, err := json.Marshal(world["/chatlet/channels/"+assistanttest.RecordID+"/threads/"+
-			assistanttest.RecordID])
+	names := map[string]string{"pm": "Product manager", "ada": "Ada Lovelace",
+		"engineer": "Backend engineer"}
+	roomHref := "#/chatlet/" + assistanttest.RecordID
+	for tool, want := range map[string]struct {
+		room  int
+		seats []string
+	}{
+		// How often the card names the room, and whom it names, in order.
+		"post_chat_message":     {1, []string{"pm", "pm", "ada"}},
+		"reply_in_chat_thread":  {1, []string{"pm", "pm", "pm", "ada"}},
+		"send_direct_message":   {0, []string{"ada", "ada", "pm", "ada"}},
+		"edit_chat_message":     {1, []string{"pm", "pm", "ada"}},
+		"delete_chat_message":   {2, []string{"pm", "pm", "pm", "ada"}},
+		"update_chat_room":      {2, []string{"pm", "ada"}},
+		"set_chat_room_members": {3, []string{"engineer", "ada", "ada", "pm", "engineer"}},
+		"leave_chat_room":       {3, []string{"pm", "ada"}},
+	} {
+		write, _ := catalog.Lookup(tool)
+		p, err := write.Preview(t.Context(), reader(assistanttest.World()), wednesday,
+			assistanttest.ProposalArgs[tool])
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%s: %v", tool, err)
 		}
-		return raw
-	}
-	args := catalog.Args{"channel": assistanttest.RecordID, "message_id": assistanttest.RecordID}
-	heading := func(body string) string {
-		t.Helper()
-		res, err := catalog.Shape(thread, args, exec.Response{Status: http.StatusOK,
-			Body: answer(body)}, provenance.NewBoundary(), wednesday, cards.Options{})
-		if err != nil || len(res.Cards) == 0 || res.Cards[0].Entity == nil {
-			t.Fatalf("a thread starting %q shaped %+v (%v)", body, res.Cards, err)
+		rooms := 0
+		var seats []string
+		for _, r := range chatRefs(p) {
+			switch r.Kind {
+			case wire.ResourceRoom:
+				rooms++
+				if r.ID != assistanttest.RecordID || r.Name != "#launch" || r.Open == nil ||
+					r.Open.Href != roomHref {
+					t.Errorf("%s names the room as %+v (open %+v)", tool, r, r.Open)
+				}
+			case wire.ResourceSeat:
+				seats = append(seats, r.ID)
+				if r.Name != names[r.ID] || r.Open == nil ||
+					r.Open.Href != "#/company/org/seats/"+r.ID {
+					t.Errorf("%s names the seat %s as %q (open %+v), want %q linked to the seat",
+						tool, r.ID, r.Name, r.Open, names[r.ID])
+				}
+			default:
+				t.Errorf("%s names a %s, which no chat card names", tool, r.Kind)
+			}
 		}
-		return res.Cards[0].Entity.Title
-	}
-	if got := heading("Can we ship\nthe launch copy?"); got != "Thread: Can we ship the launch copy?" {
-		t.Errorf("a thread is headed %q, want its first words on one line", got)
-	}
-	if got := heading(strings.Repeat("word ", 40)); !strings.HasPrefix(got, "Thread: word word") ||
-		!strings.HasSuffix(got, "…") || len(got) > len("Thread: ")+80 {
-		t.Errorf("a thread of a long first message is headed %q, want its first words, marked "+
-			"where they are cut", got)
-	}
-	if got := heading(""); got != "Thread" {
-		t.Errorf("a thread whose first message was taken back is headed %q", got)
-	}
-
-	rooms, _ := catalog.Lookup("list_chat_rooms")
-	req, err := rooms.Request(map[string]any{"unread": true})
-	if err != nil || req.Query.Get("limit") != "15" || req.Query.Get("unread") != "true" {
-		t.Errorf("the rooms with something unread are asked as %s?%s (%v)", req.Path,
-			req.Query.Encode(), err)
-	}
-	if got := rooms.StepLabel(map[string]any{"unread": true}, cards.Options{}); got !=
-		"Reading your chat rooms, with unread messages" {
-		t.Errorf("the rooms with something unread are the step %q", got)
+		if rooms != want.room || !slices.Equal(seats, want.seats) {
+			t.Errorf("%s names the room %d times and the seats %q, want %d and %q", tool,
+				rooms, seats, want.room, want.seats)
+		}
 	}
 }

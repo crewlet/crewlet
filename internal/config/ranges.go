@@ -13,21 +13,13 @@ import (
 // the company document to, and the one a screen that changes the setting
 // checks a typed value against before it sends it.
 //
-// # Declared once, for both
+// Declared once, for both: bounds kept inline in a validator could not be
+// reported, and a copy beside the editor would drift. Each is declared in
+// [settingRanges], keyed by the setting's authored path: the validator reads
+// it through [problems.within], `queries.LimitRow` reports it, and a fault
+// carries it ([Fault.Range]).
 //
-// A cap's bounds lived inline in its validator and nowhere else, so nothing
-// could report them. Settings › Limits checked only a value's shape and sent
-// 0, -2 and 999999 to the engine, whose refusal was this package's operator
-// line ("turn_engine.max_iterations: value out of range: must be at least 1,
-// got 0: …"), and a copy of the bounds kept beside the editor would have
-// drifted from the validator the day either moved. So each bound is declared
-// in [settingRanges], keyed by the setting's authored path: the validator
-// reads it through [problems.within], `queries.LimitRow` reports it beside the
-// value, and a fault the validator raises carries it ([Fault.Range]), so a
-// screen says an engine refusal in the same words as its own check.
-//
-// A Range bounds ONE setting. Two settings held to each other (a task's time
-// limit under its call's, a round cap under its ceiling) are a rule about
+// A Range bounds ONE setting; two settings held to each other are a rule about
 // both, checked by the validator that owns them.
 type Range struct {
 	// Min is the least value admitted, or, with MinExclusive, the value every
@@ -147,14 +139,6 @@ var settingRanges = map[string]Range{
 	"code.scratch.max_per_seat":      {Min: 0, Max: atMost(CodeScratchMaxPerSeatCeiling)},
 	// 0 KEEPS MESSAGES FOR EVER, a choice of its own below the shortest
 	// horizon (ChatletConfig.MessageRetentionDays says why it is three-valued).
-	"assistant.max_steps":                 assistantSteps.rangeOf(),
-	"assistant.turn_timeout_seconds":      assistantTimeout.rangeOf(),
-	"assistant.proposal_ttl_seconds":      assistantProposal.rangeOf(),
-	"assistant.retention_days":            assistantRetention.rangeOf(),
-	"assistant.deep_work.timeout_seconds": deepTimeout.rangeOf(),
-	"assistant.deep_work.max_steps":       deepSteps.rangeOf(),
-	"assistant.deep_work.max_tokens":      deepTokens.rangeOf(),
-
 	"chat.chatlet.message_retention_days": {
 		Min: MinMessageRetentionDays, Max: atMost(MaxMessageRetentionDays), OrZero: true,
 	},

@@ -18,63 +18,16 @@ import (
 
 // A PERSON CHANGES THEIR OWN PASSWORD.
 //
-// # The proof is a step-up's, taken here
-//
-// The route is guarded — a person signed in — and the CURRENT password is
-// verified exactly as a step-up's is: on the throttle's curve for who they are
-// signed in as, through the verify cap, a wrong one a counted failure answered
-// with the one refusal every sign-in arm gives. A person who HOLDS A SECOND
-// FACTOR presents its code too (`code`), decided as the step-up decides it
-// ([Service.proveSecondFactor]): absent, it is asked for
-// (`second_factor_required`, neither a success nor a failure on the curve);
-// wrong or already spent, it is the one refusal, a failure on the person's own
-// curve as well as the pair's;
-// right, it is SPENT — an app code records its step and a recovery code is
-// removed. Together that IS the recent proof the change needs, so the route
-// does not additionally send the person through a step-up first.
-//
-// THE CODE IS ASKED BECAUSE OF WHAT THE CHANGE ENDS. It took the current
-// password alone, so somebody holding a person's session cookie and their
-// password but not their authenticator changed the password — which ends
-// every other session and token the person holds and every reset link — and
-// locked the real owner out until an administrator issued them a reset link:
-// the takeover the second factor exists to stop, through the one door that
-// did not ask for it. A person holding no second factor is unchanged — their
-// password is the whole of a step-up from them.
-//
-// # Only a person, at a keyboard
-//
-// It is [authz.ActionCredentialProof] — how somebody proves who they are —
-// whose row needs a PERSON PRESENT, so a request that presented a machine
-// token is refused by the table exactly as an enrolment is, on the principal
-// as this request proves it: the current password it presents is a proof
-// taken now. And a session that is not a person's — a Tier A token exchanged
-// for one — has no password to change, which is said rather than mistaken for
-// a wrong password.
-//
-// # It ends everything else, and keeps this browser
-//
-// The new password and a moved revocation epoch are ONE record
-// ([iamdomain.Writer.SetPassword]): somebody changes a password when they think
-// somebody else has it, so every session and machine token the person held
-// ends with it, every outstanding reset link too. THIS browser is then handed
-// a new session exactly as a step-up hands one — the session it presented
-// ended first, the new one keeping its absolute deadline — so the person stays
-// signed in where they made the change.
-//
-// THE NEW SESSION'S PROOF is now, for everybody: the change proves what a
-// step-up from this person proves — the password, and the code where they
-// hold a second factor — so its replacement is as fresh as a step-up's. While
-// the change asked for the password alone it kept the replaced session's
-// instant for a person holding a second factor, which dated that session
-// honestly and still let the change itself through.
-//
-// A REPLACEMENT THAT FAILS AFTER THE CHANGE LANDED answers its own failure: the
-// password is changed and the cookie this request held is over with the
-// epoch, so the next request signs the person out and the new password signs
-// them in. A change this node has not applied yet (`pending`) opens no session
-// here at all, because the epoch a new session is opened at is read from rows
-// that do not yet hold the move — it says so, and the person signs in again.
+// The CURRENT password is verified as a step-up's is. A person who HOLDS A
+// SECOND FACTOR also presents its code ([Service.proveSecondFactor]): absent is
+// asked for, wrong or spent is the one refusal, right is SPENT. That is the
+// recent proof the change needs, so no step-up comes first; the code is asked
+// because the change ends every other session, token and reset link.
+// It is [authz.ActionCredentialProof], needing a PERSON PRESENT, so a machine
+// token is refused; an exchanged Tier A session has no password. The password
+// and a moved revocation epoch are ONE record ([iamdomain.Writer.SetPassword]);
+// THIS browser gets a session proved now. A replacement failing after the
+// change landed leaves the new password working; a `pending` change opens none.
 
 // passwordChange is what a change presents: Code is the second factor's,
 // asked only of a person who holds one, exactly as a step-up asks it.

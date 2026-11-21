@@ -40,20 +40,16 @@ type backupTaker interface {
 
 // serveBackup answers POST /backup.
 //
-// `?dir=` is the destination ON THE ENGINE'S HOST — this writes files where
-// the engine runs, not where the caller does, which is why the parameter is
-// required rather than defaulted: a default would put a company's entire
-// durable state somewhere nobody chose.
+// `?dir=` is the destination ON THE ENGINE'S HOST, not the caller's, which is
+// why it is required rather than defaulted: a default would put a company's
+// entire durable state somewhere nobody chose.
 //
-// SYNCHRONOUS, and it can take a while — the copy is bounded by the size of
-// the store and the stream estate rather than by anything this handler
-// decides. That is deliberate: the alternative is a job that outlives its
-// request, which needs somewhere durable to record what it did, and the only
-// place to record it is the very store being copied. The work is safe to be
-// cut off — the store copy renames into place only after it verifies, and a
-// backup is only a backup once its manifest is written — so a client that
-// gives up, or a drain that ends the process mid-copy, leaves an unfinished
-// directory rather than a false one.
+// SYNCHRONOUS, however long the copy takes: a job outliving its request needs
+// somewhere durable to record what it did, and the only place is the very store
+// being copied. Being cut off is safe: the store copy renames into place only
+// after it verifies, and a backup is only one once its manifest is written, so
+// a client that gives up or a drain that ends the process leaves an unfinished
+// directory, never a false one.
 func (a *App) serveBackup(w http.ResponseWriter, r *http.Request) {
 	dir := r.URL.Query().Get("dir")
 	if dir == "" {
@@ -155,29 +151,15 @@ const logGapRetry = time.Second
 
 // backupRefusal separates the caller's mistakes and the fleet's states from
 // the engine's failures.
-//
 // A destination that is occupied, relative or one this host cannot prepare is
-// a 400: nothing is wrong with the node, the request named somewhere it cannot
-// write, and answering 500 would send an operator looking at the engine
-// instead of at their own command.
-//
-// A backup asked for while another runs on this node is a 409: the node is
-// busy with exactly what was asked for, and the request can be made again once
-// that one finishes. So are the refusals A ROLLING UPGRADE, a keyring
-// rotation or a rebuilt log makes — a record on a log the backup replays that
-// this build cannot read, one signed under a key this node does not hold, and
-// a copy keyed to an earlier instance of a log — because this node is sound
-// and so is the command: what it holds conflicts with the fleet's newer state,
-// and another node, or this one once it has caught up, takes the backup. A
-// record whose signature no key opens is not among them: it is bytes no node
-// of the fleet wrote, and a 500 like every failure of the engine's own.
-//
-// A copy naming objects the object store did not answer for is a 503, and so
-// is a log a restore could not replay to the snapshot: what failed is the
-// store holding the company's files, or the log the copy needed, and each
-// clears — the store answers again, the next copy stands past the gap — so
-// these are the failures here that trying again later can fix.
-//
+// a 400: a 500 would send an operator looking at the engine, not their command.
+// A backup while another runs on this node is a 409, as are the refusals A
+// ROLLING UPGRADE, a keyring rotation or a rebuilt log makes (a record this
+// build cannot read, one signed under a key this node lacks, a copy keyed to an
+// earlier instance of a log): another node takes the backup. A record whose
+// signature no key opens is not among them: no fleet node wrote it, a 500.
+// A copy naming objects the object store did not answer for is a 503, as is a
+// log a restore could not replay to the snapshot: both clear with time.
 // EVERY OTHER FAILURE IS A 500, whose reason is in this node's log alone.
 func backupRefusal(err error) refusal {
 	switch {

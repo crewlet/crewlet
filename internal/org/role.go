@@ -81,21 +81,16 @@ type HumanContact struct {
 	SlackUserID string `yaml:"slack_user_id,omitempty" json:"slack_user_id,omitempty"`
 
 	// MattermostUserID is a Mattermost USERNAME, not the 26-character user
-	// id: Mattermost mentions address a person by name, and the name is
-	// what an agent has to write into a message for it to render.
+	// id: mentions address a person by name, and an agent writes the name
+	// into a message for it to render.
 	//
-	// A post names its author by the user id instead, so the name alone
-	// attributes nothing: the Mattermost transport asks the server which
-	// account holds it and registers that account's id for the seat (see
+	// A post names its author by user id, so the transport asks the server
+	// which account holds the name and registers that id for the seat (see
 	// [Transport.AddressedByName]).
 	//
-	// Literal values are lowercased, because Mattermost's own are: the
-	// server lowercases a username on every save, admits only lowercase
-	// characters in one, and looks one up as `Username = lower(?)`, so
-	// "Jane" and "jane" are one account there and must be one here. The
-	// duplicate check compares what the chart declares, and two seats
-	// spelling one person differently would otherwise both validate and
-	// then contend for the one account both names resolve to.
+	// Literal values are lowercased, as Mattermost's own are (see
+	// contactField.lowercase), or two seats spelling one person differently
+	// would both validate and then contend for one account.
 	MattermostUserID string `yaml:"mattermost_user_id,omitempty" json:"mattermost_user_id,omitempty"`
 
 	// AtlassianAccountID is an Atlassian Cloud account id — one id covers
@@ -123,28 +118,17 @@ type contactField struct {
 	key string
 
 	// lowercase marks a field whose LITERAL values are lowercased, because
-	// two spellings differing only in case are one account. The reason
-	// differs per field, and each is a fact about somebody else's code:
+	// two spellings differing only in case are one account:
 	//
-	//   - github_login and gitlab_username: both platforms compare logins
-	//     without case, and both sides of the engine's own match lowercase —
-	//     the webhook parser and the boot-time identity lookup — so a
-	//     mixed-case literal here would never resolve.
-	//   - mattermost_user_id: nothing inbound is matched against the name
-	//     itself (a post carries the sender's user id, which the transport
-	//     asks the server for by this name); it is folded because
-	//     Mattermost folds it — the server lowercases a username on
-	//     every save (NormalizeUsername), admits only lowercase characters
-	//     in one, and finds one by `Username = lower(?)` — so "Jane" and
-	//     "jane" are one person there and the duplicate check must say so.
+	//   - github_login, gitlab_username: both platforms compare logins without
+	//     case, and the engine's webhook parser and identity lookup lowercase,
+	//     so a mixed-case literal would never resolve.
+	//   - mattermost_user_id: Mattermost lowercases a username on every save
+	//     (NormalizeUsername), so "Jane" and "jane" are one person.
 	//
-	// A ${VAR} reference is exempt and is lowercased after resolution
-	// instead.
-	//
-	// Unset for the OPAQUE ids, a Slack member id and an Atlassian account
-	// id: the platform issues them and nothing says two that differ in case
-	// are one account, so folding them would make the duplicate check
-	// refuse two people it cannot know are one.
+	// A ${VAR} reference is exempt and is lowercased after resolution. Unset
+	// for the OPAQUE ids (Slack member id, Atlassian account id): nothing says
+	// two that differ in case are one account.
 	lowercase bool
 
 	// value addresses the field, so normalisation and validation write
@@ -199,18 +183,13 @@ var contactTransports = []struct {
 // NAME a person is addressed by, where every event the transport receives
 // names them by an account id the platform assigned instead.
 //
-// Mattermost is the one: a mention is `@username`, and a DM is opened with the
-// account that name belongs to, so the name is what an agent needs — while a
-// post carries only its author's 26-character user id. Every other field here
-// is the very id the surface's events carry: a Slack member id, an Atlassian
-// account id, a GitHub or GitLab login.
+// Mattermost is the one: a mention is `@username`, while a post carries only
+// its author's user id. Every other field here is the id its events carry.
 //
-// So the declared value of such a field is NOT an identity the party registry
-// can hold. Registered as written, it is a key no event ever looks up: every
-// post a person wrote reached the agents from a stranger, however the chart
-// named them. The transport resolves the name against its server and
-// registers the account id it was answered with — which is also the only
-// place that can notice the name naming nobody.
+// Such a value is NOT an identity the party registry can hold: registered as
+// written, no event looks it up and every post reaches the agents from a
+// stranger. The transport resolves the name against its server and registers
+// the account id, the only place that can notice the name naming nobody.
 func (t Transport) AddressedByName() bool {
 	for _, entry := range contactTransports {
 		if entry.transport == t {
@@ -229,11 +208,10 @@ type Identity struct {
 // Clone returns a copy the caller may normalise without touching the original,
 // or nil for nil.
 //
-// A seat is BUILT from an authored document by the config layer, whose
-// document a reader may hold across many builds, and [Organization.Normalize]
-// then rewrites the contact in place. Shared, that rewrote the source's own
-// contact, from several goroutines at once: a data race, and a document
-// silently changed by being read.
+// A seat is BUILT from an authored document a reader may hold across many
+// builds, and [Organization.Normalize] rewrites the contact in place. Shared,
+// that would rewrite the source's contact from several goroutines: a data
+// race, and a document changed by being read.
 func (c *HumanContact) Clone() *HumanContact {
 	if c == nil {
 		return nil
@@ -268,16 +246,12 @@ func (c *HumanContact) Normalize() {
 // string.
 //
 // Such a value is neither a literal id nor a reference: resolution
-// substitutes embedded references too, so letting it through would register
-// a truncated or mangled identity that silently matches nobody. "${A}${B}"
-// is embedded for the same reason — the resolved value is a concatenation,
-// not an identity.
+// substitutes embedded references too, so it would register a mangled
+// identity matching nobody. "${A}${B}" is embedded for the same reason.
 //
-// The trigger is any "${" rather than [envref.Has], deliberately: a value
-// like "${1}" is one the resolver would leave alone, so it would register
-// verbatim as somebody's Slack id. No account id on any of these platforms
-// contains a brace, so the broader read costs nothing and catches the near
-// miss.
+// The trigger is any "${" rather than [envref.Has], deliberately: "${1}" is
+// left alone by the resolver and would register verbatim as somebody's id.
+// No account id here contains a brace, so the broader read costs nothing.
 func (c *HumanContact) Validate() error {
 	return joinFieldErrors(c.faults())
 }
@@ -343,15 +317,13 @@ func (c *HumanContact) Identities() []Identity {
 // reference resolved through lookup, then lowercased for the
 // case-normalised transports. A nil lookup reads the process environment.
 //
-// An identity whose reference does not resolve is OMITTED. Emitting the raw
-// ${VAR} text would poison registration, prompts and mention markup with a
-// string no webhook payload or platform lookup could ever match — the
-// failure would surface as a person who mysteriously never gets mentioned,
-// rather than as a missing variable.
+// An identity whose reference does not resolve is OMITTED. The raw ${VAR}
+// text would poison registration, prompts and mention markup with a string
+// nothing could match, surfacing as a person who never gets mentioned rather
+// than a missing variable.
 //
-// The lookup is a parameter rather than a package-level read because the
-// environment is the one input to this model that is genuinely ambient, and
-// ambient inputs are what make a test suite serial.
+// The lookup is a parameter because the environment is this model's one
+// ambient input, and ambient inputs make a test suite serial.
 func (c *HumanContact) ResolvedIdentities(lookup EnvLookup) []Identity {
 	if c == nil {
 		return nil
@@ -407,23 +379,16 @@ func (s SlackIdentity) IsZero() bool { return s == SlackIdentity{} }
 
 // GitHubApp is a seat's own GitHub App, as the running company holds it.
 //
-// ONE APP PER AGENT, and there is no other way to have one: a GitHub App has
-// exactly one bot identity, derived from its slug, and no token, header or
-// manifest field varies the author. So agents sharing an app would all act as
-// the same account, and two seats resolving to one login means an @mention can
-// no longer say which agent is meant.
+// ONE APP PER AGENT: an app has exactly one bot identity, derived from its
+// slug, and nothing varies the author. Agents sharing one would act as one
+// account, and an @mention could no longer say which agent is meant.
 //
-// THE APP ITSELF IS WRITTEN BY THE ENGINE, what it may do by a person. An app
-// is created from a manifest the engine builds, and GitHub returns its id,
-// slug, key and webhook secret exactly once, at conversion time; what a person
-// does is click through the creation and the install. Enabled, Permissions and
-// Repos are the seat's settings: the first two are what the integration's
-// Agents tab writes, and the repositories are named in the org builder.
+// THE APP ITSELF IS WRITTEN BY THE ENGINE, what it may do by a person: GitHub
+// returns its id, slug, key and webhook secret exactly once, at manifest
+// conversion. Enabled, Permissions and Repos are the seat's settings.
 //
-// HOW MUCH THE APP MAY DO IS [GitHubApp.Permissions], in GitHub's own terms.
-// The app is registered with them and every token it mints carries them,
-// narrowed to Repos. The seat's [Role.CodeAccess] is Gitlet's tier alone and
-// reaches nothing here (GITLET'S TIER ALONE, at that field).
+// HOW MUCH IT MAY DO IS [GitHubApp.Permissions], in GitHub's terms, carried by
+// every token and narrowed to Repos. [Role.CodeAccess] is Gitlet's alone.
 type GitHubApp struct {
 	// Enabled is the seat's stored on or off. Off suspends the installation
 	// and keeps the app (D1), and an off seat is issued no token.
@@ -771,39 +736,30 @@ type Role struct {
 	// Placement constrains which nodes may run this seat; the zero value is
 	// anywhere.
 	//
-	// It is a constraint on the fleet, not a schedule: the seat is claimed
-	// by whichever eligible node reaches it first, and a node that stops
-	// matching hands it back at the next turn boundary. Narrowing it to a
-	// set no live node satisfies leaves the seat unserved, and the engine
-	// reports that rather than quietly widening the constraint — widening
-	// is exactly what the operator asked it not to do.
+	// It is a constraint on the fleet, not a schedule: the seat is claimed by
+	// whichever eligible node reaches it first, and a node that stops matching
+	// hands it back at the next turn boundary. A set no live node satisfies
+	// leaves the seat unserved, and the engine reports that rather than
+	// widening the constraint the operator set.
 	//
-	// An agent seat's alone: a human seat is never claimed, so a constraint
-	// on its claim is config that reads as live and does nothing, and
-	// [Role.Validate] refuses it there.
+	// An agent seat's alone: a human seat is never claimed, so [Role.Validate]
+	// refuses it there.
 	Placement placement.SeatPlacement `yaml:"placement,omitempty" json:"placement,omitzero"`
 
 	Slack      SlackIdentity      `yaml:"slack,omitempty" json:"slack,omitzero"`
 	Mattermost MattermostIdentity `yaml:"mattermost,omitempty" json:"mattermost,omitzero"`
 
-	// GitHub is this seat's own GitHub App, beside the two chat
-	// identities and for the same reason: an agent acts as ITSELF at the
-	// code host, and which account that is comes from the app.
+	// GitHub is this seat's own GitHub App, beside the two chat identities: an
+	// agent acts as ITSELF at the code host, and the app says which account.
 	//
-	// # Why it is on the runtime seat at all
+	// It lives on the runtime seat because the company DOCUMENT no longer
+	// carries seats: a fact about a seat kept elsewhere is invisible to the
+	// running company (the bot-login registry, missing-app report and webhook
+	// secret index would each see no apps).
 	//
-	// It was not, and the walks that needed it read the company DOCUMENT
-	// instead — which stopped carrying seats at all when the org chart
-	// became a log. A seat is rows plus this document now, so a fact about
-	// a seat that lives anywhere else is a fact the running company cannot
-	// see: the bot-login registry, the missing-app report and the webhook
-	// secret index each walked an empty list and reported a company with
-	// no apps in it.
-	//
-	// A POINTER, because an absent block and a block holding nothing are
-	// different states an operator can be in: a seat nobody has created an
-	// app for yet is nil, and a seat whose app exists but is not installed
-	// is a real, reportable half-built record. See [GitHubApp.Held].
+	// A POINTER, because an absent block and an empty one differ: nil is a
+	// seat with no app yet; a block whose app is not installed is a real,
+	// reportable half-built record. See [GitHubApp.Held].
 	GitHub *GitHubApp `yaml:"github,omitempty" json:"github,omitempty"`
 
 	// Project and Space are this seat's tracker and knowledge IDENTITY:
@@ -822,15 +778,12 @@ type Role struct {
 	// CodeAccess is the seat's `role.code.access` as written — read_only,
 	// review or full_access — or empty where the document says nothing.
 	//
-	// GITLET'S TIER ALONE: it caps what the seat may do
-	// on Gitlet, and reaches nothing at a vendor — GitHub reads the
-	// seat's role.integrations.github.permissions, its own permission set
-	// in its own terms, and never this tier.
+	// GITLET'S TIER ALONE: it caps what the seat may do on Gitlet and reaches
+	// nothing at a vendor; GitHub reads role.integrations.github.permissions.
 	//
-	// WHAT WAS WRITTEN, never a default: empty and read_only are the same
-	// tier, and Gitlet reads silence as read_only through its one
-	// reading (config.RoleCode.AccessOrDefault), so a default written here
-	// would be a second statement of it. What a seat may DO is that
+	// WHAT WAS WRITTEN, never a default: Gitlet reads silence as read_only
+	// through its one reading (config.RoleCode.AccessOrDefault), so a default
+	// here would be a second statement of it. What a seat may DO is that
 	// reading, never this field read bare.
 	CodeAccess string `yaml:"code_access,omitempty" json:"code_access,omitempty"`
 
@@ -868,17 +821,13 @@ func (r *Role) IsHuman() bool { return r.Kind == KindHuman }
 
 // EffectiveKind is this seat's kind with the document's default resolved.
 //
-// AN EMPTY KIND IS AN AGENT SEAT, which is what makes `kind:` optional in a
-// file: a company writes `kind: human` for the people and nothing for the
-// agents. Every reader here already knows that — [Role.IsHuman] is the whole
-// of it — so the zero value never had to be resolved.
+// AN EMPTY KIND IS AN AGENT SEAT, which makes `kind:` optional in a file;
+// [Role.IsHuman] already reads it so.
 //
-// A STORED ROW IS DIFFERENT, and that is what this is for. A seat's kind
-// stored in a row is a closed set, so a row carrying "" would be a value
-// nothing recognises rather than a default nobody wrote: the difference
-// between "agent, unstated" and "unknown" is invisible in a file and load
-// bearing in a table. Whatever writes a row resolves it here rather than
-// deciding for itself.
+// A STORED ROW IS DIFFERENT: its kind is a closed set, so "" would be a value
+// nothing recognises, and "agent, unstated" versus "unknown" is invisible in
+// a file but load bearing in a table. Whatever writes a row resolves it here
+// rather than deciding for itself.
 func (r *Role) EffectiveKind() RoleKind {
 	if r == nil || r.Kind == "" {
 		return KindAgent
@@ -914,11 +863,9 @@ func (r *Role) Handle() string {
 // the seat has none or its reference does not resolve. A nil lookup reads the
 // process environment, as [HumanContact.ResolvedIdentities] does.
 //
-// A REFERENCE IS AN ORDINARY CASE rather than an exotic one: a company that
-// keeps its people's addresses out of its document writes one for every seat
-// that has an address. Used as written, it is a string no vendor payload can ever carry, which is the
-// failure [HumanContact.ResolvedIdentities] names for a contact id — a seat
-// whose address never matches, read as a colleague the vendor does not know.
+// A REFERENCE IS AN ORDINARY CASE: a company keeping addresses out of its
+// document writes one per seat. Used as written, no vendor payload can carry
+// it, the failure [HumanContact.ResolvedIdentities] names for a contact id.
 //
 // NOT FOLDED. The form an address is compared in is [iam.NormalizeEmail]'s,
 // and a caller that compares folds both sides with it; this is the value a
@@ -944,30 +891,16 @@ func (r *Role) ResolvedEmail(lookup EnvLookup) string {
 
 // humanForbidden is the runtime-only surface a human seat must not carry,
 // in the order an error reports it. Human seats are never spawned or
-// claimed, so every one of these would be config that looks live and does
-// nothing.
+// claimed, so each would be config that looks live and does nothing.
 //
-// The names are the keys an operator WROTE, because the error's job is to
-// point at a line in a file — and it is located there too: [fieldOf] makes
-// the name the refusal's field, which the config layer appends to the
-// seat's path. So a name that is not the authored key pins the refusal to a
-// line the document does not have. A seat's chat apps are written under
-// `integrations:` (integrations.slack, not slack). Its tracker project and
-// knowledge container are NOT: `project` and `space` are top-level seat
-// keys, vendor-neutral because they name a container on whichever backend
-// the company runs, and labelling them `integrations.jira` and
-// `integrations.confluence` sent an operator to the company's own vendor
-// blocks.
+// The names are the keys an operator WROTE ([fieldOf] makes the name the
+// refusal's field): chat apps under `integrations:`, `project` and `space`
+// top-level.
 //
-// What a seat holds on a code host — its code access tier ([Role.CodeAccess])
-// and its own GitHub App ([Role.GitHub]) — is refused on a human seat too, but
-// by the config layer, as an ADMISSION rule rather than one of these runnable
-// ones: nothing about running depends on either, since nothing running reads a
-// tier off a human seat and every path that creates, installs or reconciles an
-// app skips one, so a stored revision carrying one runs as it did — and a later
-// build may relax the rule (a tier that caps a person) without this build
-// refusing to apply what its newer peer admitted. Listing them here as well
-// would report one mistake twice.
+// [Role.CodeAccess] and [Role.GitHub] are refused on a human seat by the
+// config layer as an ADMISSION rule, not here: nothing running depends on
+// either, so a stored revision carrying one must still apply, and a later
+// build may relax the rule without refusing what its newer peer admitted.
 func (r *Role) humanForbidden() []string {
 	fields := []struct {
 		name string

@@ -30,23 +30,16 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
-// everySurfaceApp is an App with every surface it can mount mounted: each
-// guarded surface, the sign-in surface and the assistant's as its real type
-// (its zero value, since mounting reads nothing but the surface's own route
-// table), the datasets surface, the operator surface and the two signed-token
-// edges (the telemetry receiver and the tool bridge), so the route table it
-// keeps is the one a node serves. The assistant's zero value leaves out the
-// approval and file routes its optional halves add, every one beneath
-// /assistant/, which the edge refuses a grant and the architecture page names
-// whole: no walk here would answer differently with them mounted.
+// everySurfaceApp is an App with every surface it can mount mounted (guarded,
+// sign-in, the assistant's as its zero value, datasets, operator and the two
+// signed-token edges), so the route table is the one a node serves. The
+// assistant's zero value omits its optional halves' routes, all beneath
+// /assistant/, which the edge refuses a grant: no walk here would differ.
 //
-// A SURFACE OPTIONS GAINS IS A SURFACE THIS FIXTURE MUST MOUNT: every field of
-// api.Options whose type mounts its own routes (a `Routes` method, over an
-// authz.Mux for a guarded surface or an auth.Mux for the sign-in surface) must
-// be set here, or the walks below would certify a table that is missing a
-// surface's routes. The edges the App mounts itself (the operator surface and
-// the two signed-token edges) have no such method; each is held instead by the
-// architecture page's table, which names their routes
+// A SURFACE OPTIONS GAINS IS A SURFACE THIS FIXTURE MUST MOUNT: every
+// api.Options field whose type has a `Routes` method must be set here, or the
+// walks certify a table missing its routes. The edges the App mounts itself
+// have no such method; the architecture page's table holds them
 // ([TestTheArchitecturePageNamesEveryRouteANodeServes]). Mutation: leave Work
 // or Auth unset and this fails naming it.
 func everySurfaceApp(t *testing.T) *api.App {

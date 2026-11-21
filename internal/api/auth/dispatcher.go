@@ -17,27 +17,20 @@ import (
 
 // HOW AN ASSISTANT TOOL CALL IS SENT: in process, through the very handler the
 // API port serves (ADR-0050).
-//
-// # In process, and why not a loopback call
-//
-// A loopback request to api.port would make the grant a network credential: a
-// local process or a proxy log could capture it, and it would depend on the
-// bind address, TLS and the public listener's partition, which differ on
-// exactly the hardened deployment that binds loopback behind a proxy. Called in
-// process, the request meets the same page policy, canonical path, guard,
-// cross-site check, drain gate, route and authority row as a click, and the
-// grant never crosses a socket.
-//
-// # What the request carries, and what it does not
-//
-// The grant as its bearer, the in-process marker only this file sets, the
-// body as JSON, the operation key of an approved write, and the caller's trace
-// span. NO cookie and NO Origin, so the cross-site rule passes it as the bearer
-// request it is and nothing ambient authenticates it; and NOTHING ELSE of the
-// caller's context: the request is built on a fresh one carrying only the
-// caller's cancellation, deadline and span, so no value the turn's own request
-// was resolved with (its principal, its session, a Tier A marker) can reach a
-// handler beside the one the guard composes.
+
+// Not a loopback call: a request to api.port would make the grant a network
+// credential a local process or proxy log could capture, and would depend on
+// the bind address, TLS and listener partition, which differ on exactly the
+// hardened deployment binding loopback behind a proxy. In process, the request
+// meets the same page policy, guard, cross-site check, drain gate, route and
+// authority row as a click, and the grant never crosses a socket.
+
+// The request carries the grant as its bearer, the in-process marker only this
+// file sets, the JSON body, an approved write's operation key and the caller's
+// trace span. NO cookie and NO Origin, so nothing ambient authenticates it. It
+// is built on a fresh context holding only the caller's cancellation, deadline
+// and span, so no value the turn's own request was resolved with (principal,
+// session, Tier A marker) reaches a handler beside what the guard composes.
 
 // ErrForeignGrant reports a grant these delegations did not mint. The
 // orchestrator holds only [exec.Grant]; anything else it hands back is refused

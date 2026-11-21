@@ -15,17 +15,10 @@ import (
 
 // THE JOIN RAISES EVERY FIGURE THE FLEET HOLDS MORE OF, and nothing else.
 //
-// What a node publishes for an object is its derivation joined with the
-// fleet's record of it, and the join is what makes a node's day never shrink
-// without freezing it: each figure the fleet holds more of is raised to the
-// fleet's, each the derivation holds more of is the derivation's, and every
-// label the derivation states is the derivation's — a read entry's newest
-// context included, where the derivation read it later. A handle or a role the
-// derivation leaves EMPTY keeps the fleet's: that is a seat the chart no
-// longer holds whose day here is spend alone, not a newer name. First-pass
-// turns are the one figure that FALLS as a day grows (a review that sends a
-// turn back takes it out), so the turns with an unaccepted review are what
-// join and first-pass is read back.
+// Each figure the fleet holds more of is raised to the fleet's, each the
+// derivation holds more of is the derivation's, and every label it states is
+// the derivation's; a handle or role it leaves EMPTY keeps the fleet's. First-
+// pass turns FALL as a day grows, so the turns with an unaccepted review join.
 //
 // Mutation: join any one figure the other way — the smaller, or a first-pass
 // count by its own larger — or keep the fleet's label over the derivation's,
@@ -209,23 +202,16 @@ func TestAJoinRaisesEveryFigureTheFleetHoldsMoreOf(t *testing.T) {
 
 // THE JOIN OF A DAY WITH AN EARLIER DERIVATION OF IT IS THE DAY, byte for byte.
 //
-// Every publish takes the join of its derivation and the fleet's record, so on
-// the ordinary day — nothing lost, the fleet's record an earlier derivation of
-// the same rows — the join must change nothing at all, or every node would
-// publish a day nobody derived. The earlier derivation goes through the real
-// publish, apply and read-back ([usage.Applied]), and the day grows in every way
-// a day grows between the two: more spend, a tallied turn, an untallied turn
-// whose parked segment arrives late (moving it UP a duration bin) along with a
-// review that sends it back (taking it OUT of first-pass), reads that push
-// entries the cap kept past it, an entry the cap kept read again with a newer
-// turn and query, a fire, a fire's turn label, a person's spend, and a unit
-// repository's readers the cap elided read again until they outrank readers
-// it kept.
+// On the ordinary day (nothing lost) the join must change nothing, or every
+// node would publish a day nobody derived. The earlier derivation goes through
+// the real publish, apply and read-back ([usage.Applied]), and the day grows
+// every way a day grows: spend, a tallied turn, an untallied turn moving UP a bin and OUT of
+// first-pass, reads past the cap, a kept entry read again, a fire, a person's
+// spend, and elided unit-repository readers outranking kept ones.
 //
-// Mutation: join first-pass by its own larger, or a histogram bin by bin, or
-// count elided reads or readers off one side alone, or keep a read entry's
-// older context over the derivation's newer one, and the joined day differs
-// from the day.
+// Mutation: join first-pass by its own larger, a histogram bin by bin, count
+// elided reads or readers off one side, or keep a read entry's older context,
+// and the joined day differs from the day.
 func TestTheJoinOfADayWithAnEarlierDerivationOfItIsTheDay(t *testing.T) {
 	t.Parallel()
 	own := openStore(t)

@@ -257,52 +257,30 @@ import (
 )
 
 const (
-	// LongTTL is the TTL for any lease that must stay held for the whole
-	// of a case. It is far longer than any lapse the suite simulates, so
-	// travelling past a ShortTTL lease never disturbs it.
-	//
-	// It is also the MAXIMUM TTL the suite will ever ask a backend for, and
-	// that is a promise, not an observation. A store sizes its retention to
-	// the longest TTL it must honour — the embedded-NATS backend sets its
-	// bucket from this very constant — and a backend that cannot honour a
-	// TTL is right to refuse it rather than silently shorten it, since a
-	// quietly-clamped deadline makes every heartbeat's next-tick arithmetic
-	// wrong. A case that needs a second, distinguishable TTL takes a
-	// FRACTION of this one; asking for a multiple makes a correct backend
-	// fail an unrelated assertion with a confusing error.
-	//
-	// The rule is that no case may DEPEND on a TTL above this, not that
-	// none may send one: exactly one case deliberately asks for more, to
-	// certify that a store refuses rather than clamps, and it accepts a
-	// refusal as the correct answer.
-	//
-	// Every lease outside seats and presence is the one exception, and the
-	// exception belongs to the contract rather than to this suite:
-	// coord.MaxDutyTTL is a ceiling every backend must honour for a duty
-	// and for a caller's class (coord.HeldToSeatTTL says which leases are
-	// left out) whatever TTL it sizes its seat leases from, so the duty
-	// cases claim at it and depend on the answer. A backend sizing that
-	// retention from this constant would be wrong, and those cases say so.
+	// LongTTL is the TTL for any lease that must stay held for a whole case,
+	// far longer than any lapse the suite simulates. It is also the MAXIMUM
+	// TTL the suite asks a backend for, a promise: a store sizes its retention
+	// to it (the embedded-NATS bucket is set from this constant) and may
+	// refuse a longer one rather than clamp it, since a clamped deadline
+	// breaks every heartbeat's arithmetic. A case needing a second TTL takes a
+	// FRACTION of this one. No case may DEPEND on one above it, though one
+	// asks to certify refusal. The exception is the contract's:
+	// coord.MaxDutyTTL, which every backend must honour for a duty and a
+	// caller's class (coord.HeldToSeatTTL says which are left out) whatever
+	// its seat TTL, so the duty cases claim at it.
 	LongTTL = 5 * time.Minute
 
 	// ShortTTL is the TTL for a lease a case intends to lapse, and it is
 	// only ever claimed as the LAST act before lapsing it.
 	//
-	// It is therefore NOT required to cover any store work — a case that
-	// must do something while the lease is still live uses WindowTTL
-	// instead. That distinction is the whole correction: this comment used
-	// to claim 100ms was "comfortably more than a slow round trip", which
-	// is simply false and was falsified by a real backend. Under -count=2
-	// with the suite parallel under -race, a handful of round trips
-	// against an embedded broker cost 200-330ms, and two cases failed
-	// intermittently for months' worth of runs before anyone caught the
-	// dump instead of truncating it.
-	//
-	// So the value now answers a much easier question: how long a lease
-	// should live when the only thing that must happen before it expires
-	// is nothing at all. Overrunning a zero-operation window is harmless —
-	// the lease lapses, which is what the case wanted. 100ms keeps a
-	// fully serialised sleeping run (-parallel 1) to a few seconds.
+	// It is therefore NOT required to cover any store work: a case that
+	// must do something while the lease is live uses WindowTTL. A handful
+	// of round trips against an embedded broker cost 200-330ms under
+	// -count=2 with the suite parallel under -race, so 100ms covers no
+	// operation. It only answers how long a lease should live when nothing
+	// must happen before it expires; overrunning a zero-operation window is
+	// harmless, the lease lapses. 100ms keeps a fully serialised sleeping
+	// run (-parallel 1) to a few seconds.
 	ShortTTL = 100 * time.Millisecond
 
 	// WindowTTL is ShortTTL's sibling for the few cases that must complete a
@@ -311,13 +289,12 @@ const (
 	// windows are irreducible: the operation happening while live IS the
 	// invariant, so no reordering closes them.
 	//
-	// Sized from a measurement, not a guess. Those cases run in 0.17-0.20s
-	// against an embedded broker at rest; under -count=2 with the whole
-	// suite in parallel under -race they were observed at 0.36-0.48s, so a
-	// handful of round trips can cost 200-330ms. 2s leaves roughly six
-	// times that. ShortTTL stayed at 100ms because every other lapsing case
-	// claims its short lease as the LAST thing it does — a window of zero
-	// operations cannot be overrun, and lapsing early is harmless there.
+	// Measured: those cases run in 0.17-0.20s against an embedded broker at
+	// rest and 0.36-0.48s with the whole suite parallel under -race, so a
+	// handful of round trips costs 200-330ms; 2s leaves roughly six times
+	// that. ShortTTL stays at 100ms because every other lapsing case claims
+	// its short lease as the LAST thing it does: a window of zero operations
+	// cannot be overrun.
 	WindowTTL = 2 * time.Second
 
 	// lapseMargin is how far past ShortTTL harness.lapse travels. On the
@@ -328,25 +305,13 @@ const (
 	// stallBudget bounds how long the suite will wait on a backend before
 	// calling it stuck.
 	//
-	// A contract call that never returns has to fail as a NAMED CASE, not
-	// as a package timeout. The Go test binary's ten-minute panic dumps
-	// every goroutine in the process and is attributed to whichever
-	// package the deadline happens to land in — which is exactly how a
-	// hang in one queue backend was first reported against a different
-	// one, costing the wrong author the investigation. The heaviest case
-	// here issues a few thousand store round trips, so the budget has to
-	// clear that on a contended real store, through the SLOWEST topology the
-	// suite certifies. Measured rather than only derived, because arithmetic
-	// in a comment reads exactly like a measurement: the churn case runs in
-	// 8.8 s against the embedded broker under -race — roughly 2,700
-	// operations at ~3 ms each — but in 18.6 s through a leaf, where every
-	// operation crosses the link, on an idle 4-CPU box, and in 28-85 s on
-	// the same box under other packages' load. A budget sized from the
-	// embedded figure (it was 90 s) failed the leaf case twice under load at
-	// a commit that changed nothing in the suite, which is a stall budget
-	// reporting contention as a hang. So it carries about ten times the
-	// slowest topology's idle figure, while still reporting well inside go
-	// test's default ten-minute package timeout.
+	// A call that never returns must fail as a NAMED CASE, not a package
+	// timeout (blamed on whichever package the deadline lands in). The
+	// churn case, the heaviest (~2,700 operations), runs in 8.8 s against the
+	// embedded broker under -race, 18.6 s through a leaf on an idle 4-CPU box,
+	// and 28-85 s under other packages' load; a budget from the embedded
+	// figure (90 s) reported contention as a hang. So it is about ten times
+	// the slowest topology's idle figure, inside go test's ten-minute timeout.
 	stallBudget = 180 * time.Second
 )
 
@@ -740,38 +705,14 @@ func (h *harness) mustBeUnheld(resource string) {
 // requireUnchanged asserts a record survived an operation the backend refused
 // or rejected exactly as it was.
 //
-// A "no" has two halves and the suite used to check only one. Returning the
-// right answer while writing to the record anyway is the shape a
-// read-modify-write backend reaches by validating after the write instead of
-// before it, and every field here is one a refusal must not touch.
+// A "no" has two halves: the right answer, and no write. A read-modify-write
+// backend can answer right while writing anyway, by validating after the
+// write. Resource is a COMPLETENESS guard (claim() already catches a
+// corrupted name).
 //
-// Resource is compared too, which the first version omitted while its comment
-// claimed to cover "every field a refusal must not touch". The answer was
-// right and the stated reason was not — the pairing that survives any review
-// checking answers rather than reasons.
-//
-// Stated precisely, because the counterfactual refused to support the tidier
-// story: this closes a COMPLETENESS gap, not a demonstrated hole. A refusal
-// that corrupts the resource name is caught either way — claim() asserts the
-// lease it is handed names the resource asked for — so no mutation available
-// here goes uncaught without it. It is compared because the comment promises
-// every field and a future field, or a backend whose corruption misses that
-// other assertion, has nothing else standing behind it.
-//
-// Two probes were needed to learn that. The first was vacuous: it extracted
-// zero field names and reported no omission, a measurement of nothing wearing
-// the shape of a clean result. The second found the omission. The third —
-// removing the comparison to check the hole was real — is the one that said
-// it was not.
-//
-// This generalises over the record only as far as it is kept in step with it:
-// a field added to coord.Lease and not added here is a field every negative
-// path may quietly write, and nothing fails to say so. Extend it with the
-// struct.
-//
-// Measured, not assumed: dropping the Preferred comparison here while a
-// backend writes the hint on a refused claim passes the whole suite, both
-// mutations landing-checked. The limitation is real and this is what it costs.
+// It covers the record only as far as it is kept in step: a field added to
+// coord.Lease and not here is one every negative path may quietly write, and
+// nothing fails to say so. Extend it with the struct.
 func (h *harness) requireUnchanged(what string, before, after *coord.Lease) {
 	h.t.Helper()
 	if after == nil {

@@ -58,70 +58,18 @@ type Message struct {
 	Time   time.Time
 }
 
-// Leader reads single messages of one stream from the stream's LEADER: a
-// `$JS.API.STREAM.MSG.GET`, the one read of a single message that no replica
-// answers from its own copy.
+// Leader reads single messages of one stream from the stream's LEADER, the one
+// single-message read (`STREAM.MSG.GET`) no replica answers from its own copy.
+// The client reads a stream allowing direct gets (every KV bucket and object
+// store) ONLY by `DIRECT.GET`, which a replica behind the quorum answers "no
+// message" for a key just written. ONE implementation for every caller (adr/0008).
 //
-// # Why not the client's own reads
-//
-// A stream that allows direct gets — every KV bucket and every object store
-// does — is read by the client ONLY through `DIRECT.GET`, which any replica
-// answers, one that is behind the quorum included: the client picks the API
-// from the stream's allow_direct flag alone and offers no way to ask for the
-// other. A behind replica answers "no message" for a key written a moment
-// ago, which is the answer a caller deciding something from absence can
-// least afford — coordination's listings certify themselves with this read,
-// and the object store reads an object's metadata with it, where a "not
-// found" would answer a just-uploaded file as unreadable and a deletion as
-// already done.
-//
-// ONE implementation for every caller, because the request, its address
-// across a leaf link and the reading of its answer are a rule that would
-// otherwise be written once per caller (adr/0008).
-//
-// # And every read ASKED AGAIN while nobody answers it
-//
-// Only the leader answers, so a read is at the mercy of the moment it is
-// sent. The broker decides it when a worker takes it from the API queue every
-// routed request waits in, and a member that is not the stream's leader —
-// while it still believes in one — returns without replying
-// (server/jetstream_api.go, jsMsgGetRequest: "only the stream leader should
-// answer"). So for the seconds between a leader's loss and its group's
-// election every read is DROPPED, and a request held until its caller's
-// deadline is a request nobody will ever answer; while a leader behind a
-// backlog answers LATE, so a request thrown away at its term would throw away
-// the only answer. Every read is therefore asked as a metadata read is
-// ([jsprovision.ReadBoundedWith]) — the hedge the domain logs' leader reads
-// already take, never a second idea of when a request is lost: each request
-// presumed lost after [jsprovision.ReadTerm], the next sent
-// [jsprovision.ReAsk] later with every earlier one still outstanding, the
-// first answer from any of them taken, none outliving the call, and none
-// asked past the longest silence the server keeps
-// ([jsprovision.LookupBudget]) — each of the three beyond the time a reply
-// as large as the stream's messages may be takes to arrive, for a reader of
-// large ones ([Leader.Carrying]), or to cross a link, for one a writer waits
-// on ([Leader.Deciding]). An ANSWER ends it whatever it says — a
-// message, no message, a group with no leader ([server.JSClusterNotAvailErr]).
-// "No responders" is no answer: a node whose link to the broker is down hears
-// it at once, and its read is asked again every [jsprovision.ReAsk], where it
-// failed at once while it was one request — a link that comes back inside the
-// read's bound is answered, and one that does not costs the bound.
-//
-// A read whose caller set no deadline KEEPS THE BOUND IT HAD as one request,
-// the client's own DefaultTimeout, and is asked again inside it: at none, two
-// and four seconds of five, so a request a member dropped is asked again where
-// the new leader answers it, while every caller sized against the five seconds
-// — a boot's steps, a duty's tick — waits no longer for a broker that never
-// answers than it did.
-//
-// It was one request, held for its caller's deadline or, for a caller with
-// none, for the client's own five-second default — which is how the object
-// collector's boot pass lost its read of the files bucket on a loaded fleet
-// of three: `context deadline exceeded`, every node's first collection
-// failed, and the next ten minutes away. An election measured why: with the
-// leader stepped down or killed, the first read on every other member was
-// never answered at all, and the one asked again two seconds later was
-// answered by the new leader.
+// Every read is ASKED AGAIN while nobody answers: a non-leader replies not at
+// all, so between a leader's loss and its election reads are dropped, while a
+// backlogged leader answers LATE. So reads take [jsprovision.ReadBoundedWith]'s
+// hedge: presumed lost after [jsprovision.ReadTerm], re-asked every
+// [jsprovision.ReAsk] with earlier asks outstanding, the first ANSWER taken
+// ("no responders" is none), none past [jsprovision.LookupBudget].
 type Leader struct {
 	// conn is what the reads are asked on: the client's connection, the one
 	// call they make of it ([requester]), so a case inside a bubble can
@@ -174,67 +122,17 @@ func NewLeader(js jetstream.JetStream, stream string) (*Leader, error) {
 }
 
 // Carrying is l for a stream whose messages may be as large as messageBytes,
-// on a connection that may carry a mebibyte in as long as pace across a link —
-// none on a member's own connection, which crosses nothing: every message read
-// is given the time a reply of that size takes to ARRIVE ([Arrival]) — its
-// handling on every connection, and its crossing where there is a link —
-// beyond the read term before it is presumed lost, beyond the client's own
-// bound where its caller set no deadline, and beyond the lookup ceiling every
-// read is held to ([jsprovision.Timing.Arriving]). The ONE rule for a leader
-// read of a message that may be large, on every connection, where no writer
-// waits on what the read answers: a reader of dead letters
-// (internal/queue/jetstream) and of an object's pieces across a link
-// (internal/objstore/natsobj) each read through it, sized at the largest
-// message the stream may hold, since a reader cannot know how large the
-// message it asks for is until its reply is in. A reader whose reads decide a
-// write its caller is waiting on is given the reply's crossing alone
-// ([Leader.Deciding]).
-//
-// # Why the bound grows with the term
-//
-// The bound a deadline-less caller is held to is what its one request was
-// given to be answered in ([jsprovision.ReadBoundedWith]): the broker's
-// answer, with no arrival in it. Held there, a read whose term said its
-// reply took longer than five seconds to cross was cut at five every time,
-// whatever its term: a dead letter's frame read across a link by a feed's
-// replay, which sets no deadline, failed at every start for an entry whose
-// reply took that long — about six megabytes below about 13 Mbit/s — and was
-// left until it expired, its wake lost.
-//
-// # Why the ceiling grows with it too
-//
-// The ceiling ([jsprovision.LookupBudget]) is the broker's longest silence,
-// and a reply on its way is no silence. Held to the ceiling alone, a read
-// whose reply took longer than thirty seconds to arrive failed at every ask,
-// whatever its term: a value of more than about 768 KiB, read across a link
-// at the object store's floor, could not be read at all, and every
-// read-decide-write of one — a run's record of six megabytes, rewritten by
-// every change of it — failed on its read, whatever its write was given
-// (crewlet/crewlet#1149).
-//
-// # Why a large reply gets a longer term
-//
-// The broker sends a message read's reply whole, and the client hears nothing
-// of it until its last byte has arrived — so a reply carrying an object's
-// whole piece, a base64-encoded 128 KiB in a reply of about 175 KB, spends
-// five seconds crossing a leaf link at the object store's thirty-seconds-a-
-// mebibyte floor before the reader sees any of it. Presumed lost at the one-
-// second read term, it was asked again at two seconds and at four while the
-// first reply was still arriving: the broker answers every request it is
-// sent, so each re-ask put another whole piece on the link a node's lease
-// renewals cross, where a put keeps its own bytes in flight to half a
-// mebibyte ([objstore/natsobj]'s window) — three pieces on the link for one
-// read. Given the transfer, a read on a link at the floor asks once; one
-// asked again is a read whose reply could not have been on its way.
-//
-// AND ON A MEMBER'S OWN CONNECTION, which crosses nothing, a reply of
-// megabytes is still built by the leader and decoded by its reader, in the
-// engine's own process ([Handling]): a dead letter at the transport's
-// ceiling, its reply eleven megabytes, read at the bare read term under
-// load, was asked again at two seconds and at four while the leader was
-// still building the first — every re-ask another whole reply built beside
-// it, more of the work that made the first one late — and ran out its bound
-// with none of them answered (crewlet/crewlet#1153).
+// on a connection carrying a mebibyte in as long as pace across a link (none on
+// a member's own): each read is given the time a reply that size takes to
+// ARRIVE ([Arrival]) beyond the read term, the client's own bound where the
+// caller set no deadline, and the lookup ceiling ([jsprovision.Timing.Arriving]).
+// For reads of possibly large messages where no writer waits on the answer;
+// a reader deciding a write uses [Leader.Deciding]. The client hears nothing
+// until the last byte, so a 175 KB piece takes five seconds over a leaf link at
+// the floor, and re-asks at two and four seconds put three pieces on the link
+// carrying lease renewals. The bound and ceiling grow with the term, or a long
+// reply is cut at five or thirty seconds every time (crewlet/crewlet#1149).
+// In process a megabyte reply is still built and decoded ([Handling], #1153).
 func (l *Leader) Carrying(messageBytes int, pace time.Duration) *Leader {
 	c := *l
 	c.arrival = Arrival(messageBytes, pace)
@@ -242,42 +140,17 @@ func (l *Leader) Carrying(messageBytes int, pace time.Duration) *Leader {
 }
 
 // Deciding is [Leader.Carrying] for a reader whose reads DECIDE A WRITE its
-// caller is waiting on — the read-decide-write of a value that may be as large
-// as messageBytes, a sandbox run's record (internal/coord/kv's runs) — on a
-// connection that may carry a mebibyte in as long as pace across a link: every
-// message read is given the time its reply takes to CROSS that link
-// ([Crossing]) beyond the read term, beyond the client's own bound where its
-// caller set no deadline, and beyond the lookup ceiling, and none of the
-// reply's [Handling]. So on a member's own connection, which crosses nothing,
-// it is read at the read term, as a reader of small messages is.
+// caller is waiting on (a sandbox run's record, internal/coord/kv's runs): each
+// read is given the time its reply takes to CROSS the link ([Crossing]) beyond
+// the read term, the client's own bound and the lookup ceiling, and none of the
+// reply's [Handling]. On a member's own connection it is read at the read term.
 //
-// # Why not the reply's handling
-//
-// The writer waits on the read within a budget of its own reason — a resumed
-// turn's record of what it carries five seconds, an attempt at settling a
-// take ten — and a request a member dropped across an election has to be
-// asked again inside that budget, at two seconds, where the new leader answers
-// it. Given the handling of a reply at a run's bound — eight seconds — the
-// read would ask again only after such a budget had ended, and the change
-// would be refused for a request the new leader would have answered in two.
-// What the handling buys is a reply built once while the race detector makes
-// building it slow on a loaded runner ([HandlingPace]); a node not running
-// under it builds and decodes such a reply in tens of milliseconds, which the
-// read term covers many times over, so the read term costs a writer's read
-// nothing a node pays, and the two seconds it keeps are what the hedge is for.
-// A domain log's read of a subject's newest record keeps the read term for the
-// same reason (internal/queue/jetstream's DomainLog.LastSeq).
-//
-// # Why its crossing all the same
-//
-// Across a link no byte of the reply is heard before its last is in, so a read
-// given less than its crossing is asked again while its first reply is still
-// on the link, every re-ask another whole reply ahead of the node's lease
-// renewals, and one whose crossing outlasts the lookup ceiling is never taken
-// at all: a run's record of six megabytes takes four minutes at the slowest
-// pace a link is allowed (crewlet/crewlet#1149). A writer that bounds such a
-// change counts that crossing in its budget (internal/coord/kv's
-// Reach.valueCrossing), so the wait it adds is one the writer already gives.
+// No handling: the writer waits within a budget of its own (five to ten
+// seconds) and a request dropped across an election must be re-asked inside it,
+// at two seconds; handling only buys a reply built once under a slow race
+// detector ([HandlingPace]). Its crossing all the same: across a link no byte
+// is heard before the last, so less re-asks while the first reply is on the
+// link, and one past the lookup ceiling is never taken (crewlet/crewlet#1149).
 func (l *Leader) Deciding(messageBytes int, pace time.Duration) *Leader {
 	c := *l
 	c.arrival = Crossing(messageBytes, pace)
@@ -321,39 +194,18 @@ func Handling(messageBytes int) time.Duration {
 	return time.Duration(float64(HandlingPace) * float64(ReplyBytes(messageBytes)) / mebibyte)
 }
 
-// HandlingPace is how long a mebibyte of a leader's reply is given to be
-// built, carried in process and decoded: a SECOND — so the largest reply a
-// leader's read carries, a state log's record or a dead letter at the
-// transport's ceiling (eleven megabytes, 10.7 MiB), is given 10.7 seconds.
-//
-// # Why a second
-//
-// The reply is CPU, not a link: the leader reads the message and encodes it
-// into JSON, base64 inside, each server it passes parses it whole, and the
-// reader decodes it. Read back on a member's own connection
-// (BenchmarkADomainLogReadOfItsLargestRecord, two E-cores of a Core Ultra 7
-// 265U), the largest reply took 36.9 ms without the race detector — 3.5 ms a
-// mebibyte. Under it, the slowest of three runs of five reads each, in one
-// process, took 0.73 s with nothing else on those two cores, and 3.80, 4.81
-// and 5.37 seconds with eight, twelve and sixteen threads more kept busy
-// beside it: one, five, seven and nine runnable threads a core, the last past
-// the top of the ten to thirty-three on four cores this repository's runners
-// were measured at (internal/config's MinLeaseTTL), 8.25 a core. Each step of
-// load added less than the one before, and at nine a core the reply took half
-// a second a mebibyte. A second a mebibyte is twice that at the top of the
-// load measured, and nearly three hundred times what the reply costs a node
-// that is not running under the race detector.
-//
-// It is a TERM, never a deadline: a reply that is answered in milliseconds
-// ends the read as soon as it is in. What the second a mebibyte costs is the
-// wait before a request presumed lost is asked again — only for a reader of
-// messages that may be that large whose reads no writer waits on
-// ([Leader.Carrying]), and a request a member dropped across an election is
-// asked again eleven seconds later for a dead letter at the transport's
-// ceiling rather than two — which is what keeps a leader from building one
-// reply twice while the first is still being built. A reader a writer waits
-// on is given none of it ([Leader.Deciding]): the race detector's figure would
-// hold every such write past its own reason.
+// HandlingPace is how long a mebibyte of a leader's reply is given to be built,
+// carried in process and decoded: a SECOND, so the largest reply (a state log's
+// record or a dead letter at the transport's ceiling, 10.7 MiB) gets 10.7 s.
+// The reply is CPU, not a link: JSON with base64 inside, parsed whole by each
+// server and decoded by the reader. BenchmarkADomainLogReadOfItsLargestRecord
+// took 3.5 ms a mebibyte without the race detector and, under it with nine
+// runnable threads a core (past the 8.25 a core top measured on this
+// repository's runners, internal/config's MinLeaseTTL), half a second. A
+// second is twice that. It is a TERM, never a deadline: it only delays the
+// re-ask of a request presumed lost, keeping a leader from building one reply
+// twice, and only for readers no writer waits on ([Leader.Carrying]); a
+// [Leader.Deciding] reader is given none, or every write would pass its reason.
 const HandlingPace = time.Second
 
 // Crossing is how long the reply to a message read that carries a message of
@@ -366,26 +218,18 @@ func Crossing(messageBytes int, pace time.Duration) time.Duration {
 	return time.Duration(float64(pace) * float64(ReplyBytes(messageBytes)) / mebibyte)
 }
 
-// ReplyBytes is the most the reply to a message read — a `STREAM.MSG.GET`,
-// this package's or the client's own where a stream allows no direct get —
-// carries for a message of messageBytes, its header block and its payload: the
-// reply is JSON, the message base64-encoded inside it beside its envelope
-// ([replyOverhead]), so it is a third larger than the message.
+// ReplyBytes is the most the reply to a message read (a `STREAM.MSG.GET`)
+// carries for a message of messageBytes, header block and payload: JSON with
+// the message base64-encoded beside its envelope ([replyOverhead]), a third
+// larger than the message.
 //
-// # A reply past the transport cannot cross a leaf's link
-//
-// The server on the receiving side of a leaf link holds every message the
-// link carries to its own max_payload — the transport's eight mebibytes on
-// every embedded server — and CLOSES THE WHOLE LINK on one larger (nats-server
-// v2.15.2, leafnode.go, processLeafMsgArgs → maxPayloadViolation), every lease
-// and mailbox the node holds across it cut off until it is dialled again. A
-// message of more than about six mebibytes, which the transport carries
-// whole, has a reply larger than that: a reader that may meet one across a
-// leaf's link reads it raw instead (internal/queue/jetstream's copy reads),
-// and one whose messages are held below it reads from the leader. A route
-// carries any size, and nothing checks what a server sends its own client, so
-// a client of a broker somebody else runs reads from the leader whatever the
-// message's size.
+// A reply past the transport cannot cross a leaf's link: the receiving server
+// holds every message to its max_payload (eight mebibytes on every embedded
+// server) and CLOSES THE WHOLE LINK on a larger one (nats-server v2.15.2,
+// processLeafMsgArgs), cutting every lease and mailbox across it. A message
+// over about six mebibytes has such a reply, so a reader that may meet one
+// across a leaf link reads it raw (internal/queue/jetstream's copy reads). A
+// route carries any size, and a client of another's broker reads from the leader.
 func ReplyBytes(messageBytes int) int {
 	return base64.StdEncoding.EncodedLen(messageBytes) + replyOverhead
 }
@@ -422,19 +266,14 @@ func MaxReadable(transport int64) int {
 // few its append carried).
 const replyOverhead = 1 << 10
 
-// Sending is how long the REQUEST of an acknowledged write — a publish that
-// carries a message of messageBytes, its header block and its payload — takes
-// to cross a link carrying a mebibyte in as long as pace: [Crossing]'s twin
-// for the other direction, and what a write is given beyond the request term
-// for each of its first [WriteSends] sends ([WriteBound], [Budget]), since the
-// stream acknowledges a message only once its last byte is in.
-//
-// RAW, where a read's reply is not: a publish carries its message as it is,
-// behind the protocol line that names it ([requestOverhead]) — never
-// base64-encoded and never inside JSON — so a write crosses in three quarters
-// of the time the reply to a read of the same message does, and a bound
-// counted as a read's would hold a write on a dead link a third longer than
-// its bytes need.
+// Sending is how long the REQUEST of an acknowledged write carrying a message
+// of messageBytes (header block and payload) takes to cross a link carrying a
+// mebibyte in as long as pace: [Crossing]'s twin for the other direction, given
+// beyond the request term for each of a write's first [WriteSends] sends
+// ([WriteBound], [Budget]), since the stream acknowledges only once the last
+// byte is in. RAW, where a read's reply is not: a publish is neither
+// base64-encoded nor inside JSON, so it crosses in three quarters of a read's
+// time, and a read's bound would hold a write on a dead link a third longer.
 func Sending(messageBytes int, pace time.Duration) time.Duration {
 	return time.Duration(float64(pace) * float64(RequestBytes(messageBytes)) / mebibyte)
 }
@@ -520,23 +359,16 @@ func (l *Leader) At(ctx context.Context, seq uint64) (Message, error) {
 }
 
 // Leading is the server that leads the stream, by its name, and how many
-// replicas the stream keeps, as the stream's LEADER states them: one
-// `STREAM.INFO` that names no subjects, so its answer is the stream's state
-// and configuration and none of its messages — a few kibibytes, read at the
-// read term — asked again while nobody answers it, as a message read is (see
-// [Leader]).
+// replicas it keeps, as the LEADER states them: one `STREAM.INFO` naming no
+// subjects (a few kibibytes, read at the read term), asked again while nobody
+// answers as a message read is (see [Leader]). A reader that cannot ask the
+// leader for a message (one too large for its reply to cross the link) reads
+// from a consumer, placed on a random replica, and learns here which server
+// holds the leader's copy.
 //
-// A reader that cannot ask the leader for a message — one too large for the
-// leader's reply to cross its link (internal/queue/jetstream's copy reads) —
-// reads it from a consumer instead, which the broker places on one of the
-// stream's replicas at random; only the one on the leader's server reads the
-// leader's own copy, and this is how that reader knows which server that is.
-//
-// AN ANSWER THAT NAMES NO LEADER IS REFUSED ([ErrLeaderless]): a stream's
-// info is the leader's except while its group has none, when every member
-// answers from its own copy (nats-server v2.15.2, server/jetstream_api.go,
-// jsStreamInfoRequest), naming no leader to read from. A stream on a server
-// that is not clustered names that server, as a stream of one replica does.
+// AN ANSWER THAT NAMES NO LEADER IS REFUSED ([ErrLeaderless]): while a group
+// has none every member answers info from its own copy (nats-server v2.15.2,
+// jsStreamInfoRequest). An unclustered server names itself.
 func (l *Leader) Leading(ctx context.Context) (name string, replicas int, err error) {
 	var resp server.JSApiStreamInfoResponse
 	if _, _, err = page(ctx, l.conn, l.info, server.JSApiStreamInfoRequest{}, jsprovision.ReadTerm,

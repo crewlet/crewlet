@@ -11,18 +11,13 @@ import (
 // statement binding the reported number really does prepare while one binding
 // one more does not.
 //
-// The second half is what makes this a measurement rather than a constant with
-// a probe-shaped comment, and it is asked of the statement the number SIZES —
-// a multi-row INSERT, one parameter per row of a one-column table — never of
-// the probe's own. A probe held only to its own statement passes whatever
-// bound that statement happens to meet: `SELECT ?,?,…` met the result-set
-// width at 2 000 columns, the probe reported that as the parameter limit, this
-// case asked the same statement whether 2 001 prepared, and every applier
-// chunked to a sixteenth of the parameters the probe can report, with nothing
-// failing.
+// The second half is asked of the statement the number SIZES (a multi-row
+// INSERT, one parameter per row), never the probe's own: a probe held to its
+// own statement passes whatever bound that statement meets, as `SELECT ?,?,…`
+// met the result-set width at 2 000 columns and every applier chunked to it.
 //
-// Mutation: probe with a statement returning a column per parameter again,
-// and an insert binding one more than the reported limit prepares.
+// Mutation: probe with a statement returning a column per parameter, and an
+// insert binding one more than the reported limit prepares.
 func TestMaxVariablesIsMeasuredNotAssumed(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -66,16 +61,16 @@ func TestMaxVariablesIsMeasuredNotAssumed(t *testing.T) {
 // THE PAGE CACHE IS READ BACK, because asking for it is not getting it.
 func TestThePageCacheIsAppliedOrReported(t *testing.T) {
 	t.Parallel()
-	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "cache.db"), Options{})
+	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "cache.db"), Options{PageCacheKiB: 8 << 10})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	// 32 MiB is what the session list asks for. A driver that ignored the
-	// pragma answers with its own default, which is what this catches.
-	if got := db.Caps().PageCacheKiB; got != 32768 {
-		t.Errorf("cache_size reads back as %d KiB, want the 32768 the session "+
+	// 8 MiB is what the handle asks for. A driver that ignored the pragma
+	// answers with its own default, which is what this catches.
+	if got := db.Caps().PageCacheKiB; got != 8192 {
+		t.Errorf("cache_size reads back as %d KiB, want the 8192 the session "+
 			"list sets: a driver that ignores the pragma leaves every "+
 			"connection on its own default and nothing else would say so", got)
 	}

@@ -11,8 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// Domain is the access log as the state-log framework sees it: the TWELFTH
-// domain and the TENTH strict, identity-claiming one.
+// Domain is the access log as the state-log framework sees it: a strict,
+// identity-claiming domain.
 type Domain struct{}
 
 // Name is the register key, the manifest key and the operator's column. Never
@@ -34,14 +34,13 @@ const MaxRecordBytes = 256 << 10
 // minutes, which outlasts a publisher's retry budget.
 const AccessLogDuplicates = 2 * time.Minute
 
-// LinearizableReadsPerSeatDay is this log's read model: TWO reads a turn, at
-// `linearizable`, at the reference company's thirty turns a seat a day. A
-// turn's dispatch reads what its seat was last told, and so does its prefetch,
-// which holds back a memory note the seat has not been told yet
-// (internal/engine's seatTold, read by both). Modelled as the dispatch's one,
-// every company read twice its census and the census-drift alarm stood on a
-// company doing nothing but ordinary turns. A review of a seat's access reads
-// it too, but only when the seat's access changed, a few times a week.
+// LinearizableReadsPerSeatDay is this log's read model: TWO `linearizable`
+// reads a turn at the reference company's thirty turns a seat a day. A turn's
+// dispatch and its prefetch (which holds back a memory note the seat has not
+// been told) both read what the seat was last told (internal/engine's
+// seatTold); counting one trips the census-drift alarm on ordinary turns. A
+// review of a seat's access reads it only when that access changed, a few
+// times a week.
 const LinearizableReadsPerSeatDay = 60
 
 // Stream is the access log, at the domain's whole budget.

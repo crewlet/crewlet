@@ -14,44 +14,27 @@ import (
 // Category reports the dashboard category an event type is filed under, and
 // whether the type is stored at all.
 //
-// THE TAXONOMY IS [events]'s, and delegating to it is the point: this was an
-// identical map here and another in internal/observe, with nothing asserting
-// they agreed — so a type placed in one and forgotten in the other would be
-// written and never shown, or shown and never written, and no test anywhere
-// could see it. internal/observe imports this package, so neither could import
-// the other; the one map lives in the package that owns the type registry.
+// THE TAXONOMY IS [events]'s, and delegating to it is the point: two maps (here
+// and in internal/observe, which imports this package) could disagree unseen,
+// so a type would be written and never shown, or shown and never written. The
+// one map lives in the package that owns the type registry.
 //
-// An absent type is NOT WRITTEN, and that is deliberate for three types and a
-// hazard for every other one: the sandbox panel once drew rows that vanished on
-// reload and 404'd when clicked, because its events reached the live stream and
-// never the store. See events.Exclusions for which three, and why.
+// An absent type is NOT WRITTEN: deliberate for three types, a hazard for every
+// other (its rows reach the live stream, vanish on reload and 404 when
+// clicked). See events.Exclusions for which three, and why.
 func Category(eventType string) (string, bool) { return events.Category(eventType) }
 
 // tagKeys are the flat JSON fields promoted out of an event into its tags.
 //
-// THE ONE LIST, and the reason it is here rather than beside the publish
-// listener that uses it is the reason [Category] delegates to internal/events:
-// this was a map here and another in internal/observe, with nothing asserting
-// they agreed — so a dimension added to one and forgotten in the other was
-// written by nobody or read by nobody, and no test anywhere could see it.
-// That is not hypothetical. `notification_source` lived only here, read only
-// by a mapping function in this package that had no production caller —
-// observe.Record is the writer — so the tag Company › Integrations counts its
-// merges and drops by was never written at all, and every one of those counts
-// read zero on a company whose third-party apps were delivering fine. That
-// function is gone; internal/observe imports this package, so it calls
-// [ExtractTags] rather than keeping a second opinion.
+// THE ONE LIST, for the reason [Category] delegates to internal/events: a
+// second copy in internal/observe (which imports this package, so calls
+// [ExtractTags]) let a dimension be written by nobody or read by nobody,
+// unseen by any test.
 //
-// Reading them from the event's own JSON rather than from typed struct fields
-// is what keeps this list independent of the event catalogue: an event type
-// this build has never heard of still arrives with its fields intact in the
-// envelope, so a newer node's events are indexed here exactly as a known one's
-// are. A writer that reaches through the decoded payload instead sees nothing
-// at all on an unknown type.
-//
-// The value is the tag name; the key is the JSON field it comes from. They
-// differ in one place — `role` on the event is `agent_role` in the tags,
-// because that is the name every filter and index uses.
+// Read from the event's own JSON, not typed fields, so an event type this build
+// has never heard of is indexed exactly as a known one. The key is the JSON
+// field, the value the tag name; they differ only for `role`, `agent_role` in
+// the tags because every filter and index uses that name.
 var tagKeys = map[string]string{
 	"agent_id":   "agent_id",
 	"role":       "agent_role",
@@ -83,23 +66,16 @@ var tagKeys = map[string]string{
 	// work legitimately produces several. This is what still groups them,
 	// and the only identity a re-run reproduces. See ADR-0017.
 	"work_key": "work_key",
-	// WHICH CONVERSATION — a chat thread, a work item, a page — the event
-	// belongs to. channel_id does NOT cover it: that is set on A2A events
-	// alone and never on the phase records that carry the model's
-	// reasoning, so without this no query can ask history for one thread's
-	// turns.
+	// WHICH CONVERSATION (a chat thread, a work item, a page) the event
+	// belongs to. channel_id does NOT cover it: it is set on A2A events
+	// alone, never on the phase records carrying the model's reasoning.
 	//
-	// ONE MEANING ACROSS EVERY EVENT TYPE, which is a property of the wire
-	// field rather than of this line: the tag is the conversation IDENTITY
-	// because every payload that spells a field `conversation_key` holds
-	// the identity. The coalescing record used to promote its inbox
-	// PARTITION through it and now names that `partition_key` below, so a
-	// filter on this tag cannot mean the thread a seat is talking on for
-	// one row and the batch a wake arrived in for the next — two values
-	// that differ exactly where it matters, since a direct message's
-	// identity is the bare channel and its partition can be a thread
-	// inside it. A tag whose meaning depends on the row is worse than an
-	// absent one: the query still answers.
+	// ONE MEANING ACROSS EVERY EVENT TYPE: every payload spelling a field
+	// `conversation_key` holds the conversation IDENTITY, never the inbox
+	// PARTITION (that is `partition_key` below). The two differ exactly where
+	// it matters, since a direct message's identity is the bare channel and
+	// its partition can be a thread inside it, and a tag whose meaning
+	// depends on the row is worse than an absent one: the query still answers.
 	"conversation_key": "conversation_key",
 	// WHICH INBOX PARTITION a coalescing record merged.
 	//
@@ -148,24 +124,15 @@ var tagKeys = map[string]string{
 	// record deliberately leaves the node to the envelope.
 	"node": "node",
 	// The RUNTIME AUDIT's dimensions (types.OperatorActed and
-	// types.BackupRequested): the operator tool a call ran, the repository
-	// a git push named and the directory a backup was written to, which
-	// only those two carry, and beside the author the row's `actor` column
-	// already holds, WHAT SORT of author it is and the CREDENTIAL it acted
-	// through — the two halves of iam.ActorFor that are not the name. Tags
-	// for the reason every one here is — the Audit log and the backup
-	// history draw these rows from a listing, which never selects the
-	// payload, and without them a row could say only the summary's prose
-	// about who did what, through what, and where. A refused push writes no
-	// row in the code domain, so its record's repository is the only place
-	// it is named.
-	//
-	// `operator_id` is a field of the same meaning wherever a payload
-	// carries it — a seat pause, a sandbox answer, a sign-in, a revision's
-	// activation — so the tag is one dimension across every type rather
-	// than the audit's alone: "what did this credential do" is a filter on
-	// a listing. There is no seat beside the actor, because there is no
-	// second author: a person bound to a seat is recorded AS the seat.
+	// types.BackupRequested): the operator tool a call ran, the repository a
+	// git push named, the directory a backup was written to, and beside the
+	// `actor` column WHAT SORT of author it is and the CREDENTIAL it acted
+	// through (the halves of iam.ActorFor that are not the name). Tags because
+	// the Audit log and backup history read a listing, which never selects the
+	// payload. A refused push writes no row in the code domain, so its record
+	// is the only place the repository is named. `operator_id` means the same
+	// wherever a payload carries it, so "what did this credential do" is one
+	// filter; a person bound to a seat is recorded AS the seat.
 	"actor_kind":  "actor_kind",
 	"operator_id": "operator_id",
 	"tool":        "tool",
@@ -238,24 +205,15 @@ const phaseExecute = string(types.PhaseExecute)
 // SpendFor pulls a spend record's cost out of a phase completion, a collected
 // launch or an auxiliary record.
 //
-// Read from the event's serialized form for the same reason [extractTags] is:
-// an event type this build has never heard of still arrives with its fields
-// intact in the envelope, so a newer node's phase completions are recorded
-// here exactly as a known one's are. Reaching through the decoded payload
-// instead would see nothing at all on an unknown type.
+// Read from the serialized form, as [ExtractTags] is, so an unknown event type
+// from a newer node is recorded like a known one. Nil for every other event,
+// leaving the promoted columns at their defaults (schema/0015).
 //
-// Nil for every other event, which is what leaves the promoted columns at
-// their defaults — see schema/0015 for why they are columns.
-// It reads the SHALLOW form, like [extractTags] fifty lines below and unlike
-// the version this replaces: thirteen scalars are wanted, and decoding into
-// map[string]any deep-decoded the engine's largest payload — a phase
-// completion carries the phase's whole prompt and tool log — on the
-// publishing goroutine of every LLM call. map[string]json.RawMessage leaves
-// everything it is not asked for as bytes.
-//
-// A struct decode would be shorter and is wrong here for the reason the
-// per-field accessors exist: it fails the whole call on one wrong-typed
-// field, where these zero only the offender.
+// SHALLOW: map[string]any would deep-decode the engine's largest payload (a
+// phase completion carries the whole prompt and tool log) on every LLM call's
+// publishing goroutine; map[string]json.RawMessage leaves the rest as bytes. A
+// struct decode fails the whole call on one wrong-typed field, where the
+// per-field accessors zero only the offender.
 func SpendFor(eventType string, payload []byte) *Spend {
 	if !isSpendType(eventType) {
 		return nil
@@ -330,17 +288,12 @@ func phaseCalls(body map[string]json.RawMessage) int {
 // ExtractTags pulls the filterable dimensions out of an event's serialized
 // form.
 //
-// "Which agent does this event concern" is a RULE, not a field, and one copy
-// of it is all this codebase should have — which is why it lives beside the
-// columns it feeds rather than being re-derived by each reader downstream.
-// Exported for internal/observe, which is the publish listener that actually
-// writes the rows; see [tagKeys] for what a second copy of this cost.
+// "Which agent does this event concern" is a RULE, not a field, with one copy
+// beside the columns it feeds. Exported for internal/observe, the publish
+// listener that writes the rows; see [tagKeys].
 //
-// It takes the SERIALIZED event rather than a decoded map so the caller on
-// the publishing goroutine pays a shallow decode: map[string]json.RawMessage
-// leaves everything no tag names as bytes, where map[string]any deep-decodes
-// the engine's largest payload — a phase completion carries the whole prompt
-// and tool log — on every LLM call.
+// It takes the SERIALIZED event rather than a decoded map so the publishing
+// goroutine pays a shallow decode (see [SpendFor]).
 func ExtractTags(payload []byte) map[string]string {
 	var flat map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &flat); err != nil {
@@ -352,12 +305,9 @@ func ExtractTags(payload []byte) map[string]string {
 			tags[tag] = s
 		}
 	}
-	// Whether the work this event reports failed. A tag rather than a
-	// payload read because a listing deliberately never selects the payload
-	// column, so a dashboard hydrating its feed from history has no other
-	// way to know a phase died — and a feed that renders a failed turn
-	// identically to a successful one is the bug this dimension closes.
-	// Only set when true, so the tag doubles as a filter.
+	// Whether the work this event reports failed. A tag because a listing
+	// never selects the payload, so a feed hydrated from history has no other
+	// way to know a phase died. Only set when true, so it doubles as a filter.
 	var failed bool
 	if raw, ok := flat["failed"]; ok {
 		_ = json.Unmarshal(raw, &failed)
@@ -365,21 +315,18 @@ func ExtractTags(payload []byte) map[string]string {
 	if failed {
 		tags["failed"] = "true"
 	}
-	// THE WORK ITEM A TURN IS CHARGED TO, the second nested read. Every
-	// turn-level record carries it as an object,
-	// `work_item{backend, id, key, project}`, and the tag is its identity
-	// across trackers — `<backend>:<id>`, [types.WorkItem.Ref] — because
-	// that is the one of the four that a move or a rename leaves alone and
-	// that two trackers cannot both mint. [EventLog.Append] reads it back out
-	// of here for the work_item column (schema/0033), which is what makes
-	// "everything that happened on this item" an index seek.
+	// THE WORK ITEM A TURN IS CHARGED TO, from the object
+	// `work_item{backend, id, key, project}` every turn-level record carries.
+	// The tag is its identity across trackers, `<backend>:<id>`
+	// ([types.WorkItem.Ref]): the one of the four a move or rename leaves alone
+	// and two trackers cannot both mint. [EventLog.Append] reads it back for
+	// the work_item column (schema/0033), making "everything on this item" an
+	// index seek.
 	//
-	// BOTH HALVES OR NOTHING: a backend with no id names no item, and a tag
-	// of `native:` would make every such row the same one. The backend is
-	// taken as a string rather than tested for [types.WorkBackend.Valid], so
-	// a newer peer's record naming a tracker this build does not know is
-	// indexed exactly as a known one is — the rule this whole extractor
-	// follows by reading the JSON rather than the decoded payload.
+	// BOTH HALVES OR NOTHING: a backend with no id names no item, and `native:`
+	// would make every such row the same one. The backend is a string, not
+	// checked with [types.WorkBackend.Valid], so a newer peer's unknown tracker
+	// is indexed like a known one.
 	if raw, ok := flat["work_item"]; ok {
 		var item struct {
 			Backend string `json:"backend"`

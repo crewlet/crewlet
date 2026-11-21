@@ -23,21 +23,16 @@ func (r *Result) Findings() []integration.Finding {
 
 	// A RUN THAT LEFT THE INSTANCE WITH NOWHERE TO DELIVER TO.
 	//
-	// This used to read `r.Hooked != "" && len(r.HookedOn) == 0`, described
-	// as the shape a refused registration leaves. It is not a shape
-	// [Reconcile] can produce: every route through `ensureHooks` either
-	// returns a non-empty list or returns an ERROR, so the branch could
-	// never fire and the one ingress state this pass really does reach —
-	// no public base URL to point a hook at — reported nothing at all and
-	// classified as READY. See [Result.NoIngress].
+	// Keyed on NoIngress, not on a refused registration: every route through
+	// `ensureHooks` returns a non-empty list or an ERROR, so "hooked on
+	// nothing" is unreachable, while the state this pass does reach (no public
+	// base URL to point a hook at) would classify as READY. See
+	// [Result.NoIngress].
 	//
-	// The refusal that branch was written for is still a fault rather than
-	// a finding: a credential that may not administer the group's or a
-	// project's hooks fails the whole pass. That is the wrong verdict for
-	// the same reason [Result.NoIngress] is reported rather than raised —
-	// no retry fixes it — but changing it also changes what
-	// `crewlet gitlab provision` prints and the status it exits with, so it
-	// is a coordinated change rather than a line here.
+	// A credential that may not administer a hook fails the whole pass as a
+	// fault, not a finding. No retry fixes that either, but reporting it
+	// instead would change what `crewlet gitlab provision` prints and exits
+	// with.
 	if r.NoIngress != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingIngressBlocked,

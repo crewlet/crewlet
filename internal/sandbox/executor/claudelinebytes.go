@@ -5,7 +5,7 @@ import "bytes"
 // A THREAD LINE'S BYTE FACTS: what Claude Code's large-file readers read of a
 // line's bytes, never its decode ([threadChain], THE LARGE FILE), and the marks
 // the resumed count reads ([resumedReading]), carried by every whole line, a
-// refused one too ([threadBytes]), beside its decode's facts ([lineFacts]).
+// refused one too ([threadBytes]), beside its facts ([lineFacts]).
 // Never read them off the decode: a call input keyed `x"isSidechain` valued
 // true is written `"x\"isSidechain":true`, a sidechain's bytes where the decode
 // reads none, and `{"parent\u0055uid":null}` decodes to a parent no byte reader
@@ -110,14 +110,6 @@ func (b *threadBytes) KeyedBy(id string) bool { return b.keyed && string(b.key[:
 // Has reports whether the line holds every mark of m, anywhere in its bytes.
 func (b *threadBytes) Has(m byteMark) bool { return b.marks&m == m }
 
-// lineBytesOf is the byte facts of raw, a whole line, its break dropped,
-// read as its bytes stream past ([lineBytes]).
-func lineBytesOf(raw []byte) threadBytes {
-	var l lineBytes
-	l.write(raw)
-	return l.facts()
-}
-
 // lineBytes reads a whole line's byte facts ([threadBytes]) as its bytes stream
 // past in pieces of any size ([lineBytes.write]), never holding the line; its
 // zero value has read nothing, and [lineBytes.facts] reads what is written so
@@ -208,8 +200,9 @@ func (l *lineBytes) reset() {
 	*l = lineBytes{cmps: l.cmps[:0], keys: l.keys[:0]}
 }
 
-// write reads p, the line's next bytes, its break never among them.
-func (l *lineBytes) write(p []byte) {
+// Write reads p, the line's next bytes, its break never among them; it never
+// fails.
+func (l *lineBytes) Write(p []byte) (int, error) {
 	base := l.out.n
 	if base < int64(lineHeadBytes) {
 		l.out.headLen = uint8(base) + uint8(copy(l.out.head[base:], p))
@@ -251,7 +244,7 @@ func (l *lineBytes) write(p []byte) {
 				backslash = indexFrom(p, i, '\\')
 			}
 			if i = min(quote, backslash); i == len(p) {
-				return
+				return len(p), nil
 			}
 		}
 		if p[i] == '"' {
@@ -259,6 +252,7 @@ func (l *lineBytes) write(p []byte) {
 		}
 		l.depth.step(p[i])
 	}
+	return len(p), nil
 }
 
 // indexFrom is where the first c of p at or past from lies, len(p) where none

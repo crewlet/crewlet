@@ -6,29 +6,17 @@ import (
 	"strings"
 )
 
-// A CONTAINER KEY is the short, stable name a unit files work under and
-// writes pages into — `ENG`, `PROD`, `HOME`. One grammar covers both kinds
-// and every backend, and that is the point rather than a simplification.
+// A CONTAINER KEY is the short, stable name a unit files work under and writes
+// pages into (`ENG`, `PROD`, `HOME`). One grammar covers both kinds and every
+// backend, on purpose: keys are vendor-neutral so that switching backends does
+// not rewrite the org chart, and a wider grammar would let a company write
+// `engineering-platform` and find on moving to Jira that its hierarchy must be
+// renamed. So the shape is the tightest vendor's, Jira's project-key rule (an
+// upper-case letter then one to nine upper-case letters or digits).
 //
-// # Why the grammar is the tightest vendor's
-//
-// The keys became vendor-neutral so that switching backends does not rewrite
-// the org chart. A grammar wider than the narrowest backend would forfeit
-// exactly that: a company on Worklet could write `engineering-platform`
-// and discover on the day it moves to Jira that its whole hierarchy has to be
-// renamed, with every item key it ever minted pointing at the old one.
-//
-// So the accepted shape is Jira's own project-key rule — an upper-case letter
-// followed by one to nine upper-case letters or digits — which Confluence
-// space keys and the native containers both accept as a subset. An org chart
-// written against it is portable by construction.
-//
-// # Refused rather than upper-cased
-//
-// A lower-case key is an error naming the fix, not a value silently mangled.
-// Comparison is case-insensitive on the vendors and exact natively, so
-// accepting `eng` would make one company's `eng` and `ENG` the same container
-// and another's two — and the config would not say which.
+// Refused rather than upper-cased: comparison is case-insensitive on the
+// vendors and exact natively, so `eng` and `ENG` would be one container for one
+// company and two for another.
 var containerKeyPattern = regexp.MustCompile(ContainerKeyPattern)
 
 // ContainerKeyPattern is [ValidContainerKey]'s grammar as text, at most
@@ -58,19 +46,15 @@ const ContainerKeyRule = "an upper-case letter followed by 1-9 upper-case " +
 	"letters or digits (ENG, PROD, TS2), the shape every backend accepts, " +
 	"so the org chart survives a backend switch"
 
-// validateContainerKeys checks every project and space key in the document:
-// the shape, and the two knowledge containers the engine reserves.
+// validateContainerKeys checks every project and space key in the document: the
+// shape, and the two knowledge containers the engine reserves.
 //
-// UNIQUENESS IS DELIBERATELY NOT CHECKED. Two units sharing one project is an
-// ordinary arrangement — the shipped example has Product Management and
-// Content both filing into PROD, because they collaborate too tightly to
-// justify cross-project linking — and what actually goes wrong is narrower
-// than duplication: a key whose units resolve to DIFFERENT leads has no
-// single recipient for activity that names nobody. That is a question about
-// the normalised org chart rather than about the document, and
-// [org.Organization.LeadsBy] already answers it, reporting each ambiguity
-// with the candidates it chose between. A second rule here would refuse
-// configurations that work.
+// UNIQUENESS IS DELIBERATELY NOT CHECKED. Two units sharing one project is
+// ordinary (the shipped example files Product Management and Content both into
+// PROD). What goes wrong is narrower: a key whose units resolve to DIFFERENT
+// leads has no single recipient for activity naming nobody, which
+// [org.Organization.LeadsBy] reports with its candidates. A second rule here
+// would refuse configurations that work.
 func (c *Company) validateContainerKeys() error {
 	var p problems
 

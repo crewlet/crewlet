@@ -143,14 +143,12 @@ func TestTheCapTakesARecordStampedAheadInItsArrivalsPlace(t *testing.T) {
 
 // AN EXPIRY READS THE FRONT OF THE WINDOW AND STOPS.
 //
-// This asserts the expiry's COST rather than its result, because the result is
-// the same either way: the window is held in stamp order, so whatever it has
-// aged past is a prefix, and an expiry that read past the first record still
-// inside the window would be a pass over every record — on every spend record
-// the company published, under the projection's lock, which is the quadratic
-// fill this replaced (80 s a test under the race detector at the cap). A
-// record planted where the order never puts one tells the two apart: read from
-// the front, it is never reached.
+// This asserts the expiry's COST, not its result, which is the same either way:
+// the window is in stamp order, so what it has aged past is a prefix, and an
+// expiry reading past the first record still inside would pass over every
+// record on every spend record, under the lock (quadratic fill). A record
+// planted where the order never puts one tells them apart: read from the
+// front, it is never reached.
 //
 // Mutation: scan the window for aged records (slices.ContainsFunc and
 // DeleteFunc, as it used to) and the planted record is dropped.
@@ -190,12 +188,10 @@ func TestAnExpiryReadsOnlyTheAgedFrontOfTheWindow(t *testing.T) {
 
 // AN ARRIVAL IN STAMP ORDER MOVES NOTHING THE WINDOW HOLDS.
 //
-// Nearly every arrival is in stamp order, and placing one is an append — the
-// insertion that keeps the window ordered costs only the records stamped AFTER
-// an arrival, which for these is none. A record planted out of order in the
-// middle tells that apart from the two ways of keeping order that cost the
-// window instead: re-sorting it on an arrival moves the planted record, and
-// searching for the arrival's place from the front stops at the planted record
+// Nearly every arrival is in stamp order and is an append: insertion costs only
+// the records stamped AFTER it, here none. A record planted out of order in the
+// middle tells that apart from the two costlier ways of keeping order:
+// re-sorting moves the planted record, and searching from the front stops at it
 // and inserts the arrival there.
 //
 // Mutation: append and re-sort the window per arrival, or search for the

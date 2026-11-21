@@ -4,13 +4,13 @@ import (
 	"errors"
 	"maps"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -185,8 +185,7 @@ func TestARunWaitingForAMintedCredentialSaysWhatItWaitsFor(t *testing.T) {
 // alone and the rate limit's row does.
 func TestAMintGitHubDidNotAnswerIsAWaitAndOneItRefusedIsAPersons(t *testing.T) {
 	t.Parallel()
-	closed := httptest.NewServer(http.NotFoundHandler())
-	closed.Close()
+	closed := "http://" + httpxtest.Refusing(t)
 	const (
 		askedAgain = "GitHub is asked for it again on the restart schedule"
 		fixTheApp  = "until somebody fixes the agent's GitHub App"
@@ -204,7 +203,7 @@ func TestAMintGitHubDidNotAnswerIsAWaitAndOneItRefusedIsAPersons(t *testing.T) {
 		"a 503":                        {status: http.StatusServiceUnavailable, says: []string{askedAgain}},
 		"a 429":                        {status: http.StatusTooManyRequests, says: []string{askedAgain}},
 		"a 403 at GitHub's rate limit": {status: http.StatusForbidden, limited: true, says: []string{askedAgain}},
-		"GitHub not reached":           {url: closed.URL, says: []string{askedAgain}},
+		"GitHub not reached":           {url: closed, says: []string{askedAgain}},
 		"a suspended installation":     {status: http.StatusForbidden, says: []string{fixTheApp}},
 		"a revoked key":                {status: http.StatusUnauthorized, says: []string{fixTheApp}},
 		"a 503 beside a variable nobody set": {status: http.StatusServiceUnavailable,

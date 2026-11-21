@@ -12,95 +12,47 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// RecordVersion is the record shape THIS BUILD can decode.
+// RecordVersion is the record shape THIS BUILD can decode; a record above it
+// is RETAINED rather than skipped (the deferral contract in [statelog]).
 //
-// A record above it is RETAINED rather than skipped — see the deferral contract
-// in [statelog] — which is what makes a rolling upgrade a period of reduced
-// coverage rather than an outage.
-//
-// IT IS THE CEILING THIS BUILD READS, NOT WHAT IT WRITES. Every record is
-// stamped by [Encode] with the lowest version that reads what it carries, over
-// [versionedFields], because a record a peer cannot read is deferred on that
-// peer: written at the ceiling for no reason, every record of a rolling upgrade
-// would be deferred on every older node. It moves only with that table, and
-// exactly to its highest version.
-//
-// Version 1 is every shape this domain has: no build that wrote anything else
-// was ever released.
+// IT IS THE CEILING THIS BUILD READS, NOT WHAT IT WRITES: [Encode] stamps every
+// record with the lowest version that reads it, over [versionedFields], because
+// a peer defers a record it cannot read. It moves only with that table, exactly
+// to its highest version. Version 1 is every shape this domain has.
 const RecordVersion = 1
 
-// BaseRecordVersion is version 1, the base format: what every build there will
-// ever be reads, and what a record carrying no versioned field is stamped at.
-// A gate, the read index's barrier and a reanchor's generation stay at it
-// ([MutationRecord.readByEveryBuild]) — save a gate whose APPLY changed, which
+// BaseRecordVersion is version 1, the base format every build reads and the
+// stamp of a record carrying no versioned field. A gate, the read index's
+// barrier and a reanchor's generation stay at it
+// ([MutationRecord.readByEveryBuild]), save a gate whose APPLY changed, which
 // rides a version an older build halts at.
 const BaseRecordVersion = 1
 
-// GateRecordVersion is the SHAPE version every gate's payload — a removal's,
-// an invalidation's, an eviction's — and a reanchor's generation carries, FOR
-// EVER.
+// GateRecordVersion is the SHAPE version every gate's payload (a removal's, an
+// invalidation's, an eviction's) and a reanchor's generation carries, FOR EVER.
 //
-// # Why this one number never moves
-//
-// A record whose version this build does not know is normally RETAINED and
-// applied later by a build that does. That is exactly wrong for a gate: a node
-// that deferred a removal goes on signing in somebody the company off-boarded,
-// one that deferred an invalidation goes on honouring every bearer the company
-// ended, and one that deferred an eviction goes on applying every record the
-// evicted node appends — and there is no later record that repairs any of
-// them. So an undecodable gate STOPS that build's applier instead, and a stop
-// takes a node out of the fleet until it is upgraded, so no mere change of
-// SHAPE may cost one. That is what pinning this at one buys: a gate's payload
-// can only ever grow by addition, never by reshaping, for the life of the
-// deployment, and an older build reads every one of them. A generation is
-// pinned beside them for the barrier's reason: an older node RETAINS one it
-// cannot read, and a retained generation is a transition it never makes.
-//
-// # What does move, and why a stop is then the right answer
-//
-// A change to what a gate's APPLY does is not a change of shape, and no older
-// build can honour it: applied the old way it leaves rows every newer node
-// does not hold, and deferred it is the licence described above. So such a
-// record is written at a RECORD version above every build that predates the
-// change — a row in [versionedFields] carrying [statelog.VersionedField.Gate]
-// — and the framework halts that build at it, while every record written
-// before it keeps the rule it was applied by. The halt needs the older build
-// to know the record for a gate, and it does, because [Domain.InstallsGate] is
-// answered from the envelope's op. That is also why a changed gate is NOT
-// given a new op: one an older build does not know is not a gate to it, so at
-// a raised version it would be deferred — the licence above.
-//
-// The rule is the framework's ([statelog.VersionedField.Gate]) and every
-// strict domain's (internal/worklet's GateRecordVersion states it at length),
-// and this domain's three gates take the same pin.
+// An undecodable gate STOPS the applier rather than being retained, since a
+// deferred gate has no later record to repair it; pinned, a gate's shape only
+// grows by addition, so no shape change takes an older node out. A generation
+// is pinned beside them because a retained one is a transition never made. A
+// change to what a gate's APPLY does is a [versionedFields] row carrying
+// [statelog.VersionedField.Gate], at which older builds halt; never a new op,
+// which an older build would not know as a gate and so would defer. The rule
+// is the framework's; internal/worklet's GateRecordVersion states it at length.
 const GateRecordVersion = 1
 
 // versionedFields is every field an identity record has gained since the base
-// format, and the version a reader must be at to apply a record carrying it —
-// the one statement of which record travels at which version, read by [Encode]
-// for every record a writer leaves unstamped.
+// format, with the version a reader must be at to apply a record carrying it:
+// the one table [Encode] stamps from. EMPTY: this build writes the base format.
 //
-// EMPTY, because the base format is everything this build writes.
-//
-// # Adding a field to any record or payload is adding a row here
-//
-// A field an older build has no home for is decoded AROUND: the build reads the
-// version, finds it readable, applies what it understands and drops the rest,
-// so its rows differ from every upgraded node's for good, on tables the
-// identity claim compares byte for byte — or, for a CONDITION on what a record
-// permits, say the condition does not exist and permit more than its writer
-// said. The row is what makes the encoder stamp a version that build retains
-// instead. A field added after a release takes the next version above
-// [RecordVersion], which moves with it, and the domain's statelogtest
-// candidate gains a record carrying it, which certifies the path is where the
-// encoder writes it.
-//
-// # And a new predicate is a row too
-//
-// A rule the applier would read off the record's VERSION, with no field of its
-// own to carry it — a sweep that collects more than its predecessor did — is
-// stated with a marker on the record's root that the writer sets, and the
-// marker's row stamps it.
+// ADDING A FIELD TO ANY RECORD OR PAYLOAD IS ADDING A ROW HERE: an older build
+// decodes around a field it has no home for, so its rows diverge on tables the
+// identity claim compares, or a missing CONDITION reads as none and permits
+// more. The row stamps a version that build retains; one added after a release
+// takes the next version above [RecordVersion], which moves with it, and the
+// statelogtest candidate gains a record carrying it. A new predicate with no
+// field of its own (a sweep that collects more) is a marker on the record's
+// root, and the marker gets the row.
 var versionedFields = statelog.RecordFields{}
 
 // VersionedFields is the table, for the conformance suite and for an operator
@@ -111,171 +63,107 @@ func VersionedFields() statelog.RecordFields { return slices.Clone(versionedFiel
 type OpKind string
 
 const (
-	// OpInvite is an address and a human seat spoken for by somebody who
-	// has no person yet, on [KindDirectory], so it contends with every
-	// enrolment and every other invitation: the decide refuses an address
-	// or a seat a person holds or another open invitation holds, and the
-	// invitation HOLDS both from then until it is redeemed, cancelled or
-	// ages out.
-	//
-	// ITS OWN OP rather than a shape of [OpEnrol], because an invitation
-	// names nobody: it holds an address open for a person who does not
-	// exist, and what an operator reads in the log is the difference
-	// between "this address was invited" and "this address belongs to
+	// OpInvite holds an address and a human seat for somebody with no
+	// person yet, on [KindDirectory]: the decide refuses either while a
+	// person or another open invitation holds it, and the invitation holds
+	// both until it is redeemed, cancelled or ages out. ITS OWN OP rather
+	// than a shape of [OpEnrol] because it names nobody, and the log must
+	// tell "this address was invited" from "this address belongs to
 	// somebody".
 	OpInvite OpKind = "invite"
 
-	// OpCancel withdraws an invitation nobody has redeemed, on
-	// [KindDirectory] — the subject its address and its seat are held on —
-	// and its apply DELETES the row, so the address and the seat it held
-	// are free for a new invitation, a create or a bind the moment it lands
-	// and its sealed copy goes with the row.
-	//
-	// ITS OWN OP rather than an invitation whose deadline moved to now: an
-	// operator reading the trail asks "who withdrew this link", and an
-	// expiry nobody authored says nothing. A REDEEMED invitation is never
-	// cancelled — it created somebody, and what undoes that is removing
-	// them.
+	// OpCancel withdraws an unredeemed invitation, on [KindDirectory]; its
+	// apply DELETES the row and its sealed copy, freeing the address and
+	// the seat at once. ITS OWN OP rather than a deadline moved to now, so
+	// the trail says who withdrew it. A REDEEMED invitation is never
+	// cancelled: what undoes it is removing the person it created.
 	OpCancel OpKind = "cancel"
 
-	// OpEnrol creates a person WHOLE — their row, their first credential,
-	// their login, their address and their seat — and, for a redemption,
-	// spends the invitation, in ONE record on [KindDirectory]. Two writer
-	// verbs publish it ([Writer.Create], [Writer.Redeem]) and it is one
-	// format: an administrator's create of a person carries their FIRST
-	// PASSWORD LINK as a `reset` credential, stamped with the counters of
-	// the record's own snapshot, and a redemption carries the password the
-	// invitee chose.
+	// OpEnrol creates a person WHOLE (row, first credential, login, address,
+	// seat) and, for a redemption, spends the invitation, in ONE record on
+	// [KindDirectory]. [Writer.Create] publishes it with the FIRST PASSWORD
+	// LINK as a `reset` credential stamped with the record's own snapshot
+	// counters; [Writer.Redeem] with the password the invitee chose.
 	//
-	// ONE RECORD, because every half of it is a value the directory's
-	// decide judges in one snapshot: the address, the login and the seat
-	// nobody else holds, and the invitation not spent. Split, a half that
-	// landed without the rest was a reservation every reader had to step
-	// around and a sequence nothing could finish.
+	// ONE RECORD because the directory's decide judges every half in one
+	// snapshot (address, login and seat unheld, invitation unspent); split,
+	// a landed half is a reservation every reader steps around and nothing
+	// finishes.
 	OpEnrol OpKind = "enrol"
 
 	// OpIdentity sets an enrolled person's LOGIN and SEAT binding, as
-	// post-state, on [KindDirectory].
-	//
-	// BOTH ARE ALWAYS STATED, the unchanged one as the snapshot held it,
-	// so a rename, a bind, a move between seats and a service account's
-	// unbind are one record each and the value given up is freed by the
-	// same record that takes the new one — there is no release step left to
-	// not land. A person is never unbound: their seat is moved, or freed by
-	// their removal ([ErrSeatRequired]).
+	// post-state, on [KindDirectory]. BOTH ARE ALWAYS STATED (the unchanged
+	// one as the snapshot held it), so a rename, bind, seat move or service
+	// account's unbind frees the old value in the record that takes the
+	// new: there is no release step. A person is never unbound: their seat
+	// is moved, or freed by their removal ([ErrSeatRequired]).
 	OpIdentity OpKind = "identity"
 
-	// OpUpdate is a person's own content, as FULL POST-STATE: their name,
-	// their contacts, their grants, their credential set.
-	//
-	// FULL POST-STATE AND NOT A PATCH, unlike the tracker: a person is
-	// authored as a form and submitted whole, so the writer always holds the
-	// complete new value and a patch would be a diff it computed in order to
-	// be reassembled by every data node.
+	// OpUpdate is a person's own content (name, contacts, grants, credential
+	// set) as FULL POST-STATE, not a patch: a person is submitted whole as a
+	// form, so a patch would be a diff every data node reassembles.
 	OpUpdate OpKind = "update"
 
-	// OpStatus moves a person between the enrolment and suspension stages
-	// [iam.Stage] names. Its subject is [KindPerson].
-	//
-	// ITS OWN OP AND NOT A FIELD OF [OpUpdate], because suspending somebody
-	// is the operation an operator reads the log FOR — and one that must be
-	// findable without decoding every content record in the domain.
-	// Restoring is the same op with a different status, rather than a
-	// second op, so the pair can never be classified apart.
+	// OpStatus moves a person between the stages [iam.Stage] names, on
+	// [KindPerson]. ITS OWN OP, not a field of [OpUpdate], because a
+	// suspension is what an operator reads the log for and must be findable
+	// without decoding content records; restoring is the same op, so the
+	// pair can never be classified apart.
 	OpStatus OpKind = "status"
 
-	// OpRevoke bumps a person's REVOCATION EPOCH, which ends every session
-	// they hold, everywhere, at once. Its subject is [KindPerson].
-	//
-	// Three things reach it and they are deliberately one op: a person
-	// signing out everywhere, an administrator ending somebody's sessions,
-	// and a second factor reset — each of which has to end whatever that
-	// person's cookies are doing wherever they are.
-	//
-	// IT CARRIES A [MutationRecord.Reason] because the three are
-	// indistinguishable afterwards and an operator investigating a
-	// compromise needs to know which one fired.
+	// OpRevoke bumps a person's REVOCATION EPOCH, ending every session they
+	// hold, everywhere, on [KindPerson]. Signing out everywhere, an
+	// administrator ending their sessions and a second factor reset are
+	// deliberately one op; it carries a [MutationRecord.Reason] because
+	// only that tells the three apart when investigating a compromise.
 	OpRevoke OpKind = "revoke"
 
 	// OpPassword replaces a person's password AND moves their revocation
-	// epoch, in ONE record on [KindPerson]: the person's document as full
-	// post-state, with the new password's verifier and every outstanding
-	// reset link revoked, beside the epoch it moves to.
-	//
-	// ONE RECORD, because each half alone is a state somebody can be left
-	// in. A password changed with the sessions still live is the change
-	// that did not do what it was for — somebody changes a password when
-	// they think somebody else has it — and the two as a sequence are a
-	// first record that lands and a second that may not.
-	//
-	// ITS OWN OP beside [OpUpdate] and [OpRevoke] rather than either of
-	// them, because an operator reads the log for exactly this — "when did
-	// this person's password change, and was it them or a reset link" — and
-	// the reason names which.
+	// epoch in ONE record on [KindPerson]: the person's document as full
+	// post-state (new verifier, every outstanding reset link revoked)
+	// beside the new epoch. Either half alone is a state somebody can be
+	// left in: a changed password with live sessions did not do its job.
+	// ITS OWN OP, not [OpUpdate] or [OpRevoke], so "when did this password
+	// change, and by them or a reset link" is findable, the reason naming
+	// which.
 	OpPassword OpKind = "password"
 
-	// OpRemove is a person the company no longer has, and it INSTALLS A
-	// GATE by its op rather than by its kind: it rides the DIRECTORY
-	// subject, because it frees a login, an address and a seat.
+	// OpRemove is a person the company no longer has. It rides the
+	// DIRECTORY subject (it frees a login, an address and a seat), so it
+	// INSTALLS A GATE by its op, not its kind: it is the one record no later
+	// record repairs, since nothing names a removed person again, and a node
+	// that deferred it would go on admitting them.
 	//
-	// The gate exists because a removal is the one operation here with no
-	// inverse a later record supplies. Every other record is a full
-	// post-state under a monotone guard, so a node that deferred one is
-	// repaired by the next record about that person; nothing ever names a
-	// removed person again, so a node that deferred a removal would go on
-	// admitting somebody every peer has off-boarded.
-	//
-	// WHAT IT ERASES is every sealed value of theirs the estate holds —
-	// their rows go, and the invitation and trail rows that outlive them
-	// keep every column but the sealed ones. The tombstone and the id
-	// outlive it, because the audit trail names them.
+	// It ERASES every sealed value of theirs: their rows go, and the
+	// invitation and trail rows that outlive them lose their sealed columns.
+	// The tombstone and the id remain, because the audit trail names them.
 	OpRemove OpKind = "remove"
 
 	// OpOpen begins one session. Its subject is [KindSession], create-only
 	// at an expectation of zero, so a lineage can be opened exactly once.
 	OpOpen OpKind = "open"
 
-	// OpClose ends one session. Its subject is [KindSession].
-	//
-	// A RE-ISSUE IS NOT A RECORD and this is the reason the pair is only
-	// two: the idle deadline a re-issue moves lives in the bearer's own
-	// signed payload, so the busiest thing a signed-in person does writes
-	// nothing on this log at all. What lands here is a session beginning
-	// and a session ending, which is a handful of records per person per
-	// day.
+	// OpClose ends one session, on [KindSession]. A RE-ISSUE IS NOT A
+	// RECORD: the idle deadline it moves lives in the bearer's own signed
+	// payload, so this log sees a handful of records per person per day.
 	OpClose OpKind = "close"
 
-	// OpInvalidate ends EVERY session in the company at once, on
-	// [KindInvalidation], by moving the fleet-wide generation a bearer
-	// carries. It INSTALLS A GATE.
+	// OpInvalidate ends EVERY session in the company by moving the
+	// fleet-wide generation a bearer carries, on [KindInvalidation]. It
+	// INSTALLS A GATE: a node that deferred it would honour every cookie
+	// just invalidated, with no later record to repair it.
 	//
-	// THE GATE IS THE WHOLE POINT. A node that deferred this record would
-	// go on honouring every cookie the company had just invalidated, and
-	// there is no later record about any of those sessions to repair it —
-	// which is the same shape of failure a deferred removal is, one
-	// blast radius wider.
-	//
-	// IT IS NOT [OpRevoke] AT A LARGER SCALE, and the difference is which
-	// counter moves: a revocation bumps one person's epoch and is rolled
-	// back by a restore along with every other row, while this moves the
-	// one number in the estate that can be pushed forward without knowing
-	// who was affected. That is exactly what the restore runbook's last
-	// step needs, because the sessions it has to end are the ones an
-	// artefact taken before the revocation still believes in.
-	//
-	// THE NEW GENERATION IS STATED ON THE RECORD, never incremented by the
-	// applier, for [OpRevoke]'s reason: an applier that did `+ 1` would
-	// fold over an arrival order, and two nodes at one checkpoint have
-	// seen the same set in a different order.
+	// NOT [OpRevoke] AT SCALE: a restore rolls a per-person epoch back with
+	// every other row, while this is the one number that can be pushed
+	// forward without knowing who was affected, which the restore runbook's
+	// last step needs. The new generation is STATED, never `+ 1` in the
+	// applier, which would fold over an arrival order nodes do not share.
 	OpInvalidate OpKind = "invalidate"
 
 	// OpSweep deletes one bucket's expired rows below a POSITION the
-	// publisher resolved once. Its subject is [KindSweep].
-	//
-	// A RECORD RATHER THAN A LOCAL DELETE, because these rows are
-	// identity-claimed: a node sweeping on its own clock would hold
-	// different bytes from its peers, and "N byte-identical copies" would
-	// quietly become a claim about how synchronised their clocks were.
+	// publisher resolved once, on [KindSweep]. A RECORD, not a local delete,
+	// because the rows are identity-claimed: each node sweeping on its own
+	// clock would hold different bytes.
 	OpSweep OpKind = "sweep"
 
 	// OpBarrier is the read index's payload-free append.
@@ -304,39 +192,30 @@ var OpKinds = []OpKind{
 // Valid reports whether an op off the wire is one this build knows.
 func (o OpKind) Valid() bool { return slices.Contains(OpKinds, o) }
 
-// RecordEnvelope decodes at EVERY version, BEFORE V is consulted.
+// RecordEnvelope decodes at EVERY version, BEFORE V is consulted, so a record
+// this build cannot read is retained rather than dropped. Its EIGHT top-level
+// keys are RESERVED for the format's life: a later version may add fields
+// beside them, never repurpose one.
 //
-// Its EIGHT keys are RESERVED at the top level of the format for its life: a
-// later version may add fields beside them and may never repurpose one. It is
-// the same split the event envelope makes between a known header and an opaque
-// body, for the same reason — a rolling upgrade puts a record this build cannot
-// read on the wire, and dropping it would make every upgrade an outage.
-//
-// # NOTHING HERE IS PERSONAL DATA, and that is a property of the format
-//
-// Every field in this struct is readable by every build for ever, which means
-// it is also readable by every OPERATOR SURFACE that renders a record this
-// build could not decode: a deferral row, a stalled-log report, a broker
-// listing. So none of them carries a name, an address or a login — the subject
-// is an opaque id or names nobody, and the scope is a bucket number. A person's own
-// values live in the payload, sealed under the fleet keyring, which the
-// envelope pass never opens.
+// NOTHING HERE IS PERSONAL DATA, by design of the format: every operator
+// surface that renders an undecodable record (a deferral row, a stalled-log
+// report, a broker listing) reads these fields. So the subject is an opaque id
+// or names nobody and the scope is a bucket number; a person's values live in
+// the payload, sealed under the fleet keyring, which the envelope pass never
+// opens.
 type RecordEnvelope struct {
 	// V is the record version. Refused for the PAYLOAD when unknown, never
 	// for this struct.
 	V int `json:"v"`
 
-	// OpID is the operation id, in the state log's grammar
-	// (`<uuidv7>[.<name>][.<step>...]`, [statelog.NewOpID]): the
-	// idempotency key, the Nats-Msg-Id, the ops table's key — and the
+	// OpID is the operation id ([statelog.NewOpID]'s grammar): the
+	// idempotency key, the Nats-Msg-Id, the ops table's key, and the
 	// instant it was minted at, which the publisher reads to decide whether
-	// this node's ledger can vouch for a retry. A step of a gesture carries
-	// the gesture's id and its step ([statelog.StepOpID]). EMPTY on a
-	// barrier, deliberately — an op id is what
-	// invites a message id, and a duplicate ack is served out of the
-	// dedupe window with no quorum round trip at all, which is the one
-	// thing a read barrier must never be — and empty on a trimmed record,
-	// whose identical copies are each meant to land.
+	// this node's ledger can vouch for a retry. A gesture's step carries the
+	// gesture's id and step ([statelog.StepOpID]). EMPTY on a barrier (an op
+	// id invites a message id, whose duplicate ack skips the quorum round
+	// trip a barrier exists for) and on a trimmed record, whose identical
+	// copies are each meant to land.
 	OpID string `json:"op_id,omitempty"`
 
 	// Subject is the object this record arbitrates on.
@@ -345,35 +224,27 @@ type RecordEnvelope struct {
 	// Op is what the record does.
 	Op OpKind `json:"op"`
 
-	// CreatedAt is THE AUTHORED INSTANT, the writer's own clock. It rides
-	// the record so an operator reading an authentication trail can see
-	// when a revocation was decided, and it is NEVER ORDERED ON and never
+	// CreatedAt is THE AUTHORED INSTANT, the writer's own clock, for the
+	// authentication trail an operator reads. NEVER ORDERED ON and never
 	// written to a row: every instant this domain stores is the broker's,
-	// which is what makes one node's copy byte-identical to another's.
-	// Empty on a barrier, because nothing renders one.
+	// which keeps the nodes' copies byte-identical. Empty on a barrier.
 	CreatedAt time.Time `json:"created_at,omitzero"`
 
-	// Gen is the generation. It is what makes a row's version a pure
-	// function of the record — (Gen << 40) | the broker's own sequence — so
-	// the applier needs no table lookup, no config read and no clock.
-	// Present on a barrier too, because a barrier from a previous
-	// generation must be refusable.
+	// Gen is the generation: it makes a row's version a pure function of
+	// the record, (Gen << 40) | the broker's sequence, with no lookup,
+	// config read or clock. Present on a barrier too, so one from a
+	// previous generation can be refused.
 	Gen uint32 `json:"gen,omitempty"`
 
-	// Writer is the publishing node's id, read by the eviction gate — which
-	// runs before any kind rule, on a node that may not be able to decode
-	// the payload at all. Empty on a barrier, which writes no rows for a
-	// gate to drop — and SET on a trimmed record, which removes anchors,
-	// so an evicted node's must be droppable.
+	// Writer is the publishing node's id, read by the eviction gate, which
+	// runs before any kind rule on a node that may not decode the payload.
+	// Empty on a barrier, which writes no rows; SET on a trimmed record,
+	// which removes anchors, so an evicted node's must be droppable.
 	//
-	// IT AND Gen ARE THE FRAMEWORK'S STAMP ([statelog.Stamp]), set from the
-	// stamp a decide is handed — or, on the one record nothing decides, a
-	// reanchor's, from the facts the transition hands [GenerationRecord] —
-	// and from nowhere else: the publisher refuses a record that does not
-	// carry the one it was decided under. Every
-	// writer here left both empty until it did, so the eviction gate
-	// compared an empty writer against every eviction on this log and
-	// dropped nothing.
+	// IT AND Gen ARE THE FRAMEWORK'S STAMP ([statelog.Stamp]), taken from
+	// the stamp a decide is handed (a reanchor's from the facts the
+	// transition hands [GenerationRecord]) and nowhere else: the publisher
+	// refuses a record not carrying the one it was decided under.
 	Writer string `json:"writer,omitempty"`
 
 	// Scope is the complete set of identity buckets this record's apply may
@@ -383,16 +254,12 @@ type RecordEnvelope struct {
 
 // InstallsGate reports whether this record installs an apply gate.
 //
-// ANSWERED FROM THE ENVELOPE ALONE, because it must be answerable by a node
-// that cannot decode the payload: it is what turns an unknown version into a
-// STOP rather than a deferral.
-//
-// ON THE OP AND NOT ON A KIND, because a removal rides the DIRECTORY subject
-// beside every enrolment and identity change, so a reader that keyed on the
-// kind would defer it — and a deferred removal here is a person the company
-// off-boarded still signing in on one node. An eviction has a kind of its own and could have
-// been read either way; it is read here so the question is asked once, in one
-// place, for both — and so does an invalidation.
+// ANSWERED FROM THE ENVELOPE ALONE, so a node that cannot decode the payload
+// turns an unknown version into a STOP rather than a deferral. ON THE OP, not
+// the kind: a removal rides the DIRECTORY subject beside every enrolment, so a
+// kind-keyed reader would defer it, leaving somebody off-boarded signing in on
+// one node. Eviction and invalidation are read here too, so the question is
+// asked in one place.
 func (e RecordEnvelope) InstallsGate() bool {
 	switch e.Op {
 	case OpRemove, OpInvalidate, OpEviction:
@@ -407,64 +274,47 @@ type MutationRecord struct {
 	RecordEnvelope
 
 	// Expect is the version this mutation was decided against. PROVENANCE
-	// ONLY — the broker is what enforced it, and nothing reads this to
-	// decide anything.
+	// ONLY: the broker enforced it, and nothing reads this to decide.
 	Expect uint64 `json:"expect,omitempty"`
 
 	// Mutation is the typed payload for (Subject.Kind, Op), left as OPAQUE
-	// BYTES when the version is above this build's.
-	//
-	// IT IS WHERE EVERY SEALED VALUE LIVES. A person's name and address are
-	// sealed under the fleet keyring BEFORE publication, with their id and
-	// the field as the additional authenticated data, so the bytes on the
-	// broker, in every data node's deferred table and in every snapshot are
-	// ciphertext that only a holder of the keyring can open.
+	// BYTES when the version is above this build's. EVERY SEALED VALUE LIVES
+	// HERE, sealed under the fleet keyring BEFORE publication with the
+	// person's id and the field as additional authenticated data, so the
+	// broker, every deferred table and every snapshot hold ciphertext only.
 	Mutation json.RawMessage `json:"mutation,omitempty"`
 
 	// Person is the id every row this record writes belongs to, IN THE
-	// CLEAR, and it is here rather than in the envelope on purpose.
-	//
-	// The applier needs it to attach rows the subject does not name: a
-	// directory record's subject names nobody and a session's names a
-	// lineage, and the person is what their rows are keyed on. The
-	// ENVELOPE does not carry it because
-	// every envelope field is rendered by an operator surface for a record
-	// nobody could decode, and a person's id in a stalled-log report is a
-	// durable, replicated statement that this person exists.
+	// CLEAR: the applier keys rows on it where the subject does not name
+	// them (a directory subject names nobody, a session's names a lineage).
+	// NOT in the envelope, which operator surfaces render for undecodable
+	// records: an id in a stalled-log report is a durable, replicated
+	// statement that this person exists.
 	//
 	// Empty on a barrier, a trimmed record, a sweep, an eviction, a
-	// generation, an invalidation and an invitation's issue — the records
-	// that are about nobody; for a directory record about somebody it is
-	// that person.
+	// generation, an invalidation and an invitation's issue: the records
+	// about nobody.
 	Person string `json:"person,omitempty"`
 
-	// Actor and ActorKind are who did this.
-	//
-	// THE KIND IS A COLUMN AND NEVER A PREFIX ON THE NAME, which is
-	// internal/iam's own rule: an operator prefixed into a name showed one
-	// person as two people three rows apart in the audit feed.
+	// Actor and ActorKind are who did this. THE KIND IS A COLUMN, NEVER A
+	// PREFIX ON THE NAME (internal/iam's rule), or one person reads as two
+	// in the audit feed.
 	Actor     string   `json:"actor,omitempty"`
 	ActorKind iam.Kind `json:"actor_kind,omitempty"`
 
-	// OperatorID is the credential Actor acted THROUGH — a machine token's
+	// OperatorID is the credential Actor acted THROUGH (a machine token's
 	// `pat:<id>`, a browser session's `session:<lineage>`, a Tier A token's
-	// own login — which is what tells a token's gesture from its owner's
-	// when Actor names the owner either way. A gesture a person makes
-	// through the sign-in surface is written FOR them ([Writer.For]): the
-	// session it opened or closed, or their login where it came through no
-	// session yet. Empty where the party acted through none, which is the
-	// node's own writer — every duty, and what the engine decides for
-	// itself, such as a password re-hashed at this build's cost.
+	// login), which tells a token's gesture from its owner's. A sign-in
+	// surface gesture is written FOR the person ([Writer.For]): the session
+	// it opened or closed, or their login before any session. Empty for the
+	// node's own writer: every duty, and what the engine decides itself,
+	// such as a password re-hashed at this build's cost.
 	OperatorID string `json:"operator_id,omitempty"`
 
-	// Reason is why, in at most [MaxReason] bytes, for the operations
-	// whose motive is not recoverable from their effect.
-	//
-	// A REVOCATION IS THE CASE IT EXISTS FOR: signing out everywhere, an
-	// administrator ending somebody's sessions and a second factor reset
-	// produce an identical epoch bump, and which one fired is the first
-	// question anybody investigating a compromise asks. It is prose an operator wrote or a constant the
-	// engine chose, never a stack trace and never a value from a request.
+	// Reason is why, in at most [MaxReason] bytes, for an op whose effect
+	// does not show its motive; a revocation is the case it exists for
+	// ([OpRevoke]). Prose an operator wrote or a constant the engine chose,
+	// never a stack trace or a value from a request.
 	Reason string `json:"reason,omitempty"`
 
 	// Extra carries fields a newer build wrote, so a record round-trips
@@ -474,37 +324,22 @@ type MutationRecord struct {
 
 // What is NOT on the record, deliberately.
 //
-// THE BROKER'S INSTANT. The effective instant every duration is measured
-// against derives from the broker's own store timestamp, which the replication
-// loop stamps onto the record before calling the applier. A writer must not be
-// able to author it, and a field a writer could set is a field a writer could
-// lie about — so it reaches the applier as an argument rather than as a key in
-// the format.
-//
-// A NOTIFY BLOCK. An identity change wakes nobody: a person being suspended, a
-// session ending or a login being changed is not work for an agent, and the
-// contact updates that DO follow a status change are derived by a duty from
-// the rows rather than routed from the record. A field with no producer is a
-// value every reader is entitled to misread, so there is none.
-//
-// AN IP ADDRESS, A USER AGENT OR A DEVICE FINGERPRINT. A session record says
-// that a session was opened and by whom; where from is a request-scoped
-// observation, and putting one on a replicated, permanently retained log would
-// make every data node's database a location history nobody asked for.
+// THE BROKER'S INSTANT: durations measure from the broker's store timestamp,
+// which the replication loop hands the applier as an argument, because a
+// field a writer could set is one it could lie about. A NOTIFY BLOCK: an
+// identity change is no agent's work, and the contact updates a status change
+// needs are derived by a duty from the rows. AN IP ADDRESS, USER AGENT OR
+// DEVICE FINGERPRINT: request-scoped, and on this permanently retained,
+// replicated log they would make every data node a location history.
 
-// MaxReason bounds the reason a record carries.
-//
-// TWO HUNDRED AND FIFTY-SIX, which is a line of prose: this is rendered into
-// an authentication trail beside the op that caused it, where the op is
-// already the headline, so the field's job is to say WHICH of three
-// indistinguishable causes fired rather than to narrate.
+// MaxReason bounds the reason a record carries: a line of prose, since the
+// trail already headlines the op and the reason only says WHICH of the
+// indistinguishable causes fired.
 const MaxReason = 256
 
-// ErrFutureVersion reports a record a newer build wrote.
-//
-// It carries the SUBJECT because the caller is the applier's deferral arm,
-// which has to file the record under something — and a version error with no
-// subject is a record that can only be dropped.
+// ErrFutureVersion reports a record a newer build wrote. It carries the
+// SUBJECT because the applier's deferral arm must file the record under one;
+// without it the record could only be dropped.
 type ErrFutureVersion struct {
 	Got     int
 	Want    int
@@ -518,12 +353,9 @@ func (e *ErrFutureVersion) Error() string {
 		e.Want)
 }
 
-// DecodeEnvelope is the FIRST pass, and it never fails on version.
-//
-// Every branch that makes an un-decodable record survivable turns on something
-// here: the subject it is filed under, the scope a writer probes for, the op a
-// gate reads, and the version that decides whether there is a second pass at
-// all.
+// DecodeEnvelope is the FIRST pass, and it never fails on version: the subject
+// an undecodable record is filed under, the scope a writer probes, the op a
+// gate reads and the version deciding the second pass all come from here.
 func DecodeEnvelope(payload []byte) (RecordEnvelope, error) {
 	var env RecordEnvelope
 	if err := json.Unmarshal(payload, &env); err != nil {
@@ -541,11 +373,9 @@ func DecodeEnvelope(payload []byte) (RecordEnvelope, error) {
 	return env, nil
 }
 
-// Decode is the SECOND pass, and it is the one that may refuse on version.
-//
-// It returns the envelope alongside the error whenever the envelope itself
-// decoded, because that is precisely the case the applier retains: the caller
-// needs the subject, the scope and the op of a record it cannot read.
+// Decode is the SECOND pass, and the one that may refuse on version. It
+// returns the envelope beside the error whenever that decoded: the applier
+// retains such a record by its subject, scope and op.
 func Decode(payload []byte) (MutationRecord, error) {
 	env, err := DecodeEnvelope(payload)
 	if err != nil {
@@ -569,21 +399,14 @@ func Decode(payload []byte) (MutationRecord, error) {
 // Encode renders a record, stamping it with the lowest version that reads it
 // and carrying back whatever a newer build wrote.
 //
-// A ZERO VERSION IS "STAMP IT": the writer leaves V unset on every record it
-// builds and this computes the minimum over [versionedFields] from the bytes it
-// is about to publish, so the stamp cannot drift from what the record carries.
-// A version the caller DID set is kept — a relay re-encodes a record at the
-// version its writer gave it — but is refused when it is below what the
-// record's own fields need, because that record
-// would be applied, lossily, by exactly the builds the stamp exists to hold it
-// back from. A record every build must read
-// ([MutationRecord.readByEveryBuild]) is refused whenever it carries a
-// versioned field at all, stamped or set — save a gate's own changed apply
-// ([statelog.VersionedField.Gate]), at which an older build halts.
-//
-// LOSSLESS IN BOTH DIRECTIONS, which is what makes a rolling upgrade safe: a
-// node that read a record it only half understood and republished it — the
-// reanchor path does exactly that — must not strip the half it did not.
+// A ZERO VERSION IS "STAMP IT": the minimum over [versionedFields] of the
+// bytes about to be published, so the stamp cannot drift from the content. A
+// set version is kept (a relay re-encodes at its writer's) but refused below
+// what the record's fields need, since the builds the stamp holds back would
+// apply it lossily. A [MutationRecord.readByEveryBuild] record carrying any
+// versioned field is refused, save a gate's changed apply
+// ([statelog.VersionedField.Gate]). LOSSLESS both ways: the reanchor path
+// republishes records it half understood and must not strip the other half.
 func Encode(rec MutationRecord) ([]byte, error) {
 	return rec.encodeWith(versionedFields)
 }
@@ -602,10 +425,9 @@ func (rec MutationRecord) encodeWith(fields statelog.RecordFields) ([]byte, erro
 		return nil, fmt.Errorf("iamdomain: encode the record on %s: %w",
 			rec.Subject, err)
 	}
-	// THE STAMP IS TAKEN OVER WHAT THIS BUILD WROTE, never over what it
-	// CARRIES: a carried field is one this build does not read, so it
-	// cannot be what this build's table stamps — and a relay of a record
-	// carrying one keeps the version its writer gave it.
+	// THE STAMP IS TAKEN OVER WHAT THIS BUILD WROTE, never what it CARRIES:
+	// a carried field is not in this build's table, and a relay keeps its
+	// writer's version.
 	known := data
 	if len(rec.Extra) > 0 {
 		if known, err = jsoncarry.Encode(rec, nil); err != nil {
@@ -623,13 +445,8 @@ func (rec MutationRecord) encodeWith(fields statelog.RecordFields) ([]byte, erro
 	}
 	switch {
 	case rec.readByEveryBuild() && minimum > BaseRecordVersion && len(refused) > 0:
-		// A GATE, A BARRIER OR A GENERATION NEVER CARRIES A VERSIONED
-		// FIELD, stamped or set — save the one kind a gate may: a change to
-		// what the gate's own apply does ([statelog.VersionedField.Gate]),
-		// at which an older node HALTS. Anything else a gate needs a newer
-		// reader for would take every older node out of service for a
-		// field rather than for a rule it cannot honour; a barrier or a
-		// generation an older node cannot read is one it retains.
+		// See [MutationRecord.readByEveryBuild]: only a gate's changed
+		// apply may carry a versioned field, at which an older node HALTS.
 		return nil, fmt.Errorf("iamdomain: the %s record on %s must be readable "+
 			"by every build for ever — an older node halts at a gate, and retains "+
 			"a barrier or a generation, that it cannot read — and it carries %s, "+
@@ -652,44 +469,33 @@ func (rec MutationRecord) encodeWith(fields statelog.RecordFields) ([]byte, erro
 	return data, nil
 }
 
-// readByEveryBuild reports a record every build there will ever be must be
-// able to read, and so one that stays at [BaseRecordVersion] and never carries
-// a versioned field: a gate, so an undecodable one is a stop rather than a
-// deferral — a deferred removal is somebody off-boarded still signing in on
-// that node, a deferred invalidation every bearer the company ended still
-// honoured there, a deferred eviction every record the evicted node appends
-// still applied — and its shape may therefore only ever grow by addition
-// ([GateRecordVersion]); and the read index's barrier, the trim's trimmed
-// record and a reanchor's generation, because an older node RETAINS a record
-// it cannot read — a barrier is then a linearizable read on that node that
-// waits for ever, a trimmed record every anchor it names kept on that node,
-// and a generation a transition it never makes.
+// readByEveryBuild reports a record every build must be able to read, so it
+// stays at [BaseRecordVersion] and carries no versioned field. A gate, because
+// an undecodable one stops rather than defers (a deferred removal,
+// invalidation or eviction has nothing to repair it), so its shape only grows
+// by addition ([GateRecordVersion]). The barrier, the trimmed record and a
+// generation, because an older node RETAINS what it cannot read: a
+// linearizable read waiting for ever, anchors kept, a transition never made.
 //
 // THE ONE EXCEPTION is a gate's own APPLY changing
-// ([statelog.VersionedField.Gate]): no older build can honour that rule, so
-// the record rides the version it arrived at and every older node halts there
-// — the only answer that is not a divergence.
+// ([statelog.VersionedField.Gate]): no older build can honour it, so the
+// record keeps its version and older nodes halt there rather than diverge.
 func (rec MutationRecord) readByEveryBuild() bool {
 	return rec.InstallsGate() || rec.Op == OpBarrier || rec.Op == OpTrimmed ||
 		rec.Op == OpGeneration
 }
 
-// recordFields is every top-level name this build writes.
-//
-// DERIVED from the struct rather than typed again, on [jsoncarry.Names]'
-// terms: the omitempty names have to be listed because a zero value does not
-// marshal them, and a name missing here is decoded into the struct AND carried
-// as unknown — so the next encode writes the stale carried copy back over what
-// the caller set.
+// recordFields is every top-level name this build writes, DERIVED from the
+// struct ([jsoncarry.Names]) so omitempty names are listed too: a name missing
+// here decodes into the struct AND is carried as unknown, so the next encode
+// writes the stale carried copy back over what the caller set.
 var recordFields = jsoncarry.Names(MutationRecord{})
 
 // EncodeBarrier renders the framework's barrier append as one of this domain's
-// own records.
-//
-// A DOMAIN THAT DECLARES ONE GETS A READ INDEX and therefore `linearizable`,
-// and this domain needs one: "may this person act, as of now" is precisely a
-// question about a position, and answering it from a node that has not applied
-// a revocation is the failure the whole revocation epoch exists to prevent.
+// own records. Declaring one gives the domain a read index and so
+// `linearizable`, which "may this person act, as of now" needs: answered by a
+// node that has not applied a revocation, it is the failure the epoch exists
+// to prevent.
 func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.BarrierKind {
 		return nil, fmt.Errorf("iamdomain: %q is not a barrier envelope", env.Kind)
@@ -708,13 +514,10 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 			V:       BaseRecordVersion,
 			Subject: BarrierSubject(),
 			Op:      OpBarrier,
-			// THE BARRIER'S SCOPE IS RESOLVED FROM ITS KIND rather than
-			// from what is stated here — see [ScopeSet.Resolve] — so
-			// whatever a peer wrote, a barrier read back on this build
-			// intersects nothing and no linearizable read ever waits
-			// behind another. The root is stated because a scope must
-			// encode to something, and it is the one kind for which
-			// that choice is not read.
+			// RESOLVED FROM ITS KIND ([ScopeSet.Resolve]), so whatever a
+			// peer wrote a barrier intersects nothing and no linearizable
+			// read waits behind another; the root is stated only because
+			// a scope must encode to something.
 			Scope: RootScope(),
 			Gen:   env.Gen,
 		},
@@ -722,18 +525,16 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 }
 
 // EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0080) as one of this domain's own records — the barrier's split: the
-// framework owns when one is appended, what it removes and the floor its
-// subject names, and the domain owns what a record on its log looks like.
+// ADR-0080) as one of this domain's records, split as the barrier is: the
+// framework owns when one is appended, what it removes and its floor; the
+// domain owns the record's shape.
 //
-// THE WRITER TRAVELS, unlike a barrier's: a trimmed record removes rows, so the
-// eviction gate must be able to drop an evicted node's. NO OP ID, asserted —
-// one becomes a message id and a ledger row nothing resolves. NO PERSON, since
-// it is about nobody, so no removal's tombstone ever holds one back. And the
-// floor is CHECKED here, at the write, rather than in [Subject.Validate], which
-// the read path runs too: a refusal there would turn one malformed record into
-// an applier that stops on every node, where the framework's apply faults
-// instead.
+// THE WRITER TRAVELS, unlike a barrier's, so the eviction gate can drop an
+// evicted node's. NO OP ID: one becomes a message id and a ledger row nothing
+// resolves. NO PERSON, so no removal's tombstone holds it back. The floor is
+// CHECKED here at the write, not in [Subject.Validate], which the read path
+// runs too: a refusal there stops the applier on every node, where the
+// framework's apply faults instead.
 func EncodeTrimmed(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.TrimmedKind || env.Subject.Kind != statelog.TrimmedKind {
 		return nil, fmt.Errorf("iamdomain: a %q envelope on %q is not a trimmed record",

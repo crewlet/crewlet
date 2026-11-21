@@ -116,6 +116,9 @@ type bookWrites struct {
 	// authors they added, each (change, author) pair once.
 	revisions []revisionRow
 	authors   []authorRow
+	// moves are the closes the entries made by deleting a source, each its
+	// change's move ([MoveClosed]).
+	moves []moveRow
 	// merges counts the changes the entries merged and merged lists them in
 	// order — what a push decide routes each entry's merges by.
 	merges int
@@ -140,8 +143,8 @@ type bookTrial struct {
 	// touched, bodies, revisions, authors, merges and next are the writes'
 	// lengths, merge count and next number as the entry found them: what
 	// taking it back cuts them to.
-	touched, bodies, revisions, authors, merges int
-	next                                        int64
+	touched, bodies, revisions, authors, moves, merges int
+	next                                               int64
 	// moved is every change the entry moved, by id, as before its first
 	// move; added every change it opened, which taking it back forgets.
 	moved map[string]changeRow
@@ -180,6 +183,10 @@ type revisionRow struct {
 	kind       PartyKind
 	pushID     string
 	workingFor *types.WorkingFor
+	// via and forced are how the push moved the change's source: its way, and
+	// whether it rewrote the branch rather than moving it forward.
+	via    PushVia
+	forced bool
 }
 
 // authorRow is one code_change_authors row a record writes.
@@ -343,7 +350,7 @@ func (b *changeBook) readAuthors(ctx context.Context, tx *sql.Tx, pairs [][2]str
 func (b *changeBook) try() {
 	w := &b.writes
 	b.trial = &bookTrial{touched: len(w.touched), bodies: len(w.bodies), revisions: len(w.revisions),
-		authors: len(w.authors), merges: w.merges, next: b.next}
+		authors: len(w.authors), moves: len(w.moves), merges: w.merges, next: b.next}
 }
 
 // keep admits the entry on trial: its moves are the record's.
@@ -385,6 +392,7 @@ func (b *changeBook) takeBack() {
 	}
 	w.touched, w.bodies = w.touched[:t.touched], w.bodies[:t.bodies]
 	w.revisions, w.authors, w.merges, b.next = w.revisions[:t.revisions], w.authors[:t.authors], t.merges, t.next
+	w.moves = w.moves[:t.moves]
 	w.merged = w.merged[:t.merges]
 }
 
@@ -419,7 +427,8 @@ func (b *changeBook) rowCount() int { return b.rowsEnding(len(b.ended())) }
 // rowsEnding is [changeBook.rowCount] with the ended changes counted once by its caller.
 func (b *changeBook) rowsEnding(ended int) int {
 	w := &b.writes
-	return len(w.touched) + len(w.revisions) + len(w.authors) + len(w.bodies) + b.queuedMoved() + ended
+	return len(w.touched) + len(w.revisions) + len(w.authors) + len(w.bodies) + len(w.moves) + b.queuedMoved() +
+		ended
 }
 
 // decidedRows is [changeBook.rowCount] plus, where the moves open or end a
@@ -573,7 +582,7 @@ func (b *changeBook) move(e PushEntry) {
 		row = b.touch(row.id)
 		row.head, row.revision = c.New, row.revision+1
 		b.writes.revisions = append(b.writes.revisions, revisionRow{change: row.id, n: row.revision, head: c.New,
-			pusher: pusher, kind: kind, pushID: e.PushID, workingFor: e.WorkingFor})
+			pusher: pusher, kind: kind, pushID: e.PushID, workingFor: e.WorkingFor, via: e.Via, forced: c.Forced})
 		// A push no seat or person made adds no author: an author row naming
 		// nobody names what no review could ask after (and no decide admits
 		// one, a token bound to nobody reading only).
@@ -607,6 +616,9 @@ func (b *changeBook) move(e PushEntry) {
 		row = b.touch(row.id)
 		row.state, row.closeReason = ChangeStateClosed, SourceDeleted
 		row.closedAt = sql.NullInt64{Int64: b.at, Valid: true}
+		row.closedBy, row.closedByKind = pusher, kind
+		b.writes.moves = append(b.writes.moves, moveRow{change: row.id, kind: MoveClosed, by: pusher, byKind: kind,
+			reason: SourceDeleted})
 	}
 }
 
@@ -654,7 +666,7 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 		bodyBytes: int64(len(e.Change.Body)), state: state, source: source.Ref, target: e.Change.Target,
 		head: source.New, revision: 1, owner: owner, ownerKind: kind, operator: operator,
 		turn: e.Principal.Run.TurnID, run: e.Principal.Run.RunID, openedAt: b.at, opened: b.packed, version: 1,
-		position: b.packed, updatedAt: b.at}
+		position: b.packed, updatedAt: b.at, reverts: e.Change.Reverts}
 	if run := e.Principal.Run; run.WorkID != "" {
 		row.work = types.WorkItem{Backend: types.WorkBackend(run.WorkBackend), ID: run.WorkID, Key: run.WorkKey,
 			Project: run.WorkProject}
@@ -680,7 +692,7 @@ func (b *changeBook) open(e PushEntry) (string, string) {
 	w.touched = append(w.touched, id)
 	w.opened[id] = true
 	w.revisions = append(w.revisions, revisionRow{change: id, n: 1, head: source.New, pusher: owner, kind: kind,
-		pushID: e.PushID, workingFor: e.WorkingFor})
+		pushID: e.PushID, workingFor: e.WorkingFor, via: e.Via, forced: source.Forced})
 	b.author([2]string{id, owner})
 	w.authors = append(w.authors, authorRow{change: id, author: owner, kind: kind, first: 1})
 	if e.Change.Body != "" {
@@ -699,8 +711,9 @@ const (
 	qualifiedChangeColumns = `c.id, c.repo_id, c.number, c.title, c.body_bytes, c.state, c.source_ref,
 		c.target_ref, c.head_oid, c.revision, c.owner, c.owner_kind, c.owner_operator_id, c.work_backend,
 		c.work_id, c.work_key, c.work_project, c.created_turn, c.created_run, c.opened_at, c.opened_position,
-		c.closed_at, c.close_reason, c.merged_at, c.merged_via, c.merge_oid, c.merged_by, c.merged_by_kind,
-		c.merged_operator_id, c.override_reason, c.version, c.position, c.updated_at`
+		c.closed_at, c.close_reason, c.closed_by, c.closed_by_kind, c.merged_at, c.merged_via, c.merge_oid,
+		c.merged_by, c.merged_by_kind, c.merged_operator_id, c.override_reason, c.version, c.position,
+		c.updated_at, c.reverts`
 	liveBySourceSQL = `SELECT ` + qualifiedChangeColumns + ` FROM json_each(?2) AS j
 		CROSS JOIN code_changes AS c INDEXED BY code_changes_open_idx
 		WHERE c.repo_id = ?1 AND c.source_ref = CAST(j.value AS TEXT) AND ` + liveChanges

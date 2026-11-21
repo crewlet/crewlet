@@ -12,36 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// withoutAmbientEnvironment is the options that undo everything openai-go's
-// NewClient reads from the process environment, for a client that must send
-// only what the company configured.
+// withoutAmbientEnvironment undoes what openai-go's NewClient reads from the
+// process environment (seven variables, DefaultClientOptions; the SDK's own
+// switch is internal), so the client sends only what the company configured:
+// `base_url` may name a gateway that must not see a credential exported for
+// something else. OPENAI_API_KEY and OPENAI_BASE_URL are overridden by [New];
+// ADMIN_KEY and WEBHOOK_SECRET are cleared so the client does not HOLD them;
+// ORG_ID and PROJECT_ID are headers on every request; CUSTOM_HEADERS lines are
+// deleted by name, parsed as the SDK parses them.
 //
-// THE SDK READS SEVEN VARIABLES AT CONSTRUCTION (DefaultClientOptions) and
-// exposes no public way to stop it — the switch it has,
-// requestconfig.WithEnvironmentDefaultsDisabled, is internal and reached only
-// through its Azure and Bedrock options. Every one of them is a leak here,
-// because this client points at whatever `base_url` an embedder names — a
-// gateway, a self-hosted server — and none of those should see a credential
-// the operator happened to export for something else:
-//
-//   - OPENAI_API_KEY and OPENAI_BASE_URL: overridden by [New], which always
-//     sets its own key (an empty one included) and base URL;
-//   - OPENAI_ADMIN_KEY: the organization's admin credential. The embeddings
-//     endpoint declares bearer-only security, so today it is never SENT from
-//     here — it is cleared so the client does not HOLD it, and a call this
-//     package adds later cannot be the one that sends it;
-//   - OPENAI_ORG_ID and OPENAI_PROJECT_ID: the OpenAI-Organization and
-//     OpenAI-Project headers, on every request to every endpoint;
-//   - OPENAI_CUSTOM_HEADERS: arbitrary `Name: value` lines, each a header on
-//     every request — deleted by name, parsed exactly as the SDK parses them;
-//   - OPENAI_WEBHOOK_SECRET: read only by webhook verification, which nothing
-//     here calls, and cleared anyway so the client holds nothing it was not
-//     given.
-//
-// These are applied BEFORE the caller's own options, because deleting a
-// custom `Authorization` header marks the request as carrying an explicit
-// one, and it is the caller's WithAPIKey after it that hands authorization
-// back to the configured key.
+// Applied BEFORE the caller's options: deleting a custom `Authorization` header
+// marks the request as carrying an explicit one, and the caller's WithAPIKey
+// after it hands authorization back to the configured key.
 func withoutAmbientEnvironment() []option.RequestOption {
 	opts := []option.RequestOption{
 		option.WithAdminAPIKey(""),
@@ -61,31 +43,18 @@ func withoutAmbientEnvironment() []option.RequestOption {
 	return opts
 }
 
-// detail is what an OpenAI-compatible endpoint SAID about failing a request —
-// its own message, and the type, code and param it filed the failure under —
-// as one redacted, bounded line, or "" where it said nothing.
+// detail is what an OpenAI-compatible endpoint SAID about failing a request
+// (its message, and the type, code and param it filed it under) as one
+// redacted, bounded line, or "" where it said nothing.
 //
-// # Why the SDK's own error is not enough
-//
-// openai-go's API error answers Error(), String(), Format and LogValue with the
-// status alone ("OpenAI API error: 400 Bad Request"). That is deliberate
-// upstream: the request URL and the provider's fields "may contain secrets",
-// so the summary carries neither. But an error formatted with %v then says
-// THAT an endpoint refused and never WHY, and the why is what an operator acts
-// on: a context length the endpoint enforces, a `dimensions` the model does not
-// take, a model the gateway does not serve and a key it rejects all read as
-// the same 400 or 404. The fields are still on the error; this reads them.
-//
-// # What is shown, and what never is
-//
-// The STRUCTURED fields first, since they are the endpoint's own account. An
-// endpoint that does not answer in OpenAI's error envelope — a gateway, a
-// self-hosted server — leaves them empty, and its body is then read for what
-// it can honestly yield, from the copy the SDK puts back on the response. The
-// request URL is never shown, and neither is anything the SDK's dumps would
-// add: upstream removed them for a reason this reading keeps. Either way the
-// text is redacted whole before it is bounded ([shown]), because upstream's
-// warning is true — an endpoint that rejects a key can echo it.
+// The SDK's API error prints the status alone, deliberately (the URL and
+// fields "may contain secrets"), so %v says THAT an endpoint refused, never WHY:
+// a context length, a `dimensions` the model does not take, an unserved model
+// and a rejected key all read as the same 400 or 404. The fields are still on
+// the error; this reads the STRUCTURED ones first, then, for an endpoint outside
+// OpenAI's envelope, the body copy the SDK puts back. The URL is never shown.
+// The text is redacted whole before it is bounded ([shown]): an endpoint that
+// rejects a key can echo it.
 func detail(apiErr *sdk.Error) string {
 	if apiErr == nil {
 		return ""

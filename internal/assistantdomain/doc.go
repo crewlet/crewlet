@@ -41,25 +41,25 @@
 //
 // The estate is not encrypted at rest, so every message, card, preview and
 // parked turn is sealed under the fleet keyring (internal/secrets' AES-256-GCM)
-// with associated data naming the conversation and the record, as the
-// identity estate seals a person's name; the applier never opens a value, so
-// every node writes identical rows. What is stored is what the person saw,
-// never a raw tool result (outside the bounded parked turn), a grant, a
-// request header or a rendered prompt. A conversation untouched for its
-// retention (thirty days by default) is purged through its own purge record by
-// the trash reaper, decided again at the apply against activity the
-// conversation's arbitration cannot see; a purge installs a gate so nothing
-// later recreates it; and a person's erasure is ONE record that takes every
-// conversation they own, published by the engine when the identity applier
-// reports the removal and by the reaper's next pass as the backstop
+// with associated data naming the conversation, the record and the column
+// ([AAD]), as the identity estate seals a person's name; the applier never
+// opens a value, so every node writes identical rows. What is stored is what
+// the person saw, never a raw tool result (outside the bounded parked turn), a
+// grant, a request header or a rendered prompt. A conversation untouched for
+// its retention (thirty days by default) is purged through its own purge record
+// by the trash reaper (a trashreap.Termed source internal/engine registers),
+// decided again at the apply against activity the conversation's arbitration
+// cannot see, and the person's Clear purges at once; a purge installs a gate so
+// nothing later recreates it; and a person's erasure is ONE record that takes
+// every conversation they own, published by the engine when the identity
+// applier reports the removal and by the reaper's next pass as the backstop
 // ([Writer.EraseOwner]).
 //
 // # Files
 //
-// The images a person attaches and the files a deep-work run delivers are
-// kept beside the conversation ([FileStore]): each file's bytes are sealed
-// under the same keyring, with associated data naming the conversation and the
-// file, and uploaded as one object of the fleet's object store BEFORE the
+// The images a person attaches are kept beside the conversation
+// ([FileStore]): each file's bytes are sealed under the same keyring, with
+// associated data naming the conversation and the file, and uploaded as one object of the fleet's object store BEFORE the
 // record naming it is published on the conversation's subject (an attachment
 // exists before the turn it is sent with); the row is declared in
 // internal/objstore/references, so the collector deletes the object once a

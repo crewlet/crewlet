@@ -12,25 +12,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A RECORD TOO LARGE IS REFUSED ONCE, AS TOO LARGE — on a real broker.
+// A RECORD TOO LARGE IS REFUSED ONCE, AS TOO LARGE, on a real broker: never read
+// as no answer, retried and reported as a conflict.
 //
-// The client's refusal is a plain error rather than the broker's, and it was
-// read as no answer: the write asked the log what landed, found nothing,
-// retook its snapshot, decided the same record and was refused again —
-// sixteen times — and then told its caller a colleague kept editing the
-// object.
-//
-// TWO PATHS TO ONE ANSWER. A record past its domain's declared largest is
-// refused by the publisher before it is sent, on a log that keeps a gate
-// reserve or none; one inside the declaration that the SERVER still cannot
-// carry is refused by the client, and that refusal is what has to be read as
-// too large. No declaration reaches past the transport's contract any more
-// ([statelog.MaxTransportRecordBytes]) and a server announcing less than that
-// is refused when the queue opens, so the second path is a server that
-// CHANGED under a running node — a reconnect to a cluster member configured
-// apart from the one it booted against, or a server restarted with a smaller
-// max_payload. The case stages the second: it opens on an operator's server
-// that carries the contract and restarts it under the log with less.
+// Two paths: a record past its domain's declared largest is refused by the
+// publisher before it is sent, with a gate reserve or without; one inside the
+// declaration that the SERVER cannot carry is refused by the client. No
+// declaration passes [statelog.MaxTransportRecordBytes] and a smaller server is
+// refused when the queue opens, so the second path is a server that CHANGED
+// under a running node (a reconnect to a member configured apart, a restart with
+// a smaller max_payload); the case restarts the server under the log with less.
 func TestAnOversizedRecordIsRefusedOnceAsTooLarge(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -84,15 +75,11 @@ func (unreservedDomain) Stream() statelog.StreamSpec {
 	return spec
 }
 
-// NO DECLARATION ADMITS A RECORD THE TRANSPORT CANNOT CARRY.
-//
-// The transport's limit is on the signed MESSAGE, and a declaration is on the
-// payload a decide forms, so a log declared at the transport's own number
-// passed the publisher's refusal with a record the broker then refused past
-// its max_payload — naming a server setting on the broker the engine
-// configures itself, where the declaration was supposed to be the one refusal
-// a record meets before it is sent. The spec is refused instead, and the
-// largest the transport carries is what a log that wants it all declares.
+// NO DECLARATION ADMITS A RECORD THE TRANSPORT CANNOT CARRY. The transport's
+// limit is on the signed MESSAGE and a declaration on the payload, so a log
+// declared at the transport's own number passes the publisher's refusal and is
+// refused by the broker instead; the spec is refused, and a log wanting all the
+// transport carries declares [statelog.MaxTransportRecordBytes].
 //
 // Mutation: hold the declaration to [queue.MaxPayloadBytes] again and the
 // transport's own number validates.
@@ -122,11 +109,9 @@ func TestADeclarationPastWhatTheTransportCarriesIsRefused(t *testing.T) {
 	}
 }
 
-// A BROKER REFUSAL THAT IS NOT A FULL LOG IS NOT REPORTED AS ONE.
-//
-// Every API error the framework had no case for came back `log_full`, with a
-// remedy to raise the stream's byte ceiling. A stream that is not there has
-// room to spare; the refusal now carries the broker's own error.
+// A BROKER REFUSAL THAT IS NOT A FULL LOG IS NOT REPORTED AS ONE: `log_full`
+// sends an operator to raise the byte ceiling, and a missing stream has room to
+// spare. The refusal carries the broker's own error.
 func TestABrokerRefusalThatIsNotAFullLogIsNotReportedAsOne(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

@@ -77,16 +77,10 @@ import (
 var log = logging.Get("queue.memory")
 
 // ErrNotStarted is returned on a queue that has not been started, or has been
-// stopped, by EVERY publish, subscription and attachment verb — not just the
-// ones a caller thinks of as needing a connection. The contract requires one
-// answer for all of them (see queue.EventQueue.Start), and this backend's
-// answer is "Start is what makes the client live".
-//
-// It used to be only Publish, Subscribe and SubscribeBatch, while
-// EnsureSubscription created durable state, DeleteSubscription destroyed it
-// and PauseTopic took a hold — on a client whose Stop had already dropped
-// every consumer. That hold survived into the next life and left a restarted
-// queue reporting itself running and silently deaf.
+// stopped, by EVERY publish, subscription and attachment verb, not just the
+// ones needing a connection: the contract requires one answer for all of them
+// (see queue.EventQueue.Start). A hold taken on a stopped client would survive
+// into the next life and leave a restarted queue running and silently deaf.
 //
 // A sentinel because callers branch on it: a boot-ordering mistake looks
 // exactly like a transport failure otherwise.
@@ -105,46 +99,25 @@ var ErrNilHandler = errors.New("memory: handler is nil")
 
 const (
 	// defaultMaxRedeliveries matches the JetStream backend's budget in TOTAL
-	// ATTEMPTS, which is the only comparison that means anything here: this
-	// constant counts redeliveries AFTER the first delivery, while NATS
-	// MaxDeliver counts total deliveries. So 24 here and 25 there are the
-	// same budget, and writing 25 in both places would be the same numeral
-	// denoting a different quantity.
+	// ATTEMPTS: this constant counts redeliveries AFTER the first delivery,
+	// while NATS MaxDeliver counts total deliveries, so 24 here and 25 there
+	// are the same budget (writing 25 in both would denote different
+	// quantities; see WithDeliveryAttempts, which names the convention).
 	//
-	// That is worth the paragraph because the repo has already been bitten
-	// by it once: the suite's capability was renamed WithRedeliveryBudget
-	// -> WithDeliveryAttempts precisely because "budget" never said which
-	// convention it counted, and a backend then wrote MaxDeliver: budget+1
-	// to satisfy the missing half.
-	//
-	// JetStream is the twin to track because it is the only broker this
-	// engine ships. It budgets 25 rather than the 10 a free-handoff broker
-	// needs because its deferral returns via Nak and spends an attempt, and
-	// this twin's deferral now spends one for the same reason — so the two
-	// budgets have to match in the quantity they denote as well as in what
-	// they are spent on. Where the twin's default disagrees with the real
-	// backend, every test written against the twin is calibrated to a broker
-	// nobody runs. See internal/queue/jetstream/stream.go maxDeliver; if it
-	// moves, this moves with it.
+	// JetStream is the twin to track as the only broker this engine ships. It
+	// budgets 25 rather than the 10 a free-handoff broker needs because its
+	// deferral spends an attempt, as this twin's does. A default that
+	// disagrees calibrates every test to a broker nobody runs. See
+	// internal/queue/jetstream/stream.go maxDeliver; if it moves, this moves.
 	defaultMaxRedeliveries = 24
 
-	// defaultMaxHistory bounds the published-event log this backend keeps
-	// for tests and diagnostics. It is not a mailbox — retention that
-	// matters lives in the subscriptions.
-	//
-	// It is a CEILING against unbounded growth, not a capacity anyone
-	// should tune to, and the two are worth telling apart because the
-	// number looks like a sizing decision and is not one. Measured: the
-	// high-water mark of any one broker's history across a full conformance
-	// run is 5 events, so this is not sized to test traffic at all — a
-	// backlog of 5 and a ceiling of 10000 are answers to different
-	// questions, and the ceiling exists for a broker that outlives a test
-	// binary.
-	//
-	// What it actually costs is the reason to keep it finite: entries are
-	// live pointers, so the buffer pins whole events against GC for as long
-	// as the broker lives. That is the trade to reason about if anyone
-	// moves it — not how many events a test publishes.
+	// defaultMaxHistory bounds the published-event log kept for tests and
+	// diagnostics (not a mailbox: retention that matters lives in the
+	// subscriptions). It is a CEILING against unbounded growth, not a
+	// capacity to tune to: a full conformance run peaks at 5 events per
+	// broker, and the ceiling exists for a broker that outlives a test
+	// binary. Its cost is the reason to keep it finite: entries are live
+	// pointers, pinning whole events against GC for the broker's life.
 	defaultMaxHistory = 10000
 )
 
@@ -157,22 +130,14 @@ type subKey struct{ topic, group string }
 // Broker is the state a fleet SHARES: subscriptions, the mail in them, the
 // broadcast streams, and dead letters.
 //
-// Every field is guarded by mu, including the per-client state hanging off the
-// Queues built from this broker. One lock rather than a lock per structure
-// because a delivery reads and writes both halves in one step, and two locks
-// would need an ordering rule that a future reader is guaranteed to get wrong.
+// Every field is guarded by mu, including the per-client state of the Queues
+// built from this broker. One lock, not one per structure: a delivery touches
+// both halves in one step, and two locks would need an ordering rule.
 //
-// Two things are NEVER done while holding it, and both are the same mistake:
-//
-//   - running a handler (see dispatch.go), and
-//   - writing a log line.
-//
-// A log call is a write to a handler this package does not control — it can
-// block on a full pipe, a slow file, or a contended CI stderr — and this one
-// mutex guards every subscription and every peer. Holding it across that write
-// stops the whole company for as long as the write takes, and a goroutine
-// parked in the middle of a drain is what it looks like from the outside.
-// Gather what a line needs, unlock, then log.
+// NEVER, while holding it: run a handler (see dispatch.go) or write a log line.
+// A log write goes to a handler this package does not control and can block,
+// stalling every subscription and peer. Gather what a line needs, unlock, then
+// log (TestNoLogCallHoldsTheBrokerLock).
 type Broker struct {
 	mu        sync.Mutex
 	subs      map[subKey]*subscription
@@ -246,6 +211,7 @@ func (b *Broker) Client(opts ...Option) *Queue {
 		broker:          b,
 		maxRedeliveries: defaultMaxRedeliveries,
 		pauses:          map[subKey]map[string]struct{}{},
+		current:         map[subKey]queue.Attachment{},
 		quiescing:       map[subKey]struct{}{},
 	}
 	// Options are applied under the broker lock because one of them
@@ -261,26 +227,18 @@ func (b *Broker) Client(opts ...Option) *Queue {
 	return q
 }
 
-// Fail takes the broker away from under every client of it, for the rest of
-// its life — the twin of a broker that stopped, or of a partition between it
-// and everybody.
+// Fail takes the broker away from under every client, for the rest of its
+// life: the twin of a broker that stopped or a total partition.
 //
-// From then on every verb that has to REACH the broker answers [ErrBrokerDown]
-// on every client: Publish, Subscribe, SubscribeBatch, EnsureSubscription,
-// DeleteSubscription, ListSubscriptions, SubscribeStream, Serve, Ask, Broadcast,
-// Listen and the three dead-letter verbs. The verbs about a client's OWN
-// attachments (Quiesce, Unquiesce, Detach, PauseTopic, ResumeTopic) still
-// answer, because on the broker this twin stands for they are the client's own
-// state and touch no server, and a node
-// that cannot prove it owns a seat quiesces it on exactly the outage this
-// models. Nothing is delivered, and no client is stopped by it: a queue whose
-// broker went away is still live, which is the difference between
-// [queue.ErrUnavailable] and [queue.ErrNotLive].
+// From then on every verb that has to REACH the broker (publish, subscribe,
+// ensure, delete, list, stream, serve, ask, broadcast, listen, dead-letter)
+// answers [ErrBrokerDown]. A client's OWN attachment verbs (Quiesce, Detach,
+// PauseTopic and the like) still answer: they touch no server, and a node
+// unsure it owns a seat quiesces it on exactly this outage. No client is
+// stopped: the queue is still live ([queue.ErrUnavailable], not ErrNotLive).
 //
-// ONE-WAY, because what it exists for is certifying that a caller is TOLD,
-// against a capability the real backend's harness can honour only by stopping
-// the broker's server — so a twin able to bring a broker back would model a
-// recovery no case can hold against the backend that ships.
+// ONE-WAY: the real backend's harness can honour "a caller is TOLD" only by
+// stopping its server, so a twin that recovered would model what no case holds.
 func (b *Broker) Fail() {
 	b.mu.Lock()
 	b.down = true
@@ -375,25 +333,17 @@ type consumer struct {
 	// processes would.
 	window *lingerWindow
 
-	// detached records that this consumer has been dropped, and exists
-	// because REMOVING IT FROM THE SUBSCRIPTION IS NOT ENOUGH.
+	// detached records that this consumer has been dropped, because REMOVING
+	// IT FROM THE SUBSCRIPTION IS NOT ENOUGH. Every other gate is read off the
+	// subscription or client, which [Broker.drainPass] re-derives each round;
+	// a detach is a member LEAVING sub.members, which a loop already holding
+	// the *consumer never sees again, and [Broker.deliverBatch] holds one
+	// across a partition walk spanning many handler calls. Without the flag a
+	// mid-drain detach would go on invoking and ACKING partitions 2..N on a
+	// seat already released (internal/node detaches on a lost lease). The
+	// jetstream attachment has a flag of the same name, read by blocked().
 	//
-	// Every other gate a delivery passes is read off the subscription or
-	// the client, so [Broker.drainPass] re-deriving the deliverable members
-	// each time round answers them. A detach is the one that is read off
-	// neither: it is a member LEAVING sub.members, which a loop already
-	// holding the *consumer never looks at again — and [Broker.deliverBatch]
-	// is exactly such a loop, holding one across a partition walk that can
-	// span many handler calls. So a detach landing mid-drain stopped
-	// nothing: the twin went on invoking, and ACKING, partitions 2..N on a
-	// consumer this node had already released, which is precisely the work
-	// the fenced release exists to abandon (internal/node detaches when a
-	// seat's lease is lost). The jetstream backend answers it with a flag
-	// of the same name on its own attachment, read by blocked() beside the
-	// other three.
-	//
-	// Never cleared: attaching again mints a NEW consumer, so there is no
-	// state from a previous life for a re-attach to inherit.
+	// Never cleared: attaching again mints a NEW consumer.
 	detached bool
 }
 
@@ -463,9 +413,15 @@ type Queue struct {
 	// state: every gate here describes THIS process's consumer, and a
 	// subscription-level answer would let one node's pause hold, or one
 	// node's shutdown, stop a peer from serving the seat it owns.
-	running   bool
-	paused    bool
-	pauses    map[subKey]map[string]struct{}
+	running bool
+	paused  bool
+	pauses  map[subKey]map[string]struct{}
+	// current is each pair's current attachment and minted the last one
+	// this client minted: see [Queue.Attachment]. minted is never reset,
+	// a restart included, so no two attachments of this client share a
+	// value.
+	current   map[subKey]queue.Attachment
+	minted    queue.Attachment
 	quiescing map[subKey]struct{}
 	listeners []queue.PublishListener
 
@@ -524,20 +480,13 @@ func (q *Queue) Start(context.Context) error {
 		return nil
 	}
 	q.running, q.paused = true, false
-	// Clear the process-local gates here as well as in Stop.
-	//
-	// Stop clears them because "a hold that outlived a stop left a reused
-	// queue silently deaf" — but clearing on only one side leaves the window
-	// between the two open, and a hold taken there survives into the next
-	// life. Measured: Stop, PauseTopic, Start, Subscribe, Publish delivers
-	// nothing, with a hold on a queue that reports itself running. That is
-	// the same incident reached from the other side, and it is reachable by
-	// any hold racing a drain, the no-turn-engine park's among them.
-	//
-	// The invariant is about the START of a life, not the end of one: a
-	// queue that has been started serves, and is never silently gated by
-	// state from a previous one.
+	// Clear the process-local gates here as well as in Stop: a hold taken
+	// between a Stop and a Start (PauseTopic then Start) would survive into
+	// the next life and leave a queue that reports itself running delivering
+	// nothing. The invariant is about the START of a life: a started queue is
+	// never silently gated by state from a previous one.
 	clear(q.pauses)
+	clear(q.current)
 	clear(q.quiescing)
 	q.broker.mu.Unlock()
 
@@ -561,6 +510,7 @@ func (q *Queue) Stop(ctx context.Context) error {
 		q.dropMembersLocked(sub)
 	}
 	clear(q.pauses)
+	clear(q.current)
 	clear(q.quiescing)
 	q.broker.streams = slices.DeleteFunc(q.broker.streams, func(s *streamSub) bool {
 		return s.owner == q
@@ -618,17 +568,14 @@ func (q *Queue) dropMembersLocked(sub *subscription) int {
 // Publish records the event, hands it to every subscription on the topic, and
 // drains what it can reach before returning.
 //
-// The event is durable — in every mailbox that will hold it — before the
-// best-effort fan-outs run, so a listener or a stream subscriber can never
-// observe a publish that a subscriber will not.
+// The event is durable in every mailbox that will hold it before the
+// best-effort fan-outs run, so a listener or stream subscriber never observes
+// a publish that a subscriber will not.
 //
 // Everything retained or delivered is DECODED FROM THE WIRE, never the
-// publisher's own pointer. That is the single most load-bearing thing about
-// this twin: a broker is a serialization boundary, and a twin that skips it
-// certifies bugs rather than catching them. Three concrete ones it would hide
-// — a payload keeping a Go type it loses in transit (a value payload arrives
-// as a pointer), a JSON number arriving as an int rather than a float64, and
-// one group's handler mutating what another group is about to receive.
+// publisher's own pointer: a broker is a serialization boundary, and skipping
+// it would hide a payload keeping a Go type it loses in transit, a JSON number
+// arriving as an int, and one group's handler mutating another's copy.
 func (q *Queue) Publish(ctx context.Context, topic string, ev *events.Event) error {
 	if ev == nil {
 		return errors.New("memory: nil event")
@@ -922,9 +869,11 @@ func (q *Queue) Detach(_ context.Context, topic, group string) (bool, error) {
 	}
 	// Holds and the quiesce flag describe THIS attachment, so they are
 	// released with it — unconditionally, before the attachment is even
-	// looked up. One that outlived a detach would leave a node that
-	// re-attached later silently deaf.
+	// looked up. And the attachment ENDS, so a hold asked for it after
+	// this is refused. One that outlived a detach, or was taken for it
+	// after one, would leave a node that re-attached later silently deaf.
 	delete(q.pauses, key)
+	delete(q.current, key)
 	delete(q.quiescing, key)
 
 	sub, ok := q.broker.subs[key]
@@ -974,16 +923,14 @@ func (q *Queue) EnsureSubscription(_ context.Context, topic, group string) (bool
 // ConsumerProposals reports how many durable subscriptions THIS client has
 // asked the broker to create since it was minted.
 //
-// The twin's answer to the number the JetStream backend reports under the same
-// name, and the reason the conformance suite can certify "ensuring a mailbox
-// that exists proposes nothing" on both backends rather than on the one where
-// it is expensive. Here a create costs a map insert rather than a replicated
-// write, so the number is not about cost — it is about whether the second
-// ensure REACHED the create at all, which is the same question on both.
+// The twin's answer to the JetStream backend's number of the same name, so the
+// conformance suite certifies "ensuring a mailbox that exists proposes nothing"
+// on both. Here a create is a map insert, so the number is not about cost but
+// whether the second ensure REACHED the create at all.
 //
-// DIAGNOSTIC, and deliberately not on [queue.EventQueue]: see the JetStream
-// backend's method for why a consensus-layer observable does not belong in a
-// contract two backends share.
+// DIAGNOSTIC, deliberately not on [queue.EventQueue]: see the JetStream
+// backend's method for why a consensus-layer observable stays out of the
+// contract.
 func (q *Queue) ConsumerProposals() int { return int(q.subscriptionCreates.Load()) }
 
 // DeleteSubscription destroys the subscription and its retained mail.
@@ -1126,32 +1073,15 @@ func (q *Queue) SubscribeStream(_ context.Context, pattern string, h queue.Strea
 // decodeWire returns one consumer's own event, decoded from the bytes the
 // publish serialised.
 //
-// The caller has already decoded those same bytes once — that is how it holds
-// `received` — so a failure here is unreachable.
-//
-// That reason is stated because "unreachable" without one is the label that
-// tells the next auditor to stop looking, and it is itself a claim about our
-// own code — the population nobody audits. The coordination twin has a branch
-// that read identically and was NOT unreachable: it decodes bytes it had only
-// ENCODED, and json.Number("1e1000") marshals fine and then fails to unmarshal
-// into float64. Ours differs in exactly the way that matters, and it was
-// probed rather than argued: json.Number("1e1000"), a malformed number,
-// invalid UTF-8 and a 1MB string were each pushed through this path, and every
-// one either failed at ENCODE — so Publish refuses and nothing reaches here —
-// or decoded identically on both passes.
-//
-// One mechanism could still have made two decodes of one input disagree, and
-// it is worth naming because the byte-identity argument does not cover it:
-// Event.UnmarshalJSON is not a pure function of its input, since it consults a
-// global type registry to decode the typed body. It cannot open a failure here
-// regardless — the registry-dependent branch swallows its own error and falls
-// through to the envelope representation rather than returning one — so the
-// only error paths left are the two envelope decodes, which are byte-pure.
-//
-// Falling back to a clone keeps mail flowing rather than dropping a delivery
-// if it ever stops being unreachable; it is a worse copy (it shares the
-// payload pointer), not no copy. Nothing is logged because this runs under the
-// broker lock.
+// The caller already decoded those bytes once (that is how it holds
+// `received`), so a failure here is unreachable. Unlike the coordination
+// twin's decode of bytes it only ENCODED (json.Number("1e1000") marshals, then
+// fails into float64), a bad number, invalid UTF-8 or a huge string fails at
+// ENCODE, so Publish refuses, or decodes identically. Event.UnmarshalJSON
+// consults a global type registry, but swallows its own error and falls
+// through to the byte-pure envelope decodes. The clone fallback keeps mail
+// flowing if that changes (it shares the payload pointer). Nothing is logged:
+// this runs under the broker lock.
 func decodeWire(wire []byte, received *events.Event) *events.Event {
 	var out events.Event
 	if err := json.Unmarshal(wire, &out); err != nil {
@@ -1204,32 +1134,45 @@ func (q *Queue) PauseDelivery(context.Context) error {
 	return nil
 }
 
-// PauseTopic takes one reason's hold on this client's attachment.
+// Attachment answers the pair's current attachment on this client, minting
+// it on the first read since the pair's last Detach (or this client's last
+// start).
+func (q *Queue) Attachment(_ context.Context, topic, group string) (queue.Attachment, error) {
+	key := subKey{topic, group}
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	if q.notStartedLocked() {
+		return 0, ErrNotStarted
+	}
+	at, ok := q.current[key]
+	if !ok {
+		q.minted++
+		at = q.minted
+		q.current[key] = at
+	}
+	return at, nil
+}
+
+// PauseTopic takes one reason's hold on attachment at, if it is still current.
 //
-// It does NOT create the subscription, and used to. A hold is process-local
-// state about one attachment; on a real broker it gates local dispatch and
-// creates nothing remote, so a twin that minted a subscription here was
-// modelling something no backend does — and being kinder than the broker is
-// this file's cardinal sin, because the twin certifies what it models.
-//
-// It also had a consequence with real blast radius. DeleteSubscription exists
-// so a decommissioned role's inbox cannot accumulate undeliverable events for
-// ever; measured, a stray PauseTopic afterwards (any hold racing the
-// decommission) RESURRECTED the subscription, which then
-// retained every event published to that topic for a role that no longer
-// existed. Exactly the accumulation the verb exists to prevent.
-//
-// The old reason (a gate taken before anything attaches should still retain the
-// mail it gates) was answering a question the contract already answers the
-// other way: publishing to a topic with no subscription drops the event, and
-// EnsureSubscription is how a caller asks for retention.
-func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error {
+// It does NOT create the subscription. A hold is process-local state about one
+// attachment and creates nothing remote on a real broker; a twin kinder than
+// the broker certifies what no backend does. A stray hold racing a
+// DeleteSubscription would also RESURRECT it, retaining every event for a
+// decommissioned role. Retention before attachment is EnsureSubscription's
+// job: publishing to a topic with no subscription drops the event.
+func (q *Queue) PauseTopic(_ context.Context, topic, group string, at queue.Attachment, reason string) error {
 	key := subKey{topic, group}
 	reason = normalizeReason(reason)
 	q.broker.mu.Lock()
 	if q.notStartedLocked() {
 		q.broker.mu.Unlock()
 		return ErrNotStarted
+	}
+	if cur, ok := q.current[key]; !ok || cur != at {
+		q.broker.mu.Unlock()
+		return fmt.Errorf("memory: hold %q on %s/%s for attachment %d: %w",
+			reason, topic, group, at, queue.ErrAttachmentGone)
 	}
 	held, ok := q.pauses[key]
 	if !ok {
@@ -1243,18 +1186,24 @@ func (q *Queue) PauseTopic(_ context.Context, topic, group, reason string) error
 	return nil
 }
 
-// ResumeTopic releases one reason's hold, flushing when none remain.
+// ResumeTopic releases one reason's hold on the attachment at names, flushing
+// when none remain. Under an attachment that has ended it lifts nothing: the
+// Detach that ended it dropped every hold it carried.
 //
 // A topic stays paused while ANY reason holds it. With one flat hold, a
 // second subsystem gating the same inbox would un-gate the first by lifting
 // its own hold, on a completely ordinary code path.
-func (q *Queue) ResumeTopic(ctx context.Context, topic, group, reason string) error {
+func (q *Queue) ResumeTopic(ctx context.Context, topic, group string, at queue.Attachment, reason string) error {
 	key := subKey{topic, group}
 	reason = normalizeReason(reason)
 	q.broker.mu.Lock()
 	if q.notStartedLocked() {
 		q.broker.mu.Unlock()
 		return ErrNotStarted
+	}
+	if cur, ok := q.current[key]; !ok || cur != at {
+		q.broker.mu.Unlock()
+		return nil
 	}
 	held := q.pauses[key]
 	if len(held) == 0 {
@@ -1314,24 +1263,51 @@ func (q *Queue) WaitForHandlers(ctx context.Context, timeout time.Duration) (int
 func (q *Queue) enterHandlerLocked() { q.inFlight.Begin() }
 func (q *Queue) exitHandlerLocked()  { q.inFlight.End() }
 
+// Backlog reads the mail a subscription holds without consuming it
+// ([queue.EventQueue.Backlog]): its mailbox, a laned topic's marked events
+// first as the broker's lane holds them ([Queue.Waiting]), at most limit. Mail
+// a drain took and has not dispatched is not in the mailbox, and not read.
+func (q *Queue) Backlog(_ context.Context, topic, group string, limit int) ([]*events.Event, error) {
+	if err := queue.CheckBacklogLimit(limit); err != nil {
+		return nil, err
+	}
+	q.broker.mu.Lock()
+	defer q.broker.mu.Unlock()
+	if q.notStartedLocked() {
+		return nil, ErrNotStarted
+	}
+	if q.broker.down {
+		return nil, ErrBrokerDown
+	}
+	sub, ok := q.broker.subs[subKey{topic, group}]
+	if !ok {
+		return nil, nil
+	}
+	out := slices.Clone(sub.mail)
+	if queue.HasLane(topic) {
+		slices.SortStableFunc(out, func(a, b *events.Event) int {
+			return cmp.Compare(laneRank(a), laneRank(b))
+		})
+	}
+	return out[:min(len(out), limit)], nil
+}
+
+// laneRank orders a laned topic's mail as its two mailboxes hold it: the
+// lane's first.
+func laneRank(ev *events.Event) int {
+	if queue.Prioritized(ev) {
+		return 0
+	}
+	return 1
+}
+
 // --- inspection -----------------------------------------------------------
 //
 // These answer questions the EventQueue contract deliberately does not, and
 // that the properties seat ownership rests on cannot be asserted without:
-// what mail is a subscription holding, which subsystem is gating a seat, which
+// which subsystem is gating a seat, which
 // seats is this node serving. They are exported so that a test never has to
 // read the backend's own registry to ask an operationally central question.
-
-// Backlog reports the events a subscription retains and has not delivered.
-func (q *Queue) Backlog(topic, group string) []*events.Event {
-	q.broker.mu.Lock()
-	defer q.broker.mu.Unlock()
-	sub, ok := q.broker.subs[subKey{topic, group}]
-	if !ok {
-		return nil
-	}
-	return slices.Clone(sub.mail)
-}
 
 // Waiting reports what a subscription holds that no handler is running on
 // ([queue.EventQueue.Waiting]): its mailbox, and what a drain took and has not
@@ -1482,22 +1458,17 @@ func (q *Queue) InWindow(topic, group string) int {
 	return 0
 }
 
-// Idle returns a channel that is closed while nothing on this broker can hand
-// a subscription's handler a delivery: no drain is running and no linger
-// window is open, on any client of it.
+// Idle returns a channel closed while nothing on this broker can hand a
+// handler a delivery: no drain running, no linger window open, on any client.
+// Reported so a conformance case asserting nothing more was delivered reads its
+// journal once nothing could deliver, not after elapsed time. Dispatch is
+// inline, so a handler runs only inside a drain, which starts only from a verb
+// or a linger window's flush: once the verbs return, the windows are what is
+// left, counted until closed undelivered or the flush's drain has returned.
+// Broker-wide, because one client's drain runs every member's handler.
 //
-// Reported so the conformance suite can see it. A case asserting that nothing
-// more was delivered reads its journal once the backend has nothing left that
-// could deliver, rather than after a window of elapsed time. Dispatch here is
-// inline, so a handler runs only inside a drain, and a drain starts only from a
-// verb or from a linger window's flush: once the verbs have returned, the
-// windows are what is left, and a window stays counted until it is closed
-// undelivered or the drain its flush starts has returned. A broker-wide answer,
-// because a drain one client's verb starts runs every member's handler.
-//
-// THE CHANNEL OF THE MOMENT IT IS ASKED: one returned while the broker is busy
-// is closed when it next goes idle, and a drain started afterwards is waited
-// for by asking again.
+// THE CHANNEL OF THE MOMENT IT IS ASKED: one returned while busy closes when
+// the broker next goes idle; a drain started afterwards needs asking again.
 func (b *Broker) Idle() <-chan struct{} {
 	b.mu.Lock()
 	defer b.mu.Unlock()

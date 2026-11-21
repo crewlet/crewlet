@@ -128,15 +128,13 @@ func TestEveryIamSubcommandIsDispatchedAndAdvertised(t *testing.T) {
 // exception to.
 //
 // "Every iam command needs it, reads included" was false for `iam token
-// -login`, which signs in as its caller and never reads CREWLET_API_TOKEN — so
-// a person minting their first token was told to export a credential they did
-// not have yet, by the very help whose later paragraph said -login signs them
-// in. The paragraph stating the rule is read out of the help, and the
-// behaviour it describes is held beside it: an ordinary read with no variable
-// set is refused naming it, and `token -login` with no variable set mints.
-// Mutation: drop the exception from the paragraph and the first half fails;
-// make the -login path build its client from the environment first and the
-// last half fails.
+// -login`, which signs in as its caller and never reads CREWLET_API_TOKEN, so a
+// person minting their first token was told to export a credential they did not
+// have yet. The paragraph stating the rule is read out of the help, and the
+// behaviour is held beside it: an ordinary read with no variable set is refused
+// naming it, and `token -login` with none mints. Mutation: drop the exception
+// from the paragraph and the first half fails; build the -login client from the
+// environment first and the last half fails.
 func TestTheIamHelpNamesTheOneCommandThatReadsNoToken(t *testing.T) {
 	var rule string
 	for _, para := range strings.Split(iamHelp(), "\n\n") {
@@ -176,20 +174,16 @@ func TestTheIamHelpNamesTheOneCommandThatReadsNoToken(t *testing.T) {
 }
 
 // AN INVITATION AND A CREATE ARE TOLD WHAT THEY LACK BEFORE ANYTHING IS SENT,
-// naming the flag — before a config file is read, so the operator hears about
-// the flag rather than about a file they were never going to need.
+// naming the flag, before a config file is read, so the operator hears about
+// the flag rather than a file they never needed.
 //
-// A person holds a human seat for as long as they are here, so an invitation
-// and a person's create each name one; a person is found by their address,
-// and their login may be left to the node, which proposes it from that
-// address; a service account has no address to propose from, so its login is
-// required and its seat is not — and nobody is behind it to have meant a
-// default, so what it carries is required too. The node refuses each the same
-// way — this is
-// the sentence an operator who left a flag off needs. The controls are the
-// complete commands, which pass every check here and stop only at the config
-// file nobody wrote. Mutation: drop any one check and its row reaches the
-// config file instead of naming its flag.
+// A person holds a human seat while here, so an invitation and a person's
+// create each name one; a person's login may be left to the node (it proposes
+// one from their address); a service account has no address, so its login is
+// required, its seat is not, and what it carries is, since nobody is behind it
+// to have meant a default. The controls are the complete commands, which stop
+// only at the config file nobody wrote. Mutation: drop any one check and its
+// row reaches the config file instead of naming its flag.
 func TestAnIamNewcomerIsToldWhatItLacksBeforeAnythingIsSent(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -447,15 +441,12 @@ func TestTheCLIStoresEveryAppWithAdmin(t *testing.T) {
 
 // A PERSON LEFT WITHOUT -grants IS GIVEN THE DEFAULT APPS, AND NEVER ADMIN.
 //
-// The node requires `grants` on an invitation and on a create — `[]` is a real
-// answer there, the overview alone — so what a person is given when the
-// command says nothing has to be the command's, and it is the colleague's:
-// every app but the opt-in ones ([iam.DefaultApps]), which is what a teammate
-// needs to be sent work and to read what the company wrote down. Atlas and
-// admin are never a default. A token left without
-// -grants is the opposite case: it sends no field at all, which the node reads
-// as everything the owner holds that the minting session may confer — the
-// default the help states for each.
+// The node requires `grants` on an invitation and a create (`[]` is a real
+// answer, the overview alone), so what a person gets when the command says
+// nothing is the command's: the colleague's default, every app but the opt-in
+// ones ([iam.DefaultApps]). Atlas and admin are never a default. A token left
+// without -grants is the opposite: it sends no field, which the node reads as
+// everything the owner holds that the minting session may confer.
 //
 // Mutation: send no grants on a person's invitation or create and the first
 // two rows fail; send the apps on a mint and the third does.
@@ -520,20 +511,17 @@ func TestAPersonsInviteDefaultsToTheDefaultApps(t *testing.T) {
 	}
 }
 
-// A SERVICE ACCOUNT IS TOLD WHAT IT CARRIES, EVERY TIME — and every -grants is
-// held to the engine's vocabulary — before a config file is read.
+// A SERVICE ACCOUNT IS TOLD WHAT IT CARRIES, EVERY TIME, and every -grants is
+// held to the engine's vocabulary, before a config file is read.
 //
-// A person left without -grants is given every app, but nobody is behind a
-// service account to have meant a default, so its create without -grants is
-// refused naming the flag; `-grants none` is how to decide nothing. A name the
-// engine does not know, `none` beside a permission, and -grants on a command
-// that sends no set are each refused naming what to do — and every refusal
-// lands before the config is read, which this case proves by naming a config
-// file that does not exist.
+// Nobody is behind a service account to have meant a default, so its create
+// without -grants is refused naming the flag; `-grants none` decides nothing.
+// An unknown name, `none` beside a permission, and -grants on a command that
+// sends no set are each refused naming what to do, before the config is read,
+// which this case proves with a config file that does not exist.
 //
 // Mutation: default a service account's grants, accept an unknown name, or
-// ignore -grants on suspend, and a row is answered by the missing config
-// instead.
+// ignore -grants on suspend, and a row is answered by the missing config.
 func TestAMachineCreateNamesItsGrants(t *testing.T) {
 	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "no-such-config.yaml")
@@ -588,18 +576,15 @@ func TestAMachineCreateNamesItsGrants(t *testing.T) {
 
 // THE COMMAND NEVER SPELLS THE PERMISSION LIST BY HAND.
 //
-// The help, the -grants flag's own line and the refusals that tell an
-// operator what to type all list the permissions, and four of them had the
-// list typed out while [iamGrantWords] — written so that list would follow
-// [iam.AllGrants] — was used by two. A typed copy is right on the day it is
-// written and goes on naming three permissions after a fourth exists, which
-// no behavioural case can see while the copy still matches. So this reads
-// every string this package's source builds, a constant concatenation folded
-// into one sentence, and refuses one that names every permission, or every
-// app, as a list.
+// The help, the -grants flag's line and the refusals that tell an operator
+// what to type all list the permissions; a typed copy is right the day it is
+// written and goes on naming three after a fourth exists, which no behavioural
+// case sees while it still matches. So this reads every string this package's
+// source builds, a constant concatenation folded into one sentence, and
+// refuses one that names every permission, or every app, as a list.
 //
 // Mutation: type "admin, worklet and doclet" back into the grant refusal, or
-// "(worklet, doclet)" back into the help, and this fails naming the line.
+// "(worklet, doclet)" into the help, and this fails naming the line.
 func TestTheCLINeverSpellsTheGrantListByHand(t *testing.T) {
 	t.Parallel()
 	// ANY LIST OF THE VOCABULARY'S WORDS, and not only the whole of it: a
@@ -800,20 +785,18 @@ func TestTheTrailPrintsATokensGestureAsOne(t *testing.T) {
 	}
 }
 
-// EVERY KEYED WRITE SAYS WHETHER IT LANDED HERE, read off the answer's outcome
-// — an invitation's issue among them.
+// EVERY KEYED WRITE SAYS WHETHER IT LANDED HERE, read off the answer's outcome,
+// an invitation's issue among them.
 //
-// The printer said "applied at" for every 2xx, so a write the node had made
-// durable and not yet applied — a 202, which a read there does not show yet —
-// was reported as applied. And `invite` printed its link and nothing else, so
-// an issue this node had not applied read exactly like one the next read here
-// shows, though the usage and cli.md say every write prints its outcome. A
-// link is printed on `pending` too: the record is durable, and it opens on
-// every node that has applied it. Every row of [iamKeyedArgs] is asked, so a
-// keyed write that stops saying where it stands is a row that fails.
-// Mutation: print "applied" for every success again and the pending rows read
-// as applied; drop the line from the invitation's printer and its rows fail;
-// print an invitation's link only on applied and its pending row fails.
+// The printer said "applied at" for every 2xx, so a write made durable and not
+// yet applied (a 202) was reported as applied, and `invite` printed its link
+// alone, so an unapplied issue read like an applied one, though the usage and
+// cli.md say every write prints its outcome. A link is printed on `pending` too:
+// the record is durable and it opens on every node that has applied it. Every
+// row of [iamKeyedArgs] is asked. Mutation: print "applied" for every success
+// and the pending rows read as applied; drop the line from the invitation's
+// printer and its rows fail; print a link only on applied and its pending row
+// fails.
 func TestAnIamWriteSaysWhetherItLandedHere(t *testing.T) {
 	t.Parallel()
 	const link = "https://crewlet.example.com/dashboard#/invite/x-1.s3cr3t"
@@ -876,23 +859,18 @@ var iamKeyedArgs = map[string][]string{
 	"cancel-invite":     {"cancel-invite", "inv-1"},
 }
 
-// A 2xx WHOSE OUTCOME THIS BUILD CANNOT READ FAILS, NAMING THE RETRY — on every
-// keyed iam write, as a table and as -json, and before anything of the answer
-// is printed.
+// A 2xx WHOSE OUTCOME THIS BUILD CANNOT READ FAILS, NAMING THE RETRY, on every
+// keyed iam write, as a table and as -json, before anything of the answer is
+// printed.
 //
-// The node answers its own unknown 503; but a node newer than this command may
-// answer, 2xx, an outcome this build cannot read, and the printer printed it
-// as `outcome "x"` and exited zero — so a script read a write nobody here
-// could vouch for as one that landed, and an invitation's link was handed out
-// for an issue nobody could confirm. It fails as every other keyed write's
-// open outcome does, under the operation the command SENT, and prints nothing:
-// no link, and under -json no document a script reads before the exit status.
-// The failure begins with the write it is about — the subcommand and whom it
-// named — because it reaches a terminal or a log beside every other command's.
-// The control: applied and pending still exit zero on every row. Mutation:
-// drop the judgement from the printer of plain writes, of a create or of an
-// invitation, make it after the -json dump, or name nothing of the write in
-// the failure, and rows fail.
+// A node newer than this command may answer 2xx an outcome this build cannot
+// read, which printed as `outcome "x"` and exited zero, so a script read an
+// unvouched write as landed and an invitation's link was handed out for an
+// issue nobody could confirm. It fails as every keyed write's open outcome
+// does, under the operation SENT, and prints nothing (no link, no -json
+// document), beginning with the write it is about; applied and pending still
+// exit zero. Mutation: drop the judgement from the plain, create or invitation
+// printer, make it after the -json dump, or name nothing of the write.
 func TestAnIamWriteWhoseOutcomeThisBuildCannotReadFails(t *testing.T) {
 	t.Parallel()
 	if len(iamKeyedArgs) != len(iamKeyed) {
@@ -1072,17 +1050,15 @@ func TestAnUnknownIamWriteNamesItsRetryAndCanMakeIt(t *testing.T) {
 
 // AN IAM WRITE THE NODE NEVER ANSWERED NAMES THE OPERATION IT WAS SENT UNDER.
 //
-// A write whose answer was lost — the connection dropped, or something in
-// front of the node answered in its place — may well have landed, and the key
-// it was sent under is the only handle on it. Left to the node to mint, that
-// key was lost with the answer, so the only retry an operator could run was a
-// fresh operation: a second invitation, or a create the first attempt's person
-// refuses. So every write whose route reads a key is sent under one minted
-// before it asks ([operationFor]) — a pasted one trimmed and sent as given —
-// and a lost answer names it. A read, and a mint whose route reads no key,
-// are offered no retry under one. Mutation: send no key until the operator
-// names one, drop the retry from a lost answer or from a proxy's, or offer it
-// on a read, and this fails.
+// A write whose answer was lost (a dropped connection, or something in front of
+// the node answering in its place) may have landed, and its key is the only
+// handle on it. Left to the node to mint, the key was lost with the answer, so
+// the only retry was a fresh operation (a second invitation). So every write
+// whose route reads a key is sent under one minted before it asks
+// ([operationFor]), a pasted one trimmed, and a lost answer names it. A read,
+// and a mint whose route reads no key, are offered no retry under one.
+// Mutation: send no key until the operator names one, drop the retry from a
+// lost answer or a proxy's, or offer it on a read, and this fails.
 func TestAnIamWriteTheNodeNeverAnsweredNamesTheOperationItWasSentUnder(t *testing.T) {
 	var mu sync.Mutex
 	var keys []string
@@ -1163,26 +1139,17 @@ func TestAnIamWriteTheNodeNeverAnsweredNamesTheOperationItWasSentUnder(t *testin
 }
 
 // A MINT AND A RESET LINK SAY WHERE THEY STAND, AND ONE NOBODY CAN CONFIRM IS
-// RUN AGAIN — never retried under a key, and never shown.
+// RUN AGAIN, never retried under a key, never shown.
 //
-// `token` and `reset-password` printed their value and nothing of the outcome,
-// though every write here says where it stands; and a 2xx carrying an outcome
-// this build cannot read, or none, printed the value and exited zero. Their
-// routes read no key and the command refuses -op-id on both, so such an answer
-// is finished as the node's own unknown for either is — run again, as a new
-// one, with the op id said for the trail — and nothing of it is shown: a token
-// or a link nobody can confirm is one the node itself hands out to nobody.
-// Every path that mints is asked: a service account's under the bearer, and
-// your own under the session `-login` opens — each as a table and as -json,
-// where a document printed beside a failure is one a script reads before the
-// exit status. A token's value stays the table's first line, alone, with the
-// line saying where it stands after it, so what took the value from that line
-// still takes the value; and a failure begins with the write it is about.
-// Mutation: drop the judgement from either printer or make it after the -json
-// dump, prescribe the keyed retry for a write no key names, drop the op id
-// from the sentence, drop the line from either printer, print a token's line
-// before its value, or name nothing of the write in the failure, and rows
-// fail.
+// Their routes read no key and -op-id is refused on both, so a 2xx carrying an
+// outcome this build cannot read, or none, is finished as the node's own
+// unknown is: run again, the op id said for the trail, nothing of it shown.
+// Every path that mints is asked (a service account's under the bearer, your
+// own under the `-login` session), as a table and as -json. A token's value
+// stays the table's first line, alone, so what took it from that line still
+// does. Mutation: drop the judgement from either printer or make it after the
+// -json dump, prescribe the keyed retry, drop the op id or the status line,
+// print the status before the value, or name nothing of the write, and rows fail.
 func TestAMintAndAResetLinkSayWhereTheyStand(t *testing.T) {
 	t.Parallel()
 	const (
@@ -1389,17 +1356,14 @@ func TestAnIamKeyTheEngineNeverMintedIsRefusedBeforeItIsSent(t *testing.T) {
 // AN INVITATION AND A CREATE TAKE THE SEAT THE OPERATOR NAMED, and only they
 // take the flag.
 //
-// A person holds a human seat for as long as they are here, so `-seat` has to
-// reach the body the node reads on an invitation and on a create alike — and a
-// person's create answers their first password link, which the command prints
-// once. A service account's create names no seat and answers no link: the
-// command says how to give it a token instead. On any other command `-seat`
-// is refused rather than ignored: `iam grant ID -seat lead` read as accepted
-// would say a seat was taken that nothing sent — a seat is MOVED with `bind`,
-// which trims it as the flag is. Mutation: drop the seat from either body and
-// the node sees none; drop the link block and the url goes unprinted; send
-// bind's seat untrimmed and the node is asked for a padded handle; drop the
-// refusal and the grant is sent.
+// A person holds a human seat while here, so `-seat` must reach the body on an
+// invitation and a create alike, and a person's create answers their first
+// password link, printed once. A service account's create names no seat and
+// answers no link: the command says how to give it a token. On any other
+// command `-seat` is refused, not ignored (`iam grant ID -seat lead` would say
+// a seat was taken that nothing sent): a seat is MOVED with `bind`, which trims
+// it as the flag is. Mutation: drop the seat from either body; drop the link
+// block; send bind's seat untrimmed; drop the refusal and the grant is sent.
 func TestAnIamInviteAndCreateTakeTheSeatTheOperatorNamed(t *testing.T) {
 	var asked []string
 	var bodies []map[string]any
@@ -1912,17 +1876,14 @@ func TestIamSeatsNamesAMaskedHolderRatherThanReadingItVacant(t *testing.T) {
 
 // A LISTING'S "MORE" LINE IS A COMMAND THAT RUNS, AND ASKS FOR THE SAME LISTING.
 //
-// Every listing ends a page by printing the command for the next one. Two
-// things have to hold of it. The cursor flag it names has to exist: neither
-// `-after` nor `-before` was defined once, so following the line answered "flag
-// provided but not defined". And it has to repeat the filters the page was
-// asked with: a line naming the cursor alone paged through the WHOLE listing
-// from that row, printing rows the operator had filtered out as though they
-// matched. The node here answers a page with a cursor; the printed line is run
-// as written, and the node must be asked exactly what it was asked the first
-// time with the cursor moved. Mutation: drop either cursor flag and its row
-// fails to parse; compose the line from the cursor alone and every row fails
-// on its filters.
+// Every listing ends a page by printing the command for the next. The cursor
+// flag it names has to exist (`-after` and `-before` once were not defined, so
+// following the line answered "flag provided but not defined"), and it has to
+// repeat the filters the page was asked with, else it pages the WHOLE listing
+// from that row, printing rows the operator had filtered out. The printed line
+// is run as written, and the node must be asked what it was asked the first time
+// with the cursor moved. Mutation: drop either cursor flag and its row fails to
+// parse; compose the line from the cursor alone and every row fails on its filters.
 func TestAListingsMoreLineIsACommandThatRuns(t *testing.T) {
 	for _, tc := range []struct {
 		args           []string

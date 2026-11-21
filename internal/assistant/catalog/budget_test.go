@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -104,13 +105,18 @@ func TestASeatsCeilingIsChangedAsBudgetsChangesIt(t *testing.T) {
 	}
 	got := rows(p)
 	row := got["token_budget.day"]
-	if row.Label != "QA Engineer's daily token budget" || row.From != "1,000,000 tokens" ||
-		row.To != "1,500,000 tokens" {
+	if row.Label != "Daily token budget" || row.From.Text() != "1,000,000 tokens" ||
+		row.To.Text() != "1,500,000 tokens" {
 		t.Errorf("the card's row is %+v", row)
+	}
+	// THE SEAT IS A RECORD on its own row, never a name in a label.
+	if seat := soleRef(t, got["seat"].To); seat.Kind != wire.ResourceSeat || seat.ID != "qa" ||
+		seat.Name != "QA Engineer" || seat.Open == nil || seat.Open.Screen != "seat" {
+		t.Errorf("the card names the seat as %+v, want the seat qa by its name, linked", seat)
 	}
 	fields := 0
 	for field := range got {
-		if !strings.HasPrefix(field, "check.") && !strings.HasPrefix(field, "request.") {
+		if field != "seat" && !strings.HasPrefix(field, "check.") && !strings.HasPrefix(field, "request.") {
 			fields++
 		}
 	}
@@ -145,7 +151,7 @@ func TestABudgetChangeCarriesTheRoutesWarning(t *testing.T) {
 		string(checks[0].Body) != string(p.Request.Body) {
 		t.Fatalf("the route was asked %+v, want the change checked under its tag", checks)
 	}
-	if w := rows(p)["check.warning.1"]; !strings.Contains(w.To, "above the company's") {
+	if w := rows(p)["check.warning.1"]; !strings.Contains(w.To.Text(), "above the company's") {
 		t.Errorf("the route's warning is %+v on the card", w)
 	}
 }
@@ -174,7 +180,7 @@ func TestTheCompanysCeilingIsAMergePatchOfTheOneWindow(t *testing.T) {
 		t.Error("the patch leaves the window out, which removes nothing")
 	}
 	row := rows(p)["token_budget.month"]
-	if row.Label != "The company's monthly token budget" || row.From != "120,000,000 tokens" ||
+	if row.Label != "The company's monthly token budget" || row.From.Text() != "120,000,000 tokens" ||
 		p.Title != "Remove a token budget" {
 		t.Errorf("the card is %q with the row %+v", p.Title, row)
 	}

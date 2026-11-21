@@ -25,6 +25,7 @@ import { useNow } from "~/lib/clock.ts";
 import { useNavigator } from "~/app/router.tsx";
 import { triggerHeadline, type Attempt, type TurnGroup } from "~/lib/phases.ts";
 import type { TurnRow } from "~/protocol/index.ts";
+import { EngineLine } from "./InlineToken.tsx";
 
 export function TurnCard({
   group,
@@ -93,7 +94,7 @@ export function TurnCard({
               affordance only — a clamp is visual, so the whole sentence stays in
               the DOM and a screen reader has it either way. */}
           <span className="clamp t-cell secondary" title={headline}>
-            {headline}
+            <EngineLine text={headline} refs={trigger?.refs} />
           </span>
           <div className="row gap-1 wrap">
             {group.phases.map((p) => (

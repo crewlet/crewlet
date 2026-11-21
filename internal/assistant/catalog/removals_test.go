@@ -132,7 +132,7 @@ func TestAReplaceNeverRemovesByOmission(t *testing.T) {
 	if !slices.Equal(p.Removes, []string{"Project", "Space"}) {
 		t.Errorf("the card warns it removes %v, want Project and Space", p.Removes)
 	}
-	if got := rows(p)["request.removes"]; got.Label != "Removes" || got.To != "Project, Space" {
+	if got := rows(p)["request.removes"]; got.Label != "Removes" || got.To.Text() != "Project, Space" {
 		t.Errorf("the removal row is %+v", got)
 	}
 
@@ -161,9 +161,16 @@ func TestAReplaceNeverRemovesByOmission(t *testing.T) {
 	p, err = change.Preview(t.Context(), read, wednesday, unitArgs(withoutQA, "roles.qa"))
 	if err != nil || !slices.Equal(p.Removes, []string{"QA Engineer"}) ||
 		p.Risk != wire.RiskDestructive || p.Title != "Change unit Product" ||
-		!strings.HasPrefix(p.Summary, "This removes seat QA Engineer from unit ") {
+		!strings.HasPrefix(p.Summary.Text(), "This removes seat QA Engineer from unit ") {
 		t.Errorf("a seat removed on purpose previewed %v: %q, %q at risk %q, warning %v", err,
-			p.Title, p.Summary, p.Risk, p.Removes)
+			p.Title, p.Summary.Text(), p.Risk, p.Removes)
+	}
+	// THE SEAT AND THE UNIT ARE REFS, each by its id, shown by its name.
+	refs := p.Summary.Refs()
+	if len(refs) != 2 || refs[0].Kind != wire.ResourceSeat || refs[0].ID != "qa" ||
+		refs[0].Name != "QA Engineer" || refs[0].Open == nil || refs[1].Kind != wire.ResourceUnit ||
+		refs[1].Name != "Product" {
+		t.Errorf("the removal's summary names %+v", refs)
 	}
 
 	emptied := withAnalyst(func(u map[string]any) { u["goals"] = []any{} })

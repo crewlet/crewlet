@@ -17,14 +17,12 @@ import (
 
 // A REFUSED QUESTION ANSWERS IN THE AUTHORITY TABLE'S ENVELOPE.
 //
-// A question's REST refusal is the registry's, carried whole, and it is
-// answered through the table's one mapping — so its status, its code and its
-// fields are byte for byte what the router writes for the same decision on
-// every other surface ([authz.EnvelopeRefusal]). It spelled `unauthorized`
-// beside the reason and the grants for itself, which agreed with the mapping
-// for every refusal a question can reach today and would have answered a
-// stale proof as a missing permission, its window dropped — and an artifact's
-// refusal for a role without the role it needs.
+// A question's REST refusal is the registry's, carried whole and answered
+// through the table's one mapping, so status, code and fields are byte for
+// byte what the router writes for the same decision elsewhere
+// ([authz.EnvelopeRefusal]). Spelling `unauthorized` with the reason and
+// grants would answer a stale proof as a missing permission, and an artifact
+// role refusal without its role.
 //
 // Mutation: answer with httpjson.CodeUnauthorized and the reason and grants
 // alone again and the step-up, token, role and no-relation cases go red.

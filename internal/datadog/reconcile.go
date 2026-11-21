@@ -79,19 +79,15 @@ type Result struct {
 	// Orphaned are the enabled service accounts at this company's own email
 	// domain that nothing manages ([Options.Managed]).
 	//
-	// REPORTED AND NEVER TOUCHED, which is the whole of it. A live
-	// organization accumulates these: an account somebody made by hand at
-	// this engine's `.invalid` domain, or one an engine made before it kept
-	// a record of its accounts. Every one is an identity somebody has to
-	// decide about, and nothing else names them: no seat's row mentions
-	// them, and the card read Ready over an organization full of them.
+	// REPORTED AND NEVER TOUCHED. These are identities somebody has to decide
+	// about (an account made by hand at this engine's `.invalid` domain, or
+	// by an engine before it kept a record), and no seat's row names them.
 	//
-	// Not removed, for the reason the disconnect gives at length: an account
-	// is a colleague at that app with history attached, and deleting one
-	// because a handle changed is not a decision a timer makes. It is an
-	// ADVISORY — [integration.FindingRegistrationOrphaned] is phase-ready,
-	// owed to an admin — so it says so without holding the surface out of
-	// Ready.
+	// Not removed, for the reason the disconnect gives: an account is a
+	// colleague at that app with history attached, and deleting one is not a
+	// decision a timer makes. It is an ADVISORY
+	// ([integration.FindingRegistrationOrphaned] is phase-ready, owed to an
+	// admin), so it does not hold the surface out of Ready.
 	Orphaned []User
 
 	// Notes are the caveats, such as a webhook this pass could not register.
@@ -117,30 +113,18 @@ const appKeyName = "crewlet"
 // It CREATES, CHANGES AND DISABLES NO AGENT'S ACCOUNT: that is the per-seat
 // access sync's, which reads every account back on each pass.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
-	// A CANCELLED PASS OBSERVED NOTHING, AND IT SAYS SO HERE RATHER THAN BY
-	// HAPPENING TO MAKE A NETWORK CALL FIRST.
+	// A CANCELLED PASS OBSERVED NOTHING: it raises here rather than relying
+	// on the credential probe's network call to fail.
 	//
-	// [integration.Reconciler]'s contract — and the clause
-	// integrationtest drives for it — is that a cancelled pass raises
-	// rather than answering with findings, because an error is a fault the
-	// loop retries and an empty findings list is a statement that
-	// everything is fine. This pass satisfied that only INCIDENTALLY: the
-	// credential probe below is a network call, so a dead context failed
-	// it. That left the clause resting on two things it should not rest
-	// on. The first is the transport honouring cancellation, which is a
-	// property of whatever [Client] was built with rather than of this
-	// package. The second is worse and is reachable today: the arm above
-	// the probe returns [integration.ErrNotConfigured], which the loop
-	// reads as "forget this surface's status row" — so a node draining
-	// during shutdown, against a company mid-edit, would delete the
-	// fleet's Datadog status on its way out.
-	//
-	// And when the probe DID answer for it, it answered wrongly. The
-	// sentence it produces names the organization credential pair and says
-	// it "could not be verified", so a pass cancelled by a node shutting
-	// down sent an operator to look at a key that was never asked about.
-	// [integration.Refusal]'s own doc is about exactly that class of
-	// mistake.
+	// [integration.Reconciler]'s contract (driven by integrationtest) is
+	// that a cancelled pass errors, because an error is a fault the loop
+	// retries and empty findings say everything is fine. Without this check
+	// the arm above the probe returns [integration.ErrNotConfigured], which
+	// the loop reads as "forget this surface's status row", so a node
+	// draining at shutdown would delete the fleet's Datadog status. And a
+	// probe failed by cancellation says the organization credentials "could
+	// not be verified", sending an operator to a key never asked about
+	// (see [integration.Refusal]).
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -197,47 +181,15 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 // orphanedAccounts is every service account at this company's own domain that
 // no seat in the plan claims.
 //
-// # Which accounts count as this engine's
-//
-// The domain is the first half and it is not enough on its own: a company may
-// point `email_domain` at a real domain it owns, where its own people have
-// addresses. So a `.invalid` domain — the default, and reserved by RFC 2606
-// precisely because nothing can deliver to it — is taken as conclusive, since
-// no person has a mailbox there and a service account at one was made by a
-// provisioner. Anywhere else the `crewlet-` prefix is the marker.
-//
-// THE PREFIX THIS ENGINE NO LONGER WRITES is deliberately not listed. The
-// accounts a live organization actually holds came from whatever scheme was
-// current when they were made, and enumerating past ones would be a list that
-// grows for ever and is wrong the moment somebody edits `email_domain`. The
-// `.invalid` clause catches every one of them without naming any.
-//
-// An account is claimed by its id where the access ledger records one, and by
-// the address a document seat's account is created under otherwise: a seat
-// whose account the sync has not adopted yet is still a seat somebody is
-// managing, and reporting its account as orphaned would tell an operator to
-// clean up the identity of a working agent. See [Options.Managed].
-//
-// # A disabled one is already where the advisory is asking it to get to
-//
-// The remedy this reports under is "disable or delete the ones you do not
-// want", so an account that is ALREADY DISABLED has reached the end state and
-// reporting it asks for work somebody has done. Worse, it was mostly this
-// engine's own: a `remove_seats` disconnect DISABLES the accounts it removes,
-// so the ordinary reconnect-with-a-smaller-roster cycle turned every correct
-// teardown into a row on the card — measured on one organization, 36 rows,
-// all of them inert.
-//
-// Skipping them also makes the advisory's own instruction work. Before this,
-// an operator who read the note and disabled an account watched the finding
-// come back unchanged on the next tick, because the only state the filter
-// looked at was the address; the only thing that cleared it was a delete. Now
-// either half of "disable or delete" does.
-//
-// THE ENABLED ONES ARE THE WHOLE FINDING and they still report. That is the
-// account that can still act — a changed handle's old identity, live,
-// holding whatever it held, matching nothing any pass will ever ask for
-// again.
+// `email_domain` may be a real domain where people have addresses, so only a
+// `.invalid` domain (the default; RFC 2606) is conclusive; elsewhere the
+// `crewlet-` prefix marks an account. Past prefixes are not listed.
+// An account is claimed by its id where the access ledger records one, else by
+// the address its seat's account is created under: an unadopted seat is still
+// managed ([Options.Managed]). DISABLED ACCOUNTS ARE SKIPPED: they have
+// reached the end state the advisory asks for (a `remove_seats` disconnect
+// disables what it removes). The enabled ones can still act, so they are the
+// finding.
 func orphanedAccounts(existing []User, managed []string, domain string) []User {
 	claimed := make(map[string]bool, len(managed))
 	for _, account := range managed {
@@ -324,17 +276,14 @@ func (r *Result) Findings() []integration.Finding {
 	}
 	// AND THE ACCOUNTS NOTHING CLAIMS, said once.
 	//
-	// ONE FINDING rather than one per account, because there is nothing
-	// per-account to do differently: the decision is the same for all of
-	// them and is one person's, and 36 rows of it — measured — would bury
-	// every other finding on the card. The addresses are in the detail,
-	// which is where a list an operator acts on belongs.
+	// ONE FINDING rather than one per account: the decision is the same
+	// for all of them and is one person's, and a row each would bury
+	// every other finding. The addresses go in the detail.
 	//
 	// AN ADVISORY, so it does not hold the surface out of Ready.
-	// [integration.FindingRegistrationOrphaned]'s verdict is phase-ready
-	// and admin-owed: nothing is broken, and nothing this engine runs will
-	// ever change it, so reporting it as a wait would leave somebody
-	// watching a retry that has nothing to retry.
+	// [integration.FindingRegistrationOrphaned] is phase-ready and
+	// admin-owed: nothing this engine runs will ever change it, so a wait
+	// would leave somebody watching a retry with nothing to retry.
 	if len(r.Orphaned) > 0 {
 		addresses := make([]string, 0, len(r.Orphaned))
 		for _, user := range r.Orphaned {

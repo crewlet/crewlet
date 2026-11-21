@@ -20,82 +20,38 @@ var log = logging.Get("integration")
 
 // Interval is how often the loop wakes to see what is due.
 //
-// Fifteen seconds, which is the FINEST CADENCE [Schedule] can ask for
-// ([Schedule.AdminBase]): a tick slower than that would make the shortest
-// wait in the system a lie, and the whole point of the brisk admin cadence is
-// that an operator who installs an app sees provisioning continue without
-// pressing anything.
-//
-// It is also what the control plane's own reconcile poll ticks at, and the
-// two cost about the same: a tick with nothing due is one duty claim and one
-// read of the activation pointer plus one status row per node, on a connection
-// the process already holds. That is the SHAPE rather than a count — a fixed
-// number here was a claim about how many nodes a fleet has, which is the one
-// thing about it nothing in this package knows. Nothing is fetched from a
-// third-party app unless one is due.
+// Fifteen seconds, the FINEST CADENCE [Schedule] can ask for
+// ([Schedule.AdminBase]): a slower tick would make the shortest wait a lie.
+// It is also the control plane's reconcile poll interval. A tick with nothing
+// due is one duty claim and a read of the activation pointer plus one status
+// row per node, with nothing fetched from a third-party app.
 const Interval = 15 * time.Second
 
 // WakeSettle is how long a config apply waits before the tick it brings
 // forward runs.
 //
-// A COALESCING WINDOW, not a delay for its own sake. One operator action is
-// routinely several applies: the setup dialog writes one request per surface,
-// so saving Atlassian writes the organization, Jira and Confluence blocks in
-// three, and each one marks the loop stale. Ticking per apply would ask three
-// third-party apps three times for one press of Save. This window is well
-// under what a person reads as "immediately" and folds the burst into one
-// pass.
+// A COALESCING WINDOW. One action is routinely several applies (saving
+// Atlassian writes three blocks), each marking the loop stale; ticking per
+// apply would query the third-party apps three times for one Save.
 //
-// It is also the floor under a pass that writes the document on every run.
-// Such a pass marks the loop stale from inside the tick that is running it,
-// so with no window the loop would spin against a third-party app at whatever
-// speed the pass returns. That is a bug rather than a design (a pass is
-// expected to converge, and [Worker.MarkStale] says why the second one writes
-// nothing), but the failure has to stay survivable long enough for somebody
-// to notice it.
+// It is also the floor under a pass that writes the document on every run:
+// that marks the loop stale from inside its own tick, so with no window the
+// loop would spin against the app. A pass is expected to converge
+// ([Worker.MarkStale] says why), but the failure must stay survivable.
 const WakeSettle = 750 * time.Millisecond
 
 // Reconciler is one surface's convergence step.
 //
-// # Level triggered, never told what changed
-//
-// Handed nothing and asked what the world looks like now. An event can be
-// lost, refused, or arrive twice, and each of those has already cost an
-// integration that silently never finished. A pass that reads the world
-// cannot be lost.
-//
-// # The safety contract, which is not optional
-//
-// This runs unattended, every few minutes, for the life of the deployment. So
-// an implementation:
-//
-//   - MUST be idempotent. Every pass does the same work, and only what the
-//     third-party app already has separates a repair from a no-op.
-//
-//   - MUST NOT rotate a credential that still works. A third-party app serves a token
-//     once, so the tempting reading of "reconcile" is to mint every pass, and
-//     that is an outage on a timer: the engine is authenticating with the old
-//     value, and rotating revokes what every running agent is using. Check
-//     what the sink recorded (provision.TokenSink.Value) and keep a working
-//     credential. Rotation is an operator gesture on the integration subcommand,
-//     where somebody typed the flag.
-//
-//   - MUST NOT delete anything a seat's departure implies. Decommissioning is
-//     the other flag on that subcommand, for the same reason.
-//
-//   - MUST NOT WRITE when nothing has changed, and this stopped being a
-//     SHOULD the day every reconciler was pointed at integrationtest: its
-//     "a converged pass writes nothing" case is a hard failure, so this clause
-//     is now checked rather than believed. It was believed for a while and
-//     three vendors did not keep it — GitLab re-POSTed every membership and
-//     re-PUT every hook, Mattermost re-joined every team and channel, and
-//     Atlassian re-invited every seat, on every pass, for ever.
-//
-//     Reading is a different budget. A pass has to read enough to KNOW
-//     nothing has changed, which is what replaced those writes, so the cost of
-//     a converged pass is a read per seat and per project rather than nothing
-//     at all. That is what the settled interval is sized against — see
-//     [DefaultSchedule].
+// Level triggered: asked what the world looks like now, since an event can be
+// lost or arrive twice. It runs unattended, so it:
+//   - MUST be idempotent.
+//   - MUST NOT rotate a credential that still works: an app serves a token
+//     once, and minting every pass revokes what running agents use. Check the
+//     sink (provision.TokenSink.Value). Rotation is an operator gesture.
+//   - MUST NOT delete anything a seat's departure implies (an operator flag).
+//   - MUST NOT WRITE when nothing changed (integrationtest's "a converged
+//     pass writes nothing"), though it reads enough to KNOW that; the settled
+//     interval is sized against it: see [DefaultSchedule].
 type Reconciler interface {
 	// Kind names the surface this converges.
 	Kind() Kind
@@ -140,16 +96,14 @@ func nextAttempt(r Reconciler, now time.Time, wait time.Duration) time.Time {
 //
 // # Why a sentinel rather than a registration the apply rebuilds
 //
-// The company document is edited live, so the set of configured surfaces
-// moves under a running loop. The obvious answer is to tear the worker down
-// and build a new one on every apply, and it is worse than it looks: the
-// worker is a fleet singleton holding a lease, so rebuilding it on an
-// unrelated config change drops that lease and hands a peer a duty it will
-// hold until the TTL lapses, for a company whose integrations did not change.
+// The company document is edited live, so configured surfaces move under a
+// running loop. Rebuilding the worker on every apply would drop its fleet
+// singleton lease on an unrelated config change and hand a peer the duty
+// until the TTL lapses.
 //
 // So registration is static, every reconciler reads the LIVE config on each
 // pass, and one that finds its own block gone says so. The loop then forgets
-// its status, exactly as it forgets a kind nothing registered.
+// its status, as it does for a kind nothing registered.
 var ErrNotConfigured = errors.New("integration: this surface is not configured")
 
 // ErrCredentialRejected reports a pass that failed because the third-party app
@@ -186,88 +140,44 @@ var ErrDisconnectUnavailable = errors.New("integration: this node cannot complet
 var ErrBlockNotRemoved = errors.New("integration: the company's settings refused the change that removes this integration")
 
 // Guard is the ONE claim every writer at one surface passes through, and the
-// bound on the work it admits.
+// bound on the work it admits. The worker takes it, not the reconciler: freed
+// when the pass returns, it would leave the status write outside, and a tick
+// folding a stale row could overwrite an operator's disconnect.
 //
-// # Why the worker takes it rather than the reconciler
+// Three-valued: held false is knowledge (somebody else is writing, and two at
+// once is one creating the account another deletes); an error is a failure to
+// look, not a statement that the surface is idle.
 //
-// Three callers write at a third-party app and none can see the others: a pass
-// an operator ran from the dashboard, a tick of this loop, and a disconnect's
-// teardown. Two at once is one creating the account another is deleting.
-//
-// The loop used to take this INSIDE its reconciler and give it back the moment
-// the pass returned — which left the write that RECORDS the pass outside it.
-// That is a lost update with a name: an operator's disconnect, written under
-// the guard on the node serving the API, silently overwritten by a tick
-// folding a row it had read before the pass began. The card flipped back to
-// connected and they pressed the button again. So the guard is taken out here,
-// where it can span the re-read, the pass and the status write alike.
-//
-// # Three-valued, because the third value is the whole point
-//
-// held false is knowledge: somebody else is writing at this surface. An error
-// is a failure to look, and a coordination store that could not answer has NOT
-// said the surface is idle — acting on that guess is what creates the
-// duplicate the guard exists to prevent. Collapsing them into a bool would put
-// this back where CLAUDE.md's three-valued rule says never to be.
-//
-// # It BOUNDS the work
-//
-// The returned context carries the caller's own pass deadline, so a pass
-// cannot outlive the lease protecting it. It must DERIVE from ctx rather than
-// replace it: a worker stopping mid-pass, and the shared certification suite
-// handing in a cancelled context, both have to reach the reconciler.
-//
-// release is non-nil exactly when held is true, and calling it is what lets the
-// next writer in. Nil Guard is an unguarded worker — the shape a test builds,
-// where there is no lease to take and nothing to serialize against.
+// The returned context carries the pass deadline and must DERIVE from ctx, so
+// a stopping worker reaches the reconciler. release is non-nil exactly when
+// held. A nil Guard is unguarded.
 type Guard func(ctx context.Context, kind Kind) (
 	bounded context.Context, release func(), held bool, err error)
 
 // AdmitsFunc reports whether this node's configuration is current enough to
 // converge a third-party app.
 //
-// # Why the loop asks at all
+// On a shed or stuck node the LIVE company document is an epoch the fleet has
+// replaced; converging an app to it undoes the current revision.
 //
-// Every reconciler reads the LIVE company document on each pass, and on a node
-// whose posture is shed or stuck that document is the epoch the fleet has
-// already replaced. Converging a third-party app to it undoes what the current
-// revision asked for: an account a removed seat should no longer have is kept,
-// a webhook is re-registered at the previous address, and the status row says
-// ready. The node least able to answer for the company is the one with the
-// fewest other duties competing for the lease, so it is if anything MORE likely
-// to be holding this one.
-//
-// # Asked here rather than folded into the duty claim
-//
-// [schedule.Scheduler] already spells this rule for its own tick, for the same
-// reason and in the same shape, and folding it into the shared worker-duty
-// helper instead would gate every fleet singleton at once. That is not a
-// bigger version of this fix, it is a different and worse one: a node's roles
-// and its posture are decided by different subsystems that do not consult each
-// other, so an ingress-only peer counts as healthy in the shed decision while
-// refusing every duty on roles — and an ingress+workers fleet whose worker node
-// fails one apply ends with NO node running any singleton, /ready green and
-// nothing logged. Gated here, a shedding node declines this one duty, says so,
-// and a worker-capable peer takes it.
-//
-// Nil admits, which is the single-node case and the case before a control
-// plane exists.
+// Asked here, not folded into the shared worker-duty helper, which would gate
+// every fleet singleton: roles and posture come from subsystems that do not
+// consult each other, so an ingress+workers fleet whose worker node fails one
+// apply would run NO singleton with /ready green. Gated here, a shedding node
+// declines this one duty and a peer takes it. Nil admits.
 type AdmitsFunc func() bool
 
 // Reject marks err as a credential refusal when the third-party app answered with an
 // authentication or authorization status, and returns it untouched otherwise.
 //
-// The POLICY lives here and the extraction stays with each third-party app, because
-// they are different problems: which statuses mean "your credential is no
-// good" is one rule for every third-party app, while digging the number out of a
-// refusal is a question about that third-party app's own error type. Written per
-// integration, the rule drifts (401 alone in one place and 401-or-403 in the
-// next), and the surfaces that forgot 403 are exactly the ones that sit in
-// "the engine is working on it" forever.
+// The POLICY lives here and the extraction stays with each third-party app:
+// which statuses mean "your credential is no good" is one rule, while digging
+// the number out of a refusal depends on that app's error type. Written per
+// integration the rule drifts (401 alone vs 401-or-403), and a surface that
+// forgot 403 sits in "the engine is working on it" forever.
 //
-// 401 and 403 only. A 429 is rate limiting and clears, a 404 is usually the
-// wrong host or project rather than the wrong key, and a 5xx is the third-party app's
-// own problem: every one of those is a genuine wait.
+// 401 and 403 only. A 429 clears, a 404 is usually the wrong host or project
+// rather than the wrong key, and a 5xx is the app's own problem: genuine waits.
 func Reject(err error, status int) error {
 	if err == nil || (status != http.StatusUnauthorized && status != http.StatusForbidden) {
 		return err
@@ -388,22 +298,11 @@ type Options struct {
 	// Configured reports whether the company document still declares a
 	// surface, and is consulted for TEARDOWN-ONLY kinds alone.
 	//
-	// # Why only those, when the question sounds general
-	//
-	// A surface with a reconciler already answers it, better: the pass reads
-	// the live document and returns [ErrNotConfigured], which [Observe] turns
-	// into a forget. That answer knows things this one cannot — every pass
-	// treats `enabled: false` as not configured, where a document-shaped test
-	// sees a block and says yes — so consulting both would give one surface
-	// two authorities that disagree, and a paused integration would flap
-	// between them.
-	//
-	// A teardown-only kind has no pass to ask, and today that is Slack alone.
-	// Its row is written by the setup form (an endpoint, so a moved Request
-	// URL can be reported) and nothing has ever been able to remove it: the
-	// row outlived the `slack:` block for the life of the deployment, and a
-	// later reconnect inherited a stale address. This is the answer for that
-	// one class and no other.
+	// A surface with a reconciler answers better: its pass returns
+	// [ErrNotConfigured] (and knows `enabled: false` counts), and consulting
+	// both would give a paused integration two disagreeing authorities.
+	// A teardown-only kind (Slack) has no pass, and its setup-form row would
+	// outlive the `slack:` block, so a reconnect inherits a stale address.
 	//
 	// Nil means this node cannot say, and nothing is forgotten on a guess.
 	Configured func(Kind) bool
@@ -429,35 +328,27 @@ type Options struct {
 	// under at the third-party app right now, for a surface where the
 	// address is not enough to find it again.
 	//
-	// Datadog is the case, and today the only one: a webhook definition is
-	// addressed by name, that name is a live config field, and Datadog
-	// serves no listing — a GET on the collection answers 405 — so a
-	// definition the engine stops managing can never be found again by
-	// anything. Renaming the field creates a second definition and orphans
-	// the first, silently and for ever.
+	// Datadog is the case: a webhook definition is addressed by a live config
+	// name and Datadog serves no listing (a GET on the collection answers
+	// 405), so a renamed field orphans the first definition for good.
 	//
-	// Compared with what was recorded, so the orphan is REPORTED rather
-	// than deleted: the name is also the handle a monitor writes, so every
-	// monitor still saying it goes on delivering correctly, and removing
-	// the definition would silence exactly those. Empty for a kind with no
-	// such name, and nil leaves every row's field empty.
+	// Compared with what was recorded, so the orphan is REPORTED, not
+	// deleted: monitors still naming it deliver correctly, and removing it
+	// would silence exactly those. Empty for a kind with no such name; nil
+	// leaves every row's field empty.
 	Registration func(Kind) string
 
 	// SettledInterval is how long a CONVERGED surface is trusted before it
 	// is read back, as the applied revision holds it right now.
 	//
-	// READ FRESH ON EVERY PASS rather than folded into [Options.Schedule],
-	// for the reason [Options.Endpoint] is: it is a field of the company
-	// document, the document is edited live, and a value captured when this
-	// worker was built would leave an operator who shortened the interval
-	// waiting out the one they had replaced — for as long as the OLD
-	// interval had left to run, which is precisely the wait they were trying
-	// to shorten.
+	// READ FRESH ON EVERY PASS, not folded into [Options.Schedule]: the
+	// document is edited live, and a captured value would make an operator
+	// who shortened the interval wait out the OLD one, the very wait they
+	// meant to shorten.
 	//
-	// It overrides [Schedule.Settled] and nothing else: the other three
-	// waits are retries of something already known to be wrong, and their
-	// cost does not scale with the company. Nil, or any value that is not
-	// positive, takes the Schedule's own.
+	// It overrides [Schedule.Settled] only: the other waits are retries of
+	// something known wrong and their cost does not scale with the company.
+	// Nil, or a non-positive value, takes the Schedule's own.
 	SettledInterval func() time.Duration
 
 	// Now is the clock, for tests. Nil is time.Now.
@@ -509,18 +400,14 @@ type Worker struct {
 	// unconfigured is every surface whose last pass said the company has no
 	// block for it.
 	//
-	// IN MEMORY AND NOT A ROW, because the absence of a row is exactly what
-	// [Observe]'s `forget` means: a surface nobody configured has no status
-	// to record, and writing one would put every unconfigured vendor on an
-	// operator's screen for ever. But forgetting it is also what un-paced
-	// it — the next tick reads no row, builds a zero [State] whose
-	// NextAttemptAt is already past, and runs the pass again, so a company
-	// that configured none of them reconciled all of them every interval
-	// for the life of the process.
+	// IN MEMORY AND NOT A ROW: the absence of a row is what [Observe]'s
+	// `forget` means, and a row would put every unconfigured vendor on an
+	// operator's screen. But forgetting also un-paced it (no row, so a zero
+	// [State] whose NextAttemptAt is past), and a company configuring none
+	// reconciled all of them every interval.
 	//
-	// The set is cleared by `stale`, which is the one thing that can change
-	// the answer: a surface becomes configured when somebody edits the
-	// company document, and a config apply already marks the loop stale.
+	// Cleared by `stale`, the one thing that can change the answer: a surface
+	// becomes configured by a document edit, and an apply marks the loop stale.
 	unconfigured sync.Map
 
 	// stale is set when the document every recorded conclusion was drawn
@@ -552,22 +439,14 @@ type Worker struct {
 // concluded was drawn from a document that is no longer current.
 //
 // THE CADENCE IS FOR A THIRD-PARTY APP, NOT FOR A DOCUMENT. A settled surface
-// is asked again in minutes, which is right when the only thing that could
-// have changed is at the third-party app: nobody wants a timer hammering
-// GitHub. It is wrong the moment the answer changes HERE. An operator who
-// installs an agent's app is redirected straight back to a card still holding
-// the previous pass's finding, "this agent has no app of its own", printed
-// above the same card's roster reporting that agent installed and ready: one
-// screen, two answers, for as long as the settled cadence had left to run.
+// is asked again in minutes, wrong once the answer changes HERE: an operator
+// who installs an agent's app is redirected to a card still holding the old
+// finding ("this agent has no app of its own").
 //
-// In memory rather than written through the store, because it is not a
-// conclusion to be shared: every node sees the apply, and the one holding the
-// duty is the one that acts on it. A node that is not the singleton sets a
-// flag and does nothing with it.
-//
-// A pass this triggers may itself write to the document (adopting an
-// installation is exactly that) and so mark the loop stale again. It
-// converges: the second pass finds nothing new to record and writes nothing.
+// In memory, not written through the store: every node sees the apply and
+// only the one holding the duty acts on it. A pass this triggers may itself
+// write the document (adopting an installation) and mark the loop stale
+// again; it converges, as the second pass writes nothing.
 func (w *Worker) MarkStale() {
 	if w == nil {
 		return
@@ -591,30 +470,12 @@ func (w *Worker) MarkStale() {
 // Refresh says ONE surface's state AT THE THIRD-PARTY APP may have changed,
 // so the next tick asks it again rather than waiting out its cadence.
 //
-// # What this is for, and why it is not a write
-//
-// The cadence is a BACKOFF — [Schedule.Next] takes an admin-owed surface from
-// fifteen seconds to ten minutes — and the thing it is backing off from is
-// asking a person to do something at their third-party app. So the moment
-// that person DOES it is exactly the moment the backoff is longest and most
-// wrong. Measured: an operator finished installing an agent's GitHub App in
-// about eight seconds and then watched the card ask them to install it for
-// several minutes, reloading the page, reasonably concluding the install had
-// not worked.
-//
-// Nothing about the caller is believed. A refresh does not say what changed
-// or that anything did; it says LOOK NOW, and the pass that follows is the
-// ordinary verified one — it lists the app's own installations and believes
-// GitHub. That is what makes this safe to reach from an unauthenticated
-// redirect, where adopting the id off the query would not be: the worst a
-// caller can do is make the engine ask a question it was going to ask
-// anyway, which is a rate concern for the caller to bound and not a trust
-// one.
-//
-// An unknown kind is kept rather than refused. The set is read by kind on
-// the way past and a name this build does not serve is simply never taken
-// out — cheaper than the lookup, and there is nothing for a caller to do
-// about a refusal here anyway.
+// The cadence is a BACKOFF ([Schedule.Next]: fifteen seconds to ten minutes)
+// from asking a person to act at their app, so the moment they DO act is when
+// it is longest and most wrong. Nothing about the caller is believed: this
+// says LOOK NOW, and the pass that follows is the ordinary verified one, so it
+// is safe from an unauthenticated redirect (a rate concern, not a trust one).
+// An unknown kind is kept, not refused: it is simply never taken out.
 func (w *Worker) Refresh(kind Kind) {
 	if w == nil {
 		return
@@ -929,28 +790,13 @@ func (w *Worker) Tick(ctx context.Context) {
 
 // visit takes the surface's guard and does whatever the row then says.
 //
-// # Everything that decides the work happens INSIDE the guard
-//
-// The row is re-read here, and the routing decision — converge, tear down, or
-// nothing — is made from THAT row rather than from the snapshot [Worker.Tick]
-// filtered on. Both halves are load-bearing and both were bugs:
-//
-//   - Folding a pass's outcome into a row read before the pass began loses
-//     whatever landed in between. An operator's disconnect is written under
-//     this same guard on whichever node served the request, and the tick put
-//     its own copy back over the top.
-//   - Routing on the stale row is the same race one step earlier: a
-//     disconnect that lands between the load and the guard would be answered
-//     by a CONVERGE pass, which finds the block still in the document (it has
-//     to be — it carries the credential the teardown authenticates with),
-//     converges the surface, and reports it healthy while somebody waits for
-//     it to go.
-//
-// The due check is repeated for the same reason, and pays for itself: a
-// dashboard pass that ran while this tick was working through the surfaces
-// ahead of this one has already moved NextAttemptAt, and re-reading is what
-// lets the loop notice rather than spend a third-party app's rate limit
-// re-asking what somebody just asked.
+// Everything that decides the work happens INSIDE the guard: the row is
+// re-read and routed (converge, tear down, nothing) from THAT row, not the
+// snapshot [Worker.Tick] filtered on. Folding into an earlier row overwrites
+// an operator's disconnect; routing on it hands a disconnect landing between
+// load and guard a CONVERGE pass, which finds the block still present and
+// reports the surface healthy. The due check is repeated too: a dashboard
+// pass meanwhile has moved NextAttemptAt, sparing the app a repeated ask.
 func (w *Worker) visit(ctx context.Context, kind Kind, forced bool, now time.Time) {
 	bounded, release, held, err := w.hold(ctx, kind)
 	switch {
@@ -965,19 +811,15 @@ func (w *Worker) visit(ctx context.Context, kind Kind, forced bool, now time.Tim
 				"this surface, so it did not touch it")
 		return
 	case !held:
-		// SOMEBODY IS ALREADY DOING THIS: an operator's pass, an access
-		// sync, or a teardown. Nothing is recorded, for the reason above
-		// and one more: a fault written here would describe as broken a
-		// surface that is at this moment being provisioned successfully.
+		// SOMEBODY IS ALREADY DOING THIS (an operator's pass, an access sync,
+		// a teardown). Nothing is recorded: a fault written here would
+		// describe as broken a surface being provisioned successfully.
 		//
-		// AND A FORCED LOOK STAYS OWED. The ask that forced it (a config
-		// apply's sweep, a refresh) was spent on the way here, so dropped
-		// now it was lost: a save on the Agents tab applies a revision and
-		// starts that integration's access sync, the sync takes the lease
-		// first, and the sweep the save was owed waited out the settled
-		// cadence instead, minutes of a card describing the setting the
-		// person had just replaced. Kept as a refresh, the next tick asks
-		// again, and the one after the holder lets go takes it.
+		// A FORCED LOOK STAYS OWED. Its ask (a config apply's sweep, a
+		// refresh) was spent on the way here, so dropping it would leave the
+		// card describing the replaced setting for the settled cadence (a
+		// save starts an access sync that takes the lease first). Kept as a
+		// refresh, the next tick asks again.
 		if forced {
 			w.refreshing.Store(kind, struct{}{})
 		}
@@ -1060,19 +902,14 @@ func (w *Worker) stillHoldsDuty(ctx context.Context) bool {
 // spreadWait scatters a wait by up to a tenth of itself, so surfaces that
 // settled together do not stay together.
 //
-// EVERY SURFACE IS STAMPED FROM ONE READING OF THE CLOCK, and the settled
-// interval is one number, so a company whose integrations all converge on the
-// same tick becomes due on the same tick — for ever. Nothing ever pulls them
-// apart again: each pass re-stamps them from the same instant with the same
-// interval. What that produces is one burst of every vendor's API at once,
-// six times an hour, instead of a steady trickle.
+// Surfaces are stamped from one clock reading with one settled interval, so
+// integrations converging on the same tick stay due together for ever: a
+// burst of every vendor's API at once instead of a trickle.
 //
-// A TENTH, and only downward from a full interval, because the interval is
-// also a promise: [Schedule.Settled] is "the horizon on which an
-// administrator who revokes an agent's access by hand is noticed", and
-// stretching it would make that horizon longer than it says. Ten per cent is
-// enough to decorrelate every surface of [Kinds] within one tick of each
-// other and small enough that no cadence's meaning changes.
+// A TENTH, and only downward, because the interval is also a promise:
+// [Schedule.Settled] is the horizon on which a hand-revoked agent access is
+// noticed, and stretching it would make that longer than it says. It
+// decorrelates every surface of [Kinds] within one tick of each other.
 func spreadWait(d time.Duration) time.Duration {
 	if d <= 0 {
 		return d
@@ -1268,24 +1105,14 @@ func (w *Worker) scheduleNow() Schedule {
 // StampEndpoint records the address a pass ran against, where that pass is
 // what keeps the address current.
 //
-// THREE-WAY on [Kind.Ingress], and the three answers are genuinely different:
+// THREE-WAY on [Kind.Ingress]: IngressEngine (a pass registers the delivery,
+// so the address it ran against is the registered one) stamps; IngressNone
+// (nothing delivers) records none, or it would become an unactionable false
+// alarm once the base moved; IngressOperator (a person typed it at the app)
+// must not, or the one warning about a moved address becomes a green row.
 //
-//   - IngressEngine — a pass registers the delivery here, so the address it
-//     ran against is the address the registration points at.
-//   - IngressNone — nothing delivers to an address at all, so none is
-//     recorded: one would be a claim waiting to become a false alarm the
-//     moment the public base moved, reporting an action nobody can take on a
-//     surface with no address to change.
-//   - IngressOperator — a person typed the address at the third-party app.
-//     Stamping it would report the base this deployment listens on as though
-//     the third-party app had been told, which turns the one warning an
-//     operator gets about a moved address into a green row.
-//
-// EXPORTED, because two writers share these rows: the loop's tick and the
-// pass an operator runs from the dashboard. The rule lived inside the loop
-// and the dashboard's pass stamped every surface unconditionally — so the
-// same row meant one thing when a tick wrote it and another when a button
-// did.
+// EXPORTED because two writers share these rows, the loop's tick and an
+// operator's dashboard pass, and the rule must not differ between them.
 func StampEndpoint(state *State, kind Kind, current string) {
 	if kind.Ingress() == IngressEngine {
 		state.Endpoint = current
@@ -1295,23 +1122,12 @@ func StampEndpoint(state *State, kind Kind, current string) {
 // StampRegistration records the name this surface's registration is now held
 // under, and reports the one the previous name left behind.
 //
-// A NAME IS NOT AN ADDRESS, which is why this is separate from
-// [StampEndpoint]. Where a registration is found by its address, moving the
-// address re-points it and nothing is orphaned. Where it is found by NAME —
-// Datadog's webhook definition, and only that today — changing the name
-// creates a second registration and abandons the first, which goes on
-// working: same address, same token, every monitor still naming it delivering
-// correctly.
-//
-// SO IT IS REPORTED, NEVER DELETED. Removing it would silence exactly those
-// monitors, and Datadog serves no listing, so nothing can find it again
-// afterwards either. The finding is the only place an operator can learn it
-// exists, and it is an advisory because nothing is broken — what is owed is
-// repointing the monitors and then removing the definition by hand.
-//
-// EXPORTED for the reason [StampEndpoint] is: two writers share these rows,
-// and a rule written twice is a row that means one thing when a tick wrote it
-// and another when a button did.
+// A NAME IS NOT AN ADDRESS, hence separate from [StampEndpoint]: changing a
+// name (Datadog's webhook definition) creates a second registration and
+// abandons the first, which keeps delivering for monitors still naming it.
+// SO IT IS REPORTED, NEVER DELETED: removal would silence them, and Datadog
+// serves no listing to find it again. The advisory is the operator's only way
+// to learn it exists. EXPORTED for [StampEndpoint]'s reason.
 func StampRegistration(state *State, current string) []Finding {
 	previous := state.Registration
 	state.Registration = current
@@ -1334,40 +1150,15 @@ func StampRegistration(state *State, current string) []Finding {
 // forgetDeparted drops the row of a TEARDOWN-ONLY surface the company
 // document no longer declares.
 //
-// # Why this is so much narrower than its name used to be
-//
-// It used to claim to forget any departed surface and forgot nothing at all:
-// the liveness test was the REGISTRATION set, and the engine registers every
-// kind in [Kinds] — a pass for the seven it converges, a teardown-only entry
-// for the one it does not — so every valid kind was live and every invalid one
-// was skipped. Unreachable code that a reader would have trusted.
-//
-// Reviving it as a general answer would have been worse than leaving it dead,
-// because a general answer already exists and is better: a surface with a
-// reconciler is forgotten when its own pass reports [ErrNotConfigured], read
-// off the live document by the code that knows what configured MEANS for that
-// third-party app — `enabled: false` included, which a block-shaped test reads
-// as configured. Two authorities on one question is a paused integration
-// flapping between them.
-//
-// So this answers for the one class that has no pass to ask, which is Slack
-// alone today. Its row is written by the setup form — an endpoint, so a moved
-// Request URL can be reported — and until now nothing could ever remove it: it
-// outlived the `slack:` block for the life of the deployment, and a later
-// reconnect through the config file inherited an address from the company
-// before it.
-//
-// Three things are deliberately never forgotten here:
-//
-//   - A surface with a reconciler, per the above.
-//   - A surface being torn down. A teardown that failed leaves the row in
-//     [PhaseDisconnecting] on purpose and the block may already be gone, so
-//     forgetting it here would abandon an unfinished disconnect — the third-party
-//     app's webhooks still live, the card gone from the screen, silently.
-//   - A kind this build does not know. The loop walks its own canonical order,
-//     so a row a newer peer wrote is never even considered: an older node in a
-//     rolling upgrade must not erase a status it cannot read, which it would
-//     then watch the newer node write back on every pass.
+// Narrow on purpose: a surface with a reconciler is forgotten by its own pass
+// ([ErrNotConfigured]; it knows `enabled: false` counts), and two authorities
+// would flap a paused integration. This answers only for Slack, which has no
+// pass and whose setup-form row would leak its address into a reconnect.
+// Never forgotten here: a surface with a reconciler; a surface being torn
+// down (a failed teardown holds [PhaseDisconnecting] while the block may be
+// gone, and forgetting would abandon it with webhooks live); a kind this
+// build does not know, so an older node in a rolling upgrade never erases a
+// newer peer's status.
 func (w *Worker) forgetDeparted(ctx context.Context, states map[Kind]State) {
 	if w.configured == nil {
 		// This node cannot say what the document declares, and a guess

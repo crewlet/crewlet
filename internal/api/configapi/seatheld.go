@@ -14,66 +14,17 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE SEAT-HOLDER CHECK: a write may not take a human seat out of the company
-// while anybody in the identity directory holds it — a person, a service
-// account bound to it, or an open invitation onto it.
+// THE SEAT-HOLDER CHECK: a write may not take a human seat while the identity
+// directory has a holder for it: a person (suspended too; removal frees it), a
+// service account, or an open invitation (ADR-0032) at [Service.now]. Else the
+// holder meets `403 seat_unavailable`. A PERSON is named over an invitation.
 //
-// # Why at the write
+// ADVISORY: the directory is read before activation, and an offline `config
+// import` or `activate` asks nobody; `/iam/check` reports `binding_dangling`.
 //
-// A person's seat binding lives in the identity directory and the seat in the
-// company document, and the two are written by different gestures. A revision
-// that removes a seat a colleague holds — or turns it into an agent seat —
-// leaves that person bound to nothing: every request they make is refused
-// `403 seat_unavailable`, and `/iam/check` names it once somebody asks. That is
-// the ordinary mistake, removing a seat somebody still uses, and the write is
-// where it can carry that person's name rather than surface as a finding
-// after the fact.
-//
-// # Any stage short of removal, and an invitation on its way
-//
-// A suspended person still holds their seat — suspending somebody is not
-// giving their seat away. A removal deletes the person's row, so a seat whose
-// holder was removed is free.
-//
-// AN OPEN INVITATION HOLDS ITS SEAT exactly as it holds its address (ADR-0032):
-// every person holds a human seat for as long as they exist, so every
-// invitation names the one its redemption binds, and nothing else may take
-// it while the link is outstanding. Taken out of the company under it, the
-// link would be refused at its redemption with nothing to tell its holder why,
-// and the administrator who sent it would learn of it only from them. An
-// invitation redeemed, cancelled or past its expiry holds nothing, judged at
-// this surface's own clock ([Service.now]) — and where a build before
-// invitations held their seats left a person and an invitation on one seat, the
-// PERSON is named, since the invitation's redemption would be refused for the
-// seat they hold.
-//
-// # Advisory, and what it cannot see
-//
-// The directory is read before the activation, so a bind or an invitation
-// landing between the two is not seen; and an offline `crewlet config import`
-// or `activate` writes the store with no directory to ask. Both leave the
-// residue `/iam/check` reports as `binding_dangling` — or an invitation whose
-// redemption is refused — which one record repairs.
-//
-// # An unreadable directory refuses, and only a write that needs it
-//
-// A write that takes no human seat away never asks, except a whole document
-// replacing an unsealed revision, which can't tell what it takes away (below).
-// One that does and cannot
-// read the directory is refused 503 rather than allowed: a removal may not
-// proceed on evidence this node does not have, and an outage read as "nobody
-// holds it" is exactly the answer the write would act on.
-//
-// # A document replacing what nobody can read asks about every seat
-//
-// The seats a write takes away are the human seats of the revision it
-// replaces that its own document does not keep. A whole document replacing a
-// revision stored without a seal reads nothing from it (apply.go), so it has
-// no such list: it asks instead about EVERY seat its document does not keep
-// as a human seat, and only the directory knows which of those anybody holds.
-// So it always asks, and a held seat it drops is refused exactly as a removal
-// is. Judged against nothing, the check would answer "nothing leaves" and the
-// replacement would take every seat it dropped from whoever holds it.
+// Only a write taking a human seat asks, and a whole document over an unsealed
+// revision (apply.go) asks about EVERY seat it does not keep. An unreadable
+// directory refuses such a write 503: an outage is not "nobody holds it".
 
 // SeatHolder is the ONE thing holding a human seat, as a refusal names it: a
 // person or a service account bound to it, or an open invitation onto it.
@@ -122,16 +73,11 @@ func (h SeatHolder) held() string {
 // invitation open at now. A seat nothing holds, and a seat the predicate does
 // not admit, is absent. An error is UNKNOWN, never "nobody".
 //
-// A FUNCTION RATHER THAN THE DIRECTORY, because this surface needs one
-// question of it, and the directory's own types are the identity estate's.
-// THE SEATS ASKED ARE A PREDICATE rather than a list, because one write asks
-// about seats it cannot list: a whole document replacing a revision stored
-// without a seal asks about every seat its own document does not keep as a
-// human seat, and only the directory knows which of those anybody holds (see
-// this file's header).
-// NOW IS THE CALLER'S, because whether an invitation is still open is a
-// question about an instant and the directory keeps no clock: the surface
-// passes its own ([Service.now]), so a case pinning it pins the answer.
+// A FUNCTION, not the directory: the directory's types are the identity
+// estate's and this surface needs one question of it. THE SEATS ASKED ARE A
+// PREDICATE because a whole document over an unsealed revision asks about
+// seats it cannot list. NOW IS THE CALLER'S: the directory keeps no clock, so
+// the surface passes [Service.now] and a case pinning it pins the answer.
 type Holders func(ctx context.Context, asked func(seat string) bool, now time.Time) (
 	map[string]SeatHolder, error)
 
@@ -170,18 +116,13 @@ func claimHolders(read func(context.Context, time.Time) (iamdomain.SeatClaims,
 // holdersOf folds one snapshot of the seat claims to what holds each seat
 // asked admits.
 //
-// IT ANSWERS ABOUT THE SEATS ASKED AND NO OTHERS: the claims are narrowed to
-// them BEFORE they are folded. The fold is the directory's
-// ([iamdomain.ClaimsBySeat]), so two rows bound to one seat are the unknown arm
-// — but only for a seat this write takes away. Folded whole, a residue on any
-// seat in the company refused every write that removed a human seat, the
-// seats nobody holds included, for a duplicate the write never touched.
+// IT ANSWERS ABOUT THE SEATS ASKED AND NO OTHERS: the claims are narrowed
+// BEFORE the fold ([iamdomain.ClaimsBySeat], where two rows bound to one seat
+// are the unknown arm), or a duplicate on a seat the write never touched would
+// refuse every write that removed a human seat.
 //
-// Two open invitations on one seat are the newest. A PERSON WINS where a
-// person and an invitation both claim a seat — a residue of the build before
-// invitations held their seats — because what the write takes from is the
-// person; the invitation's redemption is refused for the seat they hold either
-// way.
+// Of two open invitations on one seat the newest counts. A PERSON WINS over an
+// invitation on the same seat: what the write takes from is the person.
 func holdersOf(claims iamdomain.SeatClaims, asked func(string) bool) (
 	map[string]SeatHolder, error) {
 

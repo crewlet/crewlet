@@ -474,7 +474,7 @@ func TestARecordWritesNoMoreRowsThanItsDecideCounts(t *testing.T) {
 		{name: "a reopen whose source moved", closed: true, op: OpChangeReopen,
 			proposal: ChangeProposal{Reopen: &ChangeReopen{}},
 			payload:  ChangeReopen{RepoID: repo, ChangeID: ccChange(1), By: ccSeat, Head: moved}},
-		{name: "an edit", op: OpChangeEdit, proposal: ChangeProposal{Edit: &ChangeEdit{}},
+		{name: "an edit", op: OpChangeEdit, proposal: ChangeProposal{Edit: &ChangeEdit{Body: &body}},
 			payload: ChangeEdit{RepoID: repo, ChangeID: ccChange(1), By: ccSeat, Body: &body}},
 		{name: "a retarget", op: OpChangeRetarget, proposal: ChangeProposal{Retarget: &ChangeRetarget{}},
 			payload: ChangeRetarget{RepoID: repo, ChangeID: ccChange(1), By: ccSeat, TargetRef: "refs/heads/next"}},

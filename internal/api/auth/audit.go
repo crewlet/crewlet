@@ -12,41 +12,17 @@ import (
 )
 
 // WHAT THE GUARD TELLS THE AUDIT TRAIL, and which of it is allowed to be a row.
-//
-// The guard sees every request, which makes it the frame that knows that a
-// credential was presented and REFUSED. That is authored by whoever holds the
-// wrong value, which is anybody who can reach the listener, so it is never an
-// event: it is a failed attempt of method `bearer`, counted, and folded into
-// what the engine's own loop publishes once each minute has closed
-// (internal/iam/authevents).
-//
-// A TIER A TOKEN'S USE IS NOT A ROW. Every write a token makes already names
-// it — the author and `operator_id` columns every record carries — so a row
-// per first use in an hour said again, coarsely, what the records say exactly,
-// and took a bounded once-per-window set of its own to say it. A route
-// REFUSING a token — something holding it reaching past its grants — is a
-// WARN log line on this node ([Guard.overreached]), which an operator's log
-// alerting sees without a dedupe of its own.
-//
-// BOTH ARE A REQUEST'S, recorded by the middleware alone. An open socket
-// decides the credential it was opened with again whenever the identity
-// estate moves it ([Guard.ResolveOpen]), outside the middleware, and a
-// re-decision is not somebody presenting a credential: counted, every tab a
-// revocation closed would be a failed attempt on the per-minute row.
-//
-// # A refusal is an attempt only where the guard RELIED on the credential
-//
-// Resolve runs on every request, the [Unguarded] ones included, and those
-// carry credentials that were never this guard's to check: the Atlassian Forge
-// relay's own `Authorization: Bearer` JWT on /webhooks/forge, verified by that
-// route against the relay's keys; a sign-in page loaded by a browser that
-// still holds a cookie signed under a retired key. Counted at the resolution,
-// every legitimate Jira and Confluence delivery was a failed bearer sign-in,
-// and any alert on the counter fired on ordinary traffic. So Resolve only
-// MARKS what it refused ([refusedCredential]) and the middleware counts the
-// mark in the one arm where the refusal decided something: a guarded route
-// answering 401. The credential exchange at `POST /auth/token` is such a
-// route, and so is the socket's handshake.
+// A credential REFUSED is authored by anybody who can reach the listener, so it
+// is never an event: a failed `bearer` attempt, counted and folded into the
+// per-minute row (internal/iam/authevents). A TIER A TOKEN'S USE IS NOT A ROW
+// (writes name it); a route REFUSING one is a WARN log ([Guard.overreached]).
+// Both are a request's, recorded by the middleware alone: an open socket's
+// re-decision ([Guard.ResolveOpen]) is not a credential being presented. A
+// refusal counts only where the guard RELIED on the credential: Resolve also
+// runs on [Unguarded] requests, whose credentials were never its to check (the
+// Forge relay's JWT; a retired cookie), so it only MARKS the refusal
+// ([refusedCredential]); the middleware counts it where it decided something
+// (a guarded route's 401, `POST /auth/token`, the socket handshake).
 
 // Audit is where the guard's authentication facts go.
 //

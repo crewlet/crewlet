@@ -1025,17 +1025,14 @@ func closedPosture() config.Bootstrap {
 // authorize gives a bootstrap its credentials AND the authority behind them.
 //
 // BOTH HALVES, because a principal's grants are what its token declares as
-// the node's admin posture lets it carry, and a fixture that set only one
-// carries none: an `api.auth.admin` left unset is no posture at all, which
-// confers nothing whatever a token asks for, and a token declaring nothing
-// carries nothing however the node is postured. Either way every question
-// past the overview refuses for want of a grant, and a case about the drain,
-// the socket or a route's shape fails on an authority it never meant to be
-// about.
+// the node's admin posture lets it carry: an unset `api.auth.admin` confers
+// nothing whatever a token asks for, and a token declaring nothing carries
+// nothing. Either way every question past the overview refuses for want of a
+// grant, failing cases about the drain or a route's shape on authority.
 //
-// The default is `admin` on a node that serves it, which carries every app
-// with it. A token passed with grants of its own keeps them — that is how a
-// case narrows itself to the authority it IS about.
+// The default is `admin` on a node that serves it. A token passed with grants
+// of its own keeps them, which is how a case narrows itself to the authority
+// it IS about.
 func authorize(b *config.Bootstrap, tokens ...config.APIToken) {
 	b.API.Auth.Admin = iam.AdminServe
 	for i := range tokens {
@@ -1127,15 +1124,11 @@ func TestHealthNamesTheIdentityDutiesThisNodeArmed(t *testing.T) {
 
 // /HEALTH SAYS WHETHER THE COMPANY HAS ITS FIRST PERSON — TO ANYBODY.
 //
-// A fresh install has nobody in it, and its first person is invited under a
-// Tier A token; an operator who has just started a node, and a dashboard whose
-// sign-in form nobody can use yet, both need to be told that is where they
-// are. /health is the probe every visitor reaches, and before the first person
-// there is no credential but the deployment's own to present anywhere else.
-// `unknown` is its own answer, never `unclaimed`: told nobody is in, a
-// dashboard would give an empty company's guidance to one that may have
-// started. A node with no identity rows says nothing at all, and none of it
-// moves the status.
+// A fresh install has nobody in it; /health is the probe every visitor
+// reaches, with no credential but the deployment's own before the first
+// person. `unknown` is its own answer, never `unclaimed`: told nobody is in, a
+// dashboard would give an empty company's guidance to a started one. A node
+// with no identity rows says nothing at all, and none of it moves the status.
 //
 // Mutations: fold the seam's error into `unclaimed` and the unknown row goes
 // red; answer the field on a node with no seam and the first row does.

@@ -47,20 +47,15 @@ func (s *Store) Backend() Backend { return s.backend }
 // Put streams r into a new object, under a key minted for it, and answers what
 // a row names it by: the key, and the digest and size of what r yielded.
 //
-// At most limit bytes are read; one more fails the put with [ErrTooLarge],
-// so an upload over its limit is refused having read one byte past it rather
-// than the whole of it.
+// At most limit bytes are read; one more fails the put with [ErrTooLarge]
+// having read one byte past it, not the whole upload.
 //
-// EVERY FAILURE REACHES THE BACKEND AS A FAILED READ — the limit, and ctx
-// ending, as well as r's own — because a failed read is the one failure every
-// backend cleans up after with a context that still works, leaving nothing
-// anybody can find ([Backend.Put]). And the failure the read recorded is the
-// one Put answers, whatever the backend wrapped it in, so a caller's
-// errors.Is sees [ErrTooLarge] or its own reader's error on every backend.
-//
-// THE DIGEST AND THE SIZE ARE THIS STORE'S OWN, counted over the bytes it
-// handed the backend: a backend's account of what it stored is never what a
-// row records.
+// EVERY FAILURE REACHES THE BACKEND AS A FAILED READ (limit, ctx, r's own),
+// the one failure every backend cleans up after with a working context
+// ([Backend.Put]); the recorded failure is the one Put answers, so errors.Is
+// sees [ErrTooLarge] or the reader's error on every backend. THE DIGEST AND
+// SIZE ARE THIS STORE'S OWN, counted over what it handed the backend, never a
+// backend's account of what it stored.
 func (s *Store) Put(ctx context.Context, r io.Reader, limit int64, m PutMeta) (Object, error) {
 	return s.put(ctx, KeyAt(s.now()), r, limit, m)
 }
@@ -69,20 +64,13 @@ func (s *Store) Put(ctx context.Context, r io.Reader, limit int64, m PutMeta) (O
 // ([Store.Mint]) for one upload a caller reserved before any byte moved, and
 // answers what a row names it by, exactly as [Store.Put] does.
 //
-// # Why a key minted before the bytes arrive
-//
-// An upload that is reserved first (an artifact's upload intent) names its key
-// when it is reserved, so the same key is the one a presigned put signs and the
-// one the engine streams into: the reservation then knows, before any byte
-// moves, every object it may have to answer for. The key is still minted here,
-// on this store's clock, never by a client.
-//
-// A NAME IS PUT ONCE: the caller holds a claim that no other put of k runs, or
-// has run to its end, before it calls this ([Backend]'s rule). A put that
-// fails leaves nothing under the name, so a failed put may be followed by
-// another under the same claim. And a key too old to be named is refused
-// before a byte is read: bytes stored under it could never be recorded, and
-// would wait for the collector with nothing reserving them.
+// Reserving first (an artifact's upload intent) makes one key both what a
+// presigned put signs and what the engine streams into, so the reservation
+// knows every object it may answer for. Minted on this store's clock, never
+// by a client. A NAME IS PUT ONCE: the caller holds a claim that no other put
+// of k runs or has run to its end ([Backend]'s rule); a failed put leaves
+// nothing, so another may follow. A key too old to be named is refused before
+// a byte is read: bytes under it could never be recorded.
 func (s *Store) PutMinted(ctx context.Context, k Key, r io.Reader, limit int64, m PutMeta) (Object, error) {
 	if k.IsZero() {
 		return Object{}, errors.New("objstore: a put under a minted key names no key")
@@ -167,29 +155,14 @@ func (m *metered) Read(p []byte) (int, error) {
 }
 
 // Open streams the object o names back, checked against it: every byte is
-// counted and hashed, and the stream ends in [ErrCorrupt] — never io.EOF —
-// where the backend's bytes are not o's.
+// counted and hashed, and the stream ends in [ErrCorrupt], never io.EOF,
+// where the backend's bytes are not o's. THE LAST BYTE IS HELD BACK until the
+// object ENDED and the bytes before it hash to o's digest, else a caller
+// would hold a whole damaged file before the damage was known.
 //
-// # The byte that completes the file is held back
-//
-// Until the backend has said the object ENDED and the bytes before it hash to
-// o's digest, the reader hands out every byte but the last. Verifying at the
-// end and handing everything out as it came would put the whole of a damaged
-// file into a caller's hands — a response with a complete Content-Length, a
-// backup file of the right size — before the damage was known; held back, a
-// damaged object always reads short of its size, which is what a client and
-// a backup can each see for themselves.
-//
-// # Every read is bounded twice
-//
-// The whole read runs under [ReadBudget] — or ctx's own deadline, where that
-// is sooner — and every wait on the backend under [Stall]: the backend's
-// open of the stream ([Store.begin]) and each Read of it after. A wait that
-// lasts longer cancels the read, so a broker that lost the object's pieces, a
-// connection that went away or a bucket that keeps failing the request a read
-// begins with ends the read in a minute rather than at the end of a budget
-// that may be hours long.
-//
+// EVERY READ IS BOUNDED TWICE: the whole under [ReadBudget] (or ctx's sooner
+// deadline), each backend wait ([Store.begin], each Read) under [Stall], so a
+// dead connection ends the read in a minute, not at a budget of hours.
 // A missing object is [ErrNotFound] here, before the first byte.
 func (s *Store) Open(ctx context.Context, o Object) (io.ReadCloser, error) {
 	if err := o.Validate(); err != nil {
@@ -298,22 +271,14 @@ func (v *verifier) Close() error { return v.body.Close() }
 
 // begin asks the backend for n bytes of o from off — to the end where n is
 // negative — under the stall watchdog: a backend that has handed back no
-// stream within [Stall] has the read's context cancelled (cancel), and the
-// read fails as stalled ([ErrStalled]), as a Read that waits as long does
-// ([watched]).
+// stream within [Stall] has the read's context cancelled (cancel) and the
+// read fails as [ErrStalled], as a Read waiting as long does ([watched]).
 //
-// THE OPEN IS A WAIT ON THE BACKEND LIKE ANY READ, and the longest one: a
-// backend looks the object up and asks for its first bytes before it hands a
-// stream back — S3's first range is a request answered before Get returns,
-// the broker's a leader's read of its metadata and its consumer's first
-// message — and none of that is a Read for [watched] to time. Unwatched, an
-// open the backend kept failing and asking again — a gateway answering one
-// object with a server error every time, a bucket refusing connections, a
-// throttle that never lifts — held its read, and the node's slot it was read
-// in, until the read's whole budget had passed: two minutes for a small file,
-// hours for a pack bundle near its ceiling. Watched, it ends where a read that
-// heard nothing for as long would, and one the backend merely slowed, and that
-// begins inside the stall, is read as ever.
+// THE OPEN IS A WAIT ON THE BACKEND LIKE ANY READ, and the longest: it looks
+// the object up and fetches the first bytes before returning a stream, and no
+// Read exists for [watched] to time. Unwatched, an open the backend kept
+// failing and retrying held the read and its node slot for the whole budget,
+// hours for a pack bundle near its ceiling.
 func (s *Store) begin(ctx context.Context, cancel context.CancelFunc, o Object, off, n int64) (io.ReadCloser, error) {
 	timer := time.AfterFunc(s.stall, cancel)
 	body, err := s.backend.Get(ctx, o.Key.Name(), off, n)
@@ -380,17 +345,13 @@ func (w *watched) Close() error {
 // the end of the object, and none — without asking the backend — at or past
 // it.
 //
-// CHECKED FOR ITS LENGTH ONLY: a page of an object cannot be checked against
-// the whole object's digest, which is the one the row keeps. A page that is
-// not the length the row's size implies is [ErrCorrupt], and so is a LAST
-// page with a byte after it — an object held longer than its row — since the
-// final page is the one read that can see the object's end; a page of the
-// right length is whatever the backend holds there. It is what a tool reading a
-// page into a model's context takes, where reading the whole object to check
-// one page would be the wrong price. Bounded as [Store.Open] is — the stall
-// watching its open and its Reads — by the budget of every byte up to the
-// page's end, because a backend with no ranged read (the broker's) walks the
-// object to the offset, reading its messages' headers alone inside the open.
+// CHECKED FOR ITS LENGTH ONLY: a page cannot be checked against the whole
+// object's digest. A page not the length the row's size implies is
+// [ErrCorrupt], as is a LAST page with a byte after it (an object longer than
+// its row); otherwise it is whatever the backend holds there. Bounded as
+// [Store.Open] is, by the budget of every byte up to the page's end, since a
+// backend with no ranged read (the broker's) walks to the offset inside the
+// open.
 func (s *Store) ReadAt(ctx context.Context, o Object, off, n int64) ([]byte, error) {
 	if err := o.Validate(); err != nil {
 		return nil, err

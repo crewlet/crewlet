@@ -22,17 +22,16 @@ func openStore(t *testing.T) *store.DB {
 
 // TestEveryDomainGetsANodeLocalLedgerSweepAndNoAnchorSweep.
 //
-// The operation ledger is NODE-LOCAL: each node holds its own operation rows,
-// so a fleet singleton would tidy one node's copy and leave every other
-// growing — which looks exactly like a sweep that works, to the operator who
-// checks the node it ran on. Its cutoff is a CLOCK (how long a retrying
-// client may take to re-ask), so the job carries the domain's horizon.
+// The operation ledger is NODE-LOCAL: a fleet singleton would tidy one node's
+// copy and leave every other growing, which looks like a sweep that works. Its
+// cutoff is a CLOCK (how long a retrying client may take to re-ask), so the job
+// carries the domain's horizon.
 //
-// AND NO ANCHOR SWEEP. A domain's arbitration anchors are replicated rows,
-// which only an applier writes (ADR-0002): the trim removes them with a
-// trimmed record every node applies at one position (ADR-0080), and a job here
-// deleting them below a floor each node read for itself would leave two copies
-// of one log holding different anchors.
+// AND NO ANCHOR SWEEP. Arbitration anchors are replicated rows, which only an
+// applier writes (ADR-0002): the trim removes them with a trimmed record every
+// node applies at one position (ADR-0080); a job deleting them below a floor
+// each node read for itself would leave two copies of one log with different
+// anchors.
 func TestEveryDomainGetsANodeLocalLedgerSweepAndNoAnchorSweep(t *testing.T) {
 	t.Parallel()
 	ledger := &countingLedger{}
@@ -148,26 +147,15 @@ func TestASubjectKindWithItsOwnHorizonIsItsOwnSweep(t *testing.T) {
 
 // A REVISION OUTLIVES THE AUDIT ROW THAT NAMES IT.
 //
-// # The relation, which is the thing to keep — not the number
+// An audit row names the revision activated; a revision sweep shorter than the
+// audit log's horizon would leave a trail pointing at nothing, which reads as
+// damage. The relation is what to keep, not the number: [maintenance.RevisionRetention]
+// (an annual cycle) and [store.EventRetention] (the event log's read floor) are
+// in different packages and either can move for its own reason.
 //
-// The event store records which revision was activated, by whom and when, and
-// an operator reading that row a month later follows it to the document. If
-// the revision sweep ran shorter than the audit log's own horizon, that
-// follow would land on a row the sweep had already deleted — an audit trail
-// pointing at nothing, which is worse than one that stops, because it reads
-// as damage.
-//
-// THE TWO CONSTANTS ARE IN DIFFERENT PACKAGES and nothing else connects them.
-// [maintenance.RevisionRetention] is set here from an annual cycle and
-// [store.EventRetention] is set there from the event log's read floor, so
-// either can move for a reason that has nothing to do with the other. This is
-// what makes the ordering between them a decision rather than a coincidence
-// that happens to hold today.
-//
-// The margin is deliberately not asserted: what must hold is the ORDER. A
-// test demanding a particular multiple would fail for a change that is
-// perfectly sound and would have to be edited to say so, which is how a
-// relation quietly becomes a number nobody believes.
+// The margin is deliberately not asserted, only the ORDER: a test demanding a
+// multiple would fail for a sound change and turn a relation into a number
+// nobody believes.
 func TestARevisionOutlivesTheAuditRowThatNamesIt(t *testing.T) {
 	t.Parallel()
 

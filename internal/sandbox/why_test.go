@@ -22,13 +22,16 @@ import (
 // retry a key nobody fixed, or to give up on an outage that clears in a minute.
 
 // e2bAnswering is a provider whose control plane answers every request with
-// status, or — when status is zero — whose server is gone before it is asked.
+// status, or, when status is zero, whose server is gone.
 func e2bAnswering(t *testing.T, status int) *sandbox.E2BProvider {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(status)
-		_, _ = w.Write([]byte(`{"message": "the provider's own words"}`))
-	}))
+	server := httpxtest.Gone(t)
+	if status != 0 {
+		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(`{"message": "the provider's own words"}`))
+		}))
+	}
 	t.Cleanup(server.Close)
 	provider, err := sandbox.NewE2B(sandbox.E2BOptions{
 		APIKey: "k", Domain: "test.invalid",
@@ -36,9 +39,6 @@ func e2bAnswering(t *testing.T, status int) *sandbox.E2BProvider {
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if status == 0 {
-		server.Close()
 	}
 	return provider
 }

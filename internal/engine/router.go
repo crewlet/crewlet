@@ -521,6 +521,14 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 			b.Atlas.Writer = c.atlasWriter
 		}
 	}
+	// AND THE ADVISOR LOG, on the atlas log's terms: the duty and a person's
+	// decision write through a data node that publishes, from any node.
+	if c.advisorReader != nil && c.advisorWriter != nil {
+		b.Advisor = estate.AdvisorHalf{Reader: c.advisorReader}
+		if publishes {
+			b.Advisor.Writer = c.advisorWriter
+		}
+	}
 	if n == nil {
 		return b
 	}

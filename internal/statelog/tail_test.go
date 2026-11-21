@@ -212,13 +212,11 @@ func TestARestoredReanchorOverUnheldRecordsRunsOnlyOnTheOperatorsWord(t *testing
 // A RECORD THESE ROWS HOLD FROM A PEER'S SNAPSHOT IS HELD — THROUGH A REAL
 // SNAPSHOT, TRANSFER AND ADOPTION.
 //
-// The operation ledger travels inside every snapshot, instant and all, so the
-// row a donor wrote when it applied a record names that record on the node that
-// adopted it exactly as it did on the donor: a restored reanchor there finds
-// nothing written after the restore and runs. Where the donor's own sweep had
-// removed the row, the walk cannot vouch — but it says why, with the watermark
-// that travelled beside the ledger, so the refusal can say the rows may hold
-// the record after all.
+// The operation ledger travels inside every snapshot, instant and all, so a
+// donor's row names its record on the adopting node exactly as on the donor,
+// and a restored reanchor there runs. Where the donor's sweep had removed the
+// row the walk cannot vouch, but names the watermark that travelled beside the
+// ledger, so the refusal can say the rows may hold the record after all.
 func TestARecordHeldFromAPeersSnapshotIsHeld(t *testing.T) {
 	t.Parallel()
 	held := otherHistory.Add(-time.Hour).Truncate(time.Microsecond)
@@ -341,8 +339,8 @@ func TestALedgersSilenceIsConclusiveOnlySinceItLastLostARow(t *testing.T) {
 //
 // Where the ledger may have lost the record's row the refusal says the rows may
 // hold it after all, naming how far back; where the ledger's silence is
-// conclusive it says so, the snapshot a record came from no longer being a
-// reason — only a gate that dropped it is.
+// conclusive it says the rows hold no such record, a peer's snapshot included,
+// unless a gate dropped it.
 func TestARestoredReanchorsRefusalSaysHowSureItIs(t *testing.T) {
 	t.Parallel()
 	lost := otherHistory.Add(time.Hour)

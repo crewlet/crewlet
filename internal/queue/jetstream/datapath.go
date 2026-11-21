@@ -182,8 +182,7 @@ func (d *dataPath) moving(span time.Duration) bool {
 	return d.meter != nil && d.meter.Moving(span)
 }
 
-// verdict is the data path's answer at now (the table in the package doc,
-// "A node's leases ride a link of their own").
+// verdict is [Queue.DataPath]'s answer at now.
 func (d *dataPath) verdict(now time.Time) error {
 	if err := d.firstHop(); err != nil {
 		return err

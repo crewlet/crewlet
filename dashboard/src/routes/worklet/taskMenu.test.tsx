@@ -57,6 +57,7 @@ const JANE = {
 const MAYA = { ...JANE, login: "U0MAYA", grants: ["worklet"], handle: "maya", owner: "maya" };
 
 const row = (id: string, key: string, title: string): WorkSummary => ({
+  flow: null,
   id,
   key,
   project: "ENG",

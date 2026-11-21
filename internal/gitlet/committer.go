@@ -1329,7 +1329,7 @@ func (c *Committer) answer(repoID string, p Proposal, d decided, res statelog.Re
 	}
 	if row, ok := rows[p.PushID]; ok {
 		if row.RepoID != repoID {
-			return answered{err: fmt.Errorf("%w: push_id: %s is a push to repository %s, not %s",
+			return answered{err: refusedf("%w: push_id: %s is a push to repository %s, not %s",
 				ErrInvalidProposal, p.PushID, row.RepoID, repoID)}
 		}
 		// THE RECORD'S OWN ROW, or one an earlier record applied: the push

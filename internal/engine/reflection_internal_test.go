@@ -103,7 +103,7 @@ func TestASeatsReflectionRunsWhereTheSeatIsHeld(t *testing.T) {
 	holder, probe := holderOn(t, q)
 
 	// THROUGH THE SEAT'S OWN HOOKS: acquisition attaches, release lets go.
-	if err := holder.prepareSeat(ctx, reflectSeat, 1, "node-a/1"); err != nil {
+	if err := holder.prepareSeat(ctx, reflectSeat, 1, "node-a/1", noSeatInbox); err != nil {
 		t.Fatalf("prepare the seat: %v", err)
 	}
 	if !attached(q, reflectSeat.ID) {
@@ -137,7 +137,7 @@ func TestASeatsReflectionRunsWhereTheSeatIsHeld(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = peer.Stop(context.Background()) })
 	next, nextProbe := holderOn(t, peer)
-	if err := next.prepareSeat(ctx, reflectSeat, 2, "node-b/1"); err != nil {
+	if err := next.prepareSeat(ctx, reflectSeat, 2, "node-b/1", noSeatInbox); err != nil {
 		t.Fatalf("prepare the seat on the next holder: %v", err)
 	}
 	deadline := time.Now().Add(5 * time.Second)

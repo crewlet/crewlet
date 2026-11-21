@@ -1,6 +1,7 @@
 package artifactserve_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactserve"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/objectives"
+	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
 // judged is the objective meter as the handler sees it, keeping every event.
@@ -31,6 +33,8 @@ func (j *judged) Record(n objectives.Name, elapsed time.Duration, answered bool)
 	defer j.mu.Unlock()
 	j.events = append(j.events, judgedEvent{n, elapsed, answered})
 }
+
+func (j *judged) Abandon(objectives.Name, time.Duration) {}
 
 func (j *judged) all() []judgedEvent {
 	j.mu.Lock()
@@ -73,6 +77,60 @@ func TestEveryDocumentsFirstByteIsAViewEvent(t *testing.T) {
 	}
 	if got := r.judged.all(); len(got) != 3 || !got[2].answered {
 		t.Errorf("events %+v: an expired ticket is the viewer's to re-mint, and an answer", got)
+	}
+}
+
+// A REQUEST ITS VIEWER ABANDONED IS NO BAD VIEW EVENT AND NO 5XX: a read the
+// request's own cancellation ended (a frame torn down, a browser gone) is no
+// fault of the store's. One already late when its viewer left, and one the
+// store failed on its own while the viewer waited, still burn.
+//
+// Mutation: drop the abandoned branch in ServeHTTP, and the first case is a bad
+// event and a 5xx.
+func TestARequestItsViewerAbandonedIsNoBadViewEvent(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	rec := &recorder{counts: map[string]uint64{}}
+	r.meter = objectives.NewMeter(rec, r.clock.now)
+	r.build()
+	f := r.frame()
+	doc := request{url: strings.SplitN(f.URL, "#", 2)[0], dest: "iframe"}
+	check := func(when string, bad, abandoned, failed uint64) {
+		t.Helper()
+		got := []uint64{
+			rec.count(metrics.ObjectivesEvents, metrics.Attrs{"outcome": objectives.OutcomeBad}),
+			r.rec.count(metrics.ArtifactsServeRequests, metrics.Attrs{"dest": "document", "status": "abandoned"}),
+			r.rec.count(metrics.ArtifactsServeRequests, metrics.Attrs{"dest": "document", "status": "5xx"}),
+		}
+		if got[0] != bad || got[1] != abandoned || got[2] != failed {
+			t.Errorf("%s: bad view events, abandoned and 5xx documents %v, want %v", when, got,
+				[]uint64{bad, abandoned, failed})
+		}
+	}
+
+	ctx, leave := context.WithCancel(t.Context())
+	r.whileHeld(ctx, doc, func(chan<- error) { leave() })
+	check("the viewer left inside the bound", 0, 1, 0)
+
+	ctx, leave = context.WithCancel(t.Context())
+	r.whileHeld(ctx, doc, func(chan<- error) {
+		r.clock.advance(objectives.ViewFirstByteWithin + time.Millisecond)
+		leave()
+	})
+	check("the viewer left a late document", 1, 2, 0)
+
+	if code := r.whileHeld(t.Context(), doc, func(fail chan<- error) {
+		fail <- errors.New("holding: the broker did not answer")
+	}); code != http.StatusServiceUnavailable {
+		t.Errorf("a store that failed while the viewer waited answered %d, want 503", code)
+	}
+	check("the store failed while the viewer waited", 2, 2, 1)
+
+	ctx, leave = context.WithCancel(t.Context())
+	r.whileHeld(ctx, request{url: base(f) + "logo.png", dest: "image"}, func(chan<- error) { leave() })
+	if n := r.rec.count(metrics.ArtifactsServeRequests,
+		metrics.Attrs{"dest": "subresource", "status": "abandoned"}); n != 1 {
+		t.Errorf("an abandoned file was counted abandoned %d times, want once", n)
 	}
 }
 

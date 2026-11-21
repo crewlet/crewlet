@@ -16,25 +16,16 @@ import (
 
 // THE TYPED PAYLOADS, one per (kind, op).
 //
-// A small whole-document object — a membership set, a gate — travels as FULL
-// POST-STATE: one document field, one upsert, and no patch semantics to get
-// wrong. A ROOM'S SETTINGS travel as a TYPED PATCH, because a topic change
-// must not have to restate a thousand members.
+// A small whole-document object (a membership set, a gate) travels as FULL
+// POST-STATE. A ROOM'S SETTINGS travel as a TYPED PATCH, so a topic change need
+// not restate a thousand members: a nil field is unchanged, and the POINTER
+// tells "set this to empty" from "leave it alone". Two rules:
 //
-// The patch's rule is the tracker's and the wiki's, and it is the right one: a
-// nil field is unchanged, and the POINTER is what tells "set this to empty"
-// from "leave it alone" — which a plain string cannot. Two rules travel with
-// it:
-//
-//  1. A named scalar present in the patch carries its COMPLETE new value,
-//     never an excerpt and never a diff. The [MaxExcerpt] previews live in the
-//     notification, where a card is what they are for — and the complete
-//     value is what a woken seat reads, so a message is never handed to the
-//     seat it addresses cut at a card's length.
-//  2. A collection the write TOUCHES is carried whole; one it does not touch
-//     is absent. That is what makes a record able to rebuild the row on a
-//     replay from zero, and it is affordable because every collection here is
-//     capped.
+//  1. A scalar in the patch carries its COMPLETE new value, never an excerpt
+//     or a diff: [MaxExcerpt] previews belong to the notification's card.
+//  2. A collection the write TOUCHES is carried whole, one it does not touch
+//     is absent, so a replay from zero can rebuild the row (every collection
+//     is capped).
 
 // OpKind is what a record does.
 type OpKind string
@@ -150,19 +141,14 @@ var opRidesOn = map[OpKind]ObjectKind{
 // SubjectKind names the object kind whose subject an op is published on,
 // reporting false for a pair this build does not write.
 //
-// `of` is the channel's own kind and is read for [OpCreate] ALONE, because a
-// create is the one op with two answers:
+// `of` is read for [OpCreate] ALONE, the one op with two answers:
+//   - A NAMED room arbitrates on its NAME ([KindChannelName]): two people
+//     typing `#launch` contend at the broker and one wins.
+//   - A DIRECT conversation arbitrates on its DERIVED id ([KindChannel]),
+//     create-only at expectation zero; both sides derive the SAME id
+//     ([DirectChannelID]), so the loser is told the room exists.
 //
-//   - A NAMED room's create arbitrates on its NAME ([KindChannelName]), so two
-//     people typing `#launch` contend at the broker and exactly one wins.
-//   - A DIRECT conversation has no name to contend for, so its create
-//     arbitrates on its own DERIVED id ([KindChannel]), create-only at an
-//     expectation of zero — and the two sides opening it from two nodes derive
-//     the SAME id, so the loser is told the room already exists, which is the
-//     right answer because it does. See [DirectChannelID].
-//
-// An unknown channel kind answers false rather than guessing, because the two
-// answers are different arbitration disciplines and picking the wrong one for
+// An unknown kind answers false rather than guessing: the wrong discipline for
 // a named room is two rooms with one name.
 func SubjectKind(op OpKind, of Kind) (ObjectKind, bool) {
 	if op == OpCreate {
@@ -372,22 +358,14 @@ func (c ChannelCreate) checkAddress() error {
 // ChannelPatch changes a room's settings. Every field is a pointer, and absent
 // means unchanged.
 //
-// # Why there is no retention here
+// No retention here: it is its own admin's record ([RetentionSet]), since a
+// shorter horizon destroys what a room said.
 //
-// A room's retention is its own record ([RetentionSet]): a shorter horizon is a
-// prune on a delay, so it is the one setting that destroys what a room said,
-// and it is an admin's to set where a topic is any member's.
-//
-// # Why there is no name here
-//
-// A channel's NAME IS IMMUTABLE. It is the address the create arbitrated on,
-// and moving it is a second claim plus a release of the first, inside one
-// transaction, on a record whose subject is the NEW name — a rename op, with
-// its own payload and its own arbitration, which this build does not have.
-// What a room's people actually change is its topic and its purpose, and both
-// are here. A `Name *string` on this patch would arbitrate on the room's own
-// subject, which nobody else contends for, and hand two rooms the same
-// address.
+// No name here: a channel's NAME IS IMMUTABLE. The create arbitrated on it, and
+// a move is a second claim plus a release of the first on a record whose
+// subject is the NEW name, a rename op this build lacks. A `Name *string` would
+// arbitrate on the room's own subject, which nobody else contends for, and
+// hand two rooms one address.
 type ChannelPatch struct {
 	V int `json:"v"`
 
@@ -508,19 +486,15 @@ type MemberSet struct {
 	// chart's. See [Channel.ChartEpoch].
 	ChartEpoch int64 `json:"chart_epoch,omitempty"`
 
-	// Unit RE-HOMES a unit room: the key of the unit the chart now gives
-	// it to, which the room is recorded under from this record on ([Channel.Unit]).
-	// EMPTY ON EVERY RECORD THAT MOVES NO UNIT — every write that is not
-	// the chart's, and every chart write to a room already recorded under
-	// that key — so the record says exactly what changed.
+	// Unit RE-HOMES a unit room: the key of the unit the chart now gives it
+	// to, recorded from this record on ([Channel.Unit]). EMPTY ON EVERY RECORD
+	// THAT MOVES NO UNIT, so the record says exactly what changed.
 	//
-	// THE CHART'S ALONE, and only beside its activation: a room's unit is
-	// what its answerer resolves through, and it moves for the reason
-	// its membership does — the org chart gave the channel to another unit
-	// (moved in a reorg, or the unit renamed without an `id`) — so it rides
-	// the record the chart already arbitrates on the room, stamped with the
-	// same activation, and an older activation moves it back no more than
-	// it moves the members back.
+	// THE CHART'S ALONE, beside its activation: a room's unit is what its
+	// answerer resolves through, and it moves for the membership's reason (a
+	// reorg, or a unit renamed without an `id`), so it rides the record the
+	// chart already arbitrates, stamped with the same activation: an older
+	// activation moves it back no more than it moves the members back.
 	Unit string `json:"unit,omitempty"`
 
 	// AutoJoined is the seats this write puts in an auto-join room as
@@ -728,25 +702,15 @@ func (m MessageDelete) Validate() error {
 
 // MessageErase removes message rows permanently. Its subject is the CHANNEL.
 //
-// # Why it is a channel record and why no seat may write one
-//
 // It deletes up to [MaxEraseMessages] rows across one room, so the room is its
-// blast radius and the channel subject is what serialises it against the
-// room's own state — an erase racing an archive has a defined order rather
-// than two. And it is the one gesture that destroys what somebody wrote, so it
-// is a PERSON's or a CREDENTIAL's — an admin's, which the authority table
-// decides before it is published: an agent that could erase its own messages
-// could erase the evidence of what it did, and the author kind is checked
-// HERE, in the decide, rather than only at whichever route happened to be the
-// way in.
+// blast radius and the channel subject serialises it against the room's own
+// state (an erase racing an archive has a defined order). It is a PERSON's or
+// a CREDENTIAL's, an admin's, decided by the authority table: an agent that
+// could erase its own messages could erase the evidence of what it did. The
+// author kind is checked in the decide, not only at the route.
 //
-// # Why it carries no room and no count
-//
-// The room is the SUBJECT, and how many is the length of the list. A copy of
-// either beside the thing it copies could only ever disagree with it, and
-// nothing reads a summary of an erase off the log: the account a person reads
-// is the audit record of whoever made it, written where the request was
-// served.
+// It carries no room and no count: the SUBJECT is the room and the list's
+// length the count. The audit record is written where the request was served.
 type MessageErase struct {
 	V int `json:"v"`
 
@@ -1061,19 +1025,15 @@ func decodePayload[T Payload](rec MutationRecord) (Payload, error) {
 
 // EncodeBarrier renders the read index's payload-free append.
 //
-// # Why the framework cannot write this itself
-//
 // The read index owns WHEN a barrier goes out and what its acknowledgement
-// proves — a quorum-committed position. The DOMAIN owns what a record on its
-// log looks like: this one's envelope, its version gate, its subject grammar
-// and the scope alphabet its applier files deferrals under. Neither can write
-// the other's half, and this function is where they meet.
+// proves (a quorum-committed position); the DOMAIN owns what a record on its
+// log looks like (envelope, version gate, subject grammar, deferral scopes).
+// Neither can write the other's half, and this is where they meet.
 //
-// AN OP ID IS REFUSED, and that is a correctness rule rather than tidiness. An
-// op id becomes the Nats-Msg-Id; a repeat inside the duplicate window is
-// answered from the dedupe cache with no quorum round trip at all, and the
-// sequence it returns is then a position nothing confirmed — which is exactly
-// the claim a barrier exists to make and the one it must never fake.
+// AN OP ID IS REFUSED, a correctness rule: it becomes the Nats-Msg-Id, and a
+// repeat inside the duplicate window is answered from the dedupe cache with no
+// quorum round trip, returning a position nothing confirmed, the very claim a
+// barrier must never fake.
 func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.BarrierKind {
 		return nil, fmt.Errorf("chatlet: %q is not a barrier envelope", env.Kind)
@@ -1287,42 +1247,26 @@ func checkLinks(links []string) error {
 
 // LinkSchemes are the schemes a message's link is written in. A link is an
 // ABSOLUTE address in one of them, written whole, with no space or control
-// character in it, and it is stored exactly as it was sent ([checkLink] holds
-// every link to that). Every tool that takes links names them.
+// character, and stored exactly as sent ([checkLink] holds every link to that).
+// Every tool that takes links names them.
 //
-// # Why a link is an absolute address
-//
-// A message's links are read wherever the message is: on a person's screen,
-// by a seat in the thread it is handed, and by any client that prints them
-// for somebody to open. A relative reference (`docs/plan`, `/worklet/ENG-1`),
-// a scheme-relative one (`//host/plan`) and a fragment (`#/worklet/ENG-1`,
-// one of the dashboard's own routes) resolve against whichever page shows
-// them, so each reader would open a different place or none at all. And the
-// dashboard's one address check opens http, https and mailto and draws any
-// other scheme as words, so a link in any other scheme is not one a reader
-// can follow.
-//
-// HTTP IS TAKEN BESIDE HTTPS, where a decision's evidence takes https alone
-// (internal/worklet's Evidence): that address is drawn as the button a person
-// presses while weighing a decision, while a message's link is a reference in
-// a conversation, often to a company's own host serving plain http, and how
-// a reader draws it is that reader's link rules to decide. What the store
-// holds is that it is an address a reader can open.
-//
-// NO SPACE AND NO CONTROL CHARACTER, ANYWHERE: the dashboard's address check
-// strips them before it reads an address, a line of text ends a link at its
-// first space, and the thread a seat reads joins a message's links with
-// spaces, so a link holding one would open a different address for each
-// reader. A space inside a path is written %20. url.Parse refuses a control
-// character itself, and its error says less than this one does.
-//
-// THE LINK IS STORED AS SENT. It is checked and never rewritten, so every
-// reader opens exactly the address its author wrote.
+// ABSOLUTE, because a relative (`docs/plan`), scheme-relative (`//host/plan`)
+// or fragment (`#/worklet/ENG-1`) link resolves against whichever page shows
+// it, so each reader opens a different place. The dashboard opens http, https
+// and mailto and draws any other scheme as words. HTTP IS TAKEN BESIDE HTTPS,
+// where a decision's evidence takes https alone (internal/worklet's Evidence):
+// a message's link is a conversation reference, often to a plain-http host.
 func LinkSchemes() []string { return []string{"http", "https", "mailto"} }
 
 // checkLink holds one link to what a link is ([LinkSchemes] says what and
 // why). A refusal names the entry (`links[1]`), so a caller sending several
 // knows which one to change.
+//
+// NO SPACE OR CONTROL CHARACTER, ANYWHERE: the dashboard strips them before
+// reading an address, text ends a link at its first space, and a seat's thread
+// joins links with spaces, so each reader would open a different address. A
+// space in a path is written %20. url.Parse refuses a control character
+// itself, with a vaguer error. The link is STORED AS SENT, never rewritten.
 func checkLink(field, link string) error {
 	if link == "" {
 		return invalid(field, "a message carries an empty link, which "+

@@ -103,7 +103,7 @@ import (
 // reason), and nothing a listing names beyond its own query, since a page is
 // MaxSnapshotItems rows.
 func (q ReadQuery) validateChangesDue() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch d := q.ChangesDue; {
 	case q.Asker != (Principal{}):
 		return refused("asker", "a changes_due read is the engine's own, which no principal makes")

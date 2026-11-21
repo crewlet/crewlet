@@ -227,15 +227,12 @@ func TestASilentNodeIsNamed(t *testing.T) {
 }
 
 // A NODE THE ROSTER DOES NOT HOLD NEVER ENDS THE READ BEFORE A PEER IT NAMES.
-// Every node serves the history questions, whatever its roles, so one the
-// roster does not hold answers too — a draining node, which gives its presence
-// back first and serves until it stops — and a scatter's replies carry no
-// sender: a read that ended at as many replies as the roster has peers ended
-// on such a node's answer before a named peer's, called that peer silent for
-// its whole budget and merged without its rows. Here node-d, draining, answers
-// first, and node-b answers only once node-d's reply has reached the read: the
-// read still waits for node-b, complete, with every node's row — node-d's
-// believed beside them.
+// Every node serves history, so one the roster does not hold (a draining node,
+// which leaves the roster first and serves until it stops) answers too, and
+// replies carry no sender: a read ending at as many replies as the roster has
+// peers ended on its answer, called a named peer silent and merged without its
+// rows. Here draining node-d answers first and node-b only once node-d's reply
+// has reached the read; the read still waits for node-b, complete.
 //
 // Mutation: end the scatter at as many replies as the roster has peers —
 // node-d's answer fills it, node-b is named silent and its row is missing, red.
@@ -617,14 +614,11 @@ func servesAs(t *testing.T, b *memory.Broker, node string, version int, row stor
 // A PEER ON ANOTHER PROTOCOL IS NAMED ON EVERY QUESTION, and nothing of it is
 // merged.
 //
-// Every question carries fields only this protocol defines — the asker's
-// instant above all, which every node floors the history at, and the filters
-// and counts each version added — so a node speaking any other version is never
-// asked to answer around them: every question goes out in [eventfan.Protocol],
-// the peer refuses it by version, and the coverage names it in its own words
-// while the rest of the fleet answers as usual. Its row is never merged in as
-// though it matched a filter it could not read, or counted under a horizon it
-// never floored at.
+// Every question carries fields only this protocol defines (the asker's
+// instant above all, plus each version's filters and counts), so a node on
+// another version is never asked to answer around them: it refuses by version
+// and the coverage names it while the rest answers. Its row is never merged as
+// though it matched a filter it could not read.
 //
 // Mutation: stamp any question with a version but [eventfan.Protocol], and the
 // peer's row is merged into that answer with the coverage reading complete.
@@ -878,14 +872,12 @@ func TestTheAxisIsSummedOverEveryNodeAndShownFromItsFirstWholeBar(t *testing.T) 
 
 // EVERY NODE FLOORS A PINNED WINDOW AT THE ASKER'S INSTANT.
 //
-// The axis, the page of turns and the spend window are each cut on the asker's
-// clock before anybody is asked, and the instant travels with the question —
-// so by the time a peer reads, it is in that peer's past. Each peer floored
-// its rows at its OWN clock's history horizon instead, so what it held between
-// the asker's horizon and its own was missing from bars, a turn and a window
-// the merged answer said it covered. Node-b's rows here sit a minute above the
-// pinned horizon: below its clock's, and still on disk, since retention keeps
-// a day past the floor.
+// The axis, the page of turns and the spend window are cut on the asker's clock
+// before anybody is asked, and the instant travels with the question. A peer
+// flooring at its OWN clock's horizon would miss what it held between the two
+// from an answer said to cover it. Node-b's rows sit a minute above the pinned
+// horizon: below its clock's, and still on disk, as retention keeps a day past
+// the floor.
 //
 // Mutation: floor any of the three reads in the store at `now()` rather than
 // the query's instant, or leave `at` off the turns or the spend question's
@@ -952,13 +944,12 @@ func TestEveryNodeFloorsAPinnedWindowAtTheAskersInstant(t *testing.T) {
 
 // EVERY QUESTION IS ASKED AT THE ASKER'S INSTANT, on every node.
 //
-// A listing, a related-agent page and its siblings, one event, a trace, a turn
-// and the phase histories carry no window, but each is floored at the history
-// horizon — and each node floored at its OWN clock's, so a fleet's answer was a
-// union of different horizons and a node answering late, or running a little
-// ahead, dropped what it held at the edge. The asker's [eventfan.Fleet.Clock]
-// is read once per question and its instant sent with it; node-b's rows here
-// sit just above the horizon under that instant and below its own clock's.
+// Windowless questions (a listing, related-agent page, event, trace, turn,
+// phase histories) are still floored at the history horizon, and a node
+// flooring at its OWN clock's makes a union of horizons that drops what a late
+// or fast node held at the edge. [eventfan.Fleet.Clock] is read once per
+// question and its instant sent; node-b's rows sit just above the horizon under
+// that instant and below its own clock's.
 //
 // Mutation: leave `at` off any question's wire parameters — the listing's, the
 // trace rows', an id question's, the phases' — and node-b's rows drop out of
@@ -1066,18 +1057,16 @@ func TestEveryHistoryQuestionIsAskedAtTheAskersInstant(t *testing.T) {
 
 // A TURN RAN WHERE ITS ROWS SAY, NOT WHERE THEY ARE KEPT.
 //
-// A node without the `data` role keeps no event log: a data node keeps its
-// events in custody (ADR-0025), so the node HOLDING a turn's rows is not, in
-// general, a node it ran on. Here a turn opened on agent-1, a stateless host
-// whose rows node-b keeps, moved to agent-2 — kept by node-b too — for one
-// row, and was resumed on node-a; agent-2's row sits in the middle of node-b's
-// share, past the cap a read returns and before the ending recovered beside
-// it. The turn ran on agent-1, agent-2 and node-a; node-b ran none of it.
+// A data node keeps stateless nodes' events in custody (ADR-0025), so the node
+// HOLDING a turn's rows is not in general one it ran on. Here a turn opened on
+// stateless agent-1, moved to agent-2 for one row and resumed on node-a, with
+// node-b keeping both agents' rows; agent-2's row sits mid-share, past the cap
+// a read returns. node-b ran none of it.
 //
-// Mutation: answer `nodes` from which nodes answered with rows — the read this
-// replaced — and node-b is named while neither agent is; derive it from the
-// rows each node RETURNED rather than asking its whole share, and agent-2,
-// whose only row no read returns, goes missing.
+// Mutation: answer `nodes` from which nodes answered with rows, and node-b is
+// named while neither agent is; derive it from the rows each node RETURNED
+// rather than its whole share, and agent-2, whose only row no read returns,
+// goes missing.
 func TestATurnRanWhereItsRowsSayNotWhereTheyAreKept(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
@@ -1121,18 +1110,14 @@ func TestATurnRanWhereItsRowsSayNotWhereTheyAreKept(t *testing.T) {
 
 // ONE NODE'S PART IS READ AT ONE INSTANT, so its count is never short.
 //
-// A turn's part is four reads — its oldest rows, how many it holds, its newest
-// rows and the traces it touched — and a trace's is two. Each read floored the
-// history at its own reading of the clock, so a row crossing the floor between
-// the rows and the count made the count come back short of them: a long turn
-// counted at the cap was reported whole, lost its ending, and named no trace.
-// The turn here is one row past the cap, every row above the horizon under the
-// asker's instant and below the clock's — so a read floored anywhere but that
-// instant finds none of it.
+// A turn's part is four reads (oldest rows, count, newest rows, traces) and a
+// trace's two. Each flooring at its own clock reading let a row cross the floor
+// between rows and count, so a long turn came back whole at the cap, without
+// its ending or traces. The turn here is one row past the cap, every row above
+// the horizon under the asker's instant and below the clock's.
 //
-// Mutation: hand any of the part's follow-up reads (the count, the ending, the
-// traces) the zero instant rather than the part's own, and that half of the
-// answer comes back empty.
+// Mutation: hand any follow-up read (the count, the ending, the traces) the
+// zero instant rather than the part's own, and that half comes back empty.
 func TestOneNodesPartIsReadAtOneInstant(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
@@ -1179,17 +1164,13 @@ func outcomeOn(t *testing.T, n node, id, kind, app string, at time.Time) {
 		Time: at, Summary: kind, Tags: map[string]string{"notification_source": app}})
 }
 
-// THE OUTCOME COUNTS ARE EVERY NODE'S, SUMMED, OVER THE ASKER'S WINDOW — and a
+// THE OUTCOME COUNTS ARE EVERY NODE'S, SUMMED, OVER THE ASKER'S WINDOW, and a
 // node that could not count is named rather than read as zero.
 //
-// An outcome event is written to the store of the node that decided it, so a
-// count from one store is that node's share; and every node counts the window
-// the ASKER names, both edges — the bottom one, and the asker's instant, which
-// is the top edge and where the history is floored. Node-b's rows sit on every
-// edge: at the bottom (in), a second under it (out), at the instant (out), and
-// a second above the asker's horizon, which is under node-b's own clock's (in
-// on the window that reaches it). A node that never answers is named for the
-// budget.
+// An outcome is written to the node that decided it, so one store's count is
+// its share; every node counts the ASKER's window, topped by the asker's
+// instant. Node-b's rows sit on every edge: the bottom (in), a second under it
+// (out), the instant (out), a second above the asker's horizon (in).
 //
 // Mutation: answer from the asker's store alone, or keep one node's count where
 // two name the same app, and gitlab is short; leave either edge off the wire
@@ -1321,14 +1302,12 @@ func idsOf(rows []store.EventRecord) []string {
 // A CUSTODY ROW TWO DATA NODES HOLD IS COUNTED ONCE, at every step of its
 // settling.
 //
-// A node without `data` hands its events to the data nodes in custody batches,
-// and a batch whose claim failed is written by a second keeper before the first
-// has learned it is not its own: until the first settles it, both logs hold the
-// same rows. Summed as two counts, one dropped notification was two. So each
-// node counts what it keeps and names what it holds unsettled, and the asker
-// asks every data node which of the named rows it keeps — while both copies are
-// unsettled, once the keeper has settled and the other has not, and once both
-// have — and counts each row once, asked from either node.
+// A claim-failed custody batch is written by a second keeper before the first
+// learns it, so both logs hold the same rows until the first settles; summed,
+// one dropped notification was two. Each node counts what it keeps and names
+// what it holds unsettled; the asker asks every data node which named rows it
+// keeps and counts each once, from either node, in all three states (both
+// unsettled, one settled, both settled).
 //
 // Mutation: sum each node's count with the rows it names, or skip the second
 // question, and the batch's drop is counted twice in one of the three states.
@@ -1426,19 +1405,14 @@ func onceEach(seen map[string]int, want []string) []string {
 	return wrong
 }
 
-// A TURN IS PAGED WHERE IT IS LISTED, though it began earlier on a node that
-// does not list it.
+// A TURN IS PAGED WHERE IT IS LISTED, though it began on a node that doesn't.
 //
-// A page narrowed by a turn-level filter is selected by each node on its own
-// half of a turn, and the turn resumed here after a move passes the filter
-// only in its second half — failed only there, or charged to the item only by
-// the records written there. The node holding the first half, where the turn
-// began, lists none of it, and the node holding the second lists it at that
-// half's start. Paged by where it began, it sorted below the newest point that
-// full node's page stopped at and was cut, and the cursor moved on past the
-// half that listed it, page after page, until no page held it. It is paged at
-// the start its listing reaches, which each node says of its own share, and
-// shown from where it began.
+// Each node selects a filtered page on its own half of a turn, and this resumed
+// turn passes the filter only in its second half: the first node lists none of
+// it, the second lists it at that half's start. Paged by where it began, it
+// sorted below the point the full node's page stopped at and the cursor moved
+// past it. It is paged at the start its listing reaches and shown from where it
+// began.
 //
 // Mutation: page a turn by its merged start, and the turn is on no page of
 // either walk; ignore what a node says it lists and judge its share by what

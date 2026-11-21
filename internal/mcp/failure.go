@@ -21,23 +21,16 @@ import (
 
 // WHY A SERVER FAILED, in the classes a person tells apart by what fixes them.
 //
-// A start that failed used to be one line of text, and the text is whatever
-// the layer that gave up wrote: an SDK's "failed to connect", a dial error, a
-// child's exit status. A person reading it has to know which of a dozen
-// remedies it calls for, and a screen cannot word a remedy for text it can
-// only print. So every failure the engine records about a server carries a
-// CLASS beside its sentence: the engine decides it once, where the facts are
-// (the HTTP status, the process's exit, the dial error), and the node's status
-// record, a server's page and the alarms all read the class rather than parse the
-// sentence.
+// Every failure recorded about a server carries a CLASS beside its sentence,
+// so a screen can word the remedy and the status record, a server's page and
+// the alarms read the class instead of parsing text.
 //
 // THE CLASS IS DECIDED WHERE THE FACTS ARE, never read back out of a sentence:
-// [connect] knows the status the server answered and whether its process
-// exited, and wraps what it returns with the class ([classedFailure]); a session
-// that ends is classed by the bridge from the same facts ([client.deathClass]).
-// [ClassOf] reads that, and falls back on the error's own types (a DNS
-// answer, a certificate, a refused dial, a missing executable) for an error
-// that reached it some other way.
+// [connect] knows the answered status and whether the process exited, and
+// wraps its error with the class ([classedFailure]); a session that ends is
+// classed by the bridge ([client.deathClass]). [ClassOf] reads that and falls
+// back on the error's own types (DNS, certificate, refused dial, missing
+// executable) for an error that arrived some other way.
 
 // FailureClass is why talking to an MCP server failed. EMPTY IS A REAL
 // ANSWER: a failure that fits none of the classes, whose sentence says what

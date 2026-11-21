@@ -141,6 +141,9 @@ type MyWork struct {
 	LogLag         *uint64            `json:"log_lag,omitempty"`
 	Complete       bool               `json:"complete"`
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
+
+	// FlowLive is [Answer.FlowLive] for every row here.
+	FlowLive bool `json:"flow_live"`
 }
 
 // MyWorkQuery asks for one person's own day.
@@ -199,7 +202,7 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time,
 		MaxLagSeq: q.MaxLagSeq,
 		Set:       true,
 	}, func(tx *sql.Tx) error {
-		return readMyWork(ctx, tx, q.Handle, q.Agents, now, loc, &out)
+		return readMyWork(ctx, tx, q.Handle, q.Agents, r.flowAt(now), loc, &out)
 	})
 	if err != nil {
 		return MyWork{}, err
@@ -213,19 +216,20 @@ func (r *Reader) MyWork(ctx context.Context, q MyWorkQuery, now time.Time,
 	return out, nil
 }
 
-func readMyWork(ctx context.Context, tx *sql.Tx, handle string, agents []string, now time.Time,
+func readMyWork(ctx context.Context, tx *sql.Tx, handle string, agents []string, flow flowAt,
 	loc *time.Location, out *MyWork) error {
 
 	// `overdue` is cut at the company's own midnight on the surface's
 	// clock, so it agrees with the board; neither UTC nor the process's
 	// clock, which would put rows a day out from the board or another node.
-	anchor, err := period.Resolve("today", now, loc)
+	anchor, err := period.Resolve("today", flow.now, loc)
 	if err != nil {
 		return err
 	}
-	dayStart := anchor.At
+	at := rowsAt{dayStart: anchor.At, flow: flow}
+	out.FlowLive = flow.live()
 
-	priorities, total, err := readPriorityRows(ctx, tx, handle, dayStart)
+	priorities, total, err := readPriorityRows(ctx, tx, handle, at)
 	if err != nil {
 		return err
 	}
@@ -233,12 +237,12 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, agents []string,
 	out.Totals.Priorities = ClaimTotal{Total: total}
 
 	if out.Assigned, out.Totals.Assigned, err = taskBlock(ctx, tx,
-		assignedBlock(handle), dayStart); err != nil {
+		assignedBlock(handle), at); err != nil {
 		return err
 	}
 
 	if out.AskedOfMe, out.Totals.AskedOfMe, err = readAsks(ctx, tx, handle,
-		dayStart, MyWorkRows, MyWorkAskBytes); err != nil {
+		at, MyWorkRows, MyWorkAskBytes); err != nil {
 		return err
 	}
 
@@ -248,15 +252,15 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, agents []string,
 	}
 
 	if out.Collaborating, out.Totals.Collaborating, err = taskBlock(ctx, tx,
-		collaboratingBlock(handle), dayStart); err != nil {
+		collaboratingBlock(handle), at); err != nil {
 		return err
 	}
 	if out.WatchingRecent, out.Totals.WatchingRecent, err = taskBlock(ctx, tx,
-		watchingBlock(handle), dayStart); err != nil {
+		watchingBlock(handle), at); err != nil {
 		return err
 	}
 	if out.UnblockedRecent, out.Totals.UnblockedRecent, err = taskBlock(ctx, tx,
-		unblockedBlock(handle), dayStart); err != nil {
+		unblockedBlock(handle), at); err != nil {
 		return err
 	}
 	agentSet := make(map[string]bool, len(agents))
@@ -264,7 +268,7 @@ func readMyWork(ctx context.Context, tx *sql.Tx, handle string, agents []string,
 		agentSet[a] = true
 	}
 	if out.HoldingUp, out.Totals.HoldingUp, out.HoldingAgents, err = readHolding(ctx, tx, handle,
-		agentSet, dayStart); err != nil {
+		agentSet, at); err != nil {
 		return err
 	}
 	return nil
@@ -342,10 +346,10 @@ func unblockedBlock(handle string) blockQuery {
 // A total in a second statement is a second copy of the predicate, and the
 // first edit to one makes a heading count rows its list would never show.
 func taskBlock(ctx context.Context, tx *sql.Tx, block blockQuery,
-	dayStart time.Time) ([]TaskRow, ClaimTotal, error) {
+	at rowsAt) ([]TaskRow, ClaimTotal, error) {
 
 	set := tasksWhere(block.where, block.args)
-	rows, _, err := readTasks(ctx, tx, set, block.terms, MyWorkRows, dayStart)
+	rows, _, err := readTasks(ctx, tx, set, block.terms, MyWorkRows, at)
 	if err != nil {
 		return nil, ClaimTotal{}, err
 	}
@@ -381,7 +385,7 @@ func openGroups() []any {
 // entries would hide open ones past the page; [MaxPriorities] keeps it one
 // small read with an exact total.
 func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
-	dayStart time.Time) ([]TaskRow, int, error) {
+	at rowsAt) ([]TaskRow, int, error) {
 
 	person, held, err := readPerson(ctx, tx, handle)
 	if err != nil {
@@ -401,7 +405,7 @@ func readPriorityRows(ctx context.Context, tx *sql.Tx, handle string,
 	rows, _, err := readTasks(ctx, tx, tasksWhere(
 		"t.removed_at IS NULL AND t.id IN ("+placeholders(len(ids))+
 			") AND t.status_group IN ("+placeholders(len(open))+")", args),
-		[]sortTerm{{Column: "t.id"}}, len(ids), dayStart)
+		[]sortTerm{{Column: "t.id"}}, len(ids), at)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -452,7 +456,7 @@ const (
 // text carried whole before the rest go by reference
 // ([AskRow.BodyNotIncluded]); 0, for a screen with no ceiling, carries all.
 func readAsks(ctx context.Context, tx *sql.Tx, handle string,
-	dayStart time.Time, limit, maxBytes int) ([]AskRow, ClaimTotal, error) {
+	at rowsAt, limit, maxBytes int) ([]AskRow, ClaimTotal, error) {
 
 	// One FROM-and-WHERE for the page, the count and [Reader.Decisions]'
 	// oldest-ask instant, for [taskBlock]'s reason.
@@ -486,7 +490,7 @@ func readAsks(ctx context.Context, tx *sql.Tx, handle string,
 		return nil, ClaimTotal{}, fmt.Errorf("worklet: read the asks waiting on %s: %w",
 			handle, err)
 	}
-	out, err := askRowsOf(ctx, tx, pending, dayStart, maxBytes, true)
+	out, err := askRowsOf(ctx, tx, pending, at, maxBytes, true)
 	if err != nil {
 		return nil, ClaimTotal{}, err
 	}
@@ -507,7 +511,7 @@ type askRecord struct {
 // each carries its answering call (an ask is answered once, ADR-0023).
 // maxBytes is [readAsks]'.
 func askRowsOf(ctx context.Context, tx *sql.Tx, pending []askRecord,
-	dayStart time.Time, maxBytes int, open bool) ([]AskRow, error) {
+	at rowsAt, maxBytes int, open bool) ([]AskRow, error) {
 
 	if len(pending) == 0 {
 		return []AskRow{}, nil
@@ -518,7 +522,7 @@ func askRowsOf(ctx context.Context, tx *sql.Tx, pending []askRecord,
 	}
 	tasks, _, err := readTasks(ctx, tx,
 		tasksWhere("t.id IN ("+placeholders(len(ids))+")", ids),
-		[]sortTerm{{Column: "t.id"}}, len(ids), dayStart)
+		[]sortTerm{{Column: "t.id"}}, len(ids), at)
 	if err != nil {
 		return nil, err
 	}

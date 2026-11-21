@@ -20,23 +20,17 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// `crewlet retention` — what the log is holding, why, and the gestures that
-// change it.
+// `crewlet retention` — what the log holds, why, and the gestures that change it.
 //
-// # Why this is a GROUP and not a set of top-level verbs
+// # Why a GROUP, not top-level verbs
 //
-// Two of the verbs stop a machine writing. A group is what keeps a destructive
-// fleet gesture from sitting at the same level as `version`, and it is what
-// makes the shape of the surface readable: everything under `retention`
-// answers or changes one question, which is what the log may delete.
+// Two verbs stop a machine writing. A group keeps a destructive fleet gesture
+// apart from `version`, and makes everything under `retention` answer or change
+// one question: what the log may delete.
 //
-// # Why every verb talks to a NODE
-//
-// The same reason `backup` and `budgets` do. The register these verbs read and
-// write is a coordination bucket on a broker embedded in the engine, which
-// binds NO SOCKET on the default topology — so there is no address any other
-// tool could be given, and the answer has to come from a process that already
-// holds it.
+// Every verb talks to a NODE, as `backup` and `budgets` do: the register is a
+// coordination bucket on a broker embedded in the engine, which binds NO SOCKET
+// on the default topology, so the answer comes from a process that holds it.
 
 // THE NINE VERBS, and seven of them are node-client commands for `backup`'s
 // reason. TWO ARE NOT, and each is an exception with its own cause:
@@ -84,19 +78,16 @@ func runRetention(environ config.Source, args []string, stdout, stderr io.Writer
 
 // retentionReport is the answer's shape as this command reads it.
 //
-// DECODED INTO A SHAPE OF THIS COMMAND'S OWN rather than into
-// [statelog.Report], for `crewlet backup`'s reason: the CLI reads a node's
-// answer over HTTP, and a struct shared with the writer would make an older
-// binary refuse a newer node's report over a field it does not print.
+// DECODED INTO A SHAPE OF THIS COMMAND'S OWN rather than [statelog.Report], for
+// `crewlet backup`'s reason: the CLI reads a node's answer over HTTP, and a
+// struct shared with the writer would make an older binary refuse a newer node's
+// report over a field it does not print.
 //
-// WHICH IS WHY ITS TESTS SERVE THE WRITER'S OWN TYPE rather than JSON typed
-// by hand. A shape of its own is a shape that can drift, and this one had: the
-// node block's per-domain progress and each snapshot's positions are MAPS keyed
-// by domain, the tombstone is `evicted`, and a readable term is `ok` — while
-// this file declared lists, `eviction` and `known`, and its fixture spelled the
-// same invention. So `status` and `snapshots` failed to decode the answer of
-// every real node, whose own heartbeat puts a row in the node block at boot,
-// and `evict`/`readmit` swallowed that failure and printed no watermark.
+// ITS TESTS THEREFORE SERVE THE WRITER'S OWN TYPE rather than hand-typed JSON: a
+// shape of its own can drift. Declaring lists where the node sends maps keyed by
+// domain, `eviction` for `evicted` and `known` for `ok` made `status` and
+// `snapshots` fail to decode every real node's answer, and `evict`/`readmit`
+// swallow that failure and print no watermark.
 type retentionReport struct {
 	NodeID           string    `json:"node_id"`
 	At               time.Time `json:"at"`
@@ -489,19 +480,14 @@ func retentionStatus(environ config.Source, args []string, stdout, stderr io.Wri
 
 // retentionDomains prints one row per registered domain.
 //
-// ONE ROW PER DOMAIN rather than a second command, so a fleet that registers a
-// third domain grows a line rather than an argument. A term that does not
-// apply to a domain prints `n/a` rather than `0`, because an absent term and a
-// term that permits nothing are different facts.
-//
-// PER DAY is the log's intake over the trailing day, measured out of its own
-// records, and `-` where nobody measured it — a compacted log, one younger
-// than a day, a node that has not ticked — which is not a log that took in
-// nothing.
-//
-// RESERVE is the top of CEILING kept for gate records on a log that claims
-// identity, and HEADROOM is what is left of the rest — the ceiling ordinary
-// writes are refused `log_full` at — so a log at 0% still takes an eviction.
+// ONE ROW PER DOMAIN rather than a second command, so a third domain grows a line,
+// not an argument. A term that does not apply prints `n/a`, not `0`: an absent
+// term and one that permits nothing are different facts. PER DAY is the trailing
+// day's intake measured from the log's own records, `-` where nobody measured it
+// (a compacted log, one younger than a day, a node yet to tick), which is not a
+// log that took in nothing. RESERVE is the top of CEILING kept for gate records on
+// a log that claims identity; HEADROOM is the rest, where ordinary writes are
+// refused `log_full`, so a log at 0% still takes an eviction.
 func retentionDomains(w io.Writer, report retentionReport, only string) {
 	fmt.Fprintln(w, "\nDOMAIN\tSTREAM\tGEN\tREPLAY\tFIRST\tLAST\tBYTES\tPER DAY\tCEILING\tRESERVE\tHEADROOM\tTRIM FLOOR")
 	for _, d := range report.Domains {
@@ -773,18 +759,16 @@ func retentionAck(environ config.Source, args []string, stdout, stderr io.Writer
 
 // retentionGate evicts a node or takes it back.
 //
-// ONE FUNCTION FOR BOTH, because they are one gesture with a sign — and
-// because the confirmation, the printing and the outcome vocabulary would
-// otherwise be written twice and drift.
+// ONE FUNCTION FOR BOTH: one gesture with a sign, so the confirmation, printing
+// and outcome vocabulary cannot drift.
 //
 // # One gesture, every identity-claiming log, one line per log
 //
-// The node judges the gesture once and writes its record to every log the
-// trim counts nodes on, so the answer is PER LOG: each with its own
-// three-valued outcome, or the refusal that stopped that log. A gesture that
-// did not reach every log exits non-zero and says how to finish it — the same
-// command with the operation id it answered with, which every log that already
-// holds the record answers from its own ledger rather than writing twice.
+// The node judges the gesture once and writes its record to every log the trim
+// counts nodes on, so the answer is PER LOG: its own three-valued outcome or the
+// refusal that stopped it. A gesture that did not reach every log exits non-zero
+// and says how to finish it: the same command with the operation id it answered
+// with, which a log already holding the record answers from its own ledger.
 func retentionGate(environ config.Source, args []string, stdout, stderr io.Writer, evict bool) error {
 	verb := "readmit"
 	if evict {
@@ -817,24 +801,16 @@ func retentionGate(environ config.Source, args []string, stdout, stderr io.Write
 			"node id in -confirm to run %s", verb)
 	}
 
-	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, when the operator
-	// brought none. A gesture writes one log after another and the node
-	// finishes it whatever happens to this connection, so a request that
-	// times out or drops has very likely done its work — and the id the
-	// node would have answered with is the only handle on it. Minted by the
-	// node, it was lost with the answer, and the only way on was a second
-	// gesture under a fresh id.
-	//
-	// THROUGH THE STATE LOG'S OWN MINT ([statelog.NewOpID]), under the name
-	// the route itself mints with, so the id carries its instant — the node
-	// refuses one that does not, since no ledger could vouch for it — and
-	// reads in the ledger exactly as a node-minted one would. The node goes
-	// into that name through [statelog.OpNamePart], as the route's does,
-	// because a node id may hold the dot that begins a step.
-	//
-	// AND ONE THE OPERATOR BROUGHT IS HELD TO THE RULE EVERY SURFACE HOLDS
-	// IT TO before anything is asked — [operationFor], which every keyed
-	// write here mints and checks its id through.
+	// THE OPERATION ID IS MINTED HERE, BEFORE THE REQUEST, when the operator brought
+	// none. A gesture writes one log after another and the node finishes it whatever
+	// happens to this connection, so a timed-out request has very likely done its
+	// work, and an id minted by the node was lost with the answer, leaving only a
+	// second gesture under a fresh id. It comes from the state log's own mint
+	// ([statelog.NewOpID]), under the route's name, so it carries its instant (the node
+	// refuses one that does not: no ledger could vouch for it); the node enters that
+	// name through [statelog.OpNamePart] because a node id may hold the dot that begins
+	// a step. An id the operator brought is held, before anything is asked, to
+	// [operationFor], the rule every keyed write here mints and checks its id through.
 	gesture, err := operationFor(verb+"-"+statelog.OpNamePart(node), *opID)
 	if err != nil {
 		return err

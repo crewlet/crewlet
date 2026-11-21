@@ -14,10 +14,10 @@ import (
 )
 
 // The applier is a PURE FUNCTION of the log: it reads no config, clock,
-// keyring or other domain; every instant it writes is the broker's or one the
-// record carries; it judges no value, so two builds write one row; a record the
-// rows no longer admit writes nothing rather than failing; and every write is
-// guarded so a redelivery writes nothing it has not written.
+// keyring or other domain; every instant it writes is the broker's or the
+// record's; it judges no value (package doc, "The applier judges no text"); a
+// record the rows no longer admit writes nothing rather than failing; and
+// every write is guarded so a redelivery writes nothing new.
 
 // Applier writes this node's copy of the atlas estate. It holds nothing.
 type Applier struct{}

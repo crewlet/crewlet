@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // The sentinels: each a fact a caller acts on differently, errors.Is-comparable,
@@ -285,3 +286,35 @@ func (e *TooWideError) Error() string {
 
 // Unwrap is ErrInvalidProposal.
 func (e *TooWideError) Unwrap() error { return ErrInvalidProposal }
+
+// FieldRefused is a request refused by one of its fields ([ErrInvalid], [ErrInvalidProposal]):
+// Field as the request spells it (`findings[0].lines`), so a surface can say which value was
+// refused without reading the sentence (ADR-0060); Err is the sentinel and its sentence.
+type FieldRefused struct {
+	Field string
+	Err   error
+}
+
+func (e *FieldRefused) Error() string { return e.Err.Error() }
+
+func (e *FieldRefused) Unwrap() error { return e.Err }
+
+// RefusedField is the field refused, as a surface outside the domain asks it of an error's chain.
+func (e *FieldRefused) RefusedField() string { return e.Field }
+
+// refusedf is fmt.Errorf for a refusal by one field, whose format leads "%w: <field>: " (or
+// "%w: %s: " with the field as the first argument), carrying the field as a [FieldRefused]. The
+// field is read from the CALL, never from the error's text, so no sentence becomes a value.
+func refusedf(format string, args ...any) error {
+	err := fmt.Errorf(format, args...)
+	head, _, ok := strings.Cut(strings.TrimPrefix(format, "%w: "), ": ")
+	switch {
+	case !ok || !strings.HasPrefix(format, "%w: "):
+		return err
+	case head == "%s" && len(args) > 1:
+		head = fmt.Sprint(args[1])
+	case strings.Contains(head, "%"):
+		return err
+	}
+	return &FieldRefused{Field: head, Err: err}
+}

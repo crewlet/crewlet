@@ -21,35 +21,16 @@ import (
 
 // THE SECOND FACTOR, enrolled and recovered.
 //
-// # Both routes are guarded AND ask for a step-up
+// Both routes are guarded AND need a step-up ([Service.mayChangeProof]): they
+// decide whether a stolen session becomes a permanent hold on an account, so
+// the person must be present within the step-up window.
 //
-// Adding a second factor and replacing the codes that bypass it are the two
-// gestures that decide whether a stolen session can be turned into a permanent
-// hold on somebody's account. A session alone is not enough for either: what
-// is being changed is the thing that would stop the person holding that
-// session, so the person has to be at the keyboard — within the step-up window,
-// because this is the second-factor reset's gesture by another door and `/iam`
-// asks the reset and a factor's revocation the same (see
-// [Service.mayChangeProof]).
+// A machine token is refused both, though it acts as its owner and is stepped
+// up: [authz.ActionCredentialProof] needs a person present, so a pipeline's
+// environment can never enrol a factor or read regenerated recovery codes.
 //
-// # A machine token is refused both, whoever it acts as
-//
-// A personal access token acts AS its owner — a person, carrying their seat
-// — so the kind check below passes for it, and it is stepped up by
-// construction, so the window passes for it too. What refuses it is the
-// authority table's row for the gesture, which needs a person present
-// ([authz.ActionCredentialProof]): whoever holds a pipeline's environment must
-// never enrol their own second factor on the owner's account, or regenerate
-// the recovery codes and read them. A token PROVES NOBODY IS PRESENT, so it
-// manages no proof.
-//
-// # The enrolment is TWO requests, and the secret is only in the first answer
-//
-// A secret handed out and stored in one step is one nobody proved they can
-// use: a person scans the QR code, their app is misconfigured, and they have
-// enrolled a factor that will lock them out. So the first request answers a
-// seed and stores nothing, and the second presents a code derived from it —
-// which is the only evidence that the app on the other side works.
+// Enrolment is TWO requests: the first answers a seed and stores nothing, the
+// second presents a code derived from it, the only proof the app works.
 
 // totpEnrolRequest is what either leg of an enrolment presents.
 type totpEnrolRequest struct {
@@ -244,15 +225,12 @@ func (s *Service) EnrolTOTP(w http.ResponseWriter, r *http.Request) {
 //
 // # A password must never override a factor
 //
-// An enrolment-only session was proved by a password alone, and its proof is
-// fresh for the step-up window, so it satisfies what an enrolment asks of a
-// whole session. Without this, whoever holds such a session — somebody who
-// knows the password of a person who held no factor, signed in before that
-// person enrolled their own — could enrol THEIR authenticator over the
-// owner's, lock the owner out and be handed a whole session for it. Every
-// other path already refuses a password alone once a factor is held: the
-// sign-in and the step-up both demand the code. A whole session may still
-// replace its own factor, which is what enrolling one again is for.
+// An enrolment-only session is proved by a password alone and fresh for the
+// step-up window, so it passes what an enrolment asks. Without this refusal,
+// someone who knew the password of a person with no factor could enrol THEIR
+// authenticator over the owner's once the owner enrolled one, lock the owner
+// out and be handed a whole session. Sign-in and step-up already demand the
+// code once a factor is held. A whole session may still replace its own.
 var errFactorHeld = errors.New("authapi: an enrolment-only session cannot " +
 	"enrol over a second factor its person already holds")
 
@@ -283,21 +261,13 @@ type totpEnrolled struct {
 // may only enrol a second factor — or false when it is not — and whether the
 // caller may go on, false once it has written the refusal.
 //
-// # Read off the bearer, and held to the rows
-//
-// WHETHER it is one is the bearer's own signed mark with the row's
-// ([session.Validation.EnrolmentOnly]), readable on a node that has not
-// applied the session. But what the enrolment ENDS and what its replacement
-// KEEPS — the lineage, the deadline, the carried grants — are the presented
-// session's, read under the signature and the rows as a step-up reads the
-// session it replaces: neither may come off a cookie nobody verified, nor off
-// a session this node cannot say is live. So a restricted session this node
-// is behind on is `503` and one that is over is `401`, before anything is
-// offered or written.
-//
-// A HEADER CREDENTIAL CARRIES NO SESSION, so it is never one — and every
-// credential in a header that could reach an enrolment at all was refused by
-// [Service.mayChangeProof] already.
+// WHETHER it is one is the bearer's signed mark ([session.Validation.
+// EnrolmentOnly]), readable on a node that has not applied the session. What
+// the enrolment ENDS and its replacement KEEPS (lineage, deadline, grants) is
+// read under the signature and the rows, as a step-up does: never off an
+// unverified cookie or a session this node cannot say is live. So a restricted
+// session this node is behind on is `503` and one that is over is `401`. A
+// HEADER CREDENTIAL CARRIES NO SESSION, so it is never one.
 func (s *Service) enrolmentSession(w http.ResponseWriter, r *http.Request,
 	person string) (session.Validation, bool, bool) {
 
@@ -321,24 +291,15 @@ func (s *Service) enrolmentSession(w http.ResponseWriter, r *http.Request,
 // completeEnrolment replaces an enrolment-only session with a whole one, once
 // the second factor it was restricted for is enrolled.
 //
-// # Why the session is replaced rather than lifted
+// The restriction records what its SIGN-IN proved (a password alone), so the
+// gesture ENDS the restricted session first, as a step-up does (same deadline,
+// one live session), and opens the one the factor earns; lifted in place, a
+// session would prove one thing and be trusted for another.
 //
-// What restricted it is what its SIGN-IN proved — a password alone — and that
-// is a fact about the session, recorded once when it opened. The enrolment
-// satisfies the rule the restriction stood for: the person now holds a second
-// factor. So the gesture opens the session that earns, and ENDS the
-// restricted one first, exactly as a step-up does — the same deadline, one
-// live session and not two. A restriction lifted in
-// place would be a session that proved one thing and is trusted for another.
-//
-// # And it keeps the restricted session's PROOF
-//
-// The code the enrolment checked proves possession of a seed this same
-// session was handed moments earlier, which says nothing about who is holding
-// it — so the replacement is proved when the password was, and never now.
-// Dated now, it restarted the step-up window: whoever held the restricted
-// cookie was handed a fresh one — recovery codes, reveals — that the password
-// sign-in never earned.
+// It keeps the restricted session's PROOF: the checked code proves possession
+// of a seed handed over moments earlier, not who holds it, so the replacement
+// is proved when the password was, never now. Dated now, it would restart the
+// step-up window and hand a restricted cookie recovery codes and reveals.
 func (s *Service) completeEnrolment(w http.ResponseWriter, r *http.Request,
 	principal iam.Principal, replaced session.Validation) {
 
@@ -464,21 +425,13 @@ func (s *Service) proofOfRemoved(w http.ResponseWriter, r *http.Request) {
 // [notAPerson] says why), a machine token, or a person whose proof of identity
 // is older than the gesture's window.
 //
-// # The rule is the authority table's, the token's refusal included
-//
-// Enrolling a second factor, replacing it and regenerating the recovery codes
-// are [authz.ActionCredentialProof] — the verb `/iam` asks of revoking a
-// factor, so the two surfaces that change how somebody proves who they are
-// cannot answer differently about it. Its row needs a PERSON PRESENT on every
-// arm, so the table refuses a request that presented a machine token here
-// (`token_refused`) although the token acts as its owner and is stepped up: it
-// used to admit one and leave this route to remember to refuse it, which a
-// route added on the same verb could forget.
-//
-// DECIDED AT THIS SURFACE'S OWN INSTANT and rendered in the router's own
-// envelope, so the refusal names its `reason` and its `window` — which is
-// what a client needs to ask the person to confirm who they are and replay
-// the request, and what this route used to leave out.
+// Enrolling or replacing a factor and regenerating recovery codes are
+// [authz.ActionCredentialProof], the verb `/iam` asks of revoking one. Its row
+// needs a PERSON PRESENT, so the table refuses a machine token
+// (`token_refused`) and no route must remember to. DECIDED AT THIS SURFACE'S
+// OWN INSTANT and rendered in the router's envelope, so the refusal names its
+// `reason` and `window`, which a client needs to ask the person to re-prove
+// and replay.
 func (s *Service) mayChangeProof(w http.ResponseWriter, r *http.Request) (iam.Principal, bool) {
 	principal, resolution := iam.From(r.Context())
 	switch resolution {

@@ -43,22 +43,17 @@ func refusalOf(t *testing.T, s sandbox.PendingStore, turnID, launch string,
 }
 
 // A REFUSAL IS RECORDED ON AN ANSWER'S TERMS, WITH NONE OF THE REPLY. A reply
-// past what the row carries as an answer cannot be recorded, and what the row
-// records as its question's outcome instead is its refusal: the run answered,
-// holding an answer that names the reply's deliveries and carries none of
-// them, and the refusal beside it naming the same deliveries and both figures
-// — one write, by the same compare-and-set an answer is recorded by, so a
-// second refusal or a short reply after it finds the question answered and is
-// false with no error. A refusal whose answer carries any of the reply's
-// deliveries, naming other deliveries than its answer, or stating figures
-// within the share is an error and writes nothing: the first would put on the
-// row the very bytes it could not carry, and the others are no refusal of the
-// reply the answer names.
+// past what the row carries as an answer cannot be recorded; the row records
+// its refusal instead: the run answered, holding an answer that names the
+// reply's deliveries and carries none of them, and the refusal beside it naming
+// the same deliveries and both figures, in one write by the same compare-and-set
+// an answer is recorded by, so a second refusal or a short reply after it finds
+// the question answered and is false with no error. A refusal whose answer
+// carries a delivery of the reply, names other deliveries, or states figures
+// within the share is an error and writes nothing.
 //
-// Mutation: record a refusal whose answer carries a delivery of the reply, and
-// the row holds the bytes the refusal says it could not; leave the refusal off
-// the write, and the run holds an answer with no words, which it would be
-// resumed with.
+// Mutation: record a refusal whose answer carries a delivery of the reply, or
+// leave the refusal off the write (the run holds an answer with no words).
 func testARefusalIsRecordedOnAnAnswersTermsWithNoneOfTheReply(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	r := run("t-refusal")

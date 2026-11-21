@@ -15,16 +15,12 @@ import (
 // the child's own output captures ([childRun.read]). It is also the tick of the
 // watcher that bounds the captures ([childRun.watch]) and of the [janitor].
 //
-// A tenth of a second: far under a model request's own latency, so a request is
-// reported long before the calls it asked for need it — the host waits two
-// seconds for the record of a call's request before placing the call without
-// it — and a stat and a read a tenth of a second cost a run nothing. Measured
-// on every harness the probe ran, a line reaches a regular file within a few
-// milliseconds of when it reaches a pipe, so a tenth of a second is the one
-// latency the captures add. A failure marker acts within it, and a server's
-// ready values are seen within it, against a poll of half a second. As the
-// watcher's tick, it bounds how far past a bound a runaway writer gets
-// (its rate times this) and what an escaped writer holds on the volume.
+// A tenth of a second: far under a model request's latency, so a request is
+// reported long before its calls need it (the host waits two seconds for a
+// call's request record), and a stat and read at that rate cost nothing. On
+// every harness probed a line reaches a file within milliseconds of a pipe, so
+// this is the one latency the captures add. As the watcher's tick, it bounds how
+// far past a bound a runaway writer gets (its rate times this).
 const tailPoll = 100 * time.Millisecond
 
 // recordTail follows the file a harness keeps its record in, for a profile whose

@@ -14,37 +14,24 @@ import (
 
 // How this binary's four node clients render a refusal.
 //
-// ONE RENDERER, because there are four of them — [configClient.refusal],
-// [secretsClient.refusal], [nodeError] and [iamRefusal] —
-// each talking to the same [httpjson] surface, and the rule they share is not
-// the interesting part of any of them. Written twice and about to be written a
-// third time, it was already asymmetric: the node client decoded `error`
-// alone, so a route that answered with a detail and a hint reached an operator
-// as the bare code, and on the drain's refusal the bare code is the half that
-// does not help.
-//
-// AND IT DRIFTED AGAIN, one field later: the three clients that decode a
-// struct read `detail` and `hint` and never `message`, so a refusal at
-// ADR-0060's floor (no `detail`, its code's own sentence the whole of what it
-// says, which is every refusal nobody has worded for a person) reached an
-// operator as the bare code once more. What a refusal says is decoded into
-// one type ([refusalWords]) and said by one rule ([refusalWords.said]).
+// ONE RENDERER for [configClient.refusal], [secretsClient.refusal], [nodeError]
+// and [iamRefusal], all talking to the same [httpjson] surface. Separate copies
+// drifted: one decoded `error` alone, so a detail and hint reached an operator as
+// the bare code; three read `detail` and `hint` but not `message`, so a refusal
+// at ADR-0060's floor (no `detail`, only its code's own sentence) did too. What a
+// refusal says is decoded into one type ([refusalWords]) and said by one rule
+// ([refusalWords.said]).
 
 // credentialRefusal renders the two refusals that are about the CREDENTIAL
 // rather than the request, and reports whether raw was one of them.
 //
-// TWO FACTS THAT WERE ONE SENTENCE. A 401 is a credential the node did not
-// accept at all. A 403 `unauthorized` is one it DID accept, whose grants do
-// not reach this verb — and the body names the grants that would have. The
-// node client answered both with "the node refused the token: check it
-// against the api.auth.tokens entry you meant to use", which sent an operator
-// whose token works to look for a typo in it, and the other three rendered the
-// 403 as a bare code or a bare reason with the grants dropped: the one fact
-// that says whom to ask for what.
-//
-// A 403 whose body is not a refusal on authority — a seat the chart no longer
-// holds, a mint request asking for more than its owner carries — is not this
-// function's, and each client renders it with the rest of its answers.
+// A 401 is a credential the node did not accept at all. A 403 `unauthorized` is
+// one it DID accept, whose grants do not reach this verb; the body names the
+// grants that would have. They must not share a sentence: "check the token against
+// the api.auth.tokens entry" sends an operator whose token works hunting for a
+// typo, and a bare code drops the fact that says whom to ask for what. A 403 whose
+// body is not a refusal on authority (a seat the chart no longer holds, a mint
+// asking for more than its owner carries) is not this function's.
 func credentialRefusal(status int, raw []byte, sentToken bool) (string, bool) {
 	switch status {
 	case http.StatusUnauthorized:

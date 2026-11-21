@@ -187,24 +187,14 @@ func runMigrate(args []string, stdout, stderr io.Writer) error {
 //
 // # Why this talks to a NODE and not to a file
 //
-// The token counters are FLEET state: they live in the coordination store so
-// that a company's cap is one number rather than one per node. On the default
-// topology that store is the engine's own embedded broker, held by the
-// running engine: a second broker on its store directory is refused
-// (internal/queue/jetstream's StoreDirLock), so there is nothing this command
-// could open beside it — and a budget is a question about a company that is
-// running, which the running node answers.
+// The token counters are FLEET state, in the coordination store, so a cap is
+// one number rather than one per node. On the default topology that store is
+// the running engine's embedded broker, and a second broker on its store
+// directory is refused (internal/queue/jetstream's StoreDirLock).
 //
-// So `show` reads the same answer the dashboard renders. It takes the running
-// node's address, which defaults to what this node's own Tier A config says it
-// binds — so the common case is still `crewlet budgets show` beside the config
-// file.
-//
-// There is no `reset`, and no route for one (ADR-0019). Each ceiling is per
-// calendar window, and a window's allowance comes back when the window turns
-// over; room before then is made by raising the ceiling — a seat's through
-// `PUT /config/roles/{handle}`, the company's through `PATCH /config` — which
-// is a write like any other, recorded under its author.
+// There is no `reset`, and no route for one (ADR-0019): a window's allowance
+// returns when it turns over, and room before then is made by raising the
+// ceiling (`PUT /config/roles/{handle}`, `PATCH /config`), a recorded write.
 func runBudgets(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {
@@ -293,19 +283,13 @@ func budgetsShow(environ config.Source, args []string, stdout, stderr io.Writer)
 // while the window is still refusing, and a dash otherwise.
 //
 // LAST, NOT SINCE: the counter moves the stamp to every refusal it records
-// ([coord.WindowUsage.RefusedAt]) — a refused charge, a call a turn held, a
-// parked delivery — so the instant is the latest one, and a column that said
-// "since" claimed the window had been refusing for less time than it had. It
-// keeps the latest on purpose: an admitted charge clears only the stamps it
-// read, so a refusal that lands between its write and its clear survives only
-// because it carries a newer instant.
+// ([coord.WindowUsage.RefusedAt]), so "since" would understate how long the
+// window had been refusing; an admitted charge clears only the stamps it read.
 //
-// THE STATE DECIDES, NEVER THE STAMP, the rule every dashboard surface takes. A
-// stamp is cleared only by an admitted charge or by the window turning over,
-// so after a ceiling is raised it outlives the refusal: the window reads ok or
-// near and still carries refused_at. Printed regardless, the row said the
-// window was refusing beside a state saying it was not, and an operator who
-// believed the column went to raise a ceiling that had already been raised.
+// THE STATE DECIDES, NEVER THE STAMP, the rule every dashboard surface takes.
+// A stamp is cleared only by an admitted charge or the window turning over, so
+// after a ceiling is raised it outlives the refusal, and printing it anyway
+// would say the window was refusing beside a state saying it was not.
 func lastRefused(win budgetWindow) string {
 	if win.State != string(types.BudgetRefusing) {
 		return "-"

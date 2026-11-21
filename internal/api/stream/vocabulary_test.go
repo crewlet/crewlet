@@ -46,18 +46,14 @@ func TestTheDashboardKnowsExactlyTheQueryErrorCodesTheEngineSends(t *testing.T) 
 
 // THE SOCKET AND REST SHARE ONE REFUSAL TABLE.
 //
-// The socket answers a query with a code, and the query surface's REST twin
-// answers the same question with a code, and the dashboard asks over both —
-// the socket while it is open, plain HTTP when it is deciding whether its
-// token is the reason it is not. Two vocabularies there means one failure with
-// two names, which is how the dashboard came to handle `no_event_store`: a
-// code that existed on one side of the protocol and nowhere else, branched on
-// by a screen, sent by nothing.
+// The dashboard asks over both the socket and the REST twin, so two
+// vocabularies would be one failure with two names (`no_event_store` existed
+// on one side only, branched on by a screen, sent by nothing).
 //
 // So every code this package declares must be an entry on [httpjson.Code]'s
-// table — the one the REST routes answer from, and the one that carries the
-// sentence a person reads for each code. Read from this package's own source,
-// so a code added here without an entry there fails without being listed.
+// table, which also carries the sentence a person reads for each code. Read
+// from this package's own source, so a code added here without an entry there
+// fails without being listed.
 func TestTheSocketAndRestShareOneTable(t *testing.T) {
 	t.Parallel()
 	if unknown := notOnTheRESTTable(engineCodes(t)); len(unknown) > 0 {

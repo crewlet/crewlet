@@ -43,10 +43,9 @@ func (n *node) links(id artifacts.ID) []artifactsdomain.HistoryEntry {
 }
 
 // A LINK PUTS AN ARTIFACT THAT ALREADY EXISTS ON A WORK ITEM'S LISTING, ONCE.
-// It writes one history row filed under the item and moves nothing else; a
-// retry under the same key is the same operation, and a second link to an item
-// the history already names (by a link, or by a create made for it) answers
-// success and writes no second row.
+// It writes one history row filed under the item and nothing else; a retry
+// under the same key is the same operation, and a link to an item the history
+// already names (by a link or a create made for it) succeeds with no new row.
 //
 // Mutation: drop linkedTo's check from the decide and the second link writes a
 // second row; write the history row without the authority and the listing

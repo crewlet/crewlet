@@ -31,50 +31,17 @@ import (
 )
 
 // THE POSTURE MATRIX: every credential shape this build can present, against
-// one route per authority class — and against EVERY route that operates the
-// deployment or holds the company's configuration and credentials.
+// one route per authority class and EVERY route that operates the deployment
+// or holds the company's configuration and credentials.
 //
-// # What it is for
-//
-// The authority rules are each tested where they live — the registry's
-// posture check, the guard's resolution, the configuration surface's own
-// rules. What no one of them covers is the COMPOSITION: a request travels the
-// CORS gate, the guard, the CSRF gate, the drain gate and the route's own
-// rule, and a hole is something that opens between two of them rather than
-// inside either. Every case here goes through api.App, the way a caller does.
-//
-// And the hole this matrix did not see is the reason it grew. The deployment's
-// own controls — the budget reset, the backup, the retention and capacity
-// gestures — and /secrets asked only whether somebody RESOLVED: the guard in
-// front of them answers that and nothing else, and each route resolved its
-// caller for the audit line and decided no permission. A person signed in to
-// read the company's overview could reset spend, copy the node's durable state
-// to a directory of their choosing, evict a machine from the fleet and read
-// back any credential the company holds. Every one of those routes is a row
-// now, against a shape holding every app — the most a caller can hold and
-// still not be an admin.
-//
-// # The shapes
-//
-// The model is admin and one permission per app, and the columns are its
-// corners: each app alone, both apps, admin, admin on a node whose
-// `api.auth.admin` refuses it (which keeps every app), a person holding
-// nothing but the overview, and every credential SHAPE the guard resolves — a
-// Tier A token, the development principal on a node that serves admin and on
-// one that refuses it, a personal access token, a service account's token
-// holding admin, and a session.
-//
-// # What a row means
-//
-// One route, and the status every credential shape gets from it — in the
-// order of [shapes], and in an ARRAY, so a route that leaves a shape out does
-// not compile. A cell that is wrong is either a surface reachable by somebody
-// who should not (the dangerous direction) or one refused to somebody who
-// should reach it (the direction that gets a guard disabled by whoever is on
-// call). An ADMITTED cell carries whatever the route answers once it is
-// reached — a 400 for a missing parameter, a 404 for a stream this fixture
-// does not run — because what the matrix asserts is that the authority layer
-// let it through, and 401 and 403 are the only two answers that layer gives.
+// Each authority rule is tested where it lives; this covers their COMPOSITION
+// (CORS, guard, CSRF, drain, the route's rule), where a hole opens between two
+// gates, through api.App. A row is one route and its status per shape in
+// [shapes] order, in an ARRAY so a missing shape does not compile. A wrong cell
+// is a surface open to the wrong caller or refused to the right one (which gets
+// a guard disabled). An ADMITTED cell carries what the route answers once
+// reached: the authority layer only ever answers 401/403. The deployment's
+// controls and /secrets are rows against a shape holding every app but not admin.
 func TestThePostureMatrix(t *testing.T) {
 	t.Parallel()
 	const (
@@ -250,15 +217,10 @@ func TestThePostureMatrix(t *testing.T) {
 	//	 3 Tier A knowledge 8 dev, refused cred   13 session, nothing
 	//	 4 Tier A both apps 9 dev, refusing       14 session admin, stale
 	//
-	// The routes, each named by what reaching it discloses or does rather
-	// than by its permission — so a row that moves to a different
-	// permission still has to be read rather than renumbered.
-	//
-	// THE QUESTION SURFACE carries one route per posture, because it is the
-	// one place every posture is reachable through one mount. `/config` and
-	// `/setup` have their own suites for their own rules; /secrets is here
-	// whole because it is cheap to stand up for real, and the deployment's
-	// controls are here whole because nothing else composes them.
+	// Routes are named by what reaching them does, not by permission, so a
+	// row that moves permission is read rather than renumbered. The question
+	// surface carries one route per posture. `/config` and `/setup` have their
+	// own suites; /secrets and the deployment's controls are here whole.
 	for _, row := range []struct {
 		name         string
 		method, path string

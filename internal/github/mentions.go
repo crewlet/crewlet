@@ -4,38 +4,16 @@ import "strings"
 
 // Finding `@login` in a markdown body.
 //
-// # Why a scanner and not a regular expression
+// GitHub sends raw markdown with no parsed mention array, so the text is the
+// only source. An `@` counts only when what precedes it is not part of a word,
+// else `deploy@example.com` mentions "example". RE2 has no lookbehind, so a
+// one-pass scanner is the only correct implementation, not a workaround.
 //
-// GitHub sends comment, description and review bodies as raw markdown with
-// no parsed mention array — unlike a tracker, which resolves each mention to
-// a user id before it sends the payload — so the only way to recover who was
-// named is to read the text.
-//
-// The rule that makes that safe is a NEGATIVE one: an `@` counts only when
-// what precedes it is not part of a word. Without it `deploy@example.com`
-// mentions a user called "example" and every file path with an @ in it pings
-// somebody. Go's regexp engine is RE2 and has no lookbehind, so the rule
-// cannot be written as a pattern — a one-pass scanner is not a workaround
-// here, it is the only correct implementation.
-//
-// # Two rules that are GitHub's alone
-//
-// A LOGIN IS ALPHANUMERIC AND HYPHENS, nothing else. The self-hosted host
-// beside this one allows dots and underscores, and reading its grammar here
-// would swallow the sentence after a mention: `@ana.  We should` yields
-// "ana." on GitLab's rule and needs a trailing-punctuation walk-back to
-// recover. GitHub's own rule makes the walk-back unnecessary and, more
-// importantly, makes `@ana_bot` two tokens on GitHub and one on GitLab —
-// which is a different person.
-//
-// `@org/team` IS A TEAM, NOT A PERSON, and it is the reason this scanner
-// looks at what FOLLOWS a login as well as what precedes it. Read naively,
-// `@crewlet/reviewers` mentions an account called "crewlet" — and on a
-// company whose org name matches one of its own seats, that seat is woken by
-// every team ping. A team is dropped rather than expanded: expanding it
-// needs the members API, one call per mention on the inbound hot path, to
-// produce a fan-out GitHub itself treats as lower-priority than a direct
-// mention.
+// A LOGIN IS ALPHANUMERIC AND HYPHENS only: GitLab's grammar (dots,
+// underscores) would swallow `@ana.  We should` as "ana." and read `@ana_bot`
+// as one person. `@org/team` IS A TEAM, NOT A PERSON, so the scanner also checks
+// what FOLLOWS a login: `@crewlet/reviewers` must not wake a seat named
+// "crewlet". Teams are dropped, not expanded (a members API call per mention).
 
 // Mentions are the logins named in a body, lowercased, deduplicated, in the
 // order they appear.

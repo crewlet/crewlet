@@ -682,13 +682,12 @@ func TestACredentialsEndIsMeasuredOnTheServicesClock(t *testing.T) {
 
 // AN END THE GUARD STILL SERVES IS DECIDED AGAIN, and the socket still closes.
 //
-// The timer runs on the monotonic clock and the guard compares the wall clock,
-// so a wall clock stepped back after the handshake fires the timer while the
-// guard still serves the credential. Nothing else may ever decide that socket
-// again — no record is written at a deadline — so the timer has to: here the
-// guard serves for a while past the end the socket was told and then refuses,
-// and no move, no publish, nothing else is sent. The socket must close 4401,
-// and must not have been decided in a loop meanwhile.
+// The timer runs on the monotonic clock and the guard compares the wall
+// clock, so a wall clock stepped back fires the timer while the guard still
+// serves the credential. No record is written at a deadline, so only the timer
+// can decide that socket again: here the guard serves a while past the end the
+// socket was told and then refuses, with no move or publish. The socket must
+// close 4401, and must not have been decided in a loop meanwhile.
 //
 // Mutations: drop the re-arm and the socket stays open past the read's bound;
 // re-arm with no floor and it is decided over and over against the same
@@ -721,16 +720,13 @@ func TestAnEndTheGuardStillServesIsDecidedAgain(t *testing.T) {
 
 // A PUBLISHED COMPANY DECIDES EACH SOCKET IN MEMORY, and reads no identity.
 //
-// The org a seat binding resolves through may have moved — a seat removed under
-// the person bound to it, or turned over to an agent — and nothing on the
-// identity log says so. Every apply — a hire or any other edit of the org
-// among them — publishes a company, so deciding every socket by the guard
-// there would be an identity read per open tab on each: the socket is decided
-// against the company just published instead. A seat this socket saw that
-// company hold and no longer a human seat is what the guard refuses
-// `seat_unavailable` (4403); one the socket never saw the published company
-// hold is the handshake's to resolve (1013). The control is a seat still held:
-// the socket stays open. In every case the guard is never asked again.
+// The org a seat binding resolves through may have moved and nothing on the
+// identity log says so. Every apply publishes a company, so deciding each
+// socket by the guard would be an identity read per open tab: it is decided
+// against the company just published instead. A seat the socket saw held and
+// no longer a human seat is what the guard refuses `seat_unavailable` (4403);
+// one it never saw held is the handshake's (1013). The control is a seat still
+// held: the socket stays open. The guard is never asked again.
 //
 // Mutation: close every seat that fails to match 4403, and the unseen seat is
 // told access was withdrawn.
@@ -781,15 +777,14 @@ func TestAPublishedCompanyDecidesEachSocketInMemory(t *testing.T) {
 
 // A DECISION THAT KEEPS THE SEAT LEARNS NOTHING ABOUT IT.
 //
-// The published-company decision tells a seat removed (4403) from one the
-// company has not been seen to hold yet (1013) by whether this socket saw it
-// held. A decision by the guard that leaves the principal on the same seat
-// cannot change that, so it reads nothing: learned again after every decision,
-// it was read from whatever company was published as the decision ended, and a
-// company that had just dropped the seat left the socket believing it had
-// never been held — the publish that followed closed it 1013 rather than 4403
-// `seat_unavailable`. (A decision that MOVES the seat closes the socket
-// itself: see TestADecisionThatMovesWhoASocketActsAsClosesIt.)
+// The published-company decision tells a seat removed (4403) from one not yet
+// seen held (1013) by whether this socket saw it held. A guard decision that
+// leaves the principal on the same seat cannot change that, so it reads
+// nothing: learned again after every decision, it was read from whatever
+// company was published as the decision ended, and one that had just dropped
+// the seat left the socket believing it was never held, so the next publish
+// closed it 1013 rather than 4403 `seat_unavailable`. (A decision that MOVES
+// the seat closes the socket: TestADecisionThatMovesWhoASocketActsAsClosesIt.)
 //
 // Mutation: learn it after every decision, and the dropped seat closes 1013.
 func TestADecisionThatKeepsTheSeatLearnsNothingAboutIt(t *testing.T) {
@@ -882,19 +877,13 @@ func TestAQuestionIsAskedAsTheLastDecisionResolved(t *testing.T) {
 
 // A DECISION THAT MOVES WHO A SOCKET ACTS AS CLOSES IT, 1013.
 //
-// A rename, a seat bound or unbound, a permission given or taken: the socket was
-// kept open and went on answering as the new principal while the tab still
-// named the old one — the sidebar read "Jane Founder · human seat" and the
-// seat page "Your day" after Jane unbound herself, until a reload — because
-// what a tab knows about who it is (the `viewer` question) is asked again on a
-// reconnect and on nothing a decision did. A changed grant used to be sent a
-// fresh snapshot in place, which moved the pushes and left that answer behind.
-// Closed 1013, the reconnect's handshake decides the new principal, builds
-// its snapshot for its audience, and the tab asks who it is again. A
-// permission TAKEN is this case too and never a 4403: an open socket needs no
+// A rename, a seat bound or unbound, a permission given or taken: kept open,
+// the socket answered as the new principal while the tab still named the old
+// one, because a tab asks who it is (the `viewer` question) only on a
+// reconnect. Closed 1013, the reconnect's handshake decides the new principal.
+// A permission TAKEN is this case, never a 4403: an open socket needs no
 // permission (ADR-0033), so losing one changes what it carries, not whether
-// it may be open. The CONTROL is a decision resolving the same actor, which
-// keeps the socket open.
+// it may be open. The CONTROL, the same actor, keeps the socket open.
 //
 // Mutation: carry on past a moved principal and every case but the control
 // stays open; compare the login alone and the seat and permission cases do.
@@ -951,18 +940,15 @@ func TestADecisionThatMovesWhoASocketActsAsClosesIt(t *testing.T) {
 	}
 }
 
-// A LEAD MOVED OFF A TEAM IS CLOSED TO RECONNECT, and so is one moved onto
-// one.
+// A LEAD MOVED OFF A TEAM IS CLOSED TO RECONNECT, and so is one moved onto one.
 //
-// Whose trail an open socket reads — which seats' live calls reach it whole —
-// is decided at its handshake from the chart ([Service.AudienceFor]), and the
-// client keeps that audience for as long as it is open. A published company
-// that moves the lead relation would otherwise leave a lead taken off a team
-// still receiving that team's transcripts, and one put on a team never
-// receiving theirs. So the publish decides the audience again, in memory, and
-// a socket whose audience it changes closes 1013 for the reconnect to build
-// the audience it has now. The CONTROL is a publish that leaves the relation
-// where it was: the socket stays open.
+// Whose trail an open socket reads is decided at its handshake from the chart
+// ([Service.AudienceFor]) and kept while it is open, so a publish that moves
+// the lead relation would leave a lead taken off a team still receiving its
+// transcripts, and one put on a team never receiving them. The publish decides
+// the audience again, in memory, and a socket whose audience changes closes
+// 1013 for the reconnect to build the new one. The CONTROL, a publish leaving
+// the relation as it was, keeps the socket open.
 //
 // Mutation: skip the audience check on a publish, and the moved lead's socket
 // stays open; close on every publish, and the control does not.

@@ -8,20 +8,15 @@ import (
 
 // What an operator has to supply before monitor alerts reach a seat.
 //
-// The engine does the rest of the wiring itself: with the organization
-// credential pair below it registers the webhook definition at Datadog,
-// points it at this deployment, writes the payload template the route
-// decodes and attaches the shared token as a header. What is left for a
-// person is the half only they can do, which is naming that webhook in the
-// monitors they want an agent woken by.
+// With the organization credential pair the engine registers the webhook
+// definition at Datadog, points it at this deployment, writes the payload
+// template and attaches the shared token. A person only names that webhook in
+// the monitors that should wake an agent.
 //
-// The webhook URL is deliberately NOT a requirement, and now for a stronger
-// reason than before: it is not an input at all but the Tier A webhook address
-// (`api.public.external_url` behind a public listener, `api.external_url`
-// otherwise — [config.API.WebhookBase]), resolved before the file is decoded,
-// plus the inbound path, and the engine WRITES it at Datadog on every pass.
-// Modelling it as a field would invite somebody to type one the next
-// reconcile would overwrite.
+// The webhook URL is deliberately NOT a requirement: it is the Tier A webhook
+// address ([config.API.WebhookBase]) plus the inbound path, and the engine
+// WRITES it at Datadog on every pass, so a field would invite somebody to type
+// one the next reconcile would overwrite.
 
 // Requirements says what this company still needs for Datadog.
 //
@@ -189,19 +184,13 @@ func Requirements(in *config.Datadog, resolve func(string) (string, bool)) []set
 				Label: "None: dismiss alerts nobody owns",
 				Hint:  "Only monitors tagged with a seat wake an agent.",
 			}},
-			// AND IT IS THE ONE OFFERED, because it is the only answer
-			// that is right for a company the form knows nothing about.
-			//
-			// Every other choice here is one of THIS company's seats, and
-			// picking one for them is picking whose phone rings for every
-			// alert nobody labelled — which is a decision about somebody's
-			// working life, made by a form, from a roster it has no basis
-			// for ranking. "Choose one" made the field an unanswerable
-			// question at exactly the moment an operator wanted to be
-			// done; this makes it an answerable one, and the answer it
-			// suggests is the conservative half of the pair: an alert that
-			// wakes nobody is a gap somebody can close later, where an
-			// alert waking the wrong agent is work already misrouted.
+			// AND IT IS THE ONE OFFERED, because it is the only answer right
+			// for a company the form knows nothing about. Every other choice
+			// is one of THIS company's seats, and picking one decides whose
+			// phone rings for every unlabelled alert, from a roster the form
+			// cannot rank. It is also the conservative half: an alert that
+			// wakes nobody is a gap to close later, one that wakes the wrong
+			// agent is work already misrouted.
 			Default: config.DatadogIgnore,
 			Hint:    "The agent an alert wakes when no tag names one.",
 			// A ROUTING FLOOR IS NOT A CREDENTIAL. It claimed

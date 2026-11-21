@@ -115,24 +115,14 @@ func (armsDirectory) PersonByEmailBlind(context.Context, string) (iamdomain.Sigh
 
 // ONE GENERIC REFUSAL FOR EVERY LOGIN ARM.
 //
-// A sign-in surface must not be a roster: whatever went wrong — nobody by that
-// login, nobody at that address, a person suspended, somebody who holds no
-// password, a wrong password,
-// a directory this node could not read, or the right password with a wrong app
-// code or a recovery code already spent — the caller gets ONE status and ONE
-// body, byte for byte, and one failed attempt on the trail. The last two leave
-// by a path of their own, the second-factor check, so they are held here with
-// the rest rather than assumed to answer alike. Told apart by either, the
-// refusal says which logins exist and which are worth guessing at. That every
-// arm also spends one derivation under the verify cap is
-// [TestEverySignInArmWaitsForTheVerifyCap]'s; this is the shape half, where
-// one arm answering differently used to be a matter of nobody having written
-// the line.
-//
-// The control is the right password, which is NOT refused — or every arm
-// would pass on a surface that refused everything.
-//
-// Mutation: answer any one arm with another code — the second-factor refusal
+// A sign-in surface must not be a roster: whatever went wrong (unknown login or
+// address, suspended, no or wrong password, unreadable directory, wrong app
+// code, spent recovery code) the caller gets ONE status and ONE body, byte for
+// byte, and one failed attempt on the trail. The last two leave
+// by the second-factor check's own path, so they are held here. The derivation
+// each arm spends is [TestEverySignInArmWaitsForTheVerifyCap]'s. The control is
+// the right password, NOT refused, or every arm would pass on a surface that
+// refused everything. Mutation: answer any one arm with another code — the second-factor refusal
 // given a code of its own included — and its row goes red.
 func TestOneGenericRefusalForEveryLoginArm(t *testing.T) {
 	t.Parallel()

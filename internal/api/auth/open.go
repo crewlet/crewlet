@@ -22,24 +22,18 @@ import (
 // ONE difference: a session's IDLE deadline is set aside
 // ([session.Signer.ValidateOpen]).
 //
-// # Why the idle deadline does not end an open connection
-//
-// The idle deadline is the bearer's own, moved by a re-issue on a REST
-// response — and a connection can never receive one: its bearer is the one
-// its handshake presented, so its idle deadline is the handshake's plus the
-// idle limit however busy the tab has been since. Decided on that, every
-// dashboard left open past it would be closed by the first identity event
-// anywhere in the company, while its person was at the screen. An open live
-// view is activity; the session is decided on its ROWS instead — ended,
-// revoked, its person suspended or removed, the company's generation moved —
-// and its ABSOLUTE deadline, which no re-issue moves, still ends it.
-//
-// NOTHING IS WRITTEN: there is no response to write a cookie to, the
-// connection having been hijacked at its handshake, and the browser's own REST
-// traffic carries every re-issue. And a refusal is not COUNTED — see
-// audit.go: a re-decision is the connection's, not somebody presenting a
-// credential.
+// The idle deadline is moved by a re-issue on a REST response, which a
+// connection never receives: its idle deadline stays the handshake's plus the
+// limit however busy the tab is, so every dashboard left open past it would be
+// closed by the first identity event while its person is at the screen. An
+// open live view is activity; the session is decided on its ROWS (ended,
+// revoked, person suspended or removed, generation moved) and its ABSOLUTE
+// deadline, which no re-issue moves.
 func (g *Guard) ResolveOpen(r *http.Request) (*http.Request, *Refusal) {
+	// NOTHING IS WRITTEN: the connection was hijacked at its handshake, so
+	// there is no cookie to set, and REST traffic carries the re-issues. A
+	// refusal is not COUNTED (audit.go): a re-decision is the connection's,
+	// not a presented credential.
 	return g.resolve(discardWriter{header: http.Header{}}, r, true)
 }
 

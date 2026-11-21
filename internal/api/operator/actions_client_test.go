@@ -140,30 +140,15 @@ func orNull(domain string) string {
 // EVERY CHANGE THE DASHBOARD MAKES IS ONE THE ACT TRANSPORT SERVES, WITH THE
 // ARGUMENTS ITS TOOL TAKES.
 //
-// `contract/actions.ts` is the dashboard's whole write vocabulary: a screen
-// calls `act(tool, args)` with a key of it and only the arguments its row
-// names. That table is tool names and argument names written in TypeScript —
-// a surface that starts lying on the first rename in Go, and lies in the worst
-// way: a button that is refused the first time a person presses it, on a
-// screen whose promise is that pressing it makes the change. So the table is
-// read from ITS OWN SOURCE and held against the REAL catalogue:
-//
-//   - every tool is served by `/operator/act` — in the catalogue and not a
-//     proven read, which the transport refuses `read_only_tool`;
-//   - every argument is a property of that tool's schema, and every property
-//     the schema requires is one the row lets a screen send — an argument the
-//     tool does not declare is refused `invalid_body` by the tools' own gate,
-//     which is what a row still naming `save_work_view`'s retired `owner`, or
-//     a `viewer` no tool takes, would meet on every press;
-//   - every row declares the scope its write's authority class gives it;
-//   - every row's `apps` are the apps its authority row opens it to
-//     ([appsOf]). A wrong set is a control held with the wrong remedy — or
-//     with none: a reader holding no app was told the engine does not make
-//     `answer_knowledge` for them while the table said either app would;
-//   - every row's `domain` is the log its tool's write lands on ([actionLog]),
-//     or null for one that lands on none. A wrong one is silent and costs
-//     read-your-writes: a write filed under `null` raises no floor, so the
-//     screen's next read may come from before the press.
+// `contract/actions.ts` is the dashboard's write vocabulary in TypeScript, read
+// from ITS OWN SOURCE and held against the REAL catalogue, or a Go rename
+// leaves a button refused when pressed:
+//   - every tool is served by `/operator/act` and is not a proven read;
+//   - every argument is in the tool's schema, every required one sendable
+//     (an undeclared one is refused `invalid_body`);
+//   - every row's scope and `apps` are its authority row's ([appsOf]);
+//   - every row's `domain` is the log its write lands on ([actionLog]), or
+//     null; a wrong one silently raises no read-your-writes floor.
 func TestEveryActionTheDashboardTakesIsOneTheActTransportServes(t *testing.T) {
 	t.Parallel()
 	s := fullSurface(t)

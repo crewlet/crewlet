@@ -97,24 +97,18 @@ func limitedOf(sit *coord.ModelSitOut) *Limited {
 	return out
 }
 
-// credential serves PUT /llm/providers/{key}/credential: candidate values
-// tested in an isolated home, sealed only if they sign the model in, and the
-// revision that reads them re-activated.
-//
-// IN THE SETUP WRITER'S ORDER, each step for a reason:
+// credential serves PUT /llm/providers/{key}/credential: values tested in an
+// isolated home, sealed only if they sign the model in, then the revision that
+// reads them re-activated. In the setup writer's order:
 //  1. The target: the active entry, or the draft the body carries.
-//  2. Validation, every fault at once where it can be: the draft whole, as
-//     the entity route's dry run is; each name, which the entry must read;
-//     each value's kind, by the prefixes the vendor gives them.
+//  2. Validation, every fault at once where it can be (draft, names, kinds).
 //  3. `If-None-Match: *`, refusing a name already stored, so a create never
 //     overwrites a credential another model reads.
-//  4. `config.write` when a re-activation will follow, before anything is
-//     tested or sealed.
+//  4. `config.write` when a re-activation follows, before anything is tested.
 //  5. The test: the harness itself, with only these values.
 //  6. With `dry_run=true`, the answer and nothing else.
-//  7. The seal, then the one re-activation, held to `If-Match`. A create
-//     seals each value only where none is stored, in one step of the
-//     store's, so step 3 is the early answer and this the guarantee.
+//  7. The seal, then the one re-activation, held to `If-Match`. A create seals
+//     only where none is stored, in one store step: 3 is the early answer.
 func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.ModelActed) {
 	ctx := r.Context()
 	key := r.PathValue("key")
@@ -213,9 +207,14 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 		s.fail(w, "test the credential", err)
 		return
 	}
-	if !s.passed(w, key, names, checked, wordsFor(draft, key, names)) {
+	words := wordsFor(draft, key, names)
+	words.current = active != nil
+	if !s.passed(w, key, names, checked, words) {
 		return
 	}
+	// THE TEST'S ANSWER IS THE MODEL'S until its own calls say more: added
+	// after it passed, a model read "Not tested".
+	s.engine.Verified(key, checked.At)
 	verified := fmt.Sprintf("Answered a one-turn %s run in %.1f s with only %s.",
 		agentName(draft), checked.Elapsed.Seconds(), plural(len(names), "this value", "these values"))
 	hints := checked.Hints

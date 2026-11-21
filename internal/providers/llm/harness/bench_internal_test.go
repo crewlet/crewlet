@@ -246,15 +246,13 @@ func TestARejectedLoginDoesNotSitTheEntryOut(t *testing.T) {
 
 // A WINDOW IS KEPT ON THE WALL CLOCK, the clock its end is named on.
 //
-// An instant read from time.Now carries a monotonic reading as well, and two
-// instants that both carry one compare on it alone. The monotonic clock stops
-// while the host sleeps, so a window kept with one outlasted a sleep by the
-// sleep's length: the entry went on refusing while the end it named, which
-// every reader compares on the wall clock, was already past, and the engine's
-// probe, armed for that end, asked again at once, thousands of times a second.
-// So a window holds no monotonic reading, whether its own report opened it or
-// another provider's ([Plan.Hold]), and every comparison against it is on the
-// wall clock.
+// Two instants that both carry a monotonic reading compare on it alone, and
+// that clock stops while the host sleeps: a window kept with one outlasted a
+// sleep, the entry refused past the end it named, and the engine's probe,
+// armed for that end, asked again thousands of times a second. So a window
+// holds no monotonic reading, whether its own report opened it or another
+// provider's ([Plan.Hold]), and every comparison against it is on the wall
+// clock.
 //
 // Mutation: store the report's own instant in record, and the window keeps
 // its monotonic reading.
@@ -298,13 +296,11 @@ func TestAWindowIsKeptOnTheWallClock(t *testing.T) {
 // A HOST THAT SLEPT THROUGH A WINDOW'S END WAKES WITH THE ENTRY TRIED AGAIN,
 // and no refusal names a next try the wall clock has already passed.
 //
-// After a host slept inside a window, an entry whose window was judged on the
-// monotonic clock went on refusing for the sleep's length while naming as its
-// next try an end the wall clock had passed. The engine's probe, armed for that
-// end, was due at once and asked again as fast as the refusal returned: on
-// 2026-11-01 one node renewed its parks 20 834 times in a minute, every flood
-// beginning just after the host woke. The case reads the entry through a clock
-// that slept (clocktest.AfterSleep), inside the window and past its end.
+// An entry whose window was judged on the monotonic clock went on refusing for
+// the sleep's length, naming as its next try an end the wall clock had passed;
+// the engine's probe, armed for that end, was due at once and asked again as
+// fast as the refusal returned. The case reads the entry through a clock that
+// slept (clocktest.AfterSleep), inside the window and past its end.
 //
 // Mutation: store the report's own instant in record, and after two hours'
 // sleep the entry still refuses, naming a next try two hours past.

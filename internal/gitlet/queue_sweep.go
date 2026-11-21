@@ -35,7 +35,7 @@ import (
 // step never appends a record that removes none of the rows it read.
 func (s *Store) QueueSweep(ctx context.Context, repoID string, now time.Time) (SweepResult, error) {
 	if now.IsZero() {
-		return SweepResult{}, fmt.Errorf("%w: now: a queue sweep judges the history by the duty holder's "+
+		return SweepResult{}, refusedf("%w: now: a queue sweep judges the history by the duty holder's "+
 			"clock, and none was given", ErrInvalid)
 	}
 	through := now.Add(-QueueHistory)

@@ -133,11 +133,11 @@ func TestEachMCPKindRaisesAfterItsSpanAndClears(t *testing.T) {
 }
 
 // THE SPANS ARE THE ONES THE ENGINE ALREADY KEEPS: the restart schedule's
-// ceiling, past which every attempt waits the whole ceiling, and the longest an
-// integration waits between two passes it still owes, each plus the heartbeat
-// that carries the result. Spelled in statelog so the table needs neither
-// package, and held to both here, so a retune of the schedule fails until the
-// alarm follows. The reference says each.
+// ceiling (past it every attempt waits the whole ceiling) and the longest wait
+// between two integration passes, each plus the heartbeat that carries the
+// result. Spelled in statelog so the table needs
+// neither package, and held to both here, so a retuned schedule fails until
+// the alarm follows; and the reference says each.
 func TestTheMCPSpansAreTheSchedulesTheyWaitOut(t *testing.T) {
 	t.Parallel()
 	if want := mcp.RestartCeiling + coord.ReconcileInterval; statelog.MCPOutageGrace != want {
@@ -261,8 +261,7 @@ func TestAnMCPKindStandsPerServerAndHandsOverWhenTheLastInstanceFalls(t *testing
 		t.Errorf("raise lines = %v, want github's failing after the first two", raised)
 	}
 
-	// A refused name needs no span, so only the stamp keeps it from being
-	// judged here.
+	// A refused name needs no span: only the missing stamp leaves it unjudged.
 	unstamped := append(at(clock, 0).MCPServers, statelog.MCPServerCondition{Server: "linear",
 		Started: 1, Refused: []string{"lin_a"}, RefusedCount: 1})
 	if got := statelog.Evaluate(statelog.Reading{MCPServers: unstamped}); len(got) != 0 {

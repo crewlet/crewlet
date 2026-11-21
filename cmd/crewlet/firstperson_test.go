@@ -20,32 +20,18 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-// THE FIRST PERSON IS INVITED LIKE EVERYBODY AFTER THEM, END TO END: a real
-// node on a fresh estate, its own identity log, its own guard in front of its
-// own routes, and the command an operator types.
+// THE FIRST PERSON IS INVITED LIKE EVERYBODY AFTER THEM, END TO END: a real node
+// on a fresh estate, and the command an operator types.
 //
-// There is no founder route. Every node that serves the API already requires a
-// Tier A token, and that token is the credential a company has before it has
-// anybody: `crewlet iam invite` under it issues an ordinary invitation onto the
-// human seat the company declares for its first person, which confers only
-// what its writer holds — the token's grants as this node's admin posture lets
-// it carry them — and the invited person redeems the link like anybody else,
-// taking the seat. What
-// only a real node can say is that the pieces compose on an estate with
-// NOBODY in it: that nothing on the way requires somebody to be enrolled
-// already, that the invitation carries the grants and the seat the founder
-// needs, and that the person it creates can sign in afterwards with the
-// password they chose, acting as that seat.
+// There is no founder route: `crewlet iam invite` under the Tier A token issues
+// an ordinary invitation onto the first person's seat, conferring only what its
+// writer holds, and they redeem it like anybody. Only a real node says nothing
+// requires somebody already enrolled, and that they then sign in as the seat.
+// `-grants admin` STORES EVERY APP BESIDE IT, so removing admin later leaves them.
 //
-// `-grants admin` STORES EVERY APP BESIDE IT, as the dashboard's picker does,
-// so the founder's row lists admin and every app, and taking admin away from
-// them later leaves them the apps.
-//
-// Mutation: make the directory write require an enrolled administrator rather
-// than the grant, and the invitation is refused; drop a grant from what the
-// redemption confers, and the person's own session lacks it; send `admin`
-// without the apps, and the founder's row lists admin alone; drop the seat
-// from what the command sends, and the invitation is refused naming it.
+// Mutation: require an enrolled administrator, not the grant, and the invitation
+// is refused; drop a grant from the redemption, and the session lacks it; send
+// `admin` alone, and the row omits the apps; drop the seat, and it is refused.
 func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 	// NOT PARALLEL: the command reads its credential from the environment,
 	// and only there, which is the rule it is exercising.
@@ -125,19 +111,12 @@ func TestTheFirstPersonIsInvitedUnderATierAToken(t *testing.T) {
 }
 
 // A PERSON CREATED ON A SEAT SETS THEIR FIRST PASSWORD THROUGH THE LINK, END TO
-// END: the command an administrator types, a real node's create, and the
-// screen the link opens.
+// END: the administrator's command, a real node's create, and the link's screen.
 //
-// An administrator's create is the other way in beside an invitation: the
-// person exists, active, on the seat it named, from the moment it lands — and
-// holds no password, which is what the link the command prints once is for.
-// What only a real node can say is that the link the CLI printed is one the
-// node's own reset path spends: that it opens as a FIRST password link (the
-// screen says "choose your password", not "a new one"), sets the password the
-// person chose, signs nobody in, and is spent by it — and that the person then
-// signs in with that password, acting as their seat. The login is left to the
-// node, which proposes it from the address, and so is -grants, which on a
-// person's create is every app and not admin.
+// A create leaves the person active on the named seat with no password; the link
+// the command prints once is for that. Only a real node says its reset path spends
+// it: opens as a FIRST password link, sets the password, signs nobody in, is
+// spent; then they sign in as the seat. -grants is every app, not admin.
 //
 // Mutation: drop the link block from what `iam create` prints, and no link is
 // found; drop the seat from what it sends, and the create is refused naming

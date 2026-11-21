@@ -16,12 +16,8 @@ import (
 
 // SuiteWriter is the node id the suite's publisher stamps, and SuiteGeneration
 // the generation its estate's checkpoint is placed at before a candidate
-// writes.
-//
-// NEITHER IS A ZERO VALUE, deliberately: a domain that wrote an empty writer
-// or generation zero into its envelope would pass a suite whose own node were
-// unnamed and whose estate were at the first generation — which is exactly
-// what every domain in this tree did, for as long as nothing checked.
+// writes. Neither is a zero value, so a domain that leaves its envelope's
+// writer or generation unset cannot pass by matching them.
 const (
 	SuiteWriter     = "suite-writer"
 	SuiteGeneration = uint32(5)
@@ -43,22 +39,12 @@ func runStamp(t *testing.T, new Factory) {
 // [statelog.Stamp] — or that installs a gate at any version but the one its
 // own changed apply needs ([gateStamp]).
 //
-// # Why the write path and not the encoder
-//
-// [Candidate.Encode] is a fixture the TEST writes, so a suite that checked it
-// would certify the test's idea of a record. The stamp is lost or kept in the
-// domain's own decision — the one builder every production write goes through
-// — and that is only reached by writing through it. Every domain in this tree
-// had a writer field and a generation field on its envelope, and not one of
-// their writers set either, so the applier's eviction gate compared an empty
-// writer against every eviction on the log and dropped nothing.
-//
-// The publisher refuses an unstamped record on its own; this reads the bytes
-// back independently of that refusal, so a publisher that stopped checking
-// would not take the certification down with it.
-//
-// EXPORTED AND RETURNING THE VERDICT, for [Declaration]'s reason: the suite's
-// own tests hand it a domain that forgets, and read the refusal back.
+// The write path, not [Candidate.Encode], a fixture the test writes: the stamp
+// is kept or lost in the domain's own decision, and a record with no writer
+// is one the eviction gate never drops. The bytes are read back independently
+// of the publisher's own refusal, so a publisher that stopped checking cannot
+// take the certification down with it. Exported and returning the verdict for
+// [Declaration]'s reason.
 func Stamped(t *testing.T, new Factory) error {
 	t.Helper()
 	c := new(t)
@@ -83,8 +69,7 @@ func Stamped(t *testing.T, new Factory) error {
 		t.Fatalf("build %s's read seam: %v", name, err)
 	}
 	log := newSuiteLog()
-	// SIGNED, as every publisher's records are: the framework refuses a
-	// publisher with no signer, and what the broker holds is the frame.
+	// Signed: the framework refuses a publisher with no signer.
 	signer, err := recordseal.NewSigner(name, suiteRing())
 	if err != nil {
 		t.Fatalf("build a signer for %s: %v", name, err)
@@ -93,12 +78,9 @@ func Stamped(t *testing.T, new Factory) error {
 	if err != nil {
 		t.Fatalf("build a verifier for %s: %v", name, err)
 	}
-	// A NODE WHOSE APPLIER RUNS, over the log the publisher appends to: a write
-	// path of more than one step decides each from the rows the step before it
-	// made, as it does on every node — a rename from the create's row, a
-	// release from the rename's. Over a log nothing applied, every step after
-	// the first was decided from an estate that never held the first, so a
-	// candidate could certify only the first record of a sequence.
+	// An applier runs over the publisher's log: a multi-step write path
+	// decides each step from the rows the one before made (a rename from the
+	// create's row), so without it only the first record could certify.
 	runner, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: c.Domain, Spec: c.spec(), Applier: c.Applier, Verifier: verifier,
 		Fetch: log, Log: log, Node: node, DB: db, Checkpoint: at,
@@ -114,12 +96,9 @@ func Stamped(t *testing.T, new Factory) error {
 		Waiter: runner, Voids: runner, Identity: runner,
 		NodeID:     SuiteWriter,
 		Generation: func() uint32 { return SuiteGeneration },
-		// THE SAME LOG READ BACK THROUGH THE VERIFIER, because what it
-		// holds is the signed frame and a resolution decodes the body.
+		// Read back through the verifier: the log holds signed frames.
 		Records: statelog.VerifiedLog{Log: log, Verifier: verifier},
-		// A RESERVE OVER A LOG WITH NO CEILING where the domain keeps
-		// one: what is under test is what the decision writes, not the
-		// log's room.
+		// Under test is what the decision writes, not the log's room.
 		Admission: admissionFor(t, c),
 	}
 	pub, err := statelog.NewPublisher(deps)
@@ -165,24 +144,13 @@ func Stamped(t *testing.T, new Factory) error {
 // gateStamp holds a record that INSTALLS A GATE to the one version a gate may
 // carry: exactly what its own changed apply needs, and nothing above it.
 //
-// # Why a gate is the exception to "the lowest version that reads it"
-//
-// Every other record a build cannot read is RETAINED, and applied after its
-// upgrade. A gate is not: an older build that cannot read one HALTS at it and
-// takes its copy of the estate out of service, because a deferred gate would
-// license every record above it — an evicted writer's records applied there, a
-// removed object written back. So a gate stays at the base version unless its
-// APPLY changed, which no older build can honour either way, and the table says
-// which fields are such a change ([statelog.VersionedField.Gate]). A gate
-// carrying an ordinary versioned field above those halts every older node for
-// a field rather than for a rule — what each domain's encoder refuses
-// ([statelog.RecordFields.Ungated]) and what is checked here again on the bytes
-// the write path actually published, since the encoder is the code under test.
-//
-// It was a flat "a gate is at version 1", which the first gate whose apply
-// changes — stamped above the base exactly as the framework intends — would
-// have failed for the wrong reason, with a sentence claiming an older build
-// defers what the applier stops on.
+// An older build HALTS at a gate it cannot read rather than retaining it, since
+// a deferred gate would license every record above it. So a gate rises above
+// the base only for a field marking a changed apply
+// ([statelog.VersionedField.Gate]); an ordinary versioned field on it would
+// halt older nodes for nothing. The encoder refuses that
+// ([statelog.RecordFields.Ungated]); this checks the published bytes again,
+// since the encoder is the code under test.
 func gateStamp(c Candidate, name string, env statelog.Envelope, payload []byte) error {
 	if !c.Domain.InstallsGate(env) {
 		return nil
@@ -224,8 +192,7 @@ func seedCheckpoint(ctx context.Context, db store.ReplicatedHandle, at statelog.
 }
 
 // admissionFor is a reserve over a log with no ceiling where the candidate's
-// domain keeps one, and none where it keeps none — [statelog.ReservationOf]'s
-// rule, which every publisher, read index and sweep is held to.
+// domain keeps one ([statelog.ReservationOf]), and none otherwise.
 func admissionFor(t *testing.T, c Candidate) statelog.Admission {
 	t.Helper()
 	if !statelog.ReservationOf(c.Domain).Kept {
@@ -239,8 +206,7 @@ func admissionFor(t *testing.T, c Candidate) statelog.Admission {
 	return reserve
 }
 
-// openFence refuses nothing: the suite's node is neither evicted nor below
-// any floor, because what is under test is what the decision writes.
+// openFence refuses nothing: what is under test is what the decision writes.
 type openFence struct{}
 
 func (openFence) Evicted(context.Context) (bool, error)                 { return false, nil }

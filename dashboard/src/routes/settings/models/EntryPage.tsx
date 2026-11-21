@@ -61,6 +61,7 @@ import { JOB_WORDS, seatName } from "./places.ts";
 import { ROUTE, RUN_IN, WINDOW, product } from "./words.ts";
 import { AgoTime } from "~/components/AgoTime.tsx";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
+import { UsageLimitsCard } from "./UsageLimits.tsx";
 
 type Open = (flow: Flow, at?: WizardAt) => void;
 
@@ -83,16 +84,15 @@ export interface CategoryUse {
   backups: SeatOnCategory[];
 }
 
-/** Whether the Dashboard Assistant runs on the model, falls back to it, or neither. */
-export type AssistantUse = "runs" | "backup" | null;
-
 export interface WhoRuns {
   /** The seats that run every seat job on the model, said once, under Everything. */
   everything: string[];
   /** Each category's other seats: those that split their jobs, and the backups. */
   categories: CategoryUse[];
-  assistant: AssistantUse;
-  deepWork: AssistantUse;
+  /** Whether Ask Crewlet runs on the model. */
+  assistant: boolean;
+  /** Whether the Advisor explains its findings with the model. */
+  advisor: boolean;
   /** Every distinct seat on the model, at any position. */
   seats: number;
 }
@@ -137,11 +137,6 @@ export function whoRuns(usedBy: readonly ModelUse[]): WhoRuns {
         whole: CATEGORY_JOBS[category].every((j) => jobs.includes(j)),
       }))
       .sort((a, b) => a.seat.localeCompare(b.seat));
-  const assistantOf = (which: "chat" | "deep_work"): AssistantUse => {
-    const uses = usedBy.filter((u) => u.assistant === which);
-    if (uses.some((u) => u.position === 0)) return "runs";
-    return uses.length > 0 ? "backup" : null;
-  };
   return {
     everything,
     categories: CATEGORY_ORDER.map((category) => ({
@@ -149,8 +144,8 @@ export function whoRuns(usedBy: readonly ModelUse[]): WhoRuns {
       runs: list(category, runs),
       backups: list(category, backups),
     })).filter((c) => c.runs.length > 0 || c.backups.length > 0),
-    assistant: assistantOf("chat"),
-    deepWork: assistantOf("deep_work"),
+    assistant: usedBy.some((u) => u.assistant === "chat"),
+    advisor: usedBy.some((u) => u.advisor === "findings"),
     seats: new Set(usedBy.flatMap((u) => (u.seat ? [u.seat] : []))).size,
   };
 }
@@ -176,18 +171,17 @@ function SeatChip({ seats, on }: { seats: readonly Seat[]; on: SeatOnCategory })
   );
 }
 
-function assistantLine(use: AssistantUse, deepWork: AssistantUse): string[] {
+/** The helpers that run on a model, a line each: Ask Crewlet and the Advisor are no seat's. */
+function helperLines(who: Pick<WhoRuns, "assistant" | "advisor">): string[] {
   return [
-    ...(use === "runs" ? ["Ask Crewlet runs on it."] : []),
-    ...(use === "backup" ? ["Ask Crewlet falls back to it."] : []),
-    ...(deepWork === "runs" ? ["Ask Crewlet's deep work runs on it."] : []),
-    ...(deepWork === "backup" ? ["Ask Crewlet's deep work falls back to it."] : []),
+    ...(who.assistant ? ["Ask Crewlet runs on it."] : []),
+    ...(who.advisor ? ["The Advisor explains its findings with it."] : []),
   ];
 }
 
 function WhoRunsCard({ model, data }: { model: ModelView; data: ModelsData }) {
   const who = useMemo(() => whoRuns(model.entry.used_by), [model.entry.used_by]);
-  const assistant = assistantLine(who.assistant, who.deepWork);
+  const assistant = helperLines(who);
   return (
     <Card padding="none">
       <Card.Header count={who.seats}>
@@ -650,7 +644,7 @@ export function EntryPage({
 }) {
   const signInRef = useRef<HTMLElement | null>(null);
   const key = model.key;
-  // A HOST SIGN-IN ASKED FOR ELSEWHERE (the list, By job, an alarm) arrives
+  // A HOST SIGN-IN ASKED FOR ELSEWHERE (the list, a seat's job, an alarm) arrives
   // here as `?focus=host-login`: the sign-in card is where it is made, and
   // the parameter is spent once it has moved focus, so Back does not move it
   // again.
@@ -686,7 +680,17 @@ export function EntryPage({
   // 2); the limits are a card of their own. Where it runs and the web tools
   // are read off the document, which only an admin reads.
   const facts: Fact[] = [
-    { label: "Model", value: <span className="mono">{model.model}</span>, token: true },
+    // THE MODEL BY NAME where the engine's catalogue names it, its id on hover; else its id.
+    {
+      label: "Model",
+      value:
+        model.modelName === model.model ? (
+          <span className="mono">{model.model}</span>
+        ) : (
+          <span title={model.model}>{model.modelName}</span>
+        ),
+      token: true,
+    },
     { label: "Status", value: <HealthLine model={model} compact /> },
     ...(data.admin && model.executor
       ? [
@@ -718,6 +722,7 @@ export function EntryPage({
         facts={facts}
       />
       <ConditionCallout model={model} data={data} open={open} />
+      <UsageLimitsCard model={model} />
       {model.admin ? (
         <div className="models-entry-grid">
           <SignInCard model={model} data={data} open={open} focusRef={signInRef} />

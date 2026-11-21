@@ -16,54 +16,17 @@ import (
 )
 
 // The probe surface: what a node WITHOUT the ingress role serves on api.port.
+// An orchestrator must restart a wedged node and wait on rollouts, so it
+// carries /health and /ready and nothing else; port 0 binds nothing. The tool
+// bridge and OTLP receiver (`/otlp/`) are served to THIS HOST'S LOOPBACK ALONE
+// ([mcpbridge.FromLoopback], never a header), absent to anybody else: a
+// `direct` box dials them here (cmd/crewlet's boxHostURL), as a seat pool may
+// have no route to the fleet's address (CREWLET_MCP_BRIDGE_URL).
 //
-// # Every node can be probed, whatever its roles
-//
-// The API, the dashboard and the webhooks are the ingress role's, and a node
-// without it serves none of them — a satellite is placed on a private host
-// precisely so that it terminates no traffic. But an orchestrator runs every
-// node, and one it cannot probe is one it can neither restart when it wedges
-// nor wait on during a rollout: a node that has not yet joined the fleet reads
-// exactly like one that has, and the next one is replaced while the first is
-// still claiming nothing. So api.port on such a node carries /health and /ready
-// to the network, and nothing else. api.port 0 binds nothing, here as
-// everywhere.
-//
-// # And the two routes its own boxes dial, to this host alone
-//
-// A node that runs seats launches executor boxes, and a `direct` one is a
-// process of this host: it reaches the seat's tools over the tool bridge and
-// exports its telemetry to the receiver, and the address it is handed for both
-// is this listener on loopback (cmd/crewlet's boxHostURL). So this surface
-// serves those two routes too — the bridge under its prefix (internal/api/
-// mcpbridge, its notes route included) and the receiver under `/otlp/` — to a
-// caller on THIS HOST'S LOOPBACK ALONE ([mcpbridge.FromLoopback], read from the
-// connection, never a header), and answers anybody else as their absence
-// would: the probes are still all the network reaches here.
-//
-// The obvious alternative was the one in place: hand such a node's boxes the
-// fleet's address (CREWLET_MCP_BRIDGE_URL) and let an ingress node relay each
-// call back over the broker. That address is the one thing a seat pool may
-// not have — a satellite on a private host, a Kubernetes seat pool with no
-// route in — and without it every executor launch on the node was refused.
-// The loopback address needs none, and is served by the same bridge, so a
-// call for a seat this node has since handed on is relayed to its holder as
-// on any ingress node.
-//
-// # The same answers, sized to the node
-//
-// /health is liveness and answers 200 while the process is alive, through a
-// drain, exactly as the full surface's does; its body is the part of the health
-// envelope that describes a node rather than a dashboard ([ProbeHealth]).
-//
-// /ready answers a different question from the full surface's, because this
-// node takes no traffic to steer: it is ready while it is DOING ITS WORK. Its
-// broker link is up, it holds its presence lease, and — where it runs seats in
-// a mode that publishes — its latest placement pass was admitted to claim. And
-// beneath those, everything the full surface's /ready refuses on: a drain, no
-// company, a diverged posture. One judgement ([judgeReadiness]) decides both,
-// in one precedence, so the shared reasons can never mean different things on
-// the two.
+// /health is liveness through a drain ([ProbeHealth]). /ready means DOING ITS
+// WORK: broker link up, presence lease held, and where seats publish, the
+// latest placement pass admitted, plus all the full /ready refuses on, through
+// one [judgeReadiness] so reasons never diverge.
 
 // WorkState is what a node without the ingress role must hold to be doing its
 // work, as [ProbeRuntime.Work] reads it.

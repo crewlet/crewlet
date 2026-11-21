@@ -162,7 +162,7 @@ func (c Compaction) validLayerFields() error {
 		return fmt.Errorf("%w: layer: %w", ErrInvalidProposal, err)
 	}
 	if len(l.Replaces) >= MaxPublishedLayers {
-		return fmt.Errorf("%w: layer.replaces: %d layers, and a chain holds at most %d (MaxPublishedLayers)",
+		return refusedf("%w: layer.replaces: %d layers, and a chain holds at most %d (MaxPublishedLayers)",
 			ErrInvalidProposal, len(l.Replaces), MaxPublishedLayers)
 	}
 	for i, out := range c.Add {
@@ -293,18 +293,18 @@ func decideLayer(ctx context.Context, tx *sql.Tx, c Compaction, chain []LayerRow
 			"plans again", baseName(l.BaseID), j, chainNames(chain)), nil
 	}
 	if k-j+1 > MaxPublishedLayers {
-		return "", "", fmt.Errorf("%w: layer.replaces: the chain holds %d layers and the publication replaces %d, "+
+		return "", "", refusedf("%w: layer.replaces: the chain holds %d layers and the publication replaces %d, "+
 			"leaving %d, past the %d one holds (MaxPublishedLayers)", ErrInvalidProposal, k, j, k-j+1,
 			MaxPublishedLayers)
 	}
 	base := publishedBy(chain[:k-j], nil)
 	if slices.ContainsFunc(chain[:k-j], func(row LayerRow) bool { return row.Layer.LayerID == l.LayerID }) {
-		return "", "", fmt.Errorf("%w: layer.layer_id: %s is a layer of the chain below it", ErrInvalidProposal,
+		return "", "", refusedf("%w: layer.layer_id: %s is a layer of the chain below it", ErrInvalidProposal,
 			l.LayerID)
 	}
 	for _, p := range l.Packs {
 		if under, ok := base[p]; ok {
-			return "", "", fmt.Errorf("%w: layer.packs: pack %s is its base layer %s's already — a layer covers "+
+			return "", "", refusedf("%w: layer.packs: pack %s is its base layer %s's already — a layer covers "+
 				"the packs its base does not", ErrInvalidProposal, p, under)
 		}
 	}

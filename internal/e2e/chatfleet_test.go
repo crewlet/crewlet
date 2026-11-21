@@ -72,24 +72,15 @@ func awaitFrame(t *testing.T, conn *websocket.Conn, kind stream.Kind, what strin
 // A WORKING INDICATOR RAISED ON A NODE THAT SERVES NO API SHOWS IN A ROOM
 // WATCHED ON ANOTHER.
 //
-// The node running a seat's turn is rarely the node a browser is attached to:
-// here it is the pair's stateless member, which holds no data and binds no
-// API, and the seat pinned to it raises its indicator in that node's chat hub
-// — the hub that used to be started only by the API, and so never ran on a
-// node like this one. The indicator is the seat's member of the room's
-// presence on that node's presence hub, and the room is open on the data
-// member: what reaches the tab is the data member's presence hub asking its
-// peers as its first socket joins the room, and the stateless member's hub
-// answering with a frame SEALED under the fleet keyring, which the data member
-// opens before it shows anybody.
+// The seat's turn runs on the stateless member (no data, no API) and raises its
+// indicator in that node's chat hub. The data member's presence hub asks its
+// peers as its first socket joins the room; the stateless member's hub answers
+// with a frame SEALED under the fleet keyring.
 //
-// THE PRESENCE HUBS ALONE: the indicator is raised on the chat hub by hand,
-// so this certifies the node-to-node half and nothing of the turn. That a turn
-// raises it — the engine's [notify.StatusDriver] over the stateless member's
-// hub, under `chat.chatlet.typing_status` — is
-// [TestASeatOnAStatelessNodeAnswersInARoomTheFleetHolds]'s, which holds a real
-// turn until the same tab has been shown it. This case stays because it fails
-// on the hubs alone, where that one fails on either half.
+// THE PRESENCE HUBS ALONE: the indicator is raised by hand. That a turn raises
+// it ([notify.StatusDriver]) is
+// [TestASeatOnAStatelessNodeAnswersInARoomTheFleetHolds]'s, which fails on
+// either half; this fails on the hubs alone.
 func TestAnIndicatorRaisedOnANodeWithNoAPIShowsInARoomOnAnother(t *testing.T) {
 	t.Parallel()
 	p := startStatelessPairSpec(t, pairSpec{company: peopleDoc, dataBoot: withSignIn})
@@ -129,23 +120,15 @@ func showsWorking(data json.RawMessage, room, seat, status string) bool {
 
 // A PERSON'S READ STATE MOVED THROUGH ONE NODE REACHES THEIR SOCKET ON ANOTHER.
 //
-// A cursor is on no log, so no applier anywhere will ever announce it. It is a
-// coordination record, and every node serving sockets WATCHES those records
-// and pushes a changed one to that seat's own sockets there — the push derived
-// from the durable record, never told to a node by the node that took the
-// write. So a flush through ANY node reaches every tab its person has open,
-// on whichever node each is attached to. Here the write is made through the
-// pair's stateless member and the tab is on the data member, which only the
-// record crossing between them and the data member's own watch can tell.
+// A cursor is on no log, so no applier announces it. It is a coordination
+// record every node serving sockets WATCHES, pushing a changed one to that
+// seat's own sockets there, never told by the node that took the write. Here
+// the write goes through the stateless member, the tab is on the data member.
 //
 // THE COORDINATION WRITE ITSELF, the one `mark_chat_read` makes
-// ([coord.ChatReads.AdvanceChatRead]), on the stateless member's own
-// connection to the fleet's store — not a route, because a node without
-// `data` serves no API at all (Tier A refuses it `ingress`), so in production
-// two tabs on two nodes are two data members. What crosses here is what
-// crosses there: one node's write to the coordination store, and another
-// node's watch of it. That the tool writes exactly this record is the
-// builtin's own suite's subject.
+// ([coord.ChatReads.AdvanceChatRead]), not a route: a node without `data`
+// serves no API (Tier A refuses it `ingress`), so in production two tabs on two
+// nodes are two data members. The builtin's suite covers the tool's record.
 func TestAPersonsReadStateMovedThroughOneNodeReachesTheirSocketOnAnother(t *testing.T) {
 	t.Parallel()
 	p := startStatelessPairSpec(t, pairSpec{company: peopleDoc, dataBoot: withSignIn})

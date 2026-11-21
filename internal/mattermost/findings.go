@@ -17,18 +17,12 @@ func (r *Result) Findings() []integration.Finding {
 
 	// THE ADMINISTRATOR TOKEN RESOLVED AND CANNOT WRITE.
 	//
-	// REJECTED rather than MISSING, which is the distinction that kind was
-	// split on: a ${VAR} pointing at nothing is missing, and "an account
-	// that lost the access it was issued with" is this. It never clears on
-	// its own — every pass is refused identically until somebody gives that
-	// account the system_admin role or supplies a token from one that has
-	// it — so reporting it as a wait would leave an operator watching a
-	// retry that cannot succeed.
-	//
-	// A CONVERGED COMPANY REACHES THIS. Nothing is written on a pass that
-	// needs nothing, so the refusal is invisible until the day a seat is
-	// added and every pass from then on fails. That is precisely the window
-	// this is worth reporting in.
+	// REJECTED rather than MISSING (a ${VAR} pointing at nothing is missing):
+	// an account that lost its access never clears on its own, every pass is
+	// refused until it gets system_admin or a token from an account that has
+	// it, so a wait would leave an operator watching a retry that cannot
+	// succeed. A CONVERGED COMPANY REACHES THIS: a pass that needs nothing
+	// writes nothing, so the refusal stays invisible until a seat is added.
 	if r.NotAdmin != "" {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingCredentialRejected,

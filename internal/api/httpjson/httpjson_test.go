@@ -159,17 +159,13 @@ func TestExtraFieldsNeverDisplaceTheErrorCode(t *testing.T) {
 
 // THE DETAIL IS STRUCTURED JSON, not a sentence and not a bag of strings.
 //
-// It is the half a client BRANCHES on — `retry_after_ms` is waited on,
-// `missing_grant` is rendered beside the permission it names, `problems` is
-// put field by field beside the inputs — and every one of those needs the
-// value's own type. The old shape was flat text: a number arrived as "4000"
-// for the client to parse back, and anything with structure arrived as prose
-// for it to read.
+// It is the half a client BRANCHES on (`retry_after_ms` is waited on,
+// `missing_grant` and `problems` are rendered beside what they name), so each
+// needs the value's own type, not "4000" to parse back.
 //
 // THE CONTROL IS THE SECOND HALF: the same fact through the text form comes
 // back as a string. Route [httpjson.FailWithFields] through a
-// map[string]string — which is what "detail is a flat string" meant — and the
-// first half of this test goes red.
+// map[string]string and the first half goes red.
 func TestDetailSurvivesAsStructuredJson(t *testing.T) {
 	t.Parallel()
 	rec := httptest.NewRecorder()
@@ -579,22 +575,14 @@ func TestA503NoWaitClearsSaysSoInItsMessage(t *testing.T) {
 
 // A WRITE THAT MAY HAVE LANDED SAYS SO AS A FIELD, NOT A SENTENCE.
 //
-// An unknown outcome and a refusal are both 503s and send a client opposite
-// ways — the first is retried under the same operation, the second wrote
-// nothing — and each surface wrote the unknown for itself: `/iam` said it
-// only in prose, so a client that branched on `outcome` (the CLI's
-// purge does) read a write that may have destroyed an item as one that wrote
-// nothing. The three keys are the writer's and win over a route's detail; an
-// unvouched unknown carries no Retry-After whatever the caller passed, since
-// the same request on this node answers the same way until the change reaches
-// it.
+// An unknown outcome (retried under the same operation) and a refusal (wrote
+// nothing) are both 503s. Said only in prose, a client branching on `outcome`
+// (the CLI's purge) read a write that may have landed as one that wrote
+// nothing. The three keys win over a route's detail; an unvouched unknown has
+// no Retry-After; a route without operation ids leaves `op_id` out.
 //
-// A route whose writes carry no operation id says so by leaving the key out:
-// an empty `op_id` is one a client would send back.
-//
-// Mutation: drop the `outcome` key, let the detail's `op_id` or `outcome`
-// win, write an empty `op_id`, or keep the caller's Retry-After on an
-// unvouched one, and a case goes red.
+// Mutation: drop `outcome`, let the detail's keys win, write an empty `op_id`,
+// or keep the caller's Retry-After, and a case goes red.
 func TestAnUnknownOutcomeSaysSoAsAField(t *testing.T) {
 	t.Parallel()
 	if httpjson.OutcomeUnknown != string(statelog.OutcomeUnknown) {

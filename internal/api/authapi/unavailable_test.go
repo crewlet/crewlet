@@ -22,26 +22,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// EVERY 503 THIS SURFACE ANSWERS SAYS WHETHER TO COME BACK, BECAUSE NOTHING
-// HERE SPELLS ONE ITSELF OR PICKS ITS HINT WITHOUT ITS CAUSE.
+// EVERY 503 THIS SURFACE ANSWERS SAYS WHETHER TO COME BACK, AND NOTHING HERE
+// SPELLS ONE OR PICKS ITS HINT WITHOUT ITS CAUSE.
+// A 503 that does not say whether to come back looks like a node down for
+// good, and a browser that cannot tell gives up on the page that would let the
+// person back in. Held structurally: no file here names the status, so
+// httpjson.Unavailable is the only way to answer one (Retry-After where
+// waiting clears the cause, none where it cannot); a case per site could not
+// cover the next site added.
 //
-// A 503 that does not say whether to come back is indistinguishable to a
-// client from a node that is down for good, and the sign-in surface is where a
-// client most needs to tell them apart: a browser that cannot, gives up on the
-// one page that would have let the person back in. Ten sites answered a bare
-// 503. The rule is held structurally — no file in this package names the
-// status, so the one writer that decides the header with it,
-// httpjson.Unavailable, is the only way to answer one: a Retry-After where
-// waiting clears the cause, and none, deliberately, where it cannot — because
-// a behavioural case per site would have to provoke ten different failures and
-// would still say nothing about the eleventh.
-//
-// AND NO FILE NAMES THE BARE HINT, auth.RetryIdentitySeconds: every site asks
-// auth.RetryIdentity with what caused the 503, nil where nothing did. Every
-// site took the constant, so a write the state log refused for good — too
-// large, a full log, an evicted node — told a client to come back in two
-// seconds; the refusal's own rule answers those with no header, which is the
-// answer.
+// NO FILE NAMES THE BARE HINT, auth.RetryIdentitySeconds: sites ask
+// auth.RetryIdentity with the cause, nil where none, so a write the state log
+// refused for good (too large, full log, evicted node) carries no header.
 func TestEveryUnavailableAnswerHereSaysWhetherToComeBack(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
@@ -198,15 +190,11 @@ func (racingRevoke) Revoke(context.Context, string, string, string) (statelog.Re
 // A WRITE THAT LOST ITS RACE IS `409 stale`, AS ON /iam AND /worklet, IN THE STATE
 // LOG'S WORDS FOR A PERSON, AND NEVER THE 503 OF A NODE THAT COULD NOT.
 //
-// Nothing about the request or the node was wrong: the record it wrote kept
-// changing under it, and the same gesture made again decides on a fresh
-// snapshot and lands — which is `stale`, carrying no Retry-After since no wait
-// is what clears it. This surface answered it as every other failed write,
-// "This node couldn't make that change. Try again in a moment.", which sent a
-// person to wait out a node with nothing wrong with it, while the API
-// reference already said a lost race here is `409 stale`. The framework's own
-// words name the subject the race was lost on, a broker path with the
-// person's id in it, and never reach the answer.
+// Nothing about the request or the node was wrong: the record kept changing
+// under the write, and the same gesture again decides on a fresh snapshot and
+// lands. That is `stale`, with no Retry-After since no wait clears it, not the
+// "Try again in a moment" of a failing node. The framework's own words name
+// the subject (a broker path with the person's id) and never reach the answer.
 //
 // Mutation: drop the lost-race arm from failWrite and the case goes red on
 // the status.
@@ -246,12 +234,9 @@ func TestASignOutEverywhereThatLostItsRaceIsStale(t *testing.T) {
 // LOG'S, A GESTURE IN THIS SURFACE'S OWN.
 //
 // statelog.LostRace ends "look at it again, then make the change again if it
-// still needs making", which is advice about an account somebody edits — a
-// sign-out everywhere, an authenticator's enrolment. A person at the sign-in
-// form, or redeeming a link, has nothing to look at and changed nothing: what
-// clears it is signing in again. Every write here took the edit's words, so a
-// sign-in whose session or second factor's spend lost its race told the person
-// to look at something that is not there.
+// still needs making", advice about an account somebody edits. A person at the
+// sign-in form, or redeeming a link, has nothing to look at: what clears it is
+// signing in again.
 //
 // Mutation: answer every lost race through writeFailed and the sign-in rows
 // go red on the sentence.

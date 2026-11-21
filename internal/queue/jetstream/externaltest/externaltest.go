@@ -171,18 +171,15 @@ func (s *Server) start(port int, maxPayload int32) {
 
 // limitAccount states the account's JetStream file-store limit.
 //
-// ON THE RUNNING SERVER, because [server.Options] has no field for an
-// account's JetStream limits: nats-server takes them from a parsed accounts
-// block, from an account JWT, or from the running account, and the first two
-// would mean writing the server's whole account configuration, sign-in
-// included, in place of the options the suites hand [Start]. It runs before [Start] hands the case a URL, so no
-// client of the case's ever reads the server without it; after a restart it
-// runs before [Server.Restart] waits for the client, and a client that read
-// its budget in between would read the account as unlimited — none of the
-// suites restarting a server reads one.
+// It acts on the running server because [server.Options] has no field for an
+// account's JetStream limits; the other routes (a parsed accounts block, an
+// account JWT) would mean writing the whole account configuration, sign-in
+// included, in place of the options the suites hand [Start]. It runs before
+// [Start] hands the case a URL, and after a restart before [Server.Restart]
+// waits for the client, which would otherwise read the account as unlimited.
 //
-// THE FILE STORE ALONE: every other limit is nats-server's "unlimited", as
-// an account with JetStream enabled and nothing configured has it.
+// Only the file store is limited; every other limit stays "unlimited", as for
+// an account with JetStream enabled and nothing configured.
 func (s *Server) limitAccount() {
 	s.t.Helper()
 	err := s.ns.GlobalAccount().UpdateJetStreamLimits(map[string]server.JetStreamAccountLimits{
@@ -214,26 +211,16 @@ func (s *Server) HostPort() string {
 	return net.JoinHostPort(addr.IP.String(), strconv.Itoa(addr.Port))
 }
 
-// Reload lowers or raises the running server's max_payload LIVE — no restart,
-// so a connected client is not reconnected and is told only what the server
-// chooses to send it, which for a reloaded max_payload is nothing: nats-server
-// applies it to the connections it holds without an INFO. That is the
-// operator's gesture this package exists to stage beside a restart.
+// Reload lowers or raises the running server's max_payload LIVE: a connected
+// client is not reconnected and is sent no INFO, since nats-server applies the
+// new limit to held connections silently. The INFO ending a handshake does
+// carry a reload that lands first, so a case reloads under a connection that
+// has made a round trip.
 //
-// Nothing, that is, once the client's handshake is done. The INFO ending it
-// is built after the PONG nats.Connect returns on and carries a reload that
-// lands first, so a case reloads under a connection that has made a round
-// trip since it connected, as every dial of the queue in this module has.
-//
-// MAX_PAYLOAD AND NOTHING ELSE, because it is the one reload that is safe to
-// stage under a client that is using the server. nats-server's authorization
-// reload rewrites account state its client read loops read without a lock,
-// which the race detector reports inside nats-server itself whenever a
-// connected node is mid-request; a case that changes what the server admits
-// restarts it instead ([Server.RestartAs]).
-//
-// A later [Server.Restart] or [Server.RestartAs] starts from the reloaded
-// limit.
+// Only max_payload: nats-server's authorization reload rewrites account state
+// its client read loops read without a lock, which the race detector reports
+// whenever a node is mid-request. A case that changes what the server admits
+// restarts it ([Server.RestartAs]). A later restart keeps the reloaded limit.
 func (s *Server) Reload(maxPayload int32) {
 	s.t.Helper()
 	next := s.opts

@@ -24,38 +24,17 @@ import (
 )
 
 // The company config a running node serves comes from the STORE, not from the
-// file on the command line. That file is a SEED, reconciled into the store
-// like any other change.
-//
-// Both halves of that are load-bearing. Without the seed, a first run has
-// nothing to activate and the node serves a company no peer can see. Without
-// the store, a PUT /config on one node is invisible to every other — which is
-// the fan-out failure the whole control plane exists to remove.
+// file on the command line, which is a SEED reconciled into it. Without the
+// seed a first run has nothing to activate; without the store a PUT /config on
+// one node is invisible to every other.
 //
 // # A bootstrap seed does not overwrite a company that exists
 //
 // `-company` imports only where NO COMPANY EXISTS: none in this node's store
-// and none the fleet runs, the fleet's half decided create-only at the
-// pointer. It used to import whenever its content differed from the active
-// revision, which quietly made a restart a write: an operator edits the
-// company live, restarts a node whose file is a month old, and the file wins
-// — a deleted role returns, a changed model reverts, and nothing says so. And
-// it used to decide "no company" from this node's store alone, which a fresh
-// node joining a fleet and every boot of a node without `data` find empty:
-// such a node replaced the fleet's running company with its file, on every
-// node at once.
-//
-// The rule that replaced it is not "silently ignore an edited file", which was
-// the failure the old behaviour was itself guarding against. An edited file
-// that is not imported SAYS SO, at warn, naming both revisions and the two
-// ways to apply it. `-import-company` is the deliberate override, and
-// `crewlet config import` changes a running fleet with no restart at all.
-//
-// WHICH of those a file is, and what the engine boots on, is decided once,
-// before the engine starts — see seed.go. This file carries the decision out.
-//
-// The seed is compared against a revision's opened document, not its stored
-// bytes — see [tierBSeed.is].
+// and none the fleet runs (create-only at the pointer). Importing whenever
+// content differed made a restart a write; deciding from this node's store
+// alone let a fresh node replace the fleet's company. An edited file not
+// imported SAYS SO, at warn; `-import-company` is the override. See seed.go.
 
 // startReconciler carries out the decided seed, converges this node on the
 // pointer, and returns the loop for the caller to run.

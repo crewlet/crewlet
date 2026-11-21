@@ -196,19 +196,15 @@ func TestGitLabDecodesAWhsecSecret(t *testing.T) {
 
 // A SECRET THAT IS NOT A whsec_ VALUE IS NOT A SECRET.
 //
-// This inverts a test that asserted the opposite. The old verifier keyed on
-// the printable string when the payload would not decode, so a mistyped
-// secret produced an HMAC that cannot match anything GitLab computes — and
-// the operator got an endless stream of signature mismatches,
-// indistinguishable from an attack, with nothing naming the encoding.
+// Keying on the printable string when the payload will not decode yields an
+// HMAC that matches nothing GitLab computes: endless signature mismatches that
+// look like an attack, with nothing naming the encoding.
 //
-// 503 rather than 401 is the point: the sender's request was fine, and what
-// is wrong is on this side. That is the same STATUS a route with no secret at
-// all gives, because it is the same situation — this node cannot verify — and
-// NOT the same code: it answered `no_webhook_secret` over a secret the
-// operator could see configured, which sent them looking for a value that was
-// already there. `unusable_webhook_secret` says the one they have is the
-// problem.
+// 503 rather than 401: the sender's request was fine, and what is wrong is on
+// this side. The same STATUS as a route with no secret, because this node
+// cannot verify, and NOT the same code: `no_webhook_secret` over a secret the
+// operator can see configured sends them looking for a value already there.
+// `unusable_webhook_secret` says the one they have is the problem.
 func TestAMalformedSigningSecretIsReportedNotUsedVerbatim(t *testing.T) {
 	t.Parallel()
 	for _, bad := range []string{
@@ -332,16 +328,13 @@ func TestEachRouteUsesItsOwnSecret(t *testing.T) {
 // WHAT THE PROVISIONER MINTS IS WHAT THIS ROUTE ACCEPTS.
 //
 // The minter and the verifier live in different packages and agree on one
-// thing that is never written down between them: the `whsec_` payload is
-// STANDARD base64, and the HMAC key is the decoded bytes.
+// thing never written down between them: the `whsec_` payload is STANDARD
+// base64, and the HMAC key is the decoded bytes.
 //
-// Getting it wrong is silent in both directions. A URL-safe payload usually
-// fails a standard decode, and this route's fallback then keys on the
-// printable string verbatim — deliberately, so a hand-written secret still
-// works — while GitLab keys on the decoded bytes. Every delivery is refused
-// with a signature mismatch and nothing names the encoding. Measured against
-// a real instance: the hook fired, and the only trace was one
-// `webhook_signature_invalid` line.
+// Getting it wrong is silent: a URL-safe payload fails a standard decode, a
+// verbatim-keying fallback would compute a different HMAC than GitLab's
+// decoded-bytes key, and the only trace would be a `webhook_signature_invalid`
+// line.
 func TestAMintedSecretVerifiesOnThisRoute(t *testing.T) {
 	t.Parallel()
 	secret, err := gitlab.MintSigningSecret()

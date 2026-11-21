@@ -9,13 +9,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The retention report's closed sets the dashboard keeps its own copy of, held
-// against the engine's in both directions — see internal/clientsource.
-//
-// A value the engine sends and the dashboard's union does not name falls to a
-// renderer's default arm: a trim floor state the screen does not know reads as
-// "no conclusion yet", a generation state as a distance it is not. A value the
-// dashboard names and the engine never sends is a branch nothing reaches.
+// The retention report's closed sets, which the dashboard copies, match the
+// engine's both ways (internal/clientsource): an engine value the dashboard's
+// union lacks falls to a renderer's default arm (an unknown trim floor state
+// reads as "no conclusion yet"), and a dashboard value the engine never sends is
+// a branch nothing reaches.
 func TestTheDashboardKnowsEveryRetentionReportState(t *testing.T) {
 	t.Parallel()
 	for _, gate := range []struct {
@@ -49,9 +47,8 @@ func TestTheDashboardKnowsEveryRetentionReportState(t *testing.T) {
 	}
 }
 
-// THE SNAPSHOT FLOOR'S DONOR COUNT IS THE ENGINE'S: Settings › Retention says
-// "N of M donors" and tells an operator to reach M, so a copy that drifted
-// would send them to fix the wrong number.
+// The snapshot floor's donor count is the engine's: Settings › Retention tells
+// an operator to reach "M donors", so a drifted copy names the wrong number.
 func TestTheDashboardCountsTheDonorsTheSnapshotFloorRequires(t *testing.T) {
 	t.Parallel()
 	raw, err := clientsource.Scalar(clientsource.Tree(t), "SNAPSHOT_DONORS_REQUIRED")

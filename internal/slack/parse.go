@@ -97,14 +97,12 @@ var contentSubtypes = map[string]bool{
 //
 // Two discriminators, both required:
 //
-//   - `hidden: true` marks a bookkeeping delivery — message_changed (a human
-//     edit AND Slack's own link-unfurl edit of a bot's message),
-//     message_deleted, and the message_replied thread counter, which Slack
-//     delivers WITHOUT its subtype. For that last one the flag is the only
-//     reliable tell.
-//   - The subtype allowlist drops the system lines that DO carry text
-//     (channel_join, channel_topic) but are about the channel rather than
-//     addressed to anybody.
+//   - `hidden: true` marks a bookkeeping delivery: message_changed (a human
+//     edit and Slack's own link-unfurl edit), message_deleted, and the
+//     message_replied counter, which arrives WITHOUT its subtype, so the flag
+//     is the only tell.
+//   - The subtype allowlist drops system lines that carry text (channel_join,
+//     channel_topic) but are not addressed to anybody.
 //
 // An app_mention carries neither field and always passes.
 func SkipReason(event map[string]any) string {

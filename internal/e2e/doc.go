@@ -24,6 +24,26 @@
 // test that lives inside one of the components it composes tends, over time,
 // to be written as a test of that component.
 //
+// # The stand-in executor harness and the client half
+//
+// A case that forms a cluster runs in `make test-solo`, not `make test`.
+//
+// The executor's harness stands in for Claude Code and files its session as
+// Claude Code does: a rooted chain whose every record names the release it
+// answered, so a relaunch's reading of a kept session reads what the stand-in
+// wrote. Its cut-off mode files only some of the calls it makes, so the telling
+// by that reading is held end to end (exacttelling_test.go).
+//
+// replay.mjs is the one piece of code in internal/ that is not Go: the CLIENT
+// half of golden_test.go's wire-protocol gate. It pushes the captured frames,
+// the /operator/act answers (each with the questions that read the log its
+// write made) and what the captured tab was pushed in the company's own chat
+// through the committed static/protocol/protocol.js (built beside the embedded
+// tree, never in it) under plain `node`, and fails on anything the client
+// cannot read. It sits beside golden_test.go because the two are one
+// test that changes together: not under dashboard/, since it is no test of the
+// dashboard (its Vitest suites are).
+//
 // # How a case here is written
 //
 // A case that stands up ONE node, or a stateless node beside one data node,

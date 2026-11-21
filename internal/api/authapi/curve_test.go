@@ -36,17 +36,13 @@ func codeOf(t *testing.T, rec *httptest.ResponseRecorder) string {
 
 // A KNOWN PASSWORD NEVER CLEARS THE CURVE ON THE CODE IT GUARDS.
 //
-// Somebody holding a person's password but not their authenticator guesses at
-// the six digits. The password alone proves itself — and the answer to it is
-// `second_factor_required`, a sign-in not yet complete. Counted as a success
-// it would clear the pair, and presenting the password without a code between
-// every guess would wipe each wrong code off the curve: a million codes at
-// line rate. It releases the attempt instead, so every wrong code climbs the
-// curve whatever is sent between them, and the fourth is 429 with the wait.
-//
+// The password alone answers `second_factor_required`, a sign-in not yet
+// complete. Counted as a success it would clear the pair, so presenting the
+// password between guesses would wipe each wrong code off the curve: a million
+// codes at line rate. It releases the attempt, so the fourth wrong code is 429.
 // The rig's clock stands still and its sleep returns at once, so the waits
-// below are the ones the curve DECIDED — 1s and 3s served inside the request,
-// then 7s refused.
+// below are the ones the curve DECIDED: 1s and 3s served in the request, 7s
+// refused.
 //
 // Mutation: succeed the ticket on the code-less prompt and every wrong code
 // starts from nothing, so none is ever refused.
@@ -166,16 +162,10 @@ func (c *movingClock) advance(d time.Duration) {
 
 // WRONG CODES FROM MANY ADDRESSES CLIMB ONE CURVE: THE PERSON'S.
 //
-// Somebody holding a person's password guesses at their second factor from a
-// block of addresses. Each address and each spelling was a fresh pair on the
-// curve, so every guess was the first on its own and only the verify cap
-// bounded them — six digits fall to a /48 of IPv6 in about an hour. A code is
-// decided on the person's own curve too: three wrong codes from three
-// addresses, and the fourth, from a fourth, is 429 with the seven seconds three
-// failures earn, counted as a turned-away second-factor attempt. On to the
-// ceiling, and the surface says so — somebody holding this person's password
-// is guessing at their code — naming the person and the address, once it is
-// reached and not before, and not again while the run is held there.
+// Per-address pairs let each guess be first: six digits fall to a /48 of IPv6
+// in an hour. A code is decided on the person's own curve too: three wrong
+// codes from three addresses make the fourth 429 with seven seconds. At the
+// ceiling the surface says so, naming person and address, once.
 //
 // Mutations: decide a code on its pair alone and the fourth address's guess is
 // refused like the first, with no wait; announce on any failure and the first

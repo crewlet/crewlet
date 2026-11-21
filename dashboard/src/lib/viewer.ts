@@ -160,7 +160,7 @@ export interface ViewerState {
   configManagedBy: readonly string[];
   /**
    * Why this caller may not ask the Dashboard Assistant, or null when they
-   * may: the engine's own first failing condition, and `disabled` for an
+   * may: the engine's own first failing condition, and `no_model` for an
    * engine whose answer carries no `assistant` member at all.
    */
   assistant: AssistantAccessReason | null;
@@ -171,12 +171,12 @@ export interface ViewerState {
    */
   assistantModel: AssistantModelNotice | null;
   /**
-   * Whether a question's images are read: only deep work reads them, so false
-   * where the company runs none, and the composer takes no image.
+   * Whether a question's images are read: Ask Crewlet's model reads them, as
+   * the engine says of the model assigned; false and the composer takes none.
    */
   assistantReadsImages: boolean;
-  /** The company sets a stronger chain a question can ask for: the composer offers Think harder. */
-  assistantDeliberate: boolean;
+  /** The reader may assign Ask Crewlet's model: they hold the company document's write. */
+  assistantCanAssign: boolean;
   /**
    * On a company talking on a vendor's chat, which vendor surfaces it
    * declares, named to a reader holding Chatlet only: empty everywhere else.
@@ -274,7 +274,7 @@ function viewerState(
     assistant: assistantUnavailable(data?.assistant),
     assistantModel: assistantModelNotice(data?.assistant),
     assistantReadsImages: data?.assistant?.reads_images === true,
-    assistantDeliberate: data?.assistant?.deliberate === true,
+    assistantCanAssign: data?.assistant?.can_assign === true,
     chatVendors: data?.chat_vendors ?? [],
     artifactPages: data?.artifact_pages,
   };

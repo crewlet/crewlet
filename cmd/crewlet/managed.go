@@ -14,22 +14,16 @@ import (
 
 // A MANAGED COMPANY DOCUMENT, from the host's side — ADR-0030.
 //
-// The API refuses a change to a managed document from every credential that
-// `api.auth.company_writers` does not list. The commands that write the
-// document WITHOUT the API — an offline `crewlet config import` or `activate`,
-// and a Tier B file on `crewlet run`'s command line — present no credential
-// at all, so no writer list can name them. They read the same Tier A that
-// declares the document managed, and they honour it: the document's source is
-// the managing system, and a revision written here would be replaced at its
-// next reconcile exactly as an API edit would.
+// The API refuses a change from every credential `api.auth.company_writers`
+// does not list. Commands that write the document WITHOUT the API (an offline
+// `crewlet config import` or `activate`, a Tier B file on `crewlet run`) carry
+// no credential, so they read the same Tier A and honour it: a revision
+// written here would be replaced at the next reconcile.
 //
-// What stays open is what changes no byte of the company: `config rekey`
-// re-seals the revision this node boots on under the keyring, which is Tier
-// A's own business and nothing the managing system can do, and `config
-// activate` of the company's own revision — the one this node knows the fleet
-// to run ([store.Configs.Restorable]) — which is the offline re-publish a
-// rotated credential needs. Any other revision, the one this node boots on
-// while it refuses the fleet's included, is a change of document.
+// What stays open changes no byte of the company: `config rekey`, and `config
+// activate` of the company's own revision, the one the fleet runs
+// ([store.Configs.Restorable]), which is the offline re-publish a rotated
+// credential needs. Any other revision is a change of document.
 
 // managedRefusal is what a host-side write of a managed document is told:
 // who manages it, why the write is refused, and the two ways forward.
@@ -78,19 +72,14 @@ func refuseManagedOverride(boot *config.Bootstrap, path string) error {
 // as it is resolved and before anything reads the file.
 //
 // `-import-company` is refused ([refuseManagedOverride]), its file unread. A
-// `-company` bootstrap seed is NEVER READ: on a managed deployment it is
-// neither imported nor run, so there is nothing to read it for, and reading it
-// anyway is how a stray ./company.yaml the node was never told about — or one
-// that no longer parses — would fail the boot of a node that ignores it. What
-// comes back names the file when there is one to ignore (a named path, or the
-// default where it exists), for [decideSeed] to say so; an absent default is
-// no seed at all.
+// `-company` bootstrap seed is NEVER READ: it is neither imported nor run, and
+// reading it would let a stray or unparseable ./company.yaml fail the boot of
+// a node that ignores it. The result names the file when there is one to
+// ignore, for [decideSeed] to say so.
 //
-// IGNORED, LOUDLY, rather than refused: `-company` defaults to
-// ./company.yaml, so a node can carry one it was never told about, and a
-// bootstrap seed is ignored wherever a company exists anyway — this is the same
-// answer for the same reason, said at the same level. An empty store on a
-// managed deployment waits for its managing system's first write.
+// IGNORED, LOUDLY, rather than refused: `-company` defaults to ./company.yaml,
+// and a seed is ignored wherever a company exists anyway. An empty store waits
+// for the managing system's first write.
 func managedSeed(boot *config.Bootstrap, path string, named bool, importPath string) (tierBSeed, error) {
 	if importPath != "" {
 		return tierBSeed{}, refuseManagedOverride(boot, importPath)

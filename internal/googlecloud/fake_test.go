@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 )
@@ -424,7 +425,7 @@ func (f *fakeGoogle) sts(w http.ResponseWriter, r *http.Request) {
 	}
 	claims, ok := f.verify(r.Form.Get("subject_token"))
 	now := f.clock.now().Unix()
-	if !ok || claims.Iss != googlecloud.Issuer(testCompany) || claims.Sub != googlecloud.Subject(testCompany) ||
+	if !ok || claims.Iss != googleauth.Issuer(testCompany) || claims.Sub != googleauth.Subject(testCompany) ||
 		claims.Aud != "https:"+audience || claims.Exp <= now || claims.Iat > now+60 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -514,8 +515,8 @@ func (f *fakeGoogle) impersonate(w http.ResponseWriter, r *http.Request, who, ac
 	case target == nil:
 		f.fail(w, http.StatusNotFound, "NOT_FOUND", "Not found; Gaia id not found for email "+account)
 		return
-	case who == "federated:"+googlecloud.Subject(testCompany) && target.Email == provisioner:
-	case who == "federated:"+googlecloud.Subject(testCompany) && target.Email == atlasAccount && f.atlasTrusted:
+	case who == "federated:"+googleauth.Subject(testCompany) && target.Email == provisioner:
+	case who == "federated:"+googleauth.Subject(testCompany) && target.Email == atlasAccount && f.atlasTrusted:
 	case who == provisioner && f.delegates(target):
 		if f.mintRefusals > 0 {
 			f.mintRefusals--

@@ -11,16 +11,13 @@ import (
 // THE DASHBOARD ASKS NO MORE AT ONCE THAN THIS SOCKET RUNS.
 //
 // A screen that asks a burst of lookups of its own (Chatlet's link previews,
-// one `chat_unfurls` read per message in a transcript and per link in a room's
-// Shared list) bounds the burst to one wave of [stream.MaxInFlightQueries],
-// because past that number the reader stops taking frames until a query
-// finishes and every read the screen asks next waits behind the burst. So
-// the dashboard carries the number (`MAX_IN_FLIGHT_QUERIES` in
-// `contract/wire.ts`) and derives its bound from it, which only works while
-// the two agree. Above the engine's, the burst takes two waves and holds the
-// rail and the transcript behind its own lookups (the bound once read eight
-// while this socket ran four, under a comment saying it was one wave). Below
-// it, the previews wait longer than the socket would have made them.
+// one `chat_unfurls` read per message and per link) bounds the burst to one
+// wave of [stream.MaxInFlightQueries], because past that number the reader
+// stops taking frames until a query finishes and every later read waits
+// behind the burst. So the dashboard derives its bound from the number
+// (`MAX_IN_FLIGHT_QUERIES` in `contract/wire.ts`), which only works while the
+// two agree. Above the engine's, the burst takes two waves and holds the rail
+// and transcript behind it; below it, previews wait longer than needed.
 func TestTheDashboardAsksNoMoreAtOnceThanTheSocketRuns(t *testing.T) {
 	t.Parallel()
 	raw, err := clientsource.Scalar(clientsource.Tree(t), "MAX_IN_FLIGHT_QUERIES")

@@ -28,29 +28,10 @@ type Reads interface {
 // ScatterReads is how many of a Gitlet node's repositories its scatter reads at
 // once, ACROSS EVERY REQUEST it is answering, where its seat git-work share
 // (gitlet.GitShare) holds units units: ALL BUT ONE of them, and one where the
-// share holds only one.
-//
-// TIED TO THE SHARE, because the share is what every scatter read waits on:
-// each one's search takes a unit of it (gitlet.GitShare.Take), FIFO behind
-// every seat's read of a file, a log or a diff. Bounded by the requests'
-// answer slots instead (queue.ConcurrentAnswers, 64 a request, 64 requests a
-// node), one unfiltered search queued 64 waiters on every Gitlet node's share at
-// once and a few at once thousands, so every seat's ordinary read waited
-// behind them past gitlet.GitShareWait and was answered unready on every node
-// alike. Bounded here, a node's scatter holds at most units-1 units and waits
-// for no other, so a seat's read always finds a unit the scatter cannot take,
-// and waits behind nothing a search started; and one search on an idle node
-// still uses every unit but that one. A read holds its unit around its search
-// alone, never around its sync of the copy (gitlet.GitShare), so a scatter read
-// that is syncing holds its place here and no unit: the share's unit is then
-// free for a seat, at the price of the scatter running below units-1 for as
-// long as its reads sync — the bound is on the share the scatter can hold,
-// not on keeping it full.
-//
-// A NODE WHOSE SHARE IS ONE UNIT (a read lane of three cores or fewer:
-// gitlet.ShareOf) has none to keep apart: the scatter there waits for that unit
-// FIFO beside the seats' reads, one read at a time, so a seat's read waits
-// behind at most one search's.
+// share holds only one (a read lane of three cores or fewer: gitlet.ShareOf),
+// where there is no unit to keep apart: the scatter waits for it FIFO beside
+// the seats' reads, one at a time, so a seat waits behind at most one search.
+// Why it is tied to the share is on [Server]'s scatter field.
 func ScatterReads(units int) int { return max(1, units-1) }
 
 // errNotAsked is a request that assigns this node nothing: answered with
@@ -67,6 +48,15 @@ type Server struct {
 	now   func() time.Time
 	// units is the node's seat git-work share, and scatter its
 	// ScatterReads(units) slots, taken by every request's reads alike, FIFO.
+	// TIED TO THE SHARE, because every scatter read waits on it: each search
+	// takes a unit (gitlet.GitShare.Take), FIFO behind every seat's read.
+	// Bounded by the requests' answer slots instead (queue.ConcurrentAnswers,
+	// 64 a request, 64 requests a node), one unfiltered search queued 64
+	// waiters on every node's share and a few thousands, so every seat's read
+	// waited past gitlet.GitShareWait and was answered unready everywhere.
+	// Here a scatter holds at most units-1 units, so a seat's read always finds
+	// one, and one search on an idle node still uses all but that one. A read
+	// holds its unit around its search alone, never its sync of the copy.
 	units   int
 	scatter *semaphore.Weighted
 }
@@ -136,18 +126,14 @@ func replyProtocol(v int) int {
 
 // search reads the repositories asked IN THE ORDER OF THEIR NAMES, in the
 // node's ScatterReads slots, folding each one's lines into the request's
-// merge as its read returns — so the request holds the first Limit lines and the
-// answers of the reads in flight, never every answer — and PASSES OVER a
-// repository the merge has passed: once the first Limit lines are all of
-// repositories named before it, none of its lines can be in the reply, so a
-// search for a common word reads the first repositories that fill the limit
-// and the reads in flight beside them rather than every repository assigned.
-// Every repository named after the last line kept is past the limit
-// ([OutcomePastLimit]), read or not: decided by its name once every read has
-// returned, so the reply is the same however the reads interleaved. A line
-// past the last of a repository that stopped early is the asker's to leave
-// out ([prefixEnd]), which it does from the outcomes this reply carries; the
-// node cuts by its limit alone.
+// merge as its read returns, so it holds the first Limit lines and the reads
+// in flight, never every answer, and PASSES OVER a repository the merge has
+// passed: once the first Limit lines are all of repositories named before it,
+// none of its lines can be in the reply. Every repository named after the last
+// line kept is past the limit ([OutcomePastLimit]), read or not, decided by
+// name once every read has returned so the reply is the same however the
+// reads interleaved. A line past the last of a repository that stopped early
+// is the asker's to leave out ([prefixEnd]); the node cuts by its limit alone.
 func (s *Server) search(ctx context.Context, req Request, asked []Assigned) Reply {
 	results := make([]RepoResult, len(asked))
 	order := make([]int, len(asked))
@@ -251,19 +237,16 @@ func rawPath(h Hit) string {
 }
 
 // prefixEnd is where the lines a merge holds stop being the FIRST lines of
-// the search: the earliest last line of a repository that stopped early — at
-// its limit, its answer's bound or its budget — and of a node that cut its
+// the search: the earliest last line of a repository that stopped early (at
+// its limit, its answer's bound or its budget) and of a node that cut its
 // lines at the limit. Each answered its first lines in the search's order up
-// to its last (gitlet.SearchAnswer), so a line of another repository after that
-// last may follow lines it never read; the asker's merge keeps none, and the
-// answer is every line of the search up to its own last. That is what lets a page of a
-// long search be asked after the last line of the page before ([Key]): a line
-// the merge kept past a repository's stop would carry the next page's place
-// past that repository's unread lines, and they would be answered on no page.
-//
-// A repository that stopped with no line marks no end: a page continued from
-// before it would read what this one read and stop as early, so an end there
-// would never move; its lines are missing, which Truncated says, and the
+// to its last (gitlet.SearchAnswer), so a line of another repository after
+// that may follow lines it never read; the asker's merge keeps none. That is
+// what lets a page be asked after the last line of the page before ([Key]): a
+// line kept past a repository's stop would carry the next page's place past
+// its unread lines, answered on no page. A repository that stopped with no
+// line marks no end: a page continued from before it would stop as early, so
+// an end there would never move; Truncated says its lines are missing, and the
 // merge goes on past it.
 type prefixEnd struct{ end *Hit }
 

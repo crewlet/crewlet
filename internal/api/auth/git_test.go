@@ -589,17 +589,13 @@ func TestGitTextFoldsASentenceOntoOneLine(t *testing.T) {
 
 // EVERY REFUSAL ON A GIT ROUTE IS ONE GIT PRINTS — not the 401 alone.
 //
-// The guard writes two more answers about somebody it has RESOLVED: a
-// credential whose seat the chart will not let it act as (403
-// seat_unavailable) and a session that may only enrol a second factor (403
-// second_factor_enrolment_required), and one about a node that cannot tell
-// (503 identity_unavailable). Each was the API's JSON on every route, and git
-// prints nothing of a JSON body: a person whose seat was retired, or who
-// pushed to a node behind on identity, saw a bare `The requested URL returned
-// error: 403` with nothing saying why or whether to retry. So on a git route
-// each is text/plain in one line, the 503 keeping its Retry-After — and the
-// control is the same refusal on an API route, which stays the envelope.
-// Mutation: answer either arm with httpjson on a git route and its row fails.
+// The guard also answers 403 seat_unavailable, 403
+// second_factor_enrolment_required and 503 identity_unavailable. Git prints
+// nothing of a JSON body, so a person saw a bare `The requested URL returned
+// error: 403` with no reason or retry hint. On a git route each is text/plain
+// in one line, the 503 keeping its Retry-After; the control is the same
+// refusal on an API route, which stays the envelope. Mutation: answer either
+// arm with httpjson on a git route and its row fails.
 func TestEveryRefusalOnAGitRouteIsOneGitPrints(t *testing.T) {
 	t.Parallel()
 	const gitPath = "/git/r.git/info/refs?service=git-upload-pack"

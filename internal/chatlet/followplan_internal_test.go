@@ -11,20 +11,13 @@ import (
 
 // THE FOLLOW DERIVATION SEEKS BY KEY, and runs on every edit, delete and erase.
 //
-// Each name an edit drops asks the thread whether anything still names it and,
-// if nothing does, removes one follow. Both are written for a seek, and both
-// have a plan this planner prefers that is not one: the reply probe joined
-// plainly drives on `chat_mentions_handle_idx` — every mention the handle has
-// ever had in the company, to answer a question about one thread — and a
-// delete with a term on the unindexed `reason` column leaves the primary key
-// for `chat_follows_prune_idx`, every follow in the room. Neither is a
-// failure; each is a transaction holding the estate's one writer for longer
-// the older the company is.
-//
-// NEVER ANALYZEd, because no node is: a plan taken over statistics is a plan
-// no deployment runs. Each plan is read through storetest's one reading of
-// one, which also refuses a correlated aggregate the planner unnested into a
-// read of its whole table ([storetest.Decorrelated]).
+// Each dropped name asks the thread whether anything still names it, and if not
+// removes one follow. The planner prefers a non-seek for each: the plainly
+// joined reply probe drives on `chat_mentions_handle_idx` (every mention the
+// handle ever had), and a delete with a term on unindexed `reason` leaves the
+// primary key for `chat_follows_prune_idx` (every follow in the room), holding
+// the estate's one writer longer as the company ages. NEVER ANALYZEd, because
+// no node is; plans are read through storetest ([storetest.Decorrelated]).
 //
 // Mutation: join the replies plainly rather than CROSS JOIN and the plan
 // drives on chat_mentions_handle_idx.

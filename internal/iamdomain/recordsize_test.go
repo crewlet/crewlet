@@ -17,21 +17,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE LOG'S DECLARED LARGEST RECORD HOLDS THE LARGEST PERSON THE CAPS ALLOW.
+// The log's declared largest record holds the largest person the caps allow.
 //
-// A person's document is the one record here that grows — every credential
-// change and every edit republishes it whole — and the log's gate reserve is
-// sized by the declaration, so the declaration has to hold the widest
-// document a writer can form. It is built at every cap the writer holds a
-// person to: a name and an address at theirs, the most credentials one person
-// holds, every token carrying every grant and a label of characters JSON
-// escapes six-fold, and the envelope beside it — the actor,
-// the credential they acted through and a reason — at theirs. A cap raised
-// without revisiting [iamdomain.IamMaxRecordBytes] fails here.
-//
-// AND THE CAP IS WHAT THIS RESTS ON, so it is held too: a write that would
-// leave one more drops a credential that has stopped verifying, or is refused
-// before anything is published when every one still does.
+// A person's document is the one record here that grows (every credential
+// change and edit republishes it whole), and the declaration sizes the log's
+// gate reserve. So the document is built at every cap the writer holds a
+// person to: name, address, the most credentials, every token with every grant
+// and a label JSON escapes six-fold, and the envelope's actor, credential and
+// reason. A cap raised without revisiting [iamdomain.IamMaxRecordBytes] fails
+// here; TestAPersonHoldsNoMoreCredentialsThanTheCap holds the credential cap.
 func TestTheLargestRecordHoldsTheLargestPerson(t *testing.T) {
 	t.Parallel()
 	limit := iamdomain.Domain{}.Stream().MaxRecordBytes
@@ -93,7 +87,7 @@ func widestCredentials(t *testing.T, sealer *iamdomain.Sealer, person string) []
 	t.Helper()
 	at := time.Now().UTC()
 	id := func(i int) string { return fmt.Sprintf("018f3a9c-0000-7000-8000-%012d", i) }
-	// THE SHAPE ARGON2ID'S PHC STRING TAKES at this build's cost: the
+	// The shape Argon2id's PHC string takes at this build's cost: the
 	// parameters, a sixteen-byte salt and a thirty-two-byte digest.
 	phc := "$argon2id$v=19$m=65536,t=3,p=1$" + strings.Repeat("s", 22) + "$" +
 		strings.Repeat("h", 43)
@@ -129,19 +123,13 @@ func widestCredentials(t *testing.T, sealer *iamdomain.Sealer, person string) []
 	return out
 }
 
-// A PERSON HOLDS AT MOST MaxHeldCredentials, AND EVERY WRITER OF THE SET HOLDS
-// THEM TO IT.
-//
-// The declared largest record rests on the cap, so the cap is checked where
-// the set is formed — a credential change, an edit of the person and a mint —
-// and a write that would leave more LIVE credentials than it publishes
-// nothing. The mint is the one a person meets, so its refusal is the token's
-// own ([iamdomain.ErrInvalidToken]) and counts the live ones. An enrolment is
-// no row here because it carries at most one credential, where it once took a
-// list a caller filled and carried a token past the mint's grant cut: a
-// create carries none of the caller's — the record forms its first password
-// link itself — and a redemption's TYPE holds it to one, which its validation
-// holds to a password.
+// A person holds at most MaxHeldCredentials, and every writer of the set holds
+// them to it: a credential change, an edit of the person and a mint each
+// publish nothing when they would leave more live credentials. The mint is the
+// one a person meets, so its refusal is the token's own
+// ([iamdomain.ErrInvalidToken]) and counts the live ones. An enrolment is no
+// row: a create carries none of the caller's credentials (the record forms its
+// first password link) and a redemption's type holds it to one password.
 // Mutation: drop any one of the three checks and its row goes green past the
 // cap.
 func TestAPersonHoldsNoMoreCredentialsThanTheCap(t *testing.T) {
@@ -202,16 +190,13 @@ func TestAPersonHoldsNoMoreCredentialsThanTheCap(t *testing.T) {
 	}
 }
 
-// A CREDENTIAL THAT HAS STOPPED VERIFYING GIVES UP ITS PLACE, EARLIEST FIRST.
+// A credential that has stopped verifying gives up its place, earliest first.
 //
-// A person at the cap was refused a mint, a second factor or new recovery
-// codes and told to revoke a token nothing uses — which frees nothing, since a
-// revocation keeps the credential on the document until the retention sweep
-// collects it a week later. Now a write past the cap drops the credentials
-// that lapsed earliest, as many as it needs and no live one: revoking a token
-// makes room at once, an expired token makes room without anybody revoking
-// it, and the one kept is the one that lapsed last, whose week of account is
-// the longest still to run.
+// A revocation keeps the credential on the document until the retention sweep
+// collects it a week later, so a write past the cap drops the credentials that
+// lapsed earliest, as many as it needs and never a live one: revoking or
+// expiry makes room at once, and the one kept is the one that lapsed last,
+// whose week of account has longest to run.
 //
 // Mutation: count lapsed credentials against the cap again and the mint is
 // refused; drop the latest lapse first and the wrong token goes.
@@ -220,7 +205,7 @@ func TestALapsedCredentialGivesUpItsPlaceEarliestFirst(t *testing.T) {
 	rig := newWriteRig(t)
 	owner := tokenOwner(t, rig, "jane.doe")
 	set := liveTokens(iamdomain.MaxHeldCredentials)
-	// TWO LAPSED, the later one first in the set so its order breaks no tie:
+	// Two lapsed, the later first in the set so its order breaks no tie:
 	// a revocation an hour ago, and an expiry two hours ago.
 	set[5].RevokedAt = brokerAt.Add(-time.Hour)
 	set[9].ExpiresAt = brokerAt.Add(-2 * time.Hour)
@@ -275,16 +260,14 @@ func TestALapsedCredentialGivesUpItsPlaceEarliestFirst(t *testing.T) {
 	}
 }
 
-// A TOKEN A COUNTER ENDED GIVES UP ITS PLACE, BEFORE ANY OTHER LAPSED ONE.
+// A token a counter ended gives up its place before any other lapsed one.
 //
 // Signing out everywhere, a password set, a suspension and an administrator
-// ending somebody's sessions all end their tokens by moving the revocation
-// epoch, and write no `revoked_at` — so the cap counted every such token as
-// live until its own expiry, up to a year, while the listing showed it revoked
-// with no Revoke to offer. A person at the cap was then refused every mint,
-// second factor and recovery set over tokens that could never verify again.
-// The one ended comes first because nothing says when it stopped and the sweep
-// never collects it; the one revoked an hour ago keeps its week of account.
+// ending sessions end tokens by moving the revocation epoch, writing no
+// `revoked_at`; the cap must count such a token lapsed, not live until an
+// expiry up to a year away. It goes first because nothing says when it
+// stopped and the sweep never collects it; the one revoked an hour ago keeps
+// its week of account.
 //
 // Mutation: drop the counter from lapsedAt and the mint makes room by dropping
 // the revoked token instead.

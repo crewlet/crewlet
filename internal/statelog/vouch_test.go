@@ -13,15 +13,12 @@ import (
 // AN OPERATION THIS NODE'S LEDGER CANNOT VOUCH FOR IS NEVER DECIDED A SECOND
 // TIME.
 //
-// A ledger that LOST ROWS to its retention sweep holds none for an operation
-// minted before the loss, so a retry of one — a turn re-run, a caller repeating
-// an `unknown` under the same id — finds no row, takes a snapshot whose rows
-// already hold the first application, and decides again on top of it. The
-// broker has no reason to refuse that: the expectation is current, and the
-// duplicate window is two minutes wide. So the refusal has to come from here,
-// before the append, and it has to read the instant the operation was MINTED —
-// which is the id's own, because every retry reuses the id and a retry's own
-// clock is always after the loss.
+// A ledger whose retention sweep LOST ROWS holds none for an operation minted
+// before the loss, so a retry finds no row and would decide again on rows that
+// already hold the first application; the broker's expectation is current and
+// its duplicate window two minutes wide. So the refusal comes from here,
+// before the append, reading the instant the operation was MINTED from its id:
+// every retry reuses the id, and a retry's own clock is always after the loss.
 func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 	t.Parallel()
 
@@ -35,9 +32,7 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 			t.Fatalf("the first application = (%+v, %v), want applied", first, err)
 		}
 		// THE SWEEP, after the mint and before the retry: the ledger is
-		// empty, with the sweep's cutoff as its watermark — an operation
-		// whose id carries an old instant (a turn-derived id, or a
-		// caller's retry long after the first attempt) meets exactly this.
+		// empty, with the sweep's cutoff as its watermark.
 		h.sweep(minted.Add(time.Minute))
 		appended := h.appends.appends.Load()
 
@@ -58,8 +53,8 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		if res.OpID != op {
 			t.Errorf("unknown carries op id %q, want %q to retry under", res.OpID, op)
 		}
-		// AND SAYS WHY, because the retry it needs is not this node's:
-		// the same id repeated here meets the same swept ledger.
+		// AND SAYS WHY: the same id retried here meets the same swept
+		// ledger.
 		if !res.Unvouched {
 			t.Error("an unknown the ledger could not vouch for is not marked " +
 				"unvouched — a caller cannot tell it from a lost " +
@@ -76,11 +71,9 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		if err != nil || first.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("the first application = (%+v, %v), want applied", first, err)
 		}
-		// A loss the operation predates, which did NOT take the first
-		// copy's row: the copy landed above it, so this node's own
-		// applier applied it and its row is here. The row speaks for
-		// itself, and refusing it would strand a retry that this node
-		// can answer.
+		// A loss the operation predates that did NOT take its row (the
+		// first copy was applied after it): the row speaks for itself,
+		// and refusing would strand a retry this node can answer.
 		h.applier.mu.Lock()
 		h.applier.lost = minted.Add(time.Minute)
 		h.applier.mu.Unlock()
@@ -97,12 +90,10 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 		}
 	})
 
-	// PAST THE BROKER'S DUPLICATE WINDOW, which is where the second
-	// application stops being a claim and becomes a record on the log. The
-	// window is the one thing that could collapse a retry without the
-	// ledger, and it is an optimisation rather than a mechanism: a turn is
-	// re-run after a crash or a redelivery backoff, or an operator repeats
-	// an `unknown` from a terminal, long after two minutes.
+	// PAST THE BROKER'S DUPLICATE WINDOW a second application becomes a
+	// record on the log. The window is an optimisation, not a mechanism: a
+	// turn re-run after a crash or backoff, or an operator repeating an
+	// `unknown`, comes long after two minutes.
 	t.Run("past the duplicate window a retry is still not published again", func(t *testing.T) {
 		t.Parallel()
 		h := newHarnessFor(t, shortWindowDomain{})
@@ -171,13 +162,11 @@ func TestAnOperationTheLedgerCannotVouchForIsNeverDecidedTwice(t *testing.T) {
 // A RETRY OF AN OPERATION THIS NODE'S LEDGER HOLDS IS ANSWERED, NOT DECIDED
 // AGAIN — however long after the first copy it comes.
 //
-// The broker's duplicate window is the only other thing that could collapse
-// it, and it is two minutes wide. Past it, a retry used to take a snapshot
-// that already held the first application, decide again on top of it and
-// publish a second copy every data node applied: a second comment, a counter
-// moved twice, an update conditioned on the version its own first copy moved
-// refused as stale. The ledger is read in the snapshot's own transaction,
-// before the domain is asked anything.
+// Past the broker's two-minute duplicate window, deciding again on rows that
+// already hold the first application publishes a second copy every data node
+// applies: a second comment, a counter moved twice, a version condition
+// refused as stale by its own first copy. The ledger is read in the
+// snapshot's own transaction, before the domain is asked anything.
 func TestARetryTheLedgerHoldsIsAnsweredNotDecided(t *testing.T) {
 	t.Parallel()
 
@@ -218,9 +207,8 @@ func TestARetryTheLedgerHoldsIsAnsweredNotDecided(t *testing.T) {
 	})
 
 	// AND A DUPLICATE ACKNOWLEDGEMENT SAYS THE SAME: the broker collapsed
-	// this append onto an earlier copy inside its window — here one this
-	// node has not applied yet, so its ledger could not answer first — and
-	// the position is that copy's, not a record this call stored.
+	// this append onto an earlier copy this node has not applied (so its
+	// ledger could not answer first), and the position is that copy's.
 	t.Run("a duplicate acknowledgement", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
@@ -228,9 +216,9 @@ func TestARetryTheLedgerHoldsIsAnsweredNotDecided(t *testing.T) {
 		h.applier.auto = false
 		h.applier.mu.Unlock()
 		op := statelog.NewOpID(time.Now(), "write-a")
-		// The first copy lands on one subject and this node applies none
-		// of it; the retry is decided on another, where its expectation
-		// is current, so only the broker's dedupe can collapse it.
+		// The first copy lands unapplied on one subject; the retry is
+		// decided on another, where its expectation is current, so only
+		// the broker's dedupe can collapse it.
 		seq, _, err := h.log.Append(t.Context(), probePrefix+".object.a", op, nil,
 			signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-a"}, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}},
 				op, "one")))
@@ -248,8 +236,8 @@ func TestARetryTheLedgerHoldsIsAnsweredNotDecided(t *testing.T) {
 	})
 }
 
-// shortWindow is the duplicate window the case above runs its broker with —
-// short enough to be waited out, where the shipped two minutes is not.
+// shortWindow is [shortWindowDomain]'s duplicate window: short enough to
+// wait out, where the shipped two minutes is not.
 const shortWindow = 200 * time.Millisecond
 
 // shortWindowDomain is the probe domain with a broker that forgets an
@@ -265,13 +253,11 @@ func (shortWindowDomain) Stream() statelog.StreamSpec {
 // A REFUSAL IS NOT RETURNED FOR AN OPERATION THE LEDGER CANNOT VOUCH FOR —
 // unless it is about this node rather than the operation.
 //
-// A retry's rows already hold what its first copy did, and that is exactly
-// what makes a decision refuse: a move's root is already in the target, a
-// create's guarding row is already there, a version condition finds the
-// object moved by its own first copy. A domain whose decision only PROBES the
-// ledger refuses whenever it runs at all. So on a node whose ledger may have
-// lost the operation's row, the refusal is the ledger's silence read as an
-// answer, and it was returned before the ledger was ever asked.
+// A retry's rows already hold what its first copy did, which is exactly what
+// makes a decision refuse: a move's root already in the target, a create's
+// guarding row present, a version moved by its own first copy. On a node
+// whose ledger may have lost the operation's row, that refusal is the
+// ledger's silence read as an answer.
 func TestARefusalTheLedgerCannotVouchForIsUnknown(t *testing.T) {
 	t.Parallel()
 
@@ -367,13 +353,11 @@ func TestARefusalTheLedgerCannotVouchForIsUnknown(t *testing.T) {
 // A LEDGER LOSS BETWEEN THE DECISION AND ITS RESOLUTION IS UNVOUCHED TOO, AND
 // A LOST ACKNOWLEDGEMENT IS NOT.
 //
-// The resolution of an ambiguous publish is the third place the ledger's
-// silence is weighed: something landed on the subject, the ledger holds no row
-// for this operation, and the ledger has lost rows since the operation was
-// minted — so "somebody else won" cannot be concluded. That is an unvouched
-// unknown, like the other two. A publish nobody could probe at all is a plain
-// lost acknowledgement, which the same id retried here does resolve, and it
-// must not be marked.
+// Resolving an ambiguous publish is the third place the ledger's silence is
+// weighed: when something landed on the subject, the ledger holds no row for
+// the operation and has lost rows since its mint, "somebody else won" cannot
+// be concluded. A publish nobody could probe is a plain lost acknowledgement,
+// which the same id retried here resolves, so it is not marked.
 func TestAnUnknownSaysWhetherTheLedgerCouldVouch(t *testing.T) {
 	t.Parallel()
 

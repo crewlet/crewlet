@@ -8,33 +8,16 @@ import (
 
 // The MCP bridge edge.
 //
-// A seat's executor — its harness's own run, in a box — calls the seat's
-// tools HERE rather than holding them, so the seat's credentials — its chat token, its tracker token, its
-// code-host token — never enter a box running generated code. See
-// internal/api/mcpbridge for what the bridge does with a call once it arrives.
+// A seat's executor (a harness run in a box) calls the seat's tools HERE, so
+// its tokens never enter a box running generated code (see mcpbridge).
 //
-// # This route is deliberately reachable without the API's own auth
-//
-// It has to be: the MCP client inside the box holds no API token, and giving
-// it one would be handing a sandbox the credential that reads the whole
-// company. What authenticates a request instead is the per-run, expiring token
-// in its own PATH, and the auth package exempts this prefix for exactly that
-// reason. Two gates stand behind it: the signature says the token was minted
-// by this fleet, and the session map says the run it names is still going.
-//
-// # It is ingress's, and answers for every node
-//
-// A session is a live tool surface in the process holding the run's seat, and
-// that process may serve no API at all. So the route is served where the API
-// is, and the node a call reaches relays it to the seat's holder over the
-// broker (see [mcpbridge.Bridge.Join]): one address for the fleet, whichever
-// node holds the seat.
-//
-// AND A SEATS NODE'S OWN, TO ITS OWN HOST. A box on its launching node's host
-// dials that node's own listener on loopback, so a node without the ingress
-// role serves the same route on api.port beside its probes, to this host's
-// loopback alone ([Probes]): the address its direct boxes are handed needs no
-// API and publishes nothing to the network.
+// Reachable without the API's own auth, deliberately: the box holds no API
+// token, and one would hand a sandbox the credential that reads the company.
+// The per-run, expiring token in the PATH authenticates (the auth package
+// exempts the prefix). A session lives in the process holding the seat, which
+// may serve no API, so a call is relayed over the broker
+// ([mcpbridge.Bridge.Join]). A node without the ingress role serves the route
+// on api.port to this host's loopback alone ([Probes]).
 
 // mountBridge registers the bridge, or says why it did not.
 //

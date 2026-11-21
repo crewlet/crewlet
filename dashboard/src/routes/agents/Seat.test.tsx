@@ -15,6 +15,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { SeatScreen } from "./Seat.tsx";
 import { contactLabel } from "./seat/Settings.tsx";
+import { TIMED_OUT_PAGE, TIMED_OUT_TITLE } from "./seat/Sessions.tsx";
 import { Shell } from "~/app/Shell.tsx";
 import { Router } from "~/app/router.tsx";
 import { PAGE_ACTIONS_SLOT } from "~/app/frame/PageActions.tsx";
@@ -35,6 +36,7 @@ import { emptyDay } from "~/test/myWork.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { settled } from "~/test/settle.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
+import { TRANSCRIPT_QUERY_TIMEOUT_MS } from "~/contract/wire.ts";
 
 // EVERY ROW A LIST KEEPS IN ITS VIEW, recorded: jsdom lays nothing out, so
 // where a list scrolled to is nothing a case can read, and the call is. The
@@ -257,7 +259,7 @@ function transcriptPage(over: Record<string, unknown> = {}) {
       entries: 200,
       bytes: 1 << 20,
       entry_bytes: 16 << 10,
-      line_bytes: 32 << 20,
+      read_lines: 1 << 20,
       read_bytes: 256 << 20,
     },
     read_level: "stale",
@@ -328,7 +330,14 @@ const DEFAULTS: Record<string, unknown> = {
   },
 };
 
-let asked: { what: string; params: Record<string, unknown> }[];
+/** Every question the page asked: its kind and parameters, the wait it named
+ *  (undefined for the socket's own) and the signal that gives it up. */
+let asked: {
+  what: string;
+  params: Record<string, unknown>;
+  waitMs?: number;
+  signal?: AbortSignal;
+}[];
 let posted: { tool: string; args: Record<string, unknown> }[];
 let reply: { status: number; body: unknown };
 /** The path of every REST read the page sent: the code questions go over REST. */
@@ -400,10 +409,15 @@ function mount(
   const socket = new LiveSocket(store);
   (
     socket as unknown as {
-      query: (what: string, params?: Record<string, unknown>) => Promise<unknown>;
+      query: (
+        what: string,
+        params?: Record<string, unknown>,
+        waitMs?: number,
+        signal?: AbortSignal,
+      ) => Promise<unknown>;
     }
-  ).query = (what, params = {}) => {
-    asked.push({ what, params });
+  ).query = (what, params = {}, waitMs, signal) => {
+    asked.push({ what, params, waitMs, signal });
     const answer = what in answers ? answers[what] : DEFAULTS[what];
     return Promise.resolve(
       typeof answer === "function"
@@ -2341,7 +2355,9 @@ test("a turn's keyless work item is named by its kind and the head of its id", a
   const keyless = screen.getByText("task b375beaf");
   expect(keyless.getAttribute("title")).toContain(`Worklet task ${id}`);
   expect(keyless.className).toContain("turn-what-key");
-  expect(screen.getByText("ENG-29").className).toContain("turn-what-key");
+  // A KEYED ITEM IS A TASK REFERENCE (`components/NamedRef.tsx`) in the same token.
+  const keyed = screen.getByText("ENG-29").closest(".turn-what-key");
+  expect(keyed?.querySelector(".crewlet-inline-ref")).not.toBeNull();
   expect(document.body.textContent).not.toContain(`Worklet task ${id}`);
 });
 
@@ -2856,6 +2872,134 @@ test("choosing another session never shows the last one's transcript under it", 
     ),
   );
   expect(await screen.findByText("The other session's words.")).toBeTruthy();
+});
+
+// A TRANSCRIPT PAGE WAITS AS LONG AS A READ OF A SESSION CAN TAKE TO ANSWER,
+// the first page and every later one (`TRANSCRIPT_QUERY_TIMEOUT_MS`, held to
+// the engine's figure by `internal/api/queries`), never an ordinary question's
+// ten seconds; the protocol's own suite holds the wait to the frame.
+// Mutation: drop the wait from either read, or from `useQuery`, and its page
+// asks with the socket's.
+test("every page of a transcript waits as long as a read of a session can take", async () => {
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([sessionRow()]),
+      executor_session: (p: Record<string, unknown>) =>
+        p.cursor
+          ? transcriptPage({ entries: [said("The second page.")], from: 1 })
+          : transcriptPage({
+              entries: [said("The first page.")],
+              cut: "entries",
+              next_cursor: "k.1.1",
+            }),
+    },
+  });
+  expect(await screen.findByText("The first page.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more of the transcript" }));
+  expect(await screen.findByText("The second page.")).toBeTruthy();
+  const pages = askedFor("executor_session");
+  expect(pages.map((a) => Boolean(a.params.cursor))).toEqual([false, true]);
+  for (const page of pages) expect(page.waitMs).toBe(TRANSCRIPT_QUERY_TIMEOUT_MS);
+  // AND THE SESSIONS' LIST, an ordinary question, waits the socket's own.
+  expect(askedFor("executor_sessions")[0]?.waitMs).toBeUndefined();
+});
+
+// A TRANSCRIPT READ PAST ITS WAIT FAILS CLOSED: a first page the socket gave up
+// on (`timeout`) shows nothing of the session and says only that it could not
+// be read in time, with Try again, which asks it again.
+// Mutation: draw a timed-out page through the shared banner, and its words say
+// the engine did not answer rather than that the transcript was not read.
+test("a transcript read past its wait says only that it could not be read in time", async () => {
+  let timeouts = 1;
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([sessionRow()]),
+      executor_session: () =>
+        timeouts-- > 0
+          ? Promise.reject(new Error("timeout"))
+          : transcriptPage({ entries: [said("The session's words.")] }),
+    },
+  });
+  expect(await screen.findByText(`${TIMED_OUT_TITLE}.`)).toBeTruthy();
+  expect(screen.queryByText(/answer in time/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByText("The session's words.")).toBeTruthy();
+  expect(screen.queryByText(`${TIMED_OUT_TITLE}.`)).toBeNull();
+});
+
+// AND A LATER PAGE PAST ITS WAIT says so beside Load more, which asks it again,
+// the pages read before it kept.
+// Mutation: draw the failure in the control's place, and there is nothing to
+// press but a Try again that asks no page.
+test("a later transcript page past its wait keeps Load more, which asks it again", async () => {
+  let timeouts = 1;
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([sessionRow()]),
+      executor_session: (p: Record<string, unknown>) =>
+        p.cursor
+          ? timeouts-- > 0
+            ? Promise.reject(new Error("timeout"))
+            : transcriptPage({ entries: [said("The second page.")], from: 1 })
+          : transcriptPage({
+              entries: [said("The first page.")],
+              cut: "entries",
+              next_cursor: "k.1.1",
+            }),
+    },
+  });
+  expect(await screen.findByText("The first page.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more of the transcript" }));
+  expect(await screen.findByText(TIMED_OUT_PAGE)).toBeTruthy();
+  expect(screen.getByText("The first page.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more of the transcript" }));
+  expect(await screen.findByText("The second page.")).toBeTruthy();
+  expect(screen.queryByText(TIMED_OUT_PAGE)).toBeNull();
+});
+
+// A TRANSCRIPT READ THE SCREEN STOPS WAITING FOR IS GIVEN UP ON: another session
+// chosen, the first page's read and a later page's still in flight are
+// abandoned (their signals abort, which the socket sends on as `query_cancel`),
+// so the engine stops reading a session nobody is shown; the new session's read
+// is not.
+// Mutation: keep the reads' signals, and an abandoned read holds the socket's
+// slot and the node's until its wait of minutes passes.
+test("a transcript read the screen stops waiting for is given up on", async () => {
+  const other = "0193f0c2-6a1e-7c55-9d1a-3b6f0e2a4c13";
+  mount(`#/company/org/seats/swe?tab=memory&session=${SESSION_TURN}`, {
+    answers: {
+      agent_memory: memoryOf(),
+      executor_sessions: sessionsList([
+        sessionRow(),
+        sessionRow({ turn_id: other, ask_excerpt: "The other turn's ask." }),
+      ]),
+      executor_session: (p: Record<string, unknown>) =>
+        p.turn_id === other || p.cursor
+          ? new Promise(() => undefined)
+          : transcriptPage({
+              entries: [said("The first page.")],
+              cut: "entries",
+              next_cursor: "k.1.1",
+            }),
+    },
+  });
+  expect(await screen.findByText("The first page.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more of the transcript" }));
+  await waitFor(() => expect(askedFor("executor_session")).toHaveLength(2));
+  const [first, later] = askedFor("executor_session");
+  expect(first?.signal?.aborted).toBe(false);
+  expect(later?.signal?.aborted).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: /The other turn's ask\./ }));
+  await waitFor(() =>
+    expect(askedFor("executor_session").some((a) => a.params.turn_id === other)).toBe(true),
+  );
+  await waitFor(() => expect(later?.signal?.aborted).toBe(true));
+  expect(first?.signal?.aborted).toBe(true);
+  const chosen = askedFor("executor_session").find((a) => a.params.turn_id === other);
+  expect(chosen?.signal?.aborted).toBe(false);
 });
 
 // A PAGE THAT NO LONGER FOLLOWS ON IS REFUSED, and the reader is told so — in

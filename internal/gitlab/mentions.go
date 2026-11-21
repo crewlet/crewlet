@@ -6,17 +6,13 @@ import "strings"
 //
 // # Why a scanner and not a regular expression
 //
-// GitLab sends comment and description bodies as raw markdown with no parsed
-// mention array — unlike a tracker, which resolves each mention to a user id
-// before it sends the payload — so the only way to recover who was named is
-// to read the text.
+// GitLab sends bodies as raw markdown with no parsed mention array, so the only
+// way to recover who was named is to read the text.
 //
-// The rule that makes that safe is a NEGATIVE one: an `@` counts only when
-// what precedes it is not part of a word. Without it, `deploy@example.com`
-// mentions a user called "example" and every file path with an @ in it pings
-// somebody. Go's regexp engine is RE2 and has no lookbehind, so the rule
-// cannot be written as a pattern — a one-pass scanner is not a workaround
-// here, it is the only correct implementation.
+// The rule that makes that safe is a NEGATIVE one: an `@` counts only when what
+// precedes it is not part of a word, or `deploy@example.com` mentions "example"
+// and every path with an @ pings somebody. RE2 has no lookbehind, so the rule
+// cannot be a pattern; a one-pass scanner is the only correct implementation.
 
 // Mentions are the usernames named in a body, lowercased, deduplicated, in
 // the order they appear.

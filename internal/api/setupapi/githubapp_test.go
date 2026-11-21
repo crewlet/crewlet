@@ -242,28 +242,18 @@ func TestAnAppIsCreatedAtItsSeatsPermissions(t *testing.T) {
 	}
 }
 
-// EVERY CREATION THAT STOPS TELLS THE PERSON WHAT TO DO, in words of this
-// flow's own and never the error's, and the step decides the remedy: before
-// GitHub hands the app over nothing exists and the person starts again; once
-// it has, an app whose key was lost is deleted first, and one recorded on no
-// agent is not made twice.
+// EVERY CREATION THAT STOPS TELLS THE PERSON WHAT TO DO, in this flow's own
+// words and never the error's (a seal's failure names the secret, a refusal a
+// token): before GitHub hands the app over the person starts again; after, an
+// app whose key was lost is deleted first, and one recorded on no agent is
+// not made twice.
 //
-// The return page printed the error's text: "setupapi: this app-creation link
-// is not one this engine issued", a seal's failure naming the secret it was
-// writing, the config surface's refusal naming a token. A person who read
-// "start again" there, after GitHub had made an app whose key was lost, made a
-// second app beside an unusable first.
+// AND A RECORD STORED AND THEN UNANSWERED IS NOT ONE RECORDED ON NO AGENT: its
+// activation may have landed, so "delete the app" would delete a running one.
+// It is read back once; anything but a recorded app is told it isn't known.
 //
-// AND A RECORD STORED AND THEN UNANSWERED IS NOT ONE RECORDED ON NO AGENT. Its
-// activation may have landed, and told "couldn't add the app to this agent.
-// Delete the app on GitHub", a person deleted the app the agent was running.
-// It is read back once: an agent that records the app is the creation
-// finished, and anything else is told the outcome isn't known yet, which the
-// same link presented again then answers.
-//
-// Mutation: tell any step as another's, drop the AppFailure on one, drop a
-// stop's own heading, tell an unknown outcome as one that recorded nothing,
-// or skip the read back, and its case goes red.
+// Mutation: tell a step as another's, drop an AppFailure or a stop's heading,
+// tell an unknown outcome as nothing recorded, or skip the read back.
 func TestEveryStoppedCreationTellsThePersonWhatToDo(t *testing.T) {
 	t.Parallel()
 	app := map[string]any{

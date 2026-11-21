@@ -433,19 +433,17 @@ var chatReadCases = []fleetCase{
 	}},
 
 	{"sixteen flushes for one person at once all land", func(h *fleetHarness) {
-		// THE PROPERTY THE FORWARD MERGE AND THE RETRY EXIST FOR, and the
-		// one nothing else here exercises: every case above writes one
-		// flush at a time, so a backend whose lost race was an error —
-		// or was never retried at all — passed every one of them. Each
-		// flush names a room of its own, so a flush that lost and was
-		// dropped is a cursor missing from the record.
+		// THE PROPERTY THE FORWARD MERGE AND THE RETRY EXIST FOR: every case
+		// above writes one flush at a time, so a backend whose lost race was
+		// an error, or never retried, passed them all. Each flush names a
+		// room of its own, so a flush lost and dropped is a cursor missing
+		// from the record.
 		//
-		// SIXTEEN AT ONCE: enough that flushes lose rounds to each other
-		// on every backend that has rounds to lose, while each round lost
-		// is another flush's write that landed, so the burst always ends.
-		// That one flush outlasts more lost rounds than any fixed count
-		// would allow is the KV backend's own case, which makes it lose
-		// twenty in a row deterministically rather than by chance.
+		// SIXTEEN AT ONCE: enough that flushes lose rounds to each other on
+		// every backend that has rounds to lose, while each lost round is
+		// another flush's write that landed, so the burst always ends. A flush
+		// outlasting any fixed count of lost rounds is the KV backend's own
+		// case, which loses twenty in a row deterministically.
 		const flushes = 16
 		var wg sync.WaitGroup
 		type answer struct {

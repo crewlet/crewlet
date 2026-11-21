@@ -14,48 +14,25 @@ import (
 )
 
 // THE SEARCH FAN-OUT: how a company's corpus scan is divided across the nodes
-// that already hold it, and what an answer says when part of the division did
-// not come back.
+// that already hold it, and what an answer says when part of it did not come back.
 //
-// # What is being divided, and what is not
-//
-// Every DATA node holds the WHOLE corpus — that is the fleet shape, and
-// nothing here changes it. A node without `data` holds none of it, takes no
-// range and is never in the roster: it asks a data node to search, and that
-// node coordinates. So a fan-out divides CPU, never data: the coordinator hands
-// each participant a range of [SearchShards] buckets, every participant scans
-// only its range, and the union is one scan of the corpus done N ways. A node
-// that does not answer therefore costs the answer a slice of RELEVANCE rather
-// than a slice of the company — and since the coordinator holds the whole
-// corpus too, it could always have answered alone. That is precisely why an
-// unanswered assignment must be NAMED: an answer that is quietly short is
-// indistinguishable from a corpus that is quietly short.
-//
-// # Why the merge is score-then-RRF and never RRF-then-merge
-//
-// Reciprocal rank fusion combines DIFFERENT RANKERS over ONE corpus. Using it
-// over ONE ranker across DISJOINT SLICES is a different operation with a
-// different meaning, and it ranks by placement: at [FuseK] = 60 a document
-// ranked 1 on a weak slice contributes 1/61 = 0.016393 and a far stronger
-// document ranked 2 on a strong slice contributes 1/62 = 0.016129, so 0.10
-// outranks 0.98.
-//
-// So each participant returns its top-[FuseN] PER METHOD WITH SCORES, the
-// coordinator merges each method's candidates into one global list BY SCORE,
-// and RRF runs ONCE over the two global lists. That is byte-identical to the
-// single-scan path whenever every assignment answers — which is what makes a
-// fan-out a latency decision rather than a ranking one.
-//
-// # Why the scores are comparable, and the reason differs per method
-//
-// Semantic similarity is comparable by construction: one model, one metric,
-// one vector space. BM25 would NOT be comparable if each participant computed
-// its statistics from its own slice — but it does not have to, because every
-// data node holds the whole corpus, so document frequency and the document
-// count come from that node's complete tables whatever buckets it scanned. THE
-// SCAN IS BUCKET-LIMITED; THE STATISTICS ARE GLOBAL. That sentence is the whole
-// of why lexical fusion stays correct here and would not in a design that
-// divided storage.
+// Every DATA node holds the WHOLE corpus; a node without `data` holds none and
+// is never in the roster (it asks a data node, which coordinates). So a fan-out
+// divides CPU, never data: each participant scans a range of [SearchShards]
+// buckets and the union is one scan done N ways. A node that does not answer
+// costs a slice of RELEVANCE, and the coordinator could have answered alone,
+// which is why an unanswered assignment must be NAMED: a quietly short answer
+// looks like a quietly short corpus.
+
+// The merge is score-then-RRF, never RRF-then-merge. RRF combines different
+// rankers over ONE corpus; over one ranker across DISJOINT slices it ranks by
+// placement (at [FuseK] = 60, rank 1 on a weak slice, 1/61, beats rank 2 on a
+// strong one, 1/62). So each participant returns its top-[FuseN] PER METHOD WITH
+// SCORES, the coordinator merges each method by score, and RRF runs ONCE over
+// the two global lists, byte-identical to the single-scan path when every
+// assignment answers. Semantic scores are comparable (one model, one space);
+// BM25's are because every data node holds the whole corpus: THE SCAN IS
+// BUCKET-LIMITED; THE STATISTICS ARE GLOBAL.
 
 // Method names one of the two rankers a hybrid answer fuses.
 type Method string
@@ -113,26 +90,16 @@ type Slice struct {
 	// query, across the range it did scan.
 	SemanticSkipped bool
 
-	// Building says this participant's LEXICAL INDEX has not completed a
-	// lap over the sources this query named, so it did not cover its
-	// range at all and the coordinator must count its buckets MISSING.
+	// Building says this participant's LEXICAL INDEX has not completed a lap
+	// over the sources this query named, so it did not cover its range and the
+	// coordinator must count its buckets MISSING.
 	//
-	// It is not a degradation like the field above, and that is the whole
-	// point of it being separate. Every data node holds the whole corpus, but
-	// the lexical index over it is each node's OWN — built by that node's
-	// own walk, in its own database, on its own schedule — so a node that
-	// joined a minute ago holds the corpus and can find nothing in it.
-	// Handed a bucket range, such a node answers almost nothing and the
-	// coordinator, having no way to tell that from a range with nothing
-	// in it, reported COMPLETE coverage over a corpus it had silently
-	// dropped a slice of. That is the one thing this file's whole coverage
-	// arithmetic exists to prevent — "an answer that is quietly short is
-	// indistinguishable from a corpus that is quietly short" — and the
-	// hole was that the sentence was only ever true for a participant that
-	// did not reply.
-	//
-	// The zero value is "ready": a participant whose index has completed a
-	// lap over the named sources reports false.
+	// Not a degradation like the field above: every data node holds the whole
+	// corpus but the lexical index is each node's OWN, built on its own
+	// schedule, so a node that joined a minute ago can find nothing in it. Its
+	// empty answer looked like a range with nothing in it, so coverage was
+	// reported COMPLETE over a silently dropped slice.
+	// The zero value is "ready".
 	Building bool
 
 	// OutOfService says this participant's copy of what this query reads is
@@ -222,28 +189,15 @@ type Peers interface {
 
 // FanOutFloor is the corpus size below which a search does not fan out.
 //
-// TEN THOUSAND DOCUMENTS, and the measurement is the anchor rather than the
-// round number. A broker round trip on a LAN is ≈ 1 ms, and splitting pays
-// only when the local scan is worth several of them. At 10 000 sources the
-// semantic scan's p95 is MEASURED rather than projected — it is
-// BenchmarkSemanticScanUnderLoad's smallest cell — at 49 ms with one reader and
-// 125 ms with eight: fifty round trips and more.
-//
-// It is not lower, and the same benchmark says why. At 10 000 sources a scan
-// costs 4.96 µs per source against 2.58 at 40 000, because below that size the
-// statement's FIXED cost dominates — the plan, the sort, the rerank's 1 200
-// seeks — and a fan-out divides the rows, never the fixed cost: every
-// participant pays it again. The per-row figure behind the budget is the
-// large-corpus one, and projecting it downward (this used to read ≈ 13.5 ms,
-// from a stale 1.35 µs per source) is what makes a smaller floor look free.
-//
-// Below it a fan-out spends more wall clock arranging the work than the
-// division saves.
-//
-// It is a FLOOR rather than a switch because the alternative is worse in both
-// directions: a company that has written 200 pages would pay a network hop per
-// keystroke, and one with a million would scan them all on one core because
-// somebody never turned a knob on.
+// TEN THOUSAND DOCUMENTS, anchored on measurement: a LAN broker round trip is
+// ≈ 1 ms and splitting pays only when the local scan is worth several. At 10 000
+// sources the semantic scan's p95 is 49 ms with one reader and 125 ms with eight
+// (BenchmarkSemanticScanUnderLoad's smallest cell). Not lower: at that size the
+// statement's FIXED cost (the plan, the sort, the rerank's 1 200 seeks) dominates
+// (4.96 µs a source against 2.58 at 40 000), and a fan-out divides rows, never
+// that cost. Below the floor a fan-out spends more wall clock arranging the work
+// than it saves. A FLOOR, not a switch: 200 pages should not pay a hop per
+// keystroke, nor a million scan on one core.
 const FanOutFloor = 10_000
 
 // FanOut is the coordinator.
@@ -325,25 +279,17 @@ type FanOut struct {
 	now func() time.Time
 }
 
-// passOverFor is how long a node that answered it covered nothing — its copy
-// of what the query reads out of service, or its index still on its first
-// lap — or that skipped its semantic half because its vectors copy is out of
-// service, is given no range for queries of the same shape ([FanOut.plan]).
-// The coordinator's own scan counts: it is passed over exactly as a peer is.
+// passOverFor is how long a node that covered nothing (its copy of what the
+// query reads out of service, or its index on its first lap) or skipped its
+// semantic half (vectors copy out of service) is given no range for queries of
+// the same shape ([FanOut.plan]). The coordinator's own scan is passed over too.
 //
-// THIRTY SECONDS, and the two ways of being wrong cost different things. Too
-// long costs PARALLELISM only: a node that recovered inside the window is
-// left idle while the rest scan its share, and the answer is complete all the
-// same, because every node holds the whole corpus and a node known not to
-// cover a shape is given none of it, the coordinator included. Too short
-// costs COVERAGE:
-// each lapse spends one search re-learning the state, answered over part of
-// the corpus. The states it is for are long — a copy stays out of service
-// until an eviction is lifted, a snapshot is adopted or an upgrade decodes
-// what it held, and a first lap takes minutes — so the window is the order
-// of a presence lease's life, the estate router's for the same remedy (a node
-// not worth asking first): a coordinator re-asks a node once per lease, and a
-// search loses at most one slice per half minute per shape of query to it.
+// THIRTY SECONDS. Too long costs only PARALLELISM: a recovered node sits idle
+// while the answer stays complete, since every node holds the whole corpus. Too
+// short costs COVERAGE: each lapse spends one search re-learning the state,
+// answered over part of the corpus. The states last (an eviction lift, a
+// snapshot, an upgrade, a first lap of minutes), so the window is a presence
+// lease's life, as the estate router's: at most one slice lost per half minute.
 const passOverFor = 30 * time.Second
 
 // passedOver is a coordinator's memory of the nodes — itself included — it
@@ -706,43 +652,16 @@ func (f *FanOut) Search(ctx context.Context, q FanQuery) (Answer, error) {
 
 // plan decides who participates in q and which buckets each one takes.
 //
-// # A node that said it could not cover a range is given none, for a while — this one included
-//
-// A node whose copy of what q reads is out of service, or whose index has not
-// finished its first lap, answers its range saying it covered nothing — and
-// both states last. Handed its share of every search regardless, it cost
-// every search in the company a slice of its corpus and a round trip for as
-// long as the state held, though every node holds the whole corpus and the
-// rest could have scanned that slice. So a coordinator that hears it passes
-// that node over for [passOverFor] for queries of the same shape — the same
-// sources, since both states are per source — and divides every bucket among
-// the rest: the next search is complete. A node whose VECTORS copy is out of
-// service is passed over the same way for the queries that rank by meaning,
-// the only ones it cannot fully answer. Whoever is passed over is asked again
-// once the window lapses, which is what brings a recovered node back.
-//
-// THE COORDINATOR IS PASSED OVER BY ITS OWN SCAN as a peer is by its reply.
-// The router sends a node searches the moment its copy of their domain
-// serves, and nothing routes on what else a scan needs: a freshly joined data
-// node's index is on its first lap for minutes, and its vectors copy may be
-// out of service while its pages copy is not. Kept as a participant, its own
-// range was missing from every search however many peers could have scanned
-// it — and a passed-over peer's share that landed on it was missing too.
-//
-// AND IT STILL STANDS IN. A coordinator given no range holds the whole corpus
-// all the same, so a range the others leave uncovered — the broker could not
-// be asked, a peer stayed silent, a peer answered covering nothing — it scans
-// itself before it fuses ([FanOut.standIn]). Passed over for its vectors, its
-// keyword half is still an answer, said as a semantic skip: given no range and
-// nothing in its place, a broker that failed during the half minute emptied
-// every search the node could have answered by its words alone.
-//
-// WHEN NOBODY IS LEFT, EVERYBODY IS ASKED. A search every one of whose nodes
-// is known not to cover its shape ignores the pass-overs and divides among
-// them all, so each reply refreshes what is known and a node that recovered
-// is found by the next search rather than after the window. Solo is not the
-// answer there: it asks the coordinator alone, the one node known not to
-// cover.
+// A node that said it could not cover a range (its copy of what q reads out of
+// service, its index on its first lap) is passed over for [passOverFor] for
+// queries of the same sources, and its buckets divided among the rest, so the
+// next search is complete; a node whose VECTORS copy is out of service is
+// passed over only for queries that rank by meaning. THE COORDINATOR IS PASSED
+// OVER BY ITS OWN SCAN as a peer is by its reply, since routing does not look at
+// what else a scan needs. AND IT STILL STANDS IN: it holds the whole corpus, so
+// a range the others leave uncovered it scans before fusing ([FanOut.standIn]).
+// WHEN NOBODY IS LEFT, EVERYBODY IS ASKED, so replies refresh what is known;
+// solo would ask only the one node known not to cover.
 func (f *FanOut) plan(ctx context.Context, q FanQuery) ([]Assigned, error) {
 	solo := []Assigned{{Node: f.Self, Shards: Everything()}}
 	if f.Peers == nil || f.Roster == nil || f.Corpus == nil {
@@ -963,27 +882,14 @@ func (t settledTable) gaps(table []Assigned) []Assignment {
 // fuseSlices merges the answers by score within each method, then fuses the
 // two global lists once.
 //
-// THE COVERAGE IS COUNTED FROM THE TABLE, never from the answers. A
-// participant reports which range it scanned, but what a range is WORTH is the
-// coordinator's own arithmetic: counting an answer's own claim would let one
-// slow peer's stale table inflate the coverage of a search that missed a third
-// of the corpus, and the partial report exists precisely to be untrusting
-// here. Which participants covered their range is [settle]'s judgement, on
-// the same terms.
-//
-// ONLY THE RANKERS THE QUERY ASKED FOR ARE FUSED, whatever a participant sent
-// back: what goes into the answer is the coordinator's decision, on the same
-// untrusting terms as the coverage above, so a slice carrying a half nobody
-// asked for cannot turn a keyword search into a hybrid one.
-//
-// scatterErr is why the peers could not be asked at all, which becomes every
-// unanswered peer's own reason rather than a generic silence.
-//
-// A RANGE THE COORDINATOR SCANNED IN ITS PARTICIPANT'S PLACE ([FanOut.standIn])
-// is answered — its buckets count, its hits merge — while the participant it
-// stood in for is named as not having answered and why, and the coordinator
-// is named as having answered: the corpus lost nothing, and the fleet still
-// did not answer as it was asked.
+// THE COVERAGE IS COUNTED FROM THE TABLE, never from the answers: a peer's
+// stale table must not inflate the coverage of a search that missed a third of
+// the corpus; which participants covered their range is [settle]'s judgement.
+// ONLY THE RANKERS THE QUERY ASKED FOR ARE FUSED, so a slice carrying a half
+// nobody asked for cannot turn a keyword search into a hybrid one. scatterErr
+// is why the peers could not be asked, and becomes each unanswered peer's own
+// reason. A RANGE SCANNED IN ITS PARTICIPANT'S PLACE ([FanOut.standIn]) counts
+// and merges while that participant is still named as not having answered.
 func fuseSlices(settled settledTable, stood standIns, table []Assigned, q FanQuery,
 	scatterErr error) Answer {
 
@@ -1082,18 +988,11 @@ func absentReason(uncovered string, scatterErr error) string {
 
 // MergeByScore merges per-slice candidate lists into one global list.
 //
-// # Why taking depth per slice is EXACT rather than approximate
-//
-// The slices are disjoint, so a document appears in exactly one of them. The
-// global top-N is therefore contained in the union of the per-slice top-N: a
-// document outside its own slice's top-N has at least N better documents in
-// that slice alone, so it cannot be in the global top-N. Asking each
-// participant for [FuseN] is sufficient for an identical global list, not a
-// sample of one.
-//
-// TIES BREAK ON THE KEY, ascending, because a merge across concurrent
-// answerers has no arrival order worth preserving — a fused order that is not
-// total is a board that changes between reads of the same data.
+// Taking depth per slice is EXACT: the slices are disjoint, and a document
+// outside its slice's top-N has N better ones in that slice alone, so the
+// global top-N lies in the union of the per-slice top-N ([FuseN] is
+// sufficient, not a sample). TIES BREAK ON THE KEY, ascending, because a merge
+// across concurrent answerers has no arrival order worth preserving.
 func MergeByScore(lists [][]Scored, depth int) []Scored {
 	merged := make([]Scored, 0, depth*max(len(lists), 1))
 	for _, list := range lists {

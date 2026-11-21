@@ -35,61 +35,17 @@ func (e errNotResettable) Error() string {
 		"reset link", e.stage)
 }
 
-// PostPasswordReset is `POST /iam/people/{id}/password-reset`: a ONE-TIME LINK
-// that sets the person a new password, shown once.
-//
-// # The link is a credential on the person
-//
-// A `reset` credential, stored as every credential is — a SHA-256 of a
-// crypto/rand secret ([credential.ResetVerifier]) and an expiry
-// [credential.ResetLinkLifetime] away — so it is listed among the person's
-// credentials, revoked by `DELETE /iam/credentials/{id}`, and collected by the
-// sweep once it is spent, revoked or aged out. Issuing one revokes the person's
-// earlier outstanding link in the same record: a person holds at most one. A
-// created person's FIRST password link ([Service.PostPeople]) is such a link,
-// so this is also the remedy for one that lapsed unspent — `GET /iam/check`
-// reports that person as holding no way in — and issuing it revokes one still
-// outstanding.
-//
-// # Shown once, like a token's value
-//
-// The link — `<api.external_url>/dashboard#/reset/<credential id>.<secret>` —
-// is in this answer and nowhere else, and this route READS NO KEY: a replay of
-// the issue would answer the first attempt's record beside a secret that
-// verifies against nothing, so an issue whose outcome was unknown is issued
-// again, and the link that may have landed is one nobody holds, which expires.
-// Issuing again revokes it anyway.
-//
-// # Only for somebody whose every permission the issuer holds
-//
-// The administrator who issues the link is shown it, and nothing stops them
-// spending it themselves and signing in as the person — clearing a second
-// factor first is a gesture of the same permission. So a link is held to
-// [iamdomain.Writer.MayConfer], judged in the record's own snapshot as though
-// the person's grants were being conferred from nothing: a target holding a
-// permission the issuer lacks is `403 unauthorized` naming it, for the reason a
-// machine token is minted only for a service account and an invitation
-// carries only what its issuer holds — administering people must never be a
-// way to act with a permission one does not have. Issuing is admin's, and
-// admin carries every app (ADR-0033), so what reaches that refusal today is a
-// name this build does not know on the person's row: kept there and ignored,
-// and never one an issuer on this build can be shown to hold — `403
-// forbidden`, since no permission would make it one. And since the judgement
-// is the issue's, a grant the person GAINS while the link is outstanding
-// revokes it, in the record that adds the grant
-// ([iamdomain.Writer.UpdatePerson]): that grant was judged against nobody
-// holding the link.
-//
-// What the issue does NOT follow is the ISSUER: an administrator demoted after
-// issuing a link still holds a link that opens, as an invitation they issued
-// still confers what it carries. The link lives a day, and whoever demotes
-// them revokes it with `DELETE /iam/credentials/{id}`.
-//
-// # It signs nobody in
-//
-// Spending it sets the password and ends every session the person held; they
-// then sign in with it, where a second factor they hold still applies. See
-// internal/api/authapi's reset routes.
+// PostPasswordReset is `POST /iam/people/{id}/password-reset`: a ONE-TIME LINK,
+// a `reset` credential ([credential.ResetVerifier], [credential.ResetLinkLifetime]).
+// Shown once, in this answer only. Issuing revokes the earlier one, so it also
+// remedies a lapsed FIRST link. The route READS NO KEY: a replay would pair the first record with a secret that
+// verifies against nothing, so an unknown outcome is issued again. The issuer
+// could spend it to become the person, so it is held to
+// [iamdomain.Writer.MayConfer] as if their grants were conferred from nothing
+// (`403 unauthorized`; today only an unknown name on the row reaches it, `403
+// forbidden`; ADR-0033). A grant the person GAINS meanwhile revokes it
+// ([iamdomain.Writer.UpdatePerson]); a demoted ISSUER's link still opens until
+// revoked. Spending it ends every session and signs nobody in.
 func (s *Service) PostPasswordReset(w http.ResponseWriter, r *http.Request) {
 	if !s.linksPoint(w, "a reset") {
 		return

@@ -9,14 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// Declaration is every contract a domain can break in what it SAYS about
+// Declaration is every contract a domain can break in what it says about
 // itself, checked as pure functions over the declaration.
 //
-// EXPORTED AND RETURNING ERRORS rather than reporting into a *testing.T,
-// because that is what makes the suite's own tests possible: a case that
-// cannot be shown to fail is a claim rather than a check, and the only way to
-// show it is to hand it a domain that lies and read the verdict back. Every
-// check here found something once.
+// It returns errors rather than reporting into a *testing.T so the suite's own
+// tests can hand it a lying domain and read the verdict: a case that cannot be
+// shown to fail is a claim, not a check.
 func Declaration(c Candidate) []error {
 	var out []error
 	add := func(format string, args ...any) {
@@ -24,11 +22,9 @@ func Declaration(c Candidate) []error {
 	}
 	name := c.Domain.Name()
 
-	// EVERY TABLE CARRIES A CLASS, and the class is what a snapshot's
-	// scrub list, the identity claim's membership and the local sweep are
-	// all derived from. A hardcoded list of any of the three would
-	// silently omit whatever a deployment actually has — which is the
-	// failure this tree's backup package names in its own words.
+	// Every table carries a class, from which a snapshot's scrub list, the
+	// identity claim's membership and the local sweep are derived; a
+	// hardcoded list would silently omit what a deployment has.
 	tables := c.Domain.Tables()
 	if len(tables) == 0 {
 		add("%s declares no tables — the scrub list, the identity claim and "+
@@ -44,42 +40,32 @@ func Declaration(c Candidate) []error {
 			replicated++
 		}
 	}
-	// A DOMAIN THAT CLAIMS IDENTITY MUST HAVE SOMETHING TO CLAIM IT
-	// ABOUT. The claim is exactly "the Replicated tables of a domain that
-	// claims identity", so a domain declaring it with no Replicated table
-	// asserts equality over nothing and passes for ever.
+	// The identity claim covers the Replicated tables, so claiming it with
+	// none asserts equality over nothing and always passes.
 	if c.Domain.ClaimsIdentity() && replicated == 0 {
 		add("%s claims byte-identical state and declares no Replicated table — "+
 			"the claim would be an assertion over the empty set", name)
 	}
 
-	// THE STREAM AND ITS REPLAY PROTOCOL MUST AGREE, and neither loop can
-	// detect its own mismatch: a strict loop over a compacted stream
-	// stalls on the first ordinary write, and a compacted loop over a log
-	// accepts a hole that is data loss.
+	// The stream and its replay protocol must agree, and neither loop
+	// detects its own mismatch: a strict loop over a compacted stream stalls
+	// on the first write; a compacted loop over a log accepts a hole that is
+	// data loss.
 	spec := c.spec()
 	if err := spec.Validate(); err != nil {
 		add("%s declares a stream its own protocol refuses: %w", name, err)
 	}
-	// AND IT MUST BE ONE DECLARATION. Every runner, publisher and reader
-	// asks the domain for its stream separately and is held to what a
-	// second ask answers ([statelog.StreamSpec.Instantiates]), so a domain
-	// whose answer moves between two asks builds nothing at all.
+	// It must be one declaration: every runner, publisher and reader asks
+	// separately and is held to a second ask
+	// ([statelog.StreamSpec.Instantiates]), so a moving answer builds nothing.
 	if err := spec.Instantiates(c.Domain); err != nil {
 		add("%s answers a different stream each time it is asked: %w", name, err)
 	}
 
-	// AN ARBITRATED KIND IS A KIND THIS DOMAIN ACTUALLY PUBLISHES. A kind
-	// in the declaration with no records is an anchor nothing ever writes;
-	// a kind publishing expectations that is NOT declared is a writer
-	// forming an expectation the applier never advances, which wedges that
-	// subject the first time a gate drops a record on it.
-	// NOT GUARDED ON len(c.Kinds) > 0. It was, which meant a candidate
-	// declaring no kinds skipped this check entirely rather than failing it —
-	// the same hollowing-out the three t.Skips in cases_apply.go did, in the
-	// one place that would otherwise have caught a kindless candidate. A
-	// domain that declares no kinds is not certifiable (see [requireKinds]),
-	// so reporting every arbitrated kind as unpublished is the right answer.
+	// An arbitrated kind must be one the domain publishes, or its anchor is
+	// a row nothing writes. Not guarded on len(c.Kinds): a kindless
+	// candidate is not certifiable ([requireKinds]), so it fails here
+	// rather than skipping the check.
 	for _, kind := range spec.ArbitratedKinds {
 		if !slices.Contains(c.Kinds, kind) {
 			add("%s arbitrates %q and publishes no record of that kind — the "+
@@ -88,22 +74,19 @@ func Declaration(c Candidate) []error {
 		}
 	}
 
-	// A DOMAIN THAT GATES SEAT ADMISSION REPLAYS STRICTLY. Admission waits
-	// for the domain's copy to be level, and a compacted domain's gap is a
-	// coverage number rather than a fault — withholding every seat claim on
-	// a node for one is the outage the number exists to avoid. Whether its
-	// copy is JUDGED is not this declaration's to say: every domain's is
-	// (ADR-0079).
+	// A domain gating seat admission replays strictly: admission waits for a
+	// level copy, and a compacted domain's gap is a coverage number, not a
+	// fault, so withholding seat claims for one is the outage the number
+	// exists to avoid. Every domain's copy is judged regardless (ADR-0079).
 	if c.Domain.GatesSeatAdmission() && spec.Replay != statelog.ReplayStrict {
 		add("%s gates seat admission and replays %s — a compacted domain's gap is a "+
 			"coverage number, and gating every seat claim on it is the outage the "+
 			"number exists to avoid", name, spec.Replay)
 	}
 
-	// THE OPERATION LEDGER'S ABSENCE IS PAIRED WITH A CLAIM, and the
-	// pairing is asserted rather than assumed because half of it is not
-	// enough: a domain with a total apply whose writer answers a caller
-	// still has to say whether the answer landed.
+	// Keeping no operation ledger is checked against both claims it rules
+	// out, since a total apply alone is not enough: a writer answering a
+	// caller still has to say whether the write landed.
 	if c.Domain.OpsTable() == "" {
 		if c.Domain.GatesSeatAdmission() {
 			add("%s keeps no operation ledger and gates seat admission — a "+
@@ -120,10 +103,9 @@ func Declaration(c Candidate) []error {
 		}
 	}
 
-	// THE LEDGER TRAVELS. Scrubbed out of a snapshot, it leaves the node
-	// that adopts one unable to tell a first attempt from a retry of
-	// anything the donor applied, and the only safe answer to both is
-	// `unknown` — which is a recovering node refusing its own backlog.
+	// The ledger travels: scrubbed from a snapshot, it leaves the adopting
+	// node unable to tell a first attempt from a retry of the donor's, so it
+	// answers `unknown`, refusing its own backlog.
 	if ops := c.Domain.OpsTable(); ops != "" {
 		if class, held := tables[ops]; !held || class != statelog.Divergent {
 			add("%s classes its operation ledger %s as %v, and it must be "+
@@ -133,9 +115,8 @@ func Declaration(c Candidate) []error {
 		}
 	}
 
-	// THE TABLE NAMES THE FRAMEWORK INTERPOLATES ARE PLAIN IDENTIFIERS. A
-	// table name is not a value a driver can bind, so the alternative to
-	// checking is a domain that can name a table with a quote in it.
+	// Table names the framework interpolates must be plain identifiers: a
+	// driver cannot bind a table name.
 	for _, named := range []struct{ field, value string }{
 		{"OpsTable", c.Domain.OpsTable()},
 		{"DeferredTable", c.Domain.DeferredTable()},
@@ -152,12 +133,10 @@ func Declaration(c Candidate) []error {
 		}
 	}
 
-	// THE VERSIONED-FIELD TABLE AND THE BUILD'S VERSION AGREE. A field at
-	// a version this build does not read is a record the build that wrote
-	// it retains; a version no field introduced is one this build would
-	// accept from a newer peer and apply without the field it was minted
-	// for. Both are silent until a rolling upgrade, which is the one time
-	// anybody would need them to have been caught.
+	// The versioned-field table and the build's version agree: a field above
+	// it makes the build retain, unread, records it wrote; a version no field
+	// introduced would be accepted from a newer peer and applied without the
+	// field it was minted for. Both stay silent until a rolling upgrade.
 	if err := c.Fields.Check(c.Domain.RecordVersion()); err != nil {
 		add("%s: %w", name, err)
 	}
@@ -168,9 +147,8 @@ func Declaration(c Candidate) []error {
 			name, len(c.Fields))
 	}
 
-	// A DOMAIN'S NAME IS DURABLE IN THREE PLACES that have no idea about
-	// each other — the positions register, a snapshot's manifest and the
-	// operator's own column — so it is a key rather than a label.
+	// The name is a durable key in three places unaware of each other: the
+	// positions register, a snapshot's manifest and the operator's column.
 	if name == "" || strings.TrimSpace(name) != name {
 		add("the domain's name is %q — it is the register key, the manifest key "+
 			"and the operator column, so it can never be renamed and can never "+

@@ -104,15 +104,14 @@ func observedOf(rec *metrics.Recorder, name, operation string) map[string][2]flo
 // many attempts it took and how it ended — so an operator reads a bucket's
 // throttles, its failures and its retries off the node's own series.
 //
-// On one object: two 500s and then the object; a `SlowDown` and then the
-// object; a missing key; a 403. Seven attempts — two failed, one throttled,
-// four answered (two successes, the missing key and the refusal) — and four
-// requests answered after 3, 2, 1 and 1 of them. Then a head that never gets
-// its turn, waiting at a gate whose every place is held until its deadline:
-// a request with no attempt, observed at zero as `unsent`, which is what
-// keeps the retries computable — attempts 7, less requests 5, plus unsent 1,
-// is the 3 retries the two heads asked again made. And a head the bucket
-// fails for its whole span is observed `given_up`, at every attempt it made.
+// On one object: two 500s then the object; a `SlowDown` then the object; a
+// missing key; a 403. Seven attempts (two failed, one throttled, four
+// answered) and four requests answered after 3, 2, 1 and 1 of them. Then a
+// head that never gets its turn at a gate whose every place is held until its
+// deadline: no attempt, observed at zero as `unsent`, which keeps the retries
+// computable (attempts 7, less requests 5, plus unsent 1, is the 3 retries).
+// And a head the bucket fails for its whole span is observed `given_up`, at
+// every attempt it made.
 func TestEveryAttemptIsCountedByOperationAndOutcome(t *testing.T) {
 	t.Parallel()
 	rec := newRecorder(t)

@@ -12,14 +12,8 @@ import (
 )
 
 // A SUSPENSION IS WHAT EVERY READ ANSWERS, the session read and the sign-in
-// read alike.
-//
-// The status op moves a stage without authoring a whole document, and the row
-// keeps the stage twice — the column every predicate reads, and the document a
-// content record wrote. The op used to move the column alone, and both readers
-// here decided from the DOCUMENT: a suspended person's sessions went on
-// validating as `active` and their sign-in went on succeeding, while the
-// directory listing beside them — which reads the column — said suspended.
+// read alike. The row keeps the stage twice, the column and the document, and
+// the status op must move both: these readers decide from the DOCUMENT.
 func TestASuspensionIsWhatEveryReadAnswers(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -27,9 +21,7 @@ func TestASuspensionIsWhatEveryReadAnswers(t *testing.T) {
 	id := uuid.Must(uuid.NewV7()).String()
 	enrolSarah(t, rig, id)
 
-	// THE CONTROL: before the suspension both reads say active, so the
-	// assertions below are about the suspension and not about a reader
-	// that answers something other than `active` for everybody.
+	// THE CONTROL: before the suspension both reads say active.
 	assertStage(t, reader, id, iam.StageActive)
 
 	if _, err := rig.writer.SetStage(t.Context(), id, iam.StageSuspended,
@@ -39,8 +31,8 @@ func TestASuspensionIsWhatEveryReadAnswers(t *testing.T) {
 	rig.drain()
 	assertStage(t, reader, id, iam.StageSuspended)
 
-	// AND THE ROW'S TWO COPIES AGREE, so a read-modify-write that
-	// re-publishes the document cannot put the old stage back.
+	// AND THE ROW'S TWO COPIES AGREE, so re-publishing the document cannot
+	// put the old stage back.
 	if got := rig.column(`SELECT stage FROM iam_people WHERE id = ?`, id); len(got) != 1 ||
 		got[0] != string(iam.StageSuspended) {
 		t.Errorf("the stage column is %v, want suspended", got)
@@ -61,13 +53,9 @@ func TestASuspensionIsWhatEveryReadAnswers(t *testing.T) {
 	}
 }
 
-// EDITING A SUSPENDED PERSON LEAVES THEM SUSPENDED.
-//
-// A grant change and a credential change are each a read-modify-write of the
-// whole document, formed inside the decide. Formed from a document that still
-// said `active`, the edit re-published `active` and the applier wrote it back
-// into the column — so an administrator narrowing a leaver's grants quietly
-// reinstated them.
+// EDITING A SUSPENDED PERSON LEAVES THEM SUSPENDED: a grant or credential
+// change re-publishes the whole document, so a document still saying `active`
+// would reinstate a leaver whose grants an administrator narrowed.
 func TestEditingASuspendedPersonLeavesThemSuspended(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -104,17 +92,12 @@ func TestEditingASuspendedPersonLeavesThemSuspended(t *testing.T) {
 	assertStage(t, reader, id, iam.StageSuspended)
 }
 
-// AN EDIT OF A PERSON'S DOCUMENT MOVES NEITHER THEIR KIND NOR THEIR STAGE.
-//
-// The applier writes whatever kind and stage a document states, so the record
-// is where both are held: a service account flipped to a person is a person
-// holding no seat and a coloned login no person may have, which every other
-// write here refuses to produce; and a stage moved by a document edit moved no
-// epoch, so whatever a suspended person held came back the day they were
-// reinstated. Both are refused with nothing published; an edit of what the
-// person holds, the control, lands.
-//
-// Mutation: drop either clause from the edit's decide and its row lands.
+// AN EDIT OF A PERSON'S DOCUMENT MOVES NEITHER THEIR KIND NOR THEIR STAGE,
+// since the applier writes whatever a document states: a flipped kind yields a
+// seatless person or a coloned login, and a stage moved by an edit moves no
+// epoch, so a suspended person's sessions come back on reinstatement. Both are
+// refused with nothing published; an edit of what they hold, the control,
+// lands. Mutation: drop either clause from the edit's decide and its row lands.
 func TestAnEditMovesNeitherAPersonsKindNorTheirStage(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -205,14 +188,11 @@ func assertStage(t *testing.T, reader *iamdomain.Reader, id string, want iam.Sta
 	}
 }
 
-// A SUSPENSION ENDS THE SESSIONS IT CUTS OFF, AND A REACTIVATION REVIVES NONE.
-//
-// A stage that may not act was only REFUSED at each request, so reactivating
-// somebody brought back every session they held when they were suspended —
-// whose browser had been answered `401` and had dropped its cookie, so the
-// only copy that came back was one somebody else kept. The CONTROL is the
-// session before the suspension, which is live. Mutation: state no epoch on
-// the status record and the session is live again after the reactivation.
+// A SUSPENSION ENDS THE SESSIONS IT CUTS OFF, AND A REACTIVATION REVIVES NONE:
+// the browser dropped its cookie on the `401`, so a revived session's only
+// copy is one somebody else kept. The CONTROL is the session before the
+// suspension, which is live. Mutation: state no epoch on the status record and
+// the session is live again after the reactivation.
 func TestASuspensionEndsTheSessionsItCutsOff(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

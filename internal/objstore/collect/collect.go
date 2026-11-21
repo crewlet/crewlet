@@ -9,7 +9,8 @@
 // fetches a missing copy or reads a disk for rot: the backend does all of
 // that. What no backend can know is which objects the company still REFERS
 // to, because that is a fact about the replicated estate — so the two jobs
-// left are the two that need it, run by one data node at a time.
+// left are the two that need it, run by one data node at a time. A collection runs every
+// [CollectInterval], an audit every [AuditInterval].
 //
 // # The inventory is the estate
 //
@@ -215,6 +216,14 @@
 // files the store has lost. An audit its caller stopped has not run to its end
 // either, however its questions fared: what it counted by then is a floor.
 //
+// RESTORE TRUSTS ONLY A RECORD OF THIS STORE, READ WHOLE. The record outlives
+// a move of the fleet's files, and another store's report is none: the new
+// store is collected and audited at once, and /fleet shows no report until
+// then rather than the old store's under its name. A record the coordination
+// store did not give up runs no pass until it is read, since an unknown taken
+// for "nothing recorded" wrote the findings out of it. Every status surface
+// reads it through the one reader (engine.ObjectCollection).
+//
 // # How hard the store is asked
 //
 // A collection makes a request per object it deletes — or, on a store that
@@ -329,34 +338,15 @@ const CollectInterval = time.Hour
 // AuditInterval is how often the store is asked for every object a required
 // table names.
 //
-// A DAY. What an audit looks for is a backend losing acknowledged bytes — an
-// event, not a drift: a durable store does not lose a little more each hour —
-// so how soon after one it pages is the trade, against what one audit costs.
-// No longer the requests on the production store: on an S3 bucket that lists
-// in order an audit of two million objects is some 2,200 listings where the
-// bucket keeps little else among them — a listing per nine hundred names
-// more for every other object it keeps there, up to twice as many where a
-// derived object sits beside every live one — and a HEAD for each object
-// they pass over, a minute or two of listing, and hourly would cost little
-// more. What it costs is bounded instead by the two parts that
-// grow with every object a live row names whatever the store:
-//
-//   - A WALK OF THE WHOLE REQUIRED ESTATE on the duty's data node, a page of
-//     [objstore.WalkPage] rows a read on one of its few reader connections,
-//     and a pin appending a barrier to every declaring domain's log
-//     ([PinsPerDay]).
-//   - A LISTING OF THE WHOLE STORE PER WINDOW on a store that keeps no order
-//     ([auditWindow]): on `nats` two million objects are twenty listings of
-//     every name, seven to eleven minutes of listing, and on an S3 directory
-//     bucket about twenty minutes — or, once a listing has failed, a stat of
-//     each object, two minutes of the bucket stream's leader on a member and
-//     up to six from a follower, or 23 to 55 minutes of HEADs on a directory
-//     bucket ([auditConcurrency]).
-//
-// Hourly, the directory bucket's audit would run a third of every hour and
-// the broker's listing name nearly a billion objects a day for one company; a
-// day keeps every backend's audit a small share of its day, and a loss is
-// still paged within a day of happening.
+// A DAY. An audit looks for a backend losing acknowledged bytes, an event
+// rather than a drift, so the trade is how soon it pages against what an
+// audit costs: a walk of the whole required estate on the duty's data node
+// ([objstore.WalkPage] rows a read, plus a pin per domain, [PinsPerDay]) and,
+// on a store that keeps no order, a listing of the whole store per window
+// ([auditWindow]) or, once that fails, a stat of each object
+// ([auditConcurrency]): 23 to 55 minutes of HEADs on a directory bucket.
+// Hourly, that audit would run a third of every hour and the broker's listing
+// name nearly a billion objects a day for one company.
 const AuditInterval = 24 * time.Hour
 
 // PinsPerDay is how many times the collector pins the estate in a day at its
@@ -384,60 +374,13 @@ const JudgeBatch = 500
 // once: a stat of one object, or — on a store that lists in order — a listing
 // of a range of up to [rangeChunk] of them.
 //
-// THIRTY-TWO. Asked by name, an audit is one question per object a required
-// row names — on a store that keeps no order once its listing has failed —
-// and asked one at a time they are round trips in a row: two million objects
-// are two million round trips end to end, most of a day at any latency a
-// network store answers in, of a pass due daily that holds the duty's only
-// turn for all of it. With thirty-two out the audit asks 32 divided by the
-// store's mean latency a second — whatever the store's latency is; nothing
-// here assumes a figure for it, and what each backend answers is its own
-// benchmark's, below. On one that lists in order the same two million are some
-// 2,200 listings and more by the bucket's other objects among them
-// ([auditor.cut]), which the bound takes thirty-two at a time; on
-// one that keeps no order its listing is the walk's own, a window at a time
-// ([auditWindow]), and the bound carries the second looks.
-//
-// AND NO MORE, because the bound is what keeps the store from being flooded:
-// a question goes out only when one of the thirty-two has been answered, so a
-// store that slows down is asked more slowly by itself, and one that fails
-// stops the audit at its [failedInARow]th failure in a row with at most
-// thirty-two questions out.
-//
-//   - S3 documents at least 5,500 GET and HEAD requests a second per
-//     partitioned prefix, and every object the engine writes is under one
-//     (`files/`). Thirty-two out reach that only if a request averaged under
-//     5.8 ms — a listing of a thousand keys or a HEAD of a second look alike
-//     — which leaves the rest of the rate to the company's own downloads,
-//     each a GET on the same prefix. A throttle slows the whole client
-//     (internal/objstore/s3obj), every request of the node's waiting its
-//     turn and the throttled one asked again until its deadline, so the
-//     audit's thirty-two slow with everything else the node sends the
-//     prefix. Against a bucket held 20 ms away, and 50, the backend's
-//     benchmark listed 31,400–33,000 names a second and 15,600–16,900 one
-//     listing at a time — two million objects in one to two minutes — and
-//     answered 47 HEADs a second and 19 for each one out: 1,380–1,450 and
-//     about 610 with thirty-two out, which is what a directory bucket costs
-//     asked by HEAD, as it is once its listing has failed — 23–24 minutes and
-//     55 for two million objects, rather than twelve hours and twenty-nine.
-//   - It is the bucket's transport's warm connections to one host
-//     (httpx.MaxIdleConnsPerHost: s3obj's clone of httpx's, over HTTP/1.1,
-//     keeps httpx's pool), so every question rides a connection already open
-//     rather than paying a TLS handshake of its own.
-//   - On `nats` a question by name is one read from the bucket stream's
-//     leader. The backend's benchmark answered a stat across ten thousand objects
-//     4,800–8,600 times a second one at a time on a member's own client and
-//     15,000–19,000 with thirty-two out; through a leaf 2,900–4,200 and
-//     15,000–25,000; and from a follower at three replicas, whose every
-//     question crosses a route to the leader, 2,100–2,800 and 5,600–23,400.
-//     The depth buys a few times the stats a second, for a fraction as long:
-//     two million objects are about two minutes on a member rather than four
-//     to seven.
-//
-// Those figures are the backends' own benchmarks (`make bench`; four vCPUs of
-// a 2.8 GHz Xeon, 2026-10-10), recorded in internal/objstore/natsobj's and
-// s3obj's package docs — the S3 ones against an in-process fake held that far
-// away, since no real bucket has been measured.
+// THIRTY-TWO. Asked one at a time, per-object questions are round trips in a
+// row (two million objects, most of a day) holding the duty's only turn. AND
+// NO MORE: a question goes out only when one is answered, so a slow store is
+// asked more slowly and a failing one stops the audit at its [failedInARow]th
+// failure. S3 documents 5,500 GET and HEAD a second per prefix; thirty-two
+// reach that only under 5.8 ms a request, leaving the company's downloads
+// their share. Figures: natsobj's and s3obj's package docs (`make bench`).
 const auditConcurrency = 32
 
 // deleteConcurrency is how many deletions a collection has in flight at once
@@ -445,32 +388,26 @@ const auditConcurrency = 32
 // gateway that does not offer a batch.
 //
 // SIXTEEN, half the audit's, because a deletion is a WRITE. On S3 a prefix's
-// writes — AWS documents at least 3,500 PUT, POST and DELETE requests a second
-// — are what the company's uploads spend too, every part of a multipart upload
-// included, and sixteen out reach a quarter of them only if a DELETE averaged
-// under 18 ms. On `nats` a deletion is three requests to the bucket stream's
-// leader — a read of the object's metadata, then a purge of it and a purge of
-// the object's pieces, each purge a write replicated through the stream's
-// group — the costliest thing the object store asks of the broker. Asked one at
-// a time a collection's deletions are round trips in a row; sixteen out divide
-// that by sixteen.
+// writes (AWS documents at least 3,500 PUT, POST and DELETE a second) are
+// shared with the company's uploads, and sixteen out reach a quarter of them
+// only if a DELETE averaged under 18 ms. On `nats` a deletion is three
+// requests to the bucket stream's leader (a metadata read, then a purge of
+// the object and of its pieces, each a replicated write), the costliest thing
+// the object store asks of the broker.
 const deleteConcurrency = 16
 
 // batchesInFlight is how many batch deletions ([objstore.BatchDeleter]) a
 // collection has out at once on a store that deletes in batches: each judged
 // batch's unnamed objects — up to [JudgeBatch] — in one DeleteObjects.
 //
-// ONE, and the reason is the prefix's write rate rather than the requests.
-// AWS states that rate in requests and is silent on how a batch's keys count
-// against it; read the way that cannot spend the uploads' share — each key a
-// write — one batch of five hundred out reaches a quarter of the prefix's
-// writes only if it is answered in under 0.57 s, about what the sixteen single
-// deletions out reached, while a second batch out would take as much again
-// from the company's uploads on the same prefix. What a
-// batch buys is the requests: a bulk removal of a million objects is two
-// thousand of them rather than a million, at the pace the prefix allowed
-// anyway. Whether S3 counts a batch as one write is a measurement against a
-// real bucket nobody has made; if it does, this is the number to raise.
+// ONE, because of the prefix's write rate rather than the requests. AWS
+// states that rate in requests and is silent on how a batch's keys count;
+// counting each key as a write, one batch of five hundred out reaches a
+// quarter of the prefix's writes only if answered in under 0.57 s, about what
+// the sixteen single deletions reach, and a second batch would take as much
+// again from the company's uploads. A batch buys requests: a million objects
+// are two thousand of them. If S3 counts a batch as one write (unmeasured
+// against a real bucket), this is the number to raise.
 const batchesInFlight = 1
 
 // rangePage is how many names one request of a ranged listing answers on the
@@ -479,51 +416,16 @@ const batchesInFlight = 1
 const rangePage = 1000
 
 // rangePageRoom is how much of a page a range is cut short of, for the objects
-// in it the walk could not count before it cut the range ([rangeChunk],
-// [auditor.cut]).
+// in it the walk could not count before it cut the range ([rangeChunk]).
 //
-// A range holds every object the store keeps between its references, and a
-// page that fills before the range's last key costs a second request — one
-// that lists most of the next chunk's range besides, which that chunk then
-// lists again. So a chunk cut at the page itself took two requests whenever
-// its range held one object more than its references: a bucket's everyday
-// garbage doubled the audit (measured against the in-process S3 at a thousand
-// references a chunk: nineteen listings for ten thousand references with one
-// object in a thousand unnamed, against ten with none). What a range holds
-// besides its references is what no required row names — an object a row
-// stopped naming within the hour, which the next collection deletes; one a
-// retired row keeps for its grace; one a derived row names, which an index
-// kept over a repository's packs puts among the packs' keys at as many as one
-// for every one to eight of them; and, among the last day's keys, every upload
-// not yet named and every version of a file rewritten during the day
-// ([PendingGrace]). That density is the store's, not a constant's — near
-// nothing for a company that keeps files alone, up to as many objects again as
-// references where its rows are mostly packs — so the walk MEASURES it from the
-// ranges it has listed and cuts each range to fill the page less this room
-// ([auditor.cut]). The room is for what the measurement cannot see: how much
-// fuller a range is than the ones before it. A room for the density itself,
-// as there was when every chunk was nine hundred references, is right for
-// one density alone: a tenth of the page held a few objects in a thousand
-// with an order of magnitude to spare, and any more than one in nine cost
-// every chunk a second request — an index kept over packs at one object to
-// every few of them doubled the audit's requests. Cut by the names, a store
-// with a few objects in a hundred between its references pays up to a ninth
-// more requests, where nine hundred references would still have fitted (3%
-// at one in fifty, measured — the package doc), and every denser store fills
-// its pages.
-//
-// A TENTH OF THE PAGE: placed independently, the objects a range of a whole
-// page holds besides its references number at most nine hundred, so they vary
-// from range to range by at most thirty, the root of that, and a hundred is
-// three of those — about one range in two thousand overflows. Objects uploaded
-// together — the parts of one large object a domain stores in pieces — sort
-// together and widen that spread by the root of how many go at once: a tenth
-// still holds a handful going at once, and a burst of a dozen or more is rare
-// among the ranges.
-// Less room pays a second request wherever a range is a little fuller than the
-// last; more pays for part of a page on every chunk: at a tenth, an audit of a
-// store that holds nothing but its references makes a ninth more listings than
-// chunks of a whole page would.
+// A page that fills early costs a second request that also relists the next
+// range. A range's extras (objects no required row names: pending deletions,
+// derived objects, the last day's uploads, [PendingGrace]) are a density the
+// walk MEASURES ([auditor.cut]); the room covers how much fuller a range is
+// than the ones before. A TENTH: placed independently, the extras (at most
+// nine hundred) vary by at most thirty, a hundred is three of those, so one
+// range in two thousand overflows; pieces of one large object sort together
+// and widen that, but a tenth holds a handful. More makes a ninth more listings.
 const rangePageRoom = rangePage / 10
 
 // rangeChunk is how many names a range is cut to hold, consecutive in key
@@ -556,15 +458,12 @@ const rangeDensityWeight = 8
 // one refusing particular objects.
 //
 // THE AUDIT'S OWN BOUND, thirty-two. A store that has gone away fails every
-// question the audit has out, so its first full window of answers stops the
-// audit — with no more than the window asked in vain, and none of them taken
-// for a finding: a failed audit's counts never reach [AuditReport.Found]. A
-// store answering its other questions while it fails some breaks the run at
-// every answer, and the objects it fails are set aside for their second look
-// instead. Smaller, a run of failures as short as the requests that were in
-// flight when a store hiccupped would stop an audit that could have run to its
-// end; larger, a store that is down would be sent more than one window of
-// questions it cannot answer.
+// question out, so its first full window of answers stops the audit with at
+// most that window asked in vain, none taken for a finding ([AuditReport.Found]
+// never sees a failed audit's counts). A store that fails only some questions
+// breaks the run at every answer, and those objects get their second look.
+// Smaller, a hiccup across the requests in flight would stop an audit that
+// could finish; larger, a down store is sent more than a window.
 const failedInARow = auditConcurrency
 
 // MissingShown is how many unreadable files a status names: the counts are
@@ -573,54 +472,30 @@ const failedInARow = auditConcurrency
 const MissingShown = 100
 
 // maxSuspects is how many references the audit holds at once for their second
-// look ([Collector.audit]) — each waiting alone, or in a range whose listing
+// look ([Collector.audit]), each waiting alone or in a range whose listing
 // failed ([lookAgain]).
 //
-// A HUNDRED THOUSAND, about twenty mebibytes of references at some two hundred
-// bytes each, a queue entry's own included. The second look is for a store that
-// had not caught up with an upload when it was asked — a handful of "not
-// found" answers at a time — or failed a question, and a store that has given
-// a hundred thousand of them has lost those objects rather than lagged. Past
-// the bound the OLDEST is looked at again at once rather than at the end of
-// the walk, so an audit of a store that lost everything holds twenty mebibytes
-// rather than the company's whole inventory — two million references, four
-// hundred mebibytes, on the one node whose alarm is the only thing saying the
-// files are gone. Every object still gets its one second look, and the oldest
-// gets it no sooner than a hundred thousand questions later — however fast the
-// store answers, a hundred thousand of its answers after the one that missed,
-// which is the room a store that lists a new object late is given to show it.
+// A HUNDRED THOUSAND, about twenty mebibytes at some two hundred bytes a
+// reference. The second look is for a store that lagged an upload or failed a
+// question, and one that has given a hundred thousand of them has lost those
+// objects. Past the bound the OLDEST is looked at again at once, so a store
+// that lost everything costs twenty mebibytes rather than the whole inventory
+// (four hundred for two million references) on the one node whose alarm is
+// the only thing saying the files are gone. The oldest gets its look a
+// hundred thousand answers late: the room a slow-listing store is given.
 const maxSuspects = 100_000
 
 // auditWindow is how many listed objects one window of the audit's listing of
 // a store that keeps no order holds in memory ([auditor.listWindow]).
 //
-// A HUNDRED THOUSAND, about thirteen mebibytes: a window keeps 127 bytes a key
-// — the key in its map and its heap, and the size and digest [judged] reads,
-// the digest a string of its own as the broker's listing decodes one
-// (BenchmarkAuditWindow; 2026-10-24, four vCPUs of a 2.3 GHz Xeon) — beside
-// [maxSuspects]' twenty, on the one node that runs the duty.
-//
-// WHAT IT TRADES IS LISTINGS FOR MEMORY. Every window is a listing of the
-// whole store, so an audit of N objects lists N × ceil(N / auditWindow) names,
-// which grows with the square of the store past one window. On the broker,
-// whose listing names 63,000–94,000 objects a second and whose stats answer
-// 15,000–19,000 a second at [auditConcurrency] on a member's own client and
-// 5,600–23,400 from a follower (internal/objstore/natsobj's package doc): a
-// hundred thousand objects are one listing of one or two seconds against five
-// to seven of stats; a million, ten listings and two to three minutes against
-// about one; two million, twenty listings and seven to eleven minutes against
-// two on a member and up to six from a follower. What the listing saves at
-// every size is REQUESTS — its consumer pulls five hundred names a request,
-// from whichever replica the broker places it on, so two million objects are
-// eighty thousand pulls where a stat apiece was two million reads from the
-// stream's leader — and on an S3 directory bucket, which lists a thousand
-// names a request at 31,400–33,000 a second and answers HEADs at 1,380–1,450
-// a second with thirty-two out from 20 ms away (s3obj's package doc, against
-// an in-process fake held that far away), two million objects are forty
-// thousand listing requests in about twenty minutes against two million HEADs
-// in twenty-three or twenty-four. A larger window lists
-// fewer times for 127 bytes a key more — a million keys is 127 MB on one
-// node — and a smaller one the reverse.
+// A HUNDRED THOUSAND, about thirteen mebibytes (127 bytes a key,
+// BenchmarkAuditWindow) beside [maxSuspects]' twenty, on the one node that
+// runs the duty. It trades LISTINGS FOR MEMORY: every window lists the whole
+// store, so N objects list N × ceil(N / auditWindow) names, growing with the
+// square past one window; a larger window lists less for 127 bytes a key
+// more. What listing saves at every size is REQUESTS: five hundred names a
+// pull makes two million objects eighty thousand pulls, not two million
+// leader reads (on S3, forty thousand listings, not two million HEADs).
 const auditWindow = 100_000
 
 // Status is what the collector last found, for the alarm, the status surface
@@ -947,19 +822,16 @@ func (c *Collector) collect(ctx context.Context, r *CollectionReport, cutoff tim
 		pinned bool
 	)
 	// THE DELETIONS RUN BESIDE THE LISTING, at most [deleteConcurrency] at
-	// once: the listing goes on judging the next batch while the last one's
-	// are in flight, and waits only when all of them are. The estate is still
-	// read by this goroutine alone — only the store's deletions are parallel —
-	// and a deletion that fails ends dctx, which stops the listing.
+	// once; the listing waits only when all are in flight. The estate is read
+	// by this goroutine alone, and a failed deletion ends dctx, which stops
+	// the listing.
 	//
-	// ON A STORE THAT DELETES IN BATCHES ([objstore.BatchDeleter]) a judged
-	// batch's unnamed objects go in ONE request, [batchesInFlight] of them
-	// out at once — a slot a batch waits for in its own goroutine, so the
-	// listing still runs ahead — until the store refuses a batch as a request
-	// ([objstore.ErrNoBatch]): a gateway without the verb, from which the
-	// rest of the pass deletes each object on its own. A batch the store
-	// fails otherwise ends the pass before its slot goes, and no batch that
-	// waited for the slot is sent after it.
+	// ON A BATCH-DELETING STORE ([objstore.BatchDeleter]) a judged batch's
+	// unnamed objects go in ONE request, [batchesInFlight] out at once (a
+	// batch waits for the slot in its own goroutine, so the listing runs
+	// ahead), until the store refuses with [objstore.ErrNoBatch]: the rest of
+	// the pass then deletes singly. Any other batch failure ends the pass
+	// before its slot goes, and no batch waiting for the slot is sent after.
 	deletes, dctx := errgroup.WithContext(ctx)
 	deletes.SetLimit(deleteConcurrency)
 	var (
@@ -1227,19 +1099,15 @@ func (c *Collector) audit(ctx context.Context, r *AuditReport) ([]MissingFile, e
 	m := mergeWalks(c.opts.References, v)
 
 	// THE WALK READS THE ESTATE ON THIS GOROUTINE ALONE, in key order, and
-	// hands the references on to questions, at most [auditConcurrency] of
-	// them out at once: a hand-off waits for a free slot, so the walk reads
-	// its next page only once the questions have caught up with this one,
-	// and a question that stops the audit ends actx, which stops the walk at
-	// its next reference. A question is a listing of a range of references
-	// on a store that lists in order — as many as fill [rangeChunk] names at
-	// the density the ranges before it listed ([auditor.cut]) — a second
-	// look's stat, or a stat of one object once the audit asks by name. On a
-	// store that keeps no order the walk itself takes each reference's first
-	// look, from the window of the store's listing it falls in
+	// hands the references on to questions, at most [auditConcurrency] out:
+	// a hand-off waits for a free slot, so the walk reads its next page only
+	// once the questions have caught up, and a question that stops the audit
+	// ends actx, which stops the walk. A question is a ranged listing
+	// ([rangeChunk] names at the measured density, [auditor.cut]), a second
+	// look's stat, or a stat by name. On a store that keeps no order the walk
+	// takes each first look from its window of the store's listing
 	// ([auditor.listWindow]): a listing is a request between two reads of the
-	// estate, never inside one, and the walk needs its window before it can
-	// go on.
+	// estate, never inside one.
 	asks, actx := errgroup.WithContext(ctx)
 	asks.SetLimit(auditConcurrency)
 	var (
@@ -1526,21 +1394,14 @@ func (a *auditor) measured(names, refs int) {
 // store, err being how it ended — the density of one listed to its end
 // ([auditor.measured]), an order the store cannot keep ([auditor.unordered]) —
 // and only then lets the walk cut its next range ([auditor.probe]). names is
-// how many names the listing handed on, and refs how many references the range
-// was cut for.
+// how many names the listing handed on, refs how many references it was cut for.
 //
-// ONLY A RANGE LISTED TO ITS END is a density: one that left an undated object
-// or two out is included, since a stat dates those.
-//
-// AND THE WALK IS LET GO LAST, because it reads both the moment it is: the
-// density its next cut is sized by, and the mode that says whether it cuts one at
-// all. Let go before the mode turned, as it once was, the walk could gather and
-// hand on a second range of a store that keeps no order in the moment before
-// this goroutine turned the audit to the listing: a second listing of a range the
-// store had already said it cannot give in order, and every reference of it then
-// asked about by name. CI met exactly that, twenty references asked about by name
-// for the ten of the one range a store that keeps no order should ever be asked
-// for.
+// ONLY A RANGE LISTED TO ITS END is a density (an undated object left out
+// counts: a stat dates it). THE WALK IS LET GO LAST,
+// because it reads both the density its next cut is sized by and the mode
+// that says whether it cuts one at all: let go before the mode turned, it
+// could hand on a second range of a store that keeps no order, listed
+// again and every reference of it asked about by name.
 func (a *auditor) cameBack(ctx context.Context, err error, names, refs int) {
 	if err == nil || errors.Is(err, objstore.ErrUndated) {
 		a.measured(names, refs)
@@ -1701,25 +1562,16 @@ func (a *auditor) again(ctx context.Context, l lookAgain) error {
 
 // firstRange is the first look of every reference in chunk — consecutive in
 // key order, the range (after, the last of them] — taken from ONE ranged
-// listing of the store rather than a stat of each: a reference the listing
-// hands on is held, or held wrong, as the listing says; one it passes over is
-// one the store does not hold as far as the listing goes, and waits for a
-// second look like any "not found". A chunk costs one request while its range
-// fits a page ([rangeChunk]), and a range the store listed whole tells the walk
-// how many names its next ranges may hold for each reference
-// ([auditor.measured]).
+// listing rather than a stat of each: a reference it passes over waits for a
+// second look like any "not found". A range listed whole tells the walk how
+// many names its next ranges may hold ([auditor.measured]).
 //
-// A LISTING IS ONE QUESTION to the store's account: one it answers ends a run
-// of failures, and one that fails is a failure of the run, whose references it
-// had not reached wait AS A RANGE for their second look — a listing of the
-// range again ([auditor.secondRange]), never a stat of each. One the store
-// cannot give in order turns the rest of the walk to the store's listing
-// ([askListing]); this chunk's remaining references, which come before what the
-// walk has reached, are asked about by name.
-//
-// NOTHING IS ASKED WHILE THE LISTING RUNS: what the queue hands back to be
-// looked at once is looked at after it, so a question never holds another
-// request open beneath it.
+// A LISTING IS ONE QUESTION to the failure count, and the references a failed
+// one had not reached wait AS A RANGE for their second look
+// ([auditor.secondRange]). One the store cannot give in order turns the rest
+// of the walk to the store's listing ([askListing]); this chunk's remaining
+// references are asked by name. NOTHING IS ASKED WHILE THE LISTING RUNS, so no
+// question holds another request open beneath it.
 func (a *auditor) firstRange(ctx context.Context, after objstore.Key, chunk []objstore.Reference) error {
 	if a.mode.Load() != askRanges {
 		// HANDED ON BEFORE ANOTHER RANGE CAME BACK OUT OF ORDER, and only
@@ -1895,17 +1747,15 @@ func (a *auditor) settle(ref objstore.Reference) {
 
 // confirm settles the second looks the store failed after its last answer,
 // once every question has ended: it asks again about the last object the
-// store's answer finished with — never one of those waiting, whose own failure
-// would say nothing of the store — and an answer says the store was answering,
-// so those objects are UNANSWERED, while a failure, or a store that finished
-// none all audit, says it is failing, which is the audit's error rather than
-// a finding about each object.
+// store's answer finished with (never one of those waiting, whose own failure
+// says nothing of the store). An answer says the store was answering, so
+// those objects are UNANSWERED; a failure, or a store that finished none all
+// audit, says it is failing, the audit's error rather than a finding.
 //
-// ONE QUESTION, ASKED ONLY WHEN SOMETHING WAITS ON IT: without it, the second
-// looks are the audit's last questions, and a store that went away just then
-// would have every one of them called unanswered for a day — while an
-// object the store refuses every time would, as the last second look, never
-// be confirmed at all.
+// ONE QUESTION, ASKED ONLY WHEN SOMETHING WAITS ON IT: without it the second
+// looks are the audit's last questions, so a store that went away just then
+// would have each called unanswered for a day, and an object it refuses every
+// time would never be confirmed.
 func (a *auditor) confirm(ctx context.Context) error {
 	a.mu.Lock()
 	waiting, probe, ok := len(a.unconfirmed), a.settled, a.hasSettled
@@ -2101,22 +1951,15 @@ type listedObject struct {
 
 // listWindow lists the store once and keeps the [auditor.window] smallest keys
 // after `after` (the zero key: from the first) — the window. It is the last
-// window when the listing held no more keys than that; otherwise it runs
-// through the largest key kept, and the next window starts after it.
-//
-// ONE LISTING A WINDOW, AND THE WHOLE STORE EACH TIME: a store that keeps no
-// order hands its names in an order of its own, so the only way to know which
-// keys come first is to see them all. An audit of N objects is so
-// ceil(N / [auditWindow]) listings, each naming all N, where a stat apiece was
-// N requests; what that costs, and what it saves, is [auditWindow]'s to say.
-// What the window bounds is the memory: a window of keys and what [judged]
-// reads of each, never the company's inventory.
+// window when the listing held no more keys; otherwise the next starts after
+// the largest kept. A store that keeps no order can only say which keys come
+// first by showing them all, so each window is a listing of the WHOLE STORE
+// ([auditWindow] has the cost); the window bounds the memory.
 //
 // AN UNDATED LISTING IS NO FAILURE HERE. An entry the backend could not date
-// is left out of the listing ([objstore.ErrUndated]), so the reference naming
-// it reads as unlisted and is asked about by name, which answers whether the
-// object is there; the collection, which deletes, is the pass that must refuse
-// to judge what it cannot date.
+// is left out ([objstore.ErrUndated]), so its reference reads as unlisted and
+// is asked about by name; the collection, which deletes, is the pass that must
+// refuse to judge what it cannot date.
 func (a *auditor) listWindow(ctx context.Context, after objstore.Key) (window, error) {
 	held := map[objstore.Key]listedObject{}
 	var largest keyHeap

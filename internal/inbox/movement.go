@@ -8,37 +8,16 @@ import (
 
 // HOW A PERSON LEARNS THEY HAVE WORK.
 //
-// A domain's applier writes the inbox — one notice row per (record,
-// recipient) — and a WAKE reaches an agent through that domain's change feed.
-// A person has no turn to wake: an agent's mention reaches them on Slack or
-// Jira, if they have those, and a Crewlet-only person has neither. The
-// dashboard is that person's delivery surface, and it polled.
+// After a committed batch the APPLIER (not the change feed, which relays to
+// ONE node) says whose inbox moved. Every DATA node applies every record and
+// only a data node serves sockets, so each tells its own sockets from its own
+// apply, except where its copy is out of service and the engine relays from a
+// sound peer (internal/engine's liverelay.go).
 //
-// So the applier also says, after a committed batch, whose inbox moved. It is
-// derived by the APPLIER rather than by the change feed: the feed relays a
-// record to ONE node, while every DATA node applies every record, and only a
-// data node serves sockets (ingress requires `data`). So each node with
-// sockets open tells its own, from its own apply, and nothing crosses between
-// nodes — but for a node whose own copy of the domain is out of service,
-// whose movements the engine relays from a sound peer (internal/engine's
-// liverelay.go). A node without `data` runs no applier and has no dashboards
-// to tell.
-//
-// # A HINT, NEVER CONTENT
-//
-// A movement names its domain, a handle, how many notices arrived for it —
-// none, when the batch only took notices away, which a purge does — and the
-// subject and reason of the newest — identifiers — and the broker's instant
-// its push is timed from: never an excerpt, a title or who wrote it. It rides a socket frame routed to whoever watches that seat,
-// and what the frame is for is telling a screen to re-read the inbox it
-// already polls, through the same question and the same authority as the
-// poll. A payload carrying content would be a second read path around that
-// authority.
-//
-// The count is a hint too, and says so: a transaction body the store re-runs,
-// or a batch that failed and is applied again, can announce one notice twice.
-// The rows are the truth and the screen reads them; nothing adds these counts
-// up.
+// A HINT, NEVER CONTENT: identifiers only, telling a screen to re-read through
+// the same question and authority as its poll; content would be a second read
+// path around that authority. The count is a hint too: a re-run transaction
+// body or re-applied batch can announce one notice twice. Nothing adds counts.
 
 // Movement is one person's inbox having moved in one committed batch of one
 // domain's applier on this node.

@@ -434,7 +434,7 @@ func TestAWalkWhoseAuthorityHasEndedStartsNothing(t *testing.T) {
 	if held := len(rig.waiter.slots); held != 0 {
 		t.Fatalf("%d slots are held after every attempt was refused; want none", held)
 	}
-	if rig.waiter.begin(ended, "t1", func() {}) || rig.waiter.isBusy("t1") {
+	if _, begun := rig.waiter.begin(ended, "t1", func() {}); begun || rig.waiter.isBusy("t1") {
 		t.Fatal("a walk whose authority had ended registered a task")
 	}
 }

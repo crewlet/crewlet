@@ -23,31 +23,18 @@ import (
 	"github.com/crewlet/crewlet/internal/iam/session"
 )
 
-// `crewlet iam token -login` — minting YOUR OWN machine token.
+// `crewlet iam token -login`: minting YOUR OWN machine token. A person's token
+// is theirs alone to mint (internal/iamdomain refuses anybody else, an
+// administrator included), and what mints one is their own SESSION; this CLI
+// otherwise sends CREWLET_API_TOKEN, a Tier A token or a machine token, neither
+// of which may mint one. So it signs in as the dashboard does (login, password
+// from the terminal without echo or stdin's first line, a second-factor code
+// the same way), mints under the cookie that answered, then logs out, so the
+// session ends with the command.
 //
-// # Why this one command signs in
-//
-// A person's machine token is theirs alone to mint: whoever mints one is shown
-// its value and it acts as its owner, so internal/iamdomain refuses a mint on a
-// person's account by anybody else, an administrator included. What mints one
-// is the person's own SESSION — and this CLI otherwise authenticates with
-// CREWLET_API_TOKEN and nothing else, which is either the deployment's Tier A
-// token (it owns no tokens) or a machine token (which may not mint another).
-// So for this one request it signs in exactly as the dashboard does: the login,
-// a password read from the terminal without echo or from the first line of
-// standard input, and a second-factor code where the person holds one, read the
-// same way; then the mint, carrying the cookie that answered; then a logout, so
-// the session it opened ends with the command rather than living on, in
-// nobody's browser, for its absolute lifetime.
-//
-// # Why it states an Origin here and nowhere else
-//
-// A cookie-authenticated write is refused without an Origin the deployment is
-// reached at (internal/api/auth's cross-site check): a browser always sends
-// one, so a request carrying a cookie and none did not come from the browser
-// the cookie was issued to. This client IS the party the cookie was issued
-// to, so it states the deployment's own origin — `api.external_url`'s. A
-// bearer request states none, which the same check admits.
+// It states an Origin here and nowhere else: internal/api/auth refuses a cookie
+// write without one the deployment is reached at, and this client is the party
+// the cookie was issued to, so it states `api.external_url`'s; a bearer states none.
 
 // selfMint is one person minting their own token.
 type selfMint struct {
@@ -382,24 +369,18 @@ func pipedPassword(raw []byte, what string) (string, error) {
 	return password, nil
 }
 
-// maxPipedPasswordBytes bounds a password piped to a command that signs in
-// with it, and the second-factor code piped after one, each measured without
-// the line ending a pipe adds ([pipedPassword]).
+// maxPipedPasswordBytes bounds a password piped to a command that signs in with
+// it, and the second-factor code piped after one, each measured without the
+// line ending a pipe adds ([pipedPassword]).
 //
 // THE ENGINE'S OWN SIGN-IN SETS IT: [authapi.MaxLoginBodyBytes] is the whole
-// body a sign-in reads — the login, the password and a code — so no password
-// longer than that signs anybody in to this engine, and `crewlet iam token
-// -login` has no reason to read one further. A vendor's username and password
-// login (`crewlet llm login -username U -password-stdin`) takes the same kind
-// of secret, typed or generated, and is held to the same bound: four
-// kibibytes is an order of magnitude above any passphrase — 256 characters,
-// [config.MaxPasswordLength], is already the longest floor a deployment may
-// set — and a token is not a password: `-token-stdin` takes one, to the size
-// every store keeps.
-//
-// NOT [secrets.MaxValueBytes], which a value piped to be stored is read to: a
-// password is never stored, so the size every store keeps says nothing about
-// it, and that limit is sized for a PEM key or a service account's JSON.
+// body a sign-in reads (login, password, code), so no longer password signs
+// anybody in, and `crewlet llm login -password-stdin` takes the same kind of
+// secret and is held to the same bound: four kibibytes is an order of magnitude
+// above any passphrase ([config.MaxPasswordLength], 256 characters). NOT
+// [secrets.MaxValueBytes], which a value piped to be stored is read to: a
+// password is never stored, and that limit is sized for a PEM key or a service
+// account's JSON.
 const maxPipedPasswordBytes = authapi.MaxLoginBodyBytes
 
 // maxPipedLineBytes is how much is read for one piped password, or code,

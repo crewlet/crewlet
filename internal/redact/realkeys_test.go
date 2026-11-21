@@ -160,27 +160,15 @@ func brokenVariants() map[string]func(lines []string) []string {
 
 // NO PIECE OF A REAL KEY SURVIVES, in any wrapping, whole or double-spaced,
 // broken by the lines of another process, or read from inside it: not one
-// window of 24 base64 characters — eighteen bytes of the key — of any line of
-// its body. The fixtures above are shapes the reader is written against; these
-// are the encoders' own output, with their own widths, headers and last lines,
-// and the windows are what a person could copy off a screen.
-//
-// WHAT NO READ REACHES IS NAMED HERE, NOT SKIPPED. A key read from inside —
-// its BEGIN not in the text — is checked whole, double-spaced, broken by one
-// line and broken by two, wherever they fall, and never broken by three: the
-// lines above those have no armour at all, and a read crosses two lines and no
-// more. Read back, a blank line under a wrapping that marks every line — a
-// reader's line number, a grep's context mark — is a line interrupting the key,
-// so such a key double-spaced and broken by one line as well is broken by
-// three, and is not checked from inside.
-//
-// Mutation: end a block at a blank line, at the first line that is not the
-// key's, or read nothing back from an END, and pieces of these keys survive;
-// read back across no two lines, and every key read from inside and broken by
-// two loses the lines above them; read OpenPGP's checksum as a short line
-// alone, and its key loses them broken by two on either side of it, and
-// double-spaced under a wrapping that marks every line; leave MIME's width
-// out, and the key wrapped at it loses them wherever two break it.
+// window of 24 base64 characters (eighteen bytes) of any line of its body.
+// These are the encoders' own output, with their own widths, headers and last
+// lines. A key read from inside (no BEGIN) is checked whole, double-spaced and
+// broken by one or two lines, never three: a read crosses two lines. Under a
+// wrapping that marks every line a blank line interrupts the key, so a
+// double-spaced key broken by one line is broken by three there, unchecked.
+// Mutation: end a block at a blank line or the first line not the key's, read
+// nothing back from an END or across no two lines, read OpenPGP's checksum as
+// a short line alone, or leave MIME's width out, and pieces survive.
 func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 	t.Parallel()
 	for kname, key := range realKeys() {
@@ -258,17 +246,14 @@ func TestNoPieceOfARealKeySurvivesAnyWrapping(t *testing.T) {
 // wrapping, under every encoder's last line, a label and its value on the next
 // line (or after a blank one) redact the value, since the key's block never
 // takes the word the password's rule keys on, the value is read where the
-// wrapping puts it, and nothing of the key survives — a label whose separator
-// is an `=` ending its line too. It used to hold only where the label's lines
-// alone redacted the value, and they did not where the wrapping's syntax
-// stood where the value would be (an echo's quote, a concatenation's, a
-// numbered blank line): there the value was published with no key above it.
+// wrapping puts it, and nothing of the key survives, a label whose separator
+// is an `=` ending its line too. This holds where the wrapping's syntax stands
+// where the value would be (an echo's quote, a concatenation's, a numbered
+// blank line), not only where the label's own lines redact it.
 //
-// Mutation: drop the label from bodyLine, and the value is published under
-// most of these keys in most wrappings; read a password's key only where its
-// separator is past the run, and it is published after `pwd=` and
-// `PASSWORD=`; take the value from the first word past the separator, and it
-// is published in the echoed, concatenated and numbered wrappings.
+// Mutation: drop the label from bodyLine, read a password's key only where its
+// separator is past the run, or take the value from the first word past the
+// separator, and the value is published in some wrapping.
 func TestAPasswordAfterARealKeyWithNoEndIsNeverPublished(t *testing.T) {
 	t.Parallel()
 	const value = "hunter2x9"

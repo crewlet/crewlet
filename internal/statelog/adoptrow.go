@@ -9,31 +9,23 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// This node's own record of the snapshots it has adopted — `statelog_adoption`,
-// in the node estate, written through every phase of a join.
-//
-// It is this node's HISTORY: which donor's artefact it installed, which one
-// (the checksum), when the join began and whether it finished — the record an
-// operator reads when a node is behaving oddly and the question is what it is
-// actually running. Nothing on the write path reads it: the operation ledger
-// travels inside the snapshot with its own watermark ([Rows.LostBefore]), so
-// an adoption bounds nothing.
+// statelog_adoption, in the node estate, is this node's HISTORY of the
+// snapshots it adopted (donor, checksum, when the join began, whether it
+// finished), for an operator asking what a node is actually running. Nothing
+// on the write path reads it: the operation ledger travels inside the snapshot
+// with its own watermark ([Rows.LostBefore]), so an adoption bounds nothing.
 
 // RecordAdoption writes or advances this node's adoption row.
 //
-// KEYED ON started_at, so one join writes one row through all three of its
-// phases: [AdoptionScrubbed] when the artefact is verified, [AdoptionInstalled]
-// when the file is in place, [AdoptionComplete] when the node may serve. Only
-// the last stamps `completed_at`, which is what makes an interrupted adoption
-// visible as an interrupted adoption rather than as a node that has always
-// been here.
+// Keyed on started_at, [Adopter.Join]'s stamp once the fleet's offers are in
+// (never the caller's own clock), so one join is one row through its phases:
+// [AdoptionScrubbed], [AdoptionInstalled], [AdoptionComplete]. Only the last
+// stamps completed_at, so an interrupted adoption shows as one rather than as
+// a node that has always been here.
 //
-// startedAt is the instant [Adopter.Join] stamps once the fleet's offers are
-// in, and never one the caller reads off its own clock.
-//
-// IN THE NODE ESTATE. The replicated estate is the thing being replaced, so a
-// row written there would be renamed away between the second phase and the
-// third — and the phase that matters most is the one that would vanish.
+// In the node estate because the replicated estate is the thing being
+// replaced: a row there would be renamed away between the second phase and
+// the third, the one that matters most.
 func RecordAdoption(ctx context.Context, db *store.DB, startedAt time.Time,
 	donor string, m Manifest, phase AdoptionPhase) error {
 

@@ -7,14 +7,12 @@ import (
 
 // A WRITE OF PART OF THE DOCUMENT THAT CHANGES NOTHING STORES NOTHING.
 //
-// A patch or an entity's PUT is "change these fields". One that changes none
-// was stored as a second revision under a summary saying what the first one
-// did ("Add three human seats" twice, a diff of nothing between them) and its
-// activation rebuilt every node's seats. It is answered `200 changed: false`
-// with the revision that already says it, needs no summary, and moves
-// nothing; a check of it says `changed: false` too. The whole document sent
-// back with PUT /config is the activation a caller who renders the document
-// makes, and stays one: the control.
+// A patch or an entity's PUT that changes no field was stored as a second
+// revision under the first's summary, and its activation rebuilt every node's
+// seats. It is answered `200 changed: false` naming the revision that already
+// says it, needs no summary and moves nothing; a check says `changed: false`
+// too. The whole document sent back with PUT /config is still an activation:
+// the control.
 //
 // Mutation: drop the `unchanged` answers in the PATCH and entity handlers,
 // and each unchanged write lands as a new revision again.

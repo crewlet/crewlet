@@ -9,11 +9,10 @@ call maps onto the engine. Writing pages is
 
 ## How a page reaches the engine
 
-A page never talks to the engine. It runs in a sandboxed frame on the artifact
-origin, which holds no credential, and the runtime installs `window.crewlet`,
-which talks to the **host** (the dashboard that embedded the frame) over a
-`MessagePort`. The host makes every call to the engine as the signed-in viewer,
-and the engine decides each one again.
+A page runs in a sandboxed frame on the artifact origin, which holds no
+credential. The runtime installs `window.crewlet`, which talks to the **host**
+(the dashboard that embedded the frame) over a `MessagePort`. The host calls the
+engine as the signed-in viewer, and the engine decides each call again.
 
 ```mermaid
 sequenceDiagram
@@ -35,13 +34,12 @@ sequenceDiagram
 Four rules hold whatever a page does:
 
 1. **A page never names its own artifact.** The host binds every call to the
-   artifact it embedded, so a page cannot address another artifact's data or
-   room.
+   artifact it embedded, so a page cannot address another's data or room.
 2. **A page never holds a credential.** No token, cookie or session id crosses
-   the port, and `identity` answers display facts only.
-3. **Capabilities are checked twice.** The host refuses a call the version did
-   not declare (a fast, readable error), and the engine authorizes every call
-   against the viewer's share and the collection rules (the real boundary).
+   the port; `identity` answers display facts only.
+3. **Capabilities are checked twice.** The host refuses an undeclared call (a
+   fast, readable error); the engine authorizes every call against the viewer's
+   share and the collection rules (the real boundary).
 4. **Every message is validated** on both sides. An unknown call is refused;
    an unknown field in a value is preserved.
 
@@ -49,30 +47,25 @@ Four rules hold whatever a page does:
 
 ## Versions of the contract
 
-A version pins the contract it was written against at publish (`contract:
+A version pins its contract at publish (`contract:
 "latest"` resolves to the newest this engine serves and is stored exactly).
 The engine serves every contract any published version pins. Within a major
-version everything is **additive**: new methods, new optional fields, new
-refusal codes. Treat a refusal code you do not recognise as a generic failure.
-
-`crewlet.version` is the exact contract the page is running.
+version everything is **additive**: new methods, optional fields, refusal
+codes. Treat an unrecognised refusal code as a generic failure.
+`crewlet.version` is the exact contract the page runs.
 
 A page never includes the runtime: the origin places it as the first script
 of every HTML page of a version that pins a contract, named by its bytes,
 `/_crewlet/runtime/<contract>/runtime.<digest>.js` (the first 16 hex digits
 of its SHA-256). That name is public and kept a year (`public,
-max-age=31536000, immutable`): a fix to the runtime ships under the same
-contract and is a new name, so no browser or cache keeps a page on a runtime
-from before it. The contract's own path,
-`/_crewlet/runtime/<contract>/runtime.js`, still answers for a page or a
-cache that names it, as `public, no-cache, must-revalidate` with an `ETag`:
-every use is asked again, and an unchanged runtime answers `304`.
+max-age=31536000, immutable`); a runtime fix ships under the same contract as a
+new name. `/_crewlet/runtime/<contract>/runtime.js` still answers, as
+`public, no-cache, must-revalidate` with an `ETag`; an unchanged runtime answers `304`.
 
-The artifact kit is versioned the same way, by the page itself: it links
-`/_crewlet/kit/<version>/` with an exact version, and the engine serves every
-kit version it has shipped, public and immutable, so a published page keeps
-the kit it was written against. The
-[authoring guide](../guides/artifact-authoring.md) names the newest.
+The artifact kit is versioned by the page: it links `/_crewlet/kit/<version>/`
+with an exact version, and the engine serves every kit version it has shipped,
+public and immutable. The [authoring guide](../guides/artifact-authoring.md)
+names the newest.
 
 ---
 
@@ -106,14 +99,11 @@ type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 A namespace whose capability the version did not declare exists, and every
 call on it rejects with `capability_not_declared`.
 
-`capabilities` answers from the page's first script: the origin writes the
-frame's grant on the runtime's own element, so a page may branch on
-`capabilities.has` before `ready` resolves. Calls made before then wait for
-the handshake, and the host's answer at the handshake is the authority from
-then on. The dashboard's host answers with that same grant, as the engine
-minted it for the frame, so a question asked before the handshake and the
-same question asked after it get the same answer. What the viewer is, and
-who is in the room, are known only once `ready` has resolved.
+`capabilities` answers from the page's first script (the origin writes the
+frame's grant on the runtime's element), so a page may branch on
+`capabilities.has` before `ready` resolves, and the answer is the same after the
+handshake. Calls made earlier wait for the handshake. The viewer and the room
+are known only once `ready` has resolved.
 
 ### Connection
 
@@ -127,9 +117,9 @@ interface Connection {
 ```
 
 `reconnecting` means the host lost its socket and is re-establishing it; reads
-answer from what the page already holds, and writes wait. On reconnect the
-host rejoins the artifact's room and the runtime re-reads anything the pushes
-it missed would have changed.
+answer from what the page holds, and writes wait. On reconnect the host rejoins
+the artifact's room and the runtime re-reads what missed pushes would have
+changed.
 
 ### Identity
 
@@ -153,20 +143,19 @@ interface IdentityApi {
 ```
 
 Never a token, a login or an email address. `me` answers every signed-in
-viewer: one signed in without a seat (an operator's API token) has an empty
-`seat`, which a person column cannot store, and the name the dashboard shows
-them. The viewer's own session is in the presence roster too, named the same
-way. `people` answers from the chart
-the viewer's dashboard already holds, so a page learns no one the viewer could
-not see there; a seat a value names that it does not list is one that has left
-the company. When the viewer's share is removed while the page is open, the host
-withdraws the page's room and every later call rejects with `forbidden`.
+viewer; one without a seat (an operator's API token) has an empty `seat`, which
+a person column cannot store, and the name the dashboard shows them. Their
+session is in the presence roster too, named the same way. `people` answers
+from the chart the viewer's dashboard holds, so a page learns no one the viewer
+could not see; a seat a value names that it does not list has left the company.
+When the viewer's share is removed while the page is open, the host withdraws
+the page's room and every later call rejects with `forbidden`.
 
 ### Data
 
 A collection is read and written by name. Every write is one engine write: a
-batch of ops applied all or nothing, decided by the engine in the store's log
-order, identically on every data node.
+batch of ops applied all or nothing, in the store's log order, identically on
+every data node.
 
 ```ts
 interface Doc<T = Record<string, Json>> {
@@ -254,73 +243,70 @@ interface Column {
 }
 ```
 
-A schema is answered as the engine holds it, so a column carries more than
-these fields (its write rule, its default); an unknown field is preserved.
+A schema is answered as the engine holds it, so a column carries more fields
+(its write rule, its default); unknown fields are preserved.
 
 Each method is one op of the engine's write:
 
 | Method | Op | Effect |
 |---|---|---|
-| `set` | `set` | Replaces the document's fields, creating the document |
-| `merge` | `merge` | Sets the named top-level fields and leaves the rest |
+| `set` | `set` | Replaces the document's fields, creating it |
+| `merge` | `merge` | Sets the named top-level fields, leaves the rest |
 | `delete` | `delete` | Tombstones the document, so a client catching up sees the delete |
 | `increment` | `increment` | Adds a number to a numeric field |
 | `append` | `append` | Grows a long-text field, or adds an element to an array field |
-| `add`, `remove` | `add`, `remove` | Adds an element to, or removes one from, an array field (a multiselect) |
+| `add`, `remove` | `add`, `remove` | Adds or removes an element of an array field (a multiselect) |
 
-Without `ifVersion` a write is blind, which is what a click on a checkbox
-should be. With it, the whole batch is refused as a `conflict` when any guarded
-document has moved, and `conflict` carries the current documents.
+Without `ifVersion` a write is blind, as a checkbox click should be. With it,
+the whole batch is refused as a `conflict` when any guarded document has moved,
+and `conflict` carries the current documents.
 
 | Verdict | Means |
 |---|---|
 | `applied` | Every op took effect |
 | `conflict` | A guarded document moved since the version the page passed |
-| `invalid` | A name, a value or a type broke the grammar or the schema |
+| `invalid` | A name, value or type broke the grammar or the schema |
 | `forbidden` | A collection or column rule refused the viewer's role or kind |
 | `quota` | A store bound or the company's datastore quota |
 | `gone` | The store was purged or the artifact trashed |
-| `pending` | Accepted, and not yet applied on the node that answered; the runtime resolves it from the push that follows |
+| `pending` | Accepted, not yet applied on the answering node; the runtime resolves it from the push that follows |
 
-A write RESOLVES with its verdict whichever side of the log the engine decided
-it on: a value the grammar refuses before anything is appended is `invalid`
-exactly as one the applier refuses is, a share that writes no data is
-`forbidden`, and a trashed or purged store is `gone`. A write REJECTS only
-where nothing about it was decided: `rate_limited` (this node's write budget is
-spent; the message says how long to wait, and the same write may be sent
-again), `capability_not_declared` (refused by the host before the engine) and
-`unavailable` (the engine could not be reached; nothing was written unless a
-later read shows it).
+A write RESOLVES with its verdict whichever side of the log decided it: a value
+the grammar refuses before anything is appended is `invalid` like one the
+applier refuses, a share that writes no data is `forbidden`, a trashed or purged
+store is `gone`. A write REJECTS only where nothing was decided:
+`rate_limited` (this node's write budget is spent; the message says how long to
+wait, and the same write may be resent), `capability_not_declared` (refused by
+the host) and `unavailable` (the engine could not be reached; nothing was
+written unless a later read shows it).
 
 `undo` and `redo` step through the writes this page made on this tab, never a
-collaborator's, and answer like a write: `conflict` when somebody has changed
-a field since, `invalid` when the history no longer holds the write.
+collaborator's, and answer like a write: `conflict` when somebody has changed a
+field since, `invalid` when the history no longer holds the write.
 
-Reads honour the collection's read rule on every path, the subscription
-included: a page reading an `own_rows` collection receives the viewer's rows
-and nothing else, unless the viewer is an editor.
+Reads honour the collection's read rule on every path, subscriptions included:
+a page reading an `own_rows` collection receives only the viewer's rows, unless
+the viewer is an editor.
 
 `subscribe` delivers the collection's current documents, then every change as
-the engine applies it, with the documents a remote write changed listed in
-`changed`. A subscription the host or the engine refuses (`forbidden`,
-`not_found`, `capability_not_declared`, `unavailable`) calls `onError` once
-with the refusal and never calls the callback, since an empty collection and
-one the viewer may not read are different answers; a page that passes no
-`onError` has the refusal reported on its console. In contract 1.0 a subscription is to a whole collection and a page
-filters on its side; a store holds at most 50 000 documents across its
-collections.
+the engine applies it, with the documents a remote write changed in `changed`.
+A refused subscription (`forbidden`, `not_found`, `capability_not_declared`,
+`unavailable`) calls `onError` once and never the callback, since an empty
+collection and an unreadable one are different answers; without `onError` the
+refusal is reported on the console. In contract 1.0 a subscription is to a whole
+collection and a page filters on its side; a store holds at most 50 000
+documents across its collections.
 
 A query filters and orders only on paths the collection indexes (its declared
-columns, or what a schemaless collection's documents hold), and is refused
-`invalid` naming the path otherwise. `contains` asks whether an array field
-holds the value; `prefix` whether a text field starts with it.
+columns, or what a schemaless collection's documents hold), else it is refused
+`invalid` naming the path. `contains` asks whether an array field holds the
+value; `prefix` whether a text field starts with it.
 
 ### State
 
-Per-viewer state that follows the viewer across devices and is invisible to
-everybody else, in the artifact's private store. The method names are the ones
-Claude's artifact storage uses, so a page written for it moves with small
-changes.
+Per-viewer state that follows the viewer across devices, invisible to everybody
+else, in the artifact's private store. The method names match Claude's artifact
+storage, so a page written for it moves with small changes.
 
 ```ts
 interface StateApi {
@@ -331,10 +317,10 @@ interface StateApi {
 }
 ```
 
-A value is at most 64 KiB of JSON and is written whole, last write wins. A
-page written for Claude's `window.storage` may opt in to an adapter that maps
-that object onto `crewlet.state`; there is no `window.claude` alias, and no
-synchronous `localStorage` emulation.
+A value is at most 64 KiB of JSON, written whole, last write wins. A page
+written for Claude's `window.storage` may opt in to an adapter that maps it onto
+`crewlet.state`; there is no `window.claude` alias and no synchronous
+`localStorage` emulation.
 
 ### Presence
 
@@ -361,19 +347,16 @@ interface PresenceApi {
 }
 ```
 
-Presence is best effort: a member disappears 45 seconds after their last
-frame, a room past 50 members presents the 50 most recently active plus
-counts, and agents working on the artifact appear like people. `region` is a
-name the page chooses for where the viewer is (a tab, a chart), at most 64
-characters.
+Presence is best effort: a member disappears 45 seconds after their last frame,
+a room past 50 members presents the 50 most recently active plus counts, and
+agents working on the artifact appear like people. `region` is a name the page
+chooses for where the viewer is (a tab, a chart), at most 64 characters.
 
-THE ROOM IS DRAWN ONCE, by the dashboard, in the artifact's bar: everybody
-with the page open. A page draws presence only where it places a reader, by
-their `focus`: the kit's `<crewlet-sheet>` rings the cells the members whose
-focus is in its collection are on, and names them in a small stack of who is
-in that sheet, never the whole room. A page that draws its own presence
-follows the same rule, so nobody is shown twice beside a part of the page
-they are not in.
+THE ROOM IS DRAWN ONCE, by the dashboard, in the artifact's bar: everybody with
+the page open. A page draws presence only where it places a reader, by their
+`focus`: the kit's `<crewlet-sheet>` rings the cells of members focused in its
+collection and names them in a small stack, never the whole room. A page that
+draws its own presence follows the same rule, so nobody is shown twice.
 
 ### Assets
 
@@ -395,10 +378,34 @@ an agent's tool, never by a page.
 crewlet.openLink(url: string): Promise<boolean>
 ```
 
-The frame cannot open a window. `openLink` asks the host, which shows the
-viewer the destination and opens it in a new tab with no opener if they
-confirm. It resolves `true` when the viewer opened it and `false` when they
-did not. Only `https:` and `http:` URLs are accepted.
+The frame cannot open a window. `openLink` asks the host, which shows the viewer
+the destination and opens it in a new tab with no opener if they confirm. It
+resolves `true` when the viewer opened it, else `false`. Only `https:` and
+`http:` URLs are accepted.
+
+### Links to the page's own files
+
+A frame holds only the artifact's pages. A link (`<a href>`, an image map's
+`<area>`, an SVG `<a>`) to any other file of the artifact (a picture, SVG,
+video, PDF or asset) opens in the runtime's **file viewer** over the page; the
+frame stays where it is. Nothing to call or declare:
+
+- **Pictures, video and sound are shown** as large as the frame fits. Each is
+  named, and captioned, by the link's picture's `alt` text, else the link's
+  `aria-label`, `title` or words. Video and sound use the browser's controls.
+- **Any other file is named, not shown.** A PDF, font or data file cannot be
+  drawn in the page, so the viewer says so beside its name; a file the version
+  does not hold is said to be missing.
+- **The page's other linked files are a step away**, in the page's order, by the
+  Previous and Next buttons or the arrow keys.
+- **Escape, the Close button or a click on the dark around the file closes
+  it**, and focus returns to the link. While it is open the page behind is
+  inert and hears no keys or clicks.
+
+A link to a page of the version (`.html`, `.htm`) is followed by the frame, and
+a link to another site still needs `openLink`. A click with a modifier key is
+left to the browser, and a page that handles a link's click itself
+(`event.preventDefault()`) keeps it.
 
 ### Printing a board
 
@@ -406,18 +413,16 @@ did not. Only `https:` and `http:` URLs are accepted.
 crewlet.print(): Promise<boolean>
 ```
 
-The frame has no print dialog of its own (its sandbox never allows modals).
-`print` asks the host, which needs no capability for it. On a `design`'s
-artboard, the dashboard covers the window with that board alone, framed at its
-own size, and hands the browser a page of the board's size holding nothing
-else, which the reader can save as a PDF; the promise resolves `true` once the
-print was handed over.
+The frame has no print dialog (its sandbox never allows modals). `print` asks
+the host and needs no capability. On a `design`'s artboard, the dashboard covers
+the window with that board alone, at its own size, and hands the browser a page
+of the board's size holding nothing else, which the reader can save as a PDF;
+the promise resolves `true` once the print was handed over.
 
-It is refused with `forbidden` unless the reader acted just now (a click or a
-key press in the page, or in the dashboard around it), so a page cannot put a
-print dialog in front of the reader on its own; call it from a button's click
-handler. It is refused with `unavailable` where the host offers no print, as
-on a plain `html` page, which the reader prints from the browser.
+It is refused with `forbidden` unless the reader acted just now (a click or key
+press in the page or the dashboard around it), so call it from a button's click
+handler. It is refused with `unavailable` where the host offers no print, as on
+a plain `html` page, which the reader prints from the browser.
 
 ### Theme
 
@@ -428,9 +433,9 @@ interface ThemeApi {
 }
 ```
 
-An artifact follows its reader's own appearance setting. The kit's `theme.js`
-applies it before first paint; `crewlet.theme` is for a page that draws its
-own charts.
+An artifact follows its reader's appearance setting. The kit's `theme.js`
+applies it before first paint; `crewlet.theme` is for a page that draws its own
+charts.
 
 ### Comments
 
@@ -441,9 +446,9 @@ interface CommentsApi {
 ```
 
 A reader comments on an artifact from the dashboard, on a part of the page or
-on the whole version ([Comments](../concepts/artifacts.md#comments)). A page
-names the parts worth commenting on as **anchors**, and a thread pinned to one
-follows it into every later version that declares the same name:
+the whole version ([Comments](../concepts/artifacts.md#comments)). A page names
+the parts worth commenting on as **anchors**, and a thread pinned to one follows
+it into every later version that declares the same name:
 
 ```html
 <section data-crewlet-anchor="pricing">…</section>
@@ -451,25 +456,28 @@ follows it into every later version that declares the same name:
 
 The attribute is the declaration. `crewlet.comments.anchor(name, element)` is
 the same from script: it checks the name (rejecting with `invalid`), sets the
-attribute and returns a function that removes it. Declare names as literals,
-in the markup or in the call: the engine finds a version's anchors in its
-files when it places threads on it, so a name built at run time is one it
-cannot find, and its threads read as outdated on the next version. Without an
-anchor, a comment on a page is a point, as fractions of the page's width and
-height, which moves when the page reflows.
+attribute and returns a function that removes it. Declare names as literals:
+the engine finds a version's anchors in its files, so a name built at run time
+is not found and its threads read as outdated on the next version. Without an
+anchor, a comment is a point, as fractions of the page's width and height,
+which moves when the page reflows.
 
-The page takes no part in a comment and gains nothing from one. While the
-reader has comments on show, the runtime tells the host where each declared
-anchor is drawn (`comments.layout`), again whenever the page or an element in
-it scrolls; in Comment mode it draws the host's comment-pin pointer over the
-whole page (a link's or a button's own pointer included, since a click there
-places a comment and presses nothing), reports the reader's click, the innermost anchor
-under it and that anchor's text, up to 1 KiB (`comments.pick`), and on the
-host's request it draws a picture of the region as the reader sees it, each
-scrolled element, fixed bar and sticky header where the scroll has it
-(`comments.crop`). None of these needs a capability. The host checks every
-value, and writes the comment itself, as the reader, from its own composer; a
-page never sees a comment's words, never writes one and cannot open one.
+The page takes no part in a comment. While the reader has comments on show, the
+runtime tells the host where each declared anchor is drawn (`comments.layout`),
+again whenever the page or an element in it scrolls. In Comment mode it draws
+the host's comment-pin pointer over the whole page (a link's or button's own
+pointer included, since a click there places a comment and presses nothing) and
+reports the reader's click, the innermost anchor under it and that anchor's
+text, up to 1 KiB (`comments.pick`). On the host's request it draws a picture of
+the region as the reader sees it, with each scrolled element, fixed bar and
+sticky header where the scroll has it, and its images, canvases, video frames
+and fonts drawn in (`comments.crop`). It reads only what crosses the region's
+rows, draws each image's visible part once at the reader's screen density (800
+pixels at most on the longer side), and reads a file the page may not draw out
+again from the page's own origin; one it cannot read, or not read within 2
+seconds, is drawn as a placeholder. None of these needs a capability. The host
+checks every value and writes the comment itself, as the reader, from its own
+composer; a page never sees a comment's words, writes one or opens one.
 
 ---
 

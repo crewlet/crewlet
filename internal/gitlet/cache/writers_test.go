@@ -407,6 +407,8 @@ var cacheWriters = []writerRow{
 		"an engine write's commit — a merge_change's merge commit or squash and a rebase's replayed commits " +
 			"among them, and each merged entry's of a chain (chain.go, in the chain's scratch, named its id) — " +
 			"written into its scratch", nil},
+	{"internal/gitlet/host/build.go", kindGit + " mktag",
+		"an annotated create_tag's tag object, written into its scratch", nil},
 	{"internal/gitlet/host/build.go", kindGit + " merge-tree",
 		"a revert's or a cherry-pick's merged tree (`--write-tree`), and a merge_change's of its change into its " +
 			"target (`--allow-unrelated-histories`, as the home's mergeability merges them) — a chain's every " +

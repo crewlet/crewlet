@@ -19,32 +19,16 @@ import (
 
 // Principal is who a turn acts as.
 //
-// THE SEAT'S HANDLE IS THE IDENTITY, and the kind is [iam.KindSeat] — which
-// is what the authority table's own-record and colleague classes compare
-// against, and what [iam.ActorFor] turns into an `agent` author. A turn with
-// no seat answers the zero principal, which holds nothing and is refused by
-// every class: a tool surface built outside a turn legitimately has no seat,
-// and admitting it would make "no acting seat" the most powerful caller in
-// the engine.
+// THE SEAT'S HANDLE IS THE IDENTITY, kind [iam.KindSeat] ([iam.ActorFor] makes
+// an `agent` author of it). A turn with no seat answers the zero principal,
+// refused by every class: admitting it would make "no acting seat" the most
+// powerful caller.
 //
-// # A seat holds every app and never admin
-//
-// EVERY APP, and not a per-seat choice, because what bounds a seat is its
-// ROLE: a seat with no knowledge tools registered cannot write a page
-// whatever it holds, so a permission that had to agree with the registry
-// would be a second answer to one question. A company that wanted a seat to
-// see nothing would not give it a seat.
-//
-// NEVER ADMIN. An agent that could rewrite the company it runs inside, read
-// its credentials or every prompt every other agent was given, is the blast
-// radius the vocabulary exists to bound — and the one permission a company
-// might reasonably want to give a seat is precisely the one it must not be
-// able to take. The one verb only a seat makes — asking a colleague
-// (`a2a_ask`) — is the table's `seatOnly` row rather than a permission a seat
-// carries, so nothing beside the apps is needed here.
-//
-// A CLONE, so a decision that appends to the principal's grants can never
-// reach the list of apps every other turn reads.
+// EVERY APP, not per seat: the ROLE bounds a seat (no knowledge tools, no page
+// writes), so a permission agreeing with the registry would be a second answer.
+// NEVER ADMIN: an agent rewriting its company or reading every credential and
+// prompt is the blast radius the vocabulary bounds. The seat-only verb
+// (`a2a_ask`) is the table's `seatOnly` row. Grants are a CLONE (no shared list).
 func Principal(t *Turn) iam.Principal {
 	seat, err := t.RequireSeat()
 	if err != nil {
@@ -91,23 +75,17 @@ func unitOf(o *org.Organization, seat *org.Role) string {
 	return unit.Key()
 }
 
-// WithPrincipal attaches the turn's seat as the acting party, unless
-// something upstream has already answered.
+// WithPrincipal attaches the turn's seat as the acting party, unless something
+// upstream has already answered. THE OUTER ANSWER WINS, which makes this safe on
+// every tool invocation: overwriting an operator's own principal would
+// attribute their gesture to the agent.
 //
-// THE OUTER ANSWER WINS, which is what makes this safe to call on every tool
-// invocation: a surface reached through a credential that resolved to
-// somebody — an operator's own session or token — has a principal already,
-// and overwriting it with the seat would attribute their gesture to the agent.
-//
-// ANY answer, and that includes [iam.Anonymous]: a context a resolver checked
-// and found nobody on is a finding this function must not overrule, or every
-// request that presented nothing would be decided as whichever turn it
-// happened to carry. It is also why the sandbox bridge does NOT rely on this:
-// its route is exempt from the credential guard, so the guard answers
-// anonymous for every box, and the bridge replaces that answer with the run's
-// seat itself — see internal/api/mcpbridge's Session.actingAs. A surface whose
-// credential IS the run states the seat outright; this function only fills a
-// context nobody has answered for.
+// ANY answer, [iam.Anonymous] included: a context a resolver checked and found
+// nobody on must not be overruled, or a request presenting nothing would be
+// decided as whichever turn it carried. So the sandbox bridge does NOT rely on
+// this: its route is exempt from the credential guard, which answers anonymous
+// for every box, and the bridge states the run's seat itself (internal/api/
+// mcpbridge's Session.actingAs).
 func WithPrincipal(ctx context.Context, t *Turn) context.Context {
 	if _, how := iam.From(ctx); how != iam.Unknown {
 		return ctx

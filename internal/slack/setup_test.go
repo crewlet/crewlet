@@ -121,16 +121,11 @@ func TestTheTwoSlackCredentialsNameDifferentPages(t *testing.T) {
 
 // THE FORM ASKS FOR THE TWO CREDENTIALS AND NOTHING ELSE.
 //
-// A third box sat here, "Default channel", for as long as the transport had a
-// `Send` whose empty-channel fallback was the seat's configured one — and that
-// send had no caller anywhere in the tree. Every message an agent posts is the
-// Slack MCP server's call on this same token, and it names its own channel, so
-// the box collected a value nothing read: an operator typed a channel id, the
-// dialog reported the seat configured, and the agent went on posting exactly
-// where it was addressed. That is worse than not asking, because the answer
-// looks like configuration and is stored in the company document as though it
-// were. A seat's room is `units[].channel` on the org chart, which the
-// executor prompt renders as the team channel.
+// A "Default channel" box would collect a value nothing reads: every message
+// an agent posts is the Slack MCP server's call, which names its own channel.
+// That is worse than not asking, because the answer looks like configuration
+// and is stored in the company document. A seat's room is `units[].channel`
+// on the org chart.
 //
 // The whole list rather than "no channel field", so the next value added
 // without a reader has to be argued for here first.

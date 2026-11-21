@@ -6,73 +6,46 @@ import (
 )
 
 // Spent is what ONE READ has already paid for on the data nodes asked for it
-// before this one, carried to the next.
-//
-// # Why a read carries it
-//
-// The estate's router asks the next data node a read one refused for a reason
-// about itself ([ReadRefusal.Elsewhere]), and a node asked afresh pays for the
-// whole read again: a barrier appended to the log, then up to a whole
-// [ReadBudget] waited for its position. On a fleet that one burst put behind
-// together, every node refuses `behind` — so the one final refusal cost a
-// barrier per node, each applied by every node's applier on the very log they
-// are all behind on, and a read budget per node: six seconds at three data
-// nodes and ten at five, where one node's refusal had cost two. Carried, the
-// walk pays for each ONCE, however many nodes it asks:
-//
-//   - Index is the READ INDEX a node established for the read on a log: the
-//     position of a barrier it appended, which the broker committed. A
-//     linearizable read handed one on its own log WAITS FOR THE RECORDS
-//     BEFORE IT AND APPENDS NOTHING — every node derives the same position to
-//     wait for from it ([waitsThrough]), and waits on its own reached
-//     position ([Runner.Reached]), so the barrier the FIRST node appended is
-//     one more barrier every other node passes the moment it decodes it,
-//     never one whose commit it waits for: every data node applies every
-//     node's barriers. That is equally linearizable: the read index takes
-//     only a barrier that started after its reader arrived
-//     ([ReadIndex.Read]), and that reader is this same request, reaching a
-//     node after it began — so every write acknowledged before the request
-//     began is below the barrier, whichever node's applier the request is
-//     then served from.
-//   - Waited is the furthest position on a log a node already waited its
-//     whole bound for and did not reach. A node waits for no position at or
-//     below it — it serves the read if it already holds it, and refuses
-//     `behind` at once if it does not — because the walk's wait for a
-//     position is one bound wherever it is spent: the position is by then at
-//     least that bound old, and a copy that answers requests holds a
-//     position that old unless it lags by more than a whole read budget,
-//     which is the copy the first wait has already found.
-//   - Unconfirmed is every log a node spent a barrier's whole budget on
-//     without the barrier committing — a log without a quorum, or on one
-//     member a stalled write, rather than a slow one ([DefaultBarrierBudget])
-//     — and a read on it appends NO SECOND barrier: it is refused at once,
-//     `no_quorum` where several members store the log and `broker_stalled`
-//     where one does ([ReadIndex.unconfirmed]). Every node's barrier goes to
-//     the one log's leader, so through an election every node's waits out its
-//     whole budget alike, and behind one member's stalled write likewise; the
-//     one case a second barrier commits where the first did not — a member
-//     cut off from the log's leader while its peers and its asker still reach
-//     it — is answered with the refusal and its retry hint
-//     ([ElectionRetryHint]) rather than every read of every election paying
-//     a barrier's budget per data node.
+// before this one, carried to the next. The estate's router asks the next node
+// a read one refused for a reason about itself ([ReadRefusal.Elsewhere]), and a
+// node asked afresh pays for the whole read again: a barrier appended to the
+// log, then up to a whole [ReadBudget] waited. Carried, the walk pays for each
+// ONCE however many nodes it asks, rather than a barrier and a budget per node
+// on a fleet all `behind` on the very log those barriers go to.
 //
 // Every term is keyed by its LOG, because a position is a coordinate on one
-// log ([Position.Stream]) and what was paid for on one says nothing about
-// another. The zero value has paid for nothing, which is a read asked of its
-// first node.
+// log ([Position.Stream]). The zero value has paid for nothing, which is a
+// read asked of its first node.
 type Spent struct {
-	// Index is the read index established on each log, at most one a log:
-	// the FIRST one a walk established, which every node it asks after is
-	// held to.
+	// Index is the read index established on each log, at most one a log: the
+	// position of the FIRST committed barrier a walk appended, which every node
+	// it asks after is held to. A linearizable read handed one WAITS FOR THE
+	// RECORDS BEFORE IT AND APPENDS NOTHING ([waitsThrough], [Runner.Reached]):
+	// every data node applies every node's barriers. Equally linearizable,
+	// because [ReadIndex.Read] takes only a barrier started after its reader
+	// arrived, and that reader is this same request, so every write
+	// acknowledged before it began is below the barrier on any node.
 	Index []Position `json:"index,omitempty"`
 
 	// Waited is, on each log, the furthest position a node waited its whole
-	// bound for and did not reach.
+	// bound for and did not reach. A node waits for no position at or below
+	// it: it serves the read if it holds it and refuses `behind` at once if
+	// not, because the walk's wait is one bound wherever it is spent: the
+	// position is by then at least a bound old, and only a copy lagging by
+	// more than a whole read budget, which the first wait found, lacks it.
 	Waited []Position `json:"waited,omitempty"`
 
 	// Unconfirmed is every log on which a node's barrier ran its whole budget
-	// without committing — named for what is known, not for why: on one
-	// member it is no quorum that was missed.
+	// ([DefaultBarrierBudget]) without committing. A read on it appends NO
+	// SECOND barrier: it is refused at once, `no_quorum` where several members
+	// store the log and `broker_stalled` where one does
+	// ([ReadIndex.unconfirmed]). Every node's barrier goes to the one log's
+	// leader, so through an election or behind a stalled write each would wait
+	// out its budget alike. The one case a second barrier would commit (a
+	// member alone cut off from the leader) gets the refusal's retry hint
+	// ([ElectionRetryHint]) rather than every election's reads paying a budget
+	// per node. Named for what is known, not why: on one member it is no
+	// quorum that was missed.
 	Unconfirmed []string `json:"unconfirmed,omitempty"`
 }
 
@@ -148,14 +121,12 @@ type spentKey struct{}
 
 // WithSpent is ctx carrying what the read it serves has already paid for on
 // the nodes asked for it before this one ([Spent]), for every read made on it
-// ([Reader.Read]). A zero s comes back as ctx itself: a read asked of its
-// first node has paid for nothing.
+// ([Reader.Read]). A zero s comes back as ctx itself.
 //
-// A CONTEXT VALUE, as [WithReplyMargin]'s mark is, because both describe the
-// REQUEST a read is made for rather than the read: the serving node's estate
-// marks the request it answers, and every read the operation makes on that
-// request's behalf — however many, through whichever domain's reader — is
-// held to it without each operation's arguments carrying it.
+// A CONTEXT VALUE, as [WithReplyMargin]'s mark is, because it describes the
+// REQUEST rather than one read: every read an operation makes on the request's
+// behalf, through whichever domain's reader, is held to it without each
+// operation's arguments carrying it.
 func WithSpent(ctx context.Context, s Spent) context.Context {
 	if s.IsZero() {
 		return ctx

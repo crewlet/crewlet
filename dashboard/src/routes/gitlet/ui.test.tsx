@@ -14,7 +14,7 @@ import { LiveSocket, Store, type CodeCheckRollup } from "~/protocol/index.ts";
 import { CODE_ORG } from "~/test/codeScreens.tsx";
 import { ChangeRefPill } from "./ChangeRow.tsx";
 import { gitletWrote } from "./repo/History.tsx";
-import { CheckRollupMark, Face, GITLET, TagChip, useWhoName } from "./ui.tsx";
+import { BranchChip, CheckRollupMark, Face, GITLET, TagChip, useWhoName } from "./ui.tsx";
 
 afterEach(cleanup);
 
@@ -135,4 +135,16 @@ test("a tag chip opens its whole ref, and a change's pill opens the change", () 
   expect(pill.getAttribute("href")).toBe("#/gitlet/repos/web/changes/41");
   expect(pill.getAttribute("title")).toBe("Change web!41, merged: cache");
   expect(pill.querySelector(".code-state[data-state='merged']")).toBeTruthy();
+});
+
+// A BRANCH BREAKS AFTER ITS SLASHES, never mid-word: each `/` offers a break
+// and the chip's text stays the name. Mutation: drop the <wbr> after a slash.
+test("a branch chip offers a line break after each slash and nowhere else", () => {
+  const { container } = mount(<BranchChip name="seats/agent-swe/experiment" />);
+  const chip = container.querySelector(".code-branch-chip")!;
+  expect(chip.textContent).toBe("seats/agent-swe/experiment");
+  expect(chip.querySelectorAll("wbr")).toHaveLength(2);
+  for (const wbr of chip.querySelectorAll("wbr")) {
+    expect(wbr.previousSibling?.textContent?.endsWith("/")).toBe(true);
+  }
 });

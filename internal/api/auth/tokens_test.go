@@ -224,23 +224,15 @@ func TestATokenActsAsItsOwnerWithTheNarrowestOfThreeGrantSets(t *testing.T) {
 // A MACHINE TOKEN IS STEPPED UP BY CONSTRUCTION, SAYS IT IS A TOKEN, AND IS
 // REFUSED EVERY GESTURE THAT NEEDS A PERSON PRESENT.
 //
-// A token has nobody at a keyboard, so presenting it is its whole proof for
-// what an automation does — a configuration or a credential write —
-// and it is composed fresh for `step_up`. That makes the principal's CLOCK no
-// help in keeping it off the gestures that need a person present, so what
-// does is carried beside it: the principal names the token it came through
-// ([iam.Principal.Via]), and the authority table refuses that on every row
-// that needs a person ([authz.Presence]). Walked with the principal THIS GUARD
-// composed — carrying everything a token may and asking about its own owner,
-// by id and by login, which is the arm no grant guards — over every row that
-// states a presence: a row needing a person on every arm admits it nowhere,
-// and one sparing the self arm admits it only as its owner. (internal/authz
-// holds the table's half with principals it builds itself; this is what ties
-// it to the credential shape the guard actually stamps.)
+// A token is composed fresh for `step_up`, so the clock cannot keep it off
+// person-present gestures; the credential beside it ([iam.Principal.Via]) does,
+// refused on every row needing a person ([authz.Presence]). Walked with the
+// principal THIS GUARD composed, asking about its own owner by id and login:
+// a row needing a person admits it nowhere, one sparing the self arm only as
+// its owner. internal/authz holds the table's half.
 //
 // Mutation: stamp a token as a session that proved nothing and it is stale;
-// drop the credential from the principal and PresentedToken loses it, and the
-// token is admitted to its owner's proof.
+// drop the credential and PresentedToken loses it.
 func TestAMachineTokenIsSteppedUpAndSaysItIsAToken(t *testing.T) {
 	t.Parallel()
 	m := newMachineRig(t)

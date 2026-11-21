@@ -8,20 +8,17 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// A REMOTE'S CREDENTIAL IS ONE code.remote_credentials DECLARES FOR ITS HOST,
-// in a declared repository as in a person's request (internal/gitlet's decide)
-// and at the dial (internal/engine's mirrorDial), all three through
-// [config.CodeRemoteCredentials.Refusal]: a variable the table does not
-// declare, or a declared one toward another host, another port or a name
-// beginning with the declared host, is refused at the credential as one conflict
-// naming the table and the host its value would go to — never the credential
-// itself. A declared variable toward its host, on the port declared, is
-// accepted, and so is an anonymous remote, which sends nothing.
+// A REMOTE'S CREDENTIAL IS ONE code.remote_credentials DECLARES FOR ITS HOST, in a declared
+// repository, a person's request (internal/gitlet's decide) and the dial (internal/engine's
+// mirrorDial), all through [config.CodeRemoteCredentials.Refusal]: an undeclared variable, or a
+// declared one toward another host, another port or a name beginning with the declared host, is
+// refused as one conflict naming the table and the host, never the credential. A declared
+// variable toward its host and port is accepted, and so is an anonymous remote, which sends
+// nothing.
 //
-// Mutation: drop the remotes.Refusal arm from validateCodeRemote — every
-// refusal below is accepted, red. Compare hosts without their port in
-// Refusal — "another port" is accepted, red. Match a host by its prefix — "a name
-// beginning with its host" is accepted, red.
+// Mutation: drop the remotes.Refusal arm from validateCodeRemote — every refusal below is
+// accepted, red. Compare hosts without their port in Refusal — "another port" is accepted, red.
+// Match a host by its prefix — "a name beginning with its host" is accepted, red.
 func TestARemoteCredentialIsOneDeclaredForItsHost(t *testing.T) {
 	t.Parallel()
 	table := "  remote_credentials:\n" +

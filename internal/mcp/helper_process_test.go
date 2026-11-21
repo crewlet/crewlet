@@ -18,18 +18,15 @@ import (
 
 // A REAL MCP server, run as a REAL child process.
 //
-// Subprocess supervision is the half of this package that cannot be tested
-// against an in-process fake: environment inheritance, a stderr pipe, a
-// process group, a child that ignores SIGTERM, a grandchild that outlives its
-// parent. All of those are properties of an operating system, not of an
-// interface, and a fake transport would assert that the mock was called.
+// Subprocess supervision (environment inheritance, a stderr pipe, a process
+// group, a child ignoring SIGTERM, a grandchild outliving its parent) is the
+// operating system's, which a fake transport cannot test.
 //
-// So the test binary re-executes ITSELF in helper mode. The server speaks
-// newline-delimited JSON-RPC by hand rather than through the SDK's server,
-// which is deliberate: these tests exist to pin what the CLIENT does with wire
-// shapes a real third-party server produces and an SDK-built server cannot —
-// an out-of-spec empty cursor, a repeated cursor, an annotations object that
-// omits a hint, a content block from a future spec version.
+// So the test binary re-executes ITSELF in helper mode, speaking
+// newline-delimited JSON-RPC by hand rather than through the SDK's server, to
+// pin what the CLIENT does with wire shapes an SDK-built server cannot
+// produce: an empty or repeated cursor, annotations omitting a hint, a
+// content block from a future spec version.
 
 const (
 	helperModeEnv = "CREWLET_MCP_TEST_HELPER"

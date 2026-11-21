@@ -21,17 +21,14 @@ import (
 
 // The applier's own guards, over a real replicated estate.
 //
-// [statelogtest] certifies what the FRAMEWORK relies on — that an applier is
-// deterministic, that it is idempotent at a position, the deferral contract,
-// the table classes. What it cannot know is what a CONVERSATION means, and
-// every case here is one of those: the room's minted sequence, the tombstone
-// that keeps a thread's root, the marker that makes an erase permanent, the
-// prune's time range, and the live batch a re-run transaction must not push
-// twice.
+// [statelogtest] certifies what the FRAMEWORK relies on (determinism,
+// idempotence at a position, deferral, table classes); each case here is what
+// only a CONVERSATION means: the room's minted sequence, the tombstone that
+// keeps a thread's root, the marker that makes an erase permanent, the prune's
+// time range, and the live batch a re-run transaction must not push twice.
 //
-// THE HELPERS ARE PREFIXED `apply…` because this package's suites are several
-// files written against one test package, and a `harness` here would be a
-// collision with the write path's rather than a shared fixture.
+// THE HELPERS ARE PREFIXED `apply…`: this package's suites share one test
+// package, and a bare `harness` would collide with the write path's.
 
 // applyBrokerAt is the broker's own instant for a record, which is the ONLY
 // clock this domain writes. Every case that needs a second instant states it.
@@ -691,20 +688,15 @@ func TestAnErasedMessageIsNeverResurrectedByAReplay(t *testing.T) {
 // TestTheErasingRecordIsNotBlockedByItsOwnMarker, and a SECOND erase does not
 // restate the first erasure's attribution.
 //
-// Two facts about the marker, which the applier consults BY OPERATION ID
-// rather than by presence. A record must not read its OWN effect as somebody
-// else's: a redelivered erase re-asserts its deletes and its marker rather
-// than being turned away by them, and it is not gated either — a gesture whose
-// acknowledgement was lost must not resolve as "applied nowhere" while the
-// destruction it asked for did happen.
+// The marker is consulted BY OPERATION ID, not presence: a redelivered erase
+// re-asserts its deletes and marker and is not gated, or a gesture whose
+// acknowledgement was lost would resolve as "applied nowhere".
 //
-// And the first erasure is the FACT: who removed somebody's words, and when,
-// is what the marker records, so a later erase naming the same message
-// leaves it alone. TWO GUARDS HOLD THAT ONE — the skip in [applyErase] and the
-// marker's own conflict clause — so the assertion below survives either being
-// removed alone, which is defence in depth rather than a case that cannot
-// fail: remove the marker write, restate it on conflict AND drop the skip, or
-// gate the erase on its own marker, and it goes red.
+// The first erasure is the FACT (who removed somebody's words, and when), so a
+// later erase of the same message leaves it alone. TWO GUARDS HOLD THAT ONE,
+// the skip in [applyErase] and the marker's conflict clause, so the assertion
+// survives either removed alone; remove the marker write, restate on conflict
+// AND drop the skip, or gate the erase on its own marker, and it goes red.
 func TestTheErasingRecordIsNotBlockedByItsOwnMarker(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t)

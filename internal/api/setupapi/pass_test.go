@@ -12,17 +12,14 @@ import (
 
 // THE SURFACE LEASE IS STILL HELD WHEN THE PASS'S OUTCOME IS WRITTEN.
 //
-// The lease is what makes these rows safe to write, and the write that
-// records a pass — the phase, the findings, the attempts — used to happen
-// OUTSIDE it: Execute took the guard and gave it back the moment the pass
-// returned, so a reconcile tick that had read the row a moment earlier folded
-// its own copy back over the top. An operator's disconnect landing in that
-// window was silently overwritten and the card went from Disconnecting back
-// to connected.
+// The lease is what makes these rows safe to write; a pass's outcome (phase,
+// findings, attempts) written outside it lets a reconcile tick that read the
+// row earlier fold its own copy back over an operator's disconnect, turning
+// Disconnecting back into connected.
 //
-// Observable only from inside the write, because the write is the last thing
-// the handler does and the release is a frame later. So the store asks for the
-// guard itself: being GIVEN it is proof nobody is holding it.
+// Observable only from inside the write, since the release is a frame later:
+// the store asks for the guard itself, and being GIVEN it proves nobody holds
+// it.
 func TestTheSurfaceLeaseIsHeldWhenThePassIsRecorded(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)

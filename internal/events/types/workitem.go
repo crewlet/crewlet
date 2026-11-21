@@ -8,17 +8,14 @@ package types
 
 // WorkBackend names the tracker a work item lives in.
 //
-// NOT the company's configured tracker (config.TrackerBackend), and the
-// difference is the reason this is its own type. That setting says where a
-// company keeps ITS work; this says where one ITEM lives. A company on the
-// Worklet still has seats woken by a GitHub issue or a GitLab one, and
-// a turn on that issue is on a GitHub item whatever the tracker setting reads —
-// so the set here is every place a turn's item can be, which is wider than the
-// set of trackers a company can choose.
+// NOT the company's configured tracker (config.TrackerBackend): that says
+// where a company keeps ITS work; this says where one ITEM lives. A company on
+// the Worklet still has seats woken by a GitHub or GitLab issue, so the set
+// here is wider than the trackers a company can choose.
 //
-// A plain string on the wire, so a backend a newer node names decodes and
-// round-trips here as a value rather than failing; [WorkBackend.Valid] is how a
-// reader asks whether this build knows it.
+// A plain string on the wire, so a backend a newer node names round-trips as a
+// value rather than failing; [WorkBackend.Valid] asks whether this build knows
+// it.
 type WorkBackend string
 
 // The places a work item can live.

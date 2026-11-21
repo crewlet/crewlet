@@ -14,75 +14,15 @@ import (
 // THE DIRECTORY'S STATEMENTS ARE THE ONES PLANNED, EVERY ONE OF THEM, AND
 // EVERY INDEX ON ITS TABLES SERVES ONE.
 //
-// # Why this is asserted rather than reviewed
-//
-// A sign-in resolves a login or an address blind to its row, every directory
-// decision asks whether anybody else holds the value it is about to give, and
-// an open invitation holds its address and its seat as a person does — each a
-// query with a BOUND value, over a table every login in the company is a row
-// of. A statement there with no index behind it reads every person in the
-// company and shows up as a slow sign-in, never as a failure; an index nobody
-// reads is a write on every apply of every identity record on every data node,
-// for ever. The planner is the only thing that knows which a statement is, so
-// this runs EXPLAIN QUERY PLAN over the statements this package runs, planned
-// as a deployment plans them — with no statistics, over an empty estate.
-//
-// It used to be a case of internal/store's schema suite, over COPIES of these
-// statements, and the copies had drifted: two of them asked for a non-empty
-// seat where no statement here does, so the plan they certified was not the
-// plan any node ran. Planned from the package's own named statements, a change
-// to one is a change to what is planned — and planned whole, the first run
-// found what the copies never could (replicated 0069): an index on the people
-// no statement reaches, `/health`'s question whether anybody is enrolled
-// reading the people from the heap, the trail a person pages through read
-// whole and sorted on every page, and the erasure of an address's trail
-// seeking every row that names nobody while the index on the address was
-// reached by no statement at all.
-//
-// # The tables it speaks for
-//
-// The people, the invitations and the trail: the three tables a sign-in, a
-// directory decision and an investigation read by a value or in an order. The
-// credentials, the sessions and the gates are read by their keys and by the
-// sweep's own indexes, and are not this test's to speak for.
-//
-// # What it holds
-//
-//   - every statement in the module's source that reads `iam_people`,
-//     `iam_invites` or `iam_history` is registered here, matched whole
-//     ([storetest.StatementLiterals]): a reader nobody registered is one whose
-//     plan nobody checked;
-//   - a READ — a point read or write by a row's key, a lookup by a bound value,
-//     a bucket's sweep, a page — seeks the index it names, or walks it in its
-//     own order, and one about that order sorts nothing ([directoryReads]);
-//   - a CENSUS — the open invitations, a search of the directory, an existence
-//     question — reads every row its question names by definition, and is held
-//     to no heap scan of a covered table ([directoryCensuses]);
-//   - a PASS reads every row by definition — the counts a keyring rotation
-//     retires a key on, a re-derivation of every invitation's seat — so it may
-//     read the heap, and is held to no sort ([directoryPasses]);
-//   - and the inverse: every index the schema declares on a covered table is
-//     in some registered plan.
-//
-// # The plain lookups, and the one partial index
-//
-// The three lookups (`iam_people_login_idx`, `_email_idx`, `_seat_lookup_idx`)
-// are PLAIN: a PARTIAL index over the non-empty rows is one a bound value
-// cannot be proved to satisfy, and measured on this driver every lookup was
-// then a scan of every person. The listing of every binding is the other
-// direction: a non-empty seat IS the partial `iam_people_seat_claim_idx`'s
-// predicate, so it walks that index — the bound people, in seat order — where
-// without it the read is every person plus a sort, on every seat listing and
-// every party-registry rebuild.
-//
-// Mutation: make the login index partial over its non-empty rows and the
-// login's sighting and holder lookup read `SCAN iam_people`; leave
-// `iam_people_bucket_idx` in place and the inventory names it; drop
-// `iam_people_kind_idx` and the existence question reads the heap; drop
-// `iam_history_version_idx` and every page of the trail reads it whole; read
-// `iam_people` in a new literal anywhere in the module without registering
-// it, and the walk names the file; drop `iam_removed_seat_idx` and one seat's
-// removed holder and a bind's leavers read every tombstone.
+// A sign-in and every directory decision look up a bound value in a table with
+// a row per login: unindexed, that is a slow sign-in, never a failure, and an
+// index nobody reads is a write on every apply on every data node. Only the
+// planner knows which, so this plans the package's own statements (copies of
+// them drift) as a deployment does, with no statistics over an empty estate.
+// Every module statement reading a covered table is registered, matched whole
+// ([storetest.StatementLiterals]), and every index on one is in some plan.
+// Mutation: read `iam_people` in an unregistered literal and the walk names the
+// file; leave `iam_people_bucket_idx` in place and the inventory names it.
 func TestTheDirectoryStatementsArePlanned(t *testing.T) {
 	t.Parallel()
 	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
@@ -92,6 +32,8 @@ func TestTheDirectoryStatementsArePlanned(t *testing.T) {
 			t.Errorf("close the store: %v", err)
 		}
 	})
+	// The tables read by a value or in an order; the credentials, sessions and
+	// gates are read by their keys and the sweep's own indexes.
 	covered := []string{"iam_people", "iam_invites", "iam_history"}
 
 	used := map[string]bool{}
@@ -185,8 +127,15 @@ type directoryIndexed struct {
 }
 
 // directoryReads is every read or write of one row by its key, every lookup of
-// a value's holder and every probe or sweep of one bucket, each with the index
-// it seeks.
+// a value's holder, every probe or sweep of one bucket and every page, each
+// seeking its index or walking it in its order, and one about that order sorts
+// nothing. The three lookups (login, email, seat_lookup) are PLAIN: a bound
+// value cannot be proved to satisfy a partial index, and on this driver every
+// lookup then scanned every person. Mutation: make the login index partial and
+// the login's sighting and holder lookup read `SCAN iam_people`; drop
+// `iam_history_version_idx` and every page of the trail reads it whole; drop
+// `iam_removed_seat_idx` and a seat's removed holder and a bind's leavers read
+// every tombstone.
 func directoryReads() map[string]directoryIndexed {
 	const (
 		person     = "sqlite_autoindex_iam_people_1"
@@ -268,16 +217,16 @@ func directoryReads() map[string]directoryIndexed {
 		"a machine's removal trail": seek("iam_history_person_idx", erasedTrailStatement("('')"), "p1"),
 		"a trail row erased":        seek("sqlite_autoindex_iam_history_1", eraseTrailStatement, "{}", "h1"),
 	}
-	// ONE SEAT'S REMOVALS NO BIND HAS STAMPED, sought by the tombstones' own
-	// seat index (replicated 0122) in its third column's order, the person's
-	// id: SeatHolder's second seek and the leavers a bind stamps and scopes.
-	// A tombstone is permanent, so without the index each is every removal
-	// the company ever made.
+	// ONE SEAT'S REMOVALS NO BIND HAS STAMPED (SeatHolder's second seek, a
+	// bind's leavers), sought by the tombstones' seat index (replicated 0122)
+	// in its third column's order, the person's id. A tombstone is permanent,
+	// so without the index each read is every removal the company ever made.
 	out["one seat's removed holder"] = inOrder(removedSeat, seatRemovedHolderStatement, []any{"founder"})
 	out["one seat's leavers"] = inOrder(removedSeat, leaversStatement, []any{"founder"})
 
-	// THE BINDINGS IN SEAT ORDER, walked through the partial index whose
-	// predicate their WHERE is — SeatClaims' and SeatHolders' shapes.
+	// THE BINDINGS IN SEAT ORDER (SeatClaims', SeatHolders'), walked through
+	// the partial index whose predicate their WHERE is; without it, every
+	// person plus a sort on every seat listing and party-registry rebuild.
 	out["the seat claims' bindings"] = walk("iam_people_seat_claim_idx", seatClaimBindingsStatement, nil)
 	out["the seat holders' bindings"] = walk("iam_people_seat_claim_idx", seatHoldersStatement, nil)
 
@@ -290,11 +239,10 @@ func directoryReads() map[string]directoryIndexed {
 	statement, args = invitationsPageStatement(InvitationsQuery{After: "i0", All: true}, DefaultPageSize)
 	out["a page of every invitation"] = inOrder(invitation, statement, args)
 
-	// THE TRAIL'S PAGES, newest first by position, in every shape the
-	// surface asks for: the whole trail and a window of it walk or seek the
-	// position's own index, one person's trail seeks theirs (replicated
-	// 0069), and an instant is resolved to a position by walking the
-	// position's index from the newest row.
+	// THE TRAIL'S PAGES, newest first by position: the whole trail and a
+	// window walk or seek the position's index, one person's trail seeks
+	// theirs (replicated 0069), and an instant resolves to a position by
+	// walking the position's index from the newest row.
 	for name, page := range map[string]struct {
 		q     HistoryQuery
 		index string
@@ -317,20 +265,20 @@ func directoryReads() map[string]directoryIndexed {
 }
 
 // directoryCensuses is every statement whose question names a set of rows it
-// reads whole: the listings' windows in every shape the surfaces ask for, the
-// open invitations the seat claims read, the trail's join to its people, and
-// the existence questions.
+// reads whole (the listings' windows, the open invitations the seat claims
+// read, the existence questions), held to no heap scan of a covered table.
+// Mutation: drop `iam_people_kind_idx` and the existence question reads the
+// heap.
 func directoryCensuses() map[string]directoryPlanned {
 	out := map[string]directoryPlanned{
 		"the seat claims' invitations": {openSeatInvitationsStatement, []any{1}},
 		"any person":                   {anyPersonStatement, []any{"person"}},
 		"any blind":                    {anyBlindStatement, nil},
 	}
-	// A PAGE OF THE OPEN INVITATIONS reads every open invitation through the
-	// partial index whose predicate is the page's own, and sorts them: the set
-	// is what is outstanding, plus what aged out within the week the sweep
-	// waits, so it is bounded by what the company has issued and not by what
-	// it ever did.
+	// A PAGE OF THE OPEN INVITATIONS reads every open one through the partial
+	// index whose predicate is the page's own, and sorts them: a set bounded
+	// by what is outstanding plus what aged out within the week the sweep
+	// waits, not by history.
 	statement, args := invitationsPageStatement(InvitationsQuery{After: "i0"}, DefaultPageSize)
 	out["a page of the open invitations"] = directoryPlanned{statement, args}
 
@@ -343,11 +291,11 @@ func directoryCensuses() map[string]directoryPlanned {
 }
 
 // directoryPasses is every statement that reads every row it names by
-// definition — and a removal's read of the invitations, which is held to no
-// index ON PURPOSE: its arm by the person a redemption created has none, and
-// needs none, because the table holds only the invitations still outstanding
-// and those the sweep has not collected a week on, and a removal reads it
-// once; an index there would be a write on every invitation for that one read.
+// definition (a keyring rotation's counts, every invitation's seat re-derived),
+// held to no sort, and a removal's read of the invitations, held to no index ON
+// PURPOSE: the table holds only invitations outstanding or a week past, and a
+// removal reads it once, so an index on its arm by the person a redemption
+// created would be a write on every invitation for that one read.
 func directoryPasses() map[string]directoryPlanned {
 	return map[string]directoryPlanned{
 		"every invitation's seat":    {invitationSeatsStatement, nil},

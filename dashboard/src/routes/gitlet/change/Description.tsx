@@ -5,11 +5,20 @@
  */
 
 import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { Button, FormField, Input, Menu, Stack, Tag, Textarea, useToast } from "@crewlethq/ui";
+import {
+  Button,
+  FormField,
+  Input,
+  MarkdownEditor,
+  Menu,
+  Stack,
+  Tag,
+  useToast,
+} from "@crewlethq/ui";
 import { EllipsisGlyph, LinkGlyph, PencilGlyph, TextQuoteGlyph } from "@crewlethq/icons/glyphs";
 import { useDraftBox } from "~/app/assistant/boxes.ts";
 import { useDraftState } from "~/app/assistant/draft.ts";
-import { WriteButton, pressable } from "~/components/WriteButton.tsx";
+import { RefusalsTo, WriteButton, pressable, useRefusalPlace } from "~/components/WriteButton.tsx";
 import { changeLive } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
@@ -124,6 +133,8 @@ export function Description({
 /** The title and the description, edited in place and saved as one update. */
 function EditForm({ change, onDone }: { change: CodeChangeDetail; onDone: () => void }) {
   const update = useAct("code_update_change");
+  // SAVE'S REFUSAL ON A LINE OF ITS OWN, under the row, so the row keeps one height.
+  const refusals = useRefusalPlace("code-description__refusal");
   const [opened, setOpened] = useState(() => ({ title: change.title, body: change.body ?? "" }));
   const [title, setTitle] = useDraftState(opened.title);
   const [body, setBody] = useDraftState(opened.body);
@@ -205,44 +216,44 @@ function EditForm({ change, onDone }: { change: CodeChangeDetail; onDone: () => 
             />
           )}
         </FormField>
-        <FormField label="Description" helper="Markdown">
+        <FormField label="Description">
           {(field) => (
-            <Textarea
+            <MarkdownEditor
               id={field.id}
               aria-describedby={field.describedBy}
+              label="Description"
+              placeholder="What it changes and why. Markdown works."
               value={body}
               rows={8}
-              autoResize
-              onChange={(event) => setBody(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                  event.preventDefault();
-                  void save();
-                }
-              }}
+              onChange={setBody}
+              onSubmit={() => void save()}
+              renderPreview={(value) => <div className="prose md">{renderMarkdown(value)}</div>}
             />
           )}
         </FormField>
-        <div className="code-description__actions">
-          {stale && (
-            <Button size="small" variant="ghost" onClick={again}>
-              Start again from the latest
+        <RefusalsTo place={refusals.element}>
+          <div className="code-description__actions">
+            {stale && (
+              <Button size="small" variant="ghost" onClick={again}>
+                Start again from the latest
+              </Button>
+            )}
+            <Button size="small" variant="secondary" onClick={onDone} disabled={update.busy}>
+              Cancel
             </Button>
-          )}
-          <Button size="small" variant="secondary" onClick={onDone} disabled={update.busy}>
-            Cancel
-          </Button>
-          <WriteButton
-            write={update}
-            size="small"
-            variant="primary"
-            type="submit"
-            blocked={blocked}
-            onPress={() => void save()}
-          >
-            Save
-          </WriteButton>
-        </div>
+            <WriteButton
+              write={update}
+              size="small"
+              variant="primary"
+              type="submit"
+              blocked={blocked}
+              onPress={() => void save()}
+            >
+              Save
+            </WriteButton>
+          </div>
+        </RefusalsTo>
+        {refusals.place}
         {blocked && <p className="muted t-caption">{blocked}</p>}
       </Stack>
     </form>

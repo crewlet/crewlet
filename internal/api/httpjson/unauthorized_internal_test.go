@@ -10,15 +10,14 @@ import (
 // THE UNAUTHORIZED SENTENCE NAMES EVERY PERMISSION THERE IS, read off the list,
 // for a refusal that says nothing more about itself.
 //
-// A person refused on a screen reads this sentence to learn what to ask an
-// admin for, and it typed the list by hand: the next app's permission would
-// have been missing from it the day it shipped, beside a `grants` field naming
-// exactly that permission. So the sentence is the list's, in the words People
-// & access uses — each capitalised, commas, "or" before the last — and the
-// table carries it for [iam.AllGrants].
+// A person refused reads this sentence to learn what to ask an admin for, so a
+// hand-typed list would miss the next app's permission beside a `grants` field
+// naming it. The sentence is the list's, in People & access's words (each
+// capitalised, commas, "or" before the last), and the table carries it for
+// [iam.AllGrants].
 //
 // Mutation: have the builder name a fixed list rather than its argument and
-// the rows fail — the four-permission row is the app that does not exist yet;
+// the rows fail (the four-permission row is the app that does not exist yet);
 // give the table any sentence but the builder's and the last check does.
 func TestTheUnauthorizedSentenceNamesEveryPermission(t *testing.T) {
 	t.Parallel()

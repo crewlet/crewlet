@@ -7,27 +7,21 @@ import (
 
 // ScopeSeparator is the one thing the framework knows about a scope path.
 //
-// A domain chooses its own path alphabet — what a container is, what a family
-// is, what an object is called — and the framework never names any of it. What
-// it does know is that a path is a hierarchy written left to right with this
-// separator between levels, which is exactly enough to compute CONTAINMENT:
-// whether one path covers another.
-//
-// That is the whole seam. It lets the read levels and the write path's
-// deferral probe be written before any domain exists, and it means a domain
-// that adds a level of hierarchy adds it to its own strings rather than to the
+// A domain chooses its own path alphabet; the framework knows only that a path
+// is a hierarchy written left to right with this separator between levels,
+// enough to compute CONTAINMENT. So the read levels and the deferral probe
+// need no domain, and a domain adds a level to its own strings, not to the
 // framework.
 const ScopeSeparator = "/"
 
 // ScopePath builds a scope path from its segments, skipping empty ones so a
 // missing id can never produce a path with a hole in it.
 //
-// ONE SPELLING FOR EVERY DOMAIN WHOSE PATH CAN MISS A SEGMENT — an object's
-// container, say. The tracker, the wiki and chat each wrote this
-// function, identically; a fourth copy that kept a blank segment would build
-// `project//task/7` where the others build `project/task/7`, and
-// [Ancestors] and the deferral probe would then read two paths for one object
-// — a write that steps over a record deferred on its container.
+// EVERY DOMAIN WHOSE PATH CAN MISS A SEGMENT (an object's container, say)
+// builds it here: a copy that kept a blank segment would build
+// `project//task/7` where the others build `project/task/7`, and [Ancestors]
+// and the deferral probe would read two paths for one object, letting a write
+// step over a record deferred on its container.
 func ScopePath(segments ...string) string {
 	kept := make([]string, 0, len(segments))
 	for _, s := range segments {
@@ -43,9 +37,9 @@ func ScopePath(segments ...string) string {
 //	"project/ENG/task/7" -> ["project/ENG/task/7", "project/ENG/task",
 //	                         "project/ENG", "project"]
 //
-// The closure is what makes a scope probe a SET MEMBERSHIP test rather than a
-// pattern match: a record deferred on the container of an object this write is
-// about must be found by a probe that only knows the object.
+// The closure makes a scope probe a SET MEMBERSHIP test rather than a pattern
+// match: a record deferred on the container of an object this write is about
+// must be found by a probe that only knows the object.
 func Ancestors(path string) []string {
 	path = strings.Trim(strings.TrimSpace(path), ScopeSeparator)
 	if path == "" {
@@ -62,14 +56,13 @@ func Ancestors(path string) []string {
 // Closure is every path in this scope plus every path that contains one,
 // sorted and deduplicated.
 //
-// It is one half of the deferral probe, and only one: a stored deferred path
-// found HERE is a path that COVERS something this operation is about, either
-// exactly or as its container. It says nothing about a deferred path BENEATH
-// one of these, which is what [ScopeSet.Roots] is for.
+// It is one half of the deferral probe: a stored deferred path found HERE
+// COVERS something this operation is about, exactly or as its container. A
+// deferred path BENEATH one of these is [ScopeSet.Roots]'s half.
 //
-// It is NOT an intersection test. Two sibling paths share every ancestor above
-// them, so comparing two closures for a common element answers true for every
-// pair of objects in one company.
+// It is NOT an intersection test: two siblings share every ancestor above
+// them, so comparing closures answers true for every pair of objects in one
+// company.
 func (s ScopeSet) Closure() []string {
 	seen := map[string]struct{}{}
 	for _, p := range s.Paths {
@@ -88,14 +81,11 @@ func (s ScopeSet) Closure() []string {
 // Roots is every path in this scope with nothing above it inside the scope,
 // normalised and sorted.
 //
-// It is the other half of the probe, and the direction the first half cannot
-// see: a record deferred on an object BENEATH something this operation is
-// about — one task inside a project this write is rewriting — is not in the
-// closure, because the closure walks upward. A descendant test walks down.
-//
-// Only the roots are needed, because a descendant of a nested path is a
-// descendant of its outermost ancestor in the set: testing both would ask the
-// same question twice.
+// It is the probe's other half: a record deferred BENEATH something this
+// operation is about (one task inside a project this write rewrites) is not in
+// the upward-walking closure; a descendant test walks down from these. Only
+// roots are needed, since a descendant of a nested path is a descendant of its
+// outermost ancestor in the set.
 func (s ScopeSet) Roots() []string {
 	norm := make([]string, 0, len(s.Paths))
 	for _, p := range s.Paths {
@@ -125,10 +115,9 @@ func (s ScopeSet) Roots() []string {
 // Covers reports whether outer contains inner — the same path, or an ancestor
 // of it.
 //
-// SHARING AN ANCESTOR IS NOT CONTAINMENT, and the distinction is the whole
-// predicate: two sibling projects both sit under the same family, and a probe
-// that treated that as an intersection would refuse every write in the company
-// the moment one record anywhere was deferred.
+// SHARING AN ANCESTOR IS NOT CONTAINMENT: two sibling projects sit under one
+// family, and a probe that read that as an intersection would refuse every
+// write in the company once one record anywhere was deferred.
 func Covers(outer, inner string) bool {
 	outer = strings.Trim(strings.TrimSpace(outer), ScopeSeparator)
 	inner = strings.Trim(strings.TrimSpace(inner), ScopeSeparator)
@@ -141,14 +130,12 @@ func Covers(outer, inner string) bool {
 // Intersects reports whether two scopes are about any object in common, under
 // containment in BOTH directions.
 //
-// It is the predicate the SQL probe implements, written here as a pure
-// function so the rule is testable without a database and so the two can be
-// checked against each other. Getting it wrong in one direction is the
-// difference between a refused write and a silent overwrite.
-//
-// The two directions are the probe's two clauses: a stored path in [Closure]
-// is one that COVERS something the query is about, and a stored path under a
-// [Roots] entry is one the query COVERS. Neither finds the other's case.
+// It is the predicate the SQL probe implements, kept pure so the rule is
+// testable without a database and the two can be checked against each other:
+// wrong in one direction is a refused write, in the other a silent overwrite.
+// The directions are the probe's two clauses: a stored path in [Closure]
+// COVERS something the query is about, and one under a [Roots] entry is
+// COVERED by it. Neither finds the other's case.
 func (s ScopeSet) Intersects(other ScopeSet) bool {
 	for _, p := range s.Normalised().Paths {
 		for _, q := range other.Normalised().Paths {

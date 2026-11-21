@@ -90,7 +90,7 @@ func (b *building) revertChange(ctx context.Context) (string, gitlet.EngineWrite
 	} else if !strings.HasSuffix(message, "\n") {
 		message += "\n"
 	}
-	wr.opens = revertOption(named, c.Title, c.MergeOID, c.TargetRef)
+	wr.opens = revertOption(named, w.Change, c.Title, c.MergeOID, c.TargetRef)
 	commit, err := b.commit(ctx, m.tree, tip, head.committed, message)
 	return commit, gitlet.EngineWriteResult{}, false, err
 }
@@ -144,8 +144,8 @@ func revertChangeMessage(named, title, mergeOID, before, how string) string {
 
 // revertOption is the change a revert_change's push opens: "Revert
 // <repo>!<n>" into the target the reverted change merged into, its
-// description naming what it reverts.
-func revertOption(named, title, mergeOID, target string) *gitlet.ChangeOption {
+// description naming what it reverts and its record the change's number.
+func revertOption(named string, number int64, title, mergeOID, target string) *gitlet.ChangeOption {
 	return &gitlet.ChangeOption{Target: target, Title: gitlet.AsTitle("Revert " + named),
-		Body: fmt.Sprintf("Reverts %s (%s), merged as %s.", named, title, mergeOID)}
+		Body: fmt.Sprintf("Reverts %s (%s), merged as %s.", named, title, mergeOID), Reverts: number}
 }

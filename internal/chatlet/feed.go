@@ -20,19 +20,14 @@ var log = logging.Get("chatlet")
 // Source is the notification source name Chatlet registers under.
 //
 // BARE, for the reason [github.com/crewlet/crewlet/internal/worklet.Source]
-// is: it appears in every log line, every event's source column and every
-// dashboard filter, and a first-party source has nothing to disambiguate
-// itself from.
+// is: it appears in every log line, source column and dashboard filter.
 //
-// IT IS ALSO THE DELIVERY SURFACE. The reply obligation is source-scoped —
-// the turn's delivery gate compares the surface a posting tool declares with
-// `tools.DeliversTo` against the notification source the inbound wake
-// carried — so the three chat posting tools declare THIS constant and the
-// parser publishes wakes under it. A second spelling on either side does not
-// fail: the gate finds no delivery for the source, falls back to "any
-// delivery counts", and every addressed chat turn is then allowed to end in
-// silence. That failure has shipped once already, which is why both sides
-// name one constant rather than one string twice.
+// IT IS ALSO THE DELIVERY SURFACE. The reply obligation is source-scoped: the
+// turn's delivery gate compares what a posting tool declares with
+// `tools.DeliversTo` against the wake's source, so the three chat posting tools
+// and the parser both use THIS constant. A second spelling does not fail: the
+// gate finds no delivery for the source, falls back to "any delivery counts",
+// and every addressed chat turn may end in silence.
 const Source = "chat"
 
 // FeedGroup is the durable consumer's name, and it is STABLE for the
@@ -47,36 +42,13 @@ const Source = "chat"
 const FeedGroup = "crewlet-chat-feed"
 
 // Translator turns one committed chat record into the delivery the parser
-// reads.
+// reads. It alone decides whether a change can wake anybody AT ALL; WHO is the
+// parser's, and whether they were woken already is the inbox's.
 //
-// # What it contributes, and what it deliberately does not
-//
-// The feed knows how to run a durable consumer exactly once. This is the only
-// place that decides whether a change can wake anybody AT ALL; WHO it wakes is
-// the parser's, and whether they have been woken already is the inbox's.
-//
-// # Why the whole record travels in the body
-//
-// The node that WINS a feed message is rarely the node running the seat that
-// gets woken, and is usually behind on the row: a message is committed on the
-// publishing node's own apply and this consumer is a second, independent
-// position over the same log. Routing from a local read would either route
-// from rows that do not have the message in them yet, or block the feed until
-// they did. The record carries its own routing snapshot ([Notify]) precisely
-// so neither is necessary.
-//
-// # Why it holds no setting, and what it does hold
-//
-// Every decision below is a property of the RECORD. A translator with a
-// setting would be a wake filter a redelivery months later could not
-// reproduce — the knowledge base's
-// ([github.com/crewlet/crewlet/internal/doclet.Translator]) holds one, the
-// reserved skills container, and states the cost of reading it per change
-// rather than capturing it. Nothing here needs one.
-//
-// What it holds is this node's [Decisions]: the applier's verdict on a post or
-// an edit is the record's own decision, identical on every node, and a record
-// the applier refused wakes nobody ([Translator.Translate]).
+// The whole record travels in the body: the node that WINS a feed message is
+// usually behind on the row, so the record carries its routing snapshot
+// ([Notify]) instead of a local read. It holds no setting (a wake filter a
+// redelivery months later could not reproduce), only this node's [Decisions].
 type Translator struct {
 	decisions Decisions
 }
@@ -105,39 +77,18 @@ func (t *Translator) Source() changefeed.Source {
 	return changefeed.Source{Name: Source, Group: FeedGroup}
 }
 
-// Translate decides whether a committed record wakes anybody, and hands the
-// parser the whole thing.
+// Translate decides whether a committed record wakes anybody.
 //
-// # The four ways a record wakes nobody, why each is an ACK, and the one deferral
+// Four ways a record wakes nobody, each an ACK: a MACHINERY SUBJECT (barrier,
+// generation, eviction; a wake per barrier would page the company), an
+// OPERATION THAT WAKES NOBODY ([wakesAnybody]), a NIL ROUTING SNAPSHOT (the
+// record's own "wake nobody"), and a RECORD THE APPLIER REFUSED (in no room;
+// where undecided, see [Decisions] for why the feed never waits).
 //
-// A MACHINERY SUBJECT — a barrier, a generation, an eviction — is the fleet
-// talking to itself. A wake per barrier would page the company once per
-// linearizable read.
-//
-// AN OPERATION THAT WAKES NOBODY: see [wakesAnybody].
-//
-// A PAYLOAD FROM A NEWER BUILD. The envelope decoded, so this node knows what
-// the record is about and knows it cannot read the rules — and waking
-// somebody from a payload it cannot decode would be inventing a notification.
-// It is DEFERRED to a peer on that build ([changefeed.Defer]), never answered
-// "no wake": the feed's consumer is the fleet's, so a record this node acked
-// is one no peer would ever see (#838).
-//
-// A NIL ROUTING SNAPSHOT is how a record says "wake nobody" — the engine
-// narrating its own room, a reaction and a prune are the records it exists
-// for: each is a line to render or a row to remove, not a question to answer.
-//
-// A RECORD THE APPLIER REFUSED — a post into a room a record ahead of it
-// archived, or by an author taken out of it; an edit of a message taken back
-// — is in no room, and a seat woken for it would open a room to answer words
-// nobody can read. Where this node has not decided the record, the wake is
-// derived from the record as it always was: see [Decisions] for why the feed
-// never waits on an applier that cannot answer.
-//
-// The other four are DECISIONS, and a decision is handling: acked rather than
-// naked, because a record naked for having nothing to say comes back for
-// ever. The newer build's payload is the one that is not: this node has
-// decided nothing about it, and a peer can.
+// A PAYLOAD FROM A NEWER BUILD is DEFERRED to a peer on that build
+// ([changefeed.Defer]), never "no wake": waking from an undecodable payload
+// would invent a notification, and an ack is the fleet's, so no peer would see
+// the record (#838). The four acks are decisions; a nak comes back for ever.
 func (t *Translator) Translate(ctx context.Context, rec changefeed.Record) (
 	changefeed.Delivery, bool, error) {
 
@@ -228,35 +179,16 @@ func (t *Translator) landed(ctx context.Context, rec changefeed.Record,
 
 // wakesAnybody reports an op whose records can carry a notification.
 //
-// TWO, AND IT IS A CLOSED SET: somebody saying something, and the edit of
-// something somebody said — an edit because a colleague the new text NOW
-// NAMES has been addressed by it and has heard nothing about it at all.
+// A CLOSED SET of two: a post, and an edit (the colleague the new text NOW
+// NAMES has heard nothing). The other ten are quiet:
 //
-// THE OTHER TEN ARE QUIET, and each is quiet for its own reason rather than
-// by omission:
+//   - PRUNE and ERASE remove what was said: a wake sends a seat to an absence.
+//   - A REACTION toggle would make an emoji cost a model call.
+//   - A MEMBERSHIP REPLACEMENT and a PATCH, even a topic move, are room state.
+//   - DELETE, CREATE, EVICTION, GENERATION and BARRIER are bookkeeping.
 //
-//   - A PRUNE and an ERASE remove what was said. A wake would send a seat to
-//     open an absence.
-//   - A REACTION is a toggle on somebody else's message — and the same op
-//     carries the un-reaction, since a set-valued record would let the later
-//     of two simultaneous reactors erase the earlier. Waking a room for one
-//     would make an emoji cost a model call.
-//   - A MEMBERSHIP REPLACEMENT and a PATCH are a room's own state. Not even a
-//     patch that moves the topic, which is the one somebody expects to be
-//     announced: the room's own screen shows it, and a company where every
-//     topic edit woke every member would have agents triaging furniture.
-//   - A DELETE tombstones a message, a CREATE makes an empty room, and an
-//     EVICTION, a GENERATION and a BARRIER are the fleet's own bookkeeping.
-//
-// A CLOSED SET RATHER THAN A NEGATIVE ONE, on [ObjectKind.Routable]'s
-// reasoning: an op added later is silently quiet rather than silently loud,
-// and the failure of a missing wake is one person not hearing something while
-// the failure of an unintended one is every seat in the company woken by a
-// bookkeeping append.
-//
-// The record's own [MutationRecord.Notify] remains the authority — this is
-// the half that can be answered without the second decode, on the ops that
-// are the overwhelming majority of a busy company's traffic.
+// CLOSED, on [ObjectKind.Routable]'s reasoning: a later op is silently quiet,
+// not silently loud. [MutationRecord.Notify] remains the authority.
 func wakesAnybody(op OpKind) bool {
 	switch op {
 	case OpPost, OpEdit:

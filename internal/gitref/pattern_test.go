@@ -340,13 +340,12 @@ func TestPatternMatchAgreesWithItsRule(t *testing.T) {
 // A PATTERN REACHES A SEAT'S NAMESPACE EXACTLY WHERE IT MATCHES A REF THERE:
 // PatternReachesSeats is held to MatchPattern itself over every pattern of up
 // to four components below refs/heads/ drawn from seats, a, *, s* (a glob
-// admitting seats) and ** — and the tags namespace, which reaches none —
-// against every ref a seat's namespace can hold of up to four components below
-// refs/heads/seats/, each a or seats: a pattern reaches it iff one of those
-// refs matches. Four components suffice for every pattern here, since a
-// pattern's non-** parts take one component each and ** may take none. So
-// refs/heads/** and refs/heads/*/*/* reach it, refs/heads/* and
-// refs/heads/seats/* — which match only reserved names no ref holds — do not.
+// admitting seats) and ** (and the tags namespace, which reaches none),
+// against every seat-namespace ref of up to four components below
+// refs/heads/seats/, each a or seats: a pattern reaches iff one matches. Four
+// suffice, since non-** parts take one component each and ** may take none.
+// refs/heads/** and refs/heads/*/*/* reach it; refs/heads/* and
+// refs/heads/seats/*, matching only reserved names no ref holds, do not.
 //
 // Mutation: answer true for any pattern whose part after refs/heads/ admits
 // seats, whatever follows — refs/heads/* reaches, red.

@@ -200,32 +200,15 @@ func dataMemberBootstrap(t *testing.T, port int, ring keyring) *config.Bootstrap
 // bootDataMember boots the pair's data member on a leaf port nothing held a
 // moment ago, and on ANOTHER one when that port was taken in between.
 //
-// THE PORT IS RELEASED BEFORE THE MEMBER BINDS IT ([leafPort]) — nothing can
-// hand a listener's port to a broker the engine builds — and with the cases
-// here running in parallel, another case's listener can take it in that gap.
-// The member's own pre-bind probe refuses a taken port by name
-// ([jetstream.ErrLeafPortTaken], which
-// [TestADataMemberRefusesATakenLeafPortByName] holds), so that one failure is
-// worth another set of numbers, for the reason
-// [jetstreamtest.ClusterStartAttempts] gives and on its count: the collision
-// is with work this case does not coordinate with, so a wider window does not
-// help and a different number does. Any other failure ends the case — the
-// route listener's [jetstream.ErrRoutePortTaken] among them, since this member
-// is no cluster's and opens no route listener to lose.
-//
-// THE API IS SERVED ON ln, and the member's api.port names it: the member is
-// the pair's one node with the ingress role, so it is the address the seats
-// node's executor box dials where the pair hands it the fleet's address, and
-// an ingress node whose api.port is 0 serves nothing and joins no relay
-// (internal/engine's joinBridgeFleet) — the box's every call would reach a
-// node that cannot hand it to the seat's holder.
-//
-// amend, when set, changes the member's bootstrap after the harness's own
-// settings and before the member is seeded or opened from it. The listener's
-// address is one of those settings, and a sign-in's api.external_url
-// ([withSignIn]) replaces it as the address the member serves people at:
-// nothing a box dials is read from it — the box is handed the listener, and
-// the relay is joined on api.port.
+// THE PORT IS RELEASED BEFORE THE MEMBER BINDS IT ([leafPort]), so a parallel
+// case can take it. The probe refuses a taken port by name
+// ([jetstream.ErrLeafPortTaken], held by
+// [TestADataMemberRefusesATakenLeafPortByName]); only that failure gets another
+// set of numbers ([jetstreamtest.ClusterStartAttempts]). THE API IS SERVED ON
+// ln, and api.port names it: this is the pair's one ingress node, which the
+// executor box dials, and ingress with api.port 0 serves nothing and joins no
+// relay (internal/engine's joinBridgeFleet). amend changes the bootstrap
+// before seeding; no box reads api.external_url.
 func bootDataMember(t *testing.T, cfg *config.Company, model *scriptedModel,
 	env map[string]string, ln net.Listener, ring keyring, amend func(*config.Bootstrap)) (
 	*node, *config.Bootstrap) {
@@ -404,24 +387,14 @@ func TestASeatOnAStatelessNodeWritesThroughADataNode(t *testing.T) {
 // A SEAT ON A NODE THAT HOLDS NOTHING ANSWERS IN A ROOM THE FLEET HOLDS, AND
 // THE ROOM SHOWS IT AT WORK WHILE IT DOES.
 //
-// The chat half of [TestASeatOnAStatelessNodeWritesThroughADataNode], and not
-// the same claim twice: a chat turn is WOKEN by the room as well as writing to
-// it. A person says something on the data member, from her own tab; the wake
-// is derived from that committed record by the change feed and reaches the
-// seat's mailbox on the stateless member, whose turn reads the trigger with
-// the chat parser a node without data still registers; and its answer goes
-// back through a data node's router into the room it was asked in — which is
-// where the assertion reads it, on the node that holds the room.
-//
-// AND THE INDICATOR IS THE TURN'S OWN. The node running a seat's turn is rarely
-// the node a browser is attached to, and here it is a node with no API: what
-// raises the indicator is that node's engine, from the turn
-// ([notify.StatusDriver] over its own chat hub, as the seat's member of the
-// room's presence), and what shows it is the presence hub of the data member
-// Alice's tab is attached to, told it over the broker in a sealed frame. So
-// the seat is HELD on the round that answers until her socket has shown it
-// working — [TestAnIndicatorRaisedOnANodeWithNoAPIShowsInARoomOnAnother]
-// raises one by hand and certifies the presence hubs alone.
+// The chat half of [TestASeatOnAStatelessNodeWritesThroughADataNode]: a chat
+// turn is WOKEN by the room as well as writing to it, via the chat parser a
+// node without data still registers. AND THE INDICATOR IS THE TURN'S OWN: the
+// turn's node has no API, its engine raises it ([notify.StatusDriver]), and the
+// data member Alice's tab shows it, told over the broker in a sealed frame. So
+// the seat is HELD on the answering round until her socket has shown it working;
+// [TestAnIndicatorRaisedOnANodeWithNoAPIShowsInARoomOnAnother] certifies the
+// presence hubs alone.
 func TestASeatOnAStatelessNodeAnswersInARoomTheFleetHolds(t *testing.T) {
 	t.Parallel()
 	p := startStatelessPairSpec(t, pairSpec{company: peopleDoc, dataBoot: withSignIn})
@@ -487,18 +460,12 @@ func TestASeatOnAStatelessNodeAnswersInARoomTheFleetHolds(t *testing.T) {
 // A SEAT WOKEN BY A REPLY IN A THREAD IS HANDED THE THREAD, ON A NODE THAT
 // HOLDS NONE OF IT, AND ANSWERS IN IT.
 //
-// A thread reply is usually thin — "can you take this one?" — and the thread
-// is the context, so the turn-start prefetch hands the thread over rather than
-// leaving the seat to go and read it ([notify.ThreadReader]). For the engine's
-// own chat that read is [chatlet.ThreadReader] over the estate router, as the
-// woken seat: on a node that holds no data it is a data node's copy that
-// answers, and a router that could not reach one renders the unreadable hint
-// instead — which tells the seat it has only the triggering message. So the
-// prompt is the assertion: the thread block, with the message that opened the
-// thread in it, and not the hint.
-//
-// The reply goes where a thread reply belongs: in the thread, through
-// [chatlet.ReplyInThreadTool], read back on the node that holds the room.
+// A thread reply is usually thin, so the turn-start prefetch hands the thread
+// over ([notify.ThreadReader]): [chatlet.ThreadReader] over the estate router,
+// as the woken seat. Without data a data node's copy answers, and a router
+// reaching none renders the unreadable hint. So the prompt is the assertion:
+// the thread block with the opening message, not the hint. The reply goes
+// through [chatlet.ReplyInThreadTool], read back on the node holding the room.
 func TestASeatWokenInAThreadOnAStatelessNodeIsHandedTheThread(t *testing.T) {
 	t.Parallel()
 	p := startStatelessPairSpec(t, pairSpec{company: peopleDoc, dataBoot: withSignIn})
@@ -660,26 +627,16 @@ func TestAStatelessNodesAuditTrailLandsOnADataNode(t *testing.T) {
 }
 
 // A STATELESS NODE ROUTES BY THE DIRECTORY A DATA NODE HOLDS, so a suspended
-// person's word is never attributed to their seat on a node that wins
-// deliveries and holds no rows of its own.
+// person's word is never attributed to their seat on a node holding no rows.
 //
-// Decided by the wiring [engine.New] gives a node without `data`, on the real
-// engine at both ends of a real leaf link, because that wiring is the whole of
-// the guarantee: such a node runs no applier, so nothing would ever signal its
-// party registry that a seat's standing moved, and the one way it learns is
-// the directory [engine.New] hands it — a data node's, read through the
-// estate's router on the registry's own timer ([engine.DirectoryRefresh],
-// shortened here to directoryRefresh, so the case reads its change rather than
-// waiting out a production tick).
-// Handed none, it builds the chart-only registry, which routes every suspended,
-// retired and removed holder's accounts for as long as the node runs.
-//
-// The suspension is written on the DATA node and observed on the stateless
-// one, so the reading below can only have crossed the leaf.
-//
-// Mutation: drop New's hand-over of the routed directory to a node without
-// `data` and the first assertion fails at once — the registry consulted no
-// directory — and the suspension never reaches it.
+// Decided by [engine.New]'s wiring for a node without `data`, on real engines
+// over a real leaf link: with no applier nothing signals its party registry that
+// a standing moved, so it learns only from the directory [engine.New] hands it,
+// read through the estate router on the registry's timer
+// ([engine.DirectoryRefresh], shortened to directoryRefresh). Handed none, it
+// builds the chart-only registry, which routes every suspended, retired and
+// removed holder's accounts. The suspension is written on the DATA node.
+// Mutation: drop New's hand-over of the directory and the first assertion fails.
 func TestAStatelessNodesPartyRegistryReadsTheDirectory(t *testing.T) {
 	t.Parallel()
 	p := startStatelessPair(t)

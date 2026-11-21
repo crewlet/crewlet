@@ -56,24 +56,16 @@ func TestTheObjectsBlockIsValidated(t *testing.T) {
 }
 
 // AN S3 ENDPOINT NO REQUEST CAN REACH IS REFUSED, naming the field, and every
-// form the S3 client reaches is accepted. Refused: a port outside 1 to 65535,
-// which the URL parser lets through and no dial completes; an IPv6 zone
-// holding a `]`, a `%` or a space, which splits the address where the dialer
-// looks for its port or which the client cannot write back into a URL; and an
-// endpoint the client refuses at start — one it cannot parse, with no scheme
-// or another, no host, or a query. Each of the first two the node used to find
-// only 77 to 86 s into its boot.
-//
-// Accepted, each a form the client sends its request for: a host with its
+// form the client reaches is accepted. Refused: a port outside 1 to 65535, an
+// IPv6 zone holding `]`, `%` or a space, and an endpoint the client refuses at
+// start (unparsable, no scheme or another, no host, a query). Accepted: a
 // scheme's own port, a port with leading zeros or none after its colon, an
-// upper-case scheme, a base path, an empty query, a host outside ASCII, an
-// IPv6 address in brackets with an interface's name or number as its zone,
-// and an empty host beside a port (`http://:9000`, this host, path-style).
+// upper-case scheme, a base path, an empty query, a non-ASCII host, a bracketed
+// IPv6 with an interface's name or number as zone, an empty host beside a port.
 //
-// Mutation: drop the port's range, the zone's characters, the scheme or the
-// query, and a refused case is accepted; refuse a port of none or with leading
-// zeros, an empty query, or a zone of an interface's number, and an accepted
-// case is refused.
+// Mutation: drop the port range, zone characters, scheme or query and a refused
+// case is accepted; refuse a port of none or leading zeros, an empty query or a
+// numeric zone and an accepted case is refused.
 func TestAnS3EndpointNoRequestCanReachIsRefused(t *testing.T) {
 	t.Parallel()
 	for endpoint, refused := range map[string]bool{

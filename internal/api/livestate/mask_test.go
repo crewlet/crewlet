@@ -218,16 +218,12 @@ func structOf(t reflect.Type) reflect.Type {
 // EVERY FIELD A SEAT'S LIVE STATE PUTS ON THE WIRE IS CLASSIFIED — status,
 // body, tracker or delegated — in both directions, all the way down.
 //
-// The split between what a seat is DOING (everybody's) and what it is SAYING
-// (its trail's readers') is declared once, here and in [MaskCall], over the
-// seven shapes the live state reaches a reader in. A field somebody adds to any
-// of them — or to a struct a status field carries — is a field this walk has
-// no answer for, and it fails until somebody decides: left unclassified, a new
-// transcript field would ride the overview to every reader. And a table entry
-// naming no field is a field that was renamed out from under its rule.
-//
-// A WORK ITEM IS THE TRACKER'S WHEREVER IT APPEARS, as a rule rather than an
-// entry: a seat's current task reaches only a reader who uses Worklet.
+// What a seat is DOING (everybody's) and what it is SAYING (its trail's
+// readers') is declared here and in [MaskCall], over the seven shapes the live
+// state reaches a reader in. A field added to any of them fails this walk until
+// classified, or a new transcript field would ride the overview to every
+// reader. A table entry naming no field was renamed out from under its rule.
+// A WORK ITEM IS THE TRACKER'S WHEREVER IT APPEARS, as a rule, not an entry.
 //
 // Mutation: add an unclassified field to [LiveCall], or to [Paused], and this
 // fails; classify `work_item` as status and the rule fails.
@@ -404,14 +400,12 @@ func noBody(t *testing.T, who string, got map[string]any) {
 
 // A MASKED CALL CARRIES NO BODY AND NO BODY VERSION, and keeps its status.
 //
-// What a seat is doing reaches a reader the seat's trail is not open to: its
-// phase, its round, which tool is running. What it is saying — prompt, answer,
-// narration, the tool calls and the running one's arguments, what woke it —
-// does not, and neither does any version of it: the dashboard asks for a call
-// whole when a push names a newer version than it holds, so a version that
-// moved would send the reader round for a body it will never be sent. The
-// rounds' and the runs' versions stay: both are status. And the work item goes
-// with the tracker.
+// What a seat is doing (phase, round, which tool runs) reaches a reader the
+// trail is closed to; what it is saying (prompt, answer, narration, tool calls
+// and arguments, what woke it) does not, nor does any version of it: a moved
+// version would send the dashboard asking for a body it will never get. The
+// rounds' and runs' versions stay: both are status. The work item goes with
+// the tracker.
 //
 // Mutation: keep a body field, a running call's arguments or a body version,
 // or drop the runs, and this fails.

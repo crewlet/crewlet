@@ -16,30 +16,15 @@ import (
 
 // A MIGRATED ESTATE, BUILT ONCE PER TEST BINARY.
 //
-// Opening a store on a fresh file runs both estates' whole migration sequence —
-// eighty-odd files of DDL, each its own fsync'd transaction — and a test
-// package that opens a store per case ran that sequence hundreds of times: the
-// audit that found it counted 1,210 runs in tracker's suite alone, 307 s of its
-// 354 s wall clock inside them. None of those runs was the subject of the test
-// that paid for it. A migration is deterministic and inserts nothing that
-// identifies the file it ran in, so the second run on a fresh file produces
-// exactly what the first did.
-//
-// So the first fixture in a binary that asks builds the pair once — through
-// [store.OpenNode] and [store.DB.OpenReplicated], the production sequence, so
-// the image is precisely what THIS binary's migrations produce and a broken
-// migration still fails every package at its first fixture — folds each
-// file's write-ahead log back into it with [store.QuiesceCopy], and keeps the
-// two files' bytes. Every fixture after that writes them where a fresh file
-// would have been created, and opens the copy through the same production
-// path, which finds every version applied and applies nothing.
-//
-// NO FILE IS EVER COMMITTED for it: an image checked into the tree would be a
-// second copy of the schema that a new migration could disagree with.
-//
-// WHAT STAYS FRESH is whatever has migrating as its subject: internal/store's
-// own suites — the contract's schema cases, Pending, adoption, the ledger — and
-// every test that calls [store.OpenNode] directly.
+// A fresh file runs both estates' whole migration sequence (eighty-odd fsync'd
+// DDL transactions), hundreds of times in a package opening a store per case.
+// Migration is deterministic and inserts nothing identifying its file, so the
+// first fixture builds the pair once through [store.OpenNode] and
+// [store.DB.OpenReplicated] (the production sequence, so a broken migration
+// still fails every package), folds each WAL back with [store.QuiesceCopy] and
+// keeps the bytes; later fixtures write them where a fresh file would be.
+// NO FILE IS COMMITTED: it would be a second copy of the schema. Whatever has
+// migrating as its subject stays fresh ([store.OpenNode] direct, store's suites).
 var image = sync.OnceValues(buildImage)
 
 // estateImage is the two estates' files as a fresh pair is left by this
@@ -100,14 +85,11 @@ func buildImage() (estateImage, error) {
 // there is left exactly as it is: a test reopening its own file, or handing in
 // a copy it prepared, gets that file and nothing else.
 //
-// For a test that opens a store or boots an engine on a path of its own —
-// [OpenEstate] and [OpenNode] seed for themselves. Seed only the estates the
-// caller will open: a replicated file beside a node opened alone is a file a
-// fresh node would not have, and Pending, a backup or an estate-presence check
-// would see it.
-//
-// An in-memory path is not seeded, since there is no file to write; it
-// migrates on open as it always has.
+// For a test that opens a store or boots an engine on a path of its own
+// ([OpenEstate] and [OpenNode] seed for themselves). Seed only the estates the
+// caller will open: a replicated file beside a node opened alone is one a fresh
+// node would not have, and Pending, a backup or an estate-presence check would
+// see it. An in-memory path is not seeded; it migrates on open.
 func Seed(t testing.TB, estate store.Estate, path string) {
 	t.Helper()
 	if path == "" || strings.HasPrefix(path, ":memory:") {

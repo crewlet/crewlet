@@ -239,14 +239,14 @@ func TestAPartBesideTheTallyOfItsCallsIsNeverSaidToBeNamedByNoList(t *testing.T)
 	}
 }
 
-// A SESSION THAT MAY HOLD ITS EARLIER ROUNDS AS A SUMMARY IS TOLD SO. A Claude
-// Code thread that restarted before its job (or where the count cannot rule
-// it out) holds the turn's closed rounds only in a summary. A closed call
-// alike a told one is still listed again, and named by nothing else; of the
-// rest the brief names the told tools, since no line's value compares with a
-// summary's words. Told nothing: a thread that restarted nowhere, and an
-// OpenCode capture, whose restarts no count reads; a session that may be a
-// summary now is told.
+// A SESSION THAT MAY HOLD ITS EARLIER ROUNDS AS A SUMMARY IS TOLD SO. A thread
+// that restarted before its job (or where the count cannot rule it out) holds
+// the turn's closed rounds only in a summary. A closed call alike a told one is
+// still listed again, and named by nothing else; of the rest the brief names
+// the told tools, since no line's value compares with a summary's words. Told
+// nothing: a thread that restarted nowhere. Told: a session that may be a
+// summary now, and an OpenCode capture, whose count names its restarts as
+// Claude Code's does.
 //
 // Mutation: ignore a restart before the job, or name a closed call that is
 // listed again, and a case goes red.
@@ -279,9 +279,10 @@ func TestASessionThatMayHoldItsEarlierRoundsAsASummaryIsToldSo(t *testing.T) {
 			history: closed("hi", "bye"), want: otherCallsOf(earlierRoundsPart), listedTo: 1},
 		"restarted before its job, every closed call listed again": {restart: "r-1", tokens: 10_000,
 			history: closed("bye"), listedTo: 1},
-		"restarted nowhere":                  {tokens: 10_000, history: closed("hi")},
-		"a summary now":                      {tokens: 160_000, history: closed("hi"), summary: true, want: otherCallsOf(earlierRoundsPart)},
-		"an OpenCode capture that restarted": {restart: "r-1", tokens: 10_000, harness: "opencode", history: closed("hi")},
+		"restarted nowhere": {tokens: 10_000, history: closed("hi")},
+		"a summary now":     {tokens: 160_000, history: closed("hi"), summary: true, want: otherCallsOf(earlierRoundsPart)},
+		"an OpenCode capture that restarted": {restart: "r-1", tokens: 10_000, harness: "opencode", history: closed("hi"),
+			want: otherCallsOf(earlierRoundsPart)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

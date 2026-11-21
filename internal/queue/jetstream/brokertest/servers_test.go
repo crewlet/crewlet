@@ -25,55 +25,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree/decltype"
 )
 
-// EVERY NATS-SERVER A CASE BUILDS ITSELF DECLARES ITS SIZE. Every broker this
-// module starts through internal/queue/jetstream reaches startEmbedded, where
-// a test binary refuses one whose store the runner's disk would size
-// (jetstream.ErrUndeclaredSize). A case that builds a server itself — from
-// nats-server's own Options, or from a configuration it writes for
-// nats-server to read — never gets there, and with JetStream on and no limit
-// stated, nats-server takes three quarters of the free space on its store's
-// volume as the limit just the same: on the store directory's volume, or,
-// with none, on that of the fixed default directory every server on the
-// machine shares. So this gate reads every Go file of the module, test files
-// included, and fails:
-//
-//   - a composite literal of nats-server's Options that sets StoreDir, or
-//     JetStream to anything but false, and no JetStreamMaxStore;
-//   - a function that assigns an Options value's StoreDir, or its JetStream
-//     anything but false, and sets that limit nowhere in it — by assignment,
-//     or in an Options literal of its own;
-//   - a nats-server configuration — a string literal, or a constant
-//     concatenation of them, that nats-server's own parser reads — that
-//     enables JetStream and states no max_file_store in its jetstream block.
-//
-// A value's type is decltype's reading of the declarations, in a world that
-// reads each package as its tests compile it, never a name list: an Options
-// is whatever resolves to nats-server's type, under any import name, an
-// element literal whose type its collection elides included, so a store set
-// on a value of any other type — Tier A's config.Stream, the broker's
-// jetstream.Config — is not this gate's. A literal spelling one of those
-// fields, or an assignment to one, whose type the walk cannot establish
-// FAILS rather than passing, since a gate asserting an absence that skipped
-// what it could not read would certify nothing about it.
-//
-// The declaration is brokertest.StoreMaxBytes, as for every other test broker
-// (the package doc); the engine's own options state the figure Tier A gives
-// them, and pass for that.
-//
-// # Coverage boundary
-//
-// Not seen: a configuration no literal of the module spells whole — one read
-// from a file on disk, or assembled at run time from parts no one literal
-// holds — and an Options nats-server's own functions fill from one
-// (ConfigureOptions' flags among them); a configuration its parser cannot read
-// as written, a template whose verbs sit where the grammar admits none; a
-// function that sizes one Options and gives another its store by assignment,
-// since that rule holds a function rather than a value; and what decltype
-// does not see (its package doc).
-//
-// Mutation: drop JetStreamMaxStore from externaltest's server, or
-// max_file_store from the max_payload case's configuration, and this fails
-// naming it.
+// EVERY NATS-SERVER A CASE BUILDS ITSELF DECLARES ITS SIZE: one built from
+// nats-server's Options or a configuration skips startEmbedded's refusal
+// (jetstream.ErrUndeclaredSize), and with JetStream on and no limit nats-server
+// takes three quarters of its store volume's free space. So this gate reads
+// every Go file, tests included, and fails an Options literal setting StoreDir
+// or JetStream without JetStreamMaxStore, a function assigning such a field
+// and setting the limit nowhere, and a configuration literal enabling
+// JetStream with no max_file_store. Types are decltype's reading; a field on a
+// value it cannot type FAILS, since an absence gate that skipped what it could
+// not read certifies nothing. Not seen: a configuration read from disk or built
+// at run time. Declare brokertest.StoreMaxBytes. Mutation: drop it from
+// externaltest's server, or max_file_store from the max_payload configuration.
 func TestEveryNATSServerATestBuildsDeclaresItsSize(t *testing.T) {
 	t.Parallel()
 	found, err := moduleServers()
@@ -109,38 +72,17 @@ func TestEveryNATSServerATestBuildsDeclaresItsSize(t *testing.T) {
 }
 
 // EVERY NATS-SERVER A CASE BUILDS ITSELF KEEPS ITS STORE IN A
-// brokertest.TempDir. Every broker this module starts through
-// internal/queue/jetstream reaches startEmbedded, where a test binary refuses
-// one whose store directory no brokertest.TempDir holds
-// (jetstream.ErrStoreOutsideTempDir); a server a case builds from
-// nats-server's own Options never gets there. A stopped nats-server can still
-// land a consumer's last state flush in its store after Shutdown and
-// WaitForShutdown have returned, and a store in a t.TempDir is removed once at
-// the end of the test, which that write then fails with "directory not empty"
-// on a file the case never wrote (crewlet/crewlet#1079). So this gate judges
-// the same walk as the size gate above, and fails an Options StoreDir — in a
-// literal, or by assignment — whose value is made by a testing.TB's TempDir
-// (or, in a test file, by os.MkdirTemp or os.TempDir, whose removal is the
-// case's own and tries once too). What the value is made from is followed
-// within its file: through every local it reads to each value that local is
-// given, through a parameter to what each of the file's calls of its function
-// passes there, and through a field of a type this module declares to each
-// value the file gives that field — the shapes the tree's servers take
-// (backuptest's restart takes its store as a parameter, externaltest's server
-// keeps it in a field). A TempDir call there on a value the walk cannot type
-// FAILS rather than passing, for the size gate's reason.
-//
-// # Coverage boundary
-//
-// Not seen: a store made in another file than the one that sets it, or
-// returned by a function, or copied from another Options; a store
-// directory a configuration names, which a verb fills at run time; a store a
-// non-test file makes with os.MkdirTemp, which is how the embedded broker
-// makes a scratch member's store, removed by its own stop; and what decltype
-// does not see (its package doc).
-//
-// Mutation: give externaltest's server, or backuptest's restored broker, a
-// t.TempDir store, and this fails naming the Options it reaches.
+// brokertest.TempDir: one built from Options skips startEmbedded's refusal
+// (jetstream.ErrStoreOutsideTempDir), and a stopped nats-server can still land
+// a consumer's flush, failing t.TempDir's single removal (crewlet/crewlet#1079).
+// On the size gate's walk, this fails an Options StoreDir (literal or
+// assignment) made by a testing.TB's TempDir (in tests also os.MkdirTemp or
+// os.TempDir), followed within its file through locals, parameters (to the
+// file's calls) and fields of module types; one it cannot type FAILS. Not
+// seen: a store made in another file, returned by a function or copied from
+// another Options; a configuration's directory; a non-test os.MkdirTemp (the
+// embedded scratch member). Mutation: give externaltest's server or
+// backuptest's restored broker a t.TempDir store.
 func TestEveryNATSServerATestBuildsKeepsItsStoreInATempDir(t *testing.T) {
 	t.Parallel()
 	found, err := moduleServers()

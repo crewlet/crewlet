@@ -19,46 +19,25 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// `crewlet chatlet` — the company's own chat, from a shell.
+// `crewlet chatlet`: the company's own chat, from a shell.
 //
-// # Why every verb here talks to a running node
+// Every verb talks to a running node: the rooms and messages are the state
+// log's, whose broker is inside the engine's process with no listener on the
+// default topology, so a command opening the store would find it locked or
+// write rows the log never carried, the direction estates may not flow in.
 //
-// For the reason `crewlet budgets` and `crewlet worklet purge` do, and one more of
-// chat's own. The rooms and the messages are the state log's: a write is a
-// record the broker arbitrates and every data node applies, and on the default
-// topology that broker is inside the engine's own process with no listener at
-// all. A command that opened the store instead would either find a database
-// locked to a live engine or — worse — write rows the log never carried, which
-// is the one direction this engine's estates may not flow in.
-//
-// # Why no verb here names an author
-//
-// WHO SPEAKS IS THE CREDENTIAL'S, and there is nowhere in this CLI to write a
-// handle. A chatlet verb is made AS A SEAT: the node resolves the credential in
-// CREWLET_API_TOKEN to the principal it acts as, and a person — or a
-// credential the identity directory binds to a human seat — reads and speaks
-// as that seat. A person's own token is `crewlet iam token -login <login>`; a
-// pipeline that has to post is a service account bound to a human seat with
-// `crewlet iam bind`. A credential acting as itself — a Tier A token, a
-// service account bound to no seat — is refused every room, reads included, by
-// the authority table's own row: a message's author, a room's membership and
-// every recipient rule key on a seat, and a `-as` flag here would be a second
-// answer to the only question that decides what a transcript may show.
-//
-// So `crewlet chatlet post` says something as that seat over the act transport
-// the dashboard's composer uses (`post_message`), one gesture with one record
-// and one `operator_acted` row, and `channels`, `read` and `search` are the
-// chat questions the dashboard asks.
-//
-// # Except the three said in nobody's voice
-//
-// `erase`, `prune` and `retention` destroy what people said, now or on a delay,
-// and no seat is given them: they are an administrator's, made under the
-// administrator's own name — a Tier A token holding admin included — on the
-// human write surface's routes beside the tracker's purge. None of them reads
-// the room it destroys from, because an administrator is in no private room
-// they were not invited to, and what they confirm is what the request itself
-// destroys: an erase's count of messages, a prune's cutoff, a horizon's days.
+// No verb names an author: WHO SPEAKS IS THE CREDENTIAL'S. The node resolves
+// CREWLET_API_TOKEN to the seat it acts as (`crewlet iam token -login`, or a
+// service account bound with `crewlet iam bind`). A credential acting as
+// itself (a Tier A token, an unbound service account) is refused every room,
+// reads included: authorship, membership and recipient rules key on a seat.
+
+// `erase`, `prune` and `retention` are said in nobody's voice: they destroy
+// what people said, now or later, so no seat is given them. They are an
+// administrator's, made under the administrator's own name (a Tier A admin
+// token included) on the human write surface's routes. None reads the room it
+// destroys, since an administrator is in no private room they were not invited
+// to; each confirms what the request destroys: a count, a cutoff, a horizon.
 
 const chatletUsage = `crewlet chatlet: read and post in the company's chat, as your seat
 
@@ -136,21 +115,18 @@ func runChatlet(environ config.Source, args []string, stdout, stderr io.Writer) 
 
 // ---- a node that serves no chat --------------------------------------- //
 
-// chatletUnserved names the axis when a node answers that it does not serve what a
-// chatlet verb asked for, and passes every other failure through unchanged.
+// chatletUnserved names the axis when a node answers that it does not serve
+// what a chatlet verb asked for, and passes every other failure through.
 //
-// THREE REFUSALS, ONE CAUSE. A chat question a node has no rooms for is
-// `unknown_query`, a chat tool its catalogue does not carry `unknown_tool`, and
-// a destruction whose half is not up `no_route`. Each is right in its own words
-// and none says why: the rooms, their questions and their tools exist only
-// where `chat.backend` is `chatlet`, the writes only on a node that may publish,
-// and every route only on a node with the ingress role. "the node answered
-// 404: unknown_tool" sends an operator looking for a typo.
+// THREE REFUSALS, ONE CAUSE: `unknown_query` (no rooms), `unknown_tool` (not
+// in the catalogue) and `no_route` (a destruction's half is not up). Each is
+// right and none says why: rooms, questions and tools exist only where
+// `chat.backend` is `chatlet`, writes only on a node that may publish, routes
+// only on a node with the ingress role. "404: unknown_tool" sends an operator
+// looking for a typo.
 //
-// NOT `no_active_revision`, which is a node that has not been handed a company
-// yet and says so in its own words: wrapped in this sentence it would send the
-// operator to the company's `chat.backend` for a node that has no company at
-// all.
+// NOT `no_active_revision`, a node not yet handed a company: this sentence
+// would send the operator to `chat.backend` for a node with no company at all.
 func chatletUnserved(err error, what string) error {
 	var refusal *nodeRefusal
 	if !errors.As(err, &refusal) {
@@ -650,19 +626,12 @@ func chatletSearch(environ config.Source, args []string, stdout, stderr io.Write
 
 // chatletPost says something in a room, as the seat the credential acts as.
 //
-// THROUGH THE ACT TRANSPORT, as `post_message` — the tool the dashboard's
-// composer calls and a seat's turn calls, over the route the dashboard writes
-// through (ADR-0024) — so a line said from a terminal is one gesture with one
-// record and one `operator_acted` row, attributed to that seat. There is no
-// second write path to drift from it.
-//
-// # A retry is the same message
-//
-// A post arbitrates nothing at the broker: two people talking in one room are
-// not racing for anything, so there is no expectation a resubmission could fail
-// against. What makes a retry one message is the OPERATION, which the transport
-// takes from the `Idempotency-Key` this command mints before it asks and prints
-// whenever the outcome is not known — and `-op-id` sends it again
+// THROUGH THE ACT TRANSPORT, as `post_message` (the tool the dashboard's
+// composer and a seat's turn call, ADR-0024), so a line said from a terminal is
+// one gesture with one record and one `operator_acted` row, with no second
+// write path to drift. A post arbitrates nothing at the broker, so a retry is
+// one message only by its OPERATION: the `Idempotency-Key` this command mints
+// and prints whenever the outcome is not known, which `-op-id` sends again
 // ([keyedWrite]).
 func chatletPost(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	channel, rest := splitSubject(args)
@@ -764,31 +733,16 @@ func (r *chatletRepeated) Set(value string) error {
 
 // chatletErase destroys the messages named in one room, now.
 //
-// # Why this exists beside the prune
-//
-// A credential pasted into ONE message is the case it is for. A prune destroys
-// everything a room said before an instant — the blunt tool, and every line of
-// conversation around the one that leaked goes with it, with no inverse. An
-// erase destroys exactly the rows named, on every data node, and leaves the
-// conversation around them standing — by the ids `chatlet read` and `chatlet search`
-// print beside each message, which is how the one that leaked is found.
-//
-// # Why the count is typed, and the reason is required
-//
-// The route's confirmation is the NUMBER of messages: repeating the room id
-// would confirm nothing, since it is already in the request, while the count is
-// a value the operator had to establish — counted here as the route counts it,
-// over [chatlet.EraseSet], so a message named twice is one message on both sides.
-// And the reason is the erase record's account of rows that are gone from
-// every node, so the route refuses an erase without one — refused here first,
-// so a typo costs nothing.
-//
-// # A destruction in the purge's shape
-//
-// The operation is minted HERE, before the request, and `-op-id` finishes an
-// unknown — or a request the node never answered — rather than appending a
-// second erase ([keyedWrite]). The route binds the operation to the set it
-// destroys, so the same id sent with other messages is another erase.
+// For a credential pasted into ONE message: a prune destroys everything before
+// an instant, with no inverse, while an erase destroys exactly the rows named
+// (ids as `chatlet read` and `search` print them) on every data node. The
+// route's confirmation is the NUMBER of messages, counted as the route counts
+// it over [chatlet.EraseSet] so a message named twice is one: repeating the
+// room id would confirm nothing. The reason is the erase record's account of
+// rows gone from every node, so it is required, and refused here first. The
+// operation is minted HERE, and `-op-id` finishes an unknown outcome rather
+// than appending a second erase ([keyedWrite]); the route binds it to the set
+// destroyed, so the same id with other messages is another erase.
 func chatletErase(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	channel, rest := splitSubject(args)
 	var messages chatletRepeated
@@ -848,22 +802,15 @@ func chatletErase(environ config.Source, args []string, stdout, stderr io.Writer
 
 // chatletPrune destroys everything a room said before an instant.
 //
-// # Why this exists beside the retention duty
+// The retention duty publishes a cutoff derived from the company's horizon and
+// a room's own; this is the other caller: an administrator answering an
+// erasure request for ONE room, NOW, not at the next sweep.
 //
-// The ordinary producer of a prune is the fleet-singleton retention duty, which
-// publishes a cutoff derived from the company's horizon and a room's own. This
-// is the other caller: an administrator answering an erasure request for ONE
-// room, NOW, rather than at the next sweep.
-//
-// # Why the cutoff is typed twice
-//
-// The same guard the capacity window's byte ceiling takes. Everything said in
-// the room before this instant is destroyed on every data node with no inverse,
-// so the instant that decides how much of a conversation disappears is not a
-// value to inherit from a shell history — it appears twice in one command, and
-// the route refuses the pair if they name different instants. Compared here as
-// INSTANTS, as the route compares them, so the same moment written in two zones
-// is confirmed rather than refused.
+// The cutoff is typed twice, the capacity window's byte-ceiling guard: it
+// decides how much of a conversation disappears on every data node with no
+// inverse, so it is not a value to inherit from shell history, and the route
+// refuses a differing pair. Compared as INSTANTS, as the route does, so one
+// moment written in two zones is confirmed.
 func chatletPrune(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	channel, rest := splitSubject(args)
 	var cutoff, confirm, opID *string
@@ -935,31 +882,15 @@ type chatletDestroyed struct {
 
 // chatletRetention sets how long one room keeps what is said in it.
 //
-// # Why it is here, and an administrator's
-//
-// A room's own horizon is the one setting a person cannot change from the
-// dashboard or through a tool: a shorter one is a prune on a delay — the
-// retention duty takes whatever it no longer covers on its next pass, on every
-// data node — so it is decided as a prune is, on the human write surface, and
-// without this verb nothing a person runs could reach it.
-//
-// # Exactly one of -days and -company
-//
-// THE ZERO IS A SETTING: `-days 0` keeps the room for ever ([chatlet.RetentionForever]),
-// so a flag left off cannot also mean zero — the default a plain integer flag
-// would give it — and "the company's own horizon" is a choice of its own,
-// `-company`, sent as null. A command naming neither is refused rather than
-// guessed at, because the guess that reads an absent value as "the company's"
-// destroys the past of a room an administrator had set to keep for ever.
-//
-// # Why the horizon is typed twice
-//
-// The prune's guard, for the prune's reason: a shorter horizon destroys the
-// room's past on the duty's next pass, on every data node, with no inverse —
-// so `-confirm` repeats it, the days or `company` in the route's own spelling
-// ([chatlet.HorizonConfirmation]), and the route refuses the pair if they differ.
-// Checked here first, so a typo sends nothing. Every horizon takes it, a
-// longer one too: whether this one shortens the room's depends on what the
+// It is an administrator's verb: a shorter horizon is a prune on a delay, taken
+// by the retention duty on every data node, so it is decided as a prune is, on
+// the human write surface. THE ZERO IS A SETTING: `-days 0` keeps the room for
+// ever ([chatlet.RetentionForever]), so a flag left off cannot also mean zero,
+// and "the company's own horizon" is `-company`, sent as null. Exactly one is
+// required: reading an absent value as "the company's" would destroy the past
+// of a room set to keep for ever. `-confirm` repeats the horizon in the route's
+// spelling ([chatlet.HorizonConfirmation]) for the prune's reason (no inverse),
+// on every horizon, a longer one too: whether it shortens depends on what the
 // room had, which neither this command nor the route reads.
 func chatletRetention(environ config.Source, args []string, stdout, stderr io.Writer) error {
 	channel, rest := splitSubject(args)

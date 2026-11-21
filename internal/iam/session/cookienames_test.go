@@ -15,12 +15,10 @@ import (
 //
 // On https the bearer is `__Host-crewlet_session`, which a browser sets only
 // from this exact host; `crewlet_session` any sibling host can write with a
-// Domain covering this one. Read under either name, a sibling that planted its
-// own session signed in a visitor who held none as that session's person — so
-// [session.Presented] reads the issued name alone, on https and on plain http
-// alike. [session.Held] is the sign-out's reading: every bearer the browser
-// holds, the issued one first, so a browser still holding the name an http
-// deployment issued before it moved to https has that session ended too.
+// covering Domain. Read under either name, a sibling's planted session signed
+// in a visitor as that session's person, so [session.Presented] reads the
+// issued name alone. [session.Held] is sign-out's reading: every bearer the
+// browser holds, the issued one first, so an old http-era name is ended too.
 //
 // Mutation: read the other name in Presented and the planted cookie is
 // presented; drop it from Held and the old session outlives its sign-out.

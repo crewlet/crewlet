@@ -10,18 +10,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// EVERY RECORD THE WRITER BUILDS IS STAMPED AT THE BASE VERSION.
-//
-// A peer decides by the version alone whether to apply a record or retain it,
-// so the version a record of each kind travels at is a contract between the
-// builds of one rolling upgrade: one higher than its fields need and every
-// older node retains what it could have applied — every sign-in, if it is a
-// session start. The field table is empty, so every record of every op is
-// stamped at the base, whoever writes it: a party that acted through a
-// credential and one that did not — the node's own, which writes every sign-in
-// and every duty — and the two records nothing decides are encoded as the
-// framework asks for them. Mutation: stamp every record at a version above the
-// base, and a row here fails.
+// EVERY RECORD THE WRITER BUILDS IS STAMPED AT THE BASE VERSION. A peer
+// applies or retains a record by its version alone, so one higher than its
+// fields need makes every older node retain what it could apply (every
+// sign-in, for a session start). The field table is empty, so every op is at
+// the base whoever writes it, through a credential or as the node, and so are
+// the records nothing decides. Mutation: stamp every record above the base,
+// and a row here fails.
 func TestEveryRecordTheWriterBuildsIsStampedAtTheBase(t *testing.T) {
 	t.Parallel()
 	const (
@@ -123,9 +118,8 @@ func TestEveryRecordTheWriterBuildsIsStampedAtTheBase(t *testing.T) {
 		}
 	}
 
-	// THE THREE RECORDS NO WRITER DECIDES: the read index's barrier, the
-	// trim's trimmed record and a reanchor's generation, all at the base for
-	// ever.
+	// THE THREE RECORDS NO WRITER DECIDES: a barrier, a trimmed record and a
+	// generation.
 	barrier, err := EncodeBarrier(statelog.Envelope{Kind: statelog.BarrierKind})
 	if err != nil {
 		t.Fatalf("EncodeBarrier: %v", err)
@@ -158,9 +152,8 @@ func TestEveryRecordTheWriterBuildsIsStampedAtTheBase(t *testing.T) {
 	}
 }
 
-// stampedAsWritten builds one record through the writer's funnel with the
-// payload its gesture carries, as the gesture does, and reads back the version
-// it is published at.
+// stampedAsWritten builds one record through the writer's funnel with its
+// gesture's payload and reads back the version it is published at.
 func stampedAsWritten(w *Writer, subject Subject, op OpKind, person string,
 	scope ScopeSet, payload any) (int, error) {
 

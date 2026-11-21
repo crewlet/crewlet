@@ -11,26 +11,17 @@ import (
 	"testing"
 )
 
-// The property this package exists for: signalling the process Go started
-// must reach what that process forked. A harness or an MCP server is nearly
-// always a launcher over a runtime that forks helpers, and killing only the
-// launcher leaves those holding memory, sockets and the inherited stderr.
+// Signalling the process Go started must reach what it forked: a harness is a
+// launcher over helpers, and killing only the launcher leaves them holding
+// memory, sockets and stderr. sh starts cat in the background and exits, so
+// only the process GROUP can reach cat, which only a signal ends meanwhile.
 //
-// The shape: sh starts cat in the background and exits. cat's parent is
-// therefore gone — the only thing that can still reach it is the process
-// GROUP. cat reads a pipe whose write end this case holds open, and writes to
-// a pipe whose write end nothing else holds, so it cannot end on its own while
-// the case runs: only a signal ends it, and once the case is over its input's
-// end of file does.
-//
-// GONE IS READ OFF ITS OUTPUT, never off its pid. The kernel closes every
-// descriptor a process holds as it exits, before anything reaps it, so the
-// end of file on cat's output is the moment it has gone, zombie or not.
-// kill(pid, 0) answers yes for a zombie until its adopter reaps it, and an
-// orphan's adopter is whatever the machine runs as its first process: in a
-// container whose first process reaps nothing, never (#1080). A build whose
-// Kill misses cat leaves the read below blocked, and the test binary's own
-// timeout ends it, naming this case.
+// GONE IS READ OFF ITS OUTPUT, never its pid. The kernel closes a process's
+// descriptors as it exits, before anything reaps it, so end of file on cat's
+// output is the moment it has gone, zombie or not. kill(pid, 0) answers yes
+// for a zombie until reaped, which in a container whose first process reaps
+// nothing is never (#1080). A Kill that misses cat blocks the read until the
+// test binary's timeout names this case.
 func TestSignallingTheGroupReachesAnOrphanedGrandchild(t *testing.T) {
 	input, feed, err := os.Pipe()
 	if err != nil {

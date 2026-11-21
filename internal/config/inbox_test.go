@@ -12,14 +12,12 @@ import (
 
 // THE INBOX HORIZON IS THE COMPANY'S: `inbox.retention_days`, at the top of the
 // company document, a year when unset, and refused outside a month to ten
-// years — at its own path, naming the bounds.
+// years, at its own path, naming the bounds.
 //
-// A person's inbox is every native domain's notices, kept by each on its own
-// log under one set of rules, so the horizon that ages them out is the
-// company's rather than one domain's: a block under the tracker left any other
-// source's notices on a horizon of their own. Below a month an inbox stops
-// being one — a person away for four weeks would come back to nothing — and
-// past ten years it is a second copy of the history it points at.
+// A person's inbox holds every native domain's notices, each kept on its own
+// log, so the horizon that ages them out is the company's: a block under the
+// tracker left other sources' notices on a horizon of their own. Below a month
+// an inbox stops being one; past ten years it is a second copy of the history.
 //
 // Mutation: drop the bounds, or read Retention past the default, and a row
 // fails.

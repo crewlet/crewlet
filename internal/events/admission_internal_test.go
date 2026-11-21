@@ -9,19 +9,14 @@ import (
 // AUTHORS REACHES THE NODE ESTATE.
 //
 // The estate is a local file on a disk an operator sized, and every artefact
-// taken from it — the backup, the snapshot a lagging node installs, the
-// integrity check before either counts — is a copy of the whole thing. A type
-// whose rate anybody who can reach the listener decides therefore hands the
-// size of all four to whoever is making the requests, and it does it without
-// a credential to revoke or an identity to attribute.
+// taken from it (backup, a lagging node's snapshot, the integrity check) copies
+// the whole. A type whose rate anyone reaching the listener decides hands them
+// all that size, with no credential to revoke or identity to attribute.
 //
-// A FAILED LOGIN IS THE WORKED EXAMPLE, and the reason this rule is written
-// down before the types that need it exist: an anonymous caller authors
-// millions of them a day for nothing, so the per-attempt fact belongs on a
-// metrics counter and only a coalesced event — per source, per minute,
-// published by the engine's own loop and therefore [RateEngine] — is a row.
-// Nothing about that is obvious from either side of the decision when somebody
-// is adding an event type at the time, which is what a walk is for.
+// A FAILED LOGIN IS THE WORKED EXAMPLE: an anonymous caller authors millions a
+// day, so the per-attempt fact belongs on a metrics counter and only a
+// coalesced event (per source, per minute, published by the engine's own loop,
+// so [RateEngine]) is a row. This walk makes that visible to whoever adds a type.
 func TestNoTypeAnAnonymousCallerRatesReachesTheStore(t *testing.T) {
 	t.Parallel()
 	if got := AdmissionViolations(); len(got) > 0 {

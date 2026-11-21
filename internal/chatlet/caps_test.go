@@ -13,15 +13,13 @@ import (
 // this package documents as one number.
 //
 // [chatlet.MaxRailChannels] is how many rooms a person's channel list answers
-// for, and it is [coord.MaxReadCursors] — the cap the read-state record puts
-// on one person's cursors. Past that cap the record has already dropped its
-// stalest cursor to stay inside its own bound, so a room listed beyond it
-// could not carry an unread badge that was ever right: the rail would show a
-// number derived from a cursor nothing is keeping.
+// for, and it is [coord.MaxReadCursors], the cap on one person's cursors. Past
+// it the record has already dropped its stalest cursor, so a room listed beyond
+// it could not carry a right unread badge.
 //
-// A RAIL SMALLER than the cursor cap is merely wasteful. A rail LARGER is the
-// defect, and it is silent: the extra rooms render, their badges read zero,
-// and zero is indistinguishable from caught up.
+// A RAIL SMALLER than the cap is merely wasteful. A rail LARGER is the silent
+// defect: the extra rooms render with badges reading zero, indistinguishable
+// from caught up.
 func TestTheRailIsBoundedByTheCursorsAPersonCanKeep(t *testing.T) {
 	t.Parallel()
 	if chatlet.MaxRailChannels != coord.MaxReadCursors {

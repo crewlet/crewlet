@@ -139,20 +139,17 @@ const (
 var requestOutcomes = []string{requestUnsent, requestGivenUp, requestAnswered, requestEnded, requestFailed}
 
 // requestOutcome is how a request that sent attempts attempts and ended with
-// err under ctx ended: exactly one of [requestOutcomes], decided in that
-// order.
+// err under ctx ended: exactly one of [requestOutcomes], decided in that order.
 //
-// UNSENT IS ITS OWN OUTCOME, whatever ended the request, because the retries
-// an operator reads are the attempts counter's total less the requests that
-// made an attempt: a request with none is observed at zero, and the
-// histogram's first bucket holds zero and one together, so folded into
-// `ended` it would leave that sum a reader cannot compute — attempts less
-// requests undercounts by every request that never got its turn, which is
-// also the one direct reading of a gate starving the node's requests.
+// UNSENT IS ITS OWN OUTCOME, whatever ended the request: retries are the
+// attempts total less the requests that made an attempt, and the histogram's
+// first bucket holds zero and one together, so folded into `ended` a request
+// that never got its turn would undercount that sum. It is also the one direct
+// reading of a gate starving the node.
 //
 // FROM THE REQUEST'S OWN ERROR, never its last attempt's outcome: a request
-// given up ends on an attempt that FAILED, and one whose deadline ended it
-// may have had its last attempt throttled.
+// given up ends on a FAILED attempt, one ended by its deadline may have had
+// its last attempt throttled.
 func requestOutcome(ctx context.Context, attempts int, err error) string {
 	if attempts == 0 {
 		return requestUnsent

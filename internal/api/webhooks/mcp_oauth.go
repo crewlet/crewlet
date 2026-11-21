@@ -13,22 +13,17 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp/oauth"
 )
 
-// THE MCP SIGN-IN'S TWO PUBLIC ADDRESSES, under /webhooks/ because that is the
-// partition a vendor and a person's browser reach without an operator
-// credential (internal/api/auth's public prefixes): the callback a vendor sends
-// the person back to, and the engine's client metadata document a vendor reads
-// its client id from.
+// THE MCP SIGN-IN'S TWO PUBLIC ADDRESSES, under /webhooks/ because that
+// partition is reached without an operator credential (internal/api/auth's
+// public prefixes): the vendor's callback and the client metadata document.
 //
 // # The callback trusts nothing but the state's signature
 //
-// `GET /webhooks/mcp-oauth` is unauthenticated: a redirect carries no engine
-// credential. What it does (exchange a code and seal a grant every agent
-// reaches a server with) is decided by the state alone, which the engine
-// signed under the fleet keyring when the sign-in started and spends once
-// (internal/engine's mcpoauth.go). Every query value is bounded before
-// anything reads it, nothing the vendor or the address sent is shown, and
-// the page is a template with no script under its own Content-Security-Policy,
-// on the dashboard's origin.
+// `GET /webhooks/mcp-oauth` is unauthenticated. Exchanging a code and sealing
+// a grant is decided by the state alone, signed under the fleet keyring and
+// spent once (internal/engine's mcpoauth.go). Every query value is bounded
+// first, nothing the vendor sent is shown, and the page is a template with no
+// script under its own Content-Security-Policy.
 
 // MCPSignIns finishes the MCP sign-ins the engine started and publishes its
 // client metadata document.

@@ -85,7 +85,7 @@ func (p CompactionProposal) ValidateUnstored() error {
 	p.Compaction.Add = add
 	if l := p.Compaction.Layer; l != nil {
 		if len(l.Parts) > 0 {
-			return fmt.Errorf("%w: layer.parts: already stored as %d parts — Validate checks a stored layer",
+			return refusedf("%w: layer.parts: already stored as %d parts — Validate checks a stored layer",
 				ErrInvalidProposal, len(l.Parts))
 		}
 		layer := *l
@@ -111,7 +111,7 @@ func (p CompactionProposal) measure() (int, error) {
 		return 0, fmt.Errorf("%w: compaction: encode it: %w", ErrInvalidProposal, err)
 	}
 	if len(encoded) > EntryRoom {
-		return 0, fmt.Errorf("%w: compaction: %d bytes, past the %d one proposal may take of its record",
+		return 0, refusedf("%w: compaction: %d bytes, past the %d one proposal may take of its record",
 			ErrInvalidProposal, len(encoded), EntryRoom)
 	}
 	return len(encoded), nil
@@ -122,7 +122,7 @@ func (p CompactionProposal) measure() (int, error) {
 func (p CompactionProposal) validFields() error {
 	c := p.Compaction
 	bad := func(field, format string, args ...any) error {
-		return fmt.Errorf("%w: %s: %s", ErrInvalidProposal, field, fmt.Sprintf(format, args...))
+		return refusedf("%w: %s: %s", ErrInvalidProposal, field, fmt.Sprintf(format, args...))
 	}
 	if id, err := uuid.Parse(c.RepoID); err != nil || id.String() != c.RepoID {
 		return bad("repo_id", "%q is not a UUID in its canonical lowercase spelling", c.RepoID)
@@ -295,7 +295,7 @@ func decideCompaction(ctx context.Context, tx *sql.Tx, c Compaction, retention t
 		made += out.Objects
 	}
 	if made > held {
-		return compactDecision{}, fmt.Errorf("%w: add: the outputs hold %d objects and the %d packs they "+
+		return compactDecision{}, refusedf("%w: add: the outputs hold %d objects and the %d packs they "+
 			"replace %d — a merge writes no object its inputs did not hold", ErrInvalidProposal, made,
 			len(c.Retire), held)
 	}

@@ -162,29 +162,16 @@ type event struct {
 	Time time.Time
 }
 
-// span is one test's BUSY time, from its event stamps: the stretches in
-// which some part of it ran — its own body, or any of its subtests — and
-// never one in which all of it sat waiting for a slot.
+// span is one test's BUSY time, from its event stamps: the stretches in which
+// it or a subtest ran, never one spent waiting for a slot.
 //
-// Not the test's own Elapsed, which the testing package stops when the test's
-// body returns, BEFORE its parallel subtests run: a test whose subtests call
-// t.Parallel reported its setup alone (internal/coord/kv's TestContract: 0.25 s
-// over a suite of ninety-nine cases). And not run-to-result less its own
-// pauses, which is what this measured first: a parent's clock then ran on
-// while its parallel subtests queued behind the rest of the package, so a
-// trivial table test in internal/engine read 830 s, the whole package's
-// tail, and the slowest-tests list was every parent in it.
-//
-// So a test's busy time is the UNION of its own running stretches (from
-// `run` or the `cont` that resumed it, to its `pause` or its result) and its
-// subtests' busy time — with its own stretch from its last subtest's `run` to
-// that subtest's result left out, because no event marks its body returning:
-// over that stretch it is waiting on its subtests (a sequential one runs
-// there and is counted as itself; parallel ones are counted as they ran),
-// and its own work resumes, if it has any, only once the last has answered.
-// A `cont` for a test that is not paused is not a resume: in verbose mode
-// cmd/go prints `=== CONT` whenever the output switches back to a test,
-// which says nothing about its clock.
+// Not Elapsed (the testing package stops it before parallel subtests run) and
+// not run-to-result less pauses (a parent's clock runs on while its subtests
+// queue). It is the UNION of the test's running stretches (`run` or the
+// resuming `cont`, to `pause` or result) and its subtests' busy time, less the
+// stretch from its last subtest's `run` to that result: no event marks its body
+// returning, so it is waiting there. A `cont` for a test not paused is no
+// resume: cmd/go prints `=== CONT` whenever output switches back to a test.
 type span struct {
 	started time.Time
 	running bool
@@ -423,12 +410,10 @@ func (r report) passed() map[string]bool {
 // output — package result lines, and a failing test's own output.
 //
 // NOT the whole stream. `-json` implies verbose, so echoing every Output field
-// would print a line per passing subtest and make a CI log tens of times
-// longer than it was before this was in the pipeline. A gate that does that is
-// a gate somebody takes back out, and then the skips are invisible again. So
-// per-test output is BUFFERED and flushed only when that test fails, which is
-// what `go test` without -v does; package-level records are printed as they
-// come, and those carry the `ok  pkg  1.234s` lines.
+// would make a CI log tens of times longer, and a gate like that gets taken
+// back out. Per-test output is BUFFERED and flushed only when that test fails,
+// as `go test` without -v does; package-level records (the `ok  pkg  1.234s`
+// lines) are printed as they come.
 //
 // A line that is not JSON is passed through rather than rejected: `go test`
 // writes build errors and toolchain chatter around the stream, and a gate that
@@ -473,21 +458,12 @@ func read(in *bufio.Scanner, out *os.File) report {
 				// AND WHATEVER ITS TESTS WERE SAYING WHEN IT DIED.
 				//
 				// Per-test output is buffered and flushed on that test's own
-				// pass/fail/skip, which is what keeps this gate's log the
-				// length `go test` would have produced. A test that never
-				// reports one — the binary panicked under it, the race
-				// detector aborted the process, TestMain exited — leaves its
-				// buffer to be dropped, and the package then fails with a
-				// bare `FAIL pkg 103s` line and NOT ONE WORD about why.
-				//
-				// Measured: internal/engine failed exactly that way twice on
-				// one pull request, in a full CI log, with `0 test(s) failed
-				// in 1 package(s)` underneath it. A gate whose whole subject
-				// is that nothing fails invisibly cannot be the thing hiding
-				// the failure — the module doc above already says so about
-				// build errors ("a gate that swallowed those would hide the
-				// one failure nobody can debug without them"), and this is
-				// the same sentence for a crash.
+				// result. A test that never reports one (the binary panicked,
+				// the race detector aborted, TestMain exited) would have its
+				// buffer dropped, leaving a bare `FAIL pkg 103s` and NOT ONE
+				// WORD about why. A gate whose subject is that nothing fails
+				// invisibly cannot hide the failure: same reason as passing
+				// build errors through.
 				r.orphaned += flush(out, buffered, e.Package)
 			}
 			continue
@@ -895,19 +871,14 @@ func Verdict(r report, producer error, declarationsBroken bool) (int, string) {
 			"package(s). Nothing here can say the suite passed.", producer, len(r.ran))
 
 	case len(r.failed) > 0 || len(r.failedPkgs) > 0:
-		// DECIDED BEFORE "not one test ran", because a build failure is both:
-		// nothing executed AND a package reported failure, and naming the
-		// compile error is what the reader can act on.
+		// DECIDED BEFORE "not one test ran": a build failure is both nothing
+		// executed and a failed package, and the compile error is what the
+		// reader can act on.
 		//
-		// BOTH counts, because they are different failures. A package can fail
-		// with no failing test in it — that is what a build error looks like
-		// from here, and reporting only named tests would pass a tree that
-		// does not compile.
-		//
-		// AND THE PACKAGES ARE NAMED. `0 test(s) failed in 1 package(s)` is
-		// the line this printed, twice, on a CI run nobody could diagnose: a
-		// count says a package failed and refuses to say which, in a stream
-		// covering 120 of them. The number was never the useful half.
+		// BOTH counts, because a package can fail with no failing test (a
+		// build error), and counting only tests would pass a tree that does
+		// not compile. The PACKAGES ARE NAMED: a count says a package failed
+		// and not which, in a stream covering 120 of them.
 		note := fmt.Sprintf("\nskipgate: %d test(s) failed in %d package(s): %s",
 			len(r.failed), len(r.failedPkgs), strings.Join(r.failedPkgs, ", "))
 		if len(r.failed) == 0 {
@@ -976,20 +947,15 @@ type coverage struct {
 
 // judges reports whether this run says anything about one declared test.
 //
-// A test that REPORTED its own result is judged whatever the command: it
-// skipped or it did not, it measured or it did not. One that reported nothing
-// is judged only on an unnarrowed run of its package that passed: there every
-// test ran to its result, so a declared test that did not was renamed or
-// deleted, and saying so is the half of the gate that keeps the table from
-// describing tests that no longer exist. On a narrowed run it is a test the
-// filter left out — the run says nothing about it, and judging it anyway
-// failed every targeted run of a package that declares one. In a package that
-// FAILED it may be a test the binary never reached — a panic, the race
-// detector, -failfast or the timeout stopped it first — or one the binary
-// died UNDER, which started and never finished; calling either renamed or
-// deleted, or a structural skip that stopped firing, would send the reader
-// after the wrong defect. That run fails already, and the next one that
-// passes judges it.
+// A test that REPORTED its own result is judged whatever the command. One that
+// reported nothing is judged only on an unnarrowed run of its package that
+// passed: there every test ran, so a declared test that did not was renamed or
+// deleted, which keeps the table from describing tests that no longer exist.
+// On a narrowed run it is a test the filter left out, and judging it would
+// fail every targeted run. In a FAILED package it may be a test the binary
+// never reached (panic, race detector, -failfast, timeout) or died UNDER;
+// calling either renamed or deleted would send the reader after the wrong
+// defect. That run fails already, and the next passing one judges it.
 func (c coverage) judges(pkg, test string) bool {
 	if c.reported[pkg+"\x00"+test] {
 		return true
@@ -1001,15 +967,12 @@ func (c coverage) judges(pkg, test string) bool {
 // program, and the GOFLAGS it runs under — runs a SUBSET of the tests in the
 // packages it names: a non-empty -run or -skip.
 //
-// Read from the command because the stream cannot say it: test2json reports
-// the tests that ran and never the ones a filter left out, and an unnarrowed
-// run is the only one on which a test's absence is a fact about the test.
-// Every spelling `go test` accepts is read — -run X, -run=X, --run, the
-// binary's own -test.run (which follows -args) — and GOFLAGS' -run=X, since
-// `go test` takes its test flags from there too. An empty pattern selects
-// every test, so it narrows nothing. GOFLAGS written with `go env -w` is not
-// read: a filter set there narrows every run on the machine, and missing it
-// errs LOUD — the entries it left out are reported stale — never silent.
+// Read from the command because test2json never reports the tests a filter
+// left out, and only on an unnarrowed run is a test's absence a fact about it.
+// Every spelling is read: -run X, -run=X, --run, the binary's -test.run (which
+// follows -args), and GOFLAGS' -run=X. An empty pattern narrows nothing.
+// GOFLAGS written with `go env -w` is not read: missing it errs LOUD (the
+// entries it left out are reported stale), never silent.
 func narrows(args []string, goflags string) bool {
 	filters := func(list []string, valueMayFollow bool) bool {
 		for i, a := range list {

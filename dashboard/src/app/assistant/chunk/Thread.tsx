@@ -11,9 +11,9 @@
  * it was and Copy. No answer rating: in a self-hosted engine nothing would
  * read one.
  *
- * THE INDICATOR IS THE LIVE LINE, AS IN CLAUDE: the Assistant's mark turning,
- * with "Thinking" or the running step's sentence under a shimmer, and the
- * mark alone while the answer's words arrive above it. It replaces both the
+ * THE INDICATOR IS THE LIVE LINE: the mark turning, with the running step's
+ * sentence, or "Thinking" then "Answering" with the time since the question
+ * (`thinkingOf`). It replaces both the
  * skeleton that stood in for the answer (three lines that jumped to one when
  * the first words came) and the caret, which stood on a line of its own. So
  * the run chip says nothing the indicator already says: it is drawn from the
@@ -54,9 +54,7 @@ import { remedyOf } from "~/protocol/remedy.ts";
 import {
   ActionReceipt,
   CardBlock,
-  DeepRunBlock,
   ReplyProse,
-  deepRunsOf,
   runChipOf,
   stepsOf,
   thinkingOf,
@@ -198,8 +196,7 @@ function Turn({
   const open = isOpen(turn.phase);
   const chip = runChipOf(turn, now);
   const steps = stepsOf(turn, technical);
-  const deepRuns = deepRunsOf(turn);
-  const thinking = thinkingOf(turn);
+  const thinking = thinkingOf(turn, now);
   // EACH ANSWER'S CARDS ARE ONE ARRAY while the turn's cards are, so an
   // answer works out its reads and its mentions once per change of its cards,
   // never on every render (a running turn's clock renders it every second).
@@ -263,9 +260,6 @@ function Turn({
           {steps.length > 0 ? <StepList label="Steps" steps={steps} /> : undefined}
         </RunChip>
       ) : null}
-      {deepRuns.map((run) => (
-        <DeepRunBlock key={run.step.step_id} run={run} now={now} technical={technical} />
-      ))}
       {turn.replies.map((reply) => (
         <Answer
           key={reply.id}
@@ -299,16 +293,17 @@ function Turn({
           role="alert"
           title={turn.error.message}
           action={
-            turn.error.retryable ? (
-              <Button
-                size="small"
-                variant="secondary"
-                disabledReason={retryDisabledReason}
-                onClick={() => onRetry(turn.question, turn.attachments, turn.mode ?? "ask")}
-              >
-                Try again
-              </Button>
-            ) : undefined
+            // EVERY FAILED TURN CAN BE ASKED AGAIN: a reloaded transcript does
+            // not say whether waiting helps, and Send's own reason holds this
+            // off while something must change first.
+            <Button
+              size="small"
+              variant="secondary"
+              disabledReason={retryDisabledReason}
+              onClick={() => onRetry(turn.question, turn.attachments, turn.mode ?? "ask")}
+            >
+              Try again
+            </Button>
           }
         >
           {turn.error.hint ? `${turn.error.hint} ` : ""}

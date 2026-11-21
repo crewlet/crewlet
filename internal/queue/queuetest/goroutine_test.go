@@ -11,55 +11,17 @@ import (
 )
 
 // TestNoFatalOffTheTestGoroutine fails the build if this suite can call
-// t.Fatal, t.Skip or t.FailNow from anywhere but the test goroutine.
+// t.Fatal, t.Skip or t.FailNow from anywhere but the test goroutine: on a
+// handler or spawned goroutine they end only that goroutine, the failure is
+// never recorded and the case times out unexplained. t.Errorf and t.Logf
+// are safe anywhere.
 //
-// Those three end the calling goroutine with runtime.Goexit. On the test's own
-// goroutine that is how a test stops; on a delivery handler or a spawned
-// goroutine it kills that goroutine instead, so the failure is never recorded,
-// whatever the test was waiting for never arrives, and the case fails later as
-// an unexplained timeout naming nothing. The suite's answer to a broken backend
-// would be to lose the diagnosis — the same family as a panic taking the binary
-// down with it, and quieter.
-//
-// t.Errorf and t.Logf are safe anywhere and are what the handlers here use.
-//
-// This is a source scan for the same reason the memory backend's lock guard is:
-// reproducing it needs a backend that is already misbehaving, and a test that
-// has to break a backend to prove a point becomes the thing that breaks CI. It
-// also replaced a line-based scan of mine that reported six violations, all
-// false — a closure passed as an argument does not close its brace at the end
-// of its body, so the scan ran on into the enclosing test function and found
-// its perfectly legal error checks. Hence the AST.
-//
-// WHAT IT CATCHES AND WHAT IT DOES NOT. It catches a stop-call written
-// LEXICALLY inside a `go` statement or a handler literal — measured on both
-// halves separately, since they are different matchers: a t.Fatalf added inside
-// `go func()` and one added inside a handler literal each came back named by
-// file and line. It does not see through a CALL: a goroutine that invokes a
-// NAMED function which fatals is invisible to it — better to say so than to let
-// the next reader infer coverage the walk does not have.
-//
-// This paragraph used to open "WHAT IT DOES NOT CATCH: a stop-call written
-// lexically inside a `go` statement or a handler literal", i.e. it disclaimed
-// precisely what the guard is for. The same inverted sentence sat in the memory
-// backend's lock guard, which is the tell: one construction copied to a second
-// site, not two independent slips. See that guard for why the shape survives —
-// a stated limit reads as modesty and gets read past.
-//
-// This walker is HALF rename-proof, which is why it carries the strong vacuity
-// check anyway. The `go` half keys on *ast.GoStmt and on testing.T's own method
-// names: language and stdlib, nothing this repo can rename. The handler half
-// keys on queue.Result and *events.Event, which are repo-local — rename either
-// and every handler literal reads as on-goroutine while the guard keeps
-// passing. A matcher is only as rename-proof as its weakest clause.
-//
-// Both counts below are asserted rather than logged. A guard that checks for
-// the ABSENCE of something passes identically when the thing is absent and when
-// the guard has stopped working, and those are indistinguishable from outside —
-// which matters most here, where the appearance of certification is the entire
-// deliverable. If this suite ever legitimately stops using goroutines and
-// handlers, DELETE this guard rather than relaxing the count: a guard kept
-// alive past its subject is how the number gets quietly lowered to zero.
+// An AST scan, since reproducing it needs a backend already misbehaving. It
+// catches a stop-call LEXICALLY inside a `go` statement or a handler
+// literal, not through a CALL to a NAMED function. The handler half keys on
+// repo-local queue.Result and *events.Event, so a rename would blind it:
+// both counts are asserted, as a guard for ABSENCE passes identically when
+// it stops working. If the suite stops using them, DELETE the guard.
 func TestNoFatalOffTheTestGoroutine(t *testing.T) {
 	t.Parallel()
 	dir := packageDir(t)

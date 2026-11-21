@@ -15,18 +15,14 @@ import (
 // the other posters in this package leave out and the thing the teardown's
 // ordering is about.
 //
-// A request the client sends is the SERVER's from then on. The client can stop
-// waiting for the answer — its context ends — but that abandons the request
-// rather than withdrawing it: the server still applies it, whenever it gets
-// to it, and a clear sent on another connection in the meantime can be
-// applied first. So a raise here is held until the test answers it, and a
-// client that gives up returns at once while the raise stays held, to be
-// applied when the test answers — after anything the client sent since.
+// A request the client sends is the SERVER's from then on: a client whose
+// context ends abandons it rather than withdrawing it, and a clear sent on
+// another connection meanwhile can be applied first. So a raise here is held
+// until the test answers it, and a client that gives up returns at once while
+// the raise stays held, applied after anything sent since.
 //
-// Every case drives it inside a synctest bubble, so "the teardown has done
-// whatever it was going to do before the server answered" is
-// [synctest.Wait] rather than a sleep: the ordering is reproduced exactly,
-// on every run, with nothing left to load.
+// Every case runs in a synctest bubble, so "the teardown has done all it will
+// before the server answered" is [synctest.Wait], not a sleep.
 type wire struct {
 	text    bool // renders text, as Slack's indicator does
 	clears  bool // has a clear operation at all, which a typing indicator lacks
@@ -150,15 +146,12 @@ func teardowns() map[string]teardown {
 // and so before the clear, on the backend that has one, and before the turn is
 // over, on the backend that has none.
 //
-// The teardown cancelled the session's context, which made the post in flight
-// return at once while the server still held it; the clear then went out, and
-// the held raise was applied after it. On Slack that is an indicator left up
-// over a turn that had ended, until Slack's own expiry took it down; on a
-// typing indicator it is "typing…" shown after the agent's reply. Stopping the
-// loop between posts and letting the one in flight finish is what orders them.
-//
-// Both kinds of post are covered, because both can be in flight: the opening
-// raise, and a heartbeat re-assertion made long after it.
+// A teardown that cancels the session's context returns the post in flight at
+// once while the server still holds it, and the held raise is applied after
+// the clear: an indicator left up over an ended turn (a typing indicator shows
+// "typing…" after the reply). Stopping the loop between posts and letting the
+// one in flight finish orders them. Both the opening raise and a later
+// heartbeat re-assertion are covered, since either can be in flight.
 func TestARequestTheServerHoldsLandsBeforeTheTeardownEnds(t *testing.T) {
 	backends := map[string]struct{ text, clears bool }{
 		"a backend that renders and clears text": {text: true, clears: true},

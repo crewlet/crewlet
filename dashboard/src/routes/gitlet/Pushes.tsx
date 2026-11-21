@@ -42,6 +42,7 @@ import {
 } from "~/lib/code.ts";
 import { fmtBytes, fmtCount, fmtDate, fmtDateTime, plural, readerDay } from "~/lib/format.ts";
 import { zone } from "~/lib/prefs.ts";
+import { joinEdges } from "~/lib/range.ts";
 import { useOrgIndex, useSeatBadgeOf } from "~/lib/seats.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
@@ -60,7 +61,7 @@ import { ChangeRefPill } from "./ChangeRow.tsx";
 import { CodeList, useDayGroups, type ListDay } from "./CodeList.tsx";
 import { REPO_PARAM, commitHref, compareHref, repoHref } from "./paths.ts";
 import {
-  credentialWords,
+  credentialTag,
   dayAside,
   dayCounts,
   pusherParams,
@@ -68,11 +69,12 @@ import {
   pushWords,
   type PushPart,
 } from "./pushWords.ts";
-import { PUSHER_DAYS } from "./activity.tsx";
+import { PUSHER_DAYS, boundsOf } from "./activity.tsx";
 import { PushesRail } from "./PushesRail.tsx";
 import { usePushActivity } from "./railParts.tsx";
 import { REFUSED_CODES, refusalSentence } from "./repo/marks.ts";
 import { RepoPicker } from "./RepoPicker.tsx";
+import { useGitletSectionCounts } from "./sectionCounts.ts";
 import { BranchChip, Face, GITLET, useWhoName } from "./ui.tsx";
 import { WHEN, dayBoundsFor, sinceOf } from "./when.ts";
 import "~/styles/gitlet.css";
@@ -97,6 +99,7 @@ const VIA_WORDS: Readonly<Record<string, string>> = {
 };
 
 export function Pushes() {
+  useGitletSectionCounts();
   const [repo, setRepo] = useParam(REPO_PARAM, "", "filter");
   const picker = <RepoPicker size="sm" repo={repo} onChoose={setRepo} />;
   if (repo !== "" && isRepoName(repo)) {
@@ -185,37 +188,50 @@ export function PushHistory({
   const seats = usePusherChoices(activity.read.data?.repo?.pushers, by);
   const kind = by === "" ? "" : (pusherParams(by, seats.kindOf).pusher_kind ?? "");
   const since = sinceOf(when, today);
-  const base = useMemo(
+  const params = useMemo(
     () => ({
       name: repo,
       brief: true,
       ...(kind ? { pusher_kind: kind } : {}),
       ...(kind && kind !== "gitlet" ? { pusher: by } : {}),
-      ...(since ? { since } : {}),
     }),
-    [repo, kind, by, since],
+    [repo, kind, by],
   );
-  // THE DAY COUNTS RIDE THE FIRST PAGE, one snapshot with its rows; never beside a pusher.
+  // THE DAY COUNTS RIDE THE FIRST PAGE, one snapshot with its rows; never beside a pusher. The
+  // window's start and its days are its edges, by its name, so the reader's midnight is no new
+  // question (`lib/useCodeQuery.ts`); the name says whether the days ride it, which no
+  // parameter does for a pusher not yet resolved to a kind.
   const bounds = useMemo(
     () => (by === "" ? dayBoundsFor(when, today, inZone) : []),
     [by, when, today, inZone],
   );
-  const params = useMemo(
-    () => (bounds.length > 0 ? { ...base, day_bounds: bounds.join(",") } : base),
-    [base, bounds],
-  );
-  const first = useCodeQuery("code_pushes", params, { pollMs: PUSHES_POLL_MS });
+  const first = useCodeQuery("code_pushes", params, {
+    pollMs: PUSHES_POLL_MS,
+    window: {
+      name: `${when}/${by === "" ? "counted" : "uncounted"}`,
+      edges: { since, ...(bounds.length > 0 ? { day_bounds: joinEdges(bounds) } : {}) },
+    },
+  });
   const paged = usePaged(
     first,
-    params,
-    (cursor) => codeRest.query("code_pushes", { ...base, cursor }),
+    { ...params, when, counted: by === "" },
+    (cursor, edges) =>
+      codeRest.query(
+        "code_pushes",
+        { ...params, cursor },
+        undefined,
+        edges && { since: edges.since },
+      ),
     pushesOf,
     pushIdOf,
     pushesAfter,
   );
   const rows = paged.items;
-  const pushDays = first.data?.push_days;
-  const counted = useMemo(() => dayCounts(bounds, pushDays), [bounds, pushDays]);
+  // THE DAYS AND THE COUNTS THE LIST DRAWN WAS READ AT, which lag the reader's day until the moved
+  // window lands.
+  const pushDays = paged.answers[0]?.push_days;
+  const drawnBounds = useMemo(() => boundsOf(paged.edges), [paged.edges]);
+  const counted = useMemo(() => dayCounts(drawnBounds, pushDays), [drawnBounds, pushDays]);
   const runs = useDayGroups(rows, landedAt, dayHeading);
   const groups = useMemo(() => {
     const loaded = new Map<string, number>();
@@ -577,15 +593,27 @@ function PushChips({ push }: { push: CodePushRow }) {
           </Tag>
         )
       )}
-      {push.actor_kind === "operator" && !landing && (
-        <Tag appearance="outline" size="xs" leadingIcon={<KeyGlyph size="xs" />}>
-          {credentialWords(push.actor)} <span className="mono">{push.actor}</span>
-        </Tag>
-      )}
+      {push.actor_kind === "operator" && !landing && <CredentialTag login={push.actor} />}
       <Tag appearance="outline" size="xs">
         {VIA_WORDS[push.via] ?? push.via}
       </Tag>
     </>
+  );
+}
+
+/** The credential a person pushed through: its kind, a name a person gave it, the whole id its title. */
+function CredentialTag({ login }: { login: string }) {
+  const { words, name } = credentialTag(login);
+  return (
+    <Tag appearance="outline" size="xs" leadingIcon={<KeyGlyph size="xs" />} title={login}>
+      {words}
+      {name && (
+        <>
+          {" "}
+          <span className="mono">{name}</span>
+        </>
+      )}
+    </Tag>
   );
 }
 

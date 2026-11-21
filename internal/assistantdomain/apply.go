@@ -12,30 +12,22 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The applier, and the rules that make it a PURE FUNCTION of the log.
+// The applier is a PURE FUNCTION of the log, so N nodes' tables stay
+// byte-identical, while:
 //
-// N nodes derive one SQL state from one ordered stream, and the identity claim
-// says their tables are byte-identical. That holds exactly as long as these do:
-//
-//  1. IT READS NO CONFIG, NO CLOCK, NO KEYRING AND NO OTHER DOMAIN. Every
-//     value it writes is the record's or the broker's: a sealed value is the
-//     writer's envelope written through as bytes, never opened, and every
-//     instant a row records of its own is [statelog.ApplyOptions.StoredAt].
-//  2. A RECORD THE ROWS NO LONGER ADMIT WRITES NOTHING, NEVER AN ERROR. A turn
-//     closed twice, a move from a state the proposal has left, a record about a
-//     conversation no create wrote: each applies as no rows on every node
-//     alike, and its writer, which decided it from a snapshot of these rows,
-//     reads the rows back. An error would stall every node's log on a record
-//     that is merely late.
+//  1. IT READS NO CONFIG, NO CLOCK, NO KEYRING AND NO OTHER DOMAIN: it writes
+//     only the record's or the broker's values, a sealed one unopened, and
+//     every instant a row records of its own is [statelog.ApplyOptions.StoredAt].
+//  2. A RECORD THE ROWS NO LONGER ADMIT WRITES NOTHING, NEVER AN ERROR (a turn
+//     closed twice, a stale proposal move, a record about an uncreated
+//     conversation): its writer reads the rows back, and an error would stall
+//     every node's log on a record that is merely late.
 //  3. EVERY WRITE IS GUARDED BY THE RECORD'S POSITION or keyed by an id the
-//     record names, so a redelivery writes nothing it has not written.
+//     record names, so a redelivery writes nothing new.
 
-// Applier writes this node's copy of the assistant estate.
-//
-// IT HOLDS NOTHING: no keyring, no clock and no listener, which is the first
-// rule above made structural. A batch moves nothing another subsystem on this
-// node acts on: the person's open drawer learns of a turn's progress on its
-// own channel (internal/assistant/live), never from an apply.
+// Applier writes this node's copy of the assistant estate. It holds no
+// keyring, clock or listener (rule 1 above); an open drawer learns of a turn's
+// progress from internal/assistant/live, never from an apply.
 type Applier struct{}
 
 // NewApplier builds the assistant applier.
@@ -175,8 +167,7 @@ type applyContext struct {
 // at is the broker instant as it is stored.
 func (c applyContext) at() int64 { return store.EncodeTime(c.brokerAt) }
 
-// Apply writes one record's rows. The dispatch is on the SUBJECT KIND, and
-// every kind has a case.
+// Apply writes one record's rows, dispatched on its subject kind.
 func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	opts statelog.ApplyOptions) (int, error) {
 
@@ -197,9 +188,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		// THE READ INDEX'S OWN APPEND writes no row on any node.
 		return 0, nil
 	case KindTrimmed:
-		// THE TRIM'S OWN RECORD. The framework removes this log's anchors
-		// below the floor its subject names, in this same transaction
-		// (ADR-0080); this domain writes nothing for it.
+		// THE TRIM'S OWN RECORD: the framework removes the anchors below its
+		// floor in this same transaction (ADR-0080).
 		return 0, nil
 	case KindEviction:
 		return applyEviction(ctx, tx, c, payload)
@@ -214,9 +204,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 	case KindOwner:
 		return applyOwner(ctx, tx, c, payload)
 	}
-	// A KIND THIS BUILD DOES NOT KNOW REACHES HERE ONLY AT A VERSION IT CAN
-	// READ, which is a writer publishing a kind it never declared; failing is
-	// what makes that writer's mistake visible.
+	// An unknown kind reaches here only at a version this build reads: a writer
+	// published a kind it never declared, and failing makes that visible.
 	return 0, fmt.Errorf("assistantdomain: %s is not a kind this build applies, "+
 		"and the record at %s claims version %d: a kind is declared before it is "+
 		"published", record.Subject.Kind, rec.Position, record.V)
@@ -310,9 +299,8 @@ func readConversation(ctx context.Context, tx *sql.Tx, id string) (conversationR
 	return row, true, nil
 }
 
-// touch moves a conversation's activity to this record's broker instant: what
-// its retention is measured from. Monotone, and guarded by position, so a
-// redelivery moves nothing.
+// touch moves a conversation's activity, which its retention is measured
+// from, to this record's broker instant: monotone and position-guarded.
 func touch(ctx context.Context, tx *sql.Tx, c applyContext, conversation string) (int, error) {
 	res, err := tx.ExecContext(ctx, `
 		UPDATE assistant_conversations SET
@@ -327,10 +315,8 @@ func touch(ctx context.Context, tx *sql.Tx, c applyContext, conversation string)
 }
 
 // removeConversation deletes one conversation's rows and leaves its deletion
-// marker, in one statement list, so a transaction that fails partway leaves
-// the conversation whole. THE MARKER FIRST: an apply that stops between the
-// two leaves a conversation the gate already holds rather than one deleted and
-// recreatable.
+// marker. THE MARKER FIRST: an apply that stops between the two leaves a
+// conversation the gate already holds, not one deleted and recreatable.
 func removeConversation(ctx context.Context, tx *sql.Tx, c applyContext, conversation,
 	owner string, reason PurgeReason) (int, error) {
 

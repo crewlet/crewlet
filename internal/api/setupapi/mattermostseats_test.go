@@ -146,17 +146,15 @@ const mattermostOnDoc = `{
 
 // A DISCONNECT FINISHES WHILE AGENTS ARE STILL TURNED ON THERE. The document
 // refuses an agent turned on at an integration the company has not connected,
-// so the block alone could not be removed: the engine's teardown retried the
-// same refused revision for ever, and forcing answered 400, until somebody
-// turned every agent off by hand, one by one. The disconnect's revision now
-// turns those agents off with the block, as ONE revision: each keeps what it
-// was given (its channels), so connecting again and turning it on restores it,
-// and a seat that was already off, or had no block, is not touched.
+// so the block alone cannot be removed. The disconnect's revision turns those
+// agents off with the block, as ONE revision: each keeps what it was given
+// (its channels), so connecting again and turning it on restores it, and a
+// seat already off, or with no block, is not touched.
 //
-// THE CONTROL is the bare patch a disconnect used to send, which the document
-// still refuses: the rule is right, and it is the disconnect that owed it the
-// seats. Mutation: drop TurnOffDisconnected from configapi.Service.Disconnect
-// and the forced disconnect answers the control's refusal.
+// THE CONTROL is the bare patch, which the document still refuses: the rule
+// is right, and it is the disconnect that owes it the seats. Mutation: drop
+// TurnOffDisconnected from configapi.Service.Disconnect and the forced
+// disconnect answers the control's refusal.
 func TestADisconnectTurnsOffTheAgentsStillOnThere(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)

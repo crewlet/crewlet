@@ -20,30 +20,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A BRIEF IS A TURN (wire.TurnBrief): the first answer of a conversation the
-// person goes on asking in, so it is started, admitted, metered, recorded and
-// streamed exactly as a question is, with three differences, all here.
-//
-//   - It only reads. The turn is offered the person's read tools and
-//     [catalog.BriefTool], nothing that proposes, navigates or hands work on,
-//     and its reads draw no cards: the run chip shows each read, and the
-//     brief card is the whole answer. Its prose is never drawn.
-//   - It answers in a fixed shape. The model calls answer_brief once; the
-//     engine holds the call to its schema and bounds, and a call it cannot
-//     accept is answered with EVERY reason and may be written again ONCE.
-//     A second refusal ends the turn [wire.ErrorBriefInvalid]. The retry
-//     always has a round to land in: reads stop [BriefAnswerAttempts]
-//     rounds before the turn's last ([BriefReadRounds]), so an answer
-//     written after the last read is never refused in the turn's last
-//     round.
-//   - The engine owns everything but the words. A row survives only when
-//     the record it cites appears in what this turn's own reads answered AND
-//     the record's own read, sent again as the person, answers it: a row
-//     about a record nobody read, or one the person may not open, is dropped,
-//     never drawn. Its address is the link table's, its danger tone is a fact
-//     that read carried (a seat stopped, a task marked urgent, a failed last
-//     turn), and its action opens that address or asks a question. Nothing a
-//     brief offers writes.
+// A BRIEF IS A TURN (wire.TurnBrief): the first answer of a conversation, run
+// as a question is, with three differences.
+//   - It only reads: the person's read tools and [catalog.BriefTool], no
+//     proposals or navigation, and its reads draw no cards.
+//   - It answers in a fixed shape. answer_brief is called once; a call the
+//     engine cannot accept is answered with EVERY reason and may be rewritten
+//     ONCE, then the turn ends [wire.ErrorBriefInvalid]. Reads stop
+//     [BriefAnswerAttempts] rounds before the last ([BriefReadRounds]), so the
+//     retry always has a round.
+//   - The engine owns all but the words. A row survives only when the record it
+//     cites is in this turn's reads AND its read, sent again as the person,
+//     answers it. Address and tone are the link table's and the read's facts.
 
 // errBriefInvalid ends a brief turn whose model wrote no brief the engine
 // could accept within its retry.
@@ -108,8 +96,11 @@ func (t *turn) readForBrief(model string) {
 func (t *turn) cited(id string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// A ROOM IS CITED as people write it (#release) or as the chat routes
+	// answer it, by its bare name.
+	bare, room := strings.CutPrefix(id, "#")
 	for _, answer := range t.brief.reads {
-		if containsName(answer, id) {
+		if containsName(answer, id) || (room && containsName(answer, bare)) {
 			return true
 		}
 	}
@@ -141,12 +132,13 @@ func nameByte(b byte) bool {
 		(b >= 'A' && b <= 'Z')
 }
 
-// briefTools are what a brief turn is offered: the person's reads, and the
-// brief's answer. Never a write, a page action, a navigation or deep work.
+// briefTools are what a brief turn is offered: the person's reads, the route
+// lookup they are found by, and the brief's answer. Never a write, a page
+// action or a navigation.
 func briefTools(offered []catalog.Tool) []catalog.Tool {
 	out := make([]catalog.Tool, 0, len(offered)+1)
 	for _, t := range offered {
-		if t.Kind == catalog.KindRead {
+		if t.Kind == catalog.KindRead || t.Name == catalog.DescribeAPITool {
 			out = append(out, t)
 		}
 	}

@@ -15,17 +15,14 @@ var logger = logging.Get("eventfan")
 
 // ONE NODE'S PART OF EACH QUESTION, read from its own store.
 //
-// Each part carries exactly what the merge needs to be exact and nothing it
-// does not: a page says whether it FILLED (so the merge knows where this
-// node's rows stop being known), a trace and a turn say how many rows the node
-// HOLDS (so the merged view can say it is cut), and a turn carries its newest
-// rows beside its oldest (so a long turn keeps its ending).
+// Each part carries what the merge needs and no more: a page says whether it
+// FILLED (where this node's rows stop being known), a trace and a turn say how
+// many rows the node HOLDS (so the merged view can say it is cut), and a turn
+// carries its newest rows beside its oldest (so a long turn keeps its ending).
 //
-// EVERY PART IS READ AT ONE INSTANT, the asker's: every read a part makes is
-// floored at it, so a count asked beside the rows it counts is floored where
-// they are — read at two instants, a row crossing the floor between the two
-// made the count come back short of the rows beside it, and a long turn
-// whose count fell to the cap was reported whole and lost its ending.
+// EVERY PART IS READ AT ONE INSTANT, the asker's: a count asked beside its rows
+// is floored where they are. At two instants a row crossing the floor made the
+// count short, and a long turn was reported whole and lost its ending.
 
 // listPart is one node's page of a keyset listing, newest first.
 type listPart struct {
@@ -228,39 +225,15 @@ func (p turnPart) keep(n int) any {
 // TurnClosingEvents is how many of a long turn's last rows are recovered
 // beside its opening.
 //
-// Thirty-two rather than two, because the records a reader came for are not
-// reliably the last two. A turn's ending is its final review phase and
-// everything after it, which on a turn with learning enabled is, counted in the
-// order it is stamped:
-//
-//   - the review phase's own record: 1;
-//   - its card's rewrite, an IN-turn `auxiliary_spend` stamped at that call —
-//     after the review it condenses, before the completion: 1. Every other
-//     in-turn record is stamped at its own last call, which is before the
-//     review phase ended, so it sorts above this tail whenever it was flushed;
-//   - the stop's own record, when a guard, the budget or the provider chain
-//     ended the turn: 1;
-//   - `agent_turn_completed` and `turn_completed`: 2;
-//   - the audit record of a colleague's answer, when the turn was an ask: 1;
-//   - the REFLECTION PASS, which publishes after them: an episode, a persist
-//     decision, a counterparty profile per distinct sender, a synthesized,
-//     refined or promoted skill and its sentinel — 7 with one sender;
-//   - and what that pass's model calls cost, as `auxiliary_spend` of the
-//     reflection stage — one per purpose per model: the persist decider, the
-//     profiler, the synthesizer and the refiner, 4 on one model.
-//
-// Seventeen, then, before a coalesced trigger's second sender or a fallback
-// chain that answered the pass on a second model adds a row each. Twenty —
-// this constant's old value, set when the ending was counted at fifteen — was
-// outgrown by a busier ending, which pushed the review phase out of the
-// recovered rows: the one a reader who came for "how did it end" wants beside
-// the words. Thirty-two keeps fifteen rows of headroom for exactly those,
-// while staying small enough that the second read is a seek rather than a
-// scan. The recovered rows replace nothing: a cut view holds
-// [store.MaxTurnEvents] opening rows plus at most this many closing ones,
-// which is the same payload budget the cap exists for with a bounded addition
-// — fleet-wide as well as per node, because the merge cuts to the same two
-// numbers.
+// Thirty-two, because the rows a reader came for are not reliably the last two:
+// with learning enabled the ending is 17 rows with one sender (the review phase
+// and its card's rewrite, the stop record, two completions, a colleague's
+// audit, the reflection pass's 7 rows and its 4 model-call spends), and a
+// second sender or fallback model adds one each. A smaller budget pushed the
+// review phase out of the recovered rows. 32 leaves fifteen rows of headroom
+// while the second read stays a seek, not a scan. The rows replace nothing: a
+// cut view holds [store.MaxTurnEvents] opening rows plus at most this many
+// closing ones, fleet-wide and per node.
 const TurnClosingEvents = 32
 
 // turnPartOf reads one node's share of a turn from ONE SNAPSHOT of its log, for

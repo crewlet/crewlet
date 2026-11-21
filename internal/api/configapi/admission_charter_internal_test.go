@@ -14,16 +14,13 @@ import (
 // A CHARTER WRITE THROUGH THE ASSISTANT IS DECIDED AS THE ADMINISTRATOR'S OWN.
 //
 // An administrator acting through an approved assistant grant (an exec grant)
-// is admitted to a charter write on `config.principles.write`, and to the same
-// change asked as an ordinary document write, and to a draft that also renames
-// the company or adds a seat: the company document's verbs are the
-// administrator's own through their assistant (ADR-0052's parity), each write
-// the one they approved. A READ grant is refused every one of them, naming the
-// scope, because a write is only ever carried as an approved request. The
-// administrator at their keyboard is admitted to all of it, which is the
-// control. Mutation: let a read grant take an approve row in authz and the
-// read grant writes the charter; keep config.write from the assistant and the
-// approved document write is refused.
+// is admitted to a charter write on `config.principles.write`, to the same
+// change as an ordinary document write, and to a draft that also renames the
+// company or adds a seat (ADR-0052's parity). A READ grant is refused every
+// one, naming the scope, because a write is only carried as an approved
+// request. The administrator at their keyboard is the control. Mutation: let a
+// read grant take an approve row in authz and it writes the charter; keep
+// config.write from the assistant and the approved document write is refused.
 func TestACharterWriteThroughTheAssistantIsTheAdministratorsOwn(t *testing.T) {
 	t.Parallel()
 	keyboard := iam.Principal{ID: uuid.New(), Login: "ana.admin", Kind: iam.KindPerson,

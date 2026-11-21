@@ -9,20 +9,15 @@ import (
 // Resolution is what a resolver managed to say about a request.
 //
 // THREE VALUES, NEVER TWO. "This is who it is", "this is definitively nobody"
-// and "this node could not tell" are three different facts, and collapsing the
-// last two into one is the single most incident-hardened lesson carried into
-// this engine — internal/coord's package doc is where it is written down,
-// because treating unknown as loss tears a healthy company down over a
-// two-second store blip. Here the same collapse would answer 401 to a person
-// holding a perfectly good credential, and keep answering it for as long as
-// the identity store was unreachable, which teaches everybody to go and check
-// their password.
+// and "this node could not tell" are different facts; collapsing the last two
+// is the lesson internal/coord's package doc records. Here it would answer 401
+// to a person with a good credential for as long as the identity store was
+// unreachable.
 //
-// A [Resolution] rather than an error, although an error is this tree's usual
-// third value, because the CLASSIFICATION is what every gate branches on and
-// only the unknown arm has a reason to carry. Making it an error would put two
-// sentinels and an errors.Is at the top of every handler to recover a fact a
-// closed set states outright. The reason is still there: [Reason].
+// A [Resolution] rather than an error, because the CLASSIFICATION is what every
+// gate branches on and only the unknown arm has a reason to carry; an error
+// would put sentinels and an errors.Is atop every handler. The reason is still
+// there: [Reason].
 type Resolution string
 
 const (
@@ -94,17 +89,14 @@ func WithUnresolved(ctx context.Context, why error) context.Context {
 
 // From returns the principal a resolver attached and HOW it got there.
 //
-// A CONTEXT NOBODY RESOLVED IS [Unknown], NOT [Anonymous]. The absence of an
-// answer is not evidence of absence: a middleware that did not run, a handler
-// reached by a path nobody wired through the guard and a caller that forgot to
-// thread the context all look exactly like this, and reading any of them as
-// "definitively nobody" is how a surface ends up deciding it is safe to serve
-// because nothing told it otherwise. Anonymous is something a resolver says;
-// silence is not.
+// A CONTEXT NOBODY RESOLVED IS [Unknown], NOT [Anonymous]. A middleware that
+// did not run, a path not wired through the guard and a caller that dropped the
+// context all look like this, and reading them as "definitively nobody" would
+// let a surface decide it is safe to serve. Anonymous is something a resolver
+// says; silence is not.
 //
-// The principal is the zero value on both of the other two, so a caller that
-// ignores the resolution gets a principal carrying no grants — the failure
-// direction that refuses rather than the one that admits.
+// The principal is the zero value on both other arms, so a caller ignoring the
+// resolution gets no grants: the failure direction that refuses.
 func From(ctx context.Context) (Principal, Resolution) {
 	if ctx == nil {
 		return Principal{}, Unknown

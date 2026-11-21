@@ -387,9 +387,9 @@ a.seat-chip:hover {
    sides off an outset ring, leaving two lines that read as dividers. */
 .list-row.clickable:focus-visible,
 a.list-row:focus-visible,
-.feed-row:focus-visible,
+.feed-row:has(.feed-row__open:focus-visible),
 .project-row:focus-visible,
-a.live-row:focus-visible {
+.live-row:has(.live-row__open:focus-visible) {
   outline: 2px solid var(--color-focus);
   outline-offset: var(--size-focus-ring-inset-offset);
 }

@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 )
 
 // catalogue is every payload this package registers, one prototype each. It is
@@ -41,6 +43,8 @@ func catalogue() []events.Payload {
 		BudgetExhausted{}, BudgetMeters{},
 		// waiting.go
 		SeatInboxWaiting{},
+		// seat.go, placement
+		SeatPlaced{}, SeatReleased{},
 		// auxiliary.go
 		AuxiliarySpend{},
 		// provider.go
@@ -91,7 +95,7 @@ func catalogue() []events.Payload {
 		// assistant.go
 		AssistantTurnCompleted{},
 		// seat.go
-		SeatPaused{}, SeatResumed{}, AgentTurnStopped{}, AgentTurnSteered{},
+		SeatPaused{}, SeatResumed{}, AgentTurnStopped{}, AgentTurnSteered{}, AgentTurnJoined{},
 		// seataccess.go
 		SeatAccessDriftRestored{},
 		SeatGrantChanged{},
@@ -113,6 +117,7 @@ var wireTypes = []string{
 	"agent_spawned",
 	"agent_terminated",
 	"agent_turn_completed",
+	"agent_turn_joined",
 	"agent_turn_progress",
 	"agent_turn_started",
 	"agent_turn_steered",
@@ -193,6 +198,8 @@ var wireTypes = []string{
 	"seat_paused",
 	"seat_provider_parked",
 	"seat_provider_released",
+	"seat_placed",
+	"seat_released",
 	"seat_resumed",
 	"skill_archived",
 	"skill_promoted",
@@ -349,26 +356,15 @@ func TestPayloadTagsAreDistinctAndSnakeCase(t *testing.T) {
 }
 
 // wireTags is the OTHER HALF OF THE WIRE CONTRACT: the exact JSON keys each
-// registered type publishes. `wireTypes` above pins the type strings, and
-// nothing pinned the keys — so a renamed tag was as green as a comment
-// change.
+// registered type publishes. `wireTypes` above pins the type strings.
 //
-// A KEY IS A PEER CONTRACT, AND A RENAME IS A SILENT DELETE. ADR-0006 is
-// additive-only from the first build a successor runs beside, because a
-// rolling upgrade runs in both directions at once: a renamed tag is a dropped
-// field on whichever half has not upgraded, and every row already written
-// keeps the old key forever. The failure has no symptom a reviewer can see —
-// the build is green, the tests pass, and a reader of the dashboard gets a
-// confidently wrong `0` where the payload used to answer.
+// A RENAME IS A SILENT DELETE. ADR-0006 is additive-only, because a rolling
+// upgrade runs both directions at once: a renamed tag is a dropped field on
+// the half not upgraded, and rows already written keep the old key forever.
 //
-// GOLDEN, NOT DERIVED. Computing the expected keys from the struct is a test
-// that asserts the code equals itself; the whole value here is that the
-// literal strings live in a file a rename has to edit, in a diff a reviewer
-// reads. An ADDITIVE change — a genuinely new field — edits one line here and
-// that friction is the feature. A rename edits one too, and then has to argue
-// for it.
-//
-// Sorted per type, because the comparison is against sorted marshalled keys.
+// GOLDEN, NOT DERIVED: computing the keys from the struct asserts the code
+// equals itself; the literals live in a file a rename has to edit, in a diff a
+// reviewer reads. Sorted per type, as the marshalled keys are.
 var wireTags = map[string][]string{
 	"org_started":               {"org_name"},
 	"org_stopped":               {"org_name"},
@@ -384,11 +380,11 @@ var wireTags = map[string][]string{
 		"dry_run", "failed", "key", "mcp_server", "operator_id", "outcome", "refusal", "seat", "tool", "variable"},
 	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                 {"agent_id", "description", "missed", "requested_by", "role", "schedule", "scheduled_at", "scope_id", "scope_type", "task_id", "timeout_seconds"},
-	"work_pickup":                   {"agent_id", "dead_waits", "item", "key", "moved", "progressed", "quiet", "ready", "ready_capped", "role", "status", "submitted_by", "waits_on", "why", "working_for"},
+	"work_pickup":                   {"agent_id", "dead_waits", "item", "key", "moved", "progressed", "quiet", "ready", "ready_capped", "role", "status", "submitted_by", "wait_by", "wait_reason", "waited", "waits_on", "why", "working_for"},
 	"delegated_review":              {"agent_handle", "agent_id", "at", "held_launch", "held_turn", "kind", "panel", "request", "requester", "rule"},
 	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "scope_id", "scope_type", "superseded_by", "target_handle", "task_id"},
 	"scheduled_task_fired":          {"requested_by", "schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},
-	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "sender_name", "source_event_type", "subject", "subject_is_label", "writer"},
+	"external_notification":         {"addressed", "agent_id", "body", "context_requires_recon", "fence_boundary", "messages", "metadata", "notification_source", "origin", "owes", "recipient_email", "salient_body", "sender", "sender_name", "source_event_type", "subject", "subject_is_label", "subject_refs", "writer"},
 	"turn_trigger_skipped":          {"agent_handle", "agent_id", "disposition", "reason", "trigger_id", "trigger_type", "wake"},
 	"notifications_coalesced":       {"agent_handle", "count", "first_at", "last_at", "notification_source", "partition_key"},
 	"notification_skipped":          {"detail", "handle", "notification_source", "reason"},
@@ -410,6 +406,8 @@ var wireTags = map[string][]string{
 	"provider_fallback":             {"agent_id", "error_kind", "from_harness", "from_provider_key", "from_subscription", "iteration", "phase", "resets_at", "role", "to_provider_key", "turn_id", "work_key"},
 	"seat_provider_parked":          {"agent_handle", "agent_id", "harness", "provider_keys", "resets_at", "retry_at", "role", "said", "subscription"},
 	"seat_provider_released":        {"agent_handle", "agent_id", "reason", "role"},
+	"seat_placed":                   {"agent_handle", "agent_id", "epoch", "on_node", "role", "since"},
+	"seat_released":                 {"agent_handle", "agent_id", "epoch", "on_node", "reason", "role"},
 	"agent_turn_started":            {"agent_handle", "agent_id", "conversation_key", "resumed", "role", "started_at", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"agent_turn_completed":          {"agent_id", "cache_read_tokens", "cache_write_tokens", "calls_elided", "conversation_key", "decision", "elided_calls", "error", "error_file", "error_function", "error_kind", "execute_model", "failed", "input_tokens", "iterations", "model", "output_tokens", "prompt", "prompt_messages", "response", "review_model", "role", "stopped", "subagent_count", "subagent_input_tokens", "subagent_output_tokens", "subagent_tokens", "suspended", "tool_executions", "total_tokens", "trigger", "turn_id", "work_item", "work_item_basis", "work_key"},
 	"turn_completed":                {"acted", "agent_handle", "agent_id", "all_tool_names", "ask", "ask_provenance", "conversation_key", "duration_ms", "ended_at", "interactions", "iterations", "outcome", "pickup_answer", "plan_summary", "review_outcome", "role", "skills_used", "started_at", "suspended", "task_summary", "tool_sequence", "turn", "turn_id", "work_item", "work_item_basis", "work_key"},
@@ -456,6 +454,7 @@ var wireTags = map[string][]string{
 	"agent_capability_told":         {"agent_handle", "baseline", "changes", "digest", "lines", "revision_from", "revision_to", "told_at"},
 	"agent_turn_stopped":            {"agent_handle", "agent_id", "operator_id", "reason", "role", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
 	"agent_turn_steered":            {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "retold", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
+	"agent_turn_joined":             {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "outcome", "owes_answer", "role", "sent_at", "trigger_ids", "turn_id", "wake_id", "work_key", "written_by", "written_by_kind", "written_on"},
 	"executor_answer_given":         {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "approval", "choice", "delegated_rule", "launch_id", "operator_id", "turn_id"},
 	"executor_answered":             {"agent_handle", "agent_id", "answer", "answer_bytes", "answer_max_bytes", "answered_by", "answered_by_kind", "asked_at", "audience_handles", "choice", "decision", "delegated_rule", "launch_id", "operator_id", "outcome", "question", "question_context", "role", "turn_id", "via", "work_item", "work_key"},
 	"phase.tool_skill_blocked":      {"agent_id", "iteration", "phase", "role", "skill_keys", "tool_name", "turn_id", "work_key"},
@@ -771,6 +770,60 @@ func TestATriggersSummaryIsOneLineWithinItsBound(t *testing.T) {
 	}
 }
 
+// A TRIGGER'S SUMMARY HOLDS NO SECRET HOWEVER ITS CUT FALLS. The summary rides
+// every record of the turn it woke, and a subject is somebody's words: a key in
+// the kept opening, and a bearer token with the bound falling at every offset
+// of it and of its marker, reach the summary as markers, never in part.
+//
+// Mutation: cut before redacting, and the cut keeps the head of the credential
+// it ran across; drop the move back off a marker, and a cut inside one keeps
+// it in part.
+func TestATriggersSummaryHoldsNoSecretHoweverItsCutFalls(t *testing.T) {
+	t.Parallel()
+	sample := map[string]string{}
+	for _, s := range redacttest.Shapes() {
+		sample[s.Name] = s.Sample
+	}
+	opening, value := sample["anthropic-key"], sample["jwt"]
+	straddling := "Authorization: Bearer " + value
+	summarise := func(subject string) string {
+		return DescribeTrigger(events.New(ExternalNotification{NotificationSource: "mail", Sender: "alice",
+			Subject: subject}, events.TraceContext{})).Summary
+	}
+	// THE CUT AT EVERY OFFSET of the token and of its marker, placed in the
+	// redaction's bytes, which the opening's own marker shortens.
+	head := "deploy key " + opening + " "
+	lead := len("Message from alice: ") + len(redact.Secrets(head))
+	for at := 1; at < len(redact.Secrets(straddling))+2*redact.LongestMarker(); at++ {
+		subject := head + strings.Repeat("x", MaxTriggerSummaryBytes-lead-at) + " " + straddling + " " +
+			strings.Repeat("y", 256)
+		got := summarise(subject)
+		if len(got) > MaxTriggerSummaryBytes || !strings.HasSuffix(got, "…") {
+			t.Fatalf("a %d-byte subject is summarised in %d bytes, want it cut within %d and marked",
+				len(subject), len(got), MaxTriggerSummaryBytes)
+		}
+		for _, secret := range []string{opening, value} {
+			for i := 0; i+6 <= len(secret); i++ {
+				if strings.Contains(got, secret[i:i+6]) {
+					t.Errorf("the bound %d bytes into the token's line: the summary holds %q of a credential", at,
+						secret[i:i+6])
+					break
+				}
+			}
+		}
+		for _, words := range redact.OwnWords(got) {
+			if strings.Contains(words, "REDACTED") {
+				t.Errorf("the bound %d bytes into the token's line: the summary holds a marker in part", at)
+				break
+			}
+		}
+	}
+	if got := summarise("deploy key " + opening); strings.Contains(got, opening[:12]) ||
+		!strings.HasPrefix(got, "Message from alice: deploy key ") {
+		t.Errorf("a short subject is summarised as %q, want its credential redacted and the rest kept", got)
+	}
+}
+
 // An integration that named itself but no human must not invent one: the sender
 // and source-event-type keys stay absent rather than arriving blank.
 func TestDescribeTriggerOmitsUnnamedSender(t *testing.T) {
@@ -1013,19 +1066,15 @@ func TestASummaryLeadIsUpperCasedByRuneNotByte(t *testing.T) {
 // A PROMOTED TAG MEANS ONE THING, AND THE CATALOGUE IS WHERE THAT IS HELD.
 //
 // internal/store promotes the flat wire field `conversation_key` out of every
-// event into one column of the event log, and the value a query gets back has
-// to mean the same thing whichever row it matched. It did not: every event a
-// turn publishes puts the conversation IDENTITY there, while the coalescing
-// record put the inbox PARTITION there — two values that differ exactly where
-// it matters, since a direct message's identity is the bare channel and its
-// partition can be a thread inside it. So a filter on that tag silently mixed
-// the thread a seat is talking on with the batch a wake arrived in.
+// event into one event-log column, which must mean the same thing whichever
+// row matched. The conversation IDENTITY and the inbox PARTITION differ exactly
+// where it matters (a direct message's identity is the bare channel, its
+// partition can be a thread inside it), so mixing them makes a filter conflate
+// the thread a seat talks on with the batch a wake arrived in.
 //
-// The rule this holds is the naming one, because that is the half a reviewer
-// can check: a field spelled `conversation_key` on the wire is the
-// conversation and is called ConversationKey, and a field holding a partition
-// is called PartitionKey and spells itself `partition_key`. A new event
-// stamping its batch into the shared tag now has to rename a field to do it.
+// The rule held is the naming one, which a reviewer can check: a field spelled
+// `conversation_key` on the wire is the conversation and is called
+// ConversationKey; a partition is PartitionKey and spells `partition_key`.
 func TestNoPayloadPutsAPartitionInTheConversationField(t *testing.T) {
 	t.Parallel()
 	for _, payload := range catalogue() {

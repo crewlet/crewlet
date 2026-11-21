@@ -18,17 +18,16 @@ import (
 
 // THE FULL SESSION TABLE, EVERY ROW REACHED BY A REAL BEARER.
 //
-// Not the map read back — that asserts nothing — but every state of the world
-// driven through [Signer.Validate], each landing on the row the design names,
-// with the cell each row permits for each of the three kinds of request.
+// Not the map read back, but every state of the world driven through
+// [Signer.Validate], each landing on the row the design names, with the cell
+// each row permits for each of the three kinds of request.
 //
 // THE CONTROL IS THE TWO ABSENT-ROW ARMS. `gone` and `behind` are the same
-// observation — no row — separated only by whether this node's applied
-// position covers the bearer's start position. Collapse them and one of the
-// two verdicts is wrong every time: answering 401 signs out every person whose
-// request reached a node a second behind, and serving honours a session that
-// ended. TestCollapsingTheAbsentRowArmsIsAStampede is that mutation, written
-// out rather than described.
+// observation (no row), separated only by whether this node's applied position
+// covers the bearer's start position. Collapse them and one verdict is wrong
+// every time: 401 signs out everyone whose request reached a node a second
+// behind, and serving honours a session that ended.
+// TestCollapsingTheAbsentRowArmsIsAStampede is that mutation.
 func TestTheFullSessionTable(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -350,18 +349,16 @@ func TestALongIdleSessionIsServedAndReissued(t *testing.T) {
 
 // TWO NODES WHOSE CLOCKS DISAGREE NEVER END A SESSION BETWEEN THEM.
 //
-// The rotation index this format used to carry had one arm that acted: a
-// bearer whose index was ahead of the validating node's clock by more than a
-// two-minute overlap bumped the person's revocation epoch, ending every
-// session and every machine token they held. The index was inside the signed
-// payload, so only a node holding the keyring wrote it, from its own clock —
-// the arm fired on an NTP fault and on nothing else. So a cookie minted and
-// re-issued by a node three hours fast, and one by a node three hours slow,
-// are both served by a node on time, re-issued, and ask nobody to revoke
-// anything.
+// The old rotation index had one arm that acted: a bearer whose index was
+// ahead of the validating node's clock by more than a two-minute overlap bumped
+// the person's revocation epoch, ending every session and machine token they
+// held. Only a keyring node wrote the index, from its own clock, so the arm
+// fired on an NTP fault and nothing else. A cookie minted and re-issued by a
+// node three hours fast, or three hours slow, is served by a node on time,
+// re-issued, and asks nobody to revoke anything.
 //
-// THE CONTROL is the previous format: the same fast node's cookie landed on
-// the reuse row there, refused, with the revocation asked for.
+// THE CONTROL is the previous format: the fast node's cookie landed on the
+// reuse row, refused, with the revocation asked for.
 func TestClockSkewBetweenNodesNeverEndsASession(t *testing.T) {
 	t.Parallel()
 	for name, skew := range map[string]time.Duration{

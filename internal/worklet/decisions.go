@@ -56,6 +56,9 @@ type DecisionsAnswer struct {
 	LogLag         *uint64            `json:"log_lag,omitempty"`
 	Complete       bool               `json:"complete"`
 	Incomplete     *Incomplete        `json:"incomplete,omitempty"`
+
+	// FlowLive is [Answer.FlowLive] for every ask's item here.
+	FlowLive bool `json:"flow_live"`
 }
 
 // Decisions answers the open asks put to one person.
@@ -70,7 +73,8 @@ func (r *Reader) Decisions(ctx context.Context, q DecisionsQuery, now time.Time,
 	case q.Handle == "":
 		return DecisionsAnswer{}, invalid("a decisions read names nobody")
 	}
-	var out DecisionsAnswer
+	flow := r.flowAt(now)
+	out := DecisionsAnswer{FlowLive: flow.live()}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
 		// The domain, for [Reader.MyWork]'s reason: an ask can be on any
@@ -87,8 +91,8 @@ func (r *Reader) Decisions(ctx context.Context, q DecisionsQuery, now time.Time,
 			return err
 		}
 		// Every body whole: the screen's read has no answer ceiling to fit.
-		if out.Asks, out.Total, err = readAsks(ctx, tx, q.Handle, anchor.At,
-			MaxDecisions, 0); err != nil {
+		if out.Asks, out.Total, err = readAsks(ctx, tx, q.Handle,
+			rowsAt{dayStart: anchor.At, flow: flow}, MaxDecisions, 0); err != nil {
 			return err
 		}
 		if out.OldestAt, err = oldestAsk(ctx, tx, q.Handle); err != nil {

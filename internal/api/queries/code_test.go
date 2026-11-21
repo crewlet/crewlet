@@ -285,15 +285,13 @@ var codeQuestions = []struct {
 }
 
 // A CODE QUESTION HANDS THE READER THE CALLER'S WHOLE FRESHNESS: the level,
-// every floor named — one per log, so the reader that waits on the code log's
-// can refuse one on any other as the request's mistake, which a floor it was
-// never handed it cannot — and a staleness bound beside a stale read, read
-// through the grammar every question reads them by. That is what makes a
-// screen's read of its own code write back honest: it names the position the
-// write answered with, and the code log's reader waits for that position
-// rather than answer from before it. What is not a freshness at all — a bare
-// `session`, a floor that is not a position, a bound beside a level it does not
-// bound — is refused as the request's mistake before the reader is asked.
+// every floor named (one per log, so the reader that waits on the code log's
+// can refuse one on any other as the request's mistake) and a staleness bound
+// beside a stale read, through the grammar every question reads them by. That
+// makes a screen's read of its own code write back honest: the code log's
+// reader waits for the position the write answered with. What is not a
+// freshness at all (a bare `session`, a floor that is not a position, a bound
+// beside a level it does not bound) is refused before the reader is asked.
 //
 // Mutation: hand the reader the level alone (codeReadQuery building its Fresh
 // from the grammar's Level) → every floor and bound goes missing, red.

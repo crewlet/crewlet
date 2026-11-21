@@ -27,16 +27,14 @@ const churnTTL = 2 * time.Millisecond
 // contendedClaimBudget is how long a claimant keeps coming back for a
 // DEFINITE answer while the suite is deliberately stampeding one resource.
 //
-// A backend may answer unknown at any moment — that is the third answer, not
-// an error the suite gets to disallow — and a compare-and-swap store under a
-// stampede reaches it honestly: it loses every swap it attempts inside its
-// retry budget and cannot say whether the winner is a peer or a record that
-// lapsed underneath it. (An embedded-NATS backend does exactly this, and the
-// first version of these cases failed it for being right.) So the suite does
-// what a caller does — comes back on the next sweep — rather than requiring a
-// definite answer from a contended store on the first try. Ten seconds is
-// orders of magnitude beyond the microseconds this takes in-process and the
-// few round trips it takes out of it, and it stays inside stallBudget.
+// A backend may answer unknown at any moment (the third answer, not an error
+// to disallow), and a compare-and-swap store under a stampede reaches it
+// honestly: it loses every swap inside its retry budget and cannot say whether
+// the winner is a peer or a record that lapsed. So the suite does what a
+// caller does, comes back on the next sweep, rather than requiring a definite
+// answer on the first try. Ten seconds is orders of magnitude beyond the
+// microseconds this takes in-process and the few round trips out of it, and
+// stays inside stallBudget.
 const contendedClaimBudget = 10 * time.Second
 
 // claimUntilDefinite retries an unknown answer until the backend gives a real
@@ -309,19 +307,14 @@ var concurrencyCases = []testCase{
 	}},
 
 	{"a_lease_renewed_throughout_a_listing_is_in_every_listing", func(h *harness) {
-		// "A class listing may lag" is about a lease that CHANGED — a
-		// peer claimed a second ago is discovered a second late. It is
-		// not licence to drop one that was live before the listing
-		// began and after it ended, and a renew is the write every live
-		// lease takes on every heartbeat. Missing one is a live node
-		// that looks gone (placement divides the seats by the rest), an
-		// owner whose drain looks finished, and — for an older-protocol
-		// peer — a floor that lets the newer build claim beside it.
-		//
-		// Measured on the embedded KV before its listings were
-		// certified: a store that keeps one revision per key REMOVES the
-		// revision a listing is about to read when the key is renewed,
-		// and 23% of listings lost a lease that way.
+		// "A class listing may lag" is about a lease that CHANGED, not
+		// licence to drop one live before the listing began and after it
+		// ended; a renew is the write every live lease takes on every
+		// heartbeat. Missing one is a live node that looks gone (placement
+		// divides the seats by the rest), an owner whose drain looks finished,
+		// and, for an older-protocol peer, a floor that lets the newer build
+		// claim beside it. A store keeping one revision per key REMOVES the
+		// revision a listing is about to read when the key is renewed.
 		nodes := []string{"n0", "n1", "n2", "n3", "n4"}
 		held := map[string]*coord.Lease{}
 		for _, n := range nodes {

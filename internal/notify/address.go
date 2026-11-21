@@ -7,21 +7,16 @@ import (
 
 // THE ONE RULE FOR "IS SOMEBODY WAITING ON THIS SEAT?".
 //
-// Three subsystems ask it and none of them may answer differently: the
-// working indicator raises "is thinking…" while the agent works, the
-// delivery check refuses to let an addressed turn end in silence, and the
-// prompt tells the agent which of the two it is in. A spinner over a turn
-// that is allowed to end in silence, and a silence after a spinner, are the
-// same bug — one question answered twice.
+// Three subsystems ask it and none may answer differently: the working
+// indicator, the delivery check (which refuses an addressed turn ending in
+// silence) and the prompt. A spinner over a turn allowed to end in silence is
+// one question answered twice.
 //
-// It is a VALUE EACH BACKEND DECLARES, not a package-level list. The list was
-// the union of the two shipped backends' channel types, which made the answer
-// right by coincidence rather than by construction: the partition key read
-// the backend's OWN kinds and the reply obligation read the global, so a
-// backend whose channel_type is its own — Chatlet is the
-// first — was DIRECT to one and NOT ADDRESSED to the other for the same
-// message. Nothing about that fails; the seat just stops owing anybody an
-// answer in its own direct messages.
+// It is a VALUE EACH BACKEND DECLARES, not a package-level list: a global
+// union of channel types is right only by coincidence, since the partition key
+// read the backend's OWN kinds and the reply obligation the global, so a
+// backend with its own channel_type (Chatlet) was DIRECT to one and NOT
+// ADDRESSED to the other, and the seat stopped owing answers in its DMs.
 
 // AddressRule is one backend's answer to "was this message addressed to this
 // seat?".

@@ -51,6 +51,7 @@ import {
   ChevronLeftGlyph,
   CircleCheckGlyph,
   FileTextGlyph,
+  InboxGlyph,
   LayersGlyph,
   SquareKanbanGlyph,
   SquareTerminalGlyph,
@@ -89,7 +90,14 @@ import { RunQuestion } from "~/components/RunQuestion.tsx";
 import { answerFate, closedAt, type GivenAnswer } from "./answerFate.ts";
 import { fmtAt } from "~/lib/format.ts";
 import { addressMark, InertAddress, TokenScope } from "~/components/InlineToken.tsx";
-import { CHECKED_WORDS, renderInline, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
+import {
+  CHECKED_WORDS,
+  renderInline,
+  renderMarkdown,
+  renderQuoted,
+  renderTokens,
+} from "~/lib/markdown.ts";
+import { Said } from "~/components/Said.tsx";
 import { nameOfIn, type OrgIndex } from "~/lib/seats.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useAgents } from "~/lib/store-hooks.ts";
@@ -155,6 +163,8 @@ import { questionWithheld } from "~/lib/access.ts";
 
 interface PaneProps {
   row: InboxRow | null;
+  /** The address names an item that every read has answered without: gone, or not the reader's. */
+  missing?: boolean | undefined;
   /**
    * The list beside the pane is empty and says so in its own empty state. The
    * pane then says no second "All clear": it holds one quiet line, the place a
@@ -194,6 +204,19 @@ interface PaneProps {
 }
 
 export function InboxPane(props: PaneProps) {
+  // AN ITEM THE ADDRESS NAMES AND NOBODY HOLDS is said calmly, never drawn as another item.
+  if (!props.row && props.missing) {
+    return (
+      <div className={`inbox-pane ${props.onBack ? "inbox-pane-missing" : "inbox-pane-empty"}`}>
+        {props.onBack && <BackToInbox onBack={props.onBack} />}
+        <EmptyState
+          icon={<InboxGlyph size={28} />}
+          title="This item is not in your inbox"
+          description="It was answered, cleared or removed, or the link is to someone else's inbox."
+        />
+      </div>
+    );
+  }
   // NO "ALL CLEAR" OVER A LIST STILL LOADING: the pane waits with the list.
   if (!props.row && props.loading) {
     return <div className="inbox-pane inbox-pane-empty" aria-busy="true" />;
@@ -227,6 +250,21 @@ export function InboxPane(props: PaneProps) {
         <OpenPane key={props.row.key} {...props} row={props.row} />
       </ReadingPane>
     </div>
+  );
+}
+
+/** The way back to the list, where the list and the pane are one column. */
+function BackToInbox({ onBack }: { onBack: () => void }) {
+  return (
+    <Button
+      size="small"
+      variant="ghost"
+      className="inbox-pane-back"
+      leadingIcon={<ChevronLeftGlyph size="sm" />}
+      onClick={onBack}
+    >
+      Back to the inbox
+    </Button>
   );
 }
 
@@ -271,17 +309,7 @@ function OpenPane({
   const accessed = row.kind === "decision" ? accessNote(row.subject) : undefined;
   // THE WAY BACK IS ITS OWN ROW at the pane's top, worded: an icon in the
   // byline's start slot floated beside a wrapped byline's middle line.
-  const back = onBack ? (
-    <Button
-      size="small"
-      variant="ghost"
-      className="inbox-pane-back"
-      leadingIcon={<ChevronLeftGlyph size="sm" />}
-      onClick={onBack}
-    >
-      Back to the inbox
-    </Button>
-  ) : undefined;
+  const back = onBack ? <BackToInbox onBack={onBack} /> : undefined;
   const frame: Frame = {
     who,
     name: rowName(row, who),
@@ -611,17 +639,43 @@ function ArtifactNoticePane({
   );
 }
 
+/** What an outcome line says of an answer, and what stands under it. */
+interface Outcome {
+  line: ReactNode;
+  under: ReactNode;
+}
+
+/**
+ * The words written in an answer, read by the conversation's rule
+ * (`CHECKED_WORDS`): quoted in the line where they are one paragraph, and as
+ * a quote under it where they are more, since the line is a paragraph and
+ * holds no list.
+ */
+function writtenOutcome(text: string): Outcome {
+  const quoted = renderQuoted(text, CHECKED_WORDS);
+  return "inline" in quoted
+    ? { line: <Said quoted={quoted} />, under: null }
+    : { line: null, under: <ReadingPaneQuote>{quoted.blocks}</ReadingPaneQuote> };
+}
+
 /**
  * "Answered Exact search (Recommended)", where the controls that answered it
  * were: an ask's, or an executor's once it took the answer.
  */
-function answeredWith(answer: AskAnswer): ReactNode {
-  return (
-    <>
-      Answered <strong>{answer.kind === "choice" ? answer.label : `“${answer.text}”`}</strong>
-      {answer.kind === "choice" && answer.recommended && " (Recommended)"}
-    </>
-  );
+function answeredWith(answer: AskAnswer): Outcome {
+  if (answer.kind === "choice") {
+    return {
+      line: (
+        <>
+          Answered <strong>{answer.label}</strong>
+          {answer.recommended && " (Recommended)"}
+        </>
+      ),
+      under: null,
+    };
+  }
+  const written = writtenOutcome(answer.text);
+  return { line: <>Answered{written.line}</>, under: written.under };
 }
 
 function AskPane({
@@ -679,6 +733,7 @@ function AskPane({
   // A QUESTION ANSWERED IN WORDS is answered in its own field above, so the
   // conversation carries no second box.
   const inWords = options.length === 0 || open;
+  const outcome = answer ? answeredWith(answer) : null;
 
   const onAnswered = (given: AskAnswer) => {
     setAnswer(given);
@@ -727,8 +782,11 @@ function AskPane({
         ) : (
           chips
         )}
-        {answer ? (
-          <ReadingPaneOutcome {...landing}>{answeredWith(answer)}</ReadingPaneOutcome>
+        {outcome ? (
+          <>
+            <ReadingPaneOutcome {...landing}>{outcome.line}</ReadingPaneOutcome>
+            {outcome.under}
+          </>
         ) : (
           <AnswerAsk
             layout="buttons"
@@ -754,7 +812,7 @@ function AskPane({
         <Conversation
           item={frame.address}
           itemKey={frame.itemKey}
-          of={{ kind: "ask", comment: ask.comment, options }}
+          of={{ kind: "ask", comment: ask.comment }}
           label="Replies to this question"
           to={frame.name}
           replyTo={inWords && !answer ? null : ask.comment}
@@ -810,7 +868,8 @@ function AnsweredPane({
   const ask = "run" in answered ? null : answered;
   const decision = run ? run.decision : ask?.ask.decision;
   const asked = (decision && WAS_ASKED[decision.role]) || "asked you";
-  const said = words.kind === "choice" ? words.said : words.said ? `“${words.said}”` : null;
+  const written = words.kind === "choice" ? words.note : words.said;
+  const outcome = written ? writtenOutcome(written) : null;
   // An answered message is read whole, since its heading does not quote it.
   const context = run
     ? run.question_context.trim()
@@ -850,21 +909,19 @@ function AnsweredPane({
           />
         )}
         <ReadingPaneOutcome>
-          {`${words.who} ${words.verb}${words.kind === "withdrawn" && said ? ":" : ""}`}
-          {said && (
+          {`${words.who} ${words.verb}`}
+          {words.kind === "choice" && (
             <>
               {" "}
-              <strong>{said}</strong>
+              <strong>{words.said}</strong>
+              {words.recommended && " (Recommended)"}
+              {outcome && " and wrote"}
             </>
           )}
-          {words.recommended && " (Recommended)"}
-          {words.note && (
-            <>
-              {" and wrote "}
-              <strong>{`“${words.note}”`}</strong>
-            </>
-          )}
+          {words.kind === "withdrawn" && outcome && ":"}
+          {outcome?.line}
         </ReadingPaneOutcome>
+        {outcome?.under}
         {words.replaced && <ReplacedBy replaced={words.replaced} />}
         {words.who !== "You" && words.kind !== "withdrawn" && (
           <Text as="p" variant="caption">
@@ -934,7 +991,7 @@ function AskFollowThrough({
       <Conversation
         item={frame.address}
         itemKey={frame.itemKey}
-        of={{ kind: "ask", comment: ask.comment, options: ask.decision?.options ?? [] }}
+        of={{ kind: "ask", comment: ask.comment }}
         label="Replies to this question"
         to={frame.name}
         replyTo={ask.comment}
@@ -1249,6 +1306,7 @@ function RunPane({
       ? "taken"
       : null;
   if (fate === "recorded" || fate === "taken") seenTaken.current = true;
+  const taken = said !== null && fate === "taken" ? answeredWith(said) : null;
   // THE OUTCOME TAKES THE FOCUS from the control that sent the answer, which
   // it replaces.
   const landing = useFocusLanding(given !== null);
@@ -1445,22 +1503,25 @@ function RunPane({
         {said !== null ? (
           // PENDING UNTIL THE EXECUTOR TOOK IT: sent, recorded or ended is
           // never the success check a used answer gets.
-          <ReadingPaneOutcome {...landing} tone={fate === "taken" ? "done" : "pending"}>
-            {fate === "taken" ? (
-              answeredWith(said)
-            ) : fate === "recorded" ? (
-              <>
-                Answer recorded.{" "}
-                {busyOn
-                  ? busyLine(busyOn, frame.name)
-                  : `${frame.name}’s executor picks it up next.`}
-              </>
-            ) : fate === "ended" ? (
-              <>Answer sent. {frame.name}’s executor is no longer running.</>
-            ) : (
-              <>Answer sent. Waiting for {frame.name}’s executor to take it.</>
-            )}
-          </ReadingPaneOutcome>
+          <>
+            <ReadingPaneOutcome {...landing} tone={taken ? "done" : "pending"}>
+              {taken ? (
+                taken.line
+              ) : fate === "recorded" ? (
+                <>
+                  Answer recorded.{" "}
+                  {busyOn
+                    ? busyLine(busyOn, frame.name)
+                    : `${frame.name}’s executor picks it up next.`}
+                </>
+              ) : fate === "ended" ? (
+                <>Answer sent. {frame.name}’s executor is no longer running.</>
+              ) : (
+                <>Answer sent. Waiting for {frame.name}’s executor to take it.</>
+              )}
+            </ReadingPaneOutcome>
+            {taken?.under}
+          </>
         ) : superseded ? (
           // THE PANE'S OWN SENTENCE names nobody, so the line beside it says
           // whose answer was used as well as when.
@@ -1863,9 +1924,13 @@ function NoticePane({
               : "The comment and its replies"
             : "Conversation on this task"
         }
-        to={frame.name}
+        to={frame.who ? frame.name : frame.itemKey || frame.name}
         replyTo={comment || undefined}
-        placeholder={`Reply to ${frame.name}. @mention to bring someone in.`}
+        placeholder={
+          frame.who
+            ? `Reply to ${frame.name}. @mention to bring someone in.`
+            : `Comment on ${frame.itemKey || "the task"}. @mention to bring someone in.`
+        }
         index={index}
         now={now}
       />

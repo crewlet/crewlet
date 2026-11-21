@@ -28,23 +28,16 @@ import (
 )
 
 // THE SURFACES A PERSON REACHES, built over the engine running beside them:
-// the way in, the identity directory, the operator surface (the dashboard's
-// act route and an operator's own assistant), the human write surface, and the
-// two credential arms the guard resolves a browser's cookie and a machine token
-// through.
+// the way in, the identity directory, the operator surface, the human write
+// surface, and the two credential arms the guard resolves a cookie and a
+// machine token through.
 //
 // # Here, beside the options they fill, and not in the command that serves them
 //
-// For [engineRuntime]'s reason, with its failure measured. They were built in
-// cmd/crewlet, which is package main and reachable from no other package, so
-// the end-to-end suite's own wiring could not call them and mounted none of
-// them: every fixture there presented a Tier A bearer to a node serving no
-// /auth, no /iam and no /worklet. A fleet whose sessions did not cross between
-// its members — a cookie minted on one node refused on the next, a revocation
-// one node never heard — left the fleet suite green, because nothing in it had
-// ever signed in. One constructor that `crewlet run` and the suite both call is
-// what makes the suite's sign-in the one a deployment serves; a copy in the
-// suite would be a harness agreeing with itself.
+// For [engineRuntime]'s reason: cmd/crewlet is package main, so the end-to-end
+// suite could not call this wiring, and a fleet whose sessions did not cross
+// between members left it green because nothing had ever signed in. One
+// constructor both call makes the suite's sign-in the one a deployment serves.
 
 // HumanSurfaces are the surfaces a node serves a person, and a person's
 // credentials, through. Built by [NewHumanSurfaces] and handed to an API's
@@ -96,18 +89,14 @@ type HumanSurfaces struct {
 // A it runs under.
 //
 // EVERY NODE SERVING THE API SERVES ALL OF THEM, with a company or without
-// one. Such a node holds the estate — ingress requires the `data` role
-// (ADR-0025) — and the identity estate is the engine's CORE, running from boot
-// on every node that holds the estate, so a node
-// nobody has configured yet still exchanges the deployment's Tier A token for
-// a session — the session its company is created through — holds the
-// directory its first person is invited or created into once that company
-// declares a human seat, and serves the write surface — whose
-// routes answer `503 no_active_revision` until the first company brings the
-// tracker and the knowledge base up, and are served from then on with no
-// restart. They used to be ABSENT on such a node, each logged, so the node a
-// company is bootstrapped on was the one node nobody could sign in to until
-// it was restarted.
+// one. Such a node holds the estate (ingress requires the `data` role,
+// ADR-0025) and the identity estate is the engine's CORE, running from boot, so
+// an unconfigured node still exchanges the deployment's Tier A token for the
+// session its company is created through, holds the directory its first person
+// joins, and serves the write surface, whose routes answer `503
+// no_active_revision` until the first company brings the tracker and knowledge
+// base up. Were they absent, the node a company is bootstrapped on would be the
+// one nobody could sign in to until restarted.
 func NewHumanSurfaces(boot *config.Bootstrap, e *engine.Engine) (HumanSurfaces, error) {
 	signIn, sessions, err := signInSurface(boot, e)
 	if err != nil {
@@ -152,13 +141,11 @@ func NewHumanSurfaces(boot *config.Bootstrap, e *engine.Engine) (HumanSurfaces, 
 
 // Mount hands the surfaces to an API's options.
 //
-// THE ONE PLACE A NIL SURFACE BECOMES A NIL INTERFACE, and it is a method so
-// that no caller does the conversion for itself. A surface held as a nil *T is
-// a NON-NIL interface once it reaches [Options], so [New]'s own "is there one"
-// check passes and mounts every route over a nil service — which answers each
-// request with a nil dereference instead of the 404 an absent surface is
-// documented to be. [NewHumanSurfaces] builds every one on an engine [engine.New]
-// made; a zero HumanSurfaces — a suite's — is what this keeps honest.
+// THE ONE PLACE A NIL SURFACE BECOMES A NIL INTERFACE, as a method so no caller
+// converts for itself: a nil *T is a NON-NIL interface once it reaches
+// [Options], so [New]'s "is there one" check passes and mounts every route over
+// a nil service, which panics instead of answering the documented 404. This
+// keeps a zero HumanSurfaces, a suite's, honest.
 func (h HumanSurfaces) Mount(o *Options) {
 	if h.SignIn != nil {
 		o.Auth = h.SignIn
@@ -171,19 +158,14 @@ func (h HumanSurfaces) Mount(o *Options) {
 // signInSurface builds /auth and the session arm beside it.
 //
 // ON EVERY NODE SERVING THE API. The identity estate is the engine's core, run
-// wherever the estate is held — which ingress requires — so a node that has
-// met no company holds its directory too — and is exactly where the
-// deployment's Tier A token signs a session in to create the company, after
-// which its first person is invited or created onto one of its human seats
-// and signs in there. An engine with no identity estate is
-// one [engine.New] did not build, which is a wiring mistake to refuse by
-// name rather than a posture to serve around: a node holding no estate is one
-// whose roles leave out `data`, and config refuses `ingress` on such a node.
+// wherever the estate is held (ingress requires it), so a node that has met no
+// company holds its directory too, and is exactly where the Tier A token signs
+// a session in to create the company. An engine with no identity estate is a
+// wiring mistake to refuse by name, not a posture to serve around: such a node
+// leaves `data` out of its roles, and config refuses `ingress` on it.
 //
-// A keyring that cannot sign for the fleet USED TO BE a narrower posture too,
-// and it is not any more: Tier A refuses a file without a usable keyring and
-// the engine refuses to start without one, so a session signer this function
-// cannot build is a fault it returns rather than a node it quietly narrows.
+// A session signer this function cannot build is a fault it returns, not a
+// node it quietly narrows: Tier A and the engine both refuse a missing keyring.
 func signInSurface(boot *config.Bootstrap, e *engine.Engine) (
 	*authapi.Service, *auth.Sessions, error) {
 
@@ -388,19 +370,13 @@ var errNoIdentityEstate = errors.New("api: this node serves the API but has " +
 // node, whose catalogue is built for every call from the halves the node
 // serves at that moment ([NativeOperatorHalves]).
 //
-// THE SAME DEPS A SEAT'S TOOLS GET, with one field different: the actor, which
-// is the request's principal ([operator] sets it per call). That is what makes
-// this one implementation of every tool rather than two — see
-// [builtin.WorkDeps.Actor].
-//
-// The seat controls — a parked executor answered by its turn, a seat paused
-// or resumed, a note to a running turn — are served on every node whatever the
-// company's backends: each record is the fleet's, and each is carried out by
-// the node holding the seat, which reads it off that seat's inbox or its own
-// watched copy. A person's question answered from the company's knowledge runs
-// on the auxiliary model of their own seat and is charged to the company's
-// windows, with the answers cached on this node — once, here, since a cache a
-// per-call catalogue built would remember nothing.
+// THE SAME DEPS A SEAT'S TOOLS GET, but for the actor, the request's principal
+// ([operator] sets it per call): one implementation of every tool, not two
+// ([builtin.WorkDeps.Actor]). Seat controls (answering a parked executor,
+// pausing a seat, a note to a running turn) are served on every node whatever
+// the backends: each record is the fleet's, carried out by the seat's holder. A
+// person's knowledge question runs on their own seat's auxiliary model; answers
+// are cached once, here, since a per-call catalogue's cache would remember nothing.
 func operatorSurface(e *engine.Engine, authority authz.Chart,
 	listeners *operator.Listeners) (*operator.Server, error) {
 	chart := func() *org.Organization {
@@ -462,13 +438,11 @@ func operatorSurface(e *engine.Engine, authority authz.Chart,
 // workSurface builds the human write surface over the halves each request
 // finds.
 //
-// ITS TOOLS THROUGH THE OPERATOR SURFACE'S DISPATCH — the one the act route and
-// an operator's assistant call — and its own decisions on authority, the chart
-// value that dispatch decides on, so a route and the tool behind it answer one
-// question one way. What it adds is
-// the two writers the tools never reach: the tracker's, bound to the caller,
-// for a comment edit and the purge, and the knowledge base's store for its
-// rename and its three destructive verbs.
+// ITS TOOLS GO THROUGH THE OPERATOR SURFACE'S DISPATCH, and its decisions on
+// authority are the chart value that dispatch decides on, so a route and the
+// tool behind it answer one question one way. It adds the two writers the tools
+// never reach: the tracker's (bound to the caller) for a comment edit and the
+// purge, and the knowledge base's store for its rename and destructive verbs.
 //
 // PER REQUEST, never captured here: the halves come up with the node's first
 // company, which a node that booted with none meets at an apply after this
@@ -547,48 +521,30 @@ func personWriter(as func(estate.Actor) estate.WorkWriter, actor builtin.Actor) 
 
 // NativeToolDeps are the deps the builtin tools are built from for a surface
 // whose caller is a PERSON rather than a seat: the operator surface's
-// catalogue, which the dashboard's act route, an operator's assistant over MCP
-// and the human write surface's tool-backed routes all call through, and the
-// rows the write surface reads before it decides.
+// catalogue (act route, assistant over MCP, tool-backed write routes) and the
+// rows the write surface reads.
 //
-// ONE CONSTRUCTOR FOR ALL OF THEM, because a field wired on one and forgotten
-// on another is a tool that behaves differently depending on where it was
-// called from — which is the drift each of the comments below records having
-// happened once already. Actor and Authorize are left for the operator surface
-// to set per call: the actor is the request's principal carrying the call's
-// operation, and the decision is the chart's.
-//
-// THE CHART SEAMS ARE READ PER CALL — leads, units, mentions, the default
-// project, the clock — because these deps are built for every request and an
-// apply can move any of them between two.
-//
-// THROUGH THIS NODE'S ESTATE ROUTER, every read and every write, exactly as a
-// seat's tools are ([engine.OperatorWork], [engine.OperatorWorkWriter],
-// [engine.OperatorPages], [engine.OperatorPageWriter]) — never this node's own
-// copy read directly. Read directly, a data node whose copy was out of service
-// went on answering its operator from the copy it had stopped serving while
-// its own seats were answered by a peer's; through the router a person is
-// answered as the seats are, and a read after their own write waits for it
-// on the router's session floor ([engine.Engine.AwaitEstate]) — never this
-// node's own applier, which is not the one that answers once its copy is out
-// of service.
-//
-// THE READS WHEREVER THIS NODE SERVES THEM, THE WRITES ONLY WHERE IT HANDS OUT
-// A WRITER: two facts, so two gates. A node in a maintenance mode serves
-// Worklet's and Doclet's reads and hands no writer to any surface
-// ([engine.OperatorWorkWriter], [engine.OperatorPageWriter], behind the
-// engine's one writer gate), so it is handed the read tools and no write tool
-// — never write tools whose every write is refused. Gated on both at once,
-// such a node's operator was offered no read at all for the whole of a
-// capacity window: their assistant could not read a board the dashboard beside
-// it was drawing, nor fetch a project's file the listing named. Every tool is
-// gated on its own seam ([builtin.OperatorTools]), so a reader handed without
-// a writer serves exactly the reads ([readsOnly]).
+// ONE CONSTRUCTOR FOR ALL OF THEM: a field wired on one and forgotten on
+// another is a tool that behaves differently by caller. Actor and Authorize are
+// left for the operator surface to set per call. The chart seams (leads, units,
+// mentions, default project, clock) are read per call: these deps are built per
+// request and an apply can move any of them between two.
 func NativeToolDeps(e *engine.Engine) (builtin.WorkDeps, builtin.PageDeps) {
 	var work builtin.WorkDeps
 	var kb builtin.PageDeps
+	// THROUGH THIS NODE'S ESTATE ROUTER, every read and write, as a seat's tools
+	// are, never this node's own copy: a data node whose copy was out of service
+	// would answer its operator from it while its seats got a peer's. A read
+	// after a person's own write waits on the router's session floor
+	// ([engine.Engine.AwaitEstate]), not this node's applier.
 	reader, readable := engine.OperatorWork(e)
 	writer, writable := engine.OperatorWorkWriter(e)
+	// THE READS WHEREVER THIS NODE SERVES THEM, THE WRITES ONLY WHERE IT HANDS
+	// OUT A WRITER: two facts, two gates. A node in a maintenance mode serves
+	// reads but hands no writer, so it gets the read tools and no write tool;
+	// gated on both at once its operator would have no read for a whole capacity
+	// window. Every tool is gated on its own seam ([builtin.OperatorTools]), so a
+	// reader without a writer serves exactly the reads ([readsOnly]).
 	if readable {
 		work = builtin.WorkDeps{
 			Reader:       reader,
@@ -810,33 +766,18 @@ func readsOnly(d builtin.WorkDeps) builtin.WorkDeps {
 	return d
 }
 
-// ChatletDeps are chat's tool deps for the same surfaces [NativeToolDeps]
-// builds the tracker's and the knowledge base's for, on the same terms: Actor
-// and Authorize are the operator surface's to set per call, and every read and
-// every write goes through this node's estate router ([engine.OperatorChat],
-// [engine.OperatorChatWriter], [engine.OperatorChatSearch]).
+// ChatletDeps are chat's tool deps for the surfaces [NativeToolDeps] serves, on
+// the same terms: Actor and Authorize are the operator surface's to set per
+// call, and every read and write goes through this node's estate router.
 //
-// # A person's read state, whenever the rooms are the engine's
+// A person's read state (how far they have read each room, what they muted, when
+// do-not-disturb ends) is the fleet's coordination record, not a chat-log one,
+// so it is wired WHEREVER THE ROOMS ARE THE ENGINE'S, a maintenance mode
+// included: the mode forbids publishing a record, not a compare-and-set, and
+// every dashboard gesture is a tool here (ADR-0024).
 //
-// The one half no seat's surface has: how far a person has read in each room,
-// what they muted and when their do-not-disturb ends, which `list_channels`
-// counts its badges against ([builtin.ChatDeps.ReadState]) and `mark_chat_read`
-// writes ([builtin.ChatDeps.Cursors]). It is the fleet's coordination record
-// rather than a record on the chat log, so it is wired WHEREVER THE ROOMS ARE
-// THE ENGINE'S, a maintenance mode included: the mode forbids a node to
-// publish a record, and has nothing to say about a compare-and-set in the
-// coordination store — and every gesture the dashboard makes is a tool here
-// (ADR-0024), so withholding it would leave a person on such a node no way to
-// clear a badge at all.
-//
-// # The rooms, both halves or neither
-//
-// Unlike Worklet's and Doclet's tools, whose reads such a node still serves
-// ([NativeToolDeps]): a node that hands out no chat writer — one in a
-// maintenance mode — serves none of the tools that read or write the rooms,
-// rather than reads answered beside writes refused on every press. The search
-// goes with them, since a node that searches the rooms but cannot post in them
-// is a surface no seat has.
+// The rooms are both halves or neither: a node with no chat writer serves no
+// room tool, search included, not reads beside writes refused on every press.
 func ChatletDeps(e *engine.Engine) builtin.ChatDeps {
 	reader, readable := engine.OperatorChat(e)
 	if !readable {
@@ -871,23 +812,16 @@ type chatReadStore interface {
 		coord.ChatReadState, error)
 }
 
-// chatReads is a person's read state as the chat tools read and write it — the
+// chatReads is a person's read state as the chat tools read and write it: the
 // [builtin.ChatCursors] seam, and [builtin.ChatDeps.ReadState] through its
-// ReadState.
+// ReadState. The maintenance sweep's absence stamp
+// ([coord.ChatReadState.AbsentSince]) is neither answered nor handed back.
 //
-// THE PERSON'S STATE AND NOTHING OF THE RECONCILE'S, both ways: the absence
-// stamp the maintenance sweep keeps on a record
-// ([coord.ChatReadState.AbsentSince]) is its machinery, so it is neither
-// answered to a listing nor handed back from a flush.
-//
-// THE STORE'S ERROR IS RETURNED AS IT IS, never re-worded or wrapped: the tool
-// tells a flush the merge refused ([coord.ErrInvalidReadState], the caller's
-// to change) from one whose answer was lost ([coord.ErrWriteUnknown], which
-// may have landed) and from a store that could not take it by the sentinel
-// alone, and says the first in the merge's own words — re-worded, a refusal
-// that can never land would read "try again". And a read that failed is never
-// a zero state in its place: a zero state is somebody who has opened nothing,
-// to whom every room's tail is unread.
+// THE STORE'S ERROR IS RETURNED AS IT IS: the tool tells a refused merge
+// ([coord.ErrInvalidReadState]) from a lost answer ([coord.ErrWriteUnknown],
+// which may have landed) by the sentinel alone, and a re-worded refusal that
+// can never land would read "try again". A failed read is never a zero state:
+// that is somebody who has opened nothing, every room's tail unread.
 type chatReads struct{ store chatReadStore }
 
 var (

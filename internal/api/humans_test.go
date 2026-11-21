@@ -13,14 +13,12 @@ import (
 // A NODE THAT SERVES NO SIGN-IN SURFACE HAS NO SIGN-IN ROUTES, rather than
 // routes mounted over a nil service.
 //
-// Every engine [engine.New] builds serves one, a node with no company
-// included; what holds none is a zero [api.HumanSurfaces] — a suite's — and
-// [api.HumanSurfaces.Mount] is the one place its nil *authapi.Service meets the
-// options' interface. Handed straight across, the interface is NON-NIL:
-// [api.New] mounts every /auth route over a nil service and `GET /auth/config`
-// — the first thing the dashboard reads — panics inside its handler, where the
-// absent surface is documented as a 404. It was the posture of a node that
-// started with no company, until the identity estate ran from boot.
+// Every engine [engine.New] builds serves one; what holds none is a zero
+// [api.HumanSurfaces], a suite's, and [api.HumanSurfaces.Mount] is the one place
+// its nil *authapi.Service meets the options' interface. Handed straight across
+// the interface is NON-NIL: [api.New] mounts every /auth route over a nil
+// service and `GET /auth/config`, the dashboard's first read, panics where the
+// absent surface is documented as a 404.
 //
 // Mutation: make Mount assign the sign-in surface unconditionally, and the
 // read below panics.

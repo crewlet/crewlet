@@ -14,21 +14,16 @@ import (
 )
 
 // RecordVersion is the record shape THIS BUILD can decode, never the version
-// it stamps: a writer stamps the lowest version that reads its record, computed
-// by [Encode] from [versionedFields], and a record above this is retained.
+// it stamps: [Encode] stamps the lowest that reads the record, from
+// [versionedFields], and a record above this is retained.
 //
-//   - 1: the base format: a person's claim on an entry, the purge of an entry
-//     or of a value, an hour's expiry, the trim's trimmed record, and the
-//     framework's eviction, generation and barrier.
-//   - 2: an integration's read of one entry (`read`, ADR-0129): the claims it
-//     holds on the entry that changed, and the slots it withdraws.
-//   - 3: an agent's claim (ADR-0132): a `claim` whose source is an agent, by
-//     its seat, with the turn it was recorded in and the evidence the engine
-//     checked behind it.
+//   - 1: the base format: a person's claim, a purge, an expiry, the trimmed
+//     record, and the framework's eviction, generation and barrier.
+//   - 2: an integration's read of one entry (`read`, ADR-0129).
+//   - 3: an agent's claim (ADR-0132), with its seat, turn and evidence.
 //   - 4: a read of a repository's deploy and dependency files (ADR-0133): a
 //     `read` whose source is code, by the repository's name.
-//   - 5: the tool an agent's claim cited, by name, on its source: what a
-//     person reviewing the claim is shown beside its turn and its seat.
+//   - 5: the tool an agent's claim cited, by name, on its source.
 const RecordVersion = 5
 
 // baseRecordVersion is version 1, the base format.
@@ -39,17 +34,14 @@ const baseRecordVersion = 1
 const GateRecordVersion = 1
 
 // versionedFields is every field or kind an atlas record has gained since the
-// base format, with the version a reader needs to apply a record carrying it. A
-// new source of claims (an agent's, an integration's read) is a row naming its
-// value at `mutation.source.kind`, and a new record kind a row naming the
-// subject kind's value. A word the atlas vocabulary gains (a kind of entry, a
-// fact, a relation) needs no row: the applier keeps every word as text and
-// judges none, so it lands as the same row on every build, and a reader that
-// does not know it yet skips the claim by name ([atlas.View.Skipped]).
+// base format, with the version a reader needs to apply it: a new source of
+// claims is a row at `mutation.source.kind`, a new record kind a row at the
+// subject kind. A new vocabulary word needs no row (package doc, "The applier
+// judges no text").
 //
-// A KIND NO TAG HAS SHIPPED STILL GETS ITS ROW, for the access log's reason:
-// two builds of a rolling upgrade disagree about it all the same, and a build
-// without the row would fault on the record rather than retain it.
+// A KIND NO TAG HAS SHIPPED STILL GETS ITS ROW: two builds of a rolling upgrade
+// disagree about it all the same, and a build without the row would fault on
+// the record rather than retain it.
 var versionedFields = statelog.RecordFields{
 	{Name: "Op read", Since: 2, Path: []string{"op"}, Equals: string(OpRead)},
 	{Name: "Claim.Source agent", Since: 3, Op: string(OpClaim), Path: []string{"mutation", "source", "kind"},
@@ -67,26 +59,18 @@ type OpKind string
 
 // The ops an atlas record can carry.
 const (
-	// OpClaim records one claim on an entry: a fact, a relation, the entry
-	// itself, two entries joined or kept apart, or a denial of any of them;
-	// a person's, or an agent's with the evidence of its turn.
+	// OpClaim records one claim on an entry, a person's or an agent's.
 	OpClaim OpKind = "claim"
 
-	// OpRead records one integration's read of one entry (ADR-0129): the
-	// claims the read holds on it that are new or changed, and the slots of
-	// its own earlier claims it no longer holds, which are withdrawn. A read
-	// that stopped seeing the entry retires it: one denied exists claim, and
-	// every other slot withdrawn. A read of a repository's files (ADR-0133)
-	// is the same record in the repository's voice, and only withdraws.
+	// OpRead records one integration's read of one entry ([Read], ADR-0129),
+	// or of a repository's files in the repository's voice (ADR-0133).
 	OpRead OpKind = "read"
 
 	// OpPurge erases an entry or a value everywhere, its history included,
 	// and marks it so nothing brings it back.
 	OpPurge OpKind = "purge"
 
-	// OpExpire removes the history past the retention through an hour: the
-	// claims a newer claim of the same voice replaced, and the entries a
-	// person retired, with everything recorded about them.
+	// OpExpire removes the history past the retention through an hour ([Expire]).
 	OpExpire OpKind = "expire"
 
 	// OpEviction is a node's eviction from this log, or its readmission.
@@ -227,9 +211,9 @@ func Decode(payload []byte) (MutationRecord, error) {
 	return rec, nil
 }
 
-// Encode renders a record, carrying back whatever a newer build wrote, and
-// stamps it with the lowest version that reads it. A zero version is "stamp
-// it"; a set one is kept, and refused below what the record carries.
+// Encode renders a record, carrying back whatever a newer build wrote. A zero
+// version is stamped with the lowest that reads the record; a set one is kept,
+// and refused below what the record carries.
 func Encode(rec MutationRecord) ([]byte, error) { return encodeWith(rec, versionedFields) }
 
 // encodeWith is [Encode] under a named field table.

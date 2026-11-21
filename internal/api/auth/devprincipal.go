@@ -13,45 +13,25 @@ import (
 )
 
 // THE DEVELOPMENT PRINCIPAL, and what it is allowed to replace.
+
+// It replaces the removed `api.auth.disabled`, which authenticated the EMPTY
+// credential into full operator authority with no bind check, a total bypass
+// on any deployment (a Tier A file still carrying it is refused by name, see
+// config's removedKeys). What somebody wanted was a laptop dashboard opening
+// without a token. Two refusals, neither enough alone:
 //
-// # What it replaces
+//   - THE BIND MUST BE LOOPBACK, the only check that physically keeps another
+//     machine out. It judges `api.host`, not `api.external_url`: this is about
+//     who can open a socket to this process, where the bind is.
+//   - THE BINARY MUST BE A DEVELOPMENT BUILD, since a setting reaches
+//     production by being copied (compose file, Helm value, forked image).
+//     [version.IsDevelopment] asks positively, so anything unrecognised refuses.
+
+// It is a FLAG, not a config field, for the same reason: a field gets copied.
 //
-// `api.auth.disabled` authenticated the EMPTY credential into full operator
-// authority, with no check on the bind address anywhere — so one unset
-// environment variable was a total bypass of every gate this package has, on
-// any deployment, reachable by anybody who could reach the port. It is removed,
-// and a Tier A file that still carries it is refused by name (see config's
-// removedKeys); this is the thing somebody actually wanted when they reached
-// for it: a laptop where the dashboard opens without a token while its author
-// is writing a feature.
-//
-// # The two refusals, and why neither alone is enough
-//
-//   - THE BIND MUST BE LOOPBACK. That is the only check that physically
-//     prevents another machine reaching this, which is the whole difference
-//     from `disabled`. It judges `api.host` rather than `api.external_url`,
-//     deliberately and unlike `api.auth.accept_insecure`'s rule: that one is
-//     about whether a cookie crosses plaintext through a proxy, where the
-//     external address is the truth, and this one is about who can open a
-//     socket to this process, where the bind is.
-//   - THE BINARY MUST BE A DEVELOPMENT BUILD. A bind is a setting, and a
-//     setting reaches production by being copied — a compose file, a Helm
-//     value, a base image somebody forked. [version.IsDevelopment] asks
-//     positively rather than testing for a release shape, so anything this
-//     build cannot recognise as a development build refuses the flag, and no
-//     copied setting can carry this into a deployment that pulled a tag.
-//
-// It is a FLAG rather than a config field for the same reason: a field gets
-// copied into an image, and the copy is the failure.
-//
-// # What it grants
-//
-// Every app, and admin where this node serves it (`api.auth.admin: serve`) —
-// what a Tier A token listing `[admin]` carries here, and no more.
-// `disabled` granted everything unconditionally, which meant a laptop's
-// convenience and the deployment's authority were the same thing; here an
-// operator who has set this node to refuse admin has refused it to this too,
-// and a posture this build cannot read confers nothing at all.
+// It grants every app, and admin where this node serves it: what a Tier A token
+// listing `[admin]` carries, and no more; a posture this build cannot read
+// confers nothing.
 
 // DevPrincipalLoginPrefix is the class segment the development principal's
 // login carries.

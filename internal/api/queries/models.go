@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/modelcatalog"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -163,6 +165,12 @@ type ModelEntry struct {
 	Usage        ModelUsage        `json:"usage"`
 	UsedBy       []ModelUse        `json:"used_by"`
 	DeviceSignIn *ModelDevice      `json:"device_sign_in"`
+	Limits       []ModelLimit      `json:"limits"`
+	// HelperProblem is why no helper (Ask Crewlet, the Advisor) can run on
+	// the entry, in a person's words, or null where one can: the one rule
+	// ([config.Company.HelperModelProblem]), so a model picker never states
+	// its own.
+	HelperProblem *string `json:"helper_problem"`
 }
 
 // ModelSignIn is how an entry signs in, the admin's reading.
@@ -204,6 +212,39 @@ type ModelSittingOut struct {
 	Nodes    []string   `json:"nodes"`
 }
 
+// ModelLimit is one window of the entry's sign-in's vendor limit, as the
+// newest report across live nodes left it ([modelLimits]).
+type ModelLimit struct {
+	// Window is session, weekly, model or unknown (llm.LimitWindow); Hours
+	// its length as the vendor names it, 0 where unsaid; Model the model
+	// family a model window is of.
+	Window string `json:"window"`
+	Hours  int    `json:"hours"`
+	Model  string `json:"model,omitempty"`
+	// State is ok, warning or reached (llm.LimitState): the vendor's, raised
+	// to warning from [LimitWarnAt] used, and ok once the window has turned over.
+	State string `json:"state"`
+	// Used is the fraction used, null where the vendor did not say or the
+	// window has turned over since.
+	Used     *float64   `json:"used"`
+	ResetsAt *time.Time `json:"resets_at"`
+	// Until is when the entry is tried again, where it sits this window out.
+	Until *time.Time `json:"until"`
+	// Seen is when a call last heard it, and Stale whether that is past
+	// [LimitStaleAfter].
+	Seen  time.Time `json:"seen"`
+	Stale bool      `json:"stale"`
+}
+
+// LimitWarnAt is the fraction of a window from which it reads as a warning
+// whatever the vendor's status says: a fifth of a window is what is left to
+// move seats to another model before it refuses them.
+const LimitWarnAt = 0.8
+
+// LimitStaleAfter is how old a window's reading may be before it is said to be
+// out of date: a tenth of the shortest window a vendor names (five hours).
+const LimitStaleAfter = 30 * time.Minute
+
 // ModelLastFailure is the latest failure across live nodes.
 type ModelLastFailure struct {
 	Kind string    `json:"kind"`
@@ -233,13 +274,16 @@ type ModelUsage struct {
 }
 
 // ModelUse is one job the entry runs, or is a fallback for: a seat's, by
-// handle and job, or the assistant's chat or deep work. Position is the
+// handle and job, Ask Crewlet's chat, or the Advisor's findings. Position is the
 // entry's place in the resolved chain, 0 for the model that runs it.
 type ModelUse struct {
 	Seat      string `json:"seat,omitempty"`
 	Job       string `json:"job,omitempty"`
 	Assistant string `json:"assistant,omitempty"`
-	Position  int    `json:"position"`
+	// Advisor is "findings" where the Advisor explains its findings with the
+	// entry (`advisor.model`).
+	Advisor  string `json:"advisor,omitempty"`
+	Position int    `json:"position"`
 	// Written is whether the seat wrote the field that resolved the job;
 	// Source is the level that decided it (phase.Source). Absent for the
 	// assistant, whose fields are always written.
@@ -356,6 +400,7 @@ type MemberEntry struct {
 	LastSuccess *time.Time       `json:"last_success"`
 	Waiting     *ModelWaiting    `json:"waiting"`
 	UsedBy      []ModelUse       `json:"used_by"`
+	Limits      []ModelLimit     `json:"limits"`
 }
 
 // MemberSignIn is how an entry signs in, a member's reading: the route and
@@ -399,13 +444,11 @@ func (s Sources) modelReports(ctx context.Context) ([]nodeModels, error) {
 // llmEntries answers what each configured model is doing, across the fleet.
 //
 // FROM THE STATUS RECORDS, as `mcp_servers_status` is: every node writes its
-// models on its record ([coord.NodeStatusRecord.Models]), so one listing of
-// the records, counted against the lease table, is every node's word at once,
-// and a live node with no record counted is a column of its own rather than a
-// row of zeros. What
-// only THIS node can say (how it resolves each entry's credential, the hint of
-// the value it resolved) comes from its own engine ([ModelSource]), and the
-// answer names this node.
+// models on its record ([coord.NodeStatusRecord.Models]), so one listing
+// against the lease table is every node's word, and a live node with no record
+// is a column of its own rather than a row of zeros. What only THIS node can
+// say (how it resolves each entry's credential, the hint of the value) comes
+// from its own engine ([ModelSource]), and the answer names this node.
 //
 // TWO READINGS (decision D7): an admin reads the whole answer; anybody else
 // reads each model's condition with nothing that names a credential, an
@@ -472,7 +515,7 @@ func (s Sources) llmEntries(ctx context.Context, _ Params) (any, error) {
 func memberEntry(e ModelEntry) MemberEntry {
 	out := MemberEntry{Key: e.Key, Harness: e.Harness, Model: e.Model, Health: e.Health,
 		SignIn:      MemberSignIn{Route: e.SignIn.Route, Resolves: e.SignIn.Resolves},
-		LastSuccess: e.LastSuccess, Waiting: e.Waiting, UsedBy: e.UsedBy}
+		LastSuccess: e.LastSuccess, Waiting: e.Waiting, UsedBy: e.UsedBy, Limits: e.Limits}
 	if e.SittingOut != nil {
 		sit := *e.SittingOut
 		sit.Said = ""
@@ -548,7 +591,7 @@ func (s Sources) modelEntry(company *config.Company, organization *org.Organizat
 
 	e := ModelEntry{Key: key, Harness: string(cmp.Or(entry.Harness, config.Harness("claude-code"))),
 		Model: entry.Model, UsedBy: usedBy(company, key),
-		Usage: usage}
+		Usage: usage, HelperProblem: helperProblem(company, key)}
 	if e.Usage.Days == 0 {
 		e.Usage = ModelUsage{Days: ModelUsageDays}
 	}
@@ -649,8 +692,79 @@ func (s Sources) modelEntry(company *config.Company, organization *org.Organizat
 	if e.Waiting != nil {
 		slices.Sort(e.Waiting.Seats)
 	}
+	e.Limits = modelLimits(key, entry.Model, reports, e.SittingOut, now)
 	e.Health = modelHealth(e, now)
 	return e
+}
+
+// modelLimits is the one reading of an entry's limit windows: each window's
+// newest report across nodes, with the window it sits out marked reached.
+func modelLimits(key, model string, reports []nodeModels, sitting *ModelSittingOut, now time.Time) []ModelLimit {
+	newest := map[string]coord.ModelLimit{}
+	for _, r := range reports {
+		for _, l := range r.models[key].Limits {
+			if !llm.LimitWindow(l.Window).Valid() || !llm.LimitState(l.State).Valid() {
+				continue
+			}
+			k := l.Window + "/" + l.Model
+			if held, ok := newest[k]; !ok || l.Seen.After(held.Seen) {
+				newest[k] = l
+			}
+		}
+	}
+	out := make([]ModelLimit, 0, len(newest)+1)
+	for _, l := range newest {
+		out = append(out, limitOf(l, now))
+	}
+	if sitting != nil {
+		until := sitting.Until
+		i := slices.IndexFunc(out, func(l ModelLimit) bool { return sitsOut(l, sitting.Window, model) })
+		if i < 0 {
+			out = append(out, ModelLimit{Window: sitting.Window, Seen: sitting.Since})
+			i = len(out) - 1
+		}
+		out[i].State, out[i].Until, out[i].Stale = string(llm.LimitReached), &until, false
+		if sitting.ResetsAt != nil {
+			out[i].ResetsAt = sitting.ResetsAt
+		}
+	}
+	slices.SortFunc(out, func(a, b ModelLimit) int {
+		return cmp.Or(cmp.Compare(slices.Index(llm.LimitWindows, llm.LimitWindow(a.Window)),
+			slices.Index(llm.LimitWindows, llm.LimitWindow(b.Window))), cmp.Compare(a.Model, b.Model))
+	})
+	return out
+}
+
+// limitOf is one window's newest report as read at now.
+func limitOf(l coord.ModelLimit, now time.Time) ModelLimit {
+	out := ModelLimit{Window: l.Window, Hours: l.Hours, Model: l.Model, State: l.State, Used: l.Used,
+		Seen: l.Seen, Stale: now.Sub(l.Seen) > LimitStaleAfter}
+	if !l.ResetsAt.IsZero() {
+		resets := l.ResetsAt
+		out.ResetsAt = &resets
+		if !resets.After(now) {
+			// TURNED OVER since it was heard: what was used is no longer.
+			out.State, out.Used = string(llm.LimitOK), nil
+			return out
+		}
+	}
+	if out.State == string(llm.LimitOK) && out.Used != nil && *out.Used >= LimitWarnAt {
+		out.State = string(llm.LimitWarning)
+	}
+	return out
+}
+
+// sitsOut reports whether the sit-out of window, on an entry running model,
+// is the window l: the same kind, and for a model window, the family the
+// entry's model names.
+func sitsOut(l ModelLimit, window, model string) bool {
+	if l.Window != window {
+		return false
+	}
+	if window != string(llm.LimitModel) {
+		return l.Model == ""
+	}
+	return l.Model != "" && strings.Contains(strings.ToLower(model), strings.ToLower(l.Model))
 }
 
 // modelHealth is [ModelHealth]'s one reading of an entry.
@@ -707,13 +821,23 @@ func usedBy(company *config.Company, key string) []ModelUse {
 				Position: position, Written: &written, Source: string(source)})
 		}
 	}
-	if position := slices.Index(company.Assistant.LLM, key); position >= 0 {
-		out = append(out, ModelUse{Assistant: "chat", Position: position})
+	if company.Assistant.Model == key {
+		out = append(out, ModelUse{Assistant: "chat", Position: 0})
 	}
-	if deep := company.Assistant.DeepWork; deep != nil && deep.LLM == key {
-		out = append(out, ModelUse{Assistant: "deep_work", Position: 0})
+	if company.Advisor.Model == key {
+		out = append(out, ModelUse{Advisor: "findings", Position: 0})
 	}
 	return out
+}
+
+// helperProblem is why no helper can run on the entry key, in a person's
+// words where the rule wrote them, or nil where one can.
+func helperProblem(company *config.Company, key string) *string {
+	problems := config.Problems(company.HelperModelProblem(key))
+	if len(problems) == 0 {
+		return nil
+	}
+	return ptr(cmp.Or(problems[0].Said, problems[0].Message))
 }
 
 func ptr[T any](v T) *T { return &v }

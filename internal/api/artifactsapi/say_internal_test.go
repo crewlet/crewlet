@@ -16,13 +16,10 @@ import (
 // A REFUSAL IS TOLD IN ITS SENTENCE, wherever its package names and its class
 // words sit.
 //
-// This surface trimmed package names from the FRONT of a refusal and nothing
-// else, so a field refused by the domain read "invalid: kind …", a manifest's
-// path "invalid: manifest: invalid: tracker: the path …", and a lost race
-// carried the framework's error and the broker subject after the domain's
-// sentence. A lost race is told in the state log's words for a person, as on
-// every surface; the rest in the publish pipeline's sentence, and this
-// surface's own refusals without its name.
+// Package names are trimmed from anywhere in a refusal, not just the front. A
+// lost race is told in the state log's words for a person, as on every
+// surface (never the framework's error or the broker subject); the rest in the
+// publish pipeline's sentence, and this surface's own refusals without its name.
 //
 // Mutation: trim from the front only again, or drop the statelog arm, and a row
 // goes red.

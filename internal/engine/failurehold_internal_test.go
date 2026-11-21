@@ -94,6 +94,7 @@ func TestTheSecondIdenticalFailurePausesTheSeat(t *testing.T) {
 			return turn.Result{}, imageRefused
 		},
 	}
+	takeInbox(t, e, q, ceoSeat)
 	if err := q.SubscribeBatch(t.Context(), topics.AgentInbox(ceoSeat), topics.AgentInboxGroup(ceoSeat),
 		func(ctx context.Context, evs []*events.Event) queue.Result { return d.Dispatch(ctx, "ceo", evs) },
 		func(*events.Event) string { return "one-conversation" }, nil); err != nil {

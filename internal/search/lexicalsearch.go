@@ -353,31 +353,16 @@ func binds(n int) string {
 
 // Hydrate reads the documents behind a fused answer, in the order given.
 //
-// THE FAN-OUT RETURNS KEYS, not rows, and it has to: a slice that carried
-// titles and snippets across the broker would move a kilobyte per candidate to
-// render ten. So the coordinator fuses ids and reads the rows here — locally,
-// from tables that hold the whole corpus, which is what makes hydrating a
-// PEER's hit an ordinary local read rather than a second round trip.
-//
-// A key whose row is gone is SKIPPED rather than rendered blank, on
-// [Indexer.hydrateHits]'s terms: between the scan and this read the indexer
-// may have removed a document, and a document that no longer exists is not an
-// answer.
+// THE FAN-OUT RETURNS KEYS, not rows (a kilobyte per candidate across the
+// broker); rows are read here, locally, so hydrating a PEER's hit is an
+// ordinary local read. A key whose row is gone is SKIPPED ([Indexer.hydrateHits]).
 //
 // # IT RETURNS [FusedHit], WHICH HAS NO SCORE, AND THAT IS THE POINT
 //
-// A [LexicalHit] carries the BM25 number one ranker gave one document, which is
-// comparable within that ranker and is what the fan-out merges its own slices
-// on. What comes back HERE has been through reciprocal rank fusion across two
-// rankers and across disjoint slices, so the only thing left is an ORDER — the
-// fused number is a sum of reciprocal placements and means nothing beside a
-// BM25 score.
-//
-// It used to return [LexicalHit] and set no score at all, so every hit the two
-// ranked readers in this tree render carried a confident `Score: 0`. A zero
-// that is not a value is exactly the shape a type has to refuse rather than
-// document, so this one does: a caller cannot read a score that does not
-// exist.
+// A [LexicalHit] carries one ranker's BM25 number. After reciprocal rank fusion
+// across rankers and slices only an ORDER is left; the fused sum means nothing
+// beside BM25. Returning [LexicalHit] would render a confident `Score: 0`, a
+// zero that is not a value, so the type refuses it.
 func (x *Indexer) Hydrate(ctx context.Context, keys []string, text string) ([]FusedHit, error) {
 	if len(keys) == 0 {
 		return nil, nil

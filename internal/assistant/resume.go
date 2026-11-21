@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
@@ -97,7 +96,6 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 		return wire.TurnAccepted{}, err
 	}
 	if !holds(person, keep.Apps) {
-		s.dropParkedDeep(ctx, keep)
 		// THE SECOND LOCK: whatever decided the proposal, a loop that read
 		// through an app the person no longer holds is never handed back to
 		// the model for them. The turn ends; the card shows its state.
@@ -135,19 +133,15 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	}
 	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAssistantTurn,
 		TurnID: r.Turn.String()}
-	// THE SAME MODEL AS THE SEGMENT IT CONTINUES: a question asked to think
-	// harder is answered on the stronger chain after its approval too.
-	strength := keep.Strength
-	if strength == "" {
-		strength = Quick
-	}
-	provider, key, err := s.models.Chain(ctx, person, use, strength)
+	provider, key, err := s.models.Model(ctx, person, use)
 	if err != nil {
 		return wire.TurnAccepted{}, &Unavailable{Cause: err}
 	}
 	page, fresh := s.resumedPage(ctx, keep, r)
 	t := s.newTurn(person, r.Conversation, r.Turn, "", r.Read, page, acts)
-	t.strength = strength
+	if history, historyErr := s.transcripts.Transcript(ctx, person.ID, r.Conversation); historyErr == nil {
+		t.seePerson(history.Messages, "", page)
+	}
 	t.derived = &Derivation{At: row.StartedAt, Name: "assistant_resume",
 		Identity: []string{r.Turn.String(), r.Proposal.String()}}
 	if provenance.Boundary(keep.Boundary).Valid() {
@@ -189,17 +183,12 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	if r.Invalidate != nil {
 		t.emit(invalidation(r.Proposal, r.Invalidate))
 	}
-	c, _ := s.company()
-	assistantCfg := config.Assistant{}
-	if c != nil {
-		assistantCfg = c.Assistant
-	}
 	admitted, started = false, true
 	s.track(t)
 	go t.run(loopRun{ //nolint:contextcheck // the turn's own lifetime (t.ctx, under the service's base), never the request's: a turn outlives the POST that started it
 		messages: messages, provider: provider, key: key, meter: meter,
-		tools: s.offeredTools(ctx, person, acts, false), steps: assistantCfg.Steps(),
-		timeout: assistantCfg.TurnTimeout(), deep: keep.Deep, decision: decision, screen: screen})
+		tools: s.offeredTools(person, acts, false), steps: MaxRounds,
+		timeout: TurnTimeout, decision: decision, screen: screen})
 	return wire.TurnAccepted{TurnID: r.Turn, StreamURL: StreamPath(r.Conversation, r.Turn),
 		AfterSeq: after}, nil
 }
@@ -290,7 +279,7 @@ func resultOf(r approval.Resumption, b provenance.Boundary,
 			r.Failure.Refusal.Code)
 	}
 	if r.Receipt != nil && !r.ClientReported {
-		fmt.Fprintf(&out, " %s", redact.Secrets(r.Receipt.Summary))
+		fmt.Fprintf(&out, " %s", redact.Secrets(r.Receipt.Summary.Text()))
 	}
 	if len(r.Answer) > 0 {
 		answer := redact.Secrets(string(r.Answer))
@@ -305,7 +294,7 @@ func resultOf(r approval.Resumption, b provenance.Boundary,
 			answer))
 	}
 	if r.ClientReported && r.Receipt != nil {
-		out.WriteString("\n" + pageReport(b, r.Receipt.Summary, read))
+		out.WriteString("\n" + pageReport(b, r.Receipt.Summary.Text(), read))
 	}
 	return out.String()
 }

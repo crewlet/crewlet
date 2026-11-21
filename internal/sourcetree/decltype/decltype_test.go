@@ -15,28 +15,17 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree/decltype"
 )
 
-// THE WALK, ON A TREE WHOSE VERDICT IS KNOWN. Every expression a gate types
-// is spelled in the fixture as a probe carrying its own verdict —
-// want(EXPR, "verdict") for a value's type, sel(EXPR, "Name", "verdict") for
-// what a selector resolves to, elided(EXPR, "verdict", …) for each literal in
-// EXPR whose type its collection elides — so the table is the fixture, and a
-// probe the walk answers differently names itself. The shapes: locals of every kind
-// (parameters, variadics, :=, var, range clauses over every collection and
-// an iterator, comma-ok), package values in another file and another
-// package, fields and methods promoted through embedding and through an
-// interface embedding one of another package, method values, method
-// expressions on a type this file, another file of its package, another
-// package and an unread one declares, calls of function-typed fields,
-// conversions, composite literals — one whose collection's literal elides
-// its type, as an element, a value or a key, included — elements, basic
-// literals, comparisons, generics bound by instantiation, explicit
-// arguments, inference and a generic receiver, and the type parameters
-// nothing binds — a function's, and a generic method's receiver's, which the
-// parser gives no object and which shadows a package type of its name; a package outside the module
-// read from a directory it was given; values only a package the walk does not
-// read can type, its import named by every form of the rule; and what it
-// cannot type at all. A file this platform does not build is read against
-// the scope of the files it does, and never adds to that scope.
+// THE WALK, ON A TREE WHOSE VERDICT IS KNOWN. Every expression a gate types is
+// spelled in the fixture as a probe carrying its own verdict: want(EXPR,
+// "verdict") for a type, sel(EXPR, "Name", "verdict") for what a selector
+// resolves to, elided(EXPR, "verdict", …) for each literal whose type its
+// collection elides. The table is the fixture, and a probe answered
+// differently names itself. Shapes: locals, package values across files and
+// packages, embedding promotion, method values and expressions, composite
+// literals, generics (including type parameters nothing binds, which have no
+// parser object and shadow a package type of their name), a package outside the
+// module, values only an unread package can type, and what cannot be typed. A
+// file this platform does not build never adds to the scope.
 func TestTheWalkTypesAKnownTree(t *testing.T) {
 	t.Parallel()
 	root := writeTree(t, fixture)

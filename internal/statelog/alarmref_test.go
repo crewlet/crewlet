@@ -13,13 +13,9 @@ import (
 // `make alarms-doc` writes it.
 const referencePath = "docs/reference/alarms.md"
 
-// THE REFERENCE IS GENERATED AND DIFFED, the same idiom schema/ and the
-// metrics reference use.
-//
-// An operator meets an alarm for the first time in a log line at an
-// inconvenient hour. The page is where they look it up, and a page maintained
-// by hand is one that stops matching the table — at which point the alarm
-// they were paged for is the one with no entry.
+// THE REFERENCE IS GENERATED AND DIFFED, as schema/ and the metrics reference
+// are: an operator paged for an alarm looks it up there, and a hand-kept page
+// drifts until that alarm is the one with no entry.
 func TestTheAlarmReferenceIsGenerated(t *testing.T) {
 	t.Parallel()
 	want := statelog.AlarmReference()
@@ -36,9 +32,8 @@ func TestTheAlarmReferenceIsGenerated(t *testing.T) {
 	}
 }
 
-// EVERY ALARM HAS AN ENTRY. The reference renders one row per rule, so a kind
-// with no prose meaning renders an empty cell — a row that names an alarm and
-// explains nothing, which is worse than an absent page because it looks like
+// EVERY ALARM HAS AN ENTRY. A kind with no prose renders a row that names an
+// alarm and explains nothing, worse than no page because it looks like
 // documentation.
 func TestEveryAlarmHasAMeaningInTheReference(t *testing.T) {
 	t.Parallel()

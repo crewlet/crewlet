@@ -73,22 +73,16 @@ type State struct {
 	NextAttemptAt time.Time `json:"next_attempt_at,omitzero"`
 
 	// Endpoint is the public base URL this surface was last set up
-	// against, which is what its registration at the third-party app
-	// points at.
+	// against, which its registration at the third-party app points at.
 	//
-	// WRITTEN SO THE ADDRESS CAN BE COMPARED WITH THE ONE IN FORCE. A
-	// company's public base moves: a tunnel is restarted, a deployment is
-	// renamed, a proxy is put in front. Where a pass registers the hook,
-	// the next tick re-registers it at the new address on its own and this
-	// field simply follows. Where NOTHING does, the registration goes on
-	// pointing at an address that no longer answers, the surface reports
-	// ready because nothing it can see is wrong, and the first symptom is
-	// an agent that has stopped replying.
-	//
-	// So the two are kept apart and compared. A stale one is an ingress
-	// fault a person has to fix at the third-party app, and it is the only
-	// evidence there is: Slack's request URL, for one, cannot be read back
-	// without an app-configuration token the operator may not have.
+	// WRITTEN SO IT CAN BE COMPARED WITH THE ADDRESS IN FORCE. A public
+	// base moves (a tunnel restarts, a proxy goes in front). Where a pass
+	// registers the hook it re-registers and this field follows. Where
+	// NOTHING does, the registration points at a dead address, the surface
+	// still reports ready, and the first symptom is an agent that stopped
+	// replying. A stale one is an ingress fault a person fixes at the
+	// third-party app, and the only evidence: Slack's request URL cannot be
+	// read back without a configuration token the operator may lack.
 	Endpoint string `json:"endpoint,omitempty"`
 
 	// Registration is the NAME this surface's registration is held under
@@ -103,16 +97,13 @@ type State struct {
 	// learn there are now two. See [StampRegistration].
 	Registration string `json:"registration,omitempty"`
 
-	// Disconnecting is set the moment somebody asks for the integration
-	// to be taken away, which is BEFORE any teardown pass has run and
-	// set a phase. Without it the screen shows a connected integration
-	// for as long as it takes the first pass to start, and a reader
-	// presses Disconnect again.
-	//
-	// It is also what makes the teardown survive its own failures: the
-	// intent lives on the fleet row rather than in the request that
-	// asked, so a third-party app refusing the delete leaves the surface
-	// disconnecting and retrying rather than quietly connected again.
+	// Disconnecting is set the moment somebody asks for removal, BEFORE
+	// any teardown pass has set a phase; otherwise the screen shows a
+	// connected integration until the first pass starts and a reader
+	// presses Disconnect again. It also makes the teardown survive its own
+	// failures: the intent lives on the fleet row, not the request, so a
+	// third-party app refusing the delete leaves the surface disconnecting
+	// and retrying rather than quietly connected again.
 	Disconnecting bool `json:"disconnecting,omitempty"`
 
 	// RemoveSeats carries the operator's answer to "also remove the
@@ -122,22 +113,17 @@ type State struct {
 	// one is never inferred.
 	RemoveSeats bool `json:"remove_seats,omitempty"`
 
-	// RequestedBy is who asked for the integration to be taken away,
-	// which every write the teardown makes on their behalf is recorded
-	// under: the revision that drops the block, a seat's cleared
-	// credentials, the sealed values it deletes.
+	// RequestedBy is who asked for the integration to be taken away; every
+	// teardown write (the revision dropping the block, cleared seat
+	// credentials, deleted sealed values) is recorded under them.
 	//
-	// ON THE ROW, for Disconnecting's reason: the loop carries the
-	// teardown out on whichever node holds its duty, after a pass at the
-	// third-party app, long after the request that asked has answered. The
-	// revision that dropped the block — kept for ever — was recorded as
-	// the loop's own, while a FORCED disconnect, which drops the block
-	// inside the request, recorded the person: one gesture, two authors,
-	// depending on a checkbox.
+	// ON THE ROW, for Disconnecting's reason: the loop finishes the
+	// teardown on whichever node holds its duty, long after the request
+	// answered. Without it the dropped block's revision would name the
+	// loop while a FORCED disconnect (inside the request) names the person.
 	//
-	// Written with the intent by its one writer ([AskTeardown]), from the
-	// asking request's attribution, which always names somebody — so a
-	// disconnecting row always does.
+	// Written with the intent by its one writer ([AskTeardown]), from an
+	// attribution that always names somebody.
 	RequestedBy Requester `json:"requested_by,omitzero"`
 }
 
@@ -166,17 +152,14 @@ func (r Requester) Actor() (iam.Actor, bool) {
 
 // Reported is the report a reader should be shown.
 //
-// The stored one, except in the window this method exists for: between
-// somebody pressing Disconnect and the first teardown pass running, the
-// intent is set and no pass has written a phase yet. The stored report is
-// then whatever the last RECONCILE concluded — usually ready — so a screen
-// reading it directly shows a connected integration somebody has already
-// asked to remove, and they press the button again.
+// The stored one, except between Disconnect being pressed and the first
+// teardown pass: the intent is set, no pass has written a phase, and the
+// stored report is still the last RECONCILE's (usually ready), so a screen
+// reading it shows a connected integration already asked to go.
 //
-// Derived rather than written at request time because the two facts have
-// different owners: the intent is the operator's and the phase is the loop's,
-// and writing a phase on the operator's behalf would make a status row claim
-// a pass had run when none had.
+// Derived rather than written at request time because the intent is the
+// operator's and the phase is the loop's; writing a phase for the operator
+// would claim a pass had run when none had.
 func (s State) Reported() Report {
 	if s.Disconnecting && s.Report.Phase != PhaseDisconnecting {
 		return Report{
@@ -189,17 +172,15 @@ func (s State) Reported() Report {
 
 // Observed reports whether a pass has ever said anything about this surface.
 //
-// A ROW IS NOT A REPORT. Two writers put rows in this store: a pass, which
-// records a phase, and the setup write that stamps [State.Endpoint] for a
-// surface no pass converges (internal/api/setupapi). The second leaves a row
-// carrying one address and nothing else, and a reader that treats the row's
-// existence as "the loop has reported on this" renders an EMPTY phase as the
-// integration's status — which on the dashboard is a card with no state on it
-// at all, on precisely the surfaces whose state a person has to act on.
+// A ROW IS NOT A REPORT. Two writers put rows here: a pass, which records
+// a phase, and the setup write that stamps [State.Endpoint] for a surface no
+// pass converges (internal/api/setupapi), leaving a row with one address and
+// nothing else. A reader treating that row as "the loop has reported" renders
+// an EMPTY phase: a dashboard card with no state, on exactly the surfaces a
+// person has to act on.
 //
-// The phase is the test rather than a flag of its own, because a phase is
-// what a report IS: every writer that has observed anything sets one, and a
-// value a newer node wrote is still a phase to a reader that cannot name it.
+// The phase is the test, not a flag, because a phase is what a report IS, and
+// a value a newer node wrote is still a phase to a reader that cannot name it.
 func (s State) Observed() bool { return s.Reported().Phase != "" }
 
 // TearingDown reports whether this surface is being taken away.
@@ -306,18 +287,15 @@ type Store interface {
 	// LoadIntegration reads ONE surface's state, reporting whether there is
 	// one to read.
 	//
-	// Separate from the plural read because the two are asked at different
-	// moments and only one of them may be stale. [Worker.Tick] reads every
-	// row once to decide what is DUE, which is a cheap filter and tolerates
-	// being a few seconds old. What it must not tolerate is folding a pass's
-	// outcome into a row it read before the pass began: an operator's
-	// disconnect landing in that window is silently overwritten. So the row
-	// the fold is built on is re-read here, under the surface's own guard,
-	// with every other writer excluded.
+	// Separate from the plural read because only one use may be stale.
+	// [Worker.Tick] reads every row once to decide what is DUE, which
+	// tolerates being seconds old. Folding a pass's outcome into a row read
+	// before the pass began does not: an operator's disconnect landing in
+	// that window is silently overwritten. So the fold's row is re-read
+	// here, under the surface's own guard, with every other writer excluded.
 	//
-	// found is false for a surface nobody has recorded anything about, which
-	// is an ordinary answer and not an error: it is what every surface looks
-	// like before its first pass.
+	// found is false for a surface nobody has recorded anything about (every
+	// surface before its first pass): an ordinary answer, not an error.
 	LoadIntegration(ctx context.Context, kind Kind) (state State, found bool, err error)
 
 	// SaveIntegration records one integration's state.
@@ -336,20 +314,16 @@ type Store interface {
 
 // Observe folds one pass's outcome into a state.
 //
-// THE SAME RULE WHATEVER RAN THE PASS. The loop's tick and an operator
-// pressing a button in the dashboard are the same event as far as this record
-// is concerned, and two callers writing it two ways is how a status row
-// starts disagreeing with the surface that produced it. So the three
-// outcomes, and what each does to the record, live here rather than inside
-// the worker's loop.
+// THE SAME RULE WHATEVER RAN THE PASS: the loop's tick and an operator's
+// button are one event, and two callers writing a row two ways is how it
+// comes to disagree with its surface. So the outcomes live here.
 //
 // forget reports [ErrNotConfigured]: the block left the company document, so
-// the row is removed rather than recorded. A status for a surface nobody
-// configured would sit in a fleet view describing an integration that is
-// gone.
+// the row is removed; a status for a surface nobody configured would describe
+// a gone integration in the fleet view.
 //
-// The caller sets NextAttemptAt, through [Schedule.Next], because the cadence
-// is the loop's business and a pass run by hand does not change it.
+// The caller sets NextAttemptAt, through [Schedule.Next]: the cadence is the
+// loop's business and a pass run by hand does not change it.
 func Observe(state State, kind Kind, findings []Finding, err error, now time.Time) (next State, forget bool) {
 	// THE WAIT THIS ROW WAS ON before this pass changed it. Attempts pace a
 	// backoff, and a backoff only means anything within one wait — see
@@ -363,23 +337,18 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 	case errors.Is(err, ErrNotConfigured):
 		return state, true
 	case errors.Is(err, ErrCredentialRejected):
-		// NOT A WAIT. The case below treats a fault as one because almost
-		// every fault is a third-party app briefly unreachable, and that reasoning
-		// is exactly backwards here: a refused credential is refused
-		// identically on every subsequent pass, so reporting "the engine
-		// is working on it" tells an operator to wait for something that
-		// will never happen while the one action that would fix it is
-		// theirs.
+		// NOT A WAIT. The case below treats a fault as one because most
+		// are a third-party app briefly unreachable; a refused credential
+		// is refused identically on every pass, so "the engine is working
+		// on it" would tell an operator to wait for what never happens
+		// while the fix is theirs.
 		//
-		// Synthesised as a finding rather than assembled inline, so the
-		// phase and actor come from the same [FindingKind.Verdict] table
-		// every other kind reads and cannot drift from it.
+		// Synthesised as a finding so phase and actor come from the same
+		// [FindingKind.Verdict] table every other kind reads.
 		//
-		// NO Detail, deliberately: the kind's own sentence is the
-		// headline, and the third-party app's words go in LastError below. Putting
-		// the raw error in both printed the same wrapped chain twice, one
-		// line under the other, and the chain is long enough that the two
-		// copies filled the row.
+		// NO Detail: the kind's own sentence is the headline and the
+		// third-party app's words go in LastError below; the raw error in
+		// both printed the same long chain twice.
 		finding := Finding{Kind: FindingCredentialRejected}
 		state.Report = Classify([]Finding{finding})
 		state.Findings = []Finding{finding}
@@ -409,17 +378,13 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 			state.Attempts++
 		}
 	}
-	// A CHANGE OF WAIT RESTARTS THE COUNT. Attempts are consecutive passes
-	// that did not settle, and [Schedule.Next] reads them against whichever
-	// wait the row is NOW on — so a surface that spent ten ticks waiting on
-	// the engine carried a count of ten into the wait for a PERSON and
-	// started it at the ceiling.
-	//
-	// That is the one cadence where the ceiling is wrong. The brisk admin
+	// A CHANGE OF WAIT RESTARTS THE COUNT. [Schedule.Next] reads Attempts
+	// against whichever wait the row is NOW on, so ten ticks spent waiting
+	// on the engine would start the wait for a PERSON at the ceiling. That
+	// is the one cadence where the ceiling is wrong: the brisk admin
 	// interval exists so an operator who installs an app "sees provisioning
-	// continue without pressing anything", and inherited attempts skipped it
-	// entirely: the fast retries never happened, and the operator watched a
-	// screen that would not move for ten minutes.
+	// continue without pressing anything", and inherited attempts skipped
+	// it, leaving a screen that would not move for ten minutes.
 	if CadenceOf(state.Report) != was {
 		state.Attempts = min(state.Attempts, 1)
 	}
@@ -430,34 +395,15 @@ func Observe(state State, kind Kind, findings []Finding, err error, now time.Tim
 // AskTeardown records that an operator asked for this surface to be taken
 // away, before any pass has run.
 //
-// A NAMED FOLD, beside [Observe] and [ObserveTeardown], because this package
-// owns every transition of a row — so that a row cannot mean one thing when a
-// tick wrote it and another when a button did. This transition was the one
-// still written inline, at the API, and it set three fields and forgot three.
+// A NAMED FOLD beside [Observe] and [ObserveTeardown]: a row means the same
+// whether a tick or a button wrote it.
 //
-// IT CLEARS WHAT THE LAST RECONCILE OBSERVED, which is the half that was
-// missing. A surface being dismantled reports what the teardown is doing and
-// nothing else: the findings are statements about a world the operator is
-// taking apart, and an actor is not owed a step in it. Measured: pressing
-// Disconnect on Datadog left the card carrying that pass's "re-enable it at
-// Datadog: this pass will not" underneath the word Disconnecting, so the one
-// thing on the screen said the operator had work to do at a third-party app
-// they had just asked to be let go of.
-//
-// [ObserveTeardown] already erases them on every pass after the first, so
-// leaving them on the first was the divergence rather than a policy.
-//
-// NOTHING IS LOST BY CLEARING THEM. Nothing anywhere sets Disconnecting back
-// to false — a disconnecting row only ever ends by being forgotten — so there
-// is no path on which these findings become relevant again.
-//
-// DUE NOW. The zero NextAttemptAt is already in the past, but a row that has
-// been reconciled carries a future one, and inheriting it would leave the
-// disconnect waiting out a backoff nobody asked it to serve.
-//
-// BY IS WHO ASKED, recorded on the row for [State.RequestedBy]'s reason — and
-// replaced by a later ask, because whoever pressed Disconnect last is who the
-// teardown is finishing for.
+// IT CLEARS THE LAST RECONCILE'S FINDINGS: they describe a world being taken
+// apart (a stale "re-enable it at Datadog" under Disconnecting says the
+// operator has work to do). [ObserveTeardown] erases them on later passes, and
+// nothing unsets Disconnecting, so they never matter again. NextAttemptAt is
+// zeroed (DUE NOW) so the disconnect skips a reconciled row's backoff. BY is
+// replaced by a later ask: the last to press Disconnect is who it is for.
 func AskTeardown(state State, kind Kind, removeSeats bool, by iam.Actor) State {
 	state.Kind = kind
 	state.Disconnecting = true
@@ -480,18 +426,15 @@ func AskTeardown(state State, kind Kind, removeSeats bool, by iam.Actor) State {
 // ObserveTeardown records what a TEARDOWN pass concluded, and reports whether
 // the surface is finished with.
 //
-// Separate from [Observe] because the two read the same inputs to opposite
-// conclusions. A normal pass that fails is a wait: the integration is still
-// meant to exist and the next pass carries it forward. A teardown that
-// SUCCEEDS is the end of the row — nothing is left to reconcile — and one
-// that fails must hold the surface in [PhaseDisconnecting] rather than let it
-// drift back to looking connected, because the block is still in the company
-// document and a normal pass would report it healthy.
+// Separate from [Observe] because the same inputs reach opposite conclusions:
+// a failed normal pass is a wait, a failed teardown must hold the surface in
+// [PhaseDisconnecting] (the block is still in the document, so a normal pass
+// would report it healthy), and a successful one ends the row.
 //
 // forget is true only on success. The caller removes the block in the same
 // step, and the order matters: the block is the credential the teardown
-// authenticates with, so removing it first would strand whatever the third-party app
-// still holds.
+// authenticates with, so removing it first would strand whatever the
+// third-party app still holds.
 func ObserveTeardown(state State, kind Kind, err error, now time.Time) (next State, forget bool) {
 	state.Kind = kind
 	state.LastAttemptAt = now

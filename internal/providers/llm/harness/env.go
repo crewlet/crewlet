@@ -55,26 +55,18 @@ func buildEnv(p harnessprofile.Profile, c *Checkout, extra map[string]string, au
 	return hostbox.Environ(childEnv(p, c, extra, auth))
 }
 
-// childEnv is the environment a child is given, by name.
+// childEnv is the environment a child is given, by name. Layered lowest
+// precedence first: the host allowlist ([hostbox.Inherit]), the isolation
+// variables, the profile's fixed environment, its passthrough, the operator's
+// env, then auth. The isolation is protected not by its place (every
+// layer above could replace it) but by validation: a profile naming one of
+// [harnessprofile.Profile.IsolationVariables] does not load, and an entry's env
+// naming one is refused on every write and warned about on every node.
 //
-// Layered lowest-precedence first, so the reason each layer can override the
-// one below is visible in the order: the host allowlist every child gets
-// ([hostbox.Inherit]), then the isolation variables, then the profile's own
-// fixed environment, then the profile's passthrough, then the operator's
-// env, then auth. The isolation is NOT protected by its place in that
-// order — every layer above it could replace it — but by validation: a
-// profile whose env or passthrough_env names one of
-// [harnessprofile.Profile.IsolationVariables] does not load
-// ([harnessprofile.Profile.Validate]), and an entry whose env names one is
-// refused on every write of the configuration and warned about on every node
-// that applies it (config's admission rules, which never take a node off the
-// fleet's revision over an entry that still runs).
-//
-// A map of its own, apart from [buildEnv]'s rendering, because it is also
-// what decides whether an entry is signed in ([Provider.signIn]): whether a
-// key reaches the harness is a fact about this map after [applyAuth] has run,
-// and a second reading of the configuration beside it is what the doctor
-// had, and what drifted from it in both directions.
+// A map, apart from [buildEnv]'s rendering, because it also decides whether an
+// entry is signed in ([Provider.signIn]): whether a key reaches the harness is
+// a fact about this map after [applyAuth], and a second reading of the
+// configuration drifted from it.
 func childEnv(p harnessprofile.Profile, c *Checkout, extra map[string]string, auth Auth) map[string]string {
 	// THE HOST ALLOWLIST IS [hostbox]'s, the one every child the engine
 	// starts is handed, and not a copy kept here. An allowlist rather than
@@ -257,22 +249,15 @@ func prepareHome(home, cache string) error {
 // probeEnv is the child environment for an invocation that belongs to no seat
 // — today the version probe `crewlet llm doctor` runs.
 //
-// IT EXISTS BECAUSE A MISSING ENV IS NOT AN EMPTY ONE. [run] assigns whatever
-// it is given to exec.Cmd.Env, and a nil there does not mean "no environment":
-// os/exec then hands the child the ENGINE's own, which is the company's chat
-// token, its collector credential and every provider key — precisely what the
-// allowlist [childEnv] starts from exists to keep out of a vendor's harness. The
-// probe was the one call in this package that skipped it, so `--version` ran
-// with more access than any real completion ever gets — and [run] now refuses
-// a nil environment outright, so the next caller that forgets cannot either.
+// IT EXISTS BECAUSE A MISSING ENV IS NOT AN EMPTY ONE: a nil Cmd.Env makes
+// os/exec hand the child the ENGINE's own (the chat token, the collector
+// credential, every provider key) which the allowlist [childEnv] starts from
+// keeps out of a harness. [run] refuses a nil environment.
 //
-// It also makes the profile's own env apply, which the muse-code profile
-// depends on: its binary is a LAUNCHER that checks for an update every hour
-// and forks the download, and MUSE_NO_AUTO_UPDATE=1 is only a setting if the
-// child that would act on it receives it.
-//
-// A home of its own, beside the login home rather than inside a seat's: a
-// seat home is pruned between calls, and a probe has no seat.
+// It also applies the profile's own env, which muse-code depends on: its binary
+// is a LAUNCHER forking an update download hourly, and MUSE_NO_AUTO_UPDATE=1
+// only works if the child receives it. It gets a home of its own, since a seat
+// home is pruned between calls and a probe has no seat.
 func (p *Provider) probeEnv() []string {
 	home := filepath.Join(p.ws.Root(), "probe-home")
 	cache := filepath.Join(p.ws.Root(), "probe-cache")

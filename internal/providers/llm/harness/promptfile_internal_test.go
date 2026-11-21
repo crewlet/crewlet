@@ -18,17 +18,14 @@ import (
 
 // THE TRANSCRIPT MUST NOT REACH ARGV WHEN THE HARNESS OFFERS A FILE.
 //
-// A rendered prompt is the largest and most sensitive thing this backend
-// hands a harness: the seat's identity, the tool catalogue, the conversation and
-// every tool result in it. On argv all of that is readable through
-// /proc/<pid>/cmdline by every account on the machine, and bounded by ARG_MAX
-// (256 KB on macOS) — the ceiling a profile lives under only where its vendor
-// offers neither a file nor stdin.
+// A rendered prompt is the largest and most sensitive thing handed a harness: identity,
+// tool catalogue, conversation, every tool result. On argv it is readable through
+// /proc/<pid>/cmdline by every account on the machine and bounded by ARG_MAX (256 KB on
+// macOS), a ceiling a profile lives under only where its vendor offers neither file nor stdin.
 //
-// Asked from inside the child, because the per-call directory is removed on
-// release: a parent opening the path afterwards would be reading a file the
-// harness never saw, and a file written after the spawn or unreadable to the
-// child looks identical from outside.
+// Asked from inside the child, because the per-call directory is removed on release: a
+// parent opening the path afterwards would read a file the harness never saw, and a file
+// written after the spawn or unreadable to the child looks identical from outside.
 func TestFileModeKeepsTheTranscriptOffArgvAndPrivate(t *testing.T) {
 	t.Parallel()
 	// The leading "--" is for the FAKE, not for any real profile: the fake
@@ -310,16 +307,14 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 // MUSE KEEPS ITS OWN INSTRUCTIONS AND TAKES THE SEAT'S AFTER THEM, FROM A FILE,
 // AND AN OPERATOR CAN SAY NO.
 //
-// The channel is TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE, which names a file whose
-// text the harness appends to the end of its instructions (measured through the
-// engine on 1.0.3 and 1.4.13) — a variable naming a path, so the text never
-// reaches argv. There is no replace channel per call, so a side pass takes it
-// too. And the variable is undocumented, so switching it off must be one
-// override away and must hand the text back to the transcript rather than
-// to nowhere.
+// The channel is TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE, naming a file whose text the harness
+// appends to its instructions (measured on 1.0.3 and 1.4.13); a path, so the text never
+// reaches argv. There is no per-call replace channel, so a side pass takes it too. The
+// variable is undocumented, so switching it off is one override away and hands the text
+// back to the transcript rather than to nowhere.
 //
-// Mutation: declare the variable as system_prompt, put it on argv, or let an
-// empty env still count as a channel, and this is red.
+// Mutation: declare the variable as system_prompt, put it on argv, or let an empty env
+// still count as a channel, and this is red.
 func TestTheMuseSeatTextIsAppendedFromAFileAnOperatorCanTurnOff(t *testing.T) {
 	t.Parallel()
 	p, ok := harnessprofile.Builtin("muse-code")

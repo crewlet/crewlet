@@ -18,29 +18,14 @@ import (
 )
 
 // AN ASSISTANT LISTENING IS TOLD WHEN AN APPLY CHANGES ITS TOOLS, with no
-// request of its own or anybody else's in between.
+// request of its own in between.
 //
-// The operator surface reads its catalogue at the top of every call, and the
-// MCP transport keeps no session, so the one thing that can reach a connected
-// assistant between its requests is the stream it opened at connect
-// (`subscriptions/listen`, the 2026-07-28 protocol). That stream stays on the
-// catalogue that answered it, and the server advertises `tools.listChanged`:
-// a node that announced nothing left the assistant offering the tools it
-// connected to until somebody reconnected it. So `crewlet run` tells every
-// stream on the node whenever a company it publishes moves what a call is
-// served (api.App.OperatorToolsMoved, wired in serveNodeWith).
-//
-// The assistant connects once the node has its company, because a node with
-// none serves no operator surface at all (503 no_active_revision). What moves
-// the catalogue after that is a revision that adds or retires a knowledge
-// base: search_knowledge is offered exactly while there is a searcher, and
-// the company's tracker stays the same runtime throughout — a vendor's
-// knowledge base is taken live, where moving a half to or from native waits
-// for a restart.
-//
-// Twice, because the stream is still parked on the catalogue it connected to
-// at the second move: a node that announced only on the catalogue it had just
-// replaced told this assistant of the first change and of nothing after it.
+// The MCP transport keeps no session, so the only thing reaching a connected
+// assistant between requests is the stream it opened at connect
+// (`subscriptions/listen`). The server advertises `tools.listChanged`, so
+// `crewlet run` tells every stream when a published company moves what a call
+// is served (api.App.OperatorToolsMoved, wired in serveNodeWith). Twice,
+// because the stream stays parked on the catalogue it connected to.
 //
 // Mutation: drop app.OperatorToolsMoved from the company-published hook in
 // serveNodeWith, and neither move is told.

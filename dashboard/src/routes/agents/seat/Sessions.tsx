@@ -35,7 +35,9 @@
  * reading. Each page states why it ends where it does — the page's
  * own bound, with more to read, the most one read takes, with nothing more to
  * show, or that the rest could not be read, and why — and an entry cut to its
- * bound says how large the whole was.
+ * bound says how large the whole was. A page whose read runs past its wait
+ * (`TRANSCRIPT_QUERY_TIMEOUT_MS`) FAILS CLOSED: nothing of it is shown, and it
+ * says only that it could not be read in time.
  *
  * The account of how the session's turn ended is the LIST'S ROW, which the
  * list's poll keeps current: a turn's end is recorded with no new capture, so
@@ -65,9 +67,9 @@ import { Button, Callout, Card, CodeBlock, EmptyState, Skeleton, Tag } from "@cr
 import { FileTextGlyph, SquareTerminalGlyph } from "@crewlethq/icons/glyphs";
 import { useLayoutEffect, useRef, useState } from "react";
 import { href, useParam, useRoute } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
+import { PageFailed, QueryState, TryAgain } from "~/components/common.tsx";
 import { conversationLabel } from "~/lib/conversationKey.ts";
-import { fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
+import { fmtBytes, fmtDateTime, fmtExact, relTime } from "~/lib/format.ts";
 import { plainText } from "~/lib/markdownText.ts";
 import { reveal } from "~/lib/scroller.ts";
 import { useClient } from "~/lib/store-hooks.ts";
@@ -87,6 +89,7 @@ import {
   type TranscriptEntryKind,
   type TranscriptState,
 } from "~/contract/sessions.ts";
+import { TRANSCRIPT_QUERY_TIMEOUT_MS } from "~/contract/wire.ts";
 
 /**
  * What each kind of entry is called on screen. Keyed by the engine's own set,
@@ -96,6 +99,8 @@ import {
 export const KIND_LABELS: Record<TranscriptEntryKind, string> = {
   brief: "Brief",
   note: "Note",
+  late_call: "Late call",
+  wake: "Message",
   model: "Model",
   tool_call: "Tool call",
   tool_result: "Result",
@@ -126,6 +131,15 @@ export const STATE_TITLES: Record<Exclude<TranscriptState, "read">, string> = {
   malformed: "The session is not a readable archive",
   unsupported: "This build does not read this session",
 };
+
+/**
+ * What a transcript page whose read ran past its wait says, the first page
+ * and a later one: that it could not be read in time, and nothing of why,
+ * which the screen cannot know.
+ */
+export const TIMED_OUT_TITLE = "This transcript could not be read in time";
+export const TIMED_OUT_PAGE =
+  "The next page of this transcript could not be read in time. Try again.";
 
 /**
  * A transcript entry with its place among all of the transcript's, in the
@@ -417,15 +431,18 @@ function Transcript({
     useQuery("executor_session", asked, {
       enabled: handle !== "" && turn !== "",
       refetchOnReconnect: false,
+      waitMs: TRANSCRIPT_QUERY_TIMEOUT_MS,
     }),
   );
   const pages = usePaged(
     capture.first,
     asked,
-    (cursor) =>
+    (cursor, _edges, signal) =>
       socket.query(
         "executor_session",
         withFloor("executor_session", JSON.stringify({ ...asked, cursor })),
+        TRANSCRIPT_QUERY_TIMEOUT_MS,
+        signal,
       ),
     pickEntries,
     entryId,
@@ -446,7 +463,19 @@ function Transcript({
       {pages.loading && !first && (
         <Skeleton variant="text" rows={6} label="Loading this session's transcript" />
       )}
-      <QueryState error={pages.error} refusal={pages.refusal} loading={pages.loading && !first}>
+      {pages.error === "timeout" && (
+        // A READ PAST ITS WAIT FAILS CLOSED: the engine ended it there
+        // (`TRANSCRIPT_QUERY_TIMEOUT_MS`), so nothing of it is shown, and the
+        // screen cannot know why it ran long, so it says only that.
+        <Callout variant="warning" action={<TryAgain />}>
+          <strong>{TIMED_OUT_TITLE}.</strong>
+        </Callout>
+      )}
+      <QueryState
+        error={pages.error === "timeout" ? null : pages.error}
+        refusal={pages.refusal}
+        loading={pages.loading && !first}
+      >
         {first && latest && (
           <>
             <SessionAccount row={latest} />
@@ -490,9 +519,7 @@ function Transcript({
               </Callout>
             )}
             {last?.cut === "read" && (
-              <p className="t-caption">
-                {readCutWords(last.bounds.read_bytes, pages.items.length)}
-              </p>
+              <p className="t-caption">{readCutWords(last.bounds, pages.items.length)}</p>
             )}
             {(pages.more || pages.paging || pages.pageError) && (
               <footer className="panel-foot">
@@ -508,17 +535,26 @@ function Transcript({
                       Read it again from the start
                     </Button>
                   </>
-                ) : pages.pageError ? (
-                  <QueryState error={pages.pageError} refusal={null} loading={false} />
                 ) : (
-                  <Button
-                    size="small"
-                    variant="secondary"
-                    onClick={pages.next}
-                    disabled={pages.paging}
-                  >
-                    {pages.paging ? "Loading…" : "Load more of the transcript"}
-                  </Button>
+                  <>
+                    <Button
+                      size="small"
+                      variant="secondary"
+                      onClick={pages.next}
+                      disabled={pages.paging}
+                    >
+                      {pages.paging ? "Loading…" : "Load more of the transcript"}
+                    </Button>
+                    {/* BESIDE THE CONTROL, which asks the page again; a page
+                        past its wait fails closed as the first does. */}
+                    {pages.pageError === "timeout" ? (
+                      <span className="t-caption" role="alert">
+                        {TIMED_OUT_PAGE}
+                      </span>
+                    ) : pages.pageError ? (
+                      <PageFailed error={pages.pageError} />
+                    ) : null}
+                  </>
                 )}
               </footer>
             )}
@@ -614,15 +650,19 @@ function noteSentence(note: string): string {
 
 /**
  * Why a page of a transcript ends where no later page can go further, in a
- * reader's words: the archive is past what one read takes (`read_bytes` of it),
- * or a part of it too large to read left the rest unreadable — said of the
- * whole session where nothing of it was read. A page that ends at its own
- * bound says nothing of the kind — its Load more is the way on.
+ * reader's words: the archive is past what one read takes (`read_bytes` of
+ * it), or its record past the lines, and the parts of them, one read reads
+ * (`read_lines`) — said of the whole session where nothing of it was read. A
+ * page that ends at its own bound says nothing of the kind — its Load more is
+ * the way on.
  */
-export function readCutWords(readBytes: number, shown: number): string {
+export function readCutWords(
+  bounds: Pick<ExecutorSessionAnswer["bounds"], "read_bytes" | "read_lines">,
+  shown: number,
+): string {
   const why =
-    `a read takes at most ${fmtBytes(readBytes)} of its archive, ` +
-    `or a part of it was too large to read.`;
+    `a read takes at most ${fmtBytes(bounds.read_bytes)} of its archive, ` +
+    `and ${fmtExact(bounds.read_lines)} of its lines and the parts of them.`;
   return shown === 0
     ? `None of this session can be shown: ${why}`
     : `The rest of this session cannot be shown: ${why}`;
@@ -830,9 +870,9 @@ function HandedSession({ turn }: { turn: string }) {
  *
  * A CALL'S INPUT AND A TOOL'S OUTPUT ARE BLOCKS, scrolling within the ceiling
  * every block in the shell's scroller takes, because their whitespace is the
- * content; a brief, a note, the model's words and a summary are prose. A block
- * takes a tab stop only when it scrolls (`focusWhenScrollable`), named by its
- * tool — never `selectable`, which would put a stop before each of two hundred
+ * content; a brief, a note, a late call, the model's words and a summary are
+ * prose. A block takes a tab stop only when it scrolls (`focusWhenScrollable`),
+ * named by its tool — never `selectable`, which would put a stop before each of two hundred
  * short blocks a page holds and take select-all from the page while one has
  * focus, for a block that is not the record the screen is about. A PART OF THE
  * RECORD NOT READ is drawn as the warning it is, in its place, so a gap never

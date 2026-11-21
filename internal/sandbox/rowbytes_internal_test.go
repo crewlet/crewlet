@@ -89,24 +89,17 @@ func everyKind() []string {
 	return kinds
 }
 
-// A BRIDGED CALL IS HELD TO ITS SHARE OF THE LOG, AT ITS WORST. Every field of a
-// call kept by the log, each at the widest the log's encoder writes it — a name
-// past its bound in markup, arguments and an output of a megabyte of markup,
-// both its marks, every kind of change it can commit and the id its harness
-// gave it at its bound — weighs no more than [MaxBridgeCallBytes] less the room
-// left for what a later build adds to a call; the newest successful submission
-// no more than [MaxSubmissionCallBytes] less the same. And the parts are each
-// within the figure rowbytes.go states for them, and those figures with the
-// room close at the share, so the arithmetic there is this test's. A call
-// handed an id past its bound, in markup, is kept with none, so the share holds
-// whatever a writer hands the log.
-//
-// Mutation: keep the arguments or the output whole, or measure a cut by the
-// payload's own length rather than escaped, and the call overruns its share;
-// leave the name uncut, and the name does; keep a call without the kinds it
-// committed, or without its id, and the case is no longer at its worst; keep
-// an id whatever it is (log-keeps-any-id), and the call handed one past its
-// bound keeps it.
+// A BRIDGED CALL IS HELD TO ITS SHARE OF THE LOG, AT ITS WORST. A call kept by
+// the log, every field at its widest as the encoder writes it (markup name past
+// its bound, megabyte arguments and output, both marks, every kind of change,
+// id at its bound), weighs no more than [MaxBridgeCallBytes] less the room left
+// for a later build; the newest submission no more than [MaxSubmissionCallBytes]
+// less the same. The parts stay within rowbytes.go's figures, which close at the
+// share. An id past its bound is kept as none.
+// Mutation: keep the arguments or output whole, or measure a cut unescaped, and
+// the call overruns; leave the name uncut, and the name does; drop the kinds or
+// the id, and the case is no longer at its worst; keep an id whatever it is
+// (log-keeps-any-id), and one past its bound is kept.
 func TestABridgedCallIsHeldToItsShare(t *testing.T) {
 	t.Parallel()
 	const (
@@ -174,6 +167,64 @@ func TestABridgedCallIsHeldToItsShare(t *testing.T) {
 	}
 }
 
+// worstItemCall is a late-call item's call at its widest ([itemCall]): kept
+// from a call with every field an item copies set, at the widest the log's
+// encoder writes it, failed so its error is copied, and neither held nor
+// approved, whose arguments an item would keep none of.
+func worstItemCall(t *testing.T) BridgeCall {
+	t.Helper()
+	call := worstCall(t, strings.Repeat("<", 4<<10))
+	call.ArgsUnparsed, call.ArgsBytes, call.OutputBytes = true, math.MaxInt, math.MaxInt
+	return itemCall(call)
+}
+
+// AN ITEM'S CALL IS HELD TO AN ORDINARY CALL'S SHARE, whatever share the log kept
+// it at ([itemCall]): the log keeps its newest successful submission at eight
+// times an ordinary call's arguments ([MaxSubmissionArgsBytes]), and an
+// abandoned one of the job's own is that submission. An item keeps every call
+// within [MaxBridgeCallBytes] less a later build's room, its arguments within
+// [MaxBridgeArgsBytes], a failed call's error and no success's output, and
+// none of what only the log reads: a digest, an id, who answered, what it
+// committed.
+//
+// Mutation: copy the call as the log listed it (item-copies-the-listed-call),
+// and the submission's arguments and its success's output ride the item.
+func TestAnItemsCallIsHeldToItsShare(t *testing.T) {
+	t.Parallel()
+	const reserve = 1758 // what rowbytes.go leaves a later build in one call
+	for name, tc := range map[string]struct {
+		call   BridgeCall
+		listed int
+	}{
+		"a failed call at its widest": {worstCall(t, strings.Repeat("<", 4<<10)), MaxBridgeArgsBytes},
+		"a successful submission the log kept whole": {func() BridgeCall {
+			c := worstCall(t, SubmitWorkTool)
+			c.Failed, c.Late = false, false
+			return keptCall(c, MaxSubmissionArgsBytes)
+		}(), MaxSubmissionArgsBytes},
+	} {
+		if got := kept.Quoted(tc.call.Args); got < tc.listed-2000 {
+			t.Fatalf("%s: the log keeps %d bytes of its arguments, far under the %d the case needs", name, got,
+				tc.listed)
+		}
+		item := itemCall(tc.call)
+		raw, err := json.Marshal(item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if args := kept.Quoted(item.Args); args > MaxBridgeArgsBytes || len(raw) > MaxBridgeCallBytes-reserve {
+			t.Errorf("%s: the item keeps %d bytes of arguments and weighs %d, past an ordinary call's %d and "+
+				"%d less a later build's %d", name, args, len(raw), MaxBridgeArgsBytes, MaxBridgeCallBytes, reserve)
+		}
+		if tc.call.Failed != (item.Output != "") || item.Digest != "" || item.CallID != "" || item.Origin != "" ||
+			len(item.Committed) != 0 {
+			t.Errorf("%s: the item keeps output %d bytes (failed %v), digest %q, id %q, origin %q and %d kinds; "+
+				"want a failure's error alone, and none of what only the log reads", name, len(item.Output),
+				tc.call.Failed, item.Digest, item.CallID, item.Origin, len(item.Committed))
+		}
+	}
+}
+
 // everyField is [worstCall] with every other field a call can carry set
 // besides: both its marks, both its sizes, the mark of arguments that did not
 // parse, a runner past the most an
@@ -205,23 +256,17 @@ func worstEntry(t *testing.T, seq int) BridgeCall {
 }
 
 // A CALL IN FLIGHT IS HELD TO ITS SHARE. An entry written ahead of a call keeps
-// its identity and the id its harness gave it ([keptEntry]): at its widest —
-// its name and its runner past their bounds in markup the encoder escapes
-// six-fold, every instant at its longest, its id at its bound — it weighs no
-// more than [MaxCallInFlightBytes], whatever the caller handed it, arguments,
-// output and an id past its bound included; and that id it keeps as none,
-// never cut, as a finished call keeps one. And the log's split closes as its
-// table states it: its calls, its calls in flight and the rest of it
-// ([BridgeLogBytes], [InFlightBytes], [LogRestBytes]) are [RowBytes] together,
-// so a share moved without the table fails here.
-//
-// Mutation: keep a caller's runner, or its arguments, as handed
+// its identity and its harness's id ([keptEntry]); at its widest (name and
+// runner past their bounds in six-fold-escaped markup, every instant longest,
+// id at its bound) it weighs no more than [MaxCallInFlightBytes], whatever the
+// caller handed it. An id past its bound is kept as none, never cut. The log's
+// split closes as its table states: [BridgeLogBytes], [InFlightBytes] and
+// [LogRestBytes] are [RowBytes] together.
+// Mutation: keep a caller's runner or arguments as handed
 // (entry-keeps-its-runner-whole), or its id whatever it is (log-keeps-any-id),
-// and an entry overruns its share; cut an entry's id to its bound rather than
-// keep it as none (entry-cuts-its-id), and the entry handed one past it keeps a
-// cut id; hold more calls in flight than the table states
-// (more-calls-in-flight-than-the-table-says), and the log's split no longer
-// closes.
+// and an entry overruns; cut an id to its bound (entry-cuts-its-id), and one
+// past it keeps a cut id; hold more calls in flight than the table states
+// (more-calls-in-flight-than-the-table-says), and the split no longer closes.
 func TestACallInFlightIsHeldToItsShare(t *testing.T) {
 	t.Parallel()
 	entry := worstEntry(t, 0)
@@ -508,26 +553,18 @@ func admitsPanel(n int) bool {
 	})
 }
 
-// worstRow is a run's row with every field at its bound, each built in the
-// bytes that escape the most and, where a field is sealed or cut by code of
-// this package's, by that code: the parked state at its share, a recorded
-// answer and the copies of a let-go one each at theirs, a held call carrying
-// its sealed arguments at their share, its result sealed at its widest, the
-// call a person approved, which a reset owes the log too, the decision the
-// call carries out and the delegates it was put to first; the turn's read of
-// its conversation at its bound; who the turn works for and the answers that
-// woke it; and what its job may do on Gitlet: the most holds a turn may take,
-// the most repositories a job is given, each at the widest its grammar admits,
-// and its floors.
-//
-// A FIELD ADDED TO THE ROW IS SET HERE AT ITS BOUND, in the change that adds it,
-// so the arithmetic stays this test's: a field of the row comes out of the
-// rest's share (rowbytes.go's RestBytes, through ExtraRowBytes), and one of the
-// parked state out of the state's, which the park holds it to whatever it
-// carries. TestTheWorstRowSetsEveryField holds this to that, failing on any
-// field of the row left zero here that [zeroInTheWorstRow] does not name, and
-// TestTheWholeRowFitsItsBudget on figures rowbytes.go's table no longer states.
-// A field of the log beside it is set in [worstLog].
+// worstRow is a run's row with every field at its bound, in the bytes that
+// escape the most and, where this package seals or cuts a field, by that code:
+// parked state, recorded answer and let-go copies, held call with sealed
+// arguments and result, the approved call, its decision and delegates, the
+// turn's conversation read, who it works for, the answers that woke it, and the
+// job's Gitlet holds, repositories and floors.
+// A FIELD ADDED TO THE ROW IS SET HERE AT ITS BOUND, in the change that adds it:
+// a row field comes out of the rest's share (rowbytes.go's RestBytes, through
+// ExtraRowBytes), a parked-state one out of the state's.
+// TestTheWorstRowSetsEveryField fails on a field left zero here that
+// [zeroInTheWorstRow] does not name, TestTheWholeRowFitsItsBudget on figures
+// rowbytes.go's table no longer states. A log field is set in [worstLog].
 func worstRow(t *testing.T) PendingRun {
 	t.Helper()
 	markup := func(n int) string { return strings.Repeat("<", n) }
@@ -550,45 +587,122 @@ func worstRow(t *testing.T) PendingRun {
 		evidence[i] = decision.Evidence{Kind: "link", Ref: markup(decision.MaxEvidenceRef),
 			Label: markup(decision.MaxEvidenceLabel)}
 	}
-	// TEN NOTES (internal/agent/steer's MaxTurnNotes), each sealed at the
-	// bound the store holds a note's seal to, each served to a job before it
-	// was read, and read by a take that named itself — the engine's takes name
-	// themselves by a fresh UUID — and was settled unanswered, and then by a
-	// launch's brief that told it again, keeping that take's read beside its
-	// own: every field of both reads at its widest.
+	// TEN NOTES (internal/agent/steer's MaxTurnNotes), each sealed at its
+	// bound, served before read, read by a self-named take (a fresh UUID)
+	// settled unanswered and by a brief telling it again, every field of both
+	// reads at its widest and marked restarted; each served [MaxNoteServes]
+	// times, every serve lost at the widest step, its call kept at the widest
+	// [keptCallOf] keeps. Every counter at the width of what it counts: a
+	// read's and a serve's iteration and a note's Seq at math.MaxInt
+	// (max_iterations has no ceiling, and a relaunch keeps Seq), a read's round
+	// at 99, past a review's and a job's.
+	widestCall := NoteCall{Session: plain(MaxNoteCallBytes), ID: `"` + plain(MaxNoteCallBytes-2) + `"`}
+	if keptCallOf(&widestCall) == nil {
+		t.Fatalf("the store keeps no call at its widest, %+v", widestCall)
+	}
+	// AND NONE WIDER AS WRITTEN: a call at the bound holding one byte the
+	// encoder escapes, in its session, in a quoted id or in a bare one, would
+	// be written up to six bytes a byte, which this model never measures.
+	for _, escaping := range []NoteCall{
+		{Session: plain(MaxNoteCallBytes-1) + "<", ID: "7"},
+		{Session: plain(MaxNoteCallBytes), ID: `"` + plain(MaxNoteCallBytes-3) + `<"`},
+		{Session: plain(MaxNoteCallBytes), ID: plain(MaxNoteCallBytes-1) + "<"},
+	} {
+		if keptCallOf(&escaping) != nil {
+			t.Fatalf("the store keeps a call holding a byte its encoder escapes, %+v: a kept call is no longer "+
+				"written as itself, so this row no longer models its calls at their widest", escaping)
+		}
+	}
 	read := func() *NoteRead {
-		return &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: 99, Round: 99,
-			Boundary: "tool_batch", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true}
+		return &NoteRead{At: worstAt, Order: math.MaxInt, Phase: "execute", Iteration: math.MaxInt, Round: 99,
+			Boundary: "tool_batch", Launch: uuid.NewString(), Take: uuid.NewString(), Unanswered: true,
+			Restarted: true}
+	}
+	serves := func() []HookServed {
+		out := make([]HookServed, MaxNoteServes)
+		for i := range out {
+			out[i] = HookServed{Take: uuid.NewString(), Launch: uuid.NewString(), Boundary: "tool_batch",
+				Iteration: math.MaxInt, At: worstAt, Lost: ServeCancelled, Call: keptCallOf(&widestCall)}
+		}
+		return out
 	}
 	notes := make([]RunNote, 10)
 	for i := range notes {
 		told := read()
 		told.Retold = read()
-		notes[i] = RunNote{ID: uuid.NewString(), Seq: i + 1, Sealed: []byte(plain(MaxNoteSealedBytes)), At: worstAt,
-			Served: uuid.NewString(), Read: told}
+		notes[i] = RunNote{ID: uuid.NewString(), Seq: math.MaxInt - i, Sealed: []byte(plain(MaxNoteSealedBytes)),
+			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), Read: told}
 	}
-	// THE READS A BRIEF LEFT OUT, as a launch records them on the job's record
-	// and a capture states them: a whole log's calls ([MaxBridgeCalls]), each a
-	// place at its widest.
-	omitted := make([]int, MaxBridgeCalls)
+	// AND A JOB'S ITEMS, as many as the row holds ([MaxJobItems]): late-call
+	// items, the one kind the store files, each carrying its call at the
+	// widest an item keeps one ([itemCall], [worstItemCall]), unsealed, for a
+	// job, under the widest id ([lateItemID]), served as often and read by its
+	// job's own step: no brief tells an item again, the next launch removing it.
+	for range MaxJobItems {
+		job := uuid.NewString()
+		notes = append(notes, RunNote{ID: lateItemID(job, math.MaxInt), Seq: math.MaxInt - len(notes),
+			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), For: job, Read: read(),
+			LateCall: &LateCall{Round: uuid.NewString(), Call: worstItemCall(t)}})
+	}
+	// AND THE TURN'S WAKE ITEMS, as many as the row holds ([MaxTurnWakes]): each
+	// of [MaxItemWakes] wakes under the widest id, sealed at an even share of
+	// [MaxWakeItemBytes], for a job, under the widest item id ([wakeItemID]),
+	// served as often as a wake is ([MaxWakeServes]) and read, as every one a
+	// relaunch keeps is ([openNotes]).
+	for range MaxTurnWakes {
+		job := uuid.NewString()
+		wakes := make([]SealedWake, MaxItemWakes)
+		for i := range wakes {
+			wakes[i] = SealedWake{ID: plain(MaxWakeIDBytes), Sealed: []byte(plain(MaxWakeItemBytes / MaxItemWakes)),
+				At: worstAt}
+		}
+		notes = append(notes, RunNote{ID: wakeItemID(job, plain(MaxWakeIDBytes)), Seq: math.MaxInt - len(notes),
+			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves()[:MaxWakeServes], For: job,
+			Read: read(), Wake: &WakeItem{Wakes: wakes}})
+	}
+	// AND THE TELLINGS, as many as the row holds ([MaxCallTellings]), each of
+	// a round and a job at their widest ids, every number at its widest, a
+	// hook's.
+	tellings := make([]CallTelling, MaxCallTellings)
+	for i := range tellings {
+		tellings[i] = CallTelling{Round: uuid.NewString(), Appended: math.MaxInt, Launch: uuid.NewString(),
+			Place: math.MaxInt, Hook: true}
+	}
+	// THE CALLS A BRIEF LEFT OUT, as a launch records them on the job's record
+	// and a capture states them: a whole log's calls ([MaxBridgeCalls]) between
+	// the reads it owes and the late calls, each a place at its widest, one of
+	// them late so that both keys are written.
+	omitted := make([]int, MaxBridgeCalls-1)
 	for i := range omitted {
 		omitted[i] = math.MaxInt
 	}
+	lateOmitted := []int{math.MaxInt}
 	capture := &SessionCapture{LaunchSeq: math.MaxInt64, CaptureSeq: math.MaxInt64, Launch: uuid.NewString(),
 		State: CaptureUnresolved, Reason: markup(1 << 10), Through: new(math.MaxInt), Omitted: omitted,
-		BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces), NoteCursor: math.MaxInt,
-		ContextTokens: math.MaxInt64, At: worstAt, Harness: plain(32), HarnessVersion: plain(64),
+		LateOmitted: lateOmitted, BridgeSeq: math.MaxInt, BridgeOpen: make([]int, maxOpenPlaces),
+		NoteCursor:    math.MaxInt,
+		ContextTokens: math.MaxInt64, NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
+		At: worstAt, Harness: plain(32), HarnessVersion: plain(64),
 		SessionID: plain(128), ArchiveFormat: 99, RunAfter: plain(MaxMessageIDBytes),
 		Object: plain(256), ObjectHash: plain(64), ObjectSize: math.MaxInt64, ContentKey: plain(256),
 		Home: markup(1024), Workspace: markup(1024), Final: true, Interrupted: true,
 		SeatBudget: math.MaxInt64, Minted: worstAt, Taker: plain(maxIncarnationBytes), TakerEpoch: math.MaxInt64,
 		StandbyTaker: plain(maxIncarnationBytes), StandbyTakerEpoch: math.MaxInt64, StandbyAt: worstAt,
-		ResumedCount: worstCount()}
+		ResumedCount: worstCount(), CountProvider: plain(MaxCountProviderBytes)}
 	for i := range capture.BridgeOpen {
 		capture.BridgeOpen[i] = math.MaxInt
 	}
 	if err := capture.Bounded(); err != nil {
 		t.Fatalf("the worst capture is past what the row carries: %v", err)
+	}
+	// THE SAVE UNDER WAY ([PendingRun.Saving]) is a third capture at the same
+	// bounds, but for what a save never is: final, holding a note, or stood by
+	// for (zeroInTheWorstRow says why).
+	save := *capture
+	save.Final, save.NoteCursor = false, 0
+	save.StandbyTaker, save.StandbyTakerEpoch, save.StandbyAt = "", 0, time.Time{}
+	if err := save.Bounded(); err != nil {
+		t.Fatalf("the worst save is past what the row carries: %v", err)
 	}
 	// THE DECISION THE HELD CALL CARRIES OUT ([HeldAct]), each field at the
 	// widest its source admits: the question, which for one asked in words is
@@ -706,15 +820,20 @@ func worstRow(t *testing.T) PendingRun {
 	}
 	launch := LaunchRecord{StartedAt: worstAt, Started: true, Model: markup(256), ProviderKey: plain(64),
 		SignInID: uuid.NewString(), FollowUp: FollowUpReason(plain(32)), Brief: BriefKind(plain(32)),
-		BriefOmitted: omitted, FreshOmitted: omitted, LeadMarks: marks,
-		FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), ResumeCarry: ResumeCarry(plain(32)),
-		Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt, CollectFailingSince: worstAt,
-		ResumeFailures: math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
+		BriefOmitted: omitted, FreshOmitted: omitted, BriefLateOmitted: lateOmitted, FreshLateOmitted: lateOmitted,
+		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)),
+		ResumeCarry: ResumeCarry(plain(32)), Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt,
+		CollectFailingSince: worstAt,
+		ResumeFailures:      math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,
 		// THE WIDEST WINDOW A RELEASE COUNTS ONTO THE RECORD, a day's: a
 		// release writes none that is no window (BudgetWindow.Valid), and of
 		// the three periods a day spells the widest pair, written as itself.
 		RelaunchRefusedIn: BudgetWindow{Period: period.Day, Label: period.At(period.Day, worstAt, nil).Label},
-		EndedAtDeadline:   true, HarnessEnd: HarnessEnd(plain(32)),
+		EndedAtDeadline:   true, HostStoreSilentSince: worstAt, HarnessEnd: HarnessEnd(plain(32)),
+		// A REFUSAL THE SEAT'S HOLDER OWES, its condition at the longest
+		// the record takes, in the bytes that escape the most: nothing but
+		// that bound holds a condition's spelling ([MaxOwedConditionBytes]).
+		RefusalOwed: Condition(markup(MaxOwedConditionBytes)), RefusalOwedSince: worstAt,
 		// WHAT THE COPY IN ITS BOX CARRIED, at its widest: a figure of
 		// nineteen digits, a source as long as an end's word, and the job it
 		// names a launch id as the begin mints one ([LaunchRecord.Context]).
@@ -725,6 +844,19 @@ func worstRow(t *testing.T) PendingRun {
 		// most: the box's thread writes it, and nothing holds it to a uuid's
 		// shape.
 		ResumedCount: worstCount(), BasisRestart: new(markup(RestartIDMaxBytes)),
+		// AND THE POINT OF THE KEPT CAPTURE IT CONTINUED, each figure at its
+		// widest spelling, twenty bytes for an int64's minimum
+		// ([LaunchRecord.Continued]): nothing but the type bounds either.
+		Continued: &ContinuedPoint{LaunchSeq: math.MinInt64, Through: math.MinInt},
+		// AND THE PROVIDER BESIDE IT at its bound, every byte one a record
+		// writes as itself ([ValidCountProvider]).
+		CountProvider: plain(MaxCountProviderBytes),
+		// AND THE RELEASE THAT WROTE THE COPY at the most a release is
+		// ([ValidRelease]).
+		CountRelease: plain(executorkeep.HarnessVersionMaxBytes),
+		// AND WHAT THE HARNESS ESTIMATES ITS NEXT REQUEST AT, nineteen digits
+		// at each rate ([LaunchRecord.NextRequestTokens]).
+		NextRequestTokens: math.MaxInt64, NextRequestOlderTokens: math.MaxInt64,
 		Bridged: EngineSpend{Aux: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,
 			CacheWrite: math.MaxInt}, Workers: math.MaxInt, WorkerInput: math.MaxInt, WorkerOutput: math.MaxInt},
 		Condensed: AuxTokens{Input: math.MaxInt, Output: math.MaxInt, CacheRead: math.MaxInt,
@@ -825,7 +957,7 @@ func worstRow(t *testing.T) PendingRun {
 		// THE RUN ITS TURN'S LEADS ARE KEPT FOR, a launch id as the create
 		// writes it, and how many leads that part has taken, at its widest.
 		LeadsRun: uuid.NewString(), LeadsAppended: math.MaxInt,
-		BoxSince: worstAt, Capture: capture, Kept: capture, Base: &base,
+		BoxSince: worstAt, Capture: capture, Kept: capture, Saving: &save, Base: &base,
 		ExhaustedSessions: slices.Repeat([]string{plain(executorkeep.SessionIDMaxBytes)},
 			executorkeep.ExhaustedMaxSessions),
 		OwedEnd: end, EndRecorded: true,
@@ -867,36 +999,26 @@ func worstRow(t *testing.T) PendingRun {
 		PausedAt: worstAt, Deadline: worstAt, LaunchNode: plain(64),
 		Lost: &JobLoss{Cause: LossCause(plain(32)), Node: plain(64), At: worstAt}, RoundLosses: math.MaxInt,
 		Round: uuid.NewString(), AnsweredJob: uuid.NewString(),
-		HeldFor: Condition(plain(32)), HeldUntil: worstAt,
-		Steer:     RunSteer{Seat: []byte(plain(512)), Seq: math.MaxInt, Notes: notes, Pulled: uuid.NewString(), Reads: math.MaxInt},
+		HeldFor: Condition(plain(32)), HeldUntil: worstAt, Holds: math.MaxUint64,
+		Steer: RunSteer{Seat: []byte(plain(512)), Seq: math.MaxInt, Notes: notes, Pulled: uuid.NewString(),
+			Reads: math.MaxInt, Tellings: tellings},
 		CreatedAt: worstAt, UpdatedAt: worstAt,
 	}
 	return run
 }
 
-// worstLog is a run's bridged call log with every field at its bound, each
-// built in the bytes that escape the most and through the code that writes it
-// ([BridgeLog.appendCall]): two hundred of the worst calls kept and a hundred
-// dropped, by names that escape the most, so the tally of their identities
-// folds to its last step; each call's own work tallied the same way, so the
-// identities it made fold too; the most tool names the turn's earlier rounds
-// fold to ([MaxPriorCalls]); the log's identifiers — its job, its round, the
-// answer it was cut for — at their widest; its count of the late calls it
-// dropped ([BridgeLog.LateElided]) at the most it can be, every call it drops a
-// late one, as every call but the newest submission is; every kind of change
-// a call can commit, on every call and so, through the append, in the log's
-// union of what its calls committed ([BridgeLog.Committed]); and the most
-// calls in flight it holds ([MaxCallsInFlight]), each entry at its widest
-// ([worstEntry]). EACH CALL HANDED WHAT NO FINISHED CALL KEEPS besides, a
-// runner and a bound, and its own work tallied with its failures, so a field
-// the log leaves zero is one the append leaves out, never one the model did
-// not hand it ([zeroInTheWorstLog] names each).
-//
-// A FIELD ADDED TO THE LOG IS SET HERE AT ITS BOUND, in the change that adds it:
-// one of the calls' comes out of [BridgeLogBytes], and any other out of the
-// room [RowBytes] leaves above it. TestTheWorstLogSetsEveryField holds this to
-// that, failing on any field of the log left zero here that
-// [zeroInTheWorstLog] does not name.
+// worstLog is a run's bridged call log with every field at its bound, in the
+// bytes that escape the most and through [BridgeLog.appendCall]: 200 worst
+// calls kept and 100 dropped, so the identity tallies fold to their last step,
+// the calls' own work too; [MaxPriorCalls] prior names; the log's identifiers;
+// [BridgeLog.LateElided] at its most (every dropped call late, as all but the
+// newest submission are); every kind of change on every call, so the union in
+// [BridgeLog.Committed] is full; and [MaxCallsInFlight] entries ([worstEntry]).
+// EACH CALL IS HANDED WHAT NO FINISHED CALL KEEPS (a runner, a bound, failed
+// work), so a field the log leaves zero is one the append drops
+// ([zeroInTheWorstLog]). A FIELD ADDED TO THE LOG IS SET HERE AT ITS BOUND:
+// a call's comes out of [BridgeLogBytes], any other out of [RowBytes]'s room.
+// TestTheWorstLogSetsEveryField fails on one left zero and unnamed.
 func worstLog(t *testing.T) BridgeLog {
 	t.Helper()
 	bridged := BridgeLog{Launch: uuid.NewString(), Round: uuid.NewString(), CutFor: uuid.NewString(),
@@ -932,17 +1054,13 @@ const elidedWorst = 100
 
 // A RUN'S VALUES ARE BUDGETED TO WHAT ONE KEY OF THE STORE HOLDS.
 //
-// Every share in rowbytes.go is a share of what one value of a run may weigh,
-// and the coordination store refuses a value past what one of its keys holds
-// (coord.MaxValueBytes) — the largest whose leader's read crosses a leaf's
-// link, about a quarter under the transport's eight mebibytes. Closed at the
-// transport instead, the shares passed a row of seven megabytes, and every
-// write of its run — its lease, its status, each call its log appended — was
-// refused in the store; the budget tests below hold a row and a log to these
-// shares, so they hold them to the store.
-//
-// Mutation: budget a value to the transport's ceiling rather than to what one
-// key holds, and it is past the store's bound.
+// Every share in rowbytes.go is a share of one run value, which the store
+// refuses past coord.MaxValueBytes, about a quarter under the transport's eight
+// mebibytes (the largest a leader's read carries across a leaf's link). Closed
+// at the transport, a seven-megabyte row would pass and every write of its run
+// be refused. The budget tests hold a row and a log to these shares, so to the
+// store.
+// Mutation: budget to the transport's ceiling, and it is past the store's bound.
 func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 	t.Parallel()
 	if RowBytes > coord.MaxValueBytes {
@@ -951,37 +1069,17 @@ func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 	}
 }
 
-// THE WHOLE ROW FITS ITS BUDGET: the arithmetic in rowbytes.go, held to the
-// row's own encoder. Every field is at its bound in the bytes that escape the
-// most — the three a person or a tool supplies included, a recorded answer and
-// the copies of a let-go one each at its share and a held call's sealed
-// arguments at theirs, the turn's read of its conversation at its bound, and
-// what the job may do on Gitlet at the most its writers take — and the
-// parked state is at its share. The state weighs no more than
-// [ExecuteStateBytes] and the rest no more than [RestBytes] less the room left
-// for what a later build adds; the whole, with that room, no more than
-// [RowBytes]. And the handed set kept beside the row, at the most a launch
-// keeps, sealed, is a value well within [RowBytes] too.
+// THE WHOLE ROW FITS ITS BUDGET: rowbytes.go's arithmetic, held to the row's
+// own encoder, every field at its bound in its most-escaping bytes and the
+// handed set within [RowBytes]. And the table's measured figures
+// ([measuredOtherFields], [measuredSpare]) are compared exactly, since the
+// worst row weighs the same on every run: a figure only read goes stale.
 //
-// AND THE FIGURES THE TABLE STATES ARE THE ONES THE ROW WEIGHS: every other
-// field ([measuredOtherFields]) and what the rest's share leaves to spare
-// ([measuredSpare]), compared exactly, since the worst row weighs the same on
-// every run: its ids and its held result's seal are new on every run, each of
-// a fixed width, its instants are one, and its keys are written in order. A
-// figure only read, never compared, went stale the first time the row grew
-// and nothing said so; pinned, a change that moves either, a field the row
-// gains above all, restates both and the table in the change that moves them.
-//
-// Mutation: raise MaxAnswerBytes, MaxHeldArgsBytes or ConversationBaseMaxBytes
-// past what the rest has room for, raise MaxRunRepos, MaxConePaths or
-// MaxCodeHolds far enough, or let a note's seal or a held call's result grow,
-// and the rest overruns its share; raise MaxKeptLeads far enough, and the
-// job's marks of its leads overrun the rest; and raise maxIncarnationBytes to
-// 700,000, and the row's incarnations at that bound (its owner's, and the taker
-// and the standby's taker of each capture it holds) overrun it too.
-// Grow or shrink a note's seal by a byte, and every other field no longer
-// weighs the figure the table states; grow or shrink the turn's read of its
-// conversation by a byte, and the rest no longer leaves the spare it states.
+// Mutation: raise a share or a bound past the rest's room (answers, held args,
+// the conversation, repos, cone paths, holds, leads, incarnations at 700,000),
+// or grow a seal or result, and the rest overruns; change a seal or the
+// conversation read by a byte, and a measured figure is off; hold a served call
+// to its length alone, and the worst row refuses to be built.
 func TestTheWholeRowFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	run := worstRow(t)
@@ -1050,13 +1148,31 @@ var zeroInTheWorstRow = func() map[string]string {
 		"Steer.Notes[0].Read.Retold.Retold": "a brief that tells a note again keeps the marked take's read " +
 			"beside its own (openNotes), and that read is never one a brief told: only a read marked unanswered " +
 			"is told again, a settle marks only a read naming its take, and a read a brief told names none",
+		"Steer.Notes[0].For": "the walk reads the first note, a person's, which is an item of the whole turn and " +
+			"names no job (RunNote.For); the worst row's job items, as many as it holds (MaxJobItems), each name " +
+			"theirs",
+		"Steer.Notes[0].LateCall": "the walk reads the first note, a person's, which hands no job a call " +
+			"(RunNote.LateCall); the worst row's job items each carry theirs at its widest (worstItemCall)",
+		"Steer.Notes[0].Wake": "the walk reads the first note, a person's, which hands no job a wake " +
+			"(RunNote.Wake); the worst row's wake items, as many as it holds (MaxTurnWakes), each carry theirs " +
+			"at their bound",
 	}
 	// WHERE A CAPTURE'S RUN BEGAN is one of two (RunStart): a run that began its
 	// session names no message it began after, and the worst capture names one at
 	// its bound, the wider of the two (RunAfter).
-	for _, capture := range []string{"Capture", "Kept"} {
+	for _, capture := range []string{"Capture", "Kept", "Saving"} {
 		zero[capture+".RunBegan"] = "a run that began its session names no message it began after, which the " +
 			"worst capture names at its bound, the wider of the two (RunStart, keptRunStart)"
+	}
+	// WHAT A SAVE NEVER IS ([PendingRun.Saving]): the store reserves none that
+	// says otherwise (reservable), and no read stands by for one.
+	zero["Saving.Final"] = "a save is of a job still working, and its reservation refuses a final one (reservable)"
+	zero["Saving.NoteCursor"] = "a save is cut off and holds no note, and its reservation refuses one that " +
+		"says otherwise (reservable)"
+	for _, field := range []string{"StandbyTaker", "StandbyTakerEpoch", "StandbyAt"} {
+		zero["Saving."+field] = "the section names no read standing by: the reservation that writes it " +
+			"refuses a save naming one (reservable), and the save's later stamps are kept there without one " +
+			"(stampOnto, savingAfter)"
 	}
 	// THE CALL A PERSON APPROVED, on the held call and owed to the log
 	// ([OwedCall]), as approvedCall keeps it from a call with every field set
@@ -1087,27 +1203,17 @@ var zeroInTheWorstRow = func() map[string]string {
 }()
 
 // THE WORST ROW SETS EVERY FIELD THE ROW CARRIES. TestTheWholeRowFitsItsBudget
-// fails only on a row past its shares, and a field [worstRow] leaves out makes
-// the row it measures smaller, so the rule the model states, that a field the
-// row gains is set there at its bound in the change that adds it, was held by
-// nothing: the decision a held call carries out and the delegates it was put
-// to, who the turn works for, the credential and the answers that woke it, and
-// the ending's error kind each joined the row and none of them the model. So
-// every field the row's encoder writes is set in the worst row
-// ([zeroOnTheWire]), but those [zeroInTheWorstRow] names, each with why the
-// row never carries it beside the rest at their worst; and each it names is
-// zero there, so a reason that stops holding is struck rather than left to
-// hide a field.
-//
+// fails only on a row past its shares; a field [worstRow] leaves out only
+// shrinks the measured row. So every field the row's encoder writes is set in
+// the worst row ([zeroOnTheWire]) except those [zeroInTheWorstRow] names, each
+// with why the row never carries it at its worst; each is zero there, so a
+// stale reason is struck, not left to hide a field.
 // Mutation: leave the job's record without how its harness ended, a note
-// without the job it was served to, the held call without the delegates it was
-// put to, or the refusal's address with a second key and no value, and the
-// row has a field nothing names; name a field the worst row sets, and the
-// list gives a reason that does not hold; let approvedCall keep the held mark
-// or the output's size of the call it is handed, or keptCall a finished
-// call's runner, and a reason the list names no longer holds; widen the panel
-// a held call's contract admits (panel-widened), or put the worst held call to
-// a narrower one (panel-of-one), and the model is not at its worst.
+// without its job, the held call without its delegates, or the refusal's
+// address with a key and no value, and a field is unnamed; name a field the
+// worst row sets, and the reason fails; let approvedCall keep the held mark or
+// output size, or keptCall a runner, and a named reason fails; widen the panel
+// (panel-widened) or narrow it (panel-of-one), and it is not at its worst.
 func TestTheWorstRowSetsEveryField(t *testing.T) {
 	t.Parallel()
 	everyFieldSet(t, "row", worstRow(t), zeroInTheWorstRow)
@@ -1123,22 +1229,17 @@ func worstLeadsPart(t *testing.T) leadsPart {
 }
 
 // THE WHOLE LEADS PART FITS ITS BUDGET: the turn's leads are a value of their
-// own beside the row ([coord.RunLeads]), held to [RowBytes] as the row and the
-// log are. At their worst the leads weigh exactly their share
-// ([MaxKeptLeadBytes]), no more than [MaxKeptLeads] of them, and the whole
-// part, its own fields at their widest, no more than [RowBytes]: what is left
-// is the room a later build adds keys to the part in.
+// own beside the row ([coord.RunLeads]), held to [RowBytes]. At their worst they
+// weigh exactly [MaxKeptLeadBytes], at most [MaxKeptLeads] of them, and the
+// whole part no more than [RowBytes]; the rest is room for a later build's keys.
+// AND THE TABLE'S FIGURES (leads.go) ARE THE PART'S: its own fields
+// ([measuredLeadsFields]) and the spare ([measuredLeadsSpare]) are compared
+// exactly, as the row's are (TestTheWholeRowFitsItsBudget), since the worst
+// part weighs the same every run (new ids, fixed width).
 //
-// AND THE FIGURES ITS TABLE STATES ARE THE ONES THE PART WEIGHS (leads.go): its
-// own fields ([measuredLeadsFields]) and what [RowBytes] leaves to spare beside
-// them and the leads ([measuredLeadsSpare]), compared exactly, as the row's are
-// (TestTheWholeRowFitsItsBudget), since the worst part weighs the same on every
-// run: its ids are new on every run, each of a fixed width.
-//
-// Mutation: raise MaxKeptLeadBytes past what RowBytes leaves beside the part's
-// fields, and the part overruns its value; write a key of the part a byte
-// longer, and its fields no longer weigh the figure the table states; move
-// RowBytes, and the part no longer leaves the spare the table states.
+// Mutation: raise MaxKeptLeadBytes past what RowBytes leaves, and the part
+// overruns; write a key a byte longer, and its fields miss the table's figure;
+// move RowBytes, and the spare does.
 func TestTheWholeLeadsPartFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	part := worstLeadsPart(t)
@@ -1182,22 +1283,17 @@ func TestTheWorstLeadsPartSetsEveryField(t *testing.T) {
 }
 
 // THE WHOLE LOG FITS ITS BUDGET: the log is a value of its own beside the row,
-// held to [RowBytes] as the row is, and its calls to their share of it. Two
-// hundred of the worst calls beside both tallies at their shares weigh no more
-// than [BridgeLogBytes], and the whole log, with the most tool names the turn's
-// earlier rounds fold to and its identifiers at their widest, no more than
-// [RowBytes] — what is left above it being the room a later build adds keys to
-// the log in. Its calls carry every kind of change a call can commit, and its
-// union of them holds every kind. AND [MaxCallsInFlight] ENTRIES IN FLIGHT, each
-// at its widest, weigh no more than their line [InFlightBytes], inside the
-// whole: the bound a call's write ahead of it is held to measured where it
-// counts, beside every other field of the log at its worst.
-//
+// held to [RowBytes] as the row is, its calls to their share of it. 200 worst
+// calls with both tallies at their shares weigh no more than [BridgeLogBytes],
+// and the whole log, with the most prior names and widest identifiers, no more
+// than [RowBytes]; the rest is room for a later build's keys. Its calls carry
+// every kind of change, and its union holds every kind. AND [MaxCallsInFlight]
+// ENTRIES IN FLIGHT at their widest weigh no more than [InFlightBytes], inside
+// the whole: a call's write-ahead bound measured beside every other field.
 // Mutation: keep a call's output whole, or raise MaxBridgeCalls, and the calls
-// overrun their share; raise MaxPriorCalls far enough, and the log overruns
-// its value; stop the append folding a call's kinds into the log's union, and
-// the log is not measured at its worst; keep an entry's runner whole
-// (entry-keeps-its-runner-whole), and the entries overrun their line.
+// overrun; raise MaxPriorCalls far enough, and the log does; stop the append
+// folding kinds into the union, and the log is not at its worst; keep an
+// entry's runner whole (entry-keeps-its-runner-whole), and the entries overrun.
 func TestTheWholeLogFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	bridged := worstLog(t)

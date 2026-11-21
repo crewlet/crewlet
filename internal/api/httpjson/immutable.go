@@ -11,19 +11,15 @@ import (
 // ImmutableCacheControl is how an answer that never changes is marked: kept
 // by the caller's own cache alone (`private`), for a year at most, and never
 // asked again while it is kept (`immutable`, RFC 8246), not even on a
-// reload. A browser keeps it under a key naming who it was answered for
-// ([Immutable] says why), which a re-issue of the session's cookie does not
-// move.
+// reload. The cache key names who it was answered for ([Immutable]).
 //
 // PRIVATE, because the answer was decided for the credential that asked it,
-// and a shared cache in front of the node would hand it to whoever asked the
-// same path next. A YEAR, because such an answer never expires — its bytes
-// are a function of what its request named, the contract internal/api/queries'
-// Immutable holds a question to — so the bound is the longest a cache is asked
-// to keep anything (RFC 9111's caches may hold less; RFC 8246's own example
-// asks the same year), not a property of the answer. And `immutable`, because
-// without it a browser revalidates a fresh entry on every reload, a round trip
-// per page of a diff for nothing.
+// and a shared cache would hand it to whoever asked the same path next. A
+// YEAR, because such an answer never expires (its bytes are a function of what
+// its request named, the contract internal/api/queries' Immutable holds a
+// question to): the longest a cache is asked to keep anything, not a property
+// of the answer. `immutable`, because without it a browser revalidates a fresh
+// entry on every reload, a round trip per page of a diff for nothing.
 const ImmutableCacheControl = "private, max-age=31536000, immutable"
 
 // Immutable answers 200 with body as JSON, marked as never changing: a STRONG
@@ -33,39 +29,11 @@ const ImmutableCacheControl = "private, max-age=31536000, immutable"
 // body and the same three headers (RFC 9110 §15.4.5: a 304 carries what the
 // 200 would have).
 //
-// THE TAG IS THE BYTES' OWN DIGEST, never a name for the request: it is right
-// whatever the answer was a function of, including the build that encoded it,
-// so a newer build answering the same request with another field is a new tag
-// rather than a 304 confirming a body it never sent. What it saves is the
-// transfer; the answer is still read to compute it. And it saves that only
-// while the bytes hold still: an answer carrying anything the read that
-// answered it stamps — the answering copy's position, whether a memo answered
-// — is a new tag on every read, which is one reason queries' Immutable wraps
-// nothing that moves.
-//
-// # The cache key names who the answer is for, and never the session cookie
-//
-// `private` keeps the answer out of shared caches and not out of the next
-// person in the same browser, so the key holds what a client sets to say who
-// it asks for: the bearer in `Authorization`, and the dashboard's reader
-// ([ReaderHeader]), which every request a tab makes for its person carries.
-// Neither moves while that person stays signed in, so an answer is served from
-// the cache for as long as they do.
-//
-// The cookie cannot be in it: the guard re-issues a served session's cookie
-// every five minutes of use (session.ReissueAfter), so a key holding its bytes
-// stopped matching minutes after an answer was kept, and every page a person
-// went back to was read again on its repository's home Gitlet node.
-//
-// Nor is the key held apart by emptying the browser's cache whenever who it is
-// signed in as may change (`Clear-Site-Data`): the guard refuses an expired
-// cookie on every route it reaches, and Chrome held each such response, the
-// dashboard's document and every script among them, until it had scanned its
-// whole cache for this origin. A request that names nobody (a tab that opened
-// the route itself) would share one key for everybody in that browser, so it
-// is never answered here: internal/api's writeAnswer answers it the value
-// itself, `no-store`, since a code read is not the same for every person
-// (ADR-0110); and a sign-out still empties the cache (session.SignOut).
+// THE TAG IS THE BYTES' OWN DIGEST, never a name for the request: a newer
+// build answering the same request with another field is a new tag, not a 304
+// confirming a body it never sent. It saves the transfer only, and only while
+// the bytes hold still: an answer carrying anything its read stamps is a new
+// tag on every read, so queries' Immutable wraps nothing that moves.
 func Immutable(w http.ResponseWriter, r *http.Request, body any) {
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -78,6 +46,15 @@ func Immutable(w http.ResponseWriter, r *http.Request, body any) {
 	h.Set("ETag", tag)
 	h.Set("Cache-Control", ImmutableCacheControl)
 	// ADDED, never set: a route's own Vary (CORS's Origin) stays beside it.
+	//
+	// The key names who the answer is for, never the session cookie:
+	// `private` does not separate people sharing a browser, so it holds the
+	// bearer and the dashboard's reader ([ReaderHeader]), neither of which
+	// moves while they stay signed in. The cookie is re-issued every five
+	// minutes (session.ReissueAfter), so a key holding it would stop matching;
+	// `Clear-Site-Data` made Chrome scan its whole cache. A request naming
+	// nobody would share one key, so internal/api's writeAnswer answers it
+	// `no-store` (ADR-0110); a sign-out still empties the cache.
 	h.Add("Vary", "Authorization, "+ReaderHeader)
 	if NoneMatch(r.Header.Get("If-None-Match"), tag) {
 		w.WriteHeader(http.StatusNotModified)

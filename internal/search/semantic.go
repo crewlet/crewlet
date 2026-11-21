@@ -10,125 +10,18 @@ import (
 	"time"
 )
 
-// The semantic half, as one statement over two tables in one file.
-//
-// # Two stages, and the first one is now an index — ADR-0028
-//
-// There is no approximate-nearest-neighbour index on this driver — `caps.go`
-// measures for one once per process and reports it on every open, and it is
-// absent at the pin — so the honest choices were a full exact scan, an
-// embedded search library with its own index format, file and backup story,
-// or two-stage retrieval. Two-stage is what every production vector engine
-// does anyway (DiskANN's rerank, pgvector's documented rerank subquery): a
-// narrow table of sign codes is ranked first and the survivors are reranked
-// EXACTLY against the vectors they came from, by primary key.
-//
-// For its first years the first stage read every row, and this doc argued —
-// correctly, at the sizes it measured — that it needed no index. What changed
-// is the corpus: the full scan costs 2.90 µs a source at p95 with one reader
-// and 7.34 µs with eight (BenchmarkSemanticIVFUnderLoad's scan arm), so a node
-// holding a thousand seats' first-year corpus pays ≈ 2.4 s under load against
-// a one-second target. So the first stage is now an INVERTED FILE over the
-// same sign codes ([Stage1], ivf.go): the codes are filed in lists by k-means
-// in Hamming space, a query ranks the lists by its own code and reads the
-// nearest ones, and the exact rerank above it is UNCHANGED. What the index
-// costs and loses is measured by the training that installs it, and again by
-// `crewlet search eval` against the exact scan.
-//
-// Measured on this container at 3 072 dimensions, at the SHIPPED depths —
-// 1 200 candidates, 150 returned — on 40 000 topical sources, p95, with the
-// index trained, measured and installed as the embedding duty installs it
-// (BenchmarkSemanticIVFUnderLoad):
-//
-//	                     one reader   eight readers   recall
-//	the full scan          116 ms        294 ms       0.994
-//	the index, half        73 ms         219 ms       0.992
-//
-// Half its lists is what that training measured it needed, and the most an
-// installed index may probe ([IVFProbeCeiling]); at 10 000 sources the same
-// training found nothing worth installing and the scan answered.
-//
-// The full scan is still the first stage below [IVFMinCorpus], on a corpus
-// whose training found no probe count worth installing, and during the minute
-// a model change leaves the corpus with no index in the new space.
-//
-// THE ONE-READER NUMBER IS NOT THE BUDGET. Eight concurrent readers on four
-// cores cost 2.5x (the scan) and 3x (the index) that p95 — see
-// BenchmarkSemanticScanUnderLoad and BenchmarkSemanticIVFUnderLoad, which report
-// both axes precisely so the idle figure cannot be quoted as the supported
-// one.
-//
-// # The one index on the table it scans, and why every other one stays gone
-//
-// The full scan's cost model is `N x c_row over a NARROW table`: a row is
-// stored contiguously, so what makes it fast is that its rows are 400 bytes
-// rather than 12 kilobytes. An index over a table whose rows are ALL read is a
-// second copy of the row order plus a random access per row, and every row
-// matches `model` and `dim` in a company that has not just changed model —
-// measured, the indexed scan was 69 ms against 29 ms for the plain one, and 27
-// ms against 20 ms with a container filter matching a third of the corpus.
-//
-// The inverted file changes the premise rather than the finding: a probe reads
-// a SHARE of the rows, so what it needs is a probed list as one contiguous
-// range. `kb_vectors_bin_ivf_idx` is that, and it is COVERING — every column
-// the first stage reads is in it, so a list is one sequential read of the
-// index with no access to the table at all. Replicated migration 0033 has the
-// measurement against the two alternatives (an uncovering index on the list,
-// and a table clustered on it). A full scan may read the covering index
-// instead of the table: it is a copy of the same narrow rows in another order,
-// which costs the same sequential read.
-//
-// The second stage's join is the other half and it cost far more: with an
-// index leading on `source` present, the planner used it instead of the
-// primary key, and each of 1 200 candidates scanned half of `kb_vectors`
-// looking for its `source_id` — 1 min 44 s against 50 ms. Both indexes are
-// dropped by the replicated estate's migration 0004, and
-// `TestEveryIndexServesARegisteredQuery` is what stops them coming back.
-//
-// # The query's own sign code is computed inline, and that too is measured
-//
-// `vector1bit(?)` in the ORDER BY reads like a per-row call. It is not: the
-// argument is a bound parameter and nothing else, so it is hoisted — the
-// inline form, a one-row CTE cross-joined in, and a code precomputed by a
-// separate statement all measure within noise of each other (50 / 49 / 50 ms).
-// The inline form is one statement with no join to explain. The probe ranks
-// the lists by the same code computed in Go ([Quantize], which agrees with
-// `vector1bit` bit for bit), because the centroids are a value this process
-// already decoded.
-//
-// # Why the container filter is on the NARROW table
-//
-// It is the only place it does any good. Pushing it onto the wide table would
-// filter after the scan that the filter exists to shrink, and joining
-// `kb_vectors` inside the stage-1 subquery to reach it is the shape the
-// hundred seconds above came from.
-//
-// # Why the source filter has no index of its own, and why that is measured
-//
-// A filter on this table narrows the part of the scan that COSTS: the sign
-// code's distance is computed only for a row the predicate admits, and next to
-// it reading a 400-byte row is nearly free. So the filter halves the search
-// for a source holding a fifth of the corpus with or without an index — and it
-// has one anyway, because the primary key is `(source, source_id)` and the
-// planner seeks its automatic index on `source = ?`. The gate asserts that
-// plan for the statement this file builds.
-//
-// Measured at 40 000 sources and 3 072 dimensions, one reader, p50: the
-// unfiltered scan 58 ms; a source holding 20 % of the corpus 29 ms, 50 % 48 ms,
-// 80 % 66 ms. Every index tried beside it was no faster for a filtered query
-// and some were far slower for the unfiltered one, which is 0004's finding
-// again: `(model, dim, source)` 85 ms unfiltered, `(model, dim, source,
-// search_shard)` 159 ms, and a COVERING `(source, search_shard, model, dim,
-// bits, …)` — a second copy of the whole table — 28 ms for the 20 % source
-// against the primary key's 29. None narrows the BUCKET range either: this
-// planner seeks `source = ?` and reads the range as a residual predicate,
-// which is exactly what the table scan already does with it.
-//
-// What the primary key's plan costs is a random access per admitted row, and a
-// source holding MOST of the corpus pays for that: forcing a scan (`+b.source`)
-// measured 57 ms against the seek's 66 at 80 % and 41 against 48 at 50 %, and
-// 32 against 29 at 20 %. Within the noise of the machine at every mix, and no
-// caller can know the mix — so the planner's choice stands.
+// The semantic half, one statement over two tables (ADR-0028): a narrow table
+// of sign codes is ranked first, then the survivors are reranked EXACTLY
+// against their vectors by primary key. The driver has no ANN index (`caps.go`).
+// Stage one is an inverted file ([Stage1], ivf.go) from [IVFMinCorpus] up,
+// probing at most [IVFProbeCeiling], else a full scan (also while a model change
+// leaves no index in the new space). At 40 000 sources, 3 072 dims, p95, one/
+// eight readers: scan 116/294 ms, recall 0.994; half-probe index 73/219 ms, 0.992;
+// the one-reader figure is NOT the budget. Only the covering
+// `kb_vectors_bin_ivf_idx` (0033) exists: any other lost to the scan or made the
+// join scan `kb_vectors` per candidate (0004 drops them,
+// `TestEveryIndexServesARegisteredQuery`). Filters sit on the NARROW table: on the
+// wide one they would run after the scan they exist to shrink.
 
 // SemanticQuery is one semantic search.
 type SemanticQuery struct {
@@ -200,33 +93,18 @@ type SemanticHit struct {
 	Distance  float64
 }
 
-// SemanticScanBudget bounds one semantic search.
-//
-// ONE SECOND, which is the interactive target the supported corpus is declared
-// against. What fits inside it depends on HOW MANY searches run at once and on
-// which first stage runs, and the two benchmarks are where the coefficients
-// come from.
-//
-// Both first stages measured on ONE corpus and one query set
-// (BenchmarkSemanticIVFUnderLoad, 40 000 topical sources, 3 072 dimensions,
-// p95):
+// SemanticScanBudget bounds one semantic search: ONE SECOND, the interactive
+// target the corpus is declared against. Measured at 40 000 sources, 3 072
+// dims, p95 (BenchmarkSemanticIVFUnderLoad):
 //
 //	                          one reader         eight readers
 //	the full scan             2.90 µs a source   7.34 µs a source
 //	the index, half its lists 1.84 µs            5.48 µs
 //
-// So a corpus answered by the scan holds ≈ 345 000 embeddable sources
-// inside the budget while its node is idle and ≈ 136 000 while eight searches
-// compete for its cores, and one whose index probes half its lists — the most
-// any installed index may ([IVFProbeCeiling]) — ≈ 545 000 and ≈ 183 000. Half
-// is the FLOOR of what an index buys rather than its typical figure: a
-// corpus whose training chose an eighth reads a quarter as many rows as one
-// at half, and the probe share the corpus's training chose is on the
-// `search_index_trained` log line and in `crewlet search eval`.
-//
-// It is a CEILING on the statement rather than a promise about it — the point
-// is that a query over a corpus somebody grew past the projection fails a
-// search instead of holding this store's reader for as long as it takes.
+// So the scan holds ≈ 345 000 sources idle and ≈ 136 000 under eight searches;
+// an index probing half its lists ([IVFProbeCeiling], the floor of what an index
+// buys) ≈ 545 000 and ≈ 183 000. It is a CEILING: a grown corpus fails a search
+// instead of holding the store's reader.
 const SemanticScanBudget = time.Second
 
 // Stage1Method is how the first stage chose its candidates.
@@ -471,31 +349,16 @@ type stage1Plan struct {
 
 // planStage1 decides between the probe and the scan, and builds the SQL.
 //
-// # How many lists, when the search is narrowed
-//
-// A search narrowed to a source or to containers keeps only the rows its
-// filter matches, so it reads lists nearest first until it has seen as many
-// MATCHING rows as the unfiltered probe reads rows, and runs the full scan
-// when that would take more than the index's ceiling ([ProbeCount]). How many
-// rows of each source every list holds is kb_ivf_lists, which the applier
-// keeps beside the rows; a container filter's matches are COUNTED on the
-// covering index, a doubling run of lists at a time, since containers are too
-// many to keep a count of. A bucket range (a fan-out's slice) narrows nothing:
-// the slices are disjoint and every node reads the same lists of its own, so
-// together they read exactly the unfiltered probe.
-//
-// # The probe, and the rows a rollout has not re-filed yet
-//
-// An index is installed by one record and its rows are re-filed by many — a
-// rollout of reassign records the duty publishes right after it. Until the
-// last has applied, some rows are still filed under the index this one
-// replaced (or under none), and their lists mean nothing here. They are read
-// IN FULL beside the probed lists, so the answer is never missing a document
-// because a rollout is in flight: the set is bounded by the rollout and
-// shrinks as it applies. The union costs a materialised pass over both parts,
-// which is why a search checks for such rows first (one seek on the covering
-// index) and skips the union when there are none — every search but the ones
-// in a rollout's own minute.
+// A search narrowed to a source or containers reads lists nearest first until
+// it has seen as many MATCHING rows as the unfiltered probe reads, and runs the
+// full scan when that would exceed the index's ceiling ([ProbeCount]). Per-source
+// row counts per list are kb_ivf_lists (kept by the applier); a container
+// filter's matches are COUNTED on the covering index, a doubling run of lists at
+// a time. A bucket range (a fan-out slice) narrows nothing: slices are
+// disjoint, so together they read exactly the unfiltered probe.
+// Rows a rollout has not re-filed yet sit under a replaced index or none: they
+// are read IN FULL beside the probed lists, and a search seeks for them first
+// (covering index) to skip the union when there are none.
 func planStage1(ctx context.Context, tx *sql.Tx, q SemanticQuery) (stage1Plan, error) {
 	narrowing, narrowingArgs := narrowingFilters(q)
 	filters, filterArgs := stage1Filters(q)
@@ -767,19 +630,12 @@ func Key(source Source, id string) string { return string(source) + ":" + id }
 
 // Hybrid fuses a keyword list and a semantic list into one answer.
 //
-// # Why the two halves are fused in Go rather than joined in SQL
-//
-// They are in DIFFERENT DATABASE FILES. The lexical index is this node's own —
-// every node tokenises its own rows with no network — and the vectors are
-// replicated, applied from a committed record. No transaction spans the two
-// estates and no read joins across them, so a `UNION` was never available
-// here; reciprocal rank fusion consumes RANKS, so nothing is lost by doing it
-// over two lists of ids.
-//
-// What fusion absorbs is the loss of a document the keyword half also found,
-// which merely slides down. What it does NOT absorb is the loss of a
-// semantic-only document, which leaves the answer entirely — and that is
-// exactly the class the semantic half exists for. See
+// Fusion is in Go, not a SQL join: the lexical index is this node's own file
+// and the vectors are replicated, so no transaction or read spans both and a
+// `UNION` was never available. Reciprocal rank fusion consumes RANKS, so
+// nothing is lost. A document the keyword half also finds merely slides down
+// when the semantic half loses it; a semantic-only one leaves the answer
+// entirely, the class the semantic half exists for. See
 // TestFuseIsNotMonotoneInTheSemanticList.
 func Hybrid(keyword, semantic []string, limit int) []string {
 	fused := Fuse(keyword, semantic)

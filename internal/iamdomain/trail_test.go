@@ -13,17 +13,13 @@ import (
 
 // A GESTURE MADE THROUGH A TOKEN IS RECORDED AS ONE ON THE TRAIL.
 //
-// `GET /iam/audit` reads iam_history, and the trail named its actor alone. A
-// machine token acts as its owner, so its gesture's actor is the owner — and
-// what somebody's token did to the directory read there as done by them. The
-// record names the credential, and the row carries it beside the actor. The
-// gesture a token may still make about the directory is the one that spares
-// its own owner — signing them out everywhere, which a leaked token must be
-// able to do to itself — so that is the token's row here; an administrator's
-// suspension and removal, which no token may write (ADR-0033), name the
-// browser session they came through instead, and the token's own attempt at a
-// suspension writes no row at all. A writer that acted through nothing — the
-// node's own, which writes every sign-in and every duty — names none.
+// A machine token acts as its owner, so the actor alone (on iam_history, which
+// `GET /iam/audit` reads) reads a token's gesture as the owner's: the record
+// names the credential and the row carries it beside the actor. The token's
+// row here signs its owner out everywhere, the directory gesture a leaked
+// token may still make; the administrator's suspension and removal, which no
+// token may write (ADR-0033), name their browser session, and the token's
+// attempted suspension writes no row. The node's own writer names none.
 // Mutation: drop the column from the apply, or the field from the record, and
 // a row goes red; drop the record-layer lock and the refused row appears.
 func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
@@ -115,11 +111,9 @@ func TestAGestureMadeThroughATokenIsRecordedAsOneOnTheTrail(t *testing.T) {
 
 // AN ENTRY NAMES THE LOGIN OF WHOEVER IT IS ABOUT, WHILE THEY ARE ENROLLED.
 //
-// The trail names its subject by id, and a page of id prefixes said whose
-// session opened and whose row changed to nobody reading it. The login their
-// row holds rides beside it; a removal erases what identified them, so their
-// entries name nobody once they are gone — the CONTROL. Mutation: drop the
-// join and the suspension's entry names nobody.
+// The trail names its subject by id, with the login on their row beside it. A
+// removal erases what identified them, so their entries then name nobody: the
+// CONTROL. Mutation: drop the join and the suspension's entry names nobody.
 func TestATrailEntryNamesTheLoginOfWhoeverItIsAbout(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -157,15 +151,14 @@ func TestATrailEntryNamesTheLoginOfWhoeverItIsAbout(t *testing.T) {
 
 // A GESTURE A PERSON MAKES THROUGH THE NODE IS THEIRS ON THE TRAIL.
 //
-// The node's own writer writes every sign-in, sign-out, second factor's spend,
-// redemption and reset link, because the person holds no grant the record asks
-// of its party — and the trail named the node as WHO for every one of them.
-// Written [iamdomain.Writer.For] the person, the row names them and the session
-// it came through, while what the writer may do is still the node's: a person
-// holding no grant suspends nobody, and the node writing for them still may.
-// The CONTROL is the node writing for itself, named as the node. Mutation:
-// leave the author unchanged in For and the person's row names the node; carry
-// the person's grants and the stage change is refused.
+// The node's own writer writes sign-ins, sign-outs, second factors' spends,
+// redemptions and reset links, the person holding no grant the record asks of
+// its party. Written [iamdomain.Writer.For] the person, the row names them and
+// the session it came through, while what the writer may do stays the node's:
+// the node writing for a person holding no grant still suspends. The CONTROL
+// is the node writing for itself, named as the node. Mutation: leave the
+// author unchanged in For and the person's row names the node; carry the
+// person's grants and the stage change is refused.
 func TestAGestureAPersonMakesThroughTheNodeIsTheirsOnTheTrail(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

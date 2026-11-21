@@ -267,7 +267,7 @@ export function timelineOf(rows: WorkSummary[], opts: TimelineOptions): Timeline
       edges.push({
         from: blocker.id,
         to: bar.row.id,
-        open: blocker.open === true,
+        open: blocker.open,
         oneSided: blocker.one_sided === true,
       });
     }

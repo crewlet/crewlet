@@ -14,21 +14,16 @@ import (
 
 // listenSub is one client's registration as a listener on a pattern.
 //
-// Registered on the BROKER rather than on the client, for the reason
-// [Queue.SubscribeStream] gives for the same choice: a broadcast is a broker
-// fact, and a twin where one client's broadcast could not reach another
-// client's listener would model a fleet in which presence never leaves the
-// node.
+// Registered on the BROKER, for [Queue.SubscribeStream]'s reason: a
+// broadcast is a broker fact, or presence would never leave the node.
 //
 // # Delivered from a queue of its own, one message at a time
 //
-// The real backend hands a core subscription's messages to its callback one at
-// a time, on a goroutine of the client's, and never on the publisher's: a
-// broadcast returns as soon as the bytes are written, whatever the listeners
-// are doing. This twin does the same, so a listener that takes its own lock
-// and a publisher that broadcasts while holding that lock behave here as they
-// do in production. An inline dispatch would deadlock the one and certify the
-// other, and would let a slow listener hold every publisher.
+// The real backend calls a core subscription's callback one message at a
+// time on the client's goroutine, never the publisher's. This twin does the
+// same, so a listener taking its own lock and a publisher broadcasting
+// under it behave as in production; inline dispatch would deadlock the one,
+// certify the other, and let a slow listener hold every publisher.
 type listenSub struct {
 	owner   *Queue
 	pattern string
@@ -185,21 +180,14 @@ func (b *Broker) removeListenerLocked(l *listenSub) bool {
 // listeners has been handled — each listener's handler called on it and
 // returned — or answers ctx's error when ctx ends first.
 //
-// THE TWIN OF THE NATS CLIENT'S OWN BARRIER (nats.Conn.Barrier), which runs a
-// function once every callback subscription of a connection has delivered
-// what it held when it was asked: the one view a test of the backend that
-// ships has of a listener having caught up. Here a broadcast is handed to its
-// listeners inside the Broadcast that sends it, so whatever this client has
-// broadcast is in their inboxes by the time this is called, and a marker put
-// behind it in each inbox is reached only once that listener's handler has
-// run on everything ahead of it. A listener whose loop has ended holds nothing
-// more and is passed.
-//
-// Reported so the conformance suite can see it. That a WITHDRAWN listener hears
-// nothing more is an absence no later broadcast can fence — the withdrawn
-// registration hears the fence no more than the broadcast — so the suite reads
-// it behind this, which a registration the withdrawal left standing would have
-// carried the broadcast past.
+// THE TWIN OF THE NATS CLIENT'S OWN BARRIER (nats.Conn.Barrier), the one
+// view a test has of a listener having caught up. Here a broadcast is
+// handed to its listeners inside the Broadcast that sends it, so it is in
+// their inboxes by the time this is called, and a marker behind it in each
+// inbox is reached only once that handler has run on everything ahead. A
+// listener whose loop has ended is passed. That a WITHDRAWN listener
+// hears nothing more no later broadcast can fence, so the conformance
+// suite reads it behind this.
 func (q *Queue) ListenBarrier(ctx context.Context) error {
 	q.broker.mu.Lock()
 	var mine []*listenSub

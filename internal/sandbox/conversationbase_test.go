@@ -246,7 +246,13 @@ func (l *conversationLog) capturesOf(turn string) []CaptureRecord {
 
 // Session answers a turn's row at the level a relaunch reads (the engine's
 // adapter's), so an end another node published is seen.
-func (l *conversationLog) Session(_ context.Context, handle, turn string) (executorkeep.TurnRow, error) {
+func (l *conversationLog) Session(ctx context.Context, handle, turn string) (executorkeep.TurnRow, error) {
+	// A READ UNDER A CONTEXT THAT ENDED IS NOT ANSWERED, as the estate
+	// router's is not: a fake that answered it settled what a wait whose
+	// time had run out could not have read.
+	if err := ctx.Err(); err != nil {
+		return executorkeep.TurnRow{}, err
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	row, ok := l.rows[turn]
@@ -254,21 +260,6 @@ func (l *conversationLog) Session(_ context.Context, handle, turn string) (execu
 		return executorkeep.TurnRow{}, ErrTurnRowNotFound
 	}
 	return row.TurnRow, nil
-}
-
-func (l *conversationLog) Fetch(_ context.Context, row executorkeep.TurnRow, dst io.Writer) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	body, ok := l.archives[row.Object.Key.String()]
-	if !ok {
-		return errors.New("the store holds no such object")
-	}
-	_, err := dst.Write(body)
-	return err
-}
-
-func (l *conversationLog) OpenSpooled(_ executorkeep.TurnRow, sealed io.Reader) (io.Reader, error) {
-	return sealed, nil
 }
 
 func (l *conversationLog) Open(_ context.Context, row executorkeep.TurnRow) (io.ReadCloser, error) {
@@ -979,7 +970,7 @@ func TestABaseIsContinuedOnlyInABoxOfItsOwn(t *testing.T) {
 					req.Continue = &Continuation{SessionID: "sess-own", Brief: "carry on in the box you left"}
 				}
 				got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
-					rig.runner, tc.reused, false)
+					rig.runner, tc.reused, false, RunSources{})
 				t.Cleanup(got.release)
 				if got.kind != tc.want || got.session != tc.session || (got.carried != nil) != tc.carried {
 					t.Fatalf("the launch hands %s on session %q, carrying %v; want %s on %q, carrying %v",

@@ -43,21 +43,14 @@ func feedIDs(rows []livestate.FeedRow) []string {
 	return out
 }
 
-// HISTORY IS WHAT THE PROJECTION STARTS FROM, rather than nothing at all.
-//
-// Every screen the projection feeds used to start empty in every process: a
-// restart, a deploy or a node joining a fleet showed an operator a company
-// that had apparently done nothing, beside a store that said otherwise.
 // A FULL SEED DOES NOT COUNT THE LIVE ROWS IT ALREADY HOLDS A SECOND TIME.
 //
 // The seed runs after the broadcast subscription is attached, so phases that
 // complete in between are in the projection AND in the store the seed reads.
-// While the dedupe was a bounded set capped at the number of records the seed
-// reads, those live ids sat at the FRONT of its eviction order: a seed that
-// filled the cap evicted every one of them before its own loop reached the
-// store's copies of those same phases, and each was counted twice. The rollup
-// then over-reported the day by exactly the overlap, which is the figure the
-// company's headroom is read from.
+// With a dedupe set bounded at the seed's record count, those live ids sat at
+// the FRONT of its eviction order: a seed filling the cap evicted them before
+// reaching the store's copies, and each was counted twice, over-reporting the
+// day by the overlap, which the company's headroom is read from.
 func TestAFullSeedDoesNotRecountTheLiveRowsItAlreadyHolds(t *testing.T) {
 	t.Parallel()
 	s := livestate.New()

@@ -9,20 +9,16 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 )
 
-// THE ALARM FIRES AT A THRESHOLD SOMEBODY ELSE ALREADY CHOSE, and it is the
-// interval rather than the event that decides.
+// THE ALARM FIRES AT A THRESHOLD SOMEBODY ELSE ALREADY CHOSE: the interval,
+// not the event, decides.
 //
-// A create that fails on one tick is retried on the next, nine times inside a
-// shipped lease, so alarming on the first failure would put twelve lines a
-// minute in the log for a condition that clears itself — and an operator who
-// learns to ignore those has lost the one signal that a seat is silently
-// dropping every event addressed to it. What is worth saying is that a seat
-// has been without a mailbox for as long as the fleet already tolerates a
-// seat being unserved.
+// A failed create is retried every tick, so alarming on the first failure
+// would flood the log for a condition that clears itself, and an operator who
+// learns to ignore it loses the signal that a seat is dropping its events. It
+// is worth saying once a seat has had no mailbox for as long as the fleet
+// tolerates an unserved seat.
 //
-// Tested on the value rather than through a log, because the arithmetic is
-// the whole of it: a threshold exercised only by reading lines out of a
-// logger is a threshold nobody re-measures.
+// Tested on the value, not through a log: the arithmetic is the whole of it.
 func TestAMissingMailboxIsAlarmedOnlyOnceItOutlivesALease(t *testing.T) {
 	const ttl = time.Minute
 	m := newMailboxes()

@@ -11,17 +11,14 @@ import (
 // queue a writer appends to under the store's lock and never waits on, and a
 // goroutine that hands it on ([watcher.serve]).
 //
-// UNBOUNDED, because the alternative is a writer that blocks on a slow reader
-// while holding the lock every other call in the twin takes. What a watch
-// carries is the changes to a small set of records — a handful of seat
-// pauses, one run, a read state per human seat, the leases of one class —
-// which a reader consumes promptly.
+// UNBOUNDED, because a writer must not block on a slow reader while holding
+// the lock every other call takes; a watch carries changes to a small set of
+// records, which a reader consumes promptly.
 //
 // ONE type for every family, for the KV backend's reason (its watch.go): the
-// ordering guarantee is the same everywhere — the snapshot and the
-// registration happen under ONE lock, so a write lands either before the
-// snapshot and is in it, or after the registration and is delivered as a
-// change — and two copies of it are two places to get that wrong.
+// snapshot and the registration happen under ONE lock, so a write lands either
+// before the snapshot and is in it, or after the registration and is delivered
+// as a change; two copies are two places to get that wrong.
 type watcher[U any] struct {
 	mu      sync.Mutex
 	pending []U

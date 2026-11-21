@@ -11,21 +11,14 @@ import (
 
 // BOTH APPLY GATES ARE READ IN ONE TRANSACTION.
 //
-// [doclet.Gates.GatedAt] is one answer made of two reads (the page's deletion
-// marker and the writer's eviction window), and it shipped as two
-// `Read` calls under a comment saying it was one. Two calls are two snapshots,
-// and two resolutions of the replicated estate, which an adoption replaces
-// while readers run: the applier commits between them, a purge of the page can
-// land between them, and the two halves then describe two states of the
-// estate — possibly two files.
+// [doclet.Gates.GatedAt] is one answer from two reads (deletion marker and
+// eviction window). Two `Read` calls are two snapshots and two resolutions of
+// the estate, which an adoption replaces while readers run: a purge can land
+// between them and the halves describe two states, possibly two files.
 //
-// A STRUCTURAL TEST, because the defect is structural, for the reason
-// read_test.go gives: a behavioural one would have to commit a purge or swap
-// the estate between two statements of one call, which is a race a test can
-// only lose reliably. So it holds the shape instead: exactly one transaction,
-// both gate tables named inside it, and every statement run on that
-// transaction's own handle rather than on a pool a statement could reach
-// around it through.
+// A STRUCTURAL TEST, for the reason read_test.go gives: a behavioural one
+// would race a purge or swap against two statements. It holds the shape: one
+// transaction, both gate tables inside it, every statement on its own handle.
 func TestGatedAtReadsBothGatesInOneTransaction(t *testing.T) {
 	t.Parallel()
 

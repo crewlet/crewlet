@@ -42,6 +42,40 @@ func changingStandIn(name, describe string) string {
 		ToolServerTTLEnv, procgrouptest.GORACE, procgrouptest.StandInRaceOptions())
 }
 
+// describeAs replaces the description file a stand-in reads at each listing
+// with text, whole, by a rename: a listing reads the old description or the
+// new one. os.WriteFile truncates before it writes, and a listing between the
+// two read an empty file, filed as a third definition a case could accept
+// while the server went on to list the text.
+func describeAs(t *testing.T, path, text string) {
+	t.Helper()
+	next := path + ".next"
+	if err := os.WriteFile(next, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(next, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// heldUnder says what a held call was decided on, beside what on accepts for
+// it: whether it was held for a change, the digest it was held under, the
+// accepted one, and whether on's watch has answered.
+func heldUnder(on *Engine, server string, held []tools.HeldCall) string {
+	if len(held) == 0 {
+		return "nothing held"
+	}
+	index, answered := on.reviewIndex()
+	tool, _ := held[0].Entry.Tool.(*mcp.Tool)
+	digest, raw := "", held[0].Name
+	if tool != nil {
+		digest = tool.Digest()
+	}
+	accepted := index[server][raw]
+	return fmt.Sprintf("held for a change %v under %s; accepted %s (removed %v); watch answered %v",
+		held[0].Changed, digest, accepted.Digest, accepted.Removed, answered)
+}
+
 // reviewingEngine is an engine over a fleet store with the company running and
 // its watch of the accepted definitions answered, its sessions listed again a
 // floor of 50ms after each listing.
@@ -93,9 +127,7 @@ func TestAChangedDefinitionHoldsAnAllowedToolAtApproveUntilAccepted(t *testing.T
 	t.Parallel()
 	ctx := t.Context()
 	describe := filepath.Join(t.TempDir(), "describe")
-	if err := os.WriteFile(describe, []byte("Close the items"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	describeAs(t, describe, "Close the items")
 	company := specCompany(t, `
 name: Acme
 providers:
@@ -131,15 +163,14 @@ roles:
 	if out, held := call("review", nil); out != "ok" || held {
 		t.Fatalf("the accepted tool answered %q (held %v), want it to run unasked", out, held)
 	}
-	entry, _ := e.ToolsFor("ceo").Lookup("close_items")
-	first := entry.Tool.(*mcp.Tool).Digest()
 
-	if err := os.WriteFile(describe, []byte("Close the items, and delete them"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// REFILED UNDER THE WORDS WRITTEN, the definition the server goes on
+	// listing, which is the one a person is then asked to accept.
+	const reworded = "Close the items, and delete them"
+	describeAs(t, describe, reworded)
 	waitFor(t, "the changed tool to be refiled", func() bool {
 		entry, ok := e.ToolsFor("ceo").Lookup("close_items")
-		return ok && entry.Tool.(*mcp.Tool).Digest() != first
+		return ok && entry.Tool.(*mcp.Tool).Description() == reworded
 	})
 	if out, _ := call("review", nil); !strings.Contains(out, "definition changed") {
 		t.Errorf("a host phase's call to the changed tool answered %q, want it refused for the change", out)
@@ -179,9 +210,7 @@ func TestAlwaysAllowOnTheThreeHundredThirtySixthToolSticks(t *testing.T) {
 	ctx := t.Context()
 	const listed, changed = 500, "tool_0336"
 	describe, launches := filepath.Join(t.TempDir(), "describe"), t.TempDir()
-	if err := os.WriteFile(describe, []byte("a test tool"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	describeAs(t, describe, "a test tool")
 	names := make([]string, 0, listed)
 	for i := 1; i <= listed; i++ {
 		names = append(names, fmt.Sprintf("tool_%04d", i))
@@ -245,14 +274,11 @@ roles:
 	if out, held := call(e); out != "ok" || len(held) != 0 {
 		t.Fatalf("the accepted tool answered %q (held %+v), want it to run unasked", out, held)
 	}
-	entry, _ := e.ToolsFor("ceo").Lookup(changed)
-	first := entry.Tool.(*mcp.Tool).Digest()
-	if err := os.WriteFile(describe, []byte("a test tool, and delete it"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	const reworded = "a test tool, and delete it"
+	describeAs(t, describe, reworded)
 	waitFor(t, "the changed tool to be refiled", func() bool {
 		entry, ok := e.ToolsFor("ceo").Lookup(changed)
-		return ok && entry.Tool.(*mcp.Tool).Digest() != first
+		return ok && entry.Tool.(*mcp.Tool).Description() == reworded
 	})
 	_, held := call(e)
 	if len(held) != 1 || !held[0].Changed {
@@ -304,7 +330,8 @@ roles:
 	}
 	waitFor(t, "the new session to serve the tool", served(e))
 	if out, held := call(e); out != "ok" || len(held) != 0 {
-		t.Fatalf("after a new session the tool answered %q (held %+v), want it to run unasked", out, held)
+		t.Fatalf("after a new session the tool answered %q (%s), want it to run unasked", out,
+			heldUnder(e, "cloud", held))
 	}
 
 	// A RESTART, on the same fleet store.
@@ -315,7 +342,8 @@ roles:
 	waitFor(t, "the restarted engine's session to start", func() bool { return started() == 3 })
 	waitFor(t, "the restarted engine to serve the tool", served(restarted))
 	if out, held := call(restarted); out != "ok" || len(held) != 0 {
-		t.Fatalf("after a restart the tool answered %q (held %+v), want it to run unasked", out, held)
+		t.Fatalf("after a restart the tool answered %q (%s), want it to run unasked", out,
+			heldUnder(restarted, "cloud", held))
 	}
 }
 

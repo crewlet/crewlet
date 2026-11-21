@@ -70,19 +70,17 @@ func (r *Rooms) streamRooms() stream.Rooms {
 }
 
 // roomAccess decides a join as the artifacts' own read admission does: the
-// role the artifact's shares and the chart give the reader, empty for one the
-// artifact is answered as absent to (no relation, purged, never created), and
-// [artifactsdomain.ErrTrashed] for one it is disclosed to while it is in the
-// trash, whose data is not served — told apart, because the second is a state
-// its owner's restore ends.
+// role the artifact's shares and the chart give the reader, empty where the
+// artifact is answered as absent (no relation, purged, never created), and
+// [artifactsdomain.ErrTrashed] where it is disclosed but in the trash, told
+// apart because its owner's restore ends that state.
 //
-// A READ OF ITS CONTENT, RECORDED: a room carries the artifact's data to the
-// socket in it, so the join is the content read every other surface takes
-// ([artifactsapi.Gate.Content]): an artifact in the trash is refused before
-// anything is recorded, and an administrator admitted only by the admin path
-// is recorded as reading it before the room is joined, with a record that
-// could not be written refusing the join as undecidable rather than letting
-// the override pass unrecorded. Repeats collapse into the day's first record.
+// A READ OF ITS CONTENT, RECORDED: a room carries the artifact's data, so the
+// join is the content read ([artifactsapi.Gate.Content]): trashed is refused
+// before anything is recorded, and an administrator admitted only by the admin
+// path is recorded before the room is joined; a record that cannot be written
+// refuses the join as undecidable, never an unrecorded override. Repeats
+// collapse into the day's first record.
 type roomAccess struct{ gate artifactsapi.Gate }
 
 func (a roomAccess) Standing(ctx context.Context, p iam.Principal, id artifacts.ID) (artifacts.Role, error) {

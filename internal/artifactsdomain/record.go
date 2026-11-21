@@ -14,55 +14,40 @@ import (
 )
 
 // RecordVersion is the record shape THIS BUILD can decode, never the version it
-// stamps on what it writes.
+// stamps: [Encode] stamps the LOWEST version that reads a record, from
+// [versionedFields], and this moves only with that table, to its highest
+// version. A record above it is RETAINED, not skipped, so a rolling upgrade
+// reduces coverage rather than causing an outage.
 //
-// A record above it is RETAINED rather than skipped (the framework's deferral
-// contract), which is what makes a rolling upgrade a period of reduced coverage
-// rather than an outage. What a writer stamps is the LOWEST version that reads
-// the record, computed by [Encode] from [versionedFields]. It moves ONLY with
-// that table, and exactly to its highest version.
-//
-// # What each version added
-//
-//   - 1: every shape the base format has.
-//   - 2: the folder tree and the adopted brand: the `folder` and `brand`
-//     subject kinds and every op on them, an artifact's `move`, the `folder`
-//     a create files into, a create of the `brand` artifact kind (a brand
-//     kit), and the `brand` stylesheet a version pins.
-//   - 3: comment threads (ADR-0154): the `comment` subject kind and every op
-//     on it, and a person's marks over the notices they write: a reader's
-//     `inbox_marks`.
+//   - 1: the base format.
+//   - 2: the `folder` and `brand` subject kinds and their ops, an artifact's
+//     `move`, a create's `folder`, a create of the `brand` artifact kind, and
+//     a version's `brand` stylesheet.
+//   - 3: the `comment` subject kind and its ops (ADR-0154), and `inbox_marks`.
 const RecordVersion = 3
 
-// baseRecordVersion is version 1, the base format. The barrier, the trim's
-// trimmed record, a reanchor's generation and every gate are pinned at it for
-// ever, for the reason
-// internal/doclet states at its own copy: an older node retains what it cannot
-// read, and a retained gate licenses every record above it.
+// baseRecordVersion is the base format, at which the barrier, the trimmed
+// record, a reanchor's generation and every gate are pinned for ever: an older
+// node retains what it cannot read, and a retained gate licenses every record
+// above it (internal/doclet's copy).
 const baseRecordVersion = 1
 
 // GateRecordVersion is the version every gate-installing record carries, FOR
 // EVER. A field such a record needs that it cannot have belongs somewhere else.
 const GateRecordVersion = 1
 
-// versionedFields is every field an artifacts record has gained since the base
-// format, and the version a reader must be at to apply a record carrying it.
-// Adding one is a row here, [RecordVersion] moved to its version, and a
-// conformance candidate that carries it (statelog_test.go's carrying).
+// versionedFields is every field gained since the base format, and the version
+// a reader needs to apply a record carrying it. Adding one is a row here,
+// [RecordVersion] moved, and a candidate in statelog_test.go's carrying.
 //
-// A NEW KIND OR A NEW OP IS A VALUE, not a key: every record has carried
-// `subject.k` and `op` since the base format, so its row names the key AND the
-// value, and an older build retains the kind's records instead of faulting at
-// the end of its dispatch. An op a new kind carries (a folder's `rename`, the
-// brand's `adopt`) needs no row of its own: the kind's row already stamps
-// every record on that subject.
-//
-// A NEW ARTIFACT KIND IS A VALUE TOO, at a create's `mutation.kind`: an older
-// build's create apply refuses a kind it does not serve, so a node at the old
-// version would refuse the very create a newer one applies, and the fleet
-// would diverge. Its row stamps the create, which the older build then
-// retains. Later records on that artifact carry no kind, so the create's row
-// is the one row the kind needs.
+// A NEW SUBJECT KIND OR OP IS A VALUE (every record has carried `subject.k`
+// and `op` since the base format), so its row names the key AND the value, and
+// an older build retains those records instead of faulting in dispatch; an op
+// only a new kind carries needs no row (the kind's row stamps it). A NEW
+// ARTIFACT KIND is a value at a create's `mutation.kind`: an older build
+// refuses a kind it does not serve, so an unstamped create would diverge the
+// fleet. Later records on the artifact carry no kind, so the create's row is
+// the only one it needs.
 var versionedFields = statelog.RecordFields{
 	{Name: "Subject.Kind folder", Since: 2, Path: []string{"subject", "k"}, Equals: string(KindFolder)},
 	{Name: "Subject.Kind brand", Since: 2, Path: []string{"subject", "k"}, Equals: string(KindBrand)},
@@ -107,17 +92,15 @@ const (
 	// OpTransfer moves ownership to another seat.
 	OpTransfer OpKind = "transfer"
 
-	// OpTrash stamps an artifact trashed and OpRestore clears the stamp.
-	// Two ops rather than one carrying a direction, because the op is both
-	// what the applier dispatches on and what an operator reads in the log.
+	// OpTrash stamps an artifact trashed and OpRestore clears the stamp: two
+	// ops, not one with a direction, because the op is what both the applier
+	// and an operator reading the log go by.
 	OpTrash   OpKind = "trash"
 	OpRestore OpKind = "restore"
 
-	// OpPurgeBegin commits an artifact to its purge before anything the
-	// purge removes is gone: it stamps the artifact in the trash with the
-	// instant its purge began, and from then on a restore is refused and
-	// only a purge finishes it. The datastore's removal, the purge's first
-	// irreversible step, runs only behind it.
+	// OpPurgeBegin commits a trashed artifact to its purge, stamping when it
+	// began: from then on a restore is refused and only a purge finishes it.
+	// The datastore's removal, the first irreversible step, runs behind it.
 	OpPurgeBegin OpKind = "purge_begin"
 
 	// OpPurge removes an artifact permanently and INSTALLS A GATE by its op
@@ -136,18 +119,16 @@ const (
 	// monotone on broker time.
 	OpOpened OpKind = "opened"
 
-	// OpLinkWorkItem links an artifact that already exists to a tracker
-	// work item. It changes no artifact state: it writes one history row
-	// carrying the item's key, which is what a work item's listing reads
-	// ([ListQuery.WorkItem]), so the artifact appears on that item exactly
-	// as one created or published for it does.
+	// OpLinkWorkItem links an existing artifact to a tracker work item. It
+	// changes no artifact state: its one history row carries the item's key,
+	// which [ListQuery.WorkItem] reads, as for one created for the item.
 	OpLinkWorkItem OpKind = "link_work_item"
 
 	// OpReadElevated records that the admin path opened an artifact for a
-	// caller with no relation to it (D09), which the artifact's own history
-	// shows its owner and editors. Additive: its operation id is derived
-	// from the day, the admin, the artifact and the version, so a repeat
-	// within the day collapses.
+	// caller with no relation to it (D09), shown to its owner and editors in
+	// its history.
+	// Its operation id derives from the day, admin, artifact and version, so
+	// a repeat within the day collapses.
 	OpReadElevated OpKind = "read_elevated"
 
 	// OpEviction is a node's eviction from this log, or its readmission.
@@ -163,10 +144,9 @@ const (
 	// below a floor (ADR-0080).
 	OpTrimmed OpKind = "trimmed"
 
-	// OpMove files an artifact in another folder (on the artifact's
-	// subject), or moves a folder under another parent (on the tree
-	// subject). An artifact's move is not an edit: it leaves `updated_at`
-	// alone and grants and withdraws nothing.
+	// OpMove files an artifact in another folder (on its subject), or moves a
+	// folder under another parent (on the tree subject). An artifact's move is
+	// not an edit: `updated_at` stays, and it grants and withdraws nothing.
 	OpMove OpKind = "move"
 
 	// OpRename renames a folder, on the tree subject.
@@ -191,11 +171,9 @@ const (
 	OpInboxMarks OpKind = "inbox_marks"
 )
 
-// OpKinds are every op, in the order they are documented.
-//
-// A FOLDER'S OPS REUSE THE ARTIFACT'S NAMES where the gesture is the same
-// (create, remove, move): the op is dispatched on the subject
-// kind beside it, never alone.
+// OpKinds are every op, in the order they are documented. A FOLDER'S OPS
+// REUSE THE ARTIFACT'S NAMES (create, remove, move): an op is dispatched with
+// its subject kind, never alone.
 var OpKinds = []OpKind{
 	OpCreate, OpPublish, OpRestoreVersion, OpPatch, OpShare, OpUnshare, OpTransfer,
 	OpTrash, OpRestore, OpPurgeBegin, OpPurge, OpRemove, OpPin, OpUnpin, OpOpened, OpLinkWorkItem,
@@ -212,20 +190,14 @@ var CommentOps = []OpKind{
 }
 
 // HistoryOps are every op an artifact's history row is filed under, in the
-// order they are documented: what the dashboard words a history row by, and
-// what the company trail narrows to.
+// order they are documented: what the dashboard and the company trail go by.
 //
-// NOT [OpKinds]. A purge removes the history with the artifact and writes no
-// row of its own; a pin, an unpin and an opened mark are one person's
-// browsing rather than something that happened to the artifact; the log's own
-// records are about no artifact; and an asset's records are filed under the
-// asset's own name ([historyOp]), so the history tells an asset's create from
-// the artifact's. A folder's records and the brand's are filed in their own
-// histories ([FolderHistoryOps], [BrandHistoryOps]), and a comment thread's
-// records write no history row at all: the thread's own rows are what happened
-// to it, and its writer reads its verdict back from them. An artifact's move is
-// filed here, naming folder ids only, never a folder's name, so the row tells
-// a reader of the artifact nothing about a folder they cannot see.
+// NOT [OpKinds]: a purge removes the history and writes none; pins and opened
+// marks are one person's browsing; the log's own records name no artifact; an
+// asset's records go under its own name ([historyOp]); folders and the brand
+// have their own ([FolderHistoryOps], [BrandHistoryOps]); and a comment
+// thread's own rows are its history. A move's row names folder ids only, never
+// a name, so it reveals nothing of a folder the reader cannot see.
 var HistoryOps = []OpKind{
 	OpCreate, OpPublish, OpRestoreVersion, OpPatch, OpShare, OpUnshare, OpTransfer,
 	OpTrash, OpRestore, OpPurgeBegin, historyOp(KindAsset, OpCreate), historyOp(KindAsset, OpRemove),
@@ -243,19 +215,18 @@ var BrandHistoryOps = []OpKind{OpAdopt, OpClear}
 // Valid reports whether an op off the wire is one this build knows.
 func (o OpKind) Valid() bool { return slices.Contains(OpKinds, o) }
 
-// RecordEnvelope decodes at EVERY version, BEFORE V is consulted.
-//
-// Its EIGHT keys are reserved at the top level of the format for its life: a
-// later version may add fields beside them and may never repurpose one. They
-// are internal/doclet's eight, so an operator reading two logs reads one shape.
+// RecordEnvelope decodes at EVERY version, BEFORE V is consulted. Its EIGHT
+// keys are reserved at the top level for the format's life (a later version
+// adds beside them, never repurposes one), and are internal/doclet's eight, so
+// two logs read alike.
 type RecordEnvelope struct {
 	// V is the record version.
 	V int `json:"v"`
 
-	// OpID is an operation id in the state log's grammar: the idempotency
-	// key, the broker's message id and the ledger's key. EMPTY on a
-	// barrier, whose acknowledgement must never come out of a dedupe cache,
-	// and on a trimmed record, whose identical copies are each meant to land.
+	// OpID is an operation id in the state log's grammar: the idempotency key,
+	// broker message id and ledger key. EMPTY on
+	// a barrier, whose ack must never come from a dedupe cache, and on a
+	// trimmed record, whose identical copies must each land.
 	OpID string `json:"op_id,omitempty"`
 
 	// Subject is the object this record mutates and the unit the broker
@@ -265,9 +236,8 @@ type RecordEnvelope struct {
 	// Op is what the record does.
 	Op OpKind `json:"op"`
 
-	// CreatedAt is the writer's own clock. It rides the record for an
-	// operator reading the log and is NEVER written to a row: every instant
-	// this domain stores is the broker's.
+	// CreatedAt is the writer's clock, for an operator reading the log, and
+	// NEVER written to a row: every stored instant is the broker's.
 	CreatedAt time.Time `json:"created_at,omitzero"`
 
 	// Gen is the generation the writer published in.
@@ -288,9 +258,9 @@ func (e RecordEnvelope) InstallsGate() bool {
 }
 
 // readByEveryBuild reports a record every build must read: a gate, the
-// barrier, the trim's trimmed record and a reanchor's generation. None may
-// carry a versioned field: an older node retains what it cannot read, and a
-// trimmed record it retained is every anchor it names kept on that node.
+// barrier, the trimmed record and a reanchor's generation. None may carry a
+// versioned field: an older node would retain it (a retained trimmed record
+// keeps every anchor it names).
 func (e RecordEnvelope) readByEveryBuild() bool {
 	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpTrimmed ||
 		e.Op == OpGeneration
@@ -305,9 +275,9 @@ type MutationRecord struct {
 	// BYTES when the version is above this build's.
 	Mutation json.RawMessage `json:"mutation,omitempty"`
 
-	// The actor, as iam.ActorFor records a principal: the name BARE (a seat
-	// handle, or a machine login for an unbound machine), its kind, and
-	// the credential it acted through. Never a display name.
+	// The actor, as iam.ActorFor records one: the BARE name (seat handle, or
+	// an unbound machine's login), its kind and credential; never a display
+	// name.
 	Actor      string        `json:"actor,omitempty"`
 	ActorKind  iam.ActorKind `json:"actor_kind,omitempty"`
 	OperatorID string        `json:"operator_id,omitempty"`
@@ -381,12 +351,9 @@ func Decode(payload []byte) (MutationRecord, error) {
 }
 
 // Encode renders a record, carrying back whatever a newer build wrote, and
-// stamps it with the lowest version that reads it.
-//
-// A ZERO VERSION IS "STAMP IT": every writer leaves V unset. A set version is
-// kept (a relay keeps its writer's) and refused when it is below what the
-// record carries. A record every build must read is refused whenever it
-// carries a versioned field at all.
+// stamps it with the lowest version that reads it. A ZERO VERSION MEANS "STAMP
+// IT"; a set one (a relay's) is kept, and refused when below what the record
+// carries. A record every build must read may carry no versioned field.
 func Encode(rec MutationRecord) ([]byte, error) { return encodeWith(rec, versionedFields) }
 
 // encodeWith is [Encode] under a named field table: the seam the stamping rule
@@ -431,6 +398,5 @@ func encodeWith(rec MutationRecord, fields statelog.RecordFields) ([]byte, error
 }
 
 // recordFields is every top-level name this build writes, read off the
-// struct's own tags so a name missing here is not decoded into the struct AND
-// carried as unknown.
+// struct's tags so no name is both decoded and carried as unknown.
 var recordFields = jsoncarry.Names(MutationRecord{})

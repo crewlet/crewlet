@@ -39,12 +39,8 @@ func baseInputs() statelog.TrimInputs {
 	}
 }
 
-// THE SIX TERMS ENTER A MINIMUM, which is the whole grammar of this gate.
-//
-// Every term can only move the trim point DOWN. That is what makes the age
-// term a LOWER bound on how long the log keeps a record rather than an upper
-// one — an inversion three readers of this design got backwards, which is why
-// it is asserted rather than commented.
+// THE SIX TERMS ENTER A MINIMUM, so every term can only move the trim point
+// DOWN, and the age term is a LOWER bound on how long the log keeps a record.
 func TestTheTrimTakesTheLowestTermAndNothingElse(t *testing.T) {
 	t.Parallel()
 	in := baseInputs()
@@ -59,12 +55,8 @@ func TestTheTrimTakesTheLowestTermAndNothingElse(t *testing.T) {
 	}
 }
 
-// RAISING THE AGE FLOOR CAN ONLY MOVE THE TRIM POINT DOWN.
-//
-// This is the inversion, stated as an assertion: the age is a floor on
-// TRIMMING and therefore a LOWER bound on how long the log keeps a record. It
-// is not, and cannot be, a ceiling on retention — and it says nothing whatever
-// about any node's own store file, which trimming the stream does not touch.
+// RAISING THE AGE FLOOR CAN ONLY MOVE THE TRIM POINT DOWN: the age is a LOWER
+// bound on how long the log keeps a record, never a ceiling on retention.
 func TestMinAgeOnlyLowersTheTrimPoint(t *testing.T) {
 	t.Parallel()
 	last := ^uint64(0)
@@ -83,9 +75,8 @@ func TestMinAgeOnlyLowersTheTrimPoint(t *testing.T) {
 		last = d.To
 	}
 
-	// AND A HIGHER ONE NEVER RAISES IT PAST ANOTHER TERM. At an age floor
-	// above every other term, the trim is held by whichever of them is
-	// lowest — never by the age.
+	// AND A HIGHER ONE NEVER RAISES IT PAST ANOTHER TERM: above them all,
+	// the lowest of the others holds the trim.
 	in := baseInputs()
 	in.AgeFloor = 1_000_000
 	d := statelog.Trim(in.Terms())
@@ -95,16 +86,13 @@ func TestMinAgeOnlyLowersTheTrimPoint(t *testing.T) {
 	}
 }
 
-// A COUNTED NODE'S OWN POSITION IS THE `applied` TERM, so the trim can never
-// pass it while it stays counted.
+// A COUNTED NODE'S OWN POSITION IS THE `applied` TERM, so the trim never passes
+// it while the node stays counted, however long offline and whatever the age
+// setting: only an eviction frees it.
 //
-// The register has no expiry, so an offline counted node pins the floor
-// indefinitely and no age setting bounds what it still holds. The only exit is
-// an eviction — which advances the trim and deletes nothing on that machine.
-//
-// AND THE RECORD AT THE POSITION ITSELF IS KEPT, the bound being exclusive:
-// it is the record a node whose log diverged from its rows is judged by, and
-// every other term here licenses removing it.
+// AND THE RECORD AT THE POSITION ITSELF IS KEPT, the bound being exclusive: a
+// node whose log diverged from its rows is judged by it, and every other term
+// here licenses removing it.
 func TestACountedNodesPositionIsNeverTrimmedPast(t *testing.T) {
 	t.Parallel()
 	in := baseInputs()
@@ -195,11 +183,8 @@ func TestAnUnreadableTermBlocksTheTrim(t *testing.T) {
 	}
 }
 
-// AN ABSENT TERM IS `n/a`, NOT ZERO.
-//
-// A domain that declares no wake feed has no consumer to wait on, and
-// reporting its position as zero would block its trim for ever on a term it
-// does not have.
+// AN ABSENT TERM IS `n/a`, NOT ZERO: zero would block a domain with no wake
+// feed for ever on a term it does not have.
 func TestADomainWithNoWakeFeedIsNotBlockedByOne(t *testing.T) {
 	t.Parallel()
 	in := baseInputs()
@@ -223,11 +208,8 @@ func TestADomainWithNoWakeFeedIsNotBlockedByOne(t *testing.T) {
 	}
 }
 
-// THE SNAPSHOT TERM IS THE k-TH HIGHEST, not the minimum and not the maximum.
-//
-// The minimum blocks for ever on any node that has not snapshotted yet; the
-// maximum makes one donor's disk the whole fleet's recovery plan. The k-th
-// means losing any single donor still leaves a usable artefact.
+// THE SNAPSHOT TERM IS THE k-TH HIGHEST, not the maximum, so losing any single
+// donor still leaves a usable artefact ([statelog.TermSnapshotFloor]).
 func TestTheSnapshotTermSurvivesLosingOneDonor(t *testing.T) {
 	t.Parallel()
 	in := baseInputs()
@@ -239,17 +221,16 @@ func TestTheSnapshotTermSurvivesLosingOneDonor(t *testing.T) {
 	if d.Blocked() {
 		t.Fatalf("blocked by %s: %s", d.BlockedBy, d.Detail)
 	}
-	// Snapshots at 7 500, 7 400 and 7 300; the second highest is 7 400, so
-	// the trim may reach one past it. The MAXIMUM would have been 7 500 —
-	// which is exactly the artefact whose donor might be the one lost.
+	// Snapshots at 7 500, 7 400 and 7 300: the trim may reach one past the
+	// second highest. The MAXIMUM's donor might be the one lost.
 	if d.To != 7_401 {
 		t.Fatalf("the trim would remove up to %d, want 7401 — the second-highest "+
 			"snapshot is at 7400, and taking the highest would make one donor's "+
 			"disk the whole fleet's recovery plan", d.To)
 	}
 
-	// A SOLO FLEET IS SATISFIED BY CONSTRUCTION, because its snapshot loop
-	// does not run at all and its recovery artefact is a backup.
+	// A SOLO FLEET IS SATISFIED BY CONSTRUCTION: no snapshot loop runs, and
+	// it recovers from a backup.
 	solo := baseInputs()
 	solo.Counted = solo.Counted[:1]
 	solo.Counted[0].HasSnapshot = false
@@ -257,9 +238,8 @@ func TestTheSnapshotTermSurvivesLosingOneDonor(t *testing.T) {
 		t.Fatal("a single node is blocked by the snapshot term — its loop does " +
 			"not run, and concluding otherwise deadlocks one node for ever")
 	}
-	// AND IT SAYS SO IN THE DASHBOARD'S WORDS: the term's sentence is drawn
-	// on Settings › Backups, where "its recovery artefact is a backup" sat
-	// beside the product's Artifacts, one word spelled two ways for two things.
+	// AND IT SAYS SO IN THE DASHBOARD'S WORDS: Settings › Backups draws this
+	// sentence beside the product's Artifacts, so it never says "artefact".
 	for _, term := range solo.Terms() {
 		if term.Name != statelog.TermSnapshotFloor {
 			continue
@@ -271,13 +251,11 @@ func TestTheSnapshotTermSurvivesLosingOneDonor(t *testing.T) {
 	}
 }
 
-// A SNAPSHOT FROM ANOTHER GENERATION IS NOT A DONOR.
-//
-// A node republishes its position every ten seconds and takes a snapshot once
-// a day, so for most of the day after a reanchor a row sits on the NEW
-// generation carrying an artefact that names the OLD one. Counted, it licenses
-// removing records no adoptable artefact covers — the one direction this gate
-// exists to prevent, and the one a bare sequence could not have detected.
+// A SNAPSHOT FROM ANOTHER GENERATION IS NOT A DONOR. After a reanchor a node's
+// row moves to the NEW generation at its next position heartbeat but carries
+// an artefact naming the OLD one until its next daily snapshot. Counted, it
+// licenses removing records no adoptable artefact covers, which a bare
+// sequence could not detect.
 func TestASnapshotFromAnEarlierGenerationIsNotCounted(t *testing.T) {
 	t.Parallel()
 	in := baseInputs()
@@ -302,9 +280,8 @@ func TestASnapshotFromAnEarlierGenerationIsNotCounted(t *testing.T) {
 			d.Detail)
 	}
 
-	// AND IT IS NOT A BLOCK BY ITSELF. Two current artefacts beside a
-	// stale one is a fleet that can recover, and refusing there would make
-	// one node's old file stop the whole company trimming.
+	// AND IT IS NOT A BLOCK BY ITSELF: two current artefacts beside a stale
+	// one is a fleet that can recover.
 	in.Counted[1].SnapshotGeneration = 1
 	if d := statelog.Trim(in.Terms()); d.Blocked() {
 		t.Fatalf("two current artefacts beside one stale one blocked the trim: "+
@@ -365,19 +342,15 @@ func TestTheTrimTermsAreAClosedSet(t *testing.T) {
 	}
 }
 
-// THE TRIM AND A TRANSFER RACE, AND THE HOLD IS WHAT DECIDES IT.
-//
-// A joining node replays the tail its artefact stops at. The trim's job is to
-// delete that tail. Four arms, because the hold has four states and each one
-// produces a different correct answer — and getting any of them wrong looks
-// identical from the joiner's side: a snapshot installs, the replay starts,
-// and the records between the artefact and the live stream are simply gone.
+// THE TRIM AND A TRANSFER RACE, AND THE HOLD DECIDES IT. A joining node replays
+// the tail its artefact stops at, the tail the trim deletes. One arm per state
+// of the hold, each with its own correct answer; any wrong one looks the same
+// to the joiner: the records between the artefact and the live stream are gone.
 func TestTrimRacesATransfer(t *testing.T) {
 	t.Parallel()
 
-	// ARM 1 — THE HOLD IS TAKEN BEFORE THE TICK READS IT. The adopter
-	// pins the tail as step 1 of ten, before a byte is fetched, so every
-	// tick from then on sees it and the minimum cannot pass it.
+	// ARM 1 — THE HOLD IS TAKEN BEFORE THE TICK READS IT: the adopter pins
+	// the tail before a byte is fetched, so no later tick's minimum passes it.
 	t.Run("a hold taken before the tick pins the tail", func(t *testing.T) {
 		t.Parallel()
 		in := baseInputs()
@@ -395,14 +368,10 @@ func TestTrimRacesATransfer(t *testing.T) {
 		}
 	})
 
-	// ARM 2 — THE HOLD IS RENEWED FOR THE WHOLE TRANSFER. A gigabyte-scale
-	// copy outlives many ticks, and a hold that only covered the first one
-	// would be a race the joiner loses by being slow. The holder is the one
-	// every holder in the engine uses ([statelog.HoldTail]) rather than a hold
-	// this case refreshes itself: a case that renewed by hand certified a
-	// holder that did not exist, while the join's own pin was put once and
-	// never renewed. Its clock runs through five stale bounds, and the trim is
-	// asked after every renewal.
+	// ARM 2 — THE HOLD IS RENEWED FOR THE WHOLE TRANSFER, which outlives many
+	// ticks. It renews through the engine's one holder ([statelog.HoldTail]),
+	// never by hand, so the case certifies the holder that runs. Its clock
+	// runs through five stale bounds, the trim asked after every renewal.
 	t.Run("a renewed hold pins the tail for as long as the copy runs", func(t *testing.T) {
 		t.Parallel()
 		clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
@@ -421,9 +390,8 @@ func TestTrimRacesATransfer(t *testing.T) {
 		}
 	})
 
-	// ARM 3 — THE HOLDER CRASHED. A hold nothing renews cannot pin the log
-	// for ever: the joiner is gone, and the alternative is a company whose
-	// log grows until somebody notices a machine that never came back.
+	// ARM 3 — THE HOLDER CRASHED: a hold nothing renews cannot pin the log
+	// for ever.
 	t.Run("a crashed holder stops pinning the tail", func(t *testing.T) {
 		t.Parallel()
 		in := baseInputs()
@@ -443,11 +411,9 @@ func TestTrimRacesATransfer(t *testing.T) {
 		}
 	})
 
-	// ARM 4 — THE TRIM WON ANYWAY. The hold is a belt: a fleet that
-	// trimmed past the artefact regardless — an operator's purge, a
-	// hold that was never taken, a floor that moved under a retry — must
-	// not have its snapshot installed, because the joiner would come up
-	// pointing at a replay tail that no longer exists.
+	// ARM 4 — THE TRIM WON ANYWAY (an operator's purge, a hold never taken,
+	// a floor that moved under a retry): the snapshot is not installed, or
+	// the joiner would come up on a replay tail that no longer exists.
 	t.Run("an artefact the fleet trimmed past is not installed", func(t *testing.T) {
 		t.Parallel()
 		h := newJoinHarness(t)
@@ -477,17 +443,11 @@ func TestTrimRacesATransfer(t *testing.T) {
 	})
 }
 
-// TestANodeWhoseArtefactOmitsADomainIsNotCountedInThatDomainsFloor.
-//
-// THE REGRESSION THIS PATH NEVER HAD. The whole chain from an artefact on one
-// node's disk to a term in another node's trim runs through a live fleet, and
-// the one hop that can be exercised without one is this: a node that holds no
-// usable artefact must not count as a donor, because counting it licenses
-// removing records no adoptable artefact covers.
-//
-// The stamping half is the engine's, and its own case proves that a node
-// holding an artefact short of a domain stamps nothing at all — which is what
-// arrives here as HasSnapshot false.
+// TestANodeWhoseArtefactOmitsADomainIsNotCountedInThatDomainsFloor: a node
+// holding no usable artefact is not a donor, since counting it licenses
+// removing records no adoptable artefact covers. The engine's own case proves
+// a node whose artefact is short of a domain stamps nothing, which arrives here
+// as HasSnapshot false.
 func TestANodeWhoseArtefactOmitsADomainIsNotCountedInThatDomainsFloor(t *testing.T) {
 	t.Parallel()
 	in := baseInputs()
@@ -513,11 +473,8 @@ func TestANodeWhoseArtefactOmitsADomainIsNotCountedInThatDomainsFloor(t *testing
 	}
 }
 
-// ONE COUNTED NODE IS NOBODY'S STRAGGLER.
-//
-// "node-1 is the furthest behind of 1 counted node(s)" told the operator of a
-// healthy single-node company that a fleet member was behind and should be
-// brought back or evicted.
+// ONE COUNTED NODE IS NOBODY'S STRAGGLER: a healthy single-node company's
+// applied term must not read as a fleet member behind, to bring back or evict.
 func TestTheAppliedTermOnASingleNodeNamesNoStraggler(t *testing.T) {
 	t.Parallel()
 	in := baseInputs()

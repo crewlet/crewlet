@@ -12,71 +12,39 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE PUBLISHER HALF OF THE SWEEP: what a sweep record says, and when one is
-// published at all.
+// THE PUBLISHER HALF OF THE SWEEP (sweep.go is the half every data node runs),
+// run by ONE node under the fleet-singleton duty. It is the only place on the
+// retention path that reads a clock, once per tick, to turn a horizon into a
+// POSITION: the newest trail row of a class older than the horizon, through
+// `iam_history_class_idx`. Only positions travel, so nodes whose clocks disagree
+// delete the same rows, and every bucket's record of a tick carries the same
+// values rather than sixty-four reads of a moving clock.
 //
-// sweep.go is the half every data node runs. This is the half ONE node runs,
-// under the fleet-singleton duty the engine arms, and it is the only place in
-// the whole retention path that reads a clock — once per tick, here, and never
-// at apply. What it reads the clock FOR is to turn "ninety days" into a
-// POSITION: the newest trail row of a class whose broker instant is older than
-// the horizon, read off this node's own rows through the index the migration
-// ships for exactly that (`iam_history_class_idx`). From then on only positions
-// travel, so two nodes whose clocks disagree by a year delete the same rows.
-//
-// # Resolved once, published per bucket
-//
-// The positions and the collection instant are resolved ONCE for the tick and
-// every bucket's record carries the same three values. Resolving per bucket
-// would be sixty-four reads of a clock that moves between them, and the
-// records of one tick would disagree about what "ninety days ago" was.
-//
-// # A bucket with nothing due publishes nothing, and "due" has SLACK
-//
-// A sweep record is a record on the log every data node applies, the snapshot
-// carries and the trim has to wait for. Published unconditionally it is
-// sixty-four records a tick — six thousand a day at an hourly tick, which is
-// more than the rest of this domain writes at the reference company and would
-// fill the log's ceiling with housekeeping. Published whenever ANY row was past
-// its horizon it is nearly as bad on a busy company, because some row in most
-// buckets crosses its horizon every hour.
-//
-// So a bucket is DUE only when something in it is at least [SweepSlack] past
-// its horizon, and the record it then gets deletes EVERYTHING past the horizon.
-// After it lands the bucket's oldest remaining row is younger than the horizon,
-// so the bucket cannot be due again for at least the slack — which bounds this
-// publisher at sixty-four records a day however busy the company is, and needs
-// no memory of when it last ran. That last property is the one a duty needs:
-// the lease moves between nodes, and nothing the previous holder remembered
-// moves with it.
+// A bucket is DUE only when something in it is at least [SweepSlack] past its
+// horizon, and its record then deletes everything past the horizon. That bounds
+// the publisher at one record per bucket per day however busy the company, with
+// no memory of the last run, which a duty's moving lease would lose.
 
 // SessionRowGrace is how long a row nobody can present is kept past the moment
 // it stopped being presentable: a session past its absolute deadline or ended,
 // an invitation past its expiry or redeemed, a credential past its expiry or
 // revoked.
 //
-// A WEEK — the design's 168 hours — which is the invitation horizon and the
-// default absolute session lifetime. For a credential it is also what keeps a
-// token a pipeline is still presenting from being collected out from under a
-// clock skew or a paused duty, while an expired verifier is not kept for ever;
-// and the listing can say what was revoked and why for that week, after which
-// the change trail, kept for its own horizon, is the account of it. The row is kept for the sessions screen and an investigation to say
-// what ended and why ("ended by a revocation, and whose" is the sentence
-// somebody is looking for); past a week the session's own trail row — kept for the session
-// horizon, ninety days by default — is the durable account of it, and the row
-// itself is a thing nobody can present answering a question nobody is asking.
+// A WEEK (the design's 168 hours): the invitation horizon and the default
+// absolute session lifetime. It lets the sessions screen and an investigation
+// say what ended or was revoked and why, and keeps a token a pipeline still
+// presents from being collected under a clock skew or a paused duty; past it,
+// the row's trail entry, kept for its own horizon, is the durable account.
 const SessionRowGrace = 7 * 24 * time.Hour
 
 // SweepSlack is how far past its horizon a bucket's oldest row must be before
 // the bucket is swept.
 //
-// A DAY. It is what bounds this publisher's own volume at one record per
-// bucket per day — see the header — and what it costs is precision: a row is
-// kept at most a day longer than its horizon says. Against horizons of ninety
-// and four hundred days that is about one percent at the worst, and against the
-// week of [SessionRowGrace] it is a day on a row nobody can present. A shorter
-// slack buys a tighter retention with more records on the log; a day is where
-// the log cost stops being noticeable beside the domain's own traffic.
+// A DAY bounds this publisher at one record per bucket per day (this file's
+// header), at the cost of keeping a row at most a day past its horizon: about
+// one percent of the ninety- and four-hundred-day horizons. Shorter buys tighter
+// retention with more records; at a day the log cost is unnoticeable beside the
+// domain's own traffic.
 const SweepSlack = 24 * time.Hour
 
 // sweepReason is what every sweep record says about itself.
@@ -93,12 +61,9 @@ type Horizons struct {
 	Sessions time.Duration
 }
 
-// validate refuses a horizon that would delete the trail it describes.
-//
-// A ZERO IS REFUSED rather than read as "keep nothing": config validates both
-// against their floors and fills the defaults, so a zero here is a caller that
-// built the value by hand and forgot a field — and the reading that would
-// silently follow is that every row is past its horizon.
+// validate refuses a zero horizon rather than read it as "keep nothing": config
+// fills both defaults, so a zero is a hand-built value missing a field, and
+// reading it would put every row past its horizon and empty the trail.
 func (h Horizons) validate() error {
 	if h.Changes <= 0 || h.Sessions <= 0 {
 		return fmt.Errorf("iamdomain: a sweep needs both trail horizons, and "+
@@ -112,11 +77,10 @@ func (h Horizons) validate() error {
 // SweepPlan is one tick's resolution: the three values every due bucket's
 // record carries, and which buckets are due.
 type SweepPlan struct {
-	// At is the instant this plan read the clock at — the tick — and the
-	// instant every record it publishes carries in its operation id
-	// ([statelog.DeriveOpID]): the unit of work began then, so a retry of
-	// the same plan reproduces the same ids and the ledger judges them by
-	// when the plan was made, never by when the retry ran.
+	// At is the instant this plan read the clock (the tick), which every record
+	// it publishes carries in its operation id ([statelog.DeriveOpID]), so a
+	// retry of the plan reproduces the same ids and the ledger judges them by
+	// when the plan was made.
 	At time.Time
 
 	// Changes and Sessions are the exclusive POSITIONS below which a trail
@@ -131,12 +95,8 @@ type SweepPlan struct {
 	Expired time.Time
 
 	// Due are the buckets holding something at least [SweepSlack] past its
-	// horizon, in bucket order.
-	//
-	// A plan is only as current as the rows it was read from, and that is
-	// safe in the one direction it can be wrong: a node that is behind
-	// resolves LOWER positions and finds fewer buckets due, which deletes
-	// less and never more.
+	// horizon, in bucket order. A node that is behind resolves lower positions
+	// and finds fewer due, so a stale plan deletes less, never more.
 	Due []Bucket
 }
 
@@ -148,10 +108,9 @@ type SweepReport struct {
 	// pending here, which every data node will apply either way.
 	Published []Bucket
 
-	// Unknown are the buckets whose publish established nothing. They are
-	// not retried under a fresh id here: the next tick re-plans them, and a
-	// record that did land after all is idempotent, since it deletes by a
-	// predicate rather than by a list.
+	// Unknown are the buckets whose publish established nothing. The next tick
+	// re-plans them; a record that did land after all is idempotent, since it
+	// deletes by a predicate rather than by a list.
 	Unknown []Bucket
 }
 
@@ -163,9 +122,8 @@ func (w *Writer) PlanSweep(ctx context.Context, horizons Horizons) (SweepPlan, e
 	if err := horizons.validate(); err != nil {
 		return SweepPlan{}, err
 	}
-	// THE CLOCK, READ ONCE. Milliseconds are the estate's own resolution,
-	// so an instant carried at finer grain would round differently in the
-	// comparison than it reads in the record.
+	// THE CLOCK, READ ONCE, at the estate's millisecond resolution, so the
+	// comparison rounds as the record reads.
 	now := w.Now().UTC().Truncate(time.Millisecond)
 	plan := SweepPlan{At: now, Expired: now.Add(-SessionRowGrace)}
 	err := w.db.Read(ctx, func(tx *sql.Tx) error {
@@ -178,10 +136,8 @@ func (w *Writer) PlanSweep(ctx context.Context, horizons Horizons) (SweepPlan, e
 			now.Add(-horizons.Sessions)); err != nil {
 			return err
 		}
-		// THE DUE BOUNDS ARE THE SAME QUESTION ASKED A SLACK EARLIER,
-		// resolved to positions the same way, so "is anything in this
-		// bucket a day past its horizon" is a seek on the index the
-		// range delete itself uses.
+		// THE DUE BOUNDS ARE THE SAME QUESTION ASKED A SLACK EARLIER, so each
+		// probe seeks the index the range delete uses.
 		dueChanges, err := trailBound(ctx, tx, ClassChange,
 			now.Add(-horizons.Changes-SweepSlack))
 		if err != nil {
@@ -218,12 +174,9 @@ const trailBoundStatement = `
 	ORDER BY broker_at DESC LIMIT 1`
 
 // trailBound is the exclusive position below which a class's trail rows are
-// older than cutoff, or zero when none is.
-//
-// THE NEWEST ROW BELOW THE AGE, read through (class, broker_at) — a seek and a
-// step rather than a scan of everything old. Its position PLUS ONE is the
-// bound, because the sweep deletes `version < bound` and the row that defined
-// it is itself past the horizon.
+// older than cutoff, or zero when none is: the newest such row's position PLUS
+// ONE, since the sweep deletes `version < bound` and that row is past the
+// horizon too.
 func trailBound(ctx context.Context, tx *sql.Tx, class HistoryClass,
 	cutoff time.Time) (uint64, error) {
 
@@ -263,13 +216,10 @@ const (
 // bucketDue reports whether one bucket holds anything at least a slack past
 // its horizon.
 //
-// EVERY PREDICATE IS THE APPLY'S OWN, at the slack's bound rather than the
-// horizon's, and each is a seek on the index its delete uses — so this costs
-// ten probes a bucket and never reads a row it will not report.
-//
-// The invitations' two probes are named ([dueOpenInvitationsStatement],
-// [dueSpentInvitationsStatement]), because the plan gate reads every statement
-// over the invitations.
+// EVERY PREDICATE IS THE APPLY'S OWN at the slack's bound, each a seek on the
+// index its delete uses, so no probe reads a row it will not report. The
+// invitations' probes are named constants because the plan gate reads every
+// statement over the invitations.
 func bucketDue(ctx context.Context, tx *sql.Tx, b Bucket, changes, sessions uint64,
 	over int64) (bool, error) {
 
@@ -296,9 +246,8 @@ func bucketDue(ctx context.Context, tx *sql.Tx, b Bucket, changes, sessions uint
 		// An invitation with no expiry included, as the apply collects it.
 		{"invitations", over <= 0, dueOpenInvitationsStatement,
 			[]any{bucket, over}},
-		// AND WHAT WAS SPENT, which a sweep collects too, so a bucket
-		// holding nothing but a spent invitation or a revoked token is a
-		// bucket with something due.
+		// AND WHAT WAS SPENT, which a sweep collects too, so a bucket holding
+		// only a spent invitation or a revoked token is due.
 		{"redeemed invitations", over <= 0, dueSpentInvitationsStatement,
 			[]any{bucket, over}},
 		{"revoked credentials", over <= 0, `
@@ -330,15 +279,10 @@ func bucketDue(ctx context.Context, tx *sql.Tx, b Bucket, changes, sessions uint
 
 // Sweep plans one tick and publishes a record for every bucket that is due.
 //
-// THE DEPLOYMENT'S GESTURE, and it takes admin: a sweep deletes the
-// authentication trail, and the party that decides how long that trail is
-// kept is whoever runs the deployment — `api.audit` is Tier A for the same
-// reason. The node's own writer holds it; no person's does unless they are an
-// administrator.
-//
-// EVERY BUCKET IS ATTEMPTED even when one fails, for the maintenance sweep's
-// reason: the buckets are independent, and one unreachable round must not stop
-// the other sixty-three.
+// It takes admin ([Writer.mayOperate]): how long the authentication trail is
+// kept is the deployment's decision, as Tier A's `api.audit` is. EVERY BUCKET
+// IS ATTEMPTED even when one fails: they are independent, and one unreachable
+// round must not stop the other sixty-three.
 func (w *Writer) Sweep(ctx context.Context, horizons Horizons) (SweepReport, error) {
 	if err := w.mayOperate(OpSweep); err != nil {
 		return SweepReport{}, err
@@ -369,15 +313,12 @@ func (w *Writer) Sweep(ctx context.Context, horizons Horizons) (SweepReport, err
 
 // sweepBucket publishes one bucket's record.
 //
-// ITS OPERATION ID IS DERIVED FROM ITS CONTENT — the bucket and the three
-// values — at the instant the plan was made ([statelog.DeriveOpID]), so a retry
-// of the same plan collapses at the broker and in the ledger, a later tick's
-// record, which says something different, is a different operation, and the id
-// carries the instant the ledger vouches for it by. It used to be a string of
-// its own shape, which carries no instant: read as minted at the epoch, every
-// sweep was answered `unknown` without being published once the ledger had
-// lost a row — which its monthly sweep does on every deployment older than
-// the month — so the trail stopped being collected with nothing saying why.
+// ITS OPERATION ID IS DERIVED FROM ITS CONTENT at the plan's instant
+// ([statelog.DeriveOpID]): a retry of the same plan collapses at the broker and
+// in the ledger, a later tick's record is a different operation, and the id
+// carries the instant the ledger vouches for it by. An id without one reads as
+// minted at the epoch, and once the ledger's monthly sweep has run is answered
+// `unknown` without being published.
 func (w *Writer) sweepBucket(ctx context.Context, plan SweepPlan, b Bucket) (
 	statelog.Result, error) {
 
@@ -404,11 +345,10 @@ func (w *Writer) sweepBucket(ctx context.Context, plan SweepPlan, b Bucket) (
 // mayOperate refuses a record only the deployment may publish: a sweep, an
 // eviction, a readmission.
 //
-// ADMIN, AND UNLIKE [Writer.mayAdminister] IT TAKES A MACHINE TOKEN: these
-// records decide how long the estate keeps its own history and which nodes may
-// write it — facts about the deployment, not decisions about who may do
-// anything — and evicting a node from a pipeline, through a token its
-// operator minted, is the gesture an automation is for.
+// ADMIN, AND UNLIKE [Writer.mayAdminister] A MACHINE TOKEN QUALIFIES: these
+// records are facts about the deployment (how long the estate keeps its history,
+// which nodes may write it), and evicting a node from a pipeline is what an
+// automation is for.
 func (w *Writer) mayOperate(op OpKind) error {
 	if w.Can(iam.GrantAdmin) {
 		return nil

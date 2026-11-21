@@ -10,64 +10,36 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A DIVERGED LOG IS REMEMBERED, in the node estate, for as long as the rows it
-// was found against are the rows this node holds.
-//
-// # Why the log cannot be trusted to show it again
-//
-// [ErrLogDiverged] is found by comparing the record the checkpoint names with
-// the log's record at the same sequence, and a restart re-derives it the same
-// way — which needs the log to still HOLD a record there. Nothing guarantees
-// it: an evicted node stops being counted by the trim, which may then remove
-// its checkpoint's record; an operator can purge a stream by hand; and a broker
-// restored a second time, from a copy older still, may not reach the sequence
-// at all. A restarted node then had nothing to compare, found the log
-// replayable from its checkpoint, applied the other history on top of its rows,
-// and published that the log no longer diverged — lifting every peer's
-// truncation fence ([ErrLogTruncated]) on the one node that most needed it.
-//
-// # What ends it
-//
-// The row is keyed to the stream and holds the checkpoint and both instants.
-// It is recalled only while the checkpoint row names the SAME position and the
-// SAME record ([Runner.recallDiverged]): a reanchor moves the checkpoint into a
-// new generation and an adoption installs another checkpoint, and each of those
-// is a file the verdict was never about — so the row is removed then, and
-// never on any reading of the log. A verdict is only ever reached against a
-// checkpoint that names its record, so its consumed instant is never zero.
-//
-// # Why the node estate
-//
-// It is this node's finding about its own rows, derived from no log, so it is
-// not replicated state; and an adoption replaces the replicated file, which
-// would take a row there away at exactly the moment it has to be judged
-// against the file that replaced it.
+// A diverged log ([ErrLogDiverged]) is remembered in the node estate for as
+// long as this node holds the rows it was found against: finding it again needs
+// a record still at the checkpoint's sequence, which a trim that stopped
+// counting an evicted node, a hand purge or an older restore can remove, and a
+// restarted node would then apply the other history and lift every peer's
+// truncation fence ([ErrLogTruncated]). The row, keyed by stream, is recalled
+// only while the checkpoint names the same position and record
+// ([Runner.recallDiverged]), and removed when a reanchor or an adoption moves
+// it, never on a reading of the log; its consumed instant is never zero, since
+// a verdict needs a checkpoint naming its record. Not the replicated estate:
+// this is the node's own finding, derived from no log, and an adoption
+// replaces the replicated file just when the row must be judged against it.
 
-// NodeEstate is this node's own database, as the applier needs it: where it
-// keeps what it has concluded about its own rows that the log may not show it
-// again ([ErrLogDiverged]).
+// NodeEstate is this node's own database, where the applier keeps what it has
+// concluded about its rows that the log may not show again ([ErrLogDiverged]).
+// It is never replaced under a running process, so a handle may be held.
 //
-// DECLARED HERE because the applier is the caller. The node estate is never
-// replaced under a running process, so a handle to it may be held.
-//
-// ESTATE IS IN THE SHAPE so that the replicated estate cannot be handed here.
-// Its [store.ReplicatedHandle] reads and writes exactly as this does, over a
-// file with none of this table in it, and the two are handed to one
-// constructor side by side ([RunnerDeps]); a store handle says which estate it
-// is, and a replicated handle — which is only ever the replicated estate —
-// does not, so the mistake is a build failure rather than a divergence verdict
-// lost on the one day it is written.
+// Estate is in the shape so the replicated estate cannot be handed here: a
+// [store.ReplicatedHandle] reads and writes alike and sits beside this in
+// [RunnerDeps], but does not say which estate it is, so the mistake fails the
+// build rather than losing a divergence verdict.
 type NodeEstate interface {
 	Read(ctx context.Context, fn func(*sql.Tx) error) error
 	Tx(ctx context.Context, fn func(*sql.Tx) error) error
 	Estate() store.Estate
 }
 
-// writeDiverged records that stream's log diverged from these rows at d.
-//
-// ONE ROW PER STREAM, replaced: a later divergence is necessarily at another
-// checkpoint, which only a reanchor or an adoption reaches, and either ended
-// the one before it.
+// writeDiverged records that stream's log diverged from these rows at d,
+// replacing the stream's one row: a later divergence is at another checkpoint,
+// which only a reanchor or an adoption reaches, and either ended the one before.
 func writeDiverged(ctx context.Context, db NodeEstate, stream string, d divergedLog,
 	now time.Time) error {
 

@@ -48,10 +48,10 @@ const VIEWER: ViewerState = {
   failedRefusal: null,
   configWriter: true,
   configManagedBy: [],
-  assistant: "disabled",
+  assistant: "no_model",
   assistantModel: null,
   assistantReadsImages: false,
-  assistantDeliberate: false,
+  assistantCanAssign: false,
   chatVendors: [],
 };
 
@@ -61,6 +61,7 @@ function draw(
     waiting?: Waiting | null;
     flow?: QueryResult<WorkFlowAnswer>;
     crew?: ReturnType<typeof crewOf> | null;
+    range?: string;
   } = {},
 ) {
   const store = new Store();
@@ -70,7 +71,7 @@ function draw(
       <ClientContext.Provider value={{ store, socket }}>
         <Kpis
           {...(figures ? { figures } : {})}
-          range={rangeOf(DEFAULT_RANGE)}
+          range={rangeOf(over.range ?? DEFAULT_RANGE)}
           crew={over.crew === undefined ? crewOf([]) : over.crew}
           viewer={VIEWER}
           waiting={over.waiting ?? null}
@@ -190,4 +191,40 @@ test("a figure's parts carry their separator at their end, never at their start"
   expect(parts.length).toBeGreaterThan(1);
   for (const part of parts) expect(part.startsWith("·"), part).toBe(false);
   expect(parts.slice(0, -1).every((part) => part.endsWith(" ·"))).toBe(true);
+});
+
+// TASKS IN PROGRESS COMPARE AGAINST THE RANGE'S OWN LENGTH AGO: a fixed week
+// said "vs last week" whatever the picker chose.
+test("the tasks in progress compare against the count the range's length ago", () => {
+  const points = Array.from({ length: 60 }, (_, i) => ({
+    window: `w${i}`,
+    start: new Date(Date.parse("2026-07-25T00:00:00Z") + i * 86_400_000).toISOString(),
+    end: new Date(Date.parse("2026-07-26T00:00:00Z") + i * 86_400_000).toISOString(),
+    not_started: 0,
+    // 10 a day until the last month, 4 since.
+    active: i < 30 ? 10 : 4,
+    done: 0,
+    closed: 0,
+    completed: 0,
+  }));
+  const flow: QueryResult<WorkFlowAnswer> = {
+    data: {
+      bucket: "day",
+      points,
+      now: { not_started: 0, active: 4, blocked: 0, overdue: 0 },
+      blocked_history: false,
+      complete: true,
+    },
+    loading: false,
+    error: null,
+    refusal: null,
+    refetch: () => {},
+  };
+  draw(["progress"], { flow, range: "30d" });
+  expect(labels()[0]).toContain("vs 30 days ago");
+  expect(labels()[0]).toContain("−6");
+  cleanup();
+  draw(["progress"], { flow, range: "7d" });
+  expect(labels()[0]).toContain("vs 7 days ago");
+  expect(labels()[0]).not.toContain("−6");
 });

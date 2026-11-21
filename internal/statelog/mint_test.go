@@ -8,17 +8,12 @@ import (
 )
 
 // AN ATTEMPT MINTS AT THE INSTANT IT INHERITS WHILE THE LEDGER CAN VOUCH FOR IT
-// TO THE END OF THE ATTEMPT, and at its own instant once it cannot.
-//
-// Short of the horizon the inherited instant is kept, because a retry that
-// repeats an earlier attempt's write collapses onto the first copy only under
-// the same id — a rule that always rebased is red on those rows. Past it the
-// attempt's own instant, because an id minted at an instant the sweep has
-// passed, whose row is gone, is answered `unknown` on every data node and never
-// published — a rule that never rebased is red on those. And INSIDE THE
-// RETENTION'S LAST DAY it rebases too: an attempt judged there goes on deciding
-// writes, and a sweep in the next quarter hour moves past the instant while it
-// does — a horizon at the bare retention is red on that row.
+// TO THE END OF THE ATTEMPT, and at its own instant once it cannot. A rule
+// that always rebased is red short of the horizon (a retry collapses only
+// under the same id); one that never rebased is red past it (a swept instant
+// is answered `unknown` on every node); a horizon at the bare retention is red
+// in the retention's last day, where a sweep passes the instant while the
+// attempt still decides writes.
 func TestAnAttemptRebasesOnlyPastTheHorizon(t *testing.T) {
 	t.Parallel()
 	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
@@ -35,9 +30,8 @@ func TestAnAttemptRebasesOnlyPastTheHorizon(t *testing.T) {
 		{"an attempt a minute short of the retention", began, statelog.OpsRetention - time.Minute, true},
 		{"an attempt just past the retention", began, statelog.OpsRetention + time.Millisecond, true},
 		{"an attempt forty days on", began, 40 * 24 * time.Hour, true},
-		// THE START IS NOT KNOWN: the zero instant is behind every loss
-		// the ledger ever recorded, so keeping it answers every write
-		// `unknown` on a node whose ledger has swept once.
+		// The zero instant is behind every loss, so keeping it answers
+		// every write `unknown` once the ledger has swept.
 		{"an attempt whose inherited instant is unknown", time.Time{}, time.Hour, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,14 +50,10 @@ func TestAnAttemptRebasesOnlyPastTheHorizon(t *testing.T) {
 	}
 }
 
-// THE HORIZON LEAVES A WHOLE ATTEMPT INSIDE THE RETENTION.
-//
-// The attempt is judged when it starts and decides writes until it ends, and
-// every one of those writes is vouched for only while the instant its id
-// carries is no older than the retention when the write is decided. So an
-// attempt that keeps an instant right at the horizon must still have room for
-// a turn's worth of rounds before the sweep's cutoff reaches it — the day the
-// horizon's own doc names. A horizon moved to the retention is red here.
+// THE HORIZON LEAVES A WHOLE ATTEMPT INSIDE THE RETENTION: an attempt keeping
+// an instant right at the horizon still decides a turn's worth of writes, each
+// vouched for only until the sweep's cutoff reaches that instant (the day
+// MintHorizon names). A horizon moved to the retention is red here.
 func TestTheHorizonLeavesAnAttemptInsideTheRetention(t *testing.T) {
 	t.Parallel()
 	if room := statelog.OpsRetention - statelog.MintHorizon; room < 24*time.Hour {
@@ -77,12 +67,9 @@ func TestTheHorizonLeavesAnAttemptInsideTheRetention(t *testing.T) {
 	}
 }
 
-// A REBASED INSTANT IS THE ONE THE IDS CARRY, to the millisecond.
-//
-// The instant is recorded so that a later attempt inherits it, and every id
-// minted at it keeps only its millisecond. Recorded finer, a reader holding
-// the record and an id minted from it would find two different instants for
-// one decision.
+// A REBASED INSTANT IS THE ONE THE IDS CARRY, to the millisecond: recorded
+// finer, the record and an id minted from it would name two instants for one
+// decision.
 func TestARebasedInstantIsWhatTheIdsCarry(t *testing.T) {
 	t.Parallel()
 	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)

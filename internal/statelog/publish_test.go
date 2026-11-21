@@ -26,11 +26,9 @@ func probeSubject(id string) statelog.Subject {
 // THE FIVE ANSWERS ONE PUBLISH CAN HAVE, each reached through the seam that
 // produces it in production rather than through a stub of the publisher.
 //
-// The three outcomes are what a caller is told; the fourth and fifth are
-// refusals, which say no record happened at all. Collapsing any pair is the
-// failure this framework exists to avoid — most sharply `applied` and
-// `gated`, which differ only in a durable local table the answer is read out
-// of.
+// Three outcomes a caller is told and two refusals that say no record happened.
+// Collapsing any pair is the failure under test, most sharply `applied` and
+// `gated`, which differ only in a durable local table.
 func TestOnePublishHasFiveAnswersAndTellsThemApart(t *testing.T) {
 	t.Parallel()
 
@@ -57,9 +55,8 @@ func TestOnePublishHasFiveAnswersAndTellsThemApart(t *testing.T) {
 	t.Run("pending", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		// This node's applier never reaches the record. The record is
-		// DURABLE and every other node will apply it, so the honest
-		// answer is neither success nor failure.
+		// This node's applier never reaches the record, which is DURABLE and every
+		// other node applies: the answer is neither success nor failure.
 		h.applier.mu.Lock()
 		h.applier.auto = false
 		h.applier.mu.Unlock()
@@ -80,11 +77,9 @@ func TestOnePublishHasFiveAnswersAndTellsThemApart(t *testing.T) {
 	t.Run("gated", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		// THE ORDINARY BRANCH, where the wait SUCCEEDS. A live node
-		// applies its own record and drops it under its own eviction
-		// gate; a design answering from the wait alone reports it
-		// applied, out of the same database that holds the fact that
-		// killed it.
+		// THE ORDINARY BRANCH, where the wait SUCCEEDS: the node applies its own
+		// record and drops it under its own eviction gate, so an answer read from the
+		// wait alone would say applied.
 		h.applier.mu.Lock()
 		h.applier.auto = false
 		h.applier.mu.Unlock()
@@ -106,11 +101,10 @@ func TestOnePublishHasFiveAnswersAndTellsThemApart(t *testing.T) {
 			t.Errorf("a refusal of this node's own record names %q as the copy's "+
 				"writer — the reason is this node's standing", refusal.CopyWriter)
 		}
-		// THE GATE READER IS HANDED THE BODY THIS CALL APPENDED — the
-		// decision's own bytes, not the signed frame — which is what lets a
-		// reader whose gate is keyed on what the payload names (the
-		// identity estate's claims, about a person their subject does not
-		// name) say which gate dropped the record.
+		// THE GATE READER IS HANDED THE BODY THIS CALL APPENDED, the decision's own
+		// bytes rather than the signed frame, so a gate keyed on what the payload names
+		// (the identity estate's claims, about a person the subject does not name) can
+		// say which gate dropped the record.
 		h.gates.mu.Lock()
 		bodies := h.gates.bodies
 		h.gates.mu.Unlock()
@@ -131,9 +125,8 @@ func TestOnePublishHasFiveAnswersAndTellsThemApart(t *testing.T) {
 		}
 		h.anchorAt(probeSubject("a"), first.Position.Seq)
 
-		// Then the broker stops answering. The append may or may not
-		// have landed and the discriminator cannot say which, which is
-		// the whole content of the third value.
+		// Then the broker stops answering: the append may or may not have landed
+		// and the discriminator cannot say which, the third value.
 		h.pubUnreachable()
 
 		res, err := h.write(probeSubject("a"), "op-1", "hello")
@@ -158,10 +151,8 @@ func TestOnePublishHasFiveAnswersAndTellsThemApart(t *testing.T) {
 		}
 		h.anchorAt(probeSubject("a"), first.Position.Seq)
 
-		// The append fails BEFORE the record reaches the stream. The
-		// subject still holds nothing above the anchor, so there is
-		// nothing to discriminate and nothing to resolve — the write
-		// decides again from a fresh snapshot and lands.
+		// The append fails BEFORE the record reaches the stream, so nothing above
+		// the anchor needs resolving: the write decides again from a fresh snapshot.
 		h.appends.fail(errors.New("no response from stream"), true)
 
 		res, err := h.write(probeSubject("a"), "op-1", "two")
@@ -197,11 +188,9 @@ func TestOnePublishHasFiveAnswersAndTellsThemApart(t *testing.T) {
 // AN EVICTED NODE IS REFUSED BEFORE THE APPEND, on every pattern and after
 // every round.
 //
-// Fencing only the expectation-zero branch is the tempting version, on the
-// theory that the ordinary path is refused by the broker anyway. The broker
-// refuses a stale expectation and knows nothing about the counted set — so an
-// evicted node whose row is current publishes successfully and is
-// acknowledged.
+// Not only on the expectation-zero branch: the broker refuses a stale
+// expectation but knows nothing of the counted set, so an evicted node whose
+// row is current would publish and be acknowledged.
 func TestEvictedNodeRefusesBeforeTheAppend(t *testing.T) {
 	t.Parallel()
 	for name, pattern := range map[string]statelog.Pattern{
@@ -234,15 +223,12 @@ func TestEvictedNodeRefusesBeforeTheAppend(t *testing.T) {
 		})
 	}
 
-	// AND AN EVICTION THAT CANNOT BE READ BLOCKS. It is the third value:
-	// an eviction nobody can read is not an eviction that did not happen,
-	// and publishing under it produces durable records every node drops.
+	// AND AN EVICTION THAT CANNOT BE READ BLOCKS: it is the third value, and
+	// publishing under it produces durable records every node drops.
 	//
-	// BUT IT IS NOT AN EVICTION, and the refusal says so: an eviction is
-	// permanent until an operator readmits the node, and a coordination
-	// blip is gone in seconds. Answered as `evicted`, every write during
-	// the blip was a 503 with no Retry-After — "waiting cannot clear
-	// this" — which is the signal a client gives up on.
+	// BUT IT IS NOT AN EVICTION, and the refusal says so: an eviction lasts until
+	// an operator readmits the node, a coordination blip passes in seconds, and
+	// `evicted` (a 503 with no Retry-After) is the signal a client gives up on.
 	t.Run("an unreadable eviction blocks and says to come back", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
@@ -252,9 +238,8 @@ func TestEvictedNodeRefusesBeforeTheAppend(t *testing.T) {
 		if !errors.As(err, &refusal) || refusal.Reason != statelog.ReasonEvictionUnknown {
 			t.Fatalf("write = %v, want an eviction_unknown refusal", err)
 		}
-		// IN THIS PACKAGE'S WORDS: every surface sends a refusal's detail
-		// to the caller, and the fence's error is the store's own — a
-		// database path here — which belongs in the log.
+		// IN THIS PACKAGE'S WORDS: a refusal's detail reaches the caller, and the
+		// fence's error is the store's own (a database path), which belongs in the log.
 		if strings.Contains(err.Error(), "/var/lib") {
 			t.Errorf("the refusal carries the store's own words to the caller: %q", err)
 		}
@@ -272,12 +257,10 @@ func TestEvictedNodeRefusesBeforeTheAppend(t *testing.T) {
 // A NODE WHOSE LOG WAS REBUILT UNDER IT REFUSES EVERY WRITE, before the append
 // and whatever the pattern.
 //
-// Fencing only the retry at zero is the tempting version, because it is the
-// branch the floor theorem names. Every other pattern is as meaningless on a
-// rebuilt log: an ordinary expectation is a sequence from the old history the
-// broker compares with the new one — and ACCEPTS where the two happen to be
-// equal — and an additive record is resolved against a checkpoint from the
-// old history, which reads a low sequence as already applied.
+// Not only the retry at zero the floor theorem names: on a rebuilt log an
+// ordinary expectation is an old-history sequence the broker ACCEPTS where the
+// two happen to be equal, and an additive record is resolved against an
+// old-history checkpoint that reads a low sequence as already applied.
 func TestARebuiltLogRefusesEveryWriteBeforeTheAppend(t *testing.T) {
 	t.Parallel()
 	for name, pattern := range map[string]statelog.Pattern{
@@ -289,9 +272,8 @@ func TestARebuiltLogRefusesEveryWriteBeforeTheAppend(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			h := newHarness(t)
-			// A CURRENT ROW, so the ordinary branch would form an
-			// expectation the broker accepts: without the fence this
-			// write lands, which is what makes the refusal the fence's.
+			// A CURRENT ROW, so the ordinary branch forms an expectation the broker
+			// accepts: without the fence this write lands.
 			first, err := h.write(probeSubject("a"), "op-0", "before")
 			if err != nil {
 				t.Fatalf("the write before the rebuild: %v", err)
@@ -326,21 +308,16 @@ func TestARebuiltLogRefusesEveryWriteBeforeTheAppend(t *testing.T) {
 // A REFUSAL FENCE 0 MAKES AT THE APPEND IS RETURNED AS ITSELF, IN THE ROUND IT
 // WAS MADE — whatever the pattern, and whichever expectation the round formed.
 //
-// Fence 0 runs again before every append because a write is not instant: the
-// heartbeat can find the log rebuilt, and a peer can commit this node's
-// eviction, after the check at the top of the write has passed. What it finds
-// there is this node's own decision, taken before anything reached the broker,
-// so it is not an ambiguous publish. Read as one — every error that is not the
-// broker's own is "no answer" to the classifier — the write asked the log what
-// landed, found nothing, took a fresh snapshot, was refused again, and spent
-// every round to report a CONFLICT: a colleague editing the object, told to a
-// caller whose write this node refused for a reason of its own and whose remedy
-// is an operator's.
+// Fence 0 runs again before every append because the log can be rebuilt, or
+// this node evicted, after the check at the top of the write. Its refusal is
+// this node's own decision, taken before anything reached the broker, so it is
+// not an ambiguous publish: read as one, the write retakes snapshots until its
+// rounds run out and reports a CONFLICT for a refusal whose remedy is an
+// operator's.
 func TestFenceZeroAtTheAppendRefusesAsItselfInTheSameRound(t *testing.T) {
 	t.Parallel()
-	// Each trip lands inside the decision, which runs after the check at
-	// the top of the write and before the append — the window the check at
-	// the append exists for.
+	// Each trip lands inside the decision: after the check at the top of the
+	// write, before the one at the append.
 	trips := map[string]struct {
 		trip    func(*harness)
 		require func(*testing.T, error)
@@ -372,10 +349,9 @@ func TestFenceZeroAtTheAppendRefusesAsItselfInTheSameRound(t *testing.T) {
 		"additive":   statelog.PatternAdditive,
 		"sequenced":  statelog.PatternSequenced,
 	}
-	// A WRITTEN SUBJECT reaches the append with the anchor as its
-	// expectation, and a FRESH one with zero — past a zero fence that
-	// cleared — so both roads to the append are covered. The additive
-	// pattern forms no expectation on either.
+	// A WRITTEN SUBJECT reaches the append expecting the anchor and a FRESH one
+	// expecting zero, past a zero fence that cleared; the additive pattern forms no
+	// expectation on either.
 	for tripName, tc := range trips {
 		for patternName, pattern := range patterns {
 			for _, written := range []bool{true, false} {
@@ -445,8 +421,8 @@ func requireEvicted(t *testing.T, err error) {
 }
 
 // requireEvictionUnknown is an eviction state that could not be read: its own
-// reason, which clears when the state is read again, rather than `evicted`,
-// which tells the caller to give up on this node.
+// reason, which clears on the next read, rather than `evicted`, which tells the
+// caller to give up on this node.
 func requireEvictionUnknown(t *testing.T, err error) {
 	t.Helper()
 	var refusal *statelog.Unavailable
@@ -458,26 +434,19 @@ func requireEvictionUnknown(t *testing.T, err error) {
 // A REBUILD THE ZERO FENCE'S OWN READ FINDS IS REFUSED IN THAT ROUND, before
 // anything is appended at zero.
 //
-// The fence 0 at the top of a write answers from the last reading of the
-// stream's instant, which on a running node is the heartbeat's — so a log
-// rebuilt since the last beat passes it. On an ordinary expectation that window
-// needs a coincidence to do harm; on an expectation of zero it needs nothing,
-// because a rebuilt log holds nothing on any subject and the floor the fence
-// clears against is a number from the old history. The zero fence's read of the
-// log is where a real node first sees the rebuild (it carries the creation
-// instant to the applier), and the fence 0 the attempt runs before its append
-// asks the identity after that read — so the write is refused in the round that
-// found it. Without the read reaching the applier, or without the check at the
-// append, both cases below land at zero on the rebuilt log.
+// Fence 0 at the top of a write answers from the heartbeat's last reading of
+// the stream's instant, so a log rebuilt since passes it, and at zero that needs
+// no coincidence to do harm: a rebuilt log holds nothing on any subject. The
+// zero fence's read of the log carries the creation instant to the applier, and
+// the fence 0 before the append asks after that read. Without either, both
+// cases below land at zero on the rebuilt log.
 //
-// What this does NOT exercise is the identity the publisher asks over the zero
-// fence's own REFUSAL: here the fence clears, and that ask is what
-// [TestARebuildOutranksTheZeroFencesEndCheck] holds.
+// The identity asked over the zero fence's own REFUSAL is
+// [TestARebuildOutranksTheZeroFencesEndCheck]'s.
 func TestARebuildTheZeroFencesOwnReadFindsIsRefusedInThatRound(t *testing.T) {
 	t.Parallel()
 
-	// THE CONTROL: the same writes on a log nobody rebuilt land at zero,
-	// so a fence that refused everything would not pass the cases below.
+	// THE CONTROL: the same writes land at zero on a log nobody rebuilt.
 	t.Run("control: an unrebuilt log is written at zero", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
@@ -491,9 +460,8 @@ func TestARebuildTheZeroFencesOwnReadFindsIsRefusedInThatRound(t *testing.T) {
 	t.Run("an expectation of zero", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		// The subject was never written, so the write reaches the fence
-		// with no append attempted — and the fence's read of the log is
-		// what finds the rebuild.
+		// Never written, so the write reaches the fence with no append attempted,
+		// and the fence's read of the log finds the rebuild.
 		h.fence.reads = h.applier.rebuilt
 		res, err := h.write(probeSubject("fresh"), "op-1", "hello")
 		requireWrongStream(t, err)
@@ -511,8 +479,8 @@ func TestARebuildTheZeroFencesOwnReadFindsIsRefusedInThatRound(t *testing.T) {
 	t.Run("a retry at zero", func(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
-		// The row names a record at 7 that the log does not hold — the
-		// rebuilt log's shape, and a trimmed anchor's.
+		// The row names a record at 7 the log does not hold: a rebuilt log's
+		// shape, and a trimmed anchor's.
 		h.anchorAt(probeSubject("quiet"), 7)
 		h.fence.reads = h.applier.rebuilt
 		res, err := h.write(probeSubject("quiet"), "op-1", "again")
@@ -566,11 +534,10 @@ func requireWrongStream(t *testing.T, err error) {
 // A DEFERRED SCOPE REFUSES BEFORE AN EXPECTATION EXISTS, and the probe is
 // over the SCOPE rather than the subject.
 //
-// This is the floor theorem's first clause. A record this node cannot decode
-// makes the rows it touched permanently stale here, and if its position has
-// also been trimmed, the retry-at-zero branch would fire and overwrite it —
-// silently, with nothing anywhere reporting it and no later reprocess able to
-// undo it.
+// The floor theorem's first clause (package doc, "THE FLOOR THEOREM"): rows an
+// undecodable record touched are permanently stale here, and were its position
+// trimmed the retry-at-zero branch would silently and irreversibly overwrite
+// them.
 func TestADeferredScopeRefusesBeforeAnyExpectation(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -579,9 +546,8 @@ func TestADeferredScopeRefusesBeforeAnyExpectation(t *testing.T) {
 		s.Deferral = statelog.Deferral{
 			Position: statelog.Position{Stream: probeStream, Generation: 1, Seq: 42},
 			Version:  9,
-			// The deferred record's SUBJECT is b; the object being
-			// written is a. There is nothing on a's own subject to
-			// probe, which is exactly why the probe is over the scope.
+			// The deferred record's SUBJECT is b and the write is to a, so a's own
+			// subject has nothing to probe: hence the probe over the scope.
 			Scope: statelog.ScopeSet{Paths: []string{"object.b", "object.a"}},
 		}
 	})
@@ -610,11 +576,10 @@ func TestADeferredScopeRefusesBeforeAnyExpectation(t *testing.T) {
 // A CREATE IS GUARDED BY THE ROW, WHICH IS WHAT STILL HOLDS BELOW THE TRIM
 // FLOOR.
 //
-// Once a claim's record is trimmed its subject holds nothing, an expectation
-// of zero succeeds again, and the broker enforces no uniqueness at all. And
-// the deletion half is not decoration: a purge deletes the guarding row while
-// the marker is permanent, so without it a writer is told "it already exists"
-// above the floor and "it succeeded" below it.
+// A trimmed claim's subject holds nothing, so zero is expected again and the
+// broker enforces no uniqueness. The deletion half: a purge deletes the
+// guarding row while the marker is permanent, so without it a writer is told
+// "it already exists" above the floor and "it succeeded" below it.
 func TestACreateIsGuardedByTheRowAndByTheDeletionMarker(t *testing.T) {
 	t.Parallel()
 
@@ -698,15 +663,13 @@ func TestACreateIsGuardedByTheRowAndByTheDeletionMarker(t *testing.T) {
 // THE ORDINARY PATH PAYS NO COORDINATION READ, and the zero branch pays
 // exactly one.
 //
-// The asymmetry is the whole cost argument: everywhere else a stale floor
-// costs a refused write or an unnecessary snapshot; on the zero branch it
-// costs a silent lost update. Asserting both halves is what stops the fence
-// being "optimised" onto the hot path or off the cold one.
+// Elsewhere a stale floor costs a refused write or a needless snapshot; on the
+// zero branch it costs a silent lost update. Both halves are asserted so the
+// fence moves neither onto the hot path nor off the cold one.
 func TestTheOrdinaryWritePathTakesNoCoordinationRead(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	// An anchor at a live sequence, which is what an ordinary second
-	// write to an object has.
+	// An anchor at a live sequence, as an ordinary second write has.
 	first, err := h.write(probeSubject("a"), "op-1", "one")
 	if err != nil {
 		t.Fatalf("first write: %v", err)
@@ -724,16 +687,14 @@ func TestTheOrdinaryWritePathTakesNoCoordinationRead(t *testing.T) {
 
 // A LOST RACE DRIVES THIS NODE'S APPLIER FORWARD BEFORE IT RE-DECIDES.
 //
-// Re-deciding with no wait re-reads the anchor the applier has not yet
-// advanced — sixteen times, to a conflict — which is a refusal a model reads
-// as a colleague editing the same object when nobody is.
+// Without the wait it re-reads an anchor the applier has not advanced, sixteen
+// times, to a conflict a model reads as a colleague editing the object.
 func TestALostRaceWaitsForTheWinnerBeforeItRedecides(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 
-	// A peer writes the object. This node has applied nothing, so its
-	// anchor for the subject is empty while the subject is not — which
-	// is exactly the state a lost race leaves behind.
+	// A peer writes the object while this node has applied nothing: its anchor
+	// is empty and the subject is not, the state a lost race leaves.
 	peer, _, err := h.log.Append(t.Context(), probePrefix+".object.a", "peer-op", nil,
 		signedByPeer(t, h, probeRecord(statelog.Stamp{Gen: h.gen.Load(), Writer: "node-b"}, probeSubject("a"), statelog.ScopeSet{Paths: []string{"object.a"}}, "peer-op", "peer")))
 	if err != nil {
@@ -771,8 +732,8 @@ func TestAWriteThatKeepsLosingIsRefusedRatherThanRetriedForEver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the peer's write: %v", err)
 	}
-	// A stale anchor that never moves: this node cannot catch up, which
-	// is what a write storm on one object looks like from here.
+	// A stale anchor that never moves: this node cannot catch up, as under a
+	// write storm on one object.
 	h.anchorAt(probeSubject("a"), peer-1)
 	h.applier.mu.Lock()
 	h.applier.frozen = true
@@ -793,14 +754,10 @@ func TestAWriteThatKeepsLosingIsRefusedRatherThanRetriedForEver(t *testing.T) {
 // round, it lands in ONE round with no expectation, taking one snapshot, and is
 // placed after the peer's record for the applier to decide.
 //
-// The alternative a sequenced domain is built to avoid is that conflict: a
-// shared sheet's every writer on one subject would otherwise spend sixteen
-// compare-and-set rounds behind a burst of clicks and be told "it kept
-// changing" for a write the applier could simply have judged in order.
-//
-// Mutation: make [statelog.PatternSequenced] form an expectation and the write
-// is rejected round after round to ErrConflict, exactly as the arbitrated case
-// above is.
+// Arbitrated, a shared sheet's writers on one subject would spend sixteen
+// compare-and-set rounds behind a burst of clicks to be told "it kept
+// changing". Mutation: make [statelog.PatternSequenced] form an expectation
+// and the write ends in ErrConflict as the arbitrated case above does.
 func TestASequencedWriteIsOrderedByTheLogAndNeverArbitrated(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -870,12 +827,10 @@ func TestARecordMustDeclareWhatItMakesStale(t *testing.T) {
 // FIRST OBJECT'S RECORD — and the same id on the same object is still the same
 // operation.
 //
-// The ledger keeps an id's first row and answers a retry from it, before the
-// domain decides anything. A write to b under the id a write to a had used
-// found a's row there and was answered `applied` at a's position — a write to
-// b reported done, with nothing written to b at all. An operation id is the
-// caller's — a seat carrying one forward, a route taking `?op_id=` — so this
-// is a caller's mistake the framework has to refuse rather than confirm.
+// The ledger answers a retry from an id's first row before the domain decides,
+// so a write to b under a's id would be answered `applied` at a's position with
+// nothing written to b. The id is the caller's (a seat carrying one forward, a
+// route's `?op_id=`), so this is a caller's mistake to refuse, not confirm.
 func TestAnOperationIDReusedOnAnotherObjectIsRefused(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -910,11 +865,10 @@ func TestAnOperationIDReusedOnAnotherObjectIsRefused(t *testing.T) {
 
 // AND SO IS ONE WHOSE REUSE ONLY THE BROKER'S ANSWER SHOWS.
 //
-// A write whose snapshot was taken before the first object's record landed
-// finds no row, decides, and appends under the same id — which the broker's
-// duplicate window collapses onto the first record, acknowledging a's
-// sequence. Resolved from the ledger, that answered `applied` at a's position
-// too. The resolution judges the row exactly as the snapshot does.
+// A snapshot taken before a's record landed finds no row, decides, and appends
+// under the same id, which the broker's duplicate window collapses onto a's
+// record: resolved from the ledger alone, b is `applied` at a's position. The
+// resolution judges the row exactly as the snapshot does.
 func TestAReusedOperationIDTheBrokerCollapsedIsRefused(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -923,9 +877,9 @@ func TestAReusedOperationIDTheBrokerCollapsedIsRefused(t *testing.T) {
 	var firstErr error
 	h.rows.mu.Lock()
 	h.rows.afterSnapshot = func() {
-		// a's WRITE LANDS BETWEEN b's SNAPSHOT AND b's APPEND, which is
-		// the one ordering the snapshot's own check cannot see. Once only,
-		// and not under a sync.Once: a's own snapshot runs this hook too.
+		// a's WRITE LANDS BETWEEN b's SNAPSHOT AND b's APPEND, the one ordering the
+		// snapshot's own check cannot see. Once only, and not under a sync.Once: a's
+		// own snapshot runs this hook too.
 		if fired.CompareAndSwap(false, true) {
 			first, firstErr = h.write(probeSubject("a"), "op-shared", "one")
 		}
@@ -988,20 +942,14 @@ func (unreachable) LastSeq(context.Context, string) (uint64, bool, error) {
 
 // THE WAIT FOR A PEER'S POSITION IS BOUNDED, AND EXPIRY IS A REASON.
 //
-// # The failure this exists to catch
+// After a rejected append, re-deciding needs the subject's true last position,
+// and waiting for an applier that has not caught up is unbounded: on the
+// caller's own context, a request with no deadline would wait for ever and one
+// with a deadline would get a bare cancellation instead of the reason and the
+// position.
 //
-// A rejected append means a peer wrote in this generation and this node has
-// not applied it, so re-deciding needs the subject's true last position. The
-// wait for it ran on the CALLER'S OWN CONTEXT with no budget — and the state
-// that produces it is an applier that has not caught up, which is unbounded by
-// construction. A request with no deadline waited for ever, holding the
-// caller's goroutine and its own snapshot; a request with a deadline got a
-// bare cancellation where it needed the reason and the position.
-//
-// This is the one shape that catches it. A frozen applier answers instantly
-// and never moves, which spends the round budget and ends in a conflict — the
-// case above — and never touches the wait's own budget at all. Only an applier
-// that does not ANSWER does.
+// Only an applier that does not ANSWER reaches this budget: a frozen one
+// answers at once and spends the round budget instead (the case above).
 func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -1010,18 +958,16 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the peer's write: %v", err)
 	}
-	// The anchor is below what the log holds, so this write is behind a
-	// peer's record — and the applier never answers, which is a node that
-	// has stopped catching up rather than one losing races.
+	// The anchor is below what the log holds and the applier never answers: a
+	// node that has stopped catching up, not one losing races.
 	h.anchorAt(probeSubject("a"), peer-1)
 	h.applier.mu.Lock()
 	h.applier.stalled = true
 	h.applier.mu.Unlock()
 
 	started := time.Now()
-	// NO DEADLINE ON THE CALLER'S CONTEXT, deliberately: the budget under
-	// test is the write path's own, and a context deadline here would be
-	// the test supplying the bound it is meant to be checking.
+	// NO DEADLINE ON THE CALLER'S CONTEXT: the bound under test is the write
+	// path's own.
 	_, err = h.pub.Publish(context.Background(), statelog.Request{
 		Subject: probeSubject("a"),
 		Scope:   statelog.ScopeSet{Paths: []string{"p/a"}},
@@ -1060,18 +1006,16 @@ func TestTheWaitForAPeersPositionIsBoundedAndSaysWhy(t *testing.T) {
 
 // A NO-WAIT WRITE ANSWERS PENDING WITHOUT ENTERING THE WAIT AT ALL.
 //
-// The difference from the ordinary pending above is not the outcome — both are
-// durable at a position and unresolved here — it is that this one never asked.
-// A sign-in is what it exists for: the cookie minted from the record carries
-// its position, every node validates the bearer against its own applier, and
-// the row this node would be waiting for is a row nothing in the answer reads.
+// Both pendings are durable and unresolved here; this one never asked. It is
+// for a sign-in: the cookie carries the record's position and every node
+// validates the bearer against its own applier, so nothing in the answer reads
+// the row this node would wait for.
 func TestAFlaggedWriteAnswersPendingWithoutWaiting(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	// THE APPLIER IS LEFT RUNNING, deliberately. Stopping it would make
-	// this pass for the ordinary reason — a wait that timed out — and the
-	// claim is that no wait happened, which is only visible while a wait
-	// WOULD have succeeded.
+	// THE APPLIER IS LEFT RUNNING: stopped, this would pass on a wait that timed
+	// out, and the claim is that no wait happened, visible only while a wait WOULD
+	// succeed.
 	res, err := h.writeNoWait(probeSubject("a"), "op-1", "hello")
 	if err != nil {
 		t.Fatalf("write: %v", err)
@@ -1089,10 +1033,9 @@ func TestAFlaggedWriteAnswersPendingWithoutWaiting(t *testing.T) {
 			"asked for")
 	}
 
-	// THE CONTROL, and it is the whole case: the same write without the
-	// flag resolves as applied, against the same running applier. Without
-	// it the assertions above would pass on a harness whose applier was
-	// simply never going to arrive.
+	// THE CONTROL, and the whole case: without the flag the same write resolves
+	// as applied against the same running applier, so the applier was going to
+	// arrive.
 	ordinary, err := h.write(probeSubject("b"), "op-2", "hello")
 	if err != nil {
 		t.Fatalf("the ordinary write: %v", err)
@@ -1107,9 +1050,9 @@ func TestAFlaggedWriteAnswersPendingWithoutWaiting(t *testing.T) {
 	}
 }
 
-// AND THE PENDING THAT DID WAIT SAYS SO, which is the other half: the two are
-// one outcome and opposite facts about this node, and reported as one a
-// deliberate skip reads to an operator as a node falling behind under load.
+// AND THE PENDING THAT DID WAIT SAYS SO: the two are one outcome and
+// opposite facts about this node, and reported as one a deliberate skip reads
+// to an operator as a node falling behind under load.
 func TestThePendingThatWaitedIsDistinguishable(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -1133,23 +1076,17 @@ func TestThePendingThatWaitedIsDistinguishable(t *testing.T) {
 
 // A DURABLE WRITE IS NEVER ANSWERED AS A FAILURE BECAUSE ITS WAIT ENDED.
 //
-// Past the broker's acknowledgement the record is on the log and every other
-// node is applying it, whatever the caller does next. A caller whose context
-// ended during the apply wait was answered with that context's error, which
-// every caller reads as a write that did not land — a seat's tool said the
-// change was NOT made, the command line that the attempt wrote nothing — and
-// the position and the operation id of a write that landed were lost with it.
-// It is answered with what is known of the record instead: pending at its
+// Past the broker's acknowledgement the record is on the log and every node
+// applies it; a context error would tell every caller the write did not land,
+// and lose its position and operation id. It is answered pending at its
 // position where the record there is this operation's, and unknown with no
 // position where the ambiguous path found a record nobody here could read as
-// this operation's — which a wait that ran out of its own budget answers too,
-// since naming another writer's record as this one's is what [Result.Position]
-// forbids.
+// this operation's (as is a wait that ran out of its own budget), since naming
+// another writer's record as this one's is what [Result.Position] forbids.
 func TestAWriteWhoseWaitEndsIsAnsweredByWhatLanded(t *testing.T) {
 	t.Parallel()
-	// stoppedCaller is a context that ends while this node's applier is
-	// still not there: long before the publisher's own budget would, so it
-	// is the CALLER that stopped waiting.
+	// stoppedCaller ends while this node's applier is still not there, long
+	// before the publisher's own budget: the CALLER stopped waiting.
 	stoppedCaller := func(t *testing.T) context.Context {
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 		t.Cleanup(cancel)
@@ -1198,9 +1135,9 @@ func TestAWriteWhoseWaitEndsIsAnsweredByWhatLanded(t *testing.T) {
 		t.Parallel()
 		h := newHarness(t)
 		behind(h)
-		// THE RECORD LANDS AND ITS ACKNOWLEDGEMENT IS LOST, so the write
-		// resolves the record it FINDS newest on its subject — which, its
-		// caller having stopped, nobody here can read as its own.
+		// THE RECORD LANDS AND ITS ACKNOWLEDGEMENT IS LOST, so the write resolves
+		// the record it FINDS newest on its subject, which, its caller having stopped,
+		// nobody here can read as its own.
 		h.appends.fail(errors.New("no response from stream"), false)
 		res, err := publish(stoppedCaller(t), h, probeSubject("a"), "op-1")
 		if err != nil {
@@ -1218,9 +1155,8 @@ func TestAWriteWhoseWaitEndsIsAnsweredByWhatLanded(t *testing.T) {
 	})
 
 	// A READ AFTER THE WAIT THAT FAILS fails the read and not the write,
-	// whatever failed it: the caller stopping, or a store that was busy or
-	// closed while this node adopted a snapshot — which every caller reads as
-	// the change not having been made just as it reads a context error.
+	// whether the caller stopped or the store was busy or closed while this node
+	// adopted a snapshot.
 	for _, c := range []struct {
 		name string
 		// fail is what the ledger read after the record landed meets:
@@ -1307,18 +1243,14 @@ func TestAWriteWhoseWaitEndsIsAnsweredByWhatLanded(t *testing.T) {
 // THE FLAG DOES NOT REACH THE SESSION WAIT, which is the one it must never
 // skip.
 //
-// The two waits sit at opposite ends of one write and answer opposite
-// questions: the session wait is "may I decide yet" and the apply wait is "may
-// I report what my decision produced". Skipping the first makes a two-step
-// gesture decide from a state below its own previous write — which is a
-// correctness property, not a latency one, and collapsing them would trade the
-// first away for the second.
+// The session wait asks "may I decide yet", the apply wait "may I report what
+// my decision produced". Skipping the first lets a two-step gesture decide from
+// a state below its own previous write: a correctness loss, not latency.
 func TestTheSessionWaitIsNeverSkipped(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	// STALLED rather than merely not auto-applying, because the session
-	// wait is what `stalled` stops: a node that has stopped catching up,
-	// which is the state the wait exists to refuse a decision in.
+	// STALLED rather than merely not auto-applying: `stalled` stops the session
+	// wait, the state it exists to refuse a decision in.
 	h.applier.mu.Lock()
 	h.applier.stalled = true
 	h.applier.mu.Unlock()
@@ -1351,15 +1283,12 @@ func TestTheSessionWaitIsNeverSkipped(t *testing.T) {
 
 // A PUBLISHER MISSING A SEAM IS REFUSED AT CONSTRUCTION, NAMING IT.
 //
-// Every seam is on the write path: the rows are the snapshot a decision is
-// taken in, the fence is the eviction check every append makes, and the gates
-// are what a create's permanent deletion marker is read through. Built without
-// one, the write authority would fail at its first append — or, for a fence
-// nothing asked, collect acknowledgements for records every node drops — so
-// [statelog.NewPublisher] refuses the set, and the refusal names the missing
-// field because it is read by whoever wired a new domain's register entry.
-//
-// The complete set is the control: a refusal that fired whatever was passed
+// Every seam is on the write path (the rows are the decision's snapshot, the
+// fence the eviction check every append makes, the gates what a create's
+// deletion marker is read through), so a missing one fails the first append or,
+// for the fence, collects acknowledgements for records every node drops.
+// [statelog.NewPublisher] names the field for whoever wires a new domain's
+// register entry. The complete set is the control: a refusal that always fired
 // would satisfy every row below.
 func TestAPublisherMissingASeamIsRefusedByName(t *testing.T) {
 	t.Parallel()
@@ -1426,15 +1355,12 @@ func TestAPublisherMissingASeamIsRefusedByName(t *testing.T) {
 // A RECORD TOO LARGE AND A LOG AT ITS CEILING ARE TWO REFUSALS, with two
 // remedies — and both are decided at round one.
 //
-// Neither changes between rounds, so neither may be retried. But the remedies
-// are different people's: a full log is the operator's retention (raise the
-// ceiling, unblock the trim), and a record too large is the writer's change,
-// with a log that has room to spare. Both were `log_full`, so a record too
-// large told whoever read it to raise a ceiling nothing was near.
-//
-// Both are staged on a REAL broker: a record past its domain's declared
-// largest is refused before anything is sent, naming the declaration, and a
-// log created at a few kilobytes fills after a handful of records.
+// Neither changes between rounds, so neither is retried. A full log is the
+// operator's retention (raise the ceiling, unblock the trim); a record too
+// large is the writer's change, on a log with room to spare. Both are staged
+// on a REAL broker: a record past its domain's declared largest is refused
+// before anything is sent, and a log created at a few kilobytes fills after a
+// handful of records.
 func TestATooLargeRecordAndAFullLogAreRefusedApart(t *testing.T) {
 	t.Parallel()
 
@@ -1454,10 +1380,8 @@ func TestATooLargeRecordAndAFullLogAreRefusedApart(t *testing.T) {
 				"broker is asked, and nothing a retry does makes it smaller",
 				res.Rounds, h.appends.appends.Load())
 		}
-		// WHAT TO CHANGE: the limit that refused it, which is the
-		// domain's own declaration, and the writer's remedy. Never the
-		// ceiling or the trim, which is the remedy this refusal used to
-		// carry.
+		// WHAT TO CHANGE: the domain's own declared limit and the writer's
+		// remedy, never the ceiling or the trim.
 		for _, want := range []string{strconv.Itoa(probeMaxRecord),
 			"declared largest record", "split the change"} {
 			if !strings.Contains(refusal.Detail, want) {
@@ -1524,18 +1448,13 @@ func (tinyLogDomain) Stream() statelog.StreamSpec {
 // AN EVICTION THAT LANDS WHILE A WRITE IS IN FLIGHT REFUSES IT AT THE NEXT
 // APPEND, as an eviction.
 //
-// Fence 0 runs before the first snapshot and again before every append,
-// because a write that has spent rounds losing races has run for as long as
-// they took and the eviction may have landed inside that window. The second
-// check's refusal went through the append's error classification, which read
-// it as an append nobody answered: it asked the broker for the subject's last
-// sequence, found nothing of its own there, re-decided — and met the same
-// refusal every round until the budget ran out, when the caller was told the
-// rows kept changing under the write. A node that KNEW it had been removed
-// reported contention.
+// Fence 0 runs before the first snapshot and before every append, since rounds
+// lost to races take time an eviction may land in. Classified as an unanswered
+// append, the second check's refusal would re-decide every round and report
+// contention from a node that KNEW it had been removed.
 //
-// The fence here answers "not evicted" to the check before the snapshot and
-// the other answer to the one before the append.
+// The fence answers "not evicted" to the check before the snapshot and the
+// other answer to the one before the append.
 func TestAnEvictionLandingMidWriteRefusesAsAnEviction(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -1600,23 +1519,15 @@ func (f *laterFence) Evicted(ctx context.Context) (bool, error) {
 // AN APPEND THE BROKER SAYS MAY YET LAND IS NEVER A REFUSAL, AND NEVER A
 // RETAKE.
 //
-// A clustered leader stages a record's message id when it PROPOSES it, and a
-// second append under the same id before that proposal applies is answered
-// 10158, "duplicate message id is in process". The id is the op id, so the
-// second append is this write's own: an earlier round's append went unanswered
-// while its commit was slow, or a caller retried an `unknown` under the same
-// operation. A leader whose store closes under an entry raft already committed
-// answers 10077 "store is closed" for a record every member then applies.
-//
-// Both were `broker_refused` — "asking again changes nothing" — about a record
-// that applied a moment later, and a caller that re-filed under a fresh op id
-// wrote the change twice. What the probe cannot settle is `unknown` with the
-// op id, and nothing is re-decided: a fresh snapshot would decide against a
-// state about to hold this very write.
-//
-// The rows are the server's own answers, built by its constructors; the
-// append either never reaches the stream (the proposal is still in flight) or
-// lands with its answer lost.
+// A clustered leader answers 10158 "duplicate message id is in process" to a
+// second append under an id it has proposed but not applied (the id is the op
+// id, so the append is this write's own), and 10077 "store is closed" for an
+// entry raft already committed. Both records apply moments later, so a refusal
+// would have a caller re-file under a fresh op id and write the change twice.
+// Unsettled by the probe, it is `unknown` with the op id: a fresh snapshot
+// would decide against a state about to hold this very write. The rows are the
+// server's own answers; the append either never reaches the stream or lands
+// with its answer lost.
 func TestAnAppendTheBrokerSaysMayYetLandIsNeverRefused(t *testing.T) {
 	t.Parallel()
 	wire := func(e *server.ApiError) error {
@@ -1683,16 +1594,12 @@ func TestAnAppendTheBrokerSaysMayYetLandIsNeverRefused(t *testing.T) {
 // A REFUSAL THE BROKER NAMED AND THIS BUILD HAS NO REMEDY FOR IS FINAL, AND
 // CARRIES THE BROKER'S WORDS.
 //
-// A sealed stream, a JetStream store out of resources: they were `log_full`,
-// whose detail sends an operator to a ceiling and a trim neither involves, and
-// are now `broker_refused` with the broker's code and description as the
-// remedy. What this pins is the PUBLISHER's arm rather than the classification
-// beneath it — that it refuses at round one after one append, keeps the
-// broker's code and words, and tells nobody to come back: the arm could
-// return `log_full`, drop the words or fall through to the lost-race path and
-// retry for the whole round budget with every classification test still
-// green. The control is a full log answered through the same fake, which
-// stays `log_full`.
+// A sealed stream or a JetStream store out of resources is `broker_refused`,
+// with the broker's code and description as the remedy, not `log_full`, which
+// sends an operator to a ceiling and trim neither involves. This pins the
+// PUBLISHER's arm, not the classification: it refuses at round one after one
+// append, keeps the broker's words and tells nobody to come back. The control
+// is a full log answered through the same fake, which stays `log_full`.
 func TestABrokerRefusalIsFinalAndCarriesItsWords(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -1744,13 +1651,11 @@ func TestABrokerRefusalIsFinalAndCarriesItsWords(t *testing.T) {
 // A LOG THAT LOST WHAT A PEER'S ROWS HOLD REFUSES THIS NODE'S WRITES — BUT NOT
 // THE EVICTION OF THAT PEER.
 //
-// This node's rows are the log's own history, so nothing about its identity is
-// wrong; what is wrong is that a write from here, on a broker restored from an
-// older copy, is one the restored reanchor of the newer peer applies nowhere.
-// So an ordinary write refuses `log_truncated`, before anything reaches the
-// broker, naming the finding a caller can recognise — and a node gate is
-// published, because evicting that peer is one of the operator's ways out and a
-// fence that refused it would leave the fleet with one fewer.
+// On a broker restored from an older copy, this node's rows are still the
+// log's history, but a write from here is one the newer peer's restored
+// reanchor applies nowhere: it refuses `log_truncated` before the broker. A
+// node gate is still published: evicting that peer is one of the operator's
+// ways out.
 func TestALogThatLostWhatAPeerHoldsRefusesWritesButNotTheEviction(t *testing.T) {
 	t.Parallel()
 	h := newHarnessFor(t, gatingDomain{})
@@ -1783,12 +1688,10 @@ func TestALogThatLostWhatAPeerHoldsRefusesWritesButNotTheEviction(t *testing.T) 
 
 // A NODE GATE IS THE ONE WRITE A NODE THE FLEET RE-ANCHORED PAST STILL MAKES.
 //
-// Such a node's rows are a history the log no longer continues, so everything
-// it decides from them is refused — but an eviction is decided from nothing in
-// them, and the eviction of the decommissioned peer that stranded a fleet is
-// the gesture that releases it. Refused, no stranded node could ever make it.
-// A RECREATED stream is never excused: this node's expectations there are
-// sequences on another stream.
+// Everything it decides from rows the log no longer continues is refused, but
+// an eviction is decided from none of them, and evicting the decommissioned
+// peer that stranded a fleet is what releases it. A RECREATED stream is never
+// excused: this node's expectations there are sequences on another stream.
 func TestANodeGateIsTheOneWriteAPassedNodeStillMakes(t *testing.T) {
 	t.Parallel()
 	gate := func(h *harness) error {
@@ -1833,15 +1736,11 @@ func TestANodeGateIsTheOneWriteAPassedNodeStillMakes(t *testing.T) {
 // AN AMBIGUOUS PUBLISH IS JUDGED AGAINST THIS GENERATION'S ANCHOR, never one a
 // reanchor left in the generation before.
 //
-// A restored log's reanchor opens a new generation with its checkpoint at the
-// log's end and keeps every row, so a subject's anchor can sit in the
-// generation before at a sequence ABOVE anything the restored log holds. The
-// expectation already ignores such an anchor; the ambiguous path compared the
-// subject's last sequence with it as though both were one number space, read
-// "nothing landed above the anchor" for a write whose record DID land and whose
-// acknowledgement was lost, and decided again — on a node whose applier had not
-// reached the record, every later round waited behind it, and a write that was
-// on the log came back a conflict.
+// A restored log's reanchor opens a new generation at the log's end and keeps
+// every row, so an anchor can sit in the old generation ABOVE anything the log
+// holds. Compared with it, a record that DID land with its acknowledgement
+// lost reads as "nothing landed above the anchor", and the write decides again
+// behind its own record, to a conflict.
 func TestAnAmbiguousPublishIsJudgedAgainstThisGenerationsAnchor(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -1852,8 +1751,7 @@ func TestAnAmbiguousPublishIsJudgedAgainstThisGenerationsAnchor(t *testing.T) {
 	}
 
 	// THE REANCHOR: generation 2, its checkpoint at the log's end, and the
-	// row's anchor left where the generation before put it — above the
-	// restored log's end.
+	// row's anchor left above it by the generation before.
 	h.gen.Store(2)
 	h.applier.advance(statelog.Position{Stream: probeStream, Generation: 2, Seq: first.Position.Seq})
 	h.rows.pin(subject, statelog.Position{Stream: probeStream, Generation: 1, Seq: 1_000})

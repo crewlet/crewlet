@@ -450,24 +450,18 @@ func TestGitRoutesAreMountedOnlyOnAGitletNode(t *testing.T) {
 	}
 }
 
-// EACH CODE READ HAS ONE PATH, AND IT IS A QUESTION'S. Gitlet's rows —
-// the repositories, one repository in detail, one repository's push history —
-// and who read a unit's repository were routes of Gitlet's own beside
-// git, with a parameter reading and a refusal mapping of their own beside the
-// registry's. They are registry questions, served on the paths those routes
-// had through the named routes, so a person, a script, the CLI and a screen
-// reading its own write back are answered by one implementation: each code
-// question is named by exactly one route, at its path; every route an app
-// mounts under /gitlet/ — on a node of every role and on one without gitlet — is
-// one of those or, where git is served, the verify and its read, operations on
-// this node's copy rather than reads of the rows; and a request on each path
-// is the question's own answer, asking the reader what the generic form of the
-// same question asks it.
-//
+// EACH CODE READ HAS ONE PATH, AND IT IS A QUESTION'S. Gitlet's rows (the
+// repositories, one repository in detail, its push history, who read a unit's
+// repository) are registry questions served through the named routes, so a
+// person, a script, the CLI and a screen reading its own write back are
+// answered by one implementation: each code question is named by exactly one
+// route, at its path; every route an app mounts under /gitlet/, on a node of
+// every role and on one without gitlet, is one of those or, where git is
+// served, the verify and its read (operations on this node's copy, not reads of
+// the rows); and a request on each path is the question's own answer.
 // Mutation: mount a code read beside the questions again (mountCode serving
-// `GET /gitlet/repos/{name}/readers` from a handler of its own, as it did) → the
-// walk names it, red; drop a question's named route → its question has no
-// path, red.
+// `GET /gitlet/repos/{name}/readers` from a handler of its own) and the walk
+// names it; drop a question's named route and it has no path.
 func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 	t.Parallel()
 	held := func(what string) bool {
@@ -786,29 +780,18 @@ func TestTheCodeSurfaceIsAskedOnEveryRequest(t *testing.T) {
 	}
 }
 
-// A NODE THAT SERVES NONE OF GITLET SAYS WHY, and a company that hosts
-// code is never told it does not. Where the company hosts no code, a code
-// route is a 404 naming code.backend: gitlet. Where the fleet activated a configuration
-// that hosts code and this node serves none of it now — or this node has not
-// read whether it does — it is a 503 naming which of four it is, in git's
-// form on a git route, its code in brackets, and in the refusal envelope under
-// that code on a /gitlet/ route — and only the one waiting is sure to clear, an
-// apply in flight, carries
-// a Retry-After: an apply that failed and a runtime that needs its restart
-// clear when somebody acts, and a client told to come back in five seconds
-// would ask this node for ever when another node serves it. A reason the seam
-// does not name breaks its contract: 500.
-//
-// WHAT THE NODE NEVER READ THE ANSWER NEVER CLAIMS: an apply in flight may not
-// have decoded the revision yet, and an apply that failed before it could
-// (ErrCodeUnknown) did not — so neither answer says the company hosts code or
-// that Gitlet is coming, which a company that never set code.backend: gitlet
-// would read as a fact about its own document.
-//
-// Mutation: answer every reason with the health tick's Retry-After, and the
-// failed apply's and the restart's go red; answer the unread failure with the
-// failed apply's code or sentence, or an apply in flight with Gitlet's
-// promise, and the unread case and the applying one go red.
+// A NODE THAT SERVES NONE OF GITLET SAYS WHY, and a company that hosts code is
+// never told it does not. Where the company hosts no code, a code route is a
+// 404 naming code.backend: gitlet. Where the fleet activated a configuration
+// that hosts code and this node serves none of it now, or has not read whether
+// it does, it is a 503 naming which of four (git's form on a git route, the
+// envelope on /gitlet/). Only the apply in flight carries a Retry-After: the
+// others clear when somebody acts. An unnamed reason is a 500.
+// WHAT THE NODE NEVER READ THE ANSWER NEVER CLAIMS: an apply in flight, or one
+// that failed before decoding (ErrCodeUnknown), has not read the revision, so
+// neither says the company hosts code or that Gitlet is coming.
+// Mutation: answer every reason with the health tick's Retry-After, the unread
+// failure as the failed apply, or an apply in flight with Gitlet's promise.
 func TestANodeServingNoGitletSaysWhy(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -917,30 +900,17 @@ func TestANodeServingNoGitletSaysWhy(t *testing.T) {
 }
 
 // AN UNSERVED BOX ROUTE TELLS WHY ONLY TO A TOKEN THIS FLEET SIGNED.
-// /box/git/ is public — on api.public, reached from wherever a sandbox runs —
-// so a node that serves none of Gitlet now tells a coding box its
-// reason (a company hosting no code, an apply in flight, an apply that
-// failed, a configuration it could not read, a restart owed, a reason the
-// seam does not explain) only once the request presents a run token this
-// fleet signed, and then in exactly the words a person is told on /git/. Any
-// other request — no credential, a person's bearer, another user name than
-// the box's, an operator token as the password, a token another fleet signed
-// or another of this fleet's per-run edges did — is answered Gitlet's
-// own challenge, the box admission's credential step, in the same bytes
-// whatever the reason, so no reason reaches it.
-//
-// WHAT THIS DOES NOT HOLD: the unserved reasons are compared with each other,
-// not with a node that serves Gitlet. That node answers a request git
-// never sends — no ?service=, a wrong Content-Type, a name off the grammar —
-// by its shape before the credential step (the host's entry points run it
-// first), and its 503 while it stops, so such a request still tells a serving
-// node from one serving none. Git's own first request is well-formed and is
-// challenged alike by both.
-//
+// /box/git/ is public (api.public), so a node serving none of Gitlet now tells
+// a coding box its reason only once the request presents a run token this fleet
+// signed, in the words a person is told on /git/. Any other request (no
+// credential, a person's bearer, another user name, an operator token as the
+// password, a token another fleet or another per-run edge signed) is answered
+// the box admission's own challenge, in the same bytes whatever the reason.
+// NOT HELD HERE: the unserved reasons are compared with each other, not with a
+// serving node, which answers a request git never sends (no ?service=, a wrong
+// Content-Type) by its shape before the credential step.
 // Mutations: answer the reason before the credential (boxGitRoute calling
-// unservedGit first, as gitRoute does) — the first row's request without a
-// credential is told the 404, red; challenge in a person's words
-// (auth.GitChallenge) — red.
+// unservedGit first) or challenge in a person's words (auth.GitChallenge).
 func TestAnUnservedBoxRouteAnswersOnlyASignedToken(t *testing.T) {
 	t.Parallel()
 	keyring := runtoken.OneKey("k", "this fleet's key")
@@ -1088,20 +1058,16 @@ func aCheckRef() host.CheckRunRef {
 }
 
 // AN UNSERVED BOX ROUTE ANSWERS A CHECK'S TOKEN AS IT ANSWERS A RUN'S. A node
-// serving none of Gitlet now tells a check's box its reason — on its
-// git (/box/git/) and on its reads of its commit (/box/gitlet/) alike — only once
-// the request presents a check's token this fleet signed, as `check`, and then
-// in exactly the words a person is told on /git/. A check's token presented as
-// an executor's (`run`), a run's presented as a check's, and a check's token
-// another fleet signed are each answered Gitlet's own challenge, in the
-// bytes the box admission's credential step answers — so the reason reaches
-// nobody holding no credential this fleet signed for that user name.
-//
-// Mutations: CodeSurface.VerifyBox judging a check's token by the run tokens
-// alone (no check token verifies) — the signed rows answer the challenge,
-// red; VerifyBox accepting either token under either user name (no user in
-// the rule) — the crossed rows are told the reason, red; boxCodeRoute
-// answering the reason before the credential — red.
+// serving none of Gitlet now tells a check's box its reason, on /box/git/ and
+// /box/gitlet/ alike, only once the request presents a check's token this fleet
+// signed, as `check`, in exactly the words a person is told on /git/. A check's
+// token presented as an executor's (`run`), a run's presented as a check's, and
+// a check's token another fleet signed are each answered the box admission's
+// own challenge, so the reason reaches nobody without a credential this fleet
+// signed for that user name.
+// Mutations: VerifyBox judging a check's token by the run tokens alone, or
+// accepting either token under either user name, or boxCodeRoute answering the
+// reason before the credential.
 func TestAnUnservedBoxRouteAnswersACheckToken(t *testing.T) {
 	t.Parallel()
 	keyring := runtoken.OneKey("k", "this fleet's key")
@@ -1184,20 +1150,16 @@ func (f *fakeGitReads) queries() []gitlet.GitQuery {
 }
 
 // A CHECK'S API READS ONLY ITS COMMIT. Each of a check's box's three reads,
-// once admitted, is asked of the code domain's git reads AT THE ATTEMPT'S
-// COMMIT — a tree and a file at it, a diff from the attempt's base to it — as
-// a read made for the check: no asker, the attempt named, at the check's
-// session. A revision the request names (`rev`, `base`, `head`, a blob's own
-// id) is refused before anything is read, as is a parameter no read takes
-// and one named twice, and the answer carries the commit's content alone —
-// none of the push provenance a seat's read carries. And the Gitlet node holds
-// a read made for a check to its commit itself (gitlet.GitQuery.Validate), so a
-// node that built one at another commit is refused there too.
-//
-// Mutations: boxCodeQuery reading a `rev` parameter into the tree read — the
-// row naming another commit is read, red; dropping the query's Check (a read
-// as nobody, held to nothing) — red; boxCodeAnswer carrying PushedBy — red;
-// atItsCheck accepting any revision — the last half red.
+// once admitted, is asked of the code domain AT THE ATTEMPT'S COMMIT (a tree and
+// a file at it, a diff from the attempt's base) as a read made for the check:
+// no asker, the attempt named, at the check's session. A revision the request
+// names (`rev`, `base`, `head`, a blob's own id) is refused before anything is
+// read, as is a parameter no read takes or one named twice, and the answer
+// carries the commit's content alone, none of a seat's push provenance. The
+// Gitlet node holds a check's read to its commit itself (gitlet.GitQuery.
+// Validate), so a node that built one at another commit is refused too.
+// Mutations: boxCodeQuery reading `rev`, dropping the query's Check, boxCodeAnswer
+// carrying PushedBy, or atItsCheck accepting any revision.
 func TestTheCheckAPIReadsOnlyItsSha(t *testing.T) {
 	t.Parallel()
 	ref := aCheckRef()
@@ -1306,17 +1268,15 @@ func TestTheCheckAPIReadsOnlyItsSha(t *testing.T) {
 
 // THE CODE READS ANSWER IN THE READ SURFACE'S ONE VOCABULARY. A repository that
 // is not declared is `not_found`; one the asker's grant does not cover is
-// `not_permitted`, 403, with the reader's own sentence and not the sentinel's
-// Go text — answered by this node or wrapped by the router from another; a
-// level, a cursor or a parameter the reader refuses is `bad_params` with the
-// reader's own sentence; a read this node could not serve — a state-log
-// refusal, no data node serving — is `unavailable`, with its Retry-After where
-// waiting clears it and none where it cannot (an evicted node). The level is
-// the tree's one freshness grammar, and a parameter no read takes is refused
-// before the reader is asked.
-//
-// Mutation: drop the ErrNotPermitted case of the code questions' refusal mapping
-// (queries' codeRefusal), and both refusals answer 500 query_failed with no sentence.
+// `not_permitted`, 403, with the reader's own sentence, not the sentinel's Go
+// text, answered by this node or wrapped by the router from another; a level, a
+// cursor or a parameter the reader refuses is `bad_params` with its sentence; a
+// read this node could not serve (a state-log refusal, no data node) is
+// `unavailable`, with a Retry-After where waiting clears it and none where it
+// cannot (an evicted node). The level is the tree's one freshness grammar, and
+// a parameter no read takes is refused before the reader is asked.
+// Mutation: drop the ErrNotPermitted case of queries' codeRefusal and both
+// refusals answer 500 query_failed with no sentence.
 func TestCodeReadsAnswerInTheReadVocabulary(t *testing.T) {
 	t.Parallel()
 	shutOut := `seat "dev" holds no access to repository "secret": it is visibility: unit, read by ` +
@@ -1571,20 +1531,15 @@ func TestCodeReadsAreAlwaysGuarded(t *testing.T) {
 
 // A VERIFY IS AN OPERATION: begun with 202 and read until it ends. The check
 // reads every byte of a repository, which outlives a balancer's read timeout,
-// so the POST answers the verification running — its id and its address in
-// `Location` — and a GET there answers it running, done with the node's
-// report, or failed with why and what the check found before it failed. What
-// can be refused without reading the repository is refused at once: `repair`
-// is true or false and nothing else; a repository not declared, or one this
-// node holds no copy of, is `not_found` (a node holding no copy has nothing to
-// check, and building one is a whole download); a check of the other repair
-// setting running is a 409 naming it; a stopping host and a node with no slot
-// or memory free are 503s with their own waits — refused before the check
-// read anything, so the retry costs nothing; and anything else says what it
-// was, the route being always guarded and its caller an operator.
-//
-// Mutation: drop the report from a failed verification's answer, and the
-// stopped check's problems go missing.
+// so the POST answers the verification running (its id and address in
+// `Location`) and a GET there answers it running, done with the node's report,
+// or failed with why and what it found before. Refused at once, reading
+// nothing: `repair` other than true or false; a repository not declared or one
+// this node holds no copy of (`not_found`; building one is a whole download);
+// the other repair setting running (409 naming it); a stopping host or no slot
+// or memory free (503s with their own waits, so the retry costs nothing). The
+// route is always guarded and its caller an operator.
+// Mutation: drop the report from a failed verification's answer.
 func TestVerifyAnswersTheReport(t *testing.T) {
 	t.Parallel()
 	var (

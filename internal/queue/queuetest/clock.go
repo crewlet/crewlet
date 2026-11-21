@@ -11,14 +11,11 @@ import (
 // is a clock at its start.
 //
 // IT STANDS STILL UNTIL IT IS MOVED. A window opened on it ends once the case
-// has moved it past the window's end ([Clock.Advance]) and never before,
-// however long the case takes to get there: so a case lands a verb inside the
-// window and only then ends it, an order the wall clock never promised, since a
-// loaded runner could reach the verb after the window had ended by itself.
-//
-// Its instants are its own, counted from a fixed start, and never a reading of
-// the wall clock: two of them are exactly as far apart as the moves between
-// them.
+// has moved it past the window's end ([Clock.Advance]), never before, so a
+// case lands a verb inside the window and only then ends it, an order the
+// wall clock never promised on a loaded runner. Its instants are counted from
+// a fixed start, never read from the wall clock: two are exactly as far apart
+// as the moves between them.
 type Clock struct {
 	mu sync.Mutex
 	// moved is how far the clock has been moved in all.

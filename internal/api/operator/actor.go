@@ -13,21 +13,13 @@ import (
 //
 // # The principal, and nothing a call can choose
 //
-// Every actor this surface hands a tool is [builtin.PrincipalActor]'s of the
-// request's principal — the one conversion the tools make for any caller with
-// no turn — which is [iam.ActorFor]'s: a person the identity directory binds
-// to a seat writes AS that seat, with kind `human`; a credential nobody is
-// bound through writes under its whole login (`token:ops`, colon and all),
-// with kind `operator`; and the credential the call came through is recorded
-// beside either. The binding is the DIRECTORY'S, resolved by the request guard
-// before any handler ran, so it is one value on the context for the whole call:
-// the actor, the dispatch's audit record and every log line read that value,
-// and a rebind or a company revision landing while the call runs changes the
-// next request rather than splitting this one between two people.
-//
-// The alternative — asking the caller to name a seat to act as — was rejected:
-// it lets anybody with a credential write as anybody, and a tracker whose
-// author field can be chosen by the writer is not an audit trail.
+// Every actor handed a tool is [builtin.PrincipalActor]'s of the request's
+// principal, [iam.ActorFor]'s: a person the directory binds to a seat writes AS
+// it (kind `human`); a credential bound to nobody writes under its whole login
+// (`token:ops`, kind `operator`); the credential used is recorded beside either.
+// The guard resolves it once, so a rebind mid-call changes the next request,
+// not this one. A caller naming a seat to act as is refused by design: an
+// author field the writer chooses is not an audit trail.
 
 // keyKey is the context key [withKey] stores under. An unexported type, so no
 // other package can write or shadow it.

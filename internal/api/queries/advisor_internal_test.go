@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/advisor/duty"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -50,12 +52,30 @@ func (p patternsWork) WorkPatterns(context.Context, worklet.PatternsQuery) (work
 	return p.work, p.err
 }
 
+// FlowHours and FlowItems answer that this reader keeps no flow record.
+func (patternsWork) FlowHours(context.Context, worklet.FlowHoursQuery) ([]worklet.FlowHours, error) {
+	return nil, errors.New("this reader keeps no flow record")
+}
+
+func (patternsWork) FlowItems(context.Context, worklet.FlowHoursQuery) (map[string]int, error) {
+	return nil, errors.New("this reader keeps no flow record")
+}
+
+func (patternsWork) FlowPickups(context.Context, worklet.FlowHoursQuery) ([]time.Duration, error) {
+	return nil, errors.New("this reader keeps no flow record")
+}
+
 // ledgerUsage answers the turn ledger read and nothing else, keeping the range asked.
 type ledgerUsage struct {
 	UsageReads
 	rows  []usage.TurnLedgerRow
 	err   error
 	asked *usage.SpendQuery
+}
+
+// ScheduleRuns answers no run: a week whose schedules skipped nothing.
+func (ledgerUsage) ScheduleRuns(context.Context, usage.ScheduleRunsQuery) ([]usage.ScheduleRun, bool, error) {
+	return nil, false, nil
 }
 
 func (l ledgerUsage) TurnLedger(_ context.Context, q usage.SpendQuery) ([]usage.TurnLedgerRow, error) {
@@ -82,20 +102,20 @@ func TestTheAdvisorNamesASourceItCouldNotRead(t *testing.T) {
 		want      advisor.Evidence
 	}{
 		{"every source read", patternsWork{work: worklet.WorkPatterns{AgentComments: 3}}, read,
-			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, Work: worklet.WorkPatterns{AgentComments: 3},
+			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, CapacityUnread: true, FlowUnread: true, StaffingUnread: true, Work: worklet.WorkPatterns{AgentComments: 3},
 				Ledger: turns, Backup: advisor.Backup{Standing: true}}},
 		{"the tracker failed", patternsWork{err: errors.New("no data node answered")}, read,
-			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, WorkUnread: true, Ledger: turns,
+			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, CapacityUnread: true, FlowUnread: true, StaffingUnread: true, WorkUnread: true, Ledger: turns,
 				Backup: advisor.Backup{Standing: true}}},
 		{"the ledger failed", patternsWork{}, ledgerUsage{err: errors.New("no data node answered")},
-			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, LedgerUnread: true,
+			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, CapacityUnread: true, FlowUnread: true, StaffingUnread: true, LedgerUnread: true,
 				Backup: advisor.Backup{Standing: true}}},
 		{"a node with no usage half", patternsWork{}, nil, func() bool { return true },
-			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, LedgerUnread: true, Backup: advisor.Backup{Standing: true}}},
+			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, CapacityUnread: true, FlowUnread: true, SkipsUnread: true, StaffingUnread: true, LedgerUnread: true, Backup: advisor.Backup{Standing: true}}},
 		{"the alarms not yet evaluated", patternsWork{}, read, func() bool { return false },
-			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, Ledger: turns, AlarmsUnread: true}},
+			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, CapacityUnread: true, FlowUnread: true, StaffingUnread: true, Ledger: turns, AlarmsUnread: true}},
 		{"a node with no alarm table", patternsWork{}, read, nil,
-			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, Ledger: turns, AlarmsUnread: true}},
+			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, CapacityUnread: true, FlowUnread: true, StaffingUnread: true, Ledger: turns, AlarmsUnread: true}},
 	} {
 		s := Sources{Work: c.work, Usage: c.usage, AlarmsEvaluated: c.evaluated,
 			Alarms: func() []statelog.Alarm { return standing }}
@@ -139,8 +159,7 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the fleet's notices are\n%+v\nwant\n%+v", got, want)
 	}
-	raw, err := json.Marshal(advisorAnswer{Answer: advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}},
-		Notices: got})
+	raw, err := json.Marshal(AdvisorNotices{Notices: got, Unread: []string{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +167,8 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		t.Fatal(err)
 	}
-	if keys := slices.Sorted(maps.Keys(fields)); !slices.Equal(keys, []string{"findings", "notices", "revision", "unread"}) {
-		t.Errorf("the advisor answers %v", keys)
+	if keys := slices.Sorted(maps.Keys(fields)); !slices.Equal(keys, []string{"notices", "unread"}) {
+		t.Errorf("the notices answer %v", keys)
 	}
 	// ONCE EVERY LIVE NODE HAS EVALUATED, the fleet's alarms are known.
 	settled := coordmemory.New()
@@ -172,28 +191,121 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	}
 }
 
-// `alarms` IS NAMED UNREAD ONCE, whether this node's evaluation has not run,
-// the fleet's marks could not be read, or both.
+// noticeLog is an advisor log whose latest run could not read unread, and
+// whose live findings are live.
+type noticeLog struct {
+	unread []string
+	live   []advisordomain.FindingRow
+}
+
+func (noticeLog) Findings(context.Context, advisordomain.Filter, statelog.Freshness) ([]advisordomain.FindingRow, string, error) {
+	return nil, "", nil
+}
+func (l noticeLog) NonClosed(context.Context, statelog.Freshness) ([]advisordomain.FindingRow, error) {
+	return l.live, nil
+}
+func (noticeLog) Finding(context.Context, string, statelog.Freshness) (advisordomain.FindingRow, []advisordomain.HistoryRow, error) {
+	return advisordomain.FindingRow{}, nil, advisordomain.ErrNotFound
+}
+func (noticeLog) Episodes(context.Context, string, statelog.Freshness) ([]advisordomain.FindingRow, error) {
+	return nil, nil
+}
+func (l noticeLog) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
+	var scopes []duty.ScopeRecord
+	for _, word := range l.unread {
+		scopes = append(scopes, duty.ScopeRecord{Class: "evidence/" + word, Status: advisordomain.ClassUnread})
+	}
+	raw, err := json.Marshal(scopes)
+	return advisordomain.RunRow{ID: "r", Status: advisordomain.RunDone, Classes: raw}, true, err
+}
+func (noticeLog) LiveProgress(context.Context, statelog.Freshness) (string, []advisordomain.ProgressLine, bool, error) {
+	return "", nil, false, nil
+}
+func (noticeLog) RunProgress(context.Context, string, statelog.Freshness) ([]advisordomain.ProgressLine, error) {
+	return nil, nil
+}
+func (noticeLog) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
+	return nil, nil
+}
+func (noticeLog) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
+	return map[string]time.Time{}, nil
+}
+func (noticeLog) AlarmEpisodes(context.Context, time.Time, statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error) {
+	return nil, nil
+}
+func (noticeLog) Reports(context.Context, string, int, statelog.Freshness) ([]advisordomain.ReportRow, string, error) {
+	return nil, "", nil
+}
+func (noticeLog) Report(context.Context, string, statelog.Freshness) (advisordomain.ReportRow, bool, error) {
+	return advisordomain.ReportRow{}, false, nil
+}
+
+// `alarms` IS NAMED UNREAD ONCE, whether the latest run could not read this
+// node's evaluation, the fleet's marks could not be read, or both; and what
+// the latest run could not read is named beside it.
 func TestTheAdvisorNamesItsAlarmsUnreadOnce(t *testing.T) {
 	t.Parallel()
-	now := time.Date(2030, 1, 9, 12, 0, 0, 0, time.UTC)
+	settled := coordmemory.New()
+	if _, _, err := settled.TryAcquire(t.Context(), coord.NodeResource("node-a"), coord.AcquireOptions{
+		Owner: "node-a:1", TTL: time.Minute,
+		Meta: map[string]any{coord.StatusKey: coord.NodeStatus{AlarmsEvaluated: true}.Meta()},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
-		name       string
-		unread     []string
-		fleetKnown bool
-		want       []string
+		name   string
+		unread []string
+		fleet  coord.Backend
+		want   []string
 	}{
-		{"both read", []string{}, true, []string{}},
-		{"this node not evaluated", []string{advisor.UnreadAlarms}, true, []string{advisor.UnreadAlarms}},
-		{"the fleet unread", []string{advisor.UnreadWork}, false, []string{advisor.UnreadWork, advisor.UnreadAlarms}},
-		{"both unread", []string{advisor.UnreadWork, advisor.UnreadAlarms}, false,
+		{"both read", []string{}, settled, []string{}},
+		{"this node not evaluated", []string{advisor.UnreadAlarms}, settled, []string{advisor.UnreadAlarms}},
+		{"the fleet unread", []string{advisor.UnreadWork}, nil, []string{advisor.UnreadWork, advisor.UnreadAlarms}},
+		{"both unread", []string{advisor.UnreadWork, advisor.UnreadAlarms}, nil,
 			[]string{advisor.UnreadWork, advisor.UnreadAlarms}},
 	} {
-		got := noticedWith(advisor.Answer{Findings: []advisor.Finding{}, Unread: c.unread}, nil, c.fleetKnown,
-			nil, true, now)
-		if !slices.Equal(got.Unread, c.want) {
-			t.Errorf("%s: unread %v, want %v", c.name, got.Unread, c.want)
+		s := Sources{Advisor: noticeLog{unread: c.unread}, Coord: c.fleet}
+		got, err := s.advisorNotices(t.Context(), Params{})
+		if err != nil {
+			t.Fatal(err)
 		}
+		if unread := got.(AdvisorNotices).Unread; !slices.Equal(unread, c.want) {
+			t.Errorf("%s: unread %v, want %v", c.name, unread, c.want)
+		}
+	}
+}
+
+// A BLOCKING FINDING'S NOTICE NAMES ITS FINDING, so the Inbox opens it and says
+// its fix; a finding a person snoozed raises no notice while it sleeps.
+func TestABlockingFindingsNoticeNamesItsFinding(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2030, 1, 9, 12, 0, 0, 0, time.UTC)
+	f := advisor.Finding{Class: advisor.ClassSandboxUnstartable, Severity: advisor.SeverityBlocks,
+		Actor: advisor.ActorOwner, Source: advisor.SourceEvidence, Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "dev"},
+		Title: "Paused because the sandbox could not start as configured.",
+		Fix:   advisor.Fix{Kind: advisor.FixOpenSetting, Sentence: "Fix the sandbox's image.", Options: []advisor.Option{}}}
+	body, err := json.Marshal(advisor.Observe(f, advisor.Span{From: now, To: now}, "r1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := advisordomain.FindingRow{ID: "f-1", Key: advisor.Key(f), Class: string(f.Class),
+		Severity: advisordomain.Severity(f.Severity), State: advisordomain.State(advisor.StateOpen), Body: body}
+	notices := func(rows ...advisordomain.FindingRow) []notice.Notice {
+		t.Helper()
+		got, err := Sources{Advisor: noticeLog{live: rows}, Now: func() time.Time { return now }}.
+			advisorNotices(t.Context(), Params{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.(AdvisorNotices).Notices
+	}
+	got := notices(row)
+	if len(got) != 1 || got[0].Finding == nil || got[0].Finding.ID != "f-1" || got[0].Finding.Fix != f.Fix.Sentence {
+		t.Fatalf("notices %+v, want one naming finding f-1 and its fix", got)
+	}
+	row.SnoozedUntil = now.Add(time.Hour)
+	if got := notices(row); len(got) != 0 {
+		t.Errorf("a snoozed finding raised %+v", got)
 	}
 }
 
@@ -268,5 +380,67 @@ func TestTheAdvisorReadsTheSeatsTheEnginePausedForAFailure(t *testing.T) {
 	s.Pauses = pauseList{err: errors.New("no fleet store answered")}
 	if ev := s.advisorEvidence(t.Context(), c, time.Now()); !ev.PausesUnread {
 		t.Error("a pause store that failed was read as no pauses")
+	}
+}
+
+// episodeLog is an advisor log holding alarm episodes.
+type episodeLog struct {
+	noticeLog
+	rows  []advisordomain.AlarmEpisodeRow
+	since time.Time
+}
+
+func (l *episodeLog) AlarmEpisodes(_ context.Context, since time.Time, _ statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error) {
+	l.since = since
+	return l.rows, nil
+}
+
+// THE ALARMS' HISTORY IS READ OVER THE WEEK the evidence covers, each episode
+// as the log keeps it. Mutation: read since now, and the week's are missed.
+func TestTheAlarmsHistoryIsReadOverTheWeek(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2030, 1, 9, 12, 0, 0, 0, time.UTC)
+	raised := now.Add(-time.Hour)
+	l := &episodeLog{rows: []advisordomain.AlarmEpisodeRow{{SeriesID: "s", Node: "data-1", Kind: "pool_starved",
+		Instance: "pool_starved", RaisedAt: raised}}}
+	got, err := Sources{Advisor: l}.alarmEpisodes(t.Context(), now)
+	if err != nil || !l.since.Equal(now.Add(-advisor.Window)) {
+		t.Fatalf("read since %s (%v), want the week before %s", l.since, err, now)
+	}
+	if want := []advisor.AlarmEpisode{{Node: "data-1", Kind: "pool_starved", Instance: "pool_starved",
+		RaisedAt: raised}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("episodes %+v, want %+v", got, want)
+	}
+}
+
+// THE COUNTS ARE WHAT WAITS ON A PERSON: the owner's open findings, not
+// snoozed and not applied. An engine finding is the engine's own work, which
+// never reaches a person as a to-do, so the sidebar's figure over these counts
+// would ask an administrator about something nobody can act on. Mutation: drop
+// the actor test, or the snooze test, and the case goes red.
+func TestTheFindingCountsAreWhatWaitsOnAPerson(t *testing.T) {
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	row := func(actor advisordomain.Actor, severity advisordomain.Severity, state advisordomain.State,
+		snoozed time.Time) advisordomain.FindingRow {
+		return advisordomain.FindingRow{Actor: actor, Severity: severity, State: state, SnoozedUntil: snoozed}
+	}
+	rows := []advisordomain.FindingRow{
+		row(advisordomain.ActorOwner, advisordomain.SeverityBlocks, advisordomain.StateOpen, time.Time{}),
+		row(advisordomain.ActorOwner, advisordomain.SeverityCosts, advisordomain.StateOpen, time.Time{}),
+		row(advisordomain.ActorOwner, advisordomain.SeverityCosts, advisordomain.StateOpen,
+			now.Add(time.Hour)),
+		row(advisordomain.ActorOwner, advisordomain.SeverityCosts, advisordomain.StateOpen,
+			now.Add(-time.Hour)),
+		row(advisordomain.ActorOwner, advisordomain.SeverityBlocks, advisordomain.StateApplied,
+			time.Time{}),
+		row(advisordomain.ActorEngine, advisordomain.SeverityBlocks, advisordomain.StateOpen,
+			time.Time{}),
+		row(advisordomain.ActorEngine, advisordomain.SeverityNote, advisordomain.StateOpen, time.Time{}),
+	}
+	got := countsOf(rows, now)
+	want := map[advisor.Severity]int{advisor.SeverityBlocks: 1, advisor.SeverityCosts: 2, advisor.SeverityNote: 0}
+	if !maps.Equal(got, want) {
+		t.Errorf("counts = %v, want %v (the owner's open findings, a snooze ended counted, none of the engine's)",
+			got, want)
 	}
 }

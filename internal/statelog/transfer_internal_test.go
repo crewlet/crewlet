@@ -19,27 +19,16 @@ import (
 
 // EVERY BOUNDED WAIT IN A TRANSFER SAYS WHOSE END IT REACHED.
 //
-// Each wait — the ask's flush, the fetch's flush, the wait for a chunk — is a
-// child of the caller's context with a limit of this package's own, so both
-// ends fail through the child and look alike there. The caller's end must come
-// back wrapping the caller's own error, promptly, because that is how the join
-// tells a node being stopped from a fleet with nothing to give. The package's
-// own bound must come back NAMED and not as DeadlineExceeded, because in the
-// chain that reads as the caller's deadline having passed when the caller set
-// none — and before the flushes took a context at all, a plain Flush held a
-// stopping node for the client's own ten seconds and answered `nats: timeout`.
+// Each wait (the ask's flush, the fetch's flush, the wait for a chunk) is a
+// child of the caller's context bounded by this package, so both ends fail
+// alike through it. The caller's must come back promptly, wrapping its error:
+// that is how the join tells a node being stopped from a fleet with nothing to
+// give. The package's must come back NAMED, never as DeadlineExceeded (a
+// deadline the caller never set). A real broker confirms a flush at once, so
+// this one stops answering.
 //
-// A real broker confirms a flush in microseconds, so no case against one can
-// reach either flush's end; this one talks to a broker that stops answering.
-//
-// THE CALLER'S END IS CUED BY THE BROKER, never timed. Each wait announces
-// itself on the wire (the flush is the client's PING, the wait for a chunk
-// follows the credit the client returns for the one chunk it was sent), and
-// the caller's context ends only once the broker has seen that. A clock
-// started at the call raced the steps in front of the wait: a test process
-// descheduled for longer than the clock had its caller's end land on the
-// entry check or on the fetch's flush, and the error named that step, which
-// was correct and failed the case.
+// THE CALLER'S END IS CUED BY THE BROKER seeing the wait (fakeBroker's
+// waiting), never timed: a clock races the steps before it, naming one.
 func TestEveryTransferWaitSaysWhoseEndItReached(t *testing.T) {
 	t.Parallel()
 	const ownBound = 200 * time.Millisecond
@@ -99,9 +88,8 @@ func TestEveryTransferWaitSaysWhoseEndItReached(t *testing.T) {
 				t.Fatalf("the error does not say %q and name the %s bound: %v",
 					w.own, ownBound, err)
 			}
-			// Well inside the client's own ten-second flush timeout,
-			// which is what a flush bounded by nothing it was given
-			// runs into instead.
+			// Well inside the client's ten-second flush timeout, which
+			// an unbounded flush would sit out instead.
 			if took > 5*time.Second {
 				t.Fatalf("a %s bound took %s to end the wait", ownBound, took)
 			}
@@ -147,9 +135,8 @@ func TestEveryTransferWaitSaysWhoseEndItReached(t *testing.T) {
 				if !strings.Contains(err.Error(), w.step) {
 					t.Fatalf("the error does not name the step it ended (%q): %v", w.step, err)
 				}
-				// The wrapped end above proves the caller ended it, so the
-				// cue fired and ended is set. Far inside both the production
-				// bound and the client's ten seconds.
+				// The wrapped end proves the cue fired, so ended is set.
+				// Far inside the production bound and the client's ten seconds.
 				if took := time.Since(ended); took > 3*time.Second {
 					t.Fatalf("a wait took %s to return once its caller ended it: it "+
 						"sat out a bound the caller cannot end", took)
@@ -161,12 +148,10 @@ func TestEveryTransferWaitSaysWhoseEndItReached(t *testing.T) {
 
 // A COPY THIS NODE CANNOT WRITE IS ITS OWN FAULT, AND A DONOR THAT STOPS IS NOT.
 //
-// The join files a failure by whose it is ([nodeFault]): one of the offer's is
-// that donor's refusal and the join moves on, while one of this node's ends
-// the join, because every other donor's artefact would be written to the same
-// disk. The fetch is where both meet, so it is where the line is drawn — a
-// destination this node cannot create is its own, and a donor that stopped
-// sending after one chunk is the offer's.
+// The join files a failure by whose it is ([nodeFault]): the offer's moves on
+// to the next donor; this node's ends the join, since every other artefact
+// would land on the same disk. The fetch draws the line: a destination this
+// node cannot create is its own, a donor that stops after one chunk the offer's.
 func TestACopyThisNodeCannotWriteIsItsOwnFault(t *testing.T) {
 	t.Parallel()
 	nc, _ := fakeBroker(t, true)
@@ -197,11 +182,9 @@ func waitingFor(wait time.Duration) transferPace {
 }
 
 // deadlineOnCue is a caller's context whose deadline passes when pass is
-// called rather than at a time, which the standard library cannot express:
-// a deadline that passes on a clock races whatever the code does before the
-// wait under test. Only Done and Err are observed by the waits, and every
-// wait reaches them through a child, which the standard library ends with
-// this parent's own error.
+// called, not at a time (a clock races the code before the wait under test).
+// The waits observe only Done and Err, through a child that the standard
+// library ends with this parent's error.
 type deadlineOnCue struct {
 	context.Context
 	passed chan struct{}
@@ -224,19 +207,16 @@ func (c *deadlineOnCue) Err() error {
 // sends, so the credit the client returns for it is recognisable.
 const fakeCreditSubject = "fake.credit"
 
-// fakeBroker is just enough of a NATS server to hold one client connection:
-// it sends INFO, answers the connect handshake's PING, reads everything the
-// client sends after that and delivers one chunk to each fetch, nothing more.
+// fakeBroker is just enough of a NATS server for one client: INFO, the
+// handshake's PONG, and one chunk to each fetch.
 //
-// With confirm set it answers every later PING too: a broker that confirms
-// each flush and a donor that sends one chunk and stops. Without it, it stops
-// answering while the connection stays up, which is what a half-open TCP
-// connection to a wedged server looks like to a client: nothing closes, so
-// nothing but a bound ends the wait.
+// With confirm it answers every later PING too (a donor that sends one chunk
+// and stops). Without it, it goes silent with the connection up, as a
+// half-open connection to a wedged server does: only a bound ends the wait.
 //
-// waiting receives once the client is blocked in a wait the broker can see:
-// without confirm, a flush it will never confirm; with it, the wait for the
-// chunk after the one it credited.
+// waiting receives once the client blocks in a wait the broker can see: an
+// unconfirmed flush (its PING), or, with confirm, the wait for the chunk after
+// the one it credited.
 func fakeBroker(t *testing.T, confirm bool) (nc *nats.Conn, waiting <-chan struct{}) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -330,9 +310,8 @@ func serveFake(conn net.Conn, confirm bool, cue chan<- struct{}) {
 			}
 			sids[fields[1]] = fields[len(fields)-1]
 		case "PUB", "HPUB":
-			// THE PAYLOAD IS READ BY ITS DECLARED SIZE, never as lines:
-			// a payload is bytes, and one that happened to hold a line
-			// reading PING would otherwise be answered.
+			// THE PAYLOAD IS READ BY ITS DECLARED SIZE, never as lines,
+			// or a payload holding a line reading PING would be answered.
 			//
 			// PUB <subject> [reply] <size>
 			// HPUB <subject> [reply] <header size> <total size>
@@ -355,8 +334,8 @@ func serveFake(conn net.Conn, confirm bool, cue chan<- struct{}) {
 			case subject == fakeCreditSubject:
 				signal()
 			case strings.HasPrefix(subject, SubjectFetchPrefix):
-				// The fetch's body is its deliver subject, which the
-				// client subscribed to before it published the fetch.
+				// The fetch's body is its deliver subject, subscribed
+				// before the fetch was published.
 				deliver := string(payload[headers:size])
 				sid, ok := sids[deliver]
 				if !ok {

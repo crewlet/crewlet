@@ -93,13 +93,12 @@ func storedBytes(t *testing.T, backend *memobj.Backend, name string) []byte {
 }
 
 // A SESSION IS SEALED AT REST AND OPENS ONLY WHERE ITS ROW NAMES IT: the stored
-// bytes carry nothing of the archive in the clear, the session reads back
-// under its own seat and turn, and the same object named by another turn or
-// another seat is ErrUnreadable — the associated data binds the object to
-// `executor/<seat>/<turn>/<object key>`.
+// bytes hold nothing of the archive in the clear, and the object named by
+// another turn, seat or object key is ErrUnreadable, since the associated data
+// binds it to `executor/<seat>/<turn>/<object key>`.
 //
-// Mutation: seal under an associated data that leaves the turn out of AAD and
-// the object opens under another turn's row.
+// Mutation: leave the turn out of the associated data and the object opens
+// under another turn's row.
 func TestASessionOpensOnlyWhereItsRowNamesIt(t *testing.T) {
 	t.Parallel()
 	store, backend := sessionStore(t, "k1")
@@ -121,9 +120,8 @@ func TestASessionOpensOnlyWhereItsRowNamesIt(t *testing.T) {
 	if err != nil || !bytes.Equal(got, plain) {
 		t.Fatalf("the session read back (%d bytes, %v), want the archive", len(got), err)
 	}
-	// THE SAME BYTES UNDER ANOTHER KEY: what a row naming another capture's
-	// object of the very same seat and turn would open, were the object's
-	// own key not bound in.
+	// THE SAME BYTES UNDER ANOTHER KEY: what a row naming another capture of the
+	// same seat and turn would open, were the object's own key not bound in.
 	moved := objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC))
 	if err := backend.Put(t.Context(), moved.Name(), bytes.NewReader(stored), objstore.PutMeta{}); err != nil {
 		t.Fatal(err)
@@ -269,18 +267,23 @@ func TestTheSealedCapHoldsASessionAtItsBound(t *testing.T) {
 	}
 }
 
-// THE SEAT BUDGET'S FLOOR HOLDS ONE SESSION AT ITS BOUND: a budget Tier B
-// accepts never refuses outright a capture the session bound admits, and the
-// default is no smaller than the floor. internal/config cannot import this
-// package, so the two are held together here.
+// THE SEAT BUDGET'S FLOOR HOLDS ONE SESSION AT ITS BOUND, AND NO MORE: a budget
+// Tier B accepts never refuses outright a capture the session bound admits, a
+// budget that holds one is never refused at boot (the floor is that session
+// rounded up to a whole mebibyte), and the default is no smaller than the floor.
+// internal/config cannot import this package, so they are held together here.
 //
-// Mutation: raise SessionMaxBytes to 64 MiB without moving the config floor and
-// this fails.
+// Mutation: raise SessionMaxBytes to 64 MiB without moving the config floor, or
+// raise the floor to 64 MiB, and this fails.
 func TestTheSeatBudgetFloorHoldsOneSessionAtItsBound(t *testing.T) {
 	t.Parallel()
 	if config.SessionBytesPerSeatFloor < executorkeep.SealedMaxBytes {
 		t.Errorf("max_bytes_per_seat accepts %d bytes and one sealed session is up to %d",
 			config.SessionBytesPerSeatFloor, executorkeep.SealedMaxBytes)
+	}
+	if past := config.SessionBytesPerSeatFloor - executorkeep.SealedMaxBytes; past >= 1<<20 {
+		t.Errorf("max_bytes_per_seat's floor of %d bytes is %d past one sealed session at its bound, "+
+			"so it refuses budgets that hold one", config.SessionBytesPerSeatFloor, past)
 	}
 	if config.DefaultSessionBytesPerSeat < config.SessionBytesPerSeatFloor {
 		t.Errorf("the default budget of %d bytes is below the field's own floor of %d",
@@ -289,14 +292,13 @@ func TestTheSeatBudgetFloorHoldsOneSessionAtItsBound(t *testing.T) {
 }
 
 // A SESSION SEALED TO A SPOOL UPLOADS AS THE OBJECT ITS SEAL MINTED, AND READS
-// BACK AS THE ARCHIVE: the spool — what rests on a node's disk between a take
-// and its keep — holds nothing of the archive in the clear; its size is what
-// the upload stores, under the key the seal minted and bound in; the object
-// opens under the seat and turn it was sealed for and under no other; and an
-// archive past its bound is refused at the seal, before anything is uploaded.
+// BACK AS THE ARCHIVE: the spool on a node's disk holds nothing in the clear,
+// the upload stores its size under the key the seal minted and bound in, the
+// object opens only under its own seat and turn, and an archive past its bound
+// is refused at the seal, before any upload.
 //
-// Mutation: spool the archive in the clear, mint the upload's key anew, or let
-// the seal pass an archive past its bound, and a check here goes red.
+// Mutation: spool in the clear, mint the upload's key anew, or let the seal pass
+// an oversized archive, and a check goes red.
 func TestASessionSealedToASpoolUploadsAsTheObjectItsSealMinted(t *testing.T) {
 	t.Parallel()
 	store, backend := sessionStore(t, "k1")
@@ -339,17 +341,15 @@ func TestASessionSealedToASpoolUploadsAsTheObjectItsSealMinted(t *testing.T) {
 	}
 }
 
-// A SPOOLED SESSION OPENS ONLY FOR THE ROW IT WAS FETCHED FOR: a restore fetches
-// the turn's object sealed onto its node's disk, checked against the row by the
-// object store, and opens the spool against the row's own associated data — so
-// the spool reads back as the archive under its own seat and turn, and is
-// ErrUnreadable named by another turn's row, another seat's, or a row naming
-// another object, whatever bytes the spool holds. A row naming an object the
-// store no longer holds fetches nothing and is ErrUnreadable at once.
+// A STORED SESSION OPENS ONLY FOR ITS OWN ROW: the object is checked against
+// the row by the object store and opened under the row's own associated data,
+// so it is ErrUnreadable for another turn's, seat's or object's row, whatever
+// bytes it holds. A row naming an object the store no longer holds is
+// ErrUnreadable at once.
 //
-// Mutation: open the spool under an associated data that leaves the turn or the
-// seat out, or skip the object store's check in Fetch, and a row goes red.
-func TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor(t *testing.T) {
+// Mutation: open the object under an associated data that leaves the turn or
+// the seat out, or skip the object store's check, and a row goes red.
+func TestAStoredSessionOpensOnlyForItsOwnRow(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionStore(t, "k1")
 	turn := statelog.NewOpID(time.Now(), "")
@@ -359,39 +359,18 @@ func TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 	own := executordomain.Session{Handle: "ana", Turn: turn, Object: put.Object}
-	var spool bytes.Buffer
-	if err := store.Fetch(t.Context(), own, &spool); err != nil {
-		t.Fatalf("Fetch: %v", err)
+	if got, err := readAll(t, store, own); err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("the session opened for its own row read (%d bytes, %v), want the archive", len(got), err)
 	}
-	if bytes.Contains(spool.Bytes(), []byte("transcript-marker:")) {
-		t.Fatal("the spool holds the archive in the clear")
-	}
-	open := func(row executordomain.Session) ([]byte, error) {
-		r, err := store.OpenSpooled(row, bytes.NewReader(spool.Bytes()))
-		if err != nil {
-			return nil, err
-		}
-		return io.ReadAll(r)
-	}
-	if got, err := open(own); err != nil || !bytes.Equal(got, plain) {
-		t.Fatalf("the spool opened for its own row read (%d bytes, %v), want the archive", len(got), err)
-	}
+	gone := objstore.Object{Key: objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)),
+		Hash: put.Object.Hash, Size: put.Object.Size}
 	for name, other := range map[string]executordomain.Session{
-		"another turn": {Handle: "ana", Turn: statelog.NewOpID(time.Now(), ""), Object: put.Object},
-		"another seat": {Handle: "ben", Turn: turn, Object: put.Object},
-		"another object": {Handle: "ana", Turn: turn, Object: objstore.Object{
-			Key: objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)), Hash: put.Object.Hash,
-			Size: put.Object.Size}},
+		"another turn":   {Handle: "ana", Turn: statelog.NewOpID(time.Now(), ""), Object: put.Object},
+		"another seat":   {Handle: "ben", Turn: turn, Object: put.Object},
+		"another object": {Handle: "ana", Turn: turn, Object: gone},
 	} {
-		if _, err := open(other); !errors.Is(err, executordomain.ErrUnreadable) {
-			t.Errorf("the spool opened for %s: %v, want ErrUnreadable", name, err)
+		if _, err := readAll(t, store, other); !errors.Is(err, executordomain.ErrUnreadable) {
+			t.Errorf("the session opened for %s: %v, want ErrUnreadable", name, err)
 		}
-	}
-	gone := executordomain.Session{Handle: "ana", Turn: turn, Object: objstore.Object{
-		Key: objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)), Hash: put.Object.Hash,
-		Size: put.Object.Size}}
-	var nothing bytes.Buffer
-	if err := store.Fetch(t.Context(), gone, &nothing); !errors.Is(err, executordomain.ErrUnreadable) {
-		t.Errorf("a row naming an object the store does not hold fetched: %v, want ErrUnreadable", err)
 	}
 }

@@ -20,19 +20,17 @@ import (
 )
 
 // `PUT /mcp-servers/{name}/tools` sets the levels of a server's tools:
-// `{"default": "allow"|"approve"|"blocked"|null, "levels": {"<tool>": "allow"|"approve"|"blocked"|null}}`,
-// each key the server's own name for a tool. A key the body leaves out stays
-// as it is; null removes the default or a tool's own level. Written through
-// the configuration's own pipeline ([configapi.Service.SetMCPTools]): decided
-// as `config.write`, at a recent step-up for a write and the read's proof for
-// a check (`dry_run=true`), validated as the whole document, and stored as one
-// revision under the request's summary.
+// `{"default": "allow"|"approve"|"blocked"|null, "levels": {"<tool>": ...}}`,
+// each key the server's own tool name. A key the body leaves out stays; null
+// removes the default or a tool's own level. Written through the configuration
+// pipeline ([configapi.Service.SetMCPTools]): `config.write`, at a recent
+// step-up for a write (a check, `dry_run=true`, takes the read's proof),
+// validated as the whole document, stored as one revision.
 //
 // A LEVEL NAMING NO TOOL THE FLEET LISTS IS KEPT AND SAID: a server may list
-// the tool later (a server mid-upgrade, a per-agent server whose seats' own
-// credentials reach it), so it is written, and the answer names every such
-// level as `unlisted`, since one that decides nothing is most often a name
-// spelled with the prefix, or one the server spells differently.
+// the tool later (mid-upgrade, or a per-agent server reached by seats' own
+// credentials), so it is written and the answer names it `unlisted`; one that
+// decides nothing is most often a misspelled or prefixed name.
 
 // ToolDocuments writes a server's tool levels ([configapi.Service]).
 type ToolDocuments interface {

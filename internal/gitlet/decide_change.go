@@ -61,7 +61,7 @@ func (p ChangeProposal) measure() (int, error) {
 		return 0, fmt.Errorf("%w: %s: encode it: %w", ErrInvalidProposal, op, err)
 	}
 	if bytes := len(encoded) + MaxRoutingBytes; bytes > EntryRoom {
-		return 0, fmt.Errorf("%w: %s: %d bytes with its routing's room, past the %d one proposal may take of "+
+		return 0, refusedf("%w: %s: %d bytes with its routing's room, past the %d one proposal may take of "+
 			"its record", ErrInvalidProposal, op, bytes, EntryRoom)
 	}
 	return len(encoded) + MaxRoutingBytes, nil
@@ -193,17 +193,23 @@ func (p ChangeProposal) mentions() []string {
 // landing's change, the live queue entry it ends, its stored readiness
 // ([clearReadiness]) and the repository; a reopen's change, the revision a
 // moved source makes, and the repository. Each that moves a change's state
-// writes its tally row too (apply_counts.go).
+// writes its tally row too (apply_counts.go), and each but an open and a
+// landing its moves (changemoves.go): one, or an edit's one for each part it
+// sets.
 func (p ChangeProposal) decidedRows() int {
 	switch {
 	case p.Open != nil:
 		return 5 + tallyRows
-	case p.Close != nil, p.Landed != nil:
+	case p.Landed != nil:
 		return 4 + tallyRows
+	case p.Close != nil:
+		return 4 + tallyRows + 1
 	case p.Reopen != nil, p.Draft != nil:
-		return 3 + tallyRows
-	case p.Edit != nil, p.Retarget != nil:
-		return 3
+		return 3 + tallyRows + 1
+	case p.Edit != nil:
+		return 3 + p.Edit.parts()
+	case p.Retarget != nil:
+		return 3 + 1
 	}
 	return 2
 }
@@ -239,7 +245,7 @@ func (p ChangeProposal) validFields() error {
 			return badField("asker", "a landing is the repository's home Gitlet node's own, which no principal asks")
 		}
 	case why != "":
-		return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)
+		return refusedf("%w: asker: %s", ErrInvalidProposal, why)
 	case !p.Asker.Run.IsZero():
 		return badField("asker.run", "a change keeps the turn and the run that opened it in its own fields, "+
 			"and its asker names none")
@@ -1225,9 +1231,14 @@ type changeRow struct {
 	// change was closed and merged at, each set exactly while it is.
 	closedAt    sql.NullInt64
 	closeReason string
-	mergedAt    sql.NullInt64
-	mergedVia   MergedVia
-	mergeOID    string
+	// closedBy and closedByKind are who closed it: a close record's principal,
+	// or the pusher of the push that deleted its source, "" for a push nobody
+	// made. Both "" but while it is closed.
+	closedBy     string
+	closedByKind PartyKind
+	mergedAt     sql.NullInt64
+	mergedVia    MergedVia
+	mergeOID     string
 	// mergedBy and mergedByKind are who merged it through its gate — a merge
 	// record's principal, a seat by its handle or a person by their human
 	// seat — and mergedOperator the credential a person merged with;
@@ -1242,6 +1253,9 @@ type changeRow struct {
 	// updatedAt its broker instant (store.EncodeTime): when the change last
 	// moved on its repository's subject (replicated 0147).
 	position, updatedAt int64
+	// reverts is the number of the change this one reverts, 0 for none: a
+	// revert_change's push names it ([ChangeOption.Reverts]).
+	reverts int64
 	// moved and openFindings are what a READ of changes adds from the
 	// change's conversation ([withConversations] on a listing's page, the
 	// detail's own conversation row on a change read): when it last moved on
@@ -1253,14 +1267,15 @@ type changeRow struct {
 // scanChange reads one row [changeColumns] spells.
 func scanChange(scan func(...any) error) (changeRow, error) {
 	var r changeRow
-	var state, ownerKind, backend, via, mergedByKind string
+	var state, ownerKind, backend, via, mergedByKind, closedByKind string
 	err := scan(&r.id, &r.repoID, &r.number, &r.title, &r.bodyBytes, &state, &r.source, &r.target, &r.head,
 		&r.revision, &r.owner, &ownerKind, &r.operator, &backend, &r.work.ID, &r.work.Key, &r.work.Project,
-		&r.turn, &r.run, &r.openedAt, &r.opened, &r.closedAt, &r.closeReason, &r.mergedAt, &via, &r.mergeOID,
-		&r.mergedBy, &mergedByKind, &r.mergedOperator, &r.overrideReason, &r.version, &r.position, &r.updatedAt)
+		&r.turn, &r.run, &r.openedAt, &r.opened, &r.closedAt, &r.closeReason, &r.closedBy, &closedByKind,
+		&r.mergedAt, &via, &r.mergeOID, &r.mergedBy, &mergedByKind, &r.mergedOperator, &r.overrideReason,
+		&r.version, &r.position, &r.updatedAt, &r.reverts)
 	r.state, r.ownerKind, r.work.Backend, r.mergedVia = ChangeState(state), PartyKind(ownerKind),
 		types.WorkBackend(backend), MergedVia(via)
-	r.mergedByKind = PartyKind(mergedByKind)
+	r.mergedByKind, r.closedByKind = PartyKind(mergedByKind), PartyKind(closedByKind)
 	return r, err
 }
 
@@ -1345,8 +1360,9 @@ const (
 	// of the change scan one row alike.
 	changeColumns = `id, repo_id, number, title, body_bytes, state, source_ref, target_ref, head_oid, revision,
 		owner, owner_kind, owner_operator_id, work_backend, work_id, work_key, work_project, created_turn,
-		created_run, opened_at, opened_position, closed_at, close_reason, merged_at, merged_via, merge_oid,
-		merged_by, merged_by_kind, merged_operator_id, override_reason, version, position, updated_at`
+		created_run, opened_at, opened_position, closed_at, close_reason, closed_by, closed_by_kind, merged_at,
+		merged_via, merge_oid, merged_by, merged_by_kind, merged_operator_id, override_reason, version, position,
+		updated_at, reverts`
 	changeRowSQL = `SELECT ` + changeColumns + ` FROM code_changes WHERE id = ?`
 	// changesNamedSQL is the changes a list names, each by its key, driven
 	// from the list ([changeRowsIn]).

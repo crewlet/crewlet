@@ -343,7 +343,7 @@ func unsettledLoops(ctx context.Context, q *Queue, since map[uint64]uint64, down
 		pair := [2]string{l.Topic, l.Group}
 		isEmpty, read := empty[pair]
 		if !read {
-			held, err := inspector(q).Backlog(ctx, l.Topic, l.Group)
+			held, err := inspector(q).Backlog(ctx, l.Topic, l.Group, 1)
 			switch {
 			case err != nil && ctx.Err() != nil:
 				// The bound ended inside the read: the loop is still
@@ -450,18 +450,18 @@ func capabilitiesFor(open func(*testing.T, Config) *Queue) queuetest.Capabilitie
 			return open(t, Config{MaxDeliver: attempts})
 		},
 
-		// Both reads report a failure AS a failure: an empty result would
-		// tell the suite's absence cases the seat holds no mail whenever the
-		// broker did not answer.
-		Backlog: func(t *testing.T, q queue.EventQueue, topic, group string) []*events.Event {
-			t.Helper()
-			evs, err := inspector(q).Backlog(context.Background(), topic, group)
-			if err != nil {
-				t.Fatalf("Backlog(%s, %s): %v", topic, group, err)
+		// Reads through the admin client, so a case's backlog reads cost the
+		// client under test none of the consumer proposals it counts.
+		Inspect: func(_ *testing.T, q queue.EventQueue) queue.EventQueue {
+			if reader := inspector(q); reader != nil {
+				return reader
 			}
-			return evs
+			return q
 		},
 
+		// The dead-letter read reports a failure AS a failure: an empty result
+		// would tell the suite's absence cases the seat holds no mail whenever
+		// the broker did not answer.
 		DeadLetters: func(t *testing.T, q queue.EventQueue, topic, group string) []*events.Event {
 			t.Helper()
 			evs, err := inspector(q).DeadLetters(context.Background(), topic, group)

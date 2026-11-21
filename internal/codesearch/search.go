@@ -147,25 +147,16 @@ type Coverage struct {
 }
 
 // MaxCoverageText is the most bytes of WORDS a [Coverage] lists, as JSON
-// encodes them: every repository name of every set — NotAnswering's
-// included — and every node's reason, ONE BUDGET across them all. 4 KiB, a
-// sixteenth of a seat's tool answer (internal/agent/builtin's
-// ToolAnswerBytes, 64 KiB), since code_search sends the coverage beside every
-// page of its lines and the lines are the answer. Every count stays whole:
-// past the budget a set lists fewer of its names — the first, in order — and
-// a reason is cut. The reasons are listed first, in the order of their nodes
-// and in at most HALF the budget, so the names keep the other half whatever
-// the fleet; then the names, the sets of repositories left unsearched before
-// those searched another way.
-//
-// WHAT THE BUDGET DOES NOT HOLD is the coverage's shape — its fields' names
-// and counts, under 600 bytes — and one entry for each Gitlet node that did not
-// answer, its id (at most 64 bytes) and its count, under 140 bytes: every
-// such node is named, which is the point of the entry. A fleet of sixteen
-// silent Gitlet nodes so takes a coverage to under 7 KiB. Its own per-set cap of
-// 100 names was an eighth of an answer by its arithmetic and three quarters
-// of one by the names' real length, with NotAnswering's sets beside it
-// growing with the fleet.
+// encodes them: every repository name of every set (NotAnswering's included)
+// and every node's reason, ONE BUDGET across them all. 4 KiB, a sixteenth of a
+// seat's tool answer (internal/agent/builtin's ToolAnswerBytes, 64 KiB), since
+// code_search sends the coverage beside every page and the lines are the
+// answer. Every count stays whole: past the budget a set lists fewer names
+// (the first, in order) and a reason is cut. Reasons come first, in node
+// order and in at most HALF the budget so the names keep the rest; then the
+// names, of the sets left unsearched before those searched another way. NOT
+// IN THE BUDGET: the shape (under 600 bytes) and one entry per silent Gitlet
+// node, id and count under 140 bytes, since every such node is named.
 const MaxCoverageText = 4 << 10
 
 // MaxGapWhyBytes is the most of one node's reason a coverage keeps, as JSON
@@ -245,18 +236,16 @@ func New(o Options) (*Searcher, error) {
 
 // Search answers q.
 //
-// A query this package would refuse is refused before anything is asked —
-// its grammar (codeindex.Query.Validate: past codeindex.MaxQueryBytes, the
-// knowledge search's 400 bytes, refused, never cut), its limit, its asker, a
-// repo: naming a repository the asker may not read, and more than
-// MaxGrepRepos grep repositories — each gitlet.ErrInvalid or the read's own
-// refusal, a refusal over one repository a [RepoRefusal] naming it. ONE
-// REPOSITORY is a read of it through the keyed walk (gitlet.GitSearch), whose
-// answer or refusal is the search's, as a [RepoRefusal]. More are ONE
-// SCATTER: each repository asked of the first node of its git order, in one
-// signed request on topics.CodeSearch, then once more of its runner-up where
-// that node did not answer it — and the lines merged by (repository, path,
-// line), the same answer whichever node answers first.
+// A query this package would refuse is refused before anything is asked: its
+// grammar (codeindex.Query.Validate; past codeindex.MaxQueryBytes, never cut),
+// its limit, its asker, a repo: naming a repository the asker may not read,
+// and more than MaxGrepRepos grep repositories, each gitlet.ErrInvalid or the
+// read's own refusal (over one repository, a [RepoRefusal]). ONE REPOSITORY is
+// a read through the keyed walk (gitlet.GitSearch). More are ONE
+// SCATTER: each repository asked of the first node of its git order in one
+// signed request on topics.CodeSearch, then of its runner-up where that node
+// did not answer, the lines merged by (repository, path, line) so the answer
+// is the same whichever node answers first.
 func (s *Searcher) Search(ctx context.Context, q Query) (Answer, error) {
 	began := s.now()
 	if err := q.validate(); err != nil {

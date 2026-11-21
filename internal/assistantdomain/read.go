@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -26,24 +27,15 @@ import (
 // Reader answers questions about a person's conversations from this node's own
 // applied rows, opening every sealed value on this node's keyring.
 //
-// # Every read is the owner's
+// Every method takes the owner and answers [ErrNotFound] for anything not
+// theirs (package doc, "A conversation belongs to its owner"), except
+// [Reader.AuditTranscript], which opens another's conversation only for a
+// compliance read already recorded beside it ([Writer.RecordAuditRead]).
 //
-// Every method takes the owner and answers [ErrNotFound] for a conversation,
-// turn, card or proposal that is not theirs, exactly as for one that does not
-// exist: a caller with no relation is told it does not exist (ADR-0034's rule,
-// ADR-0053). THE ONE EXCEPTION is [Reader.AuditTranscript], which opens
-// somebody else's conversation only for the receipt of a compliance read
-// already recorded beside it ([Writer.RecordAuditRead]), so no path reads
-// another person's conversation without leaving the record they see.
-//
-// # Through the read authority
-//
-// Every read goes through [statelog.Reader], so the refusal ladder holds (an
-// evicted node, one below the trim floor and one whose applier stopped serve
-// nothing) and a record this node could not decode is reported rather than
-// answered around. Reads are served at `stale`: a person reads their own
-// conversation through the node their own writes waited on, and every write
-// here waits for this node's applier before it answers.
+// Every read goes through [statelog.Reader], so the refusal ladder holds and an
+// undecodable record is reported, not answered around. Reads are served at
+// `stale`: every write here waits for this node's applier, and a person reads
+// through the node their own writes waited on.
 type Reader struct {
 	db      store.ReplicatedReader
 	log     *statelog.Reader
@@ -109,10 +101,9 @@ func (r *Reader) read(ctx context.Context, scope statelog.ScopeSet, set bool,
 }
 
 // readChild runs fn in one transaction of the read authority, over the scope
-// of the conversation that the row of id in table belongs to: resolved inside
-// the transaction, because only the row says which conversation it is in. A
-// row this node does not hold reads over the whole domain, since a create this
-// node could not decode is exactly a row it does not hold.
+// of the conversation the row of id in table belongs to, resolved inside the
+// transaction since only the row names it. A row this node does not hold reads
+// over the whole domain: a create it could not decode is exactly such a row.
 func (r *Reader) readChild(ctx context.Context, table string, id uuid.UUID,
 	fn func(*sql.Tx) error) error {
 
@@ -143,9 +134,11 @@ var childKey = map[string]string{
 
 // Conversation is one conversation as its owner reads it.
 type Conversation struct {
-	ID             uuid.UUID
-	Owner          uuid.UUID
-	Title          string
+	ID    uuid.UUID
+	Owner uuid.UUID
+	Title string
+	// TitleSetBy is who wrote Title, empty before it has one.
+	TitleSetBy     wire.TitleSource
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	LastActivityAt time.Time
@@ -161,10 +154,24 @@ type Conversation struct {
 
 // Summary is the conversation as a listing shows it.
 func (c Conversation) Summary() wire.ConversationSummary {
-	return wire.ConversationSummary{
-		ID: c.ID, Title: c.Title, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
-		LastActivityAt: c.LastActivityAt, LastTurnState: c.LastTurnState,
+	s := wire.ConversationSummary{ID: c.ID, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
+		LastActivityAt: c.LastActivityAt}
+	if c.Title != "" {
+		title, by := c.Title, c.TitleSetBy
+		if !by.Valid() {
+			by = wire.TitleByModel
+		}
+		s.Title, s.TitleSetBy = &title, &by
 	}
+	if c.LastTurnState != "" {
+		state := c.LastTurnState
+		s.LastTurnState = &state
+	}
+	if c.OpenTurn != uuid.Nil {
+		open := c.OpenTurn
+		s.OpenTurnID = &open
+	}
+	return s
 }
 
 // Turn is one turn.
@@ -292,10 +299,15 @@ type Transcript struct {
 // ---- listings ----------------------------------------------------------- //
 
 // Conversations is one page of the owner's conversations, the most recently
-// used first. cursor is a page's NextCursor, empty for the first; limit is at
-// most [MaxListLimit], zero for [DefaultListLimit].
+// used first, and only those whose title holds q where q is set. cursor is a
+// page's NextCursor, empty for the first; limit is at most [MaxListLimit], zero
+// for [DefaultListLimit].
+//
+// A SEARCH IS MATCHED AFTER UNSEALING: titles are sealed, so the owner's rows
+// are read in order until a page of matches is found, which the retention
+// bounds to what thirty days of one person's conversations hold.
 func (r *Reader) Conversations(ctx context.Context, owner uuid.UUID, cursor string,
-	limit int) (wire.ConversationList, error) {
+	limit int, q string) (wire.ConversationList, error) {
 
 	switch {
 	case limit == 0:
@@ -303,6 +315,11 @@ func (r *Reader) Conversations(ctx context.Context, owner uuid.UUID, cursor stri
 	case limit < 0 || limit > MaxListLimit:
 		return wire.ConversationList{}, invalid("a listing takes 1 to %d conversations",
 			MaxListLimit)
+	}
+	q = strings.ToLower(strings.TrimSpace(q))
+	if utf8.RuneCountInString(q) > wire.SearchMaxRunes {
+		return wire.ConversationList{}, invalid("a search is at most %d characters",
+			wire.SearchMaxRunes)
 	}
 	after, err := decodeCursor(cursor)
 	if err != nil {
@@ -316,29 +333,37 @@ func (r *Reader) Conversations(ctx context.Context, owner uuid.UUID, cursor stri
 			where += ` AND (c.last_activity_at < ? OR (c.last_activity_at = ? AND c.id < ?))`
 			args = append(args, after.at, after.at, after.id)
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT `+conversationColumns+`
-			FROM assistant_conversations c WHERE `+where+`
-			ORDER BY c.last_activity_at DESC, c.id DESC LIMIT ?`, append(args, limit+1)...)
+		query := `SELECT ` + conversationColumns + `
+			FROM assistant_conversations c WHERE ` + where + `
+			ORDER BY c.last_activity_at DESC, c.id DESC`
+		if q == "" {
+			query += ` LIMIT ?`
+			args = append(args, limit+1)
+		}
+		rows, err := tx.QueryContext(ctx, query, args...)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = rows.Close() }()
 		var page []Conversation
-		var activity []int64
+		var lastAt int64
 		for rows.Next() {
 			c, at, err := r.scanConversation(rows)
 			if err != nil {
 				return err
 			}
-			page = append(page, c)
-			activity = append(activity, at)
+			if q != "" && !strings.Contains(strings.ToLower(c.Title), q) {
+				continue
+			}
+			if len(page) == limit {
+				next := encodeCursor(lastAt, page[limit-1].ID)
+				list.NextCursor = &next
+				break
+			}
+			page, lastAt = append(page, c), at
 		}
 		if err := rows.Err(); err != nil {
 			return err
-		}
-		if len(page) > limit {
-			page = page[:limit]
-			list.NextCursor = encodeCursor(activity[limit-1], page[limit-1].ID)
 		}
 		for _, c := range page {
 			list.Conversations = append(list.Conversations, c.Summary())
@@ -384,7 +409,7 @@ func decodeCursor(cursor string) (*cursorAt, error) {
 
 // conversationColumns is every column a Conversation is read from, in
 // [Reader.scanConversation]'s order, the newest turn's state included.
-const conversationColumns = `c.id, c.owner_id, c.title_sealed, c.created_at, c.updated_at,
+const conversationColumns = `c.id, c.owner_id, c.title_sealed, c.title_set_by, c.created_at, c.updated_at,
 	c.last_activity_at, c.turns, c.open_turn_id,
 	COALESCE((SELECT t.state FROM assistant_turns t WHERE t.conversation_id = c.id
 		ORDER BY t.seq DESC LIMIT 1), '')`
@@ -397,10 +422,11 @@ func (r *Reader) scanConversation(row rowScanner) (Conversation, int64, error) {
 	var (
 		c                          Conversation
 		id, owner, title, open     string
+		by                         string
 		created, updated, activity int64
 		last                       string
 	)
-	if err := row.Scan(&id, &owner, &title, &created, &updated, &activity, &c.Turns,
+	if err := row.Scan(&id, &owner, &title, &by, &created, &updated, &activity, &c.Turns,
 		&open, &last); err != nil {
 		return Conversation{}, 0, err
 	}
@@ -419,6 +445,7 @@ func (r *Reader) scanConversation(row rowScanner) (Conversation, int64, error) {
 	if c.Title, err = r.sealer.openString(title, AAD(c.ID, RecordConversation, c.ID, ColumnTitle)); err != nil {
 		return Conversation{}, 0, fmt.Errorf("conversation %s's title: %w", id, err)
 	}
+	c.TitleSetBy = wire.TitleSource(by)
 	c.CreatedAt, c.UpdatedAt = store.DecodeTime(created), store.DecodeTime(updated)
 	c.LastActivityAt = store.DecodeTime(activity)
 	c.LastTurnState = wire.TurnState(last)
@@ -469,9 +496,9 @@ func (r *Reader) Transcript(ctx context.Context, owner, id uuid.UUID) (Transcrip
 }
 
 // AuditTranscript is a conversation read for compliance (decision D06), for
-// the receipt of the compliance read [Writer.RecordAuditRead] recorded beside
-// it: a receipt whose record has not applied on this node opens nothing, so
-// the conversation is never read here before its owner can see who read it.
+// the receipt [Writer.RecordAuditRead] returned: a receipt whose record has not
+// applied on this node opens nothing, so the conversation is never read here
+// before its owner can see who read it.
 func (r *Reader) AuditTranscript(ctx context.Context, receipt AuditReceipt) (Transcript, error) {
 	if receipt.conversation == uuid.Nil || receipt.opID == "" {
 		return Transcript{}, invalid("a compliance read opens a conversation only for " +
@@ -491,8 +518,8 @@ func (r *Reader) AuditTranscript(ctx context.Context, receipt AuditReceipt) (Tra
 }
 
 // auditRecorded refuses a receipt whose compliance read has not applied on
-// this node as [ErrAuditPending]: what every audited read checks, in the same
-// transaction it then reads in.
+// this node as [ErrAuditPending], checked in the transaction the read then
+// reads in.
 func auditRecorded(ctx context.Context, tx *sql.Tx, receipt AuditReceipt) error {
 	var recorded int
 	if err := tx.QueryRowContext(ctx, `
@@ -681,10 +708,8 @@ type TurnRef struct {
 
 // ParkedPast nominates parked turns none of whose proposals expires after
 // now, the longest parked first, at most limit of them: the expiry
-// backstop's question. It only nominates: whether a turn has lapsed is
-// decided again against its proposals' states by the one rule that ends a
-// parked turn as expired (internal/assistant/proposal.Lapsed), and the close
-// is arbitrated.
+// backstop's question. It only nominates: whether a turn lapsed is decided
+// again by internal/assistant/proposal.Lapsed, and the close is arbitrated.
 func (r *Reader) ParkedPast(ctx context.Context, now time.Time, limit int) ([]TurnRef, error) {
 	if limit <= 0 {
 		return nil, invalid("a parked listing names how many it wants")
@@ -893,39 +918,44 @@ func (r *Reader) scanCard(row rowScanner) (Card, error) {
 	if err != nil {
 		return Card{}, fmt.Errorf("card %s: %w", id, err)
 	}
+	// A BODY THIS CONTRACT CANNOT DECODE was written to another one, as is a
+	// body it refuses: both are the notice.
 	if err := json.Unmarshal(body, &c.Card); err != nil {
-		return Card{}, fmt.Errorf("assistantdomain: card %s: %w", id, err)
+		c.Type, c.Card = wire.CardNotice, r.unshown(c.ID, wire.CardKind(kind), err)
+		return c, nil
 	}
 	if c.Card.Type.Valid() {
 		if err := c.Card.Validate(); err != nil {
-			// WHICH CARD AND WHY, NEVER ITS BODY: the body is what a person
-			// was shown, sealed for them alone.
-			r.logger.Warn("assistant_card_shown_as_notice", "card", c.ID.String(),
-				"type", string(c.Card.Type), "error", err.Error())
-			if r.metrics != nil {
-				r.metrics.Add(metrics.AssistantCardsShownAsNotice, 1,
-					metrics.Attrs{"type": string(c.Card.Type)})
-			}
-			c.Type, c.Card = wire.CardNotice, UnshownCardNotice()
+			c.Type, c.Card = wire.CardNotice, r.unshown(c.ID, c.Card.Type, err)
 		}
 	}
 	return c, nil
+}
+
+// unshown logs and counts a stored card of another contract, which is read as
+// [UnshownCardNotice]: which card and why, never its body, which is what a
+// person was shown, sealed for them alone.
+func (r *Reader) unshown(id uuid.UUID, kind wire.CardKind, err error) wire.Card {
+	r.logger.Warn("assistant_card_shown_as_notice", "card", id.String(),
+		"type", string(kind), "error", err.Error())
+	if r.metrics != nil {
+		r.metrics.Add(metrics.AssistantCardsShownAsNotice, 1, metrics.Attrs{"type": string(kind)})
+	}
+	return UnshownCardNotice()
 }
 
 // UnshownCardNotice is what a stored card of a kind this build draws, but in
 // a shape its contract refuses, is read as: a plain notice in its place,
 // never the body.
 //
-// A CARD IS VALIDATED BEFORE IT IS RECORDED and never rewritten after, so a
-// stored card this build's [wire.Card.Validate] refuses was written to
-// another contract of an unreleased surface: an earlier one (a brief before
-// ADR-0062), or, during a rolling upgrade, a newer node's. Either way it is
-// not read, migrated or tolerated field by field: the transcript, the
-// dashboard and the conversation the model re-reads all see this notice, and
-// asking again writes the card in the shape this node reads. A kind this
-// build does not know at all passes through untouched, as the dashboard
-// already draws one it cannot. Each one is logged, by id, kind and the
-// contract's reason, and counted.
+// A CARD IS VALIDATED BEFORE IT IS RECORDED and never rewritten, so a stored
+// card [wire.Card.Validate] refuses, or one that does not decode into today's
+// shapes, was written to another contract (an earlier one, or a newer node's
+// mid-upgrade). It is not migrated or tolerated
+// field by field: the transcript, the dashboard and the model's re-read all
+// see this notice, and asking again writes the card in this node's shape. A
+// kind this build does not know passes through, as the dashboard draws one it
+// cannot. Each one is logged (id, kind, reason) and counted.
 func UnshownCardNotice() wire.Card {
 	return wire.Card{Type: wire.CardNotice, Notice: &wire.NoticeCard{Tone: wire.NoticeInfo,
 		Text: "This answer can't be shown here. Ask again to see it now."}}
@@ -981,8 +1011,10 @@ func (r *Reader) scanProposal(row rowScanner) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, err
 	}
+	// A CARD OR A RECEIPT OF ANOTHER CONTRACT is read as its card is
+	// ([Reader.scanCard]): the notice, and no receipt.
 	if err = json.Unmarshal(rawCard, &p.Card); err != nil {
-		return Proposal{}, fmt.Errorf("assistantdomain: proposal %s's card: %w", id, err)
+		p.Card = r.unshown(p.ID, wire.CardProposal, err)
 	}
 	rawReceipt, err := open(receipt, ColumnReceipt)
 	if err != nil {
@@ -991,9 +1023,10 @@ func (r *Reader) scanProposal(row rowScanner) (Proposal, error) {
 	if len(rawReceipt) > 0 {
 		var s settlement
 		if err := json.Unmarshal(rawReceipt, &s); err != nil {
-			return Proposal{}, fmt.Errorf("assistantdomain: proposal %s's receipt: %w", id, err)
+			p.Card = r.unshown(p.ID, wire.CardProposal, err)
+		} else {
+			p.Receipt, p.Failure = s.Receipt, s.Failure
 		}
-		p.Receipt, p.Failure = s.Receipt, s.Failure
 	}
 	p.Scope, p.State, p.StepUp = wire.ProposalScope(scope), wire.ProposalState(state), stepUp != 0
 	p.ExpiresAt, p.CreatedAt = store.DecodeTime(expires), store.DecodeTime(created)

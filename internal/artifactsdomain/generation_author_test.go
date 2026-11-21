@@ -10,17 +10,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A REANCHOR'S RECORD NAMES ITS AUTHOR BY THE ONE RULE EVERY LOG READS IT BY.
-//
-// The artifacts log carried a reading of a reanchor's facts of its own: one more
-// copy of the rule [statelog.GenerationFacts.Author] states once, beside the
-// tracker's, the knowledge base's, the identity estate's, the artifact
-// datastore's, the Dashboard Assistant's, chat's, the executor log's and the
-// code log's readings of it. The record names exactly the party that rule names, in the actor
-// kinds this log's columns hold, and this node when the facts name nobody.
-// Mutation: put a private reading back that maps a principal's word to an
-// actor kind of its own, or reads a name of spaces as a party, and its case
-// says so.
+// A REANCHOR'S RECORD NAMES ITS AUTHOR BY THE ONE RULE EVERY LOG READS IT BY:
+// exactly the party [statelog.GenerationFacts.Author] names, in the actor kinds
+// this log's columns hold, and this node when the facts name nobody.
+// Mutation: a private reading that maps a principal's word to an actor kind of
+// its own, or reads a name of spaces as a party, fails its case.
 func TestAGenerationRecordNamesItsAuthorByTheOneRule(t *testing.T) {
 	t.Parallel()
 	for name, f := range map[string]statelog.GenerationFacts{

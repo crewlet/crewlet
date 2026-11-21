@@ -112,6 +112,20 @@
  * asked from the old foot of a page a re-read had moved was dropped, so the
  * press did nothing. In one line: the next page always begins where what is
  * held ends NOW, and a join always reaches the page that is there.
+ *
+ * # A window the clock moved
+ *
+ * A question over a window the clock moves (`lib/useCodeQuery.ts`'s
+ * `CodeWindow`) is ONE question whose edges move: its caller leaves the edges
+ * out of `params`, so a move keeps what is held, and every page is asked
+ * under the edges the caller's first page carries (`first.edges`), handed to
+ * `page`. A page's answer belongs to the edges it was asked at — a day's
+ * count, a window's oldest rows — so the pages drawn together are always
+ * pages of one set of edges, and [Paged.edges] says which. When the first
+ * page answers under edges the held pages were not asked at, every held page
+ * is read again under them, joined as a re-read is, and the list moves to the
+ * new edges in ONE step; until then it stays as it was. A held page that
+ * cannot be read again ends the list there, as a gap left unfilled does.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -138,7 +152,7 @@ export interface PagePlace {
 /** Which pages a change reached, asked of each page drawn. */
 export type PagesReached<A> = (answer: A, place: PagePlace) => boolean;
 
-export interface Paged<T, A> {
+export interface Paged<T, A, E = unknown> {
   /** Every entry loaded, first page first, each once. */
   items: T[];
   /** Every page's own answer, first page first — the names and seats each carries. */
@@ -175,6 +189,8 @@ export interface Paged<T, A> {
    * then. A held page that could not be read again keeps what it last said.
    */
   refresh: (reached?: PagesReached<A>) => void;
+  /** The window's edges every page drawn was asked at (the package doc); null without a window. */
+  edges: E | null;
 }
 
 /** One page after the first, and the cursor it was asked under: where it BEGINS. */
@@ -184,9 +200,11 @@ interface HeldPage<A> {
 }
 
 /** What the reader has paged through, for one reading of one question. */
-interface Kept<A> {
+interface Kept<A, E> {
   /** The reading these belong to: the question, and which time it was asked. */
   era: string;
+  /** The window's edges every page here, the top included, was asked at. */
+  edges: E | null;
   /**
    * The first page these were last JOINED to. It is what is drawn as the
    * first while a later answer that does not join is being joined, so the
@@ -225,6 +243,10 @@ interface Gap<A> {
   error: QueryErrorCode | null;
 }
 
+/** Whether two answers were asked at the same edges of a window. */
+const sameEdges = (a: unknown, b: unknown): boolean =>
+  JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
 const errorOf = (err: unknown): QueryErrorCode =>
   queryErrorCode(err instanceof Error ? err.message : null) ?? "query_failed";
 
@@ -239,19 +261,22 @@ const REFUSED_CURSOR: QueryErrorCode = "bad_params";
  * (`app/source.test.ts`), and a question no gate can see asked is one the
  * engine may stop answering unnoticed.
  */
-export function usePaged<A, T>(
-  first: QueryResult<A>,
-  /** The first page's parameters: the later pages belong to this question. */
+export function usePaged<A, T, E = unknown>(
+  /** The first page, and the window's edges it was asked at where it has one. */
+  first: QueryResult<A> & { edges?: E | null },
+  /** The first page's parameters, a window's name but never its edges: the later pages belong
+   *  to this question. */
   params: Record<string, unknown>,
-  /** Ask for the page after `cursor`, at this tab's read floor. */
-  page: (cursor: string) => Promise<A>,
+  /** Ask for the page after `cursor`, at this tab's read floor, at the window's `edges`,
+   *  given up on once `signal` aborts: the reading it is for is no longer asked. */
+  page: (cursor: string, edges: E | null, signal: AbortSignal) => Promise<A>,
   pick: (answer: A) => readonly T[],
   idOf: (entry: T) => string,
   /** The cursor to the page after this answer, or "" where there is none. */
   cursorOf: (answer: A) => string,
   /** Start the list again when the engine refuses a cursor (the package doc). */
   options: { restartWhenRefused?: boolean } = {},
-): Paged<T, A> {
+): Paged<T, A, E> {
   const question = JSON.stringify(params);
   // WHICH READING OF THE QUESTION THIS IS: a new question starts the next one,
   // so what the last held is never drawn, joined or paged on again — not even
@@ -261,7 +286,7 @@ export function usePaged<A, T>(
     readings.current = { question, count: readings.current.count + 1 };
   }
   const era = `${readings.current.count}:${question}`;
-  const [held, setHeld] = useState<Kept<A> | null>(null);
+  const [held, setHeld] = useState<Kept<A, E> | null>(null);
   const [paging, setPaging] = useState(false);
   // A FAILURE BELONGS TO ITS READING too: a new question is not told that the
   // last one's page could not be read.
@@ -286,11 +311,46 @@ export function usePaged<A, T>(
   const latest = useRef(first);
   latest.current = first;
 
+  // A READ FOR A READING NO LONGER ASKED IS GIVEN UP ON, at the engine too
+  // where the caller hands the signal on: a transcript page may read for
+  // minutes, holding the socket's slot and the node's, and every change queued
+  // here behind it, for nobody.
+  // A change for a reading since left behind is given a signal already
+  // aborted, never one that ends the reading asked now.
+  const reads = useRef<{ era: string; stop: AbortController } | null>(null);
+  const given = (q: string): AbortSignal => {
+    if (asked.current !== q) {
+      const gone = new AbortController();
+      gone.abort();
+      return gone.signal;
+    }
+    if (reads.current?.era !== q) {
+      reads.current?.stop.abort();
+      reads.current = { era: q, stop: new AbortController() };
+    }
+    return reads.current.stop.signal;
+  };
+  const giveUp = useRef(given);
+  giveUp.current = given;
+  useEffect(() => {
+    if (reads.current && reads.current.era !== era) {
+      reads.current.stop.abort();
+      reads.current = null;
+    }
+  }, [era]);
+  useEffect(
+    () => () => {
+      reads.current?.stop.abort();
+      reads.current = null;
+    },
+    [],
+  );
+
   // WHAT IS HELD NOW, written the moment a change applies, so the next change
   // reads it rather than a render's copy: a change built from `kept` put back
   // whatever had landed between that render and itself.
-  const book = useRef<Kept<A> | null>(null);
-  const commit = useCallback((next: Kept<A> | null) => {
+  const book = useRef<Kept<A, E> | null>(null);
+  const commit = useCallback((next: Kept<A, E> | null) => {
     book.current = next;
     setHeld(next);
   }, []);
@@ -317,20 +377,29 @@ export function usePaged<A, T>(
       asked.current === q && book.current?.era === q ? book.current : null;
 
     /** The page a render draws first, from what is held now. */
-    const drawnFirst = (kept: Kept<A> | null): A | null => {
+    const drawnFirst = (kept: Kept<A, E> | null): A | null => {
       const data = latest.current.data;
       if (!kept || !data) return data;
-      return meets(data, kept.pages[0]!, reading.current) ? data : kept.top;
+      return sameEdges(latest.current.edges, kept.edges) &&
+        meets(data, kept.pages[0]!, reading.current)
+        ? data
+        : kept.top;
     };
 
     /** Read the range between `from` and the held page `to`: at most `bound`
-     *  pages of it. */
-    const bridge = async (from: A, to: HeldPage<A>, bound: number): Promise<Gap<A>> => {
+     *  pages of it, at the window's `edges`. */
+    const bridge = async (
+      q: string,
+      from: A,
+      to: HeldPage<A>,
+      bound: number,
+      edges: E | null,
+    ): Promise<Gap<A>> => {
       const gap: HeldPage<A>[] = [];
       let cursor = reading.current.cursorOf(from);
       try {
         for (let read = 0; cursor && read < bound; read++) {
-          const answer = await ask.current(cursor);
+          const answer = await ask.current(cursor, edges, giveUp.current(q));
           gap.push({ cursor, answer });
           if (meets(answer, to, reading.current))
             return { outcome: "met", pages: gap, error: null };
@@ -356,14 +425,19 @@ export function usePaged<A, T>(
     const join = async (q: string) => {
       const kept = holding(q);
       const answer = latest.current.data;
+      const edges = latest.current.edges ?? null;
       if (!kept || !answer || answer === kept.top) return;
+      if (!sameEdges(edges, kept.edges)) {
+        await reedge(q, kept, answer, edges);
+        return;
+      }
       const anchor = kept.pages[0]!;
       if (meets(answer, anchor, reading.current)) {
         commit({ ...kept, top: answer });
         return;
       }
       // BOUNDED BY EVERYTHING HELD, all of which is below this gap.
-      const gap = await bridge(answer, anchor, kept.pages.length);
+      const gap = await bridge(q, answer, anchor, kept.pages.length, edges);
       if (holding(q) !== kept) return;
       if (gap.error === REFUSED_CURSOR && restarts.current) {
         restart(q);
@@ -371,14 +445,58 @@ export function usePaged<A, T>(
       }
       if (gap.error) setFailed({ era: q, code: gap.error });
       if (gap.outcome === "met") {
-        commit({ era: q, top: answer, pages: [...gap.pages, ...kept.pages] });
+        commit({ era: q, edges, top: answer, pages: [...gap.pages, ...kept.pages] });
       } else if (gap.outcome === "ended" && gap.pages.length > 0) {
         // THE HISTORY ENDED BEFORE THE HELD PAGES: they hold what has gone,
         // and what the walk read is the whole of the rest.
-        commit({ era: q, top: answer, pages: gap.pages });
+        commit({ era: q, edges, top: answer, pages: gap.pages });
       } else {
         commit(null);
       }
+    };
+
+    /** MOVE TO THE WINDOW'S NEW EDGES (the package doc's last part): every
+     *  held page read again at them, each joined to the one before it, and
+     *  drawn with the first page that carries them in one step. */
+    const reedge = async (q: string, kept: Kept<A, E>, answer: A, edges: E | null) => {
+      let failure: QueryErrorCode | null = null;
+      const fresh = await Promise.all(
+        kept.pages.map((held) =>
+          ask.current(held.cursor, edges, giveUp.current(q)).then(
+            (read): A | null | typeof REFUSED => read,
+            (err: unknown) => {
+              const code = errorOf(err);
+              if (restarts.current && code === REFUSED_CURSOR) return REFUSED;
+              failure ??= code;
+              return null;
+            },
+          ),
+        ),
+      );
+      if (holding(q) !== kept) return;
+      if (fresh.includes(REFUSED)) {
+        restart(q);
+        return;
+      }
+      if (failure) setFailed({ era: q, code: failure });
+      // EACH PAGE MEETS THE ONE BEFORE IT, its gap read where it does not;
+      // the list ends at a page not read again or a gap left unfilled.
+      const pages: HeldPage<A>[] = [];
+      let above = answer;
+      for (const [i, held] of kept.pages.entries()) {
+        const read = fresh[i];
+        if (!read || read === REFUSED) break;
+        const placed: HeldPage<A> = { cursor: held.cursor, answer: read };
+        if (!meets(above, placed, reading.current)) {
+          const gap = await bridge(q, above, placed, kept.pages.length - i, edges);
+          if (holding(q) !== kept) return;
+          pages.push(...gap.pages);
+          if (gap.outcome !== "met") break;
+        }
+        pages.push(placed);
+        above = read;
+      }
+      commit(pages.length > 0 ? { era: q, edges, top: answer, pages } : null);
     };
 
     /** READ AGAIN every page `reached` accepts, and put each in place. */
@@ -398,7 +516,7 @@ export function usePaged<A, T>(
       // are independent, and what they change is not.
       const fresh = await Promise.all(
         chosen.map((held) =>
-          ask.current(held.cursor).then(
+          ask.current(held.cursor, kept.edges, giveUp.current(q)).then(
             (answer): A | null | typeof REFUSED => answer,
             // A PAGE THAT COULD NOT BE READ AGAIN keeps what it last said:
             // the next change that reaches it asks again. One whose cursor
@@ -434,7 +552,7 @@ export function usePaged<A, T>(
         // in its range — so what it let go of is read before it is drawn,
         // bounded by the pages after it: they are what a gap left unfilled
         // drops.
-        const gap = await bridge(answer, after, pages.length - at - 1);
+        const gap = await bridge(q, answer, after, pages.length - at - 1, kept.edges);
         if (holding(q) !== kept) return;
         if (gap.error) continue;
         if (gap.outcome === "met") pages = [...above, placed, ...gap.pages, ...pages.slice(at + 1)];
@@ -449,14 +567,15 @@ export function usePaged<A, T>(
       if (asked.current !== q) return;
       const kept = holding(q);
       const tail = kept ? kept.pages[kept.pages.length - 1]!.answer : latest.current.data;
+      const edges = kept ? kept.edges : (latest.current.edges ?? null);
       const cursor = tail ? reading.current.cursorOf(tail) : "";
       if (!tail || !cursor) return;
-      const answer = await ask.current(cursor);
+      const answer = await ask.current(cursor, edges, giveUp.current(q));
       if (asked.current !== q || holding(q) !== kept) return;
       commit(
         kept
           ? { ...kept, pages: [...kept.pages, { cursor, answer }] }
-          : { era: q, top: tail, pages: [{ cursor, answer }] },
+          : { era: q, edges, top: tail, pages: [{ cursor, answer }] },
       );
     };
 
@@ -467,8 +586,12 @@ export function usePaged<A, T>(
   // is held, and otherwise the last one that did, until the gap between them
   // has been read.
   const joined =
-    !kept || !first.data || meets(first.data, kept.pages[0]!, { pick, idOf, cursorOf });
+    !kept ||
+    !first.data ||
+    (sameEdges(first.edges, kept.edges) &&
+      meets(first.data, kept.pages[0]!, { pick, idOf, cursorOf }));
   const newest = joined ? first.data : kept.top;
+  const edges = kept ? kept.edges : (first.edges ?? null);
   const pages: readonly HeldPage<A>[] = kept ? kept.pages : NONE;
   const last = pages.length > 0 ? pages[pages.length - 1]!.answer : newest;
   const following = last ? cursorOf(last) : "";
@@ -565,5 +688,6 @@ export function usePaged<A, T>(
     pageError,
     refetch: first.refetch,
     refresh,
+    edges,
   };
 }

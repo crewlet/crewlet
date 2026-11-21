@@ -10,20 +10,17 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// THE CHECKED-IN SCHEMAS ARE REGENERATED AND COMPARED, which is the whole
-// reason they can be trusted.
+// THE CHECKED-IN SCHEMAS ARE REGENERATED AND COMPARED, which is the whole reason
+// they can be trusted.
 //
-// THE one place that comparison happens. Through the rewrite there were two
-// schema directories and two tests, one per copy; the copies merged at the
-// root replacement and so did the tests. This one runs the real command
-// rather than calling the generator, so it also proves the path an author
-// actually types.
+// This is the one place that comparison happens. It runs the real command rather
+// than calling the generator, so it also proves the path an author types.
 //
-// They are a public, editor-facing artifact — the `# yaml-language-server:
-// $schema=` modeline at the top of every shipped config resolves to them —
-// and nothing at runtime reads them, so a stale one fails silently and
-// permanently: an author gets no red underline for a field that does not
-// exist, and one for a field that does.
+// The schemas are a public, editor-facing artifact (the `# yaml-language-server:
+// $schema=` modeline at the top of every shipped config resolves to them) and
+// nothing at runtime reads them, so a stale one fails silently and permanently:
+// an author gets no red underline for a field that does not exist, and one for a
+// field that does.
 func TestTheCheckedInSchemasAreWhatTheGeneratorEmits(t *testing.T) {
 	t.Parallel()
 	for _, tier := range []string{"bootstrap", "company"} {

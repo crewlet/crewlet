@@ -11,31 +11,23 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // A TOKEN CEILING, CHANGED THE WAY BUDGETS CHANGES ONE.
 //
-// ONE WINDOW, ONE SCOPE, ONE WRITE PATH. A seat's ceilings are the seat's own
-// `token_budget`, written by `PUT /config/roles/{handle}` with the seat as it
-// was read and only that window changed; the company's are the document's,
-// written by `PATCH /config` with a merge patch of that one window. Those are
-// exactly the requests Company › Budgets sends (the dashboard's
-// `lib/useCeilingWrite.ts`), decided by the same verb (`config.org.write`, a
-// lead's for the seats they lead, an administrator's for the company), with
-// the same step-up and the same conditional write, so an approved change is
-// the person's own Save under the same rules. Before this tool, the model
-// either opened the editor for the person to save (the page's prefill) or
-// replaced a whole seat through the generic change, showing every field of it.
+// ONE WINDOW, ONE WRITE PATH. A seat's ceilings are its `token_budget`, set by
+// `PUT /config/roles/{handle}` with only that window changed; the company's
+// by `PATCH /config` with a merge patch of it. These are the requests
+// Company › Budgets sends (`lib/useCeilingWrite.ts`), under the same verb
+// (`config.org.write`), step-up and conditional write: an approval is the
+// person's own Save.
 //
-// THE CARD SHOWS THE ONE WINDOW. The preview reads the scope as it is now,
-// through the turn's grant, and draws one row (the window's ceiling from what
-// it is to what it would be); the history line the revision records is the
-// card's; and the warnings are the route's own check of the change, read by
-// the one function every write preview reads them with ([checked]), so the
-// rule that keeps a warning the company already carried off the card is the
-// same for this card as for every other.
+// THE CARD SHOWS THE ONE WINDOW: one row (the ceiling, now to proposed), the
+// revision's history line, and the route's own warnings read by [checked] like
+// every write preview, so a warning the company already carried stays off.
 
 // The two scopes' routes.
 const (
@@ -64,14 +56,14 @@ func budgetWrite() Tool {
 		Description: "Propose setting or removing one token ceiling: a seat's or the " +
 			"company's, for one window (day, week or month). Name the seat by its handle or name, or " +
 			"leave seat out for the company's own ceiling; give tokens as a whole number, or " +
-			"clear: true to remove that window's ceiling. Read the current ceilings with " +
-			"list_budgets first. The person sees the ceiling now and the new one, and approves " +
+			"clear: true to remove that window's ceiling. Read the current ceilings first " +
+			"(GET /budgets). The person sees the ceiling now and the new one, and approves " +
 			"it before anything is saved, exactly as their own Save on Budgets. Use this for " +
 			"any request to change a budget or a ceiling; the Budgets page's " +
 			"budgets.ceiling.prefill only fills the editor in for the person to save " +
 			"themselves, when they ask for that.",
 		schema: object([]string{"window"}, map[string]*schema{
-			"seat": text("The seat's handle or name, as list_budgets or list_agents names it. "+
+			"seat": text("The seat's handle or name, as GET /budgets or GET /agents names it. "+
 				"Leave it out for the company's own ceiling.", nameBytes),
 			"window": oneOf("The window the ceiling is for.", budgetWindows...),
 			"tokens": {kind: "integer", description: "The new ceiling, a whole number of " +
@@ -176,12 +168,14 @@ func budgetPreview(ctx context.Context, read proposal.Read, _ time.Time,
 
 	whose := "the company's"
 	target := "The company"
+	var who wire.Phrase
 	if seat != "" {
 		name := strings.TrimSpace(cards.Text(doc["name"]))
 		if name == "" {
 			name = seat
 		}
 		whose, target = name+"'s", name
+		who = naming(wire.ResourceSeat, seat, name)
 	}
 	summary := ceilingSummary(whose, window, held, ceiling)
 
@@ -209,16 +203,22 @@ func budgetPreview(ctx context.Context, read proposal.Read, _ time.Time,
 		return proposal.Preview{}, err
 	}
 
+	// A SEAT IS ITS OWN ROW, a ref a label (words) cannot hold; the company is words.
 	label := strings.ToUpper(whose[:1]) + whose[1:] + " " + windowAdjective[window] + " token budget"
 	var c changes
+	if who != nil {
+		c.factOf("seat", "Seat", who)
+		adjective := windowAdjective[window]
+		label = strings.ToUpper(adjective[:1]) + adjective[1:] + " token budget"
+	}
 	switch {
 	case held == nil:
-		c = append(c, proposal.Added("token_budget."+window, label, tokensWords(*ceiling), false))
+		c = append(c, proposal.Added("token_budget."+window, label, wire.Plain(tokensWords(*ceiling)), false))
 	case ceiling == nil:
-		c = append(c, proposal.Removed("token_budget."+window, label, tokensWords(*held)))
+		c = append(c, proposal.Removed("token_budget."+window, label, wire.Plain(tokensWords(*held))))
 	default:
-		c = append(c, proposal.Changed("token_budget."+window, label, tokensWords(*held),
-			tokensWords(*ceiling)))
+		c = append(c, proposal.Changed("token_budget."+window, label, wire.Plain(tokensWords(*held)),
+			wire.Plain(tokensWords(*ceiling))))
 	}
 	for i, warning := range warnings {
 		c.fact("check.warning."+strconv.Itoa(i+1), "Warning", warning)
@@ -231,8 +231,8 @@ func budgetPreview(ctx context.Context, read proposal.Read, _ time.Time,
 		title = "Remove a token budget"
 	}
 	return proposal.Preview{Title: title, Target: target,
-		Note: "Turns are counted against the new ceiling once this node applies it; " +
-			"nothing already spent is reset.",
+		Note: wire.Plain("Turns are counted against the new ceiling once this node applies it; " +
+			"nothing already spent is reset."),
 		ApproveLabel: "Approve and save", Changes: c.rows(), Request: req,
 		StepUp:         recency == iam.RecencyStepUp,
 		SourceRevision: rep.revision}, nil

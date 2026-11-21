@@ -118,16 +118,14 @@ func listBots(ctx context.Context, opts Options, res *Result) {
 // renameBots brings every agent seat's bot display name in line with the
 // company document.
 //
-// A RENAMED ROLE REACHES THE BOT. A create-only display name means the roster
-// in Mattermost drifts from the org chart it mirrors, with no way back but
-// editing every bot by hand. It sweeps the document's agent seats, and of
-// those only the bots the access sync's ledger records ([Options.Managed]),
-// found by user id so a bot renamed at Mattermost is still found.
+// A RENAMED ROLE REACHES THE BOT, or the roster drifts from the org chart. It
+// sweeps the agent seats whose bots the access sync's ledger records
+// ([Options.Managed]), found by user id so a bot renamed at Mattermost is still
+// found.
 //
-// COMPARED ONLY AGAINST A LISTING THAT ANSWERED, which the caller guarantees
-// by calling this only when one did: the bot record is the only thing carrying
-// the current display name, so a missing entry would otherwise read as an
-// empty name and rewrite every bot on every pass.
+// COMPARED ONLY AGAINST A LISTING THAT ANSWERED, which the caller guarantees:
+// the bot record alone carries the display name, so a missing entry would read
+// as an empty name and rewrite every bot on every pass.
 func renameBots(ctx context.Context, opts Options, byID map[string]Bot, res *Result) {
 	for seat := range opts.Org.AllRoles() {
 		if !seat.IsAgent() {

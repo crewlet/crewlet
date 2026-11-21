@@ -259,6 +259,31 @@ func TestTheDashboardKnowsEveryStateOfAChange(t *testing.T) {
 	}
 }
 
+// THE DASHBOARD WORDS A CHANGE ITS SOURCE'S DELETION CLOSED: the merge box and peek say its branch
+// was deleted when its close reason is `SOURCE_DELETED` (`contract/code.ts`), the engine's
+// [gitlet.SourceDeleted]; a reason spelled apart shows raw. Mutation: respell either side, red.
+func TestTheDashboardKnowsWhyAPushClosedAChange(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Scalar(clientsource.Tree(t), "SOURCE_DELETED")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != gitlet.SourceDeleted {
+		t.Errorf("the dashboard's SOURCE_DELETED is %q, want the engine's %q", got, gitlet.SourceDeleted)
+	}
+}
+
+// THE DASHBOARD DRAWS EVERY MOVE OF A CHANGE'S LIFECYCLE on its timeline, by `CHANGE_MOVE_KINDS`
+// (`contract/code.ts`) in the engine's order: a kind it lacks shows in general words, one the
+// engine dropped is dead text. Mutation: drop a kind on either side, or reorder the dashboard's.
+func TestTheDashboardDrawsEveryMoveOfAChange(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "CHANGE_MOVE_KINDS"), spelledOut(gitlet.ChangeMoveKinds())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's CHANGE_MOVE_KINDS is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
 // THE DASHBOARD ASKS WHAT A CHANGE WAITS ON IN THE ENGINE'S WORDS, every one
 // of them: Gitlet › Changes narrows its listing by `CHANGE_NEEDS`
 // (`contract/code.ts`), and its Waiting on you box asks me, or person for a
@@ -298,6 +323,16 @@ func TestTheDashboardKnowsEverySortOfAListingOfChanges(t *testing.T) {
 	got, want := theDashboardsList(t, "CHANGE_SORTS"), spelledOut(gitlet.ChangeSorts())
 	if !slices.Equal(got, want) {
 		t.Errorf("the dashboard's CHANGE_SORTS is %v, want the engine's, in order: %v", got, want)
+	}
+}
+
+// THE DASHBOARD NARROWS A LISTING OF CHANGES BY READINESS IN THE ENGINE'S WORDS (`READINESS_BUCKETS`).
+// Mutation: drop a bucket from either side, or reorder the dashboard's, and this fails.
+func TestTheDashboardKnowsEveryReadinessBucket(t *testing.T) {
+	t.Parallel()
+	got, want := theDashboardsList(t, "READINESS_BUCKETS"), spelledOut(gitlet.ReadinessBuckets())
+	if !slices.Equal(got, want) {
+		t.Errorf("the dashboard's READINESS_BUCKETS is %v, want the engine's, in order: %v", got, want)
 	}
 }
 
@@ -531,25 +566,18 @@ func TestTheDashboardNamesAnObjectAsTheEnginesRepositoriesDo(t *testing.T) {
 }
 
 // THE DASHBOARD KNOWS EVERY STATE OF A CHECK, and every purpose one checks a
-// commit for, in the engine's order: the Checks section's facets, histogram
-// and checks tabs key on `CHECK_STATES`, `CHECK_ENDED_STATES` and
-// `CHECK_PURPOSES` (`contract/checks.ts`). A state they lack cannot be
-// narrowed to; one the engine dropped is refused as an unknown `state`
-// ([gitlet.CheckState.Valid]), or among the window's ending chips as one
-// that never ends ([gitlet.CheckState.Ended]).
+// commit for, in the engine's order: the Checks section's state tabs and the
+// checks tabs key on `CHECK_STATES` and `CHECK_PURPOSES` (`contract/checks.ts`).
+// A state they lack cannot be narrowed to; one the engine dropped is refused
+// as an unknown `state` ([gitlet.CheckState.Valid]).
 //
-// Mutation: drop a state or a purpose from either side, list `running` among
-// the endings, or reorder the dashboard's, and this fails.
+// Mutation: drop a state or a purpose from either side, or reorder the
+// dashboard's, and this fails.
 func TestTheDashboardKnowsEveryStateOfACheck(t *testing.T) {
 	t.Parallel()
 	got, want := theDashboardsList(t, "CHECK_STATES"), spelledOut(gitlet.CheckStates())
 	if !slices.Equal(got, want) {
 		t.Errorf("the dashboard's CHECK_STATES is %v, want the engine's, in order: %v", got, want)
-	}
-	ended := slices.DeleteFunc(gitlet.CheckStates(), func(s gitlet.CheckState) bool { return !s.Ended() })
-	got, want = theDashboardsList(t, "CHECK_ENDED_STATES"), spelledOut(ended)
-	if !slices.Equal(got, want) {
-		t.Errorf("the dashboard's CHECK_ENDED_STATES is %v, want the engine's endings, in order: %v", got, want)
 	}
 	got, want = theDashboardsList(t, "CHECK_PURPOSES"), spelledOut(gitlet.CheckPurposes())
 	if !slices.Equal(got, want) {
@@ -588,14 +616,18 @@ func TestTheDashboardKnowsEveryMergeRefusal(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("the dashboard's MERGE_REFUSALS is %v, want the engine's, in order: %v", got, want)
 	}
-	// A MERGE'S BUILD answers a change that does not merge cleanly in the
-	// write's own word, which the controls name too.
-	conflict, err := clientsource.Scalar(clientsource.Tree(t), "MERGE_CONFLICT")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if conflict != string(gitlet.WriteConflict) {
-		t.Errorf("the dashboard's MERGE_CONFLICT is %q, want the engine's %q", conflict, gitlet.WriteConflict)
+	// A MERGE'S BUILD answers a change that does not merge cleanly, and a
+	// fast-forward whose head does not hold its target's tip, in the write's
+	// own words, which the controls name too.
+	for name, word := range map[string]gitlet.WriteRefusal{"MERGE_CONFLICT": gitlet.WriteConflict,
+		"MERGE_NOT_FAST_FORWARD": gitlet.WriteNotFastForward} {
+		got, err := clientsource.Scalar(clientsource.Tree(t), name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != string(word) {
+			t.Errorf("the dashboard's %s is %q, want the engine's %q", name, got, word)
+		}
 	}
 }
 

@@ -9,10 +9,9 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// A SESSION THAT MAY ONLY ENROL IS READ BACK AS ONE.
-//
-// The restriction is the session's own fact, decided by the sign-in that opened
-// it, and every node's guard reads it off the replicated row.
+// A SESSION THAT MAY ONLY ENROL IS READ BACK AS ONE: the restriction is the
+// session's own fact, decided by the sign-in that opened it, and every node's
+// guard reads it off the replicated row.
 //
 // Mutation: drop the field from the read and the restricted row reads whole.
 func TestASessionThatMayOnlyEnrolIsReadBackAsOne(t *testing.T) {

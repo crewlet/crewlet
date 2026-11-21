@@ -11,21 +11,16 @@ import (
 
 // THE THREAD A CHATLET WAKE CAME FROM, read back for the turn it woke.
 //
-// The turn-start prefetch renders the chat thread a turn was woken in
-// (`## The thread so far`) through [notify.ThreadReaders], one reader per
-// chat surface, matched on the trigger's own `transport`. Chatlet stamps
-// `transport=chat`, the room and the thread root on every wake, and had no
-// reader — so every Chatlet thread reply was handed the "could not be read
-// from this node" hint and sent to read the thread with its tools, rounds
-// spent fetching what the node could have handed over.
+// The turn-start prefetch renders the thread a turn was woken in
+// (`## The thread so far`) through [notify.ThreadReaders], one reader per chat
+// surface, matched on the trigger's `transport`. Chatlet stamps `transport=chat`,
+// the room and the thread root on every wake.
 //
-// This is that reader, and it is the ONLY thread context a Chatlet wake gets:
-// the record carries none of its own. A second copy of one thread in one
-// frozen system prompt would double its cost on every round of the turn and
-// let the two disagree. Nor is it a stale copy a feed consumer happened to
-// hold: it is read at the seat's own level, which waits for everything
-// committed before it — the message that woke the turn included — on
-// whichever node answers.
+// This is the ONLY thread context a Chatlet wake gets: the record carries none
+// of its own, and a second copy in one frozen system prompt would double its
+// cost every round and let the two disagree. It is read at the seat's own
+// level, which waits for everything committed before it, the waking message
+// included, on whichever node answers.
 
 // ThreadSource is the one read a [ThreadReader] makes: a thread from its root,
 // as a viewer, with whom each of its messages was written for ([TurnThread]).
@@ -57,25 +52,16 @@ func NewThreadReader(threads ThreadSource, parties func() notify.Parties) Thread
 }
 
 // threadWindow is how many of a thread's newest replies one read hands back:
-// [MaxLimit], the most one read answers, beside the root, which is read on its
-// own — and the read's own byte bound still applies, so a thread of long
-// messages answers fewer.
+// [MaxLimit], the most one read answers, beside the root read on its own; the
+// read's byte bound still applies, so long messages answer fewer.
 //
 // THE RENDERER'S BOUND IS NOT THIS READER'S TO APPLY. The turn-start block is
-// bounded by BYTES alone: the root and the newest whole messages fill most of
-// it and the messages between them are CONDENSED by the seat's auxiliary model
-// rather than dropped (prefetch's renderThread). A window sized to what the
-// block renders verbatim — it was the thirty messages a count bound once
-// rendered — therefore cut the very middle the condensation is for: a Chatlet
-// thread past thirty lost it as "N earlier messages not shown", where a
-// Mattermost thread of the same length, read whole, was condensed. So the read
-// reaches as far back as one read can carry and leaves the bound to the block,
-// whose condensation refuses an input past its own ceiling and counts it.
-//
-// What the window leaves out is counted ([notify.Transcript.Older]) — and on
-// this surface it is EXACT, because the read counts the rest in the same
-// snapshot rather than walking from the root and stopping where a budget ran
-// out, so a Chatlet transcript never stops short.
+// bounded by BYTES alone and the messages between the root and the newest are
+// CONDENSED by the seat's auxiliary model, not dropped (prefetch's
+// renderThread). A smaller window would cut the middle the condensation is
+// for, so the read reaches as far back as it can and the block's condensation
+// refuses an input past its ceiling and counts it.
+// What the window leaves out is counted EXACTLY ([notify.Transcript.Older]).
 const threadWindow = MaxLimit
 
 // threadRead is the level the read is made at: a seat's own
@@ -143,25 +129,17 @@ func (r ThreadReader) ReadThread(ctx context.Context, handle, channel, root stri
 }
 
 // message is one line of the transcript.
+// THE LABEL TRAVELS AS THE SENDER'S NAME for an author the renderer's lookup
+// does not resolve (one the chart no longer holds, or the engine's narration):
+// [AuthorLabel] describes it by kind, as for the woken message's sender.
 //
-// THE LABEL TRAVELS AS THE SENDER'S NAME, for the author the renderer's own
-// lookup does not resolve. That lookup answers a Chatlet author by the handle
-// the sender id is, and names a colleague as the roster does; what it leaves
-// is an author the chart no longer holds, or the engine's own narration,
-// which [AuthorLabel] describes by kind — the rendering the woken message's
-// own sender is given, so one person reads the same in both.
+// AN EDITED MESSAGE NAMES THE EDIT IT WAS READ AT ([notify.Message.Version]):
+// [MessageView.Position], the same [statelog.Position.String] token an edit's
+// wake carries as its trigger, so a turn's mark drops that wake and no later
+// one. An unedited message names none: its post's wake is dropped by its id.
 //
-// AND AN EDITED MESSAGE NAMES THE EDIT IT WAS READ AT ([notify.Message.Version]):
-// the position of the record that last wrote it ([MessageView.Position]),
-// which is the trigger an edit's wake carries (changefeed's trigger, the same
-// [statelog.Position.String] token), so a turn's mark of the message drops
-// that edit's wake and no later one. Only a post, an edit and a delete move
-// that position, and a deleted message renders no line, so it is never
-// marked. An unedited message names none: its post's own wake is dropped by
-// its id, as it always was.
-//
-// AND WHOM IT WAS WRITTEN FOR ([notify.Message.WorkingFor]), from the carriers
-// the turn-start read alone hands over: a copy, never the answer's own.
+// WorkingFor ([notify.Message.WorkingFor]) is a copy of what the turn-start
+// read's carriers hand over, never the answer's own.
 func (ThreadReader) message(view MessageView, viewer string, parties notify.Parties,
 	carriers map[string]*types.WorkingFor) notify.Message {
 

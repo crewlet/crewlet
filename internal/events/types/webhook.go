@@ -17,19 +17,13 @@ func init() {
 // RawWebhook is one authenticated provider delivery, on its way from the API's
 // webhook edge to the transport that understands it.
 //
-// The BODY AND THE BYTES BOTH TRAVEL, and neither is redundant. The parsed
-// body is what routing reads; the raw bytes are what a transport re-verifies
-// against, and re-serializing the parsed form would not reproduce them — key
-// order, whitespace and number formatting are all free in JSON and all inside
-// the provider's HMAC. A transport handed only the parsed body could never
-// check a signature again.
+// The BODY AND THE BYTES BOTH TRAVEL: the parsed body is what routing reads,
+// and re-serializing it would not reproduce the raw bytes a signature covers
+// (key order, whitespace and number formatting are free in JSON).
 //
 // Verification has ALREADY happened when this is published: the API refuses an
-// unsigned delivery at the edge, before anything is persisted or published.
-// Nothing downstream checks again — an earlier version of this comment claimed
-// the transports did, and no consumer reads a signature at all. The raw bytes
-// are kept because a parser needs the delivery exactly as sent, not because a
-// second verification runs on them.
+// unsigned delivery at the edge, and nothing downstream checks again. The raw
+// bytes are kept because a parser needs the delivery exactly as sent.
 type RawWebhook struct {
 	// Body is the delivery's JSON, always an object.
 	Body map[string]any `json:"body"`
@@ -104,40 +98,17 @@ func (e RawWebhook) SummaryFor(actor string) string {
 }
 
 // InboundDelivery is the RECORD that one inbound delivery reached this
-// company: the row Company › Integrations counts and lists as a surface's
-// deliveries. [RawWebhook] is the wake; this is its audit row, and they are
-// separate events because the wake is not stored (internal/events says why)
-// while every delivery is.
+// company, the row Company › Integrations counts and lists. [RawWebhook] is
+// the wake and is not stored (internal/events says why); this is the audit row.
 //
-// # One path for every surface
-//
-// Both inbound edges publish it — the webhook receiver for a delivery it
-// verified and queued, and the Mattermost socket fleet for a post it claimed
-// and queued — and the store's publish listener files it, inline on the
-// publishing node or through custody on a node without `data`. The socket runs
-// on every node, stateless ones included, so a row written straight into a
-// node's own store would vanish with a stateless node's scratch database;
-// publishing is what reaches a data node from anywhere. And with one producer
-// there is one rule for what a delivery row looks like rather than one per
-// edge, and every node's live projection hears a delivery rather than only the
-// node that took it.
-//
-// # Filed under its label, with the provider's bytes
-//
-// The row a delivery becomes is filed under [InboundDelivery.Label] as its
-// type and carries [InboundDelivery.Body] as its payload (internal/observe),
-// because those are what a delivery row has always been: the provider's own
-// event name an operator matches against their console, and the bytes the
-// provider sent. The envelope's type names the PRODUCER's shape; the row's
-// names the delivery.
-//
-// # Counted once
+// Both inbound edges publish it and the store's listener files it (through
+// custody on a node without `data`, whose scratch store would lose a direct
+// write), under [InboundDelivery.Label] as its type with [InboundDelivery.Body]
+// as payload (internal/observe).
 //
 // A delivery is ONE PRESENTATION TO ONE SEAT, counted once across the fleet: a
-// Slack or GitHub app is per seat, so a message two agents' apps both receive
-// is two deliveries, and a Mattermost post two bots' sockets both read is two
-// too — while every node reading the same bot's socket is still one, because
-// the fleet claims the post before it is published or recorded.
+// message two agents' apps both receive is two, while every node reading one
+// bot's socket is one, because the fleet claims the post before publishing.
 type InboundDelivery struct {
 	// Label is what the delivery is filed under: `webhook:<event>` from a
 	// webhook route, `forge:<event>` from the Forge relay and

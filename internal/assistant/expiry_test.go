@@ -96,3 +96,29 @@ func TestAParkedTurnClosesExpiredWhenItsProposalExpires(t *testing.T) {
 		})
 	}
 }
+
+// TestAnExpiredProposalsCardReadsExpired: a reload past a proposal's approval
+// wait draws its card expired, never still asking for a decision beside a
+// turn that already reads expired. Mutation: render a proposal card at its
+// recorded state rather than its state now.
+func TestAnExpiredProposalsCardReadsExpired(t *testing.T) {
+	t.Parallel()
+	f, _, p := parkedRig(t)
+	pastExpiry(f, p)
+	got, err := f.Svc.Transcript(t.Context(), f.Person, f.Conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range got.Cards {
+		if c.Card.Proposal != nil && c.Card.Proposal.ProposalID == p.ID {
+			found = true
+			if c.Card.Proposal.State != wire.ProposalExpired {
+				t.Errorf("the card reads %s past its wait, want expired", c.Card.Proposal.State)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the transcript holds no card for the proposal")
+	}
+}

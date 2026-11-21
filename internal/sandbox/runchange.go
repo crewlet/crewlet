@@ -136,12 +136,13 @@ func unopenedNoChanges(why string) string {
 }
 
 // fitOpened holds the asks to the record's bounds: redacted (a refusal quotes
-// a branch, a name the box chose) and clipped as a diagnostic. There is at most
-// one entry per repository, so at most [MaxRunRepos].
+// a branch, a name the box chose), the reason as a diagnostic
+// ([events.Diagnostic]). There is at most one entry per repository, so at most
+// [MaxRunRepos].
 func fitOpened(opened []OpenedChange) []OpenedChange {
 	for i := range opened {
 		opened[i].Branch = redact.Secrets(opened[i].Branch)
-		opened[i].Unopened = events.ClipDiagnostic(redact.Secrets(opened[i].Unopened))
+		opened[i].Unopened = events.Diagnostic(opened[i].Unopened)
 	}
 	return opened
 }

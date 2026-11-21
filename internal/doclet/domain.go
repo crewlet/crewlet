@@ -11,45 +11,32 @@ import (
 // Domain is the knowledge base as the state-log framework sees it.
 //
 // A DECLARATION, not a behaviour: every method answers a question the
-// framework asks before it applies anything, and each one has a failure mode
-// that is silent if the answer is wrong. What tables exist decides what a
-// donated snapshot scrubs and what an identity claim compares; which kinds
-// arbitrate decides where an anchor row is written; whether a record installs
-// a gate decides whether an unknown version stops the applier or is filed for
-// later.
+// framework asks before applying anything, and a wrong answer fails silently.
+// Which tables exist decides what a donated snapshot scrubs and an identity
+// claim compares; which kinds arbitrate decides where an anchor row is
+// written; whether a record installs a gate decides whether an unknown version
+// stops the applier or is filed for later.
 //
-// THE FRAMEWORK'S THIRD DOMAIN, and its second strictly-ordered one. What it
-// adds over the tracker's is the case the pair could not exercise: two
-// STRICT domains on one node, so the checkpoint, the readiness input and the
-// identity claim are per-domain values rather than the one value a single
-// strict domain makes them indistinguishable from.
+// THE FRAMEWORK'S THIRD DOMAIN, its second strictly-ordered: two STRICT
+// domains on one node make the checkpoint, readiness input and identity claim
+// per-domain values, which one strict domain cannot distinguish.
 type Domain struct{}
 
 // Name is the register key, the manifest key and the operator's own column.
 func (Domain) Name() string { return "pages" }
 
-// PagesLogMaxBytes is the ceiling this domain declares for its log, which is
-// what the framework's own suites provision the stream with.
+// PagesLogMaxBytes is the ceiling this domain declares for its log, which the
+// framework's own suites provision the stream with. A NODE DOES NOT CREATE THE
+// STREAM AT IT: each ceiling is a reservation the broker grants in full, so the
+// engine sizes the logs together from Tier A (`stream.pages_log_max_bytes`).
 //
-// A NODE DOES NOT CREATE THE STREAM AT IT. Every state log's ceiling is a
-// reservation the broker grants in full, so the engine sizes them together
-// from Tier A (`stream.pages_log_max_bytes`) inside what the broker can
-// actually grant. This value once was the node's too, reserved on top of a
-// budget the other two logs had been scaled to fill, and on a small disk it
-// was the one reservation the broker refused.
+// Crossing it REFUSES an append rather than dropping the oldest record: nothing
+// here is derivable, so shedding is data loss.
 //
-// Crossing a ceiling REFUSES an append rather than dropping the oldest record:
-// nothing on this stream is derivable from anything else, so shedding history
-// is data loss with a tidy name.
-//
-// FOUR GIBIBYTES, a quarter of the tracker's, and the ratio is the corpus
-// rather than a guess: the reference company files 100 000 tasks and 300 000
-// comments a year against a knowledge base of a few thousand pages, and a
-// page's records are dominated by SAVES rather than by creates. At a 512 KiB
-// body cap and the modelled edit rate a completely blocked trim reaches this
-// in about five years, which is the same unmistakable operator failure the
-// tracker's ceiling is sized for. Tier A's derived value keeps the same ratio
-// to the tracker's on every volume.
+// FOUR GIBIBYTES, a quarter of the tracker's, from the corpus: the reference
+// company files 100 000 tasks and 300 000 comments a year against a few
+// thousand pages, mostly SAVES. At a 512 KiB body cap and the modelled edit
+// rate a completely blocked trim reaches this in about five years.
 const PagesLogMaxBytes = 4 << 30
 
 // PagesMaxRecordBytes is the largest record this domain publishes
@@ -179,18 +166,15 @@ func (Domain) Evicts(payload []byte) (bool, error) {
 // Tables is every durable table this domain writes, with its class.
 //
 // THE SCRUB LIST, THE IDENTITY CLAIM AND THE LOCAL SWEEP ARE ALL DERIVED FROM
-// THIS MAP, which is why a table missing from it is three lists that are
-// silently short rather than one error. It is built from the exported
-// inventories rather than typed a third time.
+// THIS MAP, so a missing table leaves three lists silently short. It is built
+// from the exported inventories, not typed a third time.
 //
 // ALL FOUR CLASSES ARE PRESENT, and two tables are Divergent. `pages_skills`
-// is one: the tool-skill flag is THIS BUILD'S parser answering about this
-// build's rules, recomputed on every apply, so two nodes on different builds
-// legitimately disagree about it — it travels inside a snapshot, because a
-// joining node wants the answer rather than a rebuild, and it is excluded from
-// the identity claim, because a rolling upgrade would otherwise report a
-// fleet-wide divergence for a difference that resolves itself. The operation
-// ledger is the other, for the reason its own line below gives.
+// is THIS BUILD'S parser answering about its rules, recomputed on every apply,
+// so nodes on different builds legitimately disagree: it travels in a snapshot
+// (a joiner wants the answer, not a rebuild) and is excluded from the identity
+// claim (a rolling upgrade would report a divergence that resolves itself).
+// The operation ledger is the other, as its line below says.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
 		len(ReproducibleTables)+len(MachineryTables)+1)
@@ -230,16 +214,14 @@ func (Domain) GatesSeatAdmission() bool { return true }
 // ClaimsIdentity reports that every data node's Replicated tables must be
 // byte-identical.
 //
-// TRUE. N copies of one SQL state, derived from one ordered log by one
-// deterministic applier.
+// TRUE: N copies of one SQL state from one ordered log and one deterministic
+// applier.
 //
-// ASSERTED AND NOT VERIFIED. A checksum over each node's identity-claimed
-// tables, published and compared, is what would turn "should be identical"
-// into something a fleet reports on, and nothing builds one — see
-// [internal/worklet.Domain.ClaimsIdentity], which carries the argument and the
-// one column that a naive checksum would trip over. Every column this domain
-// writes is owned by a record, so the exclusion that domain needs does not
-// arise here.
+// ASSERTED AND NOT VERIFIED: nothing builds the published, compared checksum
+// that would make "should be identical" something a fleet reports on. See
+// [internal/worklet.Domain.ClaimsIdentity] for the argument and the one column
+// a naive checksum trips over; every column here is owned by a record, so that
+// exclusion does not arise.
 func (Domain) ClaimsIdentity() bool { return true }
 
 // FeedGroup is the change feed's own consumer on this log: [FeedGroup], the

@@ -66,60 +66,29 @@ const SeedTurnsPerSeat = 3
 // whose every node answers the rounds are milliseconds each.
 const seedTurnReads = 16
 
-// Seed fills a freshly started projection from the FLEET's event stores.
-//
-// THREE BOUNDED READS, each bound the projection's own, so a seed can never
-// hold more than the live stream could have built:
+// Seed fills a freshly started projection from the FLEET's event stores:
+// THREE BOUNDED READS, each bound the projection's own, so a seed never holds
+// more than the live stream could have built.
 //
 //   - the feed: the newest [livestate.EventFeedLimit] persisted events the feed
-//     carries ([store.ListQuery.FeedOnly] — an accounting row is stored and
-//     never fed, see events.KeptOutOfFeed), inside
-//     the store's own read floor ([store.EventHistory]). Payload-free, because
-//     a feed row carries none;
-//   - the spend: the newest [livestate.SpendRecordLimit] spend records —
-//     phases, collected launches and auxiliary records — inside
-//     [livestate.LiveSpendWindow], read from the promoted token columns rather
-//     than the payloads. The count is the projection's record cap, applied at
-//     the READ, on every node: a busy day past it was otherwise read in full
-//     inside the seed's time budget, only to be cut to the cap on arrival.
-//     Read in pages ([eventfan.Fleet.PhaseTokens]), because the cap is more
-//     than one node's reply carries;
-//   - each agent seat's newest [SeedTurnsPerSeat] turns, for the seat's last
-//     turn and a turn it left parked on its executor — asked by the seat's
-//     AGENT ID, read off the composed org (nil asks nobody: a node with no
-//     company has no seats).
+//     carries ([store.ListQuery.FeedOnly]), inside [store.EventHistory]'s floor;
+//   - the spend: the newest [livestate.SpendRecordLimit] records inside
+//     [livestate.LiveSpendWindow], capped at the READ on every node and paged;
+//   - each agent seat's newest [SeedTurnsPerSeat] turns, by AGENT ID.
 //
-// FROM EVERY DATA NODE. Each data node's event store holds what it published
-// and the events it keeps in custody for a node without `data` ([Custody]), so
-// a seed read from this node's alone showed a restarted node only its own share
-// of the company, and a node that joined a fleet showed nothing its peers had
-// done. Which nodes answered is recorded on the projection
-// ([livestate.LiveState.SeededFrom]) rather than hidden.
-//
-// THE SPEND WINDOW IS ASKED FOR AS AN INSTANT, never as a day count. The two
-// are the same window only while [livestate.LiveSpendWindow] is a whole number
-// of days, and a window of 36 hours asked for in days would seed 24 of them
-// while the projection kept all 36 — less history than the screen claims to
-// cover, with nothing to say so.
-//
-// Called AFTER the broadcast subscription is attached, so an event published
-// between the read and the subscription cannot fall into the gap; the
-// projection recognises one that arrives both ways.
-//
-// BEST EFFORT per read: one that cannot be answered does not cost the others,
-// and every failure is returned for the caller to report, because what it
-// costs is visible nowhere else. The screens still render; they start at this
-// process's boot until a later seed fills them ([HistorySeed]). The coverage
-// returned is the one recorded on the projection.
-//
-// CONCURRENT, which is what makes each read independent in time as well as in
-// failure: read one after another under a budget, a SLOW first read spent that
-// whole budget and handed the next an expired context, so one slow read cost
-// them all. Side by side, the seed costs the slowest of them rather than their
-// sum. The listener waits on it for a budget at most ([Seeding.Wait]).
+// FROM EVERY DATA NODE, since each also keeps custody ([Custody]) for nodes
+// without `data`; who answered is recorded ([livestate.LiveState.SeededFrom]).
 func Seed(ctx context.Context, history FleetHistory, organization *org.Organization, live Seeded) (
 	eventfan.Coverage, error) {
 
+	// Called AFTER the broadcast subscription is attached, so no event falls
+	// in the gap; the projection recognises one arriving both ways. BEST EFFORT
+	// per read: a failed one does not cost the others and every failure is
+	// returned for the caller to report, being visible nowhere else; the
+	// screens start at this process's boot until a later seed ([HistorySeed]).
+	// The reads run CONCURRENTLY, since in sequence under a budget a SLOW first
+	// one handed the next an expired context: the seed costs the slowest, not
+	// the sum, and the listener waits at most ([Seeding.Wait]).
 	var (
 		h      livestate.History
 		wg     sync.WaitGroup
@@ -155,6 +124,9 @@ func Seed(ctx context.Context, history FleetHistory, organization *org.Organizat
 		h.Events = rows
 	})
 	wg.Go(func() {
+		// The window is asked for as an INSTANT, never a day count: they match
+		// only while LiveSpendWindow is whole days (36 hours in days seeds 24
+		// while the projection keeps 36, silently).
 		records, c, err := history.PhaseTokens(ctx, store.PhaseTokenQuery{
 			Since: at.Add(-livestate.LiveSpendWindow),
 			Limit: livestate.SpendRecordLimit,

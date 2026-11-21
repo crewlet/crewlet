@@ -11,33 +11,26 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE TYPED PAYLOADS, one per (kind, op).
+// The typed payloads, one per (kind, op). A record carries its COMPLETE new
+// values, never a rule for computing them, so a replay from zero rebuilds the
+// same rows and the applier stays a pure function of record and rows.
 //
-// A record carries its COMPLETE new values, never a rule for computing them:
-// a version names every file it holds, a publish names the exact versions it
-// retires, a patch names each field it sets. That is what makes a replay from
-// zero produce the rows the original apply did, and it is what lets the
-// applier stay a pure function of the record and the rows.
-//
-// IDS TRAVEL AS TEXT, not as [artifacts.ID]: a payload is decoded on every
-// node, and an id refused by a decoder would be a record that stalls the log
-// rather than one the applier refuses deterministically and records as
-// refused. The applier parses them.
+// IDs travel as text, not [artifacts.ID]: an id a decoder refused would stall
+// the log, where the applier parsing it refuses it deterministically as a row.
 
 // VersionPayload is one version as a record states it: the first version of a
 // create, a publish and a rollback all carry one.
 type VersionPayload struct {
-	// Number is head + 1, decided in the artifact subject's snapshot, so
-	// the broker's arbitration makes it unique.
+	// Number is head + 1, decided in the artifact subject's snapshot; the
+	// broker's arbitration makes it unique.
 	Number int `json:"number"`
 
 	// VersionID is a name-based uuid over the record's operation, so a
 	// retry names the version its first attempt made.
 	VersionID string `json:"version_id"`
 
-	// Base is the head the version was decided against: Number - 1, also
-	// when forced (a forced publish skips the caller's base check, not the
-	// subject's arbitration).
+	// Base is the head decided against: Number - 1, even when forced (a
+	// forced publish skips the caller's base check, not the arbitration).
 	Base int `json:"base"`
 
 	// Forced marks a publish a person with presence made over a moved head.
@@ -54,32 +47,27 @@ type VersionPayload struct {
 	// (internal/artifacts/manifest), each naming its object.
 	Manifest artifacts.Manifest `json:"manifest"`
 
-	// Prune is the exact list of unlabelled versions this record retires,
-	// decided in the writer's snapshot: retention RIDES THE RECORD rather
-	// than being a rule each data node evaluates, so every data node deletes the same
-	// rows at the same position.
+	// Prune is the exact unlabelled versions this record retires, decided in
+	// the writer's snapshot (package doc, "Retention rides the record").
 	Prune []int `json:"prune,omitempty"`
 
 	// SearchText is what a gallery search matches, at most
 	// [artifacts.MaxSearchTextBytes].
 	SearchText string `json:"search_text,omitempty"`
 
-	// Brand is the adopted brand stylesheet a FRAMED version (html, design)
-	// is published under: the generated CSS's SHA-256 in hex, decided in the
-	// writer's snapshot of the brand subject, empty for none (no brand
-	// adopted, a native kind, or a page that opted out with
-	// `<html data-crewlet-brand="off">`). The complete value rides the
-	// record, so every node stores the same pin. Since record version 2.
+	// Brand is the adopted stylesheet a FRAMED version (html, design) is
+	// published under: the generated CSS's SHA-256 in hex from the writer's
+	// snapshot of the brand subject, empty for none (no brand, a native
+	// kind, or `<html data-crewlet-brand="off">`). Since record version 2.
 	Brand string `json:"brand,omitempty"`
 }
 
 // CreatePayload makes an artifact and its first version in one record.
 //
-// ITS SUBJECT IS THE ARTIFACT when there is no source key, and the SOURCE
-// address when there is: the apply then writes the claim, the artifact, the
-// first version and the history row in one transaction, and recomputes the
-// subject from Owner and SourceKey, refusing a record that arbitrated on one
-// address and claims another.
+// Its subject is the artifact, or the SOURCE address when there is a source
+// key: the apply then writes claim, artifact, version and history in one
+// transaction, and recomputes the subject from Owner and SourceKey, refusing
+// a record that arbitrated on one address and claims another.
 type CreatePayload struct {
 	V int `json:"v"`
 
@@ -99,21 +87,21 @@ type CreatePayload struct {
 
 	SourceKey string `json:"source_key,omitempty"`
 
-	// Folder is the folder the artifact is created in, empty for the top
-	// level, checked live in the writer's snapshot and named in the
-	// record's scope ([FolderTerm]) so the apply orders behind any record
-	// about it. Since record version 2.
+	// Folder is where the artifact is created, empty for the top level,
+	// checked live in the writer's snapshot and named in the scope
+	// ([FolderTerm]) so the apply orders behind any record about it. Since
+	// record version 2.
 	Folder string `json:"folder,omitempty"`
 
 	Version VersionPayload `json:"version"`
 
-	// Shares are granted with the create, such as the requester an agent
-	// published for, as editor. Each share's GrantedAt is the writer's clock
-	// and is never written: a row's instant is the broker's.
+	// Shares are granted with the create (such as the requester an agent
+	// published for, as editor). GrantedAt is the writer's clock and never
+	// written: a row's instant is the broker's.
 	Shares []artifacts.Share `json:"shares,omitempty"`
 
-	// Authority is the decision stamped at the API, the quota limits inside
-	// it, which the applier enforces against the replicated counters.
+	// Authority is the decision stamped at the API; the applier enforces its
+	// quota limits against the replicated counters.
 	Authority artifacts.Authority `json:"authority"`
 }
 
@@ -141,9 +129,9 @@ type PatchPayload struct {
 	Icon        *string       `json:"icon,omitempty"`
 	Label       *VersionLabel `json:"label,omitempty"`
 
-	// Prune is the versions a label's removal pushed past the unlabelled
-	// versions kept, retired in the same record so the retention bound
-	// holds after every write rather than after the next publish.
+	// Prune is the versions a label's removal pushed past retention, retired
+	// in this record so the bound holds after every write, not the next
+	// publish.
 	Prune []int `json:"prune,omitempty"`
 }
 
@@ -168,10 +156,10 @@ type TransferPayload struct {
 	ToKind iam.ActorKind `json:"to_kind"`
 }
 
-// LinkPayload links an existing artifact to one tracker work item: the item is
-// the authority's [artifacts.Authority.WorkItem], stamped at the API with who
-// linked it and how, so the history row it writes is filed under the item the
-// way a create or a publish made for it is.
+// LinkPayload links an existing artifact to one tracker work item, the
+// authority's [artifacts.Authority.WorkItem] stamped at the API with who linked
+// it and how, so its history row is filed under the item as a create made for
+// it is.
 type LinkPayload struct {
 	V         int                 `json:"v"`
 	Authority artifacts.Authority `json:"authority"`
@@ -180,9 +168,9 @@ type LinkPayload struct {
 // StatusPayload is a trash, a restore, a purge's beginning, a purge, or an
 // asset's removal.
 //
-// A PURGE NAMES ITS DEPENDENTS' OPERATIONS, the steps that removed state other
-// domains keep per artifact before this one (the datastore first), so an
-// operator reading the log sees what the gesture did before it reached here.
+// A purge names its dependents' operations, the steps that first removed other
+// domains' per-artifact state (the datastore), so the log shows the whole
+// gesture.
 type StatusPayload struct {
 	V          int      `json:"v"`
 	Dependents []string `json:"dependents,omitempty"`
@@ -206,11 +194,10 @@ type ReaderPayload struct {
 	Version  int    `json:"version,omitempty"`
 }
 
-// MovePayload files one artifact in another folder, on the artifact's own
-// subject. From is the folder the writer's snapshot found it in and To the
-// folder it goes to, either empty for the top level; the scope names each one
-// that is a folder. The apply refuses `folder_gone` for a To that is no longer
-// live, and leaves `updated_at` alone: a move is not an edit.
+// MovePayload files one artifact in another folder, on its own subject. From
+// (as the writer's snapshot found it) and To are empty for the top level; the
+// scope names each that is a folder. The apply refuses `folder_gone` for a To
+// no longer live, and leaves `updated_at` alone: a move is not an edit.
 type MovePayload struct {
 	V         int                 `json:"v"`
 	From      string              `json:"from,omitempty"`
@@ -252,19 +239,17 @@ type FolderCreatePayload struct {
 	// ([artifacts.MaxFolderDepth]), stamped on every folder it makes.
 	MaxDepth int `json:"max_depth"`
 
-	// MaxFolders and MaxChildren are the bounds on the company's live
-	// folders and on one folder's live children the writer decided under
-	// ([artifacts.MaxFolders], [artifacts.MaxFolderChildren]), STAMPED so
-	// the apply enforces the bound the record was decided under rather
-	// than its own build's constant, which a later build may change.
+	// MaxFolders and MaxChildren bound the company's live folders and one
+	// folder's live children ([artifacts.MaxFolders],
+	// [artifacts.MaxFolderChildren]), STAMPED so the apply enforces the
+	// writer's bound, not its own build's constant, which may differ.
 	MaxFolders  int `json:"max_folders"`
 	MaxChildren int `json:"max_children"`
 
-	// Shares are granted on a new TOP-LEVEL folder: its visibility preset
-	// (the company as contributor for "Everyone", none for "Only you").
-	// Empty for a subfolder, which its top-level folder decides. A
-	// top-level folder's shares are set here and only here in this build:
-	// changing them later is a share op a later build adds to the tree.
+	// Shares are a new TOP-LEVEL folder's visibility preset (the company as
+	// contributor for "Everyone", none for "Only you"); empty for a
+	// subfolder, which its top-level folder decides. No op changes them
+	// later in this build.
 	Shares []artifacts.Share `json:"shares,omitempty"`
 
 	Authority artifacts.Authority `json:"authority"`
@@ -297,20 +282,19 @@ type FolderMovePayload struct {
 	MaxDepth    int `json:"max_depth"`
 	MaxChildren int `json:"max_children"`
 
-	// Shares are the shares a folder moved TO THE TOP LEVEL holds there:
-	// the shares of the top-level folder it was under, so who sees it and
-	// everything beneath it is what it was before the move. Empty for a
-	// move under a folder, which drops a top-level folder's own shares
-	// because its new top-level folder decides it from then on.
+	// Shares are what a folder moved TO THE TOP LEVEL holds: its old
+	// top-level folder's, so who sees its subtree is unchanged. Empty for a
+	// move under a folder, which drops its own shares: its new top-level
+	// folder decides from then on.
 	Shares []artifacts.Share `json:"shares,omitempty"`
 
 	Authority artifacts.Authority `json:"authority"`
 }
 
-// FolderRemovePayload removes one folder: its child folders and every
-// artifact filed in it (live and trashed) move up to Parent in the same apply,
-// and the folder's row becomes a tombstone. Its scope is the tree and every
-// artifact ([TreeTerm], [ArtifactsTerm]).
+// FolderRemovePayload removes one folder: its child folders and its artifacts
+// (live and trashed) move up to Parent in the same apply, and its row becomes a
+// tombstone. Its scope is the tree and every artifact ([TreeTerm],
+// [ArtifactsTerm]).
 type FolderRemovePayload struct {
 	V         int                 `json:"v"`
 	Folder    string              `json:"folder"`
@@ -324,18 +308,17 @@ type BrandFile struct {
 	Slot        string `json:"slot"`
 	ContentType string `json:"content_type"`
 
-	// Object is the stored bytes: a fresh object this adoption uploaded,
-	// for the generated stylesheet and for every logo and face copied out of
-	// the kit's version (never the kit's own object, which its retention may
-	// remove). Its hash (SHA-256 in hex) is the path the artifact listener
-	// serves the file at.
+	// Object is a fresh object this adoption uploaded, also for each logo
+	// and face copied from the kit (never the kit's own object, which its
+	// retention may remove). Its SHA-256 hex is the path the artifact
+	// listener serves it at.
 	Object objstore.Object `json:"object"`
 }
 
-// BrandAdoptPayload adopts one version of a brand kit as the company's brand,
-// on the brand subject. Its scope is the brand and the kit ([BrandTerm], the
-// kit's artifact term), so it orders behind any record about the kit, and the
-// apply refuses `version_not_found` when the version is gone by then.
+// BrandAdoptPayload adopts one brand kit version as the company's brand, on the
+// brand subject. Its scope is the brand and the kit ([BrandTerm], the kit's
+// artifact term), so it orders behind any record about the kit; the apply
+// refuses `version_not_found` if the version is gone by then.
 type BrandAdoptPayload struct {
 	V int `json:"v"`
 
@@ -353,9 +336,8 @@ type BrandAdoptPayload struct {
 	// Files are every file the adoption serves, the stylesheet first.
 	Files []BrandFile `json:"files"`
 
-	// Label is the label the apply sets on the adopted version, so it is
-	// exempt from the kit's retention; empty when the version already
-	// carries one.
+	// Label is set on the adopted version, exempting it from the kit's
+	// retention; empty when the version already carries one.
 	Label string `json:"label,omitempty"`
 
 	Authority artifacts.Authority `json:"authority"`
@@ -368,9 +350,8 @@ type BrandClearPayload struct {
 	Authority artifacts.Authority `json:"authority"`
 }
 
-// Eviction is a node's eviction from this log, or its readmission. PINNED AT
-// [GateRecordVersion] FOR EVER and a gate, so its shape may only grow by
-// addition.
+// Eviction is a node's eviction from this log, or its readmission. A gate
+// pinned at [GateRecordVersion] for ever: its shape only grows by addition.
 type Eviction struct {
 	V      int    `json:"v"`
 	NodeID string `json:"node_id"`
@@ -378,8 +359,8 @@ type Eviction struct {
 	EvictedBy string    `json:"evicted_by,omitempty"`
 	EvictedAt time.Time `json:"evicted_at"`
 
-	// Readmitted makes this the INVERSE COMMIT rather than a delete, so an
-	// evicted, readmitted and evicted again node reads correctly.
+	// Readmitted makes this an inverse commit, not a delete, so a node
+	// evicted, readmitted and evicted again reads correctly.
 	Readmitted bool `json:"readmitted,omitempty"`
 }
 
@@ -395,9 +376,8 @@ type Generation struct {
 
 // DecodeMutation reads the typed payload for one record.
 //
-// THE DISPATCH IS ON (kind, op) AND NOTHING ELSE, so a pair this build does
-// not know is an error naming both rather than a nil payload the applier would
-// read as an empty change.
+// It dispatches on (kind, op) alone: an unknown pair is an error naming both,
+// never a nil payload the applier would read as an empty change.
 func DecodeMutation(rec MutationRecord) (any, error) {
 	k, op := rec.Subject.Kind, rec.Op
 	switch {
@@ -455,9 +435,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 	case k == KindComment && (op == OpCommentResolve || op == OpCommentReopen):
 		return decodePayload[CommentStatusPayload](rec)
 	case k == KindBarrier && op == OpBarrier, k == KindTrimmed && op == OpTrimmed:
-		// THE TWO PAYLOAD-FREE RECORDS, and nil is their value rather than
-		// an absence: the applier has a case for each that writes nothing
-		// of this domain's.
+		// The two payload-free records: nil is their value, and the
+		// applier's case for each writes nothing of this domain's.
 		return nil, nil
 	}
 	return nil, fmt.Errorf("artifactsdomain: no payload shape for (%s, %s): a "+
@@ -480,12 +459,11 @@ func decodePayload[T any](rec MutationRecord) (T, error) {
 }
 
 // EncodeBarrier renders the read index's payload-free append: the framework
-// owns when a barrier goes out, the domain owns what a record on its log looks
-// like.
+// owns when, the domain what a record on its log looks like.
 //
-// AN OP ID IS REFUSED: it would become the broker's message id, and a repeat
-// inside the duplicate window is answered from the dedupe cache with no quorum
-// round trip, which is the one claim a barrier must never fake.
+// An op id is refused: it becomes the message id, and a repeat inside the
+// duplicate window is answered from the dedupe cache with no quorum round
+// trip, the one claim a barrier must never fake.
 func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.BarrierKind {
 		return nil, fmt.Errorf("artifactsdomain: %q is not a barrier envelope", env.Kind)
@@ -503,17 +481,15 @@ func EncodeBarrier(env statelog.Envelope) ([]byte, error) {
 	})
 }
 
-// EncodeTrimmed renders the trim's trimmed record ([statelog.TrimmedEnvelope],
-// ADR-0080) as a record this domain's applier decodes: the barrier's split,
-// the framework owning when one is appended, what it removes and the floor its
-// subject names, and the domain owning what a record on its log looks like.
+// EncodeTrimmed renders the trimmed record ([statelog.TrimmedEnvelope],
+// ADR-0080) for this domain's applier, split as [EncodeBarrier] is: the
+// framework also owns what it removes and the floor its subject names.
 //
-// THE WRITER TRAVELS, unlike a barrier's: a trimmed record removes rows, so the
-// eviction gate must be able to drop an evicted node's. NO OP ID, asserted:
-// one becomes a message id and a ledger row nothing resolves. And the floor is
-// CHECKED here, at the write, rather than in [Subject.Validate], which the
-// read path runs too: a refusal there would turn one malformed record into an
-// applier that stops on every node, where the framework's apply faults instead.
+// The writer travels, unlike a barrier's: the record removes rows, so the
+// eviction gate must drop an evicted node's. No op id: it would become a
+// message id and a ledger row nothing resolves. The floor is checked here, not
+// in [Subject.Validate], which the read path runs too: a refusal there would
+// stop the applier on every node, where the framework's apply faults instead.
 func EncodeTrimmed(env statelog.Envelope) ([]byte, error) {
 	if env.Kind != statelog.TrimmedKind || env.Subject.Kind != statelog.TrimmedKind {
 		return nil, fmt.Errorf("artifactsdomain: a %q envelope on %q is not a "+

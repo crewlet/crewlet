@@ -180,20 +180,15 @@ func (s *suite) runBroadcast(t *testing.T) {
 		}
 	})
 
-	// ONE MESSAGE AT A TIME, of which this case decides the half every
-	// backend can show. That no delivery runs beside another is an absence
-	// a case here could read only behind a quiet window — this one slept a
-	// millisecond in each handler for an overlap to show, and a second
-	// delivery the runner made late passed it with the bug present — so
-	// each backend's half is decided where it can be exact: the twin's in a
-	// bubble (memory's TestAHandlerNeverRunsBesideItself), JetStream's by
-	// where its code sits (jetstream's
-	// TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery). What is
-	// left here is a positive: a listener handed a burst one message at a
-	// time hears every message of it once, in the order it was sent. It is
-	// read once the last is heard, a wait for deliveries that must happen,
-	// so it needs waitFor's liveness bound and no other.
-	//
+	// ONE MESSAGE AT A TIME, the half every backend can show. That no
+	// delivery runs beside another is an absence a case here could read
+	// only behind a quiet window, which a late delivery passes with the
+	// bug present, so each backend's half is decided where it can be exact:
+	// the twin's in a bubble (memory's TestAHandlerNeverRunsBesideItself),
+	// JetStream's by where its code sits (jetstream's
+	// TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery). Left here
+	// is a positive: a listener handed a burst hears every message once,
+	// in send order, read once the last is heard (waitFor's liveness bound).
 	// Mutation: lose one broadcast of the burst for its listener, or hand it
 	// over twice, and the listener's record is not the burst.
 	t.Run("one_listener_hears_one_message_at_a_time", func(t *testing.T) {

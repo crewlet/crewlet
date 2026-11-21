@@ -7,11 +7,8 @@ import (
 )
 
 // ONE ANSWER OVER SEVERAL RECORDS IS THE LEAST CERTAIN OF THEM, in either
-// order, and a record that appended nothing claims nothing.
-//
-// It is what every tool appending more than one record answers — a save and
-// its rename, an item and its dependency — and the promise every transport
-// makes on top of it is that an unknown write is never reported applied.
+// order, and a record that appended nothing claims nothing: a tool appending
+// several records never reports an unknown write applied.
 func TestTheLessCertainOutcomeWinsEitherWay(t *testing.T) {
 	t.Parallel()
 	order := []statelog.Outcome{"", statelog.OutcomeApplied,
@@ -42,13 +39,9 @@ func TestTheLaterPositionIsGenerationFirst(t *testing.T) {
 	}
 }
 
-// A POSITION ON ANOTHER LOG IS NEVER LATER, however large its number.
-//
-// A packed position is a coordinate in one log's number space, and two logs'
-// spaces are unrelated: compared bare, the knowledge base's sequence 90 would
-// "follow" the tracker's sequence 4 for no reason but the sizes of two
-// counters, and a caller would barrier on a log it never reads. The first log
-// keeps the answer, in either argument order.
+// A POSITION ON ANOTHER LOG IS NEVER LATER, however large its number: two
+// logs' packed spaces are unrelated, and a caller would barrier on a log it
+// never reads. The first log keeps the answer, in either argument order.
 //
 // Mutation: compare packed values in Later, and this fails.
 func TestAPositionOnAnotherLogIsNeverLater(t *testing.T) {

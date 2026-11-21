@@ -337,13 +337,12 @@ func created(e *estate) {
 
 // A FIRST PASSWORD LINK SAYS SO, AND ENDS NOTHING BECAUSE THERE WAS NOTHING.
 //
-// An administrator's create of a person on a human seat hands them a first
-// password link, opened and spent through exactly the reset pair. Its view
-// says `first: true` — the person holds no password yet — so the screen asks
-// them to choose their password and warns of no sessions it would end; the
-// spend records "set their first password" and announces it as a first one
-// (the trail's `first`). The CONTROL is a reset link on a person who holds a
-// password: `first: false`, and a reset's own wording.
+// A create of a person on a human seat hands them a first password link,
+// opened and spent through the reset pair. Its view says `first: true` (no
+// password held), so the screen asks them to choose one and warns of no
+// sessions; the spend records "set their first password" and announces it as
+// a first one (the trail's `first`). The CONTROL is a reset link on a person
+// holding a password: `first: false`, and a reset's own wording.
 //
 // Mutation: answer `first` from anything but what the person holds and one arm
 // flips; drop it from the spend and the first arm announces a reset that ended

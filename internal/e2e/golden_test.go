@@ -42,19 +42,15 @@ import (
 // GATE G5, third leg — "a golden company runs end-to-end with the UI showing
 // live turns".
 //
-// Every other test in this tree stops at a seam. This one starts a real engine
-// on a real broker, wakes a real seat with a real trigger, drives a real
-// executor and reviewer loop against a scripted model behind the real harness
-// backend, and reads the result off a WebSocket dialled the way the dashboard
-// dials it, then feeds those exact frames through the dashboard's OWN protocol
-// module (the store and the socket, built as static/protocol/protocol.js).
+// Every other test stops at a seam. This one runs a real engine, broker, seat,
+// trigger and executor and reviewer loop against a scripted model, reads the
+// result off a WebSocket dialled as the dashboard dials it, then feeds those
+// exact frames through the dashboard's OWN protocol module
+// (static/protocol/protocol.js).
 //
-// It is the only test that can catch the class of bug it was written for. The
-// turn engine emitted NO events at all when this was written: every payload
-// type existed, the projection keyed on all of them, the socket fanned them
-// out, and the dashboard rendered them — and nothing in between ever published
-// one, so a running company showed an empty dashboard for ever. Every
-// component's own tests passed.
+// It alone catches a producer that publishes nothing while every consumer's
+// own tests pass: the projection, the socket and the dashboard all work, and a
+// running company shows an empty dashboard.
 
 // dial opens a socket on the path the dashboard's LiveSocket dials, as the
 // deployment's own token — a script, acting as itself, which is shown no chat;
@@ -621,19 +617,15 @@ func TestAGoldenCompanyRunsATurnOntoTheDashboard(t *testing.T) {
 	if bad := n.model.misrouted(); len(bad) > 0 {
 		t.Errorf("system prompts on the wrong channel: %s", strings.Join(bad, "; "))
 	}
-	// Onboarding runs BEFORE the executor and on its own budget — that is
-	// the whole reason it is a phase rather than a hint inside the
-	// executor's prompt, where it could spend the turn's budget on reading
-	// and starve submit_work.
+	// Onboarding runs BEFORE the executor and on its own budget, which is why
+	// it is a phase and not a hint in the executor's prompt, where reading
+	// could starve submit_work.
 	//
-	// THE FIRST PHASE, not the first model call. The turn-start prefetch
-	// reaches the same model for its own auxiliary passes — the memory
-	// filter, the knowledge query, the episode summary — and it runs
-	// before any phase by design: the context a turn reasons over is
-	// FROZEN before the runner exists, so a self_iterate loop cannot move
-	// the system prompt underneath a turn. Those passes are labelled
-	// `aux:` for exactly this reason and are not what this invariant is
-	// about.
+	// THE FIRST PHASE, not the first model call: the turn-start prefetch
+	// (memory filter, knowledge query, episode summary) runs before any phase
+	// by design, so the context a turn reasons over is FROZEN before the
+	// runner exists. Those passes are labelled `aux:` and are not this
+	// invariant's subject.
 	if first := firstPhase(got); first != "onboarding" {
 		t.Errorf("the first phase was %q, not the onboarding pass; calls = %v", first, got)
 	}
@@ -1042,27 +1034,18 @@ const (
 	replayTimeout = 60 * time.Second
 )
 
-// captureAct makes one real write as a person signed in to the identity
-// estate, through the route the dashboard writes through, and returns the
-// exchange for the replay.
-//
-// AS THE PERSON THE SESSION RESOLVES TO, and nothing else: the browser holds
-// the cookie a password sign-in minted, presents the deployment's Origin, and
-// sends its own operation key — exactly what the dashboard's `act` sends. No
-// seat is bound to a credential in the company document; the person is bound
-// to their seat in the identity directory, which is what makes the write
-// theirs.
+// captureAct makes one real write as a person signed in (cookie, the
+// deployment's Origin, its own operation key, as the dashboard's `act` does)
+// and returns the exchange for the replay.
 //
 // THE SERVER'S HALF OF THE SESSION FLOOR, held here before the client reads
-// it: the answer names a position in the grammar a read accepts back, and a
-// read of the person's own state AT that position is served at `session` and
-// already holds the write. A position the engine then refused as
-// `min_position`, or one it served from before the write landed, is a floor
-// the dashboard would wait on for ever or wait on for nothing — and nothing
-// else in the tree holds the answer and the read to one another.
+// it: a read of the person's own state AT the answer's position is served at
+// `session` and already holds the write. A refused `min_position`, or a read
+// from before the write, is a floor the dashboard would wait on for ever or
+// for nothing; nothing else holds the answer and the read to one another.
 //
-// A PIN, because it wakes nobody: the capture has already ended, and a write
-// that routed a notice would start a turn the test then tears down under.
+// A PIN, because it wakes nobody: a routed notice would start a turn the test
+// then tears down under.
 func captureAct(t *testing.T, n *node, b *browser) actCapture {
 	t.Helper()
 	const tool = "set_pins"
@@ -1145,19 +1128,16 @@ type chatCapture struct {
 	// Seq is the room's highest `channel_seq`, as the engine minted it.
 	Seq int64 `json:"seq"`
 
-	// Changes is every record the room took while the frames were
-	// captured, each the gesture this capture made, written down as it
-	// made it: its op, the message it named, who made it — the founder as
-	// the human seat a person writes as ([chatlet.AuthorHuman]), through the
-	// act transport and the prune route alike, or the seat as an agent —
-	// and the thread a post was said in. The one thing read back is a
-	// posted message's id, which only the engine can mint: from the post's
-	// receipt, or for the seat's answer from the room's transcript.
+	// Changes is every record the room took while the frames were captured,
+	// each the gesture this capture made, written down as it made it: op,
+	// message, who made it (the founder as the human seat,
+	// [chatlet.AuthorHuman], or the seat as an agent) and a post's thread.
+	// Only a posted message's id is read back, since only the engine mints
+	// it: from the post's receipt, or the room's transcript for the seat's.
 	//
-	// STATED RATHER THAN READ BACK, on purpose: an author or a thread the
-	// write path recorded wrongly is in what the engine answers and holds
-	// as well as on the frame, so read back from either it would be the
-	// expectation the frame is held to, and the comparison would pass.
+	// STATED RATHER THAN READ BACK, on purpose: an author or thread the write
+	// path recorded wrongly is in what the engine answers as well as on the
+	// frame, so reading it back would make the expectation match the frame.
 	Changes []chatRecord `json:"changes"`
 
 	// Newest is where the room's last record sits on the log: what the
@@ -1189,26 +1169,18 @@ func recordOf(change stream.ChatChange) chatRecord {
 	}
 }
 
-// captureChat has the founder use the company's own chat from the captured
-// tab, the way its chat screen does — every write through the act transport
-// or the human write surface, the room looked at with the socket's one
-// client-to-server frame — while a seat answers there, and returns its
-// account of it ([chatCapture]) with the exchange whose floor the replay holds
-// the client to.
+// captureChat has the founder use the company's own chat from the captured tab
+// while a seat answers, and returns its account ([chatCapture]) with the
+// exchange whose floor the replay holds the client to.
 //
 // EVERY CHAT PUSH KIND IS ON THE CAPTURE BEFORE IT RETURNS, checked against
-// the engine's own list ([stream.ChatPushKinds]) rather than one written
-// here, so a kind the engine adds is a capture that stops passing until this
-// produces it — and the replay then holds the client to dispatching it. A
-// kind the capture never carries is a kind the replay cannot certify.
+// the engine's own list ([stream.ChatPushKinds]), so a kind the engine adds
+// fails this capture until it produces it.
 //
-// AND EVERY FRAME NAMES THE RECORD IT ANNOUNCES: its op, the message, the
-// author and their kind, and a post's thread — held here against the
-// capture's account in both directions, and by the replay against the store
-// the client filed them in. A frame that named the wrong message makes a
-// screen re-read the wrong range of a room, and only a comparison per frame
-// can see it: the room's messages taken together are named by its posts
-// alone.
+// AND EVERY FRAME NAMES THE RECORD IT ANNOUNCES (op, message, author and kind,
+// a post's thread), held against the capture's account in both directions and
+// by the replay against the client's store: a wrong message makes a screen
+// re-read the wrong range, which only a comparison per frame can see.
 func captureChat(t *testing.T, n *node, founder *browser, conn *websocket.Conn,
 	frames *capture) (chatCapture, actCapture) {
 
@@ -1481,62 +1453,23 @@ func pruneRoom(t *testing.T, n *node, b *browser, channelID string) statelog.Pos
 func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	t.Parallel()
 	// THE OTHER HALF OF THE GATE. The test above asserts the frames say the
-	// right things; this one asserts the CLIENT can read them — and those
-	// are different questions, which is the entire lesson of the bug that
-	// prompted it.
+	// right things; this one asserts the CLIENT can read them, a different
+	// question: a server shape every server test accepted (the `agents` push
+	// as an object keyed by role) is dropped whole by the store's
+	// Array.isArray guard, and a running company renders idle. Nothing on
+	// either side ran both.
 	//
-	// The `agents` push was going out as an object keyed by role. Every
-	// field in it was correct. The server's tests asserted that shape and
-	// passed; the dashboard's own suites passed; the socket delivered every
-	// frame. And the store guards applyAgents with Array.isArray, so it
-	// dropped all of them, and a company running a full turn rendered idle
-	// from the first phase to the last. Nothing on either side could see
-	// it, because nothing on either side ran both.
-	//
-	// The client is the compatibility reference and wins any disagreement
-	// — so a failure here is the SERVER's.
+	// The client is the compatibility reference and wins any disagreement,
+	// so a failure here is the SERVER's.
 	node := prereqtest.OnPath(t, "node", "the dashboard client replay runs the dashboard's own protocol "+
 		"module under it, the one place both halves of the wire protocol are checked against each other",
 		"install any current node, as ci.yml does (CONTRIBUTING.md, \"A skip is not a pass\")")
-	// A CEILING the company's turn cannot reach, so the capture carries the
-	// live token meters as well: the `budget` push is a frame the client
-	// folds like any other, and one only a capped company is sent.
-	//
-	// AND A SECOND SEAT WHOSE OWN DAY IS SMALLER THAN ONE MODEL CALL, so the
-	// capture carries a window the gate has actually REFUSED. A meter that is
-	// only ever `ok` proves the happy half of the frame and nothing about
-	// `refused_at` — the field that was once dropped on its way from the
-	// counter to the push, which left every "refusing charges" row the
-	// dashboard draws unreachable. The refusal is the engine's own, made by
-	// the gate a real turn's calls pass — a charge it refuses, or the call
-	// the turn's meter holds once the turn's own context assembly has
-	// filled the day, which the meter records as the refusal a charge would
-	// have (coord.Budgets.Refuse) — so what is waited on is the counter's
-	// stamp, which both write. The seat is its own scope, so the company's
-	// turn beside it is charged against nothing it spent.
-	//
-	// Both ceilings are written where an operator writes them — the
-	// company's through `/config`, the seat's through its org chart runtime
-	// half — in the `{day: N}` form, before the socket opens. And the
-	// company runs MID-DAY ON ITS OWN CLOCK, so the refusal waited for below
-	// is stamped in the day it is read back in ([middayZone]).
-	//
-	// AND A PERSON WHO CAN WRITE, WHOSE TAB THE CAPTURE IS: a password
-	// sign-in on this node, bound to the founder's seat by the invitation
-	// that enrolled her, so the capture carries real `/operator/act` answers
-	// — the ones the dashboard's session floor is raised from — and is taken
-	// on a person's socket, the only kind the company's own chat is pushed
-	// to, every chat frame being decided per recipient seat. She holds
-	// ADMIN, which is every permission there is, so the one tab is sent
-	// every kind of frame a tab can be: the activity feed an administrator
-	// reads, the inbox the tracker's holders are told of, and the chat. One
-	// tab is one person, as on the dashboard: two sockets would be two frame
-	// streams with no order between them for the one store the replay
-	// feeds.
-	//
-	// AND THE EXECUTOR'S FLOOR OFF ([withoutExecutorFloor]): the CFO's
-	// ceiling is below it, which validation refuses, since no run of that
-	// seat could ever launch to make the call whose refusal is captured.
+	// A SECOND SEAT WHOSE OWN DAY IS SMALLER THAN ONE MODEL CALL, so the capture
+	// carries a window the gate has REFUSED. THE EXECUTOR'S FLOOR IS OFF
+	// ([withoutExecutorFloor]): the CFO's ceiling is below it, which validation
+	// refuses, since no run of that seat could launch to make the call whose
+	// refusal is captured. The company runs MID-DAY ON ITS OWN CLOCK, so the
+	// refusal is stamped in the day it is read back in ([middayZone]).
 	n := startNode(t, nodeSpec{company: func(doc string) string {
 		doc = strings.Replace(withoutExecutorFloor(doc), "roles:\n", "roles:\n"+
 			"  - name: CFO\n"+
@@ -1545,9 +1478,24 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		return doc + "\ntimezone: " + middayZone() + "\n"
 	}, boot: withSignIn})
 	waitFor(t, "the native backends to hydrate", hydrated(t, n.engine))
+	// A company CEILING its turn cannot reach, so the capture carries the live
+	// token meters (the `budget` push goes only to a capped company), and a
+	// seat ceiling it cannot hold: a meter only ever `ok` says nothing about
+	// `refused_at`, once dropped between counter and push. The refusal is the
+	// engine's own (coord.Budgets.Refuse, from a refused charge or a held
+	// call), so the wait is on the counter's stamp, which both write. Written
+	// as an operator writes them, in the `{day: N}` form, before the socket
+	// opens.
 	setCompanyCeilings(t, n, map[period.Period]int{period.Day: 100_000_000})
 	setSeatCeilings(t, n, "cfo", map[period.Period]int{period.Day: 100})
 	zone := companyMidday(t, n.engine)
+	// A PERSON WHO CAN WRITE, WHOSE TAB THE CAPTURE IS: a password sign-in
+	// bound to the founder's seat, so the capture carries real `/operator/act`
+	// answers (the session floor is raised from them) on a person's socket, the
+	// only kind the company's chat is pushed to, decided per recipient seat.
+	// She holds ADMIN, so the one tab is sent every kind of frame; one tab is
+	// one person, since two sockets would be two unordered streams into the
+	// replay's one store.
 	admin := jane
 	admin.grants = []iam.Grant{iam.GrantAdmin}
 	tab := newBrowser(t)
@@ -1846,39 +1794,31 @@ func withoutExecutorFloor(doc string) string {
 
 func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	t.Parallel()
-	// THE SEAM WAS NEVER SUPPLIED. runner.Config.Budget existed and every
-	// turn passed nil, so a company with a `token_budget:` ceiling spent
-	// without limit and the number in its config was decoration. Money
-	// leaves the building for every token, so this is the one counter that
-	// fails CLOSED — a charge that cannot be made stops the round rather
-	// than silently un-capping the company.
+	// Money leaves the building for every token, so this is the one counter that
+	// fails CLOSED: a charge that cannot be made stops the round rather than
+	// silently un-capping the company (every turn once passed runner.Config.Budget
+	// nil, and a `token_budget:` ceiling was decoration).
 	//
-	// THE CAP leaves room for the turn-start prefetch's knowledge query and
-	// ONE round of the turn's own loop — the onboarding pass's — and not for
-	// a second: the executor's run, charged whole when it is collected,
-	// crosses it, and the review after it is refused. So the cap bites
-	// partway through the turn rather than before it starts, which is the
-	// case a pre-flight check would miss. The executor's floor is off
-	// ([withoutExecutorFloor]): it would refuse the launch on the room left,
-	// which is the floor's case and not this one.
-	//
-	// THE CEILING IS WRITTEN WHERE AN OPERATOR WRITES IT, through `/config`
-	// once the node is running, and the case waits for the node to apply it
-	// before it wakes the seat: a ceiling seeded from the company file would
-	// prove the boot and nothing about a running gate picking up a cap moved
-	// under it.
-	//
-	// AND ALL OF IT IN ONE COMPANY DAY, which is what the arithmetic assumes:
-	// the gate cuts each round's windows when the round is charged, so with
-	// the company's midnight between the onboarding round and the execute
-	// round each lands in a day with room and nothing is ever refused. The
-	// company runs on a zone whose local time is noon as the case starts
-	// ([middayZone]).
+	// THE CAP leaves room for the turn-start prefetch's knowledge query and ONE
+	// round of the turn's own loop, the onboarding pass's, and not for a second:
+	// the executor's run, charged whole when collected, crosses it and the review
+	// after it is refused. So the cap bites partway through the turn, the case a
+	// pre-flight check would miss.
 	aux, round := textReplyUsage.tokens(), toolUseUsage.tokens()
 	limit := aux + round + round/2
+	// ALL OF IT IN ONE COMPANY DAY, as the arithmetic assumes: the gate cuts
+	// each round's windows when the round is charged, so a midnight between the
+	// onboarding and execute rounds lands each in a day with room and nothing is
+	// refused. The zone's local time is noon as the case starts ([middayZone]).
+	// The executor's floor is off ([withoutExecutorFloor]): it would refuse the
+	// launch on the room left, which is the floor's case and not this one.
 	n := startWith(t, func(doc string) string {
 		return withoutExecutorFloor(doc) + "\ntimezone: " + middayZone() + "\n"
 	})
+	// THE CEILING IS WRITTEN WHERE AN OPERATOR WRITES IT, through `/config` on a
+	// running node, and the case waits for the apply before waking the seat: a
+	// ceiling seeded from the company file would say nothing about a running
+	// gate picking up a cap moved under it.
 	setCompanyCeilings(t, n, map[period.Period]int{period.Day: limit})
 	zone := companyMidday(t, n.engine)
 	waitFor(t, "the seat to be claimed", func() bool {
@@ -1910,34 +1850,16 @@ func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 		return false
 	})
 
-	// EVERY COMPLETION THE MODEL ANSWERED IS ON THE COUNTER, ONCE — the
-	// rounds the gate refused included. A round is charged once its reply is
-	// in, so a refused round was billed, and the counter counts it
-	// (coord.Budgets.Charge); the auxiliary completions — the prefetch's
-	// knowledge query here — are recorded whole after they return
-	// (coord.Budgets.PostCharge). So the counter reads past the cap by every
-	// round the gate refused, and `used <= limit` is not the engine's promise:
-	// what it promises is that the counter is what the company was billed. A
-	// counter that dropped a refused round read short of that, and let the
-	// next, smaller round in on room the refused one had already used.
+	// EVERY COMPLETION THE MODEL ANSWERED IS ON THE COUNTER, ONCE, refused
+	// rounds included (coord.Budgets.Charge, PostCharge for auxiliary ones): the
+	// counter reads past the cap by every refused round, so `used <= limit` is
+	// not the engine's promise; that the counter is what the company was billed
+	// is. What the gate ADMITS is certified in coordtest's budget cases.
 	//
-	// What the gate ADMITS is certified where it can be judged charge by
-	// charge — the contract suite on the real broker (coordtest's budget
-	// cases, a refused round followed by a smaller one among them) and the
-	// tool loop's refused-round case — because here every charge, admitted or
-	// refused, lands on the one figure.
-	//
-	// WAITED FOR, re-reading the model's log and the counter together on
-	// every poll: a completion's charge lands a moment after its answer, so
-	// the two agree once the charges are through, and the poll that sees them
-	// agree is a snapshot in which every refused round so far is counted.
-	// Every round of the loop here is a tool-use reply, and every auxiliary
-	// pass a text reply, so each request's cost is known from its kind. EVERY
-	// request the model answered is summed: each is one model request of a
-	// scripted harness run, whose usage the backend reads off the record the harness
-	// prints for it, and a stop never lands between the model's answer and
-	// that record ([harnessRun.handleStop]) — so there is no request the engine
-	// was billed for and never read.
+	// WAITED FOR, re-reading the model's log and the counter together on every
+	// poll: a charge lands a moment after its answer. A loop round is a tool-use
+	// reply and an auxiliary pass a text reply, so each cost is known from its
+	// kind; none is billed and unread ([harnessRun.handleStop]).
 	var used, want int
 	var calls []string
 	waitFor(t, "the counter to hold every completion the model answered", func() bool {
@@ -1975,23 +1897,15 @@ func TestATightBudgetStopsTheTurnAndCountsTheRoundItRefused(t *testing.T) {
 	}
 	// And the SEAT's counter moved with it: one charge, both scopes.
 	//
-	// WAITED FOR rather than read once, because the two counters are two
-	// KEYS AND NO TRANSACTION — [coord/kv.FleetStore.Charge] says so and
-	// builds its order out of sequence instead: the org is counted and
-	// judged first, then the seat, which a round the company refused is
-	// counted on all the same. So there is a real window in which the org
-	// has moved and the seat has not, and the wait above lands inside it
-	// whenever the org's write is what satisfied it.
+	// WAITED FOR rather than read once, because the two counters are two KEYS
+	// AND NO TRANSACTION ([coord/kv.FleetStore.Charge] orders them instead): the
+	// org is counted and judged first, then the seat, so the wait above can land
+	// while the org has moved and the seat has not. The invariant is that they
+	// agree once the charge is through, not atomicity.
 	//
-	// Read synchronously, this asserted an ATOMICITY the design does not
-	// claim, and CI caught it: `seat spent 0 and the org 150`. The
-	// invariant is that the two agree once the charge is through, which is
-	// what this now says.
-	//
-	// BOTH READ ON EVERY POLL rather than the seat against the org figure
-	// read above: an auxiliary pass after the turn — a reflection — is
-	// recorded on both scopes too, and a seat chasing a frozen org figure
-	// would overshoot it and never catch it.
+	// BOTH READ ON EVERY POLL rather than the seat against the org figure read
+	// above: an auxiliary pass after the turn (a reflection) is recorded on both
+	// scopes too, and a seat chasing a frozen org figure would never catch it.
 	company := n.engine.Company()
 	id, _ := company.Org.AgentIDFor(company.Org.AgentSeatByHandle("ceo"))
 	var seatUsed, orgUsed int

@@ -8,26 +8,16 @@ import (
 
 // ChatPrompt is the prompt every chat backend shares.
 //
-// Chat backends deliver the same KIND of event — a person said something in
-// a channel, a direct message or a thread — and the hard part is the same
-// for all of them: deciding whether the message was actually addressed to
-// this agent, and staying silent when it was not. That triage guidance is
-// backend-neutral, so it exists once.
-//
-// What genuinely differs is small and mechanical: how a mention is written,
-// which collective addresses exist, and how a direct conversation is
-// recognised. A backend supplies those as fields.
+// The triage (was this addressed to this agent? else stay silent) is
+// backend-neutral, so it exists once; a backend supplies how a mention is
+// written, its collective addresses and how a direct conversation is spotted.
 //
 // THE ENGINE STATES ONLY WHAT THE MODEL CANNOT KNOW: who is speaking, how this
 // seat is addressed here, where a reply goes and why the message reached it.
-// How to hold a conversation is the model's own, and what a seat must do when
-// it declines a direct ask is the executor's contract, enforced at decode
-// time — so neither is restated here.
+// A declined direct ask is the executor's contract, enforced at decode time.
 //
-// NOTHING HERE NAMES A TOOL. The prompt describes the capability and lets
-// the model pick the matching tool out of its own catalogue, because the
-// deployed MCP server's tool names are not knowable by the engine — see
-// docs/concepts/tool-capabilities.md.
+// NOTHING HERE NAMES A TOOL: the engine cannot know the MCP server's tool
+// names (docs/concepts/tool-capabilities.md).
 type ChatPrompt struct {
 	// Backend is the transport key this prompt answers for.
 	Backend string
@@ -95,39 +85,15 @@ func (ChatPrompt) DigestBody(_, body string) string { return body }
 
 // RequiresRecon implements [Prompt]: a thread reply is a POINTER.
 //
-// The triggering message is usually thin — "yes", "+1", "what about the other
-// one" — and the thread is the context. A top-level message or a direct
-// message carries its own body and is no such pointer.
-//
-// IT STAYS TRUE NOW THAT THE ENGINE HANDS THE THREAD OVER at turn start (see
-// internal/agent/prefetch's thread block), and the two reasons are worth
-// having written down because the opposite reads as the obvious tidy-up.
-//
-// First, this flag describes the trigger BODY, which the thread block does
-// not change. What it gates are the three prefetches that judge relevance
-// against the trigger TEXT — the memory filter, the knowledge query, the
-// episode vector search — and "+1" is exactly as useless a query with the
-// thread in the system prompt as it was without it. Flipping the flag would
-// turn two auxiliary LLM calls back on for every chat thread reply in the
-// company, to search on a string that has not improved.
-//
-// Second, the flag is not only read here. It is stamped at parse time, merged
-// across a coalesced trigger, STORED on every event as
-// types.InboundInteraction.RequiresRecon and reported on prefetch_summary,
-// where the dashboard reads it to say "gated" rather than "broken". Changing
-// what it means for chat would silently rewrite what every past turn in the
-// store claims about itself.
-//
-// CHATLET IS THE ONE SOURCE THAT ANSWERS FALSE with a thread, and it
-// overrides this rather than weakening it: its trigger is never a pointer at a
-// message somewhere else. The record carries the message itself — what was
-// said, who said it, in which room and why it reached this seat, copied at
-// write time — so there is nothing to reconcile before the seat can reason,
-// and the prefetches this gates have a real query. The THREAD around it is not
-// on the record: it reaches the seat the way a vendor thread does, through the
-// prefetch's thread block over Chatlet's own thread reader, so one
-// mechanism serves every chat surface and a thread is never in the prompt
-// twice. See internal/chatlet's prompt.
+// The trigger is usually thin ("+1"); a top-level or direct message is not.
+// IT STAYS TRUE though the engine hands the thread over at turn start
+// (internal/agent/prefetch): the flag describes the trigger BODY and gates the
+// prefetches that query on trigger TEXT, which "+1" spoils with or without the
+// thread. It is also stamped at parse, merged across a coalesced trigger,
+// STORED as types.InboundInteraction.RequiresRecon and shown on
+// prefetch_summary, so changing it rewrites what past turns claim.
+// CHATLET ANSWERS FALSE with a thread and overrides this: its record carries
+// the message itself, so the prefetches have a real query.
 func (ChatPrompt) RequiresRecon(n Inbound) bool { return n.Metadata[ThreadField] != "" }
 
 // SubjectIsLabel implements [Prompt]: always. A chat message has no subject
@@ -144,19 +110,16 @@ func (p ChatPrompt) Addressed(n Inbound) bool { return p.Address.Addressed(n.Met
 
 // PartitionKey implements [Prompt].
 //
-// In a direct conversation a person's consecutive TOP-LEVEL messages are one
-// partition, so they key on the channel alone and a typing burst coalesces
-// into one turn — the headline case for coalescing at all.
+// In a direct conversation a person's consecutive TOP-LEVEL messages key on
+// the channel alone, so a typing burst coalesces into one turn.
 //
-// A direct THREAD REPLY keeps its thread key: merging it with unrelated
-// top-level pings would hand the turn one merged metadata whose thread
-// pointer names only one of two reply targets, steering the digest's reply
-// to the wrong place.
+// A direct THREAD REPLY keeps its thread key: merged with unrelated top-level
+// pings, the merged metadata's thread pointer would name only one of two
+// reply targets and misdirect the digest's reply.
 //
-// In a shared channel two unrelated top-level asks must NOT merge, so the
-// key stays thread-grained throughout — a reply carries the root's id, and a
-// top-level message keys on its OWN id so its later replies land in the same
-// partition.
+// In a shared channel two unrelated top-level asks must NOT merge, so the key
+// stays thread-grained: a reply carries the root's id, and a top-level
+// message keys on its OWN id so its later replies join the partition.
 func (p ChatPrompt) PartitionKey(metadata map[string]string, _ string) string {
 	channel := metadata[ChannelField]
 	if channel == "" {
@@ -174,48 +137,17 @@ func (p ChatPrompt) PartitionKey(metadata map[string]string, _ string) string {
 	return channel + ":" + anchor
 }
 
-// ConversationIdentity implements [Prompt]. THIS IS ONE OF THE TWO SOURCES
-// WHERE THE TWO ANSWERS DIFFER (Worklet's is the other), and the
-// invariant is what decides how.
+// ConversationIdentity implements [Prompt]; with Worklet's, one of the two
+// where it differs from the partition key. A DIRECT CONVERSATION IS ONE
+// CONVERSATION, thread or no thread: the DM channel. The identity must be
+// constant across a partition, and a top-level DM burst partitions on the
+// channel while its events carry different ts values, so "channel:anchor"
+// would file its executor-log rows under whichever event sorted first.
 //
-// A DIRECT CONVERSATION IS ONE CONVERSATION, thread or no thread: the whole
-// DM channel, regardless of thread_ts. What forces that is
-// [Prompt.ConversationIdentity]'s invariant — the identity must be constant
-// across every event in a partition. A top-level DM burst partitions on the
-// bare channel while its constituents carry different ts values, so an
-// identity of "channel:anchor" would give that ONE partition three different
-// identities and the key its turn's rows on the executor log are filed under
-// would fall to whichever event sorted first. The channel is the only value
-// every constituent of that partition agrees on.
-//
-// It is also what a person means. A DM is a 1:1 line that runs for months;
-// the thread a reply hangs off is a formatting detail of the transport, and
-// keying history on it filed the answer to "what did we say yesterday" under
-// an address the next turn never looked up.
-//
-// ELSEWHERE THE ANSWER IS THE PARTITION KEY: in a shared channel a thread IS
-// the conversation, and the partition is already thread-grained, so the two
-// coincide and the invariant holds trivially.
-//
-// WHERE AN ANCHOR IS USED AT ALL — the non-direct branch, which is
-// [ChatPrompt.PartitionKey] — IT IS THE SAME ONE: thread_ts falling back to
-// the message's own ts, which is what [ConversationOf] resolves for the
-// working indicator and what [ChatPrompt.Build] prints as the thread to
-// "reply as a thread" in. Three derivations of one anchor that agree only by
-// inspection is how the spinner a person is watching, the thread the reply
-// lands in and the conversation the seat's next turn continues come to name
-// three different threads.
-//
-// THE DIRECT BRANCH USES NO ANCHOR, deliberately, and that is not a fourth
-// derivation drifting from the other three — it is the answer to a different
-// question. The indicator and the reply target are about ONE MESSAGE: which
-// thread to raise a spinner in, which thread to post into. Both are still the
-// anchor on a direct message, and still that one. The identity is about the
-// LINE the message is on, and on a direct message the line is the channel. So
-// here the three must NOT agree: an identity carrying the anchor would give
-// one top-level DM partition as many identities as it has constituents, and
-// would file the seat's own history under a thread its next turn never looks
-// up — which is the failure this branch exists to remove.
+// ELSEWHERE IT IS THE PARTITION KEY: a thread IS the conversation, and its
+// anchor is the one [ConversationOf] and [ChatPrompt.Build] use (thread_ts,
+// else the message's ts), or spinner, reply and next turn name different
+// threads. THE DIRECT BRANCH USES NO ANCHOR: the identity is about the LINE.
 func (p ChatPrompt) ConversationIdentity(metadata map[string]string, subject string) string {
 	channel := metadata[ChannelField]
 	if channel == "" {
@@ -423,23 +355,16 @@ func (p ChatPrompt) triage(marker string) string {
 
 // threadBlock marks a thread reply, identical on every backend.
 //
-// IT NO LONGER SENDS THE AGENT TO GO AND READ THE THREAD. That instruction
-// cost three rounds on a company whose chat tools come from a per-role MCP
-// server (list the server's tools, activate one, then call it, with the schema
-// arriving on the next message), and an agent that skipped it answered eleven
-// words of trigger text having no idea what the thread was about. The thread
-// is now in the system prompt, under `## The thread so far` — a DIFFERENT
-// heading from this section's, because this one lands in the user message and
-// two sections with one name saying different things is a model reading
-// whichever it saw last.
+// IT DOES NOT SEND THE AGENT TO READ THE THREAD: the thread is in the system
+// prompt under `## The thread so far`, a DIFFERENT heading from this
+// section's (which lands in the user message), because two sections with one
+// name saying different things make a model read whichever it saw last.
 //
-// What stays is the one fact the model cannot work out for itself: which of
-// the thread's messages are its own, which is what stops a seat answering
-// itself. How to hold up its end of a conversation — not repeating a take it
-// already gave, letting a colleague finish — is the model's own, and telling
-// a seat to stay silent on an acknowledgement was telling it to do what the
-// engine refuses: a reply in a followed thread is addressed, and an addressed
-// turn may not end in silence.
+// What stays is the one fact the model cannot work out: which thread messages
+// are its own, so a seat does not answer itself. Holding up its end of a
+// conversation is the model's own; telling a seat to stay silent on an
+// acknowledgement would contradict the engine, since a reply in a followed
+// thread is addressed and an addressed turn may not end in silence.
 func threadBlock(self string) string {
 	reference := self
 	if reference == "" {

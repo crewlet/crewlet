@@ -13,36 +13,15 @@ import (
 // EVERY QUESTION THE DASHBOARD READS A WRITE BACK THROUGH TAKES A FLOOR, AND
 // EVERY QUESTION THAT TAKES ONE IS LISTED UNDER EACH LOG IT READS.
 //
-// A write through `/operator/act` answers with where its record landed, and
-// the dashboard raises a per-tab floor for that domain and asks the affected
-// questions again at `read_level=session&min_position=<floor>` — so the
-// screen that pressed a button never shows the state from before the press.
-// `contract/domains.ts` `SESSION_QUERIES` is the list it does that for, and
-// both directions of it fail silently:
+// A write through `/operator/act` answers with where its record landed; the
+// dashboard re-asks the affected questions at `read_level=session&min_position`.
+// `SESSION_QUERIES` (`contract/domains.ts`) lists them; both directions fail
+// silently (a listed kind with no floor is drawn as it was, an unlisted one
+// is never asked to wait). Floors are taken by [sessionQuestions] and CHAT'S
+// WHOLE FAMILY, [chatQuestions]; a bare `session` must be refused.
 //
-//   - a kind listed that takes no floor is a screen that believes it waited
-//     and did not: this node answers from whatever it holds and the row the
-//     person just changed is drawn as it was;
-//   - a kind that takes one and is not listed is a screen that is never asked
-//     to wait at all, with the same result.
-//
-// The set of questions that take a floor is [sessionQuestions], the table
-// [TestEveryNativeQuestionResolvesTheCallersOwnLevel] proves the behaviour
-// over, and CHAT'S WHOLE FAMILY, [chatQuestions], which
-// [TestTheCallersFreshnessReachesEveryChatRead] proves it over: a chat read is
-// asked for a viewer through its own stubs, so its six live in that table
-// rather than in one whose stubs are the tracker's and the wiki's. This gate
-// holds the client's list against both per domain, and asks every listed kind
-// a bare `session` itself — refused, because a floor it honours is a floor it
-// demands — so a kind added to both lists without the behaviour behind it is
-// red here too.
-//
-// A QUESTION READ FROM SEVERAL LOGS IS LISTED UNDER EACH, as the engine serves
-// it — the company feed under the tracker's and the knowledge base's — so a
-// write to either log asks it again, at the floor of each log the tab wrote
-// (`protocol/session.ts` names one `min_position` per listed domain). Listed
-// under one, the half on the other log is read from before its own write;
-// listed under a log it does not read, its floor there is refused.
+// A QUESTION READ FROM SEVERAL LOGS IS LISTED UNDER EACH, at the floor of each
+// log the tab wrote (`protocol/session.ts`).
 func TestEverySessionQueryTakesAFreshnessFloor(t *testing.T) {
 	t.Parallel()
 	body, err := clientsource.Literal(clientsource.Tree(t), "SESSION_QUERIES")

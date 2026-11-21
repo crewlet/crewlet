@@ -17,37 +17,25 @@ import (
 // SIGNING THE COMPANY IN TO A REMOTE MCP SERVER WITH OAUTH, and out again.
 //
 //   - `POST /mcp-servers/{name}/oauth` starts a sign-in to a server whose
-//     entry carries `oauth` with a person's grant (a service identity's,
-//     `grant: client_credentials`, is refused 409: nobody signs in to it,
-//     and its tokens are issued as it is used): the engine reads the
-//     server's sign-in metadata,
-//     registers where its client is a registration, and answers the
-//     authorization address the person's browser is sent to, once. The
-//     vendor sends the browser back to `GET /webhooks/mcp-oauth`
-//     (internal/api/webhooks), which finishes it.
-//   - `GET /mcp-sign-ins/{id}` is where a sign-in is, for the page that
-//     polls it: pending, completing, approved or failed, and why. Never the
-//     authorization address again.
+//     entry carries `oauth` with a person's grant (`client_credentials` is
+//     refused 409: nobody signs in to it) and answers the authorization
+//     address once. The vendor returns to `GET /webhooks/mcp-oauth`.
+//   - `GET /mcp-sign-ins/{id}` is the polling page's read: pending,
+//     completing, approved or failed, and why. Never the address.
 //   - `DELETE /mcp-servers/{name}/oauth` gives the grant up: revoked at the
-//     vendor where it offers that (RFC 7009), forgotten here, and the
-//     server stopped on every node.
-//
-// THE TWO GESTURES ARE `secrets.write`: a step-up, a person (never the
-// Dashboard Assistant, whose human-only list holds the verb), and an
-// administrator, since what they make or end is the credential every agent
-// reaches the server with. Each is one `mcp_server_acted`, refused ones
-// included. The read is `config.read`, the configuration's reader's: it says
-// how a sign-in an administrator started is going, and carries no address,
-// code or token.
-//
-// NOTHING ANSWERED IS A TOKEN. The access token lives in each node's memory
-// alone and the refresh token in the engine's own sealed row; the answers
-// here name the server, the sign-in and what the vendor said.
+//     vendor where offered (RFC 7009), forgotten, the server stopped everywhere.
 
 // SignIns starts, reads and ends a server's OAuth sign-in, adapted from the
 // engine where the API is wired, with this package's own refusals
 // ([ErrNoSuchServer], [ErrNoOAuth], [ErrNoSignIn], [ErrNotSignedIn],
 // [ErrServiceIdentity], [*SignInRefusal]).
+//
+// THE TWO GESTURES ARE `secrets.write`: a step-up, a person (never the
+// Dashboard Assistant, whose human-only list holds the verb) and an
+// administrator, since they make or end every agent's credential. Each is one
+// `mcp_server_acted`, refusals included. The read is `config.read`.
+// NOTHING ANSWERED IS A TOKEN: the access token lives in node memory alone,
+// the refresh token in the engine's sealed row.
 type SignIns interface {
 	StartSignIn(ctx context.Context, server string, by iam.Actor) (SignInAnswer, error)
 	SignIn(ctx context.Context, id uuid.UUID) (SignInAnswer, error)

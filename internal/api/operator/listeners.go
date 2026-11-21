@@ -35,42 +35,14 @@ const listenerTellBudget = 10 * time.Second
 // 2026-07-28 protocol holding its `subscriptions/listen` stream open, whichever
 // call's catalogue answered it.
 //
-// # Why the node keeps them, rather than each call's server
+// The transport keeps no session ([Server.MCPHandler]), so a stream is the only
+// channel to a client between requests. What a node serves moves (a company, a
+// backend, a tool server's tools, a PEER's move), so every call's server keeps
+// its streams in ONE registry ([Options.Listeners]).
 //
-// The transport keeps no session (see [Server.MCPHandler]), so the one channel
-// to a client between its requests is that stream, and it stays on the MCP
-// server built for the call that opened it, from the catalogue that call read.
-// What a node serves moves after that — its first company brings the native
-// halves, a revision adds or retires a knowledge backend, a shared tool server
-// comes back with other tools — and a node also hears of its PEERS' moves,
-// after which its listeners have to be told whatever catalogue their stream
-// was answered from. So every call's server keeps its streams in ONE registry
-// ([Options.Listeners]), and an announcement reaches every stream on the node:
-// never one server's listeners, and with no list of superseded catalogues to
-// keep, prune and race.
-//
-// # Told one by one, rather than through the SDK's own notifier
-//
-// The SDK announces a tool-list change only when its server's tool registry
-// changes, to every stream subscribed on that one server at once, 10 ms after
-// the change. A catalogue here never changes once built, and the two moments
-// a node must tell somebody are not changes to any registry: what the node
-// or a peer serves moved, or ONE stream has just been opened. So each stream is told directly, with
-// its own subscription named in the notification's `_meta` as the SDK names
-// it, through the sending handler of the server it is on.
-//
-// # Told the moment its stream opens
-//
-// A client lists its tools whenever it likes — the SDK's client opens its
-// stream fire-and-forget at connect and returns, so its first listing usually
-// races the stream — and a listing may be answered by any node. So a listing
-// can predate a change some node then announced before this client's stream
-// existed to hear it: the stream read its catalogue an instant before what
-// the node serves moved, or a peer's move was relayed to this node's listeners
-// an instant before the stream subscribed. Nothing would ever tell it again. Telling
-// every stream once as it opens closes that whole window for the price of
-// one listing per connection: whatever a client listed before its stream
-// existed, it lists again once the stream can hear every later change.
+// Each stream is told directly, not through the SDK's notifier (which fires
+// only when a server's tool registry changes, never here): named in `_meta`,
+// and once as it opens, since a client's first listing races its stream.
 type Listeners struct {
 	mu      sync.Mutex
 	streams map[*mcp.ServerSession]*listening

@@ -49,6 +49,29 @@
 // itself (internal/queue/jetstream's copy reads and dead-letter listings; its
 // domain consumers' standing pull reads its statuses with [PullStatus]).
 //
+// # The leader's reads, and their time
+//
+// A direct get can be answered "not found" by a replica that is behind, so a
+// read whose "none" must be true goes to the stream's leader, and
+// [ErrNoMessage] is only the leader's word. Only the leader answers, and a
+// member that still believes in a leader its group just lost takes the request
+// and says nothing, so no read is asked once for its caller's deadline or the
+// client's five seconds: it is hedged ([jsprovision.ReadBoundedWith]), and
+// each page of a listing is its own hedged read, never the whole listing,
+// which would restart from its first page every two seconds.
+//
+// How long a read waits is ONE rule per direction, so callers do not size it
+// apiece. A reply that may be a whole large message is given the time it takes
+// to ARRIVE ([Arrival]: its handling in the engine's processes, which the race
+// detector slows by orders of magnitude, and its crossing of a link at the
+// floor), or each re-ask builds another whole reply beside the first. A write
+// crosses raw ([Sending], [WriteBound], [Budget]), each send after the first
+// given one more crossing up to [WriteSends], and the end is fixed when the
+// budget starts, since counting per send gave a write met by an in-flight
+// answer a crossing every time and no end. A reply past the transport never
+// crosses a leaf's link, which the far server closes whole ([ReplyBytes]), so
+// such a message is read raw from a consumer instead ([Leader.Leading]).
+//
 // # A window across a link
 //
 // [WindowCrossing] sizes what a node's bulk transfers hold out across a link
@@ -135,45 +158,16 @@ func (a API) String() string {
 
 // RequestTerm is how long one request of a client [API.Client] builds waits
 // for its answer when its caller set no deadline: the client's DefaultTimeout,
-// which every call it makes applies to a context that carries none — a
-// stream's or a consumer's info, a key's read, and a publish waiting for its
-// stream's acknowledgement.
+// the client library's own five seconds, stated here so a release cannot move
+// what the engine is sized against: a hedged read's bound ([Leader]), a
+// coordination compare-and-set's wait on a leader's in-flight answer
+// (internal/jsinflight's Decide), boot steps and duty ticks.
 //
-// # Five seconds, the engine's own
-//
-// The figure the client library defaults to, stated here rather than
-// inherited, because the engine is sized against it: a read that was one
-// request until it was hedged keeps it as its bound, and is asked at none, two
-// and four seconds inside it ([Leader], [jsprovision.ReadBoundedWith]); a
-// compare-and-set to a coordination bucket waits out a leader's in-flight
-// answer inside it — and across a link inside it and the crossings of the
-// sends a write may make ([WriteSends]) — (internal/jsinflight's Decide); and
-// a boot's steps and a duty's tick count each call whose caller set no
-// deadline at it. Inherited, a
-// library release that moved its default would move every one of those unseen.
-//
-// What it is sized by:
-//
-//   - A write's acknowledgement is milliseconds: a member's own publish is
-//     answered in its own process, and a replicated one after one raft commit
-//     — about 1.5 ms on an idle loopback fleet (internal/jsinflight), tens
-//     under load, and a disk flush more where `stream.sync: always` asks for
-//     one. Five seconds is three orders of magnitude past an idle commit and
-//     about two past a loaded one, so a request still unanswered then was
-//     sent to a leader that stepped down or died, or over a connection that
-//     went, and nobody is going to answer it.
-//   - A write cannot be asked again as a read is — a second publish is a
-//     second write unless it carries a message id — so it holds its ONE
-//     request for the whole term, where a read is presumed lost after
-//     [jsprovision.ReadTerm], the server's one-second heartbeat, and asked
-//     again a [jsprovision.ReAsk] later, at none, two and four seconds: three
-//     asks, each its read term and a re-ask between them, are the five
-//     seconds, so a request a member dropped across an election is asked
-//     again where the new leader answers it.
-//
-// A WRITE ACROSS A LINK IS GIVEN MORE, the time its bytes take to cross it
-// every time it is sent, up to [WriteSends] sends ([WriteBound], [Budget]); a
-// request on a member's own connection crosses nothing.
+// A write's acknowledgement is milliseconds (a raft commit, ~1.5 ms idle), so
+// a request unanswered at five seconds will never be answered. A write cannot
+// be re-asked (a second publish is a second write), so it holds ONE request;
+// a read is re-asked at none, two and four seconds ([jsprovision.ReAsk]). A
+// WRITE ACROSS A LINK IS GIVEN MORE ([WriteSends], [WriteBound], [Budget]).
 const RequestTerm = 5 * time.Second
 
 // WindowCrossing is the longest the bytes a link's window holds out, both
@@ -203,24 +197,17 @@ func (a API) Client(nc *nats.Conn) (jetstream.JetStream, error) {
 // answers.
 const accountPrefix = "$JS.API."
 
-// Subject turns a subject of the account's own API — one of nats-server's
-// `JSApi…` constants, which is what a caller reaching past the client uses —
-// into the subject this API answers the same request on.
+// Subject turns a subject of the account's own API (one of nats-server's
+// `JSApi…` constants) into the subject this API answers the same request on,
+// for callers reaching past the client so a leaf of the embedded fleet reaches
+// the same JetStream a member does:
 //
-// For the callers that reach past the client, each for a request the client
-// library does not make in the shape it needs, and each addressed here so a
-// leaf of the embedded fleet reaches the same JetStream a member does:
-//
-//   - the backup's stream snapshot, which the client has no call for at all;
-//   - the read of one message from a stream's LEADER ([Leader]),
-//     `STREAM.MSG.GET` — coord/kv's certifying read of one key and the
-//     object store's read of one object's metadata — because on a stream
-//     that allows direct gets, which every KV bucket and object store does,
-//     the client only ever sends a `DIRECT.GET` that any replica answers,
-//     one that is behind included;
-//   - and coord/kv's marker sweep, a `STREAM.PURGE` bounded at a marker's
-//     own revision, whose answer carries how many messages went — which the
-//     client's own purge drops.
+//   - the backup's stream snapshot, which the client has no call for;
+//   - `STREAM.MSG.GET` from a stream's LEADER ([Leader]): on a stream allowing
+//     direct gets the client sends only `DIRECT.GET`, which a lagging replica
+//     answers too;
+//   - coord/kv's marker sweep, a `STREAM.PURGE` bounded at a marker's revision,
+//     whose answer carries how many messages went, which the client drops.
 func (a API) Subject(subject string) (string, error) {
 	switch {
 	case !a.named:

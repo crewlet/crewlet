@@ -135,21 +135,17 @@ func TestARunsCallsReachTheHostAndAreJoinedToTheirRequests(t *testing.T) {
 }
 
 // EACH REQUEST IS CHARGED AS IT IS READ, AND THE RUN'S OWN TOTAL SETTLES THE
-// REST. A phase's whole loop is one run now, so a budget charged at its end
-// gates nothing: the input of a request is charged the moment the record shows
-// the request start — so before any call it asks for runs, since the host joins
-// a call to its request first — its output when the record closes it, and the
-// harness's own total for the run settles whatever that missed, never charging
-// anything twice.
+// REST. A phase's whole loop is one run, so a budget charged at its end gates
+// nothing: a request's input is charged when the record shows it start (before
+// any call it asks for runs), its output when the record closes it, and the
+// harness's total settles what that missed, never charging twice.
 //
-// THE OUTPUT IS NOT ASKED FOR AT THE CALL: the record closes a request after
-// its calls are listed, and the call reaches the engine over the socket while
-// that line may still be on its way through the harness's output — a race no host
-// waits out, and one this test lost now and then when it asked.
+// THE OUTPUT IS NOT ASKED FOR AT THE CALL: the record closes a request after its
+// calls are listed, and the call may reach the engine before that line does.
 //
-// Mutation: charge only at the end (drop the per-request spends), and the
-// first spend comes after every call; charge the result's total on top of
-// the requests', and the run is charged twice.
+// Mutation: charge only at the end (drop the per-request spends), and the first
+// spend comes after every call; charge the result's total on top of the
+// requests', and the run is charged twice.
 func TestEachRequestIsChargedAsItIsReadAndTheTotalSettlesTheRest(t *testing.T) {
 	t.Parallel()
 	p := fakeClaude(t, fakeScript{

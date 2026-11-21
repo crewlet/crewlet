@@ -73,6 +73,9 @@ const (
 	// order, the only way to its revisions, authors and bodies, which carry
 	// no repo_id.
 	changesNumberKey = "code_changes_number_idx"
+	// changesRevertsKey is code_changes_reverts_idx, (repo_id, reverts, number)
+	// WHERE reverts > 0 (replicated migration 0190): the changes reverting one.
+	changesRevertsKey = "code_changes_reverts_idx"
 	// liveChanges is the predicate code_changes_open_idx and
 	// code_changes_target_idx are partial on: a change in a [ChangeState.Live]
 	// state, spelled in [ChangeStates]' order.

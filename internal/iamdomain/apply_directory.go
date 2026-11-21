@@ -8,25 +8,13 @@ import (
 )
 
 // THE DIRECTORY SUBJECT: every record that sets or frees a person's login,
-// address or seat, and every record that creates or removes a person's row.
-//
-// # The directory owns a row's existence and its three unique columns
-//
-// An enrolment CREATES the row whole — the document and every column — and is
-// the only record that does; an identity change sets the login and the seat; a
-// removal deletes the row. A record on the person's own subject owns the
-// document and the columns derived from it, and touches none of the three, so
-// the two subjects meet on one row and never on one column. Every record about
-// one person is applied in log order — a retained record holds back every
-// later record its scope meets — so one `version` guards both halves.
-//
-// # And the trail row names what the record was about
+// address or seat, or creates or removes their row (package doc, "Two
+// subjects meet on one row, and never on one column").
 //
 // A directory record's subject names nobody, so its trail row is filed under
-// the PERSON it is about — or, for an invitation's issue, which is about
-// nobody yet, under the ADDRESS's blind, where a removal's erasure finds every
-// invitation an address was sent ([eraseSealed]) whether or not the
-// invitation's own row has been swept since.
+// the PERSON it is about, or, for an invitation's issue, under the ADDRESS's
+// blind, where a removal's erasure finds every invitation sent there
+// ([eraseSealed]) even once its row is swept.
 
 // The trail objects a directory record is filed under.
 const (
@@ -60,9 +48,9 @@ func (a *Applier) applyDirectory(ctx context.Context, tx *sql.Tx,
 			return 0, fmt.Errorf("iamdomain: the cancellation record at %s: %w",
 				at.position, err)
 		}
-		// FILED WHERE THE ISSUE WAS: under the address, in its bucket, so
-		// "what happened to the invitations sent here" is one object's
-		// trail and a removal's erasure finds both rows.
+		// FILED WHERE THE ISSUE WAS, under the address and in its bucket, so
+		// an address's invitations are one object's trail and a removal's
+		// erasure finds both rows.
 		at.aboutKind, at.aboutID = historyObjectAddress, cancelled.EmailBlind
 		at.blind = cancelled.EmailBlind
 		return a.writeCancellation(ctx, tx, cancelled)
@@ -79,13 +67,9 @@ func (a *Applier) applyDirectory(ctx context.Context, tx *sql.Tx,
 // writeEnrolment creates a person's row whole, with their first credentials —
 // and, for a redemption, spends the invitation in the same transaction.
 //
-// AN INSERT THAT DOES NOTHING ON A ROW THAT EXISTS, never an upsert: the
-// record's decide refused a person who already exists, so the only way to meet
-// one here is a redelivery of this very record, and the guard against it is
-// the row itself.
-//
-// `created_at` IS THE BROKER'S instant for this record, which is what makes a
-// replay of the whole log reproduce the instant somebody was enrolled.
+// AN INSERT THAT DOES NOTHING ON AN EXISTING ROW, never an upsert: the decide
+// refused an existing person, so meeting one here is this record's
+// redelivery. `created_at` is the broker's instant, so a replay reproduces it.
 func (a *Applier) writeEnrolment(ctx context.Context, tx *sql.Tx,
 	at applyContext) (int, error) {
 
@@ -122,8 +106,7 @@ func (a *Applier) writeEnrolment(ctx context.Context, tx *sql.Tx,
 	}
 	written, _ := result.RowsAffected()
 	if written == 0 {
-		// A REDELIVERY: this record already created the row, and wrote
-		// everything below with it.
+		// A REDELIVERY: this record already created the row and all below.
 		return 0, nil
 	}
 	credentials, err := a.writeCredentials(ctx, tx, at, id,
@@ -133,11 +116,10 @@ func (a *Applier) writeEnrolment(ctx context.Context, tx *sql.Tx,
 		return int(written), err
 	}
 	if enrolled.Invitation != "" {
-		// THE LINK IS SPENT BY THE RECORD THAT CREATED ITS PERSON, so no
-		// node ever holds the person and a link that still opens. The
-		// guard is the column rather than the version: redeeming twice is
-		// not a stale write to skip, and the second must find it spent
-		// whatever position it arrived at.
+		// SPENT BY THE RECORD THAT CREATED ITS PERSON, so no node holds the
+		// person beside a link that still opens. Guarded by the column, not
+		// the version: a second redemption must find it spent wherever it
+		// lands.
 		spent, err := tx.ExecContext(ctx, spendInvitationStatement,
 			at.unix(), id, at.packed, enrolled.Invitation)
 		if err != nil {
@@ -154,10 +136,9 @@ func (a *Applier) writeEnrolment(ctx context.Context, tx *sql.Tx,
 			return int(written), err
 		}
 	}
-	// A NEW PERSON — at whatever stage, holding whatever seat — is a move
-	// in that seat's standing, and every credential acting as their login
-	// is to be decided again: a Tier A token's `token:<id>` row binds that
-	// token the moment it lands.
+	// A NEW PERSON moves their seat's standing, and every credential acting
+	// as their login is decided again: a Tier A token's `token:<id>` row
+	// binds the moment it lands.
 	a.moved.Seats = true
 	a.moved.person(id, held.Login)
 	return int(written), nil
@@ -184,10 +165,9 @@ const (
 // writeIdentity sets an enrolled person's login and seat to what the record
 // states.
 //
-// THE OLD VALUES ARE FREED BY THE SAME STATEMENT that sets the new, which is
-// what makes a move one record: a credential bound through the login given up
-// is bound through nothing once it lands, and one bound through the new one is
-// bound from now — so the move names both.
+// THE SAME STATEMENT FREES THE OLD VALUES and sets the new, so a move is one
+// record; a credential bound through either login changes standing, so the
+// move names both.
 func (a *Applier) writeIdentity(ctx context.Context, tx *sql.Tx,
 	at applyContext) (int, error) {
 
@@ -202,9 +182,8 @@ func (a *Applier) writeIdentity(ctx context.Context, tx *sql.Tx,
 		id, at.packed).Scan(&login, &seat)
 	switch {
 	case errorsIsNoRows(err):
-		// NOBODY TO CHANGE, or a record this row is already past — a
-		// redelivery. The guard is a SKIP, for the reason every guard
-		// here is.
+		// NOBODY TO CHANGE, or a redelivery this row is already past:
+		// skipped, as every guard here is ([Applier]).
 		return 0, nil
 	case err != nil:
 		return 0, fmt.Errorf("iamdomain: read person %s to change their "+
@@ -237,15 +216,14 @@ func (a *Applier) writeIdentity(ctx context.Context, tx *sql.Tx,
 	return int(written), nil
 }
 
-// reboundBy ends the say of every removal that released seat: a removal's
-// tombstone withholds the seat it released because the contact map still names
-// the leaver, and a bind is a new binding with a standing of its own — once
-// one has landed the leaver is no longer what the seat's standing is about,
-// however many holders come and go after it. See [Reader.SeatHolders].
+// reboundBy ends the say of every removal that released seat: a tombstone
+// withholds its seat because the contact map still names the leaver, and once
+// a bind lands the seat's standing is no longer about the leaver, whoever
+// holds it later ([Reader.SeatHolders]).
 //
-// The FIRST bind's operation id, and the guard is what makes it the first: a
-// removal is a gate no node defers, so every data node has its tombstone
-// before any later bind, and every data node stamps the same id.
+// It stamps the FIRST bind's op id, which the guard makes the first; every
+// node stamps the same one because a removal is a gate no node defers, so each
+// holds the tombstone before any later bind.
 func (a *Applier) reboundBy(ctx context.Context, tx *sql.Tx, at applyContext,
 	seat string) (int64, error) {
 
@@ -263,19 +241,15 @@ func (a *Applier) reboundBy(ctx context.Context, tx *sql.Tx, at applyContext,
 // writeInvitation records an address and a seat spoken for by somebody who has
 // no person yet.
 //
-// THE BUCKET IS THE ADDRESS'S OWN, not a person's: an invitation has no person
-// until it is redeemed, and a bucket derived from an empty id would put every
-// outstanding invitation in the company into one sweep transaction.
+// THE BUCKET IS THE ADDRESS'S: with no person yet, a bucket from an empty id
+// would put every open invitation in one sweep transaction.
 //
-// THE SEAT IS A COLUMN, beside the address's blind, because it is what a
-// directory decide holds a seat against ([heldByInvitation]) and what the seat
-// listing reads an invitation by — a lookup over a column, as every other
-// hold here is, rather than a decode of every open invitation's document per
-// decide. It is the document's own value, written whatever it holds — the
-// writer's decides are what refuse an invitation naming no seat
-// ([Writer.Invite]), and an applier that refused a record would stop the log
-// on every data node. [Applier.Rederive] recomputes it from the same decode
-// whenever a checkpoint's rule set differs from this build's.
+// THE SEAT IS A COLUMN beside the blind, so a decide's hold ([heldByInvitation])
+// and the seat listing are a column lookup, not a decode of every open
+// invitation. It holds the document's value whatever that is: the writer, not
+// the applier, refuses an invitation naming no seat (package doc, "Every
+// person holds a HUMAN seat for as long as they are here").
+// [Applier.Rederive] recomputes it.
 func (a *Applier) writeInvitation(ctx context.Context, tx *sql.Tx,
 	at applyContext, invitation Invitation) (int, error) {
 
@@ -316,16 +290,11 @@ func (a *Applier) writeInvitation(ctx context.Context, tx *sql.Tx,
 
 // writeCancellation deletes an invitation nobody redeemed.
 //
-// A DELETE AND NOT A MARK: the row is what holds the address and the seat
-// ([heldByInvitation] reads it), its sealed copy goes with it, and an id the
-// estate does not hold is exactly what a link to it must look like afterwards
-// — the same refusal as one nobody issued. The guard is the column: a
-// redeemed invitation created somebody, and its row stays until the sweep
-// collects it.
-//
-// NO TOMBSTONE, because nothing needs one: a node applies the log in order,
-// so the issue this deletes is always applied before it, and the framework
-// passes a redelivery below its checkpoint through unapplied.
+// A DELETE, NOT A MARK: the row is what holds the address and seat
+// ([heldByInvitation]), its sealed copy goes with it, and a link to it must
+// then look like one nobody issued. A redeemed invitation stays until the
+// sweep. NO TOMBSTONE: the log applies in order, so the issue always precedes
+// it, and the framework passes a redelivery below its checkpoint unapplied.
 func (a *Applier) writeCancellation(ctx context.Context, tx *sql.Tx,
 	cancelled Cancellation) (int, error) {
 
@@ -348,20 +317,12 @@ const removePersonStatement = `DELETE FROM iam_people WHERE id = ?`
 
 // writeRemoval is the one operation here with no inverse.
 //
-// IT DELETES THE ROWS AND LEAVES A TOMBSTONE, and the tombstone is what makes
-// it permanent: without it a redelivery of any earlier record about this
-// person would write them back, on one node, for ever — and in this domain
-// that is somebody the company off-boarded still signing in.
-//
-// THE IDENTIFIERS ARE RELEASED IN THE SAME STATEMENT LIST rather than by a
-// cascade, because a cascade is a delete nobody committed: the deletion is
-// part of this record's own effect and is therefore identical on every data
-// node.
-//
-// AND EVERY SEALED VALUE OF THEIRS IS ERASED, in the same transaction: the
-// rows it deletes take their name, address and seeds with them, and the rows
-// that outlive them — an invitation addressed to them, their authentication
-// trail — keep every column but the sealed ones ([eraseSealed]).
+// IT LEAVES A TOMBSTONE, which makes it permanent: without one a redelivered
+// earlier record would write an off-boarded person back, able to sign in.
+// Identifiers are released by these statements, not a cascade, so the deletion
+// is this record's own effect, identical on every node. Every sealed value of
+// theirs is erased in the same transaction, from the rows that outlive them
+// too ([eraseSealed]).
 func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 	at applyContext) (int, error) {
 
@@ -380,23 +341,19 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 		return 0, fmt.Errorf("iamdomain: encode person %s's released "+
 			"identifiers: %w", id, err)
 	}
-	// THE LOGIN THEY HOLD, read before the row that holds it is deleted:
-	// a credential bound through it is bound through nothing afterwards.
+	// THE LOGIN THEY HOLD, read before its row goes: a credential bound
+	// through it is bound through nothing afterwards.
 	login, err := heldLogin(ctx, tx, id)
 	if err != nil {
 		return 0, err
 	}
 
-	// THE TOMBSTONE FIRST, so a transaction that fails partway leaves the
-	// person present rather than deleted-and-reusable. It is keyed on the
-	// person and carries the record's OP ID rather than its position,
-	// because the apply that writes it is the one that must be able to run
-	// twice and a position changes under a republish. The seat it released
-	// is a column beside the claims as well (replicated migration 0122), the
-	// claims' own value, because one seat's standing is a seek on it
-	// ([Reader.Requester], [reboundRemovals]) where the claims are a decode
-	// of every tombstone; [Applier.Rederive] recomputes it from the same
-	// claims whenever a checkpoint's rule set differs from this build's.
+	// THE TOMBSTONE FIRST, so a transaction failing partway leaves the person
+	// present rather than deleted-and-reusable. It carries the record's OP ID,
+	// not its position, which a republish changes ([Applier.Gated]). The
+	// released seat is also a column (migration 0122), so one seat's standing
+	// is a seek ([Reader.Requester], [reboundRemovals]), not a decode of every
+	// tombstone's claims; [Applier.Rederive] recomputes it.
 	result, err := tx.ExecContext(ctx, `
 		INSERT INTO iam_removed
 			(person_id, at, record_id, actor, actor_kind, reason,
@@ -411,9 +368,8 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 	}
 	written, _ := result.RowsAffected()
 
-	// AND EVERY ROW THAT IS THEIRS. The order is deliberate: the sessions
-	// go before the person, so a reader that sees the person gone can
-	// never find a live session pointing at them.
+	// SESSIONS BEFORE THE PERSON, so a reader that sees the person gone
+	// never finds a live session pointing at them.
 	for _, statement := range []struct{ what, sql string }{
 		{"sessions", `DELETE FROM iam_sessions WHERE person_id = ?`},
 		{"revocation epoch", `DELETE FROM iam_revocation_epochs WHERE person_id = ?`},
@@ -429,11 +385,9 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 		written += n
 	}
 
-	// THE HISTORY IS NOT DELETED, and that is the whole reason the id
-	// outlives the person: an authentication trail whose authors evaporate
-	// is not an audit trail. What makes the removal real is that their
-	// NAME, ADDRESS and SEEDS are gone from every row — erased here, in the
-	// transaction that deletes the rest.
+	// THE TRAIL IS KEPT, which is why the id outlives the person: an audit
+	// trail whose authors evaporate is none. Their NAME, ADDRESS and SEEDS
+	// are erased from every row instead, here.
 	erased, err := eraseSealed(ctx, tx, id, removal.Released.EmailBlind)
 	written += int64(erased)
 	if err != nil {
@@ -441,10 +395,8 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 			"sealed values: %w", id, err)
 	}
 	if written > 0 {
-		// A REMOVAL RELEASES THE SEAT with everything else they held, and
-		// the tombstone is what the directory then reads as the seat's
-		// standing — see [Reader.SeatHolders]. And it ends every
-		// credential they held, with the rows it deleted.
+		// A REMOVAL RELEASES THE SEAT, whose standing the tombstone then is
+		// ([Reader.SeatHolders]), and ends every credential they held.
 		a.moved.Seats = true
 		a.moved.person(id, login)
 		a.moved.removed(id)
@@ -455,16 +407,14 @@ func (a *Applier) writeRemoval(ctx context.Context, tx *sql.Tx,
 // reboundRemovals selects the removal tombstones a bind of one seat speaks
 // for: every removal that released the seat and that no bind since has.
 //
-// ONE CLAUSE FOR BOTH ITS READERS — the bind's apply, which stamps them, and
-// its writer, which declares their people's buckets in the record's scope
-// ([leaversOf]) — because a tombstone is filed under the LEAVER's bucket, and a
-// bind whose scope named only its own person wrote where no node holding back
-// an earlier record about the leaver would wait for it.
+// ONE CLAUSE FOR BOTH READERS: the bind's apply, which stamps them, and its
+// writer, which declares their people's buckets in the scope ([leaversOf]). A
+// tombstone is in the LEAVER's bucket, so a scope naming only the bound person
+// would not wait behind a deferred earlier record about the leaver.
 //
-// ONE SEEK, whatever the company has removed: `iam_removed_seat_idx` (0122)
-// is `(seat_id, seat_rebound_by, person_id)`, so the clause is its prefix and
-// [leaversOf]'s order its third column. It read the seat out of every
-// tombstone's claims before, a cost that grew with every removal ever made.
+// ONE SEEK: `iam_removed_seat_idx` (0122) is `(seat_id, seat_rebound_by,
+// person_id)`, so the clause is its prefix and [leaversOf]'s order its third
+// column.
 const reboundRemovals = `seat_rebound_by = ''
 	AND seat_id = ?`
 

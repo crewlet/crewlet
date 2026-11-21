@@ -15,24 +15,11 @@ import (
 
 // A PLAN IS READ THROUGH STORETEST, AND NOWHERE ELSE.
 //
-// The package doc says what every plan gate reads is here, once: a statement's
-// plan ([PlanTree], [Plan]) and what a plan line says ([Decorrelated], [Seeks]
-// and the rest). That held only for the gates that happened to call it — six
-// read their plans through EXPLAIN QUERY PLAN loops of their own, each asking
-// less of the plan than the shared reading does, and one of them planned a
-// copy of the statement it was written to hold. So every Go file of the
-// module, tests included, is walked, and a string literal that spells an
-// EXPLAIN QUERY PLAN anywhere but this package's plan.go fails it, by file and
-// line.
-//
-// ONE EXEMPTION, recognised from the parsed package name rather than a list of
-// files: package store's own files under internal/store, whose internal tests
-// cannot import this package, because this package imports theirs. None of
-// that package's statements is a correlated aggregate the shared reading would
-// catch, which is why the copy there costs nothing it would find.
-//
-// Comments are not literals, so a doc comment saying a plan was measured with
-// EXPLAIN is not one.
+// Gates with their own EXPLAIN loops asked less of a plan than the package
+// doc's shared reading, so every Go file, tests included, is walked and a
+// string literal spelling EXPLAIN QUERY PLAN anywhere but plan.go fails.
+// ONE EXEMPTION, from the parsed package name: package store's own files, whose
+// tests cannot import this package (it imports theirs).
 //
 // Mutation: re-add the usage gate's own EXPLAIN loop and this names
 // internal/usage/plan_internal_test.go; drop the package-store exemption and

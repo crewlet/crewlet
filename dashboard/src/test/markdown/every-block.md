@@ -27,9 +27,9 @@ picture ![a chart](images/chart.png "Quarterly").
 - [x] a task done
   - [ ] a nested task
 
-- loose item one
++ loose item one
 
-- loose item two
++ loose item two
 
 ## Quotes and callouts
 

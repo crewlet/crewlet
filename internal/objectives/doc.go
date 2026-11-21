@@ -32,6 +32,18 @@
 // hourly and a burn rate is judged over five minutes as well as six hours; it
 // is a second VIEW of the same call, never a second counting path.
 //
+// # A caller that went away is no event
+//
+// An event whose caller went away before it was answered (a frame torn down, a
+// browser that left, a client that dropped its connection, a stopped turn)
+// ended in its own cancellation, not in a fault of the engine's. A site that
+// answers a caller hands such an event to [Meter.Abandon] instead: inside its
+// bound it is no event, since nobody can say how it would have ended, and past
+// it a bad one, since it was late before its caller left, so a store that stops
+// answering still burns the budget whoever gives up on it. Only a cancellation
+// is a caller leaving ([Abandoned]): a context past its deadline is a bound the
+// engine was held to, and an event that ran into it is bad.
+//
 // # Burn rates, not thresholds
 //
 // An objective alarms when it spends its error budget faster than the month

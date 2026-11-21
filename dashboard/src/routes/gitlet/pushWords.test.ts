@@ -3,7 +3,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { pinZoneForTest } from "~/lib/prefs.ts";
 import type { CodePushCommand, CodePushRow } from "~/protocol/index.ts";
 import {
-  credentialWords,
+  credentialTag,
   dayAside,
   dayCounts,
   pushSubject,
@@ -195,10 +195,18 @@ describe("a push's subject", () => {
     expect(pushSubject(row([cmd(main)], extra))).toEqual(subject);
   });
 
-  test("a credential is named by its kind", () => {
+  // Mutation: draw the login whole, and the token's id reads as its name.
+  test("a credential is named by its kind, and by a name only where a person gave it one", () => {
     expect(
-      ["pat:a", "token:b", "session:c", "other"].map((login) => credentialWords(login)),
-    ).toEqual(["Personal access token", "Deployment token", "Signed-in session", "Credential"]);
+      ["pat:01a1ef63-7d", "token:deploy", "session:01a1dc41", "ci-robot"].map((login) =>
+        credentialTag(login),
+      ),
+    ).toEqual([
+      { words: "Personal access token", name: "" },
+      { words: "Deployment token", name: "deploy" },
+      { words: "Signed-in session", name: "" },
+      { words: "Credential", name: "ci-robot" },
+    ]);
   });
 });
 

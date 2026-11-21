@@ -23,6 +23,11 @@ const DECLARED: Declared[] = [
     why: "The rail sits under the control it narrows, which names the dimension.",
   },
   {
+    where: "routes/gitlet/queue/Box.tsx",
+    element: "Meter",
+    why: "The elapsed words beside the bar say how long the checks have run and of what.",
+  },
+  {
     where: "routes/home/Kpis.tsx",
     element: "Meter",
     why: "The tile's label and figure head the bar, and its caption says what it is out of.",
@@ -91,11 +96,6 @@ const DECLARED: Declared[] = [
     where: "routes/settings/mcp-tools/builtin/Catalogue.tsx",
     element: "FilterChipGroup",
     why: "The chips name the capabilities they show.",
-  },
-  {
-    where: "routes/settings/AssistantSettings.tsx",
-    element: "ListInput",
-    why: "The setting's row names the list above it.",
   },
   {
     where: "routes/settings/FileStorage.tsx",

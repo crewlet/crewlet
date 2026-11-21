@@ -11,12 +11,11 @@ import (
 // AN EXTERNAL BROKER NEEDS A CREDENTIAL.
 //
 // A node dialling `stream.type: nats` with nothing to present reaches only a
-// server that authenticates nobody, and anything that reaches such a server
-// reads and writes this company. So Tier A refuses it at stream.credentials,
-// and accepts any one thing the client presents: a credentials file, a token,
-// a client certificate, or a userinfo in ANY entry of the comma-separated url
-// — `user:pass@` or a bare `token@`, written with or without a scheme, as the
-// client reads them.
+// server that authenticates nobody, which anyone reaching can use to read and
+// write this company. Tier A refuses it at stream.credentials and accepts any
+// one thing the client presents: a credentials file, a token, a client
+// certificate, or a userinfo in ANY entry of the comma-separated url
+// (`user:pass@` or a bare `token@`, with or without a scheme).
 //
 // Mutations: drop the rule and the bare row is accepted; ignore a userinfo
 // and the url rows are refused; read only the first url entry and the rows

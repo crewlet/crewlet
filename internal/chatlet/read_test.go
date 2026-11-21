@@ -25,16 +25,12 @@ import (
 // The read side's own guards, over a real replicated estate fed by the shipped
 // applier.
 //
-// Each case here is a claim no other suite can make: the applier's cases are
-// about the rows a record writes, the write path's are about what reaches the
-// log, and these are about what somebody is ALLOWED and ABLE to read back —
-// who may open a room, what a cursor does across a reanchor, what an unread
-// count costs, and what a node answers when it is behind rather than wrong.
+// Each case is about what somebody is ALLOWED and ABLE to read back: who may
+// open a room, what a cursor does across a reanchor, what an unread count
+// costs, and what a node answers when it is behind rather than wrong.
 //
-// THE HELPERS ARE PREFIXED `read…` for the reason the applier's are prefixed
-// `apply…`: this package's suites are several files written against one test
-// package, and a bare `harness` here would be a collision rather than a shared
-// fixture.
+// THE HELPERS ARE PREFIXED `read…` (as the applier's are `apply…`): several
+// files share one test package, and a bare `harness` would collide.
 
 // readBrokerAt is the broker's own instant for the first record; every record
 // after it is stamped a second later, so a rail ordered by activity has an
@@ -461,18 +457,13 @@ func readEdit(channelID, messageID, opID, body string,
 
 // AN EDIT LEAVES A MENTION WHERE IT WAS.
 //
-// The feed pages on a mention row's version, so that version is the
-// mention's place in it — and it is the position of the record that NAMED
-// the handle. An edit that cleared a message's rows and wrote them again
-// stamped every one at the edit, so each mention it kept jumped to the top of
-// the feed under the message's original time, above every cursor a reader
-// paging back already held: a pager of the feed never saw it again, and a
-// reader at the top saw it again as news. What an edit owes the feed is only
-// its own difference — a handle it no longer names leaves it, a handle it
-// names that the words before it did not arrives at the edit, dated by it —
-// and the position reported for a kept mention has to stay whole across a
-// reanchor, because the message's own position columns move to the edit's
-// generation while the mention does not.
+// The feed pages on a mention row's version, the position of the record that
+// NAMED the handle. An edit that rewrote every row stamped each at the edit, so
+// a kept mention jumped above every cursor a pager held (never seen again) and
+// reappeared as news at the top. An edit owes the feed only its difference: a
+// dropped handle leaves, a new one arrives dated by the edit. A kept mention's
+// position must stay whole across a reanchor, since the message's own position
+// columns move to the edit's generation while the mention does not.
 func TestAnEditLeavesAMentionWhereItWas(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
@@ -583,18 +574,14 @@ func TestADeleteTakesTheMentionOutOfTheFeed(t *testing.T) {
 
 // A CURSOR SPANS A REANCHOR, with no gap and no repeat.
 //
-// An operator who loses the broker estate rebuilds it, and the new stream
-// starts at one. Every cursor this package hands out has to survive that, and
-// the two of them survive it for DIFFERENT reasons — which is why both halves
-// are here:
+// A rebuilt broker estate starts its stream at one. Both cursors survive it,
+// for DIFFERENT reasons, so both halves are here:
 //
 //   - THE MENTIONS in Activity page on the COMPOSED position, where the
-//     generation is IN the ordering. A bare sequence would page the second half of this case
-//     against `seq < 1` and return nothing, losing every message written
-//     before the rebuild.
-//   - THE TRANSCRIPT pages on `channel_seq`, which the applier mints from log
-//     order and never moves. It is contiguous across the rebuild because the
-//     room's high-water mark is a row rather than a position.
+//     generation is IN the ordering; a bare sequence would page against
+//     `seq < 1` and lose every message written before the rebuild.
+//   - THE TRANSCRIPT pages on `channel_seq`, minted from log order and never
+//     moved: contiguous because the room's high-water mark is a row.
 func TestACursorSpansAReanchor(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)

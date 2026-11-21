@@ -286,15 +286,12 @@ func TestAGloballyReachableBlockIsPublic(t *testing.T) {
 // prefix's length (past the u octet, for the lengths whose IPv4 address
 // straddles it).
 //
-// The well-known prefix counts on every network, named or not. A
-// network-specific one counts where the network's resolver names it, and
-// each 3ffe row's prefix lies inside 2000::/3 (3ffe::/16 was the 6bone's,
-// returned to IANA in 2006: global unicast that names nobody's network).
-// Where such a prefix is not named the allowlist judges the same addresses
-// and calls the one carrying 10.0.0.5 public, which is why discovery is part
-// of the rule. The last two rows' prefixes are in RFC 8215's local-use block,
-// the block itself and a /96 in it, which the allowlist refuses whole where
-// nothing names a prefix in it.
+// The well-known prefix counts on every network; a network-specific one where
+// the resolver names it. Each 3ffe row's prefix lies inside 2000::/3 (the
+// 6bone's, returned to IANA in 2006), where, unnamed, the allowlist calls the
+// address carrying 10.0.0.5 public: why discovery is part of the rule. The
+// last two rows are in RFC 8215's local-use block, refused whole where no
+// prefix is named in it.
 func TestANAT64AddressIsJudgedByTheIPv4AddressItCarries(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

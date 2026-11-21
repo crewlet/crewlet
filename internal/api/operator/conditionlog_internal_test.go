@@ -17,18 +17,13 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CONDITION'S ERROR GOES TO THE SURFACE'S OWN LOG, with the surface's own
-// fields, at the one level rule — the only place it goes, since no answer
-// carries it any more.
+// A CONDITION'S ERROR GOES TO THE SURFACE'S OWN LOG, with its own fields, at
+// the one level rule: the only place it goes, since no answer carries it.
 //
 // LogCondition and AnswerCondition log through the logger they are handed, so
-// a line carries the answering surface's component and what the request was
-// doing (an artifact write's verb and operation, the read a configuration
-// route made) beside the error: they logged the error alone under this
-// package's component, so a line said something failed and nothing about
-// what. The level is [statelog.ConditionLevel]'s, WARN exactly where no wait
-// clears the condition and INFO for one that does, and this surface's own
-// lines carry the operation its answer names.
+// a line carries the surface's component and what the request was doing. The
+// level is [statelog.ConditionLevel]'s, WARN exactly where no wait clears the
+// condition and INFO for one that does.
 //
 // Not parallel: the last case installs the process's log sink.
 //

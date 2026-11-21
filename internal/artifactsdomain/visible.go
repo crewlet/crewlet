@@ -6,29 +6,17 @@ import (
 )
 
 // WHO MAY SEE A ROW, AS SQL: the one predicate a listing, its total, a
-// folder's counts and the folder tree are each filtered by.
+// folder's counts and the folder tree are each filtered by. It applies the
+// authority table's relations ([authz.Visible]) in SQL, since a listing cannot
+// ask that row by row over a company; the surface still decides every row it
+// shows. Every count beside a page comes from THIS predicate in the same
+// transaction: a count built from a second predicate drifts, and tells a
+// reader about rows nobody showed them.
 //
-// # One predicate, many readers
-//
-// The authority table decides who may read an artifact or see a folder
-// ([authz.Visible], a relation on the object: its owner, a share naming the
-// reader's seat, a unit they sit in or the company, or leading the agent that
-// owns it). A listing cannot ask it row by row over a whole company, so the
-// estate filters by the same relations in SQL first and the surface still
-// decides every row it shows. Every count the estate answers beside a page (the
-// listing's total, a folder's artifacts, the artifacts in no folder) comes from
-// THIS predicate in the same transaction, so a count never holds a row the
-// listing beside it could not have shown: a count built from a second
-// predicate is the one that drifts, and a drifted count tells a reader about
-// rows nobody showed them.
-//
-// # The same rule as the authority table, exactly
-//
-// A share counts only when its role is on the ladder ([artifacts.Roles]): the
-// authority table ranks a role this build does not know at zero, so a share a
-// newer peer wrote with one grants nothing there, and a listing that counted
-// it would answer "1 shared with you" over an empty page. An audience kind this
-// build does not know matches no arm below, for the same reason.
+// A share counts only at a role on the ladder ([artifacts.Roles]), and an
+// audience kind this build does not know matches no arm: the authority table
+// grants nothing for either, so counting one would answer "1 shared with you"
+// over an empty page.
 
 // relation names the columns a "the viewer holds a relation to this object"
 // predicate reads: the object's owner and the owner's kind, its id, and the
@@ -55,13 +43,12 @@ var rootRelation = relation{
 // sharedClause is "shared with the viewer": their seat, a unit they sit in or
 // below, or the company, at a role on the ladder.
 //
-// THEIR SEAT, NOT THEIR RECORD. The record is the seat when the viewer holds
-// one and the login when they do not ([iam.RecordOwner]), and a seat share
-// names a seat ([artifacts.Audience.Validate]); the authority table matches
-// it against the principal's seat alone. Matched against the record, a share
-// to a login was counted in the viewer's Shared listing and then withheld by
-// every read of it: "2 shared with you" over an empty list. A record in the
-// seat grammar is the seat, since a login never is one.
+// THEIR SEAT, NOT THEIR RECORD: the record is the login when the viewer holds
+// no seat ([iam.RecordOwner]), a seat share names a seat
+// ([artifacts.Audience.Validate]), and the authority table matches the
+// principal's seat alone; matching the record would count a share to a login
+// that every read then withholds. A record in the seat grammar is the seat,
+// since a login never is one.
 func sharedClause(v Viewer, rel relation) (string, []any) {
 	clause := `EXISTS (SELECT 1 FROM ` + rel.shares + ` s WHERE s.` + rel.sharesOf + ` = ` +
 		rel.id + ` AND s.role IN (` + placeholders(len(artifacts.Roles)) + `) AND (

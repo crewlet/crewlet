@@ -34,41 +34,26 @@ const (
 
 	// shutdownGrace is one rung of the stdio transport's shutdown ladder
 	// (childInput.Close): how long it waits after closing the child's stdin
-	// before SIGTERM, and again before SIGKILL. MEASURED-motivated; the SDK's
-	// own command transport defaults to 5s.
+	// before SIGTERM, and again before SIGKILL. The SDK's own default is 5s.
 	//
-	// It is 2s because the ladder is NOT only walked on shutdown. The SDK
-	// closes the session from inside Connect's own error paths, so a server
-	// that launches and never speaks pays this on top of the startup deadline
-	// before the engine can move on — and that is on the seat-acquisition
-	// path. TestStartupDeadlineOnAMuteServer measured a 300ms startup budget
-	// costing 5.30s wall-clock at the SDK default; the whole of the overshoot
-	// was this constant.
-	//
-	// What the window buys is a server flushing state on a clean shutdown,
-	// and a server that has not exited 2s after its stdin closed is not
-	// flushing — it is not watching stdin, which is the case the SIGTERM rung
-	// exists for. A well-behaved server exits in milliseconds and never
-	// touches this number at all.
+	// 2s because the ladder also runs from Connect's error paths: a server that
+	// launches and never speaks pays it on top of the startup deadline, on the
+	// seat-acquisition path (TestStartupDeadlineOnAMuteServer: a 300ms budget
+	// cost 5.30s at the SDK default). The window lets a server flush on a clean
+	// shutdown; one still running 2s after its stdin closed is not watching
+	// stdin, which is what the SIGTERM rung is for.
 	shutdownGrace = 2 * time.Second
 
 	// stderrDrainTimeout bounds the wait for the stderr pump to see EOF once
 	// the parent's write end is closed. REASONED.
 	//
-	// EOF arrives the moment every holder of that descriptor has closed it,
-	// which for a well-behaved tree is process exit. So this window is not
-	// really a timeout on shutdown work — it is the grace given to a
-	// GRANDCHILD (one uvx or npx spawned) that inherited stderr and outlived
-	// its parent, to let go by itself before the tree is signalled by process
-	// group.
-	//
-	// A longer grace here would be a GIVE-UP with nothing behind it — the
-	// reader simply abandoned. This one has a kill behind it, so waiting
-	// longer buys nothing and costs shutdown latency on every
-	// server that has such a grandchild. Two seconds is orders of magnitude
-	// more than closing a descriptor takes; past it the holder is stuck or
-	// deliberate, and neither gets better with time. See stderrRelay.reap and
-	// the measurement in TestMeasuredStdioTimings.
+	// EOF arrives once every holder has closed the descriptor, which for a
+	// well-behaved tree is process exit. So this is the grace for a grandchild
+	// (one uvx or npx spawned) that inherited stderr and outlived its parent to
+	// let go before the tree is signalled by process group. A kill stands
+	// behind it, so waiting longer only costs shutdown latency: 2s is orders of
+	// magnitude more than closing a descriptor takes, and past it the holder is
+	// stuck or deliberate. See stderrRelay.reap and TestMeasuredStdioTimings.
 	stderrDrainTimeout = 2 * time.Second
 
 	// stderrReapGrace is the second, shorter wait after the process group has
@@ -110,29 +95,18 @@ const (
 	maxToolPages = 100
 )
 
-// The restart schedule: how long the bridge waits before each attempt of its
-// own at a server that is down (see supervise.go), and how long the engine's
-// seat runner waits before it starts again a per-role child whose start failed
-// ([RestartWait]). EXPORTED so the engine can hold them to the seat cadence
-// they are anchored to, which this package cannot import.
+// The restart schedule: the bridge's wait before each attempt at a down server
+// (supervise.go), and the seat runner's before restarting a per-role child
+// whose start failed ([RestartWait]). EXPORTED so the engine can hold them to
+// the seat cadence they are anchored to, which this package cannot import.
 //
-// A server's first death — whether its first session came from its owner's
-// start or from a retry of a start that failed — and any death after its child
-// had been up for RestartCeiling, begins a SERIES of attempts, and the first
-// attempt of a series waits NOTHING: the child was healthy, the vendor most
-// likely still is, and a turn calling its tools is refused until it is back.
-// Every other attempt — after one that failed, after a restarted child that
-// died again before it had been up for RestartCeiling, and the first retry of
-// a start that failed — waits RestartBase, then twice as long for each attempt
-// that did not bring it back, up to RestartCeiling, each wait spread by
-// restartJitter: 15 s, 30 s, 1 min, 2 min, 4 min, then every 5 min (± a
-// fifth, so the longest is six). The retries of a failed start are a series of
-// their own, which ends when the server comes up (server.up). REASONED, not
-// measured.
-//
-// THE CEILING IS ALSO WHAT COUNTS AS STABLE, so a server that crashes every
-// few minutes is never restarted more often than the ceiling allows, while
-// one that ran for an afternoon and crashed once comes straight back.
+// A first death, or one after RestartCeiling of uptime, begins a series whose
+// first attempt waits NOTHING: the child was healthy and the vendor likely
+// still is. Every other attempt waits RestartBase, doubling to RestartCeiling,
+// each spread by restartJitter: 15 s, 30 s, 1 min, 2 min, 4 min, then 5 min
+// (± a fifth). A failed start's retries are their own series, ending when the
+// server comes up (server.up). The ceiling is also what counts as stable, so a
+// server crashing every few minutes is never restarted faster. REASONED.
 const (
 	// RestartBase is one seat heartbeat (internal/seat's HeartbeatInterval),
 	// the cadence at which a node re-proves it holds a seat at all. Sooner

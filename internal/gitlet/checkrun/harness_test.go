@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitlettest"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -66,11 +67,21 @@ type order struct{ nodes []string }
 
 func (o *order) GitOrder(string) ([]string, error) { return slices.Clone(o.nodes), nil }
 
-// tokens mints a token naming the attempt it is for.
+// tokens mints a run token, the shape a Gitlet node mints a check's in, over a
+// subject naming the attempt it is for.
 type tokens struct{}
 
+// checkSigner signs every case's check tokens.
+var checkSigner = sync.OnceValue(func() *runtoken.Signer {
+	s, err := runtoken.New(runtoken.Options{Domain: "gitlet-check", Material: runtoken.OneKey("k1", "a fleet's key")})
+	if err != nil {
+		panic(err)
+	}
+	return s
+})
+
 func (tokens) Mint(k gitlet.CheckKey, repo string, timeout time.Duration) (string, error) {
-	return fmt.Sprintf("chk-%s-%s-%d-%s", repo, k.Name, k.Attempt, timeout), nil
+	return checkSigner().Mint(fmt.Sprintf("chk-%s-%s-%d-%s", repo, k.Name, k.Attempt, timeout), timeout)
 }
 
 // cell is one fake backend of the catalogue whose boxes run a check's command

@@ -13,11 +13,10 @@ import (
 
 // Domain is the artifacts log as the state-log framework sees it.
 //
-// A DECLARATION, not a behaviour: every method answers a question the framework
-// asks before it applies anything, and each has a failure mode that is silent if
-// the answer is wrong. What tables exist decides what a donated snapshot scrubs
-// and what an identity claim compares; which kinds arbitrate decides where an
-// anchor row is written; whether a record installs a gate decides whether an
+// A DECLARATION: each method answers a question the framework asks before it
+// applies anything, and a wrong answer fails silently. The tables decide what a
+// donated snapshot scrubs and an identity claim compares; the arbitrated kinds
+// where an anchor row is written; whether a record installs a gate, whether an
 // unknown version stops the applier or is filed for later.
 type Domain struct{}
 
@@ -26,13 +25,13 @@ type Domain struct{}
 func (Domain) Name() string { return "artifacts" }
 
 // ArtifactsLogMaxBytes is the ceiling this domain declares for its log, which
-// is what the framework's own suites provision the stream with.
+// the framework's own suites provision the stream with.
 //
-// A NODE DOES NOT CREATE THE STREAM AT IT: every state log's ceiling is a
-// reservation the broker grants in full, so the engine sizes them together from
-// Tier A (`stream.artifacts_log_max_bytes`, unset deriving a quarter of the
-// tracker log's) inside what the broker can grant. FOUR GIBIBYTES is that
-// quarter of the tracker's own declared default.
+// A NODE DOES NOT CREATE THE STREAM AT IT: the broker grants every state log's
+// ceiling in full, so the engine sizes them together from Tier A
+// (`stream.artifacts_log_max_bytes`, unset deriving a quarter of the tracker
+// log's) inside what the broker can grant. FOUR GIBIBYTES is a quarter of the
+// tracker's declared default.
 const ArtifactsLogMaxBytes = 4 << 30
 
 // ArtifactsMaxRecordBytes is the largest record this domain publishes.
@@ -41,15 +40,14 @@ const ArtifactsLogMaxBytes = 4 << 30
 // [artifacts.MaxFilesPerVersion] entries, each a path of up to
 // [artifacts.MaxPathBytes], a served type, a digest, a key, a size and a script
 // policy, about 0.85 MiB of JSON, plus [artifacts.MaxSearchTextBytes] of search
-// text, then doubled so the base format leaves room for additive fields. The
-// gate reserve on this log is sized by it, so a declaration larger than the
-// records would hold back room no append could use.
+// text, doubled for additive fields. The gate reserve is sized by it, so a
+// larger declaration would hold back room no append could use.
 const ArtifactsMaxRecordBytes = 2 << 20
 
 // ArtifactsLogDuplicates is the window the broker collapses a repeated
-// operation id in: AN OPTIMISATION, NEVER A MECHANISM (the ledger is what makes
-// a retry idempotent). Two minutes, the tracker's and the pages' window,
-// because it must outlast a publisher's retry budget and no longer.
+// operation id in: AN OPTIMISATION, NEVER A MECHANISM (the ledger makes a retry
+// idempotent). Two minutes, as the tracker's and the pages': it must outlast a
+// publisher's retry budget and no longer.
 const ArtifactsLogDuplicates = 2 * time.Minute
 
 // Stream is the artifacts log, at the domain's whole budget.
@@ -188,15 +186,14 @@ func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]state
 
 // Tables is every durable table this domain writes, with its class.
 //
-// THE SCRUB LIST, THE IDENTITY CLAIM AND THE LOCAL SWEEP ARE ALL DERIVED FROM
-// THIS MAP, built from the inventories rather than typed a third time. Every
-// reproducible table is Replicated: each is written only by applying a record,
-// from the record and same-log rows alone, with broker instants, so two nodes at
-// one checkpoint hold the same bytes. The ledger is Divergent: it travels so an
-// adopter can answer a retry of anything its donor applied, and its
-// `applied_at` is each data node's own. So are a comment record's notices
-// (apply_notices.go): whether one is written depends on the batch's instant and the
-// epoch's inbox horizon, which two nodes applying one record need not share.
+// THE SCRUB LIST, THE IDENTITY CLAIM AND THE LOCAL SWEEP ARE DERIVED FROM THIS
+// MAP, built from the inventories. A reproducible table is Replicated: written
+// only by applying a record, from the record and same-log rows, with broker
+// instants, so two nodes at one checkpoint hold the same bytes. The ledger is
+// Divergent: it travels so an adopter can answer a retry of what its donor
+// applied, but its `applied_at` is each node's own. So are a comment record's
+// notices (apply_notices.go): whether one is written depends on the batch's
+// instant and the epoch's inbox horizon, which two nodes need not share.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass,
 		len(ReproducibleTables)+len(MachineryTables))
@@ -224,11 +221,9 @@ func (Domain) OpsTable() string { return "artifacts_ops" }
 // admission.
 //
 // FALSE, unlike the tracker's and the pages': a seat reads no artifact on its
-// turn path, so a stalled artifacts copy must not stop a node admitting seats.
-// The copy is still judged, as every domain's is (ADR-0079), and goes out of
-// service for its own readers (a stalled strict replay is a fault, and the
-// framework refuses every read of it), and the estate router and the serving
-// origin decide through a peer that serves.
+// turn path, so a stalled copy must not stop a node admitting seats. The copy
+// is still judged (ADR-0079): a stalled strict replay is a fault, its reads are
+// refused, and the estate router and serving origin go through a peer.
 func (Domain) GatesSeatAdmission() bool { return false }
 
 // ClaimsIdentity reports that every data node's Replicated tables must be
@@ -240,7 +235,6 @@ func (Domain) ClaimsIdentity() bool { return true }
 // wake from the committed record (ADR-0012). The trim waits on it.
 func (Domain) FeedGroup() string { return FeedGroup }
 
-// BarrierTables is the empty set, DECLARED: the barrier writes no row on any
-// node, and stating that is what keeps "this kind wrote nothing" apart from
-// "nobody classified this kind".
+// BarrierTables is the empty set, DECLARED: the barrier writes no row, and
+// stating it keeps "this kind wrote nothing" apart from "nobody classified it".
 var BarrierTables = map[string]statelog.TableClass{}

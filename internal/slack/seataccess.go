@@ -14,23 +14,20 @@ import (
 //
 // # What moved into the loop, and what stays a person's
 //
-// Creating an app, keeping its manifest in line and deleting it are API calls
-// on the app-configuration token, which the company seals once
-// ([ConfigTokenVar]), so the loop does them. Installing an app into a
-// workspace is OAuth, and OAuth exists so that granting an app a workspace is
-// a person's decision: that stays a click, offered as a waiting step with the
-// link, and the redirect it ends in is what [CompleteSeatInstall] finishes.
-//
-// # Served once, so sealed before anything else
-//
-// Slack serves an app's client secret and signing secret once, at creation,
-// and a bot token once, at install. A create therefore hands its values to the
-// sync to seal, each with the undo that deletes the app again if it cannot be
-// sealed, and an install seals its token before it reports anything, revoking
-// the token when the seal fails (design 5.2).
+// Creating, updating the manifest of and deleting an app are API calls on the
+// app-configuration token the company seals once ([ConfigTokenVar]), so the
+// loop does them. Installing into a workspace is OAuth, a person's decision:
+// it stays a click, offered as a waiting step, and [CompleteSeatInstall]
+// finishes the redirect.
 
 // SeatApp is one agent's Slack app: the app the ledger records for it, and
 // the values sealed under its engine-named variables, already resolved.
+//
+// Slack serves an app's client and signing secrets once, at creation, and a
+// bot token once, at install, so a create hands its values to the sync to
+// seal, each with the undo that deletes the app if it cannot be sealed, and an
+// install seals its token before reporting, revoking it when the seal fails
+// (design 5.2).
 type SeatApp struct {
 	Handle string
 

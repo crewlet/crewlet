@@ -48,6 +48,8 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// The access log's operation ledger, swept per node like every
 		// domain's.
 		"access_ops",
+		// The advisor log's operation ledger (see pages_ops).
+		"advisor_ops",
 		// The diary's Expire has no other caller: unswept, expired
 		// short-term memories stay rows every recall scans.
 		"agent_diary",

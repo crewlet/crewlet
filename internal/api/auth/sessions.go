@@ -18,42 +18,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// HOW A SIGNED-IN PERSON BECOMES A PRINCIPAL.
+// HOW A SIGNED-IN PERSON BECOMES A PRINCIPAL (resolve.go does a Tier A token;
+// both meet at [Guard.Resolve]). Nothing here decides anything: every judgement
+// is internal/iam/session's, and a condition here would be a second policy.
 //
-// resolve.go is the other half of this file and says what a Tier A token
-// becomes; this is what a browser's cookie becomes. The two meet at
-// [Guard.Resolve] and nowhere else, so no route downstream has to know which
-// credential shape arrived — which is the whole point of resolving both into
-// one [iam.Principal].
+// The header wins when both arrive: a browser sends its cookie on every request
+// but `Authorization` is only there on purpose, so a WRONG explicit credential
+// stays anonymous rather than being upgraded by an ambient cookie.
 //
-// # Nothing here decides anything
-//
-// Every judgement is internal/iam/session's, taken from its two tables: which
-// row a bearer landed on, and which seat a validated person acts as. This
-// file is the ADAPTER — it reads the cookie off the request, states which
-// column of the session table this request needs, and turns the three answers
-// into the three [iam.Resolution] arms plus the one refusal that is neither.
-// A condition written here would be a second policy the tables could not see.
-//
-// # Why the header wins when both arrive
-//
-// A browser sends its cookie on every request whether or not the caller meant
-// to present it; an `Authorization` header is only ever there because somebody
-// put it there. So an explicit credential is resolved first, and a request
-// that presents a WRONG one stays anonymous rather than being silently
-// upgraded by an ambient cookie that happens to be in the jar — `curl -H
-// "Authorization: Bearer $TOKEN"` from a signed-in browser's session must act
-// as the token or as nobody, never as the person.
-//
-// # And why a seat refusal is not a 401
-//
-// A person bound to a seat the chart no longer holds is not somebody whose
-// session ended: they are exactly who they say they are, and signing in again
-// changes nothing. 401 would send a browser to discard its cookie and loop
-// through the sign-in page for ever. It is a 403 NAMING THE SEAT, which is
-// [session.Binding]'s own rule — and it is written by the guard rather than
-// carried on the principal, because an empty handle reaching a person-scoped
-// read as "no rows" is the silent failure that rule exists to prevent.
+// A seat refusal is not a 401, which would loop a browser through sign-in: the
+// person is who they say they are. It is a 403 NAMING THE SEAT
+// ([session.Binding]'s rule), written by the guard because an empty handle read
+// as "no rows" is the silent failure that rule prevents.
 
 // errIdentityUnavailable is the reason attached to a request whose cookie this
 // node could not check.
@@ -69,25 +45,15 @@ var errIdentityUnavailable = errors.New("auth: this node could not read the " +
 // ActsAsThemselves reports a route whose subject is the PERSON rather than
 // the seat they hold.
 //
-// # Why the seat refusal has an exemption at all, and why it is exactly this
+// A seat refusal exists because an empty handle would write audit rows under
+// nobody's name and read person-scoped queries as empty: routes that do either
+// act AS THE SEAT. `/auth` (ending a session, re-proving identity, enrolling a
+// factor, recovery codes) is about the CREDENTIAL, never consults the chart and
+// writes no author column. Refusing it would stop a leaver ending their live
+// bearer, leaving an offboarded person a cookie with no way to sign out.
 //
-// A seat refusal exists because a person the chart cannot answer for, given a
-// silent empty handle, would write audit rows under nobody's name and read
-// every person-scoped query as empty. Every route that does either of those
-// acts AS THE SEAT.
-//
-// The `/auth` surface does neither. Ending a session, re-proving identity,
-// enrolling a second factor and regenerating a recovery set are gestures
-// about the CREDENTIAL, keyed on the session's own lineage and the person's
-// own row — the chart is not consulted by any of them, and none writes a row
-// an author column reads. So refusing them buys nothing and costs the one
-// thing a leaver must still be able to do: end the live bearer they are
-// holding. Without this, an offboarded person keeps a working cookie with no
-// way to sign out, and every screen they open loops through a refusal.
-//
-// A PREFIX AND NOT A LIST, because the whole surface shares the property: a
-// route added under /auth is a route about somebody's own credential, which
-// is what that path means. Anything else is guarded normally.
+// A prefix and not a list: a route added under /auth is about somebody's own
+// credential. Anything else is guarded normally.
 func ActsAsThemselves(path string) bool {
 	return strings.HasPrefix(path, PathAuthPrefix)
 }
@@ -165,20 +131,14 @@ func seatRefusal(binding session.Binding) *Refusal {
 // factor, on every guarded route but the three [EnrolmentAdmits] names: 403
 // `second_factor_enrolment_required`.
 //
-// # Why a session and not a sign-in refusal
+// A session and not a sign-in refusal: a person with no second factor (newly
+// invited, or administrator-reset) has nothing else to present, so refusing the
+// sign-in would lock them out of the gesture that satisfies the rule. The
+// sign-in succeeds into a session that can only enrol, and enrolling replaces
+// it with a whole one.
 //
-// A required second factor says nobody signs in on a password alone,
-// and a person who holds no second factor — freshly invited, or one
-// an administrator reset — has nothing else to present. Refusing the sign-in
-// would lock them out of the one gesture that satisfies the rule, so the
-// sign-in succeeds into a session that can make THAT gesture and nothing else,
-// and enrolling replaces it with a whole one. It was never built: the setting
-// was validated, documented and read by nothing, so a deployment that
-// required a second factor admitted a password alone everywhere.
-//
-// THE PERSON IS STILL RESOLVED, as a seat refusal's is: this node knows exactly
-// who they are, the three routes need to, and the cookie is not cleared —
-// signing in again reaches the same restricted session.
+// The person is still resolved, as for a seat refusal: the three routes need
+// to know who they are, and the cookie is not cleared.
 func enrolmentRefusal() *Refusal {
 	return &Refusal{
 		Status: http.StatusForbidden,
@@ -190,30 +150,16 @@ func enrolmentRefusal() *Refusal {
 }
 
 // EnrolmentAdmits reports whether r is one of the three GUARDED routes an
-// enrolment-only session may reach.
+// enrolment-only session may reach: `GET /auth/session` (to render the
+// enrolment), `POST /auth/totp` (the enrolment, whose completion replaces this
+// session) and `POST /auth/step-up` (enrolling asks a proof inside the step-up
+// window; a slow person must re-confirm without signing out). Sign-out is
+// [Unguarded].
 //
-// # Exactly these, and why each
-//
-//   - `GET /auth/session`, so a client can learn it holds such a session and
-//     render the enrolment rather than an error page;
-//   - `POST /auth/totp`, the enrolment itself, both legs — whose completion
-//     replaces this session with a whole one;
-//   - `POST /auth/step-up`, because enrolling asks a proof inside the
-//     step-up window, and a person who took longer than that to find their
-//     phone must be able to re-confirm the password without signing out; it
-//     opens another enrolment-only session, since a password is still all
-//     they hold.
-//
-// And TO LEAVE, the sign-out of this session — `POST /auth/logout` — which is
-// not here because the guard does not judge it at all: it is [Unguarded], so
-// no refusal reaches it, this one included.
-//
-// AN EXACT LIST OF METHOD AND PATH, never a prefix, for the exemption list's
-// reason: the same surface regenerates recovery codes, signs a person out
-// everywhere and ends other people's sessions, and a prefix would hand those to
-// a password alone. Recovery codes wait for the whole session the enrolment
-// opens, because they are the second factor's own backup and a set minted on a
-// password alone would satisfy the rule without an authenticator at all.
+// An exact list, never a prefix: the surface also regenerates recovery codes
+// (which wait for the whole session: a set minted on a password alone would
+// satisfy the rule without an authenticator), signs out everywhere and ends
+// others' sessions.
 func EnrolmentAdmits(r *http.Request) bool {
 	switch r.URL.Path {
 	case PathAuthSession:
@@ -224,44 +170,29 @@ func EnrolmentAdmits(r *http.Request) bool {
 	return false
 }
 
-// RetryIdentitySeconds is the `Retry-After` on an identity 503 — the guard's,
-// a route refusing a caller it could not resolve, and every 503 the sign-in
-// surface answers.
+// RetryIdentitySeconds is the `Retry-After` on an identity 503: the guard's,
+// and every sign-in surface's.
 //
-// TWO SECONDS, which is an apply loop's own scale rather than a round number:
-// what a caller is waiting for is this node's identity applier to commit one
-// more batch, or a coordination or store blip on the order of one lease
-// renewal. A longer hint would park a signed-in browser on an error screen
-// long after the answer changed; a shorter one turns every blip into a retry
-// storm from every open tab, against the estate that is already struggling.
-// It is a hint and never a promise — [statelog.StallGrace] is what says a node
-// is behind ENOUGH to be alarmed about, and nothing here is a second opinion
-// about that.
+// Two seconds is an apply loop's scale: the wait is for the identity applier
+// to commit one more batch, or a blip on the order of one lease renewal.
+// Longer parks a browser on an error screen after the answer changed; shorter
+// turns every blip into a retry storm from every open tab. A hint, never a
+// promise: [statelog.StallGrace] says when a node is behind enough to alarm.
+// One number, declared once, so copies cannot disagree.
 //
-// ONE NUMBER, declared once: internal/api/auth and internal/api/authapi each
-// carried a private copy beside this one, which is how three spellings of one
-// hint come to disagree.
-//
-// A 503 whose CAUSE is in hand takes it through [RetryIdentity] rather than
-// this constant, because the cause may be a refusal no wait clears.
+// A 503 whose CAUSE is in hand uses [RetryIdentity], since the cause may be a
+// refusal no wait clears.
 const RetryIdentitySeconds = 2
 
 // RetryIdentity is the `Retry-After` on an identity 503, in seconds, given
 // what caused it: [RetryIdentitySeconds] unless the state log's own rule —
 // [statelog.RetryAfter], every surface's — says otherwise. ZERO, which writes
-// no header at all, for a refusal waiting cannot clear: a record larger than
-// the broker takes, a full log, a refusal the broker named, an evicted node,
-// a record this node cannot decode. A read refusal's own derived hint where it
-// carries one. A nil cause, or one that is no state-log refusal, is the
-// constant.
-//
-// IT TAKES THE CAUSE because the identity surfaces answered every state-log
-// refusal with the constant: an identity write refused `record_too_large` or
-// `log_full` told a client to come back in two seconds for a write that could
-// never land, which the same refusal on /worklet did not. /iam and
-// /auth are held to naming the cause at every 503 by a gate in each package,
-// which refuses the constant there — a site with nothing in hand passes nil,
-// so the absence of a cause is written down rather than defaulted.
+// no header at all, for a refusal waiting cannot clear (an oversized record, a
+// full log, an evicted node, an undecodable record). A read refusal's own
+// derived hint where it carries one; a nil or non-state-log cause is the
+// constant. It takes the cause so a `record_too_large` write is not told to
+// retry in two seconds: a gate in /iam and /auth refuses the bare constant at
+// every 503, and a site with nothing in hand passes nil.
 func RetryIdentity(cause error) int {
 	return httpjson.RetrySeconds(statelog.RetryAfter(cause,
 		RetryIdentitySeconds*time.Second))
@@ -549,24 +480,18 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		return sessionAnswer{how: iam.Unknown, presented: true}
 	case session.AnswerServe:
 	default:
-		// EVERY REFUSING ROW IS ANONYMOUS, and the cookie is CLEARED so
-		// a browser stops re-presenting a value that can never work
-		// again. The log line carries which row decided; the caller
-		// gets one code for all of them, because telling somebody
-		// whether their session was revoked, expired, swept or never
-		// existed tells an attacker holding it the same.
+		// EVERY REFUSING ROW IS ANONYMOUS and the cookie is CLEARED. The
+		// log line carries which row decided; the caller gets one code
+		// for all, since revoked, expired and never-existed would tell an
+		// attacker holding it the same.
 		//
-		// NOTHING IS ANNOUNCED. A session a record ended — a sign-out,
-		// a revocation, a removal, the company's generation — was
-		// announced by whoever wrote the record; one past its own idle
-		// or absolute deadline is an expiry nobody authored, and
-		// announcing it once per lineage took a remembered set the size
-		// of every session ever noticed.
+		// NOTHING IS ANNOUNCED: a record that ended a session was
+		// announced by its writer, and an expiry nobody authored would
+		// need a remembered set of every session ever noticed.
 		//
 		// THE COOKIE ALONE ([session.End]), never the browser's cache:
-		// this runs on every route the cookie reaches, the dashboard's
-		// document and scripts among them, and Chrome holds a response
-		// that empties its cache until it has scanned all of it.
+		// this runs on the dashboard's scripts too, and Chrome holds a
+		// response that empties its cache until it has scanned all of it.
 		log.InfoContext(r.Context(), "api_session_refused",
 			"row", string(v.Row), "detail", v.Detail)
 		session.End(w, s.external)
@@ -599,41 +524,30 @@ func (s *Sessions) resolve(w http.ResponseWriter, r *http.Request,
 		return sessionAnswer{how: iam.Unknown, presented: true}
 	case session.AnswerServe:
 	default:
-		// THEY ARE STILL RESOLVED, and that is the whole difference
-		// between this refusal and an ended session: this node knows
-		// exactly who they are and cannot say what they act AS. The
-		// refusal beside the principal is what stops them reaching
-		// anything that would use a seat; [ActsAsThemselves] is the
-		// one surface it does not cover, and nothing there reads one.
+		// THEY ARE STILL RESOLVED, unlike an ended session: this node
+		// knows who they are but not what they act AS. The refusal
+		// beside the principal stops anything that would use a seat
+		// ([ActsAsThemselves] is the one surface it spares). It is also
+		// what says a binding was decided and not honoured: the seat is
+		// empty either way, and a genuinely seatless principal (a service
+		// account) carries no refusal.
 		//
-		// THE REFUSAL IS WHAT SAYS a binding was decided and this node
-		// will not honour it: the principal's seat is empty either way,
-		// and a genuinely seatless principal — a service account acting as
-		// itself — carries no refusal, so the two never read alike.
-		//
-		// THE COOKIE IS NOT CLEARED, unlike a refused session: the
-		// bearer is live and works the moment somebody rebinds them,
-		// and discarding it would sign out a person whose only problem
-		// is a chart edit.
+		// THE COOKIE IS NOT CLEARED: the bearer is live and works once
+		// somebody rebinds them; discarding it would sign out a person
+		// whose only problem is a chart edit.
 		refusal, reissue = seatRefusal(binding), false
 	}
 	if v.EnrolmentOnly() {
-		// A SESSION THAT MAY ONLY ENROL A SECOND FACTOR, refused as
-		// that whatever its seat: the seat refusal leaves the whole of
-		// /auth/ and this one only three routes of it, so the narrower
-		// answer is the one that holds — and enrolling is the first
-		// thing either person has to do. The cookie is kept and
-		// re-issued as any live session's is — its holder is working
-		// through the enrolment — and signing in again would only reach
-		// the same restricted session.
+		// AN ENROLMENT-ONLY SESSION is refused as that whatever its seat:
+		// the seat refusal spares all of /auth/ and this one only three
+		// routes, so the narrower answer holds. The cookie is kept and
+		// re-issued as any live session's.
 		//
-		// READ OFF THE BEARER AS WELL AS THE ROW, because a read on a
-		// node that has not applied the session's start is served on
-		// the bearer alone ([session.RowBehind]) with no row to read —
-		// and every sign-in answers before any node applies it. Asked of
-		// the row alone, a password reached every read on every node
-		// for the apply latency after every sign-in, the socket's
-		// snapshot among them.
+		// READ OFF THE BEARER AS WELL AS THE ROW: a node that has not
+		// applied the session's start serves a read on the bearer alone
+		// ([session.RowBehind]), and every sign-in answers before any node
+		// applies it. Asked of the row alone, a password reached every
+		// read, the socket's snapshot included, for the apply latency.
 		refusal, reissue = enrolmentRefusal(), true
 	}
 	if reissue {
@@ -657,33 +571,17 @@ func presentedOf(v session.Validation) presentedSession {
 }
 
 // awaitStart waits for this node to apply the start of the session a write
-// presents, and validates the bearer again once it has — or answers the row it
-// already had.
+// presents, then validates again, or answers the row it already had.
 //
-// # Why a write waits and a read does not
+// A sign-in answers BEFORE any applier reaches its session
+// ([statelog.Request.NoWait]); a read is served on the signature and epoch
+// ([session.RowBehind]). A write acts on the rows, yet a 503 would fail the
+// first request of every client that signs in and acts at once (`crewlet iam
+// token -login`), so it waits for the one position its bearer states.
 //
-// A sign-in answers BEFORE any node's applier reaches the session it opened
-// ([statelog.Request.NoWait]): the broker has acknowledged the record, the
-// bearer carries the position it landed at, and what the sign-in owes in
-// return is that whoever reads the bearer next honours that position. A read
-// always has — [session.RowBehind] serves it on the signature and the epoch. A
-// write may not be served on those alone, because it acts on the rows, and it
-// used to be refused 503 outright: on EVERY node for the few hundred
-// milliseconds an apply takes, which is exactly when a client that signs in
-// and then acts makes its first request. `crewlet iam token -login` signs in
-// and mints at once, and was refused on every real run, with the node it asked
-// a fraction of a second from being able to answer.
-//
-// So the write waits for the one position its bearer states — the wait the
-// sign-in skipped — and is then decided on the rows like any other request.
-//
-// # Bounded, and a miss is the answer it already had
-//
-// [SessionCatchUp] bounds it, and a node that does not arrive inside it is
-// behind for real: the row stays [session.RowBehind] and the request is
-// answered 503 with its retry hint, as before. Nothing is waited for that the
-// bearer did not state, and the bearer is SIGNED, so a caller cannot name a
-// position of its choosing to park a request on.
+// [SessionCatchUp] bounds it: a node that misses it is really behind, and the
+// request gets 503 with its retry hint. The bearer is SIGNED, so a caller
+// cannot name a position to park a request on.
 func (s *Sessions) awaitStart(ctx context.Context, directory session.Directory,
 	cookie string, behind session.Validation,
 	validate func(context.Context, session.Directory, string) session.Validation,
@@ -712,17 +610,11 @@ func (s *Sessions) reissue(w http.ResponseWriter, v session.Validation) {
 // session, and a session exchanged from a Tier A token answered from the
 // CONFIGURATION this node holds — see [tierASubjects].
 //
-// # One reading for the guard and the sign-in surface
-//
-// The guard composes it per request from its own token table, and
+// The guard composes it per request from its token table and
 // internal/api/authapi builds it once from the same Tier A through the same
-// table ([tokensOf]) — one PARSER rather than one instance, which is
-// [NewClients]' arrangement for the same reason. The sign-in surface used to
-// validate against the bare estate instead: a session exchanged from a token
-// names `token:<id>`, which no person row holds, so its own sign-out read it as
-// a session already over and never closed it, while the guard went on serving
-// the same cookie — a break-glass session that outlived the sign-out asked of
-// it, with a captured copy still working until its hour ran out.
+// table ([tokensOf]): one parser, not one instance, as [NewClients]. Validating
+// against the bare estate would miss `token:<id>`, which no person row holds,
+// so a sign-out would read the session as already over and never close it.
 func SessionSubjects(b *config.Bootstrap, directory session.Directory) session.Directory {
 	return tierASubjects{directory: directory, tokens: tokensOf(b).byLogin}
 }
@@ -766,36 +658,16 @@ func (t tierATokens) byLogin(login string) (config.APIToken, bool) {
 
 // tierASubjects is the directory a bearer is validated against, answering a
 // Tier A token's own subject from the CONFIGURATION rather than from a row.
+// The subject is the token's LOGIN (`token:<id>`), with no row: facts about the
+// SESSION are the directory's, the one about the SUBJECT is whether this node
+// still holds the entry. By the id and never the value: a new value under one
+// id leaves old sessions working until their hour ends, and an operator who
+// must cut them off rotates to a new id. A MAC would cost a check per request.
 //
-// # Why a session can stand for a token at all
-//
-// `POST /auth/token` exchanges a Tier A bearer for a session, so a browser can
-// present the deployment's break-glass credential without holding its value.
-// Such a session names the token's LOGIN (`token:<id>`) as its subject, and a
-// token has no directory row: its authority is a line in a config file. So
-// every fact validation reads about the SESSION — its row, whether it ended,
-// the fleet's generation, this node's lag and deferrals — is the directory's,
-// read as for anybody, and the one fact about its SUBJECT is whether this node
-// still holds the entry under that id.
-//
-// BY THE ID AND NEVER THE VALUE. A new value put under the same id leaves the
-// sessions the old one opened working until their one-hour lifetime ends — an
-// operator who has to cut them off at once rotates by giving the token a new
-// id, which ends them here on the next request. A MAC over the value bound into
-// the cookie once ended them on a rotation as well, at the cost of a second
-// credential check on every request, a key derivation and an ending of its
-// own, to shorten an hour an id change already shortens to nothing.
-//
-// A GONE ENTRY IS A SUBJECT THAT MAY NOT ACT, answered as a retired principal:
-// validation then ends the session wherever this node stands against its start
-// record, and the cookie is cleared. Answered as ABSENT instead, a node below
-// the start position would serve reads on a credential the operator withdrew
-// — the absent-row grace exists for a record not yet applied, and a
-// configuration entry is never late.
-//
-// A person's subject is a uuid and a token's carries the `token:` class, which
-// no uuid can, so the two never share a subject; nil tokens answers everything
-// from the directory.
+// A gone entry is a retired principal, so the session ends and the cookie is
+// cleared. As ABSENT, a node below the start position would serve reads on a
+// withdrawn credential: that grace is for a record not yet applied, and a
+// configuration entry is never late. nil tokens answers from the directory.
 type tierASubjects struct {
 	directory session.Directory
 	tokens    func(login string) (config.APIToken, bool)
@@ -829,20 +701,16 @@ func (d tierASubjects) Resolve(ctx context.Context, lineage, person string) (
 
 // principal composes who the holder of a validated bearer is.
 //
-// THE ADMIN POSTURE IS APPLIED HERE, exactly as it is for a Tier A token and
-// for the same reason: `api.auth.admin` is a decision-time bound, so a node
-// turned to `refuse` clamps admin away on its next request rather than on a
-// row somebody has to rewrite. A mixed fleet mid-rollout is a LEGAL state,
-// which is why each node publishes its own posture.
+// The admin posture is applied here as for a Tier A token: `api.auth.admin` is
+// a decision-time bound, so a node turned to `refuse` clamps admin on its next
+// request. A mixed fleet mid-rollout is LEGAL, so each node publishes its own.
 //
-// AND SO IS THE STEP-UP WINDOW: the company's, held within this node's limit,
-// read per request, and the session row states only WHEN its holder
-// proved who they are. The principal's [iam.Principal.ReauthAt] is the instant
-// that proof stops counting — the proof plus this node's window — so a
-// shortened window takes effect on the next request, and a session that
-// proved nothing (a row this node has not applied) is never fresh. A Tier A
-// token's exchanged cookie never reaches here: the guard composes it from the
-// entry, exactly as it composes the token's bearer.
+// So is the step-up window: the company's, within this node's limit, read per
+// request; the row states only WHEN its holder proved themselves.
+// [iam.Principal.ReauthAt] is the proof plus this node's window, so a shortened
+// window applies at once and a session that proved nothing (a row not yet
+// applied) is never fresh. A Tier A token's exchanged cookie never reaches
+// here: the guard composes it from the entry.
 func (s *Sessions) principal(v session.Validation, binding session.Binding,
 	admin iam.AdminPosture, proof proofWindow) iam.Principal {
 

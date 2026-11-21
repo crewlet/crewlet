@@ -517,18 +517,15 @@ func storeOf(db *store.DB, cipher secrets.Cipher) storedReader {
 
 // A BOOTSTRAP SEED NEVER OVERWRITES A COMPANY THAT EXISTS.
 //
-// This is the whole reason there are two flags. `-company` used to import
-// whenever its content differed from the active revision, which made every
-// restart a write: an operator edits their company live — the dashboard, PUT
-// /config, `crewlet config import` — then restarts a node whose file is a
-// month old, and the file wins. A deleted role comes back, a changed model
-// reverts, and nothing says so.
+// This is the whole reason there are two flags: a `-company` that imported
+// whenever its content differed made every restart a write, so a month-old
+// file won over a live edit (dashboard, PUT /config, `crewlet config import`)
+// and nothing said so.
 //
-// The store has to be left EXACTLY as it was: not just "still what it boots
-// on", but no new revision, no moved pointer, and the same document
-// underneath. A seed
-// that chained a revision and then activated the old one back would pass a
-// weaker check and still have rewritten the fleet's history.
+// The store has to be left EXACTLY as it was: no new revision, no moved
+// pointer, the same document underneath. A seed that chained a revision and
+// then activated the old one back would pass a weaker check and still have
+// rewritten the fleet's history.
 func TestABootstrapSeedDoesNotOverwriteAnExistingCompany(t *testing.T) {
 	t.Parallel()
 	db := seedStore(t)
@@ -740,15 +737,13 @@ func (p *unseenOnce) Target(ctx context.Context) (coord.Activation, bool, error)
 
 // A BOOTSTRAP SEED NEVER REPLACES A COMPANY THE FLEET RUNS.
 //
-// "No company yet" was decided from this node's own store, and an empty store
-// is not a fleet with no company: a fresh data node joining a running fleet has
-// one, and so does every boot of a node without `data`, whose store is scratch.
-// Each imported its -company file and pointed the whole fleet at it, over the
-// company every peer was running. The fleet is asked now, and the write is
-// create-only, so a pointer that lands between the read and the write is not
-// replaced either — and the revision the seed stored stays as inert history,
-// never what this node boots on. A file that IS the fleet's
-// revision is what every node of a uniform fleet carries, and is no news.
+// An empty store is not a fleet with no company: a fresh data node joining a
+// running fleet has one, and so does every boot of a node without `data`,
+// whose store is scratch. So the fleet is asked, and the write is create-only,
+// so a pointer landing between the read and the write is not replaced either;
+// the revision the seed stored stays as inert history, never what this node
+// boots on. A file that IS the fleet's revision is what every node of a
+// uniform fleet carries, and is no news.
 //
 // Mutation: drop the pointer read, or the create-only expectation, and the
 // fleet's revision is replaced.
@@ -1061,22 +1056,13 @@ func TestAnOverrideIsJudgedAgainstTheFleetsRevision(t *testing.T) {
 // is never built.
 //
 // The engine boots unconfigured where the file is to be imported, so nothing
-// builds the file until the first reconcile applies it — after the seed has
-// stored it and pointed the fleet at it. A company valid on paper that this
-// node could not build (an E2B key that resolves to nothing) was therefore
-// the fleet's company, an override over the company every peer ran included,
-// refused by this node's every apply and by its next boot, while the boot
-// that wrote it went on serving nothing. So the seed builds the file first
-// and a refusal writes nothing, the way the boot on the file once refused with
-// nothing written.
-//
-// The other half matters as much: a node restarting into a running fleet with
-// a stale file it ignores must not be refused over that file. The build is the
-// import's, never the boot's.
-//
-// Mutations: build after the activation and the fleet moves; build in the
-// bootstrap branch before the pointer is read and the ignored file refuses the
-// boot.
+// builds it until the first reconcile, after the seed has stored it and
+// pointed the fleet at it. A company this node could not build (an E2B key
+// resolving to nothing) would be refused by every apply and next boot. So the
+// seed builds first and a refusal writes nothing. A node restarting into a
+// running fleet with a stale file it ignores must not be refused over it.
+// Mutations: build after the activation and the fleet moves; build before the
+// pointer is read and the ignored file refuses the boot.
 func TestAFileThisNodeCannotBuildIsNeverImported(t *testing.T) {
 	t.Parallel()
 	unbuildable := errors.New("e2b: providers.sandbox.api_key resolved empty")

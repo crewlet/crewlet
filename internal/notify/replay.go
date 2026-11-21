@@ -16,95 +16,27 @@ import (
 // THE INBOUND GROUP'S UNHANDLED WAKES, replayed at a node's start and while it
 // runs.
 //
-// A delivery whose record a newer build wrote is PASSED by a node that cannot
-// read it ([Deferral], [queue.Pass]), and nothing steers the pass to a node that
-// can: the broker hands each return to whichever member of the group asks next,
-// so every one of its 25 deliveries can go to older nodes — early in a roll,
-// one node of the newer build among many older ones. One that no node handled
-// in the ten minutes those deliveries span is dead-lettered with its copy on
-// the group's UNHANDLED subject ([queue.RetiredTo]), and so is one whose last
-// delivery a node handed back — it shed, or stopped — after the passes before
-// it: a hand-back is no failure either. That dead letter, and this replay, are
-// what deliver it; the group's deliveries only usually do.
+// A node that cannot read a newer record PASSES the delivery ([Deferral],
+// [queue.Pass]) and nothing steers it to a node that can, so all 25 deliveries
+// can go to older nodes. The wake is then dead-lettered with a copy on the
+// UNHANDLED subject ([queue.RetiredTo]); that and this replay deliver it.
 //
-// # At the start, and whenever the subject moves
-//
-// What lets a node read a newer record is a newer build, which arrives only
-// with a restart — the change feed's reason for replaying there (internal/
-// changefeed's Feed.replay). But a node of that build ALREADY RUNNING reads
-// every copy kept after its start as well, and a roll paused with one newer
-// node among older ones keeps one every ten minutes or so: replayed only at a
-// start, each waited for a restart that a paused roll never brings, and expired
-// with its wake. So [Service.Start] begins, after it subscribes, a goroutine of
-// its own that [Service.Stop] ends, which replays the group's unhandled subject
-// once at once and then again whenever the subject moves — its count of
-// entries, asked of the broker every [replayPoll], one request however many it
-// holds ([queue.EventQueue.DeadLetterMarks]) — and at least every
-// [replayRetry] while it holds a copy kept for a reason that may since have
-// cleared, or while some other keep moved the dead letters' last sequence. Each
-// pass handles each copy through [Service.Handle], the parse and the delivery a
-// live delivery runs:
-//
-//   - a copy this node handles — its wakes delivered, or parsed to nobody, or
-//     settled as any delivery is — is DROPPED;
-//   - one this node passes too (its build is older still), one that reads as
-//     no event, one whose handling panicked and one it fails as itself — a
-//     wake too large to publish — are KEPT for a node that can, and this
-//     process never handles them again: its build is what would change that,
-//     and it changes only with a restart;
-//   - one whose wake was not delivered for a reason of the node's own, one
-//     handed back while this node sheds, one whose copy could not be read,
-//     and one whose drop failed are KEPT and tried again by a later pass; and
-//     one already gone was settled by whoever took it.
-//
-// So is one whose last delivery reached a node that could not publish its wake
-// — its broker did not answer, or its stop ended the handler — since that
-// failure is the node's ([queue.NakNode]). The group's poison — a delivery
-// one of whose deliveries FAILED AS ITSELF — is kept on its other dead-letter
-// subject, which this never reads.
-//
-// # Each copy contained as a delivery is
-//
-// A live delivery runs [Service.Handle] inside the queue's recover, where a
-// panic is a Nak and a line, and the queue goes on with the rest. The replay
-// is no queue handler, so it contains each copy itself, the queue's way
-// ([panics.Recovered], [panics.ScopeQueue]): a copy whose handling panicked
-// is KEPT, under a line naming its sequence, and the replay goes on with the
-// next. Uncontained, a panic on one copy ended the process at every start of
-// a node of the build that reads it — the only build that gets that far —
-// since the copy, never dropped, was handled again at the next.
-//
-// # A copy delivered twice is one wake
-//
-// Two nodes' replays can read one copy before either drops it, and a copy
-// whose drop failed is replayed again by a later pass — a vendor's as much
-// as a first-party feed's, since a hand-back can spend any delivery's budget.
-// That is safe because EVERY wake's id is derived ([Routed.WakeID]): a parser
-// that defers a newer record derives its wakes' from the record's change and
-// the recipient (changefeed.WakeID), and a wake whose parser derived none —
-// every vendor's — takes one derived from the delivery's own id and the
-// recipient ([DeliveryWakeID]), which the copy carries. So a second copy of a
-// wake carries the first's id, and its seat collapses it as it collapses any
-// redelivered wake: within one drain by the inbox's same-id dedupe
-// (internal/agent/inbox's Screen), and across drains by the fleet's completion
-// ledger (internal/engine's Dispatcher, which drops a worked trigger). A held
-// wake is recorded under an id derived from that one ([HeldID]), and collapses
-// alike.
-//
-// # What waits
-//
-// A copy no running node reads waits for a node that does, kept for the
-// dead-letter stream's retention (`stream.event_retention_hours`): within a
-// poll of its keep where a node of the build that reads it runs, and otherwise
-// at the start of the next one. While one waits, the engine's alarm reading
-// names it (`inbound_dead_lettered`), and one the retention lets go first is
-// counted as the wake it lost (internal/engine's feeddeadletters.go).
+// [Service.Start] begins a goroutine ([Service.Stop] ends it) replaying at once,
+// whenever the entry count moves ([replayPoll]) and at least every
+// [replayRetry] while a kept copy may have cleared. Not only at start: a newer
+// node already running reads later copies, and a paused roll brings no restart.
 
 // UnhandledSubject is where the inbound group's unhandled deliveries are kept
-// — its passed wakes, those a hand-back retired, and those only a node's own
-// failure did — and where the replay replays them from: [queue.RetiredTo] of
-// [topics.NotificationsInbound] and [InboundGroup] for a message that never
-// failed as itself.
+// (passed wakes, hand-backs, a node's own failures) and the replay reads them:
+// [queue.RetiredTo] of [topics.NotificationsInbound] and [InboundGroup] for a
+// message that never failed as itself.
+//
+// A copy delivered twice is one wake, since EVERY wake's id is derived
+// ([Routed.WakeID], changefeed.WakeID, [DeliveryWakeID]): the inbox's same-id
+// dedupe collapses it within a drain, the completion ledger across drains, a
+// held wake likewise ([HeldID]). A copy no running node reads waits for the
+// dead-letter retention (`stream.event_retention_hours`) under the
+// `inbound_dead_lettered` alarm; one expiring first is counted as lost.
 func UnhandledSubject() string {
 	return queue.RetiredTo(topics.NotificationsInbound, InboundGroup, false)
 }
@@ -209,7 +141,15 @@ func (s *Service) replay(ctx context.Context, first chan<- struct{}) {
 
 // replayPass handles every copy the inbound group's unhandled subject holds
 // that mem does not hold back, until ctx ends — leaving every copy it did not
-// reach kept — and records in mem what it made of each: see this file's head.
+// reach kept — and records in mem what it made of each.
+//
+// Each copy goes through [Service.Handle]: handled means DROPPED; one this node
+// passes, reads as no event, panics on or fails as itself is KEPT for a node
+// that can, never retried here; one failing for the node's own reason (not
+// delivered, shedding, unreadable, drop failed) is KEPT for a later pass.
+// Poison sits on another subject, never read. A copy is contained as a
+// delivery is ([panics.Recovered], [panics.ScopeQueue]): an uncontained panic
+// ended the process at every start of the only build that reaches it.
 func (s *Service) replayPass(ctx context.Context, mem *replayMemory) {
 	subject := UnhandledSubject()
 	kept, err := s.letters.DeadLettersOn(ctx, subject)

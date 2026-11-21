@@ -22,10 +22,10 @@ func TestARulesSearchEndsWhateverItsBoundAnswers(t *testing.T) {
 	// Asked more often than any search of the text needs, it admits the
 	// match, so a search that never moved on still ends, its count showing
 	// it.
-	refusing := token(`ab`, "x").bounded(func(string, int, int) (bool, int) {
+	refusing := token(`ab`, "x").bounded(&boundFunc{s: func(string, int, int) (bool, int) {
 		asked++
 		return asked > 64, 0
-	})
+	}})
 	if start, end, found := refusing.find("abab", 0); found || asked != 2 {
 		t.Errorf("the search found %v (%d to %d) asking its bound %d times, want nothing found asking it "+
 			"twice: it went on from where the bound named, the match's own start", found, start, end, asked)
@@ -44,10 +44,10 @@ func TestAJSONWebTokensHeaderOfManyOpeningsIsReadOnce(t *testing.T) {
 	matches := func(text string) (int, string) {
 		jwt := rules()[i]
 		bound, asked := jwt.bound, 0
-		jwt.bound = func(text string, start, end int) (bool, int) {
+		jwt.bound = &boundFunc{s: func(text string, start, end int) (bool, int) {
 			asked++
-			return bound(text, start, end)
-		}
+			return bound.s(text, start, end)
+		}}
 		out := jwt.apply(text)
 		return asked, out
 	}

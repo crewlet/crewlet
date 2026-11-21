@@ -7,19 +7,13 @@ import (
 	"sync"
 )
 
-// The top-level YAML keys each tier owns, DERIVED FROM THE STRUCTS.
+// The top-level YAML keys each tier owns, DERIVED FROM THE STRUCTS: a
+// hand-written copy elsewhere drifted (it listed a nonexistent `agents` and
+// omitted `roles`, `units` and others), so a `units:`-only document was
+// reported undecidable.
 //
-// A second package used to keep its own hand-written copy of these lists to
-// decide which tier an unnamed document is, and it had drifted the way a
-// restated list does: it counted `agents`, which appears nowhere in this tree,
-// the schema, the examples or the docs — while omitting `roles`, `units`,
-// `mcp_servers`, `turn_engine` and `scheduling`. A document with only `units:`
-// therefore scored nothing on either tier and was reported undecidable, which
-// is the commonest authoring shape and the one a fix loop is most often
-// pointed at.
-//
-// Only keys UNIQUE to one tier are useful for telling them apart, so the two
-// sets are subtracted from each other here rather than at each caller.
+// Only keys UNIQUE to one tier tell the tiers apart, so the sets are
+// subtracted here rather than at each caller.
 
 // CompanyKeys is every top-level key only a Tier B document has.
 func CompanyKeys() []string { return companyKeys() }

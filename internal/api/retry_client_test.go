@@ -20,15 +20,13 @@ import (
 // see internal/clientsource for why a copy exists at all and why this side
 // checks it.
 //
-// Every `unavailable` answer the engine sends says when to ask again, and the
-// dashboard waits that out (dashboard/src/protocol/retry.ts). Two values are
-// its own, declared in dashboard/src/contract/retry.ts. UNAVAILABLE_RETRY_MS is what it waits on an answer that carried no
-// hint, and it claims to be what the engine says when it has nothing better —
-// the health tick — which is only true while the two agree. RETRY_AFTER_MAX_MS
-// bounds how long a hint is waited out, and it claims to cut only the DERIVED
-// hint (a backlog over a drain rate), never one the engine fixes — which is
-// only true while every fixed hint is at or under it. Either claim broken
-// silently is a dashboard asking a node sooner than it said it could answer.
+// The dashboard waits out every `unavailable` hint (dashboard/src/protocol/
+// retry.ts) and declares two values of its own in dashboard/src/contract/
+// retry.ts. UNAVAILABLE_RETRY_MS, the wait on an unhinted answer, claims to be
+// the engine's health tick, true only while the two agree. RETRY_AFTER_MAX_MS
+// claims to cut only the DERIVED hint (a backlog over a drain rate), true only
+// while every fixed hint is at or under it. Either broken silently is a
+// dashboard asking a node sooner than it said it could answer.
 func TestTheDashboardRetriesOnTheEnginesOwnHints(t *testing.T) {
 	t.Parallel()
 	fallback := dashboardMillis(t, "UNAVAILABLE_RETRY_MS")

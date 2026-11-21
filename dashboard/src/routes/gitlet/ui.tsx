@@ -17,7 +17,7 @@
 
 import "~/styles/gitlet.css";
 
-import type { ComponentType, ReactNode } from "react";
+import { Fragment, type ComponentType, type ReactNode } from "react";
 import { Copyable, Spinner, Tag, VisuallyHidden, type AvatarVerdict } from "@crewlethq/ui";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
@@ -227,7 +227,9 @@ export function BranchChip({ name, href }: { name: string; href?: string | undef
   const inner = (
     <>
       <GitBranchGlyph size="xs" />
-      {name}
+      <span>
+        <SlashBreaks text={name} />
+      </span>
     </>
   );
   return href ? (
@@ -236,6 +238,26 @@ export function BranchChip({ name, href }: { name: string; href?: string | undef
     </a>
   ) : (
     <span className="code-branch-chip">{inner}</span>
+  );
+}
+
+/** A branch or a path that wraps after its slashes, so a narrow column breaks it between its
+ *  parts, never mid-word. */
+export function SlashBreaks({ text }: { text: string }) {
+  const parts = text.split("/");
+  return (
+    <>
+      {parts.map((part, i) => (
+        <Fragment key={i}>
+          {part}
+          {i < parts.length - 1 && (
+            <>
+              /<wbr />
+            </>
+          )}
+        </Fragment>
+      ))}
+    </>
   );
 }
 

@@ -72,12 +72,14 @@ type RigOptions struct {
 	// counter; nil serves this node's own turns and counts them here.
 	Remote assistant.Remote
 	Rate   assistant.TurnRate
-	// Files is the assistant's file store: attachments, delivered files and
-	// the files a draft change names; nil keeps none.
+	// Files is the assistant's file store: attachments and the files a
+	// draft change names; nil keeps none.
 	Files assistant.Files
-	// Deep runs deep work; nil offers none. A rig given one and no Files
-	// keeps its files in a [Files] of its own.
-	Deep assistant.DeepWork
+	// Images is whether the rig's own model takes images.
+	Images bool
+	// Search is a model whose harness has a search-only run, so search_web
+	// is offered.
+	Search bool
 }
 
 // Assemble builds a rig over o. Its person is grace, holding Worklet, on
@@ -114,14 +116,11 @@ func Assemble(o RigOptions) (*Rig, error) {
 		r.Revoker = &Revoker{}
 		revoker = r.Revoker
 	}
-	models := Models{Model: r.Model, Key: "assistant"}
+	models := Models{Provider: r.Model, Key: "assistant", Images: o.Images, Search: o.Search}
 	if o.Models != nil {
 		models = *o.Models
 	}
 	files := o.Files
-	if files == nil && o.Deep != nil {
-		files = NewFiles(clock.Now)
-	}
 	r.Files = files
 	var offered assistant.Catalogue = Catalogue(o.Tools)
 	if o.Catalogue != nil {
@@ -134,7 +133,7 @@ func Assemble(o RigOptions) (*Rig, error) {
 	r.sessions = sessions
 	svc, err := assistant.New(assistant.Deps{
 		Sessions: sessions,
-		Node:     node, Company: o.Company, Remote: o.Remote, Rate: o.Rate, Files: files, Deep: o.Deep,
+		Node:     node, Company: o.Company, Remote: o.Remote, Rate: o.Rate, Files: files,
 		Acts:   func(context.Context, iam.Principal) ([]string, error) { return o.Acts, nil },
 		Models: models, Budget: o.Budget, Catalogue: offered,
 		Transcripts: r.Store, Records: r.Store, Dispatcher: dispatcher, Revoker: revoker,

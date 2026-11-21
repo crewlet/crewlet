@@ -9,7 +9,8 @@
 // change is ONE RECORD on an ordered stream, arbitrated at the broker on the
 // subject of the object it changes and applied into N identical SQL copies
 // with the checkpoint in the same transaction as the rows. It is the state
-// log's THIRD domain, and it is refused by the config beside an
+// log's THIRD domain, its second STRICT one (which tells a per-domain
+// checkpoint from a per-node one), and it is refused by the config beside an
 // `integrations.confluence` block — pages in two places with nothing keeping
 // them in step is the cache-with-no-invalidation the whole design is against.
 //
@@ -87,7 +88,65 @@
 // A RENAME IS STILL ITS OWN OPERATION rather than a field of a save, and for a
 // reason the transaction does not remove: one record has one subject, and a
 // record carrying both an address change and a content change could arbitrate
-// only one of them.
+// only one of them. It stamps the head's `scoped_through` and never its
+// `version`, so the page's own expectation is never poisoned.
+//
+// # Revisions, comments and wakes
+//
+// REVISION N IS THE BODY AT VERSION N, the newest included: the other reading,
+// that a revision holds what was replaced, collides with itself on the first
+// save and leaves the current body reachable only through the head. A save
+// must state the version it edited, unlike a work item's optional If-Match,
+// because no per-field merge makes overwriting prose safe.
+//
+// A COMMENT DOES NOT SUBSCRIBE ITS COMMENTER, the opposite of the tracker's
+// participants rule and deliberate: a page a hundred people remarked on would
+// wake a hundred seats when somebody fixes a heading. Only a mention
+// subscribes. A remark is its author's: an edit is refused to anybody else,
+// and a removal takes the author or a moderator the caller passes as
+// [CommentAuthority], since this package holds no chart and no grants.
+//
+// The parser routes by [internal/routing] as its degenerate case: `mention`
+// over `watcher`, and a one-link chain to the container's lead offered only
+// for a change [LeadWorthy], so a departed watcher, a lead who is no longer a
+// seat and the page's own author are dropped by the tracker's steps rather
+// than a hand-kept copy. The applier is what notices a tool-skill page moving:
+// there is no page webhook and the change feed drops those changes, so the
+// apply, which derives the skill flag, is the only place that sees both an
+// arrival and a departure. A record that may wake an agent other than its
+// writer says whom the writer worked for ([MutationRecord.WorkingFor],
+// ADR-0109).
+//
+// # Who may write where
+//
+// The reserved-container rules are the store's, checked on every write path
+// (create, save, rename, every comment path) and reading the keys live because
+// they are Tier B; as a tool's check alone, a seat refused a create in the
+// skills container could still save, rename or comment there. They concern the
+// ACTOR, not capability: a person publishing there on purpose is what those
+// containers are for. The capability half is the tool layer's, because the
+// store exempts every person and holds no permissions: a person's write to a
+// skills page is asked `pages.skill.write`, since a tool skill is injected
+// into every seat's turn.
+//
+// # Reads
+//
+// A listing is read in the order its index holds: heads by container, title
+// and id, resumed through `keyset`'s arms, so a late window costs what the
+// first does; a history is read newest first in log order. A read reports the
+// POSITION it answered at, not a hydration boolean. The newest tool
+// skills are the other order ([OrderNewest]), served beside `skills=true`
+// alone ([ErrUnservedOrder]) from a partial index, read across a CROSS JOIN
+// because joined plainly the planner drove on the heads and sorted. An index no
+// reader's plan reaches is a write on every apply on every data node, carried
+// in every snapshot, so none is kept (the trash's stays: the reaper's listing
+// seeks it, on trash instant and page id): every statement that reads a page table
+// is named and planned (`TestEveryIndexServesARegisteredQuery`), which also
+// refuses an unregistered reading of a covered table and an index no plan
+// reaches. [ContainerKey] is the one canonical form of a container key.
+// The tool names are this domain's (`tools.go`), aliased by `agent/builtin`,
+// and the read types declare their somebody-else's-words fields
+// (`provenance.FieldTag`).
 package doclet
 
 import (
@@ -268,16 +327,12 @@ func NormalizeTitle(title string) string {
 // ContainerKey is the canonical form of a container key, for comparison, for
 // every query argument and for the subject a record arbitrates on.
 //
-// UPPER-CASE AND TRIMMED, because a container key is an ADDRESS a person
-// types — in a unit's `space:`, in a tool argument, in a URL — and a company
-// whose `ENG` and `eng` are two containers is one where every page is filed
-// in whichever the author happened to type.
-//
-// ONE FUNCTION because it was eleven copies and they had ALREADY DRIFTED: six
-// upper-cased without trimming and five trimmed first, so a filter built from
-// a key with a trailing space matched nothing while the lookup beside it,
-// built from the same string, matched the container — a page that was plainly
-// there and could not be listed.
+// UPPER-CASE AND TRIMMED, because a container key is an ADDRESS a person types
+// (a unit's `space:`, a tool argument, a URL), and `ENG` and `eng` as two
+// containers would file pages by whichever the author typed. ONE FUNCTION:
+// copies that upper-cased without trimming and copies that trimmed first
+// drifted, so a filter built from a key with a trailing space matched nothing
+// while the lookup beside it matched the container.
 func ContainerKey(raw string) string {
 	return strings.ToUpper(strings.TrimSpace(raw))
 }
@@ -292,14 +347,11 @@ var ErrInvalid = fmt.Errorf("doclet: invalid")
 // [ErrInvalid]. The field and the sentence are held apart so [Sentence] can
 // say them without the package prefix (a page tool tells a model this class
 // in those words alone; the act route and the human write surface answer it
-// in a person's words or in its code's own, ADR-0060) while the Go error
-// keeps the form every log and model has read.
+// in a person's words or in its code's own, ADR-0060).
 //
-// EXPORTED, FIELDS AND ALL, because a refusal crosses the estate router's wire
-// (internal/estate) whenever the node that decided it is not the node whose
-// caller is told: the wire rebuilds an error TYPE from its exported fields, and
-// an unexported one arrived as its message alone — so [Sentence] on the asking
-// node found no refusal and handed its reader the whole "doclet: invalid: …".
+// EXPORTED, FIELDS AND ALL: a refusal crosses the estate router's wire
+// (internal/estate), which rebuilds an error TYPE from its exported fields; an
+// unexported one arrived as its message alone, so [Sentence] found no refusal.
 // Only this package builds one.
 type InvalidError struct {
 	// Field is the argument refused, as the caller named it.

@@ -10,7 +10,25 @@
 // dashboard sends to the entity route's dry run (ADR-0055) to draw the
 // preview from the server's own answer, and then sends again, from the
 // administrator's session and under the entity's own tag, only when they press
-// Apply. ADR-0115 records the rule.
+// Apply. ADR-0115 records the rule. The package imports no store, coordination,
+// state log or API package, so nothing here can apply a fix
+// ([TestTheAdvisorImportsNoWritePath]).
+//
+// # Stated with its numbers, and every class says what it concluded (ADR-0166)
+//
+// A finding leads with a headline carrying its number, its stats, a chart, the
+// seats it is about and one primary action; a run records, per class, found,
+// clear, unread, or silent with why ([Outcomes]); the page reads the company's
+// numbers from [ComputeSnapshot].
+//
+// # Kept, re-derived, and re-checked before a fix is sent (ADR-0164)
+//
+// A background duty runs every detector on its class's cadence and keeps what
+// it finds with the evidence, verdict and fix it rests on; each run re-derives
+// its class's findings, and Apply runs the detector for the finding's subject
+// again before the person sends the fix under the revision that re-check
+// read. The model pass on `advisor.model` explains and adds findings only as
+// ADR-0157 grounded them, which ADR-0164 supersedes and carries.
 //
 // # One detection, read where it is decided
 //
@@ -32,8 +50,10 @@
 // # Work that stalls where nothing else says so
 //
 // stalls.go reads six more classes off the week's records ([ClassRoundCap] and
-// the rest). Every class says one thing for every subject, so it reads as one
-// row ([TestEveryClassSaysOneThingAboutEverySubject]).
+// the rest). [Detect] turns the week's records into findings, each a fixed
+// reading with its threshold beside it and no model call
+// ([TestNoDetectorCallsAModel]). Every class says one thing for every subject,
+// so it reads as one row ([TestEveryClassSaysOneThingAboutEverySubject]).
 //
 // # What the atlas shows needs a person
 //
@@ -146,10 +166,35 @@ type Subject struct {
 	Name string `json:"name,omitempty"`
 }
 
-// Fact is one number a finding's evidence states.
+// Fact is one number a finding's evidence states. A rule's facts are said by
+// their key ([FactLabel]); a model finding's carry the words the model labelled
+// them with, since its keys are its own and a key read as a label ("blocks 1").
 type Fact struct {
 	Key   string `json:"key"`
 	Value int64  `json:"value"`
+	Label string `json:"label,omitempty"`
+	// Unit is what the number counts, where the finding says it rather than
+	// its key's words ([FactUnit]); an investigation's numbers say theirs.
+	Unit Unit `json:"unit,omitempty"`
+	// Was is the same number over the range before, where it was read.
+	Was *int64 `json:"was,omitempty"`
+}
+
+// Counts is what the fact's number counts: its own unit, else its key's.
+func (f Fact) Counts() Unit {
+	if f.Unit != "" {
+		return f.Unit
+	}
+	return FactUnit(f.Key)
+}
+
+// Said is how the fact is labelled: its own words where it carries them, else
+// its key's ([FactLabel]).
+func (f Fact) Said() string {
+	if f.Label != "" {
+		return f.Label
+	}
+	return FactLabel(f.Key)
 }
 
 // RecordKind is what a record names, so a reader knows how to open it.
@@ -200,11 +245,26 @@ type Finding struct {
 	// every finding of one class, so a class reads as one row: what it is
 	// about is Subject, Item, Names, Evidence and Records.
 	Title string `json:"title"`
+	// Headline is one line that carries the finding's number ("Seats sat
+	// idle 11 h on 19 Nov: the model hit its limit 4 times"), where the
+	// class or the investigation wrote one; the title stands in for it
+	// otherwise (ADR-0166).
+	Headline string `json:"headline,omitempty"`
+	// Premise is the fact the finding rests on, asked again every hour; a
+	// premise that no longer holds resolves the finding (ADR-0166).
+	Premise *Premise `json:"premise,omitempty"`
+	// Seats are the seats a finding about one cause is about, each with its
+	// share of the number, where the class states them (ADR-0166).
+	Seats []SeatShare `json:"seats,omitempty"`
 	// Why says what it costs, in the owner's words.
 	Why string `json:"why"`
 	// Item is the one thing within the subject the finding is about, as a
 	// person reads it in a list: a schedule's name and how often it runs.
 	Item string `json:"item,omitempty"`
+	// Focus is what within the subject a class that raises several findings
+	// on one subject is about, stable across reads: a document path, an
+	// item's key, an integration finding's own subject. Part of [Key].
+	Focus string `json:"focus,omitempty"`
 	// Names is every seat the finding is about by display name, in the order
 	// of their handles, where one finding holds several.
 	Names []string `json:"names,omitempty"`
@@ -226,6 +286,27 @@ type Answer struct {
 	Revision string    `json:"revision"`
 	Findings []Finding `json:"findings"`
 	Unread   []string  `json:"unread"`
+	// Silent is each class that read its sources and still could not judge
+	// all of the company, with why (ADR-0166).
+	Silent []Silence `json:"silent,omitempty"`
+	// Shared are the findings of classes the Advisor no longer lists that
+	// the usage insights still share by their published class ([Shared]);
+	// never listed, never kept.
+	Shared []Finding `json:"-"`
+}
+
+// SeatShare is one seat a finding is about, and its share of the number.
+type SeatShare struct {
+	Seat  string  `json:"seat"`
+	Name  string  `json:"name"`
+	Value float64 `json:"value"`
+	Unit  Unit    `json:"unit"`
+}
+
+// Silence is what a class could not judge, and why, in words.
+type Silence struct {
+	Class  Class  `json:"class"`
+	Reason string `json:"reason"`
 }
 
 // [Answer.Unread]'s words: integrations whose last reconcile, the tracker's
@@ -244,6 +325,11 @@ const (
 	UnreadHolds        = "holds"
 	UnreadStops        = "budget_stops"
 	UnreadMerges       = "merges"
+	UnreadEpisodes     = "alarm_episodes"
+	UnreadFlow         = "flow"
+	UnreadSkips        = "schedule_skips"
+	UnreadStaffing     = "staffing"
+	UnreadCapacity     = "capacity"
 )
 
 // Inputs is what one answer is read from.
@@ -257,6 +343,16 @@ type Inputs struct {
 
 // Read is every finding the company document and its integrations raise.
 func Read(in Inputs) Answer {
+	answer := readEach(in)
+	answer.Findings = groupCauses(in.Company, answer.Findings)
+	stateHeadlines(in.Company, answer.Findings)
+	sortFindings(answer.Findings)
+	return answer
+}
+
+// readEach is [Read] before its causes are grouped: one finding per warning,
+// which the evidence's schedule judgement reads schedule by schedule.
+func readEach(in Inputs) Answer {
 	findings := []Finding{}
 	for _, w := range in.Company.Warnings() {
 		findings = append(findings, fromWarning(in.Company, w))
@@ -298,7 +394,11 @@ func fromWarning(c *config.Company, w config.Warning) Finding {
 	}
 	f.Title, f.Why = entry.words(c, place, w)
 	f.Item = w.Item
+	f.Focus = staticFocus(w)
 	f.Fix = entry.fix(c, place, w)
+	if class == ClassHealthUnheld {
+		f.Evidence = append(f.Evidence, Fact{Key: "agents", Value: int64(len(agentSeats(c)))})
+	}
 	return f
 }
 

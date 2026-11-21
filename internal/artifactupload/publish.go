@@ -161,7 +161,7 @@ func (s *Service) Create(ctx context.Context, c artifactsdomain.Call, req Create
 	start := s.now()
 	out, report, err := s.create(ctx, c, req)
 	s.observePublish(start, err)
-	s.judgePublish(start, err)
+	s.judgePublish(ctx, start, err)
 	return out, report, err
 }
 
@@ -236,17 +236,16 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 //
 // # A refused publish leaves nothing behind
 //
-// Every object the pipeline wrote for the publish (an edit's result, a linted
-// page, a copied CDN file, inline content) is deleted when the publish is
-// refused, and its reservation released; the upload the caller sent goes back
-// to open, its files held for another try until its window closes. An outcome
-// nobody could establish (a store that did not answer) leaves everything as it
-// is, so the retry of the same operation continues where it stopped.
+// Every object the pipeline wrote (an edit's result, a linted page, a copied
+// CDN file, inline content) is deleted when the publish is refused, and its
+// reservation released; the caller's upload goes back to open, its files held
+// until its window closes. An outcome nobody could establish (a store that
+// did not answer) leaves everything, so the retry continues where it stopped.
 func (s *Service) Publish(ctx context.Context, c artifactsdomain.Call, req PublishRequest) (artifactsdomain.Published, Report, error) {
 	start := s.now()
 	out, report, err := s.publish(ctx, c, req)
 	s.observePublish(start, err)
-	s.judgePublish(start, err)
+	s.judgePublish(ctx, start, err)
 	return out, report, err
 }
 
@@ -311,7 +310,7 @@ func (s *Service) publish(ctx context.Context, c artifactsdomain.Call, req Publi
 	decided := s.now()
 	published, err := s.writes.Publish(ctx, c, in)
 	if bytesFree(req) {
-		s.judgeApplied(decided, err)
+		s.judgeApplied(ctx, decided, err)
 	}
 	if err != nil {
 		return published, Report{}, r.fail(ctx, err)
@@ -379,7 +378,7 @@ func (s *Service) restore(ctx context.Context, c artifactsdomain.Call, req Publi
 func (s *Service) writeOnly(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.PublishInput) (artifactsdomain.Published, Report, error) {
 	decided := s.now()
 	published, err := s.writes.Publish(ctx, c, in)
-	s.judgeApplied(decided, err)
+	s.judgeApplied(ctx, decided, err)
 	return published, Report{}, err
 }
 

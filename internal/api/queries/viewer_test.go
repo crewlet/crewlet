@@ -740,17 +740,14 @@ func TestTheInboxResumeTakesTheWholePosition(t *testing.T) {
 
 // MY WORK, MY INBOX AND MY PERSON RECORD ARE THE CALLER'S WHEN THEY NAME NOBODY.
 //
-// `viewer=` is gone from the query surface: the viewer is the caller's own
-// seat, and every personal question that names no handle is about them. One
-// table over the three, because they are one rule — and the one that went
-// untested was the third: `work_person` defaulted through the same function
-// the other two do, and nothing said so.
+// The viewer is the caller's own seat, and every personal question that names
+// no handle is about them. One table over the three, because they are one
+// rule, all defaulting through the same function.
 //
 // Each is asked as a caller holding every grant, so the answer is whose record
 // was READ rather than whether the read was allowed; the handle a stub was
 // asked for is the whole assertion. The control is naming somebody else, which
-// must reach them — a default that ignored the argument would pass the first
-// half and fail this.
+// must reach them: a default that ignored the argument would fail it.
 func TestMyWorkAndPeopleDefaultToTheCaller(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -925,14 +922,12 @@ roles:
 }
 
 // WHO MAY CHANGE THE COMPANY DOCUMENT is on the viewer, so the dashboard
-// draws a managed document read-only rather than offering saves the config
-// surface refuses (ADR-0030) — judged on the CREDENTIAL the request came
-// through, by the one reading the config surface refuses a write with
-// ([config.APIAuth.MayWriteCompany]). So a person's session, a machine token
-// and a session exchanged from a listed Tier A token are each another
-// credential and may not, while the listed token's own bearer may; and the
-// writers are named to every caller, as the config surface's own refusal names
-// them to anybody whose write it turns away.
+// draws a managed document read-only (ADR-0030), judged on the CREDENTIAL the
+// request came through ([config.APIAuth.MayWriteCompany]). A person's
+// session, another machine token and a session exchanged from a listed Tier A
+// token are each another credential and may not, while the listed token's own
+// bearer may; the writers are named to every caller, as the config surface's
+// refusal does.
 //
 // Mutation: judge the login instead of the credential, and the exchanged
 // session passes; withhold the writers from a caller who may not write, and

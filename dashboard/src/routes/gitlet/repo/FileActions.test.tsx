@@ -1,12 +1,10 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { CodeBlobAnswer } from "~/protocol/index.ts";
-import { forgetDownloadProbes } from "./downloads.ts";
 import { COPY_MAX_BYTES, FileBytes, copyHeld, copyWhole } from "./FileActions.tsx";
 
 afterEach(() => {
   cleanup();
-  forgetDownloadProbes();
   vi.unstubAllGlobals();
   Reflect.deleteProperty(navigator, "clipboard");
 });

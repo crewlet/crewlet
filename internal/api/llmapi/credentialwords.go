@@ -42,6 +42,9 @@ type credentialWords struct {
 	// mint is the command that makes a new token ("claude setup-token"),
 	// "" for a key or where the harness mints none.
 	mint string
+	// current is whether the model exists already, and so has a credential
+	// it keeps using when this one is refused; false while it is being added.
+	current bool
 }
 
 // wordsFor names the credential names carries for entry under key. A write of
@@ -95,6 +98,11 @@ func (w credentialWords) refused(meaning harnessprofile.AuthMeaning) string {
 		} else {
 			cause += " Paste a current one."
 		}
+	}
+	// A MODEL BEING ADDED HAS NO CURRENT CREDENTIAL to keep using: saying it
+	// had one told a person adding their first model that a key was in use.
+	if !w.current {
+		return cause + " Nothing was stored."
 	}
 	return cause + " Nothing was stored, and the model still uses its current " + w.noun + "."
 }

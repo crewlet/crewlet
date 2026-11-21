@@ -10,79 +10,29 @@ import (
 	"time"
 )
 
-// The working indicator: "is thinking…" while an agent reasons.
+// The working indicator: "is thinking…" while an agent reasons. Backends differ
+// in one way worth modelling: WHETHER IT CARRIES TEXT; where not, the phrase
+// machinery goes INERT and a phase change costs no request.
 //
-// An agent turn takes minutes. Without a signal the person who posted sees
-// nothing until the reply lands, and cannot tell "the bot is working" from
-// "the bot is dead". Every chat backend offers some way to close that gap,
-// and they differ in exactly one way worth modelling: WHETHER THE INDICATOR
-// CARRIES TEXT.
+// A raised status expires within minutes, so a session heartbeats at the
+// poster's interval. Posting clears it; "gave up" has no backend signal, so a
+// session clears explicitly when its last turn ends.
 //
-// One backend renders free text ("Agent SWE is crewleting…"). Another offers
-// only the composer typing indicator, whose wording its client fixes — the
-// engine can raise it but cannot say anything with it. A poster declares
-// which it is, and where text is unsupported the phrase machinery goes
-// INERT: the session still runs, keeping the indicator alive, but a phase
-// change stops costing a request, because there is nothing about it a reader
-// could see.
-//
-// # Two properties of every backend's mechanism shape the lifecycle
-//
-// A RAISED STATUS EXPIRES — in a couple of minutes at most — so a session
-// keeps a heartbeat that re-asserts well inside that window, at the poster's
-// own interval.
-//
-// POSTING INTO THE CONVERSATION CLEARS IT, which covers the "agent replied"
-// half for free. The "agent gave up" half — the agent decided the message
-// was not for it, the turn failed, the budget ran out — has no backend-side
-// signal at all, so a session always clears explicitly when its last turn
-// ends.
-//
-// # And one property of the CALLER shapes where the requests are made
-//
-// EVERY RAISE AND EVERY RE-ASSERTION IS MADE BY THE SESSION'S OWN GOROUTINE,
-// never by the turn that asked for it. Both calls sit on a turn's critical
-// path — [StatusDriver.Begin] runs before the turn assembles its context, and
-// [StatusSession.Phase] runs immediately before a phase's first provider call
-// — so a chat instance that takes its client timeout to answer would delay
-// the agent's actual work by that long, for a cosmetic surface whose every
-// other failure is swallowed. So those two only write the state and wake the
-// goroutine, which is also what makes the ORDER of what a backend hears total:
-// one writer, so a re-assertion can never overtake the raise it belongs to.
-//
-// The teardown is the deliberate exception. [StatusSession.End],
-// [StatusDriver.ClearFor] and [StatusDriver.Stop] STOP the goroutine at its
-// next boundary between posts, WAIT for it, and only then clear — because the
-// clear has to be the last thing the backend hears, and a process that exits
-// before it lands leaves an indicator claiming an agent is working for the
-// whole of the backend's expiry.
-//
+// Raises and re-assertions are made by the session's OWN GOROUTINE, never the
+// turn: [StatusDriver.Begin] and [StatusSession.Phase] sit on its critical
+// path, and a slow chat instance would delay real work. One writer also keeps
+// what a backend hears totally ordered.
+
 // # Stopped between posts, never cancelled in the middle of one
 //
-// CANCELLING A REQUEST ABANDONS IT; IT DOES NOT WITHDRAW IT. The teardown used
-// to cancel the goroutine's context, which made an in-flight raise or
-// re-assertion return at once — while the request itself was already on the
-// wire, or already in the server's hands. The clear then went out on a second
-// connection, and the server was free to apply the two in either order: when
-// the abandoned raise landed second, the indicator stayed up over a turn that
-// had ended, with nothing left to take it down but the backend's own expiry.
-// So a teardown asks the loop to stop and lets the post in flight finish:
-// once its response is back, the server has applied it, and the clear that
-// follows is ordered after it for real. A backend with no clear at all (the
-// typing indicator) gets the same guarantee from the same rule — nothing it
-// was sent can arrive after the turn that raised it is over.
-//
-// BOUNDED, because the wait is now for a real request: every request an
-// indicator makes runs under [statusRequestTimeout], the clear included, so a
-// teardown waits at most one post and one clear however slow the backend is.
-// A post that runs out of that time is abandoned after all, and its fate is
-// the one thing no client can know; that is the only case left in which the
-// clear can be overtaken, and the indicator then lapses on the backend's own
-// expiry.
-//
-// DETACHED, the clear especially: the ending being reported is often the
-// cancellation itself — a shed seat, a drained node, a turn that ran out of
-// time — and a clear made on a dead context does nothing at all.
+// CANCELLING A REQUEST ABANDONS IT; IT DOES NOT WITHDRAW IT: a cancelled raise
+// is already on the wire, the clear takes a second connection, and the server
+// may apply them in either order, leaving the indicator over an ended turn. So
+// [StatusSession.End], [StatusDriver.ClearFor] and [StatusDriver.Stop] stop
+// the goroutine between posts, let the post in flight finish, WAIT, and only
+// then clear. BOUNDED by [statusRequestTimeout]; a post that runs out is the
+// one case where the clear can be overtaken. The clear is DETACHED: the ending
+// is often the cancellation itself.
 
 // StatusMode is when an agent shows a working status.
 type StatusMode string
@@ -126,17 +76,14 @@ type Conversation struct {
 // ConversationOf resolves the thread a turn's trigger points at, for one
 // backend. It reports false for a trigger that came from somewhere else.
 //
-// The discriminator is the `transport` key every chat transport stamps on
-// what it parses. That key survives inbox coalescing — the merged event
-// mirrors the latest constituent's metadata — and the detached-sandbox round
-// trip, so a resumed turn resolves the same conversation as its kick-off and
-// the indicator the person is watching stays the one that clears.
+// The discriminator is the `transport` key every chat transport stamps; it
+// survives inbox coalescing and the detached-sandbox round trip, so a resumed
+// turn resolves the conversation of its kick-off and the indicator the person
+// watches stays the one that clears.
 //
-// Raising a status needs a THREAD ANCHOR, and a top-level message has no
-// thread yet — so its own id is the anchor. Through [Anchor], which is the
-// same value the chat prompt tells the agent to reply under: that is what
-// makes the indicator appear where the reply will land rather than somewhere
-// else in the channel.
+// Raising needs a THREAD ANCHOR, and a top-level message's own id is it,
+// through [Anchor], the value the chat prompt tells the agent to reply under,
+// so the indicator appears where the reply will land.
 func ConversationOf(metadata map[string]string, backend string) (Conversation, bool) {
 	if len(metadata) == 0 || backend == "" || metadata[TransportField] != backend {
 		return Conversation{}, false
@@ -232,17 +179,13 @@ type StatusPoster interface {
 
 	// ClearStatus takes the indicator down.
 	//
-	// SEPARATE from SetStatus with an empty string, because the two are
-	// only the same operation on a backend that renders text. One clears
-	// by setting an empty status; a fixed-vocabulary typing indicator has
-	// no text to empty and no clear operation at all — it lapses on its
-	// own — so overloading the payload makes "raise" and "clear"
-	// indistinguishable, and such a backend has to refuse both.
+	// SEPARATE from SetStatus with an empty string: the two are one operation
+	// only on a backend that renders text. A typing indicator has no text to
+	// empty and no clear at all (it lapses), so overloading the payload makes
+	// "raise" and "clear" indistinguishable.
 	//
-	// Required, and deliberately with no generic fallback: the only
-	// candidate — SetStatus with "" — RAISES the indicator on a poster
-	// that ignores its status argument, which is the entire class of
-	// backend this method exists for.
+	// Required, with no generic fallback: SetStatus with "" RAISES the
+	// indicator on a poster that ignores its status argument.
 	ClearStatus(ctx context.Context, handle, channel, thread string) bool
 }
 
@@ -271,15 +214,12 @@ type StatusPost struct {
 // statusRequestTimeout bounds every request an indicator makes: the raise,
 // each re-assertion, and the clear.
 //
-// ONE REQUEST, ONE BUDGET, and it is what bounds a teardown, which waits for at
-// most the post in flight and then makes the clear (see the opening comment).
-// Five seconds: long enough for a chat instance under load to answer, short
-// enough that a drain of a dozen seats against one that has stopped answering
-// finishes in seconds rather than waiting out a vendor client's timeout per
-// request, on the one surface whose every failure is swallowed as cosmetic.
-// What a request that runs out loses is one indicator left standing until the
-// backend's own expiry lapses it — about two minutes on the surface that
-// renders text, seconds on the one that does not.
+// It bounds a teardown, which waits for at most the post in flight and then
+// the clear (see "Stopped between posts"). Five seconds: long enough for a
+// loaded chat instance to answer, short enough that draining a dozen seats
+// against one that stopped answering takes seconds, not a vendor client's
+// timeout per request. A request that runs out leaves one indicator standing
+// until the backend's own expiry (about two minutes where text renders).
 const statusRequestTimeout = 5 * time.Second
 
 // statusKey identifies one live indicator.
@@ -338,23 +278,16 @@ type wait struct {
 	at   time.Time
 }
 
-// maxWaitAge is the longest a queued line stands for one message with nothing
-// ending it, the backstop under every way a wait is meant to end: the turn
-// that picks the message up ([StatusDriver.Begin], then Dequeue), the dispatch
-// that settles it, including a hand-back that dead-letters it (the engine's
-// Dispatcher.Settled), the seat leaving this node ([StatusDriver.ClearFor])
-// and the driver stopping ([StatusDriver.Stop]). A wait one of those missed
-// would otherwise be re-asserted on every heartbeat for the life of the
-// process.
+// maxWaitAge is the longest a queued line stands for one message, the
+// backstop under every way a wait ends (the picking-up turn, the dispatch
+// that settles it, [StatusDriver.ClearFor], [StatusDriver.Stop]): one of those
+// missed would be re-asserted on every heartbeat for the life of the process.
 //
-// ONE HOUR, and a judgment rather than a measurement: nothing bounds how long
-// a seat may legitimately be busy (an executor run has no run-time limit), so
-// any bound can end a line that was still true. An hour is twice the ack
-// window a running turn's own mail must settle in (jetstream DefaultAckWait),
-// long enough that only a seat held by an executor outlasts it; past it the
-// seat's own state on Live and the Agents page says more than a line that has
-// not moved. Ending the line never touches the message, which stays on the
-// seat's inbox.
+// ONE HOUR, a judgment rather than a measurement: nothing bounds how long a
+// seat may legitimately be busy (an executor run has no time limit), so any
+// bound can end a line still true. An hour is twice the ack window (jetstream
+// DefaultAckWait), so only a seat held by an executor outlasts it, and past it
+// the seat's own state says more. Ending the line never touches the message.
 const maxWaitAge = time.Hour
 
 // queued reports whether this indicator says "queued": somebody's message is
@@ -409,16 +342,14 @@ type StatusOptions struct {
 // StatusDriver owns every live working indicator on one backend.
 //
 // Sessions are keyed by (handle, channel, thread) and REFERENCE-COUNTED by
-// turn id, so two DIFFERENT turns for one agent in one thread — a queued
-// follow-up, or a colleague's ask arriving mid-conversation — share a
-// heartbeat and the indicator clears only when the last of them finishes.
-// Clearing on the first would take the indicator down while somebody is still
-// waiting.
+// turn id: two DIFFERENT turns for one agent in one thread (a queued
+// follow-up, a colleague's ask) share a heartbeat, and the indicator clears
+// when the last finishes, not while somebody is still waiting.
 //
-// A suspend/resume pair is NOT that case and must not be confused with it: it
-// is ONE turn id, so its hold is one, taken back by [StatusDriver.Rejoin]
-// rather than counted twice — which is what makes ending a resumed turn take
-// the indicator down instead of decrementing a count that never reached two.
+// A suspend/resume pair is ONE turn id, so its hold is one, taken back by
+// [StatusDriver.Rejoin] rather than counted twice; ending a resumed turn then
+// takes the indicator down instead of decrementing a count that never reached
+// two.
 type StatusDriver struct {
 	poster  StatusPoster
 	mode    StatusMode
@@ -576,35 +507,24 @@ func (d *StatusDriver) Begin(ctx context.Context, handle, turnID, phase string, 
 	d.sessions[key] = s
 	d.mu.Unlock()
 
-	// THE RAISE IS THE GOROUTINE'S FIRST ACT, not this function's last: see
-	// the third property in this file's opening comment. Begin returns as
-	// soon as the session exists, so the turn it belongs to never waits on a
-	// chat backend to start working.
+	// THE RAISE IS THE GOROUTINE'S FIRST ACT, not this function's last (see
+	// the file's opening comment): the turn never waits on a chat backend.
 	go d.run(loopCtx, s)
 	return &StatusSession{driver: d, key: key, turn: turnID}
 }
 
 // Rejoin takes back the hold a turn already has on a live indicator.
 //
-// It is what a RESUMED turn calls. A turn that suspended on a detached
-// executor ended with keepAlive, so its indicator is still up and still
-// heartbeating; the turn that re-enters that conversation minutes later needs
-// the hold back so it can end it for real — and it CANNOT call Begin, because
-// a resume has no trigger to raise from: the parked run's own row deliberately
-// carries no chat metadata (the message that woke the suspended turn may be
-// days gone, and a coalescing key is a partition rather than an address).
+// A RESUMED turn calls it: one that suspended with keepAlive left its
+// indicator up and needs the hold back to end it for real. It CANNOT call
+// Begin, since the parked run's row carries no chat metadata.
 //
-// Addressed by (handle, turn id) rather than by conversation for the same
-// reason, and it never raises, never posts and never creates: a session this
-// driver does not hold answers nil, which is the honest answer where the seat
-// moved node or the process restarted — the indicator then lapses on the
-// backend's own expiry, and a resumed turn that raised a fresh one would be
-// claiming a conversation it cannot prove it is in.
-//
-// No guard on an empty handle or turn id, because the match below already is
-// one: no live session is keyed on an empty handle ([StatusDriver.Begin]
-// refuses one) and no hold is recorded under an empty turn id, so both answer
-// nil by the same rule everything else does.
+// Addressed by (handle, turn id) for the same reason; it never raises, posts
+// or creates. A session not held here answers nil, the honest answer where
+// the seat moved or the process restarted (the indicator lapses on the
+// backend's expiry; a fresh raise would claim a conversation it cannot prove
+// it is in). An empty handle or turn id needs no guard: nothing is keyed on
+// one.
 func (d *StatusDriver) Rejoin(handle, turnID string) *StatusSession {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -723,16 +643,14 @@ func (s *StatusSession) End(ctx context.Context, keepAlive bool) {
 // something the seat is already doing, saying it is queued and how many tasks
 // are ahead of it; it reports whether this driver took it.
 //
-// THE SAME INDICATOR A TURN RAISES, keyed on the same conversation, so the
-// turn that picks the message up joins it ([StatusDriver.Begin]) and moves it
-// on to its phase in place, and [StatusDriver.Dequeue] takes the wait away
-// once the message no longer waits. Nothing else changes about the lifecycle:
-// one goroutine posts, a heartbeat keeps it alive, and a seat this node stops
-// running takes it down ([StatusDriver.ClearFor]).
+// THE SAME INDICATOR A TURN RAISES, keyed on the same conversation: the turn
+// that picks the message up joins it ([StatusDriver.Begin]) and moves it to
+// its phase in place, and [StatusDriver.Dequeue] takes the wait away. The
+// lifecycle is otherwise unchanged ([StatusDriver.ClearFor] included).
 //
-// ONLY WHERE WORDS ARE DRAWN. A backend whose indicator is a composer typing
-// line says "writing" whatever it is told, and a queued message is not being
-// written, so on such a backend this raises nothing.
+// ONLY WHERE WORDS ARE DRAWN: a composer typing line says "writing" whatever
+// it is told, and a queued message is not being written, so there this raises
+// nothing.
 func (d *StatusDriver) Queue(ctx context.Context, handle, wake string, metadata map[string]string) bool {
 	if d.mode == StatusOff || handle == "" || wake == "" || !d.poster.SupportsStatusText() {
 		return false
@@ -910,21 +828,16 @@ func (d *StatusDriver) Stop(ctx context.Context) {
 }
 
 // retire takes down the indicators of sessions already out of the driver's
-// map, each in the one order that keeps its clear last: stop its goroutine at
-// the next boundary between posts, wait for the post in flight to FINISH, then
-// clear. Never cancel that post — see "Stopped between posts" in the opening
-// comment.
+// map, in the one order that keeps each clear last: stop its goroutine, wait
+// for the post in flight to FINISH, then clear (see "Stopped between posts").
 //
-// ALL AT ONCE rather than one after another, so the call is bounded by one
-// post and one clear however many indicators it takes down: every stop is
-// asked for before any wait, and each clear goes out as soon as its own
-// session's goroutine is gone. One after another, a node stopping with a
-// dozen live indicators against a chat instance that had stopped answering
-// would wait out a dozen budgets in turn.
+// ALL AT ONCE, so the call is bounded by one post and one clear however many
+// indicators it takes down: every stop is asked for before any wait, and one
+// after another a dozen indicators against an unanswering chat instance would
+// wait out a dozen budgets in turn.
 //
-// ctx may be dead already — the ending being reported is often the
-// cancellation itself — because each clear detaches from it and carries its
-// own deadline ([StatusDriver.clear]); the waits take nothing from it at all.
+// ctx may be dead already (the ending is often the cancellation itself): each
+// clear detaches from it and carries its own deadline ([StatusDriver.clear]).
 func (d *StatusDriver) retire(ctx context.Context, sessions []*session) {
 	for _, s := range sessions {
 		close(s.stop)

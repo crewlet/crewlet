@@ -16,24 +16,13 @@ import (
 //
 // Every change is one RECORD on one ordered stream, published to the subject
 // of the object it changes and conditioned on that object's last sequence
-// there. The subject is the ARBITRATION UNIT rather than a routing label: two
-// writers saving one page contend at the broker and exactly one wins, and two
-// writers on different pages never contend at all.
+// there. The subject is the ARBITRATION UNIT, not a routing label: two writers
+// saving one page contend at the broker and one wins.
 //
-// # What the log removes that the bucket could not
-//
-// The package doc names the three two-key sequences this domain used to have
-// — create, save and rename — each with its own crash state and its own grace
-// rule for stepping over the debris. Every one of them existed because
-// coordination has no multi-key transaction. Here they do not exist: a create
-// is ONE record whose apply writes the title row, the page row, the first
-// revision and the history entry in one transaction, so there is no orphan
-// claim, no orphan revision and no window in which a title is held by a page
-// that was never written.
-//
-// What the record must still state is the SCOPE — every object its apply
-// touches — because that is what a node which cannot decode it files the
-// deferral under.
+// A create is ONE record whose apply writes the title row, page row, first
+// revision and history entry in one transaction, so no orphan claim exists.
+// A record must still state its SCOPE, every object its apply touches, because
+// a node that cannot decode it files the deferral under that.
 
 // ObjectKind is what an object on the pages log is.
 //
@@ -201,32 +190,15 @@ func TrimmedSubject(floor statelog.Position) Subject {
 
 // TitleSubject names one container's claim on one title.
 //
-// # Why the title is a TOKEN rather than the title
+// The address is a fixed-width TOKEN of the normalised title, not the title: a
+// subject is a broker path (no space, dot, `*` or `>`, all common in prose),
+// and escaping would need a second alphabet agreeing with coordination's. A
+// 32-byte token is bounded where an escaped title is up to 3x [MaxTitle] in
+// every member's index, and [TitleToken] is recomputed from the payload, so a
+// writer arbitrating on one address while claiming another is REFUSED.
 //
-// A subject is a broker path: it may not contain a space, a dot, a `*` or a
-// `>`, and a page title is prose that routinely contains all four. The bucket
-// this domain replaces solved that by escaping every segment of its key
-// grammar; doing the same here would mean a SECOND escaping alphabet — the
-// broker's, which is not coordination's — and two alphabets that must agree
-// about one address for ever.
-//
-// So the address is arbitrated on a fixed-width digest of the normalised
-// title, and three things make that the better trade:
-//
-//   - ARBITRATION NEEDS ONLY EQUALITY. Two writers claiming one address must
-//     land on one subject, and nothing here ever needs to read the title back
-//     out of the subject.
-//   - THE SUBJECT IS A COST. It is a key in the broker's per-subject index on
-//     every member for the life of the deployment; a 32-byte token is bounded
-//     where an escaped title is up to 3x [MaxTitle].
-//   - NOTHING IS LOST. The record's own payload carries the container and the
-//     displayed title, the applier writes both, and [TitleToken] recomputes
-//     the token from them — so a writer that arbitrated on one address while
-//     claiming another is REFUSED rather than applied.
-//
-// THE TITLE IS NORMALISED HERE, once, so a caller cannot arbitrate on the
-// author's own capitalisation: "Deploy Runbook" and "deploy runbook" are one
-// address, and two subjects would make them two.
+// THE TITLE IS NORMALISED HERE, once: "Deploy Runbook" and "deploy runbook"
+// are one address.
 func TitleSubject(container, title string) Subject {
 	return Subject{
 		Kind: KindTitle,

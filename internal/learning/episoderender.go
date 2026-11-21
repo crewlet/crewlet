@@ -28,26 +28,15 @@ const EpisodeAccountBytes = 600
 // EpisodeRewriteTimeout bounds every rewrite ONE RENDER of past turns makes
 // ([PastTurns]) — the turn-start block's and the query_episodes tool's alike —
 // as ONE deadline from the render's start, never one per rewrite.
+// Thirty seconds is the turn-start auxiliary calls' own bound
+// (prefetch.AuxTimeout): a model is waiting, and rewrites not back by then mean
+// a provider in trouble, better served by the size note ([compact.Omitted]).
+// It is held inside the one function every caller renders through.
 //
-// THIRTY SECONDS, the turn-start auxiliary calls' own bound
-// (prefetch.AuxTimeout) and for its reason: a model is waiting on the answer —
-// a turn starting, or a tool call in the middle of one — and rewrites of a few
-// kilobytes that have not come back in that long are a provider in trouble,
-// whose reader is better served by the size note ([compact.Omitted]) now than
-// by the rewrite later. Held HERE, inside the one function every caller
-// renders through, so no caller can make a rewrite without it: the tool's
-// renders had none and waited out the compactor's own minute, plus its retry,
-// per account.
-//
-// ONE DEADLINE FOR THE RENDER, because a deadline per rewrite is a bound per
-// WAVE: [PastTurns] makes at most [compact.Parallel] rewrites at a time, so n
-// turns' asks and accounts ran in ⌈2n / Parallel⌉ waves, each allowed the full
-// thirty seconds — two waves for the three turns the turn-start block
-// recalls, a minute where the block had been one auxiliary call's thirty
-// seconds, and six and a half minutes for the tool's twenty-five. Held to one
-// deadline, a render of any number of turns waits at most this, and a rewrite
-// still queued behind the bound when it passes is never sent and is named by
-// its size.
+// One deadline, because [PastTurns] runs at most [compact.Parallel] rewrites at
+// a time, so a per-rewrite deadline bounds each wave (six and a half minutes
+// for twenty-five turns). A rewrite still queued at the deadline is never sent
+// and is named by its size.
 const EpisodeRewriteTimeout = 30 * time.Second
 
 // PastTurn is what a prompt carries of one recalled turn's own words, each on
@@ -103,10 +92,8 @@ func PastTurns(ctx context.Context, episodes []Episode, fit compact.Bound, bytes
 //
 // "" for a turn that recorded nothing it did.
 //
-// WHY IT IS SHOWN AT ALL: the label beside it ([Episode.TaskSummary]) says
-// what kind of event woke the turn — "Message from Ana: Slack message" — and
-// nothing of what came of it, so a recall of three similar turns used to tell
-// a seat three times that somebody had sent a message.
+// It is shown because the label beside it ([Episode.TaskSummary]) says only
+// what kind of event woke the turn, nothing of what came of it.
 func episodeAccount(ctx context.Context, ep Episode, fit compact.Bound, bytes int) string {
 	return episodeLine(ctx, fit, compact.KindOutcome, ep, ep.PlanSummary, bytes)
 }
@@ -129,26 +116,18 @@ func episodeAsk(ctx context.Context, ep Episode, fit compact.Bound, bytes int) s
 	return episodeLine(ctx, fit, compact.KindTask, ep, ep.Ask, bytes)
 }
 
-// RenderPastTurn is one recalled turn as a model reads it: THE ONE RENDERING of
-// a past turn into a model's text, for the turn-start "## Similar prior work"
-// block, the episode summary model's input and `query_episodes` alike, so all
-// three present one turn one way (ADR-0040). past is what [PastTurns] made of
-// its ask and account; b is the token the reader's fences carry — the turn's
-// for a seat, one minted for the call for an auxiliary model.
+// RenderPastTurn is one recalled turn as a model reads it: THE ONE RENDERING,
+// shared by the turn-start "## Similar prior work" block, the episode summary
+// model's input and `query_episodes` (ADR-0040). past is what [PastTurns] made
+// of its ask and account; b is the token the reader's fences carry.
 //
-// A RAW TURN is when it started, the label of what woke it, how it ended and
-// the tools it called, what it was asked and what it did. WHAT IT WAS ASKED IS
-// SOMEBODY ELSE'S WORDS on most turns, so it sits inside a fence of b under the
-// label it was asked with ([Episode.AskProvenance]) — a stranger's message
-// from a month ago is not the seat's own memory because the seat recalled it —
-// and is neutralised where it was the company's or the seat's own (a
-// schedule's task). Everything else on the line is the engine's label or the
-// seat's own account, and is neutralised, so nothing on it opens or closes a
-// fence. A turn with no label, no ask and no account renders nothing.
-//
-// A COMPACTED ROW stands for a cluster of turns, so it is the pattern, how many
-// turns it stands for and how many of them ended done, and what varied — its
-// summary's own words, neutralised. It keeps no ask.
+// A raw turn is its start, wake label, outcome, tools, ask and account. The ask
+// is usually somebody else's words, so it sits inside a fence of b under the
+// label it was asked with ([Episode.AskProvenance]), neutralised where it was
+// the company's or the seat's own. Everything else is the engine's label or the
+// seat's account, neutralised so nothing opens or closes a fence. A turn with
+// none of label, ask, account renders nothing. A compacted row is the pattern,
+// its turn and done counts, and what varied (neutralised); it keeps no ask.
 func RenderPastTurn(b provenance.Boundary, ep Episode, past PastTurn) string {
 	var out strings.Builder
 	if ep.Kind == KindCompacted {

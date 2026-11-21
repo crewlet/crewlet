@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -90,17 +91,14 @@ func ledgerOf(bridged []runner.BridgedCall) []ledger.Call {
 	return out
 }
 
-// A SENT-BACK SESSION IS TOLD WHAT IT LACKS. A reviewer's send-back continues
-// the session that did the round, so its brief is that session's next message:
-// the task restated — a compacted session holds only its own summary of it —
-// the rules its earlier rounds' calls are read by, without their list, which
-// the session holds; what the review asked of the next round; and every note
-// the turn has read that the session has not — the one read after the session
-// was saved, and the one the reviewer read in this very segment, which reaches
-// the brief before the record has numbered it — then the one this brief is the
-// first to read, never one the session read itself. In a box that replaced the
-// session's, it is told that too: a fresh checkout, and the old box's paths. The
-// fresh brief beside it still carries every note.
+// A SENT-BACK SESSION IS TOLD WHAT IT LACKS. A send-back continues the
+// session that did the round, so its brief is that session's next message: the
+// task restated (a compacted session holds only its summary of it), the rules
+// its calls are read by without their list, what the review asked, and every
+// note the session has not read, including one the reviewer read in this very
+// segment, which reaches the brief before the record numbers it, but never one
+// the session read itself. In a replaced box it is told that too: a fresh
+// checkout and the old box's paths. The fresh brief still carries every note.
 //
 // Mutation: carry only the notes this brief is the first to read, or every
 // note the turn read, drop a note this segment read, or drop the task or the
@@ -177,25 +175,17 @@ func TestASentBackSessionIsToldWhatItLacks(t *testing.T) {
 }
 
 // A CARRIED-ON SESSION IS TOLD WHAT CAME AFTER IT WAS SAVED. A lost job's round
-// continues the job's kept session, saved before the job was cut off: so it is
-// told it was cut off, that its transcript may end mid-call, and every call the
-// run made through the seat's tools that the session may not have been
-// answered — every call the round's log took after the read the session's save
-// point is, so after the point it ends and one still in flight when it was
-// saved, which the log took once its tool answered — with the call's outcome,
-// never one the log took before that read. A session cut off is saved at the
-// newest point its launch was known to hold, which may be short of where it
-// ends — the round's start, where its launch landed no capture of its own — so
-// those calls are told as ones it may already show, each shown both there and
-// in the session one call, and never as calls it lacks. A round lost a second
-// time starts a session of its own, rather than replay the state it was lost
-// in toward the round's limit.
+// continues the job's kept session, saved before the cut-off: so it is told it
+// was cut off, that its transcript may end mid-call, and every call the log
+// took after the read its save point is (one in flight at the save included),
+// with its outcome. That point may be short of where the session ends, so the
+// calls are told as ones it may already show. A round lost a second time
+// starts a session of its own.
 //
 // Mutation: list every call of the round, read the save point against the
-// order the calls were made in rather than the order the log took them (and
-// the call in flight goes untold), drop the interrupted note, tell a session
-// cut off its calls in the words of one saved where it ends, or continue the
-// session after a second loss, and a case goes red.
+// order the calls were made in (the call in flight goes untold), drop the
+// interrupted note, tell the calls in the words of a session saved where it
+// ends, or continue after a second loss, and a case goes red.
 func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -287,25 +277,17 @@ func TestACarriedOnSessionIsToldWhatCameAfterItWasSaved(t *testing.T) {
 }
 
 // A KEPT SESSION CUT OFF IS TOLD AGAIN EVERY NOTE THE TURN HAS READ. A capture
-// whose harness was cut off may lack its job's last take of the notes, recorded
-// read before its answer reached the harness, and is not known to hold its
-// job's brief, which told the notes the session it continued lacked — an
-// earlier job's among them. No record says which those were, so a relaunch
-// that continues it — a person's answer or a loss alike — tells it, after the
-// calls it may not show and before the note waiting for it, every note the turn
-// has read, once each, in the order read, under a header that counts them and
-// says a note shown both above and there is one note — a second copy of one,
-// unheaded, would read as a note of its own; the note waiting follows, once.
-// Whatever cursor its capture states: none, as this build stamps a capture cut
-// off, or the notes before its job's last take, as an older build stamped one.
-// A capture whose harness ended its own run holds every note read up to its
-// cursor, and is told those read after it, and only those, as before.
+// whose harness was cut off may lack its job's last take of the notes, and no
+// record says which. So a relaunch that continues it tells it, after the calls
+// it may not show and before the note waiting, every note the turn has read,
+// once each, in order, under a header saying a note shown both above and there
+// is one note. Whatever cursor its capture states. A capture whose harness
+// ended its own run is told only the notes read after its cursor.
 //
 // Mutation: tell a session cut off only the notes past its cursor, head them
-// only where its capture states a cursor, tell them without their header, after
-// the note waiting or a second time with no header, or tell a whole session its
-// notes as ones it may already show or none of those read after its cursor, and
-// a case goes red.
+// only where a cursor is stated, drop the header, put them after the note
+// waiting or repeat them unheaded, or tell a whole session its notes as ones
+// it may already show, and a case goes red.
 func TestAKeptSessionCutOffIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -415,24 +397,16 @@ func TestAKeptSessionCutOffIsToldAgainEveryNoteTheTurnRead(t *testing.T) {
 
 // A KEPT SESSION IS TOLD AGAIN EVERY NOTE FROM A READ ITS HARNESS NEVER HAD. A
 // take whose write landed after its answer was lost is marked unanswered on the
-// record: the session lacks that note though its harness ended its own run, and
-// holds the answered reads after it. So a relaunch that continues it — a
-// person's answer or a send-back alike — tells it every note from that read on,
-// once each, in the order read, under the header of notes it may already show,
-// and none before, which the session holds; the note waiting follows, once. As
-// much where the capture's cursor already stops before the read
-// (internal/sandbox's notesHeld) as where its mark landed after the capture was
-// stamped and the cursor counts it — the mark carried from the record the
-// segment resumed from, or landed after that and read by the relaunch's own
-// brief. With two reads marked around an answered one, the first stops it. A
-// take marked unanswered after the session was saved is told as every read
-// after the save is, unheaded. The fresh brief beside it tells every note, as it
-// always does.
+// record: the session lacks that note though its harness ended its own run. So
+// a relaunch that continues it tells it every note from that read on, once
+// each, in order, under the header of notes it may already show: as much where
+// the cursor already stops before the read (internal/sandbox's notesHeld) as
+// where it counts a mark landed after the capture was stamped. Of two marked
+// reads the first stops it; one marked after the save is told unheaded.
 //
-// Mutation: tell only the notes past the capture's cursor where it counts the
-// read, stop at the last read marked rather than the first, ignore a mark the
-// relaunch's brief read, tell them without their header, tell the notes before
-// the read too, or leave the read itself out, and a case goes red.
+// Mutation: tell only the notes past the cursor where it counts the read, stop
+// at the last read marked, ignore a mark the relaunch's brief read, drop the
+// header, tell notes before the read, or leave the read out, and a case goes red.
 func TestAKeptSessionIsToldAgainEveryNoteFromAReadItsHarnessNeverHad(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -640,18 +614,16 @@ func TestARelaunchTellsANoteALostTakeRecordedWhereTheRecordReadIt(t *testing.T) 
 
 // A SESSION IS TOLD A NOTE ITS HARNESS WAS SERVED AS ONE IT MAY ALREADY SHOW. A
 // note the run's bridge served an OpenCode harness is recorded read only once
-// the harness confirms delivering it, so a session continued from that job may
-// hold one the record says waits, or that only a review read since. A relaunch
-// that continues it tells such a note under the header of notes it may already
-// show, never as one it had not read: still waiting, among the notes the brief
-// is the first to read — the header taking every note before it, so the order
-// read is kept, and only the notes after it following plainly — and read since
-// by a review, among the notes past the session's cursor. The fresh brief
-// beside it tells every note plainly, as it always does.
+// the harness confirms it, so a continued session may hold one the record says
+// waits; and a hook's note taken before its last restart
+// (steer.Reading.Restarted) it may not hold, though the cursor counts it. A
+// relaunch tells each under the header of notes it may already show: a waiting
+// one among the notes the brief is first to read, the header taking every note
+// before it to keep the order read, and the others from their read on.
 //
 // Mutation: tell a served note plainly, take the notes after the last served
-// one under the header, or leave a served note a review read since plain, and a
-// case goes red.
+// one under the header, leave a served note a review read since plain, or count
+// a restarted read held, and a case goes red.
 func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -670,7 +642,12 @@ func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.
 	served := note("served", "the note served to the job's harness, its confirmation lost")
 	late := note("late", "the note filed after it")
 	msg := func(by, text string) string { return prompts.SteerMessage(by, text) }
+	restarted := read("restarted", "the note a hook's serve handed over before the session restarted", 2,
+		types.PhaseExecute, types.SteerBoundaryToolBatch)
+	restarted.Restarted = true
 	for name, tc := range map[string]struct {
+		// cursor is the capture's, 1 where unset.
+		cursor  int
 		steered []steer.Read
 		served  []string
 		waiting []steer.Note
@@ -678,6 +655,9 @@ func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.
 		// it; none is the header absent.
 		again, plain []string
 	}{
+		"a hook's note its session took before it restarted": {cursor: 2, steered: []steer.Read{held, restarted},
+			waiting: []steer.Note{late}, again: []string{msg(restarted.By, restarted.Text)},
+			plain: []string{msg(late.By, late.Text)}},
 		"a served note still waiting": {steered: []steer.Read{held}, served: []string{"served"},
 			waiting: []steer.Note{early, served, late},
 			again:   []string{msg(early.By, early.Text), msg(served.By, served.Text)},
@@ -695,7 +675,7 @@ func TestASessionIsToldANoteItsHarnessWasServedAsOneItMayAlreadyShow(t *testing.
 				box.Offer(n)
 			}
 			basis := keptBasis
-			basis.NoteCursor = 1
+			basis.NoteCursor = max(tc.cursor, 1)
 			relauncher := &probingLauncher{basis: basis}
 			resume := &runner.Resume{State: parked.State, Steered: tc.steered, Served: tc.served,
 				Asked: &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
@@ -813,12 +793,11 @@ func TestAnAnsweredOrARefusedRunsSessionIsContinuedToldWhatCarriesItOn(t *testin
 
 // A SESSION CONTINUED IN A NEW BOX IS TOLD WHAT THAT BOX HOLDS. Where the
 // run's surface offers Gitlet's checkout, a new box holds none of the
-// repositories the session checked out of it — nothing is cloned at launch —
-// so the continuation tells it to check each out again with that tool, the
-// same branch and access and no base, and calls a fresh checkout only what
-// the box's setup clones; a run offered no checkout, in a company that hosts
-// no code, is told the box is on a fresh checkout, as before. The form for
-// the box the session was last worked in says neither.
+// repositories the session checked out of it (nothing is cloned at launch), so
+// the continuation tells it to check each out again with that tool, the same
+// branch and access and no base, and calls a fresh checkout only what the
+// box's setup clones; a run offered no checkout is told the box is on a fresh
+// checkout. The form for the box last worked in says neither.
 //
 // Mutations: hand the new-box form no checkout whatever the surface offers →
 // Gitlet's case, red; keep "on a FRESH checkout of the repository"
@@ -895,8 +874,9 @@ func TestASessionContinuedInANewBoxIsToldWhatThatBoxHolds(t *testing.T) {
 // hold the launch to the floor of what it sends ([runner.Continuation]), where
 // whether the seat's budget can carry it at all is the launch's to decide.
 //
-// Mutation: hand the launch the context only of a kept capture it continues, or
-// withhold the box's own session for its size here, and this goes red.
+// Mutation: hand the launch the context only of a kept capture it continues
+// (SessionBasis.ContextTokens) in place of the copy's (SessionBasis.CopyContext),
+// or withhold the box's own session for its size here, and this goes red.
 func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 	t.Parallel()
 	entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
@@ -905,7 +885,7 @@ func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
 	relauncher := &probingLauncher{basis: runner.SessionBasis{
-		Why: "the newest capture of the job was not kept: refused", ContextTokens: 150000}}
+		Why: "the newest capture of the job was not kept: refused", CopyContext: 150000}}
 	asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
 		Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
 	collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
@@ -924,10 +904,11 @@ func TestARelaunchHandsItsLaunchWhatItsSessionSendsFirst(t *testing.T) {
 // AN IN-PLACE CONTINUATION IS HELD TO THE LARGER OF ITS COPY'S AND ITS CAPTURE'S
 // MEASURE. A person's answer carries the asking run on in the session its box
 // holds, whose whole context it sends before the answer. Two figures say what
-// that context is: the job's newest capture's measure of its archive, and the
-// job's record's of the copy itself, which the read that collected the job took
-// off its run's own account of its requests ([runner.Resume.ContextTokens]),
-// and which a company that keeps no session has alone. The copy is the capture
+// that context is: the job's newest capture's measure of its archive
+// ([runner.SessionBasis.CopyContext]), and the job's record's of the copy
+// itself, which the read that collected the job took off its run's own account
+// of its requests ([runner.Resume.ContextTokens]), and which a company that
+// keeps no session has alone. The copy is the capture
 // or grew past it, so the launch is held to the larger of the two.
 //
 // Mutation: hand the launch the capture's measure alone, and a copy that grew
@@ -949,7 +930,7 @@ func TestAnInPlaceContinuationIsHeldToTheLargerOfItsCopysAndItsCapturesMeasure(t
 			parked, _ := launched.Suspended()
 			parked.State.ActiveTools = req.Surface.Active()
 			relauncher := &probingLauncher{basis: runner.SessionBasis{
-				Why: "the newest capture of the job was not kept: refused", ContextTokens: tc.capture}}
+				Why: "the newest capture of the job was not kept: refused", CopyContext: tc.capture}}
 			asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
 				Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
 			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
@@ -962,6 +943,57 @@ func TestAnInPlaceContinuationIsHeldToTheLargerOfItsCopysAndItsCapturesMeasure(t
 				again.Continue.ContextTokens != tc.want {
 				t.Fatalf("the relaunch continues in place %+v, want the asking run's own session carrying the %d "+
 					"tokens it sends first", again.Continue, tc.want)
+			}
+		})
+	}
+}
+
+// AN IN-PLACE COPY BESIDE AN OLDER KEPT CAPTURE IS HELD TO THE COPY'S MEASURE:
+// the kept continuation to its capture's own (SessionBasis.ContextTokens and
+// NextRequest), the job's copy to its newest capture's (CopyContext, or its
+// record's where larger, and CopyNextRequest, or its record's where it holds
+// one). Where the capture continued is older than the newest, the two differ,
+// and the copy held to the older's would be held to less than it sends.
+//
+// Mutation: hand the in-place launch basis.ContextTokens or basis.NextRequest,
+// and the copy is held to 40000 or 45000 while it sends 150000 or 155000.
+func TestAnInPlaceCopyBesideAnOlderKeptCaptureIsHeldToTheCopysMeasure(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct{ copied, want, recordNext, wantNext int64 }{
+		"its newest capture measured more than its record": {copied: 90000, want: 150000, wantNext: 155000},
+		"its record measured more than its newest capture": {copied: 180000, want: 180000, recordNext: 185000,
+			wantNext: 185000},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			entries := []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}}
+			launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
+			before := play(t, req, run{calls: []llm.ToolCall{call(t, "slack_post", `{"text":"looking into it"}`)}})
+			parked, _ := launched.Suspended()
+			parked.State.ActiveTools = req.Surface.Active()
+			older := keptBasis
+			older.ContextTokens, older.CopyContext = 40000, 150000
+			older.NextRequest, older.CopyNextRequest = sandbox.NextRequest{Tokens: 45000},
+				sandbox.NextRequest{Tokens: 155000}
+			relauncher := &probingLauncher{basis: older}
+			asked := &runner.Asked{Question: "which branch?", Answer: "use main", By: "founder",
+				Branch: "wip/t1", SessionID: "sess-ask", BoxKept: true}
+			collector, _ := buildWith(t, entries, buildOpts{calls: turnctx.NewCallLog(), launcher: relauncher,
+				resume: &runner.Resume{State: parked.State, Asked: asked, Bridged: before, ContextTokens: tc.copied,
+					NextRequest: sandbox.NextRequest{Tokens: tc.recordNext}}})
+			if _, _, err := collector.Resume(t.Context(), nil); err != nil {
+				t.Fatalf("Resume: %v", err)
+			}
+			again := relauncher.last(t)
+			if again.Session == nil || again.Session.Basis.ContextTokens != 40000 ||
+				again.Session.Basis.NextRequest.Tokens != 45000 {
+				t.Fatalf("the relaunch continues kept %+v, want the older kept capture, held to its own 40000 "+
+					"and 45000", again.Session)
+			}
+			if again.Continue == nil || again.Continue.SessionID != "sess-ask" ||
+				again.Continue.ContextTokens != tc.want || again.Continue.NextRequest.Tokens != tc.wantNext {
+				t.Fatalf("the relaunch continues in place %+v, want the asking run's own copy carrying the %d "+
+					"tokens it sends first, estimated at %d", again.Continue, tc.want, tc.wantNext)
 			}
 		})
 	}
@@ -1089,14 +1121,11 @@ func (g guarded) relaunched(t *testing.T) (*runner.Runner, runner.AgentRunReques
 // A LAUNCH RECORDS THE SKILLS IT ARMED, NEVER A LOAD ITS RUN MADE AS IT STARTED.
 // The run starts inside its launch, on the guard the launch armed, so its
 // harness can report a skill load over the bridge before the launch returns.
-// That load is a call of the job's own, placed past its BridgeFrom, which every
-// rebuild of its guard replays only where the session it continues holds it —
-// never where the job's own copy in its box is continued after its harness was
-// cut off, or a capture of it saved before the load. So the job's parked state
-// records the skills its launch armed as it armed them, before the run started,
-// on a first launch and on a relaunch alike: none for a session of the run's
-// own, and the ones the session it continues held for a capture its launch
-// takes up.
+// That load is a call of the job's own, past its BridgeFrom, which a rebuilt
+// guard replays only where the continued session holds it. So the parked state
+// records the skills the launch armed as it armed them, on a first launch and
+// a relaunch alike: none for a session of the run's own, and the ones the
+// continued session held for a capture taken up.
 //
 // Mutation: record the guard as it stands once the launch returns, at either
 // launch, and the load is recorded as one the launch armed; record the guard
@@ -1148,18 +1177,11 @@ func TestALaunchRecordsTheSkillsItArmedNeverALoadItsRunMadeAsItStarted(t *testin
 
 // A RELAUNCH'S GUARD HOLDS WHAT THE SESSION ITS RUN TAKES UP LOADED, AND NOTHING
 // ELSE. The continued model has in front of it the skill bodies its own session
-// loaded — those its launch was armed with, and those its job loaded up to the
-// point its capture was saved — so its guard holds those and the covered tool
-// runs. Not a load another session made: an earlier round's, in a session this
-// one never was, or one the job made after the capture, which the restored
-// session never saw. Not the skills the job before's launch was armed with
-// where that job's box said it started a session of its own in place of the one
-// its launch chose (its record's word): the session the relaunch continues is
-// that one, which read none of them. And a session of the run's own read no
-// skill, whether the relaunch meant to start one or its launch found it could
-// not continue the session after all: its guard is empty, and the tool is
-// refused until it loads one. Armed as the launch decides, before the run makes
-// a call.
+// loaded (those its launch armed and its job loaded up to its capture's save).
+// Not a load another session made (an earlier round's, or the job's after the
+// capture), nor what the job before armed where its box started a session of
+// its own, which read none. A session of the run's own has an empty guard,
+// whether the relaunch meant to start one or its launch could not continue.
 //
 // Mutation: rebuild a continued relaunch's guard from the turn's loads, take
 // the job before's armed skills whatever its box said, arm it before the launch
@@ -1205,12 +1227,11 @@ func TestARelaunchsGuardHoldsWhatItsSessionLoaded(t *testing.T) {
 // A RUN WHOSE BOX STARTS A SESSION OF ITS OWN IS HELD TO A FRESH GUARD BEFORE
 // ITS FIRST CALL. The launch decided to continue the session of the job before,
 // which loaded the skill, and armed the run's guard with it; the run's box then
-// found it could not take that session up — an archive that did not unpack, an
-// import OpenCode refused — and started one of its own, which it says by the
-// token its harness dials before it makes a call. That session's model has read
-// no skill, so the call is refused until it loads one, and the phase's record
-// states the fresh brief its run was handed in the continuation's place. A box
-// that says it took the session up keeps the guard its launch armed.
+// found it could not take that session up (an archive that did not unpack, an
+// import OpenCode refused) and started one of its own, which it says by the
+// token its harness dials before a call. That model has read no skill, so the
+// call is refused until it loads one, and the record states the fresh brief the
+// run was handed. A box that took the session up keeps the armed guard.
 //
 // Mutation: ignore the box's word, or re-arm on it whichever session it names,
 // and a case goes red; publish nothing on a fall back, and the record says the
@@ -1353,16 +1374,14 @@ var baseBasis = runner.SessionBasis{SessionID: "s-base", Harness: "claude-code",
 		ContextTokens: 40000, EndedAt: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)}}
 
 // A CONVERSATION'S NEXT TURN IS TOLD WHERE IT BEGINS. Its first launch asks
-// which session it continues — every launch does, a first one too — and is
-// answered the session the conversation's last turn left. That session holds
-// another turn, so the run is handed a lead before the turn's own brief: where
-// the session's turn ended and this one begins, that what it read may be stale
-// and what it set up is set up anew, that its box is a new one on a fresh
-// checkout whose old paths were the other box's, and that its harness was cut
-// off. Then the turn's whole fresh brief, the account of how the conversation's
-// earlier turns ended among it, which the session never read. Continued only in
-// a box of its own, so it carries no same-box brief; and the engine's record of
-// that session is defused under the turn's token.
+// which session it continues (every launch does) and is answered the session
+// the conversation's last turn left. That session holds another turn, so the
+// run is handed a lead before the turn's own brief: where that turn ended and
+// this one begins, that what it read may be stale, that its box is new on a
+// fresh checkout whose old paths were the other box's, and that its harness
+// was cut off. Then the turn's whole fresh brief, with the earlier turns'
+// endings the session never read. No same-box brief; the record of that
+// session is defused under the turn's token.
 //
 // Mutation: probe only a relaunch, hand the same-turn lead, drop the fresh
 // brief or the endings, or leave a marker in the home, and a check goes red.
@@ -1518,19 +1537,12 @@ func TestAConversationsNextTurnIsToldWhatItsNewBoxHolds(t *testing.T) {
 }
 
 // A BASE CONTINUATION ARMS AN EMPTY GUARD, whatever the parked state holds. The
-// session the conversation's last turn left loaded skills in another turn,
-// which this turn's guard never armed and its lead says were set up anew: so
-// once the launch decides its run takes that session up, the guard holds
-// nothing, and a skill-covered call is refused until the skill is loaded again
-// — the safe direction. That holds where it matters most: a round a person's
-// answer or a lost job carries on, the turn having kept no session of its own,
-// continues the session its first launch was handed, while the job it follows
-// left a parked state whose box said it took that session up and whose launch
-// armed the guard with what it loaded there — loads in a session the relaunch
-// restores afresh, which read none of them. Such a run is handed the lead, then
-// the carried round's reseed, which says what the round's jobs did. A relaunch
-// that continues the turn's own kept session is armed with what that session
-// loaded, the round's carry or a send-back alike.
+// session the conversation's last turn left loaded skills in another turn, which
+// its lead says were set up anew: so once the launch decides its run takes that
+// session up, the guard holds nothing until the skill is loaded again. That
+// matters where an answer or a lost job carries a round on with no session of the
+// turn's own: the job it follows armed its guard in a session the relaunch
+// restores afresh. A kept session of the turn's own is armed with what it loaded.
 //
 // Mutation: drop the base branch of the launch's decision (sessionDecided), so a
 // base continuation is armed from the parked state as a kept one is, and both

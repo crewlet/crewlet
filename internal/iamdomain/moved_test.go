@@ -13,26 +13,16 @@ import (
 
 // A COMMITTED BATCH SAYS WHOSE CREDENTIALS IT MOVED, and only theirs.
 //
-// An open dashboard socket is authenticated once, at its handshake, and then
-// held for as long as the tab is; what ends it is the record that ended its
-// credential, which every node hears from its own applier. Two failures are
-// invisible from the writing side and are what this is for. A record that
-// ended somebody's credential and named nobody leaves their open tab receiving
-// the company's state until it closes on its own — a revocation that stops at
-// the one surface a browser keeps open. And a record that named everybody
-// would end every socket on the node for every unbind in the company.
-//
-// So each gesture is held to exactly what it names: the session it ended, or
-// the person whose row it moved WITH THE LOGIN THEY HOLD — a rename naming the
-// login it gave up as well as the one it took — because a Tier A token is
-// bound through the directory row under its own login and never learns that
-// row's id. Only the fleet-wide generation names
-// everyone. A sign-in names nothing, which is the control: it is the bulk of
-// this log's traffic and ends nobody's credential.
+// Naming nobody leaves an ended credential's open dashboard tab streaming the
+// company; naming everybody ends every socket on the node for every unbind.
+// So each gesture names the session it ended, or the person whose row it
+// moved WITH THEIR LOGIN (a rename, both), since a Tier A token binds through
+// the row's login and never learns its id. Only the fleet-wide generation
+// names everyone; a sign-in, the bulk of this log's traffic, names nothing.
 //
 // Mutation: drop the old login from an identity change's move, or the login
-// from a person's move, and the rename or the machine's suspension names
-// less than it moved.
+// from a person's move, and the rename or the machine's suspension names less
+// than it moved.
 func TestABatchSaysWhoseCredentialsItMoved(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -162,19 +152,14 @@ func TestABatchSaysWhoseCredentialsItMoved(t *testing.T) {
 
 // A BATCH THAT RETAINED A RECORD MOVES EVERYONE'S CREDENTIAL, and no seat.
 //
-// A record this node retains — a newer build's, or one signed under a key it
-// was not restarted with — never reaches Apply, and whose it is sits inside
-// the payload it could not open. What its commit did change is what this node
-// can vouch for: every read of a person in its bucket answers unknown, and the
-// guard refuses their REST requests 503. A socket held open on that person's
-// session heard nothing, so a revocation a newer peer wrote kept streaming the
-// company to the tab on every node still on the older build. So a retention
-// names everyone, which closes every socket for its handshake to decide — and
-// the guard answers that per bucket. It moves no seat's standing, because the
-// contact routing is rebuilt from rows and a retained record wrote none.
-//
-// The control is a batch that applied nothing and retained nothing, which
-// hands over nothing at all — before and after.
+// A retained record (a newer build's, or one under a key this node lacks)
+// never reaches Apply, and whose it is sits inside the payload. Its commit
+// does make every read of a person in its bucket answer unknown (REST 503),
+// so a socket on that person's session must be re-decided: naming everyone
+// closes every socket for its handshake, which the guard answers per bucket.
+// It moves no seat: routing is rebuilt from rows, and a retained record wrote
+// none. The control, before and after, is a batch that applied and retained
+// nothing, which hands over nothing.
 //
 // Mutation: make Retained a no-op and the move never arrives.
 func TestARetainedRecordNamesEveryone(t *testing.T) {

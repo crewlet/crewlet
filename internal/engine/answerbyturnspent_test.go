@@ -23,19 +23,14 @@ import (
 
 // AN ANSWER BY TURN IS SPENT ONCE, AND SAID ONCE, WHATEVER ITS RUN DID NEXT.
 //
-// The node that took the answer can stop before it acknowledges the delivery —
-// mid-turn, its turn's reply perhaps already sent — and the original comes
-// round to the seat's next holder. By then the run was revived and resumed by
-// that holder, reaped with the answer a turn took, or resumed and relaunched.
-// The coordinator spends the answer's delivery at each of those moments
-// ([sandbox.CoordinatorOptions.Spent]); the dispatcher recorded nothing for it,
-// because an answer by turn is not a type its ledger keeps for turns, and the
-// answer-by-turn route never read the ledger. So the redelivery reached the
-// coordinator, found nothing on the run that recognised it, and was announced
-// `gone` or `not_awaiting` after it had resumed the run. Every case here
-// delivers the answer on the seat's control topic, where it is settled, with
-// the ledger read wired as the engine wires it
-// ([sandbox.CoordinatorOptions.WasSpent]).
+// The node that took the answer can stop before it acknowledges the delivery,
+// and the original comes round to the seat's next holder, by when the run was
+// revived and resumed, reaped with the answer, or relaunched. The coordinator
+// spends the delivery at each moment ([sandbox.CoordinatorOptions.Spent]); the
+// dispatcher's ledger keeps no such type for turns, so a redelivery otherwise
+// finds nothing recognising it and is announced `gone` or `not_awaiting` after
+// it resumed the run. Every case delivers on the seat's control topic with the
+// ledger read wired as the engine wires it ([sandbox.CoordinatorOptions.WasSpent]).
 
 // answerBoard records every executor_answered a coordinator announces, and
 // every copy of an answer by turn it hands back to the seat's control topic.
@@ -109,6 +104,10 @@ type spentHolder struct {
 	retries     *handCranked
 	ordinary    *turns
 }
+
+// noInbox is the attachment a recovery is handed by a coordinator wired with no
+// inbox hold: the zero one, which names none, since nothing it does holds one.
+const noInbox queue.Attachment = 0
 
 func (w *spentWorld) holder(t *testing.T, lease sandbox.Fence, resume sandbox.Resumer) *spentHolder {
 	t.Helper()
@@ -275,7 +274,7 @@ func TestAnAnswerByTurnRevivedAndResumedIsNotAnnouncedAgain(t *testing.T) {
 
 	resumer := &takingResumer{}
 	next := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, resumer)
-	if err := next.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2); err != nil {
+	if err := next.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox, nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	next.retries.fire()
@@ -300,7 +299,7 @@ func TestAnAnswerByTurnATurnTookIsNotAnnouncedGone(t *testing.T) {
 	old.coordinator.Stop()
 
 	next := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, &takingResumer{})
-	if err := next.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2); err != nil {
+	if err := next.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox, nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	if _, found, err := w.store.Get(t.Context(), "t1"); err != nil || found {
@@ -389,7 +388,7 @@ func TestAnAnswerRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
 	if !errors.Is(err, sandbox.ErrSeatNotHeld) {
 		t.Fatalf("the node that let the seat go answered %v, want it refused for the seat", err)
 	}
-	if got := engine.ControlOutcome(err).Outcome; got != queue.OutcomeDefer {
+	if got := engine.ControlOutcome(t.Context(), err).Outcome; got != queue.OutcomeDefer {
 		t.Fatalf("the refused answer leaves the control topic as %s, want it handed on (defer)", got)
 	}
 	if now := mustRun(t, w.store, "t1"); now.Answer != nil || now.Status != sandbox.StatusAwaiting {
@@ -398,7 +397,7 @@ func TestAnAnswerRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
 
 	resumer := &takingResumer{}
 	holder := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, resumer)
-	if err := holder.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2); err != nil {
+	if err := holder.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox, nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	holder.deliver(t, given)
@@ -425,7 +424,7 @@ func TestARefusalOnTheStoresWordAloneIsNotALostSeat(t *testing.T) {
 	run := w.parked(t, older)
 	resumer := &takingResumer{}
 	newer := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, resumer)
-	if err := newer.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2); err != nil {
+	if err := newer.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox, nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 
@@ -438,7 +437,7 @@ func TestARefusalOnTheStoresWordAloneIsNotALostSeat(t *testing.T) {
 	if errors.As(err, &refused) && refused.Condition == sandbox.SeatLost {
 		t.Fatalf("a refusal on the store's word was named a lost seat while the node's lease stands: %v", err)
 	}
-	if got := engine.ControlOutcome(err).Outcome; got != queue.OutcomeNak {
+	if got := engine.ControlOutcome(t.Context(), err).Outcome; got != queue.OutcomeNak {
 		t.Fatalf("the refusal leaves the control topic as %s, want nak: a deferral quiesces "+
 			"the attachment of a seat this node holds", got)
 	}
@@ -484,7 +483,7 @@ func TestACompletionRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
 	if !errors.As(err, &refused) || refused.Condition != sandbox.SeatLost {
 		t.Fatalf("the node that let the seat go answered %v, want the completion refused as a lost seat", err)
 	}
-	if got := engine.ControlOutcome(err).Outcome; got != queue.OutcomeDefer {
+	if got := engine.ControlOutcome(t.Context(), err).Outcome; got != queue.OutcomeDefer {
 		t.Fatalf("the refused completion leaves the control topic as %s, want it handed on (defer)", got)
 	}
 	if now := mustRun(t, w.store, "t1"); now.Status != sandbox.StatusRunning {
@@ -493,7 +492,7 @@ func TestACompletionRefusedForTheSeatSurvivesToItsHolder(t *testing.T) {
 
 	resumer := &takingResumer{}
 	holder := w.holder(t, sandbox.Fence{Owner: "node-y", Epoch: 2}, resumer)
-	if err := holder.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2); err != nil {
+	if err := holder.coordinator.RecoverSeat(t.Context(), "swe", "node-y", 2, noInbox, nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 	holder.deliver(t, completion)

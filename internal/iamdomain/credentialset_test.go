@@ -9,16 +9,14 @@ import (
 
 // A CREDENTIAL SET THAT REFUSES IN ITS SNAPSHOT PUBLISHES NOTHING.
 //
-// A rule about the set a write LANDS on — an enrolment-only session enrolling
-// over a second factor its person has come to hold since it opened — can only
-// be decided in the snapshot the write is formed in: decided from a read made
-// first, it is decided on a set that may have moved. So [CredentialSet.Apply]
-// may refuse, and the refusal comes back as the write's error, unwrapped, with
-// no record on the log.
-//
-// The CONTROL is the same write whose Apply forms a set, which lands. Mutation:
-// ignore Apply's error and publish what it returned, and the refused row puts a
-// record on the log and answers no error.
+// A rule about the set a write LANDS on (an enrolment-only session enrolling
+// over a second factor its person came to hold since it opened) is decided only
+// in the snapshot the write is formed in; a read made first may have moved. So
+// [CredentialSet.Apply] may refuse, and the refusal is the write's error,
+// unwrapped, with no record on the log. The CONTROL is the same write whose
+// Apply forms a set, which lands. Mutation: ignore Apply's error and publish
+// what it returned, and the refused row puts a record on the log and answers no
+// error.
 func TestACredentialSetThatRefusesInItsSnapshotPublishesNothing(t *testing.T) {
 	t.Parallel()
 	errRefused := errors.New("the set this write would land on is not one it may")

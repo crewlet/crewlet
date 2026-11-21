@@ -81,16 +81,12 @@ func agentNamed(t *testing.T, a queries.MCPStatusAnswer, seat string) queries.MC
 // AN AGENT'S COUNT LEAVES OUT BLOCKED AND REFUSED TOOLS, AND A SERVER'S TOOLS
 // REACH IT ONLY THROUGH ITS GRANT.
 //
-// docs lists three tools on each node, the entry blocking one, and refuses a
-// fourth its name, which is never listed, so every agent it reaches counts
-// two; a listing a node that is gone left behind counts nothing. tracker
-// reaches the eng unit alone; wiki is turned off, so the lead it names is
-// shown the grant and counts nothing; github's children list what each seat's
-// credential reaches, and each agent it reaches counts the whole listing. A
-// name two servers offer is one tool, so dev's count is not the sum of its
-// servers'. A human seat runs no tools and is not an agent.
-//
-// Mutation: count a blocked tool, count a server through Reach rather than
+// docs lists three tools on each node, the entry blocking one and refusing a
+// fourth, so every agent it reaches counts two; a gone node's listing counts
+// nothing. tracker reaches the eng unit alone; wiki is off, so it counts
+// nothing; github's children list what each credential reaches, and each agent
+// it reaches counts the whole listing. A name two servers offer is one tool.
+// A human seat is no agent. Mutation: count a blocked tool, count a server through Reach rather than
 // Grants, count a listing whatever its node's presence, or sum the servers'
 // counts, and this is red.
 func TestAnAgentsCountLeavesOutBlockedAndRefusedToolsAndOnlyItsGrantsCount(t *testing.T) {

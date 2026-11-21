@@ -19,26 +19,14 @@ import (
 )
 
 // ONE REFUSAL, ONE CLASS, ON BOTH SURFACES THAT ANSWER AN ARTIFACT WRITE: the
-// tools' class (builtin.WriterClass, the one table every tool and the person's
-// write surface read) and this API's status. Each artifactsdomain refusal is
-// published through the real publish route and answered here, and answered
-// again as the tools' class through the operator surface's one class-to-status
-// mapping ([operator.Fail]); the two statuses must be one.
+// tools' class (builtin.WriterClass) and this API's status: each artifactsdomain
+// refusal goes through the real publish route and again through
+// [operator.Fail]; the two statuses must be one.
 //
-// THEY DISAGREED THREE TIMES before this case existed: a label another version
-// holds was 409 here and `invalid` to a tool, an artifact in the trash 409 here
-// and `forbidden` to a tool, and the company's quota 413 here and `forbidden`
-// to a tool — so a model was told to send another label for a version that
-// holds it, to ask for a permission the trash does not care about, and that
-// it may not publish when nobody may.
-//
-// THE PUBLISH STATES ITS BASE AS AN If-Match HEADER, so the status it is held
-// to is the one mapping's for a call such a header conditioned
-// ([operator.FailIfMatched]): a head that moved past the base is HTTP's failed
-// precondition, `412 version_moved`, where a tool, which takes the base as an
-// argument, is told the class's `409 stale_version`. It was a refinement this
-// case declared for the one row, which said 412 for a publish and left every
-// other surface's If-Match answering 409.
+// THE PUBLISH STATES ITS BASE AS AN If-Match HEADER, so its status is the
+// mapping's for a conditioned call ([operator.FailIfMatched]): a moved head is
+// `412 version_moved`, where a tool (base as an argument) is told `409
+// stale_version`.
 //
 // Mutation: class ErrLabelTaken `invalid` in builtin's artifactClass, or answer
 // QuotaExceeded 413 in writeFailed, and this goes red naming it.

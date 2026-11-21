@@ -108,13 +108,11 @@ func renewStamps(h *Host) []time.Time {
 // to the store together, and the presence's claim beside them, rather than one
 // after another.
 //
-// Forty seats, each renewal and the presence's claim answered a round trip of
-// [passRoundTrip] after it was asked, on a bubble's clock, so the pass's length
-// is exact arithmetic: one round trip. Renewed one after another, as on main,
-// the same pass took forty-one — 8.2 s of a 14 s renew period at the shipped
-// TTL, and past the floor TTL's 4 s one, where the design measured a real
-// store's two round trips a renewal over a lagging link: 40 × 2 × 0.2 s = 16 s.
-// Every seat's renewal is stamped at the instant it was sent, the pass's start.
+// Forty seats, each renewal and the presence's claim answered [passRoundTrip]
+// after it was asked, on a bubble's clock: the pass is exactly one round trip.
+// Renewed one after another it takes forty-one, past the floor TTL's 4 s renew
+// period over a lagging link. Every renewal is stamped at the pass's start,
+// when it was sent.
 //
 // Mutation: renew the seats one after another (forty-one round trips), or
 // claim the presence after them (two).
@@ -152,11 +150,10 @@ func TestARenewPassOverManySeatsTakesAboutOneRoundTrip(t *testing.T) {
 // over more seats than [renewConcurrency] renews them in batches of exactly
 // that many, each stamped at its own send.
 //
-// Two hundred seats, each renewal answered a round trip after it was asked on
-// a bubble's clock: the store sees 64 at once and never more, the pass takes
-// ⌈200 / 64⌉ = 4 round trips, and a seat of the k-th batch is stamped k round
-// trips in, when it was sent — never the pass's start, which would credit it
-// with a renewal earlier than it happened.
+// Two hundred seats on a bubble's clock: the store sees 64 at once and never
+// more, the pass takes ⌈200 / 64⌉ = 4 round trips, and a seat of the k-th
+// batch is stamped k round trips in, when sent; the pass's start would credit
+// it a renewal earlier than it happened.
 //
 // Mutation: dispatch every renewal at once (200 in flight, one round trip),
 // renew one at a time (1 in flight, 200 round trips), or stamp every seat once

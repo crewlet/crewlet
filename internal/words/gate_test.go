@@ -23,41 +23,18 @@ import (
 // the types they export.
 const module = "github.com/crewlet/crewlet"
 
-// NO FORMAT PRINTS A SET. Every call whose callee takes a format and its
-// operands (`format string, args ...any`: fmt.Errorf and fmt.Sprintf, a
-// package's own invalid() and fail(), a problem list's add) is read with its
-// types, and an operand a verb prints is refused when it is a slice, an array
-// or a map, because fmt prints those as Go spells them, `[a b c]`, whichever
-// verb it is handed. The fix is [words.Or] or [words.And].
-//
-// AND NEITHER DOES A PRINT: fmt's Sprint, Print, Fprint and Append families
-// and the log package's Print, Fatal and Panic families take no format and
-// print every operand as %v does, so an operand of theirs is judged as one
-// under %v ([printers]). By the callee itself rather than by shape, because a
-// function taking only `...any` is as often a logger's key-value pairs as a
-// print. Mutation: put `return fmt.Sprint(names)` back in
-// internal/search/lexicalsources.go's sourceNames and this fails naming that
-// line.
-//
-// WITH TYPES, because the shape is the operand's type and never its
-// spelling: `artifacts.Kinds` and `AuthorKinds()` read like any identifier and
-// any call. The types come from [sourcetree.TypeCheck], the module's one
-// loader: export data from go list, run by the toolchain this test was built
-// with and with its -race and -tags, so it reads the build cache the test run
-// already filled.
-//
-// WHAT IS NOT JUDGED, each for a reason: a test file and a test-support
-// package (a name ending in "test", the certification suites), whose text is a
-// failing test's and read by whoever runs it; a type with its own String,
-// Error or Format method, which says how it prints; a byte slice or array
-// under %s, %q, %x or %X, which is text or a digest; %T and %p, which print no
-// member; an interface operand, whose shape is not known until it runs; and a
-// format that is not a constant, or operands forwarded whole (`args...`),
-// which is the wrapper's own call site's to answer.
-//
-// Mutation: put `%v` back in front of artifacts.Kinds in
-// internal/artifactsdomain/write_artifact.go's kind refusal and this fails
-// naming that line.
+// NO FORMAT PRINTS A SET. A call whose callee takes `format string, args
+// ...any` (fmt.Errorf, Sprintf, a package's own fail, a problem list's add) is
+// read with its types, and an operand a verb prints is refused when it is a
+// slice, array or map, which fmt spells `[a b c]` under any verb. The fix is
+// [words.Or] or [words.And]. Print, Sprint, Fprint, Append and log's Print,
+// Fatal, Panic families are judged as %v ([printers]), by callee rather than
+// shape: a `...any` function is as often a logger's pairs as a print. Judged by
+// type from [sourcetree.TypeCheck], never by spelling. Not judged: test files
+// and test-support packages; types with String, Error or Format; bytes under
+// %s %q %x %X; %T and %p; interface operands; non-constant formats and
+// forwarded `args...`. Mutation: restore `%v` before artifacts.Kinds in
+// internal/artifactsdomain/write_artifact.go's kind refusal and this fails.
 func TestNoFormatPrintsASet(t *testing.T) {
 	t.Parallel()
 	w := walkModule(t)
@@ -75,53 +52,18 @@ func TestNoFormatPrintsASet(t *testing.T) {
 	}
 }
 
-// NO SENTENCE JOINS A SET BY HAND. A list a reader reads as a sentence, "a, b
-// or c", is [words.Or] or [words.And]: the tree carried a copy of that join in
-// a dozen packages (a CLI's field list, a credential's variable references,
-// the alarm page's kinds, a grant's app names), each with its own last comma
-// and its own idea of quoting, so a member the reader types read unquoted
-// beside the value they typed and one copy wrote an Oxford comma the rest did
-// not. Every copy had one of four shapes, and each is refused:
-//
-//   - a strings.Join whose separator is a conjunction,
-//     `strings.Join(set, " or ")`;
-//   - one written beside a conjunction, `strings.Join(set[:n-1], ", ") +
-//     " and " + set[n-1]`;
-//   - one that joins all but the last member by commas, whatever joins the
-//     last (a conjunction held in a variable is still a conjunction);
-//   - a closed set joined by commas right after the words that offer one,
-//     `"is one of %s"`, `"(want %s)"` or `"it offers %s"` beside
-//     `strings.Join(set, ", ")`, which said the set unquoted beside a quoted
-//     value and with no "or".
-//
-// A member that is not a value, a command or a phrase, is [words.Said] and
-// joined the same way.
-//
-// A CALL TO A FUNCTION THAT RETURNS A JOIN IS THAT JOIN, judged where it is
-// made: a function of the module whose result is a strings.Join by a comma, by
-// a separator its caller hands it (`kindList(", ")`), or a call to another
-// such function ([commaJoiners]). Config's names() was one, and through it
-// twenty-one refusals offered their set as `"dirct" (want direct, container,
-// e2b)` with no strings.Join beside the format that printed them; a tool's
-// statuses, a setup kind and the CLI's tiers went the same way.
-//
-// THE CONJUNCTION IS A LOWER-CASE WORD, "or" or "and", which is what tells a
-// sentence from the other things a separator joins: a path, a line, a SQL
-// condition (`" AND "`), a placeholder list (`", "`). A list joined with
-// commas alone and not offered as a choice is not judged, because nothing in
-// its shape says a reader reads it as a sentence rather than as a column of
-// names (a log field, a header row, a key list); that residue is stated
-// rather than guessed at. The words package's own join is the one copy and is
-// not judged.
-//
-// Mutation: put `strings.Join(fields[:len(fields)-1], ", ") + " and " +
-// fields[len(fields)-1]` back in cmd/crewlet/artifacts.go's fieldList,
-// `strings.Join(grants, " or ")` in cmd/crewlet/refusal.go,
-// `strings.Join(Modes(), ", ")` in internal/gitlab/reconcile.go's unknown
-// mode, `strings.Join(d.OptionIDs(), ", ")` in internal/decision's
-// CheckChoice, or a private helper returning `strings.Join(out, ", ")` in
-// internal/config/providers.go's run_in refusal, and this fails naming that
-// line.
+// NO SENTENCE JOINS A SET BY HAND. A list read as a sentence, "a, b or c", is
+// [words.Or] or [words.And]: hand copies each had their own last comma and
+// quoting. Four shapes are refused: a strings.Join whose separator is a
+// conjunction; one written beside a conjunction (`Join(set[:n-1], ", ") + " and
+// " + ...`); one joining all but the last by commas, whatever joins the last;
+// a closed set comma-joined after words offering one (`"is one of %s"`,
+// `"(want %s)"`). A member that is not a value, command or phrase is
+// [words.Said]. A call to a function returning a comma join, directly or via
+// another such ([commaJoiners]), is that join. Only a lower-case "or"/"and"
+// marks a sentence; commas alone are not judged (a column of names, not a
+// choice). The words package's own join is exempt. Mutation: restore a hand
+// join in cmd/crewlet/artifacts.go's fieldList and this fails naming that line.
 func TestNoSentenceJoinsASetByHand(t *testing.T) {
 	t.Parallel()
 	w := walkModule(t)

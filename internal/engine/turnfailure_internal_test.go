@@ -53,8 +53,13 @@ func (p *pub) Publish(_ context.Context, _ string, ev *events.Event) error {
 // PauseTopic and ResumeTopic answer a seat hold as taken and lifted: a
 // launched run holds its seat's inbox on the broker, which no case over pub
 // observes — it reads what was published.
-func (*pub) PauseTopic(context.Context, string, string, string) error  { return nil }
-func (*pub) ResumeTopic(context.Context, string, string, string) error { return nil }
+func (*pub) PauseTopic(context.Context, string, string, queue.Attachment, string) error {
+	return nil
+}
+
+func (*pub) ResumeTopic(context.Context, string, string, queue.Attachment, string) error {
+	return nil
+}
 
 // only returns the single event of type T, failing if there is not exactly one.
 func only[T events.Payload](t *testing.T, p *pub, wantType string) T {

@@ -16,75 +16,16 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree/decltype"
 )
 
-// TestOnlyStreamCreatedAtReadsAStreamsCreationInstant fails the build when any
-// non-test file under internal/ and cmd/ but internal/statelog/identity.go
-// reads the Created field of a stream's information — the BROKER'S creation
-// instant — rather than asking statelog.StreamCreatedAt for the stream's
-// identity (ADR-0083).
-//
-// # Why a gate, and why the field
-//
-// A stream's identity is the instant the create that made it stamped into its
-// configuration, because a snapshot restore keeps the configuration and dates
-// the stream to the restore. Three readers had each read the broker's instant
-// on their own — every state log's applier through the log's Stats, the memory
-// changelog's hydration and the backup's read past its copy — and each passed
-// every test until a restore was tried, when each called a restored log
-// recreated. A fourth reader written the same way compiles and passes every
-// test except a restore-shaped one, so the rule is held here rather than by
-// memory. What every such reader cannot avoid, whatever it is called, is
-// selecting that one field on a value of one of a few types, so the field is
-// the subject.
-//
-// # What it flags
-//
-// A selector X.Created that is not called, in a non-test file under internal/
-// or cmd/, whose X the walk types as a value whose Created field is declared
-// by one of [streamInstantRoots] — jetstream.StreamInfo, nats.StreamInfo,
-// server.StreamInfo, server.StreamDetail, server.FileStreamInfo — directly or
-// promoted through embedding, so the server's JSApiStream*Response types and a
-// local type embedding a stream's information are flagged too. A consumer's
-// information is another type and is never flagged, nor is a type of this
-// module with a Created field of its own.
-//
-// # How X is typed
-//
-// By internal/sourcetree/decltype, the one walk every gate judging a value by
-// its type is built on: from declarations alone, on demand, with no type
-// checker — a local by its declaration, a field and a method by the type that
-// holds it, promoted through embedding, a call by the results its function
-// declares, an element by its collection, generics followed through
-// instantiation and inference — across the files of a package and into any
-// package of this module and the three NATS packages, which it reads from the
-// module cache. Its package doc says what it reads and what it cannot.
-//
-// # A read the walk cannot type FAILS
-//
-// A selector whose X it cannot type — a type switch's variable, a value only a
-// package it does not read can type (a function's result, a member of one of
-// its types) — or whose field it cannot find, or finds only deeper than a part
-// it could not read, is reported rather than passed: a gate asserting an
-// absence that skipped what it could not read would certify nothing about
-// exactly the reads it skipped. Spell the value's type where it is declared,
-// or teach decltype the shape.
-//
-// # Coverage boundary, stated rather than assumed
-//
-// A value of a package outside this module and the three NATS packages — the
-// standard library's, a vendor SDK's — is judged by its package alone and
-// never read: none of them declares a stream's information, and one that
-// embedded one would be missed. A value reached through reflection, an
-// encoding (marshalled and decoded as another type) or an interface whose
-// dynamic type is a stream's information is not seen, nor is a selector in a
-// file the walk does not judge (a _test.go file, testdata).
-//
-// # Cost
-//
-// It reads every non-test .go file under internal/ and cmd/ once and parses
-// whole only the packages of those spelling the identifier Created — 25 files
-// — and the packages their reads reach, NATS's included: 18 packages, in
-// 0.35–0.39 s with the `go list` that locates NATS, 1.8 s under the race
-// detector (four vCPUs).
+// TestOnlyStreamCreatedAtReadsAStreamsCreationInstant fails when a non-test
+// file under internal/ or cmd/ but [allowedReader] reads the BROKER'S creation
+// instant rather than statelog.StreamCreatedAt (ADR-0083): such a reader passes
+// every test but a restore-shaped one. It flags an uncalled X.Created whose X
+// internal/sourcetree/decltype types as holding that field from one of
+// [streamInstantRoots], directly or promoted. A selector it cannot type, or
+// whose field it cannot find, FAILS: an absence gate that skipped what it
+// could not read certifies nothing; spell the type or teach decltype the
+// shape. Not seen: packages outside this module and NATS (none declares a
+// stream's information), reflection, encodings, an interface's dynamic type.
 func TestOnlyStreamCreatedAtReadsAStreamsCreationInstant(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -95,9 +36,8 @@ func TestOnlyStreamCreatedAtReadsAStreamsCreationInstant(t *testing.T) {
 			"certifying nothing. Check the module root and the internal/ and cmd/ walks",
 			found.candidates, found.selectors)
 	}
-	// A guard asserting an ABSENCE passes identically when the thing is absent
-	// and when the matcher has gone inert. The one reader is KNOWN to read the
-	// field, so a walk that cannot see it has stopped seeing anything.
+	// An ABSENCE guard passes identically when its matcher goes inert; the
+	// one reader is KNOWN to read the field, so it must be seen.
 	if found.allowed == 0 {
 		t.Fatalf("found no read of a stream's creation instant in %s, the one reader "+
 			"allowed one. Either the walk has gone inert — and every verdict below is "+
@@ -124,11 +64,9 @@ func TestOnlyStreamCreatedAtReadsAStreamsCreationInstant(t *testing.T) {
 }
 
 // THE WALK, ON A TREE WHOSE VERDICT IS KNOWN: every shape a reader of a
-// stream's creation instant takes — the three readers this rule was written
-// after among them, each reverted to the field — must be reported; a
-// consumer's instant, a field of this module's own and a call must not be; a
-// read the walk cannot type must be reported as one; and a test file and
-// testdata must never be read.
+// stream's creation instant takes must be reported; a consumer's instant, a
+// field of this module's own and a call must not be; a read the walk cannot
+// type must be reported as one; and a test file and testdata never read.
 func TestTheStreamInstantWalkJudgesAKnownTree(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -173,11 +111,8 @@ func TestTheStreamInstantWalkJudgesAKnownTree(t *testing.T) {
 // to the NATS packages the module builds against, in both directions: every
 // exported type there that declares a Created field is either a stream's
 // information or named in [notStreamInstants] with what its instant is, and
-// every type either list names still declares one.
-//
-// A dependency bump is when a new kind of stream information would appear — a
-// type the gate above has never heard of, whose Created field it would never
-// flag — so the bump fails here until somebody says which kind it is.
+// every type either list names still declares one. So a dependency bump that
+// adds a kind the gate above would never flag fails here until classified.
 func TestEveryCreatedFieldOfTheNATSPackagesIsClassified(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)

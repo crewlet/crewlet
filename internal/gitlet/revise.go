@@ -977,7 +977,7 @@ func humanPlacesIn(ctx context.Context, tx *sql.Tx, repo RepoRef, r Revise) erro
 	}
 	for _, list := range [][]int{r.HumanPaths.Held, r.HumanPaths.Waived} {
 		if len(list) > 0 && list[len(list)-1] >= len(gate.HumanPaths) {
-			return fmt.Errorf("%w: revise: human path %d is past the %d %s's gate names", ErrInvalidProposal,
+			return refusedf("%w: revise: human path %d is past the %d %s's gate names", ErrInvalidProposal,
 				list[len(list)-1], len(gate.HumanPaths), r.TargetRef)
 		}
 	}

@@ -14,80 +14,27 @@ import (
 )
 
 // THE SEALED STREAM: a value too large to hold whole, sealed and opened while
-// it streams, under the same keyring every envelope above is sealed under.
-//
-// # Why a second format beside the envelope
-//
-// The envelope ([Cipher.Encrypt]) seals a whole value in one AES-GCM call and
-// base64s it into a string, which is right for a field: a name, a token, a
-// document. It is wrong for a value of tens of mebibytes. Sealing one holds the
-// plaintext, its string copy, the GCM output and two base64 strings at once,
-// about five times the value, and opening one holds as much again; and a value
-// that only exists to be streamed between a box and an object store (a coding
-// harness's captured session, internal/executordomain) would be read whole into an
-// engine process whose memory is sized for the harnesses it runs. So this format is
-// ONLINE: a writer seals while it streams and a reader opens while it streams,
-// each holding a chunk's buffers rather than the value.
-//
-// # The construction, and what each part is for
-//
-// It is the STREAM construction (Hoang, Reyhanitabar, Rogaway and Vizár,
-// "Online authenticated-encryption and its nonce-reuse misuse-resistance",
-// CRYPTO 2015), the one age and Tink's streaming AEAD are built on:
+// it streams, under the keyring every envelope above is sealed under. The
+// envelope ([Cipher.Encrypt]) holds about five times its value, wrong for tens
+// of mebibytes (internal/executordomain's sessions). This format is ONLINE
+// (the STREAM construction, Hoang et al., CRYPTO 2015): each side holds a
+// chunk's buffers, not the value.
 //
 //	header   magic "CRWS" | version 1 | key id length (1 byte) | key id | 32-byte salt
 //	chunk i  AES-256-GCM(key, nonce_i, plaintext_i, aad_i), the last one flagged final
 //
-//   - A PER-OBJECT KEY, HKDF-SHA256 over the keyring key the header names, the
-//     random salt, and an info string naming this format and the key id.
-//     Every object is sealed under a key no other object shares, so a COUNTER
-//     is a safe nonce (it never repeats under one key) and nothing random is
-//     drawn per chunk. A header changed in transit fails before a byte is
-//     handed out: a changed salt, or a key id renamed to another key the ring
-//     holds, derives another key and the first chunk fails to open; a key id
-//     the ring does not hold is refused at the lookup; and the version is not
-//     derived at all but CHECKED, a reader of version 1 opening that version
-//     alone.
-//   - THE NONCE IS THE CHUNK'S INDEX, so a chunk moved to another place opens
-//     under the wrong nonce and fails: REORDERING IS DETECTED.
-//   - THE ASSOCIATED DATA IS THE CALLER'S, THEN THE INDEX, THEN THE FINAL FLAG
-//     ([streamAAD]). The caller's binds the stream to where it belongs (an
-//     object moved under another record does not open there); the index binds
-//     each chunk to its place a second time; and the FINAL FLAG is what makes
-//     the end authenticated: a stream cut at a chunk boundary ends on a chunk
-//     sealed as not-final, which the reader can only open as final and so
-//     cannot open at all — TRUNCATION IS DETECTED — and a chunk appended after
-//     the final one makes the final one read as not-final, which fails the
-//     same way — EXTENSION IS DETECTED. The caller's associated data is
-//     prefixed by its length, so no two (caller, index) pairs spell one byte
-//     string.
-//
-// # Every failure is ErrDecrypt
-//
-// A wrong key, an unknown key id, a tampered byte, a reordered, truncated or
-// extended stream and a mismatched associated data are all [ErrDecrypt], for
-// that error's own reason: a caller that could tell them apart holds an oracle.
-// What is NOT ErrDecrypt is the source failing to read — a network that went
-// away mid-object — which is an I/O error the caller may retry and is returned
-// as it came.
+// Every failure is [ErrDecrypt], telling them apart would be an oracle; only
+// the source failing to read is not, and is returned as it came.
 
 // StreamChunkBytes is how much plaintext one chunk of a sealed stream carries.
 //
-// SIXTY-FOUR KIBIBYTES, age's figure, chosen from the two things a chunk costs:
-//   - MEMORY, which bounds it from above. A writer holds the chunk it is
-//     filling and that chunk sealed; a reader holds its read-ahead (a chunk,
-//     its tag and the byte that says whether more follows) and the chunk it
-//     opens in place: two chunk buffers a side, so a node streaming a hundred
-//     sessions at once (a fleet of seats collecting together) holds about
-//     12.8 MiB of them, where a mebibyte chunk would hold two hundred. What
-//     the stream is written to or read from buffers on its own account below
-//     that — an S3 upload holds a part of several mebibytes per upload — and
-//     that is the backend's to bound, not this format's.
-//   - OVERHEAD, which bounds it from below. Each chunk adds a 16-byte tag and
-//     one AEAD call, so at 64 KiB the tags are 0.024% of the stream and the
-//     call is amortised over enough bytes that sealing runs at AES-GCM's
-//     hardware rate; at 4 KiB the tags would be 0.4% and the calls sixteen
-//     times as many.
+// SIXTY-FOUR KIBIBYTES, age's figure, between two costs:
+//   - MEMORY bounds it above: two chunk buffers a side, so a node streaming a
+//     hundred sessions at once holds about 12.8 MiB, where a mebibyte chunk
+//     would hold two hundred. The backend's own buffering (an S3 part) is its
+//     to bound.
+//   - OVERHEAD bounds it below: each chunk adds a 16-byte tag and one AEAD
+//     call, 0.024% of the stream at 64 KiB against 0.4% at 4 KiB.
 //
 // PART OF THE FORMAT, not a tuning knob: a reader of version 1 reads chunks of
 // exactly this size, so changing it is a new [streamVersion].
@@ -213,13 +160,11 @@ func (s *StreamSealer) Seal(dst io.Writer, aad []byte) (io.WriteCloser, string, 
 // further in is ErrDecrypt from the Read that reaches it, and the reader
 // answers it for good.
 //
-// NO BYTE IS RETURNED BEFORE THE CHUNK HOLDING IT HAS AUTHENTICATED, but what
-// is returned is PROVISIONAL UNTIL io.EOF. A truncated stream reads as every
-// chunk up to the cut and then ErrDecrypt, never as a clean EOF: so the bytes
-// before the cut are handed out first, each from a chunk that authenticated,
-// and only the Read past them says the stream was cut. A caller that acts on
-// the plaintext as it arrives — unpacking an archive — stages what it acts on
-// and keeps none of it unless the reader ended at io.EOF.
+// NO BYTE IS RETURNED BEFORE ITS CHUNK HAS AUTHENTICATED, but what is returned
+// is PROVISIONAL UNTIL io.EOF: a truncated stream reads every chunk up to the
+// cut, then ErrDecrypt, never a clean EOF. A caller acting on plaintext as it
+// arrives (unpacking an archive) stages it and keeps none unless the reader
+// ended at io.EOF.
 func (s *StreamSealer) Open(src io.Reader, aad []byte) (io.Reader, error) {
 	in := bufio.NewReaderSize(src, s.chunk+streamTagBytes+1)
 	fixed := make([]byte, len(streamMagic)+2)
@@ -248,7 +193,10 @@ func (s *StreamSealer) Open(src io.Reader, aad []byte) (io.Reader, error) {
 
 // streamAEAD is the per-object AEAD: AES-256-GCM under the key HKDF derives
 // from the keyring key, the stream's salt and the format's info, which names
-// the key id so a header naming another id derives another key.
+// the key id so a header naming another id derives another key. No object
+// shares a key, so a COUNTER is a safe nonce; a changed salt or renamed key id
+// fails the first chunk, an unknown id fails the lookup, and the version is
+// CHECKED, not derived.
 func streamAEAD(key, salt []byte, id string) (cipher.AEAD, error) {
 	if len(key) != keyBytes {
 		return nil, ErrDecrypt
@@ -273,7 +221,12 @@ func streamNonce(index uint64) []byte {
 }
 
 // streamAAD is chunk index's associated data: the caller's, prefixed by its
-// length, then the index and the final flag.
+// length (so no two pairs spell one byte string), then the index and the final
+// flag. The caller's binds the stream to where it belongs; the index (also the
+// nonce) makes REORDERING detected; the FINAL FLAG authenticates the end: a cut
+// stream ends on a chunk sealed not-final, which opens as final nowhere
+// (TRUNCATION detected), and a chunk appended after the final one makes it
+// read as not-final (EXTENSION detected).
 func streamAAD(aad []byte, index uint64, final bool) []byte {
 	out := make([]byte, 0, 4+len(aad)+8+1)
 	out = binary.BigEndian.AppendUint32(out, uint32(len(aad)))

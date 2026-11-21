@@ -94,19 +94,14 @@ func charterWith(field, text string) (config.Charter, string) {
 // TestTheCharterCountsCharactersAsTheDashboardDoes holds the engine's charter
 // bounds to the shared vectors the dashboard's editor is held to as well.
 //
-// ONE COUNT ON BOTH SIDES, OR A DRAFT THE COUNTER CALLED FINE IS REFUSED. The
-// editor marks a draft past a bound before Save and shows "n of 1024
-// characters"; the engine refuses a write past the same bound. Both count code
-// points of the TRIMMED value. A browser's `.length` counts UTF-16 units, so
-// every emoji outside the basic plane counts twice there; a byte count makes
-// every accent two and every CJK character three; a grapheme count makes a
-// letter and its combining accent one. The vectors sit at each bound and one
-// past it in text where those counts part, and this test fails a vector set
-// that could not tell them apart, so a rule that drifted to any of them on
-// either side fails one of the two tests. The trim is part of the count: the
-// engine trims what `strings.TrimSpace` trims, which keeps a byte order mark
-// a browser's `String.prototype.trim` drops and drops a next-line character
-// it keeps, and the vectors hold both.
+// ONE COUNT ON BOTH SIDES, OR A DRAFT THE COUNTER CALLED FINE IS REFUSED. Both
+// count code points of the TRIMMED value, where a browser's `.length` counts
+// UTF-16 units, a byte count makes an accent two and a CJK character three,
+// and a grapheme count merges a letter with its accent. The vectors sit at each
+// bound and one past it in text where those counts part, and this test fails a
+// vector set that could not tell them apart. The trim is part of the count:
+// `strings.TrimSpace` keeps a byte order mark a browser's `trim` drops and drops
+// a next-line character it keeps, and the vectors hold both.
 func TestTheCharterCountsCharactersAsTheDashboardDoes(t *testing.T) {
 	t.Parallel()
 	var partsFromBytes, partsFromUTF16 bool

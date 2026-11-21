@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -88,16 +89,18 @@ type CheckReported struct {
 	URL string `json:"url,omitempty"`
 }
 
-// record is the record r, reported by reporter, decides at instant at: the
-// attempt's claim while it runs, its ending once it ended.
-func (r CheckReported) record(reporter Principal, at time.Time) (OpKind, any) {
+// record is the record r, reported by reporter, decides at instant at, required
+// where the target's gate requires its check: the attempt's claim while it
+// runs, its ending once it ended.
+func (r CheckReported) record(reporter Principal, at time.Time, required bool) (OpKind, any) {
 	if r.State == CheckStateRunning {
-		return OpCheckStarted, CheckStarted{CheckKey: r.CheckKey, Placement: PlacementExternal, StartedAt: at}
+		return OpCheckStarted, CheckStarted{CheckKey: r.CheckKey, Placement: PlacementExternal, StartedAt: at,
+			Required: required}
 	}
 	return OpCheckFinished, CheckFinished{CheckKey: r.CheckKey, State: r.State, Reason: CheckReasonReported,
 		DurationMs: r.DurationMs, Summary: r.Summary, Tail: r.Tail, Failures: r.Failures,
 		FailuresOmitted: r.FailuresOmitted, Tests: r.Tests, LogLines: r.LogLines, TailCut: r.TailCut,
-		Reporter: &reporter, URL: r.URL, FinishedAt: at}
+		Reporter: &reporter, URL: r.URL, Required: required, FinishedAt: at}
 }
 
 // validate refuses a report by reporter no correct asker forms: its
@@ -123,7 +126,7 @@ func (r CheckReported) validate(reporter Principal) error {
 		// rules at the last.
 		r.Attempt = MaxCheckAttempts
 	}
-	_, payload := r.record(reporter, time.Unix(1, 0).UTC())
+	_, payload := r.record(reporter, time.Unix(1, 0).UTC(), false)
 	if err := payload.(interface{ Validate() error }).Validate(); err != nil {
 		return fmt.Errorf("report: %w", err)
 	}
@@ -246,7 +249,9 @@ func decideRerun(ctx context.Context, tx *sql.Tx, r CheckRerun, asker Principal,
 // (and the home's dispatch queues nothing of a name the commit holds a CI's
 // attempt of). The attempt a report names is its CI's run: the latest while it
 // runs, the next once it ended; the latest's ending sent again is answered
-// from its row.
+// from its row. It says whether the target's gate requires the check, as the
+// home's dispatch says of a check it queues, since every reader of the row
+// (a rollup, a merge box, a notice) reads it there.
 func decideReport(ctx context.Context, tx *sql.Tx, r CheckReported, reporter Principal, d checksDecision,
 	named func(CheckKey) string, now time.Time) (checksDecision, error) {
 
@@ -258,7 +263,16 @@ func decideReport(ctx context.Context, tx *sql.Tx, r CheckReported, reporter Pri
 	if found {
 		d.row = &latest
 	}
-	_, payload := r.record(reporter, now)
+	gate, err := requiredIn(ctx, tx, key.RepoID)
+	if err != nil {
+		return checksDecision{}, err
+	}
+	names, err := gate.of(key.Target)
+	if err != nil {
+		return checksDecision{}, fmt.Errorf("gitlet: read the gate of %s for a report of check %s: %w", key.Target,
+			key.Name, err)
+	}
+	_, payload := r.record(reporter, now, slices.Contains(names, key.Name))
 	switch {
 	case found && !latest.Queued.IsZero():
 		return d.refuse(CheckRefusalNativeCheck, fmt.Sprintf("check %s of %s for %s is the engine's: it queued "+

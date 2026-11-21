@@ -3,6 +3,7 @@ package engine
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/node"
@@ -26,23 +29,16 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A DRAINING NODE STARTS NO TURN THROUGH A LAUNCH'S COMPLETION.
-//
-// What a running engine did: the drain closed the node's turn gate and quiesced
-// every seat's inbox, the box's waiter went on running through it (its
-// keepalive protects the box), and a completion it fired reached the seat's
-// CONTROL topic, which nothing quiesced. The coordinator claimed the run,
-// collected the box and resumed the turn on a node that was leaving: two full
-// turns started minutes into a drain, each holding the drain open until it
-// ended, and both abandoned when it did.
+// A DRAINING NODE STARTS NO TURN THROUGH A LAUNCH'S COMPLETION. The drain
+// closes the turn gate and quiesces every inbox, but the box's waiter keeps
+// running and a completion it fires reaches the seat's CONTROL topic, which
+// nothing quiesced: the coordinator would resume the turn on a leaving node.
 //
 // These cases drive that road end to end: a real engine, the coordinator its
-// own builder wires ([Engine.buildSandboxRuntime]) and its own waiters, the one
-// that drives the rig's box firing completions to the seat's control topic as
-// it does in production. The box is `direct`, so that waiter is this node's
-// own (ADR-0065), and the run's record names this node as the one that
-// launched it. The box and its harness are the in-process doubles, so the
-// only thing standing in for production is what runs inside the box.
+// builder wires ([Engine.buildSandboxRuntime]) and the waiter firing
+// completions to the control topic as in production. The box is `direct`, so
+// that waiter is this node's own (ADR-0065). Only what runs inside the box is
+// a double.
 
 // drainRig is one engine over a store and a stream that outlive it, holding the
 // swe seat with its executor in its box.
@@ -267,7 +263,8 @@ func deferred(t *testing.T, e *Engine) bool {
 // engine's gate from its wiring, and the draining node claims and collects the
 // run; map a drain refusal to a Nak and the control attachment is never
 // quiesced, so the broker hands the completion straight back to the node that
-// is leaving for as long as it drains.
+// is leaving for as long as it drains; record the drain's refusal as owed, and
+// the job's record is written for a delivery the drain hands on.
 func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 	t.Parallel()
 	r := newDrainRig(t)
@@ -323,6 +320,12 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 		t.Fatalf("run = %q (collected %v), want it untouched for the seat's next holder",
 			got.Status, got.Collected)
 	}
+	// AND OWING NOTHING: a delivery handed on is never acknowledged, so the
+	// drain's refusal writes nothing on the job's record.
+	if got := r.run(t, e, "t1"); got.Launch.RefusalOwed != "" {
+		t.Fatalf("the job's record owes %q after the drain's refusal; want nothing written for a delivery "+
+			"handed on", got.Launch.RefusalOwed)
+	}
 
 	finish()
 	select {
@@ -345,33 +348,37 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 	})
 }
 
-// A REFUSED COMPLETION IS HANDED BACK BY THE CONDITION ITS REFUSAL NAMES.
+// A REFUSED COMPLETION IS HANDED BACK BY THE CONDITION ITS REFUSAL NAMES (the
+// package doc's "A refused completion is handed back by the condition it
+// names"): a draining node defers; a condition that clears by waiting, a
+// provider's limit here that this build names nowhere, is acked, and the
+// waiter announces the run again (TestAnUnclaimedCompletionIsAnnouncedAgain);
+// a failure the refusal does not explain is a Nak. A completion marked
+// sandbox.ErrUnannounced, or whose refusal record the store did not take
+// (sandbox.ErrStoreSilent), is never acknowledged: a Nak, or deferred where a
+// drain or a seat let go of hands it on.
 //
-// A node that is leaving defers: the attachment is quiesced for the rest of the
-// drain and the completion waits at the head for the seat's next holder. A
-// condition that clears by waiting is acked, which spends none of the broker's
-// deliveries and quiesces nothing: the run is left unclaimed and the waiter
-// announces it again on its next poll (TestAnUnclaimedCompletionIsAnnouncedAgain).
-// A condition this build names nowhere yet, a provider's limit here, takes the
-// waiting rule with no change to the hand-back, which is the point of keying it
-// on the condition. Only a failure the refusal does not explain is a Nak.
-//
-// Mutation: key the hand-back on node.ErrDraining again and the provider limit
-// is a Nak, walking a healthy completion to the dead-letter boundary one
-// delivery at a time; defer every refusal and a seat whose ownership merely
-// blipped quiesces its control topic for as long as this node holds it.
+// Mutation: key on node.ErrDraining and the limit is a Nak; defer every refusal
+// and a blipped seat quiesces its topic; acknowledge either unowed refusal.
 func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 	t.Parallel()
 	refusal := func(cond sandbox.Condition, cause error) error {
 		return errors.Join(sandbox.ErrResumeUnavailable, &sandbox.TurnRefused{Cause: cause,
 			Refusal: sandbox.Refusal{Condition: cond, Reason: cause.Error()}})
 	}
+	// unannounced is err as the coordinator hands back a delivery while the
+	// clock on its box's host runs.
+	unannounced := func(err error) error { return fmt.Errorf("%w: %w", sandbox.ErrUnannounced, err) }
+	// unrecorded is a refusal the coordinator could not write on the job's
+	// record as owed, as it hands it back: the store's silence alone.
+	unrecorded := fmt.Errorf("%w: sandbox: recording the refusal of t1's completion: nats: timeout",
+		sandbox.ErrStoreSilent)
 	for name, tc := range map[string]struct {
 		err  error
 		want queue.Outcome
 	}{
 		"settled":                    {err: nil, want: queue.OutcomeAck},
-		"the node is draining":       {err: refusal(waitDrain, node.ErrDraining), want: queue.OutcomeDefer},
+		"the node is draining":       {err: refusal(sandbox.Draining, node.ErrDraining), want: queue.OutcomeDefer},
 		"the seat is not provable":   {err: refusal(waitOwnership, node.ErrSeatNotOwned), want: queue.OutcomeAck},
 		"a provider's limit":         {err: refusal("provider_limit", errors.New("provider limit reached")), want: queue.OutcomeAck},
 		"a refusal naming no wait":   {err: refusal("", errors.New("refused")), want: queue.OutcomeNak},
@@ -379,34 +386,188 @@ func TestARefusedCompletionIsHandedBackByItsCondition(t *testing.T) {
 		"the seat was let go of":     {err: refusal(sandbox.SeatLost, sandbox.ErrSeatNotHeld), want: queue.OutcomeDefer},
 		"a newer lease, unconfirmed": {err: fmt.Errorf("record: %w", sandbox.ErrSeatNotHeld), want: queue.OutcomeNak},
 		"the store failed":           {err: errors.New("store unavailable"), want: queue.OutcomeNak},
+		"a wait no waiter announces again": {err: unannounced(refusal(waitOwnership, node.ErrSeatNotOwned)),
+			want: queue.OutcomeNak},
+		"a limit no waiter announces again": {err: unannounced(refusal("provider_limit",
+			errors.New("provider limit reached"))), want: queue.OutcomeNak},
+		"a drain no waiter announces again": {err: unannounced(refusal(sandbox.Draining, node.ErrDraining)),
+			want: queue.OutcomeDefer},
+		"a seat let go of, no waiter announcing again": {err: refusal(sandbox.SeatLost,
+			unannounced(sandbox.ErrSeatNotHeld)), want: queue.OutcomeDefer},
+		"nothing settled while no waiter announces again": {err: fmt.Errorf("%w: its run is not settled",
+			sandbox.ErrUnannounced), want: queue.OutcomeNak},
+		"a wait whose record the store did not take": {err: unrecorded, want: queue.OutcomeNak},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if got := controlOutcome(tc.err).Outcome; got != tc.want {
+			if got := controlOutcome(t.Context(), tc.err).Outcome; got != tc.want {
 				t.Errorf("controlOutcome(%v) = %s, want %s", tc.err, got, tc.want)
 			}
 		})
 	}
 }
 
+// A STORE'S SILENCE IS THIS NODE'S FAILURE, NEVER THE MESSAGE'S, and so is
+// every failure controlOutcome hands back as the node's (queue.NakNode): the
+// store's silence or no waiter to announce the job (sandbox.ErrStoreSilent,
+// sandbox.ErrUnannounced), what the queue tells as its node's (queue.NodeFault),
+// a condition of the infrastructure (nodesFailure), a row a newer lease owns
+// (sandbox.ErrSeatNotHeld not named SeatLost) and a claim the recovery gate
+// refused (sandbox.ErrSeatRecovering). A failure of the completion itself, past
+// its deadline among them, stays the message's. The package doc's "Everything
+// else on the control topic NAKs" says why.
+//
+// Mutation: hand any of these back with queue.Nak, ask queue.NodeFault alone
+// after a refusal that waits, or read every condition as the node's: red.
+func TestAStoreSilenceIsNeverTheMessagesFailure(t *testing.T) {
+	t.Parallel()
+	live := t.Context()
+	stopped, stop := context.WithCancel(live)
+	stop()
+	silent := fmt.Errorf("sandbox: collecting t1: %w: sandbox: read run t1: nats: timeout", sandbox.ErrStoreSilent)
+	unannounced := func(err error) error { return fmt.Errorf("%w: %w", sandbox.ErrUnannounced, err) }
+	refusal := errors.Join(sandbox.ErrResumeUnavailable, &sandbox.TurnRefused{Cause: node.ErrSeatNotOwned,
+		Refusal: sandbox.Refusal{Condition: waitOwnership, Reason: node.ErrSeatNotOwned.Error()}})
+	refused := errors.New("nats: no responders available for request")
+	unanswered := fmt.Errorf("%w: nats: no responders available for request", queue.ErrUnavailable)
+	for name, tc := range map[string]struct {
+		err     error
+		nodes   bool
+		stopped bool
+	}{
+		"a step the store did not answer":       {err: silent, nodes: true},
+		"a claim the store did not answer":      {err: fmt.Errorf("sandbox: claiming t1: %w", silent), nodes: true},
+		"a hand-back no waiter announces again": {err: unannounced(silent), nodes: true},
+		"a refusal no waiter announces again":   {err: unannounced(refusal), nodes: true},
+		"a renewal the broker did not take":     {err: fmt.Errorf("%w; %w", unannounced(silent), refused), nodes: true},
+		"nothing settled while no waiter announces again": {
+			err: fmt.Errorf("%w: its run is not settled", sandbox.ErrUnannounced), nodes: true},
+		"a park the store did not record": {err: fmt.Errorf("sandbox: parking t1: %w", silent), nodes: true},
+		"the question's announcement the broker did not take": {
+			err: fmt.Errorf("sandbox: announcing the question t1 asked: %w", unanswered), nodes: true},
+		"the question's announcement to a queue no longer live": {
+			err:   fmt.Errorf("sandbox: announcing the question t1 asked: %w: draining", queue.ErrNotLive),
+			nodes: true},
+		"a collection this node's stop cut short": {
+			err: fmt.Errorf("sandbox: collecting t1 was interrupted: %w", context.Canceled), nodes: true,
+			stopped: true},
+		"a resume the coordination store failed": {err: fmt.Errorf("sandbox: resuming t1: "+
+			"engine: read the rebase: %w: nats: timeout", coord.ErrUnavailable), nodes: true},
+		"a resume that failed": {err: errors.New("sandbox: resuming t1: the model provider did not answer")},
+		"a resume that ran past its deadline": {err: fmt.Errorf("sandbox: resuming t1: runner: %w",
+			context.DeadlineExceeded)},
+		"a relaunch a sandbox provider did not answer": {err: fmt.Errorf("sandbox: resuming t1: %w",
+			sandbox.Because(sandbox.WhyProviderUnavailable, errors.New("e2b: 503"))), nodes: true},
+		"a relaunch a sandbox provider refused the key of": {err: fmt.Errorf("sandbox: resuming t1: %w",
+			sandbox.Because(sandbox.WhyProviderRefused, errors.New("e2b: 401"))), nodes: true},
+		"a refusal's record a newer lease's row refused": {err: fmt.Errorf("sandbox: the refusal of t1's "+
+			"completion (refused) is not recorded: %w", sandbox.ErrSeatNotHeld), nodes: true},
+		"a claim the seat's recovery gate refused": {err: fmt.Errorf("sandbox: claiming t1: "+
+			"sandbox: claiming run t1 of seat \"swe\": %w", sandbox.ErrSeatRecovering), nodes: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := live
+			if tc.stopped {
+				ctx = stopped
+			}
+			got := controlOutcome(ctx, tc.err)
+			if got.Outcome != queue.OutcomeNak {
+				t.Fatalf("controlOutcome(%v) = %s; want it handed back for a retry", tc.err, got.Outcome)
+			}
+			if got.FailsMessage() == tc.nodes {
+				t.Fatalf("controlOutcome(%v) counts it as the message's own failure: %v; want %v", tc.err,
+					got.FailsMessage(), !tc.nodes)
+			}
+		})
+	}
+}
+
+// A RESUME ANOTHER NODE OR BUILD CAN MAKE IS THIS NODE'S FAILURE ON THE CONTROL
+// TOPIC, CAUSE BY CAUSE, and one no node gets past stays the message's: a
+// parked state a newer build wrote, a retired one an older live node reads, a
+// reply kind this build does not know, no applied company and a seat not in
+// this node's company are each queue.NakNode; a refusal naming nothing to wait
+// on, a parked state that is no state, a run with no reply kind and one with no
+// parked state are queue.Nak. A seat not held here is deferred as SeatLost
+// (TestARefusedCompletionIsHandedBackByItsCondition).
+//
+// Mutation: drop sandbox.ErrResumeElsewhere from controlOutcome, hand every
+// ErrResumeUnavailable back as the node's, or mark any cause with the other
+// error, and its row goes red.
+func TestAResumeAnotherNodeCanMakeIsTheNodesOnTheControlTopic(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	parked := func(blob string) sandbox.PendingRun {
+		return sandbox.PendingRun{TurnID: "t1", AgentHandle: "app", Status: sandbox.StatusRunning,
+			ExecuteState: json.RawMessage(blob)}
+	}
+	alone := &resumer{engine: &Engine{backends: &Backends{Coord: coordmem.New()}}}
+	// AN OLDER NODE STILL LIVE, which reads the version this build retired.
+	older := coordmem.New()
+	present(ctx, t, older, "node-older", execstate.Version-1)
+	besideOlder := &resumer{engine: &Engine{backends: &Backends{Coord: older}, testNode: "node-self"}}
+	acme := &org.Organization{Name: "Acme"}
+	acme.Normalize()
+	elsewhere := &Engine{backends: &Backends{Coord: coordmem.New()}}
+	elsewhere.epoch.current.Store(&Company{Org: acme})
+	current := runParkedAtVersion(t, execstate.Version)
+	resume := func(r *resumer, run sandbox.PendingRun) error {
+		return r.resume(ctx, sandbox.ResumeRequest{Run: run})
+	}
+	for name, tc := range map[string]struct {
+		err   error
+		nodes bool
+	}{
+		"a parked state a newer build wrote": {
+			err: resume(alone, runParkedAtVersion(t, execstate.Version+1)), nodes: true},
+		"a retired state an older node still reads": {
+			err: resume(besideOlder, runParkedAtVersion(t, execstate.Version-1)), nodes: true},
+		"a reply kind this build does not know": {
+			err: replyErr(sandbox.PendingRun{TurnID: "t1", Reply: "later"}), nodes: true},
+		"a node with no applied company":    {err: resume(alone, current), nodes: true},
+		"a seat not in this node's company": {err: resume(&resumer{engine: elsewhere}, current), nodes: true},
+		"a refusal that names nothing to wait on": {err: fmt.Errorf("%w: %w", sandbox.ErrResumeUnavailable,
+			&sandbox.TurnRefused{Cause: errors.New("refused"), Refusal: sandbox.Refusal{Reason: "refused"}})},
+		"a parked state that is no state": {err: resume(alone, parked(`[1, 2]`))},
+		"a run with no reply kind":        {err: replyErr(sandbox.PendingRun{TurnID: "t1"})},
+		"a run with no parked state":      {err: resume(alone, parked(``))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if !errors.Is(tc.err, sandbox.ErrResumeUnavailable) {
+				t.Fatalf("the premise: %v is a resume this node cannot make", tc.err)
+			}
+			got := controlOutcome(ctx, tc.err)
+			if got.Outcome != queue.OutcomeNak {
+				t.Fatalf("controlOutcome(%v) = %s; want it handed back for a retry", tc.err, got.Outcome)
+			}
+			if got.FailsMessage() == tc.nodes {
+				t.Fatalf("controlOutcome(%v) counts it as the message's own failure: %v; want %v",
+					tc.err, got.FailsMessage(), !tc.nodes)
+			}
+		})
+	}
+}
+
+// replyErr is the failure resumeReply answers a run's reply kind with.
+func replyErr(run sandbox.PendingRun) error {
+	_, err := resumeReply(run)
+	return err
+}
+
 // A COMPLETION REFUSED ON A CONDITION THAT CLEARS BY WAITING RESUMES ONCE IT
-// CLEARS, AND ONCE ONLY, WITHOUT ANY DELIVERY BEING HANDED BACK.
-//
-// The condition is a provider's limit, which no code here names yet: the
-// hand-back keys on the condition's kind, so it needs none. While it holds,
-// every completion the waiter fires is refused and acked, so the control
-// attachment is never quiesced and the run stays unclaimed. Then it clears,
-// and the run is collected once, by whichever comes first:
-//
-//   - the signal (readmitResumes, the hook whatever ends a condition calls),
-//     with both waiters stopped so nothing else could have brought it back;
-//   - the waiter's next poll alone, with no signal, which bounds the wait by
-//     one poll interval;
-//   - both at once, racing, which the at-most-once claim settles.
+// CLEARS, AND ONCE ONLY, WITHOUT ANY DELIVERY BEING HANDED BACK. The condition
+// is a provider's limit, which no code here names (the hand-back keys on its
+// kind): every completion the waiter fires meanwhile is refused and acked, so
+// the control attachment is never quiesced. Once it clears, the run is
+// collected once, by the signal (readmitResumes, both waiters stopped), by the
+// waiter's next announcement alone (at most twenty poll intervals after its
+// last, a second at this rig's cadence), or by both racing, which the
+// at-most-once claim settles.
 //
 // Mutation: drop the kept completion from the coordinator's Readmit and the
-// signalled case never collects; defer or Nak the refusal and the attachment is
-// quiesced, or the completion's deliveries are spent, while it waits.
+// signalled case never collects; defer or Nak the refusal and it is spent.
 func TestACompletionRefusedOnAWaitResumesOnceItClears(t *testing.T) {
 	t.Parallel()
 	const waitLimit sandbox.Condition = "provider_limit"
@@ -526,9 +687,9 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 		}
 		return errors.As(err, &refused) && !errors.Is(err, node.ErrSeatBusy)
 	})
-	if refused.Condition != waitDrain || !errors.Is(refused, node.ErrDraining) {
+	if refused.Condition != sandbox.Draining || !errors.Is(refused, node.ErrDraining) {
 		t.Fatalf("a resume on a draining node was refused as %+v, want it waiting on %q "+
-			"with the node's drain as its cause", refused.Refusal, waitDrain)
+			"with the node's drain as its cause", refused.Refusal, sandbox.Draining)
 	}
 	select {
 	case <-drained:
@@ -547,17 +708,14 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 	}
 }
 
-// A RESUMED TURN TAKES A SLOT UNDER node.max_concurrent.
+// A RESUMED TURN TAKES A SLOT UNDER node.max_concurrent: it is a full turn, so
+// with the node at its ceiling a completion waits for a slot before it claims
+// the run, and runs the moment one frees.
 //
-// The ceiling is what the node is sized by, and a resumed turn is a full turn:
-// model calls, tool loops, a harness. With the node at its ceiling, a
-// completion waits for a slot before it claims the run, and runs the moment
-// one frees.
-//
-// THE WAIT IS OBSERVED, NOT SLEPT ON: the completion's handler is seen parked
-// for the slot ([node.Node.TurnsWaiting]), which it can only be before its
-// claim, and an ungated completion is seen collected instead; either ends the
-// wait, and only the first is right.
+// THE WAIT IS OBSERVED, NOT SLEPT ON: the handler is seen parked for the slot
+// ([node.Node.TurnsWaiting]), which it can only be before its claim; an
+// ungated completion is seen collected instead. Either ends the wait, and only
+// the first is right.
 //
 // Mutation: drop the gate from the engine's coordinator and the completion is
 // collected and resumed beside the turn holding the only slot.

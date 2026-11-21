@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { parseMarkdown, safeHref } from "@crewlethq/ui";
 import {
   MODEL_WORDS,
@@ -10,6 +11,7 @@ import {
   renderBlocks,
   renderInline,
   renderMarkdown,
+  renderQuoted,
   splitSections,
   UnbrokenCode,
   imageSources,
@@ -812,6 +814,21 @@ describe("a wide table", () => {
     expect(scroller?.getAttribute("aria-label")).toBe("Table: Step, Owner");
   });
 
+  // INSIDE A CONTROL THE TABLE IS NO STOP: a row that is a link quotes an
+  // answer, and a tab stop inside it lands on words the row already names.
+  // Mutation: keep the stop under `links: "text"`, and the table is one.
+  it("is no tab stop where the document sits inside a control", () => {
+    const { container } = render(
+      <div>
+        {renderMarkdown("| Step | Owner |\n|---|---|\n| Drain | SRE |", { links: "text" })}
+      </div>,
+    );
+    const scroller = container.querySelector(".md-table");
+    expect(scroller?.querySelector("td")?.textContent).toBe("Drain");
+    expect(scroller?.hasAttribute("tabindex")).toBe(false);
+    expect(scroller?.hasAttribute("role")).toBe(false);
+  });
+
   // TWO TABLES OF THE SAME COLUMNS ARE NO PAIR OF LANDMARKS. A region is a
   // landmark, so a page with two "Element, Text" tables drew two landmarks of
   // one name, which a landmark list cannot tell apart. Mutation: make the
@@ -821,6 +838,40 @@ describe("a wide table", () => {
     const root = draw(`${table}\n\nBetween them.\n\n${table}`);
     expect(root.querySelectorAll(".md-table")).toHaveLength(2);
     expect(root.querySelectorAll("[role=region], section, aside, nav, main")).toHaveLength(0);
+  });
+});
+
+describe("words a sentence quotes", () => {
+  const drawn = (nodes: ReactNode) =>
+    render(<div>{nodes}</div>).container.firstElementChild as HTMLElement;
+
+  // ONE PARAGRAPH IS QUOTED IN PLACE, by the walk a paragraph is drawn with.
+  it("draws one paragraph as its inline runs, its marks drawn", () => {
+    const quoted = renderQuoted("Hold it **a week**,\nthen ship.");
+    expect("inline" in quoted).toBe(true);
+    if (!("inline" in quoted)) return;
+    const root = drawn(quoted.inline);
+    expect(root.querySelector("p")).toBeNull();
+    expect(root.textContent).toBe("Hold it a week, then ship.");
+    expect(root.querySelector("strong")?.textContent).toBe("a week");
+  });
+
+  // ANYTHING MORE IS ITS BLOCKS, as a document draws them. Mutation: quote
+  // a list inline, and its items run into the sentence.
+  it("draws a list or a second paragraph as blocks", () => {
+    const quoted = renderQuoted("**Pass**, with notes:\n- one\n- two\n\nThe rest waits.");
+    expect("blocks" in quoted).toBe(true);
+    if (!("blocks" in quoted)) return;
+    const root = drawn(quoted.blocks);
+    expect([...root.children].map((el) => el.tagName)).toEqual(["P", "UL", "P"]);
+    expect([...root.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["one", "two"]);
+    expect(root.textContent).not.toMatch(/\*\*|- /);
+  });
+
+  it("reads the options it is given, as a document does", () => {
+    const quoted = renderQuoted("See [the guide](https://example.com).", { links: "text" });
+    if (!("inline" in quoted)) throw new Error("one paragraph is quoted in place");
+    expect(drawn(quoted.inline).querySelector("a")).toBeNull();
   });
 });
 

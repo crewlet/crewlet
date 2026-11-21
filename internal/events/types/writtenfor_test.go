@@ -63,12 +63,10 @@ func TestAnAgentsWriteStatesWhomItWasMadeFor(t *testing.T) {
 // WHOM A WRITE WAS MADE FOR CROSSES THE WIRE AS ITS BUILDER STATED IT. An actor
 // carrying nobody goes out without the key, byte for byte as a build without
 // the field sends it; one carrying somebody goes out with them. On the far
-// side what arrived is stated: a carrier as itself, and an absent one as
-// nobody once the actor's own decode says it arrived ([types.WrittenFor.Received]),
-// which is also what an older node, knowing no carrier, sends. And it crosses
-// under the rule of what holds it: decoded refusing every member nothing
-// declares, as the estate's wire decodes what an operation takes, a member
-// inside the carrier is refused where it is.
+// side what arrived is stated: a carrier as itself, an absent one as nobody
+// ([types.WrittenFor.Received]), as an older node sends. And it crosses under
+// the rule of what holds it: a member inside the carrier that nothing declares
+// is refused where it is, as the estate's wire decodes an operation.
 //
 // Mutation: drop `stated` from UnmarshalJSONFrom — a carrier that crossed the
 // wire is refused as unstated; have IsZero answer the zero value alone — an

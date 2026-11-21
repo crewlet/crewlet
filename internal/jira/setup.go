@@ -8,17 +8,15 @@ import (
 
 // What an operator has to supply before Jira issues reach a seat.
 //
-// The one thing that shapes this list is that a Cloud site and a Data Center
-// instance are addressed differently, and the config takes ONE of the two: a
-// direct URL, or a cloud id whose gateway URL is derived. Offering both as
-// required fields would produce a document the validator refuses; offering
-// neither leaves an operator guessing. So the URL is the required one and the
-// cloud id sits beside it as the alternative, which is how the config's own
-// refusal reads.
+// A Cloud site and a Data Center instance are addressed differently, and the
+// config takes ONE of the two: a direct URL, or a cloud id whose gateway URL
+// is derived. Requiring both makes a document the validator refuses; neither
+// leaves an operator guessing. So the URL is required and the cloud id is the
+// alternative beside it, as the config's own refusal reads.
 //
-// The org account is REQUIRED here where GitHub's is optional, because this
-// third-party app has no fallback: without a credential the engine cannot resolve a
-// seat's account id, and an issue assigned to an agent then reaches nobody.
+// The org account is REQUIRED here where GitHub's is optional: without a
+// credential the engine cannot resolve a seat's account id, and an issue
+// assigned to an agent reaches nobody.
 
 // Requirements says what this company still needs for Jira.
 //
@@ -81,24 +79,17 @@ func Requirements(
 			Label:      "Atlassian user account email",
 			Kind:       setup.KindEmail,
 			ConfigPath: "integrations.jira.email",
-			// REQUIRED ON CLOUD, which authenticates an API token as
-			// email and token together and refuses it as a bearer. It was
-			// optional for the Data Center case, which made it optional on
-			// every form including the one where it is the difference
-			// between a working credential and a 401.
 			// REQUIRED UNLESS THIS IS KNOWN TO BE DATA CENTER.
 			//
 			// Cloud authenticates an API token as Basic base64(email:token)
 			// and refuses it as a bearer: without the address the engine
-			// sends a bearer and Atlassian answers 403, so the webhook this
-			// integration exists to register is never created. Data Center
-			// takes the token as a bearer and wants no address at all.
+			// sends a bearer, Atlassian answers 403, and the webhook is
+			// never created. Data Center takes a bearer and wants no
+			// address.
 			//
-			// An UNKNOWN deployment counts as Cloud here, and that is the
-			// case this got wrong: with no site typed yet DeploymentOf
-			// answers DataCenter for the empty string, so the one field a
-			// fresh Cloud connect cannot do without was marked optional.
-			// THE DECLARED DEPLOYMENT, not a guess from an address.
+			// An UNKNOWN deployment counts as Cloud: with no site typed,
+			// DeploymentOf answers DataCenter for the empty string. This
+			// reads the DECLARED deployment, not a guess from an address.
 			Required: cloud,
 			// WHERE TO READ IT. The address belongs to the account whose
 			// API token is in the field below, so it is the one on that
@@ -182,28 +173,14 @@ func Requirements(
 
 // forDeployment drops the fields the other Atlassian deployment uses.
 //
-// A Cloud site and a Data Center instance need genuinely different things,
-// and the form asked for BOTH sets at once: a Cloud operator was offered a
-// webhook signing secret their site will never send, and a Data Center
-// operator a cloud id and a link address that mean nothing off Atlassian's
-// gateway. A field that cannot apply is not an optional field; it is a
-// question with no answer, and it invites one anyway.
+// A field that cannot apply is not an optional field but a question with no
+// answer: a Cloud operator must not be offered a signing secret their site
+// never sends, nor a Data Center operator a cloud id or link address.
 //
-// A field with a value SURVIVES whatever this derives, because the
-// derivation is a guess from an address and the document is a fact: hiding a
+// A field with a VALUE SURVIVES, because the document is a fact: hiding a
 // setting a company has written down would make the form disagree with the
 // configuration, and Save would then clear it.
 func forDeployment(reqs []setup.Requirement, cloud bool) []setup.Requirement {
-	// THE DEPLOYMENT IS DECLARED, so this is now a filter rather than a
-	// guess. A field that cannot apply is not an optional field: a Cloud
-	// operator was offered a Data Center signing secret their site will
-	// never send, and a Data Center operator a cloud id, a link address and
-	// a Cloud webhook token that mean nothing off Atlassian's gateway.
-	//
-	// A field with a VALUE survives whatever this decides, because the
-	// document is a fact and hiding a setting a company has written down
-	// would make the form disagree with the configuration, and Save would
-	// then clear it.
 	// JIRA SIGNS ON BOTH DEPLOYMENTS, so its webhook secret is on neither
 	// list. Confluence is the one that differs: Cloud signs nothing there,
 	// so a token in the URL is the whole check.

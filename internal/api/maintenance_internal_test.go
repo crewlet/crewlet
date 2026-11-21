@@ -17,29 +17,15 @@ import (
 
 // A NODE IN A MAINTENANCE MODE SERVES A FILE'S BYTES AND WRITES NONE. The mode
 // hands no writer to any surface ([engine.OperatorWorkWriter],
-// [engine.OperatorPageWriter], behind the engine's one writer gate), so the
-// upload and the removal are absent there, and so is every tracker gesture no
-// tool makes (the comment edit and the purge, through the halves' Tracker) and
-// every knowledge-base one (the rename and the three destructive verbs,
-// through their PageStore); a download is a READ, and a maintenance-mode node
-// serves its reads — the file listing beside it among them. Gated on the
-// writer, the download answered `no_route` for a file the same node had just
-// listed.
+// [engine.OperatorPageWriter]), so upload, removal and the tracker and
+// knowledge-base write gestures are absent. A download is a READ and is
+// served; gated on the writer it answered `no_route` for a file just listed.
 //
-// The halves are what the human write surface serves from; how it serves the
-// download from halves holding the rows and the object store and no writer is
-// its own suite's (internal/api/workapi's TestAFilesBytesAreServedWhereNoWriterIs),
-// and that [readsOnly] clears every per-actor seam is
-// [TestReadsOnlyClearsEveryWriterSeam]'s. This is the half only a running
-// engine can show: what a maintenance node hands that surface. A node without
-// `data` in the mode is held to the same by internal/e2e's
-// TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone, beside the data
-// member it needs to join.
-//
-// Mutation: keep FileWriter in [readsOnly] and the maintenance node hands its
-// write surface a file writer; clear Files there too and the download has no
-// rows to read; hand the Tracker or the PageStore past the engine's writer
-// gate in [nativeHalves] and the node serves those writes. Each goes red.
+// See also workapi's TestAFilesBytesAreServedWhereNoWriterIs,
+// [TestReadsOnlyClearsEveryWriterSeam] and, for a node without `data`,
+// internal/e2e's TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone.
+// Mutation: keep FileWriter in [readsOnly]; clear Files there too; hand the
+// Tracker or PageStore past the writer gate in [nativeHalves]. Each goes red.
 func TestAMaintenanceNodeServesAFilesBytesAndWritesNone(t *testing.T) {
 	t.Parallel()
 	inService, up := nativeHalves(nodeEngine(t, ""))

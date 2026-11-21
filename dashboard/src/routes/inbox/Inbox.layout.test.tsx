@@ -100,7 +100,7 @@ let host: HTMLElement | null = null;
 beforeEach(() => {
   vi.stubGlobal("WebSocket", InertWebSocket);
   vi.stubGlobal("fetch", actsApplied());
-  location.hash = "#/inbox?row=ask%3Ac-1";
+  location.hash = "#/inbox/ask/c-1";
 });
 
 afterEach(() => {
@@ -131,6 +131,24 @@ async function mount(width: number) {
 const title = () => document.querySelector(".crewlet-reading-pane__title");
 const scroller = () => document.querySelector<HTMLElement>(".inbox-pane");
 
+// THE PHONE'S WAY BACK SITS AT THE COLUMN'S START, no wider than its words: the column is a grid,
+// whose inline axis `justify-self` sets. Mutation: place it with `align-self` alone, and it
+// stretches across the column with its words centred.
+test("on a phone an item's way back sits at the pane's start", async () => {
+  await page.viewport(390, 844);
+  await mount(390);
+  const back = await eventually(() => {
+    const found = document.querySelector<HTMLElement>(".inbox-pane-back");
+    expect(found).not.toBeNull();
+    return found!;
+  });
+  const column = back.parentElement!.getBoundingClientRect();
+  const inset = parseFloat(getComputedStyle(back.parentElement!).paddingLeft) || 0;
+  const box = back.getBoundingClientRect();
+  expect(Math.abs(box.left - column.left - inset)).toBeLessThan(2);
+  expect(box.width).toBeLessThan(column.width / 2);
+});
+
 test("the next item after an answer opens at its head, wherever the last one was scrolled to", async () => {
   await page.viewport(1440, 900);
   await mount(1200);
@@ -150,7 +168,7 @@ test("the next item after an answer opens at its head, wherever the last one was
 
 test("the open item's title fills its first line to within one word, at every width", async () => {
   await page.viewport(1440, 900);
-  location.hash = "#/inbox?row=ask%3Ac-2";
+  location.hash = "#/inbox/ask/c-2";
   const loose: string[] = [];
   for (let width = 760; width <= 1240; width += 40) {
     ANSWERS.decisions = {
@@ -184,6 +202,56 @@ test("the open item's title fills its first line to within one word, at every wi
     capped: false,
   };
   expect(loose, "widths where the first line left room for the next two words").toEqual([]);
+});
+
+// A LONG ANSWER IN WORDS STOPS AT THREE LINES IN ITS ROW, cut where it is
+// laid out: its paragraphs and its list are drawn, and the row does not grow
+// with them. Mutation: drop the row's clamp, and the line runs to every block.
+test("a long answer in words stops at three lines in its row", async () => {
+  await page.viewport(1440, 900);
+  const at = new Date(Date.now() - 60 * 60_000).toISOString();
+  const reply = [
+    "**Pass**, with conditions:",
+    ...Array.from({ length: 8 }, (_, i) => `- Condition ${i + 1} holds before the release ships`),
+    "",
+    "The changelog still needs the migration note.",
+  ].join("\n");
+  const answered = {
+    at,
+    ask: { ...ask(3, "Is the release a go?").ask, open: false, answer_with: undefined },
+    answer: { by: "jane", by_kind: "human", at, comment: "c-31", body: reply },
+  };
+  host = document.createElement("div");
+  host.style.cssText = "display: flex; flex-direction: column; width: 1200px; height: 720px;";
+  document.body.append(host);
+  root = createRoot(host);
+  flushSync(() =>
+    root!.render(
+      <LayoutClient
+        answers={{ ...ANSWERS, answered_decisions: { handle: "jane", items: [answered] } }}
+        org={ORG}
+      >
+        <Inbox />
+      </LayoutClient>,
+    ),
+  );
+  await eventually(() => expect(title()?.textContent).toBe(FIRST));
+  [...document.querySelectorAll("button")].find((b) => b.textContent === "Answered, 1")!.click();
+  const said = await eventually(() => {
+    const found = document.querySelector<HTMLElement>(
+      ".inbox-list .crewlet-inbox-row__outcome-text",
+    );
+    expect(found?.querySelector("ul")).toBeTruthy();
+    return found!;
+  });
+  await document.fonts.ready;
+  const line = parseFloat(getComputedStyle(said).lineHeight);
+  const items = said.querySelectorAll("li");
+  expect(items).toHaveLength(8);
+  const box = said.getBoundingClientRect();
+  expect(box.height).toBeLessThanOrEqual(3 * line + 1);
+  // CUT, not short: the last condition is drawn below what is shown.
+  expect(items[7]!.getBoundingClientRect().top).toBeGreaterThanOrEqual(box.bottom);
 });
 
 /** A run holding an ssh_operate call, worded as the engine words it (`make ssh-held-words`). */
@@ -235,7 +303,7 @@ test("a held call's 400-character command and reason stay inside the reading col
     },
     executors: { runs: [run] },
   };
-  location.hash = "#/inbox?row=run%3Aturn-9";
+  location.hash = "#/inbox/run/turn-9";
   const outside: string[] = [];
   for (const [width, height] of [
     [1440, 900],

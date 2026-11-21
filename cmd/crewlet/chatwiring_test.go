@@ -31,33 +31,17 @@ import (
 )
 
 // THE CHAT SURFACE A CHATLET COMPANY'S NODE SERVES, AND NOTHING ELSE:
-// questions to read, act tools to write, and three of the human write
-// surface's routes that destroy.
-//
-// # Why this exists
-//
-// Every chat seam the API takes is resolved PER QUESTION, and correctly so: a
-// company on `chat.backend: vendor` or `none` has no Chatlet, and its node
-// answers the questions `unknown_query`, the tools `unknown_tool` and the
-// destructions `no_route` rather than serving a surface with nothing behind
-// it. That tolerance has one failure mode, and it shipped once: a process that
-// never wired the seams serves the same answers to a Chatlet company — an
-// absent surface indistinguishable from a company that opted out, every unit
-// test green and the dashboard talking to nothing. Nil is a legal value for
-// every seam, so no compile check catches it; the assertion has to be made
-// against a SERVED surface, which is what this does — the node built the way
-// `crewlet run` builds it ([serveAPI]), asked whether each half is there.
-//
-// # And that it is ONE surface per gesture
-//
-// Every ordinary chat write is a tool the dashboard calls through
-// `/operator/act` (ADR-0024). A REST route for one beside it would be a second
-// path to the same write, decided and audited apart, so the paths those
-// gestures once had must answer the router's own refusal on the served node —
-// not merely in the api package's suite, which cannot see what this process
-// mounts.
-//
-// Every probe goes through [chatProbe], which says why each is authenticated.
+// questions to read, act tools to write, and three destroying routes.
+// Every chat seam the API takes is resolved PER QUESTION: a company on
+// `chat.backend: vendor` or `none` answers `unknown_query`, `unknown_tool` and
+// `no_route`. A process that never wired the seams serves the same answers to a
+// Chatlet company, indistinguishable from one that opted out, with every unit
+// test green (it shipped once; nil is legal for every seam). So this asserts
+// on a SERVED surface, built as `crewlet run` does ([serveAPI]).
+// And it is ONE surface per gesture: every ordinary chat write is an
+// `/operator/act` tool (ADR-0024), so a REST route beside one would be a second
+// audited path and must answer the router's own refusal on the served node.
+// Probes go through [chatProbe].
 func TestAChatletCompanyServesItsChatSurface(t *testing.T) {
 	t.Parallel()
 	e := testEngine(t)
@@ -121,14 +105,11 @@ func TestAChatletCompanyServesItsChatSurface(t *testing.T) {
 // A COMPANY OFF CHATLET IS SERVED NONE OF IT, IN THE THREE WORDS `crewlet
 // chat` READS AS THAT.
 //
-// The other half of the case above. A company on `chat.backend: none` has no
-// rooms, so its node answers every chat question `unknown_query`, every chat
-// tool `unknown_tool` and every destruction `no_route` — exactly the three
-// codes [chatletUnserved] names the axis for, and the only account this CLI gives
-// of why a chat verb was refused. A surface that answered anything else — a
-// question read against rooms nobody runs, a tool reaching an absent store —
-// would reach an operator as the node's bare refusal, with nothing to say the
-// company runs no Chatlet at all. Mutation: serve a company off Chatlet
+// The other half of the case above. A company on `chat.backend: none` answers
+// every chat question `unknown_query`, tool `unknown_tool` and destruction
+// `no_route`: the three codes [chatletUnserved] names the axis for, and this
+// CLI's only account of why a verb was refused. Anything else would reach an
+// operator as the node's bare refusal. Mutation: serve a company off Chatlet
 // the native read sources, or answer its destructions anything but
 // `no_route`, and this fails.
 func TestACompanyOffChatletIsServedNoneOfIt(t *testing.T) {
@@ -249,16 +230,14 @@ func chatProbe(t *testing.T, surface *httpSurface, token string) func(
 // A NODE IN A MAINTENANCE MODE STILL TAKES A PERSON'S READ STATE, AND NO CHAT
 // WRITE.
 //
-// The mode forbids a node to publish, and every chat write is a record on the
-// log — so the tools that write the rooms are not served there, nor the
-// destructions. A person's read state is neither: it is the fleet's
-// coordination record, and with every chat gesture the dashboard makes going
-// through the act transport (ADR-0024), withholding `mark_chat_read` on such a
-// node would leave a person's screen there no way to clear a badge at all. The
-// read TOOLS go with the writes, on the knowledge base's terms, while the
-// questions the dashboard asks still answer from the copy as it is. Mutation:
-// hand the operator surface no read state on a node that may not publish, or
-// its writer anyway, and this fails.
+// The mode forbids publishing and every chat write is a log record, so the
+// write tools and destructions are not served there. A person's read state is
+// the fleet's coordination record, and since every dashboard chat gesture goes
+// through the act transport (ADR-0024), withholding `mark_chat_read` would
+// leave no way to clear a badge. The read TOOLS go with the writes, on the
+// knowledge base's terms; the questions still answer from the copy as it is.
+// Mutation: hand the operator surface no read state on a node that may not
+// publish, or its writer anyway, and this fails.
 func TestAMaintenanceModeNodeTakesAPersonsReadStateAndNoChatWrite(t *testing.T) {
 	t.Parallel()
 	e := testEngineWith(t, engine.Options{Mode: statelog.ModeMaintenance})
@@ -307,17 +286,14 @@ func TestAMaintenanceModeNodeTakesAPersonsReadStateAndNoChatWrite(t *testing.T) 
 
 // A NODE SERVING NO API STILL SHOWS ITS SEATS' WORKING INDICATORS.
 //
-// The node running a seat's turn is rarely the node a browser is attached to,
-// so an indicator raised on it reaches a room as the seat's member of that
-// room's presence, on this node's presence hub, which tells the node the room
-// is open on — and when the hub that raised it was the API's, a node with no
-// ingress role or `api.port: 0` raised every indicator into nothing: the seat
-// working, every room showing nothing, and nothing anywhere to say so. So this
-// builds the hub the way `crewlet run` builds it ([api.NewEngineChatLive],
-// beside the engine and before any listener), binds NO listener, raises an
-// indicator as the engine's status driver does, and asks the engine's own
-// presence hub who is in the room, as its peers learn it. Red if the hub never
-// learned the engine's presence hub.
+// The node running a seat's turn is rarely the one a browser is attached to, so
+// an indicator reaches a room as the seat's presence on this node's presence
+// hub. When that hub was the API's, a node with no ingress role or
+// `api.port: 0` raised every indicator into nothing, and nothing said so.
+// This builds the hub as `crewlet run` does ([api.NewEngineChatLive], before
+// any listener), binds NO listener, raises an indicator as the engine's status
+// driver does, and asks the engine's own presence hub who is in the room. Red
+// if the hub never learned the engine's presence hub.
 func TestANodeServingNoAPIShowsItsSeatsIndicators(t *testing.T) {
 	t.Parallel()
 	e := testEngine(t)

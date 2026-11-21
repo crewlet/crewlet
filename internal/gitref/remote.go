@@ -47,29 +47,16 @@ func (r RemoteURL) Parsed() *url.URL {
 
 // ParseRemoteURL reads raw as a remote's URL and writes it back.
 //
-// WRITTEN BACK, NEVER PASSED ON: two parsers that read one URL differently — a
-// host after an @, a backslash, an IPv4 address in octal or in fewer than four
-// parts, a trailing dot, a name libcurl would convert to punycode — are how a
-// check of one host becomes a dial of another, or how a pin keyed by one
-// spelling is missed by libcurl's lookup of another and answered by DNS. So
-// git is handed the URL this wrote from what it parsed, in the one spelling
-// every parser reads alike, and anything that has another is refused:
-//
-//   - any scheme but https: the engine dials another host over https alone;
-//   - no host, or a host that is neither a DNS name of letters, digits and
-//     hyphens whose last label begins with a letter ([dnsName]) nor an IP
-//     address in its one written form (dotted decimal, or IPv6 in brackets
-//     with no zone);
-//   - a user, with or without a password: a credential is a header, never
-//     part of the URL, which git writes into the arguments of every process
-//     it starts, where any user of the machine can read it — and a document
-//     carries a credential as a ${VAR} reference, never as text;
-//   - a query, which git appends its own to, or a fragment, which names
-//     nothing a git server serves;
-//   - a port that is not one from 1 to 65535.
-//
-// THE REFUSAL NEVER QUOTES THE URL BEFORE IT PARSES, and only redacted after:
-// a URL naming a user may carry a password.
+// WRITTEN BACK, NEVER PASSED ON: parsers reading one URL differently (a host
+// after an @, a backslash, an octal or short IPv4, a trailing dot, punycode)
+// turn a check of one host into a dial of another, or miss a pin keyed by one
+// spelling. So git is handed the URL this wrote, in the one spelling every
+// parser reads alike. Refused: any scheme but https; no host, or one that is
+// neither a DNS name ([dnsName]) nor an IP in its one written form (dotted
+// decimal, or bracketed IPv6 with no zone); a user (a credential is a header,
+// never in a URL git writes into process arguments); a query or fragment; a
+// port outside 1 to 65535. The refusal never quotes the URL before it parses,
+// and redacted after: a URL naming a user may carry a password.
 func ParseRemoteURL(raw string) (RemoteURL, error) {
 	u, err := url.Parse(raw)
 	if err != nil {

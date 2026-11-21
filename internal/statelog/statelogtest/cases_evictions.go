@@ -12,11 +12,9 @@ import (
 )
 
 // evictionLister is what the trim asks an identity-claiming domain: every
-// eviction its own applied rows hold, on its own log.
-//
-// DECLARED HERE AS WELL AS IN THE ENGINE, because this suite is a consumer of
-// it too — the one that makes a later domain answer it before the trim ever
-// runs against that domain's log.
+// eviction its own applied rows hold, on its own log. Declared here as well as
+// in the engine: the suite consumes it too, so a domain answers it before the
+// trim ever runs against its log.
 type evictionLister interface {
 	Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error)
 }
@@ -33,28 +31,17 @@ func runEvictions(t *testing.T, new Factory) {
 }
 
 // Evictions certifies that a domain which claims identity answers, from its
-// OWN applied rows, which nodes are evicted on its OWN log — and that one which
+// own applied rows, which nodes are evicted on its own log, and that one which
 // claims none does not pretend to.
 //
-// # Why every identity-claiming domain, and why its own rows
-//
-// The trim counts nodes per log, and a node stops being counted on a log only
-// once its tombstone THERE is older than the fence window. Every log that
-// claims identity is one the floor theorem binds, so every one needs its own
-// gate record, its own table and its own answer. The pages log had the first
-// two and no answer: the trim asked the tracker's table on its behalf, filtered
-// on the pages stream, found nothing, and counted an evicted node there for
-// ever — so the log grew toward its ceiling behind a machine that was never
-// coming back. A third identity-claiming domain that skipped this would repeat
-// it, and nothing but this case would say so before its log filled.
-//
-// What is asserted is the whole cycle the trim and the node gate rely on: the
-// eviction's own position and the broker's own instant (the gate compares
-// against the first, the fence window is measured from the second), a
-// readmission kept as a row rather than deleted, and a re-eviction that clears
-// it.
-//
-// EXPORTED AND RETURNING THE VERDICT, for [Declaration]'s reason.
+// The trim stops counting a node on a log only once its tombstone there is
+// older than the fence window, and the floor theorem binds every identity
+// log, so each needs its own answer: without one, an evicted node is counted
+// for ever and the log grows to its ceiling. Asserted is the whole cycle the
+// trim and node gate rely on: the eviction's own position (the gate's
+// comparand) and the broker's instant (the fence window's start), a
+// readmission kept as a row, and a re-eviction that clears it. It returns the
+// verdict for [Declaration]'s reason.
 func Evictions(t *testing.T, new Factory) error {
 	t.Helper()
 	c := new(t)

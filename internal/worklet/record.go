@@ -538,7 +538,8 @@ type Comment struct {
 	Act *delegated.Act `json:"act,omitempty"`
 
 	// Choice is the option an ANSWER chose, by id, checked against the
-	// decision of the ask it answers inside the write's own snapshot.
+	// decision of the ask it answers inside the write's own snapshot, where
+	// its Body is checked to say so ([ChoiceWords]).
 	Choice string `json:"choice,omitempty"`
 
 	Resolved   bool       `json:"resolved,omitempty"`
@@ -1174,6 +1175,12 @@ type Project struct {
 	// LEAD-OWNED, not chart-owned: set through [Writer.WriteProject], and a
 	// chart apply carries it through untouched.
 	TargetDate string `json:"target_date,omitempty"`
+
+	// StuckAfterHours is how long an item in progress in this project may
+	// go unchanged before it reads stuck ([FlowStuck]): [MinStuckAfterHours]
+	// to [MaxStuckAfterHours], zero for [DefaultStuckAfterHours]. Lead-owned,
+	// as the target date is.
+	StuckAfterHours int `json:"stuck_after_hours,omitempty"`
 
 	// PolicyVersion moves on a fields edit — NOT on tags.
 	PolicyVersion int `json:"policy_version,omitempty"`

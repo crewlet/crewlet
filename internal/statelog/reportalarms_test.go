@@ -66,9 +66,9 @@ func kinds(alarms []statelog.Alarm) []statelog.Kind {
 // A COMPANY WITH NO BACKUP HAS ONE PROBLEM, NOT ONE PER LOG.
 //
 // Every log's trim waits for the backup the policy asks for, and the backup
-// alarm already says the trim does not advance until there is one. Raised as
-// a `trim_blocked` per log beside it, the one cause read as several alarms on
-// the health count while the gauge and the log line said two. Each log's
+// alarm already says the trim does not advance until there is one; a
+// `trim_blocked` per log beside it would count one cause as several alarms on
+// the health count. Each log's
 // entry under the backup alarm is its OWN backup's measurement, since the
 // policy ages every log's backup on its own, and carries the term holding its
 // trim and the instant it stopped.
@@ -174,17 +174,14 @@ func TestABackupHoldIsFoldedOnlyUnderItsOwnLogsBackupAlarm(t *testing.T) {
 
 // A MEASUREMENT TAKEN ALIKE ON SEVERAL LOGS IS CARRIED ONCE, NAMING THEM.
 //
-// A deployment minutes old has no backup of any log, and the report measures
-// that on each in the same words. Carried as an entry per log, every surface
-// drew the alarm's headline and then that same sentence once per log under it
-// — on the dashboard and in `crewlet retention status` alike, each folding
-// nothing. So an entry no trim term holds names every log its measurement was
-// taken on alike, at the first such log's place; a log measured differently
-// keeps an entry of its own, and so does every held log, whose instant and
-// count are its own.
+// A deployment minutes old has no backup of any log, measured on each in the
+// same words; an entry per log would repeat that sentence under the headline
+// on every surface. So an entry no trim term holds names every log measured
+// alike, at the first such log's place; a log measured differently keeps its
+// own entry, and so does every held log, whose instant and count are its own.
 //
-// Mutation: append every log's entry on its own, as the report did, and this
-// fails on the five entries it carries.
+// Mutation: append every log's entry on its own and this fails on the five
+// entries it carries.
 func TestAMeasurementTakenAlikeOnSeveralLogsIsCarriedOnce(t *testing.T) {
 	t.Parallel()
 	young := reportAt.Add(-time.Hour)
@@ -278,19 +275,15 @@ func heldByANodeBehind() statelog.TrimInputs {
 // EVERY PER-LOG KIND LEADS WITH ITS MOST PRESSING LOG, in whichever order the
 // report reaches its logs.
 //
-// An alarm standing on several logs carries ONE detail, and it is the one a
-// person reads first: the log nearest its ceiling, the ceiling that holds the
-// fewest days, the trim held longest, the backup missing or else oldest, the
-// record held longest, the floor unreadable longest and the read rate furthest
-// past its census. Each row
-// fires its kind on two logs, `weak` and `strong`, and the alarm must lead
-// with `strong`'s measurement with the logs in either order — the first order
-// is what a comparison that never prefers anything fails, the second what an
-// inverted one fails. A per-log kind with no row fails too, so the next one
-// cannot ship leading with whichever log came first.
-//
-// Mutation: make any arm of [statelog.morePressing] answer false, or invert
-// its comparison, and this fails.
+// An alarm on several logs carries ONE detail, the one a person reads first:
+// the log nearest its ceiling, the ceiling holding the fewest days, the trim
+// held longest, the backup missing or else oldest, the record held longest,
+// the floor unreadable longest, the read rate furthest past its census. Each
+// row fires its kind on `weak` and `strong`, led by `strong` in both orders:
+// the first fails a comparison that never prefers, the second an inverted one.
+// A per-log kind with no row fails, so a new one cannot ship leading with
+// whichever log came first. Mutation: make any arm of [statelog.morePressing]
+// answer false, or invert its comparison, and this fails.
 func TestEveryPerLogKindLeadsWithItsMostPressingLog(t *testing.T) {
 	t.Parallel()
 	const gib = uint64(1) << 30

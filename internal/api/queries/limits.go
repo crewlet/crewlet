@@ -35,14 +35,12 @@ const (
 	// LimitSignIn is the company's sign-in policy, answered on
 	// `sign_in_policy` with each range narrowed to the node's limits.
 	LimitSignIn LimitGroup = "sign_in"
-	// LimitAssistant is Ask Crewlet's turn and deep-work bounds, changed on its settings page.
-	LimitAssistant LimitGroup = "assistant"
 )
 
 // LimitGroups are every group, in drawing order. Settings › Limits draws the
 // first four; `delegated_decisions` answers the delegated rows.
 var LimitGroups = []LimitGroup{LimitTurn, LimitDelegation, LimitNotifications, LimitSchedules, LimitDelegated,
-	LimitInbox, LimitAtlas, LimitCode, LimitChat, LimitSignIn, LimitAssistant}
+	LimitInbox, LimitAtlas, LimitCode, LimitChat, LimitSignIn}
 
 // LimitUnit is what a limit's number counts.
 type LimitUnit string
@@ -69,17 +67,13 @@ var LimitUnits = []LimitUnit{LimitCount, LimitSeconds, LimitFraction, LimitPerSe
 // engine enforces, and the engine's default for it.
 //
 // THE VALUE IS THE ENFORCED ONE. A company document is decoded over
-// [config.DefaultCompany], so a cap the document leaves out is the default in
-// the applied company, and every caller of these settings reads the applied
-// company. A screen therefore draws `value` and never re-derives a default:
-// the dashboard keeping its own copy of [config.DefaultTurnEngine] is the
-// drift this answer exists to prevent.
+// [config.DefaultCompany], so a cap it leaves out is the default in the applied
+// company. A screen draws `value` and never re-derives a default: a dashboard
+// copy of [config.DefaultTurnEngine] is the drift this answer prevents.
 //
-// THE DEFAULT IS BESIDE IT, never a "set" flag: the applied company does not
-// remember whether a value was written or defaulted, and a document that
-// writes the default value is indistinguishable from one that writes nothing.
-// What a screen can say truthfully is whether the value differs from the
-// engine's default.
+// THE DEFAULT IS BESIDE IT, never a "set" flag: a document writing the default
+// is indistinguishable from one writing nothing, so a screen can only say
+// whether the value differs from the engine's default.
 type LimitRow struct {
 	// Key is the setting's path in the company document, as
 	// `crewlet validate` and `PATCH /config` name it.
@@ -215,28 +209,6 @@ var limits = []limit{
 			}
 			return horizon.Hours() / 24
 		}},
-	{key: "assistant.max_steps", group: LimitAssistant, unit: LimitCount,
-		read: func(c *config.Company) float64 { return float64(c.Assistant.Steps()) }},
-	{key: "assistant.turn_timeout_seconds", group: LimitAssistant, unit: LimitSeconds,
-		read: func(c *config.Company) float64 { return c.Assistant.TurnTimeout().Seconds() }},
-	{key: "assistant.proposal_ttl_seconds", group: LimitAssistant, unit: LimitSeconds,
-		read: func(c *config.Company) float64 { return c.Assistant.ProposalTTL().Seconds() }},
-	{key: "assistant.retention_days", group: LimitAssistant, unit: LimitDays,
-		read: func(c *config.Company) float64 { return c.Assistant.Retention().Hours() / 24 }},
-	{key: "assistant.deep_work.timeout_seconds", group: LimitAssistant, unit: LimitSeconds,
-		read: func(c *config.Company) float64 { return deepWorkOf(c).Timeout().Seconds() }},
-	{key: "assistant.deep_work.max_steps", group: LimitAssistant, unit: LimitCount,
-		read: func(c *config.Company) float64 { return float64(deepWorkOf(c).Steps()) }},
-	{key: "assistant.deep_work.max_tokens", group: LimitAssistant, unit: LimitCount,
-		read: func(c *config.Company) float64 { return float64(deepWorkOf(c).Tokens()) }},
-}
-
-// deepWorkOf is the company's deep work, or the defaults where it sets none.
-func deepWorkOf(c *config.Company) config.AssistantDeepWork {
-	if c.Assistant.DeepWork == nil {
-		return config.AssistantDeepWork{}
-	}
-	return *c.Assistant.DeepWork
 }
 
 // delegatedLimits are the limits every delegate is held to, the rows of

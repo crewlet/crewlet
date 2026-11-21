@@ -43,9 +43,8 @@ func ServerURL(endpoint, server string) string {
 
 // Servers names the MCP servers an opening of surface serves under their own
 // names, sorted: the server of every tool a seat's surface offers that an MCP
-// server serves. A surface that is not a seat's — Ask Crewlet's deep work —
-// holds no MCP server's tools, and its opening serves every tool as the
-// engine's own.
+// server serves. A surface that is not a seat's own [*tools.Surface] names
+// none, and its opening serves every tool as the engine's own.
 //
 // ONE RULE FOR BOTH ENDS: the engine hands the run's harness a URL per server
 // from it ([ServerURL]) and an opening serves its servers from it, so the box
@@ -67,6 +66,25 @@ func Servers(surface Surface) []string {
 		}
 	}
 	slices.Sort(out)
+	return out
+}
+
+// Guidance is what each MCP server an opening of surface serves under its own
+// name says it is for, by that name ([Servers]): the instructions the server's
+// endpoint answers ([instructionsOf]), which a run's harness may hand its
+// model again in the box that holds its session, so a launch charges them.
+// A server that says nothing is left out; nil where none says anything.
+func Guidance(surface Surface) map[string]string {
+	seat := seatOf(surface)
+	var out map[string]string
+	for _, name := range Servers(surface) {
+		if said := instructionsOf(seat, name); said != "" {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[name] = said
+		}
+	}
 	return out
 }
 

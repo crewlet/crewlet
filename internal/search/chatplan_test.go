@@ -18,32 +18,14 @@ import (
 // EVERY STATEMENT THE CHAT INDEX ISSUES IS PLANNED ONTO THE INDEX IT NAMES, AND
 // EVERY INDEX THE CHAT INDEX'S TABLES CARRY SERVES ONE OF THEM.
 //
-// The lexical and vector gates beside this one exist because an index mistake
-// looks exactly like a mistake nobody made: the answers stay correct and only
-// the time moves. This index is the one whose corpus grows without bound — a
-// year at the declared census is millions of messages — so a statement that
-// walks a table it meant to seek is a cost that grows with the company's whole
-// history, on every sweep or every search.
-//
-// # What it holds
-//
-//   - The statements are the PRODUCTION ones, exported from the package, and
-//     a walk of the package's own source refuses a string that names a chat
-//     table after FROM, JOIN or UPDATE and is not part of one of them — so a
-//     statement added inline is a statement this gate refuses rather than one
-//     it never planned.
-//   - Each declares the index it reaches; a plan that does not reach it fails.
-//   - No plan SCANS a chat table, except the walks declared here: a rebuild's
-//     next batch of documents and its drop of the statistics left at its end,
-//     and the corpus total over the rooms table, which holds a row per room
-//     rather than per message.
-//   - The posting scan DRIVES ON THE TERM and reaches its document by key,
-//     walking the list in the order it is stored, so neither a bucket, a room
-//     list nor a speaker turns it into a walk of the documents, and no sorter
-//     stands between the list and the budget.
-//   - The inverse: every index on the chat index's own tables appears in some
-//     plan, and so do the two transcript indexes the replicated schema made for
-//     this index's walks.
+// A walk where a seek was meant leaves answers correct and costs the whole
+// history on every sweep or search.
+//   - The statements are the PRODUCTION ones: a source walk refuses a string
+//     naming a chat table after FROM, JOIN or UPDATE that is not one of them.
+//   - No plan SCANS a chat table except the declared walks.
+//   - The posting scan DRIVES ON THE TERM and reaches its document by key, with
+//     no sorter before the budget.
+//   - Every index on the chat tables appears in some plan.
 func TestEveryChatIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)

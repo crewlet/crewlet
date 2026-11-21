@@ -73,17 +73,14 @@ func (c *LiveCall) sameCall(turnID, phase string, iteration int) bool {
 // runningAs reports whether a call is the one these coordinates name and is
 // still running: not a call its phase's failure froze ([recordPhaseFailure]).
 //
-// A FROZEN CALL IS AN ATTEMPT THAT ENDED, and its phase can run again under
-// the same coordinates — the review of a parked turn's resume that is held or
-// retried ([CallVersions]). That run is a call of its own: its start seeds a
-// fresh placeholder, its rounds are not judged against the rounds the failed
-// attempt reached, and it takes neither that attempt's prompt nor its clock.
-// Read as the same call, the new run's start left the failed call on the seat
-// and its first rounds were dropped as stale behind it, so the seat drew the
-// earlier attempt's failure while its review ran again. No straggler of the
-// failed attempt's own reaches the question: the state machine's reorder
-// guard drops a start older than the failure, and [LiveState.applyProgress]'s
-// straggler guard every round not newer than it.
+// A FROZEN CALL IS AN ATTEMPT THAT ENDED, and its phase can run again under the
+// same coordinates (a held or retried review, [CallVersions]). That run is a
+// call of its own: a fresh placeholder, rounds not judged against the failed
+// attempt's, and neither its prompt nor its clock. Read as the same call, its
+// first rounds would drop as stale and the seat would draw the earlier failure
+// while the review reruns. A failed attempt's stragglers never reach here: the
+// reorder guard drops an older start and [LiveState.applyProgress]'s guard every
+// round not newer than the failure.
 func (c *LiveCall) runningAs(turnID, phase string, iteration int) bool {
 	return c.sameCall(turnID, phase, iteration) && c.InProgress
 }

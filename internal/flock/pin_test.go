@@ -17,16 +17,11 @@ import (
 // writer let go. These cases hold it to the three things that use relies on.
 
 // A PIN IS HELD BY WHATEVER HOLDS ITS DESCRIPTION, AND BY NOTHING ONCE THEY ARE
-// GONE. The description is pinned, the file unlinked, and the description
-// handed to a child process as its stdout; the engine's own copy is closed, so
-// the child's is the only one. The probe, a second description of the same
-// inode, sees the pin while the child lives and no pin once it has exited,
-// with nothing released by hand in between: the kernel let go of it when the
-// last holder closed the description.
-//
-// A real child, because inheriting a description across fork and exec is the
-// whole property: a dup in this process would pass whether or not a child
-// carries the lock with it.
+// GONE. The description is pinned, the file unlinked, the description handed
+// to a child as its stdout and the engine's copy closed. The probe, a second
+// description of the same inode, sees the pin while the child lives and none
+// once it exits. A real child, because inheriting a description across fork
+// and exec is the whole property: a dup here would pass regardless.
 //
 // Mutation: make Pin take a shared lock and the probe's shared lock is granted
 // beside it, so the child's description reads as unpinned; make Pinned read a

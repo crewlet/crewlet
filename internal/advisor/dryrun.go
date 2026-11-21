@@ -20,19 +20,27 @@ func CheckChange(c *config.Company, ch Change) error {
 	if err := json.Unmarshal(raw, copied); err != nil {
 		return err
 	}
-	if ch.Entity != EntityRoles {
+	var entity any
+	switch ch.Entity {
+	case EntityRoles:
+		for r := range copied.EachRole() {
+			if r.Seat().Handle() == ch.ID {
+				entity = r
+			}
+		}
+	case EntityUnits:
+		for u := range copied.EachUnit() {
+			if u.ID == ch.ID {
+				entity = u
+			}
+		}
+	default:
 		return fmt.Errorf("advisor: a change to %s is not checked here", ch.Entity)
 	}
-	var role *config.Role
-	for r := range copied.EachRole() {
-		if r.Seat().Handle() == ch.ID {
-			role = r
-		}
+	if entity == nil {
+		return fmt.Errorf("advisor: no %s %q to change", ch.Entity, ch.ID)
 	}
-	if role == nil {
-		return fmt.Errorf("advisor: no seat %q to change", ch.ID)
-	}
-	if err := applyTo(role, ch); err != nil {
+	if err := applyTo(entity, ch); err != nil {
 		return err
 	}
 	before := len(config.Problems(c.ValidateAdmission()))
@@ -44,28 +52,25 @@ func CheckChange(c *config.Company, ch Change) error {
 
 // applyTo merges ch.Merge into entity key by key, then replaces ch.Set's fields.
 func applyTo(entity any, ch Change) error {
-	raw, err := json.Marshal(entity)
+	fields, err := Changed(entity, ch)
 	if err != nil {
 		return err
 	}
-	var fields map[string]any
-	if err = json.Unmarshal(raw, &fields); err != nil {
-		return err
-	}
-	merge, err := asJSON(ch.Merge)
+	raw, err := json.Marshal(fields)
 	if err != nil {
-		return err
-	}
-	set, err := asJSON(ch.Set)
-	if err != nil {
-		return err
-	}
-	fields = mergeFields(fields, merge)
-	maps.Copy(fields, set)
-	if raw, err = json.Marshal(fields); err != nil {
 		return err
 	}
 	return json.Unmarshal(raw, entity)
+}
+
+// asFields is v's JSON as a map of its fields.
+func asFields(v any) (map[string]any, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]any{}
+	return fields, json.Unmarshal(raw, &fields)
 }
 
 func asJSON(v map[string]any) (map[string]any, error) {

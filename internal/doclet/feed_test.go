@@ -23,17 +23,13 @@ import (
 // THE WAKE PATH, END TO END: a committed record becomes a notification for the
 // people who asked to hear about it.
 //
-// The feed and the parser are two halves of one contract and neither can be
-// checked alone: the feed decides WHAT to relay and puts a record on the
-// inbound topic, and the parser decides WHO it is for by reading that same
-// record. A test that built the parser's input by hand would have agreed with
-// itself while the two halves spoke different shapes — which is precisely what
-// they did. The feed relayed the [doclet.MutationRecord] it encodes, the parser
-// decoded that body as a change document (the shape the coordination family
-// this domain replaced put on the wire), and the two share a version field and
-// almost no key: every delivery decoded cleanly into a change with no page id,
-// and every page notification in the company was dropped one line later, with
-// no error anywhere.
+// The feed and the parser are two halves of one contract, neither checkable
+// alone: the feed decides WHAT to relay onto the inbound topic, the parser WHO
+// it is for by reading that same record. A parser input built by hand would
+// agree with itself while the halves spoke different shapes: a body decoded as
+// the wrong document shape shares a version field and almost no key, so every
+// delivery decodes cleanly into a change with no page id and every page
+// notification is dropped, with no error anywhere.
 func TestACommittedRecordWakesThePeopleWatchingThePage(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

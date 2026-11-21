@@ -13,7 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/trashreap"
 )
 
-// dutyNames is every duty-name expression a workerDuty call passes, keyed by
+// dutyNames is every duty-name expression a workerDuty or liveDuty call passes, keyed by
 // its source text, with the names it evaluates to (dutyTTLs' idiom, for the
 // first argument).
 //
@@ -36,9 +36,15 @@ var dutyNames = map[string][]string{
 	"objectCollectorDuty":   {objectCollectorDuty},
 	"chatPruneDutyName":     {chatPruneDutyName},
 	"delegatedSweepName":    {delegatedSweepName},
+	"flowDutyName":          {flowDutyName},
 	"codeRetentionDutyName": {codeRetentionDutyName},
 	"name":                  identityDutyNames(),
 }
+
+// liveDuties are the duties claimed through liveDuty: held where the live
+// projection is seeded rather than by the workers role (ADR-0162), so the
+// pages' duty tables name them and the workers role's lists do not.
+var liveDuties = []string{flowDutyName}
 
 // dutyPhrases is how the pages name each duty in prose, lower-cased. A duty
 // dutyNames lists with no phrase here fails TestEveryDutyListNamesEveryDuty.
@@ -56,6 +62,7 @@ var dutyPhrases = map[string][]string{
 	objectCollectorDuty:   {"collector"},
 	chatPruneDutyName:     {"message horizon", "chat prune"},
 	delegatedSweepName:    {"delegated decisions sweep", "delegated-decisions"},
+	flowDutyName:          {"flow duty", "tracker-flow"},
 	codeRetentionDutyName: {"code retention", "code-retention"},
 	identitySweepDuty:     {"identity sweep"},
 }
@@ -66,10 +73,16 @@ func TestEveryClaimedDutyIsInTheNameTable(t *testing.T) {
 	t.Parallel()
 	var named []string
 	for _, site := range dutyClaims(t, sourcetree.Root(t)).sites {
-		if site.helper != "workerDuty" {
+		if site.helper != "workerDuty" && site.helper != "liveDuty" {
 			continue
 		}
 		named = append(named, site.name)
+		for _, name := range dutyNames[site.name] {
+			if (site.helper == "liveDuty") != slices.Contains(liveDuties, name) {
+				t.Errorf("%s claims the duty %s through %s, and liveDuties says the "+
+					"opposite of whether the workers role holds it", site.where, name, site.helper)
+			}
+		}
 		if _, listed := dutyNames[site.name]; !listed {
 			t.Errorf("%s claims the duty %s, which dutyNames does not list; add "+
 				"it with the name it evaluates to", site.where, site.name)
@@ -116,9 +129,10 @@ func TestTheDutyTablesNameEveryDuty(t *testing.T) {
 	}
 }
 
-// EVERY HAND-KEPT LIST OF THE WORKERS ROLE NAMES EVERY DUTY: each prose list
-// in dutyLists names every claimed duty by one of its [dutyPhrases], since
-// each was typed by hand and falls behind the engine on its own.
+// EVERY HAND-KEPT LIST OF THE WORKERS ROLE NAMES EVERY DUTY IT HOLDS: each
+// prose list in dutyLists names every duty claimed through workerDuty by one
+// of its [dutyPhrases], since each was typed by hand and falls behind the
+// engine on its own. A duty in liveDuties is no workers duty and is not there.
 //
 // Mutation: drop the trash reaper from the fleet guide's row and this names
 // the page and the duty.
@@ -146,6 +160,9 @@ func TestEveryDutyListNamesEveryDuty(t *testing.T) {
 			continue
 		}
 		for _, name := range claimed {
+			if slices.Contains(liveDuties, name) {
+				continue
+			}
 			named := slices.ContainsFunc(dutyPhrases[name], func(phrase string) bool {
 				return strings.Contains(text, phrase)
 			})

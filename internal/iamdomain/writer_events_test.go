@@ -51,18 +51,13 @@ func grantRows(t *testing.T, seen []events.Payload) []types.IAMGrantsChanged {
 // A GRANT CHANGE IS ANNOUNCED WITH WHAT IT ADDED AND WHAT IT TOOK AWAY, AS THE
 // LANDED RECORD DECIDED THEM, AND NOTHING ELSE ABOUT A PERSON IS.
 //
-// The before is read INSIDE the snapshot the record is formed in, which is why
-// the writer and not the route announces it: a route reading the row itself
-// would describe a different transaction, and on a contended row the
-// difference is a grant the feed says somebody gained that they never held.
-// A write that moved no grant — the same grants restated here — announces
-// nothing, or the audit question "who can do what to this deployment" drowns in
-// renames. And a write REFUSED announces nothing: the row it would describe
-// never existed.
+// The writer, not the route, announces it: the before is read inside the
+// record's snapshot, and a route's own read on a contended row could report a
+// grant never held. A write that moved no grant announces nothing, or renames
+// drown the audit feed; a refused write announces nothing.
 //
-// Mutations: drop the delta check and the reordering write announces an empty
-// row; announce before the refusal and the widening shows up; take the before
-// from outside the decide and the delta is wrong.
+// Mutations: drop the delta check (an empty row), announce before the refusal
+// (the widening shows), take the before outside the decide (a wrong delta).
 func TestAGrantChangeIsAnnouncedWithWhatItAddedAndRemoved(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -153,14 +148,9 @@ func TestAGrantChangeIsAnnouncedWithWhatItAddedAndRemoved(t *testing.T) {
 }
 
 // ENDING EVERY SESSION IN THE COMPANY IS ANNOUNCED WITH THE GENERATION IT MOVED
-// TO.
-//
-// The number is the decide's: it is read and incremented in the snapshot the
-// record is formed in, so it is the one the applier writes and the one every
-// bearer is checked against. A second invalidation names the next.
-//
-// Mutation: announce the generation read rather than the one written and the
-// first row says 0.
+// TO: the one the decide incremented in the record's snapshot, which the
+// applier writes and every bearer is checked against. Mutation: announce the
+// generation read, not written, and the first row says 0.
 func TestInvalidatingEverySessionIsAnnouncedWithItsGeneration(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -186,17 +176,13 @@ func TestInvalidatingEverySessionIsAnnouncedWithItsGeneration(t *testing.T) {
 // A GESTURE IS ANNOUNCED WITH THE CREDENTIAL IT CAME THROUGH, AND ONE A TOKEN
 // MAY NOT MAKE ANNOUNCES NOTHING.
 //
-// The name on an announced event is the person's; the party's OperatorID is
-// what says WHICH of their credentials made it — a browser session here — and
-// it is the PARTY's: derived from the principal's own credential by As, and
-// replaced by the next derivation, so the next party derived from this writer
-// never announces somebody else's credential. The same administrator acting
-// through a machine token is refused the gesture at the record (ADR-0033: no
-// administrative record is written through a token), and a refused record
-// announces nothing — an announcement naming a token beside a gesture that
-// never landed would put a write on the trail nobody could find. Mutation:
-// announce the actor alone, or carry the operator through As, and one of the
-// rows is wrong; drop the record-layer lock and the token's row appears.
+// By names the person; OperatorID names which credential, and is the party's:
+// As derives it from the principal's own, so a party derived next never
+// carries somebody else's. A token is refused the gesture at the record
+// (ADR-0033), and a refused record announces nothing, or the trail shows a
+// write nobody can find. Mutation: announce the actor alone, or carry the
+// operator through As, and a row is wrong; drop the record-layer lock and the
+// token's row appears.
 func TestAGestureIsAnnouncedWithTheCredentialItCameThrough(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -238,9 +224,8 @@ func TestAGestureIsAnnouncedWithTheCredentialItCameThrough(t *testing.T) {
 	if seen := rig.events.take(); len(seen) != 0 {
 		t.Errorf("a gesture refused through a token announced %#v", seen)
 	}
-	// THE NEXT PARTY'S CREDENTIAL IS ITS OWN: dana acts as herself, so
-	// her operator is her login, and never the credential the party before
-	// her acted through.
+	// THE NEXT PARTY'S CREDENTIAL IS ITS OWN: dana acts as herself, so her
+	// operator is her login, never the previous party's credential.
 	if next := party.As(principalNamed("dana.sre", iam.KindPerson, nil)); next.OperatorID != "dana.sre" {
 		t.Errorf("a party derived from one acting through a session carries "+
 			"operator %q, want its own login", next.OperatorID)
@@ -249,15 +234,12 @@ func TestAGestureIsAnnouncedWithTheCredentialItCameThrough(t *testing.T) {
 
 // A REDEMPTION'S GRANTS ARE ANNOUNCED AS ITS ISSUER'S DECISION.
 //
-// The sign-in surface enrols the person a redemption creates FOR them
-// ([iamdomain.Writer.For]): they redeemed the link, so the record is theirs.
-// What it confers is not — whoever issued the invitation decided that, and
-// the grant announcement made under the party's actor read as the new person
-// granting themselves the tracker, naming them for a decision they did not
-// make. The first person a company enrols is the row an audit most needs to
-// find. The record itself stays the redeemer's: the control. Mutation:
-// announce under the party's own actor and By is the redeemer; carry its
-// credential and the row says the issuer acted through the redeemer's login.
+// The record is the redeemer's ([iamdomain.Writer.For]; the trail check is
+// the control), but what it confers the issuer decided: announced under the
+// party's actor, it names the new person granting themselves, on the row an
+// audit most needs. Mutation: announce under the party's own actor and By is
+// the redeemer; carry its credential and the row says the issuer acted
+// through the redeemer's login.
 func TestARedemptionsGrantsAreAnnouncedAsItsIssuers(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

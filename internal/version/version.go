@@ -89,7 +89,8 @@ func IsDevelopment() bool { return IsDevelopmentFor(resolved()) }
 // link-time state, so no test can put a release version in front of the
 // predicate that decides whether a bypass is available. Taking the version as
 // an argument makes the rule exercisable; the accessor above has nothing left
-// to decide.
+// to decide. The rule is certified beside its caller, in internal/api/auth's
+// development-principal suite.
 func IsDevelopmentFor(v string) bool {
 	_, ok := developmentSpellings[v]
 	return ok

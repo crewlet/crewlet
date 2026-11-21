@@ -12,9 +12,8 @@ import (
 )
 
 // derivingApplier is the probe applier with ONE derived column: probe_derived
-// holds how many probe rows there were when the rules last ran over them. It
-// is a value the history determines and no record carries — the shape of
-// every real derived column.
+// holds how many probe rows there were when the rules last ran, a value the
+// history determines and no record carries, as every real derived column.
 type derivingApplier struct {
 	*probeApplier
 	version int
@@ -78,13 +77,8 @@ func (h *applyHarness) derivedRows() int {
 
 // A DERIVED COLUMN IS RE-DERIVED ON THE FIRST APPLY AFTER AN UPGRADE — once,
 // from the rows at the checkpoint, before any record is applied on top — and
-// never again while the rules stay the same.
-//
-// Without it a build that adds a derived column maintains it incrementally
-// over rows its predecessor wrote without it, and a build that changes a rule
-// extends values the old rule wrote: either way every node's column is a mix
-// of two rules in proportions set by when that node happened to upgrade, on
-// tables the fleet asserts byte-identical.
+// never again while the rules stay the same. Without it each node's column
+// mixes two rules in proportions set by when it upgraded (statelog.Deriver).
 func TestADerivedColumnIsRederivedOnFirstApplyAfterUpgrade(t *testing.T) {
 	t.Parallel()
 	h := newApplyHarness(t, probeDomain{})
@@ -170,10 +164,9 @@ func TestAFreshCheckpointIsStampedWithTheRulesThatDerivedIt(t *testing.T) {
 	}
 
 	fetch := newProbeFetch()
-	// EVERYTHING ELSE A RUNNER NEEDS, its stream and the keyring included,
-	// so the one refusal left is the one this asks about: a runner missing
-	// either is refused first, and that refusal says nothing about a
-	// Deriver.
+	// EVERYTHING ELSE A RUNNER NEEDS, its stream and keyring included, so the
+	// one refusal left is the Deriver's: a runner missing either is refused
+	// first.
 	_, err := statelog.NewRunner(statelog.RunnerDeps{
 		Domain: probeDomain{}, Spec: specOf(probeDomain{}),
 		Verifier: testVerifier(t, probeDomain{}),

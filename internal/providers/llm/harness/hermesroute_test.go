@@ -181,21 +181,16 @@ func (h *hermesRecorder) end(script fakeScript, total fakeUsage, last string) in
 
 // HERMES AGENT'S RUN IS READ FROM THE RECORD ITS OWN HOOK WRITES, AND ITS HOME
 // STARTS NO SERVER BUT THE SEAT'S. The seat's server is declared in the home's
-// config.yaml — which the harness reads from nowhere else, and which the profile
-// rewrites every generation — with its relay command and socket filled from
-// the run's environment; the -t list starts it and nothing else, and a text
-// function's starts none. Each response reaches the post_api_request hook the
-// same file declares, which appends it to a file in the call's directory: its
-// prose, its calls as the model named them, and its counts, the prompt less
-// its cached part. The harness sends no id with a call, so a call is joined by
-// name and arguments; the host is told the harness waits the profile's 600 seconds
-// for a call, does not re-read the list, and makes a response's calls one
-// after another.
+// config.yaml with its relay command and socket from the run's environment;
+// the -t list starts it alone, a text function's none. Each
+// response reaches the hook the same file declares, which appends its prose,
+// calls and counts (the prompt less its cached part) to a file in the call's
+// directory. Calls carry no id, so one is joined by name and arguments; the
+// host is told it waits 600 seconds, re-reads no list, calls one by one.
 //
-// Mutation: drop the route's -t list, and the planted server starts (the fake
-// fails the run); turn tool search on, and the harness never reaches the seat's
-// tools; drop the hook, and no request is observed; read the record's input
-// as the whole prompt, and the first request is charged 100, not 140.
+// Mutation: drop the route's -t list, and the planted server starts; turn tool
+// search on, and the seat's tools are unreachable; drop the hook, and no
+// request is seen; read input as the whole prompt, and 100 is charged, not 140.
 func TestHermesRunIsReadFromTheRecordItsHookWrites(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "hermes", routeCase, func(c *Config) {

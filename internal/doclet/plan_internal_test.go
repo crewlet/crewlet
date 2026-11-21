@@ -15,28 +15,16 @@ import (
 
 // THE CHANGE FEED IS READ IN ITS OWN ORDER, AND THE AUDIT ONE PAGE PER KIND.
 //
-// `pages_history` is one row per change since the domain landed and nothing
-// sweeps it, so a feed read with no index for its order reads every change the
-// company has made, sorted, on every load — which is what the audit did: its
-// `actor_kind IN (…)` sought each kind of `(actor_kind, version DESC)` and then
-// sorted everything the seeks found, while the comment above it said the order
-// came out of the index. Each author kind is now its own arm
-// ([pageActivityStatement]): one kind seeks the index in the feed's order and
-// needs no sort, and several are merged at the top of the statement over at
-// most one page per kind.
-//
-// So the statement the reader issues ([pageActivityStatement] over
-// [compilePageActivity]) is planned for every shape the feed is asked in, and
-// held to: no heap scan of the history; the audit to one seek of the author
-// index per DISTINCT kind and to no sort below the top; one kind, the
-// unfiltered digest and one page's own feed to no sort at all — the last
-// because `pages_history_page_idx` is (page_id, version DESC) since replicated
-// 0063, where it was in the broker instant's order and one page's feed sorted
-// its whole history.
-//
-// PLANNED AS A DEPLOYMENT PLANS IT — with no statistics, since nothing in the
-// engine runs ANALYZE — over a history with the shape of a company's
-// ([seedPageHistory]).
+// `pages_history` has a row per change and nothing sweeps it, so a feed read
+// with no index for its order sorts every change ever made on every load. The
+// audit's `actor_kind IN (…)` once sorted all its seeks found; each author kind
+// is now its own arm ([pageActivityStatement]): one kind seeks in the feed's
+// order with no sort, several merge at the top over at most one page per kind.
+// The statement ([compilePageActivity]) is planned with no statistics over
+// [seedPageHistory] for every shape the feed is asked in: no heap scan; the
+// audit one author-index seek per DISTINCT kind and no sort below the top; one
+// kind, the digest and one page's feed no sort (`pages_history_page_idx` is
+// (page_id, version DESC)).
 func TestTheChangeFeedIsReadInItsOwnOrder(t *testing.T) {
 	t.Parallel()
 	db := pagePlanStore(t)
@@ -170,33 +158,16 @@ func seedPageHistory(ctx context.Context, tx *sql.Tx, maxVariables int) error {
 
 // A LISTING IS READ IN ITS ORDER, AND A LATER WINDOW SEEKS IT.
 //
-// Every listing is ordered by container, title and id ([listOrder]), and a
-// window is meant to be a walk of an index in that order which its LIMIT
-// stops: `pages_heads_container_idx` for the workspace and a container,
-// `pages_heads_parent_idx` for a tree level. Without one, every window read
-// every page the listing matched and sorted them all to keep fifty; and a
-// later window resumed through one nested disjunction no index could seek, so
-// it did the same from the top. So each window a listing is asked in is
-// planned — the first, and every arm of a later one ([listResumes]) — over the
-// shapes the surfaces ask for, and held to: no read of `pages_heads` from the
-// heap, no sort of the window, and each arm of a resume one seek of the
-// order's index bounded where the cursor stopped. And no sort INSIDE it
-// either: each row's last save ([summarySaved]) is the newest of its page's
-// saves, which `pages_history_page_idx` holds in log order, where ordered by
-// anything else it sorted that page's whole history once per row.
-//
-// THE NEWEST TOOL SKILLS ARE THE OTHER ORDER ([newestOrder]), held by the
-// skill rows' own `pages_skills_newest_idx` (replicated 0067): the first window
-// walks it from the newest and the arms of a later one seek it, each row's head
-// then read by its key.
-//
-// Mutation: resume through the nested disjunction again, or order a listing by
-// a column its indexes do not lead with, and the plans sort; resume a listing
-// pinned to one container on its container as well, and the last arm reads
-// the whole container to find nothing; order a page's saves by their broker
-// instant, and every row sorts its history; join the skill rows to the heads
-// plainly rather than across, and the newest skills are read from the heap
-// and sorted.
+// Every listing is ordered by container, title and id ([listOrder]); a window
+// should walk an index in that order which its LIMIT stops, else every window
+// reads and sorts every matching page. Each window shape (the first, and every
+// arm of a resume, [listResumes]) is planned and held to: no heap read of
+// `pages_heads`, no sort, each resume arm one bounded seek, and no sort inside a
+// row's last save ([summarySaved]; `pages_history_page_idx` holds log order).
+// THE NEWEST SKILLS ([newestOrder]) walk `pages_skills_newest_idx`, each head
+// read by key. Mutation: resume through a nested disjunction, order by a column
+// the indexes do not lead with, order saves by broker instant, or join skill
+// rows to heads plainly, and the plans sort or read the heap.
 func TestAListingIsReadInItsOrder(t *testing.T) {
 	t.Parallel()
 	db := pagePlanStore(t)
@@ -274,21 +245,16 @@ func TestAListingIsReadInItsOrder(t *testing.T) {
 
 // A LISTING COUNTS ITS ROWS' CHILDREN BY SEEKING THEIR PARENTS.
 //
-// Each row of a listing says how many children it has under the listing's own
-// narrowing, which a tree draws its expander off. Written as a correlated
-// subquery in the listing's statement, the count was one the planner unnests by
-// cost into a grouped read of every page head in the company — measured, it
-// did on the workspace's listing, on every window of it. So the count is read
-// for the window's rows in a statement of its own ([childCountStatement]),
-// whose IN list of bound ids leaves nothing to unnest. Each shape a listing is
-// asked in is held to: no decorrelated subquery in its total, its window or its
-// child count ([storetest.Decorrelated]); no read of `pages_heads` from the
-// heap in any of them; and the child count one seek of
-// `pages_heads_parent_idx` by the parent.
-//
-// Mutation: put the correlated count back into the window's statement, and the
-// workspace's window is decorrelated; count the children by the child's own id
-// rather than its parent's, and the count seeks nothing.
+// Each row says how many children it has under the listing's own narrowing.
+// As a correlated subquery in the listing's statement, the planner unnests it
+// by cost into a grouped read of every page head in the company, on every
+// window. So the count is read for the window's rows in its own statement
+// ([childCountStatement]), whose IN list of bound ids leaves nothing to unnest.
+// Each listing shape is held to: no decorrelated subquery in its total, window
+// or child count ([storetest.Decorrelated]); no heap read of `pages_heads`; the
+// child count one seek of `pages_heads_parent_idx` by the parent.
+// Mutation: put the correlated count back, and the workspace's window is
+// decorrelated; count by the child's own id, and the count seeks nothing.
 func TestAListingCountsChildrenBySeekingTheirParents(t *testing.T) {
 	t.Parallel()
 	db := pagePlanStore(t)
@@ -395,19 +361,16 @@ func listingShapes() map[string]listingShape {
 
 // A FILTER BY A PAGE'S OWN ROWS IS READ FROM THOSE ROWS.
 //
-// A label and a watcher narrow a listing to the pages one label or one person
-// names, and each has an index for exactly that: `pages_labels_label_idx` and
-// `pages_watchers_handle_idx`. Written as a probe of each listed page's own
-// rows, the filter walked the listing's order asking every page in it, and the
-// listing's total counted the same way — one person's watched pages read, and
-// counted, every page in the company to find the few they follow. So each such
-// listing's total, first window and every arm of a later one are held to: a
-// seek of the filter's own index; `pages_heads` read by nothing but its key;
-// and no walk of the heads, the labels or the watchers. Each window sorts the
-// filter's matches, which is what it costs instead of the knowledge base.
-//
-// Mutation: probe the listed pages' own rows again, and every read walks the
-// heads; drop the filter's index, and the filter's rows are read whole.
+// A label and a watcher narrow a listing to the pages one label or person
+// names, each with an index for that: `pages_labels_label_idx` and
+// `pages_watchers_handle_idx`. Probing each listed page's own rows walked the
+// listing's order asking every page, and the total counted the same way, so a
+// person's few watched pages cost every page in the company. Each such total,
+// first window and later arm is held to: a seek of the filter's index;
+// `pages_heads` read by its key alone; no walk of the heads, labels or watchers.
+// Each window sorts the filter's matches, which is its cost instead.
+// Mutation: probe the listed pages' rows again, and every read walks the heads;
+// drop the filter's index, and the filter's rows are read whole.
 func TestAFilterIsReadFromItsOwnRows(t *testing.T) {
 	t.Parallel()
 	db := pagePlanStore(t)

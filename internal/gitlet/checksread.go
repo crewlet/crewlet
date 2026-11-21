@@ -162,7 +162,7 @@ func (q ReadQuery) checksQuery(fresh statelog.Freshness) statelog.Query {
 // never naming an attempt; a `check` read names its repository and one attempt
 // whole, neither paged nor bounded.
 func (q ReadQuery) validateChecks() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	c := q.Checks
 	if q.Kind == ReadCheck {
 		switch {
@@ -249,7 +249,7 @@ func (q ReadQuery) validateChecks() error {
 // any one repository by its canonical id; and nothing else, since a page is
 // MaxSnapshotItems rows.
 func (q ReadQuery) validateChecksDue() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.Asker != (Principal{}):
 		return refused("asker", "a checks_due read is the engine's own, which no principal makes")
@@ -304,7 +304,7 @@ func (q ReadQuery) validateChecksDue() error {
 // judged as one, would be refused as nobody named; its attempt's whole key, as
 // the box's token names it; and nothing else, since it reads one row.
 func (q ReadQuery) validateCheckBox() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.Asker != (Principal{}):
 		return refused("asker", "a check_box read is the engine's own — a check's box's admission — which no "+
@@ -350,7 +350,7 @@ func (q ReadQuery) validateCheckBox() error {
 // MaxSnapshotItems and its cursor; and nothing else, since it lists every
 // repository's queued attempts.
 func (q ReadQuery) validateChecksQueued() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch r := q.ChecksQueued; {
 	case r == nil:
 		return refused("checks_queued", `a checks_queued read names its question: the cell its attempts' `+
@@ -397,7 +397,7 @@ func (q ReadQuery) validateChecksQueued() error {
 // repository by its canonical id; a cursor only without one, since a
 // repository's running attempts are one page; and nothing else.
 func (q ReadQuery) validateChecksRunning() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch r := q.ChecksRunning; {
 	case q.Asker != (Principal{}):
 		return refused("asker", "a checks_running read is the engine's own — a home's sweep — which no "+

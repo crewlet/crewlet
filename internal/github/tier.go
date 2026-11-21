@@ -70,22 +70,14 @@ func ParseTier(raw string) (Tier, bool) {
 // GitHub's own permission keys and levels.
 //
 // AN ALLOW LIST, because GitHub's token endpoint takes the permissions to
-// grant: anything absent is simply not on the token. There is no catalogue to
-// subtract from and so nothing to forget, which is the opposite of a deny
-// list and much the safer direction to be wrong in.
+// grant: anything absent is not on the token, the safer direction to be
+// wrong in. `metadata` is on every tier: GitHub needs it to resolve a repo.
 //
-// `metadata` is on every tier because GitHub requires it for almost every
-// read. Without it a token cannot resolve a repository at all.
+// `actions` IS READ ON EVERY TIER, never write: read shows why a check failed;
+// write re-runs, cancels and dispatches workflows (a release is a person's act).
 //
-// `actions` IS READ ON EVERY TIER, and never write. Read is what lets an
-// agent see why a check failed and read the job's log, which is most of what
-// fixing a red pull request takes. Write re-runs, cancels and dispatches
-// workflows, a deploy among them, and starting a release is a person's act
-// here, never an agent's.
-//
-// `workflows` is on no tier. It is what lets a push change a file under
-// `.github/workflows`, and a full-access seat opted in to it on its own
-// ([TierPermissions]).
+// `workflows` is on no tier: it lets a push change a file under
+// `.github/workflows`, and a full-access seat opts in alone ([TierPermissions]).
 func (t Tier) Permissions() map[string]string {
 	switch t {
 	case TierReview:
@@ -125,18 +117,16 @@ func (t Tier) Permissions() map[string]string {
 
 // Denied is what an agent's app must never hold, at any tier.
 //
-// NOT WHAT LIMITS AN AGENT: the tiers above already exclude these by
-// omission, and a token is only ever minted with a tier's own list. This is
-// what an INSTALLATION is checked against, because the permissions an app
-// holds are not the engine's to decide once the app exists. A manifest can be
-// edited before it is submitted, and an operator can widen an installation
+// NOT WHAT LIMITS AN AGENT: a token is only minted with a tier's own list.
+// This is what an INSTALLATION is checked against, since a manifest can be
+// edited before submission and an operator can widen an installation
 // afterwards, so the engine reports an app holding any of these rather than
-// assuming its own manifest is what got created.
+// assuming its own manifest got created.
 //
-// Three groups, and each is a way to escape the tier rather than to exceed
-// it. Administration deletes a repository or drops branch protection. Secrets
-// and variables hand over every credential the repository holds. Membership
-// and organization settings are how an agent would widen its own access.
+// Three groups, each a way to escape the tier: administration (deleting a
+// repository, dropping branch protection), secrets and variables (every
+// credential the repository holds), and membership and organization settings
+// (widening its own access).
 var Denied = []string{
 	"administration",
 	"organization_administration",

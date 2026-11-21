@@ -11,42 +11,17 @@ import (
 )
 
 // InProcess is a client that answers every request with handler, run in this
-// process on a goroutine of its own: no listener, no connection and no pool,
-// so a test may run it inside a testing/synctest bubble (see the package
-// doc).
-//
-// It answers as net/http's server and transport would, in what a caller can
-// observe:
-//
-//   - the answer arrives AS IT IS WRITTEN. The response is handed back when
-//     the handler first writes, flushes or returns — a WriteHeader alone
-//     sends nothing, as the server sends nothing until its buffer is flushed
-//     — and every later write reaches the body's reader as it is made. A
-//     write returns once it has been read, which a socket's buffers would
-//     only have delayed;
-//   - the CALLER'S CONTEXT ends the call wherever it is: before the answer,
-//     the round trip returns the context's cause; part-way through, the
-//     body's next read does; and the handler's next write fails, as it would
-//     on a connection the client dropped;
-//   - the answer is DATED from the clock it runs on (the bubble's, inside
-//     one), and an unset Content-Type is sniffed from the first write, as the
-//     server does both;
-//   - a response that carries no body (a HEAD, a 204, a 304) has none, and
-//     a handler's write to a 204 or a 304 is refused with
-//     http.ErrBodyNotAllowed.
-//
-// The handler is handed a copy of the request carrying what a server always
-// gives one — a body, a host, its request URI and a remote address — since a
-// RoundTripper may not edit the request it is handed.
+// process on a goroutine of its own: no listener, connection or pool, so a test
+// may run it inside a testing/synctest bubble (see the package doc). It answers
+// as net/http would, as a caller observes: AS WRITTEN (on the handler's first
+// write, flush or return, later writes reaching the reader as made); ended by
+// the CALLER'S CONTEXT wherever the call is; DATED from the clock it runs on;
+// a HEAD, 204 or 304 has no body (a write fails with http.ErrBodyNotAllowed).
 //
 // THE TEST DOES NOT END WHILE A HANDLER IT STARTED IS RUNNING: tb's cleanup
-// waits for every one. Inside a bubble that is what lets a case end before
-// its stand-in does — a handler still asleep when the case returns, behind a
-// caller that gave up on it, is run to its end on the bubble's clock, where a
-// bubble whose case had returned would declare it deadlocked instead. So tb
-// is the bubble's own T when the client is used inside one. A handler that
-// can never end — writing to a body its caller neither reads nor closes —
-// fails the case rather than outliving it.
+// waits for each, so in a bubble a handler asleep behind an abandoned caller
+// runs out on the bubble's clock instead of being called deadlocked; tb is the
+// bubble's own T there. A handler that can never end fails the case.
 func InProcess(tb testing.TB, handler http.Handler) *http.Client {
 	tb.Helper()
 	p := &inProcess{handler: handler}

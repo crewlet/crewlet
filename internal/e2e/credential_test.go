@@ -14,28 +14,12 @@ import (
 // EVERY REQUEST THIS SUITE MAKES CARRIES A CREDENTIAL, because every request
 // to a running engine does.
 //
-// # What this closes, and what it deliberately does not
-//
-// This suite used to dial the socket with a nil header and issue bare GETs, on
-// a default bootstrap that configured no tokens at all — which worked because
-// reads were open by default. That posture is gone: every route needs a
-// credential whatever its method, so a fixture that presents none is asserting
-// the 401 rather than whatever each case is about.
-//
-// What it does NOT do is prove anything about authentication. These cases are
-// about a turn reaching a dashboard, a parked run reaching a board, a fleet
-// converging — and the credential is scaffolding so they can be about that.
-// Proving that the guard actually refuses, that a revocation reaches every
-// node, that a stalled identity applier answers 503 rather than 401: those are
-// their own cases, over a fixture that boots a closed posture deliberately.
-//
-// # It carries admin
-//
-// A case here narrows nothing, so the fixture's token carries admin — and with
-// it every app — on a node whose `api.auth.admin` serves it. A case whose
-// subject IS authority
-// builds its own posture and says what it presents — which is the same
-// division internal/api's own fixtures draw.
+// A fixture presenting none asserts the 401 rather than its own case. The
+// credential is scaffolding, not a proof of authentication: the guard's
+// refusals, a revocation reaching every node, a stalled identity applier
+// answering 503 not 401 are their own cases, over a closed posture. It carries
+// admin, and every app, on a node whose `api.auth.admin` serves it, since a
+// case here narrows nothing; a case whose subject IS authority builds its own.
 
 // e2eToken is the credential every fixture in this suite presents.
 //
@@ -48,15 +32,13 @@ const e2eToken = "an-end-to-end-fixture-credential-long-enough"
 // behind it.
 //
 // BOTH HALVES, because a principal's grants are what its token declares as
-// the node's admin posture lets it carry them: a posture left unset confers
-// nothing and a token declaring nothing carries nothing, and either way every
-// question past the overview would refuse for want of a grant rather than
-// answering whatever the case is about.
+// the node's admin posture lets it carry them: an unset posture confers
+// nothing and a token declaring nothing carries nothing, and every question
+// past the overview would refuse for want of a grant.
 //
 // UNEXPORTED AND ONLY REACHED THROUGH [withServingTierA], so a fixture cannot
 // take the credential without the keyring or the keyring without the
-// credential — the pairing was two calls and the second was already missing
-// from one of the two fixtures that needed it.
+// credential.
 func withCredential(t *testing.T, boot *config.Bootstrap) {
 	t.Helper()
 	boot.API.Auth.Admin = iam.AdminServe
@@ -105,26 +87,11 @@ func socketOptions() *websocket.DialOptions {
 //
 // # Why this case is the control for every other one in this suite
 //
-// Every fixture here now presents a credential, which makes the suite pass
-// whether the guard refuses anonymous callers or serves them. That is exactly
-// the shape of the bug this whole file exists because of: this suite dialled
-// anonymously for as long as reads were open by default, and when that posture
-// was deleted the fixtures went on dialling — the failure was invisible in
-// `make test` because internal/e2e is in the SOLO partition, so it surfaced
-// several commits later.
-//
-// A guard that stopped guarding is the same class of failure with the opposite
-// sign and none of the symptoms: every case here would still pass, and the
-// only evidence would be a company serving its LLM transcripts to whoever
-// could reach the port.
-//
-// # It checks both transports, because they are two mounts
-//
-// A socket handshake and a REST read are refused by the same middleware today,
-// and "today" is the word doing the work: the socket is the one path that has
-// ever had a credential rule of its own (it took a token in its query string
-// until the dashboard's handshake carried a session cookie instead). Checking
-// one would leave the other's exemption invisible.
+// Every fixture here presents a credential, so the suite passes whether the
+// guard refuses anonymous callers or serves them: a guard that stopped
+// guarding shows no symptom elsewhere. It checks both transports, because they
+// are two mounts: a socket handshake and a REST read share a middleware only
+// today, and the socket has had a credential rule of its own.
 func TestAnAnonymousCallerIsRefusedByARunningEngine(t *testing.T) {
 	n := start(t)
 

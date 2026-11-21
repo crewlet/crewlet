@@ -321,6 +321,18 @@ describe("a box that scrolls inside the page", () => {
     expect(fromTheView(boundOf(list) ?? ""), "a phone's list is half the view").toBe(true);
   });
 
+  // A CHECK'S PANE: bounded by the view beside its list, its body the scroller that fills it.
+  // Mutation: bound the pane by `40rem`, or drop the body's `min-block-size: 0`.
+  test("a check's pane scrolls alone beside its list, bounded by the view", () => {
+    const all = rules();
+    const pane = all.get("gitlet.css .code-checks__pane") ?? "";
+    expect(fromTheView(boundOf(pane) ?? ""), "the pane is bounded by the view").toBe(true);
+    const body = all.get("gitlet.css .code-check-pane__body") ?? "";
+    expect(scrollsBlock(body)).toBe(true);
+    expect(decl(body, "min-block-size")).toBe("0");
+    expect(holdsBlockWheel(body)).toBe(false);
+  });
+
   test("the view it is bounded by is the shell's scroller, on every screen", () => {
     // `100cqb` resolves against the nearest SIZE container; without this rule
     // it falls back to the small viewport, which is the `dvh` guess again.

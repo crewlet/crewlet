@@ -48,7 +48,7 @@ func (r PurgeResult) Held() bool { return r.Outcome != statelog.OutcomePending }
 // caller's epoch's value, never defaulted here.
 func (s *Store) PurgeStep(ctx context.Context, repoID string, retention time.Duration) (PurgeResult, error) {
 	if retention <= 0 {
-		return PurgeResult{}, fmt.Errorf("%w: retention: %v is not a retention", ErrInvalid, retention)
+		return PurgeResult{}, refusedf("%w: retention: %v is not a retention", ErrInvalid, retention)
 	}
 	// THE NAME IS READ BEFORE THE DECIDE: the scope, which holds the claim
 	// the purge releases, is stated before it runs, and the decide holds the
@@ -181,6 +181,8 @@ const (
 			CROSS JOIN code_revisions AS r WHERE r.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
 			CROSS JOIN code_change_authors AS a WHERE a.change_id = c.id LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
+			CROSS JOIN code_change_moves AS v WHERE v.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `
 			CROSS JOIN code_change_bodies AS b WHERE b.change_id = c.id LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM ` + firstChanges + `

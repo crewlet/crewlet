@@ -1,0 +1,437 @@
+package googleauth
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/setup"
+)
+
+// Connection is the company's Google identity: the provisioner and any other
+// account of the identity project the company's federated subject may act as,
+// reached with no service account key.
+type Connection struct {
+	provisioner string
+	identity    string
+	provider    string
+	issuer      string
+	subject     string
+	key         *ecdsa.PrivateKey
+	kid         string
+	http        *http.Client
+	clock       Clock
+}
+
+// Options builds a connection.
+type Options struct {
+	// Company is the company's name, which the federation token's issuer and
+	// subject are made from ([Issuer], [Subject]).
+	Company string
+
+	// Provisioner is the provisioner service account's email, whose project
+	// is the identity project.
+	Provisioner string
+
+	// Provider is the workload identity provider's full resource name.
+	Provider string
+
+	// FederationKey is the engine's ES256 private key, PKCS#8 PEM. Never
+	// logged.
+	FederationKey string `json:"-"`
+
+	// HTTP overrides the transport, for tests.
+	HTTP *http.Client
+}
+
+// New builds a connection, refusing an input that would fail every call with
+// a misleading refusal as a [*ConfigError] naming the field to change.
+func New(opts Options) (*Connection, error) {
+	email := strings.TrimSpace(opts.Provisioner)
+	identity, ok := config.GoogleCloudServiceAccount(email)
+	if !ok {
+		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.provisioner is not a service account's email"}
+	}
+	provider := strings.TrimSpace(opts.Provider)
+	if !config.GoogleCloudProvider(provider) {
+		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.provider is not a workload identity " +
+			"provider's full resource name"}
+	}
+	if org.Slugify(opts.Company) == "" {
+		return nil, &ConfigError{Sentence: "the company's name has no letter or digit to sign its federation token as"}
+	}
+	key, problem := parseFederationKey(opts.FederationKey)
+	if problem != "" {
+		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.federation_key: " + problem}
+	}
+	// THE KID IS THE ONE THE CLOUD SHELL BLOCK UPLOADS ([setup.ES256KeyID]),
+	// so Google matches every signed token to that key.
+	kid, err := setup.ES256KeyID(opts.FederationKey)
+	if err != nil {
+		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.federation_key: " + err.Error()}
+	}
+	hc := opts.HTTP
+	if hc == nil {
+		hc = httpx.Client(ClientTimeout)
+	}
+	return &Connection{
+		provisioner: email, identity: identity, provider: provider,
+		issuer: Issuer(opts.Company), subject: Subject(opts.Company),
+		key: key, kid: kid, http: hc, clock: WallClock(),
+	}, nil
+}
+
+// For is the connection of company's Google identity, from its document as
+// env resolves it. An error wrapping [integration.ErrNotConfigured] is a
+// company without the identity (Google Cloud off or no provisioning block),
+// or one whose values do not resolve.
+func For(c *config.Company, env *config.Resolver, hc *http.Client) (*Connection, error) {
+	if c == nil || c.Integrations.GoogleCloud == nil || !c.Integrations.GoogleCloud.Enabled ||
+		c.Integrations.GoogleCloud.Provisioning == nil {
+		return nil, &ConfigError{Sentence: "integrations.google_cloud is off or has no provisioning block",
+			Err: integration.ErrNotConfigured}
+	}
+	if env == nil {
+		return nil, &ConfigError{Sentence: "nothing resolves the federation key", Err: integration.ErrNotConfigured}
+	}
+	prov := c.Integrations.GoogleCloud.Provisioning
+	values := map[string]string{
+		"provisioner":    strings.TrimSpace(env.Value(prov.Provisioner)),
+		"provider":       strings.TrimSpace(env.Value(prov.Provider)),
+		"federation_key": strings.TrimSpace(env.Value(prov.FederationKey)),
+	}
+	for _, field := range []string{"provisioner", "provider", "federation_key"} {
+		if values[field] == "" {
+			return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning." + field +
+				" is not set or did not resolve", Err: integration.ErrNotConfigured}
+		}
+	}
+	return New(Options{
+		Company: c.Name, Provisioner: values["provisioner"], Provider: values["provider"],
+		FederationKey: values["federation_key"], HTTP: hc,
+	})
+}
+
+// WithClock is the same connection reading and waiting by clk. Its tokens are
+// the same: the caches are keyed by [Connection.ID], never by the value.
+func (c *Connection) WithClock(clk Clock) *Connection {
+	out := *c
+	out.clock = clk
+	return &out
+}
+
+// Clock is the time this connection reads and waits by.
+func (c *Connection) Clock() Clock { return c.clock }
+
+// Provisioner is the provisioner's email.
+func (c *Connection) Provisioner() string { return c.provisioner }
+
+// IdentityProject is the project the company's Google identities are made in:
+// the provisioner's own, which holds nothing else.
+func (c *Connection) IdentityProject() string { return c.identity }
+
+// Provider is the workload identity provider's full resource name.
+func (c *Connection) Provider() string { return c.provider }
+
+// ID is what a token this connection is handed was issued through: the
+// provider, the provisioner, the subject and the key, so a changed connection
+// never reuses another's token.
+func (c *Connection) ID() string {
+	return strings.Join([]string{c.provider, c.provisioner, c.subject, c.kid}, "|")
+}
+
+// federatedTokens is each account's token the engine reaches through the
+// federation (the provisioner's, the atlas's), one per process, connection,
+// account and scope set, renewed with federatedRenew to spare. Its map is made
+// at the first connection's first token, never at init, which Gitlet's push
+// hook pays (cmd/crewlet's hookinit_test.go).
+//
+//nolint:gochecknoglobals // a process-wide credential cache, guarded per entry
+var federatedTokens struct {
+	sync.Mutex
+	held map[string]*heldToken
+}
+
+// heldToken is one cached token. Its mutex is held across a mint, so callers
+// racing for an expired token wait on one exchange rather than each making one.
+type heldToken struct {
+	mu      sync.Mutex
+	value   string
+	expires time.Time
+}
+
+// scopeKey is a scope set as one key: sorted, so the order a caller lists
+// them in never splits one token into two. One scope, the common case, is its
+// own key.
+func scopeKey(scopes []string) string {
+	if len(scopes) == 1 {
+		return scopes[0]
+	}
+	sorted := slices.Clone(scopes)
+	slices.Sort(sorted)
+	return strings.Join(slices.Compact(sorted), " ")
+}
+
+// held is this connection's cache entry for account's token with the scope
+// set whose [scopeKey] is scopes.
+func (c *Connection) held(account, scopes string) *heldToken {
+	id := c.ID() + "|" + account + "|" + scopes
+	federatedTokens.Lock()
+	defer federatedTokens.Unlock()
+	h, ok := federatedTokens.held[id]
+	if !ok {
+		if federatedTokens.held == nil {
+			federatedTokens.held = map[string]*heldToken{}
+		}
+		h = &heldToken{}
+		federatedTokens.held[id] = h
+	}
+	return h
+}
+
+// FederatedToken is account's token with scopes, minted through federation
+// where the cached one is missing or due for renewal. Account is one the
+// company's subject impersonates directly (the provisioner, the atlas), so
+// none of them reaches another.
+func (c *Connection) FederatedToken(ctx context.Context, account string, scopes ...string) (string, error) {
+	key := ScopeCloudPlatform
+	if len(scopes) > 0 {
+		key = scopeKey(scopes)
+	} else {
+		scopes = []string{ScopeCloudPlatform}
+	}
+	h := c.held(account, key)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.value != "" && h.expires.Sub(c.clock.Now()) > federatedRenew {
+		return h.value, nil
+	}
+	fed, err := c.federated(ctx)
+	if err != nil {
+		return "", &StageError{Stage: StageFederation, Err: err}
+	}
+	value, expires, err := c.impersonate(ctx, fed, account, scopes, MaxTokenLifetime)
+	if err != nil {
+		return "", &StageError{Stage: StageImpersonation, Err: err}
+	}
+	h.value, h.expires = value, expires
+	return value, nil
+}
+
+// forget drops a cached token of account's Google refused, so the next call
+// mints afresh.
+func (c *Connection) forget(account, scopes, refused string) {
+	h := c.held(account, scopes)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.value == refused {
+		h.value, h.expires = "", time.Time{}
+	}
+}
+
+// federated signs the engine's token and exchanges it at STS. THE EXCHANGE IS
+// ALWAYS CLOUD-PLATFORM: only the impersonation names a product's scopes.
+func (c *Connection) federated(ctx context.Context) (string, error) {
+	audience := Audience(c.provider)
+	jwt, err := signJWT(c.key, c.kid, c.issuer, c.subject, "https:"+audience, c.clock.Now())
+	if err != nil {
+		return "", err
+	}
+	var out struct {
+		AccessToken string `json:"access_token"`
+	}
+	form := url.Values{
+		"grant_type":           {"urn:ietf:params:oauth:grant-type:token-exchange"},
+		"audience":             {audience},
+		"scope":                {ScopeCloudPlatform},
+		"requested_token_type": {"urn:ietf:params:oauth:token-type:access_token"},
+		"subject_token":        {jwt},
+		"subject_token_type":   {"urn:ietf:params:oauth:token-type:jwt"},
+	}
+	if err := c.Do(ctx, http.MethodPost, stsURL, "", form, &out); err != nil {
+		return "", err
+	}
+	if out.AccessToken == "" {
+		return "", errors.New("googleauth: STS answered the exchange with no token")
+	}
+	return out.AccessToken, nil
+}
+
+// impersonate mints an hour or less of account's token with scopes, using
+// bearer's.
+func (c *Connection) impersonate(
+	ctx context.Context, bearer, account string, scopes []string, life time.Duration,
+) (string, time.Time, error) {
+	var out struct {
+		AccessToken string    `json:"accessToken"`
+		ExpireTime  time.Time `json:"expireTime"`
+	}
+	err := c.Do(ctx, http.MethodPost,
+		credentialsAPI+"/projects/-/serviceAccounts/"+url.PathEscape(account)+":generateAccessToken", bearer,
+		map[string]any{"scope": scopes, "lifetime": strconv.Itoa(int(life.Seconds())) + "s"}, &out)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	if out.AccessToken == "" || out.ExpireTime.IsZero() {
+		return "", time.Time{}, errors.New("googleauth: generateAccessToken answered with no token or expiry")
+	}
+	return out.AccessToken, out.ExpireTime.UTC(), nil
+}
+
+// SeatToken mints a token of account with scopes: account is a service
+// account's email or unique ID the provisioner may mint for, impersonated with
+// the provisioner's token for life, at most [MaxTokenLifetime]. The value is
+// never logged; a refusal is an [*APIError] whose [Status] an issuer reads.
+func (c *Connection) SeatToken(
+	ctx context.Context, account string, scopes []string, life time.Duration,
+) (string, time.Time, error) {
+	if life <= 0 || life > MaxTokenLifetime {
+		return "", time.Time{}, fmt.Errorf("googleauth: a seat token's lifetime is up to %s, not %s",
+			MaxTokenLifetime, life)
+	}
+	if strings.TrimSpace(account) == "" {
+		return "", time.Time{}, errors.New("googleauth: no service account to mint a seat token for")
+	}
+	if len(scopes) == 0 {
+		return "", time.Time{}, errors.New("googleauth: a seat token names the scopes it is minted with")
+	}
+	var value string
+	var expires time.Time
+	err := c.AuthorizedAs(ctx, c.provisioner, func(bearer string) error {
+		var err error
+		value, expires, err = c.impersonate(ctx, bearer, account, scopes, life)
+		return err
+	})
+	return value, expires, err
+}
+
+// AuthorizedAs runs call with federated account's cloud-platform token, and
+// once more with a fresh one where Google refused the cached token as
+// unauthenticated.
+func (c *Connection) AuthorizedAs(ctx context.Context, account string, call func(bearer string) error) error {
+	bearer, err := c.FederatedToken(ctx, account)
+	if err != nil {
+		return err
+	}
+	err = call(bearer)
+	if Status(err) != http.StatusUnauthorized {
+		return err
+	}
+	c.forget(account, ScopeCloudPlatform, bearer)
+	if bearer, err = c.FederatedToken(ctx, account); err != nil {
+		return err
+	}
+	return call(bearer)
+}
+
+// CallAs is one request as federated account.
+func (c *Connection) CallAs(ctx context.Context, account, method, address string, body, out any) error {
+	return c.AuthorizedAs(ctx, account,
+		func(bearer string) error { return c.Do(ctx, method, address, bearer, body, out) })
+}
+
+// Do makes one call with bearer (none for ""), waiting out a short 429 on a
+// read as Google asks. A write's 429 is handed back as it came: a create
+// Google refuses for a quota answers the same status, and a wait clears no
+// quota.
+func (c *Connection) Do(ctx context.Context, method, address, bearer string, body, out any) error {
+	for attempt := 0; ; attempt++ {
+		err := c.once(ctx, method, address, bearer, body, out)
+		api, ok := errors.AsType[*APIError](err)
+		if !ok || api.Status != http.StatusTooManyRequests || method != http.MethodGet {
+			return err
+		}
+		limit := httpx.VendorRateLimit()
+		limit.Wait = c.clock.Sleep
+		unwaited := limit.WaitOut(ctx, attempt, api.RetryAfter)
+		if unwaited == nil {
+			continue
+		}
+		api.Unwaited = unwaited.Error()
+		return api
+	}
+}
+
+// once sends one request and decodes its answer into out. It is the only
+// place a request to Google is built.
+func (c *Connection) once(ctx context.Context, method, address, bearer string, body, out any) error {
+	var reader io.Reader
+	contentType := ""
+	switch b := body.(type) {
+	case nil:
+	case url.Values:
+		reader, contentType = strings.NewReader(b.Encode()), "application/x-www-form-urlencoded"
+	default:
+		encoded, err := json.Marshal(b)
+		if err != nil {
+			return fmt.Errorf("googleauth: encode %s %s: %w", method, PathOf(address), err)
+		}
+		reader, contentType = bytes.NewReader(encoded), "application/json"
+	}
+	req, err := http.NewRequestWithContext(ctx, method, address, reader)
+	if err != nil {
+		return fmt.Errorf("googleauth: build %s %s: %w", method, PathOf(address), err)
+	}
+	req.Header.Set("Accept", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		// THE TRANSPORT'S TEXT, REDACTED, never its error: it can quote what
+		// was sent.
+		return fmt.Errorf("googleauth: %s %s: %w: %s", method, PathOf(address), ErrUnreached,
+			redact.Secrets(err.Error()))
+	}
+	defer func() { _ = res.Body.Close() }()
+	payload, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))
+	if err != nil {
+		return fmt.Errorf("googleauth: read %s %s: %w", method, PathOf(address), err)
+	}
+	if res.StatusCode >= http.StatusMultipleChoices {
+		api := refusalOf(method, PathOf(address), res, payload)
+		if res.StatusCode == http.StatusTooManyRequests {
+			// GOOGLE NAMES A WAIT ON SOME LIMITS AND NONE ON OTHERS.
+			wait, named := httpx.RetryAfter(res.Header, c.clock.Now())
+			if !named {
+				wait = httpx.DefaultRetryAfter
+			}
+			api.RetryAfter = wait
+		}
+		return api
+	}
+	if out != nil && len(bytes.TrimSpace(payload)) > 0 {
+		if err := json.Unmarshal(payload, out); err != nil {
+			return fmt.Errorf("googleauth: decode %s %s: %w", method, PathOf(address), err)
+		}
+	}
+	return nil
+}
+
+// PathOf is an address's host and path, which is all an error names.
+func PathOf(address string) string {
+	u, err := url.Parse(address)
+	if err != nil {
+		return "a Google API"
+	}
+	return u.Host + u.Path
+}

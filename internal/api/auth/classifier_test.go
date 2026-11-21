@@ -24,90 +24,22 @@ import (
 // auth.GitAccess, in this module's non-test Go, decides which git service a
 // request asks for.
 //
-// # Why one classifier
-//
-// Whether a request is a FETCH or a PUSH decides two things a mistake turns
-// into a hole: a draining node finishes a fetch and refuses a push, and
-// Gitlet serves a fetch to a token bound to nobody while a push needs a
-// person.
-// Read twice — once by the drain gate, once by the host — the two readings
-// agree the day they are written and drift one commit at a time, each passing
-// its own tests; and the day one of them reads a request the other calls a
-// push as a fetch, a drain admits a push or an unbound token reaches
-// receive-pack. So the reading is GitAccess's, and its readers ask it.
-//
-// # What it flags
-//
-// A request's service is named by git's own words for it, git-upload-pack and
-// git-receive-pack, and it travels in the query's `service` key. So, outside
-// the allowances below, every place that:
-//
-//   - spells a git service in a string literal, escapes included;
-//   - builds one from pieces: a concatenation that folds to one, or a constant
-//     naming one — this file's, another file's or another package's, one a
-//     const group repeats included — compared with == or !=, switched on or
-//     listed in a case, or handed to a function of strings, bytes, path,
-//     path/filepath, regexp or slices;
-//   - reads the key `service` — spelled as a literal or a constant — from a
-//     request's query: Get or Has on a url.Values, an index of one (r.Form
-//     and r.PostForm are one), or FormValue or PostFormValue on an
-//     *http.Request. The receiver is TYPED, by internal/sourcetree/decltype
-//     reading net/url's and net/http's own declarations, so a query held in
-//     a variable is the url.Values it is; and a receiver the walk cannot type
-//     is reported rather than passed, because an absence gate that skipped
-//     what it could not read would certify nothing about exactly those.
-//
-// A constant naming a service handed anywhere ELSE is not a reading: the API
-// mounts Gitlet's routes by the host's own pattern constants, and
-// mounting a route is not deciding what a request is (so the route table
-// needs no allowance of its own).
-//
-// # The allowances, and why they are live
-//
-// internal/api/auth/git.go, where GitAccess is, and internal/gitlet/host, which
-// answers each service with its own process and so has to read which one was
-// asked for — after asking GitAccess what the request is. Each allowance is a
-// CONTROL as well: git.go must hold a hit, and internal/gitlet/host must hold
-// one once it holds a file, so a matcher that went inert fails here rather
-// than certifying a clean tree, and an allowance the code moved away from is
-// deleted rather than kept as a place a second classifier could hide.
-//
-// # What it parses, and why that is exact
-//
-// Not every file: parsing the whole module costs seconds under the race
-// detector, and almost none of it can hold a reading. Every construct above
-// is built from PIECES — the literals and the constants it is made of — and
-// the walk reads a construct whose pieces include a literal SPELLING
-// receive-pack or upload-pack (or, for the key, a literal that IS service),
-// or a constant carrying one. So a file is parsed when its bytes hold such a
-// literal — receive-pack, upload-pack, "service" or `service`, or an escape
-// that can spell a letter (\x, \u, \U, an octal digit), since a literal's
-// value need not be its bytes — or spell the NAME of a constant carrying one,
-// which is exact because an identifier has no escapes. Every such constant is
-// declared in a file parsed by that same rule, so the names are gathered to a
-// fixed point: a constant declared from one (const mine = host.Pattern)
-// carries it too, and the files spelling it are parsed in turn. The two
-// allowances are always parsed, since they are the controls.
-//
-// # Coverage boundary
-//
-// Not seen: a service name or the key split INSIDE receive-pack, upload-pack
-// or service across pieces ("git-receive-pa" + "ck"); a name assembled at run
-// time (fmt.Sprintf, a byte slice, a value read from a file); a query read
-// through RawQuery by hand with no literal naming a service; a url.Values held
-// in an interface value, converted to a map type literal or produced by a
-// package the walk does not read; and a constant naming a service handed to a
-// function outside the packages listed above. A classifier written in any of
-// those shapes is one a reviewer reads; the shapes a second classifier is
-// actually written in are the ones above.
-//
-// # Where it looks
-//
-// Every non-test Go file under the module root — not only internal/, so a
-// directory added beside it is read unasked — skipping testdata, which is not
-// compiled, and every nested checkout ([sourcetree.Walk]).
+// Two readings of fetch versus push (drain gate, host) drift one commit at a
+// time until a drain admits a push, so the reading is GitAccess's alone.
+// Outside the allowances it flags a literal spelling git-upload-pack or
+// git-receive-pack, one built from pieces (a folding concatenation or a
+// constant, compared, switched on, or handed to a string function), and a read
+// of the query key `service`. Receivers are typed by internal/sourcetree/decltype;
+// one it cannot type is reported, as a gate that skipped it certifies nothing.
+// Scope: non-test Go under the module root ([sourcetree.Walk]).
 func TestGitAccessIsTheOneClassifier(t *testing.T) {
 	t.Parallel()
+	// The allowances (git.go, internal/gitlet/host) are each also a CONTROL
+	// that must hold a hit, so an inert matcher fails and a stale allowance
+	// is deleted. A file is parsed only when its bytes hold a service literal,
+	// a letter-spelling escape, or the NAME of a constant carrying one
+	// (gathered to a fixed point; exact as an identifier has no escapes). Not
+	// seen: names split across pieces, built at run time, RawQuery by hand.
 	root := sourcetree.Root(t)
 	found := walkForClassifiers(t, root, modulePath)
 	if found.read == 0 {

@@ -26,4 +26,17 @@
 // What the sandbox asks of the log itself — a capture's record, an end's, and
 // how each was answered — is said in the sandbox's own words
 // (sandbox.SessionWrites), and the engine translates them to the log's.
+//
+// # The views a launch continues a session by
+//
+// [TurnRow] (a kept turn's row) and [ConversationHead] (the head a turn's
+// first launch freezes) live here for the same reason: the sandbox restores
+// from them and links no state log. Each has ONE maker, executordomain's
+// Session.Kept and Head.Kept, which the engine's restore and the read surface
+// both call, so the fields a relaunch decides on are copied in one place and a
+// reader is told what the launch would decide. [Excerpt] redacts before it cuts
+// (a credential cut in half leaves a head no later redaction recognises), so
+// every reader sees the same words. The log refuses a row past
+// [HarnessVersionMaxBytes] or [SessionIDMaxBytes], and the sandbox holds a
+// launch's record to them (sandbox.ValidRelease, sandbox.ValidSessionID).
 package executorkeep

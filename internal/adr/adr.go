@@ -43,10 +43,18 @@
 // register that pretends they all have gates — and the entries are checked in
 // BOTH directions, so a decision that acquires a gate and forgets to leave the
 // list fails, the same way internal/skipgate's Always entries do.
+//
+// # What the gate checks
+//
+// Every record carries the [Required] fields under a number no other record
+// holds. Its Authority exists and names the record; its Enforced-by names a
+// gate that exists, in the package a qualified name says, or is the literal
+// "nothing" with the reason. Every citation of a record in the tree names one
+// that exists, and the index lists every record on one row. It runs in make
+// check, because the register it replaced was referred to by nothing.
 package adr
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -101,6 +109,12 @@ var Unenforced = []Exemption{
 			"of the diff. The nearest static formulation, that the constant " +
 			"moves whenever a lease payload's fields change, asserts the " +
 			"opposite of the decision: a field is explicitly not a bump.",
+	},
+	{
+		ID: "ADR-0054",
+		Why: "Ask Crewlet no longer hands a task to a harness running its own " +
+			"tools: the code this record governed was deleted with it, so there " +
+			"is nothing left for a gate to look at.",
 	},
 	{
 		ID: "ADR-0010",
@@ -182,19 +196,15 @@ var Reference = regexp.MustCompile(`\bADR-(\d{4})\b`)
 
 // Load reads every record under root/[Dir].
 //
-// The template is skipped by NUMBER rather than by name: it is 0000, which is
-// the one number a real record cannot take, so a template renamed or copied
-// badly shows up as a malformed record instead of being silently ignored.
+// The template is skipped by NUMBER, not name: it is 0000, the one number a
+// real record cannot take, so a badly renamed template shows up as a malformed
+// record instead of being silently ignored.
 //
-// TWO RECORDS WITH ONE NUMBER ARE REFUSED HERE, at the one reader every check
-// goes through, rather than by a test beside it. Every consumer keys the
-// records by their id, and a map keyed on the id keeps whichever record was
-// read last — so the anchor check held one decision's authority and silently
-// skipped the other's, the citation check found the number declared and
-// passed, and a citation of it reached two decisions while the gate certified
-// one. Two branches that each took the next free number and then merged is
-// exactly how it happens, and a merge is the change least likely to be read
-// record by record.
+// Two records with one number are refused here, at the one reader every check
+// goes through. Consumers key records by id, so a map keeps whichever was read
+// last: one decision's authority would go unchecked and a citation would reach
+// two decisions while the gate certified one. Two branches that each took the
+// next free number and then merged is how it happens.
 func Load(root string) ([]Record, error) {
 	dir := filepath.Join(root, Dir)
 	entries, err := os.ReadDir(dir)
@@ -239,18 +249,20 @@ func Load(root string) ([]Record, error) {
 // the body cannot become a field. A record whose header is interrupted is a
 // record whose later fields are invisible, which is why the heading and the
 // block are read together rather than by grepping the whole file.
+//
+// THE RECORD IS READ WHOLE, so a field's line is as long as its value: a
+// line scanner's cap (64 KiB by default) would refuse a record whose
+// Enforced-by lists more gates than fit under it.
 func parse(path, name string, number int) (Record, error) {
-	f, err := os.Open(path) //nolint:gosec // a path this package built from its own directory listing
+	raw, err := os.ReadFile(path) //nolint:gosec // a path this package built from its own directory listing
 	if err != nil {
-		return Record{}, fmt.Errorf("adr: open %s: %w", name, err)
+		return Record{}, fmt.Errorf("adr: read %s: %w", name, err)
 	}
-	defer func() { _ = f.Close() }()
 
 	rec := Record{Number: number, File: name, Fields: map[string]string{}}
-	scan := bufio.NewScanner(f)
 	inHeader := false
-	for scan.Scan() {
-		line := strings.TrimRight(scan.Text(), " \t")
+	for line := range strings.Lines(string(raw)) {
+		line = strings.TrimRight(line, " \t\r\n")
 		if rec.ID == "" {
 			m := heading.FindStringSubmatch(line)
 			if m == nil {
@@ -282,9 +294,6 @@ func parse(path, name string, number int) (Record, error) {
 		if inHeader && strings.TrimSpace(line) != "" {
 			break
 		}
-	}
-	if err := scan.Err(); err != nil {
-		return Record{}, fmt.Errorf("adr: read %s: %w", name, err)
 	}
 	if rec.ID == "" {
 		return Record{}, fmt.Errorf("adr: %s has no %s heading, so "+

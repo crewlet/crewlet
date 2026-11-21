@@ -116,34 +116,17 @@ var protocolCases = []testCase{
 	}},
 
 	{"a_gate_refused_claim_writes_nothing", func(h *harness) {
-		// The gate's refusal is the one a backend is most likely to
-		// implement as an afterthought — checked in a different place
-		// from the ownership predicate, and easy to reach only after the
-		// record has already been written. During a rolling upgrade the
-		// newer half of the fleet is refused on every sweep, so a gated
-		// refusal that writes would burn an epoch and move a hint on every
-		// seat a newer node reaches for, continuously, for as long as the
-		// upgrade takes: the exact window the gate exists to make safe.
+		// A backend may implement the gate's refusal after the record is
+		// written. In a rolling upgrade the newer half is refused on every
+		// sweep, so a refusal that writes burns an epoch and moves a hint on
+		// every seat it reaches for. The resource is unheld but has a history
+		// (epoch 1, a hint), since a pristine one shows no stray write.
 		//
-		// The resource refused here is one nobody holds but which has a
-		// history — a tenure at epoch 1 whose hint names the node that
-		// held it — because a pristine resource has nothing a stray write
-		// could visibly move. (A claim on a resource a PEER holds never
-		// reaches the gate at all; see
-		// a_peer_holding_the_resource_is_the_refusal_whatever_the_gate_says.)
-		//
-		// SCOPE, because the contract permits one exception and this
-		// case must not be read as forbidding it. The violation here is
-		// already visible when the claim arrives, so a backend sees it
-		// on its check and must write nothing. The other path is
-		// deliberate: a KV cannot express the gate as a predicate
-		// inside a compare-and-swap, so it does check → claim →
-		// RE-CHECK → release on violation. A violation that appears
-		// between a backend's check and its claim therefore leaves a
-		// touched record — a burned epoch and a tombstone — because the
-		// claim was made and given back rather than never made. That is
-		// a recorded degradation, not a defect, and a concurrent gate
-		// test must assert the claim is surrendered, never that the
+		// SCOPE: here the violation is visible on arrival, so nothing may be
+		// written. A KV cannot express the gate inside a compare-and-swap, so it
+		// checks, claims, RE-CHECKS and releases; a violation appearing between
+		// leaves a burned epoch and a tombstone, a recorded degradation. A
+		// concurrent gate test asserts the claim is surrendered, never that the
 		// record is pristine.
 		first := h.claim("seat:engineer", coord.AcquireOptions{
 			Owner: "new-node:1", TTL: LongTTL, Preferred: "new-node", Protocol: 2,

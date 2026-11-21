@@ -83,7 +83,7 @@ export const MODEL_KEY_PATTERN = "^[a-z0-9][a-z0-9._-]{0,62}$";
 
 /**
  * ONE reading of a model's condition, decided by the engine
- * (`queries.ModelHealth`) so the list, the model's page and the By job view
+ * (`queries.ModelHealth`) so the list, the model's page and the seats' grid
  * cannot each decide it differently. Held against `queries.ModelHealths` by
  * `internal/api/queries.TestTheModelsScreenReadsTheEnginesHealthAndAlarms`.
  */
@@ -139,6 +139,12 @@ export type ModelSignInRoute =
 export type ModelLimitWindow = "session" | "weekly" | "model" | "unknown";
 
 /**
+ * Where a vendor says one of its windows stands (`llm.LimitState`), in
+ * escalating order. Held against `llm.LimitStates` by the sign-in gate.
+ */
+export type ModelLimitState = "ok" | "warning" | "reached";
+
+/**
  * One line of a model's test (`harness.CheckName`), in the doctor's order.
  * Held against the doctor's own order by the sign-in gate.
  */
@@ -147,12 +153,12 @@ export type ModelCheckName =
 
 /**
  * The work a written reference points at a model (`config.ProviderJob`): a
- * seat's executor or one of its satellites, or the assistant's chat or deep
- * work. Held against `config.ProviderJobs` by
+ * seat's executor or one of its satellites, or the assistant's model. Held
+ * against `config.ProviderJobs` by
  * `internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes`.
  */
 export type ModelJob =
-  "executor" | "review" | "subagent" | "auxiliary" | "judge" | "assistant" | "deep_work";
+  "executor" | "review" | "subagent" | "auxiliary" | "judge" | "assistant" | "advisor";
 
 /**
  * The seat field each seat job is written in, as the page writes it: the

@@ -61,24 +61,16 @@ func (r *heldRead) returned() bool {
 
 // A READ'S CEILING RUNS ONLY WHILE ITS LINK IS STILL.
 //
-// A read nobody answers, at the production timing, across a link a case
-// scripts, beyond it one message at the transport's bound at the floor:
+// A read nobody answers, at the production timing, across a scripted link: a
+// still link ends it at its ceiling; one that moves for good holds it to the
+// ceiling and beyond, never later; one that moves past the ceiling then stops
+// ends it at the meter's next judgment. Each ending is [Unanswered], with no
+// request asked past the ceiling.
 //
-//   - across a still link, it ends at its ceiling, as every read did;
-//   - across a link that moves for good, it is held past the ceiling and ends
-//     at the ceiling and beyond, never later;
-//   - across a link that moves until after the ceiling and is still from
-//     then on, it ends at the meter's next judgment once the link is still;
-//
-// and each ending is the silence a ceiling's is ([Unanswered]), with no
-// request asked past the ceiling: the requests out are waited for, not added
-// to.
-//
-// Mutant: a ceiling that reads no link (Timing.Ceiling as a plain timeout) —
-// the moving links' reads end at the bare ceiling. Mutant: no cap — the read
-// across a link that moves for good is still running past the ceiling and
-// beyond. Mutant: asked on past the ceiling — more requests at its end than at
-// the ceiling.
+// Mutant: Timing.Ceiling as a plain timeout, and moving links' reads end at
+// the bare ceiling. Mutant: no cap, and a link moving for good runs past the
+// ceiling and beyond. Mutant: asked on past the ceiling, and more requests are
+// out at its end than at the ceiling.
 func TestACeilingRunsOnlyWhileItsLinkIsStill(t *testing.T) {
 	t.Parallel()
 	production := Clustered(true).Timing()

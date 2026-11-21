@@ -10,7 +10,13 @@
 // consuming work it no longer owns.
 //
 // That ordering is the whole point, and it is why the fleet suite exercises
-// this package rather than the seat host directly.
+// this package rather than the seat host directly. Every HOLD of the mailbox
+// is taken for the attachment this acquisition makes: the attachment
+// ([queue.Attachment]) is read FIRST and handed to the seat's preparation
+// ([Config.SeatReady]), which takes whatever hold the mailbox must be attached
+// under (a person's pause), and this node's own turn holds name it too, so a
+// hold asked after the release's detach is refused rather than carried onto
+// the next attachment.
 //
 // The second thing that belongs here for the same reason is that every seat in
 // the COMPANY has a mailbox, whether or not this node will ever run it — the
@@ -20,7 +26,28 @@
 //
 // The third is the ADMISSION every turn on this node passes, whatever road it
 // arrives by: [Node.AdmitTurn], which the mailbox's handler and the sandbox
-// coordinator's resume both ask before they start one (ADR-0063).
+// coordinator's resume both ask before they start one (ADR-0063): the seat
+// owned fresh, a slot under node.max_concurrent, no drain.
+// TestEveryTurnStartIsAdmitted fails on a road to turn.Run that skips it.
+//
+// # Wakes
+//
+// A wake reaches a mailbox or is refused. The agent stream discards what no
+// consumer covers, so every producer of a seat's wake publishes through
+// [Node.Wakes], which checks the seat's mailbox, inbox and priority lane
+// against an in-memory set first and refuses with [queue.ErrUnavailable]
+// otherwise. It backstops boot (every mailbox exists before a producer starts)
+// and apply ([Node.EnsureMailboxesFor] before parties are indexed). A producer
+// that spends something first (the scheduler's claim, an agent-to-agent
+// channel) asks [Node.ConfirmMailbox] before it does.
+//
+// # Drain
+//
+// [Node.BeginDrain] is [Node.Drain]'s first step alone, exported for a stop
+// decided before the node has started, which cannot run a whole drain yet.
+// Drain waits within its bound for every seat that step cut to be given back
+// ([seat.Host.AwaitCut]): a cut seat is out of the held set, and its give-back
+// must not run on beside the teardown.
 package node
 
 import (
@@ -105,33 +132,15 @@ type Config struct {
 	Turn TurnFunc
 
 	// SeatReady runs as this node takes a seat, BEFORE its mailbox is
-	// attached, and a failure refuses the seat.
+	// attached, and a failure refuses the seat. inbox is the attachment of
+	// the seat's mailbox this acquisition makes ([queue.Attachment]), which
+	// every hold is taken FOR until release: a hold taken here is in force when
+	// the mailbox attaches, so a paused seat is attached already held.
 	//
-	// Before, because of the ordering OnAcquire exists to enforce: whatever
-	// the first turn will need must be ready before the first event can
-	// arrive. A seat mid-detached-run is the case that makes it matter —
-	// its runs have to be recovered and its mail parked before anything
-	// can deliver, or the first message starts a second turn beside an
-	// executor that is still going.
-	SeatReady func(ctx context.Context, seat placement.Seat, lease coord.Lease) error
-
-	// AttachHolds names the pause holds a seat's mailbox must already carry
-	// when it is attached — the reasons [queue.EventQueue.PauseTopic] is
-	// given for it, taken after SeatReady and BEFORE the attach. Nil takes
-	// none.
-	//
-	// BEFORE, for the reason the attach is last: a hold taken after the
-	// consumer starts is taken after the first delivery can arrive. A seat
-	// a person paused that placement moves here is the case — the node
-	// that released it held its mail, the release dropped that hold with
-	// the attachment, and the mail waiting on the inbox would be the first
-	// thing this node's consumer ran. A hold is keyed on the subscription
-	// rather than on an attachment, which is what lets it be taken first.
-	//
-	// ASKED BY THE SEAT'S ID, the name the held mailbox is built from and
-	// the key every hold is kept under: the agent id derived from the
-	// seat's handle (ADR-0013).
-	AttachHolds func(seat uuid.UUID) []string
+	// Before, because of the ordering OnAcquire enforces: a seat mid-detached-run
+	// must have its runs recovered and its mail parked before anything can
+	// deliver, or the first message starts a second turn beside a live executor.
+	SeatReady func(ctx context.Context, seat placement.Seat, lease coord.Lease, inbox queue.Attachment) error
 
 	// SeatsAdmitted reports whether this node may take on NEW seats right
 	// now. Nil always admits. It gates the CLAIM only — see
@@ -147,23 +156,14 @@ type Config struct {
 	SeatsServiceable func(ctx context.Context) (bool, string)
 
 	// SeatAdmitted runs when a seat this node holds STARTS ADMITTING TURNS:
-	// once its acquisition is established — the mailbox attached and
-	// [seat.Host.MayStart] saying yes from here — and again whenever a renew
-	// re-proves ownership after a stretch in which it could not (the
-	// admission edge [Node.OnAdmission] resumes the consumer on). Nil does
-	// nothing.
-	//
-	// It is how something this node refused for want of a seat that admits
-	// turns learns the refusal has lifted, at the transition rather than at
-	// a guess about when it might have. The engine's is a recorded answer
-	// whose resume the seat's preparation inherited and could not run while
-	// the seat was still establishing. It never fails anything: the seat is
-	// already serving.
-	//
-	// THE WHOLE SEAT, as every other seat hook here is handed: what waits on
-	// the edge may be filed by the id or by the handle, and a hook handed
-	// one of them would have to resolve the other through a company view
-	// that may already have moved.
+	// once its acquisition is established (mailbox attached, [seat.Host.MayStart]
+	// yes), and again whenever a renew re-proves ownership after a stretch in
+	// which it could not (the edge [Node.OnAdmission] resumes the consumer on).
+	// Nil does nothing. It tells what was refused for want of an admitting seat
+	// (the engine's: a recorded answer's resume) that the refusal has lifted,
+	// and never fails anything. Handed THE WHOLE SEAT, as every seat hook is:
+	// waiters are filed by id or handle, and resolving the other through a
+	// company view that may have moved would be wrong.
 	SeatAdmitted func(ctx context.Context, seat placement.Seat)
 
 	// SeatTurnEnded runs when a turn admitted on a seat ([Node.AdmitTurn])
@@ -181,6 +181,14 @@ type Config struct {
 	// release: the seat is already gone from this node, and its durable
 	// state belongs to the store rather than to this process.
 	SeatDone func(ctx context.Context, seat placement.Seat)
+
+	// SeatPlaced runs once an acquired seat is established here, with the
+	// lease of its tenure, and SeatReleased once a release's teardown is
+	// proven, with the lease that ended and why: together, which node held
+	// the seat when, so the time no node held it can be read back. Nil does
+	// nothing; neither fails the claim or the release.
+	SeatPlaced   func(ctx context.Context, seat placement.Seat, lease coord.Lease)
+	SeatReleased func(ctx context.Context, seat placement.Seat, lease coord.Lease, reason seat.ReleaseReason)
 
 	// BatchOptions tunes inbox coalescing. Nil uses the defaults.
 	BatchOptions *queue.BatchOptions
@@ -273,6 +281,11 @@ type Node struct {
 	// handle beside it for the diagnostics.
 	mu       sync.Mutex
 	attached map[uuid.UUID]string
+	// inboxes is the attachment of each seat's mailbox this node is taking
+	// or holds, from the start of its acquisition to its release's detach:
+	// what this node's own holds on the mailbox are taken for
+	// ([Node.holdInbox]). Under mu.
+	inboxes map[uuid.UUID]queue.Attachment
 
 	// mail is what this node knows about the company's mailboxes, and the
 	// convergence loop's own lifetime. See mailboxes.go.
@@ -299,6 +312,7 @@ func New(cfg Config) (*Node, error) {
 		cfg:      cfg,
 		log:      logging.Get("node").With("node_id", cfg.NodeID),
 		attached: map[uuid.UUID]string{},
+		inboxes:  map[uuid.UUID]queue.Attachment{},
 		running:  map[string]*admission{},
 		mail:     newMailboxes(),
 		turns:    newGate(cfg.MaxConcurrent),
@@ -417,15 +431,12 @@ func (n *Node) stopConverging() {
 // ([seat.Host.BeginDrain]), and nothing waits for a turn or gives a seat back.
 //
 // EXPORTED FOR A STOP DECIDED BEFORE THE NODE HAS STARTED, which cannot run a
-// whole drain yet: an engine whose start is cancelled while the seat host's
-// first pass runs begins the drain here at once, so the pass claims nothing
-// more and cuts what it is establishing
-// ([github.com/crewlet/crewlet/internal/engine.Engine.Start]). The whole drain
-// follows as that stop's shutdown.
+// whole drain yet: an engine cancelled during the seat host's first pass begins
+// the drain here so the pass claims nothing more and cuts what it is
+// establishing ([github.com/crewlet/crewlet/internal/engine.Engine.Start]).
 //
-// Its presence give-back is a step of the stop ctx carries, or of one this
-// node's TTL begins ([seat.WithinStop]) — the allowance Drain hands it when
-// Drain is what calls it, so the drain's give-backs still share one.
+// Its presence give-back is a step of the allowance the stop ctx carries, or of
+// one this node's TTL begins ([seat.WithinStop]), shared with Drain's own.
 func (n *Node) BeginDrain(ctx context.Context) {
 	n.host.BeginDrain(seat.WithinStop(context.WithoutCancel(ctx), n.host.TTL()))
 }
@@ -438,85 +449,27 @@ func (n *Node) BeginDrain(ctx context.Context) {
 // print a hundred lines.
 const drainLogInterval = 10 * time.Second
 
-// Drain performs this node's graceful departure and returns once its seats
-// are handed back, the ones it cut while they were being taken among them.
+// Drain is this node's graceful departure; it returns once its seats are
+// handed back, the ones it cut while being taken included.
+//  1. Stop claiming, give up presence ([Node.BeginDrain]); cut seats being taken.
+//  2. Quiesce held seats: no NEW work, renewals continue so turns finish.
+//  3. Once no handler or turn runs ([Node.waitInFlight]), release the seats
+//     (mailbox intact, lease given back); then wait for each cut seat's
+//     give-back ([seat.Host.AwaitCut]), which no release reaches.
 //
-// The three steps are one operation because no layer below can do them alone:
-// the seat host knows about leases but not about consumers, and the queue
-// knows about consumers but not about who owns a seat.
-//
-//  1. Stop claiming and give up presence, so peers stop reserving capacity
-//     for a node that will never claim again ([Node.BeginDrain]). A seat
-//     still being taken is cut rather than waited for.
-//  2. Quiesce every held seat: no NEW work is taken, and the seats keep
-//     renewing so the turns already running can finish.
-//  3. Once no handler and no turn is running ([Node.waitInFlight]), release
-//     the seats: mailbox intact, lease given back, so a peer can take over
-//     immediately rather than waiting out a TTL. Then wait for every seat
-//     step 1 cut to be given back by the claim that was taking it
-//     ([seat.Host.AwaitCut]), which no release here reaches: a cut seat is
-//     out of the held set, and its give-back — the seat's teardown and its
-//     lease — must not run on beside what the stop tears down after the
-//     drain.
-//
-// Step 3 waits INDEFINITELY, bounded only by ctx. That is deliberate: a turn
-// parked mid-LLM-round is making progress a timer cannot see, and cutting it
-// off buys a faster deploy by abandoning work that was nearly done. The hard
-// deadline belongs to whatever supervises the process — a container runtime's
-// kill grace, an operator's second interrupt — which already has one and can
-// see things this process cannot. Callers that want a bound pass a ctx with a
-// deadline.
-//
-// THAT DEADLINE BOUNDS THE WAIT ALONE. Giving up presence and handing the
-// seats back run on the STOP'S ONE ALLOWANCE instead ([seat.StopBudget]),
-// because handing an expired context to the steps whose entire purpose is
-// giving the leases back is how every seat lapses on a full TTL — the exact
-// cost step 3 exists to avoid, paid precisely when a caller took this doc's
-// advice and passed a deadline. The allowance is the one the caller's stop
-// carries — the engine's
-// ([github.com/crewlet/crewlet/internal/engine.Engine.Drain]), shared with
-// everything else that stop gives back — or, for a caller carrying none, one
-// this drain begins from this node's own TTL ([seat.WithinStop]): one
-// heartbeat interval, 15 s at the shipped 45 s, the largest still strictly
-// inside the leases it is racing. Past it a seat lapses on its TTL, the same
-// outcome as not trying, only later. Never a bound of the drain's own beside
-// it: that was a second clock over the same give-backs that also ran through
-// the seats' teardowns between them, so it could only agree with the
-// allowance or cut a give-back short for time no store had spent.
-//
-// # Unless the acknowledgements are gone
-//
-// The wait is worth its length because a turn that finishes is ACKNOWLEDGED:
-// its outcome is recorded and nobody runs it again. Once the queue reports its
-// acks lost ([acksLoss]) — its own connection closed for good, the one every
-// delivery is settled over — no running turn's outcome can be, so the broker
-// hands each delivery to whichever node takes its seat and that node runs it
-// again. Finishing it here would buy nothing but a second copy of every side
-// effect (a chat post, a comment, a tracker write) and a later exit. So step 3 ends
-// AT ONCE and every turn still running is CANCELLED, and the rest proceeds as
-// before: the seats are released, in the same order, on the same budget. The
-// cut is one-way — a turn started after it is cancelled as it starts — which
-// matches the only thing that closes the channel, a node that is stopping.
-//
-// Nothing else cuts it. A node that lost only a second connection (the
-// coordination store's, on an embedded broker) stops too, but its acks still
-// land, so its drain waits like a signal's.
-//
-// Drain does not stop the node: a drained node still renews presence-free and
-// the layers beneath are all reversible, so it could be told to claim again.
-// Stop is what ends it.
-//
-// NOTHING IN THIS TREE REVERSES IT. [Node.ResumeClaiming] has no production
-// caller — the config plane's shed path gates admission rather than draining
-// the node — and the one caller Drain does have, the engine's
-// ([github.com/crewlet/crewlet/internal/engine.Engine.Drain]), is a shutdown:
-// it latches a flag the HTTP surface refuses new work on and never clears it.
-// So read the reversibility below as a property of the parts, not as a path
-// somebody takes.
+// Step 3 waits INDEFINITELY, bounded only by ctx: a turn parked mid-LLM-round
+// makes progress a timer cannot see; the hard deadline is the supervisor's.
+// NOTHING REVERSES A DRAIN: [Node.ResumeClaiming] has no production caller and
+// the engine's Drain is a shutdown.
 func (n *Node) Drain(ctx context.Context) {
-	// THE STOP THIS DRAIN IS PART OF, for the give-backs at either end of it
-	// — see the doc above. Free of ctx's cancellation, and carrying the
-	// allowance every one of them is a step of.
+	// THE STOP THIS DRAIN IS PART OF, free of ctx's cancellation. A caller's
+	// deadline bounds the WAIT ALONE: presence and seat give-backs run on the
+	// STOP'S ONE ALLOWANCE ([seat.StopBudget]), since an expired context there
+	// lapses every seat on a full TTL, exactly when a caller passed a deadline.
+	// The allowance is the caller's stop's, or one begun from this node's TTL
+	// ([seat.WithinStop]): one heartbeat interval (15 s at 45 s), the largest
+	// strictly inside the leases it races. Never a bound of the drain's own: a
+	// second clock over the same give-backs could only agree or cut one short.
 	stop := seat.WithinStop(context.WithoutCancel(ctx), n.host.TTL())
 	n.BeginDrain(stop)
 
@@ -540,12 +493,15 @@ func (n *Node) Drain(ctx context.Context) {
 		}
 	}
 
-	// THE WAIT ENDS THE MOMENT THE ACKS ARE LOST, whether they were lost
-	// before the drain began (the usual order: the loss is what stopped the
-	// node) or while it waits. A watcher rather than a check per interval,
-	// because the interval is ten seconds of turns making side effects
-	// nobody will record. Its lifetime is this call's: the deferred cancel
-	// ends it however the loop below ends.
+	// THE WAIT ENDS THE MOMENT THE ACKS ARE LOST ([acksLoss]: the connection
+	// every delivery is settled over, closed for good), before or during the
+	// drain. No outcome can then be recorded, so the broker hands each delivery
+	// to the next seat holder and finishing here would duplicate its side
+	// effects: every running turn is CANCELLED (one-way: a later turn is
+	// cancelled as it starts), seats released as usual. A lost coordination
+	// connection alone does not cut: its acks still land. A watcher, not a check
+	// per interval, as ten seconds of unrecorded side effects is too long. The
+	// deferred cancel ends it.
 	wait, endWait := context.WithCancel(ctx)
 	defer endWait()
 	if n.acksLost != nil {
@@ -641,8 +597,21 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 			"seat id, and a mailbox is named by the id", handle)
 	}
 
+	// THE ATTACHMENT THIS ACQUISITION MAKES, read first: every hold of the
+	// mailbox from here, the seat's preparation's included, is taken for it,
+	// so the queue refuses one that was decided while this node held the
+	// seat before and asked after that holding's release, rather than carry
+	// it onto this attachment.
+	at, err := n.cfg.Queue.Attachment(ctx, inbox, group)
+	if err != nil {
+		return fmt.Errorf("node: read the attachment seat %q's mailbox is taken under: %w", handle, err)
+	}
+	n.mu.Lock()
+	n.inboxes[s.ID] = at
+	n.mu.Unlock()
+
 	if n.cfg.SeatReady != nil {
-		if err := n.cfg.SeatReady(ctx, s, lease); err != nil {
+		if err = n.cfg.SeatReady(ctx, s, lease, at); err != nil {
 			// The seat is REFUSED rather than attached anyway: a seat
 			// whose in-flight runs could not be recovered would take new
 			// work beside an executor nothing is tracking.
@@ -650,23 +619,11 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 		}
 	}
 
-	if n.cfg.AttachHolds != nil {
-		for _, hold := range n.cfg.AttachHolds(s.ID) {
-			if err := n.cfg.Queue.PauseTopic(ctx, inbox, group, hold); err != nil {
-				// REFUSED rather than attached without it: a seat whose
-				// hold could not be taken would run the mail it exists to
-				// keep. A pause fails only on a client that has stopped.
-				return fmt.Errorf("node: hold seat %q under %q before attaching it: %w",
-					handle, hold, err)
-			}
-		}
-	}
-
 	opts := n.cfg.BatchOptions
 	if opts == nil {
 		opts = queue.DefaultBatchOptions()
 	}
-	err := n.cfg.Queue.SubscribeBatch(ctx, inbox, group,
+	err = n.cfg.Queue.SubscribeBatch(ctx, inbox, group,
 		func(ctx context.Context, evs []*events.Event) queue.Result {
 			return n.runTurn(ctx, handle, evs)
 		},
@@ -686,7 +643,10 @@ func (n *Node) OnAcquire(ctx context.Context, s placement.Seat, lease coord.Leas
 
 // OnEstablished passes on that an acquired seat now admits turns — see
 // [Config.SeatAdmitted].
-func (n *Node) OnEstablished(ctx context.Context, s placement.Seat, _ coord.Lease) {
+func (n *Node) OnEstablished(ctx context.Context, s placement.Seat, lease coord.Lease) {
+	if n.cfg.SeatPlaced != nil {
+		n.cfg.SeatPlaced(ctx, s, lease)
+	}
 	if n.cfg.SeatAdmitted != nil {
 		n.cfg.SeatAdmitted(ctx, s)
 	}
@@ -719,7 +679,7 @@ func (n *Node) runTurn(ctx context.Context, handle string, evs []*events.Event) 
 // Reporting an error means the teardown could NOT be proven, and the seat
 // host keeps the lease in response: a seat this process may still be
 // consuming must not be handed to a peer.
-func (n *Node) OnRelease(ctx context.Context, s placement.Seat, _ coord.Lease, reason seat.ReleaseReason) error {
+func (n *Node) OnRelease(ctx context.Context, s placement.Seat, lease coord.Lease, reason seat.ReleaseReason) error {
 	handle := s.Handle
 	inbox, group := topics.AgentInbox(s.ID), topics.AgentInboxGroup(s.ID)
 	if inbox == "" {
@@ -737,9 +697,13 @@ func (n *Node) OnRelease(ctx context.Context, s placement.Seat, _ coord.Lease, r
 
 	n.mu.Lock()
 	delete(n.attached, s.ID)
+	delete(n.inboxes, s.ID)
 	n.mu.Unlock()
 	if n.cfg.SeatDone != nil {
 		n.cfg.SeatDone(ctx, s)
+	}
+	if n.cfg.SeatReleased != nil {
+		n.cfg.SeatReleased(ctx, s, lease, reason)
 	}
 	n.log.Info("seat_detached", "handle", handle, "reason", reason.String())
 	return nil
@@ -778,25 +742,18 @@ func (n *Node) OnAdmission(ctx context.Context, s placement.Seat, admitted bool)
 	return nil
 }
 
-// ResumeClaiming undoes [Node.Drain] for a node that is staying. It re-opens
-// the concurrency gate, re-admits the seats the drain quiesced and tells the
-// host to claim again — in that order, so no delivery arrives at a gate that
-// is still shut.
+// ResumeClaiming undoes [Node.Drain] for a node that is staying: it re-opens
+// the gate, re-admits the quiesced seats and tells the host to claim again, in
+// that order so no delivery arrives at a shut gate.
 //
-// NO PRODUCTION CALLER. It was written for the posture path's other half — a
-// node that shed on config divergence and then converged serving again rather
-// than sitting out until it restarts — and that path was built differently:
-// [github.com/crewlet/crewlet/internal/engine.Reconciler]'s shed gates
-// ADMISSION and never drains the node, so nothing here is ever undone.
-// Whether the shed should drain, or this should go, is a design decision of
-// its own; until it is taken, do not reach for this as though the engine
-// already used it. The engine's Drain, the one caller of [Node.Drain], is
-// one-way by construction: it latches a flag the HTTP surface refuses new
-// work on and never clears it, so a resume through here would leave the node
-// serving turns while its routes answer 503.
+// NO PRODUCTION CALLER: [github.com/crewlet/crewlet/internal/engine.Reconciler]'s
+// shed gates ADMISSION and never drains the node, and the engine's Drain is
+// one-way (it latches a flag the HTTP surface refuses new work on), so a resume
+// here would serve turns while its routes answer 503. Do not reach for it as
+// though the engine used it.
 //
-// It is not the inverse of [Node.Stop]. Stop releases the seats; this is for
-// a node that still holds them.
+// It is not the inverse of [Node.Stop]: Stop releases the seats; this is for a
+// node that still holds them.
 func (n *Node) ResumeClaiming(ctx context.Context) {
 	n.turns.open()
 	for _, s := range n.host.HeldSeats() {
@@ -847,22 +804,12 @@ func (n *Node) AttachedSeats() []uuid.UUID {
 
 // partitionKey groups a seat's inbox into the batches one turn is given.
 //
-// [notify.KeyOf], not a copy of it. The grammar states that the key is stamped
-// by the producer and read by everyone else, and this was one more definition
-// spelling the field name and the fallback prefix out again. Both live in
-// exactly one place now, so renaming either is a change to one constant rather
-// than a silent partition-key mismatch with a regression test that stays green
-// because it uses the constant too.
+// [notify.KeyOf], not a copy: the field name and fallback prefix live in one
+// place. THE PARTITION KEY is the merge unit, not the durable conversation
+// identity ([notify.ConversationIdentityOf]): for a direct message it is
+// deliberately finer, since a thread reply merged with unrelated top-level
+// pings would name one of two reply targets.
 //
-// THE PARTITION KEY, which is the merge unit rather than the durable
-// conversation identity beside it (see [notify.ConversationIdentityOf]): this
-// is the reader that decides which events reach a handler together, and for a
-// direct message that is deliberately finer than the conversation — a thread
-// reply must not merge with unrelated top-level pings, whose merged metadata
-// would name one of two reply targets.
-//
-// An event that cannot name a conversation gets a key of its OWN — derived
-// from its id, so nothing else can ever share it — and is therefore never
-// coalesced with anything. That is the honest default: merging two unrelated
-// triggers into one digest turn loses one of them.
+// An event naming no conversation gets a key of its OWN, derived from its id,
+// so it is never coalesced: merging two unrelated triggers loses one of them.
 func partitionKey(ev *events.Event) string { return notify.KeyOf(ev) }

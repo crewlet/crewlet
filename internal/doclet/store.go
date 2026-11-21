@@ -25,38 +25,15 @@ import (
 // THE KNOWLEDGE BASE'S WRITE PATH: one record per operation, published to the
 // subject of the thing it contends for.
 //
-// # Which subject, and why it is not always the page
-//
-// A body save, a label, a watch, a comment, a trash and a restore all contend
-// for THE PAGE, so they arbitrate on its own subject and its version is the
-// expectation. A create and a rename that MOVES the address contend for THE
-// ADDRESS — two people making "Deploy Runbook" must fight, and two fresh uuids
-// never would — so they arbitrate on the title, create-only.
-//
-// That is why a rename is its own operation rather than a field of a save. One
-// record has one subject, and a record that changed both a body and an address
-// could only arbitrate one of them; the other would be a lost update with no
-// symptom. A caller changing both makes two writes, each complete and each
-// individually durable — which is an ordinary sequence of operations rather
-// than the torn write the bucket's three-key create was.
-//
-// A rename stamps the head's `scoped_through` and never its `version`, on the
-// tracker's own rule for a record that writes a row from another subject: the
-// row's broker expectation still matches its subject's last message and cannot
-// be poisoned into permanent unwritability, and a read barrier compares the
-// MAX of the two.
-//
-// # The third case: a rename that does NOT move the address
-//
-// "Runbook" -> "RUNBOOK" changes the DISPLAYED title and nothing else. The
-// claim is keyed on the normalised title, so it does not move; the only row
-// the write touches is the page's own head. It therefore arbitrates on THE
-// PAGE, like every other write to a field of the head, and carries its own op
-// — see [OpRetitle] and [Store.retitle]. Sending it to the title's subject
-// instead would take a create-only append at an address this page already
-// holds, lose to its own claim, and report a name somebody else took; and the
-// version of this that DISCARDED it as a no-op answered `applied` while the
-// displayed title every reader renders stayed where it was.
+// Saves, labels, watches, comments, trash and restore contend for THE PAGE
+// and arbitrate on its subject. A create and an address-MOVING rename contend
+// for THE ADDRESS (two "Deploy Runbook"s must fight; two fresh uuids never
+// would) and arbitrate on the title, create-only. A rename is its own
+// operation: one record has one subject, so one changing body and address
+// would silently lose one. It stamps the head's `scoped_through`, never its
+// `version`, so the broker expectation cannot be poisoned. A rename that does
+// NOT move the address ("Runbook" -> "RUNBOOK") arbitrates on THE PAGE with
+// [OpRetitle] ([Store.retitle]).
 
 // Store is the knowledge base's write path.
 type Store struct {
@@ -90,37 +67,18 @@ type Options struct {
 	// applier is forbidden.
 	Now func() time.Time
 
-	// Reserved names the containers this company holds back from an
-	// AGENT's writes — see [Reserved] for the two and what each refuses;
-	// a refused write answers [ErrReserved] — and the spaces it DECLARES,
+	// Reserved names the containers held back from an AGENT's writes (see
+	// [Reserved]; a refusal is [ErrReserved]) and the spaces it DECLARES,
 	// outside which nobody creates a page ([Reserved.Declared]).
 	//
-	// NIL DECLARES NOTHING, so a store built without it creates no page:
-	// the declared spaces are the one rule here that binds a person as well
-	// as an agent, and a seam whose absence meant "anywhere" would be the
-	// way a surface wired later created pages in containers nobody named.
+	// NIL DECLARES NOTHING, so a store built without it creates no page: the
+	// declared spaces bind a person too, and "anywhere" on absence would let a
+	// later-wired surface create pages in containers nobody named.
 	//
-	// # Why it is here and not at a tool
-	//
-	// It was one check at `write_page`, so a seat that could not CREATE a
-	// page in the skills container could still save over one, rename one
-	// and comment on one — and every surface that grows later inherits
-	// the same hole, silently, because nothing says the rule exists. The
-	// store is the one place every write path goes through.
-	//
-	// # Why the ACTOR and not the authority table
-	//
-	// Because this is not a question about capability. internal/authz
-	// decides who may write a page at all, and — for a person — who may
-	// write a tool skill; what is left here is a rule about what an AGENT
-	// cannot see from anything it holds: that a page in the skills
-	// container is machinery rather than knowledge, and that the org root
-	// is the company's own canon rather than a team's notebook. A person
-	// publishing into either on purpose is what those containers are for.
-	//
-	// A FUNCTION because the keys are Tier B: `knowledge.skills_container`
-	// and `knowledge.root_space` move on an apply, and this store is built
-	// once per node.
+	// Checked here, not at a tool: every write path goes through the store, and
+	// a check at `write_page` left a seat free to save over, rename and comment
+	// on a skills page. It keys on the ACTOR, not the authority table; a person
+	// may publish into either. A FUNCTION because the keys are Tier B.
 	Reserved func() Reserved
 }
 
@@ -150,28 +108,18 @@ type Reserved struct {
 	// it or remarking on it is ordinary upkeep and is not refused.
 	Root string
 
-	// Declared is every container key the company DECLARES — each unit's
-	// and each seat's `space:`, `knowledge.root_space` and
-	// `knowledge.skills_container` — and a page is CREATED only in one of
-	// them, by anybody: [ErrInvalid] naming the key and how a space is
-	// declared otherwise.
+	// Declared is every container key the company DECLARES (each unit's and
+	// seat's `space:`, `knowledge.root_space`, `knowledge.skills_container`);
+	// a page is CREATED only in one, by anybody: [ErrInvalid] naming the key.
 	//
-	// # Why a create, and why a person too
+	// A page filed under an undeclared key belongs to nobody: no lead tidies
+	// it, no routing reaches it, and a typo of a real key splits a team's
+	// knowledge in two silently. That is a fact about the KEY, so unlike the
+	// two above it refuses a person as an agent, as a task's create does an
+	// undeclared project. Only a create asks: a save cannot move a page and a
+	// rename keeps its container.
 	//
-	// A container is a space the org chart names — who leads it, who is
-	// woken by what happens in it, which team's knowledge it is — and a
-	// page filed under a key nothing declares belongs to nobody: no lead
-	// tidies it, no routing reaches it, and a typo of a real key splits a
-	// team's knowledge in two with nothing to say so. That is a fact about
-	// the KEY rather than about who typed it, which is why this, unlike the
-	// two above, refuses a person exactly as it refuses an agent — the same
-	// rule a task's create holds an undeclared project to. Only a create
-	// asks: a save cannot move a page across containers and a rename keeps
-	// its container, so every other write is already inside a space that
-	// was declared when the page was made.
-	//
-	// THE MEANINGFUL ZERO: nil and empty both declare nothing, and every
-	// create is refused.
+	// Nil and empty declare nothing: every create is refused.
 	Declared []string
 }
 
@@ -201,36 +149,24 @@ func NewStore(opts Options) (*Store, error) {
 // newTimeOrderedID mints a fresh operation id, which sorts by creation time and
 // carries the instant it was minted.
 //
-// THROUGH [statelog.NewOpID] rather than a UUIDv7 minted here, because the
-// instant is what the state log reads to decide whether its ledger can vouch
-// for a retry of this operation — and the fallback this had, a v4 when a v7
-// could not be minted, is an id carrying no instant at all, which a node whose
-// ledger's sweep ever lost a row answers `unknown` for ever.
-//
-// THE WALL CLOCK and not the store's own [Store.now], which is the clock the
-// AUTHORED instants are stamped from and which a test pins: the mint instant
-// is compared with the ledger's watermark, which a sweep sets off the wall.
+// THROUGH [statelog.NewOpID], not a UUIDv7 minted here: the state log reads
+// the instant to decide whether its ledger can vouch for a retry, and an id
+// carrying none (a v4 fallback) is answered `unknown` for ever by a node whose
+// sweep lost a row. THE WALL CLOCK, not [Store.now] (the authored instants,
+// which a test pins): the mint instant is compared with the ledger's
+// watermark, which a sweep sets off the wall.
 func newTimeOrderedID() string { return statelog.NewOpID(time.Now(), "") }
 
 // publish forms one record and appends it, translating the framework's
 // refusals into this package's own vocabulary.
 //
-// THE THREE OUTCOMES TRAVEL UNCHANGED. What this adds is the one thing the
-// framework cannot know: which of its refusals a caller can act on. A refused
-// create is a NAME ALREADY TAKEN and a write that ran out of compare-and-set
-// rounds is A PAGE SOMEBODY ELSE KEPT MOVING — two different instructions to
-// whoever hit them, and the only two refusals here a person can act on without
-// reading a log.
-//
-// The conflict carries the framework's error along with this package's, so a
-// caller reasoning in either vocabulary matches. A taken title does not: "that
-// name is held in this container" is the whole of what happened, while the
-// framework's wording for it — the object already exists — names an object
-// nobody asked about.
-//
-// ONLY ON A SUBJECT A PERSON EDITS — see [refusal], which reads the subject's
-// kind: a node's eviction gate goes through here too, and on its subject the
-// translation named a page after a node id.
+// THE THREE OUTCOMES TRAVEL UNCHANGED. This adds which refusals a caller can
+// act on: a refused create is a NAME ALREADY TAKEN, a write out of
+// compare-and-set rounds A PAGE SOMEBODY ELSE KEPT MOVING. The conflict
+// carries the framework's error beside this package's; a taken title does
+// not, as "object already exists" names an object nobody asked about. Only on
+// a subject a person edits ([refusal] reads its kind): a node's eviction gate
+// goes through here too, and would name a page after a node id.
 func (s *Store) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
 	result, err := s.publisher.Publish(ctx, req)
 	return result, refusal(err, req.Subject)
@@ -239,30 +175,15 @@ func (s *Store) publish(ctx context.Context, req statelog.Request) (statelog.Res
 // onPage publishes one write about one page, stating the page's CONTAINER in
 // the request's scope.
 //
-// # Why the container has to be read before the decide
-//
-// The request's scope is what the framework probes for a deferred record
-// before the decision and waits on after the append ([statelog.Request]), and
-// it is stated before the decide runs. A page's subject is its uuid, and the
-// container is a fact about its ROW — one a rename record states and its apply
-// writes — so the subject alone resolves to the path of a page in no container
-// at all. Every page
-// write said exactly that, while the record it decided carried the real
-// container: a record deferred on the page's space, or on the page itself
-// under its space, was never matched, so a write decided over rows that were
-// behind for that space and reported them applied — the containment probe the
-// scope grammar exists for, silently answering "nothing is deferred". So the
-// container is read first and the decide checks it still holds, the shape the
-// tracker takes with a task's project and [Store.Rename] with a page's title.
+// The container is read BEFORE the decide because the scope, stated before
+// it, is what the framework probes for a deferred record: the uuid subject
+// alone resolves to no container, so a record deferred on the page's space
+// would never match. request builds the request for a container; its decide
+// must refuse a head elsewhere with [errPageMoved], via [inContainer].
 //
 // A PAGE THIS NODE DOES NOT HOLD is published with the subject alone: the
-// decide refuses it as not found, which no scope makes wrong, and the one
-// thing that must still answer — a retried operation the ledger already holds
-// — is answered before any scope is probed. A page that arrives between the
-// read and the decide is a move like any other.
-//
-// request builds the request for a container; its decide must refuse a head
-// in any other container with [errPageMoved], via [inContainer].
+// decide refuses it as not found, which no scope makes wrong, and a retried
+// operation the ledger holds is answered before any scope is probed.
 func (s *Store) onPage(ctx context.Context, pageID string,
 	request func(container string) statelog.Request) (statelog.Result, error) {
 
@@ -337,21 +258,15 @@ func inContainer(head Page, container string) error {
 
 // refusal is that translation, as a function over values.
 //
-// IT TRANSLATES ONLY ON A SUBJECT A PERSON EDITS — a page, a title, a
-// container. The log's own subjects (a node's eviction gate, a reanchor's
-// generation, a barrier) are arbitrated by the same framework, and their
-// refusals stay in its words: translated, two operators contending over one
-// node's gate were told "the page kept changing under this write: <node id>",
-// about an edit nobody was making. A kind added to [ObjectKinds] is red in
-// this function's test until somebody says whether a person edits it.
+// IT TRANSLATES ONLY ON A SUBJECT A PERSON EDITS (a page, a title, a
+// container). The log's own subjects (a node's eviction gate, a reanchor's
+// generation, a barrier) keep the framework's words: translated, two
+// operators contending over a node's gate were told "the page kept changing
+// under this write: <node id>". A kind added to [ObjectKinds] is red in this
+// function's test until somebody says whether a person edits it.
 //
-// Separate from the append because the append needs a broker, a store and a
-// log, and the two refusals that reach a person are reachable through none of
-// them on demand: an exhausted compare-and-set is sixteen lost races, which no
-// test can stage. A rule that can only be exercised by a race is a rule nobody
-// re-reads — and the branch a seat is told to act on had no producer at all
-// until this function existed, so [ErrConflict] was a sentinel the tool
-// surface matched on and nothing ever returned.
+// A function over values because an exhausted compare-and-set is sixteen lost
+// races, which no test can stage through a broker, store and log.
 func refusal(err error, subject statelog.Subject) error {
 	if err == nil {
 		return nil
@@ -525,24 +440,18 @@ type Actor struct {
 	// Apps is, and decoded as stated ([Actor.UnmarshalJSONFrom]).
 	WrittenFor types.WrittenFor `json:",omitzero"`
 
-	// OpKey is the caller's own operation key: the value a RETRY of this
-	// same gesture reproduces, which every write here derives its operation
-	// id from when it is set.
+	// OpKey is the caller's own operation key: the value a RETRY of the same
+	// gesture reproduces, which every write here derives its operation id from.
 	//
-	// ON THE ACTOR because it travels with the call and not with the store,
-	// for the same reason the actor does — and because it is what the
-	// tracker's actor already carries (`builtin.Actor.WorkKey`), so the two
-	// domains take a retry key the same way. EMPTY MINTS A FRESH ID PER
-	// CALL, which is right for every caller that will never retry the same
-	// gesture — and wrong for the one that must: an HTTP write whose answer
-	// was `unknown` can only be retried safely under the SAME id, because
-	// the operation ledger is what recognises a second arrival, and a fresh
-	// one would append the trash, the rename or the comment twice.
+	// ON THE ACTOR because it travels with the call, as the tracker's actor
+	// carries `builtin.Actor.WorkKey`. EMPTY MINTS A FRESH ID PER CALL, wrong
+	// for a write whose answer was `unknown`: only a retry under the SAME id
+	// lets the operation ledger recognise the second arrival, where a fresh
+	// one would append the trash, rename or comment twice.
 	//
 	// AN OPERATION ID THE ENGINE MINTED, held to [statelog.CheckCallerOpID]
-	// by every surface that takes one and by every write here, which refuses
-	// an actor carrying any other: the ids derived from it carry its instant
-	// — see [statelog.KeyedOpID].
+	// by every write here, which refuses any other: derived ids carry its
+	// instant ([statelog.KeyedOpID]).
 	OpKey string
 }
 
@@ -561,18 +470,16 @@ func (a Actor) operatorApps(notify *Notify) []iam.Grant {
 
 // recordedFor is whom a record was written for ([MutationRecord.WorkingFor]),
 // or why this actor may write none: an agent's carrier on a record its Notify
-// proves may wake an agent other than the actor ([mayWakeAnAgent]), the only
-// records a later turn reads to learn whom it works for, nobody on any other,
-// which stays at the version every build reads, and a refusal for an agent
-// that states nobody, or for any other kind carrying somebody
-// ([types.WrittenFor.For]).
+// proves may wake another agent ([mayWakeAnAgent]), the only records a later
+// turn reads for whom it works, nobody on any other (staying at the version
+// every build reads), and a refusal for an agent that states nobody or any
+// other kind carrying somebody ([types.WrittenFor.For]).
 //
-// ASKED OF EVERY RECORD, whether it carries or not, and in the one builder
-// every write shares ([Store.decide]): the rule is the actor's, and an agent's
-// actor whose builder forgot whom its turn works for is a bug however its next
-// record happens to route. AN ACTOR THAT CROSSED THE WIRE STATES IT ALREADY
-// ([Actor.UnmarshalJSONFrom]), so a data node never refuses a write for a key an
-// older node never sends.
+// ASKED OF EVERY RECORD, in the one builder every write shares
+// ([Store.decide]): an agent actor that forgot whom its turn works for is a
+// bug however its next record routes. AN ACTOR THAT CROSSED THE WIRE STATES
+// IT ALREADY ([Actor.UnmarshalJSONFrom]), so a data node never refuses for a
+// key an older node never sends.
 func (a Actor) recordedFor(notify *Notify) (*types.WorkingFor, error) {
 	carrier, err := a.WrittenFor.For(iam.ActorKind(a.Kind))
 	if err != nil {
@@ -586,18 +493,15 @@ func (a Actor) recordedFor(notify *Notify) (*types.WorkingFor, error) {
 
 // UnmarshalJSONFrom decodes an actor that crossed to a data node in a page
 // write's arguments (internal/estate): whom its writes are for is what the
-// node that built it stated ([types.WrittenFor.Received]), WHATEVER ARRIVED,
-// since no node asks a page write whose actor states nothing (the
-// [Actor.WrittenFor] field); an absent carrier is nobody, which is also what
-// an older node sends.
+// node that built it stated ([types.WrittenFor.Received]), WHATEVER ARRIVED
+// (see [Actor.WrittenFor]); an absent carrier is nobody, as an older node
+// sends.
 //
-// THROUGH THE CALLER'S OWN DECODER, and so under the caller's options: on the
-// estate's wire a member this build does not declare, in the actor or in its
-// carrier, refuses the request, named at its path, as one anywhere else in
-// the arguments does. An UnmarshalJSON would be handed bytes and decode them
-// again under encoding/json's own defaults, which drop such a member without
-// a word. NO ENCODER OF ITS OWN: what crosses is the plain encoding of its
-// fields under the caller's options.
+// THROUGH THE CALLER'S OWN DECODER, under its options: on the estate's wire
+// an undeclared member, in the actor or its carrier, refuses the request at
+// its path. An UnmarshalJSON would decode bytes under encoding/json's own
+// defaults, dropping it silently. NO ENCODER OF ITS OWN: what crosses is the
+// plain encoding of its fields.
 func (a *Actor) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	type wire Actor
 	if err := jsonv2.UnmarshalDecode(dec, (*wire)(a)); err != nil {
@@ -656,26 +560,16 @@ func pageIDOf(opID string) string {
 var pageIDNamespace = uuid.MustParse("b4c1e7a2-5f39-5d08-8e6b-1a2f9c3d7e45")
 
 // landed is the answer to a write this call did not decide: a retry of an
-// operation that had ALREADY LANDED under an earlier copy
-// ([statelog.Result.Collapsed]).
+// operation that had ALREADY LANDED ([statelog.Result.Collapsed]).
 //
-// # Why it is read back rather than taken from the decision
-//
-// The framework answers such a retry from its ledger before any decision runs,
-// or from the broker's duplicate acknowledgement after one ran and was never
-// stored — so whatever a write computes inside its decision is either empty or
-// describes a record nothing published. Every write here that answered with
-// the page its decision read reported, on exactly the retry an `unknown` asks
-// for, a page with no id, no title and version zero, as success. What the
-// operation DID is on the rows, so that is what is answered: the page as this
-// node holds it now, at the earlier copy's revision.
-//
-// # When the rows cannot say
-//
-// The earlier copy may not have applied here yet — the outcome then says
-// `pending` and where to wait — or the page may be gone since (a purge, or the
-// retry of one). Neither is a failure of this write, which did land, so the
-// answer carries the page's identity and nothing a row would have to vouch for.
+// It is read back, not taken from the decision: the framework answers such a
+// retry from its ledger or the broker's duplicate acknowledgement before a
+// decision runs, so what a decision computed is empty or describes a record
+// nothing published (a page with no id or title, reported as success). The
+// answer is the page as this node holds it now. When the rows cannot say (the
+// earlier copy unapplied here, so `pending`, or the page since purged) the
+// write still landed: the answer carries the identity and nothing a row must
+// vouch for.
 func (s *Store) landed(ctx context.Context, identity Page, opID string,
 	result statelog.Result) (Written, error) {
 
@@ -718,18 +612,15 @@ func (s *Store) landedComment(ctx context.Context, identity Comment,
 
 // Name is how this actor is recorded and rendered: its handle, BARE.
 //
-// AN OPERATOR HAS NO SEAT HANDLE, and that is the whole shape of the operator
-// surface: a write there carries the CREDENTIAL's own name — the login
-// [iam.ActorFor] records it under on every other row — and author kind
-// `operator`, and there is deliberately no way for a caller to name a seat to
-// act as: a knowledge base whose author field is chosen by the writer is not
-// an audit trail.
+// AN OPERATOR HAS NO SEAT HANDLE: its write carries the CREDENTIAL's own name
+// (the login [iam.ActorFor] records on every other row) and author kind
+// `operator`, and a caller cannot name a seat to act as: an author field
+// chosen by the writer is not an audit trail.
 //
-// NO PREFIX AND NO FALLBACK. This rendered `"operator:" + OperatorID` for an
-// actor with no handle, which was a second spelling of one party: the kind is
-// already a column on the row, and the audit feed — which reads this history
-// beside the tracker's, where the same operator is the bare name — showed one
-// person as two. A write with no handle is refused instead ([Actor.validate]).
+// NO PREFIX AND NO FALLBACK: the kind is already a column, and an
+// `"operator:"` spelling would show one person as two in the audit feed, which
+// reads this history beside the tracker's bare name. A write with no handle is
+// refused ([Actor.validate]).
 func (a Actor) Name() string { return a.Handle }
 
 // subscriber is the handle this actor's own subscription to a page is kept
@@ -954,16 +845,12 @@ func (s *Store) checkLabels(labels []string) error {
 // HeadRevision is the SQL expression a page's own log revision is read with,
 // written ONCE because three readers compare against it and none may disagree:
 // a decision's own read ([readHeadTx]), the head read a caller measures its
-// write against ([Store.Page]), and [Reader.locate], which is what a read
-// barrier reports.
+// write against ([Store.Page]), and [Reader.locate] (a read barrier's report).
 //
-// MAX(version, scoped_through) RATHER THAN version. A rename stamps
-// `scoped_through` and deliberately never `version` — so the row's broker
-// expectation still matches its subject's last message and cannot be poisoned
-// into permanent unwritability — and a number taken from the version column
-// alone therefore does not move when a page changes address. A caller
-// comparing it to decide whether its own rename is visible here would wait for
-// ever.
+// MAX(version, scoped_through) RATHER THAN version: a rename stamps only
+// `scoped_through`, so the version column alone does not move when a page
+// changes address, and a caller waiting for its own rename to be visible
+// would wait for ever.
 const HeadRevision = `MAX(version, scoped_through)`
 
 // readHeadTx reads one page's head from inside a decision's own transaction,

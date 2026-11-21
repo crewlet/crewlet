@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/gitlet"
@@ -191,14 +192,17 @@ func (c *culpritsPastWindow) forget(repoID, target string) {
 // baseDefs is the checks file t's tip checks are defined by: the one t's base
 // holds — and, where the first landing above the green CREATED the branch,
 // none that runs, since the branch held no file before a landing could write
-// one, and a landing's own file never defines its measurement.
+// one, and a landing's own file never defines its measurement. The sentence
+// is a person's (the check's summary): it says what happened in their words,
+// a push or a merge, never the landing rows' own.
 func (k *checks) baseDefs(ctx context.Context, repoID string, t gitlet.TipDue, memo *defsMemo,
 	at statelog.Position) (*checksDefs, error) {
 
 	if t.Base() == gitlet.ZeroOID {
-		return &checksDefs{invalid: summarize(fmt.Sprintf("%s was created by its first landing above its "+
-			"green, so no checks file defined its checks before a landing could; a green landing through its "+
-			"queue, or a person changing its gate, moves it on", t.TargetRef))}, nil
+		return &checksDefs{invalid: summarize(fmt.Sprintf("%s has had no commit whose required checks "+
+			"passed since a push or a merge created it, so no checks file was on it to define them first: a "+
+			"change landed through its queue, or a person changing its gate, moves it on",
+			strings.TrimPrefix(t.TargetRef, "refs/heads/")))}, nil
 	}
 	defs, err := memo.at(ctx, k.estate, repoID, t.Base(), at)
 	if err != nil {

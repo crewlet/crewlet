@@ -47,10 +47,10 @@ func closedSets() map[string][]string {
 		"AssistantTurnMode":        strs(wire.TurnModes),
 		"AssistantBriefTone":       strs(wire.BriefTones),
 		"AssistantBriefActionKind": strs(wire.BriefActionKinds),
+		"AssistantTitleSource":     strs(wire.TitleSources),
 		// A proposal's taint is the surface its outside text came from.
 		"AssistantTaintSource": strs(provenance.Sources),
-		// --- deep work (im-deep) ---
-		"AssistantDeepState":           strs(wire.DeepStates),
+		// --- a question's attachments ---
 		"AssistantAttachmentMediaType": wire.AttachmentMediaTypes,
 	}
 }
@@ -117,6 +117,7 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 		"ASSISTANT_PAGE_SCREEN_PATTERN":            wire.PageScreenPattern,
 		"ASSISTANT_PAGE_KEY_PATTERN":               wire.PageKeyPattern,
 		"ASSISTANT_PAGE_TITLE_MAX_RUNES":           strconv.Itoa(wire.PageTitleMaxRunes),
+		"ASSISTANT_TITLE_MAX_RUNES":                strconv.Itoa(wire.TitleMaxRunes),
 		"ASSISTANT_PAGE_VALUE_MAX_BYTES":           strconv.Itoa(wire.PageValueMaxBytes),
 		"ASSISTANT_PAGE_ID_MAX_BYTES":              strconv.Itoa(wire.PageIDMaxBytes),
 		"ASSISTANT_PAGE_MAP_MAX_KEYS":              strconv.Itoa(wire.PageMapMaxKeys),
@@ -126,11 +127,8 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 		"ASSISTANT_ACTION_ARGS_MAX_MEMBERS":           strconv.Itoa(wire.ActionArgsMaxMembers),
 		"ASSISTANT_ACTION_ARGS_MAX_ENUM":              strconv.Itoa(wire.ActionArgsMaxEnum),
 		"ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES": strconv.Itoa(wire.ActionArgsDescriptionMaxRunes),
-		// --- deep work (im-deep) ---
-		"ASSISTANT_DEEP_ACTIVITY_LINES":     strconv.Itoa(wire.DeepActivityLines),
-		"ASSISTANT_FILE_MAX_BYTES":          strconv.Itoa(wire.FileMaxBytes),
-		"ASSISTANT_ATTACHMENTS_PER_TURN":    strconv.Itoa(wire.AttachmentsPerTurn),
-		"ASSISTANT_DELIVERED_FILES_PER_RUN": strconv.Itoa(wire.DeliveredFilesPerRun),
+		"ASSISTANT_FILE_MAX_BYTES":                    strconv.Itoa(wire.FileMaxBytes),
+		"ASSISTANT_ATTACHMENTS_PER_TURN":              strconv.Itoa(wire.AttachmentsPerTurn),
 	} {
 		got, err := clientsource.Scalar(tree, name)
 		if err != nil {
@@ -174,6 +172,8 @@ func shapes() map[string]reflect.Type {
 		"AssistantChange":              reflect.TypeFor[wire.Change](),
 		"AssistantWord":                reflect.TypeFor[wire.Word](),
 		"AssistantReceipt":             reflect.TypeFor[wire.Receipt](),
+		"AssistantRef":                 reflect.TypeFor[wire.Ref](),
+		"AssistantPart":                reflect.TypeFor[wire.Part](),
 		"AssistantPageActionRef":       reflect.TypeFor[wire.PageActionRef](),
 		"AssistantTechnicalRequest":    reflect.TypeFor[wire.TechnicalRequest](),
 		"AssistantFailure":             reflect.TypeFor[wire.Failure](),
@@ -215,12 +215,12 @@ func shapes() map[string]reflect.Type {
 		"AssistantAuditRead":           reflect.TypeFor[wire.AuditRead](),
 		"AssistantTurnOutcome":         reflect.TypeFor[wire.TurnOutcome](),
 		"AssistantViewerAssistant":     reflect.TypeFor[wire.ViewerAssistant](),
+		"AssistantViewerModel":         reflect.TypeFor[wire.ViewerModel](),
+		"AssistantConversationRename":  reflect.TypeFor[wire.ConversationRename](),
 		"AssistantModelNotice":         reflect.TypeFor[wire.ModelNotice](),
-		// --- deep work (im-deep) ---
-		"AssistantDeepProgress": reflect.TypeFor[wire.DeepProgress](),
-		"AssistantFileRef":      reflect.TypeFor[wire.FileRef](),
-		"AssistantFileCard":     reflect.TypeFor[wire.FileCard](),
-		"AssistantFileStored":   reflect.TypeFor[wire.FileStored](),
+		// --- a question's attachments ---
+		"AssistantFileRef":    reflect.TypeFor[wire.FileRef](),
+		"AssistantFileStored": reflect.TypeFor[wire.FileStored](),
 	}
 }
 

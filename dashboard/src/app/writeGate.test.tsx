@@ -201,6 +201,16 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "Close and Reopen — and the dialogs each opens",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
+  "routes/gitlet/change/ChangeEdits.tsx": {
+    why:
+      "a live change's Convert to draft, retarget and work item (code_update_change), and a " +
+      "finished change's Restore branch (code_create_branch), from its rail",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/change/StackNotes.tsx": {
+    why: "a comment on lines picked on Files changed (code_comment_on_change with its anchor)",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
   "routes/gitlet/change/AskDialog.tsx": {
     why: "asking reviewers from the page bar and the rail (code_request_review)",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
@@ -212,6 +222,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   "routes/gitlet/change/ReviewDialog.tsx": {
     why: "the review sent with its drafts (code_review_change), from the page bar and Finish review",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/change/CommentCard.tsx": {
+    why: "a comment's Edit (code_comment_on_change) and Delete (code_delete_comment), from its menu",
+    suite: "routes/gitlet/change/CommentCard.test.tsx",
   },
   "routes/gitlet/change/Conversation.tsx": {
     why: "a change's comment, a reply to a thread or a finding, and a thread's Resolve",
@@ -230,6 +244,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "a change's merge box: Merge or Add to queue, Override and its dialog, Re-run " +
       "failed checks and Re-request, each a WriteButton held with the gate's sentence",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/checks/Rerun.tsx": {
+    why: "one check run again (code_rerun_checks)",
+    suite: "routes/gitlet/Checks.test.tsx",
   },
   "routes/gitlet/ImportRepo.tsx": {
     why:
@@ -270,6 +288,12 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "held with the engine's sentence where its rules refuse a delete",
     suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
   },
+  "routes/gitlet/repo/TagWrites.tsx": {
+    why:
+      "the Tags view's New tag, a tag's Delete (held with the engine's sentence where a rule " +
+      "keeps the tag) and a commit page's Tag (code_create_tag, code_delete_tag)",
+    suite: "routes/gitlet/repo/RepositoryPage.test.tsx",
+  },
   "routes/gitlet/repo/FileWrites.tsx": {
     why:
       "a branch's files: Edit (a pencil), New file (a plus in a file's tree), Delete file " +
@@ -286,6 +310,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "a change's Rebase, Take out of the queue and a merged change's Revert " +
       "(code_rebase_change, code_dequeue_change, code_revert_change)",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/queue/Requeue.tsx": {
+    why: "a change taken out of its queue, added again (code_merge_change)",
+    suite: "routes/gitlet/Queue.test.tsx",
   },
   "routes/gitlet/change/FindingAnswer.tsx": {
     why: "a standing finding's Answer finding (code_resolve_finding)",
@@ -459,6 +487,11 @@ const WRITES: Readonly<Record<keyof typeof writes, Fixture>> = {
     tool: "update_work_item",
   },
   RestoreButton: { props: { item: "ENG-1" }, name: /^Restore ENG-1$/, tool: "restore_work_item" },
+  MoveWorkConfirm: {
+    props: { label: "Confirm", onConfirm: () => {} },
+    name: /^Confirm$/,
+    tool: "update_work_item",
+  },
   EditProjectButton: {
     props: { project: "ENG", target: "2026-12-18", lead: "eng-lead" },
     name: /^Edit project$/,
@@ -624,10 +657,10 @@ const NOBODY: ViewerState = {
   failedRefusal: null,
   configWriter: true,
   configManagedBy: [],
-  assistant: "disabled",
+  assistant: "no_model",
   assistantModel: null,
   assistantReadsImages: false,
-  assistantDeliberate: false,
+  assistantCanAssign: false,
   chatVendors: [],
 };
 

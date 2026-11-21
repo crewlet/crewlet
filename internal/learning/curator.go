@@ -220,19 +220,14 @@ type pick func(BackgroundPasses) (time.Duration, func(context.Context))
 // Start arms the loops, which run until [Background.Stop] or ctx is done.
 //
 // ALL FOUR, whether or not the revision in force turns their pass on: the
-// next apply may, and a loop armed only then would start its clock at that
-// apply. A loop whose pass is off ticks without claiming its duty, so an idle
-// one costs a timer and never a coordination round trip.
+// next apply may, and a loop armed only then would start its clock there. A
+// loop whose pass is off ticks without claiming its duty, costing a timer and
+// no coordination round trip. SEPARATE TICKERS, not one with a counter: the
+// cadences are unrelated, and a counter would let tuning one move the other.
 //
-// SEPARATE TICKERS rather than one at the shorter cadence with a counter:
-// the passes have unrelated cadences for unrelated reasons, and a counter
-// would tie the curator's schedule to the lifecycle's, so tuning one would
-// silently move the other.
-//
-// Start derives its own cancellable context rather than ticking on the
-// caller's, because the engine hands this one a DETACHED context — these
-// loops are meant to outlive the signal that starts a drain — and a loop
-// whose only exit is a context that can never be cancelled has no exit.
+// Start derives its own cancellable context because the engine hands it a
+// DETACHED one (these loops outlive the signal that starts a drain), and a
+// loop whose only exit can never be cancelled has no exit.
 func (b *Background) Start(ctx context.Context) {
 	loopCtx, cancel := context.WithCancel(ctx)
 	b.cancel = cancel
@@ -327,19 +322,15 @@ func (b *Background) clusterPass(ctx context.Context, cluster *Synthesizer) {
 
 // loop ticks one pass, claiming the duty first.
 //
-// NO IMMEDIATE FIRST TICK. Every node in a fleet starts within seconds of a
-// rolling restart, so firing on start means every node races for the duty at
-// once and the winner runs a pass over a company that has not taken a turn
-// yet. Waiting one interval also means a crash-looping node cannot spend the
-// company's tokens compacting on every restart.
+// NO IMMEDIATE FIRST TICK: nodes start within seconds in a rolling restart,
+// so firing on start has every node race for the duty and the winner run a
+// pass over a company that has not taken a turn. Waiting one interval also
+// keeps a crash-looping node from spending tokens compacting on every restart.
 //
-// A Reconfigure WAKES the loop, which re-reads its passes and its cadence;
-// only a cadence that actually moved resets the clock, so an apply that
-// changes nothing about this pass leaves its next tick where it was. A tick
-// that races the wake runs the passes it last read, the same answer a pass
-// that started a moment before the apply gets. And a pass that is off claims
-// no duty: a claim is a coordination round trip, and one made for no work
-// would be paid on every tick of every idle loop.
+// A Reconfigure WAKES the loop, which re-reads its passes and cadence; only a
+// moved cadence resets the clock. A tick racing the wake runs the passes it
+// last read, as a pass started just before the apply does. A pass that is off
+// claims no duty: a claim is a coordination round trip.
 func (b *Background) loop(ctx context.Context, name string, choose pick) {
 	passes, wake := b.current()
 	every, _ := choose(passes)

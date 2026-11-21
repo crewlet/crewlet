@@ -648,15 +648,12 @@ func (b *noteBox) Waiting() bool {
 }
 
 // A SUBMISSION IS JUDGED AFTER THE DELIVERY BESIDE IT, AND THE DELIVERY RUNS IN
-// EITHER ORDER — on a harness that issues a response's calls at once and on one
-// that waits on each answer before its next call. Issued together, the
-// submission waits for the delivery, whatever order the model wrote them in, so
-// it is judged against what the phase delivered. Issued in turn, the
-// submission's answer goes back so the delivery is made — the model asked for
-// it in the same breath — and the run ends after it. Either way both are run
-// and recorded, the phase is finished, and the harness asks its model nothing more.
-//
-// The cases issued at once race, so each is tried repeatedly.
+// EITHER ORDER, on a harness that issues a response's calls at once and on one
+// that waits on each answer first. Together, the submission waits for the
+// delivery whatever order the model wrote them in. In turn, the submission's
+// answer goes back so the delivery is made, and the run ends after it. Both
+// are recorded and the harness asks its model nothing more. The cases issued
+// at once race, so each is tried repeatedly.
 //
 // Mutation: run a terminator as an ordinary call and, issued at once, it can
 // run first; end the run at the submission and, issued in turn, the delivery

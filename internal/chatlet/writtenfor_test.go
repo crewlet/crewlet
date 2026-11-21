@@ -15,24 +15,17 @@ import (
 )
 
 // AN AGENT'S MESSAGE THAT WAKES SOMEBODY CARRIES WHOM IT WAS WRITTEN FOR, AND
-// NOTHING ELSE DOES (ADR-0109), on chat's store as on the tracker's. An
-// agent's message asking a colleague in the room, said in a turn ada woke,
-// records that the turn worked for ada, at the version that carries it, which
-// an older build retains rather than waking the colleague for the agent; and
-// the wake the parser derives from it names the agent's seat as its writer,
-// carrying ada, so the partition keys it as a seat's (`seat:`, as every
-// first-party writer's). The room the same agent makes wakes nobody and
-// carries nobody, at the base version, and the same ask a turn nobody woke
-// says carries nobody either, at the version its ask alone needs.
+// NOTHING ELSE DOES (ADR-0109). An ask to a colleague, said in a turn ada woke,
+// records ada at the version that carries it (an older build retains it rather
+// than waking the colleague for the agent), and the parsed wake names the
+// agent's seat as writer, carrying ada, so the partition keys it as `seat:`.
+// The room the same agent makes wakes nobody and carries nobody, at the base
+// version; the same ask in a turn nobody woke carries nobody either.
+// The type refuses the actor that forgot: an agent stating nobody it writes for
+// says nothing, and a person handed a carrier says nothing either.
 //
-// AND THE TYPE REFUSES THE ACTOR THAT FORGOT: an agent that states nobody it
-// writes for says nothing, and a person handed a carrier says nothing either.
-// An actor decoded off the estate's wire states it already.
-//
-// Mutation: leave the carrier off the record the store builds, and ada's
-// message carries nobody; leave the writer off the inbound the parser builds,
-// and the wake names no writer; drop the refusal in recordedFor, and the
-// unstated agent's message lands.
+// Mutation: leave the carrier off the store's record, or the writer off the
+// parser's inbound, or drop the refusal in recordedFor.
 func TestAnAgentsMessageThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents().withPeople("jane"))
@@ -103,22 +96,17 @@ func TestAnAgentsMessageThatWakesSomebodyCarriesWhomItWasWrittenFor(t *testing.T
 	}
 }
 
-// A CHAT ACTOR CROSSES THE WIRE AS IT WAS STATED (ADR-0109), under the rule of
-// the arguments it crosses in, as the estate's wire encodes and decodes them
-// (crewlet#910). Through the caller's own encoder every field at its zero is
-// left off, so an agent's actor stated for nobody goes out without the key,
-// byte for byte as a build without the field sends it, and one stated for
-// somebody carries them. Through the caller's own decoder it arrives stated,
-// whatever members did, so an older node's actor, which knows no carrier,
-// arrives as stated nobody; and a member nothing declares, in the actor or in
-// its carrier, is refused where it is rather than dropped below where that
-// rule can see. (That no node asks a chat write whose actor may write nothing
-// is internal/estate's, and held there.)
+// A CHAT ACTOR CROSSES THE WIRE AS IT WAS STATED (ADR-0109), under the estate
+// wire's rule for arguments (crewlet#910). Through the caller's encoder every
+// zero field is left off, so an actor stated for nobody goes out without the
+// key, byte for byte as a build without the field sends it. Through the
+// caller's decoder it arrives stated (an older node's actor as stated nobody),
+// and a member nothing declares, in the actor or its carrier, is refused where
+// it is rather than dropped below where the rule can't see.
 //
-// Mutation: give the actor an UnmarshalJSON over encoding/json in place of
-// its UnmarshalJSONFrom, and the member inside it is dropped; state the actor
-// only where a carrier arrives, and the older node's actor arrives stating
-// nothing.
+// Mutation: give the actor an UnmarshalJSON over encoding/json in place of its
+// UnmarshalJSONFrom, and the inner member is dropped; state the actor only
+// where a carrier arrives, and the older node's actor arrives stating nothing.
 func TestAChatActorCrossesTheWireAsItWasStated(t *testing.T) {
 	t.Parallel()
 	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
@@ -168,19 +156,15 @@ func TestAChatActorCrossesTheWireAsItWasStated(t *testing.T) {
 }
 
 // A POST KEEPS WHOM AN AGENT'S MESSAGE WAS WRITTEN FOR (ADR-0109), on its
-// document and the same on every node: the carrier a version-3 record rode,
-// and nobody for a record that carries none or one below the carrier's
-// version, whatever it holds, since an older build's applier wrote that
-// post's document with no such field. Kept from the carrier's first build on,
-// before the turn-start read took it, because the applier writes a message's document
-// once, at its post's position: a field a later build began to fill would
-// differ between a node that applied the post before it upgraded and one that
-// applied it after.
+// document and the same on every node: the carrier a version-3 record rode, and
+// nobody for a record that carries none or one below the carrier's version,
+// whatever it holds, since an older applier wrote that document with no such
+// field. The applier writes a message's document once, at its post's position,
+// so a field a later build began to fill would differ between a node that
+// applied the post before upgrading and one that applied it after.
 //
-// Mutation: drop the fill, and the post made for ada keeps nobody on both
-// nodes; fill a carrier into a post whose record carries none, and that post
-// keeps one; drop the fill's version arm, and the post below the carrier's
-// version keeps ada.
+// Mutation: drop the fill; fill a carrier into a post whose record carries
+// none; drop the fill's version arm.
 func TestAPostKeepsWhomAnAgentsMessageWasWrittenFor(t *testing.T) {
 	t.Parallel()
 	ada := &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
@@ -230,16 +214,14 @@ func TestAPostKeepsWhomAnAgentsMessageWasWrittenFor(t *testing.T) {
 // A MESSAGE CARRIES WHOM IT WAS WRITTEN FOR WHERE IT ROUTES TO SOMEBODY, AND
 // NOWHERE ELSE (ADR-0109): the records a later turn reads to learn whom it
 // works for are the ones it wakes, and which seats it wakes is its record's
-// recipients, never whether the message was silent. An agent's silent message
-// that names a colleague holds the colleague back and wakes nobody, so it
-// carries nothing and stays at the version every older build reads, held
-// seats and all; a silent reply that answers the colleague's open ask wakes
-// the asker, so it carries; and an edit that adds a mention to a silent
-// message wakes nobody either.
+// recipients, never whether the message was silent. A silent message naming a
+// colleague holds them back and wakes nobody, so it carries nothing and stays
+// at the version every older build reads; a silent reply answering a colleague's
+// open ask wakes the asker, so it carries; an edit adding a mention to a silent
+// message wakes nobody.
 //
-// Mutation: decide by silent() rather than by the recipients, and the answer
-// carries nobody; carry on every Notify, and the silent message and its edit
-// carry ada.
+// Mutation: decide by silent() rather than the recipients; carry on every
+// Notify.
 func TestAMessageCarriesWhomItWasWrittenForWhereItRoutesToSomebody(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents().withPeople("jane"))

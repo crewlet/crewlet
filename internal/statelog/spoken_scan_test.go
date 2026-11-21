@@ -56,16 +56,12 @@ var verb = regexp.MustCompile(`%[-+ #0-9.*]*[a-zA-Z]`)
 
 // TestEveryWaitIsSaidThroughSpokenWait holds the engine's sentences to that
 // rule, structurally: in every fmt call whose format tells a person to wait
-// ("retry in about %s", "holds it again in %v"), the argument the verb prints
-// is a call to statelog.SpokenWait. A count printed as seconds ("retry in
-// about %d seconds", the bulk lease's 81155 seconds) and a Duration printed by
-// its own String ("again in 1m23.456s") both fail, because neither argument
-// is that call.
+// ("retry in about %s"), the verb's argument is a call to statelog.SpokenWait,
+// so neither a count of seconds nor a Duration's own String passes.
 //
-// A VERB BEFORE "seconds" is not always a wait: it may be a fixed deadline or
-// a measurement, which [statelog.Spoken] says at the nearest unit. There the
-// scan takes either call, and its failure names both, so it never pushes a
-// deadline onto a wait's rounding up.
+// A VERB BEFORE "seconds" may be a fixed deadline or a measurement, which
+// [statelog.Spoken] says at the nearest unit, so there the scan takes either
+// call and its failure names both: a deadline is never pushed to round up.
 func TestEveryWaitIsSaidThroughSpokenWait(t *testing.T) {
 	root := filepath.Join("..", "..")
 	var offenders []string
@@ -96,8 +92,8 @@ const remedy = "a duration is printed in machine form. Say a WAIT the reader act
 	"statelog.Spoken, which rounds to the nearest unit:"
 
 // TestTheWaitScanIsRedOnMachineFormAndGreenOnSpokenForm proves the scan both
-// ways on fixtures: red on every shape that shipped, green on each correct
-// call, so a scan that stopped catching or started over-reaching fails here.
+// ways on fixtures, so a scan that stopped catching or started over-reaching
+// fails here.
 func TestTheWaitScanIsRedOnMachineFormAndGreenOnSpokenForm(t *testing.T) {
 	for name, c := range map[string]struct {
 		body string
@@ -153,8 +149,7 @@ func unspokenIn(fset *token.FileSet, file *ast.File) []string {
 		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "fmt" {
 			return true
 		}
-		// The format is the first argument of Sprintf/Errorf/Printf and the
-		// second of Fprintf.
+		// Fprintf's format is its second argument.
 		at := 0
 		if strings.HasPrefix(sel.Sel.Name, "F") {
 			at = 1

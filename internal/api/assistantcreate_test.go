@@ -40,17 +40,15 @@ func prepareChange(t *testing.T, fx *assistApp, read exec.Grant,
 // THE ROLE THE PERSON ASKED FOR IS REFUSED AT ITS PREVIEW, AND THE UNIT WRITE
 // THAT ADDS IT APPLIES.
 //
-// The request that found this: "add a new agent role of 'senior software
-// engineer' and name it crewlet-swe", proposed as PUT /config/roles/crewlet-swe.
-// A seat has a place in the chart its path cannot name, so the route never
-// creates one by address, and a proposal of it was a card the person approved
-// only for the API to refuse it `400 not_creatable`, every time. The route
-// declares that where it is mounted ([authz.Absent], from the table its handler
-// decides by), so the preview refuses the step at once, with the route's own
-// sentence about where a seat is added, and draws no card. The model's next
-// plan, the unit the seat sits in with the seat added, is a proposal bound to
-// the unit's revision that applies once approved. Mutation: propose a create
-// for every 404 again, or let the route declare nothing, and this fails.
+// A seat has a place in the chart its path cannot name, so PUT
+// /config/roles/crewlet-swe never creates one by address, and a proposal of it
+// was a card the person approved only for the API to refuse `400
+// not_creatable`. The route declares that where it is mounted ([authz.Absent],
+// from the table its handler decides by), so the preview refuses at once with
+// the route's sentence about where a seat is added, and draws no card. The
+// model's next plan, the unit with the seat added, is a proposal bound to the
+// unit's revision that applies once approved. Mutation: propose a create for
+// every 404 again, or let the route declare nothing, and this fails.
 func TestTheAskedForRoleIsRefusedAtPreviewAndItsUnitWriteApplies(t *testing.T) {
 	t.Parallel()
 	fx, read := principlesApp(t)
@@ -152,18 +150,15 @@ func TestEveryPUTAPreviewCanFindEmptyDeclaresWhatItDoes(t *testing.T) {
 
 // EVERY POST SAYS WHAT IT DOES, AND ITS CARD SAYS IT AFTER IT.
 //
-// A POST's method says nothing of what it does, so the assistant titled every
-// POST a create: a person approving a purge read "Create purge" under "Approve
-// and create", in the ordinary tone. Walked over every guarded POST the App
-// mounts on a path a grant can reach, the ones the assistant never names
-// included, each declares what it does ([authz.Effect]), and the act route,
-// mounted outside every router, is declared a call where the table binds it.
-// A path the edge refuses every grant ([auth.AssistRefusedPath], the
-// assistant's own routes among them) is never previewed, so what a POST there
-// does has no reader. Over every POST the assistant may name, the card says
-// it: a destruction destructive with what goes said first, and nothing else; a
-// create titled as one, and nothing that does not create. Mutation: mount a
-// POST that declares nothing, declare an erase a rewrite, or rate a POST by
+// A POST's method says nothing of what it does, so every POST was titled a
+// create ("Create purge" under "Approve and create"). Every guarded POST on a
+// path a grant can reach declares what it does ([authz.Effect]), and the act
+// route, mounted outside every router, is declared a call where the table
+// binds it. A path the edge refuses every grant ([auth.AssistRefusedPath]) is
+// never previewed, so what a POST there does has no reader. Over every POST
+// the assistant may name, the card says it: a destruction destructive with
+// what goes said first, a create titled as one, nothing else. Mutation: mount
+// a POST that declares nothing, declare an erase a rewrite, or rate a POST by
 // its method, and this names the route.
 func TestEveryPOSTSaysWhatItDoes(t *testing.T) {
 	t.Parallel()
@@ -231,8 +226,8 @@ func TestEveryPOSTSaysWhatItDoes(t *testing.T) {
 		case (r.Effect == authz.EffectDestroys) != destructive:
 			t.Errorf("%s destroys %v, and its card %q is at risk %q", r.Pattern,
 				r.Effect == authz.EffectDestroys, p.Title, p.Risk)
-		case destructive && (!strings.HasPrefix(p.Summary, "This ") || p.Note == ""):
-			t.Errorf("%s destroys, and its card says %q, %q", r.Pattern, p.Summary, p.Note)
+		case destructive && (!strings.HasPrefix(p.Summary.Text(), "This ") || len(p.Note) == 0):
+			t.Errorf("%s destroys, and its card says %q, %q", r.Pattern, p.Summary.Text(), p.Note.Text())
 		case creates && r.Effect != authz.EffectCreates:
 			t.Errorf("%s %s, and its card is titled %q", r.Pattern, r.Effect, p.Title)
 		}
@@ -265,8 +260,8 @@ func TestEveryPOSTSaysWhatItDoes(t *testing.T) {
 		args["route"] = route
 		p, err := change.Preview(t.Context(), read, time.Now(), args)
 		if err != nil || p.Title != want.title || p.ApproveLabel != want.approve ||
-			p.Summary != want.summary {
-			t.Errorf("%s reads %q / %q: %q (%v)", route, p.Title, p.ApproveLabel, p.Summary, err)
+			p.Summary.Text() != want.summary {
+			t.Errorf("%s reads %q / %q: %q (%v)", route, p.Title, p.ApproveLabel, p.Summary.Text(), err)
 		}
 	}
 }

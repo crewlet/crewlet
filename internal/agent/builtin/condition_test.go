@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -16,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -90,20 +95,15 @@ func everyCondition() map[string]error {
 // EVERY CONDITION IS TOLD TO BOTH ITS READERS, AND TO NEITHER IN ITS OWN TEXT.
 //
 // A model reads a condition as a clause inside a tool's sentence
-// ([builtin.Condition]), and a person as a whole sentence on a screen
-// ([builtin.ConditionSentence]); both come from one classification, so
-// neither can name a condition the other does not. The model's clause and the
-// person's sentence carry nothing of the error: no framework or package name,
-// no reason's spelling, no position, setting, subject or host. The person's
-// sentence is in a screen's voice — no em dash and none of the engine's own
-// words for its parts — and asks for a try in a moment exactly where the
-// answer carries a Retry-After; a state-log refusal is told in the state log's
-// own sentence for its code.
+// ([builtin.Condition]), a person as a whole sentence ([builtin.ConditionSentence]);
+// one classification, so neither names a condition the other does not. Neither
+// carries the error (no package name, reason, position, setting, subject or
+// host). The person's has no em dash or engine word for its parts, and asks
+// for a try exactly where the answer carries a Retry-After.
 //
-// Mutation: drop an arm from the classification and its row goes red; answer a
-// refusal's message ([statelog.Unavailable.Error]) or its detail and every
-// state-log row does; give a person's sentence an em dash, or advice that
-// disagrees with the Retry-After, and that row does.
+// Mutation: drop an arm, answer a refusal's message
+// ([statelog.Unavailable.Error]) or detail, add an em dash, or give advice that
+// disagrees with the Retry-After, and the matching row goes red.
 func TestAConditionIsToldToItsTwoReadersWithoutItsOwnText(t *testing.T) {
 	t.Parallel()
 	for name, err := range everyCondition() {
@@ -185,22 +185,18 @@ func TestEveryConditionIsRecordedUnderAKindOfItsOwn(t *testing.T) {
 	}
 }
 
-// A CONDITION NO WAIT CLEARS IS NOT RETRIED BY A MODEL. A tool's sentence
-// about a condition told a model to try again whatever the condition was, so a
-// log at its byte ceiling — refused the same way until an administrator makes
-// room — was asked again for as long as the turn lasted. Now the sentence ends
-// on what a model can do about it: say it could not check, or could not make
-// the change, and why — never the person's advice, which sends them to another
-// node or an administrator, neither of which a model reaches. Only a condition
-// that clears on its own is offered the retry. A read and a write each,
-// through the tools themselves, beside a control that clears; every other
-// helper a tool answers a condition through is held to the same in
+// A CONDITION NO WAIT CLEARS IS NOT RETRIED BY A MODEL. Told to try again
+// whatever the condition, a model re-asked a log at its byte ceiling for the
+// whole turn. The sentence ends on what a model can do: say it could not check
+// or change, and why, never the person's advice (another node, an
+// administrator), which a model cannot reach. Only a condition that clears on
+// its own is offered the retry. A read and a write each, through the tools,
+// beside a control that clears; other helpers are held to the same in
 // TestEveryToolTellsAModelWhatAConditionNoWaitClearsLeavesIt.
 //
-// Mutation: answer every condition "Try again shortly" (or drop the next
-// clause from the write's sentence) and the full log's rows go red; offer the
-// person's advice instead and they go red too; offer the model's to a
-// condition that clears and the control does.
+// Mutation: answer every condition "Try again shortly", drop the next clause
+// from the write's sentence, or offer the person's advice, and the full log's
+// rows go red; offer the model's to a condition that clears and the control does.
 func TestAConditionNoWaitClearsIsNotRetriedByAModel(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -247,15 +243,13 @@ func TestAConditionNoWaitClearsIsNotRetriedByAModel(t *testing.T) {
 	}
 }
 
-// EVERY SANDBOX CLASS IS A CONDITION, AND WAITS EXACTLY WHERE THE CLASS SAYS. A
-// coding sandbox's backend marks what it failed with by what clears it
-// ([sandbox.Why]), and every reader outside a box read — the query surface
-// answering a running run's output among them — tells it through this
-// classification: unclassed here, a provider that did not answer was a fault
-// of this node, a 500 telling a client nothing would change it. The hint
-// follows the class's own word on whether a wait clears it, and the class
-// wins over a deadline its chain carries, since a provider's request that ran
-// out of time is the provider not answering.
+// EVERY SANDBOX CLASS IS A CONDITION, AND WAITS EXACTLY WHERE THE CLASS SAYS.
+// A sandbox backend marks a failure by what clears it ([sandbox.Why]), and
+// every reader outside a box tells it through this classification: unclassed,
+// a provider that did not answer was a fault of this node, a 500 nothing would
+// change. The hint follows the class's word on whether a wait clears it, and
+// the class wins over a deadline in its chain, since a request that ran out of
+// time is the provider not answering.
 //
 // Mutation: drop a class from the classification, or mark a stuck class as
 // one that waits (or the reverse), and its row goes red; read a deadline
@@ -287,4 +281,179 @@ func TestEverySandboxClassIsACondition(t *testing.T) {
 	if builtin.RetryAfter(timedOut, time.Second) != 0 {
 		t.Error("a refused key whose request also ran out of time was told to wait")
 	}
+}
+
+// EVERY CONDITION KIND IS THE NODE'S OR THE WORK'S, AND NEVER BOTH, decided
+// once ([builtin.InfrastructureKind]): the work's side is exactly worksKinds
+// (a write the state log refused for what it is, a deadline, an abandoned
+// wait) and any sandbox class sandboxClassSides leaves with the work, today
+// none; every other declared kind and condition is the node's. The state log's
+// two kinds hold for every reason it names, and a sandbox class added there
+// fails until it has a side here (builtin's "Whose failure a condition is").
+//
+// Mutation: take a declared kind off InfrastructureKind's list, put a work's
+// kind on it, read every state-log refusal under one kind, move a sandbox
+// class to the work's side or read every class as the work's, or declare a
+// kind no condition is recorded under, and its rows go red.
+func TestEveryConditionKindIsTheNodesOrTheWorks(t *testing.T) {
+	t.Parallel()
+	works := func(kind string) bool {
+		if class, ok := strings.CutPrefix(kind, builtin.SandboxKindPrefix); ok {
+			nodes, decided := sandboxClassSides[sandbox.Why(class)]
+			return decided && !nodes
+		}
+		return worksKinds[kind]
+	}
+	for _, why := range sandbox.Whys {
+		if _, decided := sandboxClassSides[why]; !decided {
+			t.Errorf("the sandbox class %q has no side decided here: say whether a mail can "+
+				"cause it, here and in builtin's sandboxClassIsTheNodes", why)
+		}
+	}
+	for why := range sandboxClassSides {
+		if !why.Valid() {
+			t.Errorf("%q is decided here and is not a class the sandbox names", why)
+		}
+	}
+	recorded := map[string]bool{}
+	for name, err := range everyCondition() {
+		kind, ok := builtin.ConditionKind(err)
+		if !ok {
+			t.Errorf("%s is recorded under no kind", name)
+			continue
+		}
+		recorded[kind] = true
+		if nodes := builtin.InfrastructureKind(kind); nodes == works(kind) {
+			t.Errorf("%s (kind %q): the node's = %v and the work's = %v, want exactly one",
+				name, kind, nodes, works(kind))
+		}
+	}
+	for _, reason := range statelog.Reasons() {
+		err := fmt.Errorf("worklet: decide: %w", &statelog.Unavailable{Reason: reason, OpID: "op-1"})
+		want := builtin.KindStateLogUnavailable
+		if reason.RefusesTheWrite() {
+			want = builtin.KindStateLogWriteRefused
+		}
+		if kind, _ := builtin.ConditionKind(err); kind != want {
+			t.Errorf("a write refused %s is recorded under %q, want %q", reason, kind, want)
+		}
+	}
+	for _, kind := range declaredKinds(t) {
+		if !recorded[kind] {
+			t.Errorf("the declared kind %q is recorded for no condition", kind)
+		}
+		if builtin.InfrastructureKind(kind) == worksKinds[kind] {
+			t.Errorf("the declared kind %q: the node's = %v, want %v", kind,
+				builtin.InfrastructureKind(kind), !worksKinds[kind])
+		}
+	}
+	for _, kind := range []string{"", types.ErrorKindUnclassified, "sandbox"} {
+		if builtin.InfrastructureKind(kind) {
+			t.Errorf("%q, no kind of a condition, is the node's", kind)
+		}
+	}
+}
+
+// ONLY A CONDITION AN OPERATOR MUST CLEAR IS ONE A FINISHED JOB'S RESUME WAITS
+// FOR THE OPERATOR ON: a disk full, read-only or failing, a process at its
+// limit of open files, and nodes holding different keys or running different
+// builds, each of them the node's too; and nothing a store, a log or a broker
+// answering again clears, nothing of the work's, and no kind at all. Raised as
+// executor_resume_blocked, a kind put on the wrong side either pages an
+// operator for an outage that ends by itself or leaves a run waiting on one
+// unsaid.
+//
+// Mutation: drop a kind from builtin.OperatorKind, or add one a wait clears
+// (coordination_unavailable), and its row goes red.
+func TestOnlyAConditionAnOperatorClearsWaitsForTheOperator(t *testing.T) {
+	t.Parallel()
+	operators := map[string]bool{
+		builtin.KindDiskFull: true, builtin.KindDiskReadOnly: true, builtin.KindDiskFailed: true,
+		builtin.KindOpenFilesExhausted: true, builtin.KindFleetKeysDiffer: true,
+		builtin.KindFleetBuildsDiffer: true,
+	}
+	seen := map[string]bool{}
+	for name, err := range everyCondition() {
+		kind, _ := builtin.ConditionKind(err)
+		seen[kind] = true
+		if got := builtin.OperatorKind(kind); got != operators[kind] {
+			t.Errorf("%s (kind %q): waits for an operator = %v, want %v", name, kind, got, operators[kind])
+		}
+	}
+	for kind := range operators {
+		if !seen[kind] {
+			t.Errorf("the operator's kind %q is recorded for no condition", kind)
+		}
+		if !builtin.InfrastructureKind(kind) {
+			t.Errorf("the operator's kind %q is not the node's", kind)
+		}
+	}
+	for _, kind := range []string{"", types.ErrorKindUnclassified, builtin.KindCoordinationUnavailable} {
+		if builtin.OperatorKind(kind) {
+			t.Errorf("%q waits for an operator", kind)
+		}
+	}
+}
+
+// sandboxClassSides is every coding sandbox class's side, true for the node's:
+// a provider that did not answer, at its account's limit, wanting it paid for
+// or refusing its credentials, a setup download failing on the far side and a
+// configuration the deployment cannot start are no mail's doing.
+var sandboxClassSides = map[sandbox.Why]bool{
+	sandbox.WhyProviderUnavailable: true,
+	sandbox.WhySetupUnavailable:    true,
+	sandbox.WhyProviderLimit:       true,
+	sandbox.WhyProviderBilling:     true,
+	sandbox.WhyConfiguration:       true,
+	sandbox.WhyProviderRefused:     true,
+}
+
+// worksKinds is every kind outside a coding sandbox's classes that is the
+// work's rather than the node's: each one what was asked can cause.
+var worksKinds = map[string]bool{
+	builtin.KindStateLogWriteRefused: true,
+	llm.KindTimeout.String():         true,
+	llm.KindCancelled.String():       true,
+}
+
+// declaredKinds is every kind constant conditionkind.go declares, read from
+// its source so a kind added there is held to a side without being listed
+// here too.
+func declaredKinds(t *testing.T) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "conditionkind.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			value, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range value.Names {
+				if !strings.HasPrefix(name.Name, "Kind") || i >= len(value.Values) {
+					continue
+				}
+				lit, ok := value.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					t.Fatalf("%s is not a string literal", name.Name)
+				}
+				kind, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				kinds = append(kinds, kind)
+			}
+		}
+	}
+	if len(kinds) == 0 {
+		t.Fatal("conditionkind.go declares no kind: the walk read nothing")
+	}
+	return kinds
 }

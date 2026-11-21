@@ -244,7 +244,7 @@ func TestARemarkPostedAgainIsResolvedFromItsRow(t *testing.T) {
 	first := resolves("the first attempt", worklet.ThreadQuery{Author: "ana",
 		Comment: "c-answer", Choice: "hold"}, "c-ask")
 	post("op-answer", worklet.Comment{ID: "c-answer", Author: "ana",
-		AuthorKind: worklet.AuthorHuman, Body: "after the audit",
+		AuthorKind: worklet.AuthorHuman, Body: choseWords("hold", "after the audit"),
 		Answers: &first.Answers, Choice: "hold"})
 
 	// THE SAME CALL AGAIN, three ways.

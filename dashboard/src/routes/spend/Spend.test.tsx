@@ -121,7 +121,7 @@ function task(key: string, tokens: number, spend: Partial<WorkSummary["spend"]> 
 }
 
 function items(rows: WorkSummary[], extra: Partial<WorkItemsAnswer> = {}): WorkItemsAnswer {
-  return { items: rows, total_hint: rows.length, complete: true, ...extra };
+  return { items: rows, total_hint: rows.length, complete: true, flow_live: false, ...extra };
 }
 
 type Answer = unknown | ((params: Record<string, unknown>) => unknown);

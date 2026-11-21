@@ -1602,24 +1602,16 @@ func TestAnAuditStoppedBeforeItsSecondLooksHasNotRunToItsEnd(t *testing.T) {
 
 // A STORE THAT FAILS QUESTION AFTER QUESTION STOPS THE AUDIT, with its own
 // error, once it has failed a window of them with none answered between: its
-// listing, and then the questions by name a failed listing turns the audit to.
-// The audit returns only once every question it asked has ended: a question
-// to the store never outlives the pass that asked it. The findings the last
-// audit made stand, and none of the failed questions is taken for a finding.
+// listing, then the questions by name a failed listing turns it to. It returns
+// only once every question has ended, and no failed question is a finding.
 //
-// THE CASE RUNS IN A BUBBLE, because the bound it holds the audit to counts
-// from the store's last answer, and the run is "in a row" in the order the
-// audit TAKES the answers in. The five answers have to be taken in before the
-// first failure is, or one of them ends the run partway and the store is
-// rightly asked another window. On the machine's clock the failures' 5 ms
-// only made that likely: on a loaded race runner a goroutine whose stat had
-// already been answered was not scheduled again until some twenty-five
-// failures had been counted, its answer then ended the run, and the store was
-// asked about all 97 objects (#1420). In the bubble the failures' moment
-// passes only once every goroutine is blocked, by which time the answers'
-// goroutines have returned, so the bound holds on every runner:
-// the five, the run of [failedInARow], and at most a window handed out while
-// that run's failures came back.
+// THE CASE RUNS IN A BUBBLE, because "in a row" is the order the audit TAKES
+// the answers in: the five answers must be taken before the first failure, or
+// one ends the run partway and the store is rightly asked another window. On
+// the machine's clock a loaded runner left an answered goroutine unscheduled
+// for some twenty-five failures (#1420). In the bubble the failures' moment
+// passes only once every goroutine is blocked, so the bound holds: the five,
+// the run of [failedInARow], and at most a window handed out.
 func TestAStoreThatFailsQuestionAfterQuestionStopsTheAudit(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {

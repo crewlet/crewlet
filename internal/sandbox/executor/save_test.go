@@ -1371,8 +1371,11 @@ func TestAPackBesideAWorkingHarnessNamesAToolItsBoxLacks(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			script := executor.ClaudeCode{}.PackSave(p, session, p.SessionSaveStaging(takerA, "a-save"),
-				p.SessionSave(takerA, "a-save"))
+			script, err := executor.ClaudeCode{}.PackSave(p, executor.SessionRecordOf(session),
+				p.SessionSaveStaging(takerA, "a-save"), p.SessionSave(takerA, "a-save"))
+			if err != nil {
+				t.Fatalf("a Claude Code save's script was refused: %v", err)
+			}
 			cmd := exec.CommandContext(t.Context(), "sh", "-c", script) //nolint:gosec // the script under test
 			cmd.Env = []string{"PATH=" + bin}
 			var stderr strings.Builder

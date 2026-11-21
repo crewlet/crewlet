@@ -133,18 +133,14 @@ func CatalogueRow(entry tools.Entry, delivers string) ToolRow {
 // that no row in taken already names, in the listings' order: what a node's
 // catalogue adds to its own registry's rows so a per-agent server's tools,
 // whose children run on other nodes, are in it. schemas are the stored
-// schemas by digest; a tool whose schema is not among them is listed without
-// one.
+// schemas by digest; a tool with none is listed without one.
 //
 // BY NAME, as a model is offered one tool per name: a registry row holding the
-// name (a built-in, or another server's tool that wins it) is what a seat
-// calls, and a listed tool under it is not offered. And a name is listed once,
-// by the first listing naming it, the listings being ordered by server as a
-// bridge orders its winners.
+// name is what a seat calls, and a name is listed once, by the first listing
+// naming it (listings are ordered by server as a bridge orders its winners).
 //
 // NEVER A BLOCKED TOOL ([coord.MCPListedTool.Blocked]): the catalogue is what
-// the agents are offered, and a blocked tool is offered to none. Its name is
-// left free, as no instance filed it.
+// agents are offered, and its name is left free as no instance filed it.
 func ListedRows(taken []ToolRow, listings []coord.MCPListing,
 	schemas map[string]coord.MCPToolDefinition) []ToolRow {
 

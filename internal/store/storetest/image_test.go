@@ -17,12 +17,11 @@ import (
 // sequence, the same schema object for object, and the same rows in every
 // table, for both estates.
 //
-// The rows are the half a schema comparison cannot see. A migration that
-// wrote something particular to the file it ran in — a minted identity, a
-// clock reading outside a view — would make every fixture seeded from one
-// image share it, and two tests that were independent on fresh files would
-// stop being so. The ledger's applied_at is the one column that legitimately
-// differs, and the only one left out.
+// The rows are the half a schema comparison cannot see. A migration writing
+// something particular to its file (a minted identity, a clock reading) would
+// make every fixture seeded from one image share it, and tests independent on
+// fresh files would stop being so. The ledger's applied_at is the one column
+// that legitimately differs, and the only one left out.
 //
 // Mutation: build the image from the node estate alone, or seed one estate's
 // image as the other's, and the schemas differ.

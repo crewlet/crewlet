@@ -3,7 +3,10 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -240,6 +243,531 @@ func TestAResumeThatKeepsFailingIsGivenUp(t *testing.T) {
 	ended, _ := rig.ending("t1", types.ExecutorFailureResumeFailing)
 	if want := "kind of: the turn could not be re-entered"; ended.ErrorKind != want {
 		t.Errorf("ErrorKind = %q, want %q", ended.ErrorKind, want)
+	}
+}
+
+// A RESUME THE NODE FAILED IS NOT THE RUN'S FAILURE, and counts nothing toward
+// the give-up. Half an hour of a coordination store that did not answer the
+// read of where the turn's writes are minted failed every attempt, and
+// counted, it ended a run whose job had finished, though the first attempt
+// after the outage would have resumed it. The failure is handed back as any
+// failure is, and the run waits on; the run's own failure after the outage is
+// still counted, from one.
+//
+// Mutation: count every failure that is not a wait, whatever
+// CoordinatorOptions.NodesFailure says, and the third attempt, half an hour
+// in, ends the run.
+func TestAResumeTheNodeFailedIsNotCountedTowardItsGiveUp(t *testing.T) {
+	t.Parallel()
+	outage := errors.New("coordination store unavailable: nats: timeout")
+	rig := newCoordRigWith(t, func(opts *CoordinatorOptions) {
+		opts.NodesFailure = func(_ context.Context, err error) bool { return errors.Is(err, outage) }
+	})
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	rig.resumer.failWith(fmt.Errorf("engine: read the rebase: %w", outage))
+
+	attempt := func() error {
+		payload, ev := rig.completion("t1")
+		return rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	}
+	for i, after := range []time.Duration{0, 20 * time.Minute, 11 * time.Minute, 5 * time.Minute} {
+		rig.now = rig.now.Add(after)
+		if err := attempt(); err == nil {
+			t.Fatalf("failure %d was not handed back for a retry", i+1)
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning || got.Launch.ResumeFailures != 0 {
+			t.Fatalf("after the node's failure %d, thirty-six minutes at most into the outage, the row "+
+				"is %s with %d failures counted, want it running with none", i+1, got.Status,
+				got.Launch.ResumeFailures)
+		}
+	}
+	if rig.gone("t1") || len(rig.failures()) != 0 {
+		t.Fatalf("a run whose resume only the node failed was ended: failures %+v", rig.failures())
+	}
+	rig.resumer.failWith(errors.New("the turn could not be re-entered"))
+	if err := attempt(); err == nil {
+		t.Fatal("the run's own failure was not handed back for a retry")
+	}
+	if got := rig.get("t1"); got.Launch.ResumeFailures != 1 {
+		t.Fatalf("the run's own failure after the outage counted %d, want 1", got.Launch.ResumeFailures)
+	}
+}
+
+// A RESUME ANOTHER BUILD CAN MAKE COUNTS TOWARD THE GIVE-UP ONLY ONCE NO LIVE
+// NODE CAN. A parked state a newer build wrote, met by an older node still
+// holding the seat through a roll, failed every attempt as a routing failure,
+// and counted, it ended at half an hour a run a newer node had parked, filed
+// as the engine's own defect. While a node that reads the state is live, the
+// failure is handed back and counts nothing; once none is, as after a
+// rollback, it counts from one, and the give-up ends the run as it ends any
+// other, so the seat is not held for ever.
+//
+// Mutation: count it whatever the fleet says, and the newer node's half hour
+// ends the run; skip it whatever the fleet says, and the rollback holds the
+// seat for ever.
+func TestAResumeAnotherBuildCanMakeIsCountedOnlyOnceNoLiveNodeCan(t *testing.T) {
+	t.Parallel()
+	var newerLive atomic.Bool
+	newerLive.Store(true)
+	var asked atomic.Value
+	rig := newCoordRigWith(t, func(opts *CoordinatorOptions) {
+		opts.ResumableElsewhere = func(_ context.Context, run PendingRun) (bool, error) {
+			asked.Store(run.TurnID)
+			return newerLive.Load(), nil
+		}
+	})
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	rig.resumer.failWith(fmt.Errorf("%w: execstate: unknown version: 9 (this build reads 8)",
+		ErrResumeElsewhere))
+
+	attempt := func() error {
+		payload, ev := rig.completion("t1")
+		return rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	}
+	for i, after := range []time.Duration{0, 20 * time.Minute, 11 * time.Minute, 5 * time.Minute} {
+		rig.now = rig.now.Add(after)
+		if err := attempt(); !errors.Is(err, ErrResumeElsewhere) {
+			t.Fatalf("failure %d = %v, want it handed back for a node that can resume it", i+1, err)
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning || got.Launch.ResumeFailures != 0 {
+			t.Fatalf("after failure %d with a node of the newer build live, the row is %s with %d "+
+				"failures counted, want it running with none", i+1, got.Status, got.Launch.ResumeFailures)
+		}
+	}
+	if asked.Load() != "t1" {
+		t.Fatalf("the fleet was asked about %v, want the run that failed, t1", asked.Load())
+	}
+	// THE ROLLBACK: no live node reads the state any more.
+	newerLive.Store(false)
+	for i, after := range []time.Duration{0, 20 * time.Minute} {
+		rig.now = rig.now.Add(after)
+		if err := attempt(); err == nil {
+			t.Fatalf("failure %d after the rollback was not handed back", i+1)
+		}
+		if got := rig.get("t1"); got.Launch.ResumeFailures != i+1 {
+			t.Fatalf("failure %d after the rollback counted %d, want %d", i+1,
+				got.Launch.ResumeFailures, i+1)
+		}
+	}
+	rig.now = rig.now.Add(11 * time.Minute)
+	if err := attempt(); err != nil {
+		t.Fatalf("the failure that spans the give-up window after the rollback asked for a retry: %v", err)
+	}
+	if !rig.gone("t1") || !rig.endedWith("t1", types.ExecutorFailureResumeFailing) {
+		t.Fatalf("the run no live node can resume was not given up: failures %+v", rig.failures())
+	}
+}
+
+// A RESUME FAILING ON A CONDITION ONLY AN OPERATOR CLEARS IS RAISED FOR THE
+// OPERATOR while the run waits ([blockedResume]): counted with its seat, kind
+// and first failure's instant once the hand-back lands, under the claim's
+// lease; out once a resume gets past it or fails otherwise, the run settles or
+// the seat is let go. A failure a wait clears is never counted. See the package
+// doc, "Resumes blocked on an operator".
+//
+// Mutation, each red: record nothing; keep the latest instant; drop a way out;
+// count at the failure or return, or whatever settled first; keep an unlanded
+// hand-back; count under a lost lease or keep it after; carry an instant across
+// holdings; drop an earlier count while a hand-back is out.
+func TestAResumeOnlyAnOperatorClearsIsRaisedWhileTheRunWaits(t *testing.T) {
+	t.Parallel()
+	full := errors.New("write: no space left on device")
+	outage := errors.New("nats: timeout")
+	rigFor := func(t *testing.T) *coordRig {
+		rig := newCoordRigWith(t, func(opts *CoordinatorOptions) {
+			opts.NodesFailure = func(_ context.Context, err error) bool {
+				return errors.Is(err, full) || errors.Is(err, outage)
+			}
+			opts.OperatorsCondition = func(err error) (string, bool) {
+				return "disk_full", errors.Is(err, full)
+			}
+		})
+		rig.launch("t1")
+		rig.coordinator.countRun("swe", StatusRunning)
+		rig.runner.Finish(Result{Success: true, Text: "done"})
+		return rig
+	}
+	attempt := func(t *testing.T, rig *coordRig) error {
+		t.Helper()
+		payload, ev := rig.completion("t1")
+		return rig.coordinator.OnCompleted(t.Context(), payload, ev)
+	}
+	blockedFor := func(t *testing.T, rig *coordRig, want ResumesBlocked) {
+		t.Helper()
+		got := rig.coordinator.ResumesBlocked()
+		if got.Runs != want.Runs || got.Seat != want.Seat || got.Kind != want.Kind || !got.Since.Equal(want.Since) {
+			t.Fatalf("resumes waiting for an operator = %+v, want %+v", got, want)
+		}
+	}
+	waiting := func(t *testing.T, rig *coordRig) {
+		t.Helper()
+		rig.resumer.failWith(fmt.Errorf("resuming t1: %w", full))
+		first := rig.now
+		for i, after := range []time.Duration{0, 20 * time.Minute, 20 * time.Minute} {
+			rig.now = rig.now.Add(after)
+			if err := attempt(t, rig); err == nil {
+				t.Fatalf("the premise: attempt %d on a full disk is handed back", i+1)
+			}
+		}
+		if rig.gone("t1") || rig.get("t1").Launch.ResumeFailures != 0 {
+			t.Fatal("the premise: a resume only the operator can unblock is never counted or ended")
+		}
+		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: first})
+	}
+	t.Run("a resume that gets past it", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		rig.resumer.failWith(nil)
+		if err := attempt(t, rig); err != nil {
+			t.Fatalf("the resume after the operator's fix: %v", err)
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("a resume that fails for anything else", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		rig.resumer.failWith(errors.New("the turn could not be re-entered"))
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the run's own failure is handed back")
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("the seat let go of", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		rig.coordinator.ReleaseSeat("swe")
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("the run settled", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		rig.coordinator.runSettled("t1")
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("a hand-back that failed, which ends the run", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		rig.coordinator.pending = &refusingStore{inner: rig.coordinator.pending, refuse: []string{"ReleaseClaim"}}
+		if err := attempt(t, rig); err != nil {
+			t.Fatalf("the premise: an attempt whose claim cannot be handed back ends the run: %v", err)
+		}
+		if !rig.gone("t1") {
+			t.Fatal("the premise: the run whose claim could not be handed back is ended")
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("an ending decided while its resume runs", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		// THE TURN RELAUNCHES ITS EXECUTOR, and a person stops the seat's
+		// running work before the turn meets the full disk: the stop ends
+		// the relaunched run while the resume's frame still runs.
+		rig.resumer.failsInTurn = true
+		rig.resumer.during = func(ctx context.Context, r PendingRun) {
+			if _, err := rig.launchVia(ctx, rig.manager, launchReq(r.TurnID)); err != nil {
+				t.Errorf("the turn's relaunch: %v", err)
+			}
+			if err := rig.coordinator.StopSeat(ctx, "swe", stopper); err != nil {
+				t.Errorf("the person's stop: %v", err)
+			}
+		}
+		_ = attempt(t, rig)
+		if run, found, err := rig.pending.Get(t.Context(), "t1"); err != nil || (found && run.Ending == nil) {
+			t.Fatalf("the premise: the stop decided the run's ending (%+v, %v, %v)", run.Ending, found, err)
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("a resume whose turn relaunched before it failed", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		// THE TURN'S NEXT JOB RUNS, so its run waits on nothing: the claim's
+		// hand-back finds the row holding that job and does not land.
+		rig.resumer.failsInTurn = true
+		rig.resumer.during = func(ctx context.Context, r PendingRun) {
+			if _, err := rig.launchVia(ctx, rig.manager, launchReq(r.TurnID)); err != nil {
+				t.Errorf("the turn's relaunch: %v", err)
+			}
+		}
+		_ = attempt(t, rig)
+		if got := rig.get("t1"); got.Ending != nil || !slices.Contains(Active, got.Status) {
+			t.Fatalf("the premise: the relaunched run is live (%s, ending %+v)", got.Status, got.Ending)
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("a hand-back the store answers late", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		store := &unansweredRelease{silentStore: &silentStore{PendingStore: rig.coordinator.pending,
+			silent: []string{"ReleaseClaim"}}}
+		rig.coordinator.pending = store
+		rig.resumer.failWith(fmt.Errorf("resuming t1: %w", full))
+		met := rig.now
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the attempt on a full disk is not settled")
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+		store.answer()
+		if fired := rig.fireRetries(); fired == 0 {
+			t.Fatal("the premise: the release the store did not answer is owed and made again")
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning {
+			t.Fatalf("the premise: the owed hand-back landed, but the run is %s", got.Status)
+		}
+		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: met})
+	})
+	t.Run("a later attempt's hand-back the store answers late", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		first := rig.now
+		waiting(t, rig)
+		store := &unansweredRelease{silentStore: &silentStore{PendingStore: rig.coordinator.pending,
+			silent: []string{"ReleaseClaim"}}}
+		rig.coordinator.pending = store
+		rig.now = rig.now.Add(20 * time.Minute)
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the attempt on a full disk is not settled")
+		}
+		// STILL WAITING, as it was before this attempt: the run an earlier
+		// attempt counted is counted while this one's hand-back is owed.
+		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: first})
+		store.answer()
+		if fired := rig.fireRetries(); fired == 0 {
+			t.Fatal("the premise: the release the store did not answer is owed and made again")
+		}
+		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: first})
+	})
+	t.Run("an ending that lands beside the hand-back", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		rig.coordinator.pending = &settledAsReleased{PendingStore: rig.coordinator.pending,
+			settle: func() { rig.coordinator.runSettled("t1") }}
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the attempt on a full disk is handed back")
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	// lettingGo has rig's lease seam answer by lost whether this node still
+	// holds the seat, under the lease every rig launch is made with, and has
+	// the next resume let the seat go of inside its frame, as a lease lost
+	// while the frame runs does: the node's admission ends a turn at a drain's
+	// cut alone, so the frame meets its failure after the seat's release.
+	lettingGo := func(rig *coordRig) {
+		var lost atomic.Bool
+		rig.coordinator.lease = func(string) (Fence, bool) {
+			if lost.Load() {
+				return Fence{}, false
+			}
+			return rigLease, true
+		}
+		rig.resumer.during = func(context.Context, PendingRun) {
+			lost.Store(true)
+			rig.coordinator.ReleaseSeat("swe")
+		}
+	}
+	t.Run("the seat let go of while its resume runs", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		lettingGo(rig)
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the attempt on a full disk is handed back")
+		}
+		if got := rig.get("t1"); got.Status != StatusRunning {
+			t.Fatalf("the premise: the hand-back landed after the seat's release, but the run is %s", got.Status)
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+		rig.coordinator.mu.Lock()
+		_, kept := rig.coordinator.blocked["t1"]
+		rig.coordinator.mu.Unlock()
+		if kept {
+			t.Error("this node still keeps the run of a seat it let go of among its runs waiting for an operator")
+		}
+	})
+	t.Run("an earlier holding's run, with the seat taken back here", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		lettingGo(rig)
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the attempt on a full disk is handed back")
+		}
+		live := t.Context()
+		if err := rig.recoverSeat(live, "node-a:2", rigLease.Epoch+1); err != nil {
+			t.Fatalf("taking the seat back: %v", err)
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+	t.Run("the seat taken back here under a newer lease", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		waiting(t, rig)
+		lettingGo(rig)
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the attempt on a full disk is handed back")
+		}
+		// TAKEN BACK before anything read the runs waiting: the earlier
+		// holding's count is no start for the next one's.
+		live := t.Context()
+		rig.resumer.during = nil
+		rig.now = rig.now.Add(time.Hour)
+		again := rig.now
+		if err := rig.recoverSeat(live, "node-a:2", rigLease.Epoch+1); err != nil {
+			t.Fatalf("taking the seat back: %v", err)
+		}
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the next holding's attempt on a full disk is handed back")
+		}
+		blockedFor(t, rig, ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: again})
+	})
+	t.Run("a failure of the node's a wait clears", func(t *testing.T) {
+		t.Parallel()
+		rig := rigFor(t)
+		rig.resumer.failWith(fmt.Errorf("resuming t1: %w", outage))
+		if err := attempt(t, rig); err == nil {
+			t.Fatal("the premise: the outage's failure is handed back")
+		}
+		blockedFor(t, rig, ResumesBlocked{})
+	})
+}
+
+// settledAsReleased is a run store whose claim's release lands and then, before
+// its answer is taken, has the run settled on this node by settle: an ending
+// decided on another path between the release's landing on the store and the
+// step that takes its answer.
+type settledAsReleased struct {
+	PendingStore
+	settle func()
+}
+
+func (s *settledAsReleased) ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error) {
+	released, err := s.PendingStore.ReleaseClaim(ctx, turnID, release)
+	s.settle()
+	return released, err
+}
+
+// claimBehindRelease is a run store whose next claim of a job, on its way to the
+// store, is overtaken by before: a claim already on its way when a hand-back of
+// the job's last claim went out ([Coordinator.claimCompletion]).
+type claimBehindRelease struct {
+	PendingStore
+	before func(ctx context.Context)
+}
+
+func (s *claimBehindRelease) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
+) (PendingRun, bool, error) {
+	if before := s.before; before != nil {
+		s.before = nil
+		before(ctx)
+	}
+	return s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
+}
+
+// A CLAIM THAT PROVES A BLOCKED RESUME'S HAND-BACK LANDED COUNTS ITS RUN. A
+// hand-back whose answer the store lost has landed where a claim of its job, on
+// its way when the hand-back went out, wins on the run the hand-back put back,
+// and that win is the step that takes the hand-back's answer
+// ([Coordinator.claimCompletion]): the run of a resume that failed on a
+// condition only an operator clears was back where its claim found it, so it is
+// counted there with its seat, its condition and the instant the failure was
+// met, as the hand-back's own answer would have counted it.
+//
+// Mutation: leave the count out of the claim's proof, and the run waits for
+// the operator uncounted.
+func TestAClaimThatProvesABlockedHandBackLandedCountsItsRun(t *testing.T) {
+	t.Parallel()
+	live := t.Context()
+	rig := newCoordRig(t)
+	run := rig.launch("t1")
+	claimed, won, err := rig.pending.ClaimForResume(live, "t1", CompletionTail(run.LaunchID), rigLease)
+	if err != nil || !won {
+		t.Fatalf("the premise: the first claim of t1 = %v, %v", won, err)
+	}
+	payload, _ := rig.completion("t1")
+	met := rig.now
+	store := &claimBehindRelease{PendingStore: rig.coordinator.pending}
+	rig.coordinator.pending = store
+	// THE FIRST CLAIM'S HAND-BACK, its resume failed on a full disk, goes out
+	// while the second claim is on its way, and lands with its answer lost.
+	store.before = func(ctx context.Context) {
+		rig.coordinator.mu.Lock()
+		cr, moved := rig.coordinator.handingBackLocked(claimed, resumeUnrevertedDetail,
+			failure{blocked: "disk_full"}, nil)
+		rig.coordinator.mu.Unlock()
+		moved()
+		if landed, landErr := store.PendingStore.ReleaseClaim(ctx, "t1", cr.release); landErr != nil || !landed {
+			t.Errorf("the premise: the hand-back landed = %v, %v", landed, landErr)
+		}
+	}
+	_, onItsWay, done, claimErr := rig.coordinator.claimCompletion(live, payload, rigLease)
+	if done != nil {
+		done()
+	}
+	if claimErr != nil || !onItsWay {
+		t.Fatalf("the claim on its way = %v, %v; want it won on the run the hand-back put back",
+			onItsWay, claimErr)
+	}
+	got := rig.coordinator.ResumesBlocked()
+	want := ResumesBlocked{Runs: 1, Seat: "swe", Kind: "disk_full", Since: met}
+	if got.Runs != want.Runs || got.Seat != want.Seat || got.Kind != want.Kind || !got.Since.Equal(want.Since) {
+		t.Fatalf("resumes waiting for an operator once the claim proved the hand-back landed = %+v, want %+v",
+			got, want)
+	}
+}
+
+// WHAT THE GIVE-UP COUNTS OF A RESUME THIS NODE CANNOT MAKE, by the fleet's
+// answer: one another node or build can make counts nothing while a live node
+// may, nor while the fleet cannot be read, and counts once none may; one no
+// node gets past (a run with no parked state) counts whatever the fleet says.
+//
+// Mutation: count a failure whose fleet read failed, or skip every resume
+// this node cannot make, and a row goes red.
+func TestWhatTheGiveUpCountsOfAResumeThisNodeCannotMake(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		err     error
+		live    bool
+		readErr error
+		counted int
+	}{
+		"another build's, a node of it live": {err: fmt.Errorf("%w: a newer state",
+			ErrResumeElsewhere), live: true},
+		"another build's, none live": {err: fmt.Errorf("%w: a newer state", ErrResumeElsewhere),
+			counted: 1},
+		"another build's, the fleet unread": {err: fmt.Errorf("%w: a newer state", ErrResumeElsewhere),
+			readErr: errors.New("coordination store unavailable")},
+		"one no node gets past, a node live": {err: fmt.Errorf("%w: run t1 has no parked turn state",
+			ErrResumeUnavailable), live: true, counted: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRigWith(t, func(opts *CoordinatorOptions) {
+				opts.ResumableElsewhere = func(context.Context, PendingRun) (bool, error) {
+					return tc.live, tc.readErr
+				}
+			})
+			rig.launch("t1")
+			rig.runner.Finish(Result{Success: true, Text: "done"})
+			rig.resumer.failWith(tc.err)
+			payload, ev := rig.completion("t1")
+			if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+				t.Fatal("the premise: a resume that failed is handed back")
+			}
+			if got := rig.get("t1").Launch.ResumeFailures; got != tc.counted {
+				t.Errorf("%v counted %d toward the give-up, want %d", tc.err, got, tc.counted)
+			}
+		})
 	}
 }
 

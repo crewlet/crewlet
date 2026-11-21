@@ -10,28 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// WHICH AGENTS AN MCP SERVER REACHES, decided by one grant on its entry.
+// WHICH AGENTS AN MCP SERVER REACHES, decided by one grant on its entry:
+// `access` grants a server to agent seats and nothing else does. Absent, every
+// agent seat; written, exactly the seats it names, each unit standing for every
+// agent seat beneath it, minus `except`. A shared server's tools reach only
+// those seats; a per-agent server starts a child for them and nobody else.
 //
-// A server reaches an agent seat through `access` on its `mcp_servers` entry
-// and through nothing else: absent, it reaches every agent seat; written, it
-// reaches exactly the seats it names, each unit it names standing for every
-// agent seat beneath that unit at any depth, minus the seats `except` leaves
-// out. That holds for a shared server, whose one instance's tools reach only
-// the seats it is granted to, and for a per-agent server, which starts a child
-// for each of those seats and for nobody else.
+// A seat's `mcp_env` block is VALUES ONLY and grants nothing, so one for a
+// server that does not reach the seat is refused ([Company.validateMCPAccess]).
 //
-// A seat's `mcp_env` block is VALUES ONLY. It holds what the seat's child of a
-// server it is granted is started with, and grants nothing, so a block for a
-// server that does not reach the seat is refused rather than left to look like
-// a grant ([Company.validateMCPAccess]).
-//
-// A SERVER BOUND TO A VENDOR'S PER-SEAT CREDENTIAL is the one exception: it
-// reaches the seats that are on at that vendor's integration
-// (`roles[].integrations.<lane>.enabled`), because that lane is where the
-// engine provisions, seals and binds the seat's own credential, and two
-// switches for one grant would disagree. Such a server takes no `access`.
-//
-// See adr/0076-an-mcp-server-reaches-an-agent-through-one-grant-on-its-entry.md.
+// A SERVER BOUND TO A VENDOR'S PER-SEAT CREDENTIAL reaches the seats on at that
+// integration (`roles[].integrations.<lane>.enabled`) and takes no `access`:
+// two switches for one grant would disagree. See adr/0076-an-mcp-server-reaches-an-agent-through-one-grant-on-its-entry.md.
 
 // MCPAccess is the agent seats an MCP server reaches ([MCPServer.Access]).
 //
@@ -86,18 +76,16 @@ type MCPReach struct {
 }
 
 // Reach reports whether the server's grant reaches seat, and why, WHETHER OR
-// NOT THE SERVER IS ON: [MCPServer.Grants] adds that. A turned-off server keeps
-// its grant for the day it is turned back on, so a value stored for a seat, a
-// test of a seat's child and the answer that lists who a server reaches read
-// the grant itself.
+// NOT THE SERVER IS ON ([MCPServer.Grants] adds that): a turned-off server
+// keeps its grant, so stored values, tests of a seat's child and the answer
+// listing who a server reaches read the grant itself.
 //
-// A human seat is reached by nothing: it runs no tools. The seat is the one
-// the engine runs ([org.Organization] as the configuration built it), which
-// carries where it sits ([org.Role.UnitKeys]) and the lanes it is on at
-// ([org.Role.AccessLanes]).
+// A human seat is reached by nothing: it runs no tools. The seat is the one the
+// engine runs ([org.Organization] as built), which carries where it sits
+// ([org.Role.UnitKeys]) and its lanes ([org.Role.AccessLanes]).
 //
-// A seat both named and left out is reached: `seats` is the more particular
-// of the two. Admission refuses that pair, so only a stored revision holds it.
+// A seat both named and left out is reached: `seats` is the more particular.
+// Admission refuses that pair, so only a stored revision holds it.
 func (m *MCPServer) Reach(seat *org.Role) (MCPReach, bool) {
 	if seat == nil || !seat.IsAgent() {
 		return MCPReach{}, false
@@ -164,31 +152,17 @@ func (c *Company) markAccessLanes(o *org.Organization) {
 }
 
 // validateMCPAccess holds every grant to what the chart holds, and every field
-// that hands a seat a server's values or its tools to a seat the server
-// reaches.
+// that hands a seat a server's values or tools to a seat the server reaches.
 //
-//   - `access` on a server bound to a vendor's per-seat credential is refused:
-//     the integration's lane grants it, and two switches for one grant would
-//     disagree.
-//   - Each name in `access` must be one: a unit's key, or an AGENT seat's
-//     handle (a person's seat runs no tools), each once, and no seat both
-//     named and left out. A seat or a unit that is removed while a grant still
-//     names it is refused the same way, naming the entry, as removing a
-//     server some block still names is: the grant is changed first, by
-//     whoever may change the server, so a later seat or unit that takes the
-//     same handle or key is never granted by an entry written for another.
-//   - A seat's `mcp_env` block for a server, a unit's block for one that
-//     reaches none of the unit's own agent seats, and an executor box's
-//     listing of one, are refused where the server does not reach the seat:
-//     each would otherwise read as a grant the engine does not make.
+//   - `access` on a server bound to a vendor's per-seat credential is refused.
+//   - Each `access` name is a unit's key or an AGENT seat's handle, once, and no
+//     seat is both named and left out. Removing a seat or unit a grant still
+//     names is refused, so a later one taking its handle is never granted by it.
+//   - A seat's or unit's `mcp_env` block and an executor box's listing are
+//     refused where the server does not reach the seat: each reads as a grant.
 //
-// THE GRANT ITSELF, WHETHER OR NOT THE SERVER IS ON ([MCPServer.Reach]): a
-// turned-off server's blocks are held to the rule a running one's are. A block
-// the engine reads by its own name ([MCPServerReference.EngineRead]) is the
-// engine's as well as the server's, so it is not held to the server's grant.
-//
-// An ADMISSION rule, like the rest of the file rules: a stored revision that
-// breaks it runs, granting by the rule above, and warns.
+// It reads the grant ([MCPServer.Reach]) whether or not the server is on; a block
+// the engine reads by its own name is exempt. ADMISSION rule: breaking it warns.
 func (c *Company) validateMCPAccess(o *org.Organization) error {
 	var p problems
 	servers := map[string]*MCPServer{}

@@ -429,7 +429,8 @@ test("a refused push says what it offered, never zero, and that nothing was stor
   ).toBeTruthy();
 });
 
-// Mutation: link the work key, and the run chip holds two links.
+// Mutations: link the work key, and the run chip holds two links; draw the token's id, and
+// the person's tag reads it.
 test("a person's push names its credential, a seat's its run and turn, each how it was built", async () => {
   atTheStory();
   stubFetch((url) => pageOf(url, STORY));
@@ -442,8 +443,15 @@ test("a person's push names its credential, a seat's its run and turn, each how 
       .getAllByRole("link")
       .map((a) => a.getAttribute("href")),
   ).toEqual(["#/live/turns/turn-ENG-412"]);
+  // A TOKEN'S ID NAMES NOTHING A PERSON KNOWS: its kind is said, the id its title.
   const person = rowOf(feed, "tried").querySelector(".code-list__meta")!;
-  expect(person.textContent).toBe("Personal access token pat:jane-laptopwith git");
+  expect(person.textContent).toBe("Personal access tokenwith git");
+  expect(
+    within(person as HTMLElement)
+      .getByText("Personal access token")
+      .closest("[title]")
+      ?.getAttribute("title"),
+  ).toBe("pat:jane-laptop");
 });
 
 // Mutation: say the loaded count alone, and Yesterday reads "2".
@@ -495,6 +503,36 @@ test("the first page asks the reader's own midnights and older pages ask none", 
   const older = histories(asked).find((u) => u.searchParams.get("cursor") === "c1")!;
   expect(older.searchParams.has("day_bounds")).toBe(false);
   expect(older.searchParams.get("brief")).toBe("true");
+});
+
+// THE READER'S MIDNIGHT IS NO NEW QUESTION: the history stays on screen as the day turns, each day
+// still counted on the days its answer was read at, and the next poll reads the moved days
+// (`lib/useCodeQuery.ts`). Mutations: put `day_bounds` back in the question's key, and the rows
+// give way to the placeholder at midnight; count the answer on the reader's new days, and
+// yesterday reads the day before's 13.
+test("the history stays on screen as the reader's day turns, counted on the days it was read at", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  vi.setSystemTime(new Date("2026-11-16T23:59:30Z"));
+  pinZoneForTest("UTC");
+  const asked = stubFetch((url) => pageOf(url, STORY));
+  mount("#/gitlet/pushes?repo=web");
+  const feed = await feedOf();
+  const row = rowOf(feed, "Gitlet merged web!41");
+  expect(headings(feed)[0]).toBe("Today8");
+  const days = () => newest(asked).map((u) => u.searchParams.get("day_bounds")!.split(",").at(-1));
+  expect(days()).toEqual(["2026-11-17T00:00:00Z"]);
+  await act(
+    async () => void vi.advanceTimersByTime(Date.parse("2026-11-17T00:00:02Z") - Date.now()),
+  );
+  expect(row.isConnected).toBe(true);
+  expect(days()).toHaveLength(1);
+  expect(headings(feed)[0]).toBe("Yesterday8");
+  expect(headings(feed)[1]).toMatch(/2 of 13$/);
+  // THE NEXT POLL, a minute after the page asked, reads the moved days.
+  await act(async () => void vi.advanceTimersByTime(60_000));
+  await afterMicrotasks();
+  expect(row.isConnected).toBe(true);
+  expect(days()).toEqual(["2026-11-17T00:00:00Z", "2026-11-18T00:00:00Z"]);
 });
 
 // AN OLDER FLEET REFUSES THE DAY COUNTS, and the history says so: nothing asks again without them.

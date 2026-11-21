@@ -8,6 +8,13 @@
 // dispatcher directly would test a path no harness takes: the socket, the MCP
 // server, the tool list, the withheld answers and the release are all on the
 // way of every real call, and they are on the way of this one.
+//
+// A script can give up on a call, die, rewrite a name, run a tool of its own, or report its requests
+// with or without per-request structure, so each gate is exercised against what
+// a real harness was measured doing, not against what a tidy one would do.
+//
+// The package is shared by many suites and additive only: a field or function
+// is added, never changed under an existing caller.
 package llmtest
 
 import (

@@ -94,17 +94,9 @@ func (a *appliedLog) Session(ctx context.Context, handle, turn string) (executor
 	return read.Session.Kept(), nil
 }
 
-// errNoArchive is this log's answer to a fetch: it keeps rows, never the
+// errNoArchive is this log's answer to an open: it keeps rows, never the
 // objects they name, and no case over it continues a session.
 var errNoArchive = errors.New("this log keeps no session's archive: no case over it continues one")
-
-func (a *appliedLog) Fetch(context.Context, executorkeep.TurnRow, io.Writer) error {
-	return errNoArchive
-}
-
-func (a *appliedLog) OpenSpooled(executorkeep.TurnRow, io.Reader) (io.Reader, error) {
-	return nil, errNoArchive
-}
 
 func (a *appliedLog) Open(context.Context, executorkeep.TurnRow) (io.ReadCloser, error) {
 	return nil, errNoArchive
@@ -120,8 +112,8 @@ func (a *appliedLog) ended() []EndRecord {
 // recordedLate is the run store whose first settle of a begun capture lets land
 // go next: a record the taker handed on before its lease's window closed, which
 // the log takes only after the settle read the turn's row and stamped the
-// capture refused, the one order the fence cannot rule out (session.go, "WHAT
-// THE FENCE CANNOT REACH").
+// capture refused, the one order the fence cannot rule out (the package doc,
+// "WHAT THE FENCE CANNOT REACH").
 type recordedLate struct {
 	PendingStore
 	land func(context.Context) (LogAnswer, error)

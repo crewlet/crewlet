@@ -12,14 +12,13 @@ import (
 
 // A CALL'S OWN RESOLVE BUDGET BOUNDS ITS WAITS, AND ONLY ITS OWN.
 //
-// [statelog.WithResolveBudget] is how a case that halted this node's applier
-// learns `pending` without spending the publisher's whole budget — while every
-// other write it makes, against appliers that are running or resuming, keeps
-// the budget their answers depend on. So both halves are pinned: a write on a
-// context carrying one waits at most that long — in the resolution, the
-// session wait and the wait behind a peer's record alike, the three waits that
-// share the write path's budget — and a write beside it on a plain context
-// waits the publisher's own (the harness's 250 ms).
+// [statelog.WithResolveBudget] lets a case that halted this node's applier
+// learn `pending` without spending the publisher's whole budget, while every
+// other write keeps the budget its answer depends on. So both halves are
+// pinned: a write on a context carrying one waits at most that long in all
+// three waits that share the write path's budget (the resolution, the session
+// wait, the wait behind a peer's record), and a write beside it on a plain
+// context waits the publisher's own (the harness's 250 ms).
 func TestACallsResolveBudgetBoundsItsWaitsAndOnlyItsOwn(t *testing.T) {
 	t.Parallel()
 	const short = 40 * time.Millisecond
@@ -128,11 +127,10 @@ func TestANonPositiveCallBudgetChangesNothing(t *testing.T) {
 	}
 }
 
-// A PUBLISHER WITH NO BUDGET OF ITS OWN WAITS THE DEFAULT — which is every
-// publisher the engine builds, since it sets none: the per-call budget above
-// is the only way a write here waits anything shorter. The wait's budget is
-// read as it begins and the caller then gives up, so the case costs nothing
-// near the five seconds it pins.
+// A PUBLISHER WITH NO BUDGET OF ITS OWN WAITS THE DEFAULT, as every publisher
+// the engine builds does: the per-call budget is the only way to wait less.
+// The case reads the wait's budget as it begins and then gives up, so it costs
+// nothing near the five seconds it pins.
 func TestAPublisherWithNoBudgetOfItsOwnWaitsTheDefault(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

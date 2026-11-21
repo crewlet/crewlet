@@ -65,24 +65,15 @@ func TestPartitionHarnessActuallyPartitions(t *testing.T) {
 
 // THE MAJORITY SURVIVES, AFTER IT ELECTS.
 //
-// This is the point of the cut and it is why the harness exists: a fleet of
-// three that loses one member has a quorum and goes on working, and a harness
-// that took the whole cluster down with the partitioned member would prove the
-// opposite.
+// This is why the harness exists: a fleet of three that loses one member has a
+// quorum and goes on working.
 //
-// # Why the publish is retried and the first attempt is expected to fail
-//
-// A publish is answered by the STREAM LEADER, and the partitioned member may
-// have been it. The remaining two cannot answer until they elect a new one —
-// measured here at several seconds, which is NATS's own election timeout and
-// not something this engine sets. So "the majority survives" is a claim about
-// the interval AFTER the election, and a test that published once immediately
-// would be asserting that a leaderless raft group answers, which no design
-// promises.
-//
-// What is asserted is that the election happens at all and that it is bounded:
-// a cluster that never elects answers nothing for ever, which is the failure
-// this case is really about.
+// The publish is retried and the first attempt is expected to fail: a publish
+// is answered by the STREAM LEADER, which the partitioned member may have been,
+// and the other two cannot answer until they elect a new one (several seconds,
+// NATS's own timeout). So the claim is about the interval AFTER the election;
+// what is asserted is that the election happens and is bounded, since a
+// cluster that never elects answers nothing for ever.
 func TestAMajoritySurvivesAPartition(t *testing.T) {
 	t.Parallel()
 	c := StartPartitionableCluster(t, 3, js.Config{})
@@ -144,26 +135,12 @@ func awaitRoutes(t *testing.T, c *Cluster, i, want int) {
 // NATS re-dials the routes it lost, until those to each peer have been
 // re-dialled redials times.
 //
-// # The relays' ports, taken by the case
-//
-// What a cut leaves of each relay to or from member i is its port, and a port
-// is free or still answers. So the case takes each one itself — a relay still
-// listening there is a path the partition left open, refused at once by name —
-// and answers every connection it is offered there by resetting it, counting
-// them: each is NATS re-dialling a route it lost, since that port is the
-// address the route was configured with. Once the routes to every peer have
-// been re-dialled often enough, the member is read for its routes, and one it
-// holds then reached it by a path through no relay — the gossiped address,
-// which is the path that bypasses the relays if it is ever reachable. The
-// ports go back before this returns, so [Cluster.Heal] can listen there again.
-//
-// Counted by PEER, not by relay: of the two relays between a pair, the one a
-// re-dial comes through is the side that solicited the route NATS kept, which
-// is NATS's choice.
-//
-// It used to watch the member's routes for five seconds, a bet that NATS
-// re-dialled inside them: a relay that kept answering behind the cut and
-// proxied late held the member at no route for the whole window and passed.
+// The case takes each relay's port to or from member i (one still listening is
+// a path the partition left open, refused by name) and resets every connection
+// offered, counting each as NATS re-dialling a route it lost. After enough, a
+// route the member holds reached it through no relay: the gossiped address.
+// Ports go back before this returns, so [Cluster.Heal] can listen again.
+// Counted by PEER, not relay: which relay a re-dial uses is NATS's choice.
 func holdRoutes(t *testing.T, c *Cluster, i, redials int) {
 	t.Helper()
 	var mu sync.Mutex
@@ -377,23 +354,15 @@ func TestABrokerDeathIsRetriedOnlyWhenAPortWasTaken(t *testing.T) {
 
 // A FAILED ATTEMPT'S LISTENERS ARE GONE BEFORE THE NEXT ONE ASKS FOR PORTS.
 //
-// # What this measures, and why the preconditions below are not enough
+// t.Cleanup runs when the TEST ends, not when an attempt fails, so a factory
+// returning nil on error leaves its members holding route listeners through the
+// retry: the contention [withFreshPorts] exists to escape.
 //
-// Every member's shutdown is registered with t.Cleanup, which runs when the
-// TEST ends — not when an attempt fails. So a factory that returns nil on
-// error leaves the members it did start holding their route listeners for the
-// whole of the retry, and the next attempt draws its ports from a machine
-// still holding the old ones: precisely the port contention [withFreshPorts]
-// exists to escape, reintroduced by the escape itself.
-//
-// So this drives [withFreshPorts] itself. The first attempt starts a real
-// member and then fails — the shape every factory in this package has — and
-// the second attempt asks whether that member's route port is bindable again.
-// It is only free if the retry took the partial cluster down, which it can
-// only do if the factory handed it back. TestAFailedStartCanHandBackWhatIt
-// Started below pins the two properties that make it possible; neither of
-// them notices a factory that regresses to `return nil, err`, which is the
-// regression that actually costs the ports.
+// So this drives it: the first attempt starts a real member and fails, the
+// second asks whether that member's route port is bindable, which it is only
+// if the factory handed the partial cluster back. TestAFailedStartCanHandBack
+// WhatItStarted pins the enabling properties, not a factory regressing to
+// `return nil, err`.
 func TestAFailedAttemptsListenersAreGoneBeforeTheNextAttempt(t *testing.T) {
 	t.Parallel()
 

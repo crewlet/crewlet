@@ -245,18 +245,13 @@ type Group struct {
 }
 
 // Tier is what a deployment says about a group's subscription, and it is
-// THREE-VALUED because the third answer is the one that matters.
+// THREE-VALUED because "cannot tell" must not collapse into "paid" or "free".
 //
-// A bool collapsed "cannot tell" into "paid", and that default is right for a
-// self-managed instance — it answers with no plan at all, and reading silence
-// as free would push every such deployment down a fallback it does not need.
-// It is wrong for the case it was written to catch: GET /groups/:path on
-// gitlab.com omits `plan` for a FREE group as well, so the one deployment
-// this was protecting read as paid and took the group hook that GitLab
-// accepts and never delivers.
-//
-// Separating the answers is what lets a caller ask somewhere else before
-// concluding. See [Client.TierOf].
+// A self-managed instance answers with no plan at all, and reading silence as
+// free would push it down a fallback it does not need. But GET /groups/:path
+// on gitlab.com also omits `plan` for a FREE group, so silence read as paid
+// takes the group hook that GitLab accepts and never delivers. Keeping the
+// answers apart lets a caller ask elsewhere before concluding: [Client.TierOf].
 type Tier string
 
 const (
@@ -316,18 +311,15 @@ func (c *Client) NamespaceByPath(ctx context.Context, path string) (Namespace, b
 
 // TierOf is the subscription tier to ACT on, asked of both places that know.
 //
-// # Why two reads rather than one
+// The group record is asked first: the caller already holds it and it is right
+// whenever it answers. Only its silence costs a second request, and only on
+// gitlab.com does that say anything; a self-managed instance stays
+// [TierUnknown], which every caller reads as paid.
 //
-// The group record is asked first because the caller already holds it and it
-// is right whenever it answers. Only its silence costs a second request, and
-// only on gitlab.com does that second request say anything: a self-managed
-// instance answers nothing at either endpoint and stays [TierUnknown], which
-// every caller reads as paid.
-//
-// A NAMESPACE THAT CANNOT BE READ IS NOT FREE. The error is returned rather
-// than folded into an answer, because concluding "free" from a request that
-// failed would move a working group hook to per-project hooks over a blip —
-// and back again on the next pass, rewriting somebody's webhooks on a timer.
+// A NAMESPACE THAT CANNOT BE READ IS NOT FREE. The error is returned, not
+// folded into an answer: concluding "free" from a failed request would move a
+// working group hook to per-project hooks over a blip, and back on the next
+// pass, rewriting somebody's webhooks on a timer.
 func (c *Client) TierOf(ctx context.Context, group Group) (Tier, error) {
 	if t := group.Tier(); t != TierUnknown {
 		return t, nil
@@ -395,17 +387,14 @@ func (c *Client) AddProjectMember(ctx context.Context, project string, userID in
 
 // SetGroupMember moves an existing membership to an access level.
 //
-// # The half of "reconcile the memberships" that was missing entirely
+// A second POST to /members answers 409 and changes nothing, and the add above
+// treats that as success, so only this call changes an existing seat's role;
+// without it the company document says maintainer, the instance keeps
+// developer, and every pass reports converged.
 //
-// GitLab answers a second POST to /members with a 409 and changes nothing,
-// and the add above treats that as success, so for as long as adding was the
-// only thing this client could do, changing a seat's role had NO effect on a
-// seat that already had a membership: the company document said maintainer,
-// the instance kept developer, and every pass reported converged.
-//
-// PUT rather than POST is the route GitLab serves for an edit, and it 404s
-// for a user with no DIRECT membership — which is why the caller decides from
-// the listing rather than trying this first and falling back.
+// PUT is the route GitLab serves for an edit, and it 404s for a user with no
+// DIRECT membership, so the caller decides from the listing rather than trying
+// this first and falling back.
 func (c *Client) SetGroupMember(ctx context.Context, groupID, userID int, access Access) error {
 	return c.send(ctx, http.MethodPut,
 		"/groups/"+strconv.Itoa(groupID)+"/members/"+strconv.Itoa(userID),
@@ -519,17 +508,14 @@ func (c *Client) SelfToken(ctx context.Context) (Token, error) {
 // tokenPath is where an account's tokens live, and it follows who owns the
 // account because the PERMISSION does.
 //
-// THE INSTANCE ROUTES ARE ADMIN ONLY, all three of them: listing another
-// account's tokens, minting one, and revoking one. Nobody is an instance
-// admin on gitlab.com, so a group Owner reaching for any of them is refused,
-// and the three refusals arrive at three different points in a run: the mint
-// 403s outright, the list 401s on the next pass, and the revoke fails inside
-// a rollback where the message says a live credential was left behind.
+// THE INSTANCE ROUTES ARE ADMIN ONLY: listing another account's tokens,
+// minting one, and revoking one. Nobody is an instance admin on gitlab.com, so
+// a group Owner is refused at three points: the mint 403s, the list 401s on the
+// next pass, and the revoke fails inside a rollback, leaving a live credential.
 //
-// The group routes are the counterpart of the group creation and are what a
-// group Owner may call. So groupID decides: non-zero addresses the group that
-// owns the account, zero the instance, which is the self-managed path where
-// the credential IS an admin token and no group owns the account.
+// The group routes are what a group Owner may call. So groupID decides:
+// non-zero addresses the group that owns the account, zero the instance (the
+// self-managed path, where the credential IS an admin token).
 func tokenPath(groupID, userID int) string {
 	if groupID != 0 {
 		return "/groups/" + strconv.Itoa(groupID) + "/service_accounts/" +
@@ -541,26 +527,15 @@ func tokenPath(groupID, userID int) string {
 // Tokens lists an account's personal access tokens.
 //
 // THROUGH THE GROUP where one owns the account: `/personal_access_tokens` is
-// an admin listing, and asking it as a group Owner answers 401. See
-// [tokenPath].
+// an admin listing and answers a group Owner 401. See [tokenPath].
 //
-// PAGED TO EXHAUSTION, which is the same lesson [Client.members] already
-// carries and this listing did not: it took whatever one default page held,
-// which is TWENTY rows. Its callers make destructive decisions from it (the
-// vendor's retire and revoke steps revoke this engine's earlier tokens), so a
-// truncated read is not a slow report but a credential left live while the
-// run says it cleaned up.
+// PAGED TO EXHAUSTION, like [Client.members]: one default page is TWENTY rows.
+// The vendor's retire and revoke steps decide from this listing, so a
+// truncated read leaves a credential live while the run says it cleaned up.
 //
-// Measured: an account had accumulated 164 tokens, of which the oldest 20 were
-// already revoked. Every pass read exactly those 20, retired nothing, minted
-// another, and reported a successful rotation. The 144 live `api`-scoped
-// tokens behind page one were invisible to the only code that could have
-// removed them.
-//
-// The ceiling is a runaway guard rather than a policy limit, which is why it
-// is generous and why it is an error rather than a truncation: a service
-// account Crewlet manages holds one token, a badly broken one holds hundreds,
-// and a server answering a full page for ever is not something to keep asking.
+// The ceiling is a runaway guard, not a policy limit, so it is generous and an
+// error rather than a truncation: a managed account holds one token, a badly
+// broken one hundreds.
 func (c *Client) Tokens(ctx context.Context, groupID, userID int) ([]Token, error) {
 	path, params := "/personal_access_tokens", url.Values{"user_id": {strconv.Itoa(userID)}}
 	if groupID != 0 {
@@ -597,23 +572,13 @@ const tokenWalkCeiling = 2000
 
 // CreateToken mints a personal access token for a service account.
 //
-// # The route follows who owns the account, because the permission does
+// The route follows who owns the account, as in [tokenPath]: the instance route
+// is admin only, so a group Owner minting through it gets a 403 on every seat.
+// groupID non-zero mints through the owning group, zero through the instance.
 //
-// `POST /users/:id/personal_access_tokens` is INSTANCE ADMIN ONLY, and on
-// gitlab.com nobody is an instance admin: a group Owner creating an account
-// through the group route and then minting through this one gets a 403 on
-// every seat, for ever. The group route
-// (`/groups/:gid/service_accounts/:uid/personal_access_tokens`) is the one a
-// group Owner may call, and it is the counterpart of the group creation.
-//
-// So groupID decides: non-zero mints through the group that owns the account,
-// zero through the instance, which is the self-managed path where the
-// credential IS an admin token and no group owns the account.
-//
-// The value is returned ONCE, by GitLab, and never again, which is why the
-// sink is written through rather than batched: between minting and recording
-// there is a window where the only copy of a live credential is in this
-// process's memory.
+// GitLab returns the value ONCE, which is why the sink is written through
+// rather than batched: between minting and recording, the only copy of a live
+// credential is in this process's memory.
 func (c *Client) CreateToken(
 	ctx context.Context, groupID, userID int, name string, scopes []string, expiry time.Time,
 ) (Token, error) {
@@ -687,20 +652,16 @@ func (m Member) Access() Access {
 
 // GroupMembers lists a group's members.
 //
-// It is what per-seat access compares against before it adds, moves or
-// removes anybody, read once per pass.
+// Per-seat access compares against it once per pass before changing anybody.
 //
-// DIRECT MEMBERS, not `/members/all`. What the pass writes is a direct
-// membership and what it can edit is a direct membership — GitLab refuses a
-// PUT for an account whose only membership is inherited from a parent group —
-// so reading the inherited listing would report a seat as converged at a
-// level this pass has no way to change.
+// DIRECT MEMBERS, not `/members/all`: the pass writes and can edit only direct
+// memberships (GitLab refuses a PUT for one inherited from a parent group), so
+// the inherited listing would report a seat converged at a level this pass
+// cannot change.
 //
-// PAGED TO EXHAUSTION. It asked for one page of 100 and took whatever came
-// back, which is silent truncation on the one listing a destructive decision
-// is made from: on a group with more members than that, every account past
-// the first page was invisible, and a membership the pass should have
-// removed stayed live with the run reporting success.
+// PAGED TO EXHAUSTION: a truncated listing hides every account past the first
+// page, and a membership the pass should remove stays live with the run
+// reporting success.
 func (c *Client) GroupMembers(ctx context.Context, groupID int) ([]Member, error) {
 	return c.members(ctx, "/groups/"+strconv.Itoa(groupID)+"/members",
 		fmt.Sprintf("group %d", groupID))
@@ -798,19 +759,14 @@ type Hook struct {
 	// Description is where this engine records WHICH signing key the hook
 	// holds, because GitLab will not say.
 	//
-	// It is a digest and never the key: [HookDigest] over the secret, which
-	// is one-way and truncated. What it buys is the one fact
-	// [SigningTokenPresent] cannot give — a hook signs with SOME key, and
-	// whether it is the key the fleet currently holds was unknowable. A
-	// secret rotated outside a reconcile run (`crewlet secrets set`, or the
-	// signing-secret field on the setup form) therefore never reached the
-	// hook: the pass found it converged, wrote nothing, and GitLab went on
-	// signing with the previous key while the engine verified with the new
-	// one and refused every delivery — on a surface reporting ready.
+	// It is a digest, never the key: [HookDigest] over the secret, one-way and
+	// truncated. It gives the fact [SigningTokenPresent] cannot: whether the
+	// hook's key is the one the fleet holds. Without it, a secret rotated
+	// outside a reconcile run looks converged, GitLab keeps signing with the
+	// old key, and the engine refuses every delivery.
 	//
-	// Empty on a hook whose description somebody cleared at GitLab, which
-	// compares unequal and is rewritten once. That is the correct
-	// direction: a hook this engine cannot place is one it should re-key.
+	// Empty where somebody cleared it at GitLab: it compares unequal and the
+	// hook is re-keyed once, the right direction.
 	Description string `json:"description"`
 
 	// SigningTokenPresent is the ONLY thing GitLab will say about a hook's
@@ -888,31 +844,15 @@ func (h *Hook) UnmarshalJSON(raw []byte) error {
 // Converged reports a hook that already carries what [hookBody] would write,
 // so writing it again would change nothing at the instance.
 //
-// THE NAME, THE ADDRESS AND THE KEY'S DIGEST ARE PART OF IT, because
-// [hookBody] writes all three.
-// They used to be the caller's business, which worked only while the caller
-// SELECTED on the address: now that [ours] selects on the name, a hook this
-// pass has to re-point would otherwise answer "converged" and be left exactly
-// as it was found.
+// THE NAME, ADDRESS AND KEY'S DIGEST ARE PART OF IT, because [hookBody] writes
+// all three: a hook this pass must re-point would otherwise answer "converged".
 //
-// # How the key is compared at all
-//
-// GitLab never returns a hook's `signing_token`, so a direct comparison is
-// impossible and this used to settle for
-// "it holds SOME token", with the caller supplying the other half from its
-// own run: a pass that had just minted knew the hook could not be carrying
-// the new value and wrote regardless. That was blind to every rotation
-// another process made — `crewlet secrets set`, the setup form's
-// signing-secret field, a peer's apply — and the consequence was silent and
-// permanent: the pass found the hook converged, wrote nothing, GitLab went on
-// signing with the previous key, the engine verified with the new one, and
-// every delivery was refused by a surface reporting ready.
-//
-// So the digest is compared instead. [hookBody] writes [HookDigest] of the
-// secret into the description, which is the one field this engine controls
-// and GitLab gives back, and the answer is then read off the same listing as
-// every other clause here — the same on every node, with nothing carried down
-// from whichever process happened to mint.
+// GitLab never returns a hook's `signing_token`, so the key is compared by
+// digest: [hookBody] writes [HookDigest] of the secret into the description,
+// the one field this engine controls and GitLab gives back. Checking only that
+// the hook holds SOME token misses a rotation made by another process
+// (`crewlet secrets set`, a peer's apply): the hook keeps the old key and every
+// delivery is refused. A digest reads the same on every node.
 func (h Hook) Converged(name, target, digest string) bool {
 	if h.Name != name || h.URL != target || h.Description != digest {
 		return false
@@ -945,35 +885,15 @@ func (c *Client) GroupHooks(ctx context.Context, groupID int) ([]Hook, error) {
 }
 
 // GroupProjects is every project the group holds, subgroups included, as
-// `<namespace>/<path>` — the same spelling `provisioning.projects` uses and
-// every project route here takes.
+// `<namespace>/<path>`, the spelling `provisioning.projects` uses.
 //
-// # Why a teardown needs it and a reconcile does not
-//
-// A disconnect has to remove every hook this engine registered ANYWHERE, and
-// the config is not a record of where they are: a run that established
-// per-project hooks wrote them on the projects named AT THE TIME, and a
-// project dropped from `provisioning.projects` since — or a company that
-// connected with the group alone — leaves them unreachable. Measured on a
-// live disconnect: two hooks left on a project in the group, pointing at dead
-// tunnels from earlier runs, which nothing would ever visit again. A
-// `trycloudflare` hostname is re-issued to whoever asks next, so those
-// deliveries go on leaving the customer's GitLab for a stranger.
-//
-// The steady-state reconcile deliberately does NOT walk this. It runs every
-// few minutes and is already O(seats × projects) over the projects a company
-// named; a group with a thousand projects would turn every tick into a
-// thousand hook listings to converge hooks on the handful the config asks
-// for. A teardown happens once, when somebody presses Disconnect, and is the
-// one moment the whole group is worth reading.
-//
-// SUBGROUPS INCLUDED, because a group's projects are not only its direct
-// children and a hook on a subgroup's project is exactly as live as one on a
-// direct child's.
-//
-// PAGED TO EXHAUSTION, for the reason every other enumeration here is: a
-// truncated listing is not a slow report, it is a wrong DECISION — here, a
-// project silently never swept.
+// A teardown needs it, a reconcile does not. A disconnect must remove every
+// hook this engine registered ANYWHERE, and the config is no record of where:
+// a project dropped from `provisioning.projects` leaves hooks pointing at dead
+// tunnels, and a `trycloudflare` hostname is re-issued to whoever asks next.
+// A reconcile walking it would make a thousand-project group a thousand hook
+// listings per tick. PAGED TO EXHAUSTION: a truncated listing means a project
+// silently never swept.
 func (c *Client) GroupProjects(ctx context.Context, groupID int) ([]string, error) {
 	var out []string
 	path := "/groups/" + strconv.Itoa(groupID) + "/projects"
@@ -987,24 +907,16 @@ func (c *Client) GroupProjects(ctx context.Context, groupID int) ([]string, erro
 			"include_subgroups": {"true"},
 			// ARCHIVED ONES TOO, and `true` is how GitLab spells that.
 			//
-			// IT IS NOT A FILTER, which is the reading it invites and the
-			// one a review raised: `archived=true` would then return ONLY
-			// archived projects and this sweep would walk past every live
-			// one, leaving their hooks delivering to an address the company
-			// no longer has. What GitLab's own ProjectsFinder#by_archived
-			// does with a truthy value is return the collection UNFILTERED;
-			// the value that narrows to archived alone is the string
-			// `only`. Verified against gitlab-org/gitlab, not inferred.
+			// NOT A FILTER, though it reads like one: GitLab's
+			// ProjectsFinder#by_archived returns the collection UNFILTERED
+			// for a truthy value; only the string `only` narrows to
+			// archived. Verified against gitlab-org/gitlab.
 			//
 			// Sent explicitly although omitting it is documented to do the
-			// same, because an archived project keeps its webhooks and this
-			// is the one pass that has to see all of them: a default is a
-			// vendor's to change, and self-managed instances run versions
-			// this deployment does not choose.
+			// same: an archived project keeps its webhooks, this pass must
+			// see all of them, and a vendor default can change.
 			"archived": {"true"},
-			// The listing is only read for the path, so the cheapest
-			// ordering is fine and the default (created_at desc) is
-			// stable enough for a sweep that visits all of them.
+			// Only the path is read, so the cheap listing form suffices.
 			"simple": {"true"},
 		}, &batch)
 		if err != nil {
@@ -1127,16 +1039,11 @@ func (c *Client) UpdateProjectHook(
 // hookBody is the subscription every crewlet hook carries.
 // EVERY EVENT IS STATED, including the ones that are off.
 //
-// Omitting a field does not mean "off" — it means "whatever this GitLab
-// version defaults it to", and `push_events` defaults to TRUE. Sending only
-// the four the parser routes therefore subscribed every hook to every push
-// on every repository, which the engine answers with a 200 and drops.
-// Measured on a real instance: the hook came back `push_events: true` from a
-// body that never mentioned push.
-//
-// So the list below is exhaustive over what GitLab's hook API accepts, and a
-// future version that flips a default cannot quietly sign this deployment up
-// for traffic nothing reads.
+// Omitting a field means "whatever this GitLab version defaults it to", and
+// `push_events` defaults to TRUE: sending only the events the parser routes
+// subscribed every hook to every push, which the engine answers 200 and drops.
+// So the list is exhaustive over what GitLab's hook API accepts, and a version
+// that flips a default cannot sign this deployment up for traffic nothing reads.
 func hookBody(name, target, secret string) map[string]any {
 	body := map[string]any{
 		"url": target,
@@ -1150,23 +1057,13 @@ func hookBody(name, target, secret string) map[string]any {
 		"description": HookDigest(secret),
 		// THE SIGNING TOKEN, and the field name is the whole feature.
 		//
-		// GitLab takes two different secrets on a hook and they are not
-		// variants of one idea:
-		//
-		//   signing_token — an HMAC key. GitLab signs every delivery and
-		//     sends webhook-id / webhook-timestamp / webhook-signature, so
-		//     the receiver can verify the payload was not tampered with.
-		//     Must be whsec_<base64> over a 32-byte key; never returned.
-		//   token — a bearer string echoed back in plaintext as
-		//     X-Gitlab-Token, which GitLab's own docs call "not
-		//     recommended" and "weaker".
-		//
-		// The key goes in `signing_token` and never in `token`: given the
-		// whsec_ key there, GitLab does exactly what it is asked — it never
-		// signs, and it echoes a 32-byte HMAC key back in cleartext on
-		// every delivery, which the engine, verifying signatures, then
-		// rejects. Measured against a live 19.3.0 instance. Signing is
-		// supported from 19.1.
+		// GitLab takes two unrelated secrets on a hook. `signing_token` is a
+		// whsec_<base64> HMAC key over 32 bytes, never returned: GitLab signs
+		// each delivery (webhook-signature), supported from 19.1. `token` is
+		// a bearer string echoed in plaintext as X-Gitlab-Token, which GitLab
+		// calls "weaker". The key goes in `signing_token` and never in
+		// `token`: there GitLab never signs and echoes the HMAC key in
+		// cleartext on every delivery, which the engine then rejects.
 		"signing_token": secret,
 		// TLS verification stays ON. A provisioner that turned it off to
 		// make a self-signed development instance work would leave it off
@@ -1246,31 +1143,16 @@ func asAPIError(err error, target **APIError) bool {
 
 // HookDigest is how a hook records which signing key it was written with.
 //
-// # Why a digest is published at all
+// GitLab only says whether a hook has a signing token, so which key it holds is
+// stored in the description, the one field GitLab returns. See [Hook.Converged].
 //
-// GitLab never returns a hook's signing token, and answers exactly one
-// question about it: whether one is set ([Hook.SigningTokenPresent]). That
-// leaves "does this hook hold the key the fleet currently holds" unanswerable,
-// and the consequence is silent: a secret rotated outside a reconcile run is
-// never written to the hook, GitLab goes on signing with the previous key, the
-// engine verifies with the new one, and every delivery is refused while the
-// surface reports ready.
+// It is a HASH, never the key: SHA-256 over a domain string and the secret, cut
+// to 48 bits. Enough to notice a change, useless against a 32-byte secret. THE
+// DOMAIN STRING IS NOT DECORATION: it stops a match with a digest of the same
+// bytes made for another purpose, as internal/runtoken does.
 //
-// The only field this engine controls and GitLab gives back is the
-// description, so the answer goes there. It is a HASH, truncated, and never
-// the key: SHA-256 over a domain string and the secret, cut to 48 bits. That
-// is far more than enough to notice a change and useless for recovering
-// anything — the secret is 32 random bytes, so there is no dictionary to run
-// and nothing shorter to guess. The engine publishes no other property of it.
-//
-// THE DOMAIN STRING IS NOT DECORATION. It stops this digest ever matching one
-// computed over the same bytes for another purpose, which is the rule
-// internal/runtoken already applies to its own key derivation and for the same
-// reason.
-//
-// An empty secret digests to nothing rather than to the hash of the empty
-// string: a hook whose key this run does not know must not be reported as
-// carrying it.
+// An empty secret digests to "", not to the hash of the empty string: a hook
+// whose key this run does not know must not be reported as carrying it.
 func HookDigest(secret string) string {
 	if strings.TrimSpace(secret) == "" {
 		return ""

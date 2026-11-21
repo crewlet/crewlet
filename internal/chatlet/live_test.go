@@ -13,14 +13,12 @@ import (
 
 // A COMMITTED EFFECT CROSSES THE WIRE WHOLE.
 //
-// A node whose own copy is out of service is relayed a sound peer's chat
-// batches instead of its own applier's, so an [chatlet.Applied] one node gathered
-// is decoded on another and rendered there. A field the encoding dropped — an
-// unexported one, a type with no wire form, a tag that collides with another —
-// would be a frame missing it, rendered on exactly the node nobody vouches for,
-// with nothing anywhere to say so. The fixture sets EVERY field, the routing
-// snapshot's included, and says so by walking them: a field added later with
-// no value here fails before the round trip can pass by leaving it zero.
+// A node whose own copy is out of service is relayed a peer's chat batches, so
+// an [chatlet.Applied] gathered on one node is decoded and rendered on another.
+// A field the encoding dropped (unexported, no wire form, a colliding tag)
+// would be missing on exactly the node nobody vouches for, silently. The
+// fixture sets EVERY field, the routing snapshot's included, and walks them: a
+// field added later with no value here fails before a zero value can pass.
 //
 // Mutation: tag two fields alike, or give one a type that encodes nothing, and
 // the round trip differs.

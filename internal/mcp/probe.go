@@ -81,19 +81,13 @@ func (h *hintTable) lookup(name string) (Annotations, bool) {
 // annotationsFromSDK is the DEGRADED read, used only when the probe has no
 // record for a tool the server returned.
 //
-// The SDK's ToolAnnotations declares DestructiveHint and OpenWorldHint as
-// *bool — absence survives — but ReadOnlyHint and IdempotentHint as plain
-// bool. For those two, "the server did not say" and "the server said false"
-// arrive as the same value, and the round trip cannot restore it either: the
-// type's MarshalJSON emits both unconditionally.
-//
-// That flattening is not cosmetic. Read naively, an UNANNOTATED tool decodes
-// as ReadOnly=false with OpenWorld unset, which is exactly the shape
-// WritesToSharedSurface classifies as a write to a shared surface — so the
-// sub-agent guard would deny every under-annotated tool in the company, having
-// been told nothing at all. Hence the wire probe; hence this fallback trusts
-// only an explicit true and reports everything else Unknown, which degrades to
-// the documented tri-state rather than inventing a fourth answer.
+// The SDK declares DestructiveHint and OpenWorldHint as *bool, but
+// ReadOnlyHint and IdempotentHint as plain bool, so "not said" and "said
+// false" arrive alike and MarshalJSON cannot restore it. Read naively, an
+// UNANNOTATED tool decodes as ReadOnly=false, OpenWorld unset: exactly what
+// WritesToSharedSurface calls a write, so the sub-agent guard would deny every
+// under-annotated tool. Hence the wire probe; this fallback trusts only an
+// explicit true and reports the rest Unknown.
 func annotationsFromSDK(a *sdk.ToolAnnotations) Annotations {
 	if a == nil {
 		return Annotations{}
@@ -117,25 +111,15 @@ func annotationsFromSDK(a *sdk.ToolAnnotations) Annotations {
 // probeTransport wraps a Transport so every tools/list RESULT can be read as
 // the server serialized it, before the SDK decodes it into a lossy struct.
 //
-// This is a deliberate reach past the SDK's typed surface, and it is confined
-// to two questions about a tools/list result: which annotation keys were
-// present, and how long the server says the listing stays fresh (`ttlMs`).
-// The one thing it changes is that hint, which it hands the SDK as zero, so
-// the SDK's cache never answers a listing the engine asks for in the server's
-// stead (relist.go): the engine lists on its own schedule. Everything else on
-// the connection passes through untouched.
+// A deliberate reach past the SDK's typed surface, confined to which
+// annotation keys were present and the listing's `ttlMs`, which it hands the
+// SDK as zero so the SDK's cache never answers a listing the engine lists on
+// its own schedule (relist.go). All else passes through.
 //
-// What wrapping COSTS, stated because it is invisible otherwise: the SDK
-// probes its own connections for an unexported clientConnection interface, and
-// a wrapper cannot implement an unexported method. The one hook lost is
-// sessionUpdated, which does two things for the streamable HTTP transport —
-// opens the standalone SSE stream, and remembers the negotiated protocol
-// version for the Mcp-Protocol-Version header. Both are handled explicitly
-// where the HTTP transport is built (see newHTTPTransport); the stdio
-// transport does not implement the interface at all, so it loses nothing.
-//
-// It is also where the end of a session is SEEN, on either transport: see
-// probeConn.Read.
+// COST: a wrapper cannot implement the SDK's unexported clientConnection, so
+// sessionUpdated is lost: the standalone SSE stream and the protocol version
+// for Mcp-Protocol-Version, both handled in newHTTPTransport; stdio loses
+// nothing. A session's end is SEEN here too: see probeConn.Read.
 type probeTransport struct {
 	inner sdk.Transport
 	hints *hintTable

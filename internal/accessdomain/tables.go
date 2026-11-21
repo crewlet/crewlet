@@ -2,8 +2,8 @@ package accessdomain
 
 import "slices"
 
-// THE TABLE INVENTORIES, which the domain's Tables(), the replay cases and the
-// applier all read.
+// The table inventories the domain's Tables(), the replay cases and the
+// applier read.
 
 // ReproducibleTables is every table a replay from zero must rebuild byte for
 // byte: the record tables, the seats' removals, the node gate's table and the

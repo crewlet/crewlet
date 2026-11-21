@@ -2,33 +2,16 @@ package notify
 
 // The self-action rule: a seat is never woken by its own action.
 //
-// Without it a seat assigned to its own issue receives a webhook for every
-// comment IT posts, comments again, and loops — observed as 28 identical
-// comments on one ticket before anyone stopped it.
+// Without it a seat woken by its own comments loops. One rule, ONE actor field
+// every parser stamps, one comparison, applied by whichever layer holds the
+// identifiers:
 //
-// # One rule, three faces
-//
-// It shows up at three points, and implementing it three separate times, in
-// three layers, from three different fields, is the mistake to avoid:
-//
-//   - A chat backend ECHOES the bot's own message straight back. Caught at
-//     the transport, by app id.
-//   - A webhook names an actor who happens to be the recipient. Caught at
-//     the inbound service.
-//   - A first-party parser fanning out to watchers includes the actor
-//     among them. Caught at parse time, where the record's author and every
-//     candidate are handles in one namespace — Worklet's router
-//     and Doclet's both drop the author there, under the same
-//     exception their prompt declares. A vendor parser does NOT: its
-//     payload names accounts in the vendor's namespace, which only the
-//     registry resolves, so it stamps the actor and leaves the comparison to
-//     the inbound service.
-//
-// Three implementations meant three chances to disagree, and they did: the
-// service read only `actor_account_id`, which one third-party app stamps,
-// so the guard existed for that third-party app and silently did not exist
-// for the rest. Here there is ONE actor field every parser stamps, and one
-// comparison, applied by whichever layer holds the identifiers.
+//   - A chat backend ECHOES the bot's own message: caught at the transport.
+//   - A webhook names the recipient as actor: caught at the inbound service.
+//   - A first-party parser's watcher fan-out includes the actor: caught at
+//     parse time, where author and candidates share one namespace (Worklet's
+//     router and Doclet's drop the author, under their prompt's exception). A
+//     vendor parser only stamps the actor: the registry resolves its accounts.
 
 // ActorField is the metadata key carrying the external id of whoever caused
 // an event.
@@ -42,17 +25,14 @@ const ActorField = "actor_external_id"
 // SelfAction reports whether an event describes an action by the party it
 // would wake.
 //
-// The actor is RESOLVED rather than string-compared against the recipient's
-// id in the transport namespace. An agent acting on a chat backend posts
-// under its BOT id while the same seat is addressed by member id, so a
-// direct comparison misses precisely the case that loops — the seat's own
-// message coming back. Resolution consults both namespaces, so both spellings
-// of one seat compare equal.
+// The actor is RESOLVED, not string-compared with the recipient's transport
+// id: an agent on a chat backend posts under its BOT id while the seat is
+// addressed by member id, so a direct comparison misses exactly the looping
+// case. Resolution consults both namespaces.
 //
 // A nil registry reports false: a node with no company cannot tell whose
-// action this was, and refusing to deliver on a guess would drop real work.
-// The loop this prevents needs a seat that is already answering, which is a
-// node that does have a company.
+// action this was, and refusing on a guess would drop real work. The loop needs
+// an answering seat, which means a node that has a company.
 func SelfAction(r *Registry, transport, actorID string, recipient Party) bool {
 	if r == nil || actorID == "" || recipient.Handle == "" {
 		return false
@@ -67,20 +47,14 @@ func ActorOf(metadata map[string]string) string { return metadata[ActorField] }
 // WakesActor reports whether an event should reach the party who caused it
 // anyway, overriding the self-action rule.
 //
-// THE EXCEPTION IS REAL AND NARROW: an event reporting the OUTCOME of the
-// actor's own action is exactly what that actor needs to hear. A pipeline
-// that failed names the person who pushed as its actor, and they are the one
-// who has to fix it; suppressing it means the one person who can act never
-// learns. A comment the actor wrote is the opposite — they already know.
-//
-// The distinction is "did something happen BECAUSE of me that I do not yet
-// know about", and only the third-party app can name which of its
-// notifications are which, so it is asked through the prompt registry —
-// with the whole notification, because a source may answer from what its
-// parser stamped on this recipient's copy rather than from the event type
-// ([Prompt.WakesActor]). A source with no registered prompt gets the safe
-// answer, which is no: an unrecognised event type that loops is worse than
-// one that goes unheard, because the loop takes the company down with it.
+// THE EXCEPTION IS NARROW: the OUTCOME of the actor's own action is what that
+// actor needs to hear (a failed pipeline names the pusher, the one who can fix
+// it); a comment they wrote they already know. Only the app can say which
+// notifications are which, so it is asked through the prompt registry with the
+// whole notification, since a source may answer from what its parser stamped on
+// this recipient's copy ([Prompt.WakesActor]). A source with no registered
+// prompt gets no: an unrecognised event that loops is worse than one unheard,
+// because the loop takes the company down with it.
 func WakesActor(prompts Prompts, n Inbound) bool {
 	return prompts.For(n.Source).WakesActor(n)
 }

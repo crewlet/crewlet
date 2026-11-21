@@ -14,58 +14,35 @@ import (
 // Capabilities records what the live driver can actually do, measured at Open
 // rather than assumed from a version number.
 //
-// The three answers here are the ones where the docs and the code disagree:
-// Turso ships the vector column type and the distance
-// functions, but its ANN index and its full-text index are announced surface
-// not yet reachable from Go. That is still true at the pinned version, and it
-// is the reason this type survived the drop of the second driver: with one
-// driver these are no longer a comparison between two implementations, they
-// are a TRIPWIRE on one. A pin bump that lands a
-// feature turns a skipping test into a passing one, and a pin bump that loses
-// one fails the build — see capability_test.go, which turns each answer into a
-// test that passes, skips, or fails deliberately.
+// Each answer is a TRIPWIRE: a pin bump that lands a feature turns a skipping
+// test into a passing one, and one that loses it fails the build
+// (capability_test.go). A REFUSAL IS NOT AN ABSENCE: Turso refuses three of
+// these at an experimental FLAG, so Gated is the second, flagged answer.
 //
-// AND A REFUSAL IS NOT AUTOMATICALLY AN ABSENCE. Turso puts three of these
-// behind experimental flags and refuses at the FLAG, before it resolves the
-// module or builds the table — so the error an unflagged connection gets is
-// the same whether the feature is fully implemented behind the gate or was
-// never written. Measured only that way, all three read false and one of them
-// (WITHOUT ROWID) was wrong. Each therefore asks twice, and Gated is the
-// second answer.
-//
-// A probe never fails Open, including VectorFunctions. A driver regression
-// here should read as a capability that vanished — in the log line and in the
-// test — not as an engine that will not start. What it would actually cost is
-// worth stating precisely rather than as "best effort": two of recall's three
-// callers log and carry on with an empty block (the turn-start prefetches),
-// and the third is the `query_episodes` builtin, which propagates and surfaces
-// as a tool error to the agent. So a company keeps running and its seats
-// stop remembering.
+// A probe never fails Open: a regression reads as a vanished capability, not
+// an engine that will not start. Recall's prefetches then carry on with an
+// empty block and `query_episodes` returns a tool error.
 type Capabilities struct {
 	// VectorFunctions is vector32() and vector_distance_cos(): similarity
 	// computed by the database. It is what recall's ORDER BY is written
 	// against — the distance arithmetic runs in the database and only the
 	// rows that survive the limit cross the driver boundary.
 	//
-	// TRUE on the pinned driver. It was a branch when there were two
-	// drivers and one of them had no vector functions at all; it is a
-	// requirement now, and the honest reading of a false here is "this
-	// build's recall returns nothing", not "recall takes the other path".
+	// TRUE on the pinned driver, and a requirement: a false means this
+	// build's recall returns nothing, not that recall takes another path.
 	VectorFunctions bool
 
 	// VectorIndex is an approximate-nearest-neighbour index over a vector
 	// column. FALSE on the pinned driver, so recall is a SCAN behind the
-	// per-agent index rather than an index lookup — the arithmetic is the
-	// database's, the row set it runs over is still every embedded row for
-	// one agent. That is correct at the real workload (a per-agent diary
-	// and compacted episodes, thousands of rows, always filtered by agent
-	// first) and it is not the same claim as "native vector search".
+	// per-agent index: the arithmetic is the database's, but the row set is
+	// still every embedded row for one agent. That is correct at the real
+	// workload (thousands of rows, always filtered by agent first) and is
+	// not "native vector search".
 	//
-	// ABSENT RATHER THAN GATED, and the two are only distinguishable
-	// behind the flag: `USING vector` and `USING diskann` both answer
-	// `unknown module name` on a connection that opted into
-	// `index_method`, so there is nothing on the far side of the gate to
-	// opt into. See Gated.
+	// ABSENT RATHER THAN GATED: `USING vector` and `USING diskann` both
+	// answer `unknown module name` on a connection that opted into
+	// `index_method`, so there is nothing behind the gate to opt into. See
+	// Gated.
 	VectorIndex bool
 
 	// FullTextSearch is a queryable full-text index — Turso's own `USING
@@ -74,97 +51,51 @@ type Capabilities struct {
 	// module, and `USING fts` answers `unknown module name 'fts'` on a
 	// connection that opted into `index_method` (measured — see Gated).
 	//
-	// Nothing depends on it. The engine's lexical search is its OWN — the
+	// Nothing depends on it: the engine's lexical search is its OWN (the
 	// analyzer in internal/textindex and the inverted list internal/search
-	// maintains — which is what this false is the reason for. So a true here
-	// would not fix anything; it would open a question about whether the
-	// engine's own index should be replaced by the database's, which is a
-	// decision rather than a fallback. That is exactly why it is measured.
+	// maintains). A true here would open a decision about replacing that
+	// index with the database's, not fix anything, which is why it is
+	// measured.
 	FullTextSearch bool
 
 	// WithoutRowid is whether a `WITHOUT ROWID` table is reachable on the
 	// connections THIS ENGINE OPENS.
 	//
-	// FALSE on the pinned driver — and `Gated` carries "without_rowid"
-	// beside it, which is a different fact from the other two falses here
-	// and the reason that field exists. The engine IMPLEMENTS the feature
-	// and serves it to a connection that opted into
-	// `?experimental=without_rowid`; this engine's pool opts into nothing,
-	// so it is refused with `WITHOUT ROWID tables are an experimental
-	// feature` (measured both ways).
+	// FALSE on the pinned driver while `Gated` carries "without_rowid": the
+	// engine implements it only for `?experimental=without_rowid`, and this
+	// pool opts into nothing. `kb_vectors_bin` and
+	// `tracker_log_deferred_scope` pay for a rowid they never use.
 	//
-	// It is a TRIPWIRE with a caller waiting for it: `kb_vectors_bin` is the
-	// narrow table every semantic search scans first, and its rowid is pure
-	// overhead on a table whose primary key is the only way anything reaches
-	// a row. The same is true of `tracker_log_deferred_scope`.
-	//
-	// A gated true is NOT a licence to write one. Opting the DSN in turns an
-	// experimental feature of a pre-release engine on for every statement the
-	// store runs, and the tables are already built with rowids, so adopting
-	// it is a new numbered migration that rebuilds them rather than an edit
-	// to the ones that shipped. That is a decision to take deliberately,
-	// which is what publishing the reading is for.
-	//
-	// The design must probe what it depends on, which is why this is here
-	// rather than remembered: a migration written with `WITHOUT ROWID`
-	// would fail on every node and every store would refuse to open, and
-	// nothing in the tree uses it today so no existing test would catch it.
+	// A gated true is NOT a licence to write one: opting the DSN in enables
+	// an experimental feature for every statement, and adopting it is a new
+	// numbered migration that rebuilds the tables. A migration using
+	// `WITHOUT ROWID` today would make every store refuse to open.
 	WithoutRowid bool
 
 	// Gated names the capabilities this build of the database engine
-	// IMPLEMENTS but serves only to a connection that opted into one of
-	// Turso's experimental features — which this engine's pool does not.
+	// IMPLEMENTS but serves only to a connection that opted into an
+	// experimental feature, which this pool does not.
 	//
-	// A CAPABILITY'S NAME, not the flag's: one gate stands in front of more
-	// than one of the fields above, so a list of flags could not say which
-	// of them had landed. Each name here matches the field it explains, and
-	// [gatedCapability] holds the flag that would unlock it.
-	//
-	// WITHOUT IT EVERY PROBE ABOVE MEASURED THE GATE RATHER THAN THE
-	// FEATURE, and could not have done otherwise: Turso refuses `USING
-	// <anything>` and `WITHOUT ROWID` at the gate, BEFORE it resolves the
-	// module or builds the table, so the refusal an unflagged connection
-	// gets is identical whether the feature is fully implemented behind it
-	// or was never written. All three read false, and the one that is
-	// actually present was indistinguishable from the two that are not.
-	//
-	// So a gated probe asks TWICE — once on the live pool, which is what
-	// `WithoutRowid` and its siblings report, and once on a throwaway
-	// in-memory connection carrying the flag, which is what this reports.
-	// Empty is the healthy reading of a driver with nothing left gated;
-	// a name appearing here on a pin bump is the day to decide whether to
-	// opt in.
+	// A CAPABILITY'S NAME, not the flag's, since one gate fronts several
+	// fields; [gatedCapability] holds the flag. The refusal is identical
+	// whether a feature exists behind the gate or not, so a gated probe asks
+	// TWICE: on the live pool (the fields) and on a throwaway in-memory
+	// connection carrying the flag (this). A name appearing on a pin bump is
+	// the day to decide whether to opt in.
 	Gated []string
 
 	// MaxVariables is how many bound parameters one statement accepts,
-	// measured rather than assumed.
+	// measured. It is the chunk size (rows ÷ columns) of every multi-row
+	// INSERT the appliers write.
 	//
-	// It is the chunk size for every multi-row INSERT the appliers write:
-	// rows ÷ columns per statement, which is the difference between one
-	// round trip and a thousand on a batch this engine writes constantly.
+	// PROBED, NOT PICKED: the limit is the ENGINE's, not the dialect's. A
+	// hardcoded 32 766 is refused by a smaller-limit engine when a batch is
+	// largest; 999 wastes round trips. The pinned driver has no limit the
+	// probe can reach, so it reports the probe's 32 766 ceiling and
+	// [RowsPerInsert]'s row cap bounds a statement instead. The probe must not
+	// select a column per parameter ("too many columns" at 2 001).
 	//
-	// WHY IT IS PROBED AND NOT PICKED. The limit is the ENGINE's, not the
-	// dialect's: SQLite defaulted to 999 before 3.32 and 32 766 after it,
-	// and an engine in this family is free to pick a third. A hardcoded
-	// 32 766 is a statement such an engine refuses at the moment a batch is
-	// largest, and a hardcoded 999 is a fraction of the rows per statement
-	// that fit. The probe costs at most fifteen prepares, once per process
-	// ([driverMeasurement]), and is right on all of them.
-	//
-	// THE PINNED DRIVER HAS NO LIMIT THE PROBE CAN REACH: a statement
-	// binding 100 000 parameters prepares, and one binding 32 760 runs. So
-	// it reports the probe's own 32 766 ceiling, and what bounds an
-	// applier's statement is [RowsPerInsert]'s row cap instead. It used to
-	// report 2 000, which was not a parameter limit at all: the probe asked
-	// with `SELECT ?,?,…`, which returns a column per parameter, and the
-	// driver's refusal at 2 001 was "too many columns in result set".
-	// Every applier chunked to that number — 285 rows a statement at seven
-	// columns, 666 at three — while the driver would have taken the 1 000
-	// the row cap allows.
-	//
-	// A conservative 999 when the probe cannot tell: too small is slow,
-	// too large is a runtime failure on a statement the caller cannot
-	// retry differently.
+	// 999 when the probe cannot tell: too large is an unretryable failure.
 	MaxVariables int
 
 	// PageCacheKiB is `PRAGMA cache_size` as the driver actually applied
@@ -182,31 +113,13 @@ type Capabilities struct {
 // PageCacheKiB — against a live pool, and reports the first question the
 // driver did not answer, or nil when it answered every one.
 //
-// Every probe runs inside its own transaction and rolls it back, so a probe
-// that half-succeeds leaves nothing behind and a probe that fails cannot
-// poison the next one — a failed statement does not abort a SQLite
-// transaction, but continuing to use one after an error is a rule the driver
-// does not document, and one transaction per question costs microseconds.
-//
-// A probe never fails Open. An unavailable capability is an answer, not an
-// error — see the type doc for what each false actually costs — and a question
-// that went unanswered gets the same conservative answer. What the error
-// return adds is which of the two it was, which only matters to
-// [driverMeasurement]: a conservative answer is right for the one handle that
-// probed and wrong for every handle after it.
-//
-// A CONTEXT THAT ENDS needs no check of its own, after the last question or
-// anywhere else. [answered] admits only the parser's refusal, and an ended
-// context never arrives as one: database/sql and the pinned driver both hand
-// back the context's own error, the driver checking before every prepare and
-// every step. So a question the context cut short is already unanswered, and
-// one answered before the context ended was answered by the driver — which is
-// no less true for the context ending afterwards.
-//
-// The gated three are assigned rather than composed in the literal, because
-// each needs the value it is filling in: a gate they answer false at is a
-// reading about the DRIVER that belongs beside their own — see
-// [Capabilities.Gated].
+// Each probe runs in its own rolled-back transaction: the driver does not
+// document reusing one after an error. A probe never fails Open; the error
+// return says whether a conservative answer was a real one, which only
+// [driverMeasurement] needs. An ended context needs no check: [answered]
+// admits only the parser's refusal, and the context's own error is not one.
+// The gated three are assigned after the literal because each needs the value
+// it fills in.
 func probeDriver(ctx context.Context, db *sql.DB) (Capabilities, error) {
 	p := &prober{ctx: ctx, db: db}
 	caps := Capabilities{
@@ -261,43 +174,18 @@ func answered(err error) bool {
 // measured it — see [driverMeasurement] for what it holds and when.
 var measuredDriver driverMeasurement
 
-// driverMeasurement is the driver's half of [Capabilities] — every field but
-// PageCacheKiB — as the first probe that the driver answered IN FULL found it,
-// or nothing while none has.
+// driverMeasurement is the driver's half of [Capabilities] as the first probe
+// answered IN FULL found it, or nothing while none has.
 //
-// A TYPE RATHER THAN THE VARIABLE ALONE so a test can hold one of its own:
-// the process's is filled by whichever open in the binary finishes first, so
-// a case asking what an EMPTY measurement does with an unanswered probe could
-// never stage one there.
+// A TYPE so a test can hold its own empty one. Once per process because every
+// answer is about the compiled-in library (only the page cache is about the
+// file) and a probe cost a median 56-128 ms per open.
 //
-// # Why once per process
-//
-// Every one of those answers is about the compiled-in library: a parser's
-// bound, a registered function or module, an experimental gate. None is about
-// the file a pool happens to be open on — only the page cache is, which is
-// why it is read on every open regardless — so a second probe hears what the
-// first did. And the probe is a binary search of prepares plus three gated
-// questions, measured at a median of 56–128 ms per open, which was most of
-// what an open cost once the file's schema was already in place: every
-// snapshot, backup member and cursor copy [OpenEstate] opened paid it again,
-// and a test binary paid it thousands of times.
-//
-// # Why only a probe answered in full
-//
-// Each question's answer is a refusal as often as an acceptance, and every
-// probe here turns a failure into the conservative answer rather than failing
-// the open. A busy file or a context that ended produces that same
-// conservative answer, and kept here it would be every later handle's: one
-// transient on the first open would shrink every applier's statements for the
-// life of the process, where unremembered it shrinks one handle's. So a probe
-// is kept only when every question got the parser's answer ([answered]), and
-// one that did not is this handle's alone — the next open asks again.
-//
-// # Why not a WRAPPED driver's
-//
-// [Options.WrapDriver] exists to change what the driver does, so a pool on a
-// wrapped driver is asking a different driver: it probes for itself, and its
-// answers neither come from the measurement nor go into it.
+// Only a probe answered in full is kept: a busy file or ended context yields
+// the same conservative answer as a refusal, and kept it would shrink every
+// applier's statements for the process's life. Otherwise it is this handle's
+// alone ([answered]). A pool on a [Options.WrapDriver] driver probes for itself
+// and neither reads nor writes the measurement.
 type driverMeasurement struct {
 	mu   sync.Mutex
 	caps *Capabilities
@@ -457,17 +345,13 @@ func record(caps *Capabilities, capability gatedCapability, got gateOutcome) boo
 // behindGate runs the same statements on a throwaway connection that opted
 // into one experimental feature.
 //
-// IN MEMORY, never the store's own file: the file is exclusively owned by this
-// process and a second handle to it is the one thing this package exists to
-// prevent — and the question is the PARSER's and the module registry's, which
-// have nothing to do with which bytes are on disk. It carries none of the
-// pool's session pragmas for the same reason.
+// IN MEMORY, never the store's own file: that file is exclusively owned by
+// this process and a second handle to it is what this package exists to
+// prevent. The question is the parser's and module registry's, not the disk's,
+// so it carries none of the pool's pragmas either. Nothing to roll back.
 //
-// The database is discarded with the connection, so there is nothing to roll
-// back and no debris to clean up.
-//
-// 3.4 ms per call, measured, and only on a probe that actually hit the gate —
-// at most once per capability, once per process ([driverMeasurement]).
+// 3.4 ms per call, only on a probe that hit the gate, once per process
+// ([driverMeasurement]).
 func (p *prober) behindGate(feature string, stmts []string) (bool, error) {
 	db, err := sql.Open(driverName, ":memory:?experimental="+feature)
 	if err != nil {
@@ -505,16 +389,13 @@ const conservativeMaxVariables = 999
 // maxVariables finds the largest parameter count one statement accepts,
 // by BINARY SEARCH over prepares.
 //
-// A prepare rather than an execution: the limit is a parser bound, so a
-// statement that prepares would run, and preparing touches no table and needs
-// no transaction. The statement ([selectParams]) carries N parameters and
-// returns ONE column, because the parameter limit is the only bound it may be
-// able to meet — see [Capabilities.MaxVariables] for the probe that met the
-// result-set width instead and reported that as the parameter limit.
+// A prepare, not an execution: the limit is a parser bound, so a statement
+// that prepares would run, with no table or transaction. [selectParams] binds
+// N parameters and returns ONE column, so the parameter limit is the only
+// bound it can meet (see [Capabilities.MaxVariables]).
 //
-// The search is bounded above by 32 766 — SQLite's own post-3.32 default and
-// the largest value any engine in this family reports — so the loop is at
-// most fifteen prepares and cannot run away on a driver with no limit at all.
+// Bounded above by 32 766, the largest value any engine in this family
+// reports, so it is at most fifteen prepares on a driver with no limit.
 func (p *prober) maxVariables() int {
 	const ceiling = 32766
 	accepts := func(n int) bool {
@@ -622,22 +503,17 @@ func (p *prober) vectorFunctions() bool {
 	return p.heard(err) == nil
 }
 
-// vectorIndex tries to build an ANN index. The index METHOD is the part
-// Turso's parser rejects today, so creating one is the only honest test — the
-// column type and the distance functions are already present and prove
+// vectorIndex tries to build an ANN index: the index METHOD is the part
+// Turso's parser rejects, and the column type and distance functions prove
 // nothing about it.
 //
-// TURSO'S GRAMMAR, not libSQL's. The probe this replaces asked for
-// `libsql_vector_idx(e)`, which is a function of the C fork and a parse error
-// here whatever the driver ever ships — so it could only ever answer false,
-// and a tripwire that cannot fire is a claim rather than a measurement. Both
-// spellings Turso could plausibly land are tried.
+// TURSO'S GRAMMAR, not libSQL's: `libsql_vector_idx(e)` is a parse error here
+// whatever the driver ships, a tripwire that cannot fire. Both spellings Turso
+// could plausibly land are tried.
 //
-// THROUGH [prober.gated], because `USING <method>` is refused at the
-// experimental gate before the method name is looked at — so an unflagged
-// connection answers identically for a method that exists and one that does
-// not, and this measured neither until it asked behind the gate as well.
-// Today both answer `unknown module name` there: genuinely absent.
+// THROUGH [prober.gated], because `USING <method>` is refused at the gate
+// before the method name is looked at. Behind it both answer `unknown module
+// name`: genuinely absent.
 func (p *prober) vectorIndex(caps *Capabilities) bool {
 	// THE BEST OUTCOME ACROSS THE SPELLINGS, decided after both have
 	// answered. One method being gated says nothing about the capability
@@ -677,26 +553,15 @@ func (p *prober) withoutRowid(caps *Capabilities) bool {
 	}))
 }
 
-// fullText accepts either mechanism, because the capability the engine
-// would eventually use is "a full-text index exists", not "this exact syntax
-// parses". The fts5 arm is not dead code for a single driver: it is the shape
-// a SQLite-compatible engine would most plausibly land, and a probe that only
-// asked for the syntax this driver rejects today could report a capability it
-// has as missing.
+// fullText accepts either mechanism: the capability is "a full-text index
+// exists", not "this exact syntax parses". The fts5 arm is the shape a
+// SQLite-compatible engine would most plausibly land.
 //
-// THE SECOND ARM IS TURSO'S OWN GRAMMAR — `CREATE INDEX … USING fts (col)`,
-// gated behind the experimental `index_method` feature. The probe it replaces
-// wrote `(fts(body))` as an index EXPRESSION, which Turso has never accepted
-// in any build, so the arm meant to catch the feature landing could not have
-// caught it.
-//
-// AND IT GOES THROUGH THE GATE, which is what makes the second arm a
-// measurement at all. An unflagged connection is refused before the module is
-// resolved, so the answer it gives is about the flag and not about fts; behind
-// the flag the engine answers `unknown module name 'fts'`, which is the fact
-// this records. The arm still exists for the day that changes — see
-// [Capabilities.FullTextSearch] for why a true would be a question rather than
-// a fix.
+// THE SECOND ARM IS TURSO'S OWN GRAMMAR, `CREATE INDEX … USING fts (col)`,
+// behind the experimental `index_method` feature. It goes THROUGH THE GATE:
+// unflagged, the refusal is about the flag, not fts; behind it the engine
+// answers `unknown module name 'fts'`, the fact this records. See
+// [Capabilities.FullTextSearch] for why a true would be a question, not a fix.
 func (p *prober) fullText(caps *Capabilities) bool {
 	if ok, _ := p.inRollback([]string{
 		`CREATE VIRTUAL TABLE crewlet_probe_fts USING fts5(body)`,

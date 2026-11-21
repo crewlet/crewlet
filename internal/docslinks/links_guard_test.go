@@ -200,31 +200,17 @@ func loadLinks(t *testing.T) []link {
 }
 
 // TestDocumentationLinksCarryTheTrailingSlash fails the build when the tree
-// links a documentation PAGE without its trailing slash.
-//
-// docs.crewlet.ai is built with Astro's trailingSlash: 'always' behind
-// Cloudflare Pages, so every page there is a directory and the slashless
-// spelling is a 308 to the slashed one. It resolves, which is exactly why
-// eight of them sat in company-architect/SKILL.md unnoticed, and it is still
-// the wrong URL to hand out.
-//
-// It costs more than a redirect. The skill is read by an assistant that
-// fetches precisely what it is given, so each link is a wasted round trip on
-// every fetch. And it is published: the docs site serves skills/ alongside
-// the pages themselves, as text/markdown with no noindex, so a crawler
-// reading it harvests these URLs and files each one under "page with
-// redirect" instead of indexing the page it reaches. Two of them — the
-// quickstart and the turn engine — were reported that way in Google Search
-// Console before this check existed.
+// links a documentation PAGE without its trailing slash. docs.crewlet.ai is
+// built with trailingSlash: 'always', so the slashless spelling is a 308: an
+// assistant fetches exactly what it is given (a wasted round trip), and a
+// crawler files each URL in skills/ (served with no noindex) under "page with
+// redirect" instead of indexing the page.
 //
 // # What is exempt, and why
 //
-// A final path segment containing a dot names a FILE, not a page: a schema is
-// served as itself and a trailing slash there would be wrong — it is also the
-// URL tools resolve $ref against and the one crewlet schema stamps as $id, so
-// appending a slash would break editor autocomplete rather than tidy it. A
-// path already ending in '/' is the correct spelling and passes. The bare
-// origin has no path to judge.
+// A final segment containing a dot names a FILE: a schema is the URL stamped
+// as $id, so a slash would break editor autocomplete. A path ending in '/'
+// passes; the bare origin has no path to judge.
 func TestDocumentationLinksCarryTheTrailingSlash(t *testing.T) {
 	t.Parallel()
 
@@ -310,31 +296,15 @@ func TestPageMissingSlashReadsPunctuationAsProse(t *testing.T) {
 // TestDocumentationLinksNameAPublishedPath fails the build when the tree links
 // a path the documentation site does not build.
 //
-// The site used to serve the engine at its root, and when it moved under
-// /engine/ nothing forwarded the old paths: a root-shaped link is a 404, and
-// so is a page or a schema somebody renamed under a link that still names
-// it. Both look perfectly plausible in review, and neither has any symptom
-// short of a reader following it.
-//
-// Under /engine/latest/ and /engine/next/ the page must exist in this tree's
-// docs/ (or the file in schema/ or skills/). For next/ that is exactly what
-// is built. For latest/ the check rests on two rules the site keeps, and is
-// only as good as they are:
-//
-//   - latest/ is main or a release of this tree, never another program.
-//     Until this engine's first release it is a redirect to next/; from then
-//     it is the newest release, cut from this tree. The one tag older than
-//     that, v0.1.0, predates this engine, and the site does not publish it.
-//   - what the release lacks, latest/ redirects to next/: a page or a
-//     schema/ or skills/ file only main has answers at its latest/ path with
-//     a redirect to its next/ copy.
-//
-// So a link to a page or file this tree has works from the day it merges,
-// at main's copy or a release's. What this cannot see is a release's copy of
-// a page that main has since changed — a heading a #fragment names, say — so
-// a fragment is not checked here. A link to an older line (/engine/vX.Y/) or
-// into the operator's tree cannot be checked from here and is held to its
-// shape alone.
+// Nothing forwards old root-shaped paths, so such a link is a 404, as is a
+// page or schema renamed under a link still naming it. Under /engine/latest/
+// and /engine/next/ the page must exist in this tree's docs/ (or schema/ or
+// skills/). next/ is exactly that; latest/ rests on two rules the site keeps:
+// it is main or a release of this tree (v0.1.0 predates this engine and is not
+// published), and what the release lacks redirects to next/. A release's copy
+// of a page main has since changed is not seen, so a #fragment is not checked.
+// A link to an older line (/engine/vX.Y/) or into the operator's tree is held
+// to its shape alone.
 func TestDocumentationLinksNameAPublishedPath(t *testing.T) {
 	t.Parallel()
 

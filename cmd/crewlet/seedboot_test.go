@@ -102,18 +102,15 @@ func running(e *engine.Engine) (string, []string) {
 // A STALE -company FILE NEVER BECOMES THE ENGINE'S COMPANY.
 //
 // The store's revision was changed live: a seat deleted, the embedding model
-// widened, Worklet and Doclet taken up. The node restarts
-// with the old file on its command line, which the seed ignores — and the
-// engine used to boot on it anyway, and what a boot builds once per process
-// outlived the reconcile that replaced it. Building it opened the store at the
-// FILE's embedding width, so every reconcile of the live revision was refused
-// ("restart the node to change the width"), every restart did the same, and
-// the node served the deleted seat for good; and it started the native halves
-// for a company that keeps neither, so the live company ran with no tracker
-// and no knowledge base on this node.
+// widened, Worklet and Doclet taken up. The node restarts with the old file on
+// its command line, which the seed ignores. Booting on it anyway built it once
+// per process, outliving the reconcile that replaced it: the store opened at the
+// FILE's embedding width, so every reconcile and restart was refused ("restart
+// the node to change the width") and the deleted seat was served for good, and
+// native halves started for a company that keeps neither.
 //
-// Mutation: hand the engine the file whenever one is given, as the old boot
-// did, and the engine starts on "Stale File" with its store at 1536.
+// Mutation: hand the engine the file whenever one is given, and the engine starts
+// on "Stale File" with its store at 1536.
 func TestAStaleSeedNeverBecomesTheEnginesCompany(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapForStore(t, brokertest.TempDir(t))
@@ -229,16 +226,15 @@ roles:
     llm: coder
 `
 
-// A FIRST BOOT WHOSE FILE THIS NODE CANNOT BUILD IS REFUSED WITH NOTHING
-// WRITTEN, through the engine's own build.
+// A FIRST BOOT WHOSE FILE THIS NODE CANNOT BUILD IS REFUSED WITH NOTHING WRITTEN,
+// through the engine's own build.
 //
-// The engine starts unconfigured to import its file, so the first build of
-// that file is the first reconcile's — after the seed has stored it and pointed
-// the fleet at it. Unchecked, the boot went on: the first reconcile's refusal
-// is a warning, the node served no company while its log said it was serving
-// the one it booted with, and every restart was refused on the revision the
-// first one had written, with the corrected file ignored because a company now
-// existed.
+// The engine starts unconfigured to import its file, so the first build of that
+// file is the first reconcile's, after the seed has stored it and pointed the
+// fleet at it. Unchecked, the first reconcile's refusal was only a warning: the
+// node served no company while its log said it served the one it booted with, and
+// every restart was refused on the revision the first had written, the corrected
+// file ignored because a company now existed.
 //
 // Mutation: hand seedCompany a build that accepts everything and the fleet is
 // pointed at the file.
@@ -266,27 +262,15 @@ func TestAFirstBootThisNodeCannotBuildIsRefusedWithNothingWritten(t *testing.T) 
 // THE BOOT HOLDS ITS STORE FROM THE READ IT DECIDES ON UNTIL THE ENGINE HAS
 // OPENED IT, and gives it back once the engine has.
 //
-// `crewlet run` decides what the engine boots on by reading this node's store,
-// closes it, and opens it for the engine only once the broker is up — seconds
-// later, on a cluster join. An offline `crewlet config import` landing in that
-// gap used to write the very row the boot had decided on, and the first tick
-// then cleared the operator's change under a false "the fleet moved on". So
-// the case stands a SECOND PROCESS in the gap, the one place the claim can be
-// seen from: every check inside this process shares it. There, the import
-// meets the starting node — it takes the node's API, as it does beside a
-// running engine, and the listener `crewlet run` binds before it decides
-// answers `503 starting` — and a command with no way through the API is
-// refused naming this process; the store stays as the boot read it. Once the
-// engine has opened the file the boot's share is given back, and the engine's
-// alone refuses the command; once the engine has stopped nothing does, and the
-// import is written.
-//
-// Mutations, each run red: give back the claim [storeAt] takes as soon as it
-// has it, or take none, and the import is written in the gap; drop the claim
-// from the plan [decideFile] makes, and it outlives the engine, so the import
-// after the stop is sent to the node instead of written; give it back in
-// [bootEngine] before the open rather than after, and the import is written in
-// the gap.
+// `crewlet run` reads the store to decide, closes it, and opens it for the engine
+// only once the broker is up. An offline `crewlet config import` landing in that
+// gap wrote the row the boot had decided on. So the case stands a SECOND PROCESS
+// in the gap (every check inside this process shares the claim): the import takes
+// the starting node's API (`503 starting`), a command with no API route is refused
+// naming this process, and the store stays as read. Once the engine has opened the
+// file the boot's share is given back; once it has stopped the import is written.
+// Mutations, each red: give back the claim [storeAt] takes at once, or take none;
+// drop it from the plan [decideFile] makes; or give it back in [bootEngine] early.
 func TestTheBootHoldsItsStoreUntilTheEngineHasOpenedIt(t *testing.T) {
 	t.Parallel()
 	// THE STARTING NODE'S LISTENER, bound before the boot decides (step 5

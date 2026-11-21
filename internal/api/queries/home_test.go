@@ -337,16 +337,11 @@ func TestTheCompanyFeedMergesItsSources(t *testing.T) {
 // THE FEED IS READ FROM TWO LOGS, AND EACH HALF WAITS ON THE CALLER'S FLOOR IN
 // ITS OWN.
 //
-// The work is the tracker's log and the pages the knowledge base's. The feed
-// used to take one floor, the tracker's, and read its pages at the dashboard's
-// own level, so a page saved a moment ago could be missing from the feed drawn
-// after the save. Each half takes its own log's floor now
-// ([statelog.Freshness.On]) and never the other's, which its reader refuses as
-// a position on another log. A half whose log the caller named no floor on is
-// read `stale` — a `session` read there would wait for nothing under the
-// stronger name — and the answer reports the weakest level a half was read at,
-// so it never claims for its pages a freshness they were not read at. A floor
-// on a log the feed does not read is refused, naming that log.
+// Work is the tracker's log, pages the knowledge base's. Each half takes its
+// own log's floor ([statelog.Freshness.On]), never the other's, so a page
+// saved a moment ago is in the feed drawn after the save. A half with no floor
+// is read `stale`, and the answer reports the weakest level a half was read
+// at. A floor on a log the feed does not read is refused, naming that log.
 //
 // Mutation: hand the pages half the whole ask, or the work half's, and its
 // floor is the wrong log's; report the first half's level and the

@@ -41,12 +41,9 @@ func (b freshnessBag) List(key string) ([]string, bool) {
 	return []string{raw}, true
 }
 
-// EVERY REFUSAL NAMES THE PARAMETER TO CHANGE, AND NO PACKAGE.
-//
-// The grammar is the framework's and every domain's surface reads it, so a
-// refusal that opened with a package — it said "worklet:" when the parser was
-// the tracker's, and the floor's said "statelog:" — named a domain the person
-// asking a chat or a wiki question never asked about.
+// EVERY REFUSAL NAMES THE PARAMETER TO CHANGE, AND NO PACKAGE: every domain's
+// surface reads the grammar, so a package names a domain the person never
+// asked about.
 func TestEveryFreshnessRefusalNamesItsParameterAndNoPackage(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {

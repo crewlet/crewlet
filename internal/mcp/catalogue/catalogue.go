@@ -36,15 +36,18 @@
 // (Tier B `mcp_registry`). Off until set: the official registry is a frozen
 // preview whose own guidance is that a host reads a curated mirror of it, and
 // which mirror is the company's decision. A listing is somebody else's words
-// about somebody else's server, so [Registry.Search] bounds what it reads and
-// how many listings it keeps, refuses every field that is not the shape this
-// build can offer, keeps only a launch it can spell without a shell and an
-// address that is https, never a package from a registry other than the
+// about somebody else's server, so [Registry.Search] bounds the bytes it reads,
+// the listings it keeps and the time it takes, refuses every field that is not
+// the shape this build can offer, keeps only a launch it can spell without a
+// shell and an address that is https, never a package from a registry other than the
 // public one its runner fetches from, and drops everything else. It dials the
 // registry and nothing a listing names: no icon, no repository, no remote. A
 // listing is marked Community and is only ever a draft for the same add flow
 // an address typed by hand goes through, so nothing it says starts a process
-// or skips a test.
+// or skips a test. The registry's own address must be https
+// ([CheckRegistryAddress]), no redirect is followed, a listing that cannot be
+// offered whole is left out and counted, and a result never carries an
+// integration, a fixed value or a vendor mark its address did not earn.
 //
 // # Who has to agree on it
 //

@@ -102,3 +102,40 @@ func (f *Fleet) DeleteUploadRecord(_ context.Context, upload string, revision ui
 	delete(f.uploads, upload)
 	return true, nil
 }
+
+// SaveLedger reads one seat's save ledger and its version. Its age is the
+// uploads bucket's, not modelled here for the upload ledger's reason.
+func (f *Fleet) SaveLedger(_ context.Context, seat string) ([]byte, uint64, error) {
+	if seat == "" {
+		return nil, 0, errors.New("coord/memory: a save ledger needs a seat")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ledger, ok := f.saveLedgers[seat]
+	if !ok {
+		return nil, 0, nil
+	}
+	return slices.Clone(ledger.value), ledger.version, nil
+}
+
+// SwapSaveLedger writes one seat's save ledger while it is still at revision,
+// 0 creating it.
+func (f *Fleet) SwapSaveLedger(_ context.Context, seat string, value []byte, revision uint64) (uint64, error) {
+	switch {
+	case seat == "":
+		return 0, errors.New("coord/memory: a save ledger needs a seat")
+	case len(value) == 0:
+		return 0, errors.New("coord/memory: a save ledger needs a value")
+	}
+	if err := coord.HoldValue("the save ledger of "+seat, len(value)); err != nil {
+		return 0, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.saveLedgers[seat].version != revision {
+		return 0, nil
+	}
+	f.version++
+	f.saveLedgers[seat] = versioned{value: slices.Clone(value), version: f.version}
+	return f.version, nil
+}

@@ -6,19 +6,15 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// THE REST BASE IS DERIVED, NEVER THE RAW URL — and on Enterprise Server the
-// difference is destructive rather than cosmetic.
+// THE REST BASE IS DERIVED, NEVER THE RAW URL: on Enterprise Server the
+// difference is destructive.
 //
-// [github.AdoptSeatApps] reads a 404 from the installation endpoints as an
-// app GitHub no longer has, and FORGETS the seat's app: the id, the slug and
-// the pointer to a private key GitHub issues once and never reissues. Handed
-// `https://ghe.example.com` as the API base, every call goes to a path the
-// REST API is not served on, every call 404s, and the first pass clears every
-// seat's working app.
-//
-// github.com hides it: an empty url makes the raw value and the derived one
-// both resolve to api.github.com, so a caller that skipped the derivation was
-// only ever wrong on Enterprise.
+// [github.AdoptSeatApps] reads a 404 from the installation endpoints as an app
+// GitHub no longer has, and FORGETS the seat's app: the id, the slug and the
+// pointer to a private key GitHub issues once. Handed `https://ghe.example.com`
+// as the API base, every call goes to a path the REST API is not served on and
+// 404s, and the first pass clears every seat's working app. github.com hides
+// it: an empty url makes the raw and derived values both api.github.com.
 func TestGitHubBasesAreDerivedFromAResolvedURL(t *testing.T) {
 	t.Parallel()
 	env := config.EnvOnly()

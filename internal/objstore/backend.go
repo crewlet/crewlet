@@ -18,20 +18,13 @@ var ErrNotFound = errors.New("objstore: no such object")
 // handed over exactly that many that hash to something other than the row's
 // digest. Never handed to a reader as the object ([Store.Open]).
 //
-// AND A NAME THE BACKEND HOLDS SOMETHING UNDER THAT IS NO OBJECT AT ALL — the
-// broker's object store holding metadata that does not decode — which its
-// stat and its get answer with this rather than with a failure: it is as
-// definite as a wrong digest, since asking again reads the same thing and no
-// get will ever hand the object's bytes back, and a failure there would have
-// every reader retry for ever, the audit stop on it every day without naming
-// the file, and a backup refuse to finish rather than record it lost.
-//
-// ONLY A DEFINITE ANSWER IS CORRUPTION. A read that FAILED before the end — a
-// deadline, a dropped link, a broker that stopped answering — is a failed
-// read and nothing more, whatever its library calls it: the object may be
-// whole, a later read may get it, and an error that said otherwise would send
-// an operator to restore a file nothing is wrong with, and a backup to record
-// it as lost.
+// AND A NAME HELD UNDER SOMETHING THAT IS NO OBJECT (broker metadata that does
+// not decode) is answered with this by stat and get, not a failure: asking again
+// reads the same, and a failure would make readers retry for ever, the audit
+// stop daily, and a backup refuse to finish rather than record it lost.
+// ONLY A DEFINITE ANSWER IS CORRUPTION: a read that FAILED before the end
+// (deadline, dropped link) may find the object whole, and saying otherwise
+// sends an operator to restore a healthy file.
 var ErrCorrupt = errors.New("objstore: an object's bytes are not the ones it was stored with")
 
 // ErrStalled is a transfer its backend stopped moving for [Stall]: a read
@@ -48,37 +41,31 @@ var ErrStalled = errors.New("stalled")
 // ErrNoDeadline is a read asked for under a context with no deadline.
 var ErrNoDeadline = errors.New("objstore: a read must carry a deadline")
 
-// ErrFull is a put the backend refused because the store has no room for it:
-// the fleet's own bucket (natsobj) holds as many bytes as it was created to
-// reserve, and refuses a new object rather than discard an old one; or an
-// S3-compatible bucket's provider refuses the write for want of room — its
-// drives at their floor, a quota spent (s3obj). Nothing is stored, as for
-// every failed put ([Backend.Put]).
+// ErrFull is a put the backend refused because the store has no room: the
+// fleet's own bucket (natsobj) holds only the bytes it reserved and refuses a
+// new object rather than discard an old one, or an S3-compatible provider
+// refuses for want of room (drives at their floor, a quota spent: s3obj).
+// Nothing is stored ([Backend.Put]).
 //
-// A SENTINEL rather than the backend's own text, because the caller's answer
-// is specific: the upload is refused for room the deployment has to make, never
-// retried as a blip. A backend answers it only inside a [*Full], which names
-// that room: errors.Is(err, ErrFull) holds of every such answer, and a surface
-// that refuses an upload for it takes the *Full with errors.As to say what an
-// operator does.
+// A SENTINEL rather than the backend's text, because the answer is specific:
+// refused for room the deployment has to make, never retried as a blip. A
+// backend answers it only inside a [*Full]; errors.Is(err, ErrFull) holds of
+// each, and a surface takes the *Full with errors.As to say what an operator
+// does.
 var ErrFull = errors.New("objstore: the object store has no room left")
 
 // Full is a put a backend refused for room ([ErrFull]): Remedy is the room an
 // operator makes, and Err the backend's own answer.
 //
-// THE REMEDY IS THE BACKEND'S, carried by its answer, because the room is
-// made where the backend keeps its bytes and only the backend knows where that
-// is. Every surface that refuses an upload for a full store splices Remedy into
-// a sentence of its own vocabulary — a pushed ref's line, a tool's answer, an
-// HTTP refusal's hint — after "until" or "once", so it is one clause, naming
-// gestures that are each an operator's, that the uploader cannot make and that
-// no retry stands in for: asked again before one is made, the store answers the
-// same. In plain words rather than markup, because a git client prints it as
-// it is.
+// THE REMEDY IS THE BACKEND'S, because only it knows where its bytes are kept.
+// Every surface splices Remedy after "until" or "once" into a sentence of its
+// own (a pushed ref's line, a tool's answer, an HTTP hint), so it is one clause
+// of gestures only an operator can make, in plain words because a git client
+// prints it as is.
 //
-// ERR NAMES THE BUCKET, its endpoint and its keys, which none of those readers
-// can act on and a model reads into its prompt: it is the node's log's, never a
-// surface's sentence.
+// ERR NAMES THE BUCKET, its endpoint and its keys, which no reader can act on
+// and a model reads into its prompt: it is the node's log's, never a surface's
+// sentence.
 type Full struct {
 	Remedy string
 	Err    error
@@ -108,15 +95,11 @@ const FullWords = "There's no room left for the company's files. An " +
 // library words in its own terms. Nothing is stored ([Backend.Put]), and a
 // later put may be.
 //
-// CLASSIFIED ONCE, HERE, by [Store] — because every surface that stores a
-// person's file has to tell this from a fault of the node, and each was
-// telling it differently: a project file's upload answered it as a store that
-// would answer again, an artifact's upload as the node's own fault, and their
-// two tools the same two ways. It is the reading every object-store surface
-// already gives a READ it cannot name (a download, the backup, the
-// migration): the store did not answer. A put the backend stopped reading
-// before its end is not this but a fault, and a put whose caller's own
-// context ended carries that context's error instead.
+// CLASSIFIED ONCE, HERE, by [Store], because every surface that stores a
+// person's file must tell this from a fault of the node, and they disagreed. It
+// is the reading every surface already gives a READ it cannot name: the store
+// did not answer. A put the backend stopped reading before its end is a fault,
+// and one whose caller's context ended carries that context's error instead.
 var ErrUnanswered = errors.New("objstore: the object store did not take the bytes")
 
 // Usage is how much of a backend's byte reservation its objects take: Bytes
@@ -189,22 +172,16 @@ type Info struct {
 	// Size is how many bytes it holds.
 	Size int64
 
-	// Written is the instant the backend dates the object by, in UTC and
-	// on the backend's own clock: NO EARLIER THAN ITS PUT BEGAN AND NO
-	// LATER THAN IT BECAME WHOLE AND VISIBLE — and where in that span
-	// differs by backend. The broker's object store and the twin date an
-	// object when its last byte is stored; S3 dates one assembled from
-	// parts by when its upload BEGAN (s3obj), which for a large object at
-	// the [MiBPace] floor is hours before anybody could read it. So
-	// anything judging an object's age from Written — the collector's
-	// grace — reads it as the EARLIEST the object might have been stored,
-	// never as when it was finished: an age measured from Written can
-	// exceed the time the object has been visible by as long as its upload
-	// took.
-	//
-	// It is one of the two instants the collector's grace is measured
-	// from; the other is the key's own ([Key.Minted]). A listing never
-	// hands on an object with no such instant ([ErrUndated]).
+	// Written is the instant the backend dates the object by, in UTC on its
+	// own clock: NO EARLIER THAN THE PUT BEGAN AND NO LATER THAN THE OBJECT
+	// BECAME WHOLE AND VISIBLE, and where in that span differs by backend. The
+	// broker's store and the twin date it at the last byte; S3 dates a
+	// multipart object by when its upload BEGAN (s3obj), hours before a large
+	// one at the [MiBPace] floor is readable. So an age from Written (the
+	// collector's grace) is read as the EARLIEST storage time, and can exceed
+	// the time visible by as long as the upload took. It is one of two instants
+	// the grace is measured from, the other the key's ([Key.Minted]); a listing
+	// never hands on an object with neither ([ErrUndated]).
 	Written time.Time
 
 	// Digest is the SHA-256 the backend computed over the bytes it was
@@ -257,30 +234,15 @@ type PutMeta struct {
 
 // Backend is where the bytes live: one store the whole fleet shares.
 //
-// Implemented by the fleet's own JetStream object store (natsobj), by an
-// S3-compatible bucket (s3obj) and by the in-memory twin (memobj), and all of
-// them certified by ONE suite (objstoretest).
+// Implemented by natsobj, s3obj and the twin memobj, all certified by ONE suite
+// (objstoretest). A DUMB STORE OF OPAQUE NAMES: a backend hands every name back
+// verbatim and parses none (what a name means is this package's grammar and the
+// collector's judgement), so it cannot hide an object from the collector by
+// declining to list a name it did not understand.
 //
-// # A dumb store of opaque names
-//
-// A backend keeps bytes under whatever name it is handed and hands every name
-// back verbatim. It parses none: what a name means — an object's key under
-// the engine's namespace ([Key.Name]) or somebody else's object entirely —
-// is this package's grammar and the collector's judgement, so it is written
-// once, here, rather than once per backend, and a backend can never hide an
-// object from the collector by declining to list a name it did not
-// understand.
-//
-// A NAME IS PUT ONCE. The store never reuses one ([Key]), so what a second put
-// of a held name does is no backend's promise, and nothing here depends on
-// it.
-//
-// # Streamed, both ways
-//
-// A put reads its bytes from a reader to the end and a get hands them back as
-// a reader, so no verb holds an object in memory: what a backend buffers is
-// its own unit of transfer — a broker message, an S3 part — and never the
-// object.
+// A NAME IS PUT ONCE ([Key] never reuses one), so what a second put of a held
+// name does is no backend's promise. Both ways are streamed: a backend buffers
+// only its own unit of transfer, never an object.
 type Backend interface {
 	// Put stores everything r yields under name. The object becomes
 	// visible only once r is read to its end and every byte is stored; a
@@ -298,18 +260,13 @@ type Backend interface {
 
 	// Get streams n bytes of name from offset off — to the end when n is
 	// negative — or answers [ErrNotFound], or [ErrCorrupt] where what the
-	// backend holds under name is no object it can read. A range that
-	// begins at or past the end is an empty stream; one that runs past it
-	// is short.
-	//
+	// backend holds under name is no object it can read. A range at or past
+	// the end is an empty stream; one running past it is short.
 	// ctx bounds the WHOLE read, the stream included, and must carry a
-	// deadline: a read that stops moving has to end somewhere, and a
-	// backend refuses one with none ([ErrNoDeadline]) rather than pick a
-	// bound of its own. Every backend begins with [CheckRead]. And ctx
-	// ENDING ends the read: a Get still opening the stream, and a Read
-	// blocked on the backend, each return with ctx's error once ctx is
-	// done — which is how [Store]'s stall watchdog stops a read that has
-	// stopped moving, or has never begun.
+	// deadline: a backend refuses none ([ErrNoDeadline]) rather than pick its
+	// own bound, beginning with [CheckRead]. ctx ENDING ends the read: a Get
+	// still opening and a Read blocked on the backend each return ctx's error,
+	// which is how [Store]'s stall watchdog stops a read that stopped moving.
 	//
 	// The bytes are what the backend holds; checking them is [Store]'s.
 	Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error)
@@ -356,17 +313,13 @@ type Backend interface {
 // S3 bucket, whose listing is in the byte order of its keys and answers a
 // thousand of them a request.
 //
-// AN OPTIONAL HALF OF THE CONTRACT, because only some stores keep their names
-// in order — the broker's object store lists in the order its metadata was
-// written — and it exists for one reason: the audit asks the store about every
-// object a live row names, and the rows are walked in key order, so on a store
-// that lists in order one listing of a range answers what a stat of each object
-// in it would, at a request a page of names rather than one an object.
-// Declared HERE, beside the contract, rather than by the consumer alone,
-// because two packages hold it to one meaning — the suite that certifies it
-// (objstoretest, which also refuses a backend that implements it uncertified)
-// and the store that reads it ([Store.ListKeys]) — and two declarations would
-// be two contracts nothing held together.
+// AN OPTIONAL HALF OF THE CONTRACT, because only some stores keep names in order
+// (the broker's lists in metadata-write order). It exists for the audit, which
+// asks about every object a live row names, walking rows in key order: one
+// listing of a range then answers what a stat of each would, a request per page
+// of names. Declared HERE rather than by the consumer, because two packages
+// hold it to one meaning, the suite certifying it (objstoretest, which refuses
+// a backend implementing it uncertified) and the reader ([Store.ListKeys]).
 type Ranged interface {
 	Backend
 
@@ -445,25 +398,18 @@ func (c *contextReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
-// Fill reads r into p until p is full or r stops, and says which: n bytes and
-// end false is a full p, end true is r ENDED after n bytes, and an error is r
-// FAILED after n bytes — with r's own error, unchanged, whatever it is.
+// Fill reads r into p until p is full or r stops, and says which: end false is
+// a full p, end true is r ENDED after n bytes, an error is r FAILED, unchanged.
+// THE END IS io.EOF ITSELF, compared by equality, never anything resembling it.
+// io.ReadFull answers its own short read as io.ErrUnexpectedEOF, also what a
+// request body answers when its client goes away mid-body, so a caller taking
+// one for the end stored a partial upload as whole. A WRAPPED io.EOF is a
+// failure for the same reason.
 //
-// THE END IS io.EOF ITSELF, compared by equality, as io.ReadAll and the
-// broker's object store compare it — never anything that resembles it.
-// io.ReadFull, which the backends read through before, answers its own short
-// read as io.ErrUnexpectedEOF, which is also what a request body answers when
-// its client goes away mid-body; a caller taking the one for the end took the
-// other with it, and stored the part of an upload that arrived as the whole of
-// it. A WRAPPED io.EOF is a failure for the same reason: the end is a
-// reader's plain answer, and one carrying more than io.EOF is reporting
-// something io.EOF does not say.
-//
-// An error that arrives with the bytes that filled p is answered with them,
-// where io.ReadFull drops it: a reader that failed once is not promised to
-// fail again on the next read. And a reader answering nothing and no error
-// [maxEmptyReads] times running fails with io.ErrNoProgress, as bufio judges
-// one, rather than holding its caller in a loop for ever.
+// An error arriving with the bytes that filled p is answered with them, where
+// io.ReadFull drops it: a failed reader is not promised to fail again. A reader
+// answering nothing and no error [maxEmptyReads] times running fails with
+// io.ErrNoProgress, as bufio judges, rather than loop for ever.
 func Fill(r io.Reader, p []byte) (n int, end bool, err error) {
 	for empty := 0; n < len(p); {
 		m, rerr := r.Read(p[n:])
@@ -497,17 +443,13 @@ const MiB = 1 << 20
 // part on its way to a bucket, an object on its way back from one — and so
 // the slowest transfer the object store accepts.
 //
-// ONE FLOOR FOR EVERY LEG, and every bound on a transfer derives from it
-// rather than restating it: two figures that agree today by coincidence are
-// two figures somebody retunes apart, and then a budget meant to outlast the
-// client's own pace no longer does.
+// ONE FLOOR FOR EVERY LEG: every bound on a transfer derives from it, since
+// two figures retuned apart stop a budget outlasting the client's own pace.
 //
-// THIRTY SECONDS, a floor of about 35 KB/s: far under any link a node or a
-// bucket is reached over, and far over a request that has stopped moving. A
-// bound derived from the SIZE rather than one figure for every request,
-// because the requests here run from a stat of no bytes to a part of eight
-// mebibytes, and any single figure is either a cap on the large ones or no
-// bound on the small.
+// THIRTY SECONDS, a floor of about 35 KB/s: far under any link a node or bucket
+// is reached over, far over a request that stopped moving. Bounds derive from
+// the SIZE, as requests run from a stat of no bytes to an eight-mebibyte part
+// and any single figure caps the large or leaves the small unbounded.
 const MiBPace = 30 * time.Second
 
 // PaceFor is how long n bytes are given at [MiBPace]: one pace for every
@@ -546,33 +488,16 @@ const ReadBase = time.Minute
 // watchdog ever sees.
 func ReadBudget(size int64) time.Duration { return ReadBase + 2*PaceFor(size) }
 
-// Stall is the longest one transfer of an object may wait on its backend
-// before it is ended as stalled ([ErrStalled]): for a read, the stream to
-// begin and each piece of it after; for a write, the backend to take more of
-// it or answer.
+// Stall is the longest a transfer may wait on its backend before it is ended
+// as stalled ([ErrStalled]): a read's stream and pieces, a write's progress.
 //
-// A MINUTE — two of [MiBPace], the time a mebibyte is given: no backend
-// streaming hands over its next piece more than a mebibyte apart, the largest
-// piece any of them moves is an eight-mebibyte part read in pieces far
-// smaller, and a read that has heard nothing for a minute is waiting on a
-// broker that lost the object's pieces, a connection that has gone or a
-// bucket that keeps failing the request it asks again — any of which would
-// otherwise hold the reader until its whole budget ran out, hours for a large
-// file. The open is held to it as each piece is ([ReadBase]): a backend asks
-// for its first bytes before it hands a stream back, and one whose client
-// asks a failed request again until its caller's deadline, or that reaches a
-// peer which accepts the request and never answers it, would otherwise make
-// of an open it cannot get answered a wait as long as the read's whole
-// budget.
+// A MINUTE, two of [MiBPace]: no backend's next piece is over a mebibyte apart,
+// so a read silent that long waits on lost pieces, a dead connection or a
+// failing bucket, which would otherwise hold the reader for its whole budget.
+// The open is held to it too ([ReadBase]), else a retrying backend or silent
+// peer would make it as long as that budget.
 //
-// THE SAME MINUTE FOR A WRITE, which each backend watches for itself because
-// only the backend can see a write move: the S3 backend at its socket — the
-// body taken, the bytes the bucket's side acknowledged, its answer — and the
-// broker's by its acknowledgements. A write moving at the floor moves a
-// mebibyte a half-minute, so a minute with nothing moving is a backend that
-// stopped, which a deadline sized for the write's bytes would hold for up to
-// sixteen and a half minutes; and a person reads one figure for every way the
-// store can fail a transfer — a read, a write, and a request the bucket keeps
-// failing, which the S3 backend gives up at the same minute. A constant,
-// never configuration: nothing honest differs by deployment.
+// THE SAME MINUTE FOR A WRITE, each backend watching its own: at the floor a
+// mebibyte moves in half a minute, so a silent minute is a stopped backend a
+// bytes-sized deadline would hold up to sixteen and a half. A constant.
 const Stall = 2 * MiBPace

@@ -240,19 +240,15 @@ func TestACallInTheHostsNamespaceIsTheHosts(t *testing.T) {
 }
 
 // A RESPONSE'S PROSE IS WHAT ITS DELTAS SPELLED WHERE NOTHING WRITES IT WHOLE,
-// and a condition can hold of a value's beginning. Muse Code streams a
-// response's prose in fragments that no later event repeats whole, and files a
-// tool's side effect under `tool:<name>` beside the model's
-// `model.meta.response`: the fragments run together are the request's prose —
-// and its answer — and a call is read from the side effects of tools alone.
+// and a condition can hold of a value's beginning. Muse Code streams prose in
+// fragments no later event repeats, and files a tool's side effect under
+// `tool:<name>` beside the model's `model.meta.response`: the fragments together
+// are the request's prose and answer, and a call is read from tools' side
+// effects alone. The request is told when its call is read, and as prose grows.
 //
-// The request is told as soon as its call is read, and told again as its prose
-// grows past what it was told.
-//
-// Mutation: read each fragment as a line of text as well, and the first
-// request is told as "Look"; leave the prose to text rules alone, and the
-// answer is empty; leave a fragment unmarked as news, and the first request
-// stays "Look"; match a
+// Mutation: read each fragment as a line of text as well, and the first request
+// is told as "Look"; leave prose to text rules alone, and the answer is empty;
+// leave a fragment unmarked as news, and the first request stays "Look"; match a
 // prefix as a whole value, and the call is never read; ignore the prefix
 // condition, and the model's own side effect is read as a call.
 func TestAResponsesProseIsWhatItsDeltasSpelled(t *testing.T) {

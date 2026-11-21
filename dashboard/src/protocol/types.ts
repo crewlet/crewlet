@@ -28,6 +28,15 @@ import type { TurnOutcomesAnswer } from "./turnOutcomes.ts";
 import type { InsightsAnswer } from "./insights.ts";
 import type { AccessFixAnswer, AdvisorAnalysisAnswer, AdvisorAnswer } from "./advisor.ts";
 import type {
+  AdvisorFindingDetail,
+  AdvisorFindingList,
+  AdvisorNoticesAnswer,
+  AdvisorReport,
+  AdvisorReportList,
+  AdvisorRunSummary,
+  AdvisorSnapshot,
+} from "./advisorFindings.ts";
+import type {
   ModelCheck,
   ModelDevice,
   ModelEntriesAnswer,
@@ -56,6 +65,7 @@ import type { ToolRow } from "../contract/tools.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
 import type {
+  CHANGE_MOVE_KINDS,
   CHANGE_STATES,
   CodeSearchAnswer,
   COMMAND_OUTCOMES,
@@ -150,6 +160,19 @@ import type {
 // Events
 // ---------------------------------------------------------------------------
 
+/**
+ * One object an engine line names (`named.Ref`): its kind, its id, and the
+ * words the line spells it with, which are a run of the line, found left to
+ * right (`lib/inlineTokens.ts`). `kind` is a string rather than a closed
+ * union: a kind a newer engine names arrives as itself and is drawn as its
+ * words.
+ */
+export interface NamedRef {
+  kind: string;
+  id: string;
+  text: string;
+}
+
 /** One payload-free row of the activity feed. */
 export interface FeedRow {
   id: string;
@@ -158,6 +181,8 @@ export interface FeedRow {
   source: string;
   actor: string;
   summary: string;
+  /** What `summary` names (`named.Ref`), absent where it names nothing. */
+  refs?: NamedRef[];
   category: string;
   trace_id: string;
   span_id: string;
@@ -208,6 +233,8 @@ export interface EventRecord {
   source: string;
   actor: string;
   summary: string;
+  /** What `summary` names (`named.Ref`), absent where it names nothing. */
+  refs?: NamedRef[];
   category: string;
   trace_id: string;
   span_id: string;
@@ -1070,6 +1097,14 @@ export interface ExecutorRow {
    * no tool, so the entries always account for `bridge_calls_elided`.
    */
   bridge_elided_calls?: ElidedCall[];
+
+  /**
+   * The late calls of the log (a call a relaunch outlived, or one its harness
+   * gave up on) that the job working as each landed took into its own session:
+   * no continuation of that session is told them again. Always an array on a
+   * row the store answered; absent on a live entry.
+   */
+  bridge_calls_told?: ToldCall[];
   /** The engine withheld this run's body from this reader — see [task_description]. */
   body_withheld?: boolean;
 }
@@ -1171,9 +1206,34 @@ export interface BridgeCall {
    * relaunch was readied, and finished after. A call of the round all the
    * same, whose effect happened — but what it cost is charged to no job, it is
    * never the round's submission, and every later continuation of the round is
-   * told it. Absent on every other call.
+   * told it but one of a session that took it while it worked
+   * ([ExecutorRow.bridge_calls_told]). Absent on every other call.
    */
   late?: boolean;
+  /**
+   * A call nobody waited for by the time it returned: its run's harness had
+   * given up on it, or the run's session on the bridge ended while it ran. It
+   * ran and its effect happened, while the session that made it holds it with
+   * no outcome, as timed out or as still running; told as a late call is.
+   * Absent on every other call.
+   */
+  abandoned?: boolean;
+  /**
+   * The call's place, from 1, in the order the round's log took its calls,
+   * which [ExecutorRow.bridge_calls_told] names a call by. Absent on a call an
+   * older engine appended.
+   */
+  appended?: number;
+}
+
+/**
+ * A late call of the run's log that the job working as it landed took into its
+ * own session, by the call's place in the log ([BridgeCall.appended]) and that
+ * job, never a word of the call.
+ */
+export interface ToldCall {
+  appended: number;
+  launch: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -3006,6 +3066,72 @@ export interface WorkSummary {
   /** Questions on the task still waiting for their answer. */
   open_asks?: number;
   spend?: WorkRowSpend;
+  /** Why the item is or is not moving, read by the engine in the row's own
+   *  statement; null on an item not in progress. Draw what it says: no screen
+   *  compares a start with its own clock. */
+  flow: WorkFlow | null;
+}
+
+/** Why an item in progress is or is not moving, the first that holds winning:
+ *  a turn or run on it, an open blocker, a wait (a later start, the
+ *  assignee's own question, a run parked on it), a seat that cannot take a
+ *  turn, a start that passed with nothing done, nothing changed for the
+ *  project's window, or none of these. `moving` is the ordinary case. */
+export type WorkFlowState =
+  "working" | "blocked" | "waiting" | "held" | "due" | "stuck" | "moving" | (string & {});
+
+/** The fact behind a working, waiting or held item; "" on the other states. */
+export type WorkFlowCause =
+  | ""
+  | "turn"
+  | "run"
+  | "start"
+  | "question"
+  | "parked"
+  | "paused"
+  | "unplaced"
+  | "budget"
+  | "limit"
+  | "parked_elsewhere"
+  | "departed"
+  | "nobody"
+  | (string & {});
+
+/** An item's flow. Every key is sent: an instant nobody knows is null. */
+export interface WorkFlow {
+  state: WorkFlowState;
+  cause: WorkFlowCause;
+  /** When the state began, where the facts give it. */
+  since: string | null;
+  /** When it ends, where known: the start waited for, a seat's reset. */
+  until: string | null;
+  /** The wait's words, on an item waiting for its start; "" otherwise. */
+  reason: string;
+}
+
+/** One recorded change of an item's flow, or one notice of it to a person
+ *  (`worklet.FlowEntry`): never the item's own history, which recording the
+ *  flow does not touch. */
+export interface WorkFlowEntry {
+  /** The record's derived key: what landed it once. */
+  id: string;
+  task: string;
+  state: WorkFlowState;
+  cause: WorkFlowCause;
+  /** When the state began, where the facts give it; null where they give none. */
+  since: string | null;
+  until: string | null;
+  /** The item's assignee as read; "" for nobody. */
+  seat: string;
+  /** The role a notice told `told` in; "" on a change of state, which tells nobody. */
+  notice: "" | "assignee" | "lead" | (string & {});
+  told: string;
+  /** Derived from the item's past rather than read as it happened. */
+  backfilled: boolean;
+  /** When the record was recorded. */
+  at: string;
+  /** Its log position, which orders it among the item's `history`. */
+  log_seq: number;
 }
 
 /** What one task has cost, as a card and the most expensive tasks draw it:
@@ -3052,12 +3178,33 @@ export interface WorkloadRow {
   blocked: number;
   overdue: number;
   unscheduled: number;
+  /** Their items in progress, a count per flow state. */
+  flow: WorkFlowCounts;
+  /** Their items in progress that want the seat now: working, moving, due and
+   *  stuck. An item parked until tomorrow, blocked or held is open work and
+   *  no load. */
+  load: number;
+}
+
+/** One seat's items in progress, a count per `WorkFlowState`. */
+export interface WorkFlowCounts {
+  working: number;
+  blocked: number;
+  waiting: number;
+  held: number;
+  due: number;
+  stuck: number;
+  moving: number;
 }
 
 export interface WorkloadAnswer {
   rows: WorkloadRow[];
   /** The answer stopped at the handle cap. */
   truncated?: boolean;
+  /** The rows' flow read the seats' live facts; false on a node whose live
+   *  projection is not seeded, where no item reads working or held by a
+   *  seat's stop. */
+  flow_live: boolean;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -3082,9 +3229,9 @@ export interface WorkBlocker {
   key?: string;
   /** The blocker's key is one another task claimed first. */
   key_collision?: boolean;
-  /** Whether the blocker is still holding this task up. `false` is a settled
-   *  fact rather than a missing one — the blocker has finished. */
-  open?: boolean;
+  /** Whether the blocker is still holding this task up. Always stated:
+   *  `false` is a settled fact, the blocker has finished. */
+  open: boolean;
   /** The blocker not listing this task back: the residue of a dependency
    *  gesture whose mirror did not land, which the repair duty is working on. */
   one_sided?: boolean;
@@ -3180,6 +3327,8 @@ export interface WorkItemsAnswer {
    *  are different facts, and `read_level` speaks only to the first. */
   complete: boolean;
   incomplete?: WorkIncomplete;
+  /** The rows' flow read the seats' live facts (`WorkloadAnswer.flow_live`). */
+  flow_live: boolean;
   /** Present only when the request named `around=`, and NULL when that task
    *  is not in this answer — it moved off the board — rather than absent. */
   around?: WorkAround | null;
@@ -3413,6 +3562,11 @@ export interface WorkProjectDetail extends WorkProjectRow {
   tags?: WorkProjectTag[];
   /** The labels that take no new work, which `tags` leaves out. */
   archived_tags?: WorkProjectTag[];
+  /** How many hours an item in progress here may go unchanged before it
+   *  reads stuck: the lead's setting, or the default where
+   *  `stuck_after_hours_set` is false. */
+  stuck_after_hours: number;
+  stuck_after_hours_set: boolean;
   policy_stamp: number;
   read_level?: ReadLevel;
   log_seq?: number;
@@ -3866,6 +4020,8 @@ export interface WorkItemDetail {
   task: WorkItem;
   comments?: WorkComment[];
   history?: WorkChange[];
+  /** The item's recorded flow, newest first, read with `history`. */
+  flow_history?: WorkFlowEntry[];
   /** What the tasks this answer's `history` POINTS AT are called, id to item
    *  key — the same map `WorkActivityAnswer.keys` carries, asked of one task's
    *  own rows.
@@ -3884,8 +4040,8 @@ export interface WorkItemDetail {
   links?: WorkLink[];
   /** How many atlas entries the task names, for a reader without the atlas
    *  app: those links are left out of `links`, so the count is all this
-   *  reader is told. Absent for a reader who holds it. */
-  entries_withheld?: number;
+   *  reader is told. Always stated: 0 where the answer left none out. */
+  entries_withheld: number;
   /** The task this one is filed under, named — absent for a top-level task
    *  and for a parent this node holds no row for. */
   parent?: WorkTaskRef;
@@ -3931,6 +4087,11 @@ export interface WorkItemDetail {
    *  the next one — the limit `task.reassignments` counts against, served by
    *  the engine that enforces it so no screen carries a figure of its own. */
   reassignment_budget?: number;
+  /** The item's flow at the read's instant, as its board row reads it; null
+   *  on an item not in progress. */
+  flow: WorkFlow | null;
+  /** The flow read the seats' live facts (`WorkloadAnswer.flow_live`). */
+  flow_live: boolean;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -5112,6 +5273,18 @@ export interface ChatUnfurl {
  * `{ urls: string[] }` (at most `chatlet.MaxLinks`, eight). Resolved as the
  * reader, by the reads their own screens use.
  */
+/**
+ * Which of the references a page draws the reader may open (`references`):
+ * each through the question its object's own page asks, as the reader. One
+ * absent from both lists is closed (refused or gone, never told apart); one
+ * under `unresolved` could not be settled by the node, and is asked again.
+ */
+export interface ReferencesAnswer {
+  references: { kind: string; id: string; title?: string }[];
+  /** Each `<kind>:<id>` the node could not settle. */
+  unresolved: string[];
+}
+
 export interface ChatUnfurlsAnswer {
   unfurls: ChatUnfurl[];
 }
@@ -5774,12 +5947,14 @@ export interface WorkMyWork {
   log_lag?: number;
   complete: boolean;
   incomplete?: WorkIncomplete;
+  /** Every row's flow read the seats' live facts (`WorkloadAnswer.flow_live`). */
+  flow_live: boolean;
 }
 
 /** One notice in a person's inbox, as `worklet.InboxNotice` serialises it.
  *
  *  THE ONE FACT NO COMMERCIAL TRACKER RECORDS is `reason`: the applier writes
- *  WHY this change found this person, as one of eighteen, in the precedence
+ *  WHY this change found this person, as one of nineteen, in the precedence
  *  order that decided it. A notice also says whether it ASKS something of them
  *  (`addressed`) or merely informs, and whether it arrived only because nobody
  *  better was found (`fallback`). */
@@ -6090,7 +6265,7 @@ export interface WorkSearchAnswer extends SearchOutcome {
 
 /** One person a change reached, and why.
  *
- *  `reason` is the ONE of eighteen that named them — the resolution is ordered
+ *  `reason` is the ONE of nineteen that named them — the resolution is ordered
  *  and a handle appears once — and `addressed` is whether the notice ASKS
  *  something of them rather than informing them. */
 export interface RoutingRecipient {
@@ -8234,6 +8409,7 @@ export interface ArtifactPresencePush {
 
 export interface QueryMap {
   viewer: Viewer;
+  references: ReferencesAnswer;
   work_inbox: WorkInboxAnswer;
   inbox: InboxAnswer;
   agent: AgentAnswer;
@@ -8259,6 +8435,13 @@ export interface QueryMap {
   diagnostics_insights: InsightsAnswer;
   advisor: AdvisorAnswer;
   advisor_analysis: AdvisorAnalysisAnswer;
+  advisor_findings: AdvisorFindingList;
+  advisor_finding: AdvisorFindingDetail;
+  advisor_run: AdvisorRunSummary;
+  advisor_notices: AdvisorNoticesAnswer;
+  advisor_reports: AdvisorReportList;
+  advisor_report: AdvisorReport;
+  advisor_snapshot: AdvisorSnapshot;
   advisor_access: AccessFixAnswer;
   /** The administrator's reading, or a member's: narrow on `reading`. */
   mcp_servers_status: McpServersStatusAnswer | McpMemberServersStatusAnswer;
@@ -8783,6 +8966,9 @@ export interface CodeChangeRow {
   opened_position: LogPosition;
   closed_at?: string;
   close_reason?: string;
+  /** Who closed it, while it is closed; absent where a push nobody made closed it. */
+  closed_by?: string;
+  closed_by_kind?: CodePartyKind;
   merged_at?: string;
   merged_via?: string;
   merge_oid?: string;
@@ -8821,6 +9007,8 @@ export interface CodeChangeSummary extends CodeChangeRow {
   updated_at: string;
   /** Its card, where `cards=true` asks (`gitlet.ChangeSummary.Card`); absent is not answered. */
   card?: CodeChangeCard;
+  /** On a `needs=me` listing, why it is listed: the reader's `review`, or a `fix` of their own. */
+  waits_for?: "review" | "fix" | (string & {});
 }
 
 /** One reviewer on a listed change's card (`gitlet.ReviewerFace`). */
@@ -8948,8 +9136,12 @@ export interface CodeChangeDetail extends CodeChangeSummary {
   conversation?: CodeConversationRow;
   /** Absent for a change its home has merged no revision of yet. */
   mergeability?: CodeMergeabilityRow;
+  /** Its target branch's tip as the read found it; absent where no live branch holds the name. */
+  target_tip?: string;
   /** Who takes part in its conversation, by handle (`gitlet.ParticipantList`); absent where not answered. */
   participants?: CodeParticipantList;
+  /** The latest change opened to revert this one (`code_revert_change`); absent where none was. */
+  reverted_by?: CodeChangeName;
 }
 
 /** A revision's facts, as its home Gitlet node recorded them (`gitlet.RevisionFactsRow`). */
@@ -8989,6 +9181,10 @@ export interface CodeRevisionRow {
   push_id?: string;
   position: LogPosition;
   at: string;
+  /** How the push that made it was built (`git`, `engine`); absent where no push made it. */
+  via?: string;
+  /** It rewrote the source branch: a force-push, or through the engine a rebase onto the target. */
+  forced?: boolean;
   /** Absent for a revision its home has recorded no facts of yet. */
   facts?: CodeRevisionFacts;
 }
@@ -9060,9 +9256,16 @@ export interface CodeCommentRow {
   resolved_by?: string;
   resolved_by_kind?: CodePartyKind;
   turn_id?: string;
+  /** Empty on a deleted comment, whose row keeps its place in its thread. */
   body: string;
   position: LogPosition;
   at: string;
+  /** When its author last edited it. */
+  edited_at?: string;
+  /** When it was deleted, and by whom. */
+  deleted_at?: string;
+  deleted_by?: string;
+  deleted_by_kind?: CodePartyKind;
 }
 
 /** One finding on a change (`gitlet.FindingRow`). */
@@ -9169,6 +9372,10 @@ export interface CodeChangeAnswer extends CodePage {
   change?: CodeChangeDetail;
   revisions?: CodeRevisionRow[];
   reviewers?: CodeReviewerRow[];
+  /** The `moves` part: the moves of its lifecycle, oldest first. */
+  moves?: CodeChangeMoveRow[];
+  /** The `queue` part: its queue entries, in queue order. */
+  queue_entries?: CodeChangeQueueEntryRow[];
   comments?: CodeCommentRow[];
   reviews?: CodeReviewRow[];
   findings?: CodeFindingRow[];
@@ -9187,6 +9394,40 @@ export interface CodeChangeAnswer extends CodePage {
   /** The `excerpts` part: each finding's excerpt by its id, and the context applied. */
   excerpts?: Record<string, CodeExcerpt>;
   context?: number;
+}
+
+/**
+ * One lifecycle move (`gitlet.ChangeMove`); `was`/`became` are a retarget's or work item's values.
+ */
+export interface CodeChangeMoveRow {
+  kind: (typeof CHANGE_MOVE_KINDS)[number] | (string & {});
+  by?: string;
+  by_kind?: CodePartyKind;
+  reason?: string;
+  was?: string;
+  became?: string;
+  position: LogPosition;
+  at: string;
+}
+
+/**
+ * One queue entry of a change (`gitlet.ChangeQueueEntry`); `reason` is absent for a landing.
+ */
+export interface CodeChangeQueueEntryRow {
+  entry_id: string;
+  target_ref: string;
+  head_oid: string;
+  method: string;
+  enqueued_by: CodeParty;
+  state: (typeof QUEUE_STATES)[number] | (string & {});
+  reason?: string;
+  checks?: string[];
+  paths?: string[];
+  commit_oid?: string;
+  enqueued_position: LogPosition;
+  enqueued_at: string;
+  ended_position?: LogPosition;
+  ended_at?: string;
 }
 
 /** One line of a finding's excerpt (`gitlet.ExcerptLine`). */
@@ -9606,7 +9847,9 @@ export interface CodeBlameLine {
   commit: string;
   orig_line: number;
   orig_path?: string;
+  /** Left out for an empty line too. */
   text?: string;
+  /** Its size where its text was too long to send: the one mark of a line elided. */
   text_bytes?: number;
 }
 

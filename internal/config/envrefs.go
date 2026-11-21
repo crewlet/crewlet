@@ -12,19 +12,15 @@ import (
 // The ${VAR} references a config payload actually holds, and where it holds
 // them.
 //
-// Answering "which variables does this config need" is a question three very
-// different callers ask: an operator wants to know what to set before a boot
-// fails on a missing one, the example suite wants to know that every
-// reference a shipped config makes is one the docs explain, and the Secrets
-// screen wants to know what BREAKS if a credential is removed. Only the last
-// one needs the path, and it is the one that cannot be answered without it: a
-// name on its own says a reference exists somewhere, which is not something
-// an operator can act on before deleting a row.
+// Three callers ask which variables a config needs: an operator before a boot
+// fails on a missing one, the example suite checking every shipped reference is
+// one the docs explain, and the Secrets screen wanting to know what BREAKS if a
+// credential is removed. Only the last needs the path; a bare name cannot be
+// acted on before deleting a row.
 //
-// It is a REFLECTION WALK rather than a re-parse of the YAML, because the
-// question is about the loaded config — the thing the engine will actually
-// resolve — and a document walk would miss defaults the loader filled in and
-// include keys it discarded.
+// It is a REFLECTION WALK, not a re-parse of the YAML: the question is about
+// the loaded config the engine will resolve, and a document walk would miss
+// defaults the loader filled in and include keys it discarded.
 
 // Reference is one ${VAR} a payload names, and the field that names it.
 //

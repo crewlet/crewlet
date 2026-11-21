@@ -9,17 +9,14 @@ import (
 
 // A CREDENTIAL'S CARRIED FIELDS SURVIVE THE PERSON'S RECORD THEY TRAVEL IN.
 //
-// A credential travels inside its person's document, and what a second factor
-// needs beyond its verifier rides in the credential's carried fields: the
-// recovery codes' verifiers, and the last TOTP step accepted, which is what
-// makes a code single-use. encoding/json marshalled the nested credential by
-// its fields alone, so both were dropped on the way to the log: a person who
-// had saved recovery codes could never sign in with one, and one code opened
-// as many sessions as it was presented in its window.
+// A credential travels inside its person's document, and a second factor's
+// state rides in its carried fields: the recovery codes' verifiers, and the
+// last TOTP step accepted, which makes a code single-use. Dropped, saved
+// recovery codes never sign in and one code opens many sessions in its window.
 //
-// The write goes through the rig — the writer, the broker and the applier —
-// and is read back the way a sign-in reads it. Mutation: delete
-// [iamdomain.Credential.MarshalJSON] and both fields come back empty.
+// The write goes through the rig (writer, broker, applier) and is read back as
+// a sign-in reads it. Mutation: delete [iamdomain.Credential.MarshalJSON] and
+// both fields come back empty.
 func TestACredentialsCarriedFieldsSurviveThePersonsRecordTheyTravelIn(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

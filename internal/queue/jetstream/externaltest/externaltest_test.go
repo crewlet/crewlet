@@ -15,18 +15,15 @@ import (
 
 // A RESTART CHANGES THE LIMIT AND NOTHING ELSE A RUNNING CLIENT DEPENDS ON.
 //
-// What the suites that use it stage is a server that CHANGED under a running
-// node, so the restart has to hand the same client back on the same address
-// with the same streams — only the max_payload moved — and return only once
-// the client reads the new limit, since that is what the client refuses a
-// message against. A restart on a fresh store would drop every stream the
-// node provisioned at boot, and one that returned when the server was up
-// would hand a case a client still holding the old limit.
+// The suites stage a server that CHANGED under a running node: the same client
+// on the same address with the same streams, only max_payload moved, and
+// Restart returns only once the client reads the new limit, which it refuses
+// messages against. A fresh store would drop the node's streams; returning when
+// the server is up would leave a case a client holding the old limit.
 //
-// Mutation: start the restarted server on a new store and the stream row goes
-// red; return from Restart without waiting for the client and the limit row
-// does; read an unset limit as zero rather than nats-server's default and the
-// last one does.
+// Mutation: a new store turns the stream row red; returning without waiting
+// for the client turns the limit row red; reading an unset limit as zero
+// rather than nats-server's default turns the last red.
 func TestARestartChangesTheLimitAndKeepsTheStreams(t *testing.T) {
 	t.Parallel()
 	const before, after = 8 << 20, 2 << 20
@@ -70,21 +67,16 @@ func TestARestartChangesTheLimitAndKeepsTheStreams(t *testing.T) {
 
 // A RELOAD CHANGES THE RUNNING SERVER AND LEAVES ITS CLIENTS WHERE THEY ARE.
 //
-// What the suites that use it stage is an operator's LIVE reload, which is a
-// different gesture from a restart in exactly the way that matters to them: a
-// connected client is not reconnected, so it learns nothing the server does not
-// send it — nats-server sends no INFO for a reloaded max_payload — while a new
-// connection reads the reloaded figure. A Reload that restarted would hand a
-// case a client that had reconnected and read the new limit, and the close for
-// good the case exists to stage would never happen. The INFO ending a handshake
-// does carry a reload that lands first, so the client here finishes its own
-// before the reload.
+// The suites stage an operator's LIVE reload, unlike a restart: a connected
+// client is not reconnected and learns nothing (nats-server sends no INFO for a
+// reloaded max_payload), while a new connection reads the new figure. A Reload
+// that restarted would hand a case a reconnected client, and the close for good
+// the case stages would never happen. The client finishes its handshake first,
+// since that INFO carries a reload landing before it.
 //
-// Mutation: implement Reload as a stop and a start on the same port and the
-// reconnect row goes red; build the reloaded set from scratch rather than from
-// the running one and the reload is refused for changing what cannot be
-// reloaded; drop the round trip before the reload and the limit row goes red
-// whenever the reload beats the INFO that ends the handshake.
+// Mutation: Reload as stop and start turns the reconnect row red; building the
+// set from scratch is refused as unreloadable; dropping the round trip turns
+// the limit row red whenever the reload beats the INFO.
 func TestAReloadChangesTheServerAndNotItsClients(t *testing.T) {
 	t.Parallel()
 	const before, after = 8 << 20, 2 << 20

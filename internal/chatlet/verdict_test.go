@@ -265,15 +265,11 @@ func TestAPostIntoARoomArchivedAheadOfItIsRefusedAndSoIsItsRetry(t *testing.T) {
 
 // A POST BY AN AUTHOR TAKEN OUT OF A PRIVATE ROOM AHEAD OF IT IS REFUSED: the
 // membership that left her out landed from another node while this one's
-// snapshot still had her in, and a room that admits its members only takes no
-// word from somebody who is not one at the post's position.
+// snapshot still had her in.
 //
-// AND THE REFUSAL NAMES THE ROOM AS A PERSON KNOWS IT, `#deal-room`, for the
-// model in a tool's answer, a seat's or a person's assistant's: it named the
-// room by its id, which nobody chose. It is the author's own post, decided
-// while she was in the room, so the name is hers to read — but the CLASS is the
-// one the decide gives somebody outside a private room, not found, since a
-// surface answers the verdict and the decide the same way.
+// THE REFUSAL NAMES THE ROOM AS A PERSON KNOWS IT, `#deal-room`, not by its id;
+// its CLASS is the decide's for somebody outside a private room, not found,
+// since a surface answers the verdict and the decide alike.
 //
 // Mutation: stop carrying MembersOnly on the post and the message lands; name
 // the room by its id again and the sentence does; refuse it as forbidden and
@@ -415,15 +411,11 @@ func (r *writeRound) feedRecord(seq uint64) changefeed.Record {
 
 // A VERDICT THE HORIZON LET GO IS UNKNOWN, NEVER DROPPED.
 //
-// A message record that wrote no verdict on a node whose rows have applied it
-// was dropped by every node's gate — or decided a month ago, its verdict pruned
-// by the record that took it past [chatlet.VerdictRetention]. The two leave the
-// same absence, so the prune records how far back it reached, and an absence
-// at or below that position vouches for nothing: the writer answers `unknown`
-// and unvouched, as the framework answers an operation its ledger may have
-// lost, and the change feed derives the wake from the record, as it does for
-// any record this node has not decided. An absence ABOVE it is still the
-// gate's, and a dropped post still wakes nobody.
+// A record with no verdict was dropped by every node's gate, or pruned past
+// [chatlet.VerdictRetention]. The prune records how far back it reached, and an
+// absence at or below that vouches for nothing: the writer answers `unknown`
+// and unvouched, and the feed derives the wake from the record. An absence
+// ABOVE it is the gate's, and a dropped post wakes nobody.
 //
 // Mutation: drop the watermark from writeVerdict, or stop reading it in
 // verdictIn, and the retry is told its own eviction dropped it while the feed

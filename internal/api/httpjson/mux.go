@@ -9,15 +9,13 @@ import (
 // [net/http.ServeMux], and nothing else.
 //
 // AN INTERFACE rather than the mux itself so the API can KEEP every pattern a
-// surface mounts. Both of a node's listeners serve one route table behind a
-// partition that is a predicate over paths, and only the table says which
-// paths exist, so the table is what the listener cases walk whole rather than
-// a sample somebody chose. A surface's own tests still hand it a plain
-// *http.ServeMux.
+// surface mounts: both listeners serve one route table behind a path
+// predicate, and the listener cases walk the whole table, not a sample. A
+// surface's own tests still hand it a plain *http.ServeMux.
 //
-// Declared here rather than by each consumer because the API's own interface
-// over a mountable surface names it in a method signature, and two interfaces
-// with one method set are still two types there.
+// Declared here rather than by each consumer because the API's interface over
+// a mountable surface names it in a method signature, and two interfaces with
+// one method set are still two types there.
 type Router interface {
 	Handle(pattern string, handler http.Handler)
 	HandleFunc(pattern string, handler func(http.ResponseWriter, *http.Request))
@@ -25,30 +23,16 @@ type Router interface {
 
 // Mux serves mux with the mux's OWN refusals answered as JSON.
 //
-// # Why it exists
+// [net/http.ServeMux]'s own 404 and 405 are `text/plain`, `nosniff`, no code.
+// Every client reads a codeless refusal as NOT THE ENGINE'S (a gateway
+// answered; the node may still have done what was asked), so a retry looped.
 //
-// [net/http.ServeMux] answers a path nothing registered with its own 404 and a
-// registered path under another method with its own 405, both through
-// [net/http.Error] — `text/plain` and `nosniff`, the combination this package
-// exists to remove — and neither carries a code. Every client of this engine
-// reads a refusal with no code as NOT THE ENGINE'S: something in front of it
-// answered, and the node may still have done what was asked. So the engine's
-// own "there is nothing here" read as a gateway that swallowed a write: a
-// purge sent to a node with no Worklet, where the route is absent by
-// design, printed "whether the purge landed is unknown" and a retry that met
-// the same 404 for ever — and so did every route a newer CLI or dashboard asks
-// an older node for, and every wrong method.
-//
-// # Why a wrapper and not a catch-all pattern
-//
-// A catch-all `/` pattern would take the 404, but a pattern with no method
-// matches every method, so it would take the 405 as well: a wrong method would
-// read as a missing path, and the `Allow` header the mux computes would be
-// lost. So the wrapper asks the mux which handler it WOULD run. A registered
-// route comes back with its pattern and is served exactly as before; the mux's
-// own answers — the 404, the 405 and the redirect that cleans a path — come
-// back with none, and only their STATUS is rewritten: the redirect passes
-// through untouched, and a handler's own 404 never reaches this code at all.
+// A WRAPPER, NOT A CATCH-ALL `/`: a pattern with no method matches every
+// method, so it would take the 405 too and lose the mux's `Allow` header. The
+// wrapper asks the mux which handler it WOULD run. A registered route comes
+// back with its pattern and is served as before; the mux's own answers (404,
+// 405, the path-cleaning redirect) come back with none; only their STATUS is
+// rewritten, never the redirect's.
 func Mux(mux *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// `*` is the mux's own too — an OPTIONS * it refuses 400 and
@@ -97,23 +81,15 @@ func (m *muxRefusal) WriteHeader(status int) {
 // NoRoute writes the answer for a route this node does not serve: `404
 // no_route`, naming the method and the path.
 //
-// THE MUX'S OWN ANSWER, and exported for the two other answers that must be
-// INDISTINGUISHABLE from it. A route that IS registered but has nothing to
-// serve here — the work surface on a company whose tracker is a vendor's, or a
-// route over the engine's native runtime this node's configuration or the mode
-// it started in does not enable, asked at every request — answers in exactly
-// the bytes the route's absence would have: a handler that wrote its own "not
-// served here" would be the one refusal a client told apart from a missing
-// route, and a route that is absent by configuration and one that is absent by
-// build must read the same. And the public listener's refusal of a route that
-// exists on api.port is this answer byte for byte, because a different wording
-// there would tell anybody on the internet that a private admin port exists
-// and which paths it serves.
+// THE MUX'S OWN ANSWER, exported for the answers that must be
+// INDISTINGUISHABLE from it: a registered route with nothing to serve here
+// (configuration or mode does not enable it) answers the bytes its absence
+// would, and the public listener's refusal of a route on api.port is this
+// answer byte for byte, so nobody on the internet learns a private admin port
+// exists.
 //
-// THE HINT NAMES BOTH KINDS OF ABSENCE, because only the first is the path's
-// fault. A node whose configuration or mode does not enable a route has the
-// route and is asked at the right path; sending its operator to check only the
-// path sends them to the one place nothing is wrong.
+// THE HINT NAMES BOTH KINDS OF ABSENCE: only the first is the path's fault,
+// and a node that merely does not enable the route is asked at the right path.
 func NoRoute(w http.ResponseWriter, r *http.Request) {
 	FailWith(w, http.StatusNotFound, CodeNoRoute, map[string]string{
 		"detail": fmt.Sprintf("this node serves nothing at %s %s",

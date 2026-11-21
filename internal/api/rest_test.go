@@ -246,19 +246,14 @@ func TestANamedRouteAgreesWithTheGenericForm(t *testing.T) {
 
 // A DOCUMENTED PATH UNDER A WILDCARD IS THE ONE THAT FAILS SILENTLY.
 //
-// Every literal `/worklet/<word>` route in the table sits above `/worklet/{id}`, and
-// one that is registered on the query channel and listed in
-// docs/reference/api-endpoints.md but MISSING from the table fails without a
-// sound: the wildcard matches that path, so the request is answered as a TASK
-// whose key is that word — a 404 naming a record nobody asked for, from a
-// route the reader believed they were on. `work_burndown` shipped in exactly
-// that state for as long as it existed.
+// A literal `/worklet/<word>` route registered on the query channel and
+// documented in docs/reference/api-endpoints.md but MISSING from the table
+// fails silently: `/worklet/{id}` matches it and answers a 404 for a TASK keyed
+// by that word.
 //
-// That is why this asserts the CODE rather than merely a non-404. Only
-// [queries.Sources.workViews] can refuse for a missing `container`, so
-// `bad_params` is proof the path reached the view strip and not the wildcard
-// below it; a route that went missing again would answer `not_found` here and
-// a status-only check would pass on it.
+// So this asserts the CODE, not a non-404. Only [queries.Sources.workViews]
+// refuses a missing `container` with `bad_params`, which proves the path
+// reached the view strip and not the wildcard (`not_found`).
 func TestALiteralWorkRouteIsNotShadowedByTheWildcard(t *testing.T) {
 	t.Parallel()
 	a := newApp(t, api.Options{
@@ -306,6 +301,18 @@ func TestALiteralWorkRouteCarriesItsQueryString(t *testing.T) {
 // stubWorkReader answers every method of the seam with its zero value: a route
 // test must not depend on what a tracker would have said.
 type stubWorkReader struct{}
+
+func (stubWorkReader) FlowHours(context.Context, worklet.FlowHoursQuery) ([]worklet.FlowHours, error) {
+	return nil, nil
+}
+
+func (stubWorkReader) FlowItems(context.Context, worklet.FlowHoursQuery) (map[string]int, error) {
+	return map[string]int{}, nil
+}
+
+func (stubWorkReader) FlowPickups(context.Context, worklet.FlowHoursQuery) ([]time.Duration, error) {
+	return []time.Duration{}, nil
+}
 
 func (stubWorkReader) Inbox(_ context.Context, q worklet.InboxQuery, _ time.Time) (
 	worklet.InboxAnswer, error) {

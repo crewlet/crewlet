@@ -13,17 +13,12 @@ import (
 // THE EVICTION GATE ON THIS LOG, both halves: the record that installs or
 // lifts it, and the rows the trim reads to stop counting an evicted node.
 //
-// # Why this log carries its own eviction and not the tracker's
-//
-// A gate is a rule about records on ONE log, keyed on positions in that log's
-// own sequence space — so the tracker's eviction row, at a tracker position,
-// says nothing about which pages records to drop, and the trim evaluates each
-// log's counted set on its own. For as long as only the tracker's writer could
-// write an eviction, this half existed as an applier, a fence and a table that
-// nothing in production ever filled: an operator's eviction lifted the tracker
-// log's pin and left this one's where it was, and the pages log grew toward its
-// ceiling behind a node that was never coming back. The engine's node gate now
-// writes both, from one judgement, and reports each log's outcome on its own.
+// This log carries its own eviction, not the tracker's: a gate is a rule about
+// records on ONE log, keyed on positions in that log's own sequence space, so
+// the tracker's eviction row says nothing about which pages records to drop,
+// and the trim evaluates each log's counted set on its own. The engine's node
+// gate writes both from one judgement and reports each log's outcome on its
+// own.
 
 // EvictNode installs the gate that drops a node's records on this log.
 //
@@ -130,14 +125,13 @@ func standingIn(ctx context.Context, tx *sql.Tx, nodeID string) (statelog.Evicti
 // window has passed.
 //
 // THIS DOMAIN'S OWN TABLE, because an eviction is a record on this log: every
-// node applies it into `pages_evictions` and every data node's copy is
-// identical, which is what makes the applier's gate hold when coordination
-// cannot be reached. The trim read the tracker's table instead, filtered on
-// this log's stream name, and found nothing for as long as the fleet existed.
+// node applies it into `pages_evictions`, each data node's copy identical, so
+// the applier's gate holds when coordination cannot be reached. The tracker's
+// table filtered by this log's stream name holds nothing for it.
 //
-// THROUGH THE NODE HANDLE'S REPLICATED PEER, for the reason [Fence.Evicted]
-// gives: the peer is nil while an adoption swaps the file, and [store.DB.Read]
-// answers that as [store.ErrNoEstate] rather than a panic.
+// THROUGH THE NODE HANDLE'S REPLICATED PEER, as [Fence.Evicted] says: the peer
+// is nil while an adoption swaps the file, and [store.DB.Read] answers that as
+// [store.ErrNoEstate], not a panic.
 func (Domain) Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error) {
 	var out []statelog.EvictionRow
 	err := db.Read(ctx, func(tx *sql.Tx) error {

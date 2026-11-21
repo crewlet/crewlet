@@ -527,8 +527,8 @@ for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/argv"
 
 // A CLAUDE CODE OLDER THAN ITS NOTE FLOOR STARTS WITHOUT THE HOOKS, AND IS NOT
 // TOLD OF NOTES. Releases from 2.1.118 run mcp_tool hooks but before 2.1.163
-// drop a Stop hook's answer, so a note taken as the run finishes would be
-// recorded read by a run that never saw it. The script reads the box's version
+// drop a Stop hook's answer, so a note served as the run finishes would be
+// handed to a run that never sees it. The script reads the box's version
 // and only on 2.1.163 or later names the hooked settings and the system text
 // told of notes; an older release gets every run's settings and the plain
 // text, its error stream says why, and its notes wait for the review. An
@@ -920,8 +920,9 @@ func pinnedOf(p executor.Paths, file string) string {
 // --settings, so a repository could move the compaction point the wrapper
 // pinned. Each file written has a pinned copy with the same settings and an
 // `env` of exactly the pin: the model's window, the two overrides blank (read
-// as none) and the resume's two switches blank (the next case's). The file
-// itself holds no `env`, since a release below the pin's floor is handed it.
+// as none), the resume's two switches blank (the next case's) and
+// DISABLE_AUTOUPDATER 1. The file itself holds no `env`, since a release below
+// the pin's floor is handed it.
 //
 // Mutation: drop or change a pinned copy's block, leave a name out rather than
 // blank, or write the block into the file itself, and this goes red.
@@ -940,6 +941,7 @@ func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *test
 		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
 		"CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "",
 		"CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP": "",
+		"DISABLE_AUTOUPDATER":                 "1",
 	}
 	read := func(file string) map[string]any {
 		raw, err := b.ReadFile(t.Context(), file)

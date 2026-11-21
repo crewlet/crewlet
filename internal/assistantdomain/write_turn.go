@@ -80,22 +80,18 @@ type NewMessage struct {
 	// Apps are the apps the turn had read through when it was written: a
 	// reader who no longer holds one is shown a notice in its place.
 	Apps []string
-	// Attachments are the files a user message was sent with, at most
-	// wire.AttachmentsPerTurn, each one of the conversation's own files
-	// (the orchestrator checks them against the store before the turn).
-	// Sealed with the message; each one's download route is the
-	// conversation's own, whatever the caller handed in.
+	// Attachments are a user message's files, at most
+	// wire.AttachmentsPerTurn, each the conversation's own (the orchestrator
+	// checks them against the store before the turn). Sealed with the
+	// message, each download route the conversation's own whatever the
+	// caller handed in.
 	Attachments []wire.FileRef
 }
 
 // sealPage seals a page chip's title for one record, or answers empties for
-// none.
-//
-// THE TITLE IS HELD TO THE WIRE'S OWN BOUND ([wire.PageTitleMaxBytes]), never
-// to a conversation title's: the chip is the page context's title, which the
-// wire took at its own bound before the turn opened, so a tighter bound here
-// refused the turn of every question asked on a page with a long title in a
-// script of three bytes a character.
+// none. The title is held to [wire.PageTitleMaxBytes], never a conversation
+// title's bound: the wire took it at that bound before the turn opened, so a
+// tighter one here would refuse the turn of a question on a long-titled page.
 func (w *Writer) sealPage(page *wire.PageChip, aad string) (title, screen string, err error) {
 	if page == nil {
 		return "", "", nil
@@ -110,14 +106,12 @@ func (w *Writer) sealPage(page *wire.PageChip, aad string) (title, screen string
 	return title, page.Screen, err
 }
 
-// OpenTurn opens a turn in one of the owner's conversations, answering the
-// turn's number in it. ONE AT A TIME: the record is arbitrated on the
-// conversation's subject, so a second opening while a turn is running or
-// parked, on this node or any other, is refused [ErrTurnRunning], and an
-// opening of the turn already open (a retry whose first attempt landed) is
-// refused [ErrTurnOpen], so it never starts a second runner. A retry the
-// ledger collapses reports [statelog.Result.Collapsed], which the caller
-// reads the same way.
+// OpenTurn opens a turn in one of the owner's conversations, answering its
+// number there. One at a time: arbitrated on the conversation's subject, so an
+// opening while a turn is running or parked, on any node, is refused
+// [ErrTurnRunning], and a retry of the turn already open is refused
+// [ErrTurnOpen], never starting a second runner; a retry the ledger collapses
+// reports [statelog.Result.Collapsed], read the same way.
 func (w *Writer) OpenTurn(ctx context.Context, c Call, t NewTurn) (int, statelog.Result, error) {
 	if err := c.validate(true); err != nil {
 		return 0, statelog.Result{}, err
@@ -151,8 +145,8 @@ func (w *Writer) OpenTurn(ctx context.Context, c Call, t NewTurn) (int, statelog
 			}
 			switch row.openTurn {
 			case t.Turn.String():
-				// THIS TURN IS ALREADY OPEN: a retry whose first attempt
-				// landed publishes nothing and answers the number it took.
+				// A retry whose first attempt landed: publish nothing,
+				// answer the number it took.
 				seq = row.turns
 				return statelog.Decision{}, fmt.Errorf("%w: turn %s", ErrTurnOpen, t.Turn)
 			case "":
@@ -443,12 +437,11 @@ func (w *Writer) ResumeTurn(ctx context.Context, c Call, turn uuid.UUID, node st
 }
 
 // CloseTurn ends a running or parked turn in a final state, drops what it
-// parked and frees its conversation for the next turn. ONCE: a second close is
-// refused [TurnMoved] naming the state the first left it in.
-//
-// An end only a parked turn can come to ([ClosableFrom]) is refused
-// [TurnMoved] for a turn that is running: one an approval resumed a moment
-// before is the runner's to end, never expired under it.
+// parked and frees its conversation for the next turn. Once: a second close is
+// refused [TurnMoved] naming the state the first left it in. An end only a
+// parked turn can come to ([ClosableFrom]) is refused [TurnMoved] for a
+// running turn: one an approval just resumed is the runner's to end, never
+// expired under it.
 func (w *Writer) CloseTurn(ctx context.Context, c Call, turn uuid.UUID, end TurnEnd) (statelog.Result, error) {
 	if !end.State.Final() {
 		return statelog.Result{}, invalid("a turn closes in a final state, and %q is not one",

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
@@ -221,6 +222,7 @@ func (e *Engine) buildMailboxes(b *Backends, nodeID string) (*maintenance.Mailbo
 		Owner:    config.NewIncarnation(nodeID),
 		LeaseTTL: e.leaseTTL,
 		Roster:   e.activeSeats,
+		Work:     e.rehomeSeatWork,
 		Runs:     e.retireSeatRuns,
 		Sessions: e.retireSeatSessions,
 	})
@@ -261,6 +263,111 @@ func (e *Engine) retireSeatRuns(ctx context.Context, seat uuid.UUID, handle, own
 			seat, len(runs))
 	}
 	return maintenance.SeatRunsWaiting{}, nil
+}
+
+// rehomeSeatWork re-homes the open work a retired seat still holds, for the
+// mailbox retirement holding its lease (ADR-0162): each item is returned or
+// handed to its lead by [worklet.Writer.RehomeDeparted], told which items the
+// seat's runs are on, which the retirement ends next.
+//
+// AGAINST THE FLEET'S REVISION, as the session removal is: a node that has not
+// applied it re-homes nothing and says why. A company whose tracker is not
+// Worklet holds no work here; one that is, on a node that writes no tracker
+// records, keeps the mailbox for a node that does.
+func (e *Engine) rehomeSeatWork(ctx context.Context, seat uuid.UUID, handle string,
+	retiring time.Time) error {
+
+	company, err := e.servedFleetRevision(ctx)
+	if err != nil {
+		return fmt.Errorf("engine: retired seat %s's work is kept until this node applies the "+
+			"revision the fleet runs: %w", seat, err)
+	}
+	if company.Config.TrackerBackendFor() != config.TrackerWorklet {
+		return nil
+	}
+	writer := e.TrackerWriter()
+	if writer == nil {
+		return fmt.Errorf("engine: this node writes no tracker records, so retired seat %s's "+
+			"work is re-homed by a node that does", seat)
+	}
+	if e.backends == nil || e.backends.Fleet == nil {
+		return fmt.Errorf("engine: this node has no fleet store, so it cannot tell which items "+
+			"retired seat %s's runs are on", seat)
+	}
+	runs, err := sandbox.NewCoordStore(e.backends.Fleet).ListActiveForSeatID(ctx, seat)
+	if err != nil {
+		return fmt.Errorf("engine: reading the runs of retired seat %s: %w", seat, err)
+	}
+	return rehomeDepartedWork(ctx, writer, company.Org, runItems(runs), seat, handle, retiring)
+}
+
+// departedWork is the slice of the tracker's writer a retirement re-homes a
+// seat's work through.
+type departedWork interface {
+	DepartedHolders(ctx context.Context) ([]string, error)
+	RehomeDeparted(ctx context.Context, d worklet.Departure) ([]worklet.Rehomed, error)
+}
+
+// rehomeDepartedWork is [Engine.rehomeSeatWork] once the fleet's revision and
+// the seat's runs are read: o is the revision's chart and runs the items the
+// seat's runs are on.
+//
+// A SEAT THE CHART STILL HOLDS keeps its work: an agent seat made a person's
+// leaves the agent seats, and so retires its mailbox, while its person holds
+// what it held. A mailbox with no handle (one only the broker's listing found)
+// is the seat's by its id, derived from each departed holder's handle.
+func rehomeDepartedWork(ctx context.Context, work departedWork, o *org.Organization,
+	runs []string, seat uuid.UUID, handle string, retiring time.Time) error {
+
+	handles := []string{handle}
+	if handle == "" {
+		holders, err := work.DepartedHolders(ctx)
+		if err != nil {
+			return fmt.Errorf("engine: read the departed holders of open work, to find retired "+
+				"seat %s's: %w", seat, err)
+		}
+		handles = handles[:0]
+		for _, h := range holders {
+			if id, ok := org.DeriveAgentID(o.Name, h); ok && id == seat {
+				handles = append(handles, h)
+			}
+		}
+	}
+	var errs []error
+	for _, h := range handles {
+		if o.SeatByHandle(h) != nil {
+			continue
+		}
+		moved, err := work.RehomeDeparted(ctx, worklet.Departure{Handle: h, Runs: runs, At: retiring})
+		if len(moved) > 0 {
+			led := 0
+			for _, m := range moved {
+				if m.To != "" {
+					led++
+				}
+			}
+			log.InfoContext(ctx, "seat_work_rehomed", "handle", h, "seat", seat.String(),
+				"items", len(moved), "to_leads", led, "returned", len(moved)-led,
+				"detail", "a retired seat's open work was handed to its leads or returned "+
+					"unassigned, each item with a history note naming the seat")
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("engine: re-home retired seat %q's work: %w", h, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// runItems is the Worklet items runs are on, by id.
+func runItems(runs []sandbox.PendingRun) []string {
+	var out []string
+	for _, run := range runs {
+		if item := run.WorkItem; item != nil && item.Backend == types.WorkWorklet &&
+			item.ID != "" && !slices.Contains(out, item.ID) {
+			out = append(out, item.ID)
+		}
+	}
+	return out
 }
 
 // mailboxRegistry is the node's view of [Engine.mailboxes]: a nil *Mailboxes

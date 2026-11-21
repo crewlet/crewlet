@@ -188,21 +188,16 @@ func TestGossipedRoutesAuthenticate(t *testing.T) {
 
 // THE FLEET STAYS WHOLE THROUGH A KEYRING ROTATION, with no step of its own.
 //
-// Three members on {k1}; then the keyring runbook's steps, member by member: add
-// k2 with k1 still active, flip the active key to k2, drop k1. After EVERY
-// restart the mesh is whole and a replicated append through every member
-// lands — because within a step every node already holds every key any node
-// presents. "Lands" as the engine's writer waits for it to ([landAppend]): the
-// member just stopped may have led the stream, so the group may be electing.
+// Three members on {k1}, then the runbook's steps member by member: add k2,
+// flip the active key, drop k1. After EVERY restart the mesh is whole and an
+// append through every member lands ([landAppend] waits as the engine's writer
+// does: the stopped member may have led the stream).
 //
-// NOT PARALLEL: a member comes back on the route port it had, and a cluster
-// another case reserved ports for in the same moment could take it while it
-// is down (TestARestartedMemberRejoinsAsItself's reason).
+// NOT PARALLEL: a member returns on its route port, which a cluster reserving
+// ports meanwhile could take (TestARestartedMemberRejoinsAsItself).
 //
-// Mutations: accept only the active key → the first member to flip is refused
-// by the others, red; have a rotated member's routes refuse the stream's
-// subjects → it routes to both others and no append through it is ever
-// answered, red once the wait's bound runs out.
+// Mutations: accept only the active key and the first flipped member is
+// refused; refuse the stream's subjects on its routes and no append is answered.
 func TestAFleetStaysWholeThroughAKeyRotation(t *testing.T) {
 	k1 := runtoken.KeyMaterial{ID: "k1", Material: "the rotation case's first placeholder material"}
 	k2 := runtoken.KeyMaterial{ID: "k2", Material: "the rotation case's second placeholder material"}
@@ -274,38 +269,14 @@ func TestAFleetStaysWholeThroughAKeyRotation(t *testing.T) {
 
 // A MEMBER ON ANOTHER KEYRING IS REFUSED, AND COUNTED BY KEY.
 //
-// A member restarted onto a keyring sharing no key with its peers — a rotation
-// that dropped the old key before every node held the new one — presents a key
-// no peer holds: every route it dials is refused, and each peer counts every
-// one of them as `route/unknown`.
-//
-// DECIDED ON EVERY DIAL, NEVER ON A ROUTE LIST (#803). A member lists a route
-// it dialled before its peer has judged it: the peer sends its INFO when it
-// accepts the connection, before it reads the CONNECT it judges, and the
-// dialler registers the route on that INFO (nats-server v2.15.2, route.go's
-// createRoute and processRouteInfo). So the member names a peer for as long as
-// each refusal takes to arrive, and a peer names the member while the member
-// judges the peer's own dial. Nor does the route report say which end admitted
-// a route: an accepted route is marked solicited once its own end dials the
-// same peer (upgradeRouteToSolicited), and nats-server calls a route it dialled
-// authenticated only at the first PONG to its PING (addRoute). The refusal is
-// what decides it, since a refused connection is closed and never routes.
-//
-// So the case runs on forwarders it counts. The peers' own dials to the member
-// stop at their forwarders, so every route between them is one the member
-// dialled. Once each peer has refused it, the member's forwarders take no new
-// dial and the ones in flight end: a route a peer admitted is held open and
-// never would. Every one ends, so every one was refused, and each peer counted
-// one refusal for each dial that reached it.
-//
+// A member on a keyring sharing no key with its peers has every dialled route
+// refused, and each peer counts each as `route/unknown`. DECIDED ON EVERY DIAL,
+// NEVER ON A ROUTE LIST (#803): a route is listed before the peer judges it
+// (nats-server v2.15.2 route.go createRoute registers on the INFO, preceding
+// the CONNECT), so only the refusal decides; the case counts on forwarders.
 // NOT PARALLEL, for TestAFleetStaysWholeThroughAKeyRotation's reason.
-//
-// Mutations: count nothing, or count an unknown key's route as invalid → no
-// route/unknown refusal arrives, red; admit an unknown key's route → none is
-// counted, red; admit a route whose refusal was counted → it is held open and
-// the member's forwarder never empties, red; hand the sink each refusal
-// twice, or only those the log limiter writes → refusals and dials differ,
-// red.
+// Mutations (each red): count nothing, admit an unknown key, count it as
+// invalid, admit a counted route, or double or limiter-filter the refusals.
 func TestAMemberOnAnotherKeyringIsRefusedByKey(t *testing.T) {
 	c := StartPartitionableCluster(t, 3, js.Config{})
 	peers := []*refusalCount{countRefusalsOf(c.Servers[0]), countRefusalsOf(c.Servers[1])}

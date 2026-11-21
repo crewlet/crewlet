@@ -18,27 +18,17 @@ import (
 )
 
 // BenchmarkASubjectListing measures what a stream's LEADER takes to answer a
-// listing of the subjects it holds a message on, a page of a hundred thousand
-// at a time ([jsapi.Leader.Subjects]) — the object store's piece listing,
-// which names every object the bucket holds, and a certified coordination
-// listing's index. The leader sorts EVERY subject under the filter to cut each
-// page, so a page costs what the whole set does and a listing of n subjects
-// costs a sort of n for each of its pages — (n−1)/99,999 of them rounded up,
-// one subject of overlap a page: reported are the pages a listing took, the
-// slowest page and the whole listing, on one solo member's file store.
-//
-// THE SUBJECTS ARE THE OBJECT STORE'S OWN PIECE SUBJECTS,
-// `$O.crewlet_files.C.<nuid>`, one per object, because the sort is of the
-// subjects' bytes and a shorter name sorts faster — the figure the object
-// store's doc gives for its objects is this one.
-//
-// A LISTING IS ASKED BEFORE THE TIMED ONES, and every page under an hour's
-// deadline: a reader's first page ever is given the read term alone and
-// asked again while it is still sorting, which the timed listings, given what
-// the last page took, are not; and a page that outgrows the five seconds a
-// caller with no deadline keeps is measured rather than cut off — the ceiling
-// every read is held to is thirty seconds a page. A million subjects and
-// three million run only under CREWLET_BENCH_LARGE=1.
+// listing of the subjects it holds a message on, a hundred thousand a page
+// ([jsapi.Leader.Subjects]): the object store's piece listing and a certified
+// coordination listing's index. The leader sorts EVERY subject under the
+// filter for each page, so n subjects cost a sort of n per page, (n−1)/99,999
+// pages rounded up: reported are the pages, the slowest page and the whole.
+// THE SUBJECTS ARE THE OBJECT STORE'S OWN, `$O.crewlet_files.C.<nuid>`: the
+// sort is of the bytes and a shorter name sorts faster; its doc quotes this.
+// A LISTING IS ASKED BEFORE THE TIMED ONES, under an hour's deadline: a first
+// page gets the read term alone and is re-asked while sorting, a page past five
+// seconds is measured, not cut off. A million and three million subjects run
+// only under CREWLET_BENCH_LARGE=1.
 func BenchmarkASubjectListing(b *testing.B) {
 	for _, n := range []int{100_000, 300_000, 1_000_000, 3_000_000} {
 		b.Run(fmt.Sprintf("subjects=%d", n), func(b *testing.B) {

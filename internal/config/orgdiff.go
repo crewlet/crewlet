@@ -15,111 +15,16 @@ import (
 
 // What a write changes in the company document, judged object by object.
 //
-// The org chart is written by its LEADS as well as by whoever holds admin
-// (internal/authz's subtree rule): a lead may change what sits
-// inside a unit they lead, and nothing else. So a write is not judged as a
-// document but as the seats and units it adds, removes, moves, reorders and
-// edits, and for each one the PLACES it reaches — every unit that must be
-// inside the writer's subtree for the change to be theirs. [DiffOrg] states those places;
-// whether they ARE inside somebody's subtree is the authority table's to
-// decide (internal/api/configapi asks it).
-//
-// # The places, and what each closes
-//
-//   - WHERE AN OBJECT IS, before and after. A seat is placed in the unit that
-//     holds it, a unit in its parent — so a lead adds, removes and moves
-//     objects only within their subtree, and cannot remove or move the top
-//     unit they lead, whose parent is not theirs.
-//   - WHERE AN OBJECT IS AMONG ITS SIBLINGS, which is placed the same way.
-//     Order is part of the chart: [org.Organization.Manager] answers with the
-//     first seat in document order that manages a seat, so swapping two
-//     teams decides which of a seat's two managers is its own, and with it
-//     who authority treats as leading that person. So a reorder reaches the
-//     unit the reordered objects sit in — a lead orders what is inside the
-//     units they lead, and never the top level or another team. It is read
-//     among the siblings both documents hold there, so a seat added or
-//     removed beside another moves nothing; and as with a removal, a lead
-//     reordering their own seats may change which of them is the first to
-//     manage a seat outside, through a `manages:` entry an administrator
-//     already gave both.
-//   - A UNIT ITSELF, before and after, when its own fields change. A lead
-//     edits their own team's name and purpose, while handing the unit to
-//     another `lead:` fails the AFTER side unless they also lead the unit
-//     above it.
-//   - WHAT A NEW REFERENCE NAMES, after: a unit's `lead:` and a seat's
-//     `manages:` entries. Leadership and management are what authority is
-//     derived from, so a lead who could name an outsider as their sub-team's
-//     lead, or make their report the CEO's manager, would be reaching outside
-//     their subtree through the relations it is defined by. A reference that
-//     names nothing reaches the root, which is nobody's.
-//   - WHO ALREADY NAMES A NEW OBJECT, before: every `lead:` and `manages:`
-//     entry in the document that states the id an added seat or unit takes.
-//     A reference may name nothing — a unit can land before the seat that
-//     leads it — and one that names a unit's key resolves to a seat of that
-//     handle first, so adding a seat under such a name hands the referrer's
-//     authority to whatever the lead configures: a seat added as `ghost`
-//     becomes the lead of an outside team whose `lead: ghost` dangled, with
-//     the lead who added it above that whole team.
-//
-// Only what a write CHANGES is judged: a reference or a key the object already
-// carried was somebody else's decision, and judging it again would make an
-// admin-wired team uneditable by its own lead.
-//
-// A CREDENTIAL IS NEVER A LEAD'S, AND NEITHER IS A `${VAR}`. Every credential
-// field a change sets, clears or alters — compared whole, so a key with nothing
-// under it counts, since an `mcp_env` key alone changes what the seat's child of
-// its server is started with — and every `${VAR}` reference it sets, clears or alters in ANY field, is
-// listed apart ([OrgChange.Credentials]) and is admin's. A
-// reference names any variable the engine's process can resolve — the
-// company's secrets and Tier A's own keyring and tokens alike — and a
-// credential field is not the only place one is resolved: a human seat's
-// `email` and contact identities resolve a whole `${VAR}` too, and are then
-// recited by `lookup_colleague` and a lead's prompt roster and matched by the
-// party registry. So a lead could otherwise read any secret back by naming it
-// as their own Slack id. A setting outside `roles:` and `units:` is listed
-// apart for the same reason ([OrgDiff.Settings]).
-//
-// NOR IS A KEY ANOTHER SYSTEM FINDS THE OBJECT BY ([keyed]): a unit's or a
-// seat's tracker project and page space, a unit's channel, a seat's email and
-// contact identities. A project's and a space's lead is whoever leads the unit
-// declaring it (internal/authz/orgchart), a channel's messages are routed to
-// its unit, and a vendor's actions are attributed by an address or an account
-// id — and who else holds the key is not a fact two documents state. A project
-// outlives the unit that declared it, in the tracker with its tasks, and an
-// account exists at its vendor whether or not a seat names it; judged against
-// the document's own objects alone, a lead declaring an orphaned project as
-// their team's became its lead, with authority over every task in it. So a
-// change that sets, clears or alters one is listed apart ([OrgChange.Keys]) for
-// admin.
-//
-// NOR IS A GRANT THE ROLE CARRIES ([granting]): `health_tools` admits a seat
-// to the administrator's reads of the deployment (internal/authz's seat
-// grant), so a lead who could set it on a seat in their team would read the
-// fleet's health through that seat — its trail is theirs to read — with no
-// permission of their own. A change that sets, clears or alters one is listed
-// apart ([OrgChange.Grants]) for admin. Clearing one is listed too: whether a
-// seat watches the deployment is the administrator's decision either way.
-//
-// A LEAD NARROWS AN MCP SERVER AND NEVER WIDENS ONE. A seat's or a unit's
-// `mcp_limits` is its own field, written by whoever leads the place it sits,
-// and a limit only holds a server back ([org.MCPLimits]). Lifting or loosening
-// one is a grant, which is an administrator's: so every agent seat both
-// documents hold is compared as it is held, its own block and every enclosing
-// unit's together ([org.Role.Limits]), and each limit the write lifts or
-// loosens for it is listed apart ([OrgDiff.Widened]) for admin. Compared as
-// held rather than block by block, because a seat is freed of a limit as
-// surely by moving it out of the unit that holds it, or by removing that unit
-// around it, as by editing the block.
-//
-// A REMOVAL TAKES ITS KEYS WITH IT, judged by where the object was and nothing
-// else, and that is the one residual: a lead may remove a sub-team or a seat
-// that declares a project or a space, and what it declared stays in the
-// tracker with its tasks, or the knowledge base with its pages, declared by
-// nothing in the document — an orphan nobody leads, which only admin may
-// declare again. It takes authority away and gives none.
-//
-// PURE, over two documents and never the running company: a node behind on
-// applies decides a write exactly as a current one does.
+// Leads write the org chart as well as admin (internal/authz's subtree rule): a
+// lead may change what sits inside a unit they lead and nothing else. So a
+// write is judged as the seats and units it adds, removes, moves, reorders and
+// edits, and for each the PLACES it reaches: every unit that must be inside the
+// writer's subtree for the change to be theirs ([DiffOrg]). Whether they are is
+// the authority table's to decide (internal/api/configapi). Only what a write
+// CHANGES is judged: a reference or key the object already carried was somebody
+// else's decision, and rejudging it would make an admin-wired team uneditable
+// by its own lead. PURE over two documents, never the running company, so a
+// node behind on applies decides as a current one does.
 
 // OrgKind is what an org change is about.
 type OrgKind string
@@ -170,7 +75,10 @@ type OrgDiff struct {
 
 	// Widened is every MCP limit the write lifts or loosens for an agent
 	// seat both documents hold, by seat, then server, then tool
-	// ([OrgWidening]).
+	// ([OrgWidening]). A lead narrows a server and never widens one: lifting a
+	// limit is a grant, admin's. Seats are compared as held, their own block
+	// and every enclosing unit's together ([org.Role.Limits]), since moving a
+	// seat out of its unit frees it of a limit as surely as editing the block.
 	Widened []OrgWidening
 
 	// Before and After are the two organizations every place was read in,
@@ -193,7 +101,11 @@ type OrgChange struct {
 	// Credentials is every credential field whose value the change sets,
 	// clears or alters — compared whole, its keys included — and every
 	// `${VAR}` reference it sets, clears or alters in any other field, by
-	// its path inside the object, sorted.
+	// its path inside the object, sorted. Never a lead's: a `${VAR}` names any
+	// variable the process can resolve, and a human seat's `email` and contact
+	// identities resolve one, recited by `lookup_colleague` and the prompt
+	// roster, so a lead could read a secret back as their own Slack id. A
+	// setting outside `roles` and `units` is listed apart for the same reason.
 	Credentials []string
 
 	// Keys is every field another system finds the object by ([keyed])
@@ -208,7 +120,14 @@ type OrgChange struct {
 	Touches []OrgTouch
 }
 
-// OrgTouch is one place a change reaches.
+// OrgTouch is one place a change reaches: where an object is, and also what a
+// new reference names, after, and who already names a new object, before.
+// `lead:` and `manages:` are what authority derives from, so a lead naming an
+// outsider as a sub-team's lead, or making their report the CEO's manager,
+// would reach outside their subtree; a reference naming nothing reaches the
+// root, which is nobody's. A reference may dangle, and one naming a unit's key
+// resolves to a seat of that handle first, so a seat added as `ghost` would
+// lead an outside team whose `lead: ghost` dangled.
 type OrgTouch struct {
 	Side OrgSide
 	// Unit is the key of the unit the place is: the unit holding a seat,
@@ -247,7 +166,14 @@ func (w OrgWidening) Field() string {
 }
 
 // DiffOrg reports what turning before into after changes. A nil before is a
-// document with nothing in it.
+// document with nothing in it. The places it reaches:
+//   - where an object is, before and after (a seat's unit, a unit's parent): a
+//     lead cannot remove or move the top unit they lead;
+//   - where it sits among the siblings both documents hold there: order decides
+//     [org.Organization.Manager] (the first manager in document order), so a
+//     reorder reaches the unit the objects sit in, never the top level;
+//   - a unit itself, when its fields change: handing it to another `lead:`
+//     fails the AFTER side unless they also lead the unit above.
 func DiffOrg(before, after *Company) OrgDiff {
 	if before == nil {
 		before = &Company{}
@@ -351,15 +277,24 @@ func diffObject(kind OrgKind, id string, b, a *surveyed) (OrgChange, bool) {
 }
 
 // keyed is every field, by JSON name, another system finds an object of each
-// kind by — see the file's header.
+// kind by, so a lead never sets one: a project's or space's lead is whoever
+// leads the unit declaring it (internal/authz/orgchart), a channel routes to
+// its unit, a vendor attributes by address or account id, and who else holds
+// the key is not a fact two documents state. A project outlives its unit in
+// the tracker, so a lead declaring an orphan as their team's became its lead.
+// A removal takes its keys with it, judged by where the object was: what it
+// declared stays orphaned, which only admin may declare again.
 var keyed = map[OrgKind][]string{
 	OrgSeat: {"contact", "email", "project", "space"},
 	OrgUnit: {"channel", "project", "space"},
 }
 
 // granting is every field, by JSON name, that carries a ROLE GRANT on an object
-// of each kind — an authority the role holds beyond what the chart's subtree
-// gives its leads, which only admin sets — see the file's header.
+// of each kind: authority beyond the chart's subtree, which only admin sets.
+// `health_tools` admits a seat to the administrator's reads of the deployment
+// (internal/authz's seat grant), so a lead setting it on a team seat would read
+// fleet health through it. Clearing is listed too: whether a seat watches the
+// deployment is admin's decision either way.
 var granting = map[OrgKind][]string{
 	OrgSeat: {"health_tools"},
 }
@@ -575,24 +510,18 @@ func settingsChanged(before, after *Company) []string {
 	return differingKeys(b, a)
 }
 
-// credentialsOf is everything in v only admin may change, by
-// its path inside v: the WHOLE VALUE of every credential field — its keys as
-// much as its strings — and every other string that carries a `${VAR}`.
+// credentialsOf is everything in v only admin may change, by its path inside v:
+// the WHOLE VALUE of every credential field, keys as much as strings, and every
+// other string carrying a `${VAR}`.
 //
-// THE WHOLE VALUE, because a credential field's key is a capability of its own. An
-// `mcp_env` block's keys are laid over its server's own values for the seat's
-// child, so `{github: {TOKEN: ""}}` changes the identity that child acts with
-// though it holds no string a walk would find, and a walk of the strings alone
-// admitted a lead pointing an agent's tool at another identity, or at none.
+// Whole value, because a key is a capability: an `mcp_env` block's keys overlay
+// its server's values for the seat's child, so `{github: {TOKEN: ""}}` changes
+// the identity the child acts with though it holds no string a walk would find.
 //
-// A credential field holding nothing — an empty string, map or list — is
-// none, so a block whose credential fields are unset holds none. EMPTYING ONE
-// IS STILL A CHANGE: the side that held a value lists its path and the side
-// that holds none does not, which [credentialsChanged] reports as cleared. What
-// is no change is an empty block where there was none, because nothing can
-// tell the two apart: the document is stored and read back with an empty
-// field omitted, so counting it would refuse a lead sending back exactly what
-// they read.
+// EMPTYING ONE IS STILL A CHANGE: the side that held a value lists its path,
+// which [credentialsChanged] reports as cleared. An empty block where there was
+// none is no change: the document is stored with empty fields omitted, so
+// counting it would refuse a lead sending back what they read.
 func credentialsOf(v any) map[string]string {
 	out := map[string]string{}
 	var walk func(v reflect.Value, path Path)

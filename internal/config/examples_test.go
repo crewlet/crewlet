@@ -19,19 +19,12 @@ import (
 // readRepoFile reads a file shipped in this repository, and FAILS when it
 // cannot.
 //
-// Every caller here used to t.Skipf "the example tree is not in this
-// checkout". CI does a full checkout and the module zip carries examples/ and
-// docs/, so none of those skips has ever fired — which means the only event
-// they could ever respond to is the one they must not hide: somebody renaming
-// examples/nimbus.company.yaml, moving a docs page, or dropping an entry from
-// the list. Every one of these cases certifies a SHIPPED artefact, so a file
-// that is not there is a broken checkout or a rename nobody swept, and both
-// are findings.
-//
-// This is not hypothetical. internal/api/queries/company_test.go carried the
-// identical shape over a dashboard path, the React rewrite moved the path, and
-// that gate certified nothing on every machine and in CI until somebody went
-// looking.
+// A t.Skipf "the example tree is not in this checkout" could only respond to
+// the event it must not hide: CI does a full checkout and the module zip
+// carries examples/ and docs/, so a missing file is a rename or move nobody
+// swept. Every case here certifies a SHIPPED artefact, so a missing file is a
+// finding. A skip let internal/api/queries/company_test.go certify nothing
+// after the dashboard path it read moved.
 func readRepoFile(t *testing.T, parts ...string) []byte {
 	t.Helper()
 	path := filepath.Join(append([]string{sourcetree.Root(t)}, parts...)...)
@@ -602,46 +595,16 @@ func wholeRef(value string) (string, bool) {
 	return m[1], true
 }
 
-// THE DOCUMENTED GIT-AUTH RECIPE KEEPS ITS SECURITY PROPERTIES.
-//
-// A sandboxed seat needs a credential helper carrying that seat's own
-// code-host PAT, and the recipe is CONFIG — the engine ships no setup steps
-// of its own — so nothing in the engine constrains it. It lives in
-// docs/concepts/code-sandbox.md, which is where a reader copies it from, and
-// the properties that keep the token from leaking are properties of that
-// block and that block alone:
-//
-//   - The helper is scoped to the host at BOTH layers. The `credential.
-//     "https://host".helper` key is what git consults, and the script
-//     re-checks `host=` itself. Either alone is a token offered to whatever
-//     host asks — a malicious submodule URL is the cheap version of that
-//     attack, and git will happily consult a helper for it.
-//   - It stays silent with no token, so a public clone falls through to
-//     anonymous instead of failing.
-//   - insteadOf is added with `--add` on both forms. It is a multi-valued
-//     key: a second plain `git config` REPLACES the first, which leaves
-//     scp-style `git@host:` remotes on SSH — with no key in the box, so
-//     they simply fail.
-//   - The commit identity comes from the engine's generic agent facts, so
-//     work attributes to the seat rather than to whoever built the image.
-//   - The helper lands in the box's HOME. Neither local cell writes a setup
-//     file outside it, and a direct box's home is minted per box, so no
-//     absolute path a file entry holds is inside it: the recipe as it
-//     stood, writing /usr/local/bin, was refused at setup in both local
-//     cells, and a reader copying it got a seat that could never provision
-//     a box. A file entry may still name the home RELATIVELY, which every
-//     cell writes under it; the recipe writes the helper with a command
-//     because git is given its absolute path, which only the box's shell
-//     knows.
-//   - That path is QUOTED where git is told it. git runs a helper's value
-//     through the shell, so an unquoted "$HOME/…" splits at a space in the
-//     home — a direct box's sits under state_dir: by default the engine
-//     user's ~/.crewlet/sandboxes, and a relative one, like the examples',
-//     resolved against wherever the engine was started — and every clone
-//     dies with "could not read Username".
-//
-// The prose around the block explains each of those to a reader editing it.
-// This is what fails when the edit lands anyway.
+// THE DOCUMENTED GIT-AUTH RECIPE KEEPS ITS SECURITY PROPERTIES. The recipe
+// (docs/concepts/code-sandbox.md) is CONFIG, so only this holds it to them:
+//   - the helper is scoped to the host at BOTH layers, the credential key and
+//     the script's `host=` check; either alone offers the token to any host
+//   - silent with no token, so a public clone falls through to anonymous
+//   - insteadOf added with `--add` on both forms: a plain second `git config`
+//     REPLACES the first, leaving scp-style remotes on keyless SSH
+//   - helper written into the box's HOME by a command (both local cells refuse
+//     an absolute-path file entry) and QUOTED where git is told it: git runs
+//     it through the shell, so "$HOME/..." splits at a space
 func TestTheDocumentedGitAuthRecipeStaysScoped(t *testing.T) {
 	t.Parallel()
 	cfg, err := ParseCompanyDocument([]byte(gitAuthRecipeBlock(t)))

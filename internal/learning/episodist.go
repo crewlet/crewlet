@@ -20,38 +20,14 @@ const EpisodistSource = "episodist"
 //
 // # Why this is a worker and not a write at the end of the turn
 //
-// An episode is what a seat DID, and the turn engine already knows that as
-// the turn ends — so writing it there would be one fewer hop. It is a worker
-// because the write must be gated on the same questions the other learning
-// passes are gated on (did the turn settle, did the agent engage), and a
-// gate that lives in the turn engine is a gate no operator can turn off and
-// no pass result reports on. The episode table is the substrate the whole
-// read side runs on; a company whose recall is empty needs to be able to see
-// WHICH gate closed.
+// A worker, not a write at the end of the turn, so it is gated like the other
+// learning passes: a gate inside the turn engine can't be turned off or
+// reported on, and an empty recall must show WHICH gate closed.
 //
-// # What its vector is of
-//
-// The turn WHOLE: its label, what it was asked ([Turn.Ask]) and what it did
-// (its plan summary), as ONE text — the engine's embed seam chunks and pools
-// a text past the model's window rather than cutting it, so a long ask or a
-// long answer is read to its end. The label alone, which is what this used to
-// embed, is the same line for every message on a surface ("Message from Ana:
-// Slack message"), and a vector of it ranked every chat turn alike. The
-// vector is tagged with the model that made it, and recall compares only
-// vectors of the model it is asking with.
-//
-// # It writes even when there is no vector
-//
-// [Episode.Embedding] is nil when the embedder was unreachable, and the row
-// still lands: similarity recall skips such rows while the time-window,
-// conversation and outcome queries still surface them, and the lifecycle
-// worker never reads a vector at all — it clusters on tool overlap. A
-// transient embedding outage must never cost an episode, and it costs the
-// vector only until the node holding the seat fills it: the ask is stored on
-// the row ([Episode.Ask]), so the text the vector is of is a function of the
-// row alone ([episodeText]), and [Episodes.Unfilled] hands the fill exactly
-// what this worker would have embedded — for a row that missed its vector, and
-// for every row after the company moves to another model.
+// The vector is of the turn WHOLE (label, [Turn.Ask], plan summary), since the
+// label alone is one line for every message on a surface; it is tagged with its
+// model. It writes even with no vector: an outage must never cost an episode,
+// and [Episodes.Unfilled] hands the fill what was missed ([episodeText]).
 type Episodist struct {
 	episodes *Episodes
 	embed    Embed

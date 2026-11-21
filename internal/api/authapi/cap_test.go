@@ -69,17 +69,11 @@ func (p *posted) answered(within time.Duration) bool {
 // EVERY ARM OF A SIGN-IN WAITS FOR THE VERIFY CAP — AND GIVES UP ITS PLACE WHEN
 // IT GOES AWAY.
 //
-// A sign-in surface is not a roster only while every arm does the same work,
-// and the work is one argon2id derivation under the node's verify cap: a
-// verification where there is a verifier, and a verification against the
-// hasher's dummy where there is none — nobody by that login or address, a
-// directory this node cannot read, a person suspended, an enrolment nobody
-// finished, a person who holds no password. So with every slot of the cap
-// held, every arm waits — a wrong password, each of those, a step-up and an
-// invitation's redemption alike. They are then abandoned: each answers 503
-// rather than a refusal, and not one counts as a failed attempt, because
-// nothing was verified. The control is the cap itself: once the slot frees, a
-// sign-in is served.
+// A sign-in surface is no roster only while every arm does the same work: one
+// argon2id derivation under the verify cap, against the verifier or the
+// hasher's dummy (unknown login, unreadable directory, suspended person, no
+// password). With every slot held every arm waits, a step-up and a redemption
+// included. Abandoned, each answers 503 and counts no failed attempt.
 //
 // Mutations: skip the decoy on any arm, or let it derive outside the cap, and
 // that arm answers without waiting; wait for a slot without the request's

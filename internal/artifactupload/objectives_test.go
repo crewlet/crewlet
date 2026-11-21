@@ -1,7 +1,9 @@
 package artifactupload_test
 
 import (
+	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 type judged struct {
 	mu     sync.Mutex
 	events []judgedEvent
+	left   []objectives.Name
 }
 
 type judgedEvent struct {
@@ -30,12 +33,27 @@ func (j *judged) Record(n objectives.Name, _ time.Duration, answered bool) {
 	j.events = append(j.events, judgedEvent{n, answered})
 }
 
+func (j *judged) Abandon(n objectives.Name, _ time.Duration) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.left = append(j.left, n)
+}
+
 // take answers the events since the last take, and forgets them.
 func (j *judged) take() []judgedEvent {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	out := j.events
 	j.events = nil
+	return out
+}
+
+// takeLeft answers the events abandoned since the last take, and forgets them.
+func (j *judged) takeLeft() []objectives.Name {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	out := j.left
+	j.left = nil
 	return out
 }
 
@@ -110,4 +128,42 @@ func TestEveryPublishIsOneObjectiveEvent(t *testing.T) {
 		t.Fatalf("the publish the store had no room for answered %v", err)
 	}
 	expect("a publish the store had no room for", judgedEvent{objectives.PublishSuccess, false})
+}
+
+// A PUBLISH ITS CALLER WENT AWAY FROM IS ABANDONED, NOT A FAILED PUBLISH: a
+// page closed or a turn stopped ended it, not the pipeline. A publish that ran
+// past a deadline failed a bound, and is unanswered.
+//
+// Mutation: drop objectives.Abandoned from judge, and the first publish is a
+// bad event.
+func TestAPublishItsCallerWentAwayFromIsAbandoned(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, options{})
+	created := h.create(h.person("ada", h.opKey("create")), map[string]string{"index.html": page})
+	h.judged.take()
+	edit := artifactupload.PublishRequest{
+		Artifact: created.Artifact, Base: 1, Mode: manifest.ModePatch,
+		Edits: []edits.Edit{{Old: `<script>function go()`, New: `<script>function go2()`}},
+	}
+
+	gone, leave := context.WithCancel(t.Context())
+	leave()
+	if _, _, err := h.svc.Publish(gone, h.person("ada", h.opKey("gone")), edit); err == nil {
+		t.Fatal("a publish whose caller had gone published")
+	}
+	if got, left := h.judged.take(), h.judged.takeLeft(); len(got) != 0 ||
+		!slices.Contains(left, objectives.PublishSuccess) {
+		t.Errorf("events %+v, abandoned %v: want the publish abandoned and nothing counted", got, left)
+	}
+
+	late, expire := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expire()
+	if _, _, err := h.svc.Publish(late, h.person("ada", h.opKey("late")), edit); err == nil {
+		t.Fatal("a publish past its deadline published")
+	}
+	got, left := h.judged.take(), h.judged.takeLeft()
+	if !slices.Contains(got, judgedEvent{objectives.PublishSuccess, false}) || len(left) != 0 {
+		t.Errorf("events %+v, abandoned %v: want an unanswered publish, a deadline being no caller "+
+			"leaving", got, left)
+	}
 }

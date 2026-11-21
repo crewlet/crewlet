@@ -710,21 +710,15 @@ func TestASaveExcerptIsItsMessageAndNothingElse(t *testing.T) {
 
 // PAGING A LISTING RETURNS EVERY PAGE ONCE, IN ITS ORDER.
 //
-// A later window is read as the arms of the order strictly after the row its
-// cursor names — the title held equal with the id past it, then every title
-// past it, then every container past it — each read in turn until the window
-// is full, so a "Load more" sees every page exactly once only while those arms
-// partition what follows the cursor and are read nearest first. Each listing
-// here is read whole and then one, two and three pages at a time, so a window
-// stops at every row of it: at the boundary between two containers in the
-// workspace, beside a title another container also holds, past a trashed page
-// a listing of the live ones leaves out, inside a tree level, and inside a
-// listing a label or a watcher narrows, which is read from the filter's own
-// rows and sorted rather than walked in the order's index.
-//
-// Mutation: drop the id bound from the resume's first arm, and the row a
-// window stopped on is read again at the top of the next; read the arms
-// shallowest first, and the windows come back out of order.
+// A later window is read as the arms of the order strictly after the cursor's
+// row (the title held equal with the id past it, then every later title, then
+// every later container), nearest first until the window is full, so "Load more"
+// sees every page once only while the arms partition what follows the cursor.
+// Each listing is read whole and then one, two and three pages at a time, so a
+// window stops at every row: a container boundary, a shared title, past a
+// trashed page, inside a tree level, and inside a label or watcher listing.
+// Mutation: drop the id bound from the first arm, and a stopped-on row repeats;
+// read the arms shallowest first, and the windows come back out of order.
 func TestPagingAListingReturnsEveryPageOnceInItsOrder(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -823,17 +817,13 @@ func placement(rows []doclet.Summary) []string {
 
 // A LISTING'S CHILD COUNT FOLLOWS ITS NARROWING, PARENT BY PARENT.
 //
-// Each row of a listing counts the pages directly under it that the SAME
-// listing would show: its status and skill narrowing applied to the children,
-// and nothing else. The count is read for a whole window of rows at once, so
-// it must also keep each parent's children apart. Here two parents and a leaf
-// share one window of the workspace, one parent holding a live child, a
-// trashed one and a tool skill, and the counts are read under no narrowing,
-// under a listing of the live pages, and under each skill narrowing.
-//
-// Mutation: drop the narrowing from the count, and the trashed child is
-// counted under the live listing and the skill under the ordinary one; count
-// by the child's own id rather than its parent's, and every count is zero.
+// Each row counts the pages directly under it that the SAME listing would show
+// (its status and skill narrowing, nothing else), read for a whole window at
+// once, so each parent's children must stay apart. Two parents and a leaf share
+// a window; one parent holds a live child, a trashed one and a tool skill.
+// Mutation: drop the narrowing, and the trashed child is counted under the live
+// listing and the skill under the ordinary one; count by the child's own id
+// rather than its parent's, and every count is zero.
 func TestAListingsChildCountFollowsItsNarrowing(t *testing.T) {
 	t.Parallel()
 	r, _ := hooked(t)
@@ -896,22 +886,16 @@ func TestAListingsChildCountFollowsItsNarrowing(t *testing.T) {
 
 // THE NEWEST SKILLS ARE LISTED BY WHEN THEY CHANGED, ACROSS EVERY WINDOW.
 //
-// Agent skills and Home's Agent skills widget list the tool skills newest
-// first. The only listing there was ran in the knowledge base's own order —
-// container, title, id — so "newest" was a sort of whichever window that
-// order held: past one window of skills the newest could be one no window
-// drawn had loaded. A newest-first listing is now read in that order itself
-// ([doclet.OrderNewest]), from the skill rows' own index, and paged by a cursor
-// in it. Here the skill whose title sorts first is the one saved last, a
-// rename moves another to the front, an ordinary page changed after every
-// skill is no row of it, and each window size pages the whole listing back
-// in the same order. And the instant each row reports is its HEAD's, which
-// the skill row copies on every apply that moves it.
-//
-// Mutation: order the newest listing by title again, and Alpha is listed
-// last; write the skill row's instant from anything but the head's, and a
-// row reports another instant than the page; drop the id from the cursor's
-// arm, and a window repeats the row the last one stopped on.
+// A newest-first listing is read in that order itself ([doclet.OrderNewest]),
+// from the skill rows' own index and paged by a cursor in it; sorting whichever
+// window the title order held would miss a newest skill past one window. The
+// skill whose title sorts first is saved last, a rename moves another to the
+// front, an ordinary page changed later is no row of it, and each window size
+// pages the whole listing in one order. A row reports its HEAD's instant.
+// Mutation: order by title again, and Alpha is listed last; write the skill
+// row's instant from anything but the head's, and a row reports another
+// instant than the page; drop the id from the cursor's arm, and a window
+// repeats the row the last one stopped on.
 func TestTheNewestSkillsAreListedByWhenTheyChanged(t *testing.T) {
 	t.Parallel()
 	r, _ := hooked(t)

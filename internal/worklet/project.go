@@ -43,12 +43,16 @@ type ProjectEdit struct {
 	// Archived stops the project taking new work. It takes a person, never an
 	// agent ([ProjectAuthority.Archive]): it is a decision about the company.
 	Archived *bool
+
+	// StuckAfterHours is [Project.StuckAfterHours]: zero clears it back to
+	// [DefaultStuckAfterHours], anything else outside the bounds is refused.
+	StuckAfterHours *int
 }
 
 // Empty reports an edit that sets nothing.
 func (e ProjectEdit) Empty() bool {
 	return e.Fields == nil && e.DefaultAssignee == nil && e.TargetDate == nil &&
-		e.Archived == nil
+		e.Archived == nil && e.StuckAfterHours == nil
 }
 
 // ProjectAuthority is what a caller may do to a project's policy.
@@ -86,9 +90,15 @@ func (w *Writer) WriteProject(ctx context.Context, opID, key string,
 			"is added with `tags_add`", key)
 	case !authority.Policy:
 		return WriteResult{}, forbidden("%s's field declarations, default "+
-			"assignee and target date are the project lead's, or an admin's — "+
-			"they decide how everybody's work in it is filed and when it is "+
-			"due, which is not a call anybody else makes for the team", key)
+			"assignee, target date and stuck window are the project lead's, or "+
+			"an admin's: they decide how everybody's work in it is filed and "+
+			"when it is due, which is not a call anybody else makes for the team", key)
+	case edit.StuckAfterHours != nil && *edit.StuckAfterHours != 0 &&
+		(*edit.StuckAfterHours < MinStuckAfterHours || *edit.StuckAfterHours > MaxStuckAfterHours):
+		return WriteResult{}, invalid("%s's stuck_after_hours is %d; it is a "+
+			"whole number of hours from %d to %d, or 0 for the default of %d",
+			key, *edit.StuckAfterHours, MinStuckAfterHours, MaxStuckAfterHours,
+			DefaultStuckAfterHours)
 	case edit.Archived != nil && !authority.Archive:
 		// Separate from the lead gate: this refusal names the facet.
 		return WriteResult{}, forbidden("archiving %s takes the project's "+
@@ -204,6 +214,10 @@ func applyProjectEdit(current Project, edit ProjectEdit, actor string,
 	}
 	if edit.Archived != nil && *edit.Archived != current.Archived {
 		next.Archived = *edit.Archived
+		changed = true
+	}
+	if edit.StuckAfterHours != nil && *edit.StuckAfterHours != current.StuckAfterHours {
+		next.StuckAfterHours = *edit.StuckAfterHours
 		changed = true
 	}
 	if !changed {

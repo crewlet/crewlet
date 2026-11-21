@@ -18,31 +18,20 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE SWEEP DELETES BY POSITION RANGE, NEVER BY A CLOCK.
+// THE SWEEP DELETES BY POSITION RANGE, NEVER BY A CLOCK: identity-claimed rows
+// stay byte-identical across nodes only if every node deletes the same rows
+// (sweep.go's header).
 //
-// THE case this whole mechanism exists for. These rows are identity-claimed:
-// N nodes assert their replicated tables are byte-identical. A node sweeping
-// on its own clock would hold different bytes from its peers, and the claim
-// would quietly become a claim about how synchronised their clocks were —
-// checkable by nothing, false whenever an NTP correction landed, and
-// indistinguishable from an applier that had diverged.
-//
-// So the publisher resolves each horizon to a POSITION, once, and every node
-// deletes exactly the same rows.
-//
-// THE CLOCK THAT COULD DIFFER IS THE BATCH INSTANT. Every other instant the
-// applier can reach is the BROKER's, stamped on the record and identical on
-// every node — which is a structural guarantee rather than a rule somebody
-// follows: [applyContext] carries the broker's instant and does not carry
-// ApplyOptions.Now at all, so there is nothing per-node for an arm here to
-// read. This case varies the one that IS per-node and asserts it changes
-// nothing, and then asserts the POSITION is what decided.
+// The one per-node clock the applier could reach is the BATCH instant:
+// [applyContext] carries the broker's instant and not ApplyOptions.Now, so this
+// is structural. The case varies the batch instant, asserts it changes nothing,
+// then asserts the POSITION decided.
 func TestTheSweepDeletesByPositionRangeNeverByAClock(t *testing.T) {
 	t.Parallel()
 
-	// TWO NODES, TWO BATCH CLOCKS, ONE RECORD. The skew is a year, which
-	// is past every horizon this domain keeps — so a sweep that read the
-	// batch instant at all would delete a different set on each.
+	// TWO NODES, TWO BATCH CLOCKS, ONE RECORD. The skew is a year, past every
+	// horizon this domain keeps, so a sweep that read the batch instant would
+	// delete a different set on each.
 	early := brokerAt.Add(-365 * 24 * time.Hour)
 	late := brokerAt.Add(365 * 24 * time.Hour)
 
@@ -75,13 +64,9 @@ func TestTheSweepDeletesByPositionRangeNeverByAClock(t *testing.T) {
 	}
 }
 
-// A ZERO HORIZON DELETES NOTHING, which is the correct reading of "this
-// company has no rows old enough yet" and is NOT the same as "everything".
-//
-// A zero is below every row's version, so the arithmetic already says so —
-// this case exists because the OPPOSITE reading is the one somebody writes by
-// accident, and it would empty the authentication trail of a company on its
-// first tick.
+// A ZERO HORIZON DELETES NOTHING ("no rows old enough yet"), never everything.
+// The arithmetic already says so; this guards the opposite reading, easy to
+// write by accident, which would empty a new company's trail on its first tick.
 func TestAZeroHorizonSweepsNothing(t *testing.T) {
 	t.Parallel()
 	rig := sweepRig(t, brokerAt)
@@ -97,16 +82,10 @@ func TestAZeroHorizonSweepsNothing(t *testing.T) {
 	}
 }
 
-// AND A SWEEP NEVER EXCEEDS ONE TRANSACTION'S ROW BUDGET.
-//
-// The budget is per TRANSACTION and the sweep is per BUCKET, and the two are
-// not the same bound: a bucket unswept for a month is not a sixty-fourth of a
-// tick, it is a sixty-fourth of a month. Without the cap, one record's apply
-// holds this store's only writer for as long as that takes, with every other
-// domain's apply waiting behind it.
-//
-// THE BUCKET CONVERGES ANYWAY, which is what makes the cap cheap: what is left
-// is swept on the next tick.
+// AND A SWEEP NEVER EXCEEDS ONE TRANSACTION'S ROW BUDGET, though a bucket
+// unswept for a month holds a month's rows: uncapped, one apply would hold this
+// store's only writer with every other domain waiting. The cap is cheap because
+// the bucket converges: what is left is swept next tick.
 func TestTheSweepNeverExceedsOneTransactionsBudget(t *testing.T) {
 	t.Parallel()
 	rig := sweepRig(t, brokerAt)
@@ -127,8 +106,8 @@ func TestTheSweepNeverExceedsOneTransactionsBudget(t *testing.T) {
 	if rows == 0 {
 		t.Fatal("the sweep deleted nothing, so the cap is not what bounded it")
 	}
-	// AND WHAT IS LEFT IS SWEPT NEXT TICK, which is what makes the cap a
-	// bound on one transaction rather than on the retention itself.
+	// AND WHAT IS LEFT IS SWEPT NEXT TICK, so the cap bounds one transaction,
+	// not the retention.
 	remaining := len(rig.trail())
 	if remaining == 0 {
 		t.Fatal("one record swept everything, so the cap did not apply and " +
@@ -147,13 +126,10 @@ func TestTheSweepNeverExceedsOneTransactionsBudget(t *testing.T) {
 	}
 }
 
-// AND THE BUDGET IS THE RECORD'S, NOT EACH STATEMENT'S.
-//
-// The case above fills ONE table and so cannot tell a budget per record from a
-// budget per statement. This one puts just over half a budget behind each of
-// three predicates in one bucket — the change trail, the session trail and the
-// ended sessions — which a per-statement LIMIT deletes in full, one and a half
-// budgets in a transaction sized for one.
+// AND THE BUDGET IS THE RECORD'S, NOT EACH STATEMENT'S: just over half a budget
+// behind each of three predicates in one bucket (the change trail, the session
+// trail, the ended sessions), which a per-statement LIMIT would delete in full,
+// one and a half budgets in a transaction sized for one.
 func TestOneSweepRecordSharesItsBudgetAcrossEveryTable(t *testing.T) {
 	t.Parallel()
 	rig := sweepRig(t, brokerAt)
@@ -206,11 +182,9 @@ func TestOneSweepRecordSharesItsBudgetAcrossEveryTable(t *testing.T) {
 	}
 }
 
-// A SWEEP NAMING A BUCKET THIS ESTATE DOES NOT HAVE IS REFUSED.
-//
-// It would otherwise delete nothing, silently, for ever — a retention that
-// reports itself running and collects nothing, which is the failure mode every
-// horizon in this tree is written to avoid.
+// A SWEEP NAMING A BUCKET THIS ESTATE DOES NOT HAVE IS REFUSED, rather than
+// silently deleting nothing for ever: a retention that reports itself running
+// and collects nothing.
 func TestASweepPastTheBucketCountIsRefused(t *testing.T) {
 	t.Parallel()
 	rig := sweepRig(t, brokerAt)
@@ -296,11 +270,9 @@ func (r *sweepRigT) fillTrail(n int) {
 // apply runs one record through this node's applier and returns the rows it
 // wrote or deleted.
 //
-// `now` IS THE BATCH INSTANT AND NOTHING ELSE. StoredAt stays the broker's own
-// stamp, identical on every node, because that is what it is: a record carries
-// one instant from the broker and every node applying it sees that one. The
-// split is the whole point of the skew case — varying both would prove only
-// that two different records produce two different states.
+// `now` IS THE BATCH INSTANT AND NOTHING ELSE; StoredAt stays the broker's
+// stamp, identical on every node. Varying both would prove only that two
+// different records produce two different states.
 func (r *sweepRigT) apply(rec statelog.Record, now time.Time) int {
 	r.t.Helper()
 	var rows int
@@ -381,21 +353,16 @@ var _ = context.Background
 
 // A SWEEP COLLECTS WHAT WAS SPENT, from the rows AND the document.
 //
-// A redeemed invitation — with the sealed address it was for — and a revoked or
-// expired credential, verifier and all, are collected a week past the moment
-// each stopped being presentable, which the record's own instant says; anything
-// that stopped more recently, and anything still presentable, stays.
-//
-// A CREDENTIAL IS COLLECTED FROM THE PERSON'S DOCUMENT TOO, and the last step
-// is why: credentials travel whole on the document and the rows are derived
-// from it, so the next change to somebody's credentials — which forms the new
-// set from the document — would republish a credential a sweep had deleted only
-// from the rows.
+// A redeemed invitation and a revoked or expired credential are collected a
+// week past the moment each stopped being presentable, by the record's own
+// instant; anything more recent, or still presentable, stays. The last step
+// holds the document half: the next credential change forms the new set from
+// the document, so a row-only delete would be republished.
 func TestASweepCollectsWhatWasSpent(t *testing.T) {
 	t.Parallel()
-	// THE PUBLISHER'S OWN CLOCK IS brokerAt, so its collection instant is a
-	// week before it; "long ago" is past that by more than the slack, which
-	// is what makes the bucket due at all.
+	// THE PUBLISHER'S CLOCK IS brokerAt, so its collection instant is a week
+	// before it; "long ago" is past that by more than the slack, which makes
+	// the bucket due.
 	cutoff := brokerAt.Add(-iamdomain.SessionRowGrace)
 	long, recent := cutoff.Add(-2*iamdomain.SweepSlack), cutoff.Add(time.Hour)
 	credentials := []iamdomain.Credential{
@@ -518,9 +485,8 @@ func TestASweepCollectsWhatWasSpent(t *testing.T) {
 			}
 		}
 		// THE ROW'S VERSION MOVES WITH THE DOCUMENT, so a person record
-		// redelivered from before the sweep cannot write back what it
-		// collected — the expectation a writer arbitrates on is the
-		// subject's anchor, never this column.
+		// redelivered from before the sweep cannot write back what it collected;
+		// a writer arbitrates on the subject's anchor, never this column.
 		stamped := rig.column(`SELECT version FROM iam_people WHERE id = ?`,
 			person)
 		if len(stamped) != 1 || stamped[0] != strconv.FormatUint(at, 10) {
@@ -553,11 +519,9 @@ func TestASweepCollectsWhatWasSpent(t *testing.T) {
 	})
 }
 
-// THE PUBLISHER FINDS A BUCKET DUE FOR WHAT WAS SPENT, and collects it.
-//
-// A bucket whose only due row is a credential revoked a week and a day ago is
-// due: were the publisher's probes only the lapsed rows', it would never
-// publish the record that collects it.
+// THE PUBLISHER FINDS A BUCKET DUE FOR WHAT WAS SPENT, and collects it: a
+// bucket whose only due row is a credential revoked a week and a day ago,
+// which probes of only the lapsed rows would never publish a record for.
 func TestTheSweepPublisherFindsABucketDueForWhatWasSpent(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -608,13 +572,11 @@ func TestTheSweepPublisherFindsABucketDueForWhatWasSpent(t *testing.T) {
 	}
 }
 
-// AN INVITATION WITH NO EXPIRY IS COLLECTED, as one that aged out is.
-//
-// Every reader reads it as aged out — it holds nothing, lists as open nowhere
-// and redeems nobody — so kept by the sweep it was the one dead invitation
-// whose sealed address stayed in every data node's estate for good. The
-// publisher finds its bucket due on it alone, and the apply collects it beside
-// an outstanding invitation in the same bucket, which stays.
+// AN INVITATION WITH NO EXPIRY IS COLLECTED, as one that aged out is: every
+// reader reads it as aged out, so kept it would leave a dead invitation's
+// sealed address in every data node's estate. The publisher finds its bucket
+// due on it alone, and the apply collects it beside an outstanding invitation
+// in the same bucket, which stays.
 //
 // Mutation: read a zero expiry as `never` in the publisher's probe and nothing
 // is published; in the apply's delete and the row outlives the sweep.
@@ -626,8 +588,8 @@ func TestTheSweepCollectsAnInvitationWithNoExpiry(t *testing.T) {
 	applyInvitationByHand(t, rig, dead, address, "a-secret",
 		rig.vacantSeat("platform-lead"), time.Time{}, 1)
 	bucket := iamdomain.BucketOf(blindOf(t, address))
-	// AN OUTSTANDING ONE IN THE SAME BUCKET, which the sweep leaves alone:
-	// the control that the delete is about the expiry and not the bucket.
+	// AN OUTSTANDING ONE IN THE SAME BUCKET, which the sweep leaves alone: the
+	// control that the delete is about the expiry, not the bucket.
 	if err := rig.db.Tx(t.Context(), func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO iam_invites (id, email_blind, expires_at, bucket,

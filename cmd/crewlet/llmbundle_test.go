@@ -294,19 +294,16 @@ func TestABundleFromAnotherHarnessIsRefusedByTheCommandsThatRestoreIt(t *testing
 	}
 }
 
-// THE COMMANDS THAT REPLACE OR REMOVE THE LOGIN DO NOT RESTORE IT FIRST. A
-// login restored before `login` ran would be seeded into the sign-in and
-// carried back as the operator's own, so a sign-in the operator backed out of
-// would report a login written; one restored before `import` would refuse the
-// operator's bundle as a login already present; and one restored before
-// `logout` would be seeded into the login home the vendor's own logout runs
-// in, handing it the configured bundle's login to REVOKE at the vendor — the
-// login every fresh container signs in with — although the logout leaves no
-// login on disk either way. So that case's vendor logout fails exactly when a
-// login was seeded for it.
+// THE COMMANDS THAT REPLACE OR REMOVE THE LOGIN DO NOT RESTORE IT FIRST. A login
+// restored before `login` would be seeded into the sign-in and carried back as
+// the operator's own, so a backed-out sign-in would report a login written; before
+// `import` it would refuse the operator's bundle as already present; before
+// `logout` it would be seeded into the vendor's logout home, handing it the
+// configured bundle's login to REVOKE (the login every fresh container signs in
+// with). That case's vendor logout fails exactly when a login was seeded for it.
 //
-// Mutation: restore the bundle before `login`, `import` or `logout`, and its
-// case is red.
+// Mutation: restore the bundle before `login`, `import` or `logout`, and its case
+// is red.
 func TestTheCommandsThatReplaceTheLoginDoNotRestoreItFirst(t *testing.T) {
 	t.Run("login", func(t *testing.T) {
 		flags, login := bundledEntry(t, llmBundle(t, `{"token":"k-bundled"}`))

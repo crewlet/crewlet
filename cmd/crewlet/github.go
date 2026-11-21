@@ -15,17 +15,12 @@ import (
 
 // `crewlet github provision` — the hosted code host's reconcile.
 //
-// # It reports more than it changes, and that is GitHub's shape
-//
-// The self-hosted code host's command beside this one CREATES a service
-// account per seat and mints its token. GitHub offers neither: there is no
-// API that creates a user, and the API that once minted a token on somebody
-// else's behalf was withdrawn in 2020. A command that offered to provision
-// accounts would be printing instructions dressed as actions.
-//
-// So it answers the question that is otherwise invisible until an event
-// reaches nobody — which account each seat's credential authenticates as —
-// and does the one write GitHub does allow: registering the inbound
+// It reports more than it changes, which is GitHub's shape. The self-hosted code
+// host's command CREATES a service account per seat and mints its token; GitHub
+// has no API that creates a user, and the one that minted a token on somebody
+// else's behalf was withdrawn in 2020. So it answers what is otherwise invisible
+// until an event reaches nobody (which account each seat's credential
+// authenticates as) and does the one write GitHub allows: registering the inbound
 // webhooks, on the organization where the credential may and on each named
 // repository where it may not.
 
@@ -176,19 +171,15 @@ func runGitHubProvision(inv invocation, args []string, stdout, stderr io.Writer)
 
 // printGitHubResult renders what the run found.
 //
-// THE SEATS COME FIRST because that is the finding an operator acts on: a
-// seat this run could not resolve receives nothing, and nothing else in the
-// engine says so — its inbound routing is simply silent.
+// THE SEATS COME FIRST because that is what an operator acts on: a seat this run
+// could not resolve receives nothing, and nothing else in the engine says so.
 //
-// THREE OUTCOMES, NOT TWO, and the third is why this was rewritten. A seat
-// that names no personal access token is not broken: on the current design it
-// acts through its OWN GitHub App, and that is the shape a new company has.
-// Printed as a binary "can / cannot receive events" it read as
-// "0 of 3 seat(s) can receive GitHub events" over three healthy agents,
-// followed by three NO ACCOUNT lines — the same false alarm that
-// [github.Result.Findings] was fixed to stop reporting, relocated to the
-// command line. The counts follow [github.SeatIdentity]'s own vocabulary now,
-// so the two cannot drift again.
+// THREE OUTCOMES, NOT TWO: a seat that names no personal access token is not
+// broken, since it acts through its OWN GitHub App, the shape a new company has.
+// A binary "can / cannot receive events" read as "0 of 3 seat(s) can receive
+// GitHub events" over three healthy agents, the false alarm
+// [github.Result.Findings] stops reporting. The counts follow
+// [github.SeatIdentity]'s vocabulary so the two cannot drift.
 func printGitHubResult(w io.Writer, res *github.Result) {
 	fmt.Fprintf(w, "\nAuthenticated as %s.\n", res.Login)
 

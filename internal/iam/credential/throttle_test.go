@@ -261,15 +261,12 @@ func owedBy(t *testing.T, th *credential.Throttle, sleeps *counting,
 
 // NO ADDRESS IS EVER REFUSED ON ITS OWN.
 //
-// Many people share one address — an office, a VPN's egress, and every caller
-// behind a proxy the deployment was not told to trust — and a stranger among
-// them shares it too. The source had a curve of its own: ten failures free,
-// then a doubling wait, refused past five seconds. So a stranger who warmed it
-// up and then failed once every twenty-five seconds, at any name, kept every
-// colleague at that address at 429, their right passwords never compared. The
-// curve is keyed on the (typed subject, source) PAIR alone, so the stranger's
-// failures are theirs and a colleague signing in owes nothing — run here for
-// ten simulated minutes, the colleague trying every second.
+// An office, a VPN's egress and every caller behind an untrusted proxy share an
+// address with strangers. With a curve on the source, a stranger who warmed it
+// up and failed every twenty-five seconds at any name kept every colleague at
+// 429, their right passwords never compared. The curve is keyed on the (typed
+// subject, source) PAIR alone, so a colleague owes nothing: run for ten
+// simulated minutes, the colleague trying every second.
 //
 // Mutation: put the source's own curve back and the colleague is refused on
 // every attempt after the warm-up.
@@ -343,21 +340,16 @@ func TestHonestSignInsInFlightTogetherAreNeverHeld(t *testing.T) {
 
 // A SECOND FACTOR CLIMBS THE PERSON'S CURVE, WHEREVER THE CODES COME FROM.
 //
-// Somebody holding a password and a block of addresses met a fresh pair on
-// every address, so each guess at the six digits was the first on its curve and
-// the verify cap was all that bounded them. A code is decided on the person's
-// own curve too, which no address appears in: three wrong codes, and the
-// fourth waits the four seconds three failures earn. The person's curve is its
-// own key — the same person's password pair is untouched by it — and reports
-// the failure that takes it to its ceiling ONCE: the failures of a run held
-// there do not report again, and a curve that has aged back down reports the
-// next climb. A success lifts it.
+// A code is decided on the person's own curve, which no address appears in:
+// three wrong codes, and the fourth waits the four seconds three failures earn.
+// It is its own key (the password pair is untouched) and reports the failure
+// reaching its ceiling ONCE: a run held there does not report again, and a
+// curve aged back down reports the next climb. A success lifts it.
 //
 // Mutations: report the ceiling at any count and the first failure reports it;
-// report the state rather than the transition and every failure at the ceiling
-// reports it; leave the curve standing on a success and the next wrong code
-// owes the ceiling rather than the first step; share one key between the
-// person's curve and a pair and the password attempt afterwards waits.
+// report the state, not the transition, and every failure at the ceiling does;
+// leave the curve standing on a success and the next wrong code owes the
+// ceiling; share one key with a pair and the password attempt waits.
 func TestASecondFactorClimbsThePersonsCurveWhereverItComesFrom(t *testing.T) {
 	t.Parallel()
 	clock := &clockOf{at: time.Date(2026, 3, 2, 9, 0, 0, 0, time.UTC)}

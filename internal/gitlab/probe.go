@@ -13,18 +13,13 @@ import (
 
 // Probe checks a typed GitLab token before anything stores it.
 //
-// TWO READS, both read-only. GET /user is who the token is, and it answers
-// for every kind of token on every GitLab this engine supports. GET
-// /personal_access_tokens/self is what the token may do and until when, and
-// it answers only on GitLab 15.5 and later and only for a personal, group or
-// project token: where it does not answer, the check stands on /user alone
-// rather than failing a token that works.
+// TWO READS, both read-only. GET /user is who the token is, for every kind on
+// every supported GitLab. GET /personal_access_tokens/self is what it may do
+// and until when, only on 15.5+ for a personal, group or project token; where
+// it does not answer, the check stands on /user rather than failing the token.
 //
-// THE SCOPE IS READ BECAUSE A TOKEN WITHOUT IT AUTHENTICATES. The access
-// token creates the agents' service accounts and needs `api`; the routing
-// token reads threads and needs `read_api` (or `api`, which includes it). A
-// `read_user` token passes /user and fails every call that matters, minutes
-// later, as a finding on the card.
+// THE SCOPE IS READ BECAUSE A TOKEN WITHOUT IT AUTHENTICATES: the access token
+// needs `api`, the routing token `read_api` (or `api`); `read_user` passes /user.
 //
 // httpClient is nil in production, which takes the client's own transport
 // and timeout; a test hands one that reaches a fake instance.

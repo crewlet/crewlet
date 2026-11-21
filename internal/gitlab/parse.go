@@ -12,26 +12,16 @@ import (
 
 // Routing a code host.
 //
-// # Two layers, and the difference between them is what a seat is being
-// asked for
+// A DIRECTED event (assignee added, reviewer requested, your name written)
+// names its recipient in the payload: no reads, survives a lapsed credential.
 //
-// A DIRECTED event names its recipient in the payload: an assignee was
-// added, a reviewer was requested, somebody wrote your name. Those route
-// from the payload alone, need no reads, and survive a lapsed credential.
+// THREAD ACTIVITY (comment, close, merge, approval) concerns everyone taking
+// part, who is NOT in the payload. It takes one REST lookup per event and
+// without one degrades to the payload's assignees, costing reach only on the
+// watching layer.
 //
-// THREAD ACTIVITY — a comment, a close, a merge, an approval — concerns
-// everyone taking part, which is exactly the set GitLab itself would notify
-// and exactly the set that is NOT in the payload. It takes one REST lookup
-// per event, and without one it degrades to the payload's assignees. That
-// degradation is deliberate and bounded: it can only ever cost reach on the
-// watching layer, never on the directed one.
-//
-// Mentions stay TEXT-EXTRACTED rather than inferred from participation, for
-// two reasons that both matter. A mention is a directed ask and gets its own
-// prompt, where participation cannot tell "this note pings you" from "you
-// commented here in March". And GitLab materialises a new mention into the
-// participants list through a background job, so the lookup races the
-// webhook that announced it — the text does not.
+// Mentions stay TEXT-EXTRACTED: a mention is a directed ask with its own
+// prompt, and GitLab adds it to the participants through a job racing the hook.
 
 // Routing reasons, doubling as the event types the prompt dispatches on.
 //
@@ -313,30 +303,16 @@ func targetsOf(names []string, reason string) []target {
 
 // build turns the target list into one notification per recipient.
 //
-// THE SINGLE CHOKE POINT where every fan-out meets the parties the engine
-// can actually route to. A repository has contributors who are not seats
-// here, and a comment naming three of them would otherwise produce three
-// notifications the service cannot deliver — each one an undeliverable
-// warning and a skip record, by the dozen on a busy project.
+// THE SINGLE CHOKE POINT where every fan-out meets the parties the engine can
+// route to: non-seat contributors would each cost an undeliverable warning and
+// a skip record. ONE gate, so the counter below sees every drop.
 //
-// ONE gate rather than one per layer. The routing rules above pre-filtered
-// their own mentions and participants too, which was not defence in depth:
-// it made the counter below under-report, and it meant two places could
-// disagree about who is routable with only one of them being tested.
+// FIRST REASON PER PERSON WINS and targets arrive in priority order, so a
+// mentioned assignee is woken once, as a mention. The ACTOR is not filtered
+// here: the spine suppresses it, knowing the exception ([Prompt.WakesActor])
+// and resolving actors across identity namespaces.
 //
-// FIRST REASON PER PERSON WINS, and the list arrives in priority order, so a
-// mentioned assignee is woken once — as a mention, which is the stronger
-// claim on their attention and the one the prompt renders differently.
-//
-// The ACTOR is not filtered here. It is stamped on the metadata under the
-// one key every third-party app uses and suppressed by the spine, which knows the
-// exception ([Prompt.WakesActor]) and can resolve an actor across identity
-// namespaces — neither of which a parser comparing usernames can do.
-//
-// A NIL REGISTRY LETS EVERYTHING THROUGH, which is right for the one caller
-// that has none: a test exercising the routing rules themselves, where the
-// question is which usernames a payload implies rather than which of them
-// work here.
+// A NIL REGISTRY LETS EVERYTHING THROUGH, for routing-rule tests.
 func build(h hook, targets []target, reg *notify.Registry) []notify.Routed {
 	var (
 		out     []notify.Routed

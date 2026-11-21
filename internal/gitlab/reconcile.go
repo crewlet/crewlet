@@ -20,17 +20,13 @@ import (
 // what the company holds as a whole: the group it provisions into, the token
 // the provisioning runs on, and the webhook that delivers to this deployment.
 //
-// # Seats are not this pass's
+// Seats are not this pass's: each agent's account, memberships and token are
+// per-seat access ([Vendor], internal/seataccess), read back every pass and
+// applied by the shared sync. This pass never creates, re-roles, rotates or
+// removes an account.
 //
-// Each agent's account, memberships and token are per-seat access
-// ([Vendor], internal/seataccess): a seat's own setting in the document,
-// read back from GitLab every pass and applied by the shared sync. This pass
-// never creates, re-roles, rotates or removes an account.
-//
-// # It is a reconcile, not a setup
-//
-// Running it twice must be safe and must be quiet: a hook that already
-// carries what this pass would write is left exactly as it is.
+// Running it twice must be safe and quiet: a hook that already carries what
+// this pass would write is left exactly as it is.
 
 // Result is what one reconcile did, for the report.
 type Result struct {
@@ -77,19 +73,14 @@ type Result struct {
 
 // Mode is where a run's service accounts live.
 //
-// # Two ownerships, not two capabilities
+// Two ownerships, not two capabilities. A GROUP service account is owned by the
+// top-level group the company provisions into: the default, the only shape
+// GitLab.com offers, and a group Owner PAT creates one.
 //
-// A GROUP service account is owned by the top-level group the company
-// provisions into. It is the default and the only shape GitLab.com offers,
-// and a group Owner PAT is enough to create one.
-//
-// An INSTANCE service account belongs to the instance itself. It is a
-// self-managed-only route that needs an instance-admin PAT, and what it buys
-// is an account that is not a member of anything until this run adds it — so
-// one company's seats can span several top-level groups, and an account
-// survives its group being deleted. Everything downstream is identical:
-// memberships are added the same way, and the token API is user-scoped on
-// both, so a token minted on either kind is minted the same way.
+// An INSTANCE service account belongs to the instance: self-managed only, it
+// needs an instance-admin PAT, and is a member of nothing until this run adds
+// it, so one company's seats can span several top-level groups and survive
+// their group's deletion. Everything downstream is identical.
 type Mode string
 
 const (
@@ -319,24 +310,15 @@ func clock(opts Options) time.Time {
 // signingSecret is what the hook is registered with, minting one when the
 // config's reference answered nothing.
 //
-// # Why an empty one cannot just be registered
+// GitLab's signing token is CALLER-SUPPLIED and write-only. A hook registered
+// with an empty one is accepted, looks healthy, and signs every delivery with
+// nothing, which the engine refuses; the only trace is a
+// `webhook_signature_invalid` log line. So an empty resolution is minted into
+// the variable the config's ${VAR} names (as the seat tokens are) or refused,
+// because a literal has nowhere to record it.
 //
-// GitLab's signing token is CALLER-SUPPLIED and write-only: the instance
-// never returns it. A hook registered with an empty one is accepted, shows
-// as healthy in the settings page, and signs every delivery with nothing —
-// which the engine then refuses. Measured against a real instance: the
-// issue was created, the hook fired, and the only trace was one
-// `webhook_signature_invalid` line in a log nobody was watching.
-//
-// So an empty resolution is not passed through. It is either minted — into
-// the variable the config's ${VAR} names, the same mint-into-${VAR} contract
-// the seat tokens follow — or refused, because a literal has nowhere to
-// record it and half-configuring is the failure above.
-// The third result says a NEW secret exists as of this run — minted or
-// rotated. It counts towards [Result.Recorded] AND it is what tells
-// [ensureHooks] to write a hook that already reports a signing token, because
-// GitLab never says WHICH key a hook holds, so the run's own record is the
-// only thing that can.
+// The third result says a NEW secret exists as of this run, minted or rotated;
+// it counts towards [Result.Recorded].
 func signingSecret(ctx context.Context, opts Options) (secret, note string, fresh bool, err error) {
 	plan := PlanSigningSecret(opts.SigningSecret, opts.SigningSecretVar, opts.Rotate,
 		true, opts.WebhookBaseKey)
@@ -501,48 +483,18 @@ const SigningSecretPrefix = whsec.Prefix
 // GitLab a question and should not have to know which spec answers it.
 func MintSigningSecret() (string, error) { return whsec.Mint() }
 
-// ensureHooks registers this deployment's webhook, at ONE level.
+// ensureHooks registers this deployment's webhook at ONE level, never both: a
+// group and a project hook on the same events BOTH fire, and the inbox does
+// not deduplicate that.
 //
-// # One level, never both
+// THE GROUP HOOKS API IS NOT EVERYWHERE: Premium on gitlab.com, absent from
+// Community Edition, hidden as a 404. Group-only registration failed AFTER
+// minting, so the rollback revoked every credential just created. The
+// unlicensed `gitlab-ee` 19.3.0 compose image DOES serve it, so the local loop
+// takes the group path; use `false` to exercise the fallback.
 //
-// A group hook already fires for every issue, merge request, note and
-// pipeline event in every project of the group and its subgroups. GitLab is
-// explicit that a group hook and a project hook subscribed to the same
-// events BOTH fire for an in-project event — double delivery, which the
-// engine's ledger deduplicates and its inbox does not. So this picks a
-// level and registers there.
-//
-// # Why there is a choice at all
-//
-// THE GROUP HOOKS API IS NOT EVERYWHERE. It is a Premium feature on
-// gitlab.com and it does not exist in Community Edition at all, and GitLab
-// hides an unavailable endpoint as a 404 rather than a 402 — so "not found"
-// is what an instance says about a feature it does not serve. Registering
-// only at the group level therefore failed the whole reconcile there, and
-// failed it AFTER minting, so the rollback revoked every credential the run
-// had just created.
-//
-// MEASURED, because the obvious guess is wrong in both directions: the
-// unlicensed `gitlab-ee` image this repository's compose stack runs (19.3.0,
-// no license) DOES serve `GET /groups/:id/hooks`, so the local loop takes
-// the group path and never exercises the fallback. Reach for `false` to
-// exercise it, and do not assume "unlicensed" means "no group hooks".
-//
-// Modes come from provisioning.group_webhook — auto (default) tries the
-// group and falls back, true demands the group, false goes straight to the
-// projects.
-//
-// A hook that already carries the right subscription is left alone
-// ([Hook.Converged]), and "the right subscription" now includes WHICH KEY it
-// is signed with: [HookDigest] publishes that in the one field this engine
-// controls and GitLab gives back. Nothing about the key is passed down here.
-// It used to be — a `freshSecret` flag saying whether THIS RUN minted or
-// rotated the secret — which was the strongest fact available while the
-// listing could only say that some token was set, and was silently blind to
-// every rotation another process made: `crewlet secrets set`, the setup
-// form's signing-secret field, a peer's apply. The digest is read off the
-// same listing every other converge test is read off, so there is one answer
-// rather than a run-local one beside an instance-side one.
+// provisioning.group_webhook: auto (default) tries the group and falls back,
+// true demands it, false goes to the projects. A [Hook.Converged] one is left.
 func ensureHooks(ctx context.Context, opts Options, group Group, projects []string,
 	target string,
 ) ([]string, []string, error) {
@@ -556,27 +508,15 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 	// A FREE GROUP TAKES THE REGISTRATION AND NEVER DELIVERS, which no
 	// error can tell you.
 	//
-	// The fallback below turns on the create call FAILING, and on
-	// gitlab.com's free tier it does not fail: POST /groups/:id/hooks
-	// answers 201, the hook is listed in the group's settings, and its own
-	// event log stays empty for ever. Measured on a live free group, where
-	// the pass reported ready and not one delivery had ever arrived.
+	// The fallback below turns on the create call FAILING, and on gitlab.com's
+	// free tier it does not: POST /groups/:id/hooks answers 201 and the hook
+	// never delivers, so the tier is READ, not inferred from a refusal.
 	//
-	// So the tier is READ rather than inferred from a refusal — and read
-	// from BOTH places that know it, which is the half this got wrong.
-	//
-	// GET /groups/:path omits `plan` for a free gitlab.com group exactly as
-	// a self-managed instance omits it, so the one deployment this clause
-	// exists for was indistinguishable from the one it must not touch. The
-	// group read as paid, the fallback never ran, and the pass registered a
-	// group hook that GitLab accepted and never delivered — reporting
-	// ready, with zero delivery attempts in the hook's own log. Measured on
-	// a live free group whose /namespaces/:path answered `plan: "free"` for
-	// the same path in the same second.
-	//
-	// [Client.TierOf] asks the namespace only when the group says nothing,
-	// so a self-managed instance still answers unknown at both endpoints
-	// and keeps the behaviour it has.
+	// GET /groups/:path omits `plan` for a free group exactly as a self-managed
+	// instance does, while /namespaces/:path answers `plan: "free"`.
+	// [Client.TierOf] therefore asks the namespace when the group says nothing;
+	// a self-managed instance still answers unknown at both and keeps its
+	// behaviour.
 	tier, err := opts.Client.TierOf(ctx, group)
 	if err != nil {
 		// A TIER THAT COULD NOT BE READ IS NOT FREE. Concluding one from a
@@ -647,21 +587,15 @@ func ensureHooks(ctx context.Context, opts Options, group Group, projects []stri
 // sweepProjectHooks removes the per-project hooks this engine left behind
 // when the company moved UP to a group hook.
 //
-// THE OTHER HALF OF [sweepGroupHooks], and the direction that was written
-// down as permanent: "if a prior run created per-project hooks and a later run
-// establishes a group hook, the reconcile does not remove the old per-project
-// hooks — you would get double delivery until you delete them. Deleting a
-// redundant project hook is a manual step." It is not manual now. A group
-// hook fires for every event in every project of the group, so a project hook
-// beside it delivers each one twice, and this engine registered both.
+// THE OTHER HALF OF [sweepGroupHooks]: a group hook fires for every event in
+// every project of the group, so a project hook beside it delivers each one
+// twice, and this engine registered both.
 //
-// The declared projects only, which is every project this engine has ever
-// hooked: [ensureProjectHooks] refuses to run at all without
-// `provisioning.projects`, so there is no project outside the list carrying a
-// registration of ours. A project dropped from the list keeps its hook, which
-// is the same answer [resolveProjects] gives about membership and for the
-// same reason — a company mid-edit looks exactly like one that removed a
-// project.
+// The declared projects only, which is every project this engine has hooked:
+// [ensureProjectHooks] refuses to run without `provisioning.projects`. A
+// project dropped from the list keeps its hook, as with [resolveProjects]'
+// membership answer, because a company mid-edit looks exactly like one that
+// removed a project.
 func sweepProjectHooks(ctx context.Context, c *Client, projects []string, name string) error {
 	for _, project := range projects {
 		hooks, err := c.ProjectHooks(ctx, project)
@@ -683,18 +617,14 @@ func sweepProjectHooks(ctx context.Context, c *Client, projects []string, name s
 // sweepGroupHooks removes the group hook this engine left behind when the
 // company moved to per-project hooks.
 //
-// THE LEVEL IS A CHOICE THAT MOVES. `group_webhook` is a live config field
-// and the `auto` answer depends on the group's PLAN, so a company that flips
-// the field — or whose paid group lapses — has the engine register per
-// project from then on and never look at the level it stopped writing. The
-// group hook goes on delivering every one of those events a second time, for
-// ever, and no pass has any reason to mention it: [Teardown] sweeps both
-// levels for exactly this reason and the reconcile did not.
+// THE LEVEL IS A CHOICE THAT MOVES: `group_webhook` is live config and `auto`
+// depends on the group's PLAN, so a company that flips it or whose paid group
+// lapses registers per project from then on and never looks at the level it
+// stopped writing, whose hook delivers every event a second time for ever.
+// [Teardown] sweeps both levels for the same reason.
 //
-// A TIER GATE IS NOT A FAILURE. Group hooks are a Premium feature and the
-// endpoint 404s where the tier does not serve it — which is most of the
-// instances that take this path at all — so that answer means there is
-// nothing to sweep rather than that the sweep failed. See [gatedByTier].
+// A TIER GATE IS NOT A FAILURE: the endpoint 404s where the tier does not
+// serve group hooks, which means nothing to sweep. See [gatedByTier].
 func sweepGroupHooks(ctx context.Context, c *Client, groupID int, name string) error {
 	hooks, err := c.GroupHooks(ctx, groupID)
 	if err != nil {
@@ -716,24 +646,15 @@ func sweepGroupHooks(ctx context.Context, c *Client, groupID int, name string) e
 
 // resolveProjects keeps the declared projects this instance actually has.
 //
-// # A missing one is dropped, not fatal
+// A missing one is dropped, not fatal: a renamed, moved or not-yet-created
+// repository is an ordinary config state, not a reason to refuse the other
+// nine. Aborting on the first 404 happened MID-LOOP, after minting, and the
+// rollback revoked the credentials the run had just created.
 //
-// `provisioning.projects` names a company's real repositories, and one of
-// them being renamed, moved or not created yet is an ordinary state of a
-// config — not a reason to refuse to provision the other nine. Aborting on
-// the first 404 did exactly that, and it aborted MID-LOOP, after minting, so
-// the rollback then revoked the credentials the run had already created.
-//
-// It runs BEFORE any mutation for the same reason the group is resolved up
-// front: a check that happens halfway through leaves half a reconcile
-// behind, and the operator's fix — create the project, re-run — is what the
-// note tells them to do.
-//
-// It is the opposite call from a knowledge-base importer, deliberately.
-// There a missing container aborts before a single page is written, because
-// half an import looks like a complete knowledge base with holes in it.
-// Memberships and hooks are additive and independent: the seats that could
-// be added were added, and re-running adds the rest.
+// It runs BEFORE any mutation, like the group's resolution: a check halfway
+// through leaves half a reconcile. Unlike a knowledge-base importer, where
+// half an import looks like a complete base with holes, memberships and hooks
+// are additive and independent, so re-running adds the rest.
 func resolveProjects(ctx context.Context, c *Client, declared []string) ([]string, []string, error) {
 	kept := make([]string, 0, len(declared))
 	var missing []string
@@ -773,31 +694,16 @@ const DefaultWebhookName = "crewlet"
 
 // ours reports a hook this deployment registered.
 //
-// THE NAME IS THE IDENTITY, because it is the only field that survives a
-// change of public base. Matching on the URL instead meant a deployment that
-// moved created a second hook and left the first: one live orphan per change,
-// at every level — the group hook and one per project — each still enabled,
-// each still signed, each delivering to an address that no longer answers.
-// Measured on a real deployment behind a tunnel: a group hook and two project
-// hooks, all pointing at dead addresses, none of which any pass could see.
+// THE NAME IS THE IDENTITY, the only field that survives a change of public
+// base: matching on the URL left a live orphan at every level delivering to an
+// address that no longer answers.
 //
-// THE DELIVERY PATH IS THE GUARD that the old comment's concern deserves. It
-// said the URL was matched "because an instance may carry hooks somebody else
-// registered", which is a real risk and the wrong answer to it: every hook
-// this engine registers ends in /webhooks/gitlab whatever base it was
-// registered against, so a hook that merely shares the name and points
-// somewhere else is not this engine's and is left alone. That is the whole of
-// what the URL match was protecting, kept without the orphans.
+// THE DELIVERY PATH GUARDS against somebody else's hooks: ours all end in
+// /webhooks/gitlab, so one that merely shares the name is left alone. A HOOK
+// WITH NO NAME IS NOT OURS ([hookBody], [confirmHook]).
 //
-// A HOOK WITH NO NAME IS NOT OURS. Every hook this engine registers carries
-// its name ([hookBody]), and an instance that would not keep it is refused
-// before its hook outlives the pass (see [confirmHook]), so a nameless hook at
-// this path is somebody else's — a person's, or another tool's — and is left
-// alone.
-//
-// Two DEPLOYMENTS watching one instance is what the name settles, because they
-// share this document: they set `integrations.gitlab.webhook_name` to two
-// values, exactly as they would Jira's or Datadog's.
+// Two DEPLOYMENTS watching one instance set distinct
+// `integrations.gitlab.webhook_name` values, as they would for Jira's.
 func ours(hook Hook, name string) bool {
 	return strings.HasSuffix(hook.URL, webhookPath) && hook.Name == name
 }
@@ -837,22 +743,14 @@ func ensureGroupHook(ctx context.Context, c *Client, groupID int, name, target, 
 		hook := held[0]
 		if hook.Converged(name, target, HookDigest(secret)) {
 			// NOTHING TO WRITE, and the listing above is also the
-			// confirmation.
+			// confirmation. A rotated secret is caught by the digest in
+			// the description, so an unconditional PUT would only re-send
+			// this identical body every few minutes.
 			//
-			// This used to PUT unconditionally, on the reasoning that
-			// the signing secret may have rotated — true, and now
-			// answered by the digest [hookBody] wrote into the hook's
-			// description. What the unconditional write cost was the
-			// steady state: the loop re-sent this identical body, all
-			// nineteen event flags of it, every few minutes for the life
-			// of the deployment.
-			//
-			// No re-read either. [confirmHook] exists because a GitLab
-			// older than 19.1 takes a signing token, ignores it and
-			// answers 200 — a claim about a WRITE. Nothing was written,
-			// and [Hook.Converged] already required the instance to
-			// report a signing token on this very listing, which is the
-			// same fact confirmHook would go back for.
+			// No re-read either: [confirmHook] guards a WRITE (a GitLab
+			// older than 19.1 ignores a signing token and answers 200),
+			// and [Hook.Converged] already required this listing to
+			// report a signing token.
 			return nil
 		}
 		if err := c.UpdateGroupHook(ctx, groupID, hook.ID, name, target, secret); err != nil {
@@ -881,21 +779,15 @@ var errUnnamed = errors.New("the instance did not keep the hook's name")
 // confirmHook reads the hook back and refuses to call the run a success unless
 // GitLab says it carries this deployment's name and now holds a signing token.
 //
-// THE NAME FIRST, because it is what every later pass finds the hook by
-// ([ours]). A hook the instance would not name is one no pass can recognise
-// as this deployment's, so it is [errUnnamed], and the create path removes it
-// rather than leave it to be created again on every pass ([removeIfUnnamed]).
+// THE NAME FIRST, because every later pass finds the hook by it ([ours]). An
+// unnamed hook is [errUnnamed], and the create path removes it rather than
+// have it created again every pass ([removeIfUnnamed]).
 //
-// THE WRITE SUCCEEDING PROVES NOTHING. `signing_token` arrived in GitLab
-// 19.0 and went generally available in 19.1; an older instance takes the
-// attribute, ignores it, and answers 200. The hook then exists, GitLab's
-// settings page calls it healthy, and it delivers unsigned to an engine
-// whose verification is mandatory — so every delivery is refused, and the
-// only place that could have said why is this function.
-//
-// `signing_token_present` is the only thing GitLab will say about it: the
-// token itself is never returned. That is enough, because what is being
-// confirmed is that a signing token EXISTS, not which one.
+// THE WRITE SUCCEEDING PROVES NOTHING. `signing_token` arrived in GitLab 19.0
+// (GA 19.1); an older instance ignores it and answers 200, so the hook looks
+// healthy but delivers unsigned to an engine whose verification is mandatory.
+// `signing_token_present` is enough: what is confirmed is that a token EXISTS,
+// not which one.
 func confirmHook(what string, list func() ([]Hook, error), name, target string) error {
 	hooks, err := list()
 	if err != nil {

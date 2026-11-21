@@ -28,8 +28,6 @@ type Card struct {
 	Error     *ErrorCard     `json:"error,omitempty"`
 	Notice    *NoticeCard    `json:"notice,omitempty"`
 	Oversize  *OversizeCard  `json:"oversize,omitempty"`
-	// --- deep work (im-deep) ---
-	File *FileCard `json:"file,omitempty"`
 	// Brief is a brief turn's answer ([TurnBrief]).
 	Brief *BriefCard `json:"brief,omitempty"`
 }
@@ -208,10 +206,10 @@ type ProposalCard struct {
 	Changes []Change `json:"changes"`
 	// Summary is what the change does, in a sentence above the rows, where
 	// the title alone does not say it: what a destructive change takes away.
-	Summary string `json:"summary,omitempty"`
+	Summary Phrase `json:"summary,omitempty"`
 	// Note is the consequence, in one sentence, under the rows: whether and
-	// how the change can be reverted.
-	Note string `json:"note,omitempty"`
+	// how the change can be reverted, and who it reaches.
+	Note Phrase `json:"note,omitempty"`
 	// Risk is how much care the approval asks ([ProposalRisk]); absent for
 	// an ordinary change.
 	Risk ProposalRisk `json:"risk,omitempty"`
@@ -221,8 +219,8 @@ type ProposalCard struct {
 	// built from the same request.
 	Technical *TechnicalRequest `json:"technical,omitempty"`
 	// Audience is who will see the result where visibility changes (a
-	// share, a comment others are notified of).
-	Audience []string `json:"audience,omitempty"`
+	// share, a comment others are notified of), one phrase each.
+	Audience []Phrase `json:"audience,omitempty"`
 	// Taint is the surface (one of provenance.Sources) whose outside text the
 	// turn read before proposing (D25); absent for none.
 	Taint provenance.Source `json:"taint,omitempty"`
@@ -275,15 +273,14 @@ type Change struct {
 	Field string     `json:"field"`
 	Label string     `json:"label"`
 	// From is the value before, for changed, removed and text; To the
-	// value after, for fact, changed, added and text.
-	From string `json:"from,omitempty"`
-	To   string `json:"to,omitempty"`
-	// Items is To as a list, one entry per item, where the value is a list of
-	// plain values (a seat's responsibilities, a voice's rules); FromItems is
-	// From as one. To and From still hold the list as one line, for a reader
-	// that draws one.
-	Items     []string `json:"items,omitempty"`
-	FromItems []string `json:"from_items,omitempty"`
+	// value after, for fact, changed, added and text. A record a value names
+	// is a [Ref] in its phrase, never its name in the words.
+	From Phrase `json:"from,omitempty"`
+	To   Phrase `json:"to,omitempty"`
+	// Items is To as a list, one entry per item (a room's members); FromItems
+	// is From as one. To and From still hold the list as one line.
+	Items     []Phrase `json:"items,omitempty"`
+	FromItems []Phrase `json:"from_items,omitempty"`
 	// Words is a text change as runs of words.
 	Words []Word `json:"words,omitempty"`
 	// New marks an added field on a record that already exists.
@@ -299,8 +296,9 @@ type Word struct {
 
 // Receipt is what an applied proposal did.
 type Receipt struct {
-	// Summary is the result in a line ("Created ENG-156").
-	Summary string `json:"summary"`
+	// Summary is the result in a line ("Created ENG-156"), the record it
+	// names a [Ref].
+	Summary Phrase `json:"summary"`
 	// Position is where the write landed, for a server write.
 	Position string `json:"position,omitempty"`
 	Open     *Link  `json:"open,omitempty"`
@@ -362,7 +360,6 @@ func (c Card) bodies() map[CardKind]bool {
 		CardError:     c.Error != nil,
 		CardNotice:    c.Notice != nil,
 		CardOversize:  c.Oversize != nil,
-		CardFile:      c.File != nil,
 		CardBrief:     c.Brief != nil,
 	}
 }
@@ -422,8 +419,6 @@ func (c Card) Validate() error {
 			return fmt.Errorf("%w: an open in app card is permitted exactly when it names "+
 				"no reason", ErrInvalid)
 		}
-	case CardFile:
-		return c.File.validate()
 	case CardBrief:
 		return c.Brief.Validate()
 	case CardOversize:
@@ -504,6 +499,20 @@ func (p *ProposalCard) validate() error {
 			return fmt.Errorf("%w: change %s carries words exactly when it is a text change",
 				ErrInvalid, ch.Field)
 		}
+		values := append([]Phrase{ch.From, ch.To}, ch.Items...)
+		for _, v := range append(values, ch.FromItems...) {
+			if err := v.validate("change " + ch.Field); err != nil {
+				return err
+			}
+		}
+	}
+	for _, p := range append([]Phrase{p.Summary, p.Note}, p.Audience...) {
+		if err := p.validate("a proposal's summary, note or audience"); err != nil {
+			return err
+		}
+	}
+	if p.Receipt != nil {
+		return p.Receipt.Summary.validate("a receipt")
 	}
 	return nil
 }
@@ -512,15 +521,14 @@ func (p *ProposalCard) validate() error {
 // things the person has to do, ranked, each with the one press that deals
 // with it.
 //
-// THE VERDICT IS NOT A FIELD. Whether anything needs the person is the
-// number of rows ([BriefCard.Verdict]), so no writer can put "nothing needs
-// you" beside a row that needs them. The first row is the recommendation: a
-// separate next step would say it again.
+// THE VERDICT IS NOT A FIELD. Whether anything needs the person is the number
+// of rows ([BriefCard.Verdict]), so no writer can put "nothing needs you"
+// beside a row that needs them. The first row is the recommendation.
 //
 // THE MODEL WRITES THE WORDS, THE ENGINE EVERYTHING ELSE. Each row's record is
-// one this turn read and resolved for the person, its address is the link
-// table's, its danger tone is a fact the engine read, and an action can only
-// open that address or ask a question. A brief never writes.
+// one this turn read for the person, its address is the link table's, its
+// danger tone is a fact the engine read, and an action can only open that
+// address or ask a question. A brief never writes.
 type BriefCard struct {
 	// Scope is what the brief covers: the page, or the one record it has
 	// open.

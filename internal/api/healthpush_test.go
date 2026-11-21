@@ -253,13 +253,11 @@ func titleOf(t *testing.T, kind statelog.Kind) string {
 
 // A WEDGED PRESENCE READ COSTS THE LIVENESS PROBE ONE BUDGET, NOT A HANG.
 //
-// The presence count is a key-iterating coordination scan the NATS client's
-// per-API timeout does not cover, and GET /health is the liveness probe: a
-// probe that waits on it for as long as the broker is wedged is one an
-// orchestrator times out and answers by killing a healthy node. The envelope
-// bounds the read to engine.ProbeReadBudget and answers without the count —
-// absent, which is what "cannot say" means — keeping the alarms, which are in
-// memory. /ready decides nothing on either and never asks.
+// The presence count is a key-iterating scan the NATS client's per-API timeout
+// does not cover, and GET /health is the liveness probe: one waiting on a
+// wedged broker gets a healthy node killed. The envelope bounds the read to
+// engine.ProbeReadBudget and answers without the count (absent means "cannot
+// say"), keeping the in-memory alarms. /ready never asks.
 //
 // Mutation: drop the budget in App.health (hand Fleet the request context),
 // and the /health half hangs until the test's own deadline; have readiness

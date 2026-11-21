@@ -2,11 +2,10 @@ package artifactsdomain
 
 import "slices"
 
-// THE TABLE INVENTORIES. Three readers derive from these and none of them can
-// see the others: the domain's own Tables() map, which the framework turns into
-// a scrub list, an identity claim and a local sweep; the replay cases, which
-// assert a replay from zero reproduces every one of them; and the applier,
-// which is the only writer of any of them.
+// THE TABLE INVENTORIES, which three readers that cannot see each other derive
+// from: the domain's Tables() map (the framework's scrub list, identity claim
+// and local sweep), the replay cases (a replay from zero reproduces each), and
+// the applier, their only writer.
 
 // ReproducibleTables is every table a record's payload must be able to
 // rebuild: what a replay from zero into an empty database has to end up with,

@@ -18,14 +18,13 @@ import (
 
 // ONLY A PERSON CONFIRMS OR CHANGES HOW THEY PROVE WHO THEY ARE.
 //
-// A principal that is no person — a session exchanged from a Tier A token, a
-// service account — has no password to confirm and no second factor to enrol,
-// whatever it is allowed. The refusal is the gesture's own rule rather than
-// a missing proof, so it is `403 forbidden` with a sentence saying why, as
-// `POST /auth/password` answers the same fact, and never `step_up_required`:
-// that asks the caller for a proof none could give, and a client honouring it
-// opened a step-up that refused the same caller again. Nothing is written.
-// The control, a person whose proof is fresh, regenerates their codes.
+// A principal that is no person (an exchanged Tier A token, a service account)
+// has no password to confirm and no factor to enrol, whatever it is allowed.
+// The refusal is the gesture's own rule, so it is `403 forbidden` with a
+// sentence saying why, as `POST /auth/password` answers, never
+// `step_up_required`: no caller could give that proof, and a client honouring
+// it would loop. Nothing is written. The control, a person whose proof is
+// fresh, regenerates their codes.
 //
 // Mutation: answer the non-person arm of the step-up or of the proof routes
 // `step_up_required` again and its row goes red.

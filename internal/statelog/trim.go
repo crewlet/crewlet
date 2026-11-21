@@ -10,64 +10,50 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// TermName is one of the six things that must permit a record's removal.
-//
-// NAMED, because `blocked_by` is what an operator reads when a log is growing
-// and the trim is not advancing — and "the trim is blocked" without which term
-// is a sentence that sends somebody to read code.
+// TermName is one of the six things that must permit a record's removal. Named
+// because `blocked_by` is what an operator reads when a log grows and the trim
+// does not advance.
 type TermName string
 
 const (
 	// TermApplied is the lowest committed position over the COUNTED SET.
 	//
-	// It reads each node's own committed sequence rather than what it has
-	// applied THROUGH: reading the latter would let one un-upgraded node
-	// holding a record it cannot decode block the whole fleet's trim for
-	// ever. The committed sequence is safe because a deferred record's
-	// bytes are durable before the checkpoint moves over it.
-	//
-	// It keeps the record AT that sequence, the purge bound being
-	// exclusive — which is also what keeps a node's checkpoint record on
-	// the log while the log has DIVERGED from its rows ([ErrLogDiverged]),
-	// for as long as the node is counted. An evicted node stops being
-	// counted, and the trim may then remove it: the verdict does not rest
-	// on that record, being recorded in the node's own estate
-	// ([NodeEstate]).
+	// The committed sequence, not the applied-through one: the latter would
+	// let one un-upgraded node holding a record it cannot decode block the
+	// fleet's trim for ever; the former is safe as a deferred record's bytes
+	// are durable before the checkpoint moves over it. The purge bound is
+	// exclusive, so the record AT that sequence stays, keeping a counted
+	// node's checkpoint record on a log that has DIVERGED from its rows
+	// ([ErrLogDiverged]); an evicted node's may go, its verdict being in its
+	// own estate ([NodeEstate]).
 	TermApplied TermName = "applied"
 
-	// TermMinHold is the lowest live hold. A joining node holds the tail
-	// it is about to replay, so a transfer pins what it needs for its
-	// whole duration — and past it, until the node's own position is
-	// published, since a boot's join runs before anything else counts the
-	// node ([AdoptDeps.Hold]). A live hold is one renewed within
+	// TermMinHold is the lowest live hold. A joining node holds the tail it
+	// is about to replay, for the whole transfer and until its own position
+	// is published, since a boot's join runs before anything counts the
+	// node ([AdoptDeps.Hold]). A hold is live when renewed within
 	// [TrimHoldStale] ([HoldTail]).
 	TermMinHold TermName = "min_hold"
 
-	// TermBackupFloor is what has left the host. A company that never
-	// backs up never trims — the log is the only copy of what no node has
-	// applied yet — and that is the configuration working as asked.
+	// TermBackupFloor is what has left the host. A company that never backs
+	// up never trims, by design: the log is the only copy of what no node
+	// has applied yet.
 	TermBackupFloor TermName = "backup_floor"
 
-	// TermSnapshotFloor is the k-th HIGHEST verified snapshot position
-	// over the counted set.
-	//
-	// The k-th rather than the minimum or the maximum: the minimum blocks
-	// for ever on any node that has not snapshotted yet, and the maximum
-	// makes one donor's disk the whole fleet's recovery plan.
+	// TermSnapshotFloor is the k-th HIGHEST verified snapshot position over
+	// the counted set: the minimum blocks for ever on a node that has not
+	// snapshotted yet, and the maximum makes one donor's disk the whole
+	// fleet's recovery plan.
 	TermSnapshotFloor TermName = "snapshot_floor"
 
 	// TermFeedAckFloor is how far the wake feed has scanned. A record the
 	// feed has not seen is one nobody has been told about.
 	TermFeedAckFloor TermName = "feed_ack_floor"
 
-	// TermAgeFloor is the newest sequence older than the age floor.
-	//
-	// IT IS ONE TERM OF A MINIMUM, which is the whole grammar of this
-	// gate: every term can only move the trim point DOWN. So the age
-	// floor is a floor on TRIMMING and therefore a LOWER bound on how long
-	// the log keeps a record — it is not, and cannot be, a ceiling on
-	// retention, and it says nothing whatever about any node's own store
-	// file. Raising it can only move the trim point down.
+	// TermAgeFloor is the newest sequence older than the age floor. Like
+	// every term it enters [Trim]'s minimum, so it is a LOWER bound on how
+	// long the log keeps a record, never a ceiling on retention, and says
+	// nothing about any node's own store file.
 	TermAgeFloor TermName = "age_floor"
 )
 
@@ -80,28 +66,19 @@ var TermNames = []TermName{
 // Valid reports whether a term name off the wire is one this build knows.
 func (t TermName) Valid() bool { return slices.Contains(TermNames, t) }
 
-// SeqUnbounded is the [Term.Seq] of a term that DOES NOT BIND.
+// SeqUnbounded is the [Term.Seq] of a term that DOES NOT BIND: the identity of
+// [Trim]'s minimum, the largest value so that it loses every comparison, not a
+// position.
 //
-// It is the identity for the minimum [TrimDecision] takes across the terms, so
-// a term permitting everything never wins that minimum and the arithmetic has
-// no case for it. That is the whole reason it is the largest value there is —
-// it is chosen to lose a comparison, not to describe a position.
-//
-// WHICH IS WHY IT NEVER LEAVES THIS PACKAGE AS A NUMBER. A sequence is a
-// stream's own counter and no fleet reaches 2^64, so this value on a screen is
-// a sentinel that escaped rather than a figure anybody can act on: the
-// retention screen printed `18446744073709552000` beside "nothing is pinning
-// the log" — not even the right digits, since a JSON number is a float64 and
-// this one is two thousand short of representable. [TermUnbounded] is what a
-// report says instead.
+// It never leaves this package as a number: no fleet reaches 2^64, and a JSON
+// number (a float64) cannot even represent it. A report says [TermUnbounded].
 const SeqUnbounded = ^uint64(0)
 
 // Term is one term's answer.
 //
-// THREE-VALUED IN EFFECT: a term permits removal up to a sequence, refuses
-// entirely, or CANNOT BE READ — and the third blocks exactly as the second
-// does. A term nobody could read is not a term that is satisfied, and treating
-// it as satisfied is how a trim advances past a node that could not report.
+// THREE-VALUED: a term permits removal up to a sequence, refuses, or CANNOT BE
+// READ, and the third blocks as the second does. Treating it as satisfied is
+// how a trim advances past a node that could not report.
 type Term struct {
 	// Name is which term this is.
 	Name TermName
@@ -117,10 +94,9 @@ type Term struct {
 	// operator reading a blocked trim.
 	Detail string
 
-	// Absent marks a term that does not exist for this domain rather than
-	// one that could not be read — a domain that declares no wake feed
-	// ([Domain.FeedGroup] empty) has no such term, and an absent term is
-	// `n/a` rather than zero.
+	// Absent marks a term this domain does not have, rather than one that
+	// could not be read (no wake feed: [Domain.FeedGroup] empty). An absent
+	// term is `n/a`, not zero.
 	Absent bool
 }
 
@@ -146,18 +122,10 @@ func (d TrimDecision) Blocked() bool { return d.BlockedBy != "" }
 
 // Trim decides how far a tick may remove, from the terms as evaluated.
 //
-// # The whole grammar, in one sentence
-//
-// THE TERMS ENTER A MINIMUM, so every one of them can only move the trim point
-// DOWN. That is what makes each of them a floor rather than a horizon, and it
-// is why the age term is a LOWER bound on how long the log keeps a record
-// rather than an upper one. Three sites downstream got this backwards, which
-// is why it is stated at the arithmetic rather than beside it.
-//
-// A term that could not be READ blocks, on the same rule the read path uses
-// for an unreadable floor: the third value is not the optimistic one. An
-// ABSENT term — one this domain does not have at all — is skipped, because
-// `n/a` and zero are different facts.
+// THE TERMS ENTER A MINIMUM, so each can only move the trim point DOWN: each is
+// a floor, not a horizon, and the age term is a LOWER bound on how long the log
+// keeps a record. A term that could not be READ blocks, as an unreadable floor
+// does on the read path; an ABSENT term is skipped, `n/a` not being zero.
 func Trim(terms []Term) TrimDecision {
 	d := TrimDecision{Terms: terms}
 	first := true
@@ -182,8 +150,8 @@ func Trim(terms []Term) TrimDecision {
 		return d
 	}
 	if d.To == 0 {
-		// Every term was read and one of them permits nothing yet, which
-		// is an ordinary state on a young fleet rather than a fault.
+		// One term permits nothing yet: ordinary on a young fleet, not a
+		// fault.
 		d.BlockedBy, d.Detail = lowest(terms), "this term permits removing nothing yet"
 	}
 	return d
@@ -217,17 +185,15 @@ type NodePosition struct {
 
 	// RecordVersion is the highest record version the node's build reads on
 	// this log, zero for a node counted from its presence before its first
-	// report. The trim reads none of it; a writer publishing a kind older
-	// builds cannot defer reads it across the same counted set ([Readers]).
+	// report. The trim ignores it; a writer publishing a kind older builds
+	// cannot defer reads it across the same counted set ([Readers]).
 	RecordVersion int
 
-	// SnapshotGeneration is the generation that snapshot's sequences
-	// belong to, which is a SEPARATE number from the one above: a node
-	// reports its committed position every [PositionHeartbeat] and takes a
-	// snapshot once a day, so an artefact from before a reanchor sits on a
-	// row whose own position is already on the new generation. Comparing
-	// its sequence against this generation's log would count a donor that
-	// names a sequence space that no longer exists.
+	// SnapshotGeneration is the generation the snapshot's sequences belong
+	// to, SEPARATE from Generation: a node reports its position every
+	// [PositionHeartbeat] but snapshots daily, so an artefact from before a
+	// reanchor sits on a row already on the new generation, naming a
+	// sequence space that no longer exists.
 	SnapshotGeneration uint32
 
 	// At is when it last reported.
@@ -242,16 +208,13 @@ type Hold struct {
 	At         time.Time
 }
 
-// TrimInputs is everything a tick reads, already fetched.
-//
-// SEPARATED FROM THE ARITHMETIC deliberately: what the terms mean is a policy
-// with an inversion in it that three readers got backwards, and a policy that
-// can only be exercised through a live fleet is one nobody checks. This struct
-// is what makes the six terms a pure function of what was read.
+// TrimInputs is everything a tick reads, already fetched, kept apart from the
+// fetching so the six terms are a pure function a test exercises without a
+// live fleet.
 type TrimInputs struct {
 	// Generation is this domain's current generation. A term reported at a
-	// LOWER one is unknown and blocks — its sequences name a dead number
-	// space, and comparing them would be comparing two different logs.
+	// LOWER one is unknown and blocks: its sequences name a dead number
+	// space.
 	Generation uint32
 
 	// Now is the tick's instant.
@@ -265,14 +228,13 @@ type TrimInputs struct {
 	// the register listed, and the live data nodes listed.
 	CountedReadable bool
 
-	// CountedUnknown is WHY it could not, which a blocked term names: empty
-	// is the register not listing, which is the cause this term always had,
-	// and a caller whose register listed says what else was unknown — the
-	// live data nodes it could not list.
+	// CountedUnknown is WHY it could not, for a blocked term to name: empty
+	// means the register did not list; otherwise the caller says what else
+	// was unknown (the live data nodes it could not list).
 	CountedUnknown string
 
-	// Holds are the live pins. One older than the stale bound is ignored,
-	// because a crashed adopter must not pin the log for ever.
+	// Holds are the live pins. One older than HoldStale is ignored
+	// ([TrimHoldStale]).
 	Holds []Hold
 
 	// HoldsReadable reports whether they could be listed.
@@ -287,9 +249,9 @@ type TrimInputs struct {
 	// BackupMaxAge is how stale that may be before the term refuses.
 	BackupMaxAge time.Duration
 
-	// FeedAckFloor is how far the wake feed has scanned, and whether this
-	// domain HAS a feed at all — false for a domain whose
-	// [Domain.FeedGroup] is empty, and an absent term is not a zero one.
+	// FeedAckFloor is how far the wake feed has scanned; HasFeed is false
+	// for a domain whose [Domain.FeedGroup] is empty, whose term is absent,
+	// not zero.
 	FeedAckFloor uint64
 	HasFeed      bool
 	FeedReadable bool
@@ -330,9 +292,7 @@ func (in TrimInputs) applied() Term {
 	for _, n := range in.Counted {
 		if n.Generation < in.Generation {
 			// A POSITION FROM A PREVIOUS GENERATION IS UNKNOWN, not
-			// old: its sequences name a dead number space, so
-			// comparing it with this generation's would be comparing
-			// two different logs.
+			// old: its sequences name a dead number space.
 			return Term{Name: TermApplied, Detail: fmt.Sprintf(
 				"%s last reported at generation %d and this log is on %d, so "+
 					"its position names a sequence space that no longer exists",
@@ -342,14 +302,11 @@ func (in TrimInputs) applied() Term {
 			lowest, who = n.Seq, n.NodeID
 		}
 	}
-	// A COUNTED NODE'S OWN POSITION IS THIS TERM, and the register has no
-	// expiry — so an offline counted node pins the floor indefinitely and
-	// no age setting bounds what it still holds. The only exit is an
-	// eviction, which advances the trim and deletes nothing on that
-	// machine.
-	// ONE COUNTED NODE IS NOBODY'S STRAGGLER. Worded as the furthest behind
-	// of one, the healthy single node read as a fleet member to bring back
-	// or evict.
+	// The register has no expiry, so an offline counted node pins this term
+	// indefinitely, whatever the age setting; only an eviction frees it, and
+	// that deletes nothing on the machine.
+	// ONE COUNTED NODE IS NOBODY'S STRAGGLER: "furthest behind" would make a
+	// healthy single node read as a fleet member to bring back or evict.
 	if len(in.Counted) == 1 {
 		return Term{Name: TermApplied, Seq: lowest, Known: true, Detail: fmt.Sprintf(
 			"%s, the only counted node, has applied through %d", who, lowest)}
@@ -378,8 +335,7 @@ func (in TrimInputs) minHold() Term {
 	var who string
 	var live int
 	for _, h := range in.Holds {
-		// A STALE HOLD IS IGNORED, because a crashed adopter must not pin
-		// the log for the life of the deployment.
+		// A STALE HOLD IS IGNORED ([TrimHoldStale]).
 		if in.HoldStale > 0 && in.Now.Sub(h.At) > in.HoldStale {
 			continue
 		}
@@ -394,8 +350,8 @@ func (in TrimInputs) minHold() Term {
 		}
 	}
 	if live == 0 {
-		// NOTHING IS PINNED, which is not a refusal: it permits removing
-		// everything the other terms permit.
+		// Nothing pinned is not a refusal: it permits what the other
+		// terms do.
 		return Term{Name: TermMinHold, Seq: SeqUnbounded, Known: true,
 			Detail: "nothing is pinning the log"}
 	}
@@ -406,9 +362,7 @@ func (in TrimInputs) minHold() Term {
 // backup is what has left the host.
 func (in TrimInputs) backup() Term {
 	if !in.HasBackupFloor {
-		// A COMPANY THAT NEVER BACKS UP NEVER TRIMS, loudly and by
-		// design: the log is the only copy of what no node has applied
-		// yet.
+		// No backup, no trim, by design ([TermBackupFloor]).
 		return Term{Name: TermBackupFloor, Detail: "no backup has been recorded, " +
 			"so nothing has left this host and the log is the only copy of what " +
 			"no node has applied yet"}
@@ -434,10 +388,9 @@ func (in TrimInputs) snapshotFloor() Term {
 		return Term{Name: TermSnapshotFloor, Detail: in.countedUnknown(
 			"how many nodes hold a snapshot is unknown")}
 	}
-	// A SOLO FLEET IS SATISFIED BY CONSTRUCTION: the snapshot loop does
-	// not run there at all, and a single node's recovery artefact is a
-	// backup — which the backup term already gates. Saying so here stops a
-	// reader concluding this term deadlocks one node.
+	// A SOLO FLEET IS SATISFIED BY CONSTRUCTION, not deadlocked: no
+	// snapshot loop runs there, and a single node recovers from a backup,
+	// which the backup term gates.
 	if len(in.Counted) < 2 {
 		return Term{Name: TermSnapshotFloor, Seq: SeqUnbounded, Known: true,
 			Detail: "a single node takes no snapshots; it is recovered from a " +
@@ -450,11 +403,10 @@ func (in TrimInputs) snapshotFloor() Term {
 			continue
 		}
 		if n.SnapshotGeneration != in.Generation {
-			// A SNAPSHOT FROM ANOTHER GENERATION IS NOT A DONOR, and
-			// it is not a block either: the node holds an artefact
-			// nobody on this generation can adopt, which is exactly
-			// a node that holds none. Counted, it would license
-			// removing records no adoptable artefact covers.
+			// A SNAPSHOT FROM ANOTHER GENERATION IS NOT A DONOR, nor a
+			// block: nobody on this generation can adopt it, so the
+			// node holds none. Counted, it would license removing
+			// records no adoptable artefact covers.
 			stale++
 			continue
 		}
@@ -485,9 +437,8 @@ func (in TrimInputs) snapshotFloor() Term {
 // feed is how far the wake feed has scanned.
 func (in TrimInputs) feed() Term {
 	if !in.HasFeed {
-		// ABSENT RATHER THAN ZERO. A domain that declares no wake feed
-		// has no consumer to wait on, and reporting `0` would block its
-		// trim for ever on a term it does not have.
+		// ABSENT, NOT ZERO: with no consumer to wait on, `0` would block
+		// the trim for ever on a term the domain does not have.
 		return Term{Name: TermFeedAckFloor, Absent: true,
 			Detail: "this domain has no wake feed"}
 	}
@@ -501,48 +452,34 @@ func (in TrimInputs) feed() Term {
 // TrimInterval is how often the trim evaluates the six terms, applies what
 // they permit and publishes what it concluded.
 //
-// FIFTEEN MINUTES, and the number comes from what a tick costs against what it
-// can save. The cost is one stream info, one register listing and — at most —
-// a binary search over the log for the age floor, per domain: a handful of
-// round trips. What it buys is that a term clearing (a backup landing, a
-// lagging node catching up) becomes disk within a quarter of an hour rather
-// than within whatever the next restart happened to be.
+// FIFTEEN MINUTES: a tick costs a handful of round trips per domain (a stream
+// info, a register listing, at most a binary search for the age floor), and
+// buys a cleared term (a backup landing, a node catching up) freeing disk
+// within a quarter hour rather than at the next restart.
 //
-// DECLARED HERE, beside the arithmetic, rather than beside the loop that ticks
-// on it, because it is also the RESOLUTION of everything the trim concludes:
-// `blocked_since` moves only on a tick, so a block is dated up to one interval
-// after it began and seen to clear up to one interval after it did. The
-// `trim_blocked` alarm adds exactly one of it to the window it fires at, and a
-// copy of the number beside the alarm would be the second opinion ADR-0015
-// forbids.
+// Declared beside the arithmetic, not the loop, because it is also the trim's
+// RESOLUTION: `blocked_since` moves only on a tick, so a block is dated and
+// seen to clear up to one interval late. The `trim_blocked` alarm adds one of
+// it to its window from this constant, never a copy (ADR-0015).
 const TrimInterval = 15 * time.Minute
 
 // TrimHoldStale is how old a hold may be before the trim ignores it.
 //
-// FOUR HEARTBEATS, the same derivation every other cached coordination fact
-// uses: a holder may miss three beats and still be alive, so a hold older than
-// four is a crashed holder rather than a slow one — and one that pinned the
-// log for ever would be a single failed join stopping the fleet trimming. A
-// live holder renews on [TrimHoldHeartbeat], a quarter of it ([HoldTail]).
+// FOUR HEARTBEATS, as for every cached coordination fact: a holder may miss
+// three beats and be alive, so an older hold is a crashed holder, and pinning
+// the log for ever on it would let one failed join stop the fleet trimming. A
+// live holder renews on [TrimHoldHeartbeat] ([HoldTail]).
 //
-// IGNORED, NOT DELETED. Nothing removes a stale hold but its owner — its own
-// release, or its next pin under the same owner, which replaces it: the
-// register's one rule is that an owner's key has one writer, and a trim that
-// deleted what it judged stale would race the renewal that proves it was not,
-// removing a live pin until the next beat put it back. What a crashed holder
-// leaves is bounded instead by the key being per OWNER — one per node and
-// purpose ([coord.HoldOwner]) — and costs nothing but the row: the arithmetic
-// reads past it.
+// IGNORED, NOT DELETED: an owner's key has one writer (its release, or its
+// next pin replacing it), and a trim deleting what it judged stale would race
+// the renewal and drop a live pin. A crashed holder leaves one row per owner
+// ([coord.HoldOwner]), which the arithmetic reads past.
 const TrimHoldStale = 4 * coord.ReconcileInterval
 
 // TrimHoldHeartbeat is how often a holder renews its pin on the replay tail
 // ([HoldTail]).
 //
-// A QUARTER OF [TrimHoldStale], which is the derivation every other heartbeated
-// fact in this estate uses: a holder may miss three beats and still be
-// believed. Derived rather than picked, and declared HERE, beside the bound it
-// is derived from, and once for every holder: a heartbeat slower than the
-// bound would have the trim ignore a live pin, which is the hole the pin exists
-// to close — and two holders each declaring their own cadence is how one of
-// them came to have none.
+// A QUARTER OF [TrimHoldStale], so a holder may miss three beats and still be
+// believed. Declared once, beside its bound, for every holder: a heartbeat
+// slower than the bound would have the trim ignore a live pin.
 const TrimHoldHeartbeat = TrimHoldStale / 4

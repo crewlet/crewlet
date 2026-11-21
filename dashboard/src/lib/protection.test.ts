@@ -47,6 +47,13 @@ test.each<[string, Partial<CodeMergeGate>, string]>([
   expect(line).not.toBe(gateLine(GATE));
 });
 
+// AN EXEMPTION FROM NO APPROVAL HOLDS NO MERGE, so its gate reads as its twin
+// without one. Mutation: say the classes whatever the approvals, and this fails.
+test("a gate asking no approval says no exemption from one", () => {
+  const none: CodeMergeGate = { ...GATE, approvals: "none" };
+  expect(gateLine({ ...none, approvals_unless: ["whitespace_only"] })).toBe(gateLine(none));
+});
+
 // MANY HUMAN PATHS ARE COUNTED, a few are named. Mutation: name every one of
 // thirty-two globs in one line, and this fails.
 test("a gate with many human paths counts them", () => {

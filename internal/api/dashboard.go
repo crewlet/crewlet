@@ -175,16 +175,11 @@ func (a *assets) serveIndex(w http.ResponseWriter, r *http.Request) {
 // serveStatic answers one asset under /static/.
 //
 // The requested path is passed to the tree UNSANITISED, and that is safe by
-// contract rather than by luck: fs.FS requires Open to reject any name that is
-// not fs.ValidPath — no "..", no leading slash, no "." element — so a traversal
-// cannot resolve to a file outside the tree whatever the request spelled.
-//
-// Measured on both sources this serves from, embed.FS and the MapFS the tests
-// use: "../../etc/passwd", "dashboard/../../etc/passwd", "/etc/passwd", "" and
-// "./x" all fail to open. A cleaning step here was written first and removed
-// after that measurement — it made the refusal look like this code's doing,
-// which is worse than no code at all, because the next reader would trust it
-// instead of the contract that is actually holding.
+// contract: fs.FS requires Open to reject any name that is not fs.ValidPath
+// (no "..", no leading slash, no "." element), so a traversal cannot resolve
+// outside the tree. Both sources this serves from, embed.FS and the tests'
+// MapFS, refuse such names. Do not add a cleaning step: it would make the
+// refusal look like this code's doing and hide the contract that holds it.
 func (a *assets) serveStatic(w http.ResponseWriter, r *http.Request) {
 	a.serve(w, r, strings.TrimPrefix(r.URL.Path, "/static/"))
 }
@@ -228,21 +223,14 @@ func (a *assets) serve(w http.ResponseWriter, r *http.Request, name string) {
 	}
 	h.Set("ETag", etag)
 
-	// http.ServeContent rather than a hand-written branch, for the
-	// conditional request above all: If-None-Match is a LIST under WEAK
-	// comparison (RFC 9110 §13.1.2), so `"a", "b"`, `W/"a"` and `*` all
-	// match — and a cache holding both representations of one URL is exactly
-	// the client that sends a list. The branch this replaced compared the
-	// header to one tag as a string, so each of those answered 200 with the
-	// whole body. It also answers HEAD and Range, and a 304 from it drops
-	// Content-Type and Content-Encoding but keeps ETag, Vary and
-	// Cache-Control, which are the fields RFC 9110 §15.4.5 requires there.
-	// It leaves Content-Length off an encoded body — its rule for handlers
-	// that compress in a wrapper, where the length it knows is the wrong one
-	// — so the gzip answer goes out chunked over HTTP/1.1, which costs a few
-	// bytes of framing and nothing a browser notices. A zero modification
-	// time turns If-Modified-Since off: the tag is the only validator, since
-	// an embedded file's time is the zero time anyway.
+	// http.ServeContent, not a hand-written branch, for the conditional
+	// request: If-None-Match is a LIST under WEAK comparison (RFC 9110
+	// §13.1.2), so `"a", "b"`, `W/"a"` and `*` all match, and a cache holding
+	// both representations of one URL sends a list. It also answers HEAD and
+	// Range, and a 304 keeps ETag, Vary and Cache-Control (RFC 9110 §15.4.5).
+	// It omits Content-Length on an encoded body, so gzip goes out chunked
+	// over HTTP/1.1: a few bytes of framing. A zero modification time turns
+	// If-Modified-Since off: the ETag is the only validator.
 	http.ServeContent(w, r, name, time.Time{}, bytes.NewReader(body))
 }
 

@@ -10,27 +10,15 @@ import (
 
 // A COUNTER THAT ENDS A SESSION OR A TOKEN ENDS IT IN THE LISTING TOO.
 //
-// A password change, "sign out everywhere" and an administrator ending
-// somebody's sessions move the person's revocation epoch, and a restore moves
-// the company's session generation: neither writes `ended_at` on a session or
-// `revoked_at` on a token. A listing that read the rows alone showed every one
-// of them still live — the Account page went on offering to sign out sessions
-// the engine answered were already over, and counted tokens it refused as in
-// use. The named sign-out reads the same predicate, so the case holds the two
-// against each other. The controls: what was opened after the counter moved
-// is live in both.
+// A revocation epoch move and the company's session generation write no
+// `ended_at` or `revoked_at`, so a listing reading rows alone shows sessions
+// and tokens live that the engine refuses. The named sign-out reads the same
+// predicate, so the case holds the two against each other; what was opened
+// after the counter moved is live in both. AND IT SAYS WHY: an epoch move's
+// reason and instant, or the generation's own wording with no end.
 //
-// AND IT SAYS WHY: an ended session with no reason was listed beside the
-// deadline it never reached. An epoch move writes its record's reason and
-// instant on every session it ends — a suspension, a reset link, an
-// administrator ending them all and a password change otherwise all read
-// "ended with every session they held", with no end — and the company's
-// generation, which writes no row per session, is listed as what it is.
-//
-// Mutation: drop Superseded from SessionRecord.Live, or from
-// CredentialRow.Revoked, and the session or the token minted before the
-// counter moved is listed live; drop the reason and it is listed with none;
-// drop the epoch move's write on the sessions it ends and the first case goes
+// Mutation: drop Superseded from SessionRecord.Live or CredentialRow.Revoked,
+// the reason, or the epoch move's write on the sessions it ends, and this goes
 // red.
 func TestACounterThatEndsASessionOrATokenEndsItInTheListingToo(t *testing.T) {
 	t.Parallel()
@@ -142,17 +130,14 @@ func TestACounterThatEndsASessionOrATokenEndsItInTheListingToo(t *testing.T) {
 
 // EACH SESSION KEEPS WHAT ENDED IT, however many moves come after.
 //
-// The epoch's row keeps only its LAST move, and the listing used to derive a
-// session's why from it: a suspension, then a reset link, then an
-// administrator ending them all re-described every session the earlier moves
-// had ended as the last, or as "ended with every session they held" with no
-// end. Each move now writes its reason and instant on the sessions it ends, so
-// the first session reads the first move and the second the second, at two
-// different instants. A session the company's generation ended before the
-// epoch moved is listed as the generation's: the later move came after it was
-// already over. Mutation: derive the reason from the epoch's row again and the
-// first session names the last move or none; drop the generation's exclusion
-// from the epoch's write and the third names the epoch's move.
+// The epoch's row keeps only its LAST move, so each move writes its reason and
+// instant on the sessions it ends: the first session reads the first move and
+// the second the second, at two instants. A session the company's generation
+// ended before the epoch moved is listed as the generation's.
+//
+// Mutation: derive the reason from the epoch's row and the first session names
+// the last move or none; drop the generation's exclusion from the epoch's
+// write and the third names the epoch's move.
 func TestEachSessionKeepsTheMoveThatEndedIt(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -210,16 +195,14 @@ func TestEachSessionKeepsTheMoveThatEndedIt(t *testing.T) {
 // A MOVE NEVER RE-DESCRIBES A SESSION AN EARLIER MOVE ENDED.
 //
 // `ended_at = 0` does not mean live: a session an earlier move ended without
-// writing it on the row holds it too — a start decided before that move whose
-// record landed after it, and every row an estate held before moves wrote
-// their reasons. The next move must leave such a session alone, or it stamps
-// its own reason and instant on a session that was over before it, and that
-// account is permanent. The row is put in that state by taking the first
-// move's reason back off it, which is what a row predating that write holds.
-// The control: a session opened after the first move is ended by the second,
-// with the second's reason. Mutation: end every session below the new epoch
-// rather than those at the one it leaves, and the stale session reads the
-// second move.
+// writing it on the row holds it too (a start decided before the move whose
+// record landed after it, or a row predating moves writing reasons). A later
+// move restamping it gives a permanent, false account. The case clears the
+// first move's reason off the row to build that state; the control is a
+// session opened after it, ended by the second move with its reason.
+//
+// Mutation: end every session below the new epoch rather than those at the one
+// it leaves, and the stale session reads the second move.
 func TestAMoveLeavesASessionAnEarlierMoveEnded(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

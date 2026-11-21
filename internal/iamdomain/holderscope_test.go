@@ -53,22 +53,18 @@ func personAwayFrom(token string) string {
 	}
 }
 
-// AN IDENTITY CHANGE IS FILED UNDER ITS PERSON'S BUCKET — AND EVERY LEAVER'S
+// AN IDENTITY CHANGE IS FILED UNDER ITS PERSON'S BUCKET, AND EVERY LEAVER'S
 // WHOSE TOMBSTONE ITS BIND STAMPS; AND SO IS A CREATE ONTO A SEAT.
 //
-// The scope is where a node that cannot decode a record files the deferral,
-// and a read about a person looks in THAT PERSON'S bucket. A directory record's
-// subject names nobody, so a move off a seat that stated the bucket of the
-// seat's handle — a hash no read consults — would leave a node deferring it
-// serving the holder as bound to the seat, never saying it was behind about
-// them; and a record naming nobody would put "Sarah moved" on nobody's history.
-// A bind of a seat somebody was removed from also stamps that leaver's
-// tombstone, which is filed under the leaver, so their bucket is declared too
-// — by a move onto the seat, and by a create onto it alike.
+// A node that cannot decode a record files the deferral under its scope, and a
+// read about a person looks in THAT PERSON'S bucket. A directory record's
+// subject names nobody, so a move scoped to the seat handle's bucket would
+// leave a deferring node serving the holder as still bound, never saying it
+// was behind, and put the move on nobody's history. A bind of a seat somebody
+// left also stamps that leaver's tombstone, filed under them: declared too.
 //
-// Mutation: drop the leavers from SetIdentity's scope, or from the
-// enrolment's, and the rig's apply refuses the bind for writing outside what
-// it declared.
+// Mutation: drop the leavers from SetIdentity's or the enrolment's scope, and
+// the rig's apply refuses the bind for writing outside what it declared.
 func TestAnIdentityChangeIsFiledUnderItsPersonAndEveryLeaver(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -147,12 +143,10 @@ func TestAnIdentityChangeIsFiledUnderItsPersonAndEveryLeaver(t *testing.T) {
 	}
 }
 
-// AND SO IS A SESSION CLOSE, under the session's person.
-//
-// Validation asks whether a deferral covers the PERSON's bucket; a close filed
-// under the lineage's bucket was one a node could not decode and never knew it
-// was behind about — so it went on serving the session somebody had signed out
-// of.
+// AND SO IS A SESSION CLOSE, under the session's person: validation asks
+// whether a deferral covers the PERSON's bucket, so a close filed under the
+// lineage's would leave a node that could not decode it serving a session
+// somebody had signed out of.
 func TestASessionCloseIsFiledUnderItsPersonsBucket(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -227,20 +221,16 @@ func (r *writeRig) scopeOf(op iamdomain.OpKind) statelog.ScopeSet {
 
 // A REDEMPTION AND A REMOVAL ARE FILED UNDER EVERY BUCKET THEIR APPLY WRITES.
 //
-// An invitation — and the trail row its record writes — is filed under its
-// ADDRESS's bucket, since it has no person until it is redeemed. Redeeming it
-// marks that row spent, and removing the person who redeemed it erases it; so
-// each record declares the person's bucket AND the address's. Declaring the
-// person's alone, a node holding back the invitation's own record — one signed
-// under a keyring key it was not restarted with, or a newer build's — applied
-// the redemption or the removal ahead of it, found no row to mark or to erase,
-// and wrote the invitation back unspent, or with the removed person's address
-// sealed in it, when it reprocessed the invitation. (The rig's apply asks
-// every record it applies whether what it wrote is inside what it declared;
-// this is the case that names the two records it caught.)
+// An invitation and its trail row are filed under its ADDRESS's bucket, having
+// no person until redeemed. Redeeming marks that row spent and removing the
+// redeemer erases it, so each record declares the person's bucket AND the
+// address's. With the person's alone, a node holding back the invitation's
+// record (signed under a keyring key it lacks, or a newer build's) applies the
+// redemption or removal first, finds no row, and on reprocessing writes the
+// invitation back unspent, or with the removed person's address sealed in it.
 //
-// Mutation: drop the address's bucket from the enrolment's scope for a redemption, and
-// the redemption's scope fails here.
+// Mutation: drop the address's bucket from the enrolment's scope for a
+// redemption, and the redemption's scope fails here.
 func TestARedemptionAndARemovalAreFiledUnderTheAddressTheyWrite(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

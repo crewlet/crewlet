@@ -59,7 +59,16 @@
  * from line 1 (`routes/gitlet/syntax.tsx`); a larger one is drawn plain.
  */
 
-import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   Button,
   ButtonLink,
@@ -102,7 +111,7 @@ import {
   type LineRun,
 } from "~/lib/code.ts";
 import { fmtBytes, fmtCount, fmtDateTime, plural, relTime } from "~/lib/format.ts";
-import { renderMarkdown } from "~/lib/markdown.ts";
+import { imageSources, renderMarkdown } from "~/lib/markdown.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
 import type { Grammar, State } from "~/lib/syntax/types.ts";
 import { usePaged, type Paged } from "~/lib/usePaged.ts";
@@ -148,6 +157,7 @@ import { GoToFile } from "./GoToFile.tsx";
 import { FileView } from "./FileView.tsx";
 import { FileBytes, WAITING_FOR_COMMIT } from "./FileActions.tsx";
 import { LineActions } from "./LineActions.tsx";
+import { FilePicture, picturePath, pictureType, usePictures } from "./pictures.tsx";
 import "~/styles/gitlet.css";
 
 /** What one page of a path read holds: a listing's entries, or one page of a file. */
@@ -979,7 +989,7 @@ function FileCard({
   children: React.ReactNode;
 }) {
   const facts = file.binary
-    ? `A binary file of ${fmtBytes(file.size)}`
+    ? `${pictureType(path) ? "A picture" : "A binary file"} of ${fmtBytes(file.size)}`
     : `${plural(file.lines, "line")} · ${fmtBytes(file.size)}`;
   // A PICK THE FILE CANNOT DRAW is said beside its size: a stale link to a
   // line past its end.
@@ -1087,7 +1097,16 @@ function PathBody({
     );
   }
   if (first.data.blob)
-    return <Source repo={repo.name} path={path} place={path} pages={pages} picked={null} />;
+    return (
+      <Source
+        repo={repo.name}
+        path={path}
+        place={path}
+        pages={pages}
+        picked={null}
+        commit={commit}
+      />
+    );
   return (
     <>
       <Entries
@@ -1190,7 +1209,11 @@ function Source({
   }, []);
   if (!head) return null;
   if (head.binary) {
-    return <p className="code-blob__note">Git draws no lines of a binary file.</p>;
+    return pictureType(path) ? (
+      <FilePicture repo={repo} commit={commit} path={path} size={head.size} />
+    ) : (
+      <p className="code-blob__note">Git draws no lines of a binary file.</p>
+    );
   }
   if (head.lines === 0) return <p className="code-blob__note">This file is empty.</p>;
   const shown = from + lines.length - 1;
@@ -1358,6 +1381,11 @@ function parseRangeCursor(cursor: string): { line: number; at: string } {
  * draw it ([useOpenAt]), with the lines before them a press away, as a
  * file's are. `total` is the file's lines, from its own read.
  */
+/** A blame line's text, or undefined where it was too long to send: the wire leaves an empty line's out too. */
+function blameText(l: CodeBlameLine): string | undefined {
+  return l.text_bytes !== undefined ? undefined : (l.text ?? "");
+}
+
 function Blame({
   repo,
   rev,
@@ -1453,9 +1481,9 @@ function Blame({
   usePickInView(`${place}\n${from}`, picked, rows.length);
   // COLOURED AS THE FILE IS: a line past its bound counts as empty for the walk.
   const grammar = useGrammar(path);
-  const texts = useMemo(() => rows.map((l) => l.text ?? ""), [rows]);
+  const texts = useMemo(() => rows.map((l) => blameText(l) ?? ""), [rows]);
   const drawnLines = useMemo(
-    () => ({ from: rows[0]?.line ?? 1, texts: rows.map((l) => l.text) }),
+    () => ({ from: rows[0]?.line ?? 1, texts: rows.map(blameText) }),
     [rows],
   );
   const stateOf = useLineStates({
@@ -1467,7 +1495,10 @@ function Blame({
   });
   const tokens = useMemo(
     () =>
-      rows.map((l) => (l.text === undefined ? null : tokensOf(grammar, l.text, stateOf(l.line)))),
+      rows.map((l) => {
+        const text = blameText(l);
+        return text === undefined ? null : tokensOf(grammar, text, stateOf(l.line));
+      }),
     [rows, grammar, stateOf],
   );
   const now = useNow();
@@ -1482,10 +1513,19 @@ function Blame({
   }
   if (rows.length === 0)
     return <p className="code-blob__note">This file is empty: no line to blame.</p>;
+  // THE WHEN COLUMN FITS ITS LONGEST TIME: past thirty days relTime names the date.
+  const whenWidth = Math.max(
+    7,
+    ...Object.values(commits).map((c) => relTime(c.authored_at, now).length),
+  );
   return (
     <>
       <EarlierLines earlier={earlier} />
-      <table className="code-blame" aria-label={`Who last changed each line of ${path}`}>
+      <table
+        className="code-blame"
+        aria-label={`Who last changed each line of ${path}`}
+        style={{ "--code-blame-when": `${whenWidth}ch` } as CSSProperties}
+      >
         <tbody>
           {rows.map((l, i) => {
             const c = commits[l.commit];
@@ -1557,10 +1597,10 @@ function Blame({
                   </button>
                 </td>
                 <td className="code-blame__text mono">
-                  {l.text === undefined ? (
-                    `(a line of ${fmtBytes(l.text_bytes ?? 0)})`
+                  {l.text_bytes !== undefined ? (
+                    `(a line of ${fmtBytes(l.text_bytes)})`
                   ) : (
-                    <Painted text={l.text} tokens={tokens[i] ?? null} />
+                    <Painted text={l.text ?? ""} tokens={tokens[i] ?? null} />
                   )}
                 </td>
               </tr>
@@ -1570,6 +1610,36 @@ function Blame({
       </table>
       <Pager paged={paged} what="lines" />
     </>
+  );
+}
+
+/** A document's own pictures, read at the document's commit: each source a path from its directory
+ *  (or the root), mapped to its object URL once read; any other source is left to the renderer. */
+function useDocPictures(
+  repo: string,
+  commit: string,
+  docPath: string,
+  text: string | undefined,
+): (src: string) => string | null | undefined {
+  const dir = docPath.includes("/") ? docPath.slice(0, docPath.lastIndexOf("/")) : "";
+  const places = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const src of imageSources(text ?? "")) {
+      const path = picturePath(src, dir);
+      if (path !== null && pictureType(path)) out.set(src, path);
+    }
+    return out;
+  }, [text, dir]);
+  const paths = useMemo(() => [...new Set(places.values())], [places]);
+  const pictures = usePictures(repo, commit, paths);
+  return useCallback(
+    (src: string) => {
+      const path = places.get(src);
+      if (path === undefined) return undefined;
+      const shown = pictures.get(path);
+      return shown && "url" in shown ? shown.url : null;
+    },
+    [places, pictures],
   );
 }
 
@@ -1618,8 +1688,10 @@ function RepoDocs({
     { name: repo.name, path: entry?.path ?? "", ...(commit ? { ref: commit } : {}) },
     { enabled: Boolean(entry) && commit !== "" },
   );
-  if (!shown || !entry) return null;
   const blob = file.data?.blob;
+  const markdown = entry !== undefined && /\.(md|markdown)$/i.test(entry.path);
+  const image = useDocPictures(repo.name, commit, entry?.path ?? "", markdown ? blob?.text : "");
+  if (!shown || !entry) return null;
   return (
     <Card padding="none" className="code-readme" as="section" aria-label={baseName(entry.path)}>
       <div className="code-docs__head">
@@ -1653,8 +1725,10 @@ function RepoDocs({
           </QueryState>
         ) : blob?.binary ? (
           <p className="muted">It is a binary file.</p>
-        ) : /\.(md|markdown)$/i.test(entry.path) ? (
-          <div className="prose md">{renderMarkdown(blob?.text ?? "", { fence: paintFence })}</div>
+        ) : markdown ? (
+          <div className="prose md">
+            {renderMarkdown(blob?.text ?? "", { fence: paintFence, image })}
+          </div>
         ) : (
           <pre className="code-readme__text">{blob?.text ?? ""}</pre>
         )}

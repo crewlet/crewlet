@@ -13,7 +13,7 @@ import { eventually } from "~/test/settle.ts";
 import { SessionReading } from "~/lib/frameSession.ts";
 import { DiffView, type DiffHunk } from "~/components/DiffView.tsx";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
-import type { CodeChangeSummary } from "~/protocol/index.ts";
+import type { CodeChangeCounts, CodeChangeSummary } from "~/protocol/index.ts";
 import { ChangeRows, ChangeStateTag } from "./ChangeRow.tsx";
 import { Changes } from "./Changes.tsx";
 import { BranchChip } from "./ui.tsx";
@@ -67,6 +67,8 @@ const MOVED = [
 /** The changes Gitlet › Changes lists and the repositories its pickers offer, where a case sets them. */
 let listed: CodeChangeSummary[] | null = null;
 let repos: string[] | null = null;
+/** The state tabs' figures, where a case answers `code_counts`. */
+let counted: CodeChangeCounts | null = null;
 
 /** The engine, for one repository's comparison of feature into main, and one file. */
 function answer(url: URL): Response {
@@ -78,6 +80,9 @@ function answer(url: URL): Response {
         position: POSITION,
         level: "session",
       });
+    case "/query/code_counts":
+      if (!counted) break;
+      return json({ counts: { changes: counted }, position: POSITION, level: "session" });
     case "/query/code_repos":
       if (!repos) break;
       return json({ repos: repos.map((name) => ({ name })), position: POSITION, level: "session" });
@@ -212,6 +217,7 @@ afterEach(() => {
   host = null;
   listed = null;
   repos = null;
+  counted = null;
   forgetTrees();
   forgetTreeChoice();
   vi.unstubAllGlobals();
@@ -1305,6 +1311,65 @@ test("a change row folds by its own width in a 370 px card at 1440 px", async ()
   }
 });
 
+// THE HEAD'S PICKERS SHARE THE COUNTED STATE TABS' ROW at 1440, drawn as their words, in every
+// filter state, so the list does not jump.
+// Mutations: box the pickers, give them their words' width as a basis, or let every one shrink.
+test.each(["#/gitlet", "#/gitlet?needs=me", "#/gitlet?owner=jane&state=all"])(
+  "the changes' head keeps its pickers on the state tabs' row at 1440 px (%s)",
+  async (hash) => {
+    await page.viewport(1440, 900);
+    listed = [carded(42)];
+    counted = { live: 5, open: 4, draft: 1, merged: 54, closed: 3 };
+    location.hash = hash;
+    mount(<Changes />, 1150);
+    await eventually(() =>
+      expect(document.querySelector(".code-changes-head")?.textContent).toContain("54"),
+    );
+    if (hash !== "#/gitlet") {
+      await eventually(() =>
+        expect(document.querySelector(".code-changes-head")?.textContent).toContain("Every state"),
+      );
+    }
+    const tabs = document
+      .querySelector<HTMLElement>('.code-changes-head [aria-label="Change state"]')!
+      .getBoundingClientRect();
+    // A HELD PICKER'S REASON is a hidden sibling of its control, no picker of its own.
+    const pickers = [
+      ...document.querySelector<HTMLElement>(".code-changes-head__pickers")!.children,
+    ].filter((el) => el.getBoundingClientRect().width > 1);
+    expect(pickers.length).toBe(6);
+    for (const picker of pickers) {
+      const at = picker.getBoundingClientRect();
+      expect(at.top, picker.textContent ?? "").toBeLessThan(tabs.bottom);
+    }
+    // NO PICKER LOSES A WORD to make the row: the Repository field gives up its slack.
+    for (const label of document.querySelectorAll<HTMLElement>(
+      ".code-changes-head__pickers .crewlet-select__label",
+    )) {
+      expect(label.scrollWidth, label.textContent ?? "").toBeLessThanOrEqual(label.clientWidth);
+    }
+  },
+);
+
+// WHERE ITS ROWS FOLD the pickers take a line of their own, never a squeeze beside the tabs.
+// Mutation: drop the fold's flex-basis, and the pickers stay on the tabs' row cut to dots.
+test("the changes' head puts its pickers under the tabs where its rows fold", async () => {
+  await page.viewport(1440, 900);
+  listed = [carded(42)];
+  counted = { live: 5, open: 4, draft: 1, merged: 54, closed: 3 };
+  location.hash = "#/gitlet?needs=me";
+  mount(<Changes />, 760);
+  await eventually(() =>
+    expect(document.querySelector(".code-changes-head")?.textContent).toContain("Every state"),
+  );
+  const tabs = document
+    .querySelector<HTMLElement>('.code-changes-head [aria-label="Change state"]')!
+    .getBoundingClientRect();
+  const group = document.querySelector<HTMLElement>(".code-changes-head__pickers")!;
+  expect(group.getBoundingClientRect().top).toBeGreaterThanOrEqual(tabs.bottom);
+  expect(group.scrollWidth).toBeLessThanOrEqual(group.clientWidth);
+});
+
 /** Every option of the open list, once it holds `count`. */
 const optionsOf = (count: number) =>
   eventually(() => {
@@ -1610,3 +1675,58 @@ for (const width of [1440, 390]) {
     expect(box.left).toBeGreaterThanOrEqual(picked.getBoundingClientRect().left - 0.5);
   });
 }
+
+/** The query bar once Gitlet › Changes has drawn it, with its field and its end buttons. */
+const queryBar = () =>
+  eventually(() => {
+    const bar = document.querySelector<HTMLElement>(".code-query");
+    const end = document.querySelector<HTMLElement>(".code-query__end");
+    expect(bar?.querySelectorAll(".crewlet-chip-field__chip").length).toBe(5);
+    expect(end?.querySelectorAll("button").length).toBe(2);
+    return { bar: bar!, field: bar!.querySelector<HTMLElement>(".code-query__field")!, end: end! };
+  });
+
+const QUALIFIED = "#/gitlet?repo=web&owner=frontend&reviewer=jane&window=7d&q=stream+shell";
+
+// THE BAR SPANS ITS BAND, its chips and words inside the field and Help and Clear over its end.
+// Mutation: drop the field's end padding, and the last chip runs under the buttons.
+test("the changes' query bar spans its band and keeps its chips inside it at 1440 px", async () => {
+  await page.viewport(1440, 900);
+  listed = [carded(42)];
+  location.hash = QUALIFIED;
+  mount(<Changes />, 1200);
+  const { bar, field, end } = await queryBar();
+  const band = bar.closest<HTMLElement>(".toolbar")!.getBoundingClientRect();
+  const box = field.getBoundingClientRect();
+  expect(box.left).toBeGreaterThanOrEqual(band.left - 1);
+  expect(box.right).toBeLessThanOrEqual(band.right + 1);
+  expect(box.width).toBeGreaterThan(band.width * 0.95);
+  const buttons = end.getBoundingClientRect();
+  expect(buttons.right).toBeLessThanOrEqual(box.right);
+  expect(buttons.top).toBeGreaterThanOrEqual(box.top);
+  for (const part of field.querySelectorAll<HTMLElement>(
+    ".crewlet-chip-field__chip, .crewlet-chip-field__input",
+  )) {
+    const at = part.getBoundingClientRect();
+    expect(at.right <= buttons.left + 1 || at.top >= buttons.bottom, part.textContent ?? "").toBe(
+      true,
+    );
+  }
+});
+
+// ON A PHONE THE CHIPS WRAP inside the field, the buttons stay at its end, and nothing goes sideways.
+// Mutation: keep the field from wrapping, and the chips overflow the band.
+test("the changes' query bar wraps its chips and keeps its buttons at 390 px, and nothing overflows", async () => {
+  await page.viewport(390, 900);
+  listed = [carded(42)];
+  location.hash = QUALIFIED;
+  mount(<Changes />, 358);
+  const { bar, field, end } = await queryBar();
+  expect(overflowing(bar)).toEqual([]);
+  expect(sidewaysScrollers(bar)).toEqual([]);
+  const box = field.getBoundingClientRect();
+  expect(box.height).toBeGreaterThan(60);
+  const clear = end.querySelectorAll("button")[1]!.getBoundingClientRect();
+  expect(clear.right).toBeLessThanOrEqual(box.right);
+  expect(clear.width).toBeGreaterThan(0);
+});

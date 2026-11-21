@@ -108,36 +108,17 @@ func runHangupProbe() {
 }
 
 // A SECOND INTERRUPT KILLS THE PROCESS, from the first moment of a run and
-// whatever the process inherited.
+// whatever the process inherited. The first signal cancels the run's context and
+// moves both signals to the second tier, so the next one ends the process:
+// during a BOOT as well as the drain, and for a process started with SIGINT
+// IGNORED, which cannot die BY the signal and exits with [interruptedStatus], as
+// a shell reports the kill.
 //
-// The first signal cancels the run's context and moves both signals to the
-// second tier, so the next one ends the process. That has to hold during a
-// BOOT as well as during the drain: a broker recovering a large store cannot
-// be interrupted, and an operator at a terminal whose second press was
-// swallowed had no way out short of SIGKILL from elsewhere. And it has to
-// hold for a process started with SIGINT IGNORED — a background job of a
-// non-interactive shell, or anything a parent that ignored it starts: the
-// first SIGINT drained it and the second, the one the drain line promises
-// "exits at once", was ignored, because handing SIGINT back restored the
-// inherited SIG_IGN. Such a process cannot die BY the signal (nothing a Go
-// program can call sets SIGINT to its default once it inherited it ignored),
-// so it exits with [interruptedStatus], which a shell reports exactly as it
-// reports the kill.
-//
-// A signal's default action cannot be observed from inside the process it
-// kills, so each case runs in a CHILD — the test binary re-executed — which
-// takes the run's own [interruptContext], interrupts itself once, waits for
-// the cancellation and interrupts itself ONCE more: a hand-back that leaves a
-// window in which a press is swallowed fails here rather than being pressed
-// through.
-//
-// And the child's dispositions are the CASE'S, never this binary's: the child
-// starts as a launcher that sets them and execs itself, since execve keeps an
-// ignored signal ignored and resets a caught one to its default. The child
-// used to inherit whatever this binary was started with, so started with
-// SIGINT ignored — `go test &` from a script — this case failed on a healthy
-// build, and setting a disposition here around the child's start instead
-// would race every parallel case that forks.
+// A default action cannot be observed from inside the process it kills, so each
+// case runs in a CHILD (the test binary re-executed) that interrupts itself, waits
+// for the cancellation and does it ONCE more. The child's dispositions are the
+// CASE'S, never this binary's: a launcher sets them and execs, since execve keeps
+// ignored ignored; setting them here would race every parallel case that forks.
 func TestASecondInterruptKillsTheProcess(t *testing.T) {
 	t.Parallel()
 	signalled := func(s syscall.Signal) func(syscall.WaitStatus) bool {

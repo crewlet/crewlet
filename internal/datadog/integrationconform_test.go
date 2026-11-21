@@ -19,44 +19,15 @@ import (
 // The Datadog half of [integration.Reconciler]'s safety contract, certified
 // against the reconcile the loop actually runs.
 //
-// # Why this file exists at all
+// Two worlds: a converged pass reports NO findings, so the clauses that walk
+// the findings walk an empty list there; [outstandingDatadog] is the other.
 //
-// integrationtest states the contract in nine clauses and its package doc
-// calls the write-counting hook REQUIRED, because that clause is "the one
-// most likely to be wrong". Its only caller was a stub whose pass returned
-// (nil, nil), so "a converged pass writes nothing" held because nothing
-// happened: a green test over a world nobody had built and a reconciler
-// nobody had run. This points the same nine cases at [datadog.Reconcile],
-// over a Datadog organization that has already been brought into line, and
-// counts what that organization and this deployment's own sealed store
-// receive.
-//
-// # Two worlds, because one of them certifies nothing on its own
-//
-// A converged pass reports NO findings — that is what converged means — so
-// every clause that walks the findings list walks an empty one and passes
-// whatever this package does. Three of them did: the kinds are known, a
-// person-owed finding says what to do, and two passes over a world with
-// findings agree. [outstandingDatadog] is the other world, and its own doc
-// says which two faults it holds and why those two.
-//
-// # What counts as a write here, and why it is not "not a GET"
-//
-// integrationtest's own doc says to count by ROUTE and to write down which
-// routes those are, because some vendors model a listing as a POST and a
-// counter keyed on the method makes the clause impossible to satisfy. Datadog
-// is not one of those vendors TODAY — every route this client reads through
-// is a GET — but that is a fact about the five routes below rather than a
-// property of the API, and Datadog does serve POST-shaped search elsewhere.
-// So [alertingOrg] classifies by route and takes the safe default: the five
-// reads are named, and ANYTHING ELSE the organization receives counts as a
-// write. A route added to the client later is counted until somebody decides
-// it is a query, which is the direction that fails loudly rather than
-// silently.
-//
-// The pass seals nothing: each agent's account and key are the per-seat
-// access sync's, which has its own tests. So the organization is the whole of
-// what a write here can reach.
+// A write is decided by ROUTE, not method (some vendors model a listing as a
+// POST). Every read here is a GET TODAY, but that is a fact about the five
+// routes below, not the API. So the five reads are named and ANYTHING ELSE the
+// organization receives counts as a write: a route added later is counted until
+// somebody decides it is a query, which fails loudly rather than silently.
+// The pass seals nothing (the per-seat access sync owns each account and key).
 
 // Every route this pass can land on, in the shape [routeOf] reduces one to.
 //
@@ -151,20 +122,15 @@ type alertingOrg struct {
 
 // newAlertingOrg builds one, reporting to the CASE that drives it.
 //
-// [integrationtest.TB] rather than the *testing.T that owns the world, and
-// the difference shows the moment a fixture complains: every Errorf in the
-// handlers below is a statement that THIS pass did something a pass must not
-// do — disabled a user, asked for a route the organization does not serve —
-// and attributed to the parent it names a test with nine subtests rather than
+// [integrationtest.TB] rather than the *testing.T that owns the world: every
+// Errorf in the handlers below says THIS pass did something a pass must not
+// do, and on the parent it would name a test with nine subtests rather than
 // the clause that caught it.
 //
-// The SERVER's lifetime still hangs off the parent, because TB deliberately
-// has no Cleanup: the suite's own tests drive its cases with a recorder, so
-// the interface is the narrow one they can satisfy. That split is safe in the
-// one way it has to be — every request this organization ever serves
-// originates from a Reconcile call made synchronously inside a case, so no
-// handler can still be running, and reporting into a case that has finished,
-// once that case returns.
+// The SERVER's lifetime still hangs off the parent, because TB has no Cleanup
+// (the suite's own tests drive its cases with a recorder). That is safe since
+// every request originates from a Reconcile call made synchronously inside a
+// case, so no handler is still running once the case returns.
 func newAlertingOrg(t integrationtest.TB) *alertingOrg {
 	t.Helper()
 	return &alertingOrg{t: t}
@@ -276,25 +242,15 @@ func (o *alertingOrg) serveWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// served is a definition as Datadog HANDS IT BACK, which is not byte-for-byte
-// what was written.
-//
-// A fake that echoes the request body makes the convergence comparison pass
-// for the wrong reason: byte equality would satisfy it, and then the first
-// real region that re-encodes anything has the pass rewriting a definition
-// that is already correct on every tick, for ever — an edit per tick in
-// somebody's audit log, invisible from inside this engine because nothing
-// here re-reads what it wrote.
+// served is a definition as Datadog HANDS IT BACK, not byte-for-byte as
+// written: an echoing fake would pass the comparison by byte equality, and a
+// real region that re-encodes would have the pass rewrite a correct definition
+// on every tick.
 //
 // So EVERY FIELD THE ENGINE COMPARES IS PERTURBED WITHOUT CHANGING WHAT IT
-// MEANS, and the engine's own comparison decides. `encode_as` comes back in
-// whatever case Datadog feels like. `custom_headers` and `payload` are JSON
-// documents Datadog stores as strings and re-encodes at its own discretion,
-// so one is re-indented and the other collapsed — opposite directions on
-// purpose, so a comparison that tightened to bytes on either field fails
-// here rather than in production. The payload was the one echoed verbatim,
-// and it is the larger document of the two: [datadog.WebhookPayload] is ten
-// keys of literal JSON.
+// MEANS. `encode_as` comes back in another case; `custom_headers` and `payload`
+// are re-indented and collapsed respectively, in opposite directions on
+// purpose, so a comparison that tightened to bytes on either fails here.
 func served(hook datadog.Webhook) datadog.Webhook {
 	hook.EncodeAs = strings.ToUpper(hook.EncodeAs)
 	var headers map[string]string
@@ -370,30 +326,14 @@ func (w *datadogWorld) mutations() int { return w.org.mutations() }
 // convergedDatadog stands the organization up and converges it BY RUNNING THE
 // PASS.
 //
-// # Converged by the pass rather than by a fixture
-//
-// The alternative is a hand-written fixture holding the webhook definition a
-// converged company has. It is the tempting one and it is weaker in the
-// direction that matters: it encodes what the harness author BELIEVES
-// converged looks like, so a pass whose idea of converged has drifted from
-// that belief writes on every run and the fixture calls it converged anyway.
-// The webhook definition has to match on four fields including a JSON-encoded
-// header. Running the real pass makes the world converged by definition, and
-// the only question left is the one worth asking: whether the SECOND pass
-// writes.
-//
-// The seeding pass's own writes are not counted: [integrationtest.Run] takes
-// its baseline from Mutations() after New returns.
+// Not a hand-written fixture, which encodes what the author BELIEVES converged
+// looks like: a drifted pass would write every run and still pass. The seeding
+// writes are not counted ([integrationtest.Run] baselines after New returns).
 //
 // TWO AGENT ACCOUNTS the access sync manages, and a PERSON under the same
-// domain. The accounts are what the orphan advisory must not report; the
-// person is what the service-account check exists to drop, since Datadog's
-// user filter is a free-text substring match on the address.
-//
-// BOTH t AND tb, deliberately. [integrationtest.TB] is the narrow interface
-// the suite's own tests drive its cases with and it has no Cleanup, so the
-// case's own reporter is tb while the server's lifetime hangs off the real
-// *testing.T that owns this world.
+// domain: the accounts are what the orphan advisory must not report, the
+// person what the service-account check drops (the filter is a free-text
+// substring match). BOTH t AND tb, as in [newAlertingOrg].
 func convergedDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 	t.Helper()
 	cfg := cfgWith()
@@ -461,29 +401,15 @@ func convergedDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 // outstandingDatadog is the same organization with two things genuinely
 // wrong, one in each half of the pass, and both of them a PERSON's to settle.
 //
-// # Why a second world exists at all
+// Clauses that walk findings certify nothing against a converged pass
+// ([integrationtest.Reconciler.Outstanding]). Each fault is STABLE across
+// passes, as the two-passes-agree clause needs:
 //
-// [integrationtest.Reconciler.Outstanding]'s doc states it: a converged pass
-// reports no findings, so every clause that walks the findings list walks an
-// empty one and certifies nothing. This world is what those clauses are run
-// against, and it has to prove itself first: the suite's anti-vacuity clause
-// fails if it reports nothing, or nothing a person owes.
-//
-// # Why THESE two faults
-//
-// Each is STABLE across passes, which the two-passes-agree clause needs and
-// which rules out every fault the pass would simply fix on the first tick:
-//
-//   - THIS DEPLOYMENT HAS NO PUBLIC BASE URL, so there is no address to point
-//     a webhook at and every monitor this company has fires into nothing. It
-//     reads as ingress_blocked on the field somebody has to set.
+//   - NO PUBLIC BASE URL, so there is no address to point a webhook at
+//     (ingress_blocked, on the field somebody has to set).
 //   - AN ENABLED SERVICE ACCOUNT AT THIS COMPANY'S DOMAIN THAT NOTHING
-//     MANAGES, the kind a live organization accumulates. It is reported and
-//     never touched, which is what makes it stable here. It reads as
-//     registration_orphaned, owed by an admin.
-//
-// Neither fault makes this pass write, which is incidental rather than
-// required: the suite counts mutations only over the converged world.
+//     MANAGES: reported, never touched (registration_orphaned, owed by an
+//     admin).
 func outstandingDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 	t.Helper()
 	world := convergedDatadog(t, tb)

@@ -12,16 +12,14 @@ import (
 //
 // # One hook on the organization, or one per repository
 //
-// GitHub will deliver an organization's every repository event through a
-// single ORG hook, which is the difference between one registration and
-// fifty on a company with fifty repositories — and, more importantly,
-// between a new repository routing on the day it is created and routing
-// whenever somebody remembers to re-run the provisioner.
+// A single ORG hook delivers every repository event of an organization: one
+// registration instead of fifty, and a new repository routes the day it is
+// created rather than when somebody re-runs the provisioner.
 //
 // It is not always available: an org hook needs `admin:org_hook`, which a
-// fine-grained token cannot carry at all and a classic token only carries if
-// whoever minted it ticked the box. So the mode is a tri-state and the
-// default falls back — see [config.ContainerWebhookMode].
+// fine-grained token cannot carry and a classic one carries only if ticked.
+// So the mode is a tri-state and the default falls back; see
+// [config.ContainerWebhookMode].
 
 // WebhookEvents are the deliveries this integration's parser reads.
 //

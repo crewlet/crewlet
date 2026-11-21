@@ -10,48 +10,24 @@ import (
 
 // A PAGE'S PARENT, and the two places it is judged.
 //
-// A parent is a pointer to another page's row, and the knowledge base is a
-// TREE only while every pointer names a page that is there, in the same
-// container, above the page rather than beneath it. A pointer that breaks any
-// of that hides the page: a tree walk from the container's top never reaches a
-// page filed under a page that does not exist, and two pages filed under each
-// other are reachable from nowhere at all — with nothing on either row to say
-// so, and no duty that would ever look.
-//
-// # The write authority refuses, inside its own snapshot
-//
-// [checkParent] runs in the decide, against the rows the decision is made
-// from, and refuses every one of the five with a remedy — so a caller that
-// names a page it mistyped, one in another space, or one it is about to file
-// its own ancestor under is told so and changes nothing.
-//
-// # The applier salvages, because two writers can still make one
-//
-// The decide sees one snapshot and the broker arbitrates each page on its own
-// subject, so two moves that are each sound — A under B on one node, B under
-// A on another — are both accepted, and so is a move under a page whose purge
-// lands between the decision and the apply. The tracker's applier states the
-// rule for a shape two concurrent writers can legally create: it APPLIES the
-// record rather than refusing it, because a refusal inside the apply
-// transaction stops that node's whole log, on every node, over one page.
-//
-// What applying MEANS here is what keeps the tree a tree: [parentFault] is
-// evaluated again at the apply, against the rows at that position — which are
-// identical on every node, so every node reaches the same answer — and a
-// parent the page cannot hold is not written. A CREATE files the page at its
-// container's top; a MOVE leaves the page under the parent it already had,
-// which was sound when its own record applied. Everything else the record
-// carries applies. The tracker raises an attention flag instead and lets a
-// repair duty write the fix; the knowledge base has neither the flag nor the
-// duty, and a page reachable from its container's top is one a person can see
-// and move, which a page in a cycle is not.
-//
-// A TRASHED parent is the one fault the applier accepts: the trash is
-// reversible, and a page under a trashed page is the state trashing a page
-// with children already leaves. Only the decide refuses to file a page there,
-// because a caller doing it deliberately is filing it somewhere nobody looks.
+// The knowledge base is a TREE only while every parent pointer names a page
+// that is there, in the same container, above the page rather than beneath it;
+// a broken one hides the page from every tree walk, with nothing on the row to
+// say so and no duty that would look. [checkParent] runs in the decide, against
+// its snapshot, and refuses each fault with a remedy. The applier salvages
+// instead (see [parentFault]).
 
 // parentFault is why a page cannot be filed under a parent.
+//
+// The applier APPLIES a record whose parent faults rather than refusing it: two
+// sound moves on two nodes (A under B, B under A) or a purge landing between
+// decide and apply can both be accepted, and a refusal in the apply transaction
+// stops that node's whole log. It re-evaluates this against the rows at its
+// position (identical on every node): a CREATE files the page at its container's
+// top, a MOVE leaves it under its old parent, the rest applies. No flag or
+// repair duty exists; a page reachable from the top can be seen and moved, one in
+// a cycle cannot. A TRASHED parent is accepted (trashing already leaves children
+// under it); only the decide refuses to file a page there.
 type parentFault string
 
 const (

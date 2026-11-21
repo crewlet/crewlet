@@ -23,48 +23,32 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The company's own chat, end to end.
-//
-// Everything below this level has its own suite: internal/chatlet certifies the
-// records, the applier, the write authority and the reader against fixtures;
-// internal/api certifies the routes and the visibility filter; internal/search
-// certifies the index. What none of them can reach is the composition, and for
-// this domain the composition is where the interesting claims live — because
-// chat is the first domain whose correctness is a statement about SEVERAL
-// NODES rather than about one:
+// The company's own chat, end to end. Chatlet, api and search have their own
+// suites; none reaches the composition, and chat's correctness is a statement
+// about SEVERAL NODES:
 //
 //   - The wake is derived from the committed record by a fleet-wide consumer,
-//     so the node that wins a message is rarely the node running the seat that
-//     gets woken. Nothing below this level has two nodes.
-//   - The per-channel sequence is MINTED BY THE APPLIER from log order. It is
-//     the one value in this domain no writer carries, so two nodes agreeing
-//     about it is not a property any unit can assert — and a divergence in it
-//     is permanent.
-//   - The retention horizon is enforced by a prune RECORD carrying the
-//     broker's own instant, precisely so that "older than a year" is one
-//     decision rather than each node's local clock. Only a fleet can show that
-//     the same rows went.
+//     so the node that wins a message is rarely the one running the woken seat.
+//   - The applier MINTS the per-channel sequence from log order, so only a
+//     fleet can show nodes agree; a divergence is permanent.
+//   - Retention is a prune RECORD carrying the broker's instant, so "older than
+//     a year" is one decision rather than each node's clock.
 //   - The delivery obligation is SOURCE-SCOPED: a turn woken in a room owes an
-//     answer IN a room, and the three posting tools are the only ones that
-//     discharge it. That runs through the real trigger, the real tool registry
-//     and the real write path or it runs nowhere.
+//     answer IN a room, discharged only by the three posting tools.
 
 // ---- what a person writes as ------------------------------------------- //
 
 // speaker is a person writing as themselves, in the one shape a person's chat
 // write takes: the `kind: human` seat they hold, as a human, through their
-// session — built by the one function the operator surface builds it with
-// ([builtin.ChatActorOf]) over the principal a person's session resolves to.
-// The act transport, the CLI and the operator's MCP surface all resolve a
-// person to it, and so does the human write surface's prune — so the same
-// actor posts here and prunes below.
+// session — built by [builtin.ChatActorOf] over the principal a person's
+// session resolves to, as the act transport, the CLI, the operator's MCP
+// surface and the prune all do, so the same actor posts and prunes.
 //
-// BENEATH THE TRANSPORT, handing the store exactly the actor the transport
-// would have resolved, because the cases that use this are about what the
-// log does with a write rather than about who may make it: the shared
-// fleet's company signs nobody in, and [say] names the operation keys a
-// case's assertions are about. A case whose subject is what a person's
-// screen does writes through the transport instead ([openRoomAs], [sayAs]).
+// BENEATH THE TRANSPORT, handing the store the actor the transport would have
+// resolved: these cases are about what the log does with a write, not who may
+// make it; the shared fleet signs nobody in, and [say] names the operation keys
+// the assertions use. A case about a person's screen writes through the
+// transport instead ([openRoomAs], [sayAs]).
 func speaker(t *testing.T, handle string) chatlet.Actor {
 	t.Helper()
 	actor, err := builtin.ChatActorOf(iam.Principal{
@@ -209,57 +193,22 @@ func posts(page chatlet.Transcript) []chatlet.MessageView {
 // IN THE SAME ROOM; EVERY MEMBER ENDS UP WITH THE SAME TRANSCRIPT; AND A PRUNE
 // TAKES THE SAME ROWS FROM EVERY MEMBER.
 //
-// A CLAIM OF [TestAFleetOfThree]'S rather than a case with a fleet of its own:
-// what it holds is a property of a running fleet, not of its boot, and a fleet
-// of its own would be a whole bring-up and teardown in the one package that
-// pays for every one. It reads only the room it makes, under a name and keys
-// no other claim uses, and the fleet's one member that runs no seats
-// ([chatWriterNode]) is stood up that way for it.
+// A claim of [TestAFleetOfThree]'s; the third destroys what the first two use.
 //
-// Three claims in one, and they cannot be separated — the first two share a
-// conversation and the third destroys it, which is the only order they can
-// run in anyway:
-//
-//  1. THE WAKE CROSSES THE FLEET. This is the whole reason a wake is derived
-//     from the durable record by a fleet-wide consumer rather than published
-//     by the writer's own goroutine: the node that wins a feed message is
-//     rarely the node running the seat that has to answer. The message is
-//     therefore posted on a member that CANNOT hold the seat, and the
-//     assertion is that the seat answered — in the room, as the room holds
-//     it — from another member.
-//  2. EVERY MEMBER MINTS ONE SEQUENCE. `channel_seq` is the one value in this
-//     domain that no record carries — the applier mints it from log order —
-//     so members agreeing about it is exactly what cannot be asserted anywhere
-//     below a fleet, and a divergence in it is permanent: every later post in
-//     the room inherits the wrong number. The seat's answer is published by a
-//     DIFFERENT member from the person's two messages, racing the second of
-//     them, and its number still has to be the one the log's order gives it.
-//  3. A PRUNE TAKES THE SAME ROWS EVERYWHERE. The horizon is enforced by a
-//     record carrying a cutoff INSTANT rather than by a sweep reading each
-//     node's own clock, and this is the difference between the two: a sweep
-//     would delete a different set on every node, for ever, and nothing would
-//     ever report it.
+//  1. THE WAKE CROSSES THE FLEET: the message is posted on a member that CANNOT
+//     hold the seat, which must answer from another one.
+//  2. EVERY MEMBER MINTS ONE SEQUENCE: the answer comes from a DIFFERENT member,
+//     racing the second message, yet its `channel_seq` follows the log's order.
+//  3. A PRUNE TAKES THE SAME ROWS EVERYWHERE: its cutoff is a record's INSTANT,
+//     not a sweep on each node's clock, which would delete a different set.
 func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c *cluster) {
-	// THE WRITER IS THE SEAT-LESS MEMBER, by name rather than by search: it
-	// is the one [TestAFleetOfThree] stands up with every role but
-	// [placement.RoleSeats], so it is the only member guaranteed not to be
-	// holding the ceo seat at any point in this claim.
+	// THE WRITER IS THE SEAT-LESS MEMBER, by name rather than by search: the
+	// one [TestAFleetOfThree] stands up with every role but
+	// [placement.RoleSeats], so the ceo seat cannot arrive on it.
 	//
-	// NOT ONE OBSERVED TO BE HOLDING NOTHING, which is what this was before
-	// the role existed, and it was flaky through four attempts to pin it by
-	// observation — a single poll, then a stability window, then asserting
-	// on any member but the writer. Placement converges while a fleet comes
-	// up, so the seat moves after any check that it has settled, and the
-	// last failure was the seat migrating ONTO the writer, where the wake
-	// then ran locally and correctly and crossed nothing:
-	//
-	//	writer=node-2; ceo is now on node-2; phases seen:
-	//	  node-0=[aux:knowledge onboarding onboarding]
-	//	  node-2=[aux:knowledge execute ... review]
-	//
-	// A member that runs no seats makes the premise a fact instead: it is a
-	// valid writer for the life of the fleet and the seat cannot arrive on
-	// it, by construction rather than by timing.
+	// Not one OBSERVED to hold nothing: placement converges while a fleet
+	// comes up, so the seat can migrate onto the writer after any check that
+	// it has settled, and the wake then runs locally and crosses nothing.
 	var writer *node
 	for _, n := range c.nodes {
 		if n.id == chatWriterNode {
@@ -270,14 +219,11 @@ func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c 
 		t.Fatalf("no member of a fleet of %d is %s, the one stood up to run "+
 			"no seats", len(c.nodes), chatWriterNode)
 	}
-	// AND THE WRITER REALLY IS HOLDING NOTHING, which the role makes true
-	// and this confirms rather than assumes. It is the premise the whole
-	// first arm rests on, and the way it fails is not a failure: if the
-	// writer also held the seat, the wake would be served by its own
-	// mailbox and the claim would pass or fail on which consumer won — a
-	// coin flip dressed as an assertion. Checked because the shape that
-	// produced it once already was coordination NOT being shared across the
-	// fleet; see [memberBootstrap]'s note.
+	// THE WRITER HOLDS NOTHING: the role makes it true and this confirms it,
+	// since the first arm rests on it. A writer that held the seat would serve
+	// the wake from its own mailbox and the claim would turn on which consumer
+	// won. Coordination not being shared across the fleet once caused exactly
+	// that; see [memberBootstrap]'s note.
 	if held := writer.engine.Node().Host().Held(); len(held) != 0 {
 		t.Fatalf("%s was stood up to run no seats and holds %v — there is "+
 			"then no member this wake has to cross to", writer.id, held)
@@ -410,21 +356,17 @@ func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c 
 		t.Fatalf("member 0 holds %v for a room three messages were said in",
 			bodies(want))
 	}
-	// THE SEQUENCE IS CONTIGUOUS, STARTS AT ONE AND FOLLOWS THE LOG, which
-	// is what a client holding 41 and handed 43 relies on to ask for 42
-	// rather than for the whole room. The first message was said before
-	// either of the others could be; the second and the seat's answer race,
-	// so each takes 2 or 3 by where the LOG put it — and a number minted
-	// from anything but log order fails one of these.
+	// THE SEQUENCE IS CONTIGUOUS, STARTS AT ONE AND FOLLOWS THE LOG, so a
+	// client holding 41 and handed 43 can ask for 42. The second message and
+	// the seat's answer race, so each takes 2 or 3 by where the LOG put it.
 	//
 	// WHERE THE LOG PUT EACH is the post's own position: the second's is its
-	// write's outcome, and the answer's is its [chatlet.MessageView.Position],
-	// which names the record that LAST changed the row — the post itself
-	// only because nothing in this claim edits, reacts to or deletes it.
+	// write's outcome, the answer's is its [chatlet.MessageView.Position], the
+	// record that LAST changed the row, which is the post itself only because
+	// nothing here edits, reacts to or deletes it.
 	//
-	// THE ROOM'S FOUNDING LINE IS ONE: its members joined, written by the
-	// record that made it, before anybody said anything, so the first
-	// message is two.
+	// THE ROOM'S FOUNDING LINE IS ONE (members joined), so the first message
+	// is two.
 	seqs := map[string]int64{}
 	for _, view := range want.Messages {
 		seqs[view.Message.ID] = view.ChannelSeq
@@ -465,16 +407,13 @@ func claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees(t *testing.T, c 
 	// (3) AND A PRUNE TAKES THE SAME ROWS FROM EVERY MEMBER.
 	//
 	// THE CUTOFF IS READ OFF THE CLOCK ONLY AFTER EVERY MEMBER HAS APPLIED
-	// THE NEWEST MESSAGE, so every message above is stored strictly before
-	// it — the instants on the rows are the BROKER's, and this is the one
-	// place that relationship has to hold for the claim to mean anything.
+	// THE NEWEST MESSAGE, so every message is stored strictly before it: the
+	// row instants are the BROKER's.
 	//
-	// AS A PERSON ([speaker]): the human write surface's prune route and
-	// `crewlet chatlet prune` write as the person or the credential that sent
-	// them, the retention duty writes as the engine itself
-	// ([chatlet.AuthorSystem]), and the prune's own guard admits those kinds and
-	// no agent. So a seat can never prune — one that could would delete a
-	// year of the company's decisions as a turn's side effect.
+	// AS A PERSON ([speaker]): the prune route and `crewlet chatlet prune`
+	// write as the person or credential that sent them, the retention duty as
+	// the engine ([chatlet.AuthorSystem]), and the guard admits no agent, so a
+	// turn can never delete a year of decisions as a side effect.
 	pruned, err := c.nodes[0].engine.ChatStore().Prune(t.Context(),
 		speaker(t, "founder"), statelog.NewOpID(time.Now(), "prune-"+made.ID),
 		made.ID, time.Now().UTC())
@@ -634,33 +573,14 @@ func ask(t *testing.T, conn *websocket.Conn, id int64, what string,
 // A PRIVATE ROOM IS NOT SERVED TO SOMEBODY WHO IS NOT IN IT, ASKED AT THE
 // SOCKET.
 //
-// # Why this is not a unit test of the filter
-//
-// Because every layer between the filter and the wire is one that can lose it,
-// and each has done so somewhere in this tree's history: a principal that
-// resolves to no seat, a question registered without its permission, a
-// transport that reduces a refusal to a code that reads as an empty room. The
-// only place all of them are live at once is a real socket on a real node, and
-// the only honest shape for the assertion is a COMPARISON — the member is
-// served the very message the non-member is refused, and the non-member is
-// served the room he IS in, the same question on the same connection.
-//
-// Without either half this case would pass identically against a node that
-// served nobody anything: a refusal on a connection that is never answered at
-// all says nothing about the filter.
-//
-// # One connection is one person
-//
-// A socket's principal is settled at its handshake and held for its life — a
-// session cookie, or a bearer — so each person here asks on a socket of their
-// own, as each person's tab does.
-//
-// # And why it is the socket's QUERY channel rather than its push
-//
-// Because they are different filters and each deserves its own subject. This
-// one is the READ path: a question asked, answered or refused. The push path —
-// a committed record becoming a frame — is
-// [TestACommittedMessageReachesAWatchingSocket] below.
+// Not a unit test of the filter: a principal resolving to no seat, a question
+// registered without its permission, or a refusal reduced to a code that reads
+// as an empty room can each lose it, and only a real socket has them all live.
+// So the assertion is a COMPARISON: the member is served the very message the
+// non-member is refused, and the non-member is served the room he IS in; a node
+// serving nobody would pass either half alone. Each person asks on a socket of
+// their own. This is the QUERY channel, not the push path
+// ([TestACommittedMessageReachesAWatchingSocket]).
 func TestAPrivateRoomIsNotServedToANonMemberOverTheSocket(t *testing.T) {
 	t.Parallel()
 	n := startNode(t, nodeSpec{company: peopleDoc, boot: withSignIn})
@@ -802,18 +722,15 @@ func (s *chatScript) tool() string {
 // chatRefusal is the engine's own words when a turn claims delivery on a
 // surface nothing was delivered on.
 //
-// THE SURFACE IS IN IT, which is the whole of what this case turns on: the
-// delivery gate compares a posting tool's declared surface against the
-// notification source the wake carried, and both sides name [chatlet.Source]. A
-// second spelling on either side does not fail — the gate finds no delivery
-// for the source, falls back to "any delivery counts", and every addressed
-// chat turn is then free to end in silence. Matching on the sentence the
-// surface-named refusal carries is how a test can see the difference.
+// THE SURFACE IS IN IT: the delivery gate compares a posting tool's declared
+// surface against the wake's notification source, both naming [chatlet.Source].
+// A second spelling on either side does not fail; the gate finds no delivery
+// for the source, falls back to "any delivery counts", and every addressed chat
+// turn may end in silence. Matching the surface-named sentence shows the
+// difference.
 //
-// THE SENTENCE IS THE RUNNER'S OWN ([runner.NotDeliveredOn]) rather than a
-// copy: a copy here lost the backticks the engine puts round the surface, so
-// the scripted model never saw the refusal and the case timed out waiting
-// for an answer it was never going to post.
+// THE SENTENCE IS THE RUNNER'S OWN ([runner.NotDeliveredOn]), not a copy,
+// which would miss the backticks the engine puts round the surface.
 var chatRefusal = runner.NotDeliveredOn(chatlet.Source)
 
 // script arms the next turn's executor.
@@ -921,21 +838,14 @@ func (m *scriptedModel) sawText(want string) bool {
 
 // A SEAT WOKEN IN A ROOM ANSWERS IN THAT ROOM, AND A REACTION DOES NOT COUNT.
 //
-// # The two halves are one turn because they are one rule
+// The reply obligation is SOURCE-SCOPED: the engine compares the surface a
+// posting tool declares with `tools.DeliversTo` against the wake's notification
+// source. Only the three posting tools carry it; a reaction obliges nothing, so
+// a thumb would leave the asker as unanswered as silence.
 //
-// The reply obligation is SOURCE-SCOPED: what a turn owes is an answer on the
-// surface the ask arrived from, and the engine decides that by comparing the
-// surface a posting tool declares with `tools.DeliversTo` against the
-// notification source the wake carried. The three posting tools carry it and
-// nothing else does — a reaction wakes nobody and obliges nothing, so a turn
-// that discharged its obligation with a thumb would leave the person who asked
-// exactly as unanswered as silence would.
-//
-// So one turn shows both directions: the seat reacts, claims delivery, is
-// refused IN THOSE WORDS, and then says something — after which the same claim
-// is accepted and the room holds its answer. A case that only asserted the
-// answer would pass on a build where the gate had fallen back to "any delivery
-// counts", which is the failure that has shipped here once already.
+// One turn shows both directions: the seat reacts, claims delivery, is refused
+// IN THOSE WORDS, then says something, and the same claim is accepted. Asserting
+// only the answer would pass on a gate fallen back to "any delivery counts".
 func TestASeatAnswersWhereItWasAsked(t *testing.T) {
 	t.Parallel()
 	n := start(t)
@@ -1028,19 +938,15 @@ func TestASeatAnswersWhereItWasAsked(t *testing.T) {
 // A PERSON IS NEVER ANSWERED BY SILENCE, AND A PERSON'S `@channel` IS A
 // REQUEST.
 //
-// The two failures these hold shut, as a person met them: they posted in a
-// room made by hand, its agents members who follow nothing in particular, and
-// named nobody, and nothing was woken and nothing said so; and their
-// `@channel` reached every agent as news, which each was told to leave alone.
-// Now the first wakes the room's answerer, its most senior agent member, and
-// the second asks every agent in the room, and both oblige an answer.
+// Two failures held shut: a post naming nobody in a hand-made room woke
+// nothing, and an `@channel` reached every agent as news to leave alone. Now
+// the first wakes the room's answerer, its most senior agent member, the second
+// asks every agent in the room, and both oblige an answer.
 //
-// THE ANSWER IN THE ROOM IS THE ASSERTION, and it is evidence of the obligation
-// rather than of the wake alone: the scripted seat posts only after the engine
-// refuses its claim to have delivered with nothing said, and the engine
-// refuses that claim only on a turn the routing addressed. A seat woken as
-// news ends on the claim, and the room holds no answer. The seat is also
-// shown why, in the routing's own words.
+// THE ANSWER IN THE ROOM IS THE ASSERTION, evidence of the obligation and not
+// of the wake alone: the scripted seat posts only after the engine refuses its
+// empty claim of delivery, which it does only on a turn the routing addressed.
+// A seat woken as news ends on the claim. It is also shown the routing's reason.
 func TestAPersonIsNeverAnsweredBySilence(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1105,19 +1011,12 @@ func TestAPersonIsNeverAnsweredBySilence(t *testing.T) {
 // — the one every node that reads this log holds — and hands back the stop so
 // a case can end one and start the next.
 //
-// It is the one thing [startNode] cannot do: that fixture takes its own
-// temporary directories and registers its teardown for the end of the test,
-// which is right for every case whose node lives as long as the case — and
-// impossible for one whose subject is what a SECOND node makes of the first
-// one's log. No API, because nothing here reads through one — and so no
-// bridge, [nodeOptions]' "" for a node that serves none: no seat takes a
-// turn here, so nothing launches a box that would dial one.
-//
-// BUILT AS EVERY OTHER NODE HERE IS ([bootNodeWith] over [nodeOptions]): the
-// harness's activation instant, its own environment rather than the process's,
-// a store seeded from the migrated image and its chat hub beside its engine.
-// The seed leaves a file that is already there alone, so a path booted twice
-// reopens its own estate.
+// What [startNode] cannot do: it takes its own temporary directories and tears
+// down at the end of the test, which cannot serve a case about what a SECOND
+// node makes of the first one's log. No API and so no bridge ([nodeOptions]'
+// ""): no seat takes a turn, so nothing launches a box that would dial one.
+// Otherwise built as every other node here ([bootNodeWith]); the seed leaves an
+// existing file alone, so a path booted twice reopens its own estate.
 func coldEngine(t *testing.T, nodeID, storePath, streamDir string, ring keyring) (
 	*node, func()) {
 
@@ -1156,37 +1055,15 @@ func coldEngine(t *testing.T, nodeID, storePath, streamDir string, ring keyring)
 // A NODE THAT WAS NOT RUNNING WHILE A ROOM FILLED UP DERIVES THE SAME
 // TRANSCRIPT FROM THE LOG, SEQUENCE AND POSITION INCLUDED.
 //
-// # What this adds over the fleet's claim
+// Unlike the fleet's claim, whose members apply side by side, this is an
+// applier starting from NOTHING against a log already holding a conversation.
+// `channel_seq` is minted from LOG ORDER, so a catching-up node must arrive at
+// the numbers its predecessor minted live, or it never converges.
 //
-// [claimAMessageOnOneNodeWakesASeatOnAnotherAndTheFleetAgrees] has every member
-// applying side by side from the moment any of them writes anything, so every
-// record reaches them within a batch of each other. What it cannot show is the
-// state this domain is most exposed by: an applier starting from NOTHING
-// against a log that already holds a room and a conversation. `channel_seq` is
-// minted from LOG ORDER rather than carried, so a node catching up has to
-// arrive at the numbers its predecessor minted live — and a node that arrives
-// at different ones never converges, with every later message in that room
-// inheriting the difference.
-//
-// # Why it is one engine after another rather than a member of a fleet
-//
-// Because what is under test is the APPLIER, and an applier's input is the log
-// rather than whoever wrote it. A node added to a company whose log has been
-// written and never trimmed sits one below the first record, so it replays
-// from there rather than asking a peer for a snapshot (the engine's "why a
-// fresh node does not join") — the same path whether the records were
-// published by a peer that is still running or by an engine that has since
-// stopped. One machine states exactly that: the company talks, that node goes
-// away, and a node with an EMPTY ESTATE comes up on the same log and has to
-// derive the lot. Its own node id is what makes it a new arrival rather than a
-// restart: the durable consumer is named after the node, so a fresh name reads
-// the log from the beginning, which is exactly what a node joining a running
-// company does.
-//
-// A fleet would add nothing the claim does not already hold — records crossing
-// members through a quorum — and would cost what this package pays most for:
-// a cluster brought up, and a member taken away and replaced while the other
-// two keep their quorum, where this runs beside every other single-node case.
+// One engine after another, not a fleet: the APPLIER's input is the log, and a
+// node added to an untrimmed log replays from the first record rather than
+// taking a snapshot. A new node id makes it an arrival, since the durable
+// consumer is named after the node. A fleet would only add quorum crossing.
 func TestANodeThatWasNotRunningCatchesUpOnTheRoom(t *testing.T) {
 	t.Parallel()
 	// ONE STREAM DIRECTORY, TWO ESTATES: the log is the company's and
@@ -1287,45 +1164,15 @@ func dialAs(t *testing.T, n *node, b *browser) *websocket.Conn {
 // A COMMITTED MESSAGE REACHES A SOCKET WATCHING THE ROOM, AND A PRIVATE ROOM'S
 // RECORDS REACH NO SOCKET OUTSIDE IT.
 //
-// # What this is actually asserting
+// The push path has four hand-offs, each a place the frame can be lost: the
+// applier commits, announces to its [chatlet.Observer], the hub decides per
+// watcher whether that viewer may see the room, the frame reaches the wire.
+// Each person dials their own socket ([dialAs]); Bob's frame is matched by his
+// write's id.
 //
-// The whole push path, which is four hand-offs and no fewer: the applier
-// commits a batch, announces it to its [chatlet.Observer], the hub decides per
-// watcher whether that viewer may see the room, and the frame reaches the wire.
-// Every one of them is a place the frame can be lost, and the first was lost
-// for the entire life of this feature — the engine built its applier with a
-// nil observer and no process ever supplied one, so nothing committed here
-// became a frame anywhere.
-//
-// That is why this is an e2e case rather than a unit test of the hub. The hub's
-// own suite already proves it fans out what it is given, against rooms of its
-// own; what nobody could prove without a running node is that anything ever
-// gives it anything — or that the decision it makes per watcher is made over
-// the node's real rooms (the router's, which [api.NewEngineChatLive] hands the
-// hub) rather than over a reader that answers yes.
-//
-// # Why each person dials their own socket
-//
-// See [dialAs]. A push is decided per recipient, so the identity has to exist
-// before the frame does, and it is the handshake's.
-//
-// # And why the message is somebody else's, said from their own tab
-//
-// Because that is the frame a watching tab exists for, and the one only the
-// per-recipient decision can deliver: Bob says it, through the act transport
-// as his dashboard would, and Alice's socket is told — about Bob's message,
-// by the id the engine handed BOB, which is the one thing that ties the frame
-// to the write rather than to any post in the room.
-//
-// # And what Bob's own tab is never told
-//
-// Before he speaks, Alice makes a private room with nobody else in it and says
-// something there. Bob's tab is watching too, and the assertion is an ORDERED
-// ABSENCE: his socket is read until his own message's frame arrives, and no
-// frame before it may name her room. The hub announces records in log order
-// and hers are below his, so a filter that let them through would have put
-// them on his socket first — and an absence asserted without the frame that
-// bounds it would pass on a socket that was simply never sent anything.
+// On Bob's tab the assertion is an ORDERED ABSENCE: Alice's private room is said
+// in before he speaks, his socket is read until his own frame arrives, and no
+// earlier frame may name her room; without the bounding frame it proves nothing.
 func TestACommittedMessageReachesAWatchingSocket(t *testing.T) {
 	t.Parallel()
 	n := startNode(t, nodeSpec{company: peopleDoc, boot: withSignIn})

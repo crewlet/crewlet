@@ -41,3 +41,23 @@ type UploadReservations interface {
 	// 0 removes nothing.
 	DeleteUploadRecord(ctx context.Context, upload string, revision uint64) (bool, error)
 }
+
+// SaveAllowances is where the fleet keeps each seat's ledger of the executor
+// sessions its runs saved as they worked (internal/sandbox): one value per
+// seat, opaque here, written by compare-and-set, in the uploads bucket beside
+// the [UploadReservations], whose age is the hold it needs. Every error is
+// UNKNOWN. The package doc says why the whole company agrees on it and why it
+// lives in that bucket.
+type SaveAllowances interface {
+	// SaveLedger reads one seat's save ledger and the revision it was read
+	// at: nil and 0 where none is written, or where the last one aged out.
+	// An empty seat is refused.
+	SaveLedger(ctx context.Context, seat string) ([]byte, uint64, error)
+
+	// SwapSaveLedger writes one seat's save ledger only while it is still
+	// at revision (0 creating it, refused where a ledger is there),
+	// answering the revision it wrote. Zero with no error is a LOST RACE:
+	// another save moved the ledger since it was read, and the caller reads
+	// it again and decides again. An empty seat or value is refused.
+	SwapSaveLedger(ctx context.Context, seat string, value []byte, revision uint64) (uint64, error)
+}

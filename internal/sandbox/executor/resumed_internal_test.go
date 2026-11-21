@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -87,7 +86,9 @@ func cntThread(lines ...string) string { return strings.Join(lines, "\n") + "\n"
 // cntCount is what the count reads of lines.
 func cntCount(lines ...string) *sandbox.ResumedCount {
 	var r resumedReading
-	walkThread(context.Background(), strings.NewReader(cntThread(lines...)), threadPlainMax, &r)
+	var large passBudget
+	defer large.release()
+	walkThread(context.Background(), strings.NewReader(cntThread(lines...)), threadPlainMax, &large, &r)
 	return r.count(0)
 }
 
@@ -249,7 +250,7 @@ func TestTheTailIsChargedAtTheHarnessesLowestRate(t *testing.T) {
 		`"media_type":"text/plain","data":"`+strings.Repeat("a", 3000)+`"}}]`)
 	var r resumedReading
 	walkThread(t.Context(), strings.NewReader(cntThread(cntUser("", "u1", `"the brief"`),
-		cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), document)), threadPlainMax, &r)
+		cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), document)), threadPlainMax, testPass(t), &r)
 	if want := int64(len(document)+2) / 2; r.tail != want || r.tail < 1500 {
 		t.Errorf("the document's line is charged %d tokens, want %d, at least 1,500", r.tail, want)
 	}
@@ -394,7 +395,7 @@ func TestALineThatIsNoRecordLeavesNoCount(t *testing.T) {
 	walkThread(t.Context(), strings.NewReader(cntThread(cntUser("", "u1", `"the brief"`),
 		cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50), cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`),
 		`not a record`, cntAnchor("u4", "u5", "m2", 2000, 0, 0, 50))),
-		threadPlainMax, &count, &figure)
+		threadPlainMax, testPass(t), &count, &figure)
 	wantMark(t, count.count(0), sandbox.CountUnread)
 	if got := figure.context(); got != 2000 {
 		t.Errorf("the floor's figure is %d, want the last reply's 2,000", got)
@@ -413,7 +414,7 @@ func TestATornLastPieceIsNoLine(t *testing.T) {
 	)
 	body := cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50)) +
 		cntAnchor("u2", "u3", "m2", 2000, 0, 0, 50)
-	walkThread(t.Context(), strings.NewReader(body), threadPlainMax, &count, &figure)
+	walkThread(t.Context(), strings.NewReader(body), threadPlainMax, testPass(t), &count, &figure)
 	wantBound(t, count.count(0), 1050)
 	if got := figure.context(); got != 1000 {
 		t.Errorf("the floor's figure is %d, want the last whole reply's 1,000", got)
@@ -431,7 +432,7 @@ func TestAThreadPastItsBoundLeavesNoCount(t *testing.T) {
 	body := cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1000, 0, 0, 50),
 		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`), cntAnchor("u4", "u5", "m2", 700, 0, 0, 30))
 	var r resumedReading
-	walkThread(t.Context(), strings.NewReader(body), int64(len(body)-1), &r)
+	walkThread(t.Context(), strings.NewReader(body), int64(len(body)-1), testPass(t), &r)
 	wantMark(t, r.count(0), sandbox.CountUnread)
 }
 
@@ -481,7 +482,7 @@ func TestOneWalkHandsEveryReadingEveryLine(t *testing.T) {
 	body := cntThread(cntUser("", "u1", `"the brief"`), `not a record`, cntAnchor("u1", "u2", "m1", 1, 0, 0, 1))
 	source := &countingReader{r: strings.NewReader(body)}
 	var a, b readings
-	walkThread(t.Context(), source, threadPlainMax, &a, &b)
+	walkThread(t.Context(), source, threadPlainMax, testPass(t), &a, &b)
 	if fmt.Sprint(a.lines) != "[1 -2 3]" || fmt.Sprint(b.lines) != fmt.Sprint(a.lines) || a.ends != 1 || b.ends != 1 {
 		t.Errorf("the readings were handed %v and %v, ending %d and %d times; want both [1 -2 3], once",
 			a.lines, b.lines, a.ends, b.ends)
@@ -515,8 +516,8 @@ func TestTheMetersFloorFigureIsWhatTheLayerReadsOfAReply(t *testing.T) {
 	t.Parallel()
 	meter := func(t *testing.T, body string) (int64, *sandbox.ResumedCount) {
 		t.Helper()
-		figure, count, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, body)), ctSession,
-			"2.1.310")
+		figure, count, _, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, body)), ctSession,
+			"2.1.310", testPass(t))
 		if err != nil {
 			t.Fatalf("meterArchive: %v", err)
 		}
@@ -578,7 +579,7 @@ func TestTheCaptureCountsTheSessionItKeeps(t *testing.T) {
 	result := cntUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
 	archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50),
 		result))
-	meter := newContextMeter(t.Context(), archiveTar, ctSession, "2.1.322")
+	meter := newContextMeter(t.Context(), archiveTar, ctSession, "2.1.322", new(passBudget))
 	_, _ = meter.Write(archive)
 	meter.finish(nil)
 	wantBound(t, meter.count(), 150+cntCharge(result))
@@ -595,7 +596,7 @@ func TestAPrecompactMemberMarksTheCapturesCount(t *testing.T) {
 	for _, name := range saved {
 		archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1, 0, 0, 1)),
 			tarMember{h: tar.Header{Name: name, Mode: 0o600, Typeflag: tar.TypeReg}, body: "{}"})
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310")
+		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310", testPass(t))
 		if err != nil {
 			t.Fatalf("meterArchive: %v", err)
 		}
@@ -623,7 +624,7 @@ func TestAnArchiveTheLayerGivesNoReadingLeavesNoCount(t *testing.T) {
 	} {
 		archive := cntArchive(t, body, tarMember{h: tar.Header{Name: extra, Mode: 0o600, Typeflag: tar.TypeReg},
 			body: body})
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310")
+		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, "2.1.310", testPass(t))
 		if err != nil {
 			t.Fatalf("%s: meterArchive: %v", name, err)
 		}
@@ -644,7 +645,7 @@ func TestAWriterBelowTheCountFloorLeavesNoCount(t *testing.T) {
 	archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 1, 0, 0, 1),
 		cntBoundary("b1"), cntUser("b1", "u4", `"the summary"`), cntAnchor("u4", "u5", "m2", 1, 0, 0, 1)))
 	for _, release := range []string{"2.1.300", ""} {
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, release)
+		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(archive), ctSession, release, testPass(t))
 		if err != nil {
 			t.Fatalf("meterArchive: %v", err)
 		}
@@ -776,7 +777,8 @@ func TestAReadCutShortBetweenLinesLeavesNoCount(t *testing.T) {
 	defer cancel()
 	var r resumedReading
 	walkThread(ctx, twoLines{body: strings.NewReader(cntThread(cntBoundary("b1"),
-		cntAnchor("b1", "u2", "m1", 100, 0, 0, 50)))}, threadPlainMax, cancelling{cancel: cancel}, &r)
+		cntAnchor("b1", "u2", "m1", 100, 0, 0, 50)))}, threadPlainMax, testPass(t), cancelling{cancel: cancel},
+		&r)
 	wantMark(t, r.count(0), sandbox.CountUnread)
 }
 
@@ -793,27 +795,27 @@ func TestAThreadWithNoChainedLineLeavesNoCount(t *testing.T) {
 		"bookkeeping alone": cntThread(cntBookkeeping),
 	} {
 		var r resumedReading
-		walkThread(t.Context(), strings.NewReader(body), threadPlainMax, &r)
+		walkThread(t.Context(), strings.NewReader(body), threadPlainMax, testPass(t), &r)
 		if got := r.count(0); got == nil || got.Mark != sandbox.CountUnread || got.Restart != nil {
 			t.Errorf("%s: the count is %+v, want unread, naming no restart", name, got)
 		}
 	}
 }
 
-// ONLY CLAUDE CODE READS A MAIN THREAD: another harness's runner answers no
-// reading.
+// EACH RUNNER READS ITS OWN HARNESS'S SESSION: a Claude Code runner its main
+// thread, and an OpenCode runner the export its job's script left, never the
+// other's file, so a box holding a Claude Code thread and no export is no
+// count of an OpenCode session.
 //
-// Mutation: read every harness's thread, and this goes red.
-func TestOnlyClaudeCodeReadsAMainThread(t *testing.T) {
+// Mutation: read a Claude Code thread for an OpenCode runner, and this goes
+// red.
+func TestEachRunnerReadsItsOwnHarnesssSession(t *testing.T) {
 	t.Parallel()
 	box, _ := cntBox(cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50)), nil)
-	ask := sandbox.MainThreadAsk{Session: ctSession, Release: "2.1.322", Count: true}
-	if got := New(OpenCode{}).ReadMainThread(t.Context(), box, ask); got.Count != nil {
-		t.Errorf("an OpenCode runner counts %+v, want no reading", got.Count)
-	}
-	if got := New(ClaudeCode{}).ReadMainThread(t.Context(), box, ask); got.Count == nil {
-		t.Error("a Claude Code runner reads no count")
-	}
+	ask := sandbox.MainThreadAsk{Session: ctSession, Release: "2.3.0", Count: true}
+	wantMark(t, New(OpenCode{}).ReadMainThread(t.Context(), box, ask).Count, sandbox.CountUnread)
+	ask.Release = "2.1.322"
+	wantBound(t, New(ClaudeCode{}).ReadMainThread(t.Context(), box, ask).Count, 150)
 }
 
 // THE REPORTED WINDOW IS THE LEAST ITS RUN REPORTED, over every model of every
@@ -945,7 +947,7 @@ func TestTheCountKeepsNoRestartsUUIDPastAnIdentitysBytes(t *testing.T) {
 		long + `"}`
 	var r resumedReading
 	walkThread(t.Context(), strings.NewReader(cntThread(cntUser("", "u1", `"the brief"`), boundary,
-		cntUser(long, "u4", `"s"`), cntAnchor("u4", "u5", "m2", 70, 0, 0, 30))), threadPlainMax, &r)
+		cntUser(long, "u4", `"s"`), cntAnchor("u4", "u5", "m2", 70, 0, 0, 30))), threadPlainMax, testPass(t), &r)
 	if len(r.newest) > sandbox.RestartIDMaxBytes || !r.flagged {
 		t.Errorf("the count keeps a restart of %d bytes (flagged %v), want at most %d", len(r.newest), r.flagged,
 			sandbox.RestartIDMaxBytes)
@@ -1000,9 +1002,9 @@ func TestACountMarkedForWhatItsBytesCannotBoundNamesItsRestart(t *testing.T) {
 		`"role":"assistant","context_management":{"applied_edits":[{"type":"clear_tool_uses_20250919",`+
 			`"cleared_tool_uses":3,"cleared_input_tokens":9000}]},`, 1)
 	saved, _ := claudePrecompact(ctSession)
-	_, precompacted, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(restarted...),
+	_, precompacted, _, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(restarted...),
 		tarMember{h: tar.Header{Name: saved[0], Mode: 0o600, Typeflag: tar.TypeReg}, body: "{}"})), ctSession,
-		"2.1.322")
+		"2.1.322", testPass(t))
 	if err != nil {
 		t.Fatalf("meterArchive: %v", err)
 	}
@@ -1056,8 +1058,8 @@ func TestAMarkedCaptureStillSaysWhetherAJobRestartedItsSession(t *testing.T) {
 	// the collection read's count of the box's copy.
 	captured := func(lines ...string) *sandbox.ResumedCount {
 		t.Helper()
-		_, count, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(lines...))), ctSession,
-			"2.1.322")
+		_, count, _, err := meterArchive(t.Context(), bytes.NewReader(cntArchive(t, cntThread(lines...))), ctSession,
+			"2.1.322", testPass(t))
 		if err != nil || count == nil || count.Mark != sandbox.CountMedia {
 			t.Fatalf("the capture counts %+v (%v), want the mark media", count, err)
 		}
@@ -1127,12 +1129,33 @@ func benchLines(plain int) []byte {
 }
 
 // BenchmarkTheMeterAtItsBounds measures the take's meter (one walk of a kept
-// main thread for the floor's figure and the count) against the take's scrub of
-// the same archive, at a 32 MiB archive's plaintext (about 118 MiB): fed by the
-// take's pipe, the meter must take no longer than the scrub.
+// main thread for the floor's figure, the count and the next request's
+// estimate) against the take's scrub of the same archive, at a 32 MiB
+// archive's plaintext (about 118 MiB): fed by the take's pipe, the meter must
+// take no longer than the scrub. Of ordinary lines, and of
+// results of text blocks, each an element the estimate walks; and an OpenCode
+// export's meter against the walk it kept before ([benchExportMeter]). Each
+// case builds its archive inside its own run, so a run of one holds no other.
 func BenchmarkTheMeterAtItsBounds(b *testing.B) {
+	b.Run("claude_code", func(b *testing.B) {
+		benchMeterAndScrub(b, benchLines(118<<20))
+	})
+	b.Run("claude_code_text_blocks", func(b *testing.B) {
+		blocks := `[{"type":"tool_result","tool_use_id":"toolu_1","content":[` +
+			strings.Repeat(`{"type":"text","text":"a few words of a tool's output"},`, 2000) + `""]}]`
+		var body bytes.Buffer
+		for n := 0; body.Len() < 118<<20; n += 2 {
+			body.WriteString(cntUser(fmt.Sprintf("u%d", n), fmt.Sprintf("u%d", n+1), blocks) + "\n")
+		}
+		benchMeterAndScrub(b, body.Bytes())
+	})
+	b.Run("opencode", benchExportMeter)
+}
+
+// benchMeterAndScrub measures the meter and the scrub of an archive of body,
+// the main thread.
+func benchMeterAndScrub(b *testing.B, body []byte) {
 	thread, _ := claudeMainThread(ctSession)
-	body := benchLines(118 << 20)
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(zw)
@@ -1153,8 +1176,8 @@ func BenchmarkTheMeterAtItsBounds(b *testing.B) {
 	b.Logf("an archive of %d bytes, %d of plaintext", len(archive), len(body))
 	b.Run("meter", func(b *testing.B) {
 		for b.Loop() {
-			if _, count, err := meterArchive(b.Context(), bytes.NewReader(archive), ctSession,
-				"2.1.322"); err != nil || count == nil {
+			if _, count, _, err := meterArchive(b.Context(), bytes.NewReader(archive), ctSession,
+				"2.1.322", testPass(b)); err != nil || count == nil {
 				b.Fatalf("meterArchive: %v", err)
 			}
 		}
@@ -1163,7 +1186,7 @@ func BenchmarkTheMeterAtItsBounds(b *testing.B) {
 		for b.Loop() {
 			reopen := func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(archive)), nil }
 			if err := scrubArchive(archiveTar, bytes.NewReader(archive), reopen, io.Discard,
-				newScrubber([]string{"sk-ant-not-real-secret"}), boundsFor(executorkeep.SessionMaxBytes)); err != nil {
+				newScrubber([]string{"sk-ant-not-real-secret"}), plainBounds(scrubPlainMax)); err != nil {
 				b.Fatalf("scrubArchive: %v", err)
 			}
 		}
@@ -1188,19 +1211,81 @@ func (r *repeating) Read(p []byte) (int, error) {
 }
 
 // BenchmarkTheMainThreadReadAtItsBound measures the collection's walk, with the
-// count's reading, of a main thread at [threadPlainMax] (a quarter gibibyte) on
-// the engine host: the ground for internal/sandbox's MainThreadReadWait, which
-// holds twice this figure on a loaded host within its fifteen seconds.
+// count's reading, of a main thread at its bounds on the engine host: ordinary
+// lines to [threadPlainMax] (a quarter gibibyte); a line of one result whose
+// content is text blocks to that bound, the slowest shape a session writes and
+// the ground for internal/sandbox's MainThreadReadWait, which holds twice it
+// with the next request's estimate, with headroom; the slowest measured, a line
+// of blocks of an empty kind, a result of empty strings, and lines of such
+// blocks to both bounds at once, which no release writes; and tiny lines to
+// [threadLinesMax]. Each case runs with the count alone, and as _next with the
+// next request's estimate beside it ([nextReading]), which a collection asks.
 func BenchmarkTheMainThreadReadAtItsBound(b *testing.B) {
 	lines := benchLines(1 << 20)
 	lines = lines[bytes.IndexByte(lines, '\n')+1:]
-	whole := threadPlainMax - threadPlainMax%int64(len(lines))
-	for b.Loop() {
-		var r resumedReading
-		walkThread(b.Context(), &repeating{lines: lines, left: whole}, threadPlainMax, &r)
-		if r.unread {
-			b.Fatal("the thread was not read whole")
+	tiny := []byte(`{"type":"x"}` + "\n")
+	const block = `{"type":""},`
+	head := `{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":[`
+	tail := block[:len(block)-1] + `]},"uuid":"u1","version":"2.1.310"}` + "\n"
+	blocks := (threadPlainMax - int64(len(head)+len(tail))) / int64(len(block))
+	// short is a record of such blocks of the length at which [threadLinesMax]
+	// of them fill [threadPlainMax].
+	short := []byte(head + strings.Repeat(block, int(threadPlainMax/threadLinesMax-int64(len(head)+len(tail)))/
+		len(block)) + tail)
+	result := head + `{"type":"tool_result","tool_use_id":"toolu_1","content":[`
+	resultTail := `""]}]},"uuid":"u1","version":"2.1.310"}` + "\n"
+	elements := func(element string) func() io.Reader {
+		n := (threadPlainMax - int64(len(result)+len(resultTail))) / int64(len(element))
+		return func() io.Reader {
+			return io.MultiReader(strings.NewReader(result), &repeating{lines: []byte(element),
+				left: n * int64(len(element))}, strings.NewReader(resultTail))
 		}
 	}
-	b.SetBytes(whole)
+	type benchCase struct {
+		name   string
+		thread func() io.Reader
+		whole  int64
+	}
+	cases := []benchCase{
+		{"ordinary_lines", func() io.Reader {
+			return &repeating{lines: lines, left: threadPlainMax - threadPlainMax%int64(len(lines))}
+		}, threadPlainMax - threadPlainMax%int64(len(lines))},
+		{"a_line_of_blocks_to_the_bound", func() io.Reader {
+			return io.MultiReader(strings.NewReader(head), &repeating{lines: []byte(block),
+				left: blocks * int64(len(block))}, strings.NewReader(tail))
+		}, int64(len(head)+len(tail)) + blocks*int64(len(block))},
+		{"lines_of_blocks_to_both_bounds", func() io.Reader {
+			return &repeating{lines: short, left: threadLinesMax * int64(len(short))}
+		}, threadLinesMax * int64(len(short))},
+		{"tiny_lines_to_the_lines_bound", func() io.Reader {
+			return &repeating{lines: tiny, left: threadLinesMax * int64(len(tiny))}
+		}, threadLinesMax * int64(len(tiny))},
+		{"a_result_of_text_blocks_to_the_bound", elements(`{"type":"text","text":"a"},`), threadPlainMax},
+		{"a_result_of_empty_strings_to_the_bound", elements(`"",`), threadPlainMax},
+	}
+	for _, bc := range cases {
+		for _, next := range []bool{false, true} {
+			name := bc.name
+			if next {
+				name += "_next"
+			}
+			b.Run(name, func(b *testing.B) {
+				for b.Loop() {
+					var (
+						r resumedReading
+						n nextReading
+					)
+					readings := []threadReading{&r}
+					if next {
+						readings = append(readings, &n)
+					}
+					walkThread(b.Context(), bc.thread(), threadPlainMax, testPass(b), readings...)
+					if r.unread || next && n.unread {
+						b.Fatal("the thread was not read whole")
+					}
+				}
+				b.SetBytes(bc.whole)
+			})
+		}
+	}
 }

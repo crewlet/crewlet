@@ -110,18 +110,13 @@ func TestEveryAppRowAdmitsAHolderAndRefusesANonHolder(t *testing.T) {
 // [authz.ClassAnyApp] admits on any ONE of its row's apps ([authz.AnyOf]) and
 // on nothing else, so a holder of an app the gesture draws nothing from is
 // refused, and the refusal names exactly the set. Every such row names at
-// least two apps — one would be [authz.ClassApp] spelt another way — each a
-// real app, none twice; and a row of any other class names none, since no
-// other class reads it and a set there would be a decision nobody consults.
-// Walked as a person bound to a seat, so a seated row is decided on its class.
+// least two apps (one is [authz.ClassApp] spelt another way), each real, none
+// twice; any other class names none, since nothing would consult it.
 //
-// THE OUTSIDE-THE-SET HALF is the case the class used to get wrong, iterating
-// [iam.Apps]: chat is an app no any-app row draws on, and that reading admitted
-// a holder of chat alone to a search of the tracker and the knowledge base — a
-// search of nothing they may read. The walk fails if no app falls outside
-// every set, because the half is then vacuous and certifies nothing.
-// Mutation: decide the class over iam.Apps again, and the chat holder goes
-// red.
+// THE OUTSIDE-THE-SET HALF: chat is an app no any-app row draws on, and
+// deciding over [iam.Apps] admitted a chat-only holder to a tracker and
+// knowledge-base search. The walk fails if no app falls outside every set.
+// Mutation: decide the class over iam.Apps again and the chat holder goes red.
 func TestAnAnyAppRowNamesItsOwnSetOfApps(t *testing.T) {
 	t.Parallel()
 	walked, outside := 0, 0
@@ -346,17 +341,16 @@ func TestAnUnresolvedTidyAsksForTheRow(t *testing.T) {
 
 // AN UNREAD REMARK IS ADMIN'S, OR READ AND DECIDED AGAIN.
 //
-// An authored verb asked before anybody has read the remark — a person's
-// surface asking what to offer, a moderator about to take a message down in a
-// room they are not in — names no author. Admin is admitted there and then:
-// the admin path needs no author, and a moderator who had to read a private
-// room's message to learn who wrote it could not delete it at all. A caller
-// holding the app is told to read the remark and decide again on its author
+// An authored verb asked before anybody has read the remark (a surface asking
+// what to offer, a moderator removing a message in a room they are not in)
+// names no author. Admin is admitted there and then: a moderator who had to
+// read a private room's message to learn its author could not delete it. A
+// caller holding the app is told to read the remark and decide again
 // ([authz.ErrUnresolved]); one without it is refused naming the app before
-// anything is read; and an author left empty on a remark somebody DID read is
-// still unnamed. Walked over every AUTHORED row. Mutation: drop the unresolved
-// arm and the holder is refused unnamed, so no person's surface offers an
-// edit, and admin is refused a moderation it may make.
+// anything is read; an empty author on a remark somebody DID read is still
+// unnamed. Walked over every AUTHORED row. Mutation: drop the unresolved arm
+// and the holder is refused unnamed, so no surface offers an edit, and admin
+// is refused a moderation it may make.
 func TestAnUnreadRemarkIsAdminsOrReadFirst(t *testing.T) {
 	t.Parallel()
 	walked := 0
@@ -474,20 +468,16 @@ func TestShowsFollowsTheKindsApp(t *testing.T) {
 
 // A CHART THAT CANNOT ANSWER CANNOT ADMIT A CALLER THE APP REFUSES.
 //
-// Every arm of a row that names an app needs the app — the owner's, a lead's
-// and an author's beside their relation, and the admin path through
-// [iam.Expand], which is decided before the chart — so for a caller holding
-// no app the answer is no whatever the chart would have said. Answered
-// unknown it was a 503 telling them to come back to a refusal, for as long as
-// the node could not read its chart (applying a revision, or running none).
-// Walked over EVERY row that names an app, on an object somebody else owns,
-// wrote and leads, resolved and not; the one unknown a caller without the app
-// may still be answered is the asked arm's "read the item", because being
-// asked admits without the app. The named cases pin the refusal to exactly
-// the app, and the CONTROL is the same calls from a caller holding it, for
-// whom the chart's answer IS the decision and so stays unknown. Mutation:
-// convert only an [authz.ErrUnresolved] in withApp, as it once did, and every
-// relation row reading the chart goes red.
+// Every arm of a row naming an app needs the app (owner, lead and author beside
+// their relation, and the admin path through [iam.Expand], decided before the
+// chart), so for a caller without it the answer is no whatever the chart would
+// have said; answered unknown, it is a 503 while the node cannot read its
+// chart. Walked over EVERY row naming an app, on an object somebody else owns,
+// wrote and leads, resolved and not; the one unknown such a caller may still
+// get is the asked arm's "read the item". The CONTROL is the same calls from a
+// holder of the app, for whom the chart's answer IS the decision. Mutation:
+// convert only an [authz.ErrUnresolved] in withApp and every relation row
+// reading the chart goes red.
 func TestAChartThatCannotAnswerCannotAdmitACallerWithoutTheApp(t *testing.T) {
 	t.Parallel()
 	down := chart{err: errors.New("the chart could not be read")}

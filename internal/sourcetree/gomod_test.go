@@ -12,30 +12,17 @@ import (
 )
 
 // NO PACKAGE PATTERN READS A DEPENDENCY INSTALL AS THIS MODULE'S: handed this
-// repository's own go.mod, the go command lists the packages [Walk] hands
-// over and none that a `node_modules` holds, wherever the install sits.
+// repository's own go.mod, the go command lists what [Walk] hands over and
+// nothing a `node_modules` holds.
 //
-// The guards read this tree through the walk, but `go vet ./...`, `go build
-// ./...`, golangci-lint and internal/solo/partition read it through the go
-// command, whose `...` steps over only names starting with `.` or `_`,
-// `vendor` and testdata, and a directory holding a go.mod of its own. An npm
-// package can ship Go without a go.mod, and flatted does: once `npm ci` had
-// run in dashboard/, every one of those took flatted in, so golangci-lint
-// failed the second `make check` of a fresh checkout on the package comment
-// flatted does not have, and `make test` compiled and ran it. CI's Go jobs run
-// where no install has, so only a contributor's gate ever saw it. The rule
-// therefore sits in go.mod, as `ignore node_modules`, where every command that
-// expands a pattern reads it, and this holds that line to the walk's rule in
-// both directions by taking the walk's answer as the want: an anchored
-// `ignore ./dashboard/node_modules` lists the other two installs, and a walk
-// that started reading installs would list what go.mod leaves out.
-//
-// The module is a temporary one: the repository's real go.mod, a package of
-// this tree, and an install at the root (where a node tool run from there
-// writes one), in dashboard/ at the incident's own path, and below a package
-// of the tree. Every package imports nothing, so the listing reads no go.sum
-// and no module, and with GOPROXY off a listing that wanted one fails here
-// rather than fetching it.
+// `go vet ./...`, golangci-lint and internal/solo/partition use the go
+// command, whose `...` skips only `.`/`_` names, `vendor`, testdata and a
+// directory with its own go.mod. An npm package can ship Go without one
+// (flatted does), so after `npm ci` in dashboard/ they took it in. The rule is
+// go.mod's `ignore node_modules`; this takes the walk's answer as the want, so
+// an anchored `ignore ./dashboard/node_modules` lists the other two installs.
+// Installs sit at the root, in dashboard/ and below a package; with GOPROXY
+// off, a listing wanting a module fails, not fetches.
 func TestNoPackagePatternReadsADependencyInstall(t *testing.T) {
 	t.Parallel()
 	gomod, err := os.ReadFile(filepath.Join(Root(t), "go.mod"))

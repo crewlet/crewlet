@@ -35,25 +35,17 @@ func beginCall(t *testing.T, s sandbox.PendingStore, turnID string, a sandbox.Br
 }
 
 // A CALL'S ENTRY IS UPDATED ONCE, BY ITS IDENTITY. The bridge writes a call's
-// entry ahead of it — its identity, with who runs it and until when, beside the
-// id its harness gave it — and the call's one update, as it finishes, takes the
-// entry out and lists the finished call in its place in the same write: the log
-// never holds two records of one call. The update finds the entry by the call's
-// place, the instant the bridge took it and its tool, never by its digest, which
-// an entry leaves out for a tool that may ask a person first and the finished
-// call then carries; so another opening's call at the same place, taken at
-// another instant, is another entry, left as it is. Asked again — a begin or an
-// update whose answer was lost — each writes nothing more. So a call a reader
-// took for one whose outcome is unknown, its entry read in flight, has that
-// unknown replaced by its own outcome once its update lands, while the run's
-// record stands. The finished call is listed with neither who ran it nor its
-// bound, which only its entry carries, though its update hands it both. And a
-// withdrawal takes the entry of a call that was then not run out, listing
-// nothing.
+// entry ahead of it (identity, who runs it and until when, its harness's id)
+// and the call's one update, as it finishes, takes the entry out and lists the
+// finished call in the same write: the log never holds two records of one call.
+// The update finds the entry by place, the instant the bridge took it and its
+// tool, never by digest, which an entry leaves out for a tool that may ask a
+// person first; a call at the same place at another instant is another entry.
+// Asked again, each writes nothing more. The finished call is listed without
+// who ran it or its bound. A withdrawal lists nothing.
 //
-// Mutation: list the call without taking its entry out, and the log holds the
-// call twice, finished and in flight; keep a finished call's runner and bound
-// as handed (kept-call-keeps-its-runner), and the call is listed with both.
+// Mutation: list the call without taking its entry out (held twice), or keep a
+// finished call's runner and bound as handed (kept-call-keeps-its-runner).
 func testACallsEntryIsUpdatedOnceByItsIdentity(t *testing.T, s sandbox.PendingStore) {
 	const turn = "t-in-flight-once"
 	job := mustLaunched(t, s, run(turn))
@@ -182,15 +174,12 @@ func testALaterCallIsNumberedAfterACallStillInFlight(t *testing.T, s sandbox.Pen
 
 // A CALL CARRIES ITS HARNESS'S ID WHOLE, AND IS NEVER FOUND BY IT. The bridge
 // hands a call's entry, and its one update, the id the call's harness gave it
-// ([sandbox.BridgeCall.CallID]): the log keeps it on the entry while the call
-// runs, and on the finished call its update lists in the entry's place. It is
-// the box's word and no part of the call's identity — a harness that makes a
-// call again may send the id it sent before — so two calls under one id, at two
-// places, are two entries and two finished calls. Held whole or not at all, on
-// the entry and the record alike, whatever the caller handed: an id at
-// [sandbox.MaxBridgeCallIDBytes] is kept whole, and one past it or outside
-// letters, digits, `-` and `_` is kept as none, never cut. And an entry
-// withdrawn takes its id with it.
+// ([sandbox.BridgeCall.CallID]), kept on the entry and then the finished call.
+// It is the box's word and no part of the call's identity (a harness making a
+// call again may resend it), so two calls under one id at two places are two
+// entries. Held whole or not at all: an id at [sandbox.MaxBridgeCallIDBytes] is
+// kept whole, one past it or outside letters, digits, `-` and `_` is kept as
+// none, never cut. A withdrawn entry takes its id with it.
 //
 // Mutation: keep an entry without its id (entry-keeps-no-id), find an entry by
 // its id (entry-found-by-its-id), or keep an id whatever it is

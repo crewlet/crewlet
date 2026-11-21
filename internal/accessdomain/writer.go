@@ -23,16 +23,15 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE ACCESS WRITE PATH: one record per told turn, signed certificate, command,
+// The access write path: one record per told turn, signed certificate, command,
 // giver's verdict, removed seat or expired hour, decided inside one snapshot of
-// this node's rows.
-// Every write is the engine's own record of what it did, so a [Call] names the
+// this node's rows. Every record is the engine's own, so a [Call] names the
 // engine and an operation id derived per execution, and a retry lands once.
 
 // Call is one write's caller: who is writing and under which operation.
 type Call struct {
-	// By is the author as iam.ActorFor records a principal: the engine, as
-	// `system`, for every record here.
+	// By is the author as iam.ActorFor records a principal: the engine
+	// (`system`) for every record here.
 	By iam.Actor
 
 	// OpID is the operation the record is published under.
@@ -82,7 +81,7 @@ type WriterDeps struct {
 	Publisher *statelog.Publisher
 	DB        store.ReplicatedReader
 
-	// Sealer seals a command's text before it is published.
+	// Sealer seals a command's and a verdict's texts before they are published.
 	Sealer *Sealer
 
 	// Now is the clock a record's authored instant is read off; nil is the
@@ -199,9 +198,9 @@ func checkRef(field, value string, required bool) error {
 	return checkText(field, value, RefMaxBytes)
 }
 
-// The patterns below are compiled at first use, not at init: a bounded repeat
-// compiles to a program holding every count, and every process that links this
-// package (the git hook among them) would pay for it on start.
+// The patterns compile at first use, not at init: a bounded repeat compiles to
+// a program holding every count, which every process linking this package (the
+// git hook among them) would pay for at start.
 
 // digestPattern is a snapshot digest's one spelling.
 var digestPattern = sync.OnceValue(func() *regexp.Regexp {
@@ -274,11 +273,9 @@ func (n NewTold) validate() error {
 	case len(n.Changes) > ChangesMaxBytes:
 		return invalid("the changes are %d bytes and the maximum is %d", len(n.Changes), ChangesMaxBytes)
 	case n.ReadThrough.On(Domain{}.Stream().Name) != nil:
-		// [statelog.Position.On], the one rule a named position is held
-		// to: a position that names nothing is judged on no stream, so a
-		// told record reads the same here wherever it was asked from — the
-		// estate router's wire leaves a position its type calls zero off,
-		// and the data node it reaches meets no stream at all.
+		// [statelog.Position.On] judges a position naming nothing on no
+		// stream, so a told record reads the same wherever it was asked
+		// from: the estate router's wire drops a zero position.
 		return invalid("the baseline was read at a position on %s, not on the access log", n.ReadThrough.Stream)
 	case len(n.Authors) > MaxAuthors:
 		return invalid("a told record names %d authors and the maximum is %d", len(n.Authors), MaxAuthors)
@@ -775,13 +772,11 @@ func checkRunes(field, value string, maxRunes int) error {
 	return nil
 }
 
-// Verdict records one giver's verdict on a delegated request, once, what it
-// decided and the giver's words sealed to the record.
-//
-// ONE RECORD PER REQUEST AND GIVER, the first written: a second verdict by
-// the same giver on the same request, under another operation, answers
-// [ErrRecorded] and changes nothing, while a panel's other delegate records
-// its own. A retry of the same operation is answered as the first copy's.
+// Verdict records one giver's verdict on a delegated request, what it decided
+// and the giver's words sealed to the record. One record per request and
+// giver, the first written: a second by the same giver under another operation
+// answers [ErrRecorded] and changes nothing, while a panel's other delegate
+// records its own; a retry of the same operation is answered as the first's.
 func (w *Writer) Verdict(ctx context.Context, c Call, n NewVerdict) (statelog.Result, error) {
 	if err := n.validate(); err != nil {
 		return statelog.Result{}, err
@@ -863,9 +858,8 @@ func (w *Writer) Forget(ctx context.Context, c Call, handle string) (statelog.Re
 // ---- retention ---------------------------------------------------------- //
 
 // Expire removes every record of the hour starting at hour, and everything
-// older, that is past the retention cutoff; each seat's baseline stays. Decided
-// again in the write's own snapshot: an hour with nothing left answers
-// [ErrNotDue].
+// older, past the retention cutoff; each seat's baseline stays. Decided again
+// in the write's own snapshot: an hour with nothing left answers [ErrNotDue].
 func (w *Writer) Expire(ctx context.Context, c Call, hour, cutoff time.Time) (statelog.Result, error) {
 	if err := c.validate(); err != nil {
 		return statelog.Result{}, err

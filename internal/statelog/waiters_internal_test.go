@@ -7,14 +7,10 @@ import (
 	"time"
 )
 
-// A WAITER ON AN APPLIER THAT ENDS IS TOLD, NOT RELEASED.
-//
-// The applier used to close every waiter's own channel on the way out — the
-// same channel a commit closes when it reaches the target — so a caller
-// blocked on a position the loop never reached returned nil, read rows below
-// its position, and reported the answer at the level it had asked for. A
-// shutdown made that a footnote; a loop ended and started again around an
-// adoption makes it a wrong answer on a running node.
+// A WAITER ON AN APPLIER THAT ENDS IS TOLD, NOT RELEASED: a released caller
+// blocked on a position the loop never reached would read rows below it and
+// report them at the level it asked for, a wrong answer on a running node
+// whenever a loop ends and restarts around an adoption.
 func TestAWaiterOnAnEndedApplierIsToldRatherThanReleased(t *testing.T) {
 	t.Parallel()
 	var w waiters

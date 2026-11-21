@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TabsMarker } from "@crewlethq/ui";
-import { plural } from "~/lib/format.ts";
+import { notPassedWords } from "~/lib/checks.ts";
 import { codeRest } from "~/lib/useCodeQuery.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import { QueryError, type CodeCommitMark, type CodeRepoDetail } from "~/protocol/index.ts";
@@ -171,11 +171,14 @@ export function useDefaultChecks(repo: CodeRepoDetail): TabsMarker | undefined {
     return { tone: "success", label: `Every check on ${branch} passed` };
   }
   if (rollup?.state === "failing") {
-    const failed = Math.max(1, (rollup.counts.failed ?? 0) + (rollup.counts.errored ?? 0));
+    const failed = rollup.counts.failed ?? 0;
+    const errored = rollup.counts.errored ?? 0;
+    // A FAILING ROLLUP counts one at least: its failing list names it.
+    const said = failed + errored > 0 ? notPassedWords(failed, errored) : notPassedWords(1, 0);
     return {
       tone: "danger",
-      count: failed,
-      label: `${plural(failed, "check")} on ${branch} failed`,
+      count: Math.max(1, failed + errored),
+      label: `${said} on ${branch}`,
     };
   }
   return undefined;

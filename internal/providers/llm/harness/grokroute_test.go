@@ -162,19 +162,16 @@ func (g *grokRecorder) end(script fakeScript, total fakeUsage, _ string) int {
 
 // GROK'S RUN IS READ FROM ITS STREAM, AND ITS HOME STARTS NO SERVER OF ITS OWN. A
 // run with tools prints its streaming-json record where a text function prints
-// the plain answer: each response's prose, its counts — the prompt less its
-// cached part — and its calls, through use_tool, by the server's qualified
-// name; the results of its calls end it. The harness sends no id with a call, so a
-// call is joined by name and arguments, and the host is told the harness waits the
-// harness's own 6000 seconds for a call, re-reads no list, and makes a response's
-// calls at once. A server planted in the home's config.toml and in
-// ~/.claude.json does not start: the home's config.toml is the profile's own,
-// with the Claude source off, and its allowlist names the seat's server alone.
+// the plain answer: each response's prose, counts (the prompt less its cached
+// part) and calls, through use_tool by the server's qualified name; the
+// results end it. Calls carry no id, so one is joined by name and arguments;
+// the host is told the harness waits 6000 seconds, re-reads no list, and
+// makes a response's calls at once. A server planted in the home's config.toml
+// or ~/.claude.json does not start: the profile's allowlist names the seat's.
 //
-// Mutation: drop the profile's mcp.output, and the run's stdout is read as the
-// plain answer; drop both home seeds, and the planted servers start (the fake
-// fails the run); read the record's input as the whole prompt, and the run is
-// charged 100 tokens less than it spent.
+// Mutation: drop the profile's mcp.output, and stdout is read as the plain
+// answer; drop both home seeds, and the planted servers start; read the
+// record's input as the whole prompt, and 100 tokens go uncharged.
 func TestGrokRunIsReadFromItsStream(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "grok", routeCase, nil)

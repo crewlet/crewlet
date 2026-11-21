@@ -4,19 +4,15 @@ import "strings"
 
 // How a seat is addressed on GitHub, and why it takes two spellings.
 //
-// AN AGENT ACTS AS ITS OWN APP, and GitHub gives one app two names. A person
-// writing a mention types the app's SLUG, so the body carries
-// `@acme-sre-lead`; every payload reporting what that app did carries the
-// account's login, which is the slug with `[bot]` appended. They are one
-// identity and no lookup relates them, so both are registered: the slug in
-// the transport's own namespace, where mentions resolve, and the bot login in
-// the companion namespace [notify.BotNamespace] names, where a payload's
-// sender does.
+// AN AGENT ACTS AS ITS OWN APP, and GitHub gives one app two names. A mention
+// carries the app's SLUG (`@acme-sre-lead`); every payload reporting what the
+// app did carries the account's login, the slug with `[bot]` appended. No
+// lookup relates them, so both are registered: the slug in the transport's
+// own namespace, where mentions resolve, and the bot login in the one
+// [notify.BotNamespace] names, where a payload's sender does.
 //
-// Neither costs a request. The old shape learned a seat's account by spending
-// a `GET /user` per credential, because a personal access token says nothing
-// about whose it is; an app's login is its slug, which the engine wrote down
-// when it created the app.
+// Neither costs a request: the login is the slug the engine wrote down when
+// it created the app, where a personal access token needs a `GET /user`.
 
 // botSuffix is what GitHub appends to an app's slug to make its account.
 const botSuffix = "[bot]"

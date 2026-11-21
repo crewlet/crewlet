@@ -1041,7 +1041,7 @@ func TestAPullMirrorsQueueIsShedNeverBuilt(t *testing.T) {
 // its decide refuses (the first's gate no longer met, the third's head moved)
 // ejects each for its refusal. A train whose BASE's checks file defines the
 // required check in no runnable form can never be green: its entries are
-// ejected `check_failed` naming the check and no train, nothing queued.
+// ejected `checks_undefined` naming the check and no train, nothing queued.
 //
 // Mutation: leave a conflicting merge unejected; eject nothing refused
 // head_moved; answer an undefined required check without the eject → each red.
@@ -1104,11 +1104,11 @@ func TestTheQueueEjectsWhatItCannotLand(t *testing.T) {
 	if len(queued) != 0 || eject == nil || len(eject.Entries) != 2 || eject.Entries[0].EntryID != left[0].EntryID ||
 		eject.Entries[1].EntryID != left[1].EntryID ||
 		slices.ContainsFunc(eject.Entries, func(x gitlet.Ejection) bool {
-			return x.Reason != gitlet.EjectCheckFailed || !slices.Equal(x.Checks, []string{"unit"}) ||
+			return x.Reason != gitlet.EjectChecksUndefined || !slices.Equal(x.Checks, []string{"unit"}) ||
 				x.TestedIn != nil
 		}) {
 		t.Fatalf("a train whose base defines no unit queued %+v and recorded %+v, want nothing queued and "+
-			"both entries ejected check_failed naming unit and no train, since nothing ran", queued,
+			"both entries ejected checks_undefined naming unit and no train, since nothing ran", queued,
 			records[len(records)-1])
 	}
 }

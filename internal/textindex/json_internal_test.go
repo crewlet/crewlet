@@ -11,25 +11,12 @@ import (
 // backslash, `u` and its four hex digits.
 func escapedUnit(unit rune) string { return fmt.Sprintf(`\u%04x`, unit) }
 
-// A JSON TEXT MAY HOLD WHAT ANY STRETCH OF IT READS. A stretch cut from a JSON
-// text — a redaction's own words between its markers — can begin and end
-// anywhere, inside an escape too, and JSON reads it from its first byte: begun
-// after the backslash of an escaped line break, it reads the break's letter as
-// the first of the word after it; inside `\u` and its digits, those as a word's;
-// at the second backslash of an escaped one, the escape that backslash opens;
-// inside a surrogate pair, either half alone. Over every stretch of every
-// case's text, every term JSON reads in it is one MayHold of the whole text
-// says the text may hold — so a text whose stretches a reader is shown hold a
-// term is never passed over — and a term no stretch reads is one it may not.
-//
-// Mutation: read only the words JSON reads from the text's start, have MayHold
-// read the text as written while a stretch is read as JSON, or leave out a
-// pair's low half, or the escape a `\\`'s second backslash opens, and a case
-// goes red.
-func TestAJSONTextMayHoldWhatAnyStretchOfItReads(t *testing.T) {
-	t.Parallel()
+// jsonStretchTexts are JSON texts whose stretches begin and end inside every kind of escape: a line's
+// break, \u and its digits, a `\\`'s second backslash, a surrogate pair's halves, and an escape the
+// text ends inside.
+var jsonStretchTexts = func() []string {
 	u := escapedUnit
-	texts := []string{
+	return []string{
 		`{"command":"cd repo\ngit push origin main","content":"package main\n\nfunc main() {\n\tfmt.Println(1)\n}"}`,
 		`caf` + u('é') + ` ` + u('A') + `bc \` + u('A') + `bc \\\` + u('B') + `x ` + u('é') + u('é') + ` \ngit` +
 			u('é') + ` ` + u('A') + u('é') + ` \` + u('A') + u('é') + ` \n` + u('A') + ` ` + u(' ') + `zz`,
@@ -38,7 +25,22 @@ func TestAJSONTextMayHoldWhatAnyStretchOfItReads(t *testing.T) {
 		`\\n\\\nab\\\\\tz\\` + u('A') + `q\nn\q x\` + `u12g4 \"ok\" \/sl \b\f\r\tend\` + `u00`,
 		`ab\`,
 	}
-	for _, text := range texts {
+}()
+
+// A JSON TEXT MAY HOLD WHAT ANY STRETCH OF IT READS. A stretch cut from a JSON
+// text (a redaction's words between its markers) can begin and end anywhere,
+// inside an escape too, and JSON reads it from its first byte: after the
+// backslash of `\n` the letter starts a word; inside `\u` and its digits those
+// are a word's; at the second backslash of `\\` it opens an escape; inside a
+// surrogate pair either half stands alone. Every term JSON reads in any
+// stretch is one MayHold says the whole text may hold, and no other is.
+//
+// Mutation: read only the words JSON reads from the text's start, have MayHold
+// read the text as written, or leave out a pair's low half or the escape a
+// `\\`'s second backslash opens, and a case goes red.
+func TestAJSONTextMayHoldWhatAnyStretchOfItReads(t *testing.T) {
+	t.Parallel()
+	for _, text := range jsonStretchTexts {
 		// EVERY TERM ANY STRETCH READS, each asked once of the whole text.
 		read := map[string]bool{}
 		for from := 0; from < len(text); from++ {

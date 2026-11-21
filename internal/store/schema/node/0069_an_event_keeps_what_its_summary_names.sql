@@ -1,0 +1,16 @@
+-- An event row keeps what its summary names.
+--
+-- A summary is a sentence ("SRE was handed its next ready work item ENG-287"),
+-- and the objects it names (the item, a change, a commit, a page) are the
+-- payload's own fields. A listing never selects the payload, so the row keeps
+-- them beside the sentence: the refs internal/events derives with the summary
+-- from one line (internal/named), each a kind, an id and the words the
+-- summary spells it with, which a dashboard draws as a link to its page.
+--
+-- WHO HAS TO AGREE ON IT: this node alone, like every column of the audit log.
+-- Written by the writer from the event it stores (internal/observe's Record),
+-- so a row kept in custody and a row this node published are one shape.
+--
+-- JSON, an array of {kind, id, text}; an empty string, never NULL, for a row
+-- whose summary names nothing, the shape every promoted column has.
+ALTER TABLE crewlet_events ADD COLUMN refs TEXT NOT NULL DEFAULT '';

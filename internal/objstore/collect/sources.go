@@ -89,16 +89,13 @@ type Estate interface {
 // names — the one constructor [References] is built with.
 //
 // Refused rather than degraded, every way the two can disagree: a table whose
-// domain has no estate here would read as naming nothing, which is the
-// failure that deletes files; an estate no table names is a barrier every
-// pass takes for nothing, and a wiring mistake besides; one named twice would
-// be read twice under two positions.
+// domain has no estate here would read as naming nothing, the failure that
+// deletes files; an estate no table names is a barrier every pass takes for
+// nothing; one named twice would be read twice under two positions.
 //
-// Each source keeps its objects from collection through every one of its
-// tables; the audit walks only its Required ones, and a store move its
-// Required and Derived ones ([objstore.Pass.Reads] decides both). A domain
-// whose every table is retired or derived is accepted: the audit's walk of it
-// reads nothing and is complete, and nothing about it is wrong.
+// Collection reads every table of a source; the audit only its Required ones,
+// a store move its Required and Derived ones ([objstore.Pass.Reads] decides
+// both). A domain whose every table is retired or derived is accepted.
 func Sources(tables []objstore.ReferenceTable, estates ...Estate) (References, error) {
 	if len(tables) == 0 {
 		return nil, errors.New("objstore/collect: no table is declared as naming objects — " +

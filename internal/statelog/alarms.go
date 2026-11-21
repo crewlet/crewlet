@@ -1,16 +1,8 @@
 package statelog
 
-// THE ALARM TABLE, and it is in this package rather than beside any one
-// subsystem because an alarm is the framework's answer to "is this node doing
-// its job", and every subsystem above it asks the same question.
-//
-
-// The package's own doc is in doc.go and is NOT restated here. It was, and
-// `go doc` concatenates every package comment in file order — so this file's
-// copy, sorting first, told a reader that the ordered stream is "the
-// write-ahead log" twelve lines before doc.go's own heading told them "This is
-// NOT the store's write-ahead log". Two package comments are ADR-0008's
-// failure inside one package: one rule, written twice, disagreeing.
+// The alarm table lives here, not beside a subsystem: an alarm answers "is
+// this node doing its job" for every subsystem above it. The package doc is
+// doc.go's alone (two package comments are ADR-0008's failure).
 
 import (
 	"cmp"
@@ -28,214 +20,118 @@ import (
 
 // The thresholds an alarm fires at.
 //
-// # Why they are named here rather than at each condition
-//
-// Every one of them is a number some OTHER decision already made — a stall
-// grace is what takes a copy out of service, a deferral grace is what stops
-// a node serving a copy it cannot decode, a read budget is what a caller was
-// promised. An alarm that invented its own
-// threshold would be a second opinion about the same event, and the two would
-// drift: the plan this replaces tinted a dashboard row `caution` past one
-// apply linger (250 ms) on a position refreshed every 15 seconds, so every row
-// was lit always, and `critical` past `min_age` — seven days, which is 10 080
-// times the grace that actually does something.
-//
-// So an alarm fires at the threshold that MATTERS, and where the constant
-// belongs to another package it is taken from there.
+// An alarm fires at the threshold some OTHER decision already made (a stall
+// grace takes a copy out of service, a read budget is what a caller was
+// promised), taken from the owning package where the constant is another's;
+// its own number would be a second opinion that drifts.
 const (
 	// PositionHeartbeat is how often a node running a state log republishes
-	// its row in the fleet's position register — the engine's position
-	// heartbeat, which the trim, the snapshot gate and a joiner's donor
-	// count all read.
-	//
-	// TEN SECONDS, taken from what the readers need rather than from what
-	// the writer can afford. The trim runs on a horizon of days and is
-	// conservative with a stale row; the snapshot gate's question — is
-	// there anybody else — changes when a node joins or leaves, which an
-	// operator expects to see reflected in seconds rather than minutes. Ten
-	// is well inside that and is a single small write per node per interval
-	// against a bucket with no age.
-	//
-	// DECLARED HERE rather than beside the loop that ticks on it, for
-	// [TrimInterval]'s reason: it is also the cadence of everything this
-	// package derives from the register — [AlarmInterval] IS it — so the
-	// one number lives where both of its readers can name it.
+	// its row in the fleet's position register, which the trim, the snapshot
+	// gate and a joiner's donor count read. Ten seconds, from what the readers
+	// need: the snapshot gate's question (is there anybody else) changes when a
+	// node joins or leaves, which an operator expects in seconds. Declared here,
+	// for [TrimInterval]'s reason.
 	PositionHeartbeat = 10 * time.Second
 
-	// StallGrace is how far behind a node may be before its lag is worth
-	// a person's attention. Sixty seconds, which is four of the fleet's
-	// coordination heartbeats ([coord.ReconcileInterval]): long
-	// enough that a rolling restart or one oversized record passes
-	// through it, short enough that a node that has actually stopped is
-	// named within a minute.
+	// StallGrace is how far behind a node may be before its lag is worth a
+	// person's attention: four coordination heartbeats
+	// ([coord.ReconcileInterval]), long enough for a rolling restart or one
+	// oversized record, short enough to name a stopped node within a minute.
 	StallGrace = 60 * time.Second
 
-	// FeedReopenCeiling is the longest a change feed waits between two
-	// attempts to open its consumer again (internal/changefeed), and HALF
-	// THE STALL GRACE, which `feed_stopped` fires at: a feed whose broker
-	// answers again is reopened inside the grace however long the outage
-	// was, so the alarm names a broker or a consumer that is still
-	// refusing, never a feed waiting out its own schedule. Longer, and a
-	// three-minute broker outage would leave every feed dark for up to a
-	// minute after the broker came back; shorter buys little, since each
-	// attempt is a consumer create with its own provisioning deadline, and
-	// at this ceiling a feed down for a day logs two attempts a minute.
-	//
-	// DECLARED HERE rather than beside the loop that waits on it, for
-	// [AlarmInterval]'s reason: the alarm's remedy states it, and two
-	// spellings of one number in two packages agree only until one is
-	// retuned.
+	// FeedReopenCeiling is the longest a change feed waits between two attempts
+	// to open its consumer (internal/changefeed), and half the stall grace
+	// `feed_stopped` fires at: a feed whose broker answers again is reopened
+	// inside the grace, so the alarm names a broker or consumer still refusing.
+	// Shorter buys little, as each attempt is a consumer create with its own
+	// deadline. Declared here because the alarm's remedy states it.
 	FeedReopenCeiling = StallGrace / 2
 
-	// AlarmInterval is how often a node running a state log — every data
-	// node — evaluates the table: on its [PositionHeartbeat], and it IS that
-	// constant rather than a second spelling of its number. The two were
-	// once one declaration in the engine, then two literals in two packages
-	// that agreed only because nobody had retuned either — and the first
-	// retune of the heartbeat would have left the table evaluating at a
-	// cadence its inputs are not published at, with nothing to say so.
+	// AlarmInterval is how often a node running a state log evaluates the
+	// table: the [PositionHeartbeat] itself, so a retune cannot leave the table
+	// running at a cadence its inputs are not published at.
 	//
-	// THE HEARTBEAT, and never the trim's quarter-hour: the table ran on
-	// that once, so `apply_lag` — which fires at the one-minute
-	// [StallGrace] and whose remedy promises a stopped node is named
-	// within a minute — was named up to sixteen minutes after it stopped,
-	// and every surface fed by the evaluation lagged the condition by the
-	// same quarter hour. An evaluation paced by anything slower silently
-	// raises every threshold to its own period. FASTER BUYS NOTHING: the
-	// fastest input, this node's lag behind the log, is measured against
-	// positions the heartbeat publishes, so a tighter loop would
-	// re-evaluate the same facts. At the heartbeat's ten seconds
-	// [StallGrace] is six evaluations, so a condition that has held past
-	// it is named within one more.
+	// Slower, `apply_lag` (fires at [StallGrace], remedy promises a stopped
+	// node is named within a minute) would be late by up to that period; faster
+	// buys nothing, as the fastest input is measured against positions the
+	// heartbeat publishes.
 	AlarmInterval = PositionHeartbeat
 
-	// DeferralGrace is how long a node may hold records it could not
-	// apply before its copy of that log goes out of service — its seats
-	// stay, and that log's operations go to the other data nodes
-	// (ADR-0079). The alarm and
-	// that step share the number deliberately: an operator who sees this
-	// alarm has thirty minutes, and one who sees a different number has no
-	// idea how long they have.
+	// DeferralGrace is how long a node may hold records it could not apply
+	// before its copy of that log goes out of service (its seats stay, its
+	// operations go to the other data nodes, ADR-0079). The alarm and that step
+	// share the number so an operator who sees the alarm knows how long they have.
 	DeferralGrace = 30 * time.Minute
 
-	// RelapseWindow is how long an alarm must stay clear before its next
-	// raise starts a new run; one raised again sooner is dated from its run's
-	// first raise, so a flapping condition reaches a person as a steady one.
-	// The deferral grace: as long clear as it must stand to be noticed.
+	// RelapseWindow is how long an alarm must stay clear before its next raise
+	// starts a new run; one raised sooner is dated from its run's first raise,
+	// so a flapping condition reaches a person as a steady one.
 	RelapseWindow = DeferralGrace
 
-	// FloorCacheStale is how old a cached trim floor may be before the
-	// node stops answering from it. Four heartbeats, the same idiom every
-	// other cached coordination fact uses.
+	// FloorCacheStale is how old a cached trim floor may be before the node
+	// stops answering from it: four heartbeats, as every cached coordination
+	// fact.
 	FloorCacheStale = 4 * coord.ReconcileInterval
 
-	// ReadBudget is what a linearizable read was promised. The barrier
-	// alarm fires at a QUARTER of it, because a barrier is one term of a
-	// read and a barrier already spending the whole budget is a read that
-	// has been failing for some time.
-	//
-	// WHAT A READ SPENDS IT ON is its barrier's append and this node
-	// committing every record before that barrier that writes a row —
-	// never a barrier's own checkpoint, its own or any other's
-	// ([Runner.Reached]). Waiting for those, on a disk whose fsyncs
-	// stalled 2.1–9.3 s, refused reads at this bound with every row they
-	// needed already on the node: 30 of 33 refused code-log reads sat in
-	// their own barrier's checkpoint-only commit. Now three reads back to
-	// back behind a checkpoint held at its commit for the whole case are
-	// served in 2.0–2.4 ms each under the race detector
-	// (TestNoReadWaitsOnACommitThatWritesNoRow), and a whole read alone
-	// takes 1.4 / 5.3 ms at p50 / p99 (BenchmarkArbitratedWrite, solo,
-	// 2,000 reads), both on two laptop E-cores.
-	//
-	// TWO SECONDS STAYS, and a refusal here is the answer rather than a
-	// bound to grow: what can still spend it is a commit that writes a
-	// row, and a device stall has no length to size against — covering the
-	// stalls above would have taken at least 9.3 s — while in a fleet the
-	// bound is also how long a walk waits on one data node before the
-	// estate router asks the next.
+	// ReadBudget is what a linearizable read was promised; the barrier alarm
+	// fires at a quarter of it. A read spends it on its barrier's append and this
+	// node committing every earlier record that writes a row, never a barrier's
+	// own checkpoint ([Runner.Reached];
+	// TestNoReadWaitsOnACommitThatWritesNoRow). Two seconds stays, and a refusal
+	// is the answer, not a bound to grow: a device stall has no length to size
+	// against, and in a fleet it is how long a walk waits on one data node before
+	// the estate router asks the next.
 	ReadBudget = 2 * time.Second
 
-	// PrefetchScanBudget is what the knowledge scan a turn's prefetch runs
-	// was promised: the turn waits for it before its first token, so it is
-	// held to half of what a person searching on purpose waits
-	// ([InteractiveSearchTarget]). Read off the node that coordinates the
-	// scan — the one whose store and share of the corpus it is.
+	// PrefetchScanBudget is what the knowledge scan a turn's prefetch runs was
+	// promised: the turn waits for it before its first token, so it is half of
+	// what a person searching on purpose waits ([InteractiveSearchTarget]).
+	// Read off the node that coordinates the scan.
 	PrefetchScanBudget = 500 * time.Millisecond
 
-	// HeadroomAlarmFraction is how little of a log's byte ceiling may
-	// remain before an operator is told. A tenth: a log that fills refuses
-	// writes rather than dropping records, so the failure is loud — but
-	// raising a ceiling needs a maintenance window, and a tenth of a
-	// 29 GiB log is days of writing at this engine's rate.
-	//
-	// OF THE CEILING ORDINARY WRITES ARE HELD TO
-	// ([Reservation.Headroom]), which on a log that keeps a gate reserve
-	// is [Reservation.Bytes] below the broker's: that is where writes
-	// start being refused, so it is what "full" means to everybody but an
-	// eviction.
+	// HeadroomAlarmFraction is how little of a log's byte ceiling may remain
+	// before an operator is told: a tenth, as raising a ceiling needs a
+	// maintenance window and a tenth of a 29 GiB log is days of writing. The
+	// ceiling is the one ordinary writes are held to ([Reservation.Headroom]),
+	// [Reservation.Bytes] below the broker's on a log with a gate reserve: where
+	// writes start being refused.
 	HeadroomAlarmFraction = 0.10
 
-	// ObjectsHeadroomAlarmFraction is how little of the nats object
-	// bucket's byte reservation may remain before an operator is told:
-	// TWICE A LOG'S, a fifth, borrowed from [HeadroomAlarmFraction] so a
-	// retune of the one moves the other. Twice, because both remedies for
-	// a full bucket take longer than a log's: raising its reservation waits
-	// for a data node to restart on the new figure, and moving the files
-	// to a bucket (`crewlet objects migrate --to s3`) copies every one of
-	// them and ends inside a maintenance window. A full bucket refuses
-	// uploads, and only uploads.
+	// ObjectsHeadroomAlarmFraction is how little of the nats object bucket's
+	// byte reservation may remain before an operator is told: twice a log's,
+	// derived from [HeadroomAlarmFraction]: raising the reservation waits for a
+	// data node restart and `crewlet objects migrate --to s3` copies every file
+	// inside a maintenance window. A full bucket refuses only uploads.
 	ObjectsHeadroomAlarmFraction = 2 * HeadroomAlarmFraction
 
-	// WALAlarmBytes is a write-ahead log large enough to say a checkpoint
-	// is not happening. A gibibyte: between checkpoints the driver's
-	// 1 000-frame autocheckpoint keeps it at a few megabytes, normal
-	// operation in the tens, and the failure it names — a reader holding a
-	// snapshot open for ever — has no other symptom until the volume fills.
-	//
-	// A COPY HOLDS IT TOO, for the copy's whole run (store.DB.Copies): a
-	// backup's or a donor snapshot's copy stops every checkpoint at its
-	// moment, so the log grows by what the node writes while the copy
-	// runs, and the run is the file's size over the rate the copy reads it
-	// — about seven minutes for the reference company's year-five estate of
-	// ≈ 44 GB at the ~104 MB/s measured on the pinned driver, so a
-	// gibibyte is about 2.5 MB/s of log written through one. The bound
-	// stays where it says a checkpoint is wrong rather than rising to clear
-	// every copy: a gibibyte of log takes the same room from the volume
-	// whatever holds it, and the reading names the copy holding it
-	// ([Reading.WALCopy]), so the alarm says which of the two it is and
-	// that a copy's end folds the log back in.
+	// WALAlarmBytes is a write-ahead log large enough to say a checkpoint is not
+	// happening: a gibibyte, where the driver's 1 000-frame autocheckpoint keeps
+	// it at megabytes. A copy holds it too, for its whole run (store.DB.Copies):
+	// it stops every checkpoint (a gibibyte is about 2.5 MB/s through a
+	// seven-minute copy of the reference company's ≈ 44 GB estate). The bound
+	// stays, as a gibibyte takes the same volume whatever holds it;
+	// [Reading.WALCopy] names the copy.
 	WALAlarmBytes = 1 << 30
 
-	// VolumeHeadroomFactor is how much free space a node's volume must
-	// have relative to its store, expressed as a multiple. A restore, a
-	// vacuum and a snapshot each need room for a second copy, so 1.1 is
-	// the point at which the next routine operation would fail.
-	//
-	// THE LOG A COPY HOLDS BACK IS ADDED to it ([Reading.CopyHeldBytes]),
-	// not left to the tenth: a backup's or a snapshot's copy stops every
-	// checkpoint at its moment for its run, so the live file's log grows
-	// on the same volume by what the node writes meanwhile, and a tenth of
-	// the store covers that only while the node writes its log at under a
-	// tenth of the rate the copy reads the file — about 10 MB/s at the
-	// ~104 MB/s measured on the pinned driver. What a copy holds back is
-	// measured by the last one; before any copy has run, the tenth stands
-	// for it.
+	// VolumeHeadroomFactor is how much free space a node's volume must have
+	// relative to its store: a restore, a vacuum and a snapshot each need room
+	// for a second copy, so 1.1 is where the next routine operation would fail.
+	// The log a copy holds back is added ([Reading.CopyHeldBytes]), as a tenth
+	// covers it only while the node writes under about 10 MB/s (a tenth of the
+	// ~104 MB/s the copy reads); before any copy has run, the tenth stands.
 	VolumeHeadroomFactor = 1.1
 
 	// VolumeClearFactor is the multiple of the store, plus the held log, a
-	// raised `volume_low` waits for before it clears. The band above the
-	// raise is 15% of the store, wider than the raise's own tenth, so a
+	// raised `volume_low` waits for before it clears: 15% above the raise, so a
 	// volume hovering at the raise keeps one alarm up rather than flapping.
 	VolumeClearFactor = 1.25
 
-	// PoolWaitAlarm is how long a caller may queue for a database
-	// connection before the pool is the problem. A hundred milliseconds
-	// is already half a dashboard query's budget spent waiting to start.
+	// PoolWaitAlarm is how long a caller may queue for a database connection
+	// before the pool is the problem: already half a dashboard query's budget.
 	PoolWaitAlarm = 100 * time.Millisecond
 
-	// MaintenanceAlarmAfter is how long a maintenance operation may stay
-	// open. Maintenance stops every publisher on every node, so an hour
-	// of it is an outage nobody is watching.
+	// MaintenanceAlarmAfter is how long a maintenance operation may stay open:
+	// it stops every publisher on every node.
 	MaintenanceAlarmAfter = time.Hour
 
 	// InteractiveSearchTarget is what an interactive search was promised.
@@ -245,128 +141,77 @@ const (
 	// current vectors for semantic recall to be what it claims.
 	SemanticCoverageFloor = 0.95
 
-	// CensusDriftFactor is how far an observed read rate may exceed the
-	// rate the log's own sizing was derived from. Twice: the log's byte
-	// ceiling, its trim cadence and its join model are all functions of
-	// that number, so at 2× they are describing a different company.
+	// CensusDriftFactor is how far an observed read rate may exceed the rate
+	// the log's sizing was derived from. Twice: the byte ceiling, trim cadence
+	// and join model are all functions of that number, so at 2× they describe
+	// a different company.
 	CensusDriftFactor = 2.0
 
-	// LinearizableReadsPerSeatDay is the reference company's read rate per
-	// agent seat — the rate the logs its seats read at `linearizable` are
-	// sized from, and the one their read models declare ([ReadModel]).
-	//
-	// ONE HUNDRED AND TWENTY-FIVE: the reference company's 12 500
-	// linearizable reads a day over its 100 seats. It is the census input
-	// every capacity decision under such a log rests on — a `linearizable`
-	// read appends a barrier record, so the rate is a term in a log's byte
-	// ceiling, in how often the trim has to run to stay under it, and in
-	// how long a rejoining node's replay takes — and it is PER SEAT because
-	// a seat's tools are what issue those reads: stated for the whole
-	// company it was a fixed 12 500 that a two-hundred-seat company doing
-	// exactly the reference company's work per seat exceeded twofold, so
-	// the alarm fired on the one company whose sizing was still right. It
-	// is a DECLARED expectation rather than a measurement, which is exactly
-	// why it needs an alarm — nothing else notices when a company outgrows
-	// the assumptions its deployment was sized against, and the symptom
-	// arrives as a full log rather than as a slow one.
-	//
-	// It is the SEATS' term of a log's census and not the whole of it: the
-	// engine's own periodic reads append barriers too, whatever the seats
-	// do, and [Census.Background] is where they are counted; and a log whose
-	// readers are not seats at all — the code log's git clients — declares
-	// them in its own sizing, which [Census.Clients] carries. [Census] turns
-	// all three into one log's figure.
+	// LinearizableReadsPerSeatDay is the reference company's read rate per agent
+	// seat (12 500 reads a day over 100 seats), what its seats' `linearizable`
+	// logs are sized from and their read models declare ([ReadModel]); each read
+	// is a barrier record, a term in the byte ceiling, trim cadence and replay
+	// time. Per seat because seats' tools issue the reads: company-wide it fired
+	// on a two-hundred-seat company sized right. Declared, so it needs an alarm:
+	// nothing else notices outgrowing it. The seats' term of [Census].
 	LinearizableReadsPerSeatDay = 125
 
-	// CredentialNoticeDays and CredentialWarningDays are how far ahead a
-	// model credential's expiry is said: thirty days as a notice, seven as
-	// a warning. FIXED BY THE OWNER, with no setting and no route: a
-	// one-year token rotated by a person needs a month's notice to be
-	// rotated calmly and a week's to be rotated at all, and a knob here
-	// would be a second opinion about a date the vendor already fixed.
+	// CredentialNoticeDays and CredentialWarningDays are how far ahead a model
+	// credential's expiry is said: thirty days as a notice, seven as a warning.
+	// Fixed, with no setting: a one-year token needs a month's notice to be
+	// rotated calmly and a week's to be rotated at all.
 	CredentialNoticeDays  = 30
 	CredentialWarningDays = 7
 
-	// LimitWaitingGrace is how long a seat may wait parked on a model's
-	// limit before the limit is a person's problem: FIFTEEN MINUTES, fixed
-	// by the owner, and equal to the provider park's longest re-probe step
-	// (harness's limitBackoff), so a park that has outlived the slowest
-	// re-probe is one the engine will not end on its own soon.
+	// LimitWaitingGrace is how long a seat may wait parked on a model's limit
+	// before it is a person's problem: fifteen minutes, equal to the provider
+	// park's longest re-probe step (harness's limitBackoff), so a park past it
+	// is one the engine will not end soon.
 	LimitWaitingGrace = 15 * time.Minute
 
 	// MCPOutageGrace is how long an instance of an MCP server may stay down
-	// before the server's outage is a person's problem: the restart
-	// schedule's ceiling (internal/mcp's RestartCeiling, five minutes) plus
-	// one heartbeat ([coord.ReconcileInterval]), the beat that carries what
-	// the last attempt concluded. Inside it the engine is still bringing the
-	// instance back on its own, at 15 s, 30 s, 1 min, 2 min and 4 min; past
-	// it every further attempt waits the whole ceiling, so a server still
-	// down then is one the schedule is not going to fix soon.
-	//
-	// SPELLED HERE rather than imported, for the reason [LimitWaitingGrace]
-	// is: this table is the state log's, and importing the MCP client for one
-	// number would make every package that reads an alarm depend on it. A
-	// test holds it to the schedule's own constant, so a retune of the one
-	// fails until the other follows.
+	// before the outage is a person's problem: the restart schedule's ceiling
+	// (internal/mcp's RestartCeiling, five minutes) plus one heartbeat
+	// ([coord.ReconcileInterval]); past it every attempt waits the whole
+	// ceiling. Spelled here, not imported, so no package reading an alarm
+	// depends on the MCP client; a test holds it to the schedule's constant.
 	MCPOutageGrace = 5*time.Minute + coord.ReconcileInterval
 
-	// MCPWaitingGrace is how long an agent's instance of an MCP server may
-	// be held back for a credential a provisioning pass mints before the wait
-	// is a person's problem: the longest an integration waits between two
-	// passes while it still owes work of its own or the vendor's
-	// (internal/integration's DefaultSchedule.WaitingMax, five minutes) plus
-	// one heartbeat. A seat still waiting then has seen at least one whole
-	// pass that did not mint its credential. A pass that cannot mint until a
-	// person acts is not a wait at all: the node calls that instance failed,
-	// and [MCPOutageGrace] applies. Held to the schedule by the same test.
+	// MCPWaitingGrace is how long an agent's instance of an MCP server may be
+	// held back for a credential a provisioning pass mints before the wait is
+	// a person's problem: the longest an integration waits between two passes
+	// that still owe work (internal/integration's DefaultSchedule.WaitingMax,
+	// five minutes) plus one heartbeat. A pass that cannot mint until a person
+	// acts is not a wait: the node calls that instance failed ([MCPOutageGrace]).
+	// Held to the schedule by the same test.
 	MCPWaitingGrace = 5*time.Minute + coord.ReconcileInterval
 
-	// MCPSignInNotice is how long before an MCP server's OAuth grant runs
-	// out `mcp_oauth_expiring` stands. REASONED: a week is a working week
-	// and a weekend, time for the person who signed in, or another
-	// administrator, to sign in again before the agents lose the server;
-	// and a grant whose vendor states its life at all states months.
+	// MCPSignInNotice is how long before an MCP server's OAuth grant runs out
+	// `mcp_oauth_expiring` stands: a working week and a weekend to sign in again
+	// before the agents lose the server, where a vendor that states a grant's
+	// life at all states months.
 	MCPSignInNotice = 7 * 24 * time.Hour
 
-	// MCPApprovalGrace is how long a call an agent's run holds for a
-	// person's approval (ADR-0077) may wait before an administrator is told:
-	// a third of the default pause TTL a parked run's box is kept for
-	// (internal/sandbox's DefaultPauseTTL, 30 minutes). A call still waiting
-	// then is one nobody its question was put to has picked up from the
-	// Inbox, and an administrator told now has the rest of that TTL in which
-	// an answer carries the run on in its own session, in the box it left,
-	// rather than in a fresh one. Raised sooner, every call a tool at Needs
-	// approval holds would raise it, which is most calls an agent makes to a
-	// server added with its starting levels. Held to the TTL by a test
-	// (internal/engine).
+	// MCPApprovalGrace is how long a call held for a person's approval
+	// (ADR-0077) may wait before an administrator is told: a third of the
+	// default pause TTL of a parked run's box (internal/sandbox's
+	// DefaultPauseTTL, 30 minutes), leaving the rest for an answer to carry the
+	// run on in its own box. Sooner, every call at Needs approval would raise
+	// it. Held to the TTL by a test (internal/engine).
 	MCPApprovalGrace = 10 * time.Minute
 )
 
 // ReadModel is what one domain DECLARES about the linearizable reads its log
 // takes: the barrier records a day each agent seat's reads append to it.
 //
-// # Per domain, because the logs are read differently
-//
-// A barrier lands on the log of the domain a read is about, so the rate is a
-// property of who reads that domain and how, and one figure charged to every
-// log with a read index is a claim about all of them that is true of some.
-// It was one figure: every such log was expected to take the whole company's
-// 125 reads a day per seat, so the identity estate's log — which no read
-// takes a barrier on, because every identity answer is a node's own rows —
-// was held to a census its ceiling was never sized for, and the ceiling was
-// sized with no barrier bytes in it at all. Declared per domain, the census a
-// log is held to and the barriers its ceiling is sized for are one number,
-// stated where the domain is registered.
-//
-// REQUIRED OF EVERY DOMAIN THAT HAS A BARRIER, by the engine's register: a
-// domain that grants `linearizable` says how often it is read that way, and
-// zero is a declaration rather than a default — the identity estate makes it,
-// and its log's first barrier is then `census_drift` naming its ceiling,
-// which is the alarm a new linearizable reader of it should meet.
+// Per domain, as a barrier lands on the log of the domain a read is about: one
+// figure for every log held the identity estate's, which takes none, to a census
+// it was never sized for. Required of every domain with a barrier (the engine's
+// register): zero is a declaration, not a default; `census_drift` then names
+// the first barrier.
 type ReadModel struct {
-	// PerSeatDay is the linearizable reads a day each agent seat's reads
-	// put on this log. Zero declares that no read of the domain takes a
-	// barrier.
+	// PerSeatDay is the linearizable reads a day each agent seat's reads put on
+	// this log; zero declares that no read of the domain takes a barrier.
 	PerSeatDay int
 }
 
@@ -378,100 +223,43 @@ type Census struct {
 	// Seats is the running company's agent seats.
 	Seats int
 
-	// Background is the barrier records a day the ENGINE'S OWN periodic
-	// reads put on this log, whatever the company's seats do — the object
-	// store's collector, which pins the estate on a fixed cadence from one
-	// data node at a time (the engine's figure is collect.PinsPerDay).
-	// Each pin is a barrier on every log it reads, so each log takes all
-	// of them.
-	//
-	// It exists because the seats' term alone is not what a log receives,
-	// and the engine's own reads do not shrink with the company: when every
-	// data node pinned the estate on its own passes, a one-seat company on
-	// one data node reading exactly its census put 293 barriers a day on a
-	// log expected to take 125, and census_drift fired on companies whose
-	// sizing was right — LOUDER the smaller the company.
+	// Background is the barrier records a day the engine's own periodic reads
+	// put on this log whatever the seats do: the object store's collector pins
+	// the estate on a fixed cadence from one data node at a time
+	// (collect.PinsPerDay), each pin a barrier on every log it reads. Without
+	// it a one-seat company fired census_drift, louder the smaller the company.
 	Background int
 
-	// Clients is the linearizable reads a day a log's OWN SIZING declares
-	// for readers that are NEITHER seats NOR the engine's own passes — the
-	// code log's git clients (gitlet.GitReadsPerDay): a company's people and
-	// their CI, whose number no seat count predicts. Zero on every other
-	// log. Its caller sizes it by the ceiling the log's stream HOLDS, which
-	// every node reads alike and only a resize moves — and counts it on
-	// that log whatever the company hosts at the moment, because the log
-	// keeps its ceiling either way and the rate it is held against is
-	// every node's over the alarm's day, which outlives a switch and spans
-	// a rolling restart.
-	//
-	// It exists for Background's reason, worse: the code log's linearizable
-	// reads are mostly a person's or a pipeline's, so held to the seats'
-	// term alone a five-seat company's code log alarmed past 1 300 git reads
-	// a day, which one CI polling ten repositories a minute exceeds tenfold.
-	// A seat's own reads of that log — a ref resolved for it, a read by
-	// object id's one re-sync at the head — are the seats' term, which every
-	// log is given whole, and are no part of this one. So are its coding
-	// boxes': a box reads at its run's floor and pays no barrier but where
-	// what it asks for is not there. And the re-syncs a seat's work may
-	// append at will are HELD to the seats' term, not merely counted in it: a
-	// box's, a turn's code tools' second look and an engine write's
-	// re-judgement each draw on a bucket of its run or its turn and on its
-	// seat's ONE bucket of the Gitlet node that answers, which all three pay —
-	// LinearizableReadsPerSeatDay a day, after a burst of gitlet.ResyncBurst
-	// (internal/gitlet's NewResyncs) — and past it are answered at the seat's
-	// floor with no barrier. A check's box's re-syncs are no seat's and no
-	// client's: bounded alike by its repository's checks on each Gitlet node,
-	// and counted in no term here.
+	// Clients is the linearizable reads a day a log's own sizing declares for
+	// readers that are neither seats nor the engine's passes: the code log's git
+	// clients (gitlet.GitReadsPerDay), people and their CI, which no seat count
+	// predicts. Zero on every other log. Sized by the ceiling the log's stream
+	// holds, not what the company hosts now. Without it a code log alarmed past
+	// 1 300 git reads a day, which one CI exceeds tenfold. A seat's and its
+	// coding boxes' reads are the seats' term, re-syncs held to it
+	// (gitlet.ResyncBurst); a check box's are no term's.
 	Clients int
 }
 
-// Expected is the log's census: the linearizable reads a day it was sized to
-// take.
+// Expected is the log's census: the linearizable reads a day it was sized for.
 //
-// # Per seat, and at least one
-//
-// The seats' reads come from their tools, so the company's figure is the
-// domain's declared rate ([ReadModel.PerSeatDay]) times its seats. A company
-// with NO agent seat is counted as one: its operators still read through the
-// dashboard and the operator MCP, and an expectation of zero on a log they
-// read would fire on the first read anybody made, on exactly the company whose
-// first seat has not been hired yet.
-//
-// # The whole company's figure on each log it reads, not a share of it
-//
-// The census says how many reads a company makes and not how they split
-// between the tracker and the knowledge base, so each of those logs declares
-// all of them — which is how their ceilings are sized too: each domain's log
-// has its own budget. Divided across the logs instead, the tracker's log would
-// be expected to take a fraction of the census, and the reference company,
-// whose reads are mostly the tracker's, would fire the alarm doing exactly the
-// work it was sized for. A log no read takes a barrier on declares none.
-//
-// # Plus what the engine reads on its own, and what the log was sized for
-//
-// [Census.Background] is added to it, and [Census.Clients], each for the
-// reason it gives.
+// [ReadModel.PerSeatDay] times seats, a company with no agent seat counting as
+// one or zero would fire on its operators' first read, plus [Census.Background]
+// and [Census.Clients]. It is the whole company's figure on each log it reads,
+// not a share: the ceiling is sized that way, and divided, the tracker's log
+// would fire doing the work it was sized for.
 func (c Census) Expected() int {
 	return max(c.Reads.PerSeatDay, 0)*max(c.Seats, 1) + max(c.Background, 0) + max(c.Clients, 0)
 }
 
-// Kind names one alarm.
-//
-// A named string rather than an integer, because it travels: it is a metric
-// attribute, a log field and a row on a dashboard, and an operator searching
-// for one has to be able to type it.
+// Kind names one alarm: a string because it travels (a metric attribute, a log
+// field, a dashboard row) and an operator has to be able to type it.
 type Kind string
 
-// The alarm kinds, one per rule in [table].
-//
-// CONSTANTS RATHER THAN THE LITERALS AT EACH USE, because the value travels
-// (see [Kind]): a kind spelled at two sites is one that is eventually spelled
-// two ways, and the misspelling surfaces as a dashboard row nobody can find
-// rather than as a compile error. What each one MEANS in an operator's words
-// is [alarmMeaning] and what to do about it is its rule's remedy, which
-// [AlarmReference] renders into the published page — so adding a kind is three
-// things, and the reference suite is what refuses a rule whose meaning nobody
-// wrote.
+// The alarm kinds, one per rule in [table]: constants so a misspelling is a
+// compile error, not a dashboard row nobody can find. A kind's meaning is
+// [alarmMeaning] and its remedy is its rule's, both rendered by
+// [AlarmReference], whose suite refuses a rule whose meaning nobody wrote.
 const (
 	KindApplyLag            Kind = "apply_lag"
 	KindReadRefusals        Kind = "read_refusals"
@@ -523,6 +311,9 @@ const (
 	KindLLMLimitWaiting          Kind = "llm_limit_waiting"
 	KindCodeMirrorFailing        Kind = "code_mirror_failing"
 
+	// The executor's: a seat's run whose finished job waits for an operator.
+	KindExecutorResumeBlocked Kind = "executor_resume_blocked"
+
 	// The MCP kinds, each about ONE configured MCP server ([PerEntryKinds]).
 	KindMCPServerFailing     Kind = "mcp_server_failing"
 	KindMCPServerPartial     Kind = "mcp_server_partial"
@@ -536,18 +327,12 @@ const (
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
 //
-// ONE STRUCT rather than a callback per condition, because the whole table is
-// evaluated together on ticks that already run — every [AlarmInterval], and
-// again straight after the trim's quarter-hour measurements land — and a
-// condition that fetched its own input would make the cost of the table a
-// function of how many alarms are defined rather than of how many facts it
-// reads.
+// One struct, not a callback per condition: the table is evaluated together on
+// ticks that already run (every [AlarmInterval], and after the trim's
+// measurements land), so its cost follows the facts read, not the alarms defined.
 //
-// A field this node cannot measure is left at its zero value, and every
-// condition is written so that a zero reads as "nothing to report" rather than
-// as "at the floor". That is what lets a node with no search backend, no
-// snapshot and no maintenance in flight evaluate the same table as one with
-// all three.
+// A field this node cannot measure stays zero, and every condition reads zero
+// as "nothing to report", not "at the floor".
 type Reading struct {
 	// Up is the kinds this node's tracker had up at its latest evaluation
 	// ([Tracker.Standing]): a rule that clears past its raise ([rule.stays])
@@ -563,111 +348,67 @@ type Reading struct {
 
 	// BarrierP95 is the read barrier's 95th percentile.
 	//
-	// EVERY …P95 HERE IS A HISTOGRAM'S QUANTILE, the upper boundary of the
-	// bucket the percentile falls in ([metrics.Snapshot.Quantile]): "up to"
-	// this, and past the boundary below it. An alarm holds one to a budget
-	// that is itself a boundary, so it fires exactly when the percentile is
-	// past the budget (TestEveryPercentileAlarmIsDecidedAtABoundary), and its
-	// detail says "up to" rather than naming the boundary as the percentile.
+	// Every …P95 here is a histogram quantile, the upper boundary of the bucket
+	// the percentile falls in ([metrics.Snapshot.Quantile]): "up to" this. An
+	// alarm holds one to a budget that is itself a boundary, so it fires exactly
+	// when the percentile is past the budget
+	// (TestEveryPercentileAlarmIsDecidedAtABoundary), and its detail says "up to".
 	BarrierP95 time.Duration
 
-	// HeadroomFraction is how much of the byte ceiling the log's ordinary
-	// writes are held to is unused, as a fraction ([Reservation.Headroom]).
-	//
-	// A POINTER, because zero is a real value here and it is the worst
-	// one: a full log and a node that has not measured its log are
-	// opposite facts, and a plain float64 gives them the same
-	// representation. Nil is "not measured" — which is every node until
-	// the trim runs once, and every node whose domain declares no ceiling.
+	// HeadroomFraction is how much of the byte ceiling the log's ordinary writes
+	// are held to is unused ([Reservation.Headroom]). A pointer: zero (a full
+	// log) and "not measured" are opposite facts. Nil is every node until the
+	// trim runs once, and every node whose domain declares no ceiling.
 	HeadroomFraction *float64
 
-	// BackupAge is how old the backup one log's trim counts is — the
-	// newest verified point the policy counts that covers the log — and
-	// BackupMaxAge what the operator asked for. A zero BackupMaxAge is a
-	// node with no backup policy, which is not an alarm — it is a
-	// deployment that has said it does not want one.
-	//
-	// A PER-DOMAIN CONDITION, evaluated once per log from the report's
-	// rows ([ReportInputs.BackupMaxAge]) for the reason the headroom is:
-	// the logs' backups have one age each, and the one a node-wide
-	// reading carried was the newest point's, whatever it covered.
-	//
-	// BackupAge IS A POINTER, for the reason HeadroomFraction is one: zero
-	// is a real and reassuring value here — a copy verified this second —
-	// and "no verified backup has ever been recorded" is the opposite
-	// fact. A plain duration gave them one representation, so the reading
-	// was filled with a fabricated age past the policy to make the alarm
-	// fire, and the alarm then told a four-second-old company that its
-	// newest backup was twenty-five hours old. Nil is the absence, and the
-	// condition below says so in words.
+	// BackupAge is how old the newest verified backup point the policy counts
+	// for one log is, and BackupMaxAge what the operator asked for. A zero
+	// BackupMaxAge is a deployment that wants no backup policy, not an alarm.
+	// Per DOMAIN ([ReportInputs.BackupMaxAge]). BackupAge is a pointer for
+	// HeadroomFraction's reason: zero is reassuring (verified this second), nil
+	// is "none ever recorded", and the condition says so in words.
 	BackupAge    *time.Duration
 	BackupMaxAge time.Duration
 
 	// TrimBlockedFor is how long the trim has been unable to advance, and
-	// TrimBlockedBy names the term holding it. Per DOMAIN, like
-	// HeadroomFraction.
+	// TrimBlockedBy names the term holding it. Per DOMAIN.
 	TrimBlockedFor time.Duration
 	TrimBlockedBy  string
 
-	// TrimPastWindow is how many of the log's SEQUENCES lie below the age
-	// term — the records older than ReplayWindow that the age term alone
-	// would release, and which a blocked trim is therefore keeping. Per
-	// DOMAIN. Exactly that many records on a strict log, whose sequences are
-	// dense above its first; AT MOST that many on a compacted one, whose
-	// superseded records are already gone from the span, which is why the
-	// detail says "up to".
+	// TrimPastWindow is how many of the log's sequences lie below the age term:
+	// records older than ReplayWindow that a blocked trim is keeping. Per
+	// DOMAIN. Exact on a strict log, at most that on a compacted one (hence the
+	// detail's "up to").
 	//
-	// MEASURED, from the age term's own sequence against the log's first,
-	// rather than assumed from how long the block has lasted, because the
-	// two come apart in exactly the cases a healthy fleet is in: a log
-	// nobody has written to is blocked for ever (every node sits at
-	// position zero) and holds nothing, and a log whose first record
-	// arrived yesterday under a block a month old holds nothing past the
-	// window either. ZERO IS THE BENIGN END and so is unmeasured — a stream
-	// this node could not read — so it needs no pointer: both say the block
-	// is keeping nothing anybody knows of.
+	// Measured from the age term's sequence against the log's first, not
+	// assumed from how long the block has lasted: a log nobody wrote to is
+	// blocked for ever and holds nothing. Zero is the benign end and so is
+	// unmeasured, so it needs no pointer.
 	TrimPastWindow uint64
 
-	// DeferredAge is how long this node has held the oldest record it
-	// could not apply on one log — from the position heartbeat's first
-	// sighting of it, the instant [Health.Fault] measures the grace that
-	// takes this node's copy of that log out of service from, through
-	// [DeferredSince.Age] — and DeferredRecord which record that is, in the
-	// words an operator upgrades by: its position and the record version it
-	// was written at against the one this build reads. Per DOMAIN, like
-	// HeadroomFraction, and filled by the report from [DomainInputs] rather
-	// than by a node-wide caller.
-	//
-	// A LOG'S, never the node's oldest, because EVERY LOG'S COPY IS JUDGED
-	// on its own (ADR-0079): past the grace a held record takes this node's
-	// copy of THAT log out of service and no other's, so two logs holding
-	// records at once are two different answers, and one alarm naming the
-	// node's oldest hid every other log held beside it.
+	// DeferredAge is how long this node has held the oldest record it could not
+	// apply on one log, from the position heartbeat's first sighting of it (the
+	// instant [Health.Fault] measures the grace from, via [DeferredSince.Age]),
+	// and DeferredRecord which record: its position and the record version it
+	// was written at against the one this build reads. Per DOMAIN, from
+	// [DomainInputs], never the node's oldest: every log's copy is judged on its
+	// own (ADR-0079), and one alarm naming the oldest hid the others.
 	DeferredAge    time.Duration
 	DeferredRecord string
 
-	// FloorUnknownFor is how long one log's trim floor has been unreadable
-	// on this node — from the first alarm heartbeat that could not read it
-	// to the latest, never a persistence nobody observed — and
-	// FloorUnknownCause what the latest read said: the log's floor key could
-	// not be read (coordination unreachable, or its row in the register does
-	// not read as a floor) or the floor is published at a generation this
-	// node has not reached — one refusal with different remedies.
-	//
-	// A DURATION A DOMAIN, each floor being its own key, read, refused and
-	// aged on its own: a domain that began failing a moment ago is still
-	// served from its memo ([FloorCacheStale]), and one age printed beside
-	// every failing name told an operator that domain's reads were refused,
-	// with another domain's age as the evidence — while one alarm naming the
-	// node's longest-unreadable floor hid every other log re-anchored beside
-	// it.
+	// FloorUnknownFor is how long one log's trim floor has been unreadable on
+	// this node (from the first alarm heartbeat that could not read it) and
+	// FloorUnknownCause what the latest read said: the key could not be read
+	// (coordination unreachable, or its row is no floor) or the floor is at a
+	// generation this node has not reached, with different remedies. One
+	// duration a domain: one still served from its memo ([FloorCacheStale])
+	// would otherwise be given another's age as evidence.
 	FloorUnknownFor   time.Duration
 	FloorUnknownCause string
 
-	// PrefetchP95 and SearchP95 are the knowledge scans this node
-	// coordinated, at p95: those a turn's prefetch ran, which the turn waits
-	// on before its first token, and those somebody ran on purpose. Two
-	// series, never one, since each is held to its own budget.
+	// PrefetchP95 and SearchP95 are the knowledge scans this node coordinated:
+	// a turn's prefetch, and those somebody ran on purpose. Two series, each
+	// held to its own budget.
 	PrefetchP95, SearchP95 time.Duration
 
 	// SearchDegradedFraction and SearchScopedFraction are the fractions of
@@ -675,43 +416,27 @@ type Reading struct {
 	// corpus.
 	SearchDegradedFraction, SearchScopedFraction float64
 
-	// HistoryPartialFraction is the fraction of this node's fleet history
-	// reads answered without every live data node, and HistoryReadBudget the
-	// budget those reads waited on for the other data nodes —
-	// internal/eventfan's FleetReadBudget, which a node that did not answer
-	// inside is what makes an answer partial.
-	//
-	// THE BUDGET TRAVELS WITH THE READING rather than being imported here,
-	// because the scatter that owns it is a layer ABOVE this framework: it
-	// reads every data node's own event log, and the framework every replicated
-	// domain is built on depending on the fleet's history reader for one
-	// constant would put that reader under every domain's build. The node
-	// that counted the reads is the one that knows what they waited on, and
-	// it states it in the same breath as the fraction, so the detail still
-	// names the number the scatter waits on rather than a second opinion of
-	// it (ADR-0015).
+	// HistoryPartialFraction is the fraction of this node's fleet history reads
+	// answered without every live data node, and HistoryReadBudget the budget
+	// those reads waited on the others (internal/eventfan's FleetReadBudget).
+	// The budget travels with the reading, not imported: the scatter is a layer
+	// above this framework (ADR-0015).
 	HistoryPartialFraction float64
 	HistoryReadBudget      time.Duration
 
-	// SemanticCoverage is the fraction of the corpus with current vectors.
-	// A POINTER for the reason HeadroomFraction is one: a company with no
-	// embeddings configured measures nothing, and zero coverage is the
-	// alarm rather than the absence.
+	// SemanticCoverage is the fraction of the corpus with current vectors. A
+	// pointer, for HeadroomFraction's reason: with no embeddings configured
+	// nothing is measured, and zero coverage is the alarm, not the absence.
 	SemanticCoverage *float64
 
-	// IVFRecall is the recall the latest measurement of the semantic index
-	// found against the exact scan (ADR-0028) — its training's, or the
-	// duty's later re-measurement's — in the query shape nearest its floor,
-	// IVFShape; IVFRecallFloor is that shape's floor, and IVFMeasuredOn how
-	// many sources the corpus held.
+	// IVFRecall is the recall the latest measurement of the semantic index found
+	// against the exact scan (ADR-0028), in the query shape nearest its floor,
+	// IVFShape; IVFRecallFloor is that shape's floor, IVFMeasuredOn how many
+	// sources the corpus held.
 	//
-	// THE FLOOR IS SUPPLIED rather than named here, because the curve is
-	// internal/search's — its FloorAt, the same curve `crewlet search eval`
-	// judges against, at the size of the corpus each shape searches — and
-	// that package imports this one. A POINTER, for SemanticCoverage's
-	// reason: an index that was never trained, or was retired for the
-	// corpus's size, measured nothing, and zero recall is the alarm rather than
-	// the absence.
+	// The floor is supplied: the curve is internal/search's FloorAt, which
+	// imports this package. A pointer, for SemanticCoverage's reason: an index
+	// never trained, or retired for the corpus's size, measured nothing.
 	IVFRecall      *float64
 	IVFRecallFloor float64
 	IVFMeasuredOn  int
@@ -723,154 +448,112 @@ type Reading struct {
 	// nobody gets until a build that reads it runs.
 	RecordsGated, FeedUnreadable int
 
-	// FeedDeadLetters is every record one log's wake feed has
-	// dead-lettered, as this node last read the dead-letter stream: how
-	// long ago each was kept and how long until the stream's retention lets
-	// it go, the oldest first. Per DOMAIN, like HeadroomFraction, filled by
-	// the report from [DomainInputs]: each domain's feed keeps its own
-	// subject (internal/changefeed's DeadLetterSubject). Empty while it
-	// holds none.
+	// FeedDeadLetters is every record one log's wake feed has dead-lettered, as
+	// this node last read the dead-letter stream: how long ago each was kept
+	// and how long until retention lets it go, oldest first. Per DOMAIN, from
+	// [DomainInputs] (internal/changefeed's DeadLetterSubject).
 	//
-	// EVERY ENTRY IS A WAKE NOBODY HAS HAD: a record its feed handed back
-	// for an hour and no node could read, kept whole — its sealed frame
-	// inside — until a node whose feed starts able to read it replays it,
-	// or the retention lets it go and the wake is lost with it.
+	// Every entry is a wake nobody has had: a record no node could read, kept
+	// whole until a node able to read it replays it or retention lets it go.
 	FeedDeadLetters []FeedDeadLetter
 
-	// InboundDeadLetters is every delivery the notification service's
-	// inbound group never handled, kept on the group's unhandled subject
-	// (internal/notify's UnhandledSubject), as this node last read the
-	// dead-letter stream: each one's age and the time it has left, as
-	// FeedDeadLetters says each feed's. Node-wide, since the group is one
-	// for the whole fleet. Empty while it holds none.
-	//
-	// EVERY ENTRY IS A WAKE NOBODY HAS HAD: a newer record's wake the older
-	// nodes of a roll passed round until its budget was spent, or one a
-	// node that shed or stopped handed back last, kept whole until the next
-	// start of a node that reads it replays it, or the retention lets it go
-	// and the wake is lost with it.
+	// InboundDeadLetters is every delivery the notification service's inbound
+	// group never handled, kept on its unhandled subject (internal/notify's
+	// UnhandledSubject), as FeedDeadLetters says. Node-wide: the group is one
+	// for the fleet. Every entry is a wake nobody has had.
 	InboundDeadLetters []FeedDeadLetter
 
-	// FeedsDown is every change feed on this node that holds no consumer:
-	// which feed, how long for, how many attempts to bring it back have
-	// failed and what the latest said. Empty on a node whose feeds all
-	// hold one, and on a node that runs none.
+	// FeedsDown is every change feed on this node that holds no consumer: which
+	// feed, how long, how many attempts have failed and what the latest said.
 	//
-	// THE OUTAGES THEMSELVES rather than a count of them, because what an
-	// operator acts on is which feed and why: a broker that cannot be
-	// reached stops every feed at once, and a consumer the broker refuses
-	// stops one. And a FACT OF ITS OWN, because nothing else can see it: a
-	// feed that cannot reach its consumer publishes no wake, and
-	// `objective_burn` judges the wakes that were published.
+	// The outages themselves, not a count: a broker that cannot be reached
+	// stops every feed, a consumer it refuses stops one. A fact of its own, as
+	// a feed that cannot reach its consumer publishes no wake and
+	// `objective_burn` judges only wakes that were published.
 	FeedsDown []FeedOutage
 
-	// MaintenanceOpenFor is how long the oldest capacity window has been
-	// open, with the log it is on and the phase it is stuck in.
+	// MaintenanceOpenFor is how long the oldest capacity window has been open,
+	// with the log it is on and the phase it is stuck in.
 	//
-	// MaintenanceUnreadable says that window is the one this node last READ
-	// open and can't read now, MaintenanceOpenFor is then how long it had
-	// been open WHEN THAT READ ANSWERED, and MaintenanceReadAgo how long ago
-	// that was. A window is open, absent, or unreadable, and the third is
-	// neither of the others: read as absent, a coordination blip cleared a
-	// firing alarm, and read as open on this node's clock, a window last read
-	// at 59 minutes crossed the hour during the blip and raised one about a
-	// window that might have closed. So the alarm judges an unreadable log
-	// on what this node last knew of it, as old as it was then, and the
-	// detail says that is what it is.
+	// MaintenanceUnreadable says that window is the one this node last read
+	// open and can't read now; MaintenanceOpenFor is then its age when that
+	// read answered, MaintenanceReadAgo how long ago. Read as absent, a
+	// coordination blip cleared a firing alarm; aged on this node's clock, a
+	// window last read at 59 minutes crossed the hour during the blip.
 	MaintenanceOpenFor    time.Duration
 	MaintenanceStream     string
 	MaintenancePhase      string
 	MaintenanceUnreadable bool
 	MaintenanceReadAgo    time.Duration
 
-	// FreeBytes and StoreBytes are one volume's free space and what this
-	// node's databases occupy ON IT, and StoreVolume the directory that
-	// names it: of the volumes the databases are on — the two files need
-	// not share one — the one with the least room for the next copy of what
-	// it holds. CopyHeldBytes is the write-ahead log that copy is expected
-	// to hold back there while it runs, as each file's last copy measured
-	// it (store.DB.CopyHoldsBack): a copy stops every checkpoint at its
-	// moment for its run, so the next one needs room for its log beside
-	// itself — zero where no copy has measured it yet.
+	// FreeBytes and StoreBytes are one volume's free space and what this node's
+	// databases occupy on it, and StoreVolume its directory: of the volumes the
+	// databases are on, the one with the least room for the next copy.
+	// CopyHeldBytes is the write-ahead log that copy is expected to hold back
+	// while it runs, as each file's last copy measured it
+	// (store.DB.CopyHoldsBack); zero where none has.
 	FreeBytes, StoreBytes, CopyHeldBytes int64
 	StoreVolume                          string
 
-	// WALBytes is the larger write-ahead log's size and WALFile the
-	// database it is beside. WALCopy is the copy holding that log now — the
-	// part file it writes, and how many more hold the log beside it — and
-	// WALCopyFor how long it has, empty and zero when no copy does: a copy
-	// holds its file's log for its whole run (store.DB.Copies), so a large
-	// log a copy holds is one the copy's end folds back in, where one
-	// nothing holds is a checkpoint that is not happening.
+	// WALBytes is the larger write-ahead log's size and WALFile its database.
+	// WALCopy is the copy holding that log now (the part file it writes, and how
+	// many more hold the log beside it) and WALCopyFor how long, empty and zero
+	// when none does: a copy holds its file's log for its whole run
+	// (store.DB.Copies) and its end folds the log back in, where a log nothing
+	// holds is a checkpoint that is not happening.
 	WALBytes   int64
 	WALFile    string
 	WALCopy    string
 	WALCopyFor time.Duration
 
-	// StoreVolumeUnmeasured says which database, or which volume, could not
-	// be measured and why — empty when every one was. It is the alarm, not
-	// an absence: a volume nobody can measure is one nothing shows has
-	// room, and leaving it out would judge the node on its other volume,
-	// which is the blind spot measuring each file's own volume removed.
+	// StoreVolumeUnmeasured says which database or volume could not be measured
+	// and why, empty when all were. It is the alarm, not an absence: leaving it
+	// out would judge the node on its other volume.
 	StoreVolumeUnmeasured string
 
 	// PoolWaitP95 is how long a caller queues for a database connection.
 	PoolWaitP95 time.Duration
 
-	// LinearizableReads and LinearizableReadsExpected are one log's
-	// observed and designed-for daily read rates — the barrier records
-	// committed to the log in the last day, from every node, and its census
-	// ([Census.Expected]). Per DOMAIN, like HeadroomFraction, and filled by
-	// the report from [DomainInputs]: a log over its census is over it
-	// however quiet the others are, and one reading naming only the log
-	// furthest past its census said nothing of a second log past its own
-	// until the first came back under.
+	// LinearizableReads and LinearizableReadsExpected are one log's observed
+	// and designed-for daily read rates: the barrier records committed to the
+	// log in the last day, from every node, and its census ([Census.Expected]).
+	// Per DOMAIN, from [DomainInputs]: one reading naming only the log furthest
+	// past its census said nothing of a second log past its own.
 	LinearizableReads, LinearizableReadsExpected int
 
 	// LogCeilingField is the Tier A field that sets this log's byte ceiling
-	// (`stream.iam_log_max_bytes`, say), which a log past its census names
-	// in its own line: each log's ceiling is its own field, sized from
-	// what that log holds, and one remedy naming the mutation log's sent an
-	// operator of every other log to the wrong field. Empty where the
-	// caller named none. Per DOMAIN, filled by the report from
+	// (`stream.iam_log_max_bytes`, say), named in a log's census line: one
+	// remedy naming the mutation log's sent every other log's operator to the
+	// wrong field. Empty where the caller named none. Per DOMAIN, from
 	// [DomainInputs.CeilingField].
 	LogCeilingField string
 
-	// LogBytesPerDay is what one log took in over the trailing day,
-	// LogMaxBytes the ceiling its broker enforces and ReplayWindow the
-	// `min_age` the trim keeps — the window the log has to be able to
-	// hold. Per DOMAIN, like HeadroomFraction, and evaluated per domain
-	// by the report.
+	// LogBytesPerDay is what one log took in over the trailing day, LogMaxBytes
+	// the ceiling its broker enforces and ReplayWindow the `min_age` the trim
+	// keeps, the window the log must be able to hold. Per DOMAIN.
 	//
-	// A POINTER, and here zero is the BENIGN end rather than the alarming
-	// one, which is exactly why it needs one: a log that took in nothing
-	// yesterday is a measurement — it can hold any window — while a node
-	// that has not measured, or a log in its first two days (whose
-	// trailing day would contain its import), knows nothing. Given the zero's representation,
-	// the unmeasured log would be reported as idle on every screen, and
-	// any form of the rule that divides by the rate — how long the ceiling
-	// holds — reads it as a ceiling that holds nothing and fires on every
-	// boot.
+	// A pointer: a log that took in nothing yesterday is a measurement (it can
+	// hold any window), while an unmeasured node or a log in its first two days
+	// (whose trailing day contains its import) knows nothing. One
+	// representation would show it as idle, and any rule dividing by the rate
+	// would fire on every boot.
 	LogBytesPerDay *uint64
 	LogMaxBytes    uint64
 	ReplayWindow   time.Duration
 
-	// ObjectsMissing is how many files' bytes the object store does not
-	// hold, or holds wrong — at another size, or under another digest, or
-	// as no object it can read — or would not answer for, as the
-	// collector's last audit to run to its end found: on the node
-	// holding the collector's duty, and zero on every other, since the
-	// store is one the whole fleet shares and one node's count of it is
-	// the fleet's. Files nobody can read. Any value above zero is an alarm,
-	// for the gated record's reason: there is no threshold below which a
-	// file that cannot be opened is acceptable.
+	// ObjectsMissing is how many files' bytes the object store does not hold,
+	// holds wrong (another size or digest, or no readable object) or would not
+	// answer for, as the collector's last complete audit found: on the node
+	// holding the collector's duty, zero on every other, as one node's count of
+	// the shared store is the fleet's. Any value above zero is an alarm, for the
+	// gated record's reason: no threshold makes an unopenable file acceptable.
 	ObjectsMissing int
 
-	// ObjectsBucketBytes is how many bytes the nats object bucket holds,
-	// and ObjectsBucketMaxBytes the reservation the broker holds it to,
-	// as the collector's duty holder last read them: zero on every other
-	// node, and on a fleet whose files are in an S3 bucket, which reserves
-	// nothing. A zero MaxBytes is "not measured", never "full".
+	// ObjectsBucketBytes is how many bytes the nats object bucket holds, and
+	// ObjectsBucketMaxBytes the reservation the broker holds it to, as the
+	// collector's duty holder last read them: zero on every other node and on a
+	// fleet on S3, which reserves nothing. A zero MaxBytes is "not measured",
+	// never "full".
 	ObjectsBucketBytes, ObjectsBucketMaxBytes int64
 
 	// ObjectsBucketWanted is the store.objects.nats_max_bytes this node's boot
@@ -879,152 +562,80 @@ type Reading struct {
 	ObjectsBucketWanted, ObjectsBucketKept int64
 	ObjectsBucketWhy                       string
 
-	// ObjectiveBurns is every service objective this node is spending the
-	// error budget of too fast, each over the fastest pair of windows that
-	// fires ([objectives.Meter.Burning]): empty on a node whose objectives
-	// are inside their budgets, and on one that measured none.
-	//
-	// JUDGED BY internal/objectives, which owns the targets, the window
-	// pairs and their factors, and carried here already judged: the alarm
-	// borrows the decision whole (ADR-0015) rather than restating a factor
-	// beside the one the objectives declare.
+	// ObjectiveBurns is every service objective this node is spending the error
+	// budget of too fast, each over the fastest pair of windows that fires
+	// ([objectives.Meter.Burning]). Carried already judged by internal/objectives,
+	// which owns the targets, windows and factors (ADR-0015).
 	ObjectiveBurns []objectives.Burn
 
 	// ClockSkew is how far this node's clock stands from the fleet's, and
 	// BrokerClockSkew how far the clock of the broker member leading the
-	// coordination store's position register stands from it, each signed —
-	// positive is ahead — as the position heartbeat last measured them off
-	// the register: every data node's row carries the instant the node
-	// stamped on it and the instant the broker stored it, so each says how
-	// far that node's clock stands from the member's, and the MEDIAN of them
-	// is the fleet's clock. ClockSkewNodes is how many data nodes' clocks
-	// that median was taken over, this node's among them. ClockSkewBound is
-	// the most either clock may stand from the fleet's:
-	// objstore.AssumedClockSkew, the hour every rule that judges one
-	// machine's instant by another machine's clock rests on, which the node
-	// that measured hands in with the measure.
-	//
-	// TWO CLOCKS, because a row's two instants alone cannot say which of its
-	// two clocks moved: judged against the member, a node read the member's
-	// drift as its own, and the member — a data node on an embedded broker,
-	// whose own row one clock stamps and stores — read nothing at all. Against
-	// the fleet's median, the clock that moved is the one off it.
-	//
-	// THE BOUND TRAVELS WITH THE READING, for HistoryReadBudget's reason:
-	// the constant is the object store's, which this framework does not
-	// import, and the alarm fires at that decision rather than at a number
-	// of its own (ADR-0015). All zero on a node that measured nothing — no
-	// beat yet, two beats in a row that could not read the register, or a
-	// heartbeat that has stopped — and a zero bound judges nothing, the
-	// BackupAge/BackupMaxAge pair's shape: a zero skew is a clock in time
-	// with the fleet's, never an alarm.
+	// position register stands from it, each signed (positive is ahead) as the
+	// heartbeat last measured: the median of the data nodes' stamped-vs-stored
+	// skew is the fleet's clock, over ClockSkewNodes clocks. ClockSkewBound is
+	// objstore.AssumedClockSkew, handed in as this framework does not import the
+	// object store (ADR-0015). Zero when unmeasured; a zero bound judges nothing.
+	// Two clocks: against the member alone a node read the member's drift as its
+	// own.
 	ClockSkew, BrokerClockSkew time.Duration
 	ClockSkewNodes             int
 	ClockSkewBound             time.Duration
 
 	// CodeMaintenanceRefused is how many repositories this node's git cache
-	// cannot write a bitmap of, because the bitmap — charged by the
-	// repository's objects, with room beside it for one clone of the
-	// repository — needs more memory than the node can give its background
-	// work; CodeMaintenanceLargest is the largest of those charges, and
-	// CodeMaintenanceBudget what the node can give: its memory as the cache
-	// last read it, less what it keeps for its git lanes, the store, the
-	// broker and the engine (internal/gitlet/cache). The node's own
-	// measurement, never a threshold of the table's: the alarm fires where
-	// the largest charge passes it. All zero on a node that serves no git.
+	// cannot write a bitmap of: it (charged by the repository's objects, with
+	// room for one clone) needs more memory than the node can give background
+	// work. CodeMaintenanceLargest is the largest charge, CodeMaintenanceBudget
+	// what the node can give (internal/gitlet/cache). Zero on a node serving no
+	// git.
 	CodeMaintenanceRefused                        int
 	CodeMaintenanceLargest, CodeMaintenanceBudget int64
 
-	// CodeCompactionBehind is how many of the repositories this node
-	// maintains — as their MAINTAINER, the Gitlet node that merges their packs
-	// and publishes their layers — its compactor found at the most live packs
-	// a repository may hold on its last pass, so every push carrying a pack
-	// into them is refused `compaction_behind` until a compaction lands;
-	// CodeCompactionBehindLargest is the most live packs among them and
-	// CodeCompactionBehindRepo that repository's name. Counted against
-	// gitlet.MaxPacksPerRepo by the compactor, which already judged each
-	// repository it names (internal/gitlet/compact): this framework imports no
-	// Gitlet package, and the alarm borrows the bound the push decide
-	// refuses at (ADR-0015) rather than holding a number of its own. All zero
-	// on a node that serves no git, compacts nothing, or found none.
+	// CodeCompactionBehind is how many repositories this node maintains (as
+	// their MAINTAINER, the Gitlet node that merges packs and publishes layers)
+	// its compactor found at the most live packs allowed, so pushes carrying a
+	// pack are refused `compaction_behind`; ...Largest is the most live packs
+	// among them and ...Repo that repository. Judged against
+	// gitlet.MaxPacksPerRepo by the compactor (internal/gitlet/compact; ADR-0015).
 	CodeCompactionBehind        int
 	CodeCompactionBehindLargest int64
 	CodeCompactionBehindRepo    string
 
-	// CodeCommitBusy is how many proposals this node's COMMITTER — the data
-	// node a repository's pushes are decided on, the first live data node in
-	// its rendezvous order — refused busy for a BACKLOG over the last
-	// TrimInterval: a repository's queue full, the node holding its whole
-	// bound across every repository it commits for, or a proposal that
-	// queued with time to spare and lost it waiting behind earlier ones
-	// (internal/gitlet's Committer.AlarmReading). CodeCommitBusyRepo is the
-	// repository with the most of them, by the name this node's rows hold
-	// for it, else its id; CodeCommitBusyOfRepo is how many were that
-	// repository's; CodeCommitBusyNode is how many met the node's whole bound
-	// rather than one repository's queue; and CodeCommitBusyWaited is how
-	// many waited in a queue until their asker could wait no longer — the
-	// queue's TIME bound, which a committer slower than its pushes meets
-	// before its count. A proposal that arrived with its asker's attempt
-	// already spent, or a record that lost every compare-and-set round, is
-	// no part of it.
-	//
-	// EACH WAS ALREADY JUDGED AT THE COMMITTER'S OWN BOUNDS, which this
-	// framework does not import, so the alarm borrows them whole (ADR-0015)
-	// and fires at any count. And the window is TrimInterval itself, which
-	// the committer borrows in turn (gitlet.CommitBusyWindow), so the detail
-	// names the span from this package's own constant rather than from a
-	// copy of it. All zero on a node that decides no push — no data role, or
-	// a company that hosts no code — and on one that turned none away.
+	// CodeCommitBusy is how many proposals this node's COMMITTER (the first live
+	// data node in a repository's rendezvous order) refused busy for a backlog
+	// over the last TrimInterval: a full repository queue, the node's whole
+	// bound, or a proposal that lost its time behind earlier ones
+	// (internal/gitlet's Committer.AlarmReading). ...Repo has the most, ...OfRepo
+	// is how many were its, ...Node met the node's bound, ...Waited waited until
+	// their asker gave up. Not counted: an arrival with its attempt spent, or one
+	// that lost every compare-and-set round. Judged at the committer's bounds
+	// (ADR-0015); window gitlet.CommitBusyWindow.
 	CodeCommitBusy       int
 	CodeCommitBusyRepo   string
 	CodeCommitBusyOfRepo int
 	CodeCommitBusyNode   int
 	CodeCommitBusyWaited int
 
-	// CodeChecksBacklog is how many queued attempts of checks have waited for
-	// a runner longer than their OWN timeout — each held to the
-	// timeout_seconds of the definition it was queued under, the time its
-	// author gave the check to run — as this node's rows hold them
-	// (internal/gitlet's Reader.ChecksBacklog, read in the order they fell
-	// overdue), exact up to gitlet.BacklogScan; CodeChecksBacklogMore reports
-	// more than that many, the count then the bound;
-	// CodeChecksBacklogOldest is the longest wait among those counted and
-	// CodeChecksBacklogCheck that attempt, by its repository's name, its
-	// commit, the branch it is checked for, its check and its attempt.
-	//
-	// MEASURED FROM THE ROWS by every data node, never by a runner: a fleet
-	// whose every Gitlet node is gone runs no check at all, and is the case the
-	// alarm must not miss. EACH ATTEMPT WAS JUDGED AT ITS OWN TIMEOUT, which
-	// this framework does not import, so the alarm borrows it (ADR-0015) and
-	// fires at any count. All zero on a node holding no code log's rows — no
-	// data role — and on one whose queued attempts are all within their
-	// time.
+	// CodeChecksBacklog is how many queued check attempts have waited for a
+	// runner longer than their own timeout (timeout_seconds), as this node's rows
+	// hold them (internal/gitlet's Reader.ChecksBacklog), exact up to
+	// gitlet.BacklogScan; ...More reports more. ...Oldest is the longest wait
+	// and ...Check that attempt (repository, commit, branch, check, attempt).
+	// Measured from the rows by every data node, never a runner: with every
+	// Gitlet node gone no check runs, the case the alarm must not miss. Judged
+	// at each attempt's own timeout (ADR-0015).
 	CodeChecksBacklog       int
 	CodeChecksBacklogMore   bool
 	CodeChecksBacklogOldest time.Duration
 	CodeChecksBacklogCheck  string
 
-	// CodeMergeRateOver is how many merge queues this node is the home of
-	// were asked to land more changes within the merge rate's window than
-	// they can land in it: their enqueues within CodeMergeRateWindow — live
-	// or ended — past the queue's own capacity over it, depth × batch
-	// changes a round at the mean round its trains took (config's
-	// LandingCapacity). CodeMergeRateOverTarget is the one asked furthest
-	// past its capacity, by its branch and its repository's name,
-	// CodeMergeRateOverAsked its enqueues within the window,
-	// CodeMergeRateOverCapacity what it can land in it and
-	// CodeMergeRateOverRound the mean round it was priced at.
-	// CodeMergeRateWindow is the window itself — internal/gitlet's
-	// MergeRateWindow — handed in by the node that measured over it, since
-	// this framework imports no Gitlet package and the detail names it.
-	//
-	// THE THRESHOLD IS THE QUEUE'S OWN CAPACITY (ADR-0015, M5-D28): the
-	// depth and the batch its gate lands under and the rounds its home
-	// timed, judged by the home's queue worker, so the alarm fires at any
-	// count and never at a rate of its own. Raised by the repository's HOME
-	// Gitlet node, the one node that builds and times its trains. All zero on
-	// a node that is home to no queue — no gitlet role, or a company that hosts
-	// no code — and on one whose every queue keeps up.
+	// CodeMergeRateOver is how many merge queues this node is the home of were
+	// asked to land more changes within CodeMergeRateWindow (internal/gitlet's
+	// MergeRateWindow) than they can: enqueues, live or ended, past the capacity
+	// (config's LandingCapacity, depth × batch a round at the mean round).
+	// ...Target is the queue asked furthest past it, by branch and repository,
+	// with ...Asked, ...Capacity and ...Round. Judged at the queue's own capacity
+	// (ADR-0015, M5-D28); raised by the home, which alone builds and times its
+	// trains.
 	CodeMergeRateOver         int
 	CodeMergeRateOverTarget   string
 	CodeMergeRateOverAsked    int
@@ -1032,28 +643,14 @@ type Reading struct {
 	CodeMergeRateOverRound    time.Duration
 	CodeMergeRateWindow       time.Duration
 
-	// CodeRefsNearLimit is how many active repositories, as this node's rows
-	// hold them, set refs so fast that they reach the most live refs a
-	// repository may hold within the ref lifecycle's window unless refs are
-	// deleted: their live refs and the refs of those set within the window
-	// together reach the bound (internal/gitlet's NearLimit and
-	// Reader.RefsNearLimit). CodeRefsNearLimitRepo is the one with the most
-	// of the two together, by name, CodeRefsNearLimitLive its live refs and
-	// CodeRefsNearLimitRecent those of them set within the window.
-	// CodeRefsLimit and CodeRefsWindow are the bound and the window
-	// themselves — gitlet.MaxRefsPerRepo, at which the push decide refuses a
-	// create repo_refs, and gitlet.RefExpiry, after which the lifecycle deletes
-	// a seat's idle branch — handed in by the node that measured against
-	// them, since this framework imports no Gitlet package and the detail
-	// names both.
-	//
-	// EACH REPOSITORY WAS ALREADY JUDGED AT THOSE TWO DECISIONS, so the alarm
-	// borrows them whole (ADR-0015) and fires at any count. Measured from the
-	// rows by every data node on the trim's quarter-hour tick, never by a Gitlet
-	// node: every data node holds the rows and reports the same repositories.
-	// All zero on a node holding no code log's rows — no data role, or a
-	// company that hosts no code — on one whose trim has not ticked or whose
-	// last measurement failed, and on one that found none.
+	// CodeRefsNearLimit is how many active repositories, as this node's rows hold
+	// them, will reach the most live refs allowed within the ref lifecycle's
+	// window unless refs are deleted (internal/gitlet's NearLimit,
+	// Reader.RefsNearLimit). ...Repo is the one with the most, ...Live its live
+	// refs, ...Recent those set within the window. CodeRefsLimit and
+	// CodeRefsWindow are gitlet.MaxRefsPerRepo and gitlet.RefExpiry. Judged at
+	// those two decisions (ADR-0015), measured by every data node on the trim's
+	// tick, not a Gitlet node.
 	CodeRefsNearLimit       int
 	CodeRefsNearLimitRepo   string
 	CodeRefsNearLimitLive   int
@@ -1061,52 +658,47 @@ type Reading struct {
 	CodeRefsLimit           int
 	CodeRefsWindow          time.Duration
 
-	// CodeMirrorFailing is how many mirrors of repositories this node is
-	// home to — a pull mirror's syncs from its source, a push mirror's
-	// pushes to its target, each the Gitlet node that runs them — have not been
-	// brought level for longer than their own refresh promise:
-	// gitlet.MirrorInterval, how often a home brings a mirror level, plus
-	// internal/gitlet/mirror's AttemptDeadline, the grace an attempt in flight
-	// is given beyond it (internal/gitlet/mirror's Mirrors.AlarmReading).
-	// CodeMirrorFailingRepo is the one failing longest, by its repository's
-	// name, and CodeMirrorFailingFor how long since it was last brought
-	// level — or since this node first tried it, where it never has been
-	// here.
-	//
-	// THE MIRROR'S OWN PROMISE IS THE THRESHOLD (ADR-0015): a mirror tried
-	// every interval and failing every time is exactly a mirror more than an
-	// interval and its grace behind, so the alarm fires at any count. Raised
-	// by the home alone, from its own memory of its attempts, so a home that
-	// moved stops counting what it no longer runs. All zero on a node that is
-	// home to no mirror, and on one whose every mirror was brought level
-	// within the promise.
+	// CodeMirrorFailing is how many mirrors of repositories this node is home to
+	// (a pull mirror's syncs, a push mirror's pushes) have not been level for
+	// longer than their refresh promise: gitlet.MirrorInterval plus mirror's
+	// AttemptDeadline (Mirrors.AlarmReading). ...Repo is the one failing longest
+	// and ...For how long since it was last level, or since this node first tried
+	// it. Judged at the mirror's own promise (ADR-0015); raised by the home alone,
+	// from its memory of its attempts.
 	CodeMirrorFailing     int
 	CodeMirrorFailingRepo string
 	CodeMirrorFailingFor  time.Duration
 
-	// Models is each configured model entry's condition across the fleet,
-	// and ModelsAt the instant it was gathered, which the expiry and the
-	// waiting thresholds are measured against. A zero ModelsAt is a node
-	// that gathered none, which evaluates no model alarm.
+	// ExecutorResumesBlocked is how many seats' runs, across the fleet, finished
+	// their executor's job and failed their last resume on a condition only an
+	// operator clears (internal/sandbox's Coordinator.ResumesBlocked).
+	// ...Seat is the run waiting longest, ...Node the node holding it, ...Kind
+	// the condition, ...For how long since the first such failure in a row. Read
+	// fleet-wide, as a satellite holding the seat evaluates no table (the package
+	// doc's "A run waiting for an operator is raised fleet-wide").
+	ExecutorResumesBlocked    int
+	ExecutorResumeBlockedSeat string
+	ExecutorResumeBlockedNode string
+	ExecutorResumeBlockedKind string
+	ExecutorResumeBlockedFor  time.Duration
+
+	// Models is each configured model entry's condition across the fleet, and
+	// ModelsAt the instant it was gathered, which expiry and waiting are
+	// measured against. A zero ModelsAt gathered none and evaluates no model
+	// alarm.
 	//
-	// FLEET-WIDE INPUTS where the fact is the fleet's: a limit met on one
-	// node and a refusal on another are both the entry's, so every data
-	// node reads the live leases' model rows and the secret store's write
-	// instants alike, as `backup_age` reads the fleet's one backup register.
-	// [ModelCondition.NoSignIn] is the gathering node's own reading.
+	// Fleet-wide, as a limit met on one node and a refusal on another are both
+	// the entry's: every data node reads the live leases' model rows and the
+	// secret store's write instants. [ModelCondition.NoSignIn] is the gathering
+	// node's own reading.
 	Models   []ModelCondition
 	ModelsAt time.Time
 
-	// MCPServers is each MCP server the active configuration runs, its
-	// condition joined across the fleet's live nodes, and MCPServersAt the
-	// instant it was gathered, which the outage and the wait are measured
-	// against. A zero MCPServersAt is a node that gathered none, which
-	// evaluates no MCP alarm.
-	//
-	// FLEET-WIDE, from the same lease listing as [Reading.Models]: an
-	// instance down on one node and a wait on another are both the server's,
-	// and every data node reads every live node's heartbeat alike, so the
-	// alarm reads the same whichever node a person asks.
+	// MCPServers is each MCP server the active configuration runs, its condition
+	// joined across the fleet's live nodes, and MCPServersAt the instant it was
+	// gathered. A zero MCPServersAt gathered none and evaluates no MCP alarm.
+	// Fleet-wide, like [Reading.Models], so the alarm reads the same on every
+	// node.
 	MCPServers   []MCPServerCondition
 	MCPServersAt time.Time
 }
@@ -1118,9 +710,8 @@ type FeedDeadLetter struct {
 	// Age is how long ago the dead-letter stream kept it.
 	Age time.Duration
 
-	// ExpiresIn is how long until the stream's retention
-	// (`stream.event_retention_hours`) lets it go, its wake with it: zero
-	// or less once it is due.
+	// ExpiresIn is how long until retention (`stream.event_retention_hours`)
+	// lets it go, its wake with it: zero or less once due.
 	ExpiresIn time.Duration
 }
 
@@ -1129,113 +720,106 @@ type FeedOutage struct {
 	// Source is the estate the feed reads: `work`, `page` or `chat`.
 	Source string
 
-	// For is how long it has held none: since its consumer failed, or
-	// since it began, for a feed that has never opened one.
+	// For is how long it has held none: since its consumer failed, or since it
+	// began, for a feed that never opened one.
 	For time.Duration
 
-	// Failures counts the failed attempts in that time (the read that
-	// ended the consumer, and each open after it), and Cause is what the
-	// latest said. Zero and empty for a feed whose first open has not
-	// answered yet.
+	// Failures counts the failed attempts in that time and Cause is what the
+	// latest said. Zero and empty before the first open answers.
 	Failures int
 	Cause    string
 }
 
 // ModelCondition is one model entry's condition, gathered across the fleet.
 type ModelCondition struct {
-	// Key is the entry's key, and Variable the variable its credential is
-	// read from ("" where it reads none).
+	// Key is the entry's key, and Variable the variable its credential is read
+	// from ("" where it reads none).
 	Key, Variable string
 
-	// ExpiresAt is when its credential expires, zero when that is unknown:
-	// a key, an environment value, a login, or a harness that declares no
-	// lifetime.
+	// ExpiresAt is when its credential expires, zero when unknown: a key, an
+	// environment value, a login, or a harness that declares no lifetime.
 	ExpiresAt time.Time
 
-	// RefusedAt is the latest auth failure on any live node when it is
-	// newer than the latest answer on any node, zero otherwise; RefusedSaid
-	// is what the harness said then.
+	// RefusedAt is the latest auth failure on any live node when newer than the
+	// latest answer on any node, zero otherwise; RefusedSaid is what the harness
+	// said.
 	RefusedAt   time.Time
 	RefusedSaid string
 
-	// NoSignIn is an entry nothing signs in on the gathering node while a
-	// seat or the assistant names it. An entry nobody runs is no alarm.
+	// NoSignIn is an entry nothing signs in on the gathering node while a seat
+	// or the assistant names it. An entry nobody runs is no alarm.
 	NoSignIn bool
 
-	// SittingOut is the latest window it sits out across live nodes, nil
-	// when it sits out none.
+	// SittingOut is the latest window it sits out across live nodes, nil if none.
 	SittingOut *coord.ModelSitOut
 
-	// WaitingSince is the earliest instant a seat was parked on a chain
-	// naming it, across live nodes; zero when none waits.
+	// WaitingSince is the earliest instant a seat was parked on a chain naming
+	// it, across live nodes; zero when none waits.
 	WaitingSince time.Time
 }
 
 // MCPServerCondition is one MCP server's condition, joined from every live
 // node's status record row for it ([coord.MCPServerStatus]).
 //
-// ONE PER SERVER THE CONFIGURATION RUNS: a server turned off (`enabled:
-// false`) raises nothing, since nothing is started for it on purpose, and a
-// server only a node on another revision still reports is that node's apply,
-// which the control plane already names.
+// One per server the configuration runs: a server turned off (`enabled:
+// false`) raises nothing, and one only a node on another revision still
+// reports is that node's apply, which the control plane already names.
 type MCPServerCondition struct {
 	// Server is the server's name in `mcp_servers`.
 	Server string
 
-	// Started, Failed and Waiting are its instances summed over every node
-	// that reported: serving, not serving, and held back unstarted for a
-	// credential a provisioning pass mints. THE SUMS THE MCP ANSWER DECIDES A
-	// SERVER'S STATE FROM, so `mcp_server_failing` stands on a server the page
-	// calls failing and `mcp_server_partial` on one it calls partial.
+	// Started, Failed and Waiting are its instances summed over every node:
+	// serving, not serving, and held back unstarted for a credential a
+	// provisioning pass mints. The MCP answer decides a server's state from
+	// these sums, so `mcp_server_failing` stands on a server the page calls
+	// failing and `mcp_server_partial` on one it calls partial.
 	Started, Failed, Waiting int
 
-	// DownSince is the earliest instant a failed instance on any node
-	// stopped serving or first failed to start, zero when none has failed,
-	// and Down the instance it dates: the outage is measured from it, so an
-	// instance that keeps failing across retries keeps one clock.
+	// DownSince is the earliest instant a failed instance on any node stopped
+	// serving or first failed to start, zero when none has, and Down the
+	// instance it dates: an instance that keeps failing across retries keeps
+	// one clock.
 	DownSince time.Time
 	Down      MCPInstanceNote
 
-	// WaitingSince is the earliest instant an instance on any node was held
-	// back for its credential, zero when none waits, and Wait that instance,
-	// its Said the wait's own sentence (the variables, and the integration
-	// that mints them).
+	// WaitingSince is the earliest instant an instance on any node was held back
+	// for its credential, zero when none waits, and Wait that instance, its
+	// Said the wait's own sentence (the variables, and the integration that
+	// mints them).
 	WaitingSince time.Time
 	Wait         MCPInstanceNote
 
-	// Refused are the tools an instance lists that are offered under no
-	// name, each by the name it would be filed under, once across the fleet
-	// and sorted (a node names at most [coord.MaxMCPToolNotes]); RefusedCount
-	// is how many there are, as the node counting the most counts them, and
-	// never fewer than Refused lists.
+	// Refused are the tools an instance lists that are offered under no name,
+	// each by the name it would be filed under, once across the fleet and sorted
+	// (a node names at most [coord.MaxMCPToolNotes]); RefusedCount is how many
+	// there are as the node counting the most counts them, never fewer than
+	// Refused lists.
 	Refused      []string
 	RefusedCount int
 
-	// SignIn is the server's OAuth sign-in, nil for a server not signed in
-	// to with OAuth.
+	// SignIn is the server's OAuth sign-in, nil for a server not using OAuth.
 	SignIn *MCPSignInCondition
 
-	// Approvals is how many calls to the server's tools agents' runs hold
-	// for a person's approval and still wait on (ADR-0077), ApprovalSince
-	// when the one waiting longest was held (zero with none waiting), and
-	// Approval that call: the seat whose run made it, and the tool.
+	// Approvals is how many calls to the server's tools agents' runs hold for a
+	// person's approval (ADR-0077), ApprovalSince when the longest-waiting was
+	// held (zero with none), and Approval that call.
 	Approvals     int
 	ApprovalSince time.Time
 	Approval      MCPApprovalNote
 
 	// Changes is how many of the server's tools are held at Needs approval
-	// because their definition changed since their level was decided, or
-	// the server added them after its first listing (ADR-0078); Loosened
-	// how many of those changes claim less risk than before; ChangeSince
-	// when the fleet first saw the change seen first (zero where its
-	// schemas are not stored); and Change that change.
+	// because their definition changed since their level was decided, or the
+	// server added them after its first listing (ADR-0078); Loosened how many
+	// claim less risk than before; ChangeSince when the fleet first saw the
+	// change seen first (zero where schemas are not stored); and Change that
+	// change.
 	Changes     int
 	Loosened    int
 	ChangeSince time.Time
 
-	// ChangesUnread is a server whose tool changes the gathering node could
-	// not judge: it has not read the live listings or what was accepted, or
-	// no live node lists the server. Not the same fact as no change.
+	// ChangesUnread is a server whose tool changes the gathering node could not
+	// judge (live listings or accepted levels unread, or no live node lists the
+	// server): not the same fact as no change.
 	ChangesUnread bool
 	Change        MCPChangeNote
 }
@@ -1268,11 +852,11 @@ type MCPSignInCondition struct {
 	Expiry time.Time
 }
 
-// needsSignIn reports whether s is a server nobody is signed in to, whose
-// vendor refused to renew its grant, or whose every instance the nodes hold
-// back for a sign-in (a grant made for an address the server is no longer
-// configured at): what `mcp_oauth_needs_sign_in` stands on, and what the
-// failing and partial kinds leave to it.
+// needsSignIn reports whether s is a server nobody is signed in to, whose vendor
+// refused to renew its grant, or whose every instance is held back for a
+// sign-in (a grant made for an address the server is no longer at): what
+// `mcp_oauth_needs_sign_in` stands on, and the failing and partial kinds leave
+// to it.
 func (s MCPServerCondition) needsSignIn() bool {
 	return s.SignIn != nil && (!s.SignIn.Held || s.SignIn.Failure != "" || s.heldForSignIn())
 }
@@ -1298,76 +882,44 @@ type MCPInstanceNote struct {
 
 // Alarm is one condition currently true on this node.
 //
-// TAGGED, like every other struct in [Report], and the tags are load-bearing
-// for a reader this package does not have yet.
-//
-// This is reached through `GET /worklet/retention`, so its field names are a wire
-// contract. Untagged it was the ONE struct in that document emitting
-// `Kind`/`Detail`/`Remedy` beside siblings emitting `node_id` and `first_seq`
-// — which `crewlet retention status` survived only because Go's own decoder
-// matches field names case-INSENSITIVELY, so the CLI kept printing the alarm
-// correctly and nothing reported the drift. Every other reader is case
-// sensitive: `alarm.kind` in the dashboard, `.alarms[].kind` in `jq`, a key
-// lookup in Python. Each of those reads the alarm as absent rather than as an
-// error, which is the failure this document exists to prevent an operator
-// from having.
+// Tagged like every struct in [Report]: it is reached through
+// `GET /worklet/retention`, so its field names are a wire contract. Untagged,
+// `crewlet retention status` survived only because Go's decoder matches field
+// names case-insensitively; every other reader (the dashboard, `jq`) is case
+// sensitive and read the alarm as absent.
 type Alarm struct {
 	// Kind is which alarm.
 	Kind Kind `json:"kind"`
 
 	// Title and Person are the kind's static words for a company owner: what is
-	// wrong, then what it affects and what to do. Detail and Remedy stay the operator's.
+	// wrong, then what it affects and what to do. Detail and Remedy stay the
+	// operator's.
 	Title  string `json:"title"`
 	Person string `json:"person"`
 
-	// Detail says what was measured, in the operator's units. It is the
-	// half of an alarm that makes it actionable: "apply_lag" is a name,
-	// and "this node is 4m12s behind" is a fact. For a per-log condition
-	// it is the most pressing log's measurement; each entry in
-	// [Alarm.Domains] carries its own logs'.
+	// Detail says what was measured, in the operator's units: "this node is
+	// 4m12s behind", not "apply_lag". For a per-log condition it is the most
+	// pressing log's measurement; each [Alarm.Domains] entry carries its own.
 	Detail string `json:"detail"`
 
-	// Remedy is what to do about it. Carried on the alarm rather than
-	// looked up beside it, because every surface renders the same alarm
-	// and a remedy that lived on one of them would be missing from the
-	// other two.
+	// Remedy is what to do about it, carried on the alarm so every surface
+	// renders the same one.
 	Remedy string `json:"remedy"`
 
-	// Domains is every log this alarm stands on, for a condition that is a
-	// property of a log rather than of the node ([PerLogKinds]): the logs
-	// nearing or short of their ceiling, the logs whose trim is held, the
-	// logs whose backup is missing or older than the policy, the logs
-	// holding a record past the deferral grace, the logs whose floor cannot
-	// be read and the logs past their census. Empty for a node-wide
-	// condition.
+	// Domains is every log this alarm stands on, for a condition of a log
+	// rather than the node ([PerLogKinds]). Empty for a node-wide one.
 	//
-	// ONE ALARM PER KIND, WITH ITS LOGS IN IT, rather than one alarm per log.
-	// The kind is the alarm's identity on the count, the gauge and every
-	// screen: the gauge carries one series per kind, and a report that
-	// raised `trim_blocked` once per log told the health count four while
-	// the gauge said one, and drew one cause as four problems on the
-	// operator's screen. Detail is the most pressing log's measurement;
-	// each entry here carries its own logs'.
-	//
-	// ONE ENTRY PER MEASUREMENT, naming every log it was taken on, where no
-	// trim term holds them ([AlarmDomain.Domains]). A deployment minutes old
-	// with no backup measures the same sentence on every log, and an entry
-	// per log made every surface print it once per log under a headline
-	// that was already that sentence.
-	//
-	// THE LOG LINES ARE STILL PER LOG. The [Tracker] forms one instance per
-	// (kind, log) from this list, so a second log joining a kind that is
-	// already up writes its own `alarm_raised`, and the first log leaving it
-	// writes its own `alarm_cleared` with its own start and detail: two
-	// things an operator has to be told started and ended, which a line per
-	// kind folded into one.
+	// One alarm per kind, its logs in it: one alarm per log told the health
+	// count four while the gauge said one. Where no trim term holds them, one
+	// entry names every log it was measured on. The log lines stay per log: the
+	// [Tracker] forms one instance per (kind, log), so a log joining or leaving
+	// writes its own `alarm_raised` or `alarm_cleared`.
 	Domains []AlarmDomain `json:"domains,omitempty"`
 
-	// Entries is every configured entry this alarm stands on, for a
-	// condition about one model entry or one MCP server ([PerEntryKinds]),
-	// the analogue of Domains: one alarm per kind with its entries in it,
-	// leading with the longest-standing entry's detail, and one pair of log
-	// lines per entry. Empty for every other kind.
+	// Entries is every configured entry this alarm stands on, for a condition
+	// about one model entry or MCP server ([PerEntryKinds]), Domains' analogue:
+	// one alarm per kind, leading with the longest-standing entry's detail, and
+	// one pair of log lines per entry. Empty for every other kind.
 	Entries []AlarmEntry `json:"entries,omitempty"`
 }
 
@@ -1381,52 +933,44 @@ type AlarmEntry struct {
 	// Detail is this entry's own measurement.
 	Detail string `json:"detail"`
 
-	// Since is when the condition began for this entry: the report that
-	// opened a sit-out, the first park, the refusal, the instant an expiry
-	// came within the alarm's threshold, or the instant an MCP server's
-	// instance went down or was held back. Zero where the condition carries
-	// no instant of its own: nothing signs a model in, or a server's tools
-	// are refused their names.
+	// Since is when the condition began for this entry: the report that opened
+	// a sit-out, the first park, the refusal, the instant an expiry came within
+	// the threshold, or an MCP instance went down or was held back. Zero where
+	// the condition has no instant of its own.
 	Since time.Time `json:"since,omitzero"`
 
-	// Seat is the agent seat, by its handle, whose instance the measurement
-	// names, where it names one: an agent's instance of an MCP server that is
-	// down or waiting. A shared server's instance, and every model entry,
-	// name none. It is what a remedy aimed at one agent's instance acts on.
+	// Seat is the agent seat, by handle, whose instance the measurement names:
+	// an agent's instance of an MCP server that is down or waiting. A shared
+	// server's instance and every model entry name none. A remedy aimed at one
+	// agent's instance acts on it.
 	Seat string `json:"seat,omitempty"`
 }
 
 // AlarmDomain is one measurement an alarm stands on, and the logs it was
 // taken on.
 type AlarmDomain struct {
-	// Domains is the logs' registered names, in the report's own order —
-	// never empty. ONE LOG WHEREVER Term IS SET: a held trim's entry carries
-	// that log's own instant and its own count of what it keeps, which no
-	// other log shares. EVERY LOG MEASURED IDENTICALLY otherwise, so a
-	// measurement the report took on five logs in the same words is carried
-	// once, naming the five, and each surface renders what it is given
-	// rather than folding repeats of its own: a young fleet's missing backup
-	// was printed once per log under a headline that already said it, on
-	// the dashboard and in `crewlet retention status` alike.
+	// Domains is the logs' registered names, in the report's order, never
+	// empty. One log wherever Term is set: a held trim's entry carries that
+	// log's own instant and count. Otherwise every log measured identically is
+	// carried once, naming them all, and each surface renders what it is given:
+	// a young fleet's missing backup was printed once per log under a headline
+	// that already said it.
 	Domains []string `json:"domains"`
 
-	// Detail is these logs' measurement, in the operator's units — under
-	// [KindBackupAge], followed by the held trim's where Term is set, since
-	// that log raises no [KindTrimBlocked] to say it.
+	// Detail is these logs' measurement, in the operator's units; under
+	// [KindBackupAge] followed by the held trim's where Term is set, since that
+	// log raises no [KindTrimBlocked] to say it.
 	Detail string `json:"detail"`
 
-	// Term is the trim term holding this log, where the alarm is about its
-	// trim: under [KindTrimBlocked], and under [KindBackupAge] for a log
-	// whose trim the backup term is holding, which raises no
-	// [KindTrimBlocked] of its own. It is the term's own name, which is what
-	// `crewlet retention status` prints and the retention guide is indexed
-	// by.
+	// Term is the trim term holding this log, where the alarm is about its trim:
+	// under [KindTrimBlocked], and under [KindBackupAge] for a log the backup
+	// term holds, which raises no [KindTrimBlocked]. It is the term's own name,
+	// which `crewlet retention status` prints and the retention guide is
+	// indexed by.
 	Term TermName `json:"term,omitempty"`
 
-	// Since is when this log's trim stopped advancing, wherever Term is
-	// set. An instant rather than an age, so a reader renders the age
-	// against its own clock instead of trusting one frozen at the
-	// evaluation.
+	// Since is when this log's trim stopped advancing, wherever Term is set: an
+	// instant, so a reader renders the age against its own clock.
 	Since time.Time `json:"since,omitzero"`
 }
 
@@ -1434,35 +978,28 @@ type AlarmDomain struct {
 type rule struct {
 	kind Kind
 	// fires reports whether the condition holds, and with what detail. A
-	// closure rather than a threshold plus an accessor, because half the
-	// conditions compare two fields of the reading against each other.
+	// closure, as half the conditions compare two fields of the reading.
 	fires func(Reading) (string, bool)
 	// stays, where set, keeps a node-wide alarm that is up ([Reading.Up])
 	// standing: a wider condition than fires, so a reading hovering at the
-	// raise threshold does not clear and raise it on alternate evaluations.
+	// raise threshold does not flap.
 	stays func(Reading) (string, bool)
 	// remedy is what an operator does about it.
 	remedy string
 	// title and person are what a company owner reads ([Alarm.Title],
 	// [Alarm.Person]), declared on the row so no kind ships without them.
 	title, person string
-	// perLog marks a condition that is a property of ONE LOG rather than
-	// of the node, which the report evaluates once per log from that log's
-	// own inputs and lists under the kind's one alarm ([Alarm.Domains]), and
-	// whose log lines the [Tracker] writes per log. DECLARED on the
-	// row so the published reference can say which they are, and held
-	// against what the report actually raises per log by a test in both
-	// directions — a flag nothing checked would be the second opinion the
-	// table exists to prevent.
+	// perLog marks a condition of one log rather than the node, evaluated once
+	// per log from that log's inputs and listed under the kind's one alarm
+	// ([Alarm.Domains]), its log lines written per log by the [Tracker]. Held
+	// against what the report raises per log by a test in both directions: a
+	// flag nothing checked would be the second opinion the table prevents.
 	perLog bool
-	// model and server mark a condition about ONE CONFIGURED ENTRY, a model
-	// entry or an MCP server, and evaluate it: model once per
-	// [Reading.Models] row at [Reading.ModelsAt], server once per
-	// [Reading.MCPServers] row at [Reading.MCPServersAt]. The entries it holds
-	// for are listed under the kind's one alarm ([Alarm.Entries]), whose log
-	// lines the [Tracker] writes per entry. A row sets one of the two, and
-	// fires is unused on it. Each answers the entry's measurement with its
-	// key left for [rule.evaluateEntries] to fill.
+	// model and server mark a condition about one configured entry, evaluated
+	// once per [Reading.Models] row at [Reading.ModelsAt] or per
+	// [Reading.MCPServers] row at [Reading.MCPServersAt] and listed under the
+	// kind's one alarm ([Alarm.Entries]). A row sets one of the two and fires is
+	// unused. Each answers with the key left for [rule.evaluateEntries] to fill.
 	model  func(m ModelCondition, now time.Time) (AlarmEntry, bool)
 	server func(s MCPServerCondition, now time.Time) (AlarmEntry, bool)
 
@@ -1476,13 +1013,6 @@ type rule struct {
 func (rule rule) perEntry() bool { return rule.model != nil || rule.server != nil }
 
 // table is every alarm this engine can raise, in the order they are reported.
-//
-// ONE PLACE, and that is the point of the file. Before it, the two capacity
-// alarms existed only as the exit code of a CLI verb nobody said who ran; the
-// backup alarm fired at twice the threshold it documented, because one clause
-// checked the age and another checked how long the first clause had been true;
-// and maintenance mode — which stops every publisher on every node — was
-// visible on one verb and no screen at all.
 var table = []rule{
 	{
 		kind:  KindApplyLag,
@@ -1551,19 +1081,12 @@ var table = []rule{
 			"retention evict` still lands and unpins the trim.",
 	},
 	{
-		// THE FORWARD-LOOKING HALF OF THE HEADROOM ALARM, and the one
-		// that names a different remedy. Headroom says the log is nearly
-		// full; this says it WILL be, with a trim that is working
-		// perfectly — the trim never removes a record younger than
-		// `min_age`, so a log whose ceiling is smaller than `min_age` of
-		// its own writing fills and refuses appends with every term
-		// satisfied. Unblocking a term cannot fix that; only the ceiling
-		// or the window can.
-		//
-		// NO THRESHOLD OF ITS OWN (ADR-0015): the two numbers compared
-		// are the ceiling the operator set and the window they set, and
-		// the alarm fires at the point where the second no longer fits
-		// in the first.
+		// The forward-looking half of the headroom alarm, with a different
+		// remedy: the trim never removes a record younger than `min_age`, so a
+		// log whose ceiling is smaller than `min_age` of its writing fills with
+		// every term satisfied. Only the ceiling or the window can fix that.
+		// No threshold of its own (ADR-0015): it fires where the window no longer
+		// fits in the ceiling.
 		kind:  KindLogCeilingShort,
 		title: "A data log will fill up",
 		person: "At its current rate a data log fills before its cleanup may remove anything, " +
@@ -1592,21 +1115,10 @@ var table = []rule{
 			"help: it never removes a record younger than min_age.",
 	},
 	{
-		// ONE THRESHOLD. The form this replaces set a blocked flag once
-		// the newest backup passed backup_max_age and then alarmed once
-		// THAT had been true for backup_max_age again — so a 24-hour
-		// policy alarmed at 48 hours, eight missed six-hourly runs after
-		// the first one that mattered.
-		//
-		// TWO STATES, because a company with no backup at all is not a
-		// company with an old one. Both fire — the trim does not advance
-		// either way and an operator has to hear it — but they are
-		// different facts and the detail says which. Fabricating an age
-		// to make the first condition cover the second is what this
-		// replaces, and it put "the newest verified backup is 25h0m0s
-		// old" in the log of a company four seconds after its first
-		// boot, one line above the trim term saying no backup had been
-		// recorded at all.
+		// One threshold: the newest backup passing backup_max_age (a second clause
+		// on how long the first had held made a 24-hour policy alarm at 48).
+		// Two states, as no backup at all is not an old one: both fire, the detail
+		// says which, and no age is fabricated for the first.
 		kind:  KindBackupAge,
 		title: "No recent backup",
 		person: "Without a recent verified backup, " +
@@ -1616,8 +1128,7 @@ var table = []rule{
 			if r.BackupMaxAge <= 0 {
 				return "", false
 			}
-			// WORDED FOR ONE LOG OR MANY: a measurement taken alike on
-			// several logs is carried once and read after all their names.
+			// Worded for one log or many: carried once after all their names.
 			if r.BackupAge == nil {
 				return fmt.Sprintf("no verified backup has been "+
 					"recorded, and the policy asks for one every %s",
@@ -1639,34 +1150,13 @@ var table = []rule{
 		perLog: true,
 	},
 	{
-		// A BLOCKED TRIM IS AN ORDINARY STATE until it has cost something,
-		// and every fresh deployment is in it: blocked on its first backup,
-		// on its first snapshot donors, on a log nobody has written to. The
-		// form this replaced fired on the block itself, so every young fleet
-		// raised it within one heartbeat and held it for days, and `crewlet
-		// retention status` exited non-zero on a fleet with nothing wrong.
-		//
-		// AT THE REPLAY WINDOW PLUS ONE TICK (ADR-0015), because `min_age`
-		// is the number the configuration already holds every SANCTIONED
-		// block under: a node joining inside its rejoin window (whose ceiling
-		// is the window's floor), a young fleet waiting for its donors (the
-		// cross-field rule keeps `snapshot_interval` × (kept + 1) below it),
-		// a trim waiting for its first backup (which `backup_age` raises on
-		// its own: from the first reading where none has been taken, at the
-		// policy's age where one has gone stale). The tick is the block's
-		// resolution (`blocked_since` moves only when the trim does), so a
-		// block that cleared at the window is seen to clear up to one tick
-		// later.
-		//
-		// AND ONLY WHILE THE LOG HOLDS A RECORD PAST THE WINDOW, which is
-		// the half that is measured rather than borrowed: a block that keeps
-		// nothing the age term would release has cost nothing, however long
-		// it has lasted. A knowledge base nobody writes to is blocked for
-		// the life of the deployment.
-		//
-		// THE TERM IS NOT IN THE SENTENCE. It is a field of the log the
-		// alarm stands on ([AlarmDomain.Term]), because one alarm carries
-		// every held log and two of them can be held by different terms.
+		// A blocked trim is ordinary until it has cost something (every fresh
+		// deployment has one). Fires at the replay window plus one tick
+		// (ADR-0015): `min_age` is what every sanctioned block is held under, the
+		// tick the block's resolution (`blocked_since` moves only with the trim);
+		// and only while the log holds a record past the window. The term is a
+		// field ([AlarmDomain.Term]), not in the sentence: one alarm carries logs
+		// held by different terms.
 		kind:  KindTrimBlocked,
 		title: "Log cleanup is stuck",
 		person: "A data log's cleanup has stalled, so the log keeps growing toward its size limit. " +
@@ -1687,10 +1177,8 @@ var table = []rule{
 			"records every day.",
 	},
 	{
-		// PER LOG, like the headroom, the ceiling and the blocked trim: the
-		// report evaluates it once for each log this node holds a record on,
-		// because what the grace does is the log's: every log's copy is
-		// judged on its own (ADR-0079), see [Reading.DeferredAge].
+		// Per log: every log's copy is judged on its own (ADR-0079), see
+		// [Reading.DeferredAge].
 		kind:  KindDeferredOld,
 		title: "A server cannot read new changes",
 		person: "A server runs an older version that cannot read changes other servers write, " +
@@ -1717,9 +1205,8 @@ var table = []rule{
 			"until the node can read the record.",
 	},
 	{
-		// PER LOG, for the same reason: a read of one log refuses on that
-		// log's floor, and a floor published ahead of this node is one
-		// log's re-anchor.
+		// Per log: a read refuses on that log's floor, and a floor ahead of this
+		// node is one log's re-anchor.
 		kind:  KindFloorUnknown,
 		title: "A server cannot serve a data log",
 		person: "A server cannot read a data log's cleanup point, so it refuses reads of that log. " +
@@ -1823,13 +1310,10 @@ var table = []rule{
 			"was not; the log line names who was absent.",
 	},
 	{
-		// THE BUDGET IS BORROWED (ADR-0015): what makes a history answer
-		// partial is a node that did not answer inside the fleet read
-		// budget, so that budget is the threshold — named in the detail
-		// from the value the reading carries, which is the constant the
-		// scatter waits on ([Reading.HistoryReadBudget]), never restated.
-		// PROCESS-WIDE rather than per log: the reads are of each data
-		// node's own event log, which is no state log at all.
+		// The fleet read budget is the threshold, borrowed (ADR-0015): the
+		// detail names the value the reading carries ([Reading.HistoryReadBudget]).
+		// Process-wide, not per log: the reads are of each data node's own event
+		// log, which is no state log.
 		kind:  KindHistoryPartial,
 		title: "History is missing some entries",
 		person: "Some history views missed a server's entries because it answered too slowly. " +
@@ -1869,15 +1353,12 @@ var table = []rule{
 			"corpus it does not cover.",
 	},
 	{
-		// THE FLOOR IS THE EVALUATION'S, borrowed (ADR-0015): the recall
-		// curve `crewlet search eval` judges a corpus against, at the size
-		// of the corpus the shape searched. A training installs the
-		// smallest probe count that meets it in every shape, and a
-		// re-measurement that finds none within the ceiling retrains in the
-		// same tick rather than recording the failure — so a recall below
-		// it was measured probing EVERY list, the full scan's own pool, and
-		// says the codes fail this corpus, not that the index was trained
-		// badly.
+		// The floor is the evaluation's, borrowed (ADR-0015): the recall curve
+		// `crewlet search eval` judges against, at the searched corpus's size.
+		// A training installs the smallest probe count that meets it, and a
+		// re-measurement finding none retrains in the same tick, so a recall
+		// below it was measured probing every list and says the codes fail this
+		// corpus, not that the index was trained badly.
 		kind:  KindIVFRecallBelowFloor,
 		title: "Search accuracy is below target",
 		person: "Meaning-based search misses more good matches than it should on this content. " +
@@ -1910,28 +1391,23 @@ var table = []rule{
 			return fmt.Sprintf("%d record(s) were dropped by an apply gate in the "+
 				"last day", r.RecordsGated), r.RecordsGated > 0
 		},
-		// THE FIELDS BY THEIR KEYS ON THE LINE, because the one fact an
-		// operator needs from it — which node wrote what nothing will apply
-		// — is under `writer`, and a remedy that called it "the operator"
-		// sent the reader looking for a field no line carries.
-		// TestTheRecordsGatedRemedyNamesWhatItsLineCarries holds every field
-		// named here to the line the applier writes.
+		// Fields by their keys on the line: the writer is under `writer`, and a
+		// remedy calling it "the operator" sent readers looking for a field no
+		// line carries. TestTheRecordsGatedRemedyNamesWhatItsLineCarries holds
+		// every field named here to the line the applier writes.
 		remedy: "A gated record is recoverable by nothing. Each drop's " +
 			"`statelog_record_gated` log line names the `gate` that dropped it, " +
 			"the record's `position` and `kind`, and the `writer` (the node " +
 			"that wrote it); this is worth reading today.",
 	},
 	{
-		// A RECORD THIS BUILD'S TRANSLATOR FAILS ON, counted on the node
-		// that met it. Every domain feed's consumer sets `MaxDeliver: -1`
-		// deliberately — a delivery budget that ran out would drop a wake
-		// silently, as a poison message — so it is the FEED that bounds
-		// such a record: handed back with a backoff from two seconds to
-		// thirty, and once it is an hour old kept as a dead letter and let
-		// go (`feed_dead_lettered` below, internal/changefeed's
-		// DeadLetterAge), so it never holds a slot of the consumer's
-		// pending set for ever. This names the build that cannot read it,
-		// while a peer that can is still being given the chance.
+		// A record this build's translator fails on, counted on the node that met
+		// it. Every feed consumer sets `MaxDeliver: -1` (a spent delivery budget
+		// would drop a wake silently), so the feed bounds the record: handed back
+		// with a backoff from two to thirty seconds, then at an hour old kept as
+		// a dead letter (`feed_dead_lettered`, internal/changefeed's
+		// DeadLetterAge). This names the build that cannot read it while a peer
+		// that can still has the chance.
 		kind:  KindFeedUnreadable,
 		title: "A server cannot read some changes",
 		person: "A server cannot read some change records, " +
@@ -1948,18 +1424,12 @@ var table = []rule{
 			"`changefeed_untranslatable` log line names the record and the error.",
 	},
 	{
-		// A WAKE NO NODE COULD DERIVE, KEPT RATHER THAN LOST: a record its
-		// feed handed back for an hour — a roll that outlasted it, a key
-		// no node holds, a record no build here can translate — kept in
-		// CREWLET_DLQ, sealed frame and all, until the first node whose
-		// feed starts able to read it replays it, an operator discards it,
-		// or the stream's retention lets it go.
-		//
-		// RAISED FROM THE FIRST ENTRY, PER LOG: each domain's feed keeps
-		// its own subject, and a single entry is a wake somebody has not
-		// had. Its count of what expires within a day is the reading's,
-		// taken on every beat, so it moves as the entries age rather than
-		// only when a feed starts and replays them.
+		// A wake no node could derive, kept rather than lost: a record its feed
+		// handed back for an hour (a roll that outlasted it, a key no node holds,
+		// an untranslatable record), kept in CREWLET_DLQ, sealed, until a node
+		// able to read it replays it, an operator discards it, or retention lets
+		// it go. Raised from the first entry, per log (each feed has its own
+		// subject); the expiring count is taken every beat.
 		kind:  KindFeedDeadLettered,
 		title: "Some agents were never woken",
 		person: "Some changes no server could read have not woken their agents, and will expire unread. " +
@@ -1987,19 +1457,14 @@ var table = []rule{
 			"record's dead-letter claim, whichever of its keeps stored the entry.",
 	},
 	{
-		// A WAKE THE INBOUND GROUP NEVER HANDLED, KEPT RATHER THAN LOST: a
-		// newer record's wake the older nodes of a roll passed round until
-		// its 25 deliveries were spent, or one whose last delivery a node
-		// that shed or stopped handed back, kept on the group's unhandled
-		// subject until a node that reads it replays it (internal/notify),
-		// or the retention lets it go.
-		//
-		// RAISED FROM THE FIRST ENTRY, NODE-WIDE: the group is one for the
-		// whole fleet, and a single entry is a wake somebody has not had —
-		// one a running node of the build that reads it delivers within a
-		// beat or two, and that otherwise waits for such a node to START,
-		// which a roll paused for good never brings. Its count of what
-		// expires within a day is the reading's, taken on every beat.
+		// A wake the inbound group never handled, kept rather than lost: a newer
+		// record's wake the older nodes of a roll passed round until its 25
+		// deliveries were spent, or one a node that shed or stopped handed back,
+		// kept until a node that reads it replays it (internal/notify) or
+		// retention lets it go. Raised from the first entry, node-wide (one group
+		// for the fleet). A running node of the reading build delivers within a
+		// beat or two; otherwise it waits for one to start, which a roll paused
+		// for good never brings.
 		kind:  KindInboundDeadLettered,
 		title: "Messages to agents wait for an upgrade",
 		person: "Some messages from connected apps wait for a server on the newer version, " +
@@ -2028,14 +1493,10 @@ var table = []rule{
 			"`dead_lettered` when its budget was spent, naming the return that spent it.",
 	},
 	{
-		// THE FEED THAT IS NOT RUNNING, beside the feed that is stuck:
-		// `feed_unreadable` is a consumer that delivers one record for
-		// ever, and this is a node with no consumer at all.
-		//
-		// AT THE STALL GRACE (ADR-0015), the grace past which a node that
-		// has stopped is named, and the feed's own schedule is held to it
-		// ([FeedReopenCeiling]), so a feed still down past it is one whose
-		// broker or consumer is still refusing.
+		// A node with no consumer at all, beside `feed_unreadable`'s stuck one.
+		// At the stall grace (ADR-0015), to which the feed's schedule is held
+		// ([FeedReopenCeiling]), so a feed down past it has a broker or consumer
+		// still refusing.
 		kind:  KindFeedStopped,
 		title: "A server stopped following changes",
 		person: "A server's change feed stopped, so agents may be woken late, though nothing is lost. " +
@@ -2072,9 +1533,8 @@ var table = []rule{
 					"in phase %q", r.MaintenanceStream, spoken(r.MaintenanceOpenFor),
 					r.MaintenancePhase), fires
 			}
-			// THE NEXT STEP IS THE READ'S, NOT THE WINDOW'S: finishing or
-			// abandoning it goes through the read that is failing, and it
-			// may have closed since.
+			// Finishing or abandoning goes through the failing read, and the
+			// window may have closed since.
 			when := "when this node last read it"
 			if r.MaintenanceReadAgo > 0 {
 				when += ", " + spoken(r.MaintenanceReadAgo) + " ago"
@@ -2085,11 +1545,9 @@ var table = []rule{
 				"abandoned through this node until it can", r.MaintenanceStream,
 				spoken(r.MaintenanceOpenFor), r.MaintenancePhase, when), fires
 		},
-		// TRUE OF THE NODE THAT RAISES IT, which is one still publishing:
-		// only a node in service evaluates this table, so "nothing is being
-		// written" was false of every node that ever said it. What a window
-		// does is hold the fleet: no node starts in service while it is open,
-		// and a node restarted for it publishes nothing until it closes.
+		// Only a node in service evaluates this table, so "nothing is being
+		// written" was false of the node saying it; what a window does is hold
+		// the fleet.
 		remedy: "While a capacity window is open no node starts in service, and " +
 			"every node restarted for it publishes nothing. Finish it or abandon " +
 			"it.",
@@ -2149,16 +1607,10 @@ var table = []rule{
 			"Every read on this node is queuing before it starts.",
 	},
 	{
-		// THE ONE THAT SAYS AN INPUT HAS STOPPED BEING TRUE. Every sizing
-		// decision under this framework — the log's ceiling, the trim's
-		// cadence, a joining node's transfer — was derived from a read
-		// rate. At twice it, they are describing a different company.
-		//
-		// PER LOG, like the headroom: each log was sized for its own
-		// census and is past it on its own, so the report evaluates it once
-		// per log and lists every log past its census under the one alarm
-		// ([Alarm.Domains]). A reading naming only the log furthest past its
-		// census hid every other log past its own.
+		// Says a sizing input has stopped being true: the ceiling, trim cadence
+		// and joining transfer were derived from a read rate, and at twice it
+		// they describe a different company. Per log, each sized for its own
+		// census ([Alarm.Domains]).
 		kind:  KindCensusDrift,
 		title: "A data log is busier than planned",
 		person: "A data log handles more than twice the reads it was sized for, " +
@@ -2166,16 +1618,14 @@ var table = []rule{
 			"Resize that log.",
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
-			// THE LOG'S OWN CEILING FIELD, where the caller named it: the
-			// remedy is one sentence for every log, and the field is
-			// what differs between them.
+			// The remedy is one sentence for every log; the ceiling field is
+			// what differs.
 			ceiling := ""
 			if r.LogCeilingField != "" {
 				ceiling = fmt.Sprintf("; its ceiling is `%s`", r.LogCeilingField)
 			}
-			// A DECLARED ZERO FIRES ON THE FIRST BARRIER: a log whose
-			// domain declares that no read takes one was sized with no
-			// barrier bytes in it, so any is a reader nobody counted.
+			// A declared zero fires on the first barrier: such a log was sized
+			// with no barrier bytes, so any is a reader nobody counted.
 			return fmt.Sprintf("%d linearizable reads a day against the %d this "+
 					"log was sized for%s", r.LinearizableReads,
 					r.LinearizableReadsExpected, ceiling),
@@ -2218,9 +1668,8 @@ var table = []rule{
 				r.ObjectsBucketMaxBytes > 0 && float64(r.ObjectsBucketMaxBytes-r.ObjectsBucketBytes) <
 					ObjectsHeadroomAlarmFraction*float64(r.ObjectsBucketMaxBytes)
 		},
-		// THE SETTING COMES FIRST: a data node raises the bucket to a larger
-		// store.objects.nats_max_bytes at boot on every broker, as the full
-		// bucket's own refusal says (natsobj.FullRemedy).
+		// The setting comes first, as the full bucket's own refusal says
+		// (natsobj.FullRemedy).
 		remedy: "Once the bucket is full every upload is refused. Raise " +
 			"`store.objects.nats_max_bytes` and restart a data node: its boot raises the " +
 			"bucket's reservation where the broker can grant the difference and still keep " +
@@ -2249,10 +1698,9 @@ var table = []rule{
 			"OBJ_crewlet_files --max-bytes=<bytes>`. See docs/concepts/object-store.md.",
 	},
 	{
-		// ONE ALARM FOR EVERY BURNING OBJECTIVE, the detail naming each:
-		// the kind is the alarm's identity on the gauge and the screen, and
-		// a burn is one cause (this node failing what it promised) whichever
-		// objective shows it first.
+		// One alarm for every burning objective, the detail naming each: a burn
+		// is one cause (this node failing what it promised) whichever objective
+		// shows it first.
 		kind:  KindObjectiveBurn,
 		title: "Service quality is slipping",
 		person: "A service target is failing fast enough to use up its monthly error allowance early. " +
@@ -2280,18 +1728,15 @@ var table = []rule{
 			"is healthy again.",
 	},
 	{
-		// THE THRESHOLD IS THE ASSUMPTION ITSELF (ADR-0015), handed in with
-		// the measure: objstore.AssumedClockSkew is what every rule its doc
-		// lists was sized against, so the alarm fires exactly where a clock
-		// stops being one those rules hold on. AT the bound is still inside
-		// it, as every rule here is silent at its threshold.
+		// The threshold is the assumption itself (ADR-0015), handed in with the
+		// measure: objstore.AssumedClockSkew is what every rule its doc lists was
+		// sized against. At the bound is still inside it.
 		//
-		// TWO CLOCKS, EACH NAMED: this node's and the broker member's leading
-		// the position register, each against the fleet's — the median of the
-		// data nodes' clocks — and the detail says which stands past the bound,
-		// because that is the machine whose clock an operator has to fix. A
-		// node measured against the member alone read the member's drift as
-		// its own and sent the operator to the wrong machine.
+		// Two clocks, each named: this node's and the register-leading broker
+		// member's, each against the fleet's (the median of the data nodes'), and
+		// the detail says which stands past the bound, as that machine's clock is
+		// the one to fix; measured against the member alone, a node read the
+		// member's drift as its own.
 		kind:  KindClockSkew,
 		title: "A server clock is wrong",
 		person: "A server's clock is far off the others', so cleanup may delete files in use " +
@@ -2300,12 +1745,9 @@ var table = []rule{
 			if r.ClockSkewBound <= 0 {
 				return "", false
 			}
-			//
-			// TWO CLAUSES, NOT A LIST: each names its own clock and has its
-			// own verb, and the second reads the first's fleet as "it", so
-			// both together are a compound sentence joined by ", and".
-			// words.And says a list ("a and b") and would run the two
-			// clauses together without the comma.
+			// Two clauses, not a list: each has its own verb and the second reads
+			// the first's fleet as "it", joined by ", and"; words.And would run
+			// them together without the comma.
 			fleet := fleetClock(r.ClockSkewNodes)
 			var off string
 			if magnitude(r.ClockSkew) > r.ClockSkewBound {
@@ -2352,12 +1794,10 @@ var table = []rule{
 			"heartbeat's own work between the two instants. See docs/guides/deployment.md.",
 	},
 	{
-		// THE THRESHOLD IS THE NODE'S OWN BUDGET, measured rather than set:
-		// the git cache reads the node's memory and keeps back what its
-		// other work is sized to hold, and a bitmap past what is left is
-		// one the kernel kills at every duty cycle — so the number that
-		// already decides whether a bitmap is written is the number the
-		// alarm fires at. Silent at the budget, as a bitmap at it is written.
+		// The threshold is the node's own budget, measured: the number that
+		// decides whether a bitmap is written (one past what is left is killed by
+		// the kernel every duty cycle). Silent at the budget, where a bitmap is
+		// written.
 		kind:  KindCodeMaintenanceRefused,
 		title: "Repositories are served more slowly",
 		person: "A server lacks the memory to index some repositories, " +
@@ -2391,10 +1831,13 @@ var table = []rule{
 			"Give the node more memory; a container resized in place is held to " +
 			"its new limit within ten seconds, without a restart. Or, where " +
 			"gitlet.max_transfers is set, give it fewer transfers. What the node " +
-			"keeps is fixed when it boots: 224 MiB for every transfer its git " +
+			"keeps is fixed when it boots: first the executor's pools it runs " +
+			"(116 MiB of transcript reads, 1 980 MiB on a node running seats) " +
+			"and the store's page cache (a sixteenth of its memory), then of " +
+			"the memory they leave 224 MiB for every transfer its git " +
 			"lane admits, whatever it serves, and 896 MiB for each core its " +
 			"memory backs at 2 GiB a core. An unset gitlet.max_transfers is sized " +
-			"to the memory, no more than one for every 512 MiB, and leaves the " +
+			"to that memory, no more than one for every 512 MiB, and leaves the " +
 			"background work 256 MiB for each backed core; a figure set by hand " +
 			"is kept as written, and leaves it nothing once its transfers' " +
 			"224 MiB each reach the memory less the cores' 896 MiB each: at as " +
@@ -2405,20 +1848,20 @@ var table = []rule{
 			"boot. A restart alone keeps the same lanes over the same memory, " +
 			"and clears it only where gitlet.max_transfers is unset and the memory " +
 			"was lowered after the node booted, since the lanes are then sized " +
-			"to what it has. See docs/concepts/gitlet.md.",
+			"to what it has. A node whose boot logged `code_cache_memory_short` " +
+			"keeps more than its memory, so its budget is zero: give it the " +
+			"`memory_needed` that line names, 4 GiB or more in all where it runs " +
+			"seats beside Gitlet at the default node.max_concurrent. See " +
+			"docs/concepts/gitlet.md.",
 	},
 	{
-		// THE THRESHOLD IS THE PUSH DECIDE'S (ADR-0015): the most live packs
-		// a repository may hold, past which a push carrying a pack is refused
-		// compaction_behind. This framework imports no Gitlet package, so
-		// the node's compactor counts the repositories it already judged
-		// against that bound and the rule fires at any — never at a number of
-		// its own. Raised by the node that COMPACTS them, the repository's
-		// maintainer, because it is the one node that can act on it and the
-		// receiver refuses most such pushes before any committer sees them;
-		// held from the listing of every pass, whatever that pass's compaction
-		// of the repository decided, so it stands for as long as pushes are
-		// refused.
+		// The threshold is the push decide's (ADR-0015): the most live packs a
+		// repository may hold, past which a pack-carrying push is refused
+		// compaction_behind. The compactor counts repositories it already judged
+		// (no Gitlet import here), so the rule fires at any. Raised by the
+		// repository's maintainer, the one node that can act on it and whose
+		// receiver refuses most such pushes before a committer sees them; held
+		// from every pass's listing, so it stands as long as pushes are refused.
 		kind:  KindCodeCompactionBehind,
 		title: "Pushes to a repository are refused",
 		person: "A repository's storage upkeep has fallen behind, " +
@@ -2449,23 +1892,15 @@ var table = []rule{
 			"rate says by how much. See docs/concepts/gitlet.md.",
 	},
 	{
-		// THE THRESHOLD IS THE COMMITTER'S OWN BOUNDS (ADR-0015): a
-		// repository's queue — its count, its bytes, and how long a proposal
-		// may wait in it, its asker's attempt less a batch and the answer —
-		// and the node's bytes across every repository it commits for, at
-		// which the committer already refused each proposal it counts. This
-		// framework imports no Gitlet package, so the rule fires at any
-		// count, never at a number of its own. Only a BACKLOG is counted,
-		// because only a backlog says this committer turns proposals away —
-		// the queue's time bound among them: a committer slower than its
-		// pushes meets it before its count, and turns every push past it away
-		// for as long as they keep coming. A proposal that arrived with its
-		// asker's attempt already spent is a cause upstream of the committer,
-		// and a record that lost every compare-and-set round is a second
-		// committer during a handoff — both counted by crewlet.code.commit.busy
-		// and logged, never alarmed. Raised by the node that decides the
-		// repository's pushes, whatever node received them, since it is the
-		// one whose queue is full or slow.
+		// The threshold is the committer's own bounds (ADR-0015): a repository's
+		// queue (count, bytes, how long a proposal may wait) and the node's bytes
+		// across every repository, at which it already refused each proposal
+		// counted; the rule fires at any count. Only a backlog is counted, as it
+		// alone says this committer turns proposals away: an arrival with its
+		// attempt spent is upstream, and one that lost every compare-and-set round
+		// is a second committer in a handoff; both are counted by
+		// crewlet.code.commit.busy and logged, never alarmed. Raised by the node
+		// that decides the repository's pushes.
 		kind:  KindCodeCommitBusy,
 		title: "Pushes are being turned away",
 		person: "A server cannot keep up with pushes, so some were turned away and retried. " +
@@ -2510,17 +1945,12 @@ var table = []rule{
 			"five. See docs/concepts/gitlet.md.",
 	},
 	{
-		// THE THRESHOLD IS EACH QUEUED CHECK'S OWN TIMEOUT (ADR-0015): a
-		// check's definition says how long it may run, which is how long its
-		// author expects its result to take, so an attempt that waited that
-		// long for a runner before it even began is one its change waits on
-		// past anything its checks file planned for. One threshold of the
-		// table's would fire on every long check's ordinary queue and never
-		// on a one-minute lint stuck for an hour. This framework imports no
-		// Gitlet package, so the reader judges each attempt at its own
-		// timeout and the rule fires at any count. Raised by every data node
-		// from its rows, never by a runner: a fleet with no live Gitlet node
-		// runs no check, and still raises it.
+		// The threshold is each queued check's own timeout (ADR-0015), how long
+		// its author expects it to take; one table threshold would fire on every
+		// long check's ordinary queue and never on a one-minute lint stuck for an
+		// hour. The reader judges each attempt, so the rule fires at any count.
+		// Raised by every data node from its rows, never a runner: a fleet with no
+		// live Gitlet node runs no check and still raises it.
 		kind:  KindCodeChecksBacklog,
 		title: "Checks are waiting to run",
 		person: "Checks have waited past their time limit for a runner, so changes wait to merge. " +
@@ -2528,8 +1958,7 @@ var table = []rule{
 		fires: func(r Reading) (string, bool) {
 			count := fmt.Sprintf("%d", r.CodeChecksBacklog)
 			if r.CodeChecksBacklogMore {
-				// PAST THE READING'S BOUND the count is the bound, and the
-				// sentence says there are more rather than how many.
+				// Past the reading's bound the count is the bound: say "more".
 				count = "more than " + count
 			}
 			return fmt.Sprintf("%s queued check attempt(s) have waited for a runner longer than their "+
@@ -2555,15 +1984,11 @@ var table = []rule{
 			"docs/concepts/gitlet.md.",
 	},
 	{
-		// THE THRESHOLD IS THE QUEUE'S OWN CAPACITY (ADR-0015, M5-D28): how
-		// many changes its depth and batch land at the mean round its home
-		// timed its trains at, over the window its enqueues are counted in.
-		// This framework imports no Gitlet package, so the home's queue
-		// worker judges each queue against its own capacity and the rule
-		// fires at any count — never at a rate of its own, which would fire
-		// on every deep queue's ordinary day and never on a depth-one queue
-		// with hour-long checks. Raised by each queue's home Gitlet node, the
-		// one node that builds its trains and so the one that times them.
+		// The threshold is the queue's own capacity (ADR-0015, M5-D28), judged by
+		// the home's queue worker, so the rule fires at any count; a rate of its
+		// own would fire on every deep queue's ordinary day and never on a
+		// depth-one queue with hour-long checks. Raised by the home Gitlet node,
+		// which builds and times its trains.
 		kind:  KindCodeMergeRateOver,
 		title: "A merge queue is falling behind",
 		person: "A merge queue is asked to land more changes than it can, so waits keep growing. " +
@@ -2593,18 +2018,13 @@ var table = []rule{
 			"See docs/concepts/gitlet.md.",
 	},
 	{
-		// THE THRESHOLD IS TWO OTHER DECISIONS' (ADR-0015): the most live
-		// refs a repository may hold, at which the push decide refuses a
-		// create repo_refs, and the ref lifecycle's window, after which it
-		// deletes a seat's idle branch. A repository whose live refs and the
-		// refs it set within the window together reach the bound sets refs
-		// fast enough to reach it within the window, or holds it already,
-		// and nothing set within the window is the lifecycle's to delete, so
-		// the lifecycle is not what makes the room. This framework imports no Gitlet package,
-		// so every data node's reader judges each repository at both and the
-		// rule fires at any count — never at a number of its own. A node's
-		// condition, raised by every data node from its own rows, before the
-		// first create is refused rather than after.
+		// The threshold is two other decisions' (ADR-0015): the most live refs a
+		// repository may hold (a create is refused repo_refs) and the ref
+		// lifecycle's window (a seat's idle branch is then deleted). Live refs
+		// plus those set within the window reaching the bound means refs come fast
+		// enough to reach it, and nothing set within it is the lifecycle's to
+		// delete. Every data node's reader judges each repository, so the rule
+		// fires at any count, before the first create is refused.
 		kind:  KindCodeRefsNearLimit,
 		title: "A repository is near its branch limit",
 		person: "A repository creates branches and tags so fast it will reach its limit, " +
@@ -2730,14 +2150,10 @@ var table = []rule{
 			"vendor named; Settings › Models › the entry › Retry asks the vendor once."),
 	},
 	{
-		// A mirror that has not been brought level for longer than its own
-		// refresh promise — the interval its home brings it level at, and
-		// the grace an attempt in flight is given — so the other host holds
-		// what the company published that long ago, or the repository what
-		// its source held. This framework imports no Gitlet package, so
-		// the home judges each mirror at the promise and the rule fires at
-		// any count (ADR-0015). A node's condition, raised by the home that
-		// runs the mirror and by no other node.
+		// A mirror not brought level for longer than its own refresh promise (the
+		// interval its home brings it level at, plus an attempt's grace). The home
+		// judges each mirror (no Gitlet import here), so the rule fires at any
+		// count (ADR-0015); raised by the home that runs the mirror, no other node.
 		kind:  KindCodeMirrorFailing,
 		title: "A repository mirror is out of date",
 		person: "A repository mirror has not synced within its refresh time, so the copy is out of date. " +
@@ -2775,18 +2191,42 @@ var table = []rule{
 			"\"Mirrors and imports\".",
 	},
 	{
-		// NO INSTANCE SERVING, past the restart schedule's ceiling: the
-		// state the MCP answer calls failing ([MCPServerCondition.Started]),
-		// measured from the instance that has been down longest. That
-		// instant and not the latest failure's, because the node publishes
-		// the earliest of its instances, and because a server whose last
-		// serving instance has just gone down was already in an outage: an
-		// alarm that waited the grace again there would clear
-		// `mcp_server_partial` and say nothing while matters got worse.
-		//
-		// A SERVER NOBODY IS SIGNED IN TO is `mcp_oauth_needs_sign_in`'s:
-		// its instances are held back for a person's sign-in, which no
-		// restart and no fix to its address ends.
+		// A seat's run whose finished job cannot be resumed until an operator
+		// clears a condition: the give-up never ends it. The sandbox judged each
+		// failure, so the rule fires at any count (ADR-0015). Read fleet-wide off
+		// the heartbeat of the node holding the seat, which may evaluate no table.
+		kind:  KindExecutorResumeBlocked,
+		title: "An agent's finished work is stuck",
+		person: "An agent's finished work waits, and the agent takes nothing new, until a server is fixed. " +
+			"Fix that server's disk, file limit, keys or version.",
+		fires: func(r Reading) (string, bool) {
+			return fmt.Sprintf("%d run(s) of seats finished their executor's job but cannot be resumed "+
+					"until an operator clears a condition (the longest: %s's, held by %s, on %s, for %s)",
+					r.ExecutorResumesBlocked, r.ExecutorResumeBlockedSeat, r.ExecutorResumeBlockedNode,
+					r.ExecutorResumeBlockedKind, spoken(r.ExecutorResumeBlockedFor)),
+				r.ExecutorResumesBlocked > 0
+		},
+		remedy: "Read the `sandbox_resume_failed` lines of the node holding the seat, which " +
+			"the alarm's line names: each names the condition in its `error`. A disk that is full " +
+			"(`disk_full`), mounted read-only (`disk_read_only`) or failing to " +
+			"read or write (`disk_failed`) is the host's: make room on it, " +
+			"remount it read-write or replace it. A process at its limit of " +
+			"open files (`open_files_exhausted`) needs the limit raised. Nodes " +
+			"holding different keys (`fleet_keys_differ`) need the same " +
+			"`secrets.keys` on every node, and nodes running different builds " +
+			"(`fleet_builds_differ`) need the upgrade finished. The run waits " +
+			"rather than ends, so the review of its finished job is not thrown " +
+			"away: the next attempt after the fix resumes it, and the alarm " +
+			"clears. A turn with a wall-clock cap still ends at its cap.",
+	},
+	{
+		// No instance serving, past the restart schedule's ceiling: what the MCP
+		// answer calls failing ([MCPServerCondition.Started]), measured from the
+		// instance down longest, not the latest failure: a server whose last
+		// serving instance just went down was already in an outage, and waiting
+		// the grace again would clear `mcp_server_partial` and say nothing while
+		// matters got worse. A server nobody is signed in to is
+		// `mcp_oauth_needs_sign_in`'s: no restart ends that.
 		kind:  KindMCPServerFailing,
 		title: "A tool server is down",
 		person: "A tool server is not running, so no agent can use its tools. " +
@@ -2805,9 +2245,8 @@ var table = []rule{
 			"server's page (`POST /mcp-servers/<name>/retry`) tries every instance now."),
 	},
 	{
-		// SOME INSTANCES SERVING AND SOME NOT, past the same ceiling: a
-		// node's environment, one agent's credentials or one child that
-		// keeps dying, rather than the server.
+		// Some instances serving and some not, past the same ceiling: a node's
+		// environment, one agent's credentials or one child that keeps dying.
 		kind:  KindMCPServerPartial,
 		title: "A tool server is down for some agents",
 		person: "A tool server is not running everywhere, so some agents cannot use its tools. " +
@@ -2831,11 +2270,9 @@ var table = []rule{
 			"schedule."),
 	},
 	{
-		// AN AGENT'S INSTANCE HELD BACK past a provisioning pass for a
-		// credential that pass mints. Beside the two above rather than
-		// folded into them: a wait is no failure, and the server's state
-		// does not count it as one, but a wait that has outlived a whole
-		// pass is an integration that is not delivering.
+		// An instance held back past a provisioning pass for a credential that
+		// pass mints. Not folded into the two above: a wait is no failure, but
+		// one that outlived a whole pass is an integration not delivering.
 		kind:  KindMCPServerWaitingLong,
 		title: "A tool server waits for a credential",
 		person: "An agent cannot use a tool server because its integration has not delivered a credential. " +
@@ -2854,9 +2291,8 @@ var table = []rule{
 			"offered none of the server's tools."),
 	},
 	{
-		// A TOOL NO AGENT CAN BE HANDED, raised as soon as a node lists
-		// it: a name is refused by a rule, never by a moment, so no wait
-		// would change it.
+		// Raised as soon as a node lists the tool: a name is refused by a rule,
+		// so no wait would change it.
 		kind:  KindMCPToolsRefused,
 		title: "Some tools cannot be offered",
 		person: "Some of a tool server's tools have names agents cannot use, so no agent sees them. " +
@@ -2873,11 +2309,9 @@ var table = []rule{
 			"the server's own to change. No agent is offered those tools until then."),
 	},
 	{
-		// A SERVER SIGNED IN TO WITH OAUTH THAT NOBODY IS SIGNED IN TO, or
-		// whose vendor refused to renew its grant (in the vendor's own
-		// words). Raised at once: it is a person's step, and no wait ends
-		// it. No agent is offered the server's tools until somebody signs
-		// in.
+		// An OAuth server nobody is signed in to, or whose vendor refused to renew
+		// its grant (in the vendor's words). Raised at once: it is a person's
+		// step and no wait ends it.
 		kind:  KindMCPOAuthNeedsSignIn,
 		title: "A tool server needs a sign-in",
 		person: "A tool server's sign-in is missing or can no longer be renewed, " +
@@ -2903,9 +2337,8 @@ var table = []rule{
 			"renews the sign-in from then on."),
 	},
 	{
-		// A GRANT THAT RUNS OUT within [MCPSignInNotice], where its vendor
-		// said when: the sign-in renews the access, and nothing renews the
-		// grant itself but a person signing in again.
+		// A grant running out within [MCPSignInNotice], where its vendor said
+		// when: nothing renews the grant itself but a person signing in again.
 		kind:  KindMCPOAuthExpiring,
 		title: "A tool server sign-in runs out soon",
 		person: "A tool server's sign-in is running out, and agents lose its tools when it does. " +
@@ -2929,9 +2362,8 @@ var table = []rule{
 			"throughout."),
 	},
 	{
-		// A CALL WAITING ON A PERSON past the grace, at its server: its
-		// run is parked and its seat free, so nothing is failing, but the
-		// work it was doing waits on somebody who has not answered.
+		// A call waiting on a person past the grace: its run is parked and its
+		// seat free, so nothing fails, but the work waits on somebody.
 		kind:  KindMCPApprovalWaiting,
 		title: "A tool call waits for approval",
 		person: "An agent's work is paused until someone answers a tool call it asked to make. " +
@@ -2953,12 +2385,9 @@ var table = []rule{
 			"step-up) or Deny. The run stays parked, its seat free, until somebody does."),
 	},
 	{
-		// A TOOL HELD FOR A CHANGE, at once: a server that changed a tool
-		// somebody allowed, or added one, has that tool asking a person
-		// before every call from now on, which nobody is told otherwise
-		// until a call is held. No span, as a refused name has none: a
-		// definition is changed or it is not, and a node restarting does
-		// not make it so.
+		// A tool held for a change, raised at once: a changed or added tool asks a
+		// person before every call, which nobody is told otherwise until a call is
+		// held. No span: a definition is changed or it is not.
 		kind:  KindMCPToolsChanged,
 		title: "A tool changed and needs review",
 		person: "A tool server changed or added tools, which now ask a person before every call. " +
@@ -3005,12 +2434,9 @@ func feedOutageDetail(f FeedOutage) string {
 }
 
 // feedDeadLetterNamed is how many of a log's dead letters the alarm's detail
-// names one by one, the soonest to expire first.
-//
-// FIVE: the detail is one log line and one row on a screen, and the entries
-// an operator acts on first are the ones with the least time left; the count
-// beside them says how many more there are and how many expire within a day,
-// which is what a thousand entries named one by one would bury.
+// names one by one, the soonest to expire first. Five: the detail is one log
+// line and one screen row, and the count beside them says how many more and how
+// many expire within a day, which a thousand names would bury.
 const feedDeadLetterNamed = 5
 
 // feedDeadLetterDetail is feed_dead_lettered's measurement on one log: how many
@@ -3213,10 +2639,8 @@ func volumeLow(factor float64) func(Reading) (string, bool) {
 
 // Evaluate reports every alarm currently true, in the table's own order.
 //
-// PURE, over a reading gathered once. What makes an alarm real is that the
-// same evaluation feeds every surface — the gauge, the log line and the
-// operator's screen — so the three can never disagree about whether something
-// is wrong.
+// Pure, over a reading gathered once: the same evaluation feeds the gauge, the
+// log line and the screen, so they cannot disagree.
 func Evaluate(r Reading) []Alarm {
 	var out []Alarm
 	for _, rule := range table {
@@ -3316,16 +2740,14 @@ func Unjudged(r Reading) []AlarmRef {
 // a real and alarming measurement rather than an absent one.
 func Frac(v float64) *float64 { return &v }
 
-// PerDay is a measured daily byte count, for the one Reading field whose zero
-// is a real and BENIGN measurement rather than an absent one — see
-// [Reading.LogBytesPerDay].
+// PerDay is a measured daily byte count, for [Reading.LogBytesPerDay], whose zero
+// is a real, benign measurement.
 func PerDay(v uint64) *uint64 { return &v }
 
 // PerLogKinds is every alarm evaluated once per log rather than once per node,
-// in the table's own order: the seven a reader of the reference has to know
-// list the logs they stand on ([Alarm.Domains]) and write a pair of log lines
-// for each of those logs ([Tracker]), while counting once on the health
-// envelope and the gauge.
+// in table order: these list the logs they stand on ([Alarm.Domains]) and write
+// a pair of log lines per log ([Tracker]), counting once on the health envelope
+// and the gauge.
 func PerLogKinds() []Kind {
 	var out []Kind
 	for _, rule := range table {
@@ -3366,9 +2788,8 @@ func kindsWhere(holds func(rule) bool) []Kind {
 	return out
 }
 
-// Age is a measured age, for the Reading field whose zero value is a real and
-// REASSURING measurement — a backup verified this second — rather than an
-// absent one.
+// Age is a measured age, for [Reading.BackupAge], whose zero is a real,
+// reassuring measurement.
 func Age(d time.Duration) *time.Duration { return &d }
 
 // Kinds is every alarm this engine can raise, sorted. For the reference doc
@@ -3394,29 +2815,22 @@ func PersonWords(kind Kind) (title, person string, ok bool) {
 	return "", "", false
 }
 
-// Spoken is a duration as a person reads it ("45s", "2m 5s", "22h 33m"),
-// for a sentence outside this package that states one: a wait, a bound, an
-// age. The one spelling the engine uses, and the dashboard's own
-// (`fmtDuration`, lib/format.ts), so a figure and the sentence beside it
-// agree. Never a bare count of seconds.
+// Spoken is a duration as a person reads it ("45s", "2m 5s", "22h 33m"), for a
+// sentence outside this package that states one. It is the dashboard's own
+// spelling (`fmtDuration`, lib/format.ts), so a figure and the sentence beside
+// it agree. Never a bare count of seconds.
 func Spoken(d time.Duration) string { return spoken(d) }
 
 // SpokenSpan is a span that may run to days in days and hours ("29d 23h") and
-// any shorter one as [Spoken] says it: a dead letter's age and the time it has
-// left, as `feed_dead_lettered` names each entry, for a surface outside this
-// package that lists the same entries — `crewlet feeds dead-letters` — so the
-// alarm and the listing an operator reads beside it say one entry alike.
+// any shorter one as [Spoken] says it: a dead letter's age and time left, so
+// the alarm and `crewlet feeds dead-letters` say one entry alike.
 func SpokenSpan(d time.Duration) string { return spokenSpan(d) }
 
-// SpokenWait is a WAIT a person is told to sit out ("retry in about 22h
-// 33m"): the largest two units, ROUNDED UP at every magnitude, so a wait never
-// reads shorter than it is and a reader who comes back when told is not
-// refused again. [Spoken] measures a duration and rounds to the nearest unit,
-// which is right for a figure and wrong for a wait: "4m" said of four and a
-// half sends the reader back early. The dashboard says a wait by the same rule
-// (`fmtWait`, dashboard/src/lib/format.ts), so the engine's sentence and the
-// screen beside it agree. Never under a second: a wait that is over is said
-// as the shortest one.
+// SpokenWait is a wait a person is told to sit out ("retry in about 22h 33m"):
+// the largest two units, rounded up at every magnitude, so a reader who comes
+// back when told is not refused again ([Spoken] rounds to nearest, which sends
+// "4m" said of four and a half back early). The dashboard says a wait by the
+// same rule (`fmtWait`, dashboard/src/lib/format.ts). Never under a second.
 func SpokenWait(d time.Duration) string {
 	secs := int64((d + time.Second - 1) / time.Second)
 	if secs < 1 {
@@ -3442,16 +2856,10 @@ func SpokenWait(d time.Duration) string {
 	return fmt.Sprintf("%dd %dh", hours/24, hours%24)
 }
 
-// spoken is a duration as an operator reads it rather than as a computer
-// wrote it.
-//
-// `time.Duration.String` wrote every alarm's number: "85h58m0s", "11.39s",
-// "24h0m0s" — a trailing zero field on every whole value, hundredths nobody
-// measured to, and a spelling the dashboard beside it never uses. This is the
-// dashboard's own convention (`fmtDuration`, lib/format.ts): unit letters with
-// no space inside a field, a space between fields, two fields at most, and no
-// field that is zero — "340ms", "1.2s", "45s", "2m", "1m 2s", "2h 3m", "24h".
-// One reading, one spelling, whichever surface says it.
+// spoken is a duration as an operator reads it, not `time.Duration.String`
+// ("85h58m0s", hundredths nobody measured to): the dashboard's convention
+// (`fmtDuration`, lib/format.ts), two fields at most and none that is zero:
+// "340ms", "1.2s", "2m", "1m 2s", "2h 3m", "24h".
 func spoken(d time.Duration) string {
 	if d < 0 {
 		d = -d
@@ -3462,8 +2870,8 @@ func spoken(d time.Duration) string {
 		}
 		return fmt.Sprintf("%d%s %d%s", a, au, b, bu)
 	}
-	// EACH MAGNITUDE ROUNDS AT ITS OWN GRAIN AND HANDS A CARRY UP, so 999.6ms
-	// is "1s" and 59m59.6s is "1h" rather than "1000ms" and "60m".
+	// Each magnitude rounds at its own grain and carries up: 999.6ms is "1s",
+	// not "1000ms".
 	if ms := d.Round(time.Millisecond).Milliseconds(); ms < 1000 {
 		return fmt.Sprintf("%dms", ms)
 	}
@@ -3526,18 +2934,9 @@ func bytesHuman(n int64) string {
 }
 
 // RefusalAlarmFloor is what a surface reports when it can see that reads are
-// being refused for a fault but cannot say for how long.
-//
-// # Why a floor rather than a duration
-//
-// The condition is written in time — reads refused for longer than one
-// reconcile interval — because a single refusal during an election is not a
-// fault and a sustained one is. A recorder holds a COUNT, not an age: it can
-// say a fault-class refusal happened, and cannot say when it started.
-//
-// So a surface with only the count reports this floor, which is one interval
-// past the threshold: the alarm fires, and the detail says what was measured.
-// The alternative — reporting zero because the age is unknown — is the
-// three-valued mistake this whole engine is organised against, and it silences
-// the alarm on exactly the fault it exists for.
+// being refused for a fault but cannot say for how long. The condition is time
+// (longer than one reconcile interval; one refusal in an election is no fault),
+// and a recorder holds a count, not an age, so such a surface reports one
+// interval past the threshold. Zero for an unknown age is the three-valued
+// mistake and silences the alarm on the fault it exists for.
 const RefusalAlarmFloor = 2 * coord.ReconcileInterval

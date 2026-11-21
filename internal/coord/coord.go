@@ -8,7 +8,7 @@
 // kind of thing the lease is for. That is not decoration: the key a resource
 // becomes carries its class as a subject token of its own, so a whole class
 // is a wildcard the broker can match and a listing asks for one kind rather
-// than reading every lease in the fleet. Four classes name four kinds:
+// than reading every lease in the fleet. Five classes name five kinds:
 //
 //   - seat:{id} — one agent seat this node runs, named by the agent id
 //     derived from its handle (ADR-0013), as its mailbox is.
@@ -30,6 +30,8 @@
 //     that has given presence up, and claimed afresh by every process, so a
 //     restart never waits on its predecessor's. Its tokens come from ONE
 //     counter for the whole class ([CounterResource]).
+//   - browser_control:{launch} — a person's control of one executor launch's
+//     browser ([BrowserControls]), its tokens from ONE counter, as a taker's.
 //
 // A caller may lease under a class of its own as well — the tracker's walk
 // claims are `move:` and `merge:` — and every such class is held to
@@ -126,6 +128,37 @@
 // from its own copy until it notices, while every write through it fails).
 // The memory twin has one copy and meets it trivially.
 //
+// # A lease a read hands out is the store's word
+//
+// Get, ListLive and ListOwned hand out only leases that were live by the
+// STORE's clock as it read them, and a reader acts on each as it is: who holds
+// a resource is the owner Get names ([Holder]). Judging the lease again, its
+// ExpiresAt against the reader's own clock, turns the store's "held" into a
+// "not held" nobody said, on every node whose clock runs ahead of the store's
+// by more than a lease's remaining time — at most its TTL, 45 s for a seat at
+// the default — while a node and the broker member leading the bucket may each
+// stand an hour from the fleet's clock, two hours from each other, before
+// anything raises clock_skew (objstore.AssumedClockSkew). Such a node finds no
+// holder for any seat, so it relays a box's call to nobody and asks no holder
+// what only the holder can answer.
+//
+// How long a lease has left is the store's reading too: its ExpiresAt less the
+// store's own clock ([Backend.Now]), which [TimeLeft] reads. Held against the
+// reader's clock instead, every lease reads as run out on a node whose clock
+// runs ahead of the store's by more than its TTL, and a 45-second lease as
+// having an hour on a node an hour behind. The clock is read for a class,
+// because a store need not keep one for every class: coord/kv keeps seats and
+// presence in one bucket and every other class in another, each lease on its
+// own bucket's clock.
+//
+// So a reader never reads a lease's deadline itself: a backend judges a record
+// on its own clock, and [TimeLeft] is the one reading of a deadline outside a
+// backend, against the store's clock.
+// TestNoNodeJudgesALeaseTheStoreHandedOutOnItsOwnClock refuses a selection of
+// [Lease.ExpiresAt] in every non-test file but a backend's (coord/kv's,
+// coord/memory's), the contract suite's (coordtest) and [TimeLeft]'s, and Lease
+// has no method that judges one.
+//
 // # Why coordination is not itself a replicated log
 //
 // The engine grows a durable-state framework — internal/statelog — whose
@@ -190,6 +223,66 @@
 // removed — exactly as the seat's tracker inbox, pins and personal views pass.
 // It ends when the seat leaves the company, never when its holder does; see
 // chatread.go for why neither a person id nor an agent id is the key.
+//
+// # A seat's save ledger lives in the uploads bucket
+//
+// [SaveAllowances] keeps one ledger per seat of the executor sessions its runs
+// saved as they worked (internal/sandbox). The WHOLE COMPANY has to agree on
+// it: a save uploads a session's archive to the object store the fleet
+// shares, and the archive it supersedes stays there, named by nothing, until
+// the object collector could have deleted it. The ledger counts those bytes
+// against the seat's session budget. Any node that drives one of the seat's
+// jobs may save it, and a handover moves a job between nodes, so nodes
+// counting alone would let a seat hold its budget once per node; one value
+// written by compare-and-set lets two saves racing for the last of an
+// allowance never both win.
+//
+// It is a third key class of the UPLOADS BUCKET, `save.<seat>`, which neither
+// the upload ledger's one segment nor an upload record (`upload.<id>`) can
+// spell. What it counts is what an upload reservation counts, bytes nothing
+// names until the collector could have deleted them, and the bucket's age
+// ([UploadRetention]) is that hold already: a ledger nobody wrote for that
+// long holds only lapsed entries, and a removed seat's ledger goes on its own,
+// with no sweep.
+//
+// Every error is UNKNOWN, and the safe direction is not to save: a save its
+// node could not count is one that may pass the seat's budget.
+//
+// # A node's runs waiting for an operator
+//
+// A node's status record (nodestatusrecord.go) says how many runs of the seats
+// it holds wait for an operator ([NodeStatusRecord.ResumesBlocked]): runs whose
+// executor's job finished and whose last resume there failed on a condition
+// only an operator clears (internal/sandbox's Coordinator.ResumesBlocked). It
+// is ON THE RECORD because the node holding the seat is the only one that
+// knows, and it may be one with no alarm table to raise it on: a satellite
+// (`roles: [seats]`) runs no state log, so it evaluates none. So the
+// `executor_resume_blocked` alarm is judged by every data node off the live
+// records, as the model alarms are. The record carries THE COUNT, AND THE RUN
+// WAITING LONGEST BY ITS SEAT, ITS CONDITION AND SINCE WHEN, the seat and the
+// kind bounded ([MaxResumeBlockedKindBytes]), never how long it has waited,
+// which moves on every pass and would rewrite the record on each. It is absent
+// where nothing waits, and a node running no executor, or a build from before
+// it, says nothing.
+//
+// # A live node not saying keeps what it said
+//
+// A reader that judges the fleet over and over, an alarm evaluation above all,
+// reads [LiveNodeStatusesKept]: a live node whose record is not counted now
+// keeps the record the reader counted on its previous read, while its presence
+// stands at the epoch that record was written under. A LIVE NODE WHOSE RECORD
+// IS NOT COUNTED IS A NODE NOT SAYING, never one whose rows went away: a record
+// whose rewrites failed while the node lives ages out of its bucket
+// ([StatusFreshness]) before the presence lapses, and read as a node holding
+// nothing, a condition only that node held (a model's sit-out, a server's
+// outage, a run waiting for the operator) cleared for one evaluation and was
+// raised again on the next, with its lines and its wakes. A node whose
+// presence is gone, or was claimed again at a new epoch, keeps nothing: what
+// it held moves to holders that say their own, and a restarted node's memory
+// went with its process. A reader that decides once, rather than judging a
+// standing condition, reads [LiveNodeStatuses] itself, and one with a truer
+// word for a node than its last record, its own memory for the node it runs
+// on, leaves that node out of what it kept.
 //
 // # Maintenance mode
 //
@@ -317,8 +410,9 @@ func (claimInFlight) Is(target error) bool { return target == ErrUnavailable }
 
 // ErrTTLTooLong reports a claim or renew asking for a TTL the store cannot
 // honour. An error, never a [Refusal] (nobody else holds the resource), and
-// never a silent clamp: a heartbeat schedules from [Lease.ExpiresAt], so a
-// deadline quietly cut short has the holder renewing too late.
+// never a silent clamp: a holder renews and counts on its lease from the TTL
+// it asked for ([ExclusiveThrough]), so a deadline quietly cut short has it
+// renewing too late and counting on a lease that has lapsed.
 var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 
 // MaxDutyTTL is the longest TTL a lease outside seats and presence
@@ -399,10 +493,12 @@ type Lease struct {
 	Owner    string
 	Epoch    int64
 
-	// ExpiresAt is the UTC deadline as the STORE understands it. A
-	// heartbeat computes its next tick from this. It is the store's
-	// clock, never the caller's: nodes must never compare their own wall
-	// clocks to decide ownership.
+	// ExpiresAt is the UTC deadline as the STORE understands it, on the
+	// store's clock and never the caller's: a node never holds it against its
+	// own clock, to decide ownership or to say how long a lease has left. A
+	// holder renews and counts on its lease from the TTL it asked for
+	// ([ExclusiveThrough]); a reader takes a lease a read handed out as live
+	// ([Holder]) and reads its time left on the store's clock ([TimeLeft]).
 	ExpiresAt time.Time
 
 	// AcquiredAt is when THIS TENURE began, on the store's clock: stamped
@@ -427,11 +523,12 @@ type Lease struct {
 	// absent, and each reader states what absent means (placement reads
 	// absent roles as every role).
 	//
-	// A CALLER MAY NOT DEPEND ON A META VALUE'S GO TYPE: the twin hands
-	// back what was written while the KV store round-trips JSON (an int
-	// reads back as float64, a []string as []any), and both conform. Read
-	// it as placement.rolesFromMeta does: accept either shape, and treat
-	// anything else as absent.
+	// A CALLER MAY NOT DEPEND ON A META VALUE'S GO TYPE: both stores hand
+	// back what a JSON round trip leaves, not what was written (an int
+	// reads back as float64, a []string as []any), the twin putting every
+	// meta through one at the door (coord/memory's wireCopy). Read it as
+	// placement.rolesFromMeta does: accept either shape, and treat anything
+	// else as absent.
 	Meta map[string]any
 }
 
@@ -445,13 +542,6 @@ func (o AcquireOptions) EffectiveProtocol() int {
 	return o.Protocol
 }
 
-// Live reports whether the lease is unexpired relative to a store-supplied
-// now. Callers that have a Lease from the store already know it was live
-// when read; this exists for backends and tests reasoning about records.
-func (l Lease) Live(now time.Time) bool {
-	return l.ExpiresAt.After(now)
-}
-
 // AcquireOptions carries the non-identity inputs to a claim.
 //
 // The zero value is deliberately usable and SAFE: an AcquireOptions naming
@@ -459,7 +549,10 @@ func (l Lease) Live(now time.Time) bool {
 // the caller says so. Every field whose zero value would be dangerous says
 // what its zero means.
 type AcquireOptions struct {
-	// Owner is the process incarnation claiming the resource.
+	// Owner is who claims the resource, the name every renewal and release of
+	// it must give: a node's process incarnation, or a node id and a uuid for
+	// one hold of its work, and for a browser control a person's take
+	// ([BrowserControlOwner.Key]).
 	Owner string
 	// TTL is how long the claim survives without a renew.
 	TTL time.Duration
@@ -481,8 +574,8 @@ type AcquireOptions struct {
 	// presence: a newer node unable to register is missing from the roster,
 	// so its peers over-take shares. Non-seat work: a fleet duty and a hold
 	// on one (internal/schedule), a server's OAuth renewal lease
-	// (internal/engine), a check run's remote slot (internal/gitlet/checkrun)
-	// and the taker lease ([ClassTaker]).
+	// (internal/engine), a check run's remote slot (internal/gitlet/checkrun),
+	// the taker lease ([ClassTaker]) and a person's control of a run's browser.
 	//
 	// It skips the check, never the stamp: on presence the stamp is what the
 	// gate reads; on a duty it holds nothing back ([ProtocolGateCounts]).
@@ -528,16 +621,30 @@ type Backend interface {
 	// from the released tenure is still fencing with.
 	Release(ctx context.Context, resource, owner string, epoch int64) (bool, error)
 
-	// Get reads a resource's current lease, or nil when unheld.
+	// Get reads a resource's current lease, or nil when unheld: a lapsed or
+	// released record reads as nil. A lease it hands out is LIVE, judged on
+	// the store's clock as it read the record, and the reader takes the
+	// store's word ([Holder]): it never judges ExpiresAt on its own clock,
+	// which may run ahead of the store's by more than any lease's TTL (the
+	// package doc, "A lease a read hands out is the store's word").
 	Get(ctx context.Context, resource string) (*Lease, error)
 
-	// ListOwned returns the live leases this owner holds.
+	// ListOwned returns the live leases this owner holds, each live by the
+	// store's word as Get's is.
 	ListOwned(ctx context.Context, owner string) ([]Lease, error)
 
-	// ListLive returns the live leases of one resource class. The
-	// membership read is built on this: ListLive(ClassNode) is the fleet's
-	// roster.
+	// ListLive returns the live leases of one resource class, each live by
+	// the store's word as Get's is: a reader judges none of them again on
+	// its own clock. The membership read is built on this: ListLive(ClassNode)
+	// is the fleet's roster.
 	ListLive(ctx context.Context, class Class) ([]Lease, error)
+
+	// Now reads the STORE's clock for class: the clock that class's
+	// ExpiresAt is on, and so the one a reader holds a deadline against to
+	// say how long a lease has left ([TimeLeft]), never its own. Two classes
+	// need not share one (the package doc, "A lease a read hands out is the
+	// store's word").
+	Now(ctx context.Context, class Class) (time.Time, error)
 
 	// WatchLive streams every write to a lease of class made after it
 	// returns (claim, renewal, takeover, release) as a [LeaseWrite], in
@@ -624,7 +731,7 @@ const ResourceSeparator = ":"
 // no members; [Class.Valid] refuses one.
 //
 // Not enumerated, or every caller's vocabulary would land here: this package
-// owns the four the fleet leases, the tracker leases under classes of its own,
+// owns the five the fleet leases, the tracker leases under classes of its own,
 // and only [Class.HeldToSeatTTL] says which classes the seat lease TTL holds.
 type Class string
 
@@ -647,6 +754,16 @@ const (
 	// renewed [KeptRenewals] times a TTL, and ungated and uncounted by the
 	// gate ([ProtocolGateCounts]): it says nothing about holding a seat.
 	ClassTaker Class = "taker"
+
+	// ClassBrowserControl is a person's control of one executor launch's
+	// browser ([BrowserControls], [BrowserControlResource]): taken and renewed
+	// by the node serving the person, ended by it or by the node holding the
+	// seat. Its tokens come from one counter for the class ([CounterResource]),
+	// since a launch is a resource nobody leases again once its job ends;
+	// ungated and uncounted by the gate. Coord's own class rather than a
+	// caller's, because [CounterResource] must know its counter and its record
+	// is a typed contract both stores implement.
+	ClassBrowserControl Class = "browser_control"
 )
 
 // TakerResource names the taker lease of one process incarnation
@@ -657,18 +774,24 @@ func TakerResource(incarnation string) string { return ClassTaker.Resource(incar
 // tokens; every backend asks this one function so the twin and the store
 // agree.
 //
-// The resource itself, except a taker lease, which counts on its class's one
-// counter keyed by the class name: a counter is never removed (a removed one
-// restarts at 1), so one per process start would grow forever. A class
-// counter keeps the guarantee — every token above every earlier one, so a
-// re-claiming taker is fenced against its past self — at the cost of
-// contention its compare-and-set absorbs. It keeps no placement hint.
+// The resource itself, except a taker lease or a browser control, which counts
+// on its class's one counter keyed by the class name: a counter is never
+// removed (a removed one restarts at 1), so one per process start or per
+// launch would grow forever. A class counter keeps the guarantee — every
+// token above every earlier one, so a re-claim is fenced against its past
+// self — at the cost of contention its compare-and-set absorbs. It keeps no
+// placement hint.
 func CounterResource(resource string) string {
-	if ClassTaker.Holds(resource) {
-		return string(ClassTaker)
+	for _, class := range classCounted {
+		if class.Holds(resource) {
+			return string(class)
+		}
 	}
 	return resource
 }
+
+// classCounted is every class whose tokens one counter of the class mints.
+var classCounted = []Class{ClassTaker, ClassBrowserControl}
 
 // Valid reports whether this class can address a key: SHAPE, not membership.
 // It must be non-empty and survive the key grammar's escaping UNCHANGED, or

@@ -11,31 +11,16 @@ import (
 
 // Prompt is what a hosted code-host event asks of the seat it reached.
 //
-// It dispatches on the ROUTING REASON the parser stamped, because one pull
-// request reaches a reviewer, an assignee, an author and a watcher and asks
-// each for something different. Two shapes here are rare in the engine:
-//
-//   - AN EVENT THAT REPORTS THE OUTCOME OF THE RECIPIENT'S OWN ACTION — a
-//     workflow run they triggered going red. Only the self-hosted host's
-//     failed pipeline and the tracker's unblocked notice share it, and the
-//     prompt says so out loud, because a seat that has learned "I am not told
-//     about my own actions" reads its own name as a routing mistake otherwise.
-//   - A REVIEW THAT ASKS FOR CHANGES. The self-hosted code host carries
-//     approvals and nothing that says "this is not right yet, here is why",
-//     so its prompt has no branch for it. It is the strongest directed ask a
-//     code host makes, and rendering it as ordinary thread activity would
-//     have an agent read a blocking review as news.
-//
-// WHAT IT SAYS IS WHAT ONLY THE ENGINE KNOWS: why the seat is reading this,
-// the item by the reference a person would paste, the product facts a model
-// would not assume (a block that holds the merge, a merge that answers the
-// requester, a close that means stop, who makes an issue's code change and
-// under whose name), and how each ask is declined on this host. How to review
-// a diff or fix a red build is the model's own, and that a direct ask may not
-// end in silence is the executor's contract — neither is restated here.
-//
-// NOTHING HERE NAMES A TOOL — the deployed MCP server's tool names are not
-// knowable by the engine. See docs/concepts/tool-capabilities.md.
+// It dispatches on the ROUTING REASON the parser stamped: one pull request
+// reaches a reviewer, assignee, author and watcher, each asked for something
+// different. Two shapes are rare: AN EVENT REPORTING THE OUTCOME OF THE
+// RECIPIENT'S OWN ACTION (a red workflow run they triggered), which the prompt
+// says out loud so the seat does not read its name as a routing mistake, and
+// A REVIEW THAT ASKS FOR CHANGES, which must not render as ordinary thread
+// activity. It says only what the engine knows (why the seat is reading this,
+// the pasteable reference, product facts, how each ask is declined here), not
+// how to review or the executor's no-silence contract, and NOTHING HERE NAMES A
+// TOOL (docs/concepts/tool-capabilities.md).
 type Prompt struct{}
 
 var _ notify.Prompt = Prompt{}
@@ -43,21 +28,15 @@ var _ notify.Prompt = Prompt{}
 // Source implements [notify.Prompt].
 func (Prompt) Source() string { return Backend }
 
-// reconEvents are the reasons whose body is a POINTER rather than the
-// content.
+// reconEvents are the reasons whose body is a POINTER rather than the content.
 //
-// A review request names a pull request and carries its description; the
-// thing that has to be read is the DIFF. An assignment is the same shape. A
-// failed workflow run carries a conclusion and nothing else — the log is the
-// whole content, and it is not in the payload.
-//
-// A COMMENT IS NOT IN HERE, and that is the distinction the set encodes: a
-// comment's body IS what was said, so the trigger is the content and the
-// turn-start filters have something real to filter against. A
-// CHANGES-REQUESTED REVIEW is in here even though it usually carries a body,
-// because the body says WHAT is wrong and the diff comments say WHERE — and
-// acting on the summary alone is how a review round produces a change that
-// answers none of the line comments.
+// A review request or assignment carries a description, but what must be read
+// is the DIFF; a failed workflow run carries only a conclusion, its log being
+// the content. A COMMENT IS NOT IN HERE: its body IS what was said, so the
+// trigger is the content and the turn-start filters have something to filter.
+// A CHANGES-REQUESTED REVIEW is, though it usually has a body: the body says
+// WHAT is wrong and the diff comments WHERE, and acting on the summary alone
+// yields a change that answers none of the line comments.
 var reconEvents = map[string]bool{
 	PRReviewRequested:  true,
 	PRAssigned:         true,
@@ -407,19 +386,16 @@ func writeRef(b *strings.Builder, label string, n notify.Inbound) {
 	}
 }
 
-// ItemRef is the human reference for whatever this event names — and the
+// ItemRef is the human reference for whatever this event names, and the
 // CONVERSATION KEY, which is the same question asked by a different caller.
 //
-// ONE SEPARATOR FOR BOTH KINDS, which is where this differs from the
-// self-hosted host: GitHub numbers issues and pull requests in one sequence
-// per repository and writes both as `#42`, so `owner/repo#42` names exactly
-// one thing. Inventing a second separator to distinguish them would produce
-// a reference that is not the one a person would paste, and would key the
-// same thread two ways depending on which event arrived.
+// ONE SEPARATOR FOR BOTH KINDS: GitHub numbers issues and pull requests in one
+// sequence per repository and writes both as `#42`, so `owner/repo#42` names
+// one thing. A second separator would not be the reference a person pastes and
+// would key one thread two ways.
 //
-// An event naming no item — a workflow run on a branch push — yields "", so
-// it is never merged with anything, which is right: two unrelated builds
-// failing are two problems.
+// An event naming no item (a workflow run on a branch push) yields "", so it
+// is never merged with anything: two unrelated builds failing are two problems.
 func ItemRef(metadata map[string]string) string {
 	repo := metadata["repo"]
 	if repo == "" {
@@ -441,18 +417,15 @@ const RepoIDField = "repo_id"
 // WorkItem is the issue or pull request an event names, as the work item a
 // turn it wakes is charged to.
 //
-// THE ID IS `<repository id>#<number>`, NOT GITHUB'S OWN GLOBAL ID, because a
-// pull request has TWO of those: an issue comment on it carries the issue
-// object's id and a review carries the pull request's, and keyed on either
-// one pull request would be two items depending on which event woke the turn.
-// Issues and pull requests share one number sequence per repository, which is
-// what makes the number the single identity both faces agree on; the
-// repository's numeric id rather than its name is what keeps it stable across
-// a rename or a transfer. The key is the reference a person pastes, and the
-// project is the repository's full name.
+// THE ID IS `<repository id>#<number>`, NOT GITHUB'S OWN GLOBAL ID: a pull
+// request has TWO of those (an issue comment carries the issue object's id, a
+// review the pull request's), so keyed on either it would be two items by
+// which event woke the turn. The number is the one identity both faces share
+// per repository, and the repository's numeric id rather than its name
+// survives a rename or transfer. The key is the reference a person pastes;
+// the project is the repository's full name.
 //
-// An event naming no item — a workflow run on a branch push — names nothing,
-// and so does one from a delivery that carried no repository id.
+// An event naming no item, or a delivery with no repository id, names nothing.
 func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 	repoID, key := metadata[RepoIDField], ItemRef(metadata)
 	number := metadata["pr_number"]

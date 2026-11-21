@@ -10,19 +10,15 @@ import (
 
 // Faulty wraps a coord.Backend and takes the store away on demand.
 //
-// The tri-state is the most incident-hardened rule in this contract, and a
-// healthy backend can only ever produce two of its three answers. Without a
-// way to make the store unreachable, "definitely not yours" and "cannot tell"
-// are tested by inspection, which is how an unreachable store ends up
-// returning the same value as a peer holding the seat. A two-second blip then
-// had a node logging "another process holds this
-// node id's presence lease", pointing an operator at a configuration problem
-// that did not exist, while it quietly stopped refreshing its own presence
-// during exactly the outage it is built to ride out.
+// A healthy backend can only produce two of the tri-state's three answers.
+// Without a way to make the store unreachable, "definitely not yours" and
+// "cannot tell" are tested by inspection, which is how an unreachable store
+// ends up returning what a peer holding the seat would: a brief blip then
+// logged "another process holds this node id's presence lease", blaming
+// configuration, while the node stopped refreshing its presence.
 //
-// Exported because callers of coord.Backend need it too: any component that
-// branches on unknown-versus-lost — the seat host above all — should be
-// certified against a store that goes away mid-sweep.
+// Exported because any component branching on unknown-versus-lost, the seat
+// host above all, should be certified against a store that goes away mid-sweep.
 type Faulty struct {
 	inner coord.Backend
 
@@ -105,6 +101,14 @@ func (f *Faulty) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease
 		return nil, err
 	}
 	return f.inner.ListLive(ctx, class)
+}
+
+// Now delegates, or fails with the configured error.
+func (f *Faulty) Now(ctx context.Context, class coord.Class) (time.Time, error) {
+	if err := f.fault(); err != nil {
+		return time.Time{}, err
+	}
+	return f.inner.Now(ctx, class)
 }
 
 // WatchLive delegates, or fails with the configured error. A watch already

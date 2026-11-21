@@ -6,17 +6,13 @@ import (
 	"fmt"
 )
 
-// applyFile writes one file's row beside its conversation and moves the
-// conversation's activity: an upload or a delivery is the conversation in use.
-//
-// A RECORD THE ROWS NO LONGER ADMIT WRITES NOTHING: a conversation that is not
-// there or not the record's owner's, an origin this build does not know, and a
-// conversation already holding [FilesPerConversation] of the file's origin.
-// The bound is decided again here, in log order, because the record is
-// additive and two uploads decided from one snapshot would otherwise both
-// land; the writer reads its row back and reports [ErrTooManyFiles] for one
-// that wrote nothing. The object the record names is then named by no row,
-// and the collector deletes it.
+// applyFile writes one file's row and moves the conversation's activity (an
+// upload or a delivery is use). It writes nothing for a conversation missing or
+// not the owner's, an unknown origin, or one already holding
+// [FilesPerConversation] of the origin: the bound is decided again here, in log
+// order, because the record is additive and two uploads from one snapshot
+// would both land. The writer then reports [ErrTooManyFiles], and the
+// collector deletes the object no row names.
 func applyFile(ctx context.Context, tx *sql.Tx, c applyContext, id string,
 	p FileRecorded) (int, error) {
 

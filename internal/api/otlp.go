@@ -11,19 +11,16 @@ import (
 
 // The OTLP receive-and-forward edge.
 //
-// A harness inside a sandbox exports its telemetry HERE rather than to
-// the real backend, so the backend's ingest credential never enters a box
-// running generated code. The receiver adds that credential on the way out —
-// see [sandbox.OtelReceiver] for why the hop exists at all.
+// A harness in a sandbox exports its telemetry HERE, not to the real backend,
+// so the ingest credential never enters a box running generated code; the
+// receiver adds it on the way out (see [sandbox.OtelReceiver]).
 //
-// # This route is deliberately reachable without the API's own auth
+// # Reachable without the API's own auth, deliberately
 //
-// It has to be: the exporter inside the box holds no API token, and giving it
-// one would be handing a sandbox the credential that reads the whole company.
-// What authenticates a request instead is the per-run, trace-scoped, expiring
-// token in its own PATH, and the auth package exempts `/otlp/` by prefix for
-// exactly that reason. So this handler verifies before it does anything, on
-// the same terms as the webhook edge beside it.
+// The exporter holds no API token, and giving it one would hand a sandbox the
+// credential that reads the whole company. The per-run, trace-scoped, expiring
+// token in the PATH authenticates instead (the auth package exempts `/otlp/` by
+// prefix), so this handler verifies first, as the webhook edge does.
 
 // maxOtelBody bounds one exported payload.
 //

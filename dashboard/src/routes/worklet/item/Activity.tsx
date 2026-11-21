@@ -20,14 +20,14 @@
  *
  * # The live row is the turn running on THIS task
  *
- * Joined on the item the engine charges the running turn to
- * (`live_call.work_item`, then the turn's own) — never on a `work_key` a
- * trigger named — and drawn only while that seat's own state is `working`.
+ * Drawn where the engine reads the task's flow `working` (ADR-0162), from its
+ * assignee's own row while that seat is `working`: no turn is matched to the
+ * task here. The task's recorded flow is drawn with its changes.
  *
  * # Who a change reached
  *
  * Every announced change carries an expander that asks `work_routing` for its
- * recipients: the one reason of eighteen each person was reached under, and
+ * recipients: the one reason of nineteen each person was reached under, and
  * whether it asked them anything. The three EMPTY answers are three different
  * facts and keep three sentences ([NobodyWoken]).
  *
@@ -120,13 +120,16 @@ import type {
   AgentRow,
   WorkActivityRecord,
   WorkComment,
+  WorkFlowEntry,
   WorkItem,
   WorkItemTurn,
   WorkRoutingAnswer,
 } from "~/protocol/index.ts";
+import { flowEntryWords } from "~/lib/flow.ts";
 import { ACTIVITY_TABS, timeline, type ActivityTab, type Entry, type Source } from "./timeline.ts";
 import { useOwnRemark } from "./remark.tsx";
 import { usePaged } from "~/lib/usePaged.ts";
+import { EngineLine } from "~/components/InlineToken.tsx";
 
 /** How often the newest page of each history is asked again: nothing pushes them. */
 const ACTIVITY_POLL_MS = 30_000;
@@ -168,6 +171,7 @@ export function Activity({
   index,
   now,
   live,
+  flowHistory,
   param = "activity",
   thread,
 }: {
@@ -183,6 +187,8 @@ export function Activity({
   now: number;
   /** The seat running a turn on this task now, or null. */
   live: AgentRow | null;
+  /** The item's recorded flow, newest first (`WorkItemDetail.flow_history`). */
+  flowHistory?: readonly WorkFlowEntry[];
   /** The address key the tab is kept under — the peek's own, so a task page
    *  and the sub-task peeked over it do not move each other's tab. */
   param?: string;
@@ -298,8 +304,19 @@ export function Activity({
             changes: { items: changes.items, more: changes.more },
             comments: { items: said, more: comments.more },
             turns: { items: turns.items, more: turns.more },
+            ...(flowHistory ? { flow: flowHistory } : {}),
           }),
-    [asked, tab, said, changes.items, changes.more, comments.more, turns.items, turns.more],
+    [
+      asked,
+      tab,
+      said,
+      changes.items,
+      changes.more,
+      comments.more,
+      turns.items,
+      turns.more,
+      flowHistory,
+    ],
   );
   // THE ASKS STILL WAITING ON THIS READER, by the comment that asked: one put
   // to their record or their login, not resolved, removed or answered by any
@@ -559,7 +576,51 @@ function FeedEntry({
       );
     case "turn":
       return <TurnCard turn={entry.turn} chrome={chrome} now={now} />;
+    case "flow":
+      return <FlowRow entry={entry.flow} chrome={chrome} now={now} />;
   }
+}
+
+/**
+ * One recorded change of the item's flow, or one notice of it (ADR-0162): the
+ * engine's record, which never touched the item's own history.
+ */
+function FlowRow({ entry, chrome, now }: { entry: WorkFlowEntry; chrome: RowChrome; now: number }) {
+  const zone = useCompanyZone();
+  const { what, why } = flowEntryWords(entry, now, {
+    zone,
+    seatName: chrome.seatName,
+    seatKind: chrome.seatKind,
+    stuckHours: chrome.stuckHours,
+  });
+  return (
+    <li className="task-entry" data-kind="flow">
+      <span className="task-entry-mark" aria-hidden="true">
+        {entry.notice ? (
+          <NamedGlyph name={changeMark("flow")} size="sm" />
+        ) : (
+          <ClockGlyph size="sm" />
+        )}
+      </span>
+      <div className="task-entry-line" data-entry tabIndex={-1}>
+        <p>
+          <b>The engine</b> {what}
+          {why && <>: {why}</>}{" "}
+          <time className="task-when" dateTime={entry.at} title={fmtDateTime(entry.at)}>
+            {`· ${fmtDateCompact(entry.at, now)}`}
+          </time>
+          {entry.backfilled && (
+            <>
+              {" "}
+              <Tag size="xs" appearance="outline" title="Derived from the item's past">
+                backfilled
+              </Tag>
+            </>
+          )}
+        </p>
+      </div>
+    </li>
+  );
 }
 
 /**
@@ -710,9 +771,6 @@ function CommentRow({
   const handle = comment.author;
   const person = handle ? index.byHandle.get(handle) : undefined;
   const name = handle ? (chrome.seatName?.(handle) ?? handle) : "The engine";
-  const chosen = comment.choice
-    ? (comment.decision?.options.find((o) => o.id === comment.choice)?.label ?? comment.choice)
-    : "";
   const own = useOwnRemark(comment, item);
   return (
     <li className="task-entry" data-kind="comment">
@@ -763,13 +821,13 @@ function CommentRow({
         {own.editor ?? (
           <Clamp className="task-comment-fold" height={COMMENT_FOLD} defaultOpen={newest}>
             <div className="prose md task-comment-body">
+              {/* AN ANSWER THAT CHOSE SAYS SO in its own words, which the
+                  engine opens with the option's label. */}
               {comment.removed ? (
                 <span className="muted">(this comment was removed)</span>
-              ) : comment.body.trim() ? (
+              ) : (
                 renderMarkdown(comment.body)
-              ) : chosen ? (
-                <p>{`Chose “${chosen}”.`}</p>
-              ) : null}
+              )}
             </div>
           </Clamp>
         )}
@@ -927,7 +985,9 @@ export function TurnCard({
               turn repeating the reason in full body text read as the turn's
               content. */}
           {turn.summary ? (
-            <p className="task-turn-summary">{turn.summary}</p>
+            <p className="task-turn-summary">
+              <EngineLine text={turn.summary} refs={undefined} />
+            </p>
           ) : (
             <p className="task-turn-nosummary">No summary. See the trace.</p>
           )}
@@ -935,7 +995,7 @@ export function TurnCard({
             <div className="task-turn-review">
               <CornerDownLeftGlyph size="sm" />
               <p>
-                <b>Reviewer:</b> {turn.review}
+                <b>Reviewer:</b> <EngineLine text={turn.review} refs={undefined} />
               </p>
             </div>
           )}
@@ -1003,15 +1063,13 @@ function LiveRow({
           decorative
         />
       </span>
-      <a
-        className="task-live"
-        data-entry
-        href={turn ? watchHref(turn) : href(["live"])}
-        aria-label={`${name} is on turn ${ordinal} of ${item.key}. Watch live.`}
-      >
+      {/* NAMED BY WHAT IT SHOWS, in the order it shows it (WCAG 2.5.3): the
+          spaces between the parts are the name's, and a flex row lays them
+          out as nothing. */}
+      <a className="task-live" data-entry href={turn ? watchHref(turn) : href(["live"])}>
         <span className="task-live-dot" aria-hidden="true" />
-        <b>{`${name} is on turn ${ordinal}`}</b>
-        <span className="truncate">{[doing, age && `for ${age}`].filter(Boolean).join(" · ")}</span>
+        <b>{`${name} is on turn ${ordinal}`}</b>{" "}
+        <span className="truncate">{[doing, age && `for ${age}`].filter(Boolean).join(" · ")}</span>{" "}
         <span className="spacer" />
         <span className="task-live-go">
           Watch live <ArrowRightGlyph size="xs" />

@@ -11,26 +11,16 @@ import (
 
 // Teardown removes the webhooks this engine registered at GitHub.
 //
-// THE HOOKS AND NOTHING ELSE. A GitHub pass registers deliveries and reads
-// what a seat already has; it creates no account, so a disconnect has no seat
-// of this engine's making to remove.
+// THE HOOKS AND NOTHING ELSE: the pass creates no account.
 //
-// BOTH LEVELS ARE SWEPT, not whichever one the current config would choose.
-// The pass registers an org hook when it can and falls back to one hook per
-// repository when it cannot, and that choice moves with the credential's
-// scopes and with `org_webhook`. A teardown that only looked where TODAY's
-// config would put a hook would leave every hook the other branch had ever
-// created, so both are swept whatever the mode says.
+// BOTH LEVELS ARE SWEPT, whatever the mode says: the pass falls back from an
+// org hook to per-repository hooks as scopes and `org_webhook` move, so
+// looking only where TODAY's config would put one leaves the other branch's.
+// Matched on the delivery URL, as the reconcile does: a webhook has no name
+// and an organization carries other integrations' hooks.
 //
-// Matched on the delivery URL, the same rule the reconcile uses and for the
-// same reason: GitHub gives a webhook no name, and an organization carries
-// hooks other integrations registered. A sweep that took the first hook it
-// found would delete somebody else's integration.
-//
-// EVERY TARGET IS ATTEMPTED before the first failure is returned. One
-// repository a token cannot administer must not strand the hooks on all the
-// others; the errors are joined so the operator sees every one at once rather
-// than one per retry.
+// EVERY TARGET IS ATTEMPTED before the first failure is returned, so one
+// repository a token cannot administer strands no others; errors are joined.
 func Teardown(ctx context.Context, opts Options) error {
 	if opts.Config == nil {
 		return errors.New("github: no github config")
@@ -48,19 +38,11 @@ func Teardown(ctx context.Context, opts Options) error {
 	// NO CREDENTIAL IS NOT A FAULT, and this check sits BELOW the two above
 	// so that the ordinary no-op cases never reach it.
 	//
-	// `integrations.github.token` is optional on this host, and nothing at
-	// runtime needs it any more — each agent acts through its own app. So a
-	// nil client is the documented posture of a working company, not a
-	// misconfiguration, and returning an error for one made the disconnect
-	// UNCOMPLETABLE: the block is dropped only after the vendor step
-	// succeeds, so the surface sat "Disconnecting" and retried for the life
-	// of the deployment.
-	//
-	// What the engine cannot do it says plainly instead. The hooks it can no
-	// longer list are named for the operator to remove, which is the same
-	// bargain the app registration itself takes: GitHub offers no API to
-	// delete an app, so the engine uninstalls what it can and hands over a
-	// link for the rest.
+	// `integrations.github.token` is optional (each agent acts through its
+	// own app), so a nil client is a working company's posture. Erroring
+	// made the disconnect UNCOMPLETABLE: the block is dropped only after
+	// this step succeeds, so the surface retried "Disconnecting" for ever.
+	// What the engine cannot list it names for the operator to remove.
 	if opts.Client == nil {
 		// SAID ONLY WHERE A HOOK COULD BE, and said as a place to LOOK
 		// rather than as a hook that is there.

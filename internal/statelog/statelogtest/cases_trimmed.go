@@ -37,28 +37,15 @@ const suiteOtherStream = "CREWLET_SUITE_OTHER_LOG"
 const suiteTrimWriter = "suite-trim"
 
 // TrimmedAnchorsGoAndAZeroWriteIsFenced certifies the trim's trimmed record
-// (ADR-0080) end to end over the candidate's own applier, encoder and read
-// seam: a domain whose log writes anchors supplies the record and the
-// framework can use it, its applier takes it — through the framework's own
-// runner — removing exactly this log's anchors below the floor and writing
-// nothing of its own, and a write to a subject whose anchor went then reaches
-// the expectation-zero fence and publishes at zero only once the fence clears
-// it, while a subject that kept its anchor arbitrates on it as before. A
-// domain whose log writes no anchor is certified to declare no such record.
+// (ADR-0080) end to end: the candidate's applier, under the production runner,
+// removes exactly this log's anchors below the floor and writes no row; a
+// write to a subject whose anchor went passes the expectation-zero fence
+// before publishing at zero; a subject that kept its anchor arbitrates on it.
+// A log that writes no anchor must declare no such record. It drives the whole
+// loop because the applier, the envelope reader and the read seam can each
+// break while the encoder looks right.
 //
-// # Why the whole loop, and not the encoder alone
-//
-// Every half of this is a seam a domain can break while its encoder looks
-// right: an applier with no case for the kind faults every node's copy at the
-// first trim, one that writes a row for it is a record that changes every
-// node's tables, an envelope reader that loses the subject's id leaves the
-// framework a floor it cannot read, and a read seam that kept a removed anchor
-// would send the write the broker refuses. So the case drives the production
-// runner over the candidate's applier and the production publisher over the
-// candidate's read seam, and holds both to what the rows and the broker say.
-//
-// EXPORTED AND RETURNING THE VERDICT, for [Declaration]'s reason: the suite's
-// own tests hand it a domain that gets each half wrong.
+// Exported and returning the verdict for [Declaration]'s reason.
 func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 	t.Helper()
 	c := new(t)
@@ -89,10 +76,8 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 			"the case has no anchor to remove", name)
 	}
 
-	// THE STAMP EVERY RECORD THE CANDIDATE ENCODES CARRIES — its writer and
-	// its generation — which is the node and the generation the case runs
-	// as, so a decision built from the candidate's own records passes the
-	// publisher's stamp check.
+	// The case runs as the writer and generation the candidate's records
+	// carry, so a decision built from them passes the publisher's stamp check.
 	probe, err := c.Encode(kind, "suite-probe", "suite-probe", 0)
 	if err != nil {
 		t.Fatalf("encode a %s %s record: %v", name, kind, err)
@@ -105,10 +90,8 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 
 	node, db := openNodeEstate(t, c)
 	log := newSuiteLog()
-	// SIGNED AND VERIFIED UNDER THE SUITE'S KEYRING, as every record a
-	// running node applies is: the runner opens each frame before the
-	// candidate's applier reads a byte, so the case drives the path a
-	// trimmed record takes on a node.
+	// Sealed under the suite's keyring, so the runner opens each frame before
+	// the applier reads it, as on a node.
 	signer, err := recordseal.NewSigner(name, suiteRing())
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +111,7 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 	loop := startLoop(t, runner)
 	defer loop.stop()
 
-	// ANCHORS THE LOG ITS OWN RECORDS WROTE, one subject per record.
+	// Anchors the log's own records wrote, one subject per record.
 	written := appendRecords(t, c, spec, log, signer, records)
 	if err = loop.waitPast(log.last()); err != nil {
 		return fmt.Errorf("%s's applier did not apply its own records: %w", name, err)
@@ -140,7 +123,7 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 	kept, swept := written[len(written)-1], written[0]
 	floor := statelog.Position{Stream: spec.Name, Generation: gen, Seq: kept.seq}
 
-	// AND TWO THE LOG NEVER WROTE: one on this log below the floor, which
+	// And two the log never wrote: one on this log below the floor, which
 	// goes whatever wrote it, and one on another log, which stays.
 	stale := subjectOf(spec, statelog.Subject{Kind: "suite", ID: "stale"})
 	if err = plantAnchor(t.Context(), db, spec.Name, stale,
@@ -152,11 +135,9 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 		t.Fatalf("plant another log's anchor: %v", err)
 	}
 
-	// THE TRIM: purge below the floor, then count and sweep through the
-	// production entry points.
 	log.purge(floor.Seq)
-	// THE DOMAIN'S TABLES WHOLE, compared by content: a count would pass
-	// an applier that rewrote a row for the record without adding one.
+	// Compared by content: a count would pass an applier that rewrote a row
+	// for the record without adding one.
 	before := tableContents(t, db, c.Domain.Tables())
 	deps := statelog.SweepDeps{
 		Domain: c.Domain, Spec: spec, Log: log, Signer: signer, Ends: log.Ends, Runner: runner,
@@ -167,8 +148,8 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 	n := result.Records
 	switch {
 	case err != nil && n > 0:
-		// THE RECORD LANDED AND THIS NODE NEVER COMMITTED IT: the sweep
-		// waits for each record it appends before it answers.
+		// The record landed and this node never committed it: the sweep
+		// waits for each record it appends.
 		return fmt.Errorf("%s's applier did not apply the trimmed record: %w — an "+
 			"applier with no case for the kind faults every node's copy at the "+
 			"first trim", name, err)
@@ -189,11 +170,10 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 		t.Fatalf("read the anchors: %v", err)
 	}
 	for _, w := range written[:len(written)-1] {
-		// A SUBJECT THE FLOOR'S OWN RECORD ALSO WROTE keeps its anchor, at
-		// the floor, which the check below holds: an anchor is one row per
-		// subject naming its LAST record, so a candidate whose suite records
-		// share a subject — a reanchor's generation, a singleton — leaves
-		// nothing below the floor on it to remove.
+		// A subject the floor's own record also wrote keeps its anchor at the
+		// floor (checked below): an anchor names a subject's last record, so
+		// records sharing a subject (a reanchor, a singleton) leave nothing
+		// below the floor on it.
 		if w.env.Subject == kept.env.Subject {
 			continue
 		}
@@ -230,8 +210,8 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 			"(%v), want none — an idle log gains nothing", again.Records, err)
 	}
 
-	// THE ZERO FENCE, through the production publisher over the candidate's
-	// own read seam, with the applier stopped where it stands.
+	// The zero fence, through the production publisher over the candidate's
+	// read seam, with the applier stopped.
 	loop.stop()
 	committed := runner.Committed()
 	rows, err := c.Rows(db.Reader(), spec)
@@ -263,8 +243,7 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 		return pub.Publish(t.Context(), statelog.Request{
 			Subject: w.env.Subject, Scope: w.env.Scope, OpID: op,
 			Pattern: statelog.PatternArbitrated,
-			// THE CANDIDATE'S OWN RECORD, stamped with the writer and
-			// generation the case runs as.
+			// The candidate's own record, stamped as the case runs.
 			Decide: func(_ *sql.Tx, _ statelog.Stamp) (statelog.Decision, error) {
 				body, encodeErr := c.Encode(w.rec.kind, w.rec.id, op, 0)
 				return statelog.Decision{Payload: body}, encodeErr
@@ -272,8 +251,8 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 		})
 	}
 
-	// A FLOOR PUBLISHED ABOVE WHAT THESE ROWS REACH: the subject whose
-	// anchor went holds nothing, and the write may not take zero.
+	// A published floor above these rows: the write to the subject whose
+	// anchor went may not take zero.
 	published.Store(committed.Seq + 2)
 	appends := len(log.expectations())
 	_, err = write(swept, "suite-trimmed-behind")
@@ -291,8 +270,8 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 		return fmt.Errorf("a write the zero fence refused appended a record anyway")
 	}
 
-	// THE FLOOR THE TRIM PUBLISHED: the fence clears, and the write goes out
-	// at zero — decided from rows the sweep had already been applied to.
+	// The trim's own floor: the fence clears and the write goes out at zero,
+	// decided from rows the sweep was already applied to.
 	published.Store(floor.Seq)
 	res, err := write(swept, "suite-trimmed-zero")
 	if err != nil || res.Outcome != statelog.OutcomePending {
@@ -316,7 +295,7 @@ func TrimmedAnchorsGoAndAZeroWriteIsFenced(t *testing.T, new Factory) error {
 			derefLast(expects))
 	}
 
-	// AND A SUBJECT THAT KEPT ITS ANCHOR arbitrates on it, with no fence.
+	// A subject that kept its anchor arbitrates on it, with no fence.
 	res, err = write(kept, "suite-trimmed-kept")
 	expects = log.expectations()
 	switch {
@@ -385,9 +364,9 @@ func subjectOf(spec statelog.StreamSpec, s statelog.Subject) string {
 	return topics.LogSubject(spec.SubjectPrefix, s.Kind, s.ID)
 }
 
-// plantAnchor writes an anchor row directly, as a node whose applier consumed a
-// record on subject at at would have — the suite's one write of a framework
-// table, to give the trimmed record something no record of the log wrote.
+// plantAnchor writes an anchor row directly, as an applier that consumed a
+// record on subject at at would have: the suite's one write of a framework
+// table, giving the trimmed record an anchor no record of the log wrote.
 func plantAnchor(ctx context.Context, db store.ReplicatedHandle, stream, subject string,
 	at statelog.Position) error {
 
@@ -454,16 +433,16 @@ func (f *countingFence) asked() []statelog.Position {
 	return append([]statelog.Position(nil), f.cursors...)
 }
 
-// loop is one run of a domain's applier, ended by stop — on every path out of
-// a case, so no goroutine outlives the test that started it.
+// loop is one run of a domain's applier, ended by stop on every path out of a
+// case, so no goroutine outlives its test.
 type loop struct {
 	runner *statelog.Runner
 	cancel context.CancelFunc
 	once   sync.Once
 
-	// done is closed when the run has returned, and err is what it
-	// returned, written before the close: a channel closed rather than sent
-	// on, so a case may wait on it and stop may still wait after.
+	// done is closed (not sent on, so both a case and stop may wait on it)
+	// after the run returns; err is what it returned, written before the
+	// close.
 	done chan struct{}
 	err  error
 }
@@ -486,17 +465,14 @@ func (l *loop) stop() {
 	})
 }
 
-// waitDrained waits until the applier has come level with its log, which
-// drained signals ([statelog.RunnerDeps.OnDrained]) — and a run comes level
-// only from its loop, after its startup, so every record an earlier build
-// retained has been reprocessed by then. A run that returns first is refused
-// with what it returned, and a stop or a fault as soon as the runner reports
-// one, as [loop.waitPast] refuses them: a record the applier refuses is
-// retried in place rather than returned, and a wait on the drain alone would
-// sit out the test binary's timeout before it said so.
+// waitDrained waits until the applier comes level with its log, which drained
+// signals ([statelog.RunnerDeps.OnDrained]); a run comes level only after its
+// startup has reprocessed every record an earlier build retained. A return,
+// stop or fault is refused as soon as seen: a refused record is retried in
+// place, so waiting on the drain alone would sit out the binary's timeout.
 func (l *loop) waitDrained(drained <-chan struct{}) error {
-	// THE TICK ONLY PACES THE ASKING: the drain, the return, the stop and
-	// the fault decide, and nothing here is judged by when it came.
+	// The tick only paces the asking; the drain, return, stop and fault
+	// decide.
 	tick := time.NewTicker(2 * time.Millisecond) //fixedwait:liveness
 	defer tick.Stop()
 	for {
@@ -527,10 +503,8 @@ func (l *loop) waitPast(seq uint64) error {
 		if err := l.runner.Stopped(); err != nil {
 			return fmt.Errorf("the applier stopped: %w", err)
 		}
-		// THE FAULT, as soon as there is one: a record the applier
-		// refuses is retried for the whole budget before it is reported,
-		// and a case that waited that long for the obvious would be slow
-		// to say so.
+		// Ask for the fault now: a refused record is otherwise retried for
+		// the whole budget before it is reported.
 		if msg, faulted := l.runner.Fault(time.Now().Add(statelog.ApplyRetryBudget)); faulted {
 			return fmt.Errorf("the applier faulted: %s", msg)
 		}
@@ -540,10 +514,9 @@ func (l *loop) waitPast(seq uint64) error {
 }
 
 // suiteSweep counts the anchors below floor and appends the records they call
-// for — the two steps the engine's trim takes — under a budget no wait here
-// reaches, so an applier that never commits the record is named by the wait's
-// own bound rather than by the budget's designed stop: the case is about what
-// the domain does.
+// for, the engine trim's two steps, under a budget no wait here reaches, so an
+// applier that never commits the record is named by the wait's own bound
+// rather than the budget's stop.
 func suiteSweep(ctx context.Context, deps statelog.SweepDeps, floor statelog.Position) (statelog.Swept, error) {
 	plan, err := statelog.PlanSweep(ctx, deps, floor)
 	if err != nil {

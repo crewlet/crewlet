@@ -5,13 +5,12 @@ import { expect, test } from "vitest";
 import {
   CROP_POINT_SIZE,
   cropScale,
-  fixedAt,
   padRegion,
   pointRegion,
-  scrollerDisplays,
-  stuckBy,
+  svgDataUrl,
   windowAround,
 } from "./crop.ts";
+import { fixedAt, scrollerDisplays, stuckBy } from "./cropcopy.ts";
 
 const SLIDE = { w: 1920, h: 1080 };
 
@@ -55,6 +54,14 @@ test("a picture's long side is at most 800 pixels, and a small one is never grow
   expect(cropScale({ x: 0, y: 0, w: 200, h: 100 })).toBe(1);
 });
 
+test("a picture is as sharp as the reader's screen, within the 800 pixel bound", () => {
+  expect(cropScale({ x: 0, y: 0, w: 200, h: 100 }, 2)).toBe(2);
+  expect(cropScale({ x: 0, y: 0, w: 480, h: 300 }, 2)).toBe(800 / 480);
+  expect(cropScale({ x: 0, y: 0, w: 1600, h: 400 }, 3)).toBe(0.5);
+  // A screen with fewer pixels than CSS pixels still gets one per CSS pixel.
+  expect(cropScale({ x: 0, y: 0, w: 200, h: 100 }, 0.5)).toBe(1);
+});
+
 test("a point of the viewport is the window around it once the page's scroll is added", () => {
   const doc = { w: 1280, h: 6000 };
   // Shown at 300 down a viewport scrolled 2000: the document's 2300.
@@ -91,4 +98,13 @@ test("a scrolled element's copy clips as a block around a wrapper laying out its
   expect(scrollerDisplays("inline-grid")).toEqual({ outer: "inline-block", inner: "grid" });
   expect(scrollerDisplays("inline-block")).toEqual({ outer: "inline-block", inner: "flow-root" });
   expect(scrollerDisplays("list-item")).toEqual({ outer: "list-item", inner: "flow-root" });
+});
+
+test("a picture's SVG reaches the image whole: no fragment cut at a #, no escape read at a %, no line break dropped", () => {
+  const svg = '<svg><text xml:space="preserve">#1 of 100%\n\tnext\r</text></svg>';
+  const url = svgDataUrl(svg);
+  const body = url.slice("data:image/svg+xml;charset=utf-8,".length);
+  expect(body).not.toMatch(/[#\t\n\r]|%(?![0-9a-f]{2})/);
+  expect(new URL(url).hash).toBe("");
+  expect(decodeURIComponent(body)).toBe(svg);
 });

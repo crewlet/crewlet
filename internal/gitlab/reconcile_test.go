@@ -979,28 +979,13 @@ func pageOf(rows []map[string]any, q url.Values) []map[string]any {
 
 // mutations counts the requests this instance received that CHANGE it.
 //
-// # Counted by ROUTE, not by method
-//
-// [integrationtest]'s converged clause asks how many writes a third-party
-// app took, and the tempting implementation is "everything that is not a
-// GET". That is the wrong rule to write down even where it gives the right
-// answer: some vendors model a listing as a POST, and a method counter would
-// call that a write — which makes the clause impossible to satisfy and
-// pushes the fix towards weakening the suite instead of fixing the pass.
-//
-// So the READ routes are named and everything else counts. GitLab serves
-// every query on this surface as a GET with query parameters, so here the
-// two rules pick out the same requests; the route is the one stated because
-// it stays correct if that ever stops being true.
-//
-// UNRECOGNISED IS A MUTATION, deliberately. A route added to this fixture
-// and forgotten here fails the converged clause loudly, where the opposite
-// default would quietly stop counting a write the pass had begun making.
-//
-// A REFUSED write still counts. The pass POSTs a membership that already
-// exists and GitLab answers 409; the instance received the request and had
-// to answer it, and the clause is about traffic and standing authority
-// rather than net effect.
+// Counted by ROUTE, not method, for [integrationtest]'s converged clause:
+// "not a GET" is wrong where a vendor models a listing as a POST, which would
+// make the clause unsatisfiable. So the READ routes are named, and everything
+// else counts: UNRECOGNISED IS A MUTATION, so a route forgotten here fails
+// loudly instead of silently ceasing to count a write. A REFUSED write (a 409
+// on an existing membership) still counts: the clause is about traffic and
+// standing authority, not net effect.
 func (f *adminInstance) mutations() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1229,24 +1214,15 @@ func reconcileWith(t *testing.T, f *adminInstance, sink provision.TokenSink,
 
 // A ROLLBACK DISCARDS WHAT THE RUN SEALED EVEN WHEN IT MINTED NO SEAT TOKEN.
 //
-// # The window, and why it never closed on its own
+// When integrations.gitlab.signing_secret resolves to nothing, the pass MINTS
+// a webhook signing secret and Records it before writing the hook, so a pass
+// whose seats keep their tokens can seal a credential and mint no token. A
+// rollback returning early on an empty minted map leaves that FRESH secret
+// sealed while GitLab signs with the old one; the next apply takes
+// SigningReuse and never re-points the hook, so every delivery fails.
 //
-// The seat tokens are not the only thing a pass seals. When
-// integrations.gitlab.signing_secret resolves to nothing, the pass MINTS a
-// webhook signing secret and Records it — and only then writes the hook. So
-// the steady-state pass, over a company whose seats all keep their tokens,
-// can record a credential and mint no token at all.
-//
-// The rollback returned early on an empty minted map, so that pass left a
-// FRESH secret in the fleet's sealed store while GitLab went on signing with
-// whatever it had. Nothing recovered: at the next config apply the engine
-// resolves the sealed value, so the pass sees a non-empty secret, takes
-// SigningReuse and never mints or re-points the hook again. Every delivery
-// fails verification from then on, off the back of one transient 500.
-//
-// Pinned on the SEALED STORE rather than on the count of Discard calls: an
-// implementation that called Discard and then re-recorded would satisfy a
-// call counter and leave the same broken instance behind.
+// Pinned on the SEALED STORE, not the count of Discard calls: Discard then
+// re-record would satisfy a counter and leave the same broken instance.
 func TestAFailedHookRollsBackASecretItHadNoTokensToRevoke(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
@@ -1459,20 +1435,12 @@ func sortByUsername(rows []map[string]any) {
 
 // A COMPANY WITH NO PUBLIC BASE URL IS DEGRADED, NOT READY.
 //
-// api.external_url is optional, the reconcile loop feeds it into
-// every pass verbatim, and with nothing in it this pass registers no webhook
-// at all: no merge request, pipeline, issue or comment ever reaches a seat.
-// The pass said so in a NOTE — which only whoever runs the CLI ever sees —
-// and returned no findings, so integration.Classify reported READY to the
-// dashboard where a running company is actually watched.
-//
-// The finding that should have carried it could not: it was keyed on
-// `Hooked != "" && len(HookedOn) == 0`, and every route through ensureHooks
-// either returns a non-empty list or an error, so the branch was unreachable
-// and this state reached nothing at all.
-//
-// Classify is asserted rather than just the finding, because READY is the
-// answer that was wrong and the finding is only how it gets fixed.
+// api.external_url is optional; with nothing in it the pass registers no
+// webhook, so no merge request, pipeline, issue or comment reaches a seat.
+// A NOTE alone is seen only by whoever runs the CLI, so the pass must return
+// a finding for integration.Classify to report anything but READY to the
+// dashboard. Classify is asserted, not just the finding, because READY is the
+// wrong answer the finding exists to prevent.
 func TestNoPublicBaseURLIsReportedRatherThanNoted(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
@@ -1860,17 +1828,13 @@ func TestMintedSigningSecretsDiffer(t *testing.T) {
 
 // A GITLAB THAT CANNOT SIGN FAILS THE RUN, LOUDLY.
 //
-// `signing_token` arrived in GitLab 19.0 behind a feature flag and went
-// generally available in 19.1. An older instance ACCEPTS the attribute,
-// ignores it, and answers 200 — so the write succeeds, the hook exists, and
-// GitLab's own settings page calls it healthy. It then delivers unsigned to
-// an engine whose verification is mandatory, and every delivery is refused.
+// `signing_token` is GA from GitLab 19.1. An older instance ACCEPTS the
+// attribute, ignores it and answers 200, so the hook looks healthy yet
+// delivers unsigned to an engine whose verification is mandatory.
 //
-// Nothing else in the system can report that: the engine sees a stream of
-// unauthenticated deliveries, which is indistinguishable from an attack, and
-// the instance sees a hook it thinks is fine. The provisioner reading
-// `signing_token_present` back is the only moment the two facts are in one
-// place.
+// Nothing else can report that: the engine's refused deliveries look like an
+// attack and the instance thinks the hook is fine. The provisioner reading
+// `signing_token_present` back is the only place the two facts meet.
 func TestAGitLabThatCannotSignIsRefused(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()

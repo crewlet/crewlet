@@ -215,19 +215,17 @@ var leaseCases = []testCase{
 
 	{"a_refused_claim_leaves_the_holders_lease_untouched", func(h *harness) {
 		// The same half-rejection, on the path a fleet walks constantly:
-		// every node sweeps for claimable seats on every tick, so in a
-		// healthy company a REFUSED claim is the single most common
-		// thing this store does. A refusal that writes anything is
-		// therefore not a rare corruption but a continuous one.
+		// every node sweeps for claimable seats on every tick, so a REFUSED
+		// claim is the most common thing this store does, and a refusal that
+		// writes anything is a continuous corruption.
 		//
-		// Three fields, three different failures. The deadline: peers
-		// refusing each other keep a dead holder's seats alive forever.
-		// The hint: it comes to name the last node that TRIED rather
-		// than the last that HELD, so a restarted node no longer finds
-		// the seats whose children it had warm. The meta: two processes
+		// Three fields, three failures. The deadline: peers refusing each
+		// other keep a dead holder's seats alive forever. The hint: it comes
+		// to name the last node that TRIED, not HELD, so a restarted node
+		// loses the seats whose children it had warm. The meta: two processes
 		// racing one node id would let the loser's profile overwrite the
-		// winner's, and peers then make placement decisions against
-		// roles and labels no running process has.
+		// winner's, and placement then runs on roles and labels no running
+		// process has.
 		resource := coord.NodeResource("n1")
 		held := map[string]any{"roles": []any{"seats"}, "labels": map[string]any{"zone": "eu"}}
 		h.claim(resource, coord.AcquireOptions{

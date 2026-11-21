@@ -69,7 +69,7 @@ func TestAnInBoxContinuationIsHeldToItsCopysMeasure(t *testing.T) {
 		Launch: row.LaunchID}
 	handed := relaunchHanded(t, asking.launcher.company, asking.handle, asking.launcher.turn,
 		runnerResume(resumeInput{Run: resumed, Bridged: logged,
-			BridgedRead: logged.Appends(), State: execstate.State{Version: execstate.Version, Round: 1},
+			BridgedRead: logged.Read(), State: execstate.State{Version: execstate.Version, Round: 1},
 			Asked: &sandbox.AskedRun{Question: "which branch?", Answer: "use main", By: "founder",
 				SessionID: "sess-ask", BoxKept: true}}, nil, nil, nil))
 	if handed.Continue.ContextTokens != copied {

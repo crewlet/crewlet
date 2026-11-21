@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/sandbox`
-- **Enforced-by:** `internal/sandbox.TestEachWaiterDrivesOnlyTheBoxesItCanReach`, `internal/sandbox.TestAPauseIsReapedOnlyOnItsBoxsHost`, `internal/sandbox.TestACollectionOfABoxOnAnotherHostIsAskedOfThatHost`, `internal/sandbox.TestAHostThatDoesNotAnswerHandsTheClaimBackUncounted`, `internal/sandbox.TestAnEndingOnAnotherNodeLeavesTheBoxToItsHost`, `internal/sandbox.TestARelaunchAwayFromTheBoxsHostStartsFresh`, `internal/sandbox.TestARelaunchOnTheBoxsHostContinuesInIt`, `internal/sandbox.TestAStopOfARelaunchBeforeItsBoxReadsNoJobAndLeavesTheBoxToItsHost`, `internal/sandbox.TestAStopOfARunWhoseBoxIsOnAnotherHostIsReadThere`, `internal/sandbox.TestAHostReclaimsTheBoxesNoRunNamesAnyMore`, `internal/sandbox.TestALaunchNodeGoneForTheBoxTimeoutHasItsJobLost`, `internal/sandbox.TestALaunchNodeBackWithinTheBoxTimeoutKeepsItsRuns`, `internal/sandbox.TestAJobKilledWithItsEngineIsLost`, `internal/sandbox.TestAJobFoundRunningAfterARestartIsWatchedByTheNewEngine`, `internal/sandbox.TestAJobItsEngineRestartKilledIsRecordedLostAndAnnounced`, `internal/sandbox.TestALostJobsRoundIsCarriedOnNotCollected`, `internal/sandbox.TestACompletionAfterTheHostWasFoundGoneCarriesTheRoundOn`, `internal/agent/runner.TestALostJobsRoundIsCarriedOnInAFreshSession`, `internal/agent/runner.TestARoundLostTooOftenIsNotStartedAgain`, `internal/sandbox.TestALocalBoxsTailIsReadOnTheNodeThatLaunchedIt`, `internal/engine.TestABoxOnAnotherHostIsReadBackByThatHost`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/engine.TestBothWaitersKeepARunsTokenFileCurrent`, `internal/engine.TestAHostBehindItsAskersClockReadsOnlyItsShareOfTheAskersWait`, `internal/engine.TestAHostAheadOfItsAskersClockStillReadsWithinTheAllowance`, `internal/engine.TestABoxReadAnotherBuildCannotReadWholeReadsNothing`, `internal/engine.TestAHostTakesEveryBoxReadAsItArrives`, `internal/engine.TestABoxReadWhoseShareIsSpentIsRefusedAndFreesItsSlot`, `internal/engine.TestAnAskThatNeverLeftThisNodeIsOneItCouldNotMake`, `internal/sandbox.TestAStopGivesASilentHostUpOnTheAskingNodesOwnClock`, `internal/sandbox.TestAStopsRetryOnANodeAheadOfItsDeciderStillAsksItsHost`, `internal/sandbox.TestAStopIsGivenUpByItsAbsoluteBoundWhereNoFrameCountsItsSilence`, `internal/sandbox.TestAnAskThatOutlivesItsSeatWritesNothingOffShortOfTheBoxTimeout`
+- **Enforced-by:** `internal/sandbox.TestEachWaiterDrivesOnlyTheBoxesItCanReach`, `internal/sandbox.TestAPauseIsReapedOnlyOnItsBoxsHost`, `internal/sandbox.TestACollectionOfABoxOnAnotherHostIsAskedOfThatHost`, `internal/sandbox.TestAHostThatDoesNotAnswerHandsTheClaimBackUncounted`, `internal/sandbox.TestAnEndingOnAnotherNodeLeavesTheBoxToItsHost`, `internal/sandbox.TestARelaunchAwayFromTheBoxsHostStartsFresh`, `internal/sandbox.TestARelaunchOnTheBoxsHostContinuesInIt`, `internal/sandbox.TestAStopOfARelaunchBeforeItsBoxReadsNoJobAndLeavesTheBoxToItsHost`, `internal/sandbox.TestAStopOfARunWhoseBoxIsOnAnotherHostIsReadThere`, `internal/sandbox.TestAHostReclaimsTheBoxesNoRunNamesAnyMore`, `internal/sandbox.TestALaunchNodeGoneForTheBoxTimeoutHasItsJobLost`, `internal/sandbox.TestALaunchNodeBackWithinTheBoxTimeoutKeepsItsRuns`, `internal/sandbox.TestAJobKilledWithItsEngineIsLost`, `internal/sandbox.TestAJobFoundRunningAfterARestartIsWatchedByTheNewEngine`, `internal/sandbox.TestAJobItsEngineRestartKilledIsRecordedLostAndAnnounced`, `internal/sandbox.TestALostJobsRoundIsCarriedOnNotCollected`, `internal/sandbox.TestACompletionAfterTheHostWasFoundGoneCarriesTheRoundOn`, `internal/sandbox.TestACollectionWhoseHostAloneHasASilentStoreIsGivenUpAsASilentHostIs`, `internal/sandbox.TestACompletionWhoseHostAloneFindsTheStoreSilentIsRenewed`, `internal/sandbox.TestEveryHandBackIsRenewedWhileTheClockOnItsHostRuns`, `internal/sandbox.TestAJobNoWaiterAnnouncesIsRenewedByItsRow`, `internal/sandbox.TestAnAcknowledgedRefusalOutlivesItsHolder`, `internal/sandbox.TestAClockOnAHostsStoreGoesWithTheCollectionItTimed`, `internal/agent/runner.TestALostJobsRoundIsCarriedOnInAFreshSession`, `internal/agent/runner.TestARoundLostTooOftenIsNotStartedAgain`, `internal/sandbox.TestALocalBoxsTailIsReadOnTheNodeThatLaunchedIt`, `internal/engine.TestABoxOnAnotherHostIsReadBackByThatHost`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/engine.TestBothWaitersKeepARunsTokenFileCurrent`, `internal/engine.TestAHostBehindItsAskersClockReadsOnlyItsShareOfTheAskersWait`, `internal/engine.TestAHostAheadOfItsAskersClockStillReadsWithinTheAllowance`, `internal/engine.TestABoxReadAnotherBuildCannotReadWholeReadsNothing`, `internal/engine.TestAHostTakesEveryBoxReadAsItArrives`, `internal/engine.TestABoxReadWhoseShareIsSpentIsRefusedAndFreesItsSlot`, `internal/engine.TestAnAskThatNeverLeftThisNodeIsOneItCouldNotMake`, `internal/sandbox.TestAStopGivesASilentHostUpOnTheAskingNodesOwnClock`, `internal/sandbox.TestAStopsRetryOnANodeAheadOfItsDeciderStillAsksItsHost`, `internal/sandbox.TestAStopIsGivenUpByItsAbsoluteBoundWhereNoFrameCountsItsSilence`, `internal/sandbox.TestAnAskThatOutlivesItsSeatWritesNothingOffShortOfTheBoxTimeout`
 - **Cost-when-tried:** the fleet's one waiter polled every running job from whichever node held its duty. A `direct` or `container` box on another node's host is not there to reconnect to, so the duty's node failed every tick, gave the box up after `ConnectGiveUp` (60 s), and settled a job that was still working as lost; its keepalive never reached the box either. An ending or a relaunch on a node the seat had moved to reached for the box the same way, and found nothing.
 - **Tag-status:** unreleased
 
@@ -39,10 +39,24 @@ last saw its job running; the host's own waiter reads a job that is not running
 as ENDED while that process is still there, and collects it, and as LOST once
 it is gone too. A lost job — or a box gone from its host, or a node gone from
 the fleet — is recorded on the run's row before its completion is announced,
-and the seat's holder reads what the job spent off its box where the box is
-left, then resumes the turn to relaunch the same round in a fresh CLI session:
-in the lost job's box on its host, else in a fresh one from what it pushed. A
-round whose calls hold its submission is collected instead, a job that had
+and so is a job whose box's host has answered the seat's holder, for the box
+timeout, that it cannot read the run's row off the coordination store
+(`launch_node_store_silent`), though by that holder, on the claim it collects
+under, rather than by a waiter before an announcement: no waiter announces such
+a job meanwhile, since the host's own reads the row through that store, so the
+holder renews its completion until the run settles: up to the bound, and past
+it until the recorded loss's round is carried on. What keys that renewal is on
+the run's row as well as in the holder's memory (the job's record of its host's
+silence, which every claim's release writes, and the recorded loss), so a
+restarted node or the seat's next holder renews it before its own first
+collection. A refusal of such a job made before any collection found
+that silence is acknowledged, as one is where a waiter stands behind it, and is
+owed on the row too, which the seat's recovery re-fires, since that silence has
+no bound ([ADR-0063](0063-every-turn-on-a-node-passes-the-nodes-admission.md)). The seat's holder reads what the
+job spent off its box where the box is left, then resumes the turn to relaunch
+the same round in a fresh CLI session: in the lost job's box on its host, else
+in a fresh one from what it pushed. A round whose calls hold its submission is
+collected instead, a job that had
 asked is parked on its question, and a round is carried on after at most two
 lost jobs.
 
@@ -155,14 +169,14 @@ hearing silence.
   unblocked, which moves every registration's backlog into unbounded
   goroutines rather than one registration's into a bounded wait.
 - AN ABSOLUTE CROSSING MARGIN in place of the share would shorten a dead
-  host's wait by about ten minutes of seventy-eight, at the cost of a second
+  host's wait by about ten minutes of eighty-six, at the cost of a second
   rule beside the tail's for the same question.
 - A SHARE OF WHAT THE ASKER STILL WAITS for a read that waited `d` (main's
   rule, `0.75 × (wait − d)`) ends the read later the longer it waited: at the
   waiting bound's end, three quarters of the way through the asker's wait, it
   reads on for three quarters of the last quarter and leaves a sixteenth of
-  the wait for the crossings, under five minutes for an uncapped collection,
-  below the nine the slowest pace needs, and the host takes a session for an
+  the wait for the crossings, under five and a half minutes for an uncapped
+  collection, below the nine the slowest pace needs, and the host takes a session for an
   asker that has gone. What the one deadline costs instead is read time: a
   read that waited reads a quarter of its wait less, so one that waited long
   can be cut by its own deadline and answer that it could not read the box,
@@ -173,9 +187,9 @@ did: the older build drops `budget_ms`, reads by the time to the deadline with
 no allowance, and never answers busy — today's behaviour for that pair until
 the host rolls. An OLDER asker's request reaches a newer host as version 1 with
 no wait and is refused (`wire`): its asker hears silence after its whole wait,
-so a collection hands its claim back only after that wait (seventy-eight to
-ninety-nine minutes) and asks again from the host's next poll, a stop's read is
-written off once the older asker's own rule reads the stop past the box
+so a collection hands its claim back only after that wait (eighty-six to a
+hundred and seven minutes) and asks again from the host's next poll, a stop's
+read is written off once the older asker's own rule reads the stop past the box
 timeout, after one whole silent ask, and a lost run's session is not kept.
 Rolling every node within one read's wait avoids each. Reading the older
 request instead would be compatibility with an unreleased build. A later build
@@ -257,7 +271,7 @@ its own silence on one clock, which is the evidence the rule asks for.
 
 - AN ATTEMPT COUNT AT A STATED PACE, on the row, states a time it does not
   measure: one attempt lasts from nothing (an ask this node could not make) to
-  the whole stop's read, about eighty-one minutes, and each count is a fenced
+  the whole stop's read, about eighty-eight minutes, and each count is a fenced
   write.
 - SILENT TIME ACCUMULATED ON THE ROW needs a new field of the recorded ending,
   its mixed-build story and a write per attempt, for a sum the bound it
@@ -267,8 +281,8 @@ its own silence on one clock, which is the evidence the rule asks for.
   that is PRESENT and silent: a key it lacks, a clock past the box read's
   allowance, an older build refusing the newer read.
 - THE SILENCE FROM THE END OF THE FIRST SILENT ASK waits a second whole ask —
-  about one hundred and sixty-two minutes in all — for a host already silent
-  for eighty-one, since one stop's ask outlasts the box timeout alone.
+  about one hundred and seventy-six minutes in all — for a host already silent
+  for eighty-eight, since one stop's ask outlasts the box timeout alone.
 - THE SILENCE FROM THE SERIES' FIRST ATTEMPT counts an ask this node could not
   make as the host's silence.
 - ONE MAP PER NODE KEYED BY THE ENDING, shared by the retry and a retirement's

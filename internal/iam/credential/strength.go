@@ -12,66 +12,39 @@ import (
 
 // WHAT THIS ENGINE ASKS OF A PASSWORD, AND WHAT IT DELIBERATELY DOES NOT.
 //
-// ONE RULE: twelve characters. No required digit, no required symbol, no
-// forbidden repeat, no expiry. Composition rules are measurably
-// counter-productive — they shrink the set people actually choose from
-// (everybody appends `1!`), an attacker who knows the rule enumerates it, and
-// they push people to write the result down. Length is the only thing that
-// buys entropy from a human at no cost to them.
-//
-// # The blocklist, and why it is not ten thousand entries
-//
-// The obvious second screen is a corpus of the most common passwords, and the
-// obvious corpus is a published top-ten-thousand list. Behind a TWELVE
-// CHARACTER floor almost none of it is reachable: those lists are ranked by
-// observed frequency, and what people actually choose clusters at six to ten
-// characters, so the overwhelming majority of a top-ten-thousand list is
-// already refused by the rule above. Embedding it would be roughly eighty
-// kilobytes in every binary to refuse strings nothing can present.
-//
-// What DOES survive a twelve-character floor is a small, enumerable set of
-// FAMILIES, and that is what `commonpasswords.txt` holds:
-//
-//   - keyboard walks long enough to clear the floor (`qwertyuiopas`,
-//     `1qaz2wsx3edc`);
-//   - runs and repeats (`123456789012`, `aaaaaaaaaaaa`, `123123123123`);
-//   - a common word with padding, which is what a length rule produces when
-//     somebody is trying to satisfy it (`password1234`, `letmein123456`);
-//   - the handful of phrases that became common by being famous
-//     (`correcthorsebatterystaple`).
-//
-// # Normalising is what makes a short list worth a long one
-//
-// A candidate is folded before it is compared: lower-cased, stripped of
-// surrounding space, and with the substitutions everybody makes undone —
-// `4` to `a`, `3` to `e`, `1` to `i`, `0` to `o`, `5` to `s`, `@` to `a`,
-// `$` to `s`. So `P@ssw0rd1234` and `p4ssw0rd1234` are both `password1234`
-// and both refused by ONE entry. A raw list has to carry every spelling; this
-// carries one per family and catches the rest by construction.
-//
-// THE FOLD IS ONLY EVER USED TO REFUSE. It is never stored, never compared
-// against a verifier and never shown to anybody: it is strictly a wider net,
-// so a password that survives it is no weaker for the folding having happened.
+// ONE RULE: twelve characters. No required digit or symbol, no forbidden
+// repeat, no expiry. Composition rules shrink the set people choose from
+// (everybody appends `1!`), are enumerable by an attacker, and push people to
+// write the result down; length is the only thing that buys entropy from a
+// human at no cost to them. The second screen is a blocklist of the families
+// that clear the floor ([buildCommon]), matched on a folded form ([fold]).
 
 //go:embed commonpasswords.txt
 var commonList string
 
-// common is the blocklist, already folded, built once — at its FIRST USE.
+// common is the blocklist, already folded, as a MAP so a check does not walk the
+// file on every password set.
 //
-// A MAP rather than a scan of the file per call: the check runs on every
-// password anybody sets, and a linear walk of the file would be the one part
-// of this package whose cost grows with the list.
-//
-// BUILT AT FIRST USE rather than at init, because this package is linked into
-// the one binary every process of the engine is, Gitlet's
-// proc-receive hook among them — exec'd once a push, and running every linked
-// package's init before its first statement. Folding the file's 1 348 entries is
-// about 140 KB and 2 200 allocations, which that hook paid on every push for a
-// table only a password change reads (cmd/crewlet's
-// TestTheHookPaysLittleForTheEnginesInit holds the module's init to its
-// bound). The first password a node checks pays it instead, once.
+// BUILT AT FIRST USE rather than at init: this package is linked into every
+// process of the engine, Gitlet's proc-receive hook (exec'd once a push, running
+// every linked init) among them. Folding the file is about 140 KB and 2 200
+// allocations, which that hook paid per push for a table only a password change
+// reads (cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit holds the
+// module's init to its bound).
 var common = sync.OnceValue(func() map[string]bool { return buildCommon(commonList) })
 
+// buildCommon folds the embedded list into a set.
+//
+// The list is not a published top-ten-thousand corpus: behind a TWELVE
+// CHARACTER floor almost all of it is unreachable (people choose at six to ten
+// characters), so embedding it would cost about 80 KB per binary to refuse
+// strings nothing can present. What survives the floor is a small set of
+// FAMILIES, which `commonpasswords.txt` holds:
+//
+//   - keyboard walks (`qwertyuiopas`, `1qaz2wsx3edc`);
+//   - runs and repeats (`123456789012`, `aaaaaaaaaaaa`);
+//   - a common word with padding (`password1234`);
+//   - phrases famous enough to be common (`correcthorsebatterystaple`).
 func buildCommon(raw string) map[string]bool {
 	out := make(map[string]bool, 512)
 	for _, line := range strings.Split(raw, "\n") {
@@ -86,22 +59,14 @@ func buildCommon(raw string) map[string]bool {
 
 // CheckStrength reports why a password cannot be used, or nil.
 //
-// IT SAYS WHAT IS WRONG, unlike every other refusal in this package, and the
-// asymmetry is the whole of the difference between the two audiences: a failed
-// SIGN-IN is answered to a stranger and must disclose nothing, while this is
-// answered to somebody who has already proved who they are and is choosing a
-// new secret. A generic refusal there is somebody typing variations until one
-// sticks.
+// IT SAYS WHAT IS WRONG, unlike every other refusal here: a failed sign-in goes
+// to a stranger and discloses nothing, while this goes to somebody who has
+// proved who they are, where a generic refusal is them typing variations.
 //
-// # The floor is an ARGUMENT, because a deployment may raise it
-//
-// min is the floor in force, the company's `sign_in.min_password_length` held
-// within the node's limit (internal/config's APIAuth.SignInPolicy), and the length refused is the
-// larger of it and [iam.MinPasswordChars]: the engine's floor is a floor under
-// every deployment's, so a caller passing zero, or anything smaller, still gets
-// twelve. It used to take no floor at all — the setting was validated,
-// documented, reported by `/auth/config` as twelve whatever it said, and
-// enforced by nothing, so a company that asked for twenty accepted fifteen.
+// The floor is an ARGUMENT, because a deployment may raise it: min is the
+// company's `sign_in.min_password_length` held within the node's limit
+// (internal/config's APIAuth.SignInPolicy). The length refused is the larger of
+// it and [iam.MinPasswordChars], so zero or less still gets twelve.
 func CheckStrength(password string, min int) error {
 	floor := max(min, iam.MinPasswordChars)
 	if n := utf8.RuneCountInString(password); n < floor {
@@ -116,8 +81,13 @@ func CheckStrength(password string, min int) error {
 	return nil
 }
 
-// fold is the form a candidate is MATCHED on. See the package's own rules
-// above: it is only ever used to refuse, so a wider net costs nothing.
+// fold is the form a candidate is MATCHED on: lower-cased, trimmed, with the
+// substitutions everybody makes undone, so `P@ssw0rd1234` and `p4ssw0rd1234`
+// are both `password1234` and refused by ONE entry. The list carries one
+// spelling per family, not every one.
+//
+// ONLY EVER USED TO REFUSE: never stored, compared against a verifier or shown,
+// so a password surviving it is no weaker for the folding.
 func fold(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	return substitutions.Replace(s)
@@ -141,16 +111,14 @@ var substitutions = strings.NewReplacer(
 // BlocklistEntries is the file's own lines, VERBATIM, for the suite that holds
 // the file to its own rules.
 //
-// THE RAW LINES AND NOT THE FOLDED KEYS, which is the whole point: the map is
-// keyed on the fold, so reading it back would make every "is this entry
-// already folded" assertion true by construction and the suite would be
-// asserting its own preprocessing.
+// THE RAW LINES AND NOT THE FOLDED KEYS: the map is keyed on the fold, so
+// reading it back would make every "is this entry already folded" assertion true
+// by construction.
 //
-// EXPORTED FOR A TEST AND SAYING SO. The three properties it checks — that no
-// entry sits below the length floor, that none is written in leetspeak, and
-// that no two fold onto one string — are facts about the DATA rather than
-// about the code, and a data file nothing reads back is one that accumulates
-// lines that look like they work.
+// EXPORTED FOR A TEST AND SAYING SO. What it checks (no entry below the length
+// floor, none in leetspeak, no two folding onto one string) are facts about the
+// DATA, and a data file nothing reads back accumulates lines that only look
+// like they work.
 func BlocklistEntries() []string {
 	var out []string
 	for _, line := range strings.Split(commonList, "\n") {

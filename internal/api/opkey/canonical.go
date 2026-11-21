@@ -11,20 +11,15 @@ import (
 
 // Canonical is the ONE encoding of a request that something is bound to: its
 // path, its query encoded with sorted keys, and its decoded body re-encoded,
-// each followed by a NUL. The same fields in another order or spacing are the
-// same request, and any change to the object, the query or the arguments is
-// another one.
+// each followed by a NUL: the same fields in another order or spacing are the
+// same request, any other change is another one (ADR-0008).
 //
-// # One encoding for every binding (ADR-0008)
-//
-// Two things bind themselves to a request. [Digest] steps an operation key by
-// it, so a key sent with another request is another operation; and the
-// Dashboard Assistant binds an approval to the exact request its preview
-// showed (ADR-0051), so a request that moved after the person approved it is
-// refused rather than executed. Encoded twice, the two would agree only until
-// one of them was edited, and the second is a security property. asks is the
-// decoded body, nil for a route that takes none; an error is a body that
-// decoded and will not encode, which is the caller's type declared wrongly.
+// [Digest] steps an operation key by it, and the Dashboard Assistant binds an
+// approval to the exact request its preview showed (ADR-0051), so a request
+// that moved after approval is refused. Encoded twice, the two would agree
+// only until one was edited, and the second is a security property. asks is
+// the decoded body, nil for a route taking none; an error is a body that will
+// not encode, the caller's type declared wrongly.
 func Canonical(path string, query url.Values, asks any) ([]byte, error) {
 	body, err := json.Marshal(asks)
 	if err != nil {

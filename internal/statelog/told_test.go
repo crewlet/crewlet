@@ -39,8 +39,8 @@ func TestATellingTellsItsSentenceAndKeepsItsFaultForTheLog(t *testing.T) {
 // EVERY GATE AND CAPACITY REFUSAL THIS PACKAGE MAKES IS TOLD, without the
 // package that wrote it: the eviction and readmission refusals, and the
 // capacity window's refusals of a phase this build doesn't know and of a
-// raise that has used its attempts. An eviction naming no node says so without
-// the empty name it used to print between two spaces. Mutation: put the
+// raise that has used its attempts. An eviction naming no node says so, never
+// an empty name between two spaces. Mutation: put the
 // "statelog: " prefix back in any Tell and this fails.
 func TestEveryGateAndCapacityRefusalIsTold(t *testing.T) {
 	t.Parallel()

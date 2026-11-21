@@ -225,25 +225,18 @@ func wantSameRefs(t *testing.T, h gitletHost, git *gittest.Client, bare string) 
 	}
 }
 
-// AN IMPORT STEPS A LARGE HISTORY UNDER THE PUSH LIMIT. A first-parent main of
-// sixty commits, each a new incompressible file of 52 KiB — about 3 MiB, three
-// times what one push may carry — lands as fast-forwards of main, then its
-// branch and its annotated tag, and EVERY PUSH IS HELD TO THE LIMIT: a push
-// row's pack_bytes is the bundle the node stored, and a step is sent whole, so
-// that bundle is exactly the pack the step sent and the .idx and .rev beside
-// it, whose sizes follow from the objects the step carries — counted here in
-// the source, from what the repository held before the push. What a step
-// sends is the pack it was measured as, byte for byte, whatever the
-// operator's git sets for its delta search, so the limit holds of what was
-// stored exactly.
+// AN IMPORT STEPS A LARGE HISTORY UNDER THE PUSH LIMIT. Sixty first-parent
+// commits of 52 KiB incompressible files (about 3 MiB, three times one push's
+// limit) land as fast-forwards of main, then its branch and annotated tag, and
+// EVERY PUSH IS HELD TO THE LIMIT: a push row's pack_bytes is the bundle the
+// node stored, which is the pack the step sent whole plus the .idx and .rev
+// beside it, sized from the objects the step carries. A step sends the pack it
+// was measured as, whatever the operator's git sets for delta search.
+// Steps are as LARGE as the limit allows: an estimate leaves out what the
+// repository will hold already, so after the first each takes a limit's worth.
 //
-// And the steps are as LARGE as the limit allows: a step's estimate leaves out
-// what the repository will hold already, so after the first step each takes
-// another limit's worth of commits.
-//
-// Mutation: cut steps to twice the limit, and the first step is refused past
-// receive.maxInputSize; estimate a step without what the repository will
-// hold, and every step after the first is a single commit.
+// Mutation: cut steps to twice the limit, and the first is refused; estimate
+// without what the repository will hold, and every later step is one commit.
 func TestImportStepsALargeHistoryUnderThePushLimit(t *testing.T) {
 	t.Parallel()
 	h := importNode(t)
@@ -305,19 +298,17 @@ func TestImportStepsALargeHistoryUnderThePushLimit(t *testing.T) {
 	wantSameRefs(t, h, git, bare)
 }
 
-// AN IMPORT MEASURES EACH STEP BEFORE IT PUSHES IT — AND WHAT IT MEASURES IS
-// WHAT THE NODE STORES. A history packed as a forge packs one stores the
-// newest version of each file whole and every older version as a small delta
-// against it, so a range of the older commits ESTIMATES at a few kilobytes and
-// PACKS to every file whole — here [forgeHistory]'s, whose first nineteen
-// commits estimate at about 120 KiB and pack past the 1 MiB limit. Measured,
-// the step is cut shorter before anything is sent. And every step is sent
-// whole, as the pack it was measured as, so what the import says its steps
-// stored is what the repository holds once they land.
+// AN IMPORT MEASURES EACH STEP BEFORE IT PUSHES IT, AND WHAT IT MEASURES IS
+// WHAT THE NODE STORES. A forge-packed history stores the newest version of
+// each file whole and older ones as small deltas, so a range of older commits
+// ESTIMATES at a few kilobytes and PACKS to every file whole: [forgeHistory]'s
+// first nineteen commits estimate at about 120 KiB and pack past the 1 MiB
+// limit. Measured, the step is cut shorter before anything is sent, and it is
+// sent whole as the pack it was measured as.
 //
-// Mutation: take a step's estimate for its size, and the first push is
-// refused past receive.maxInputSize; measure and push thin packs, and the
-// repository holds twice what the import says it stored.
+// Mutation: take a step's estimate for its size, and the first push is refused
+// past receive.maxInputSize; measure and push thin packs, and the repository
+// holds twice what the import says it stored.
 func TestImportMeasuresEachStepBeforePushingIt(t *testing.T) {
 	t.Parallel()
 	h := importNode(t)
@@ -350,25 +341,14 @@ func TestImportMeasuresEachStepBeforePushingIt(t *testing.T) {
 }
 
 // AN IMPORT PUSHES THE PACK EACH STEP WAS MEASURED AS, whatever git would build
-// for the push itself. git push builds the pack it sends, and a second build
-// is not the first: pack-objects' threads split its delta search differently
-// on every run — at four threads one forge-packed range came to 895 KiB and to
-// 1057 KiB (the package doc) — so a step measured under the limit was refused
-// past it after its whole upload, `[remote rejected] (unpacker error)`, in
-// some runs and not others. The case makes that difference certain: the
-// operator's git builds every push's pack with no delta search of its own, so
-// a step that built its pack again for the push would send every version of
-// every file whole, many times the limit, and be refused at its first push.
-// One that pushes a copy of the pack it measured sends what it measured.
+// for the push: pack-objects' threads split the delta search differently each
+// run (the package doc), so a rebuilt pack can pass the limit its measure kept.
+// The operator's git builds with no delta search, so a rebuild sends every
+// version whole and is refused at its first push.
 //
-// EVERY VERSION THE SOURCE HOLDS IS A DELTA OF ITS FILE'S NEWEST (a repack at
-// depth 1, on one thread), so the clone holds no delta a step's range can
-// reuse: a search-free pack built from the clone takes each version whole,
-// since its base is the newest, which no step but the last sends. At
-// [forgePacked]'s depth of 50 the search may store each version as a delta of
-// the next instead, and a step's range then reuses all but one of them from
-// the clone — a second build that sends what the first did, which this case
-// could not tell from a copy, and did not in one of its mutation runs.
+// EVERY VERSION THE SOURCE HOLDS IS A DELTA OF ITS FILE'S NEWEST (depth 1, one
+// thread), so the clone holds no delta a step's range can reuse; at
+// [forgePacked]'s depth of 50 it reuses most, and a rebuild passes as a copy.
 //
 // Mutation: push from the clone, letting git push build its own pack, and the
 // first step is refused past receive.maxInputSize.
@@ -403,16 +383,14 @@ func TestAnImportPushesThePackEachStepWasMeasuredAs(t *testing.T) {
 }
 
 // A STEP'S MEASURED COPY IS THE PACK ITS PUSH SENDS, BYTE FOR BYTE, where the
-// push hands its pack-objects the step's tips in an order of its own: here a
-// step that updates b, which the node holds, and creates a, which names before
-// it, at two commits of one second. git push hands its pack-objects the tips
-// of the refs it updates first, in the node's order, then those it creates;
-// and a copy writes the objects in the order its walk meets them, which for
-// two tips of one commit time is the order it was handed them — so the copy
-// the import measures is handed them in the push's order
-// ([importStep.news]). The repository pushed to keeps the pack as it came
-// (receive.unpackLimit=1), named for its checksum, and that is the checksum
-// of the copy the import measured.
+// push hands pack-objects the step's tips in an order of its own: a step that
+// updates b, which the node holds, and creates a, which names before it, at
+// two commits of one second. git push hands the tips of the refs it updates
+// first, in the node's order, then those it creates; a copy writes objects in
+// the order its walk meets them, which for tips of one commit time is the order
+// handed, so the measuring copy is handed them in the push's order
+// ([importStep.news]). The pushed-to repository keeps the pack as it came
+// (receive.unpackLimit=1), named for its checksum, which is the copy's.
 //
 // Mutation: hand the copy the step's tips in the step's own order, and the
 // repository keeps a pack the import never measured.
@@ -531,19 +509,16 @@ func TestAStepsBuildIsIndexedBeforeItsRepositoryBorrowsTheClone(t *testing.T) {
 }
 
 // A STEP'S REPOSITORY BORROWS THE CLONE BY ITS ABSOLUTE PATH, wherever the
-// import runs. Its working directory is under $TMPDIR, which an operator
-// points at a volume with room for the import and may name relative to where
-// they run it, and git reads a relative alternate against the borrowing
-// repository's own objects directory: borrowed by the path the import holds,
-// the clone was nowhere the step's repository looked, and the copy's walk
-// failed at the first object it read of the clone's — here the commit the
-// repository holds, which the step's own pack leaves out.
+// import runs. Its working directory is under $TMPDIR, which an operator may
+// name relative to where they run it, and git reads a relative alternate
+// against the borrowing repository's own objects directory: borrowed by a
+// relative path, the clone was nowhere the step's repository looked, and the
+// copy's walk failed at the first clone object it read.
 //
 // Not parallel: it runs where a person ran the import, in a directory of its
 // own (t.Chdir).
 //
-// Mutation: borrow the clone by the path the import holds, and the copy
-// fails.
+// Mutation: borrow the clone by the path the import holds, and the copy fails.
 func TestAStepsRepositoryBorrowsTheCloneByItsAbsolutePath(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -1426,18 +1401,16 @@ func TestImportStopsBeforeTheStepThatWouldPassTheRepositoryLimit(t *testing.T) {
 
 // AN IMPORT CONTINUES A BRANCH THE REPOSITORY HOLDS AT A SECOND PARENT'S
 // COMMIT. The repository holds main at a commit of side, which the source's
-// main reaches only through a merge's second parent — a branch merged in since
-// the last run — so the first-parent history past what the repository holds
-// begins with three commits of main's own side, 1.05 MiB together, that do not
-// descend from it, and that the source's branch ours holds. Every step is a
-// fast-forward of main: the walk begins at the first commit that descends from
-// the held one — the merge — whose step would carry the three before it, past
-// the push limit, so they are stepped first on ours; main then goes on from
-// the merge, and the history after it, larger than one step, in steps.
+// main reaches only through a merge's second parent, so the first-parent
+// history past it begins with three commits of main's own side (1.05 MiB
+// together) that do not descend from it and that the source's branch ours holds.
+// Every step is a fast-forward of main: the walk begins at the first commit
+// descending from the held one, the merge, whose step would carry the three
+// past the push limit, so they are stepped first on ours; main then continues
+// from the merge, in steps.
 //
-// Mutation: walk every first-parent commit the repository lacks, and the
-// first step — main to two of the three, under the limit where all three are
-// past it — is refused as non-fast-forward, on every run.
+// Mutation: walk every first-parent commit the repository lacks, and the first
+// step (main to two of the three) is refused as non-fast-forward on every run.
 func TestImportContinuesABranchHeldAtASecondParentAncestor(t *testing.T) {
 	t.Parallel()
 	h := importNode(t)
@@ -1573,25 +1546,16 @@ func TestImportStepsTheHistoryAMergeBringsInFirst(t *testing.T) {
 }
 
 // AN IMPORT STEPS A MERGE'S HISTORY ONCE, WHATEVER DESCENDS FROM THE MERGE.
-// Five branches, a0 to a4, are one commit each on top of the merge: they sort
-// before vendor and reach the vendored history only THROUGH the merge, so a
-// walk of any of their own histories meets the same merge again — measured
-// once more, at up to twice the budget, for each: at the 1 GiB ceiling a
-// pack build of gibibytes for every branch created after the merge. What is
-// stepped is the merge's other parent's OWN history, in which no walk can meet
-// the merge: on vendor, where the source keeps it, and on a0 where it does not
-// — every commit of it is an ancestor of a0's own — so a source with no branch
-// on the merged-in history imports all the same. Either way the merge is
-// measured ONCE, as the step past what one step carries — once its history
-// has landed, main's next step goes past it to main's tip — the step's note
-// names main's merge, and the five land in one batch once main is past it.
+// Branches a0 to a4 sit one commit each on the merge and reach the vendored
+// history only THROUGH it, so walking any of their histories would measure the
+// merge again, up to twice the budget each. What is stepped is the merge's other
+// parent's OWN history, in which no walk meets the merge: on vendor where the
+// source keeps it, on a0 where it does not. The merge is measured ONCE, as the
+// step past what one step carries; the five then land in one batch.
 //
-// Mutation: take the first branch that reaches the history whatever its path
-// (no preference for one that reaches it without the merge), and vendor's
-// history is stepped on a0 though vendor holds it; walk the chosen branch's
-// own first-parent history rather than the merged-in parent's, and the merge
-// is measured for every branch above it, each lands in a push of its own, and
-// with no vendor the import is refused naming a4.
+// Mutation: take the first branch reaching the history whatever its path, and
+// vendor's history is stepped on a0; walk the chosen branch's own history, and
+// the merge is measured per branch, and with no vendor the import is refused.
 func TestImportStepsAMergesHistoryOnceWhateverDescendsFromTheMerge(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1680,21 +1644,17 @@ func TestImportRefusesAMergeNoBranchReachesWithARemedyThatWorks(t *testing.T) {
 }
 
 // AN IMPORT CARRIES A MERGE'S HISTORY ONLY ON A BRANCH IT CAN FAST-FORWARD
-// THROUGH IT. Every step is a fast-forward, so a branch the repository holds
-// carries the history only where it holds it at an ancestor of the merge's
-// other parent: vendor, held part way along that history as an import that
-// stopped there leaves it, goes on from where it is; a0, held at main's first
-// commit — which the vendored history does not descend from — is passed over
-// for a1, held at the history's second commit; and a1 is taken though a2,
-// which the repository does not hold, is known able to carry it before a1's
-// question is answered: the first in the source's order, however the
-// questions asked side by side are answered.
+// THROUGH IT. A held branch carries the history only where it holds it at an
+// ancestor of the merge's other parent: vendor, held part way along that
+// history, goes on from there; a0, held at main's first commit, which the
+// vendored history does not descend from, is passed over for a1, held at the
+// history's second commit; a1 is taken though a2, which the repository does
+// not hold, is known able to carry it: the first in the source's order,
+// however the questions asked side by side are answered.
 //
 // Mutation: take a held branch whatever it is held at, and a0's walk finds no
-// commit of the history that descends from what it holds; take no branch the
-// repository holds, and the history goes on a0 rather than on vendor, where
-// the stopped import was carrying it; take the first candidate found able to
-// carry it rather than the first in order, and it goes on a2.
+// commit descending from what it holds; take no held branch, and the history
+// goes on a0 not vendor; take the first found able, and it goes on a2.
 func TestImportCarriesAMergesHistoryOnlyOnABranchItCanFastForward(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1807,15 +1767,13 @@ func TestImportCountsTheBranchCarryingAMergesHistoryInWhatIsLeft(t *testing.T) {
 }
 
 // AN IMPORT STEPS A BRANCH MERGED BACK THAT MAIN WAS MERGED INTO SINCE. A
-// long-lived feature branch, past one step, is merged into main; main goes on
-// by more than a step; then main is merged into feature, to bring it up to
-// date. Main's walk meets the first merge, and feature carries the history it
-// brings in — to the commit main merged and no further: walked to its own
-// value, feature's walk reached its own merge of main, which brings in what
-// main's paused walk was about to push, more than a step that no branch still
-// to be pushed reaches, and the import was refused there. Main goes on past
-// its merge, and feature then goes on from where it was left, its merge of
-// main a small step.
+// feature branch past one step is merged into main; main goes on by more than
+// a step; then main is merged into feature. Main's walk meets the first merge,
+// and feature carries the history it brings in to the commit main merged and no
+// further: walked to its own value, feature's walk reached its own merge of
+// main, bringing in more than a step that no branch still to be pushed reaches,
+// and the import was refused there. Main goes on past its merge, and feature
+// then continues from where it was left.
 //
 // Mutation: walk the carrier's own first-parent history rather than the
 // merged-in parent's, and the import is refused at feature's merge of main.

@@ -19,21 +19,15 @@ import (
 // `crewlet fleet broker` — the fleet broker's membership, and the removal of a
 // member that is gone for good.
 //
-// # Why through a running node
+// It goes through a running node: the metadata group is read and changed from
+// inside a MEMBER, and a removal only through its system account, which nothing
+// outside the member's process can reach (internal/engine/fleetbroker.go). So
+// `list` is a client of `GET /fleet/broker` and `remove` of its POST, as
+// `crewlet objects` is of `GET /fleet`.
 //
-// The metadata group is read and changed from inside a MEMBER, and a removal
-// only through its system account, which nothing outside the member's process
-// can reach — see internal/engine/fleetbroker.go. So `list` is a client of
-// `GET /fleet/broker` and `remove` of its POST, as `crewlet objects` is of
-// `GET /fleet`.
-//
-// # What list is FOR
-//
-// The question an operator runs it with is "does the broker still count a
-// member I have lost?" — after a host died for good, before relying on a
-// quorum, and while replacing a member. The table puts what each node
-// advertises beside what the metadata group counts, and the lines under it say
-// in words what disagrees and what to do about it.
+// `list` answers "does the broker still count a member I have lost?": its table
+// sets what each node advertises beside what the metadata group counts, and the
+// lines under it say what disagrees and what to do.
 
 // fleetBrokerUsage is the group's usage line.
 const fleetBrokerUsage = "usage: crewlet fleet broker list|remove [<config.yaml>] [-api URL]\n" +

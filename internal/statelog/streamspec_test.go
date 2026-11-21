@@ -9,13 +9,11 @@ import (
 
 // A SPEC IS THE DOMAIN'S OWN STREAM IN EVERYTHING BUT ITS CEILING.
 //
-// A position row and a floor are keyed by the domain's name, and every row
-// the log writes — the checkpoint, the anchors — by the spec's stream, so a
-// runner handed another stream's names would file one log's positions under
-// another's. And the loop that reads a log, the arbitration a publisher forms
-// and the duplicate window a retry leans on are all chosen from the domain's
-// declaration, so a spec of another shape is one those choices are wrong for.
-// The ceiling alone is the node's: Tier A sizes it.
+// Position rows and floors key on the domain's name and the checkpoint and
+// anchors on the spec's stream, so another stream's names would file one log's
+// positions under another's; the read loop, arbitration and duplicate window
+// are chosen from the domain's declaration, so another shape breaks them. The
+// ceiling alone is the node's: Tier A sizes it.
 func TestASpecIsTheDomainsOwnStreamInEverythingButItsCeiling(t *testing.T) {
 	t.Parallel()
 	d := probeDomain{}

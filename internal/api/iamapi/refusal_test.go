@@ -16,31 +16,15 @@ import (
 
 // AN IDENTITY RECORD'S REFUSAL IS ANSWERED BY THE RULE THAT MADE IT.
 //
-// The domain says whether a permission would lift a refusal
-// ([iamdomain.Refusal]), and the surface answers the two kinds as their
-// remedies differ. One a permission lifts is `403 unauthorized` exactly as the
-// authority table answers a missing permission — reason `no_grant`, the grants
-// that would lift it, and a sentence naming that permission alone. One the
-// record's own rule made is `403 forbidden`, carrying the domain's sentence and
-// no reason or grants, because no rule of the table decided it and no
-// permission would change it. Both used to be one `unauthorized` naming no
-// grant, whose sentence named every permission there is — so an administrator
-// minting a person's token was told to ask an administrator for access. A
-// bare [iamdomain.ErrRefused], which the domain never builds, is unclassified
-// and answered as the fault it is.
-//
-// Either kind's `detail` is the domain's SENTENCE ([iamdomain.Sentence]):
-// never the class word in front of it, and never what the refusal was about
-// by id ([iamdomain.Refusal.About]) — the person the token was asked for, the
-// party's own permissions — which goes to the log.
-//
-// Walked over a create, an edit, an invitation and a mint, each refused in the
-// record's own decide. Mutations: answer both kinds `unauthorized` and the
-// forbidden rows go red; drop the grants from the first arm and the sentence
-// names every permission; match the refusal arms before the token arm and the
-// token rows of [TestATokenWritingAnAdministrativeRecordIsTokenRefused] go red;
-// answer err.Error() as the detail again and both kinds go red on the class
-// word and the id.
+// A refusal a permission lifts ([iamdomain.Refusal]) is `403 unauthorized`,
+// reason `no_grant` and the grants; the record's own rule is `403 forbidden`
+// with neither. `detail` is the domain's SENTENCE ([iamdomain.Sentence]), never
+// the class word nor [iamdomain.Refusal.About]'s ids, which are logged.
+// Mutations: answer both kinds `unauthorized` and the forbidden rows go red;
+// drop the grants from the first arm and the sentence names every permission;
+// match the refusal arms before the token arm and the token rows of
+// [TestATokenWritingAnAdministrativeRecordIsTokenRefused] go red; answer
+// err.Error() as the detail and both kinds go red.
 func TestARecordRefusalSaysWhetherAPermissionWouldLiftIt(t *testing.T) {
 	t.Parallel()
 	gestures := []struct {

@@ -98,29 +98,15 @@ func TestAMemberGoneForGoodIsRemovedFromTheMetadataGroup(t *testing.T) {
 // A MEMBER GONE FOR GOOD IS STILL REMOVABLE ONCE EVERY SURVIVOR HAS RESTARTED.
 //
 // nats-server learns a server's NAME only from that server, so survivors that
-// restarted after it died — a rolling upgrade, or the restarts a capacity seal
-// takes — list it as a voter whose name is unknown, and a removal asked by
-// name is answered "no such server" while every election goes on counting it.
-// Asked by the peer id its node id hashes to, the group drops it. The listing
-// reports it nameless, by that id, rather than by the server's placeholder.
+// restarted after it died list it as a nameless voter: removal by name answers
+// "no such server" while every election still counts it, and removal by its
+// peer id works. The listing shows it by that id, not a placeholder. Survivors
+// restart one at a time, as in a rolling upgrade, keeping quorum.
 //
-// The survivors restart one at a time, as a rolling upgrade does, so the group
-// keeps the quorum each restarted member has to rejoin.
-//
-// NOT PARALLEL, unlike its neighbours, and for a reason of its own: each
-// survivor comes back on the SAME configuration — the same route port, which
-// is what makes it the same member — through [Cluster.RestartMember]'s server,
-// with none of [withFreshPorts]'s retry. Between the shutdown and the restart that
-// port is free, and a cluster another case is reserving ports for in the same
-// moment can take it, failing the restart on a bind this case cannot retry.
-// Run serially, nothing in this binary reserves a port while it is down.
-//
-// Its neighbours stop members for good as well, and the port each of those
-// leaves IS handed to whichever case asks next — which costs that case
-// nothing only because no two clusters share a name ([newClusterName]): the
-// survivors go on dialling the port for as long as they run, and a member
-// another cluster starts there is refused by them rather than merged into
-// their cluster.
+// NOT PARALLEL: each survivor returns on the SAME route port through
+// [Cluster.RestartMember]'s server, with no [withFreshPorts] retry, and a
+// cluster reserving ports meanwhile could take it while free. Neighbours'
+// abandoned ports are harmless only as no two clusters share a name.
 func TestAMemberGoneForGoodIsRemovedAfterEverySurvivorRestarted(t *testing.T) {
 	c := StartCluster(t, 3, js.Config{})
 	leaderOf(t, c)

@@ -40,6 +40,12 @@
 // written beside it, which this replaces. Placing a card on a board used to be
 // one of them; it is `place_work_item` now, and its route an adapter over it.
 //
+// A room's own horizon is an administrator's, on a recent proof, and never a
+// seat's: none is said in the room. A chat erase or prune is confirmed by what
+// the request destroys (an erase's count, a prune's cutoff) rather than by a
+// row, since an administrator reads no private room to take a pasted credential
+// out of it.
+//
 // A PROJECT'S FILE BYTES are three more, for a different reason: a seat has
 // file tools, but a tool answers a model a page at a time, and a person's
 // upload or download STREAMS a gibibyte through one request. So
@@ -68,6 +74,9 @@
 // grants that would have admitted the caller ([operator.RefuseDecision]),
 // exactly as a tool's own refusal is on this surface, and with no sentence of
 // the engine's verbs: a person reads the code's own sentence (ADR-0060). A
+// turn and the operator's assistant over MCP are answered one sentence byte for
+// byte ([builtin.Refusal] over [builtin.DecisionError]), which names the tool;
+// TestOneRefusalIsOneDecisionOnAllThreeSurfaces holds the three to one decision. A
 // route that composed its own sentence would be where the surfaces first
 // disagreed.
 //
@@ -75,7 +84,9 @@
 //
 // They are the operator surface's one refusal mapping ([operator.Fail]), so a
 // refusal reads the same here as on the act route; the `error` of a refused
-// call is its refusal CLASS's own spelling.
+// call is its refusal CLASS's own spelling. The status is read from the tool
+// result's cause, never its sentence, which is written for a model and would
+// make every wording an API.
 //
 //   - 400 — the request is the caller's to change: a body the verb does not
 //     take, or an `Idempotency-Key` that is not an operation id.
@@ -96,6 +107,11 @@
 //   - 409 — somebody changed it since it was read (`stale_version`), a race
 //     lost (`conflict`), a title taken (`exists`), or a state the request
 //     collided with (`reassignment_budget`, `inbox_full`, …).
+//   - 500 — a fault no request or wait clears; 507 `store_full` — an object
+//     store with no room left, which only an operator clears.
+//   - 409 also covers a state that refuses the gesture (a room or project
+//     archived, an item frozen in the trash, a message carrying all its emoji)
+//     and a plan limit (`quota_exceeded`).
 //   - 422 `invalid` — the domain refused an argument on its own rules, or a
 //     destructive verb's `?confirm=` does not name what it would destroy — the
 //     item's key, the page's title, the number of messages an erase names, a
@@ -141,6 +157,27 @@
 // with nothing of it written — see [keyedOp], builtin's own binding for the
 // tools, and the knowledge base's ([doclet.Store], which binds what each write
 // says).
+//
+// # A person's inbox, pins and priorities are decided on their record
+//
+// `/worklet/people/{handle}` resolves the path's name to the RECORD it names
+// through [iam.OwnerOf] — a login to its holder's, a seat exactly — and the
+// route admits only on the verb for the caller's OWN record. The path's
+// spelling is not the record: decided on a bound person's login it admitted an
+// administrator to a record nothing of theirs reads, and refused a lead their
+// own report. The tools are deliberately NOT widened to take a handle
+// ([builtin.MarkInboxFor], [builtin.SetPinsFor]): a model that could name whose
+// inbox to mark could mark anybody's.
+//
+// # An If-Match is a precondition, not a stale body
+//
+// A version stated as an `If-Match` header is folded into the tool's version
+// ([served.callIfMatched]) and answers `412 version_moved`
+// ([operator.FailIfMatched]), HTTP's failed precondition (RFC 9110 §13.1.1);
+// the same version in the body is the class's `409 stale_version`. Every reader
+// of the header under internal/api answers a false one 412, and
+// TestEveryIfMatchReaderIsAReviewedPrecondition fails on a reader nobody
+// decided.
 //
 // # What is NOT here
 //
@@ -275,22 +312,12 @@ type Options struct {
 	// Halves is what this surface serves NOW, read at the start of every
 	// request — never once, when the surface is built.
 	//
-	// # Why a source and not the halves themselves
-	//
-	// A node's tracker and knowledge base come up with its FIRST COMPANY, and
-	// a node may meet that at an apply, long after its API is serving: taken
-	// once, the halves of a node that booted with no company were none, and
-	// the surface served nothing until a restart — the one gap left in "a
-	// company can be bootstrapped live". Read per request, the routes are
-	// mounted once and serve the moment the halves exist.
-	//
-	// It answers FALSE for a node that has not been handed a company yet,
-	// and every route then answers `503 no_active_revision` with the
-	// reconcile poll as its Retry-After ([httpjson.NoActiveRevision]): the
-	// halves are coming, and a client that waits is served. A half the
-	// company does not run — its tracker or its wiki is a vendor's — is
-	// answered as the route's absence would be ([httpjson.NoRoute]), since
-	// no wait brings it: switching a backend takes a restart.
+	// A source, not the halves: they come up with a node's FIRST COMPANY,
+	// possibly after its API is serving, and taken once would serve nothing.
+	// FALSE before a company is handed over: every route then answers `503
+	// no_active_revision` with the reconcile poll as Retry-After
+	// ([httpjson.NoActiveRevision]). A half the company does not run (a vendor's)
+	// is the route's absence ([httpjson.NoRoute]); no wait brings it.
 	//
 	// REQUIRED.
 	Halves func() (Halves, bool)
@@ -322,15 +349,11 @@ type Options struct {
 	// measured on, and every read and write deadline it sets is taken from
 	// ([paced.Pace]). Nil takes time.Now.
 	//
-	// NOT a clock pinned to one instant, as a suite pins the one that
-	// stamps answers: the pace is a DURATION, the time spent inside a
-	// body's reads, and a clock that never moves would measure every read
-	// as taking none — the pace charged nothing, whatever it was meant to
-	// charge. Injectable so a suite can move it by exactly the time a fake
-	// client or store took, rather than sleep that long. And time.Now itself
-	// rather than one converted to UTC, since a converted time drops the
-	// monotonic reading, and a pace on the wall reading alone moves with
-	// every step the system clock takes.
+	// NOT a clock pinned to one instant: the pace is a DURATION, the time
+	// inside a body's reads, and a clock that never moves measures every read
+	// as taking none. Injectable so a suite moves it by exactly the time a
+	// fake client or store took. time.Now itself, not a UTC conversion, which
+	// drops the monotonic reading and so follows every system clock step.
 	PaceClock func() time.Time
 }
 
@@ -472,16 +495,12 @@ func (s *Service) guard(r *http.Request, p authz.Policy) authz.Decision {
 // refuse renders what the router did not admit, in the operator surface's
 // envelope — the one a tool's own refusal is answered in.
 //
-// AND RECORDS IT, as [Service.decide] records a refusal it takes after a
-// read: a route that decides the verb on its path refuses BEFORE the tool or
-// the writer runs, so without this the same refusal was recorded when a
-// person met it through the act route or their assistant — where the tool's
-// own gate refuses it — and was not when they met it here. Nobody resolved
-// is not recorded: there is nobody to name, and the guard's own trail counts
-// a refused credential. Nor is a READ — a file's download, the one this
-// surface serves — for the dispatch's own reason: it records no proven read,
-// refused or not, so the same refusal met through a person's assistant left
-// no row.
+// AND RECORDS IT, as [Service.decide] does: a route deciding the verb on its
+// path refuses BEFORE the tool or writer runs, so without this the refusal
+// would be recorded through the act route or the assistant (the tool's own
+// gate) but not here. Nobody resolved is not recorded (the guard's trail counts
+// a refused credential). Nor is a READ, a file's download: the dispatch
+// records no proven read, refused or not.
 func (s *Service) refuse(w http.ResponseWriter, r *http.Request, p authz.Policy,
 	d authz.Decision) {
 
@@ -551,59 +570,32 @@ func unavailableFor(w http.ResponseWriter, cause error, detail string) {
 
 // operationKey is the seed every write this request makes derives its
 // operation id from: the caller's own where they sent one, and fresh where
-// they did not — which is then handed back, so a retry can send it. It answers
-// false once it has refused a key that is not one ([opkey.Key]).
+// they did not, which is handed back so a retry can send it. It answers false
+// once it has refused a key that is not one ([opkey.Key]).
 //
-// Every id a write derives from the key carries the KEY'S instant (Worklet's
-// tools' through [builtin.Actor.Keyed] on the operator surface's dispatch, this
-// surface's own gestures' through [keyedOp], Doclet's inside [doclet.Store]),
-// which is what the publisher vouches for a retry by; Doclet refuses a key
-// outside the grammar itself ([doclet.ErrInvalid] on `actor.op_key`), so
-// without the check every page write through this surface was refused.
+// Every id derived from the key carries the KEY'S instant ([builtin.Actor.Keyed],
+// [keyedOp], [doclet.Store]), which is what the publisher vouches for a retry
+// by; Doclet refuses a key outside the grammar ([doclet.ErrInvalid] on
+// `actor.op_key`), hence the check here.
 //
-// BARE, with no name: the key is a SEED rather than the id of any one write —
-// each write derives its own, named for its verb and its object — so a name
-// here would label nothing in the ledger.
+// BARE, with no name: the key is a SEED, each write derives its own id named
+// for its verb and object, so a name here would label nothing in the ledger.
 func operationKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 	return opkey.Key(w, r, time.Now())
 }
 
 // keyedOp is the operation id of one write this surface makes ITSELF — a
 // remark's edit, a purge, a file's bytes, a room's erase or prune — derived
-// from the request's key, its verb, the object it is about and WHAT THE
-// REQUEST ASKS of it. It answers false once it has written the failure.
-//
-// THROUGH [statelog.KeyedOpID], the one rule every write made under a
-// caller's key derives by — the knowledge base's and chat's stores derive
-// theirs through it from the same `Idempotency-Key` — which states why each
-// part is in it: the verb and the object, so the one key covers every record
-// a request writes without two of them collapsing into one; the arguments, so
-// the same key sent with another request — a remark rewritten again, a purge
-// for another reason — is an operation of its own, never the first one's
-// answered `applied` from the ledger with nothing of it written; and the
-// KEY'S OWN INSTANT, so the ledger vouches for a retry exactly as long as it
-// vouches for the key. This surface spelled that rule a second time once,
-// under a namespace of its own, and read the instant without asking whether
-// the key carried one — so a key that carried none derived an id minted at the
-// epoch, which a ledger that ever swept a row answers `unknown` on every
-// attempt. Nothing needs the namespace: the verb is in the identity, and an id
-// is answered only by the operation ledger of the log it is published on
-// ([statelog.Domain]'s OpsTable) — the tracker's or chat's, where nothing else
-// derives by this rule under any of these verbs: the tracker's tools derive
-// under a namespace of their own, and chat's store names its gestures
-// otherwise. The knowledge base's store derives under `comment-edit` too, for
-// a page's remark, on a log and a ledger of its own.
-//
-// # The error is a FAULT
-//
-// [statelog.KeyedOpID] refuses a key that carries no instant, a verb that is
-// not a name and arguments that will not encode — and none of the three is the
-// caller's to fix: [operationKey] admits or mints only a key the grammar
-// minted, the verbs are constants here, and the arguments are what a body
-// decoded to or a value this surface built. So it is `500 internal_error` with
-// its words to the log, as every fault here is ([readFailed]), and it is
-// answered BEFORE the write: an id the ledger could never vouch for is never
-// published.
+// from the key, verb, object and WHAT THE REQUEST ASKS. False once it has
+// written the failure.
+// THROUGH [statelog.KeyedOpID], the one rule for writes under a caller's key:
+// verb and object, so one key covers every record without collapsing; the
+// arguments, so the same key with another request is its own operation, never
+// the first's `applied`; the KEY'S INSTANT, so the ledger vouches for a retry
+// as long as for the key. No namespace: only the log's own ledger answers an id.
+// A refusal from it is a FAULT, not the caller's ([operationKey] mints a
+// grammar key): `500 internal_error`, BEFORE the write, so an unvouchable id
+// is never published.
 func keyedOp(w http.ResponseWriter, r *http.Request, key, verb, object string,
 	asks map[string]any) (string, bool) {
 
@@ -783,25 +775,15 @@ func carries(caveats []caveat.Shown, code caveat.Code) bool {
 	return slices.ContainsFunc(caveats, func(c caveat.Shown) bool { return c.Code == code })
 }
 
-// subtreeStoppedHere rewrites a stopped subtree's instruction for THIS
-// surface.
+// subtreeStoppedHere rewrites a stopped subtree's instruction for THIS surface.
 //
-// # Why the sentence is replaced rather than passed on
-//
-// remove_work_item and restore_work_item answer a subtree walk that stopped
-// part of the way with the ROOT's receipt and a `subtree_stopped` sentence
-// saying how to finish — written for the operator's assistant, where a new
-// operation is made by leaving `op_id` out of the call. Here the operation is
-// the request's `Idempotency-Key`, and a client told to call a tool "WITHOUT
-// an op_id" is told about an argument this route refuses. What finishes the
-// walk on this surface is the same request under a NEW key, or none: a new
-// operation decides every task afresh — a task already where the gesture
-// leaves it is nothing to do — while the same key finishes it only where this
-// node's ledger can vouch for the step it stopped at, which nothing in the
-// receipt says. So the one instruction right in both cases is given, and the
-// counts it is formed from are the receipt's own fields, never words read out
-// of the tool's sentence, which this surface never answers (ADR-0060): the
-// walk stopped is the tool's `subtree_unfinished` caveat.
+// remove_work_item and restore_work_item answer a stopped walk with a
+// `subtree_stopped` sentence for the assistant, whose new operation is made by
+// leaving `op_id` out; this route refuses that argument. Here the same request
+// under a NEW key, or none, finishes the walk (a new operation decides every
+// task afresh), while the same key does only where this node's ledger can
+// vouch for the stopped step, which the receipt does not say. The counts are
+// the receipt's fields, never words read from the tool's sentence (ADR-0060).
 func subtreeStoppedHere(receipt map[string]any, caveats []caveat.Shown) {
 	if !carries(caveats, caveat.CodeSubtreeUnfinished) {
 		return
@@ -824,29 +806,15 @@ func subtreeStoppedHere(receipt map[string]any, caveats []caveat.Shown) {
 
 // moveStoppedHere rewrites a stopped move's instruction for THIS surface.
 //
-// # Why the remedy is the SAME key, where a subtree's is a new one
-//
-// move_work_item answers a move whose root landed in the target and whose walk
-// over the subtree stopped with the root's receipt and a `move_stopped`
-// sentence written for a seat or the operator's assistant — call again with
-// the same arguments, or the same `op_id`, neither of which this route takes.
-// What makes the same operation here is the same `Idempotency-Key`: every id
-// the tool derives is a function of it, so the move's own ledger answers the
-// root and the walk carries the rest. A NEW key is refused, which is where a
-// move differs from a removal: the root is already in the target and that
-// operation's ledger never put it there, which is exactly how somebody else's
-// move looks. And the root stays marked mid-move while anything is left, so
-// the Worklet duty finishes the walk on its own, the remedy where this node
-// cannot vouch for the step the walk stopped at, since the same key here stops
-// there again. Formed from the receipt's own fields, never from words read out
-// of the tool's sentence.
-//
-// THE KEY IS THE ANSWER'S `op_id` AS WELL AS THE REQUEST'S, and the sentence
-// says so: a request that sent no key had one minted for it ([operationKey]),
-// so "the SAME key" told that client to repeat a header it never held — and a
-// resend without one is a new operation, which is exactly what is refused.
-// The answer carries the key as `op_id` whichever way it was made, and
-// [operator.UnknownOutcome] words its own retry the same way.
+// The remedy is the SAME key, where a subtree's is a new one: every id the
+// tool derives is a function of the `Idempotency-Key`, so the ledger answers
+// the root and the walk carries the rest. A NEW key is refused, since the root
+// is already in the target and that ledger never put it there. The root stays
+// marked mid-move, so the Worklet duty finishes it where this node cannot
+// vouch for the stopped step. Formed from the receipt's fields.
+// The key is the answer's `op_id` too: a request that sent none had one minted
+// ([operationKey]) and would resend without one, a new operation.
+// [operator.UnknownOutcome] words its retry the same way.
 func moveStoppedHere(receipt map[string]any, caveats []caveat.Shown) {
 	if !carries(caveats, caveat.CodeMoveUnfinished) && !carries(caveats, caveat.CodeMoveWaiting) {
 		return
@@ -945,34 +913,16 @@ func failErr(w http.ResponseWriter, r *http.Request, err error, key string) {
 
 // readFailed answers a read taken before a decision that could not be served.
 //
-// NOT FOUND IS A 404 AND EVERYTHING ELSE IS THIS NODE: a row that is absent
-// and a row this node could not read are opposite answers, and a read failure
-// rendered as "no such item" is how a caller comes to file a duplicate.
-//
-// AND "THIS NODE" IS TWO THINGS, told apart by the rule every tool classes a
-// failure of its own by ([builtin.Condition]). A CONDITION waiting clears — a
-// read the state log refused, a store closed while it adopts a peer's
-// snapshot — is `503` in a person's words for the condition
-// ([builtin.ConditionSentence]), with the refusal's hint, and its error in the
-// log: it was answered "this node could not read what the decision is about: "
-// followed by the refusal's own text, the framework's name and a position in
-// it. Anything else is a
-// FAULT: `500 internal_error`, its words to the log at error, because nobody
-// but whoever runs the node can act on it. Both were one 503 carrying the
-// error's text, so a store this node could not read told a client to come
-// back in two seconds, and handed it a database path to read while it waited.
-//
-// AND A FLOOR ON ANOTHER LOG IS THE REQUEST'S: a `min_position` the caller
-// named on another domain's log ([statelog.ErrForeignPosition]) is refused by
-// the reader before it waits for anything, the same on every node, so it is
-// `400 bad_params` as every read surface answers it. It is neither a condition
-// nor a fault, and it reached the fault's arm: a download floored on the wrong
-// log answered `500 internal_error` and logged an error about a request.
-//
-// EACH IS TOLD IN ITS PACKAGES' WORDS WITHOUT THEIR NAMES
-// ([builtin.ReadRefusalSentence]): a person was handed the error's whole text,
-// "worklet: no such task: ENG-42", and a floor on another log carried
-// "statelog: " in the middle of its sentence.
+// NOT FOUND IS A 404 AND EVERYTHING ELSE IS THIS NODE: an absent row and an
+// unreadable one are opposite answers. "This node" is two things, classed as tools do
+// ([builtin.Condition]): a CONDITION waiting clears (a refused state-log read,
+// a store adopting a snapshot) is `503` in a person's words
+// ([builtin.ConditionSentence]) with the refusal's hint; anything else is a
+// FAULT, `500 internal_error`, words to the log only (they can carry a path).
+// A `min_position` on another domain's log ([statelog.ErrForeignPosition]) is
+// the REQUEST'S: `400 bad_params`. Each is told in its packages' words
+// without their names ([builtin.ReadRefusalSentence]), never "worklet: no
+// such task: ENG-42".
 func readFailed(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, worklet.ErrNoTask) || errors.Is(err, doclet.ErrNotFound) {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound,
@@ -1084,16 +1034,13 @@ func contains(list []string, s string) bool {
 // header carried a version, and ok is false once the refusal is written.
 //
 // THE BODY'S VERSION IS READ AS THE TOOL READS IT ([argval.Whole], ADR-0059),
-// never by its spelling: every tool that takes a version reads it through that
-// one integer reader, so 3, 3.0, 3e0 and "3" are one version, and a body that
-// states the header's version in any of them states it again rather than
-// stating another. A body that reads as another whole number, or as none at
-// all (a fraction, text that spells no number), states a second version and
-// is refused rather than truncated into agreement: read as a float64 and
-// truncated, `"if_match": 3.5` beside `If-Match: 3` agreed with it and was
-// overwritten, and a negative one converted to whatever the platform made of
-// it. A null is absent, as it is to the tool. The header's version is written
-// back as a json.Number, the form every transport hands a tool ([readArgs]).
+// never by its spelling: every tool reads a version through that one integer
+// reader, so 3, 3.0, 3e0 and "3" are one version and restate the header's. A
+// body that reads as another whole number, or none (a fraction, non-numeric
+// text), states a second version and is refused, never truncated into
+// agreement (`"if_match": 3.5` beside `If-Match: 3` must not pass). A null is
+// absent, as to the tool. The header's version is written back as a
+// json.Number, the form every transport hands a tool ([readArgs]).
 func ifMatch(w http.ResponseWriter, r *http.Request, args map[string]any,
 	field string) (stated, ok bool) {
 

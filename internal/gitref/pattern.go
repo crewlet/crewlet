@@ -13,21 +13,14 @@ var patternNamespaces = [...]string{"refs/heads/", "refs/tags/"}
 // MaxPatternComponents is the most components a GLOB pattern — one holding a
 // '*' — may have, refs and its namespace included.
 //
-// It is what bounds the cost of asking a glob about a ref. [Pattern.Match]
-// compares the parts before a pattern's first ** and after its last once
-// each, but a run of parts BETWEEN two **s is searched for along the ref, at
-// every place it could start — the ref's components times the run's parts,
-// each part a glob searching the component for its pieces. A ref of 255 bytes
-// offers about as many piece searches at every width of component (narrow
-// components are many places, wide ones many pieces), so what moves the
-// worst case is the length of the run, and this bounds it: eight is refs, the
-// namespace and six more, so a run holds at most four parts (with the * a
-// trailing ** stands for, five). Eight is deeper than any branch convention
-// runs — refs/heads/team/*/release/** is six — and holds the costliest rule
-// a ref can meet to the package doc's worst case, 13 µs at most; sixteen let
-// one cost 27 µs, and the byte bound alone (a run of fifty-nine globs) 85 µs.
-// A literal pattern is one comparison of the whole ref however deep it is, so
-// it is bounded only as a ref is.
+// It bounds the cost of asking a glob about a ref: a run of parts BETWEEN two
+// **s is searched for along the ref at every place it could start, and a
+// 255-byte ref offers about as many piece searches at any component width, so
+// the worst case moves with the run's length. Eight is refs, the namespace and
+// six more: a run of at most four parts (five with the * a trailing ** stands
+// for). It is deeper than any branch convention (refs/heads/team/*/release/**
+// is six) and holds the costliest rule to the package doc's worst case, 13 µs;
+// sixteen let one cost 27 µs, the byte bound alone (fifty-nine globs) 85 µs.
 const MaxPatternComponents = 8
 
 // Pattern is a protection pattern, checked and read once by [ParsePattern] —
@@ -76,27 +69,17 @@ const (
 )
 
 // ParsePattern checks pattern as a protection pattern and reads it once,
-// reporting false (and the zero Pattern) for anything that is not one. A
-// pattern is refs/heads/ or refs/tags/, then at least one '/'-separated
-// component, at most MaxRefNameBytes in all, where every component is either
-// exactly ** (whole components, as many as [Pattern.Match] says) or a glob of
-// one component in which * stands for any run of bytes but '/'; and a pattern
-// holding a * has at most MaxPatternComponents components, for the reason
-// given there.
+// reporting false (and the zero Pattern) otherwise. A pattern is refs/heads/
+// or refs/tags/ then components, at most MaxRefNameBytes in all,
+// each ** or a glob where * is any run of bytes but '/'; one holding a * has
+// at most MaxPatternComponents components.
 //
-// A glob component is valid when it is non-empty, holds no **, and becomes a
-// valid ref component with each * read as an ordinary byte — so every pattern
-// matches some ref that can exist (refs/heads/*.lock, refs/heads/.* and
-// refs/heads/a..* match none, and are refused), and holds none of ? [ \,
-// which leaves * as the only metacharacter [Pattern.Match] has to read. **
-// inside a component (a**b) is refused rather than read as *, which is what
-// git's wildmatch would make of it: a pattern that looks as if it reaches
-// across components and does not is a protection that is narrower than its
-// author meant.
-//
-// The check is ValidRef's own reading of the pattern with * admitted, so the
-// two cannot disagree about a component; a glob's parts are the one
-// allocation, and a literal has none.
+// A glob component is valid when non-empty, holding no **, and a valid ref
+// component with each * read as an ordinary byte, so every pattern matches
+// some ref that can exist (refs/heads/*.lock, refs/heads/.* and
+// refs/heads/a..* match none and are refused), and holding none of ? [ \.
+// ** inside a component (a**b) is refused, not read as * as git's wildmatch
+// would. The check is [refFormat] with * admitted, as ValidRef's is.
 func ParsePattern(pattern string) (Pattern, bool) {
 	return parsePattern(pattern, nil)
 }
@@ -205,45 +188,27 @@ func MatchPattern(pattern, ref string) bool {
 	return ok && ValidRef(ref) && p.Match(ref)
 }
 
-// Match reports whether ref matches the pattern. Both are read as
-// '/'-separated components. Every pattern component but ** matches exactly
-// one ref component, * in it standing for any run of bytes, and ** matches
-// whole components: zero or more of them, except as the LAST component of the
-// pattern, where it matches one or more — everything INSIDE what precedes it,
-// never that prefix itself. So refs/heads/* matches refs/heads/main but not
-// refs/heads/x/y, refs/heads/**/hotfix matches refs/heads/hotfix and
-// refs/heads/a/b/hotfix, and refs/heads/release/** matches
-// refs/heads/release/1.0 but not a branch named release — a rule meant for
-// both is the two rules refs/heads/release and refs/heads/release/**. That is
-// git's for-each-ref on the same pattern — its wildmatch reads a trailing /**
-// as one component or more, as gitignore does — which the tests hold it to.
-//
-// Stricter than git: a LITERAL pattern matches only the identical ref.
-// for-each-ref also matches a pattern as a prefix up to a '/', so
-// refs/heads/x lists refs/heads/x/y — and a protection on refs/heads/main
-// must not also protect refs/heads/main/x, a branch its author never named.
-//
-// What it costs: nothing can absorb a component before the first ** or after
-// the last, so those parts are compared ONCE each, at the ref's start and at
-// its end — a pattern with at most one ** (every rule the package doc
-// measures as typical) costs one comparison a part, however deep the ref.
-// Only a run of parts between two **s is searched for along the ref, placed at
-// its earliest start ([walk]); MaxPatternComponents bounds that run.
-//
-// Match does not check ref: it is for a caller already holding a ValidRef —
-// the decide asks a protection about a command only after its first rule
-// refused every ref that is not one. Its answer for anything else means
-// nothing, but it is an answer and never a panic, and a string longer than
-// MaxRefNameBytes, which no ref is, matches nothing: the cut between a
-// pattern's first ** and its last has room for no more, which
-// TestMatchAnswersFalseForWhatIsNoRef holds. [MatchPattern] is the form that
-// checks.
+// Match reports whether ref matches the pattern, both read as '/'-separated
+// components. Every pattern component but ** matches exactly one ref
+// component, * standing for any run of bytes; ** matches zero or more whole
+// components, except as the pattern's LAST, where it matches one or more:
+// everything INSIDE the prefix, never the prefix itself. So refs/heads/*
+// matches refs/heads/main but not refs/heads/x/y, and refs/heads/release/**
+// matches refs/heads/release/1.0 but not a branch named release. That is git's
+// for-each-ref, which the tests hold it to, except that a LITERAL pattern
+// matches only the identical ref (for-each-ref also matches a prefix up to
+// '/'): a protection on refs/heads/main must not protect refs/heads/main/x.
+// Cost: the package doc. Match does not check ref ([MatchPattern] does).
 func (p Pattern) Match(ref string) bool {
 	if p.parts == nil {
 		return p.literal != "" && ref == p.literal
 	}
+	// For a caller holding a ValidRef: the answer for any other string means
+	// nothing but is never a panic, and one longer than MaxRefNameBytes matches
+	// nothing, since the cut between the first ** and the last has room for no
+	// more (TestMatchAnswersFalseForWhatIsNoRef).
 	if len(ref) > MaxRefNameBytes {
-		return false // no ref is longer, and the middle's cut has room for no more
+		return false
 	}
 	parts, head, tail := p.parts, int(p.head), int(p.tail)
 	// The head, from the ref's start: lo is where the component after the
@@ -341,21 +306,18 @@ func walk(parts []part, between string, ends []uint8) bool {
 	return i == len(parts)
 }
 
-// PatternReachesSeats reports whether pattern — a protection pattern
-// ([ParsePattern]), and false for anything that is not one — matches some ref
-// a seat's namespace can hold: refs/heads/seats/<handle>/<branch>, one
-// component or more below the handle ([SeatsRoot]). A push mirror's patterns
-// are held to it (the code domain's MirrorTarget, code.repos' mirror_to): a
-// mirror publishes what the company merged, never a seat's own branches.
+// PatternReachesSeats reports whether pattern (false if no [ParsePattern]
+// pattern) matches some ref a seat's namespace can hold:
+// refs/heads/seats/<handle>/<branch> ([SeatsRoot]). A push mirror's patterns
+// are held to it (the code domain's MirrorTarget): a mirror publishes what the
+// company merged, never a seat's own branches.
 //
 // EXACT, NEVER A PREFIX TEST: every component below seats/ is its seat's to
-// name, so a pattern reaches the namespace exactly where its part over the
-// component after refs/heads/ admits `seats` and the parts after that can take
-// two components or more — or where that part is **, which can take seats and
-// whatever the rest needs. So refs/heads/** and refs/heads/*/*/* reach it,
-// while refs/heads/*, refs/heads/*/* and refs/heads/seats/x match no ref there
-// — seats and seats/<one name> are reserved ([ReservedSeatBranch]), and no ref
-// is either.
+// name, so a pattern reaches it exactly where its part over the component
+// after refs/heads/ admits `seats` and the later parts take two components or
+// more, or that part is **: refs/heads/** and refs/heads/*/*/* do;
+// refs/heads/*, refs/heads/*/* and refs/heads/seats/x do not (seats and
+// seats/<one name> are reserved, [ReservedSeatBranch]).
 func PatternReachesSeats(pattern string) bool {
 	var buf [MaxPatternComponents + 1]part
 	p, ok := parsePattern(pattern, buf[:0])

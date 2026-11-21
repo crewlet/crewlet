@@ -1,6 +1,8 @@
 package objectives_test
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -351,6 +353,55 @@ func TestARecordedEventReachesTheRecorder(t *testing.T) {
 	nilMeter.Record(objectives.DataRoundTrip, 0, true)
 	if nilMeter.Burns() != nil || nilMeter.Burning() != nil {
 		t.Error("a nil meter answered burns")
+	}
+}
+
+// AN EVENT ITS CALLER ABANDONED IS NO EVENT INSIDE ITS BOUND, AND A BAD ONE
+// PAST IT: the cancellation ended it, unless the engine was already late when
+// the caller left. Only a cancellation is a caller leaving.
+//
+// Mutation: count an abandoned event as unanswered, and the in-bound ones are
+// bad; drop the bound, and the late one is lost; read a deadline or an engine's
+// own cause as abandonment, and those cases fail.
+func TestAnEventItsCallerAbandonedIsNoEventInsideItsBound(t *testing.T) {
+	t.Parallel()
+	rec := newRecorded()
+	m := objectives.NewMeter(rec, newClock().now)
+	m.Abandon(objectives.ViewFirstByte, 0)
+	m.Abandon(objectives.ViewFirstByte, objectives.ViewFirstByteWithin)
+	m.Abandon(objectives.ViewFirstByte, objectives.ViewFirstByteWithin+time.Millisecond)
+	m.Abandon(objectives.Name("no_such_objective"), time.Hour)
+	bad := rec.adds[key(metrics.ObjectivesEvents, metrics.Attrs{"objective": "view_first_byte", "outcome": "bad"})]
+	if bad != 1 || len(rec.adds) != 1 {
+		t.Errorf("recorded %v, want the one late abandoned event, bad, and nothing else", rec.adds)
+	}
+	if b := m.Burns(); len(b) == 0 || b[0].LongBad != 1 || b[0].LongEvents != 1 {
+		t.Errorf("burns %+v, want the ledger to hold the late event alone", b)
+	}
+	var nilMeter *objectives.Meter
+	nilMeter.Abandon(objectives.ViewFirstByte, time.Hour)
+
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, expire := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expire()
+	stopped, stop := context.WithCancelCause(t.Context())
+	stop(errors.New("the node is stopping"))
+	budgeted, unbudget := context.WithTimeout(cancelled, time.Hour)
+	defer unbudget()
+	for name, c := range map[string]struct {
+		ctx  context.Context
+		want bool
+	}{
+		"a caller still waiting":                   {t.Context(), false},
+		"a caller that went away":                  {cancelled, true},
+		"a deadline that passed":                   {expired, false},
+		"a cancellation the engine gave a cause":   {stopped, false},
+		"a store's own budget under a caller gone": {budgeted, true},
+	} {
+		if got := objectives.Abandoned(c.ctx); got != c.want {
+			t.Errorf("%s: abandoned %v, want %v", name, got, c.want)
+		}
 	}
 }
 

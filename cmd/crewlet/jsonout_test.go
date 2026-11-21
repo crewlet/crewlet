@@ -78,7 +78,12 @@ func serveMarkup(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /gitlet/repos", answer(whole))
 	mux.HandleFunc("POST /gitlet/repos/web/verify", answer(verified))
 	mux.HandleFunc("GET /feeds/dead-letters", answer(whole))
-	mux.HandleFunc("GET /advisor", answer(whole))
+	// One page of open findings, the finding and the latest run each the
+	// markup, as `crewlet doctor` reads them.
+	findings := markupAnswer(t, func(m map[string]any) any {
+		return map[string]any{"findings": []any{m}, "last_run": m}
+	})
+	mux.HandleFunc("GET /advisor/findings", answer(findings))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv

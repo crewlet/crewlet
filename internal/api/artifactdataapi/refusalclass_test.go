@@ -26,19 +26,13 @@ import (
 // ONE REFUSAL, ONE CLASS, ON BOTH SURFACES THAT ANSWER A DATASTORE WRITE: the
 // tools' class (builtin.DataVerdictClass for what the applier decided,
 // builtin.WriterClass for what the writer refused before anything was
-// appended) and this API's status, each answered here through the real write
-// route and again through the operator surface's one class-to-status mapping
+// appended) and this API's status, each answered through the real write route
+// and again through the operator surface's one class-to-status mapping
 // ([operator.Fail]).
 //
-// THEY DISAGREED TWICE before this case existed: the company's quota was 413
-// here and `forbidden` to a tool, which told a model it may not write what
-// nobody may, and an artifact in the trash was `410 data_gone` here — a purge's
-// answer, for data a restore brings back whole — while every other artifacts
-// route answers it `409 artifact_trashed`.
-//
-// WHAT HTTP SAYS MORE PRECISELY is declared, never assumed: `refines` is a
-// status HTTP has for one case of the class's meaning, with the reason.
-//
+// A trashed artifact is `409 artifact_trashed` as on every artifacts route, not
+// `410 data_gone`, a purge's answer. `refines` declares a more precise HTTP
+// status for one case of the class, with the reason.
 // Mutation: class the quota verdict `forbidden` in DataVerdictClass, or answer
 // a trashed artifact 410 here, and this goes red naming it.
 func TestEveryDatastoreRefusalIsOneClassOnBothSurfaces(t *testing.T) {

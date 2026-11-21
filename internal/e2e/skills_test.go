@@ -14,17 +14,15 @@ import (
 // The tool-skill path, end to end: a page an operator published reaches the
 // prompt of a phase that can call the tools it is about.
 //
-// The claim is not that the registry works (its own suite covers that) but
-// that a real node builds one, fills it from its company's Doclet
-// through the node's skill sync, and offers it to the phases.
+// The claim is that a real node builds a registry, fills it from its company's
+// Doclet through the skill sync, and offers it to the phases.
 //
 // # Published as pages, never installed
 //
-// Every skill here is WRITTEN to the skills container and read back by the
-// node's own walk, the path an operator's page takes. Installing pages into
-// the registry directly would skip that path and race it besides: the node's
-// boot walk replaces the registry wholesale, so a walk that landed after an
-// install would silently empty what the test had just put there.
+// Every skill is WRITTEN to the skills container and read back by the node's
+// own walk, an operator's path. Installing into the registry directly would
+// skip it and race it: the boot walk replaces the registry wholesale, so a late
+// walk would empty what the test had put there.
 
 // skillPageText renders a skill back into page text, so the node's admission
 // decides what it is rather than the test.

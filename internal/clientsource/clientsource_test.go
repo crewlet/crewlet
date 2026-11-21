@@ -233,17 +233,14 @@ func TestASecondDeclarationInTheSameFileIsTwo(t *testing.T) {
 
 // A NEIGHBOUR IS ANOTHER DECLARATION, AND SO IS A NAME THAT CONTAINS THE NAME.
 //
-// The wake reasons' `PHRASES` had a neighbour of the same SHAPE: the Inbox's
-// `CONDITION_PILLS`, a map of words keyed by a state, kept out of that table
-// because its keys were not reasons. The fixture holds that pair, so a reader
-// that matched a declaration by its shape rather than its name would read two
-// tables where there is one.
+// The wake reasons' `PHRASES` has a neighbour of the same SHAPE, the Inbox's
+// `CONDITION_PILLS` (words keyed by a state, not reasons), so a reader matching
+// by shape rather than name would read two tables where there is one.
 //
-// And it holds two names that CONTAIN the name asked for, one before it and one
-// after — `WAKE_PHRASES` and `PHRASES_SHOWN`. A regular expression over a
-// declaration's head is one missing word boundary from reading either as a
-// second copy; names are read as TOKENS here, so neither is a copy, and
-// neither is the copy.
+// The fixture also holds two names that CONTAIN the name asked for,
+// `WAKE_PHRASES` and `PHRASES_SHOWN`: a regular expression over a head is one
+// missing word boundary from reading either as a second copy. Names are read
+// as TOKENS here, so neither is a copy, and neither is the copy.
 func TestANameThatContainsTheNameIsAnotherDeclaration(t *testing.T) {
 	t.Parallel()
 	root := tree(t, map[string]string{
@@ -928,5 +925,41 @@ func TestAPropertyIsReadAsItsOwnLiteral(t *testing.T) {
 	}
 	if _, err := clientsource.Property(args, "item"); err == nil {
 		t.Error("an array has no properties, and one was read")
+	}
+}
+
+// THE WIRE'S MODULE IS READ WHOLE: every interface declared under the named
+// directories, unregistered, with what it extends from anywhere in the tree,
+// and none declared elsewhere. A name declared twice is refused, as one
+// declaration read by name is.
+func TestInterfacesReadsEveryDeclarationUnderItsDirectories(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{
+		"protocol/types.ts": "export interface Row extends Base {\n  open: boolean;\n  key?: string\n}\n" +
+			"interface Page<T> { rows: T[]; more?: boolean }\nconst interfaceLike = 1;\n",
+		"contract/wire.ts":        "export interface Told { told: number }\n",
+		"components/base.ts":      "export interface Base { id: string; open?: boolean }\n",
+		"components/Screen.tsx":   "interface Props { shown: boolean }\n",
+		"protocol/types.test.ts":  "interface Row { quoted: true }\n",
+		"protocol/elsewhere.d.ts": "",
+	})
+	got, err := clientsource.Interfaces(root, "protocol", "contract")
+	if err != nil {
+		t.Fatalf("Interfaces: %v", err)
+	}
+	want := map[string][]clientsource.Member{
+		"Row":  {{Name: "id"}, {Name: "open"}, {Name: "key", Optional: true}},
+		"Page": {{Name: "rows"}, {Name: "more", Optional: true}},
+		"Told": {{Name: "told"}},
+	}
+	if !maps.EqualFunc(got, want, slices.Equal) {
+		t.Errorf("Interfaces = %v, want %v", got, want)
+	}
+	twice := tree(t, map[string]string{
+		"protocol/a.ts": "export interface Row { a: string }\n",
+		"protocol/b.ts": "export interface Row { b: string }\n",
+	})
+	if _, err := clientsource.Interfaces(twice, "protocol"); err == nil {
+		t.Error("two declarations of Row read as one")
 	}
 }

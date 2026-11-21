@@ -17,7 +17,7 @@ import { baseName, shortOID } from "~/lib/code.ts";
 import { fmtBytes } from "~/lib/format.ts";
 import type { CodeBlobAnswer } from "~/protocol/index.ts";
 import { readWhole } from "./blobs.ts";
-import { rawHref, useDownloadsServed } from "./downloads.ts";
+import { rawHref } from "./downloads.ts";
 
 /** Copy reads at most 1 MiB, about nineteen of the engine's pages; Raw serves any size. */
 export const COPY_MAX_BYTES = 1 << 20;
@@ -140,14 +140,6 @@ export function CopyFileButton({
   );
 }
 
-/** Why Raw and Download are held, or undefined: the commit unknown, or a fleet that serves none. */
-function linksHeld(commit: string, served: ReturnType<typeof useDownloadsServed>) {
-  if (commit === "") return WAITING_FOR_COMMIT;
-  if (served === "no") return "Downloading a file is not available on this fleet yet.";
-  if (served === "checking") return "Checking whether this fleet serves downloads.";
-  return undefined;
-}
-
 /** Raw, then Copy and Download joined: the file's bytes at the commit read. */
 export function FileBytes({
   repo,
@@ -162,8 +154,8 @@ export function FileBytes({
   file: CodeBlobAnswer;
   loaded: string | null;
 }) {
-  const served = useDownloadsServed(repo, true);
-  const held = linksHeld(commit, served);
+  // RAW AND DOWNLOAD NAME THE COMMIT READ, held until it is known.
+  const held = commit === "" ? WAITING_FOR_COMMIT : undefined;
   const name = baseName(path);
   const download = <ArrowDownToLineGlyph />;
   return (

@@ -71,6 +71,9 @@
 // A pinned file may be unlinked once it is pinned: the lock lives on the
 // inode, which stays while any description of it is open.
 //
+// The harness runner uses the pin to see when every process of a harness's
+// output has gone ([github.com/crewlet/crewlet/internal/providers/llm/harness]).
+//
 // # Advisory, and honest about it
 //
 // A process that never asks does not notice. Every taker of these files is this

@@ -8,36 +8,17 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// The body a wake hands a seat, fenced as what somebody else wrote (ADR-0040).
-//
-// A notification's body is the one part of its trigger the engine did not
-// write — a comment, a description, a message, a monitor's text — and a model
-// reads every word of its context as a possible instruction. So the spine
-// fences it, once, before any prompt sees it: [Render] puts the body inside a
-// [provenance.Fence] under the wake's own token ([Inbound.Fence]), labelled
-// with what the source's prompt says it is and who wrote it
-// ([Prompt.Provenance]), and hands the prompt that. A prompt can therefore
-// weave the body anywhere it likes and never hand a seat somebody's words
-// unlabelled — it is never given them bare.
-//
-// SPINE-SIDE, NOT PER PROMPT, because the alternative is one fence call per
-// place a prompt renders a body: the code-host prompts render one in six
-// openers each, and the first one written without it is a surface whose every
-// wake addresses the seat in a stranger's voice with nothing failing.
-//
-// WHO WROTE IT IS THE PARSER'S FACT and the prompt's reading: the parser holds
-// the payload, so it stamps the body's surface and its one author where the
-// payload says one person wrote every word ([BodySourceField],
-// [BodyAuthorField], [BodyAuthorKindField]), and a source's prompt reads them
-// back ([Stated]). An author the payload cannot name — a description others
-// may have edited, an edited comment, a monitor — is NOBODY, which on a
-// vendor's surface the fence labels `external`: nothing vouches for it, and
-// the error in the safe direction is a colleague read with more care rather
-// than a stranger read as a colleague. On a surface the ENGINE hosts — its own
-// tracker, knowledge base and chat ([Provenance.Hosted], [StatedHosted]) —
-// nobody named is a colleague's ([provenance.TrustForHosted]): only company
-// principals write there, so the surface vouches for whoever wrote it, and
-// that text reads alike whether it reaches a seat as a wake or as a read.
+// The body a wake hands a seat, fenced as what somebody else wrote (ADR-0040):
+// the one part of a trigger the engine did not write, and a model reads all
+// its context as possible instruction, so the spine fences it once
+// ([Render], a [provenance.Fence] under [Inbound.Fence]'s token, labelled via
+// [Prompt.Provenance]). SPINE-SIDE: per-prompt fencing fails silently for the
+// first prompt written without it. WHO WROTE IT IS THE PARSER'S FACT: it
+// stamps the surface and the one author ([BodySourceField], [BodyAuthorField],
+// [BodyAuthorKindField]); the prompt reads them back ([Stated]). An author the
+// payload cannot name is NOBODY, `external` on a vendor's surface (the safe error), a colleague on one the
+// ENGINE hosts ([Provenance.Hosted], [provenance.TrustForHosted]): only
+// company principals write there.
 
 // Metadata keys a parser stamps about the body it produced.
 const (
@@ -168,13 +149,12 @@ func SalientLabel(prompts Prompts, n types.ExternalNotification, parties Parties
 //
 // THE AUTHOR IS RESOLVED IN THE SOURCE'S OWN NAMESPACE, through the registry
 // that resolves its senders ([Parties.ByExternalID]), so a vendor account a
-// seat holds reads as that colleague and a first-party handle as the seat it
-// is. One the registry does not name is the kind a first-party record stated
-// ([FirstPartyAuthor]), and otherwise an outside party: an account nobody in
-// the company holds. A first-party record stating only a kind — the engine,
-// an operator credential — names that kind. No author stamped is nobody,
-// which the fence labels `external` on a vendor's surface; the engine's own
-// sources read it through [StatedHosted].
+// seat holds reads as that colleague and a first-party handle as its seat.
+// One the registry does not name is the kind a first-party record stated
+// ([FirstPartyAuthor], e.g. the engine, an operator credential), else an
+// outside party. No author stamped is nobody, which the fence labels
+// `external` on a vendor's surface; the engine's own sources read it through
+// [StatedHosted].
 func Stated(n Inbound, parties Parties, fallback provenance.Source) Provenance {
 	return stated(n, parties, fallback)
 }

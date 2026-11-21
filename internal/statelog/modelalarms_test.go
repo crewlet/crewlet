@@ -36,11 +36,11 @@ func modelKinds(r statelog.Reading) map[statelog.Kind][]string {
 	return out
 }
 
-// THE OWNER'S THRESHOLDS, each driven at the threshold, just inside it and
-// just outside it: thirty days and seven before a credential's computed expiry,
-// the expiry itself, and fifteen minutes of a seat's wait on a limit. A
-// threshold one second off is a different promise than the one the owner made,
-// and the page, the health count and the log all read this one evaluation.
+// THE OWNER'S THRESHOLDS, each driven at, just inside and just outside it:
+// thirty and seven days before a credential's computed expiry, the expiry, and
+// fifteen minutes of a seat's wait on a limit. A second off is another promise
+// than the owner's, and the page, health count and log all read this one
+// evaluation.
 //
 // Mutation: compare with < where the table says <= (or the reverse), take the
 // notice from the warning's constant, or fire the limit alarm beside the

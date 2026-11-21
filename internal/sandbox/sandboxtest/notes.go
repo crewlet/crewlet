@@ -57,6 +57,24 @@ var noteCases = []struct {
 	{"AWatchSeesEveryNoteChange", testAWatchSeesEveryNoteChange},
 	{"ATakeWhoseAnswerWasLostIsSettledByItsIdentity", testATakeWhoseAnswerWasLostIsSettledByItsIdentity},
 	{"ANoteIsServedOnlyToItsJobWhileItWaits", testANoteIsServedOnlyToItsJobWhileItWaits},
+	{"AHooksServeRecordsTheServeAndNoRead", testAHooksServeRecordsTheServeAndNoRead},
+	{"AServeLosesTheCallsItsInboxHeardCancelledFirst", testAServeLosesTheCallsItsInboxHeardCancelledFirst},
+	{"AServeRemovesTheTakesItsInboxSawUnansweredFirst", testAServeRemovesTheTakesItsInboxSawUnansweredFirst},
+	{"AServeToAnotherJobReplacesTheLastJobsServes", testAServeToAnotherJobReplacesTheLastJobsServes},
+	{"AVerdictReadsAHeldServeAtItsNotesPlace", testAVerdictReadsAHeldServeAtItsNotesPlace},
+	{"ARestartedTakeIsReadMarkedSo", testARestartedTakeIsReadMarkedSo},
+	{"AVerdictLosesAServeItIsToldIsAbsent", testAVerdictLosesAServeItIsToldIsAbsent},
+	{"AHeldTakeOutranksACancel", testAHeldTakeOutranksACancel},
+	{"AVerdictLandsWhateverTheRunsStatusOrEnding", testAVerdictLandsWhateverTheRunsStatusOrEnding},
+	{"ACancelAndAVerdictCommute", testACancelAndAVerdictCommute},
+	{"EveryReadOfAPlacedNoteTakesItsPlace", testEveryReadOfAPlacedNoteTakesItsPlace},
+	{"AFilingCountsNoHookServedNoteAsWaiting", testAFilingCountsNoHookServedNoteAsWaiting},
+	{"APersonCannotFileAnItem", testAPersonCannotFileAnItem},
+	{"ACallPastItsBoundIsRecordedAsNoCall", testACallPastItsBoundIsRecordedAsNoCall},
+	{"ASessionOrAnIDOutsideTheCharsetIsRecordedAsNoCall", testASessionOrAnIDOutsideTheCharsetIsRecordedAsNoCall},
+	{"AnIntegerIDAndAQuotedIDOfTheCharsetAreKept", testAnIntegerIDAndAQuotedIDOfTheCharsetAreKept},
+	{"AQuotedIDHoldingACharacterOutsideTheCharsetIsRecordedAsNoCall",
+		testAQuotedIDHoldingACharacterOutsideTheCharsetIsRecordedAsNoCall},
 }
 
 // noteRawCases are the note cases that read the raw record.
@@ -69,6 +87,14 @@ var noteRawCases = []struct {
 		testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite},
 	{"AStateTheNoteViewCannotReadIsPassedOver", testAStateTheNoteViewCannotReadIsPassedOver},
 	{"ASettleOfATakeThatRecordedNothingFencesItsWrite", testASettleOfATakeThatRecordedNothingFencesItsWrite},
+	{"ACancelLosesOnlyALiveServeOfItsJobOnItsSession", testACancelLosesOnlyALiveServeOfItsJobOnItsSession},
+	{"AnUnansweredServeIsRemovedAndFencesItsWriteInFlight",
+		testAnUnansweredServeIsRemovedAndFencesItsWriteInFlight},
+	{"AVerdictIsIdempotentAndAnswersEveryHookReadOfItsJob",
+		testAVerdictIsIdempotentAndAnswersEveryHookReadOfItsJob},
+	{"AJobsItemsCountTowardNoBoundOfAPersons", testAJobsItemsCountTowardNoBoundOfAPersons},
+	{"ALaunchRemovesEveryItemOfTheJobBeforeIt", testALaunchRemovesEveryItemOfTheJobBeforeIt},
+	{"EveryWriteHandsAnItemOnlyToItsJob", testEveryWriteHandsAnItemOnlyToItsJob},
 }
 
 // The turn's bounds every filing here is held to: internal/agent/steer's,
@@ -497,20 +523,16 @@ func testAResetKeepsTheTurnsNotesAndClearsPulled(t *testing.T, s sandbox.Pending
 
 // A LAUNCH TAKES OVER THE READ OF THE LOST TAKE ITS BRIEF NAMES. A take whose
 // write landed and whose answer was lost left its notes read by the record's
-// word, and its settle can hand them to a relaunch's brief instead — the first
-// step to tell them, the take's reader never having had them. So a brief's note
-// naming that take (sandbox.RunNote.LostTake) is recorded read by the job the
-// write opens, in the take's place — and at the take's own place among the
-// reads, never the write's: a note filed after it and read by a later take, a
-// correction of it, stays after it in the order every reader tells the turn's
-// notes in — and the ending of that job, should it never start, reports it with
-// the rest of its brief. A note another take read is left as that take read it,
-// whatever take the brief names, and a waiting note the brief reads takes the
-// write's place.
+// word, and its settle can hand them to a relaunch's brief instead. So a
+// brief's note naming that take (sandbox.RunNote.LostTake) is recorded read by
+// the job the write opens, at the take's own place among the reads, never the
+// write's: a later correction read by a later take stays after it. The ending
+// of that job, should it never start, reports it with its brief. A note another
+// take read is left as that take read it, whatever take the brief names, and a
+// waiting note the brief reads takes the write's place.
 //
-// Mutation: leave every note the record holds read as it was, take over its
-// read whatever take recorded it, or number the read taken over at the write's
-// place, and the case goes red.
+// Mutation: leave every note read as it was, take over its read whatever take
+// recorded it, or number the read at the write's place.
 func testALaunchTakesOverTheReadOfTheLostTakeItsBriefNames(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := mustLaunched(t, s, run("t-lost-brief"))
@@ -570,22 +592,16 @@ func testALaunchTakesOverTheReadOfTheLostTakeItsBriefNames(t *testing.T, s sandb
 
 // A LAUNCH RECORDS THE MARKED NOTES ITS BRIEF TELLS AGAIN. A take whose write
 // landed and whose answer never reached its reader is marked unanswered, and
-// the brief of every later launch tells its notes again; so the launch's write
+// every later launch's brief tells its notes again; so the launch's write
 // records each note its brief names as told again (sandbox.PendingRun
-// .RetoldNotes) read by the job it opens, told again, in the marked take's
-// place and at that take's own place among the reads, never the write's — a
-// note a later take read stays after it, and the write moves the record's
-// count of reads only for the notes it is the first to read — and keeps the
-// take's read beside the telling (sandbox.NoteRead.Retold). A note it names
-// that the record holds read and unmarked is left as it was read, and one the
-// record does not hold is never added. The job's ending reports the note told
-// again missed at that take where the job never started, the brief having
-// handed nothing over, and delivered at the brief where it did.
+// .RetoldNotes) read by the job it opens, at the marked take's own place among
+// the reads, never the write's, keeping the take's read beside the telling
+// (sandbox.NoteRead.Retold). A named note held read and unmarked is left as
+// read, and one not held is never added. The job's ending reports the note
+// missed at that take where the job never started, else delivered at the brief.
 //
 // Mutation: leave a marked read as it was, record the telling at the write's
-// place, leave the read marked or under its take, drop the take's read or keep
-// it unmarked, record a note the record holds unmarked as told again, or add
-// one it does not hold, and the case goes red.
+// place, drop the take's read, retell an unmarked note, or add one not held.
 func testALaunchRecordsTheMarkedNotesItsBriefTellsAgain(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := mustLaunched(t, s, run("t-retold"))
@@ -1095,19 +1111,13 @@ func testNotesSurviveEveryWriteThatIsNotTheirs(t *testing.T, s sandbox.PendingSt
 }
 
 // A KEY A LATER BUILD ADDS INSIDE A SECTION SURVIVES EVERY WRITE THIS BUILD
-// MAKES. The record is rewritten whole by every node that touches it, so a
-// field a newer build adds to the notes section, to one note, to where a note
-// was read, to a bridged call, to the identity of a call the log dropped or to
-// the job's own record is gone the moment this build writes the record back —
-// unless every level that can grow keeps what it does not know. And the log
-// beside the record ([sandbox.BridgeLog]) is rewritten whole by every append,
-// so the same holds at its top, in each of its calls and in each identity it
-// keeps. Seeded at each of those seven levels at once, as a newer build would
-// write them, and read back off the raw record and the raw log after
-// every kind of write this build makes: a status write, a lease, a bridged
-// call, a filing, a take, a pull, a claim and its release, a park, and a
-// relaunch's reset that carries the round on — which replaces the job's record
-// whole, so the key a later build added to it goes with the job it was about.
+// MAKES, at each of the nine levels of the record and its log that can grow,
+// for the reason the package doc gives ("A later build's keys"). Seeded at all
+// nine at once, as a newer build would write them, and read back off the raw
+// record and the raw log after every kind of write this build makes: a status
+// write, a lease, a bridged call, a filing, a take, a pull, a claim and its
+// release, a park, a hook's serve and a settle of one, and a relaunch's reset
+// that carries the round on, which replaces the job's record whole.
 //
 // Mutation: drop any one section's Extra from its decode or its encode, and the
 // key at that level is gone after the first write; carry the job's record's
@@ -1129,16 +1139,21 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		Call: sandbox.BridgeCall{Name: "read_page"}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.ServeHook(ctx, turn, hookServe(launch, "served-take", callNo(1), "n-2")); err != nil {
+		t.Fatal(err)
+	}
 
 	// THE NEWER BUILD'S WRITE: one key of its own at every level.
 	seeded := map[string]string{
-		"the notes section": `{"quorum":2}`,
-		"a note":            `"high"`,
-		"a note's read":     `"hook"`,
-		"a bridged call":    `{"span":"s-1"}`,
-		"a dropped call":    `{"span":"s-3"}`,
-		"the log":           `{"kept":"all"}`,
-		"the job's record":  `{"span":"s-2"}`,
+		"the notes section":         `{"quorum":2}`,
+		"a note":                    `"high"`,
+		"a note's read":             `"hook"`,
+		"a hook's serve":            `{"proof":"p-1"}`,
+		"the call a serve answered": `"sse"`,
+		"a bridged call":            `{"span":"s-1"}`,
+		"a dropped call":            `{"span":"s-3"}`,
+		"the log":                   `{"kept":"all"}`,
+		"the job's record":          `{"span":"s-2"}`,
 	}
 	if _, ok, err := runs.MutateSandboxRun(ctx, turn, func(current coord.Record) (coord.SandboxRunChange, error) {
 		var row map[string]any
@@ -1150,6 +1165,9 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		first := section["notes"].([]any)[0].(map[string]any)
 		first["priority"] = json.RawMessage(seeded["a note"])
 		first["read"].(map[string]any)["carrier"] = json.RawMessage(seeded["a note's read"])
+		served := section["notes"].([]any)[1].(map[string]any)["serves"].([]any)[0].(map[string]any)
+		served["proof"] = json.RawMessage(seeded["a hook's serve"])
+		served["call"].(map[string]any)["transport"] = json.RawMessage(seeded["the call a serve answered"])
 		row["launch_record"].(map[string]any)["trace"] = json.RawMessage(seeded["the job's record"])
 		raw, err := json.Marshal(row)
 		return coord.SandboxRunChange{Put: raw}, err
@@ -1190,6 +1208,12 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 					Read     *struct {
 						Carrier json.RawMessage `json:"carrier"`
 					} `json:"read"`
+					Serves []struct {
+						Proof json.RawMessage `json:"proof"`
+						Call  *struct {
+							Transport json.RawMessage `json:"transport"`
+						} `json:"call"`
+					} `json:"serves"`
 				} `json:"notes"`
 			} `json:"steer"`
 			Job struct {
@@ -1219,12 +1243,17 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		}
 		got := map[string]string{"the notes section": string(row.Steer.Quorum)}
 		for _, n := range row.Steer.Notes {
-			if n.ID != "n-1" {
-				continue
-			}
-			got["a note"] = string(n.Priority)
-			if n.Read != nil {
-				got["a note's read"] = string(n.Read.Carrier)
+			switch {
+			case n.ID == "n-1":
+				got["a note"] = string(n.Priority)
+				if n.Read != nil {
+					got["a note's read"] = string(n.Read.Carrier)
+				}
+			case n.ID == "n-2" && len(n.Serves) > 0:
+				got["a hook's serve"] = string(n.Serves[0].Proof)
+				if n.Serves[0].Call != nil {
+					got["the call a serve answered"] = string(n.Serves[0].Call.Transport)
+				}
 			}
 		}
 		got["the log"] = string(log.Retention)
@@ -1274,6 +1303,15 @@ func testAKeyALaterBuildAddsInsideASectionSurvivesEveryWrite(t *testing.T, s san
 		t.Fatal(err)
 	}
 	check("a pull", true)
+	if _, err := s.ServeHook(ctx, turn, hookServe(launch, "later-take", callNo(2), "n-3")); err != nil {
+		t.Fatal(err)
+	}
+	check("a hook's serve", true)
+	if settled, err := s.SettleHook(ctx, turn, sandbox.HookSettle{Launch: launch,
+		Unanswered: []string{"later-take"}}); err != nil || len(settled) != 1 {
+		t.Fatalf("the settle of the later serve = %d, %v, want its note", len(settled), err)
+	}
+	check("a hook's settle", true)
 	claimed := mustClaim(t, s, turn)
 	check("the claim", true)
 	mustRelease(t, s, claimed)
@@ -1305,22 +1343,17 @@ func compact(t *testing.T, text string) string {
 }
 
 // A STATE THE NOTE VIEW CANNOT READ IS PASSED OVER, never delivered as an empty
-// record: a reader following a run's notes — the bridge serving its harness, a
-// resumed segment's source — that were handed "no record" would answer every
-// step with nothing until the next write it could read. It keeps what it last
-// knew, and the next state it can read replaces it.
+// record: a reader following a run's notes handed "no record" would answer
+// every step with nothing until the next write it could read. It keeps what it
+// last knew, and the next state it can read replaces it.
 //
-// IN A BUBBLE, so "never delivered" is read once the watch has taken the
-// unreadable state and every goroutine of it is durably blocked, and read
-// again once the bubble's clock has moved past any timer a late delivery could
-// wait on. The watch replaces a view its reader has not taken with the next
-// state ([sandbox.PendingStore.WatchNotes]), so the states written after the
-// unreadable one cannot show a delivery that came late: a window of half a
-// second on the machine's clock passed one that came after it, to a reader a
-// loaded runner had descheduled.
+// IN A BUBBLE, "never delivered" is read once the watch has taken the
+// unreadable state and every goroutine of it is durably blocked, and again once
+// the clock has passed any timer a late delivery could wait on. The watch
+// replaces an untaken view with the next state ([sandbox.PendingStore.WatchNotes]),
+// so later states cannot show a late delivery, which a half-second window passed.
 //
-// Mutation: deliver a state the view cannot read as an empty view, at once or
-// late, and it is read here.
+// Mutation: deliver an unreadable state as an empty view, at once or late.
 func testAStateTheNoteViewCannotReadIsPassedOver(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
@@ -1408,21 +1441,17 @@ func testAStateTheNoteViewCannotReadIsPassedOver(t *testing.T, s sandbox.Pending
 }
 
 // A TAKE WHOSE ANSWER WAS LOST IS SETTLED BY ITS IDENTITY. A take's write can
-// land and its answer not reach the harness that asked — a hook given five
-// seconds, a store that answered after them — and the record then says the note
-// was read by a job whose harness never had it. The settle answers exactly the
-// notes that take's write recorded, found by the identity its read named, and
-// where its reader never had them marks each unanswered, keeping where it was
-// read: never another take's read, never a note still waiting. Asked again, it
-// answers the same notes and marks nothing twice. A take that recorded nothing
-// is answered nothing, a run with no record is answered nothing, a settle that
-// names no take is refused, and a run whose ending is decided is settled all the
-// same: what a take recorded is a fact about the take.
+// land and its answer not reach the harness that asked (a hook given five
+// seconds) and the record then says the note was read by a job whose harness
+// never had it. The settle answers exactly the notes that take's write
+// recorded, found by the identity its read named, and where its reader never
+// had them marks each unanswered, keeping where it was read: never another
+// take's read, never a waiting note. Asked again, it marks nothing twice. A
+// take that recorded nothing, or a run with no record, is answered nothing, a
+// settle naming no take is refused, and a decided run is settled all the same.
 //
 // Mutation: mark every read of the take's job rather than the take's own, mark
-// the reads of a settle that does not ask it, clear the read rather than mark
-// it, refuse a run whose ending is decided, or answer a settle naming no take,
-// and a check goes red.
+// the reads of a settle that does not ask it, clear the read rather than mark it.
 func testATakeWhoseAnswerWasLostIsSettledByItsIdentity(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := mustLaunched(t, s, run("t-settle"))
@@ -1498,15 +1527,13 @@ func testATakeWhoseAnswerWasLostIsSettledByItsIdentity(t *testing.T, s sandbox.P
 }
 
 // A SETTLE OF A TAKE THAT RECORDED NOTHING FENCES ITS WRITE, IN EITHER MODE. A
-// take whose caller gave up on its answer can still have its write in flight —
-// sent, and taken by the store only after the settle read the record — and that
-// write records the note read by a take nobody answered. So a settle that finds
-// no read of the take writes the record all the same, whether it marks what it
-// finds or answers it as it stands, and the take's write, conditioned on the
-// version it read, cannot land after it: decided again on the record the settle
-// wrote, the take is a lost race, and the note still waits. A settle that finds
-// the take's reads — marked already, where it marks — writes nothing, nothing
-// of the take being left in flight.
+// take whose caller gave up on its answer can still have its write in flight,
+// taken by the store only after the settle read the record, and that write
+// records the note read by a take nobody answered. So a settle that finds no
+// read of the take writes the record all the same, whether it marks or answers
+// as it stands, and the take's write, conditioned on the version it read,
+// cannot land after it: the take is a lost race and the note still waits. A
+// settle that finds the take's reads writes nothing.
 //
 // Mutation: write nothing where the take recorded nothing, in either mode, and
 // the take's write lands after the settle with its note read; or write where
@@ -1586,39 +1613,55 @@ func testASettleOfATakeThatRecordedNothingFencesItsWrite(t *testing.T, s sandbox
 
 // noteStagedCases are the note cases whose subject is a write another party
 // lands under one of the store's own decisions, which only the records it is
-// built on can stage ([vanishingRuns]).
+// built on can stage ([overtakingRuns]).
 var noteStagedCases = []struct {
 	name string
-	fn   func(*testing.T, *vanishingRuns, sandbox.PendingStore)
+	fn   func(*testing.T, *overtakingRuns, sandbox.PendingStore)
 }{
 	{"ASettleOfARecordRemovedUnderItAnswersNothing", testASettleOfARecordRemovedUnderItAnswersNothing},
+	{"AVerdictOfARecordRemovedUnderItAnswersNothing", testAVerdictOfARecordRemovedUnderItAnswersNothing},
+	{"AServeOfARecordRemovedUnderItServesNothing", testAServeOfARecordRemovedUnderItServesNothing},
+	{"AServeTheRunsEndingOvertookServesNothing", testAServeTheRunsEndingOvertookServesNothing},
 }
 
-// vanishingRuns is a coordination store's run records that, once armed, remove
-// a run's record between one decision of the store's and its write — the
-// run's ending deleting it under a write it lost to.
-type vanishingRuns struct {
+// overtakingRuns is a coordination store's run records that, once armed, land
+// another party's write on a run's record between one decision of the store's
+// and that decision's own write, which then loses its race to it: the run's
+// ending deleting the record ([overtakingRuns.removed]), or deciding the
+// ending, after which a live run's write takes the record no more.
+type overtakingRuns struct {
 	records
-	armed atomic.Bool
+	under atomic.Pointer[overtake]
 }
 
-// MutateSandboxRun makes the read-decide-write as the records would, the
-// record removed under the first decision once armed.
-func (r *vanishingRuns) MutateSandboxRun(ctx context.Context, turnID string,
+// overtake is a write another party lands on turnID's record.
+type overtake func(ctx context.Context, turnID string) error
+
+// arm lands write under the store's next decision, once.
+func (r *overtakingRuns) arm(write overtake) { r.under.Store(&write) }
+
+// MutateSandboxRun makes the read-decide-write as the records would, the armed
+// write landed under the first decision once armed.
+func (r *overtakingRuns) MutateSandboxRun(ctx context.Context, turnID string,
 	decide func(coord.Record) (coord.SandboxRunChange, error)) (coord.Record, bool, error) {
 
 	return r.records.MutateSandboxRun(ctx, turnID, func(read coord.Record) (coord.SandboxRunChange, error) {
 		change, err := decide(read)
-		if r.armed.CompareAndSwap(true, false) {
-			if _, _, removeErr := r.records.MutateSandboxRun(ctx, turnID,
-				func(coord.Record) (coord.SandboxRunChange, error) {
-					return coord.SandboxRunChange{Delete: true}, nil
-				}); removeErr != nil {
-				return coord.SandboxRunChange{}, removeErr
+		if write := r.under.Swap(nil); write != nil {
+			if writeErr := (*write)(ctx, turnID); writeErr != nil {
+				return coord.SandboxRunChange{}, writeErr
 			}
 		}
 		return change, err
 	})
+}
+
+// removed removes turnID's record: the run's ending deleting it.
+func (r *overtakingRuns) removed(ctx context.Context, turnID string) error {
+	_, _, err := r.records.MutateSandboxRun(ctx, turnID, func(coord.Record) (coord.SandboxRunChange, error) {
+		return coord.SandboxRunChange{Delete: true}, nil
+	})
+	return err
 }
 
 // A SETTLE OF A RECORD REMOVED UNDER IT ANSWERS NOTHING. A settle that marks
@@ -1631,14 +1674,14 @@ func (r *vanishingRuns) MutateSandboxRun(ctx context.Context, turnID string,
 //
 // Mutation: answer what an earlier attempt decided where the last found no
 // record, and the settle answers notes marked by a write that never landed.
-func testASettleOfARecordRemovedUnderItAnswersNothing(t *testing.T, runs *vanishingRuns, s sandbox.PendingStore) {
+func testASettleOfARecordRemovedUnderItAnswersNothing(t *testing.T, runs *overtakingRuns, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := mustLaunched(t, s, run("t-vanish"))
 	mustFile(t, s, "t-vanish", "n-1")
 	if _, err := s.TakeNotes(ctx, "t-vanish", namedTake(launch, "lost", "n-1")); err != nil {
 		t.Fatal(err)
 	}
-	runs.armed.Store(true)
+	runs.arm(runs.removed)
 	settled, err := s.SettleTake(ctx, "t-vanish", sandbox.NoteSettle{Take: "lost", Unanswered: true})
 	if err != nil || len(settled) != 0 {
 		t.Errorf("a settle of a record removed under it = %+v, %v, want nothing", settled, err)
@@ -1651,18 +1694,14 @@ func testASettleOfARecordRemovedUnderItAnswersNothing(t *testing.T, runs *vanish
 // A NOTE IS SERVED ONLY TO ITS JOB, WHILE IT WAITS, AND STAYS SERVED. A harness
 // that polls for its notes is handed one only once the record says it was
 // served to the job, and the note is read only once the harness confirms
-// delivering it: so the mark is what tells a continuation a session may hold a
-// note the record says waits. A serve marks only the notes it names that wait,
-// on its own job's record in a status it names, and answers every one of them
-// served to that job, an earlier serve's included; a note served stays served
-// once a take reads it and through the next launch, and the latest job served
-// it is the one named. A serve for another job, in a status it does not name,
-// on a record whose ending is decided or one that is gone serves nothing, and
-// one naming no job is refused.
-//
-// Mutation: serve a note no longer waiting, serve for another job or in
-// another status, answer only what this call marked, drop the mark when the
-// note is read, or answer a serve naming no job, and a check goes red.
+// delivering it: so the mark tells a continuation a session may hold a note the
+// record says waits. A serve marks only the notes it names that wait, on its own
+// job's record in a status it names, and answers every one served to that job,
+// an earlier serve's included; a served note stays served once read and through
+// the next launch, naming the latest job. A serve for another job, in another
+// status, or on a decided or gone record serves nothing; one naming no job is
+// refused. Mutation: serve a note no longer waiting or for another job or
+// status, answer only what this call marked, or drop the mark when it is read.
 func testANoteIsServedOnlyToItsJobWhileItWaits(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	launch := mustLaunched(t, s, run("t-serve"))

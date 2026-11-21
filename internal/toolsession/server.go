@@ -37,23 +37,13 @@ type Dispatcher interface {
 	// result the model reads, and a session that can no longer serve is the
 	// dispatcher's state, which it ends the harness run over itself.
 	//
-	// NO CONTEXT, deliberately. The only one a session could hand over is
-	// the MCP request's, and a call must never run under it: a harness that
-	// gives up on a call can cancel its request, one that dies can end the
-	// connection it came on, and a tool half-way through a write would stop
-	// there. So a call runs under the context of the run the dispatcher
-	// serves, which it holds, and the request's is not even on offer to be
-	// used by mistake: all it is handed of the request is whether anybody can
-	// still read the answer ([Call.Abandoned]), when the request is over on its
-	// transport ([Call.Over]), and a way to say the call has started running
-	// ([Call.Running]).
-	//
-	// A DISPATCHER MAY ANSWER A CALL BEFORE ITS TOOL RETURNS, and run the
-	// tool on: the tool loop answers a call "still running" ahead of its
-	// harness's own tool timeout, and the bridge answers every call still
-	// running as the opening it was made on ends (internal/api/mcpbridge). The
-	// call is then the dispatcher's to finish and to record, and the server
-	// writes the answer it was handed as it writes any.
+	// NO CONTEXT, deliberately: a call must never run under the MCP request's,
+	// since a harness that cancels it or dies would stop a tool half-way
+	// through a write. It runs under its run's context, and is handed only
+	// [Call.Abandoned], [Call.Over], [Call.Running].
+	// A DISPATCHER MAY ANSWER BEFORE ITS TOOL RETURNS, and run it on (the tool
+	// loop, ahead of its harness's timeout; internal/api/mcpbridge, as the
+	// opening ends), then finishing the call itself.
 	Call(call Call) Result
 }
 
@@ -87,52 +77,39 @@ type Call struct {
 
 	// Abandoned is closed once NOBODY CAN READ THE ANSWER ANY LONGER and the
 	// request shows it: the harness cancelled the request
-	// (`notifications/cancelled`, which Claude Code and OpenCode send at
-	// their tool timeout, discarding a late answer), the connection the
-	// request came on failed (a relay's socket closed), or, on a server that
-	// keeps a running call's answer going ([Server.KeepAnswersGoing]), a
-	// progress could not be written on the call's response: its harness hung
-	// up on it, and the streamable HTTP transport keeps no stream a harness
-	// could come back to, so the answer has no reader. A harness that stops
-	// waiting with none of those leaves it open: one that hangs up on a POST
-	// nothing is kept going on, or in the last cadence before its call
-	// returns. Nil, never closed, for a call no request carries.
+	// (`notifications/cancelled`, sent by Claude Code and OpenCode at their
+	// tool timeout), the connection failed (a relay's socket closed), or, on a
+	// server that keeps answers going ([Server.KeepAnswersGoing]), a progress
+	// could not be written: the harness hung up, and the streamable HTTP
+	// transport keeps no stream to come back to. A harness that stops waiting
+	// otherwise (a POST nothing is kept going on, or in the last cadence before
+	// the call returns) leaves it open. Nil for a call no request carries.
 	//
 	// A SIGNAL, NEVER A CONTEXT, for the reason [Dispatcher.Call] takes none:
-	// the call runs under its run's context whatever becomes of the request,
-	// and this says only, once it has run, whether its answer still had a
-	// reader — which a dispatcher that records the call records beside it.
+	// it says only, once the call has run, whether its answer had a reader.
 	Abandoned <-chan struct{}
 
 	// Over is closed once the request is OVER ON ITS TRANSPORT, nothing more
-	// to be written for it: its answer's write has returned — written,
-	// refused, or failed — or the request was cancelled, or the connection it
-	// came on failed. NEVER BEFORE THE ANSWER'S WRITE HAS RETURNED, which is
-	// what a dispatcher that answers a call while its tool runs on waits for
-	// before it closes the session the call came on: the SDK refuses every
-	// answer not yet written once a session's close has begun. It is the
-	// request's context's Done, which the SDK ends only after the answer's
-	// write (go-sdk v1.8.0; held by this package's
-	// TestACallsRequestIsOverOnlyOnceItsAnswerIsWritten, since it is the SDK's
-	// behaviour and not its promise); and unlike [Call.Abandoned] nothing here
-	// widens it: a progress that finds the call's response gone, and the
-	// handler's own return, close Abandoned and leave Over to the transport.
+	// to be written for it: its answer's write has returned (written, refused
+	// or failed), or the request was cancelled, or its connection failed. A
+	// dispatcher that answers a call while its tool runs on waits on it before
+	// it closes the call's session, since the SDK refuses every answer not yet
+	// written once a session's close has begun. It is the request's context's
+	// Done: NEVER CLOSED BEFORE THE ANSWER'S WRITE HAS RETURNED unless the
+	// request was cancelled or its connection failed, when nobody reads the
+	// answer. Why that holds, and why nothing here widens it as [Call.Abandoned]
+	// is widened, is in the package doc ("An answer before the tool returns").
 	// Nil, never closed, for a call no request carries.
 	Over <-chan struct{}
 
 	// Running is for the dispatcher to call once, the moment it starts
-	// RUNNING the call, past every answer it gives without running it; nil
-	// on a server that keeps no running call's answer going
-	// ([Server.KeepAnswersGoing]). The answer starts there: the call's first
-	// progress is written before Running returns, and another every cadence
-	// after it until the dispatcher returns.
+	// RUNNING the call; nil on a server that keeps no answer going
+	// ([Server.KeepAnswersGoing]). The call's first progress is written before
+	// Running returns, and another every cadence until the dispatcher returns.
 	//
-	// THE DISPATCHER'S TO CALL, because only it knows where a call stops
-	// being one it answers at once — refused for a run that is over, for
-	// tools that have closed, for arguments that did not parse — and becomes
-	// one whose tool may take minutes. A call answered without running is
-	// answered before its harness could give up on it, and needs nothing
-	// kept going.
+	// THE DISPATCHER'S TO CALL, because only it knows where a call stops being
+	// one answered at once (refused for a run that is over, closed tools,
+	// unparsed arguments) and becomes one whose tool may take minutes.
 	Running func()
 }
 
@@ -245,18 +222,15 @@ func (s *Server) HoldAnswersForRelist() {
 
 // KeepAnswersGoing is for a transport whose harness gives up on a call whose
 // response stays silent: every call the dispatcher runs ([Call.Running]) has
-// a `notifications/progress` written on its own progress token the moment it
-// starts running, another every `every` while its tool runs, and none once
-// its tool has returned. So the response's first byte leaves at once, and the
-// response is never silent for longer than every — see keepalive.go.
+// a `notifications/progress` written on its own progress token as it starts,
+// another every `every` while its tool runs, and none once it returns — see
+// keepalive.go.
 //
-// A CALL WHOSE REQUEST CARRIES NO PROGRESS TOKEN GETS ITS ANSWER ALONE: the
-// protocol ties a progress notification to a token the requester gave, and a
+// A CALL WHOSE REQUEST CARRIES NO PROGRESS TOKEN GETS ITS ANSWER ALONE: a
 // client that gave none has said it reads none.
 //
-// THE CALLER CHOOSES every, because the harnesses' silence checks it has to
-// answer are the transport's, not this package's (the bridge's, for the
-// harnesses that dial it over HTTP).
+// THE CALLER CHOOSES every, because the silence checks it must beat are the
+// transport's (the bridge's, for harnesses that dial it over HTTP).
 func (s *Server) KeepAnswersGoing(every time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

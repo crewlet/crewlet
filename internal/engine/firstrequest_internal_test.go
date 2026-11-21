@@ -213,7 +213,7 @@ func TestACapturedSessionIsJudgedByItsCapturesCount(t *testing.T) {
 			t.Parallel()
 			c, seat := chainCompany(t, chainMember{key: "api", agent: "claude-code", model: "claude-sonnet-4-5"})
 			k := newKeptLaunchOn(t, c, seat, 40000, 0, 0, &sandbox.ResumedCount{Tokens: tc.tokens, Restart: new("")},
-				false)
+				keptEnded)
 			pending := k.e.sandbox.Load().pending
 			row, _, err := pending.Get(k.ctx, "t1")
 			if err != nil {

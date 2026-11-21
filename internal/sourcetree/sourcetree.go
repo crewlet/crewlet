@@ -41,7 +41,10 @@
 // testdata, the guard's own package — is THAT GUARD's decision, because one
 // gate's noise is another's subject, and it stays at the guard. It reaches
 // only the entries BELOW the start, because [Walk] never hands the start over:
-// the start's name is wherever the checkout happens to live.
+// the start's name is wherever the checkout happens to live, and a gate that
+// skips `dist/` would otherwise skip a checkout at `../dist` whole. A start
+// that is not a directory is an error, and [Root] resolves its links, because
+// WalkDir does not follow a symlink start and a gate would read nothing.
 //
 // # A nested checkout is recognised by its structure, not by its name
 //
@@ -117,7 +120,8 @@
 // [TypeCheck], its one loader of its own types: the standard library's
 // go/types over the export data `go list -export -deps` answers, with no
 // golang.org/x/tools. It hands each package over after everything of the
-// module it imports, and with Tests each as its test binary compiles it —
+// module it imports, run by the toolchain that built the test (CREWLET_GO, or
+// GOROOT's) with its -race and -tags, and with Tests each as its test binary compiles it —
 // with its in-package test files, and its external test package against the
 // package's test variant, which holds what an export_test.go declares, and
 // the variants of what imports it, all built from source, so it never
@@ -157,23 +161,13 @@ import (
 // Root returns the directory holding this module's go.mod, and fails t when
 // it cannot be found.
 //
-// Located from THIS package's compiled-in source path rather than from the
-// working directory: `go test` runs a binary in its package's directory, but
-// a binary run any other way does not, and a root found from the working
-// directory would then silently be some other tree. It walks UP to the nearest
-// go.mod rather than counting a fixed number of `..`, because the nearest
-// go.mod is the definition of the module a package belongs to — and a counted
-// depth is a number every copy had to get right for itself.
-//
-// So ANY path a test takes out of its own package starts here: a page under
-// docs/, the examples, the schemas, the dashboard's build, another package's
-// sources, or the directory `go list ./...` must run in. One anchor is not this
-// one: the package's own directory — its testdata, its own sources — because
-// `go test` runs every test binary there by contract, so a path relative to it
-// has no depth to count. A test that hands git a path of this tree starts here
-// too, and has git confirm that this is the working tree's top level, which
-// `git check-attr` resolves paths against (gittest's ModuleCheckout, for
-// static's merge test).
+// Located from THIS package's compiled-in source path, not the working
+// directory (the package's only under `go test`), walking UP to the nearest
+// go.mod rather than counting `..`. ANY path a test takes out of its own
+// package starts here; its own directory (testdata, sources) is the one other
+// anchor. A test handing git a path of this tree has git confirm this is the
+// working tree's top level, which `git check-attr` resolves against
+// (gittest's ModuleCheckout).
 func Root(t testing.TB) string {
 	t.Helper()
 	root, err := ModuleRoot()
@@ -249,28 +243,18 @@ func findModuleRoot(file string, stat func(string) (fs.FileInfo, error)) (string
 	}
 }
 
-// Walk walks the tree rooted at dir as [filepath.WalkDir] does — the same
-// lexical order, the same error contract, and fn's own [fs.SkipDir] and
-// [fs.SkipAll] meaning what they mean there — except that nothing outside
-// this repository's tree, as the package doc defines it, is entered or handed
-// to fn, and neither is dir itself.
+// Walk walks the tree rooted at dir as [filepath.WalkDir] does (same order,
+// error contract and [fs.SkipDir]/[fs.SkipAll] meaning), except that nothing
+// outside this repository's tree, as the package doc defines it, is entered or
+// handed to fn, and neither is dir itself.
 //
-// THE START IS WALKED BUT NEVER HANDED TO fn, except to say that it cannot be
-// walked: it is missing, it cannot be read, or it is not a directory. Its name
-// is wherever somebody put the checkout, and the guards judge the directories
-// they are handed by NAME — dist/, static/, schema/, vendor/, their own
-// package, a dot-directory — so a start handed over was judged by rules
-// written for the entries below it. A checkout at ../dist was skipped whole by
-// every gate that steps over dist/, and each of those that asserts an absence
-// without counting what it read passed having read nothing. Nor is the start
-// judged by this package's own rules: the module root holds a `.git` of its
-// own by definition. A caller ends a walk early by returning [fs.SkipAll] from
-// any entry below it.
-//
-// A START THAT IS NOT A DIRECTORY IS AN ERROR fn hears, a symbolic link to one
-// included. WalkDir hands such a start to fn once and stops — it does not
-// follow a link at the start — so a guard started at one read nothing and
-// passed. [Root] resolves its links so that its callers never start at one.
+// THE START IS NEVER HANDED TO fn, except to say it cannot be walked (missing,
+// unreadable, or not a directory; WalkDir does not follow a symlink start, so
+// a guard started at one read nothing and passed, and [Root] resolves its
+// links). Guards judge directories by NAME (dist/, static/, vendor/), so a
+// checkout at ../dist would be skipped whole and an absence gate would pass
+// having read nothing. Nor is the start judged by the package's rules: the
+// module root holds a `.git`.
 func Walk(dir string, fn fs.WalkDirFunc) error {
 	return walk(dir, fn, os.Lstat)
 }

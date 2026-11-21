@@ -13,13 +13,11 @@ import (
 // A LOST ACKNOWLEDGEMENT THE LEDGER RESOLVES IS COLLAPSED: the row it names may
 // be an earlier copy's, whose decision this call never took.
 //
-// A retry on a node that is behind decides on its stale rows while an earlier
-// copy of the same operation — decided elsewhere, against other rows — lands on
-// the subject first. The retry's append is refused, its answer is lost, the
-// probe finds the earlier copy above the retry's anchor, and this node's
-// ledger records the operation there. The publisher answered that as the
-// application of THIS call's decision; a key mint handed back the number its
-// stale counter implied, and two tasks were filed under one key.
+// A retry on a node that is behind decides on stale rows while an earlier copy
+// of the operation, decided elsewhere, lands first; the retry's append is
+// refused, its answer lost, and the ledger places the operation at the earlier
+// copy. Answered as this call's own decision, a key mint hands back the number
+// its stale counter implied, filing two tasks under one key.
 func TestAnAmbiguousPublishTheLedgerResolvesIsCollapsed(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
@@ -76,12 +74,9 @@ func TestAnAmbiguousPublishTheLedgerResolvesIsCollapsed(t *testing.T) {
 
 // AN ACKNOWLEDGED APPEND WHOSE LEDGER ROW NAMES ANOTHER POSITION IS COLLAPSED
 // too: the broker stored this call's record, but the operation applied at an
-// earlier copy, and this node's applier skipped the second.
-//
-// Past the duplicate window the broker has no reason to refuse a second copy
-// of an additive write, so it acknowledges it cleanly — and the resolution
-// that knew the row was another copy's had its answer overwritten by the
-// duplicate flag, which was false.
+// earlier copy, and this node's applier skipped the second. Past the duplicate
+// window the broker acknowledges a second copy of an additive write cleanly,
+// so its duplicate flag (false) must not overwrite the ledger's resolution.
 func TestAnAcknowledgedCopyTheLedgerPlacesElsewhereIsCollapsed(t *testing.T) {
 	t.Parallel()
 	h := newHarnessFor(t, shortWindowDomain{})

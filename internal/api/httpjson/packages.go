@@ -2,26 +2,21 @@ package httpjson
 
 import "sync"
 
-// goPackages is the name of every Go package in this module that has non-test
-// sources, which is what a leading "name: " in an error's text is: the package
-// prefix Go errors carry ("statelog: node-4 may not be evicted"). [Sentence]
-// leaves such a prefix lowercase, because capitalising it names a package that
-// does not exist, and stripping it is the source's job rather than the
-// boundary's.
+// goPackages is the name of every Go package in this module with non-test
+// sources: what a leading "name: " in an error's text is ("statelog: node-4
+// may not be evicted"). [Sentence] leaves such a prefix lowercase, because
+// capitalising it names a package that does not exist.
 //
-// A TABLE, HELD TO THE TREE: TestThePackagePrefixesAreTheModulesPackages
-// reads every package clause in the module and fails, naming the difference,
-// when a package is added, renamed or removed without this table following.
+// HELD TO THE TREE: TestThePackagePrefixesAreTheModulesPackages fails when a
+// package is added, renamed or removed without this table following.
 //
-// BUILT THE FIRST TIME A SENTENCE READS IT, NOT AT INIT. A map literal at
-// package level is built by the package's init, which every process that
-// links httpjson pays, every push's git hook among them, and cmd/crewlet's
-// TestTheHookPaysLittleForTheEnginesInit holds the module's init to a budget
-// it sat at the edge of. Only a sentence with a prefix needs the table.
+// BUILT ON FIRST USE, NOT AT INIT: a package-level map literal is built by the
+// init every process linking httpjson pays (every push's git hook), and
+// cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit holds init to a budget.
 var goPackages = sync.OnceValue(func() map[string]bool {
 	return map[string]bool{
 		"a2a": true, "a2atest": true, "accessdomain": true, "activityline": true, "accessmigrate": true, "accessreview": true, "adr": true, "agentaccess": true, "alarmwake": true,
-		"advisor": true, "analyst": true, "api": true, "atlas": true, "atlasdomain": true, "derive": true, "gather": true, "codescan": true, "collecttest": true, "deployfiles": true,
+		"advisor": true, "advisordomain": true, "duty": true, "modelpass": true, "api": true, "atlas": true, "atlasdomain": true, "derive": true, "gather": true, "codescan": true, "collecttest": true, "deployfiles": true,
 		"argval": true, "toolargs": true, "artifactdata": true, "artifactdataapi": true, "artifacts": true,
 		"artifactrender": true, "artifactsapi": true, "artifactsdomain": true, "artifactserve": true,
 		"artifactspike": true, "artifactupload": true,
@@ -30,7 +25,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"live": true, "proposal": true, "tabular": true, "wire": true,
 		"atlaswake": true, "atlassian": true, "atlassianhost": true, "auth": true, "authapi": true, "aws": true,
 		"authevents": true, "authz": true, "auxspend": true, "backoff": true,
-		"backup": true, "backuptest": true, "brandformat": true, "brokertest": true, "builtin": true, "cache": true, "chain": true, "changefeed": true,
+		"backup": true, "backuptest": true, "brandformat": true, "browser": true, "brokertest": true, "builtin": true, "cache": true, "chain": true, "changefeed": true,
 		"canon": true, "canvasformat": true, "catalogue": true, "caveat": true, "caveattest": true, "cdp": true, "chatlet": true, "checkrun": true, "chromiumtest": true, "commentanchor": true, "edits": true,
 		"harness": true, "clientsource": true, "clocktest": true, "cloudflare": true, "commentgate": true,
 		"harnessprofile": true, "executor": true, "coalesce": true, "gitlet": true, "gitletcluster": true, "gitletfault": true, "codeindex": true, "codesearch": true, "gitlettest": true, "colleague": true, "collect": true,
@@ -42,7 +37,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"engine": true, "enginedocs": true, "envfile": true, "envref": true, "estate": true, "executordomain": true, "executordomaintest": true, "executorkeep": true, "executorread": true,
 		"eventfan": true, "eventfantest": true, "events": true, "execstate": true, "expo": true,
 		"extension": true, "externaltest": true, "fixedwait": true, "fleetsecrets": true, "flock": true,
-		"foldername": true, "github": true, "gitlab": true, "gitproc": true, "gitref": true, "gittest": true, "googlecloud": true, "home": true, "host": true, "hostbox": true,
+		"foldername": true, "github": true, "gitlab": true, "gitproc": true, "gitref": true, "gittest": true, "googleauth": true, "googlecloud": true, "home": true, "host": true, "hostbox": true,
 		"hostboxtest": true, "httpjson": true, "httprelay": true, "httpx": true, "httpxtest": true, "iam": true,
 		"iamapi": true, "iamdomain": true, "inbox": true, "insights": true, "integration": true, "notice": true, "issuereport": true,
 		"integrationtest": true, "jetstream": true, "jetstreamtest": true,
@@ -52,9 +47,9 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"learning": true, "ledger": true, "ledgerfit": true, "ledgerstore": true,
 		"livestate": true, "llm": true, "llmtest": true, "logging": true, "maintenance": true,
 		"lint": true, "linktest": true, "manifest": true, "mcprelay": true, "mediatype": true,
-		"llmapi": true, "mattermost": true, "mcp": true, "mcpapi": true, "mcpbridge": true, "mcpreview": true, "memobj": true, "modelcatalog": true, "modelnote": true,
+		"llmapi": true, "mattermost": true, "mcp": true, "mcpapi": true, "mcpbridge": true, "mcpreview": true, "memobj": true, "nodememory": true, "modelcatalog": true, "modelnote": true,
 		"memory": true, "memread": true, "memsync": true, "metrics": true, "migrate": true, "mirror": true,
-		"natsobj": true, "node": true, "notify": true, "oauth": true, "objstore": true,
+		"named": true, "natsobj": true, "node": true, "notify": true, "oauth": true, "objstore": true,
 		"objstoretest": true, "observe": true, "operator": true,
 		"objectives": true, "query": true,
 		"opkey": true, "org": true, "orgchart": true, "origin": true, "paced": true, "pagepolicy": true,
@@ -78,7 +73,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"toolsession": true, "toolsessiontest": true,
 		"topics": true, "tracing": true, "turn": true, "turnctx": true, "types": true,
 		"ticket": true, "trashreap": true,
-		"usage": true, "version": true, "webhooks": true, "whsec": true,
+		"usage": true, "version": true, "webhooks": true, "whsec": true, "wiregate": true,
 		"words": true, "workapi": true, "workkey": true, "worklet": true,
 	}
 })

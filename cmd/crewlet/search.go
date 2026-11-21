@@ -15,35 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// `crewlet search` — what the semantic half is actually doing on this
-// company's own documents.
+// `crewlet search` — what the semantic half does on this company's own documents.
 //
-// # Why there is a command at all
-//
-// The quality gate in internal/search measures the ARITHMETIC on a seeded
-// fixture and deliberately not recall on anybody's real corpus: a sign code
-// keeps only each vector's orthant, and how much an orthant says about cosine
-// rank is a property of the corpus's own distribution and of nothing else —
-// over a family of embedding-shaped generators the same arithmetic spans 0.29
-// to 0.98. There is therefore no number in this engine that answers "is
-// semantic search working for us", and this is the command that asks.
-//
-// Run it monthly and after any change to providers.embeddings.model or
-// .dimensions, which are the two inputs that move the answer.
-//
-// It also says how much of each corpus lies past the window a vector is
-// computed from: a source is embedded as its opening, so a passage deep in a
-// long page is found by its words and never by its meaning. That is a
-// property of the company's own documents, which only its own store can
-// answer, and it is the number that decides whether a source needs more than
-// one vector.
-//
-// # It reads a FILE, not a running node
-//
-// The replicated estate is exclusively owned by the running engine, so this
-// takes a path: the node's own file with the engine stopped, or — better, and
-// what the runbook says — the copy inside a backup, which needs nothing
-// stopped and measures the same rows.
+// The quality gate in internal/search measures the ARITHMETIC on a seeded fixture,
+// not recall on anybody's corpus: what a sign code's orthant says about cosine
+// rank depends on the corpus's own distribution (0.29 to 0.98 over embedding-shaped
+// generators). No number here answers "is semantic search working for us"; this
+// asks. Run it monthly and after changing providers.embeddings.model or
+// .dimensions. It also says how much of each corpus lies past the window a vector
+// is computed from: a source is embedded as its opening, so a passage deep in a
+// long page is found by its words, never its meaning. It reads a FILE, not a
+// running node, since the engine owns the estate: the node's file with the engine
+// stopped, or a backup's copy, which measures the same rows.
 func runSearch(args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	switch sub {

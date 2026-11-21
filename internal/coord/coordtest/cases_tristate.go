@@ -38,6 +38,50 @@ var tristateCases = []testCase{
 		}
 	}},
 
+	{"holder_is_unknown_never_nobody_while_the_store_cannot_answer", func(h *harness) {
+		// coord.Holder's "" is a definite answer, NOBODY holds it, which a
+		// reader acts on: no holder to relay a box's call to, no park to ask
+		// about. A store it could not ask said nothing of the kind.
+		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
+		f := NewFaulty(h.b)
+		f.Break(nil)
+		owner, err := coord.Holder(h.ctx, f, "seat:ceo")
+		if err == nil || !errors.Is(err, coord.ErrUnavailable) || owner != "" {
+			h.t.Fatalf("Holder on an unreachable store = %q (%v), want no owner and an error "+
+				"wrapping coord.ErrUnavailable", owner, err)
+		}
+	}},
+
+	{"time_left_is_unknown_never_none_while_the_store_cannot_answer", func(h *harness) {
+		// A lease with no time left reads as one its holder stopped renewing,
+		// running out. A store whose clock could not be read said nothing of
+		// how long any lease has, so coord.TimeLeft answers no reading at all.
+		h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
+		f := NewFaulty(h.b)
+		f.Break(nil)
+		left, err := coord.TimeLeft(h.ctx, f, coord.ClassSeat)
+		if err == nil || !errors.Is(err, coord.ErrUnavailable) || left != nil {
+			h.t.Fatalf("TimeLeft on an unreachable store answered a reading (%v), want none and "+
+				"an error wrapping coord.ErrUnavailable", err)
+		}
+	}},
+
+	{"the_stores_clock_is_unknown_never_this_nodes_while_the_store_cannot_answer", func(h *harness) {
+		// Now reads the STORE's clock, in each bucket a store may keep, so a call
+		// that never reached the store has no reading to give: one given anyway is
+		// this node's own clock, which coord.TimeLeft would hold every deadline
+		// against. A context that ended stands in for a store the call could not
+		// reach.
+		ctx, cancel := context.WithCancel(h.ctx)
+		cancel()
+		for _, class := range []coord.Class{coord.ClassSeat, coord.ClassWorker} {
+			if now, err := h.b.Now(ctx, class); err == nil || !errors.Is(err, coord.ErrUnavailable) {
+				h.t.Fatalf("Now(%s) on a store the call could not reach = %v (%v), want no reading "+
+					"and an error wrapping coord.ErrUnavailable", class, now, err)
+			}
+		}
+	}},
+
 	{"a_real_refusal_is_never_an_error", func(h *harness) {
 		// The other half. A peer genuinely holding the resource is a
 		// definite, actionable answer, and turning it into an error
@@ -106,21 +150,17 @@ var tristateCases = []testCase{
 
 	{"a_claim_its_caller_abandons_part_way_leaves_its_owner_an_answer", func(h *harness) {
 		// Unknown is a claim's honest answer when its caller gives up
-		// mid-flight, and it says nothing about ownership — so what the
-		// owner does next is claim again, and that claim must get a
-		// DEFINITE answer. A backend that writes a claim in steps must not
-		// leave a half-made one behind: one that did left its record
-		// claiming for the lease's whole TTL, which every peer read as
-		// held and the owner's own retries read as a sibling about to
-		// commit, so the owner answered unknown for five minutes here and a
-		// seat or a duty stayed dark for as long.
+		// mid-flight, and says nothing about ownership, so the owner claims
+		// again and that claim must get a DEFINITE answer. A backend that
+		// writes a claim in steps must not leave a half-made one behind: its
+		// record would claim for the lease's whole TTL, read as held by every
+		// peer and as a sibling about to commit by the owner's retries, and a
+		// seat or duty stays dark that long.
 		//
-		// The caller gives up at instants spread across a claim's own
-		// duration, measured first, so some land between whatever steps a
-		// backend takes. Each abandoned claim is on a fresh resource, and
-		// the owner's next claim of it must be GRANTED — nothing else
-		// claims it — at the epoch the abandoned claim returned, if it did
-		// return one.
+		// The caller gives up at instants spread across a claim's measured
+		// duration, so some land between a backend's steps. Each abandoned
+		// claim is on a fresh resource; the owner's next claim must be GRANTED
+		// at the epoch the abandoned one returned, if it returned one.
 		opts := coord.AcquireOptions{Owner: "node-a", TTL: LongTTL, Ungated: true}
 		const warm = 8
 		var took time.Duration

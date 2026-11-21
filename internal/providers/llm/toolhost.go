@@ -6,24 +6,17 @@ import (
 )
 
 // ToolHost is the engine's side of a call that offers tools: the phase's live
-// tool surface, which the backend serves to its harness as ONE MCP server for the
-// length of the call, and the place the backend reports what the harness did.
+// tool surface, which the backend serves to its harness as ONE MCP server for
+// the length of the call, and where the backend reports what the harness did.
 //
-// Declared here, by the contract, and implemented by the tool loop
-// (internal/agent/toolloop), which is the frame that holds the phase: every
-// gate a call is subject to — the seat's grant, the skill guard, the fence, the
-// budget, the round cap, the terminator — is decided behind it. A backend only
-// connects its harness to it, tells it what the harness's own record shows, and stops
-// the harness when it asks.
+// Implemented by the tool loop (internal/agent/toolloop), which holds every gate
+// a call is subject to behind it. A backend connects its harness to it, reports
+// what the harness's record shows, and stops the harness when asked.
 //
-// # Why the backend reports what the harness did
-//
-// The host sees every call the harness makes to it, and nothing else: not the
-// model's requests between them, not their prose, not what each one cost.
-// Those are in the harness's own record — its stream, or a session file it writes
-// as it runs — which only the backend reads, so the backend hands them over
-// as it reads them ([ToolHost.Observe], [ToolHost.Spent]). A harness whose record
-// shows no requests is reported on once, at the end, as one.
+// The host sees only the calls the harness makes to it, not the model's
+// requests between them, their prose or their cost; those are in the harness's
+// own record, which only the backend reads ([ToolHost.Observe], [ToolHost.Spent]);
+// a record showing no requests is reported once, at the end, as one.
 type ToolHost interface {
 	// Serve opens the host to ONE HARNESS run: the stdio server the harness is to
 	// start as its MCP server, and what to call when the run is over.

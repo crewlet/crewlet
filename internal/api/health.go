@@ -18,17 +18,15 @@ import (
 // The statuses a health body reports.
 //
 // Precedence is shutting_down > unconfigured > a posture other than serve or
-// wait > ok, which is the order [App.health] and /ready's reason both apply. A
-// draining engine is draining first, whatever else is true of it. Unconfigured
-// outranks a posture because it is the fact that decides what the node does
-// with a delivery: with no revision it refuses every one, whatever it
-// concluded about the fleet's epoch, and the posture still travels beside it
-// in its own field.
+// wait > ok, the order [App.health] and /ready's reason both apply. Unconfigured
+// outranks a posture because it decides what the node does with a delivery:
+// with no revision it refuses every one, and the posture still travels beside
+// it in its own field.
 //
 // StatusStarting is answered before any of them, by the surface a node's
-// listener serves from its bind until the node hands it its own ([Boot]):
-// shutting_down outranks it there as everywhere, and the other three are facts
-// about a running engine, which a starting node has none of yet.
+// listener serves from its bind until the node hands it its own ([Boot]);
+// shutting_down outranks it there too, and the other three are facts about a
+// running engine, which a starting node has none of yet.
 const (
 	StatusOK           = "ok"
 	StatusUnconfigured = "unconfigured"
@@ -78,17 +76,13 @@ const (
 // revision it tried at that epoch and how that went — `ok`, `error` or
 // `degraded`, the apply record's own words (`coord.NodeApply`).
 //
-// THE APPLIED EPOCH CANNOT SAY IT. A failed attempt leaves `applied_epoch`
-// where it was, so a node still applying a revision and one that refused it
-// read the same, and every reader of the push who may not read the fleet — a
-// unit lead following their own save — was told the engine was applying a
-// revision this node had refused, for as long as the tab stayed open. The
-// REVISION rides beside the epoch because an epoch number names two
-// revisions once a rebuilt coordination store has restarted the count.
+// THE APPLIED EPOCH CANNOT SAY IT: a failed attempt leaves `applied_epoch`
+// where it was, so applying and refused read the same. The REVISION rides
+// beside the epoch because an epoch names two revisions once a rebuilt
+// coordination store has restarted the count.
 //
-// NEVER THE ERROR TEXT: this body is public on /health, and a refusal can quote
-// the config value it was given. Why the node refused is the fleet view's
-// `config_error`, an admin's.
+// NEVER THE ERROR TEXT: this body is public on /health and a refusal can quote
+// the config value; the fleet view's `config_error` is an admin's.
 type ConfigAttempt struct {
 	Epoch      int64  `json:"epoch"`
 	RevisionID string `json:"revision_id"`
@@ -96,31 +90,16 @@ type ConfigAttempt struct {
 }
 
 // Health is what the /health endpoint and the dashboard's health push both
-// carry — WHOLE, on both.
+// carry, WHOLE: one shape, so a field added here reaches both, and screens
+// never read a second query that could disagree. Every field the engine answers
+// is ALWAYS PRESENT and a zero is a real zero; the OMITTED fields are those
+// where absence is itself the answer (a lag not happening, a read not done).
 //
-// ONE shape backing both, so a field added here reaches the endpoint, the
-// snapshot and the periodic push together — and a reconnect restores it with no
-// second round trip. The push used to carry three fields of it while a `stream`
-// query answered the rest, and five screens polled that query at two cadences
-// of their own: the rail could say a revision had applied while the panel in
-// front of it said it had not, for as long as fifteen seconds. There is no such
-// query any more; a screen reads the pushed body.
-//
-// Every field the engine answers is ALWAYS PRESENT, and a zero here is a real
-// zero: every process that serves the API runs the engine beside it, so there is
-// no answer this body could honestly leave out. The OMITTED fields are the ones
-// where absence is itself the answer — a lag or a stranding that is not
-// happening, a read that did not happen, an evaluation that has not run — and
-// each says which.
-//
-// PUBLIC on /health, like every probe — an orchestrator has no credential, so
-// the route is on the guard's exemption list — while the push goes to every
-// resolved socket (stream.KindHealth is NeedEverybody, the overview's). The
-// probe is the wider audience and this body is shaped for it: the fleet and
-// the alarm table appear here as COUNTS — how many nodes, how many alarms and
-// the one longest unanswered — and never as their rows: which nodes hold what
-// and what each alarm measured are the `fleet` and `work_retention` answers,
-// each an admin's.
+// PUBLIC on /health, like every probe (an orchestrator has no credential),
+// while the push goes to every resolved socket (stream.KindHealth is
+// NeedEverybody). The probe is the wider audience, so the fleet and the alarm
+// table appear only as COUNTS, never rows: those are the `fleet` and
+// `work_retention` answers, each an admin's.
 type Health struct {
 	Status string `json:"status"`
 
@@ -526,21 +505,16 @@ const tickReadBudget = 5 * time.Second
 
 // readiness answers whether traffic should come here.
 //
-// Distinct from health on purpose. Liveness answers "is this process alive" and
-// must stay 200 through a drain, so an orchestrator does not SIGKILL a node
-// mid-turn. Readiness answers "should traffic come here", and during a drain
-// the answer is no.
+// Distinct from health on purpose: liveness must stay 200 through a drain so an
+// orchestrator does not SIGKILL a node mid-turn, while readiness answers
+// "should traffic come here", which during a drain is no. Also not ready before
+// the first config revision applies: an unconfigured node cannot verify a
+// webhook signature and would only reject the delivery.
 //
-// Also not ready before the first config revision applies: an unconfigured node
-// cannot verify a webhook signature, and taking it out of rotation is how a
-// fleet avoids answering with a node that would only reject the delivery.
-//
-// IT NEVER ASKS [NodeRuntime.Fleet]. The fleet counts decide nothing here, and
-// the presence count is a scan of the fleet's keys: a readiness probe paying
-// for one on every call, to throw it away, is a probe a wedged broker can
-// slow for a fact it never reads. Nor does it ask what the probe surface's
-// /ready asks ([WorkState]): this node is ready while traffic should come to
-// it, and none of those facts decides that.
+// IT NEVER ASKS [NodeRuntime.Fleet]: the counts decide nothing here, and the
+// presence count scans the fleet's keys, so a wedged broker could slow a probe
+// for a fact it never reads. Nor does it ask what the probe surface's /ready
+// asks ([WorkState]); none of those facts decides this node's readiness.
 func (a *App) readiness(ctx context.Context) (Readiness, int) {
 	return judgeReadiness(a.nodeID, a.Configured(), a.runtime.Snapshot(ctx), nil)
 }

@@ -312,6 +312,63 @@ func TestASnoozeMeansNotNow(t *testing.T) {
 	}
 }
 
+// A NOTICE NAMED BY ITS RECORD IS THAT NOTICE, read, unread or snoozed; another person's record
+// and an unknown one answer nothing. Mutation: drop the record term (bob's whole inbox answers,
+// red).
+func TestANoticeIsReadByItsRecord(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	routeTo(t, r, "t-1", "ENG-1", "bob")
+	routeTo(t, r, "t-2", "ENG-2", "bob")
+	routeTo(t, r, "t-3", "ENG-3", "bob")
+	routeTo(t, r, "t-4", "ENG-4", "carol")
+	all := r.inbox(worklet.InboxQuery{Handle: "bob"}).Notices
+	if len(all) != 3 {
+		t.Fatalf("bob's inbox holds %d notices, want 3", len(all))
+	}
+	read, snoozed, unread := all[0], all[1], all[2]
+	if _, err := asBob(r).MarkInbox(t.Context(), "op-marks", "bob", statelog.Position{}, inbox.Gesture[worklet.Reason]{
+		Read:   []string{read.RecordID},
+		Snooze: []inbox.Snooze{{RecordID: snoozed.RecordID, Until: wednesday.Add(48 * time.Hour)}},
+	}, worklet.PersonAuthority{}); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	r.drain()
+
+	for _, c := range []struct {
+		name         string
+		want         worklet.InboxNotice
+		read, asleep bool
+	}{
+		{"read", read, true, false},
+		{"snoozed", snoozed, false, true},
+		{"unread", unread, false, false},
+	} {
+		got := r.inbox(worklet.InboxQuery{Handle: "bob", Record: c.want.RecordID, Snoozed: inbox.SnoozeInclude})
+		if len(got.Notices) != 1 || got.Notices[0].RecordID != c.want.RecordID {
+			t.Fatalf("the %s notice read by its record is %+v, want only %s", c.name, got.Notices, c.want.RecordID)
+		}
+		if n := got.Notices[0]; n.Read != c.read || n.Snoozed != c.asleep {
+			t.Errorf("the %s notice is read %v and snoozed %v, want %v and %v", c.name, n.Read, n.Snoozed,
+				c.read, c.asleep)
+		}
+	}
+	// THE OTHER NARROWINGS STILL APPLY: a read notice is no unread one.
+	if got := r.inbox(worklet.InboxQuery{Handle: "bob", Record: read.RecordID, Unread: true}); len(got.Notices) != 0 {
+		t.Errorf("an unread read of a read notice answered %+v", got.Notices)
+	}
+	carols := r.inbox(worklet.InboxQuery{Handle: "carol"}).Notices
+	if len(carols) != 1 {
+		t.Fatalf("carol's inbox holds %d notices, want 1", len(carols))
+	}
+	for _, record := range []string{carols[0].RecordID, "no-such-record"} {
+		got := r.inbox(worklet.InboxQuery{Handle: "bob", Record: record, Snoozed: inbox.SnoozeInclude})
+		if len(got.Notices) != 0 {
+			t.Errorf("bob's read of record %q answered %+v, want nothing", record, got.Notices)
+		}
+	}
+}
+
 // TestTheInboxPagesAndRefuses covers the cursor and the two gates: a page
 // must not overrun the caller's limit with its own evidence row, and an
 // unknown reason is refused, since narrowing to nothing reads as an empty inbox.

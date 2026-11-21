@@ -7,59 +7,31 @@ import (
 	"time"
 )
 
-// Rows is what the PUBLISHER reads from this node's own durable tables, and
-// it hands back ONE CONSISTENT READ rather than a sequence of them.
+// Rows is what the PUBLISHER reads from this node's own durable tables, as
+// ONE CONSISTENT READ rather than a set of getters.
 //
-// # Why the seam has this shape and not a set of getters
+// An expectation (a claim about the LOG) and a decision (about the ROWS) are
+// safe together only when read from the SAME committed state, which is why the
+// applier commits rows, anchor and checkpoint in one transaction. Two reads
+// are not: an applier commit between them pairs an OLD decision with a NEW
+// expectation, the broker accepts, and two writers mint one counter value.
 //
-// An expectation is a claim about the LOG — what is the last message on this
-// subject — and a decision is a claim about the ROWS. The two are only safe
-// together when they were read from the SAME committed state, and the applier
-// commits rows, the arbitration anchor and the checkpoint in one transaction
-// precisely so that one deferred read observes a matching pair.
-//
-// Two separate reads never do, and the failure is not theoretical. With the
-// anchor read after the row, an applier commit landing between them pairs an
-// OLD decision with a NEW expectation — the broker matches the expectation,
-// accepts the append, and two writers mint the same counter value. A
-// duplicate key: the exact failure a counter mint exists to prevent.
-//
-// # Why reading here is safe at all
-//
-// A projection-backed key mint forbids exactly this inversion, and in its own
-// words: it never reads the projection, because a stale local number would
-// mint a key that already exists. That rule was right while the local number
-// WAS the decision. Here the BROKER checks the expectation, so a stale snapshot is a
-// claim that gets refused rather than a decision that gets committed. The
-// reason holds only while the expectation travels with the decision it was
-// read beside, which is what Snapshot's single transaction enforces.
+// Minting from a local read is safe only because the BROKER checks the
+// expectation, so a stale snapshot is refused rather than committed, and only
+// while the expectation travels with its decision, as Snapshot enforces.
 type Rows interface {
-	// Snapshot opens ONE read transaction, lets the domain decide from
-	// rows inside it, and returns the framework's own inputs read in the
-	// SAME transaction.
+	// Snapshot opens ONE read transaction, lets the domain decide from rows in
+	// it, and returns the framework's inputs read in the SAME transaction,
+	// closed before it returns; nothing that can block (a broker call, a
+	// coordination read, a model) runs in it: the store's short-transaction rule.
 	//
-	// The transaction is CLOSED before Snapshot returns, and nothing that
-	// can block runs inside it — no broker call, no coordination read, no
-	// model. A read transaction held across a round trip is a reader
-	// holding a snapshot open while the world moves, which is what the
-	// store's own short-transaction rule exists to stop.
+	// decide is handed the transaction's CHECKPOINT ([Snap.Checkpoint], the
+	// same read), so a record is stamped with its rows' generation ([Stamp]).
 	//
-	// decide is handed the CHECKPOINT the transaction reads, before it
-	// decides anything: it is the one value the record's generation can be
-	// taken from, and it is [Snap.Checkpoint] — the same read, not a
-	// second one — so the generation a record is stamped with is the
-	// generation of the rows it was decided from. See [Stamp].
-	//
-	// THE WRITE'S OWN OPERATION IS LOOKED UP FIRST, in the same
-	// transaction, and when this node's ledger already records it the
-	// domain is NOT asked to decide: the snapshot answers [Snap.Held]
-	// and nothing else. See [Snap.Held] for why deciding is wrong there
-	// rather than merely wasted.
-	//
-	// held JUDGES THAT ROW, in the same transaction, before the snapshot
-	// answers with it: an error from it is the snapshot's error, and nil
-	// lets [Snap.Held] stand. It is how the publisher refuses a row that
-	// answers for some other write ([Publisher.heldHere]).
+	// The write's own operation is looked up FIRST: when the ledger holds it,
+	// held judges that row in the same transaction, refusing one that answers
+	// for another write ([Publisher.heldHere]; its error is Snapshot's), and
+	// the domain is NOT asked.
 	Snapshot(ctx context.Context, subj Subject, s ScopeSet, opID string,
 		held func(tx *sql.Tx, entry OpEntry) error,
 		decide func(tx *sql.Tx, checkpoint Position) (Decision, error)) (Snap, error)
@@ -73,21 +45,18 @@ type Rows interface {
 	// won" republishes a write that already landed.
 	Op(ctx context.Context, opID string) (OpEntry, bool, error)
 
-	// LostBefore answers the instant before which the domain's ops table
-	// may have lost rows of an operation on a subject of this KIND,
-	// reporting false when it has lost none: every row it no longer holds
-	// was applied before it, so "absent" is conclusive only for an
-	// operation minted at or after it. It travels with the ledger inside a
-	// snapshot, and only a sweep moves it — the table's or a kind's own,
-	// this node's, or its donor's, inherited with the ledger when an
-	// adoption installs that file; an adoption itself loses nothing — see
-	// ledgerloss.go and [Publisher.vouches].
+	// LostBefore answers the instant before which the domain's ops table may
+	// have lost rows of an operation on a subject of this KIND (false when it
+	// has lost none), so "absent" is conclusive only for an operation minted at
+	// or after it. It travels with the ledger in a snapshot, and only a sweep
+	// moves it: the table's or a kind's, this node's or, inherited with the
+	// ledger an adoption installs, its donor's; an adoption itself loses
+	// nothing (ledgerloss.go, [Publisher.vouches]).
 	//
-	// PER KIND, because a domain may sweep one kind's rows sooner than the
-	// rest (internal/maintenance's OpsHorizon.Kinds): the answer is the
-	// later of the table's watermark and that kind's own, so an hourly
-	// sweep of sessions never reads as the whole ledger losing everything
-	// older than an hour. An empty kind asks the table's alone.
+	// PER KIND (internal/maintenance's OpsHorizon.Kinds): the later of the
+	// table's watermark and the kind's, so an hourly session sweep never reads
+	// as the whole ledger losing everything older than an hour. An empty kind
+	// asks the table's alone.
 	LostBefore(ctx context.Context, kind string) (time.Time, bool, error)
 }
 
@@ -95,26 +64,20 @@ type Rows interface {
 // there — the record it wants to publish, and the caller-facing shape of a
 // refusal it can settle locally.
 type Decision struct {
-	// Payload is the encoded record. Empty means the domain decided
-	// there is nothing to publish, which is a legitimate outcome and not
-	// an error: an update that changes no field is a no-op the caller
-	// should be told succeeded.
+	// Payload is the encoded record. Empty means the domain decided there
+	// is nothing to publish, which is not an error: an update that changes
+	// no field is a no-op the caller is told succeeded.
 	//
-	// ITS ENVELOPE IS THE ONLY ONE THERE IS. The publisher decodes it with
-	// [Domain.Envelope] before anything is appended and refuses a record
-	// that does not carry the [Stamp] it was decided under — so there is
-	// no second envelope beside the payload for a domain to fill in
-	// differently. There was one, and nothing but a fallback generation
-	// ever read it: every domain left its writer and generation empty
-	// there and in the payload alike, and the eviction gate compared an
-	// empty writer against every eviction in the fleet for the life of
-	// the deployment.
+	// ITS ENVELOPE IS THE ONLY ONE: the publisher decodes it with
+	// [Domain.Envelope] before appending and refuses a record that does not
+	// carry the [Stamp] it was decided under, so no second envelope beside
+	// the payload can disagree with it.
 	Payload []byte
 
 	// Version is the object's version as the decision read it, which the
-	// caller's own if_match compared against and which travels back in
-	// the result. It is NEVER what the expectation is formed from — see
-	// the package doc's three-values table.
+	// caller's if_match compared against and the result carries back. It is
+	// NEVER what the expectation is formed from (package doc, "Three values,
+	// three questions, and no caller reads two of them").
 	Version int64
 }
 
@@ -141,17 +104,15 @@ type Deferral struct {
 // rests on and the reason this is one struct rather than five calls.
 type Snap struct {
 	// Held is where this node's ledger records the write's own operation
-	// as already applied, and HeldOK whether it does. When it does, no
-	// other field is read and no decision is taken.
+	// as applied, and HeldOK whether it does; when it does, no other field
+	// is read and no decision is taken.
 	//
-	// A RETRY OF AN OPERATION THAT LANDED IS ANSWERED, NOT DECIDED AGAIN.
-	// Its snapshot already holds the first application, so a second
-	// decision is taken on top of it: a comment posted twice, a counter
-	// moved twice, an update conditioned on the version its own first
-	// copy moved refused as stale. The broker does not stop that — the
-	// expectation is current, and its duplicate window is two minutes
-	// while a turn re-run or an operator's retry routinely comes later —
-	// so the ledger has to, before the domain is asked anything.
+	// A RETRY OF AN OPERATION THAT LANDED IS ANSWERED, NOT DECIDED AGAIN:
+	// a decision on top of the first application posts a comment twice,
+	// moves a counter twice, or refuses an update as stale against its own
+	// first copy. The broker does not stop it (the expectation is current,
+	// and its duplicate window is two minutes while a re-run or retry
+	// routinely comes later), so the ledger must.
 	Held   Position
 	HeldOK bool
 
@@ -159,19 +120,17 @@ type Snap struct {
 	// transaction.
 	Decision Decision
 
-	// Anchor is the arbitration anchor for (stream, subject) — THE
-	// EXPECTATION, and the only thing an expectation is ever formed
-	// from. A zero anchor means this node has consumed nothing on this
-	// subject in this generation — or the trim removed its anchor
-	// because the log holds none of its records (ADR-0080) — which is a
-	// probe rather than a licence to publish at zero.
+	// Anchor is the arbitration anchor for (stream, subject): THE
+	// EXPECTATION, and the only thing one is formed from. Zero means this
+	// node has consumed nothing on this subject in this generation, or the
+	// trim removed its anchor because the log holds none of its records
+	// (ADR-0080): a probe, not a licence to publish at zero.
 	Anchor Position
 
-	// Deferral and Deferred are the step-0 scope probe. SCOPE-KEYED and
+	// Deferral and Deferred are the step-0 scope probe, SCOPE-KEYED and
 	// never subject-keyed: a record deferred under one object leaves a
-	// NEIGHBOUR's row stale with nothing on the neighbour's own subject
-	// to say so, and the retry-at-zero branch is unsafe for exactly that
-	// neighbour.
+	// NEIGHBOUR's row stale with nothing on its own subject to say so, and
+	// the retry-at-zero branch is unsafe for exactly that neighbour.
 	Deferral Deferral
 	Deferred bool
 
@@ -185,31 +144,27 @@ type Snap struct {
 	Guard bool
 
 	// Checkpoint is this node's committed checkpoint as the decision's own
-	// transaction read it: the prefix the rows the decision was made from
-	// reflect. A domain that has never committed on this stream is at the
-	// zero position, which is what an applier that has read nothing holds.
+	// transaction read it: the prefix the decision's rows reflect (zero for
+	// a domain that never committed on this stream).
 	//
-	// IT IS WHAT THE EXPECTATION-ZERO FENCE COMPARES, and nothing later can
-	// stand in for it. The floor theorem in this package's doc concludes that
-	// a trimmed record on this subject is already reflected in THIS
-	// decision's rows, which needs C to be the position those rows were at.
-	// The live checkpoint only moves forward, so it is the permissive
-	// direction: a record applied after this snapshot, then trimmed, passes a
-	// check against the live position while the decision about to be
-	// published at zero never saw it — a lost update of exactly that record.
+	// IT IS WHAT THE EXPECTATION-ZERO FENCE COMPARES, and the live
+	// checkpoint cannot stand in: the floor theorem (package doc, "THE FLOOR
+	// THEOREM") needs C to be where THESE rows were, and the live one only
+	// moves forward, so a record applied after this snapshot and then trimmed
+	// would pass while the decision published at zero never saw it: a lost
+	// update.
 	Checkpoint Position
 }
 
 // anchorIn is the subject's arbitration anchor IN generation gen, or zero.
 //
 // ONE RULE FOR EVERY READER OF THE ANCHOR. A row keeps the generation it was
-// written in and a reanchor keeps every row, so an anchor from another
-// generation is a sequence in a number space the log has left — a restored log
-// counts again below it, a rebuilt one from one. Compared with a sequence from
-// this generation it says nothing: an expectation formed from it arbitrates
-// against a number the broker never assigned on this log, and the ambiguous
-// path that compared with it read "nothing landed above the anchor" for a
-// record that had landed, and decided again.
+// written in and a reanchor keeps every row, so another generation's anchor is
+// a sequence in a number space the log has left (a restored log counts again
+// below it, a rebuilt one from one): an expectation formed from it arbitrates
+// against a number the broker never assigned, and the ambiguous path would
+// read "nothing landed above the anchor" for a record that had, and decide
+// again.
 func (s Snap) anchorIn(gen uint32) uint64 {
 	if s.Anchor.Generation != gen {
 		return 0

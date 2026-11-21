@@ -20,29 +20,14 @@ import (
 
 // Running a third-party app's provisioning pass over the API.
 //
-// # Two routes, one machine
+// `provision` runs the pass with a sink and the public base, which lets it
+// mint a credential and register a webhook. `check` runs the SAME pass with
+// neither, which makes it read-only.
 //
-// `provision` runs the pass with a sink and the public base, which is what
-// makes it able to mint a credential and register a webhook. `check` runs the
-// SAME pass with neither, which is what makes it read-only: a person asking
-// "is it working now" after fixing something at the third-party app gets a fresh
-// answer without the engine writing anything.
-//
-// # The result goes where the loop's does
-//
-// Both write their outcome to the same fleet status the reconcile loop
-// writes, through the same fold, so Company › Integrations updates with no
-// extra plumbing and a pass run by hand can never disagree with a tick that
-// runs a minute later.
-//
-// # The refusals are the engine's, not this file's
-//
-// These routes had six route-local codes, which is how a vocabulary drifts: a
-// code only one file can see is a code the next route spells its own way, and
-// nothing holds the sentence a person is shown for it. They are entries on the
-// one refusal table now — [httpjson.CodePassInFlight] and its five siblings —
-// each with its own copy, and each answered in the envelope every other
-// surface answers with.
+// Both write their outcome to the fleet status through the reconcile loop's
+// fold, so a pass run by hand never disagrees with the next tick. Refusals
+// are entries on the one refusal table ([httpjson.CodePassInFlight] and its
+// five siblings), never route-local codes.
 
 // Status is where a pass records what it found.
 //
@@ -263,28 +248,17 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 // gets: the address and the key it is read from, and nothing that writes.
 func (s *Service) readOnlyInput() setup.PassInput {
 	return setup.PassInput{
-		// THE ADDRESS EVERY RUN GETS, INCLUDING A READ-ONLY ONE.
+		// THE ADDRESS EVERY RUN GETS, INCLUDING A READ-ONLY ONE. A vendor
+		// reads an empty base as "no public base URL" and reports
+		// ingress_blocked, and `check` persists its findings through the
+		// loop's fold: an address withheld from a read-only run flipped a
+		// healthy card to Action required.
 		//
-		// This used to be set only on the writing branch, on the reasoning
-		// below that supplying the base IS the permission to register. That
-		// reasoning is right about the PERMISSION and wrong about the FACT:
-		// a vendor reads an empty base as "this deployment has no public
-		// base URL" and reports ingress_blocked against the
-		// address's Tier A key, owed by an admin, and `check`
-		// persists its findings through the same fold the loop uses. So
-		// pressing Check on a perfectly healthy company wrote "every
-		// monitor that fires reaches nobody" into the live status row and
-		// flipped the card to Action required, telling an operator to set a
-		// value that was already set and answering 200.
-		//
-		// The permission is the SINK, which is what it has always actually
-		// been: every vendor gates its registration on having one
-		// (datadog's hook path reports rather than registers, gitlab and
-		// jira refuse outright, confluence and github the same), so a
-		// read-only run holding the address still writes nothing at the
-		// third-party app. What it gains is the ability to say what is
-		// TRUE: the webhook points somewhere else, or there is no address
-		// at all and, for the second, which Tier A key to set.
+		// The permission to register is the SINK, not the address: every
+		// vendor gates registration on having one, so a read-only run holding
+		// the address still writes nothing at the third-party app, and can
+		// say what is TRUE (the webhook points elsewhere, or which Tier A key
+		// to set).
 		WebhookBase:    s.webhookBase,
 		WebhookBaseKey: s.webhookBaseKey,
 	}
@@ -495,17 +469,13 @@ func (s *Service) runByID(w http.ResponseWriter, r *http.Request) {
 // currentState is the row a surface already has, or the error that stopped
 // this node reading it.
 //
-// THREE-VALUED, and every caller here reads the third value as a reason to
-// write NOTHING. The rows carry attempts, the settled cadence, the address a
-// surface was registered against and the last fault, and they are keyed per
-// kind on the FLEET's store — so a read that failed is not evidence the
-// surface has no row. Three copies of this each folded the failure into the
-// zero State and then saved it, which is not a lost update but a blind
-// overwrite: a two-second coordination blip erased everything a surface had
-// ever recorded and reported it as freshly reconciled.
+// THREE-VALUED, and every caller reads the error as a reason to write
+// NOTHING. The row carries attempts, cadence, the registered address and the
+// last fault on the FLEET's store, so a failed read is not evidence of no row:
+// folding it into the zero State and saving is a blind overwrite that a short
+// coordination blip turns into erased history reported as freshly reconciled.
 //
-// An absent row IS the zero State, and that is a real answer: a surface
-// nobody has reconciled has no row, which is why the miss is not an error.
+// An absent row IS the zero State, a real answer, not an error.
 func (s *Service) currentState(
 	ctx context.Context, kind integration.Kind,
 ) (integration.State, error) {

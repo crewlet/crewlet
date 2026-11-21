@@ -27,16 +27,16 @@ answers:
         - {role: Morgan, handle: morgan, total_tokens: 3731582, input_tokens: 3700000, output_tokens: 31582, calls: 160}
         - {role: QA Engineer, handle: qa, total_tokens: 181620, input_tokens: 170000, output_tokens: 11620, calls: 17}
 script:
-  - call: get_spend
-    args: {days: 7}
-  - call: get_spend_series
-    args: {days: 14, bucket: week}
+  - call: read_api
+    args: {route: GET /tokens/breakdown, query: {days: "7"}}
+  - call: read_api
+    args: {route: GET /tokens/series, query: {days: "14", bucket: week}}
   - say: >-
       Morgan spent the most this week, 3.7M tokens, then the QA Engineer with 182K.
       Last week nothing was spent, so all of it is new this week.
 expect:
-  calls: [get_spend_series]
+  calls: [read_api]
   proposals: 0
   state: completed
   says: [Morgan, last week]
-  shows: ["Spend over time, last 14 days, by week"]
+  shows: [Tokens series, 2026-10-12, 2026-10-19, "3731582"]

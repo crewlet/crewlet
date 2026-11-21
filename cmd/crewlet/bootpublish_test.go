@@ -535,15 +535,12 @@ func TestALostPointerIsRestoredFromTheFleetsLastRevisionNotTheBootRow(t *testing
 
 // A RECREATED POINTER OLDER THAN THE FLEET'S REVISION THIS NODE SAW IS REPLACED.
 //
-// The coordination store was rebuilt, and a node that was down while the fleet
-// moved on restored the old revision it knew first. This node saw the newer
-// one, and publishes it over the old — expecting that very restore, so a write
-// landing in between is not replaced — as a restore itself. A pointer naming a
-// revision this node never held is not one it can call older: it is somebody's
-// write, and the fleet's. And a pointer somebody CHOSE is the company however
-// old its instant reads (#4): instants come from writers' clocks, and an
-// operator who reverted to the old revision on a node whose clock runs behind
-// meant it.
+// A node that was down while the fleet moved on restored the old revision it
+// knew into a rebuilt coordination store. This node saw the newer one and
+// publishes it over the old as a restore, expecting that very restore. A
+// pointer naming a revision this node never held is somebody's write. A
+// pointer somebody CHOSE is the company however old its instant reads (#4):
+// clocks differ, and an operator who reverted on a slow-clock node meant it.
 //
 // Mutation: drop rule 2b and the old revision stays; drop its held guard and a
 // write this node never saw is replaced; drop its restored guard and the
@@ -730,26 +727,17 @@ func TestAnOfflineChangeOnAnUnconfirmedPublishIsPublishedOverIt(t *testing.T) {
 }
 
 // THE BOOT PUBLISHES WHAT THE ENGINE BOOTED ON, and an offer the store no
-// longer holds is a DEFECT, not a race — whether the boot meets it planning
-// the offer's publish (1a, 1d) or confirming one that landed (1b).
+// longer holds is a DEFECT, not a race, whether the boot plans its publish
+// (1a, 1d) or confirms one that landed (1b).
 //
-// `crewlet run` used to read the store, close it, and let the engine open it
-// again seconds later; an offline command in that gap replaced the offer, the
-// boot published what it had read, and the first tick then cleared the
-// operator's change with a false "the fleet moved on" warning. The boot now
-// holds this node's store from the read it decides on until the engine has
-// opened the same file ([bootEngine], whose own case stands a second process
-// in that gap), so nothing can replace the offer there, and the one online
-// writer of the boot row does not exist until the publish returns. An offer
-// gone when the publish plans or confirms it is therefore a store that
-// contradicts the company the engine built — a defect — and the boot is
-// refused naming the revision, with nothing published, rather than publishing
-// past it or walking on.
+// The boot holds this node's store from the read it decides on until the
+// engine has opened the file ([bootEngine]), so nothing can replace the offer
+// there. A gone offer is a store contradicting the company the engine built:
+// the boot is refused naming the revision, publishing nothing.
 //
-// Mutations, each run red: make [noLongerOffered] return nil on
-// [store.ErrNotOffered], as the old "leave it for the next start" did, and the
+// Mutations: make [noLongerOffered] return nil on [store.ErrNotOffered] and the
 // plan case reports success having published nothing; make [confirmOffer]
-// return nil on it, and the confirm case does.
+// return nil on it and the confirm case does.
 func TestTheBootPublishesWhatTheEngineBootedOn(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -832,19 +820,14 @@ func TestTheBootPublishesWhatTheEngineBootedOn(t *testing.T) {
 // fleet that moved on.
 //
 // An offline import makes an offer over the company the node runs. The boot
-// publishes it (1d: the fleet has no pointer, and last ran the offer's base),
-// and the first reconcile — `startReconciler`'s own tick, which `crewlet run`
-// always runs — applies that epoch, so the node serves the offer and boots on
-// it confirmed, with no `offline_revision_not_published`. This is the path an
-// offer takes when nothing interferes. What once sent the tick down the other
-// one — an offline command run while the node started, whose offer the tick
-// then cleared under that warning — is excluded by the boot's claim on the
-// store, which [TestTheBootHoldsItsStoreUntilTheEngineHasOpenedIt] stands a
-// second process against.
-//
-// Mutation, run red: suppress rule 1d in [decideBootPublish], so the offer is
-// withheld as one the fleet moved on from, and the boot puts the fleet back on
-// the base instead of on the offer.
+// publishes it (1d: no pointer, and the fleet last ran the offer's base) and
+// the first reconcile applies that epoch, so the node boots on the offer
+// confirmed, with no `offline_revision_not_published`. An offline command run
+// while the node started, which once sent the tick down the other path, is
+// excluded by the boot's claim on the store
+// ([TestTheBootHoldsItsStoreUntilTheEngineHasOpenedIt]).
+// Mutation: suppress rule 1d in [decideBootPublish], and the boot puts the
+// fleet back on the base instead of on the offer.
 func TestTheFirstTickServesTheBootsOffer(t *testing.T) {
 	t.Parallel()
 	dir := brokertest.TempDir(t)
@@ -965,18 +948,16 @@ func TestANodeThatRefusedTheFleetsRevisionBootsOnWhatItServed(t *testing.T) {
 
 // THE BOOT CARRIES THE INSTANT IT APPLIED, NOT THE FLEET'S LATEST ACTIVATION.
 //
-// A node runs P, applied at T1, so its boot row's served instant is T1. The
-// fleet re-activates P at T2 to pick up a rotated credential, and this node's
-// reconciler records that sighting — raising the row's `activated_at` to T2 —
-// but refuses the apply, lacking the credential. Its next boot still stamps the
-// chart with T1, the activation it applied, not T2, which it never ran. An
-// offline `config activate` is the other way the two columns part: it keeps
-// `activated_at` and nulls `served_at`, so the offer it makes boots with no
-// instant, because nothing has applied the choice.
+// A node applied P at T1. The fleet re-activates P at T2 to rotate a
+// credential; this node's reconciler records the sighting (raising
+// `activated_at` to T2) but refuses the apply, lacking the credential. Its
+// next boot must still stamp T1, which it ran. An offline `config activate`
+// parts the columns the other way: it nulls `served_at`, so its offer boots
+// with no instant, since nothing has applied the choice.
 //
 // Mutation: boot on `activated_at` (seed.go's `booted.revision.ServedAt` back
-// to `.ActivatedAt`) and the first case stamps T2, an activation this node
-// never applied; the second stamps the offer with the activation it replaced.
+// to `.ActivatedAt`) and the first case stamps T2, the second stamps the offer
+// with the activation it replaced.
 func TestTheBootCarriesTheInstantItAppliedNotTheFleetsLatest(t *testing.T) {
 	t.Parallel()
 

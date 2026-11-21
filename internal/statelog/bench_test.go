@@ -23,48 +23,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// BenchmarkArbitratedWrite is one arbitrated write end to end, on a node whose
-// every seam a healthy write takes is real ([wiredNode]): the fence's read of
-// this node's own eviction row, the session wait for the writer's own last
-// write, ONE snapshot of the real rows, the decision, the append the broker
-// arbitrates, this node's runner applying it from its own consumer, and
-// WaitApplied — and the two halves of a linearizable read beside it.
+// BenchmarkArbitratedWrite is one arbitrated write end to end on a node whose
+// every seam is real ([wiredNode]): the fence's eviction read, the session
+// wait, ONE snapshot, the decision, the broker's arbitration, this node's
+// applier and WaitApplied; beside it, the two halves of a linearizable read.
+// On the probe domain, one row a record, so these are the FRAMEWORK'S FLOOR.
 //
-// ON THE PROBE DOMAIN, one row a record, so these are the FRAMEWORK'S FLOOR:
-// a real domain's decision and apply add their own cost on top.
-//
-// THE ARMS, by the names a comparison keys on:
-//
-//   - members=1 is a solo node; members=3 a fleet of three data nodes, every
-//     one running its own applier, driven from the stream's leader
-//     (`from=leader`, as it was when the arm began — raft may move it) and
-//     from a follower (`from=follower`). THE THREE MEMBERS SHARE ONE MACHINE:
-//     three brokers, three appliers and three estates on its CPUs, with no
-//     network hop between them, so the cluster's figures are pessimistic per
-//     node and say nothing about a datacenter's round trip.
-//   - sync=always is production's default `stream.sync`, an fsync per write
-//     on every member; sync=interval declines it, at a thirty-second window —
-//     the write path never waits on the flush, so the window's length does
-//     not enter the figure.
-//   - writers=1 is ONE SUBJECT'S SERIAL CHAIN, each write arbitrated against
-//     the anchor the one before it advanced — what one object, or one
-//     repository's committer, can do before batching; writers=16 is sixteen
-//     subjects written at once, a node's aggregate. Each writer has a subject
-//     of its own: writers CONTENDING on one subject are deliberately not
-//     measured, since the design serialises an object's writes through one
-//     writer precisely so they never do. Every write carries its writer's
-//     own last write as its session, as a seat's turn does.
-//   - read=barrier is the barrier a linearizable read appends, alone;
-//     read=linearizable is that and this node's applier reaching it, which is
-//     what such a read waits through before it reads a row. readers=1 is one
-//     reader at a time; readers=16 is sixteen at once on one node, which the
-//     read index COALESCES onto shared appends ([statelog.ReadIndex.Read]) —
-//     a reader that arrives while one is in flight waits it out and joins the
-//     next — and those arms also report the barriers actually appended per
-//     read (`appends/read`), which is what the coalescing buys.
-//
-// Each arm reports its operations a second and the p50 and p99 of one
-// operation's latency.
+// Arms: members=1|3 as [fleetOf] says; sync=always is production's default
+// fsync per write, sync=interval a thirty-second window no write waits on;
+// writers and readers as [benchDriver] says. Each arm reports its operations
+// a second and the p50 and p99 of one operation's latency.
 func BenchmarkArbitratedWrite(b *testing.B) {
 	quiet(b)
 	for _, members := range []int{1, 3} {
@@ -89,7 +57,10 @@ type driver struct {
 }
 
 // fleetOf stands up members data nodes on their own broker (one) or cluster
-// (more), each applying the log, and answers the nodes the arms drive.
+// (more), each applying the log, and answers the nodes the arms drive: solo,
+// or the stream's leader as the arm began and a follower. Three members share
+// ONE machine with no network hop, so a cluster's figures are pessimistic per
+// node and say nothing of a datacenter's round trip.
 func fleetOf(b *testing.B, members int, cfg js.Config) []driver {
 	b.Helper()
 	if members == 1 {
@@ -105,6 +76,13 @@ func fleetOf(b *testing.B, members int, cfg js.Config) []driver {
 	return []driver{{"leader", fleet[leader]}, {"follower", fleet[(leader+1)%members]}}
 }
 
+// benchDriver runs d's arms. writers=1 is ONE SUBJECT'S SERIAL CHAIN, what
+// one object can do before batching; writers=16 sixteen subjects at once. No
+// two writers share a subject, since the design serialises an object's writes
+// through one writer, and each write carries its writer's last as its
+// session. read=barrier is the append alone, read=linearizable it and the
+// applier reaching it; readers=16 coalesce ([statelog.ReadIndex.Read]), so
+// the read arms report `appends/read`.
 func benchDriver(b *testing.B, d driver) {
 	for _, writers := range []int{1, 16} {
 		b.Run(fmt.Sprintf("from=%s/writers=%d", d.name, writers), func(b *testing.B) {
@@ -133,10 +111,8 @@ func benchDriver(b *testing.B, d driver) {
 					_, err := read.op(ctx)
 					return err
 				})
-				// NOTHING ELSE APPENDS while a read arm runs — no arm
-				// writes, and no node runs a heartbeat — so every
-				// record the log gained is a barrier one of these reads
-				// appended or joined.
+				// NOTHING ELSE APPENDS during a read arm (no writes, no
+				// heartbeat), so every record gained is a read's barrier.
 				b.ReportMetric(float64(logEnd(b, d.node)-before)/float64(b.N), "appends/read")
 			})
 		}
@@ -153,19 +129,15 @@ func logEnd(b *testing.B, node *wiredNode) uint64 {
 	return last
 }
 
-// BenchmarkApplierDrain is the apply lane for small records: a burst of probe
-// records already on the log, drained by an applier started after they
-// landed — every record's framework bookkeeping (its anchor, its ledger row,
-// the checkpoint) plus one row of its own, the cost every domain's records
-// share on a node's one write lane.
+// BenchmarkApplierDrain is the apply lane for small records: a burst already
+// on the log, drained by an applier started after it landed, each record's
+// framework bookkeeping (anchor, ledger row, checkpoint) plus one row.
 //
-// A BURST OF [statelog.ApplyTxRowBudget] records, one transaction's row budget
-// at a row a record, so the batches end on the time budget as a burst's do.
-// Large records' rows are internal/store's BenchmarkLogApplyDrain.
-//
-// Each burst gets a broker and a node of its own, built and torn down outside
-// the timer, which runs from the applier's start to its reaching the last
-// record.
+// The burst is [statelog.ApplyTxRowBudget] records, one transaction's row
+// budget, so batches end on the time budget as a burst's do; large records
+// are internal/store's BenchmarkLogApplyDrain. Each burst's own broker and
+// node are built and torn down outside the timer, which runs from the
+// applier's start to its reaching the last record.
 func BenchmarkApplierDrain(b *testing.B) {
 	quiet(b)
 	const records = statelog.ApplyTxRowBudget
@@ -189,9 +161,8 @@ func BenchmarkApplierDrain(b *testing.B) {
 			if err != nil {
 				b.Fatalf("drain %d records: %v", records, err)
 			}
-			// TORN DOWN NOW rather than when the benchmark ends, so no
-			// burst is measured beside the idle brokers and appliers of the
-			// ones before it.
+			// TORN DOWN NOW, so no burst is measured beside the idle
+			// brokers and appliers of the ones before it.
 			if err := node.stop(); err != nil {
 				b.Fatalf("the applier stopped with %v", err)
 			}
@@ -204,10 +175,9 @@ func BenchmarkApplierDrain(b *testing.B) {
 	})
 }
 
-// appendBurst lands n probe records on q's probe log, each on a subject of its
-// own, as peers' writes would have — straight onto the log, through no
-// publisher, but SIGNED as a peer's publisher signs them, since a wired node's
-// applier opens every frame — and answers the position of the last.
+// appendBurst lands n probe records on q's probe log, each on its own subject,
+// straight onto the log but SIGNED as a peer's publisher signs them (a wired
+// node's applier opens every frame), and answers the last one's position.
 func appendBurst(b *testing.B, q *js.Queue, n int) statelog.Position {
 	b.Helper()
 	spec := ensureWiredLog(b, q)
@@ -234,13 +204,9 @@ func appendBurst(b *testing.B, q *js.Queue, n int) statelog.Position {
 	return statelog.Position{Stream: spec.Name, Generation: 1, Seq: last}
 }
 
-// quiet raises the process's log level to Warn while a benchmark runs.
-//
-// An INFO line the applier writes from its own goroutine was measured landing
-// in the middle of a benchmark's result line, which a comparison tool cannot
-// read. Warn and above still print, because one of those during a
-// measurement is a finding. Put back to the level the logging package starts
-// a process at.
+// quiet raises the process's log level to Warn while a benchmark runs: an
+// INFO line from the applier's goroutine can land inside a result line, which
+// a comparison tool cannot read. Warn and above still print, as findings.
 func quiet(b *testing.B) {
 	logging.SetVerbosity(slog.LevelWarn, logging.FormatConsole)
 	b.Cleanup(func() { logging.SetVerbosity(slog.LevelInfo, logging.FormatConsole) })
@@ -249,10 +215,9 @@ func quiet(b *testing.B) {
 // measure runs b.N operations across workers goroutines and reports them a
 // second, under unit, with the p50 and p99 of one operation's latency.
 //
-// b.N COUNTED BY HAND rather than through b.Loop, for objstoretest's reason:
-// fed through b.Loop, a pool's last operations finish after the timer stops.
-// So the function is run again for every step of the ramp to its final b.N,
-// which is why every node an arm drives is built in its parent.
+// b.N is COUNTED BY HAND, not by b.Loop, for objstoretest's reason: through
+// b.Loop a pool's last operations finish after the timer stops. So this runs
+// at every step of the ramp, and an arm's nodes are built in its parent.
 func measure(b *testing.B, workers int, unit string, op func(ctx context.Context, worker int) error) {
 	var (
 		next atomic.Int64
@@ -301,12 +266,8 @@ func quantile(sorted []time.Duration, q float64) float64 {
 }
 
 // streamLeader is the index of the member leading stream, waiting for one to
-// be elected.
-//
-// THE CLUSTER'S OWN VIEW, which a benchmark may read and the read path may
-// not (TestStreamInfoIsNotOnTheReadPath holds that of the non-test code): a
-// leader's report is exactly what an isolated former leader gets wrong, and
-// here it only labels which member an arm drives.
+// be elected. A benchmark may read the cluster's own view, which the read path
+// may not (TestStreamInfoIsNotOnTheReadPath): here it only labels an arm.
 func streamLeader(b *testing.B, c *jetstreamtest.Cluster, stream string) int {
 	b.Helper()
 	nc, err := c.Servers[0].Conn()

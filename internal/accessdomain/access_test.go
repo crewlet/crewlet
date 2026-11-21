@@ -409,11 +409,10 @@ func TestACommandsFailureIsAClosedWord(t *testing.T) {
 	}
 }
 
-// THE ENGINE'S OWN INVENTORY IS RECORDED UNDER NO SEAT. An inventory
-// certificate and its command are held by the engine, in the place a seat's
-// handle takes; no seat holds an inventory certificate, the engine holds no
-// other kind, and its command is a read that serves no turn. Both are read
-// back by the audit under the engine's holder.
+// THE ENGINE'S OWN INVENTORY IS RECORDED UNDER NO SEAT. The engine holds an
+// inventory certificate and its command where a seat's handle goes; no seat
+// holds an inventory certificate, the engine holds no other kind, and its
+// command is a read serving no turn. The audit reads both back under the engine's holder.
 //
 // Mutation: let a seat hold the inventory's purpose, or the engine an operate
 // command, and a case is red.
@@ -473,11 +472,10 @@ func TestTheEnginesInventoryIsRecordedUnderNoSeat(t *testing.T) {
 	}
 }
 
-// A REKEY RESEALS EVERY COMMAND UNDER THE ACTIVE KEY: a node whose keyring made
-// a new key active moves each command still sealed under the old one by a
-// record on the command's own subject, which every node applies, so the rows
-// stay identical across nodes and open under the new key; a second pass finds
-// nothing to move.
+// A REKEY RESEALS EVERY COMMAND UNDER THE ACTIVE KEY: a node whose keyring
+// made a new key active reseals each command still under the old one by a
+// record on the command's own subject, so every node's rows stay identical and
+// open under the new key; a second pass finds nothing to move.
 //
 // Mutation: rewrite the row in place instead of publishing a record, and the
 // node that did not reseal still holds the old key.
@@ -541,15 +539,12 @@ func rotatedCipher(t *testing.T) secrets.Cipher {
 
 // A TOLD RECORD'S READ POSITION THAT NAMES NOTHING IS JUDGED ON NO STREAM. A
 // position at generation and sequence zero names nothing whatever stream it
-// says, so a told record carrying one is taken as one carrying none — as a node
-// without data's told record is, routed to a data node by the estate router,
-// whose wire leaves a position its type calls zero off. Judged by its stream,
-// the same record was refused where it ran in process and taken where it was
-// routed. A position that names something on another log is refused either way.
+// says, so it is taken as none: the estate router's wire drops a zero position,
+// and a record must be judged alike in process and routed. A position that
+// names something on another log is refused.
 //
 // Mutation: judge the read position's stream without asking whether it names
-// anything, as the check did, and the record naming nothing on the tracker's
-// log is refused.
+// anything, and the record naming nothing on the tracker's log is refused.
 func TestAToldRecordsReadPositionThatNamesNothingIsJudgedOnNoStream(t *testing.T) {
 	t.Parallel()
 	log := openAccessLog(t)

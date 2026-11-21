@@ -258,17 +258,12 @@ func (c *Client) AuthTest(ctx context.Context) (Identity, error) {
 	}
 	// THE APP, WHICH auth.test DOES NOT SAY.
 	//
-	// It answers with the bot's user id, its team and its bot id, and no
-	// app id at all: [Identity.AppID] was decoded from a response field
-	// Slack does not send, so it was empty for every seat this engine has
-	// ever wired, and nothing noticed because the one thing reading it
-	// falls back to the delivery's own envelope. bots.info is where the id
-	// lives, keyed on the bot id this call does return.
+	// It answers with the user id, team and bot id but no app id; bots.info
+	// holds it, keyed on the bot id returned here.
 	//
-	// BEST EFFORT, and never fatal: knowing the app is what lets a screen
-	// say WHICH of an operator's apps this agent is and link to it. A seat
-	// whose token works is a seat that works, and failing it over the
-	// second request would trade a running agent for a label.
+	// BEST EFFORT, never fatal: the app only lets a screen say WHICH of an
+	// operator's apps this agent is. A seat whose token works works, and
+	// failing it over a second request would trade a running agent for a label.
 	if id.BotID != "" {
 		app, err := c.AppOf(ctx, id.BotID)
 		if err != nil {
@@ -327,56 +322,39 @@ func (c *Client) SetStatus(ctx context.Context, channel, thread, status string) 
 // repliesPageLimit is how many messages one conversations.replies call asks
 // for.
 //
-// TWO CEILINGS, AND THE LOWER ONE DECIDES IT. Slack recommends at most 200
-// for the conversations family, and [callQuery] reads at most 1 MiB of a
-// response before handing it to the decoder — so a page bigger than that
-// arrives TRUNCATED and the read fails as malformed JSON rather than as a
-// short answer. A message carrying blocks, attachments or an unfurl runs 3–8
-// KB of JSON, so 200 of them is 0.6–1.6 MiB: over the read limit on exactly
-// the busy thread this call exists for, on every turn in that thread, and
-// reported at DEBUG where nobody is looking. A hundred of the fattest is
-// ~800 KB, which fits with room to spare, and a client test holds it there
-// with a full page of that shape rather than leaving the arithmetic in this
-// comment.
-//
-// It still costs the ordinary turn exactly ONE request: a thread people
-// actually hold a conversation in is tens of messages, not hundreds.
+// TWO CEILINGS, AND THE LOWER DECIDES. Slack recommends at most 200, and
+// [callQuery] reads at most 1 MiB of a response, so a bigger page arrives
+// TRUNCATED and fails as malformed JSON, not as a short answer. A message with
+// blocks, attachments or an unfurl runs 3-8 KB, so 200 is 0.6-1.6 MiB: over the
+// limit on exactly the busy thread this exists for, reported at DEBUG. A
+// hundred of the fattest is ~800 KB, which a client test holds with a full page
+// of that shape. An ordinary thread (tens of messages) still costs ONE request.
 const repliesPageLimit = 100
 
 // repliesMaxPages bounds the walk.
 //
-// conversations.replies pages from the OLDEST end and its cursors are opaque,
-// so there is no way to ask for the newest N — the only honest way to reach
-// the end of a long thread is to walk it. Ten pages of [repliesPageLimit] is
-// ~1000 messages, which no real thread reaches, and it bounds the
-// pathological one at ten requests inside the caller's own deadline: the
-// method is Tier 3 (~50 requests a minute) and each agent has its own app, so
-// the budget is nowhere near. Ten rather than the five a 200-message page
-// bought, so that halving the page against the read limit does not also halve
-// how far the walk reaches.
+// conversations.replies pages from the OLDEST end with opaque cursors, so the
+// only way to reach the end of a long thread is to walk it. Ten pages of
+// [repliesPageLimit] is ~1000 messages, which no real thread reaches, and bounds
+// a pathological one at ten requests inside the caller's deadline (Tier 3, ~50 a
+// minute, one app per agent). Ten rather than five so the smaller page does not
+// halve the walk's reach.
 //
-// Beyond the cap the walk stops and SAYS SO — see [Thread.StoppedShort]. What
-// it did not reach is the NEWEST end, the message that woke the turn
-// included, so a caller handed those messages with nothing said would render
-// the beginning of a conversation as the whole of it.
+// Beyond the cap the walk stops and SAYS SO ([Thread.StoppedShort]): what it
+// missed is the NEWEST end, the message that woke the turn included, so saying
+// nothing would render the beginning of a conversation as the whole.
 const repliesMaxPages = 10
 
 // repliesKeep is how many messages the walk holds on to.
 //
-// ONE PAGE, and the reason is which end it keeps rather than how much memory
-// it costs. Pages arrive OLDEST FIRST, so a walk that accumulates and hands
-// everything on has kept the beginning of a long thread and — once
-// [repliesMaxPages] stops it — lost the end, which is the message that woke
-// the turn. So the window SLIDES: the parent is kept because it is what the
-// thread is about, and the oldest reply is the first thing dropped, which is
-// the same root-plus-newest rule the prompt block above renders by
-// (internal/agent/prefetch keeps the root and the newest messages whole, and
-// condenses the ones between them).
-//
-// A page, because how many a renderer uses is the renderer's business: the
-// block is bounded by bytes and condenses its middle, so every reply the walk
-// keeps is one it can use, either verbatim or in that condensed account. What
-// the window drops is COUNTED, not lost: see [Thread.Older].
+// ONE PAGE, and the reason is which end it keeps, not memory. Pages arrive
+// OLDEST FIRST, so accumulating everything keeps the beginning of a long thread
+// and, once [repliesMaxPages] stops it, loses the message that woke the turn.
+// So the window SLIDES: the parent stays (it is what the thread is about) and
+// the oldest reply drops first, the root-plus-newest rule internal/agent/prefetch
+// renders by. A page because the renderer is bounded by bytes and condenses its
+// middle, so every kept reply is usable. What the window drops is COUNTED:
+// [Thread.Older].
 const repliesKeep = repliesPageLimit
 
 // Reply is one message in a thread, as conversations.replies returns it.
@@ -439,20 +417,16 @@ type Thread struct {
 
 // Replies reads a thread, oldest first, starting at its parent.
 //
-// THROUGH callQuery, NEVER call: Slack reads a JSON body for some methods and
-// silently ignores it for the rest, answering `{"ok":true}` with nothing —
-// so a thread read posted as JSON returns an empty thread from a call that
-// reported working, which the block above it renders as "this thread has
-// nothing in it". See [callQuery] for where that was measured.
+// THROUGH callQuery, NEVER call: Slack silently ignores a JSON body on some
+// methods, answering `{"ok":true}` with nothing, so a thread read posted as
+// JSON returns an empty thread from a call that reported working. See
+// [callQuery].
 //
-// The parameter is `ts`, not `thread_ts`: the argument is the PARENT
-// message's timestamp, and Slack answers `thread_not_found` for a name it
-// does not take.
+// The parameter is `ts`, not `thread_ts`: it is the PARENT message's
+// timestamp, and Slack answers `thread_not_found` for a name it does not take.
 //
 // Slack repeats the parent on every page, so the walk dedupes on the message
-// timestamp — otherwise a paged thread renders its own first message once per
-// page, and the sliding window would drop real replies to make room for
-// copies of it.
+// timestamp, or the sliding window would drop real replies for copies of it.
 func (c *Client) Replies(ctx context.Context, channel, thread string) (Thread, error) {
 	if channel == "" || thread == "" {
 		return Thread{}, fmt.Errorf("slack: conversations.replies needs a channel and a thread ts")

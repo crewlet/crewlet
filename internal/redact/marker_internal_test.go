@@ -218,26 +218,17 @@ func TestAMarkerIsRedactedAlikeAtEveryByteAStepCanEndBesideIt(t *testing.T) {
 }
 
 // A CLAIMS STAGE DECIDES UP TO THE MARKER IT HOLDS ([ruleStage.markerToStepAt]):
-// a stream writes [Secrets] of dense texts of every token, AWS secrets, keys'
-// armours and markers the text holds, cut at random, and of a run beside a
-// password's key a key's block reads, and no token's or AWS secret's claim is
-// made, nor a run's end set, as far past where it lies as a stage's place in
-// the table lets it: a step and a piece of the text as written past it at the
-// first stage, and that again, and a marker, for every stage before, so a
-// reader behind every rule, less than the claims' lag ([streamBound]). The
-// password's reader is not held to it, since its decisions read past a marker.
-// Nor is a Google token's end before the dots it may end on, which is set only
-// once they stop ([ruleStage.carryToken]): it is held to the bound from where
-// they stop, and a text here runs them past the bound, so that end is read
-// and its exception is not assumed unseen.
+// a stream writes [Secrets] of dense random-cut texts of every token, AWS
+// secret, key armour and marker, and no token's or AWS secret's claim is made,
+// nor a run's end set, further past where it lies than a stage's place in the
+// table lets it, so a reader behind every rule stays under the claims' lag
+// ([streamBound]). Exempt: the password's reader, whose decisions read past a
+// marker, and a Google token's end before the dots it may end on, set only once
+// they stop ([ruleStage.carryToken]); a text here runs them past the bound.
 //
-// Mutation: let the password's reader step at a marker too, and a password's
-// key beside a token, a suffix after the token's marker that the reader then
-// does not read, is redacted otherwise here; step at an open marker only where
-// what the stage holds stands for more than a step, and the end of a run
-// before another rule's run is set as far past it as that run is long; or
-// count a Google token's end from where it lies rather than where its dots
-// stop, and the token whose dots run past the bound is flagged.
+// Mutation: let the password's reader step at a marker; step at an open marker
+// only where the stage holds more than a step; or count a Google token's end
+// from where it lies, not where its dots stop.
 func TestAClaimsStageDecidesUpToTheMarkerItHolds(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1170, 32))

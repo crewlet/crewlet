@@ -10,6 +10,7 @@
  */
 
 import { version as KIT_VERSION } from "@crewlethq/artifact-kit/package.json";
+import { ARTIFACT_PAGE_EXTENSIONS } from "~/contract/artifactsworkspace.ts";
 import { pathSegment } from "~/lib/segment.ts";
 import type { ArtifactCapability } from "~/protocol/index.ts";
 
@@ -70,8 +71,7 @@ export function fileKind(path: string): "text" | "bytes" | null {
 
 /** Whether a path is a page the frame can open. */
 export function isPage(path: string): boolean {
-  const ext = extension(path);
-  return ext === "html" || ext === "htm";
+  return (ARTIFACT_PAGE_EXTENSIONS as readonly string[]).includes(extension(path));
 }
 
 /** The kit release this dashboard ships, which the engine serves on the artifact origin. */

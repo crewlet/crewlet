@@ -2,24 +2,18 @@ package config
 
 import "github.com/crewlet/crewlet/internal/org"
 
-// Derived is the hierarchy the engine derives from a company document, as
-// data: every conclusion a reader of the document would otherwise have to
-// reach again by re-implementing the org model.
+// Derived is the hierarchy the engine derives from a company document, as data:
+// every conclusion a reader would otherwise reach again by re-implementing the
+// org model.
 //
 // # Why the engine says it rather than a client working it out
 //
-// Because each rule here is one a second implementation gets wrong: a handle
-// is a slug with Go's own case mapping, a root seat carrying `unit:` moves into
-// that unit, a lead and a channel cascade to child units that set none, a
-// `manages` entry naming a unit stands for its seats, a lead manages the
-// members nobody else in the unit manages, and the primary manager is the
-// first seat listing one in the engine's own seat order. A dashboard that
-// derived these in TypeScript had already diverged from the engine on three of
-// them and on the handle of a name with a dotted capital I. So the engine
-// derives them once, from the same normalized organization it runs, and a
-// client draws what it is told.
-//
-// Every list is null when it is empty, as Go marshals a nil slice.
+// Each rule is one a second implementation gets wrong: a handle is a slug with
+// Go's own case mapping, a root seat carrying `unit:` moves into that unit, a
+// lead and a channel cascade to child units that set none, a `manages` entry
+// naming a unit stands for its seats, a lead manages the members nobody else
+// manages, and the primary manager is the first seat listing one. Every list is
+// null when empty, as Go marshals a nil slice.
 type Derived struct {
 	// Seats is every seat, in the engine's own order (root seats first, then
 	// each unit's subtree), which is the order the primary manager is chosen
@@ -47,16 +41,12 @@ type DerivedSeat struct {
 	// PlacedByRef is a seat written at the root that its `unit:` reference
 	// moved into a unit.
 	//
-	// A FACT ABOUT A DOCUMENT, and therefore ABSENT rather than false for
-	// an organisation derived without one. It says where a seat was
-	// WRITTEN versus where it ended up, and an organisation handed over
-	// already built carries no record of where anything was written.
-	//
-	// A POINTER for exactly that reason. "This seat was not moved" and
-	// "there is no document to have moved it in" are different answers,
-	// and a plain bool collapses the second into the first — which is the
-	// shape that lets a reader act on a claim nothing made. See
-	// [DeriveFrom], which sets it on nothing, and [Derived.WithoutPaths].
+	// A FACT ABOUT A DOCUMENT, so ABSENT rather than false for an organisation
+	// derived without one: it says where a seat was WRITTEN versus where it
+	// ended up, and a built organisation records no such thing. A POINTER for
+	// that reason: "not moved" and "no document to move it in" differ, and a
+	// bool collapses them. See [DeriveFrom], which sets it on nothing, and
+	// [Derived.WithoutPaths].
 	PlacedByRef *bool `json:"placed_by_ref,omitempty"`
 	// Manager is the handle of the primary manager, the first seat in
 	// engine order whose manages lists this one ([org.Organization.Manager]),
@@ -84,22 +74,17 @@ type DerivedUnit struct {
 	// Path is where the unit was written. Omitted with a seat's.
 	Path string `json:"path,omitempty"`
 
-	// ID is the unit's KEY — its `id`, or its name where it declares none
-	// — and it is what every reference in the document resolves: a
-	// `manages:` entry, a seat's `unit:`, and the unit column on every
-	// stored row.
+	// ID is the unit's KEY (its `id`, or its name where it declares none),
+	// which every reference in the document resolves: a `manages:` entry, a
+	// seat's `unit:`, and the unit column on every stored row.
 	//
-	// IT IS ON THE PROJECTION BECAUSE NOTHING ELSE IN IT CARRIES ONE. A
-	// client reading a `manages` entry sees a key, and with only display
-	// names beside it there is nothing in the same response to resolve
-	// that key against — so it either matched on the name, which is a
-	// different value the moment a unit declares an id, or rendered the
-	// raw string and called the reference broken.
+	// IT IS ON THE PROJECTION BECAUSE NOTHING ELSE IN IT CARRIES ONE: a client
+	// reading a `manages` entry has nothing to resolve the key against, and
+	// matching on the name fails once a unit declares an id.
 	//
-	// SPELLED `id` ON THE WIRE, as the authored field and the public
-	// projection both spell it: this hierarchy travels in the same
-	// response as those, and one value under two names in one payload is
-	// a client picking whichever it happened to read first.
+	// SPELLED `id` ON THE WIRE, as the authored field and the public projection
+	// spell it: one value under two names in one payload has a client picking
+	// whichever it read first.
 	ID string `json:"id"`
 
 	// Name is what a person reads. It is display only: nothing in the
@@ -124,23 +109,16 @@ type DerivedUnit struct {
 
 // Derive is the hierarchy the engine derives from c.
 //
-// It reads the organization [Company.Organization] builds, normalized exactly
-// as a running node normalizes it, and asks that organization's own readers
-// every question a reader could get wrong: the manager rule, the reports, the
-// effective lead, the unit chain. Nothing here decides a rule of its own. It
-// does not validate: a document with problems still has a hierarchy, and a
-// person fixing those problems needs to see it.
+// It reads the organization [Company.Organization] builds, normalized as a
+// running node normalizes it, and asks that organization's own readers every
+// question a reader could get wrong; it decides no rule of its own. It does not
+// validate: a document with problems still has a hierarchy, and a person fixing
+// them needs to see it.
 //
-// THROUGH ONE [org.Index] of that organization, whose answers are the chart's
-// own methods' (held so by org's TestTheIndexAnswersWhatTheChartDoes): each of
-// those methods walks the chart's every seat, so asked of every seat and unit
-// they made a derivation seats², and it is drawn on every configuration
-// write's answer and every read of the organization projection. Measured
-// (BenchmarkDerivingTheHierarchy, four vCPUs of a 2.8 GHz Xeon under a load
-// average near 15), the organization's build included: 14–16 ms and 5.1 MB
-// for 330 units and 930 seats and 51–72 ms and 17 MB for 1 100 units and
-// 3 100, against 95–126 ms and 44 MB and 1.1–1.2 s and 450 MB through the
-// chart's methods — what is left is linear, most of it deriving handles.
+// THROUGH ONE [org.Index], whose answers are the chart's own methods' (org's
+// TestTheIndexAnswersWhatTheChartDoes): those each walk every seat, so asked of
+// every seat and unit they made a derivation seats², drawn on every
+// configuration write. What is left is linear (BenchmarkDerivingTheHierarchy).
 func Derive(c *Company) Derived {
 	o, x := c.organization()
 	return deriveFrom(o, x)

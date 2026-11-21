@@ -15,6 +15,7 @@ import (
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -69,6 +70,8 @@ func TestTheRunningEstateIsTheDeclaredEstate(t *testing.T) {
 			topics.AccessLogWildcard},
 		atlasdomain.Domain{}.Name(): {topics.AtlasLogStream, topics.AtlasLogPrefix,
 			topics.AtlasLogWildcard},
+		advisordomain.Domain{}.Name(): {topics.AdvisorLogStream, topics.AdvisorLogPrefix,
+			topics.AdvisorLogWildcard},
 	}
 	var registered []string
 	for _, d := range registeredDomains() {

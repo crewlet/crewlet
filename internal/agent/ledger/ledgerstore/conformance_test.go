@@ -116,6 +116,11 @@ func TestRecordingTwiceIsNotAnError(t *testing.T) {
 			if _, ok := s.WorkedAt(ctx, "ceo", []string{"wk-2"})["wk-2"]; ok {
 				t.Error("an unrecorded key reads as worked")
 			}
+			// AND WHICH TURN WORKED IT is the first record's, which a skipped
+			// delivery names.
+			if by := s.WorkedBy(ctx, "ceo", []string{"wk-1", "wk-2"}); by["wk-1"] != "t1" || len(by) != 1 {
+				t.Errorf("the keys read worked by %v, want wk-1 by the first record's t1 alone", by)
+			}
 		})
 	}
 }
@@ -203,6 +208,9 @@ func TestAFailedCompletionReadAnswersNOTHINGRatherThanAPartialSet(t *testing.T) 
 	if got := s.WorkedAt(ctx, "ceo", []string{"wk-1", "wk-2", "wk-3"}); len(got) != 0 {
 		t.Errorf("a failed read of when keys were worked answered %v, want nothing known", got)
 	}
+	if got := s.WorkedBy(ctx, "ceo", []string{"wk-1", "wk-2", "wk-3"}); len(got) != 0 {
+		t.Errorf("a failed read of who worked keys answered %v, want nothing known", got)
+	}
 	ledger.fail = nil
 	if got := s.Worked(ctx, "ceo", []string{"wk-1"}); len(got) != 1 {
 		t.Errorf("the ledger did not recover: %v", got)
@@ -227,4 +235,11 @@ func (f *faultyLedger) WorkedAt(ctx context.Context, scope string, keys []string
 		return nil, f.fail
 	}
 	return f.Fleet.WorkedAt(ctx, scope, keys)
+}
+
+func (f *faultyLedger) WorkedBy(ctx context.Context, scope string, keys []string) (map[string]string, error) {
+	if f.fail != nil {
+		return nil, f.fail
+	}
+	return f.Fleet.WorkedBy(ctx, scope, keys)
 }

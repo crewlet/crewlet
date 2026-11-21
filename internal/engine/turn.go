@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/accessreview"
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
@@ -71,6 +72,11 @@ type Dispatcher struct {
 	// settles nothing.
 	Settled func(ctx context.Context, handle string, wakes []string)
 
+	// Idle is told a seat whose last dispatch running on this node has
+	// returned, its delivery settled: the router of its held inbox reads
+	// nothing while one runs (wakerouter.go). Nil tells nobody.
+	Idle func(handle string)
+
 	// DeadLettered is told of a delivery whose hand-back retires a message:
 	// the one place that holds both the message's headroom and why it failed.
 	DeadLettered func(ctx context.Context, handle string, result queue.Result)
@@ -116,23 +122,15 @@ type Dispatcher struct {
 	// Budget parks the seat when one of its capped token windows is
 	// refusing, or leaves less room than the delivery's launch needs, and
 	// reports the deferral reason naming the window — see budgetpark.go.
-	// refused is the budget refusal the delivery's turn met, nil before any
-	// turn ran, and delivery the events that turn was dispatched for, nil
-	// with it: a launch refused below its own floor (its brief beside the
-	// static floor; for one that continues the session its conversation's
-	// last turn left, whose context it sends first, that context beside its
-	// brief; or, where its fresh brief's floor is held, the static floor or
-	// the room below it) carries that floor, and the park waits for room for
-	// it rather than for the static floor alone, which a window may have
-	// without room for a larger one ([floorOf]); and the park records the
-	// window it waits on for that delivery, whose next launch, and no other
-	// delivery's, it holds ([floorWaits]). An error is a park that could not
-	// be taken, which DEFERS the delivery rather than running a turn the
-	// counter refuses: the refusal is the node's, and a deferral keeps the
-	// message's place.
+	// refused is the refusal the delivery's turn met, nil before any turn
+	// ran; delivery is the events that turn was for, nil with it. A launch refused below its own floor carries that floor ([floorOf]);
+	// the park waits for room for it, not the static floor a window may have
+	// without room for a larger one, and records the window it waits on for
+	// that delivery alone ([floorWaits]). An error is a park that could not
+	// be taken: it DEFERS the delivery rather than running a turn the counter
+	// refuses, keeping the message's place.
 	//
-	// Nil parks nothing, which is a dispatcher with no counters: every
-	// turn then runs, and its own meter, if it has one, is the gate.
+	// Nil parks nothing: every turn runs, and its own meter is the gate.
 	Budget func(ctx context.Context, handle string, delivery []*events.Event,
 		refused error) (reason string, parked bool, err error)
 
@@ -158,31 +156,16 @@ type Dispatcher struct {
 	Held func(ctx context.Context, handle, conversation string, evs []*events.Event) bool
 
 	// Answer offers a delivery to a parked executor as the reply to the
-	// question it asked, and reports what to DO with the delivery — see
-	// [sandbox.AnswerDisposition].
+	// question it asked and reports what to DO with it ([sandbox.AnswerDisposition]).
 	//
-	// THE ONE WAY A PERSON'S REPLY REACHES THE RUN THAT ASKED. A run that
-	// stops to ask a person something gives its seat back, and the reply
-	// arrives on the seat's own inbox looking like any other message.
-	// Without this seam it is consumed as an unrelated turn: the run sits in
-	// [sandbox.StatusAwaiting] until its box's pause TTL reclaims it, and
-	// the person who answered is never told anything happened.
-	//
-	// IT ANSWERS A DISPOSITION RATHER THAN A BOOL, because the bool it used
-	// to answer hid four outcomes behind two values and this frame read
-	// every error as "not the answer" — so a claim that was taken and given
-	// back, or one the store could not confirm, sent the person's reply on
-	// to the ordinary route and it was consumed as an unrelated turn while
-	// the run that asked waited out its pause TTL for a further message.
-	//
-	// Nil is a node with no coordinator, where no run is waiting.
-	//
-	// It takes the WHOLE delivery as a [sandbox.Reply]: the conversation
-	// reference (the identity admits a run and the partition picks between
-	// the runs it admits — see [sandbox.ConversationRef.Best]), the text,
-	// and the events, whose
-	// own instants are what decide whether the delivery was written after
-	// the question it would answer ([sandbox.PendingRun.AskedAt]).
+	// THE ONE WAY A PERSON'S REPLY REACHES THE RUN THAT ASKED. Without it
+	// the reply is consumed as an unrelated turn, the run sits in
+	// [sandbox.StatusAwaiting] until its pause TTL reclaims it, and the
+	// person is never told. A disposition, not a bool: a bool hid four
+	// outcomes, so a claim given back, or one the store could not confirm,
+	// sent the reply on to the ordinary route. Nil is a node with no coordinator. It takes the WHOLE [sandbox.Reply]
+	// (see [sandbox.ConversationRef.Best]): its events' instants decide
+	// whether it followed the question ([sandbox.PendingRun.AskedAt]).
 	Answer func(ctx context.Context, handle string, reply sandbox.Reply) (sandbox.AnswerDisposition, error)
 
 	// NoteDeferred tells the seat host a consumer stopped, so the next
@@ -198,9 +181,10 @@ type Dispatcher struct {
 	// ([Engine.readDelegatedRequests]). Nil reads nothing.
 	DelegatedRequests func(ctx context.Context, handle string, evs []*events.Event) []*events.Event
 
-	// StaleAssignments drops each assignment wake whose item was finished,
-	// removed or handed on since ([Engine.dropStaleAssignments]). Nil drops none.
-	StaleAssignments func(ctx context.Context, handle string, evs []*events.Event) []*events.Event
+	// StaleWakes drops each wake about work the seat holds whose item was
+	// finished, removed or handed on since ([Engine.dropStaleWakes]). Nil
+	// drops none.
+	StaleWakes func(ctx context.Context, handle string, evs []*events.Event) []*events.Event
 
 	// Observe publishes an engine-side observability event.
 	//
@@ -235,14 +219,11 @@ type Dispatcher struct {
 	//
 	// FOR ONE RECORD ONLY: the guard breach a panic that escaped a turn's
 	// own frames publishes. The live projection keys a seat by its AGENT ID,
-	// so a breach addressed by handle alone would reach no seat's failure —
-	// which is why this answers the agent id beside the role name the store
-	// labels it by — and the turn's own telemetry, which does know both, is
-	// exactly what did not run.
+	// so a breach addressed by handle alone would reach no seat's failure;
+	// the turn's own telemetry, which knows both, is what did not run.
 	//
-	// Nil publishes no breach, which is the honest answer for a dispatcher
-	// that cannot say which seat it is: the panic is still logged, the
-	// trigger still recorded and the delivery still settled.
+	// Nil publishes no breach: the panic is still logged, the trigger still
+	// recorded and the delivery still settled.
 	Identify func(handle string) (role, agentID string)
 
 	// Now is injectable so a test can pin the clock.
@@ -291,36 +272,18 @@ type Request struct {
 	// nothing and re-run the turn on every redelivery.
 	Trigger []*events.Event
 
-	// ConversationKey is the surface-scoped conversation IDENTITY — the
-	// durable thread this turn is part of — empty when the trigger has
-	// none. A schedule's fire has one: the schedule's conversation
-	// ([notify.ScheduleConversation]), which every fire of it carries, so
-	// each fire is a turn of one conversation of its runner seat.
+	// ConversationKey is the surface-scoped conversation IDENTITY (the
+	// durable thread this turn is part of), empty when the trigger has none.
+	// A schedule's fire has one ([notify.ScheduleConversation]).
 	//
-	// The identity, never the inbox partition key beside it: this field is
-	// what reaches the turn telemetry that becomes the event store's
-	// conversation_key tag and the episodes column, the executor log's rows
-	// the conversation's next turn reads its head and endings from, and the
-	// row a detached executor reports back through.
-	//
-	// THE PARTITION KEY IS NOT A FIELD HERE. It is read straight off the
-	// events at each of the four places that want it (see [partitionKeyOf])
-	// — the coalescing record, whose whole subject is the batch that
-	// merged; the turn telemetry, which carries it onto a detached run's
-	// row so two runs parked on one direct message can be told apart; the
-	// answer match, which uses it to DISAMBIGUATE between the rows the
-	// identity admitted; and the digest's own stamp, which puts both keys
-	// back on the merged envelope — plus the line logged when a partition
-	// cannot be merged. Nothing above the dispatch has a use for it.
-	//
-	// That list said three readers that WANT the partition, and what
-	// changed is not only the count: the parked run's answer match wanted
-	// it ALONE and now takes both. The identity admits, because a person
-	// answers on the conversation, and the partition only chooses between
-	// what it admitted. The engine's own prompt tells a seat replying to a
-	// top-level direct message to reply as a thread, so their answer
-	// arrives in a finer partition than the question parked under and the
-	// two strings never met.
+	// The identity, never the inbox partition key: this is what reaches the
+	// turn telemetry (the conversation_key tag, the episodes column), the
+	// executor log rows and a detached executor's report-back row. THE
+	// PARTITION KEY IS NOT A FIELD HERE: read it off the events
+	// ([partitionKeyOf]). The answer match takes both: the identity admits,
+	// because a person answers on the conversation, and the partition only
+	// chooses between what it admitted (a thread reply is a finer partition
+	// than the question parked under).
 	ConversationKey string
 
 	// Depth is the delegation depth this turn inherited: zero for a turn a
@@ -355,43 +318,15 @@ func (r Request) Ask() []*events.Event {
 
 // Dispatch runs one partition.
 //
-// THE ORDER IS THE PRODUCT, and it is stated once here because every stage's
-// position was earned by a specific failure — see internal/agent/inbox, which
-// owns the guard sequence and the reasons.
-//
-// What this frame adds around it is the two ledger reads and the one ledger
-// write, and their placement is equally deliberate:
-//
-//   - the completion read comes AFTER every parking branch, so a parked
-//     partition is never marked done, and BEFORE coalescing, so recorded
-//     constituents drop out and only the remainder merges;
-//   - the sandbox ANSWER OFFER comes after that read and before the merge, on
-//     the ordinary path as well as the park — because a run parked on a
-//     question leaves its seat free, so the reply that resumes it arrives
-//     here as an ordinary message and must be claimed before a turn eats it.
-//     What the offer answers is what happens to the delivery: spent on the
-//     run it resumed, HANDED BACK while a run is still owed it, or passed on
-//     to the ordinary route. It is the disposition that decides and never the
-//     error beside it — see [Dispatcher.answered];
-//   - the conversation read comes after that, because it is keyed on a
-//     conversation the surviving events name;
-//   - the completion WRITE comes after the turn, and a turn that failed is
-//     still recorded: the ledger answers "has this trigger been worked", not
-//     "did the work succeed", and re-running a failing turn on every
-//     redelivery is how one bad trigger becomes an infinite loop. A turn whose
-//     PHASE broke is recorded too, but only when [turn.Abandon] gives a
-//     reason — an outward write its own record shows, a panic, or a refusal
-//     every redelivery would meet again — see [Dispatcher.abandon] for why
-//     that is a different question from "did it fail", and why answering it
-//     with `err != nil` alone replayed a turn's external writes up to
-//     twenty-five times.
-//
-// NO PANIC LEAVES THIS FRAME. A phase that panics is recovered inside the turn
-// loop and comes back as an ordinary broken turn; anything else that panics
-// between the broker and the loop, in the stages below or in the turn's own
-// set-up and tear-down, is recovered here. Letting it through handed it to the
-// queue backend's handler guard, which NAKs a panic, so a defect was run again
-// up to the whole delivery budget. See [Dispatcher.recoverPanic].
+// THE ORDER IS THE PRODUCT: internal/agent/inbox owns the guard sequence and
+// the reasons, and this frame adds the two ledger reads and the one ledger
+// write, placed deliberately (the package doc's "Dispatch's order"). Every NAK
+// here asks [nakFailure], since a failure of this node's is never the mail's
+// own (the package doc's section of that name). NO PANIC LEAVES THIS FRAME: a
+// phase's panic is recovered inside the turn loop as a broken turn, and any
+// other between the broker and the loop, in the stages or the turn's set-up
+// and tear-down, here, since the queue's handler guard NAKs a panic, running a
+// defect again up to the whole delivery budget ([Dispatcher.recoverPanic]).
 func (d *Dispatcher) Dispatch(ctx context.Context, handle string, evs []*events.Event) (result queue.Result) {
 	d.enter(handle)
 	defer d.leave(handle)
@@ -451,9 +386,14 @@ func (d *Dispatcher) enter(handle string) {
 
 func (d *Dispatcher) leave(handle string) {
 	d.runningMu.Lock()
-	defer d.runningMu.Unlock()
-	if d.running[handle]--; d.running[handle] <= 0 {
+	d.running[handle]--
+	idle := d.running[handle] <= 0
+	if idle {
 		delete(d.running, handle)
+	}
+	d.runningMu.Unlock()
+	if idle && d.Idle != nil {
+		d.Idle(handle)
 	}
 }
 
@@ -536,28 +476,15 @@ func wakeIDsOf(evs []*events.Event) []string {
 // holding is what one delivery is still answerable for, narrowed as the stages
 // of [Dispatcher.dispatch] settle events or hand them back to the queue.
 //
-// A RECOVERED PANIC SETTLES THIS, NOT THE DELIVERY. Recording a constituent
-// as worked is what stops its copies ever running, so recording the whole
-// delivery would be wrong in three directions. The tail of a partition that
-// would not merge is requeued before its head runs, and a panic in the head's
-// turn would mark the tail worked while its copies sat on the queue waiting to
-// be: the exact loss [inbox.Degraded] keys the head apart to prevent. A park
-// hands the WHOLE delivery back the same way. And a constituent the completion
-// ledger had already dropped would be put on the record a second time, as
-// panicked, beside the record saying it had already been worked.
-//
-// EVERY NARROWING HAPPENS BEFORE THE REQUEUE IT DESCRIBES, never after. A
-// requeue publishes one event at a time, so a panic inside one leaves some
-// copies on the queue and the rest unpublished; narrowed afterwards, this
-// would still be claiming the published ones at the moment they stopped being
-// its to claim.
-//
-// AND THE RUN, once one exists. A panic after the run id is minted is a panic
-// in a turn that has already announced itself — its start is on the record
-// under that id — so the breach that says why it stopped has to name the same
-// run, or the one row saying the turn began and the one saying it died are
-// joined by nothing. Empty before the mint, which is the honest answer for a
-// panic in a screening stage: no run existed to name.
+// A RECOVERED PANIC SETTLES THIS, NOT THE DELIVERY: recording a constituent
+// as worked stops its copies ever running. The whole delivery would be wrong
+// three ways: an unmergeable partition's tail is requeued before its head
+// runs (a head panic would mark it worked, the loss [inbox.Degraded] prevents);
+// a park hands the WHOLE delivery back; and a constituent the completion
+// ledger dropped would be recorded again, as panicked. EVERY NARROWING HAPPENS BEFORE THE REQUEUE IT DESCRIBES: a requeue publishes
+// one event at a time, so a panic inside one leaves some copies published,
+// which a later narrowing would still claim. AND THE RUN, once minted, so a
+// breach names the run whose start is on the record (empty before the mint).
 type holding struct {
 	events []*events.Event
 	runID  string
@@ -590,20 +517,16 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	case inbox.ActionPauseAndPark:
 		if d.Pause != nil {
 			if err := d.Pause(ctx, handle, screening.Hold, screening.Reason); err != nil {
-				// The pause is what stops the requeued copies looping
-				// back at whatever rate the broker will serve. Without it
-				// the park is worse than doing nothing, so the delivery
-				// is handed back rather than parked.
+				// The pause stops the requeued copies looping back at the
+				// broker's rate; without it a park is worse than nothing,
+				// so the delivery is handed back rather than parked.
 				//
 				// DEFERRED, NOT NAKED: a hold the queue would not take is
 				// this NODE's condition, not the message's, and a Nak
 				// returns a message behind its conversation's newer mail
-				// (queue.OutcomeNak) — which the next delivery of this
-				// seat would then be screened ahead of, into the very
-				// park this one could not set up. A deferral keeps its
-				// place at the head and stops the attachment until the
-				// seat host's next renew, which is the spacing a retry of
-				// a refused queue call wants.
+				// (queue.OutcomeNak), into the very park this one could
+				// not set up. A deferral keeps its place at the head and
+				// stops the attachment until the seat host's next renew.
 				if d.NoteDeferred != nil {
 					d.NoteDeferred(handle)
 				}
@@ -677,8 +600,8 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		}
 		held.events = surviving
 	}
-	if d.StaleAssignments != nil {
-		if surviving = d.StaleAssignments(ctx, handle, surviving); len(surviving) == 0 {
+	if d.StaleWakes != nil {
+		if surviving = d.StaleWakes(ctx, handle, surviving); len(surviving) == 0 {
 			return queue.Ack()
 		}
 		held.events = surviving
@@ -686,18 +609,16 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 
 	// THE ANSWER IS CLAIMED BEFORE ANYTHING ELSE EATS IT.
 	//
-	// A run parked on a question does not hold its seat — that is the whole
-	// design, the answer arrives on the seat's own inbox — so the reply
-	// reaches here, on the ordinary path, looking like any other message.
-	// Offered only while the seat was HELD, which is the one state a parked
-	// run is never in, every clarification answer was consumed as an
-	// unrelated turn while the box waited out its pause TTL. This is the
-	// ONLY offer now: a seat a run holds has its inbox held, and an answer
+	// A run parked on a question does not hold its seat, so the reply
+	// reaches here on the ordinary path looking like any message. This is
+	// the ONLY offer: a seat a run holds has its inbox held, and an answer
 	// to another of its runs waits there to be offered here when it lifts.
+	// (Offered only while the seat was HELD, the one state a parked run is
+	// never in, every answer was consumed as an unrelated turn.)
 	//
-	// AFTER THE LEDGER, because the completion ledger has already said
-	// which of these events were worked, and a trigger that produced a turn
-	// must not also be spliced into somebody's executor.
+	// AFTER THE LEDGER: it has already said which events were worked, and a
+	// trigger that produced a turn must not also be spliced into somebody's
+	// executor.
 	if screening.OfferAsSandboxAnswer {
 		disposition, cause := d.answered(ctx, handle, surviving)
 		switch disposition {
@@ -708,50 +629,33 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			d.SpendAnswer(ctx, handle, surviving)
 			return queue.Ack()
 		case sandbox.AnswerDeferred:
-			// STILL OWED TO A RUN, and not recorded against it — the
-			// seat's runs could not be read, or the record could not be
-			// written — so it comes back rather than being worked.
-			//
-			// A DEFERRAL, AND NEVER A NAK, which is what this used to
-			// be. Both failures are the NODE's or its STORE's, not the
-			// message's, and a Nak is the one return that puts a message
-			// BEHIND its conversation's newer mail: on the only broker
-			// this engine ships a failure waits out its backoff while
-			// never-delivered messages are served (queue.OutcomeNak). The
-			// person's next message then reached the still-waiting run
-			// first and was taken as its answer, and this one came round
-			// afterwards to answer whatever the run asked next. A
-			// deferral returns the delivery at the HEAD
-			// (queue.OutcomeDefer), so it is still the first reply the
-			// question is offered.
-			//
-			// AND IT STOPS THE SEAT'S INBOX until the seat host's next
-			// renew resumes it, which is right for the condition it
-			// reports: a store that cannot record an answer cannot run a
-			// turn either, and the renew interval is the spacing the
-			// retry gets. The delivery spends one of its deliveries, as
-			// every hand-back does, which is why
-			// [Dispatcher.mayOfferAnswer] stops offering while
-			// [sandbox.AnswerDeliveryReserve] of them are left, and
-			// [sandbox.MaxAnswerAttempts] bounds the series on this node.
+			// STILL OWED TO A RUN and not recorded against it (its runs
+			// could not be read, or the record written): it comes back.
+			// A DEFERRAL, NEVER A NAK: both failures are the NODE's or its
+			// STORE's, and a Nak puts a message BEHIND its conversation's
+			// newer mail (queue.OutcomeNak), so the person's next message
+			// reached the waiting run first and was taken as its answer. A
+			// deferral returns it at the HEAD (queue.OutcomeDefer) and stops
+			// the seat's inbox until the next renew. It spends one of the
+			// delivery's deliveries, which is why [Dispatcher.mayOfferAnswer]
+			// stops offering while [sandbox.AnswerDeliveryReserve] are left
+			// and [sandbox.MaxAnswerAttempts] bounds the series on this node.
 			if d.NoteDeferred != nil {
 				d.NoteDeferred(handle)
 			}
 			return queue.Defer(queue.DeferAnswerOwed, answerOwedReason(handle, cause))
 		case sandbox.AnswerRefused:
-			// A REPLY TOO LARGE TO BE ITS RUN'S ANSWER, whose REFUSAL is
-			// recorded on the run in the answer's place and resumes it
-			// told so (ADR-0114). No turn runs on it: the seat answering
-			// it as a new message is the defect the refusal ends.
+			// A REPLY TOO LARGE TO BE ITS RUN'S ANSWER: its REFUSAL is
+			// recorded on the run in the answer's place (ADR-0114). No turn
+			// runs on it; the seat answering it as a new message is the
+			// defect the refusal ends.
 			//
-			// KEPT, NOT SPENT: deferred at the head of the inbox, behind
-			// the hold the owed refusal keeps on it, and never recorded as
-			// worked here. The run's row carries none of the reply, so
-			// this delivery is its one copy: a turn that takes the
-			// refusal records it as worked, and it is dropped when it
-			// comes round; a refusal let go of leaves it unspent, and it
-			// comes round as the ordinary message it is — the way it
-			// came. Acked, a refusal let go of would lose the reply.
+			// KEPT, NOT SPENT: deferred at the head of the inbox, behind the
+			// hold the owed refusal keeps, and never recorded as worked
+			// here. The run's row carries none of the reply, so this
+			// delivery is its one copy: a turn that takes the refusal
+			// records it worked; a refusal let go of leaves it to come
+			// round as the ordinary message it is. Acked, it would be lost.
 			if d.NoteDeferred != nil {
 				d.NoteDeferred(handle)
 			}
@@ -804,8 +708,10 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			// is ever this delivery's to settle, and the tail, its copies
 			// waiting for the seat, is never gone with it ([goneBy]).
 			held.events, held.requeued = head, tail
+			// A requeue that failed for a reason of this node's is NAK'd
+			// as the node's own, never the mail's ([nakFailure]).
 			if err := d.Park(ctx, handle, tail); err != nil {
-				return queue.Nak(fmt.Errorf("engine: requeue %s: %w", handle, err))
+				return nakFailure(ctx, fmt.Errorf("engine: requeue %s: %w", handle, err))
 			}
 			routing = inbox.Routing{
 				WorkKey: headKey, Events: head,
@@ -820,27 +726,16 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 	}
 
 	// THE TRIGGER'S TRACE, restored before anything below publishes or logs,
-	// so this turn's spans hang under whatever caused it — a webhook, a
-	// schedule, another agent — instead of each seat rooting a trace of its
-	// own and the join a reader follows from "a message arrived" to "here is
-	// what it did" never existing.
+	// so this turn's spans hang under whatever caused it (a webhook, a
+	// schedule, another agent) instead of each seat rooting its own trace.
+	// Bound FIRST of the three context values: the coalescing record and the
+	// history warning are emitted before the others and must name the trace.
 	//
-	// It is bound FIRST of the three context values rather than beside them,
-	// because the coalescing record and the conversation-history warning are
-	// both emitted between here and there: bound after them, those would be
-	// the two lines about a turn that do not name its trace, which is
-	// precisely when an operator is looking for them.
-	//
-	// A COALESCED TURN HAS ONE TRACE AND SEVERAL CAUSES, and the trace is the
-	// one the merged trigger carries. For a conversation's digest that is
-	// the first event of the partition, the same event describeTurn takes the
-	// trigger from, so ten comments on one thread become one turn under one
-	// trace and the others are recorded as the turn's interactions: a span
-	// cannot have two parents, and inventing a root to hold them would put a
-	// node above the webhook that actually happened. For a schedule's waiting
-	// fires it is the LATEST fire's, because that fire is the run and each
-	// earlier one is recorded as superseded under its own trace
-	// ([Dispatcher.noteSuperseded]).
+	// A COALESCED TURN HAS ONE TRACE AND SEVERAL CAUSES: the one the merged
+	// trigger carries (a digest's is the partition's first event; a schedule's
+	// waiting fires, the LATEST). A span cannot have two parents, so the
+	// others are recorded as interactions or superseded under their own
+	// trace ([Dispatcher.noteSuperseded]).
 	ctx = tracing.WithRemote(ctx, triggerTrace(trigger))
 	depth, chain := delegationOf(routing.Events)
 	// MINTED HERE, at the one frame that knows a partition is about to
@@ -899,30 +794,14 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		// [turn.Abandon] is the one rule, shared with the sandbox resume.
 		reason, abandon := turn.Abandon(result, err)
 		if !abandon {
-			// THE SAME CONDITION THE SCREENING ABOVE REFUSES, detected a
-			// phase later: the seat's grant moved while the turn was
-			// running and its fence closed. That is a healthy delivery a
-			// successor is already entitled to, not a broken turn, so it
-			// gets the disposition the screening gives it, deferred
-			// rather than naked. Detected in two places because the
-			// window is open the whole length of a turn; answered in one
-			// way, because it is one condition.
-			//
-			// WHAT THE DEFERRAL BUYS IS SPEED AND SILENCE, NOT A FREE
-			// DELIVERY. It spends one of the trigger's twenty-five
-			// exactly as a failure does, on every backend — which is why
-			// that budget is 25 rather than the ~10 a broker with a free
-			// handoff would need. What it does buy is a return in about a
-			// millisecond instead of the failure path's backoff, so the
-			// seat's new owner sees the delivery now rather than waiting
-			// out a delay this node earned, and a quiesced attachment, so
-			// this process stops fetching further work it has equally
-			// lost the right to do.
-			//
-			// BELOW [turn.Abandon] rather than above it: a turn that
-			// panicked, or whose record shows an outward write, must not be
-			// run again wherever the seat now lives, and handing it on
-			// would do exactly that.
+			// THE SCREENING'S CONDITION, detected a phase later: the seat's
+			// grant moved mid-turn. A healthy delivery a successor is
+			// entitled to, so deferred, not naked. It buys speed and
+			// silence, not a free delivery: it spends one of the trigger's
+			// twenty-five like a failure (why the budget is 25, not ~10),
+			// but returns in about a millisecond and quiesces the
+			// attachment. BELOW [turn.Abandon]: a turn that panicked or
+			// wrote outward must not run again where the seat now lives.
 			if errors.Is(err, seat.ErrSeatMoved) {
 				if d.NoteDeferred != nil {
 					d.NoteDeferred(handle)
@@ -931,27 +810,14 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 					"run_id", req.RunID, "work_key", req.WorkKey, "error", err.Error())
 				return queue.Defer(queue.DeferSeatMoved, "the seat moved to another node mid-turn")
 			}
-			// AND THE BUDGET STAGE'S CONDITION, found a phase later: a
-			// window that had room when the delivery was claimed and
-			// none by this turn's round. Answered the way that stage
-			// answers it — the seat is parked until the window turns
-			// over — rather than by the NAK below, whose redelivery is
-			// refused the same way until the budget of deliveries runs
-			// out. Below [turn.Abandon] for the reason the seat-moved
-			// branch is: a turn whose record shows an outward write is
-			// recorded, not run again when the window resets.
-			//
-			// ON THE FLOOR THE TURN'S LAUNCH WAS REFUSED BELOW, which the
-			// refusal carries: its brief beside the static floor, the
-			// context of its conversation's session it continues beside its
-			// brief, or, where its fresh brief's floor is held, the static
-			// floor or the room below it ([launchFloor]). Parked on the
-			// static floor alone, a launch refused below a larger floor
-			// found the window not starved, and was NAKed into the same
-			// refusal. AND FOR THE EVENTS THE TURN WAS DISPATCHED FOR, which
-			// the park records the window it waits on under: their next
-			// launch is the one held in a later window, never the launch of
-			// whatever the park's release hands the seat first ([floorWaits]).
+			// AND THE BUDGET STAGE'S CONDITION, found a phase later: parked
+			// until the window turns over, not NAKed into a redelivery
+			// refused the same way. Below [turn.Abandon] as above. Parked on
+			// the floor the launch was refused below ([launchFloor]), or a
+			// larger floor would find the window not starved and NAK into
+			// the same refusal; and for the events dispatched, so the park
+			// holds their next launch, not whatever the release hands the
+			// seat first ([floorWaits]).
 			if errors.Is(err, toolloop.ErrBudgetExhausted) {
 				if result, parked := d.parkOnBudget(ctx, handle, req.Events, err); parked {
 					log.InfoContext(ctx, "turn_budget_parked", "seat", handle,
@@ -995,14 +861,12 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			//
 			// A NAK, and so it comes back BEHIND the conversation's
 			// newer mail (queue.OutcomeNak): the spaced, budgeted retry a
-			// failing turn needs, which a deferral is not. What that
-			// order costs is closed where it would bite — a newer
-			// message's turn that was shown this one waiting in its
-			// thread answers the thread as it stands and records it as
-			// worked through, so this delivery is dropped when it comes
-			// round rather than answered a second time, out of order.
-			// See workedthrough.go.
-			return queue.Nak(fmt.Errorf("engine: turn for %s: %w", handle, err))
+			// failing turn needs, which a deferral is not; the order's
+			// cost is closed in workedthrough.go. THE NODE'S OWN where
+			// [nakFailure] says so: a turn a drain ended, a publish the
+			// broker did not answer or a coordination store that did not
+			// answer failed for nothing the mail did.
+			return nakFailure(ctx, fmt.Errorf("engine: turn for %s: %w", handle, err))
 		}
 		return d.abandon(ctx, handle, req, err, reason)
 	}
@@ -1065,39 +929,16 @@ func (d *Dispatcher) parkOn(ctx context.Context, handle, what string,
 
 // abandon stops redelivering a trigger whose turn must not run again.
 //
-// THE REDELIVERY IS THE HARM HERE, not the failure. A broken phase used to NAK
-// unconditionally, on the premise that "nothing was recorded, so a redelivery
-// runs it cleanly". That premise holds for the two writes [workkey] guards and
-// for nothing else: every MCP write, every chat post, every `a2a_ask` (a fresh
-// channel per call) and every executor launch is keyed on nothing at all. A
-// deterministic mid-turn failure therefore replayed round one's external
-// effects up to the broker's whole delivery budget: twenty-five attempts spaced
-// by a backoff that doubles from a second to thirty, so about ten minutes of
-// them, and the seat's own colleagues, issue trackers and billed boxes wore
-// every one.
-//
-// So the trigger is recorded and acked. That LOSES the rest of the turn, which
-// is the honest price and the reason it needs a reason rather than suspicion:
-// [turn.Abandon] gives one only for a turn whose record shows it reached
-// outside, for a panic, which runs the same defect again however many times it
-// is delivered, or for a refusal every redelivery would meet again
-// ([turn.ErrPermanent]). Everything else (a provider that never answered, a
-// runner that could not be built, a refused budget) is given none and keeps its
-// retry. A seat handed to another node mid-turn keeps its retry too, but as
-// a DEFERRAL rather than a NAK: see the branch above, and [seat.Host.Fence] for
-// what detects it. So does a failure a redelivery would meet again until
-// something changes, whose seat is parked or paused until it does rather than
-// NAKed into the same refusal: a refused budget until the refusing window
-// turns over ([Dispatcher.parkOnBudget]), a chain every member of which is at
-// its limit until the first is tried again ([Dispatcher.Provider]), and a
-// failure a retry cannot cure, the second time in a row, until its settings
-// change or a person resumes it ([Dispatcher.Failure]).
-//
-// It is not silent. A turn that ran has already published its own completion
-// marked failed (see [Engine.publishTurnCompleted], which fires on the error
-// path), and this adds the half that record cannot carry: that the trigger
-// behind it will not come back, and why. Both halves name the same seat and the
-// same work key.
+// THE REDELIVERY IS THE HARM, not the failure: only the two writes [workkey]
+// guards are safe to replay; every MCP write, chat post, `a2a_ask` and
+// executor launch is unkeyed, so a deterministic failure replayed them for the
+// broker's whole budget (twenty-five attempts, about ten minutes of backoff).
+// So the trigger is recorded and acked, which LOSES the rest of the turn and
+// needs a reason: [turn.Abandon] gives one only for a record showing it reached
+// outside, a panic, or a refusal every redelivery would meet
+// ([turn.ErrPermanent]). All else keeps its retry: a moved seat by DEFERRAL
+// ([seat.Host.Fence]), a recurring failure parked or paused. Not silent: the
+// failed completion ([Engine.publishTurnCompleted]) lacks that it won't return.
 func (d *Dispatcher) abandon(ctx context.Context, handle string, req Request, cause error, reason string) queue.Result {
 	// BOTH IDENTITIES. This record is paired with the turn's own completion
 	// event (see [Engine.publishTurnCompleted]) and the two are joined by a
@@ -1150,18 +991,15 @@ func (d *Dispatcher) settleHeld(ctx context.Context, handle string, evs []*event
 // stopped settles a delivery whose turn a person stopped.
 //
 // SPENT, NOT RETRIED. The trigger is recorded in the completion ledger and the
-// delivery acked, exactly as a finished turn's is, because a NAK would run the
-// turn again — on this node the moment the pause is lifted, or on a peer
-// sooner — and the person stopped it precisely so that it would not go on.
-// What they asked for next is a new ask, and the seat's other mail waits on
-// its held inbox for the resume.
+// delivery acked, as a finished turn's is: a NAK would run the turn again, on
+// this node when the pause lifts or on a peer sooner, and the person stopped
+// it so it would not go on. The seat's other mail waits on its held inbox.
 //
-// ON THE RECORD, three ways, each saying what only it can: the turn's own
-// completion reads `stopped` rather than `failed` (see
-// [Engine.publishTurnCompleted]), this frame publishes
-// [types.AgentTurnStopped] naming who stopped it, and the log line joins the
-// run to the work key. No [types.TurnTriggerSkipped]: the trigger WAS worked,
-// as far as anybody asked it to be.
+// ON THE RECORD three ways: the turn's completion reads `stopped`, not
+// `failed` ([Engine.publishTurnCompleted]); this frame publishes
+// [types.AgentTurnStopped] naming who stopped it; the log line joins the run
+// to the work key. No [types.TurnTriggerSkipped]: the trigger WAS worked, as
+// far as anybody asked.
 func (d *Dispatcher) stopped(ctx context.Context, handle string, req Request, cause error) queue.Result {
 	pause, _ := stopOf(cause)
 	log.InfoContext(ctx, "turn_stopped", "seat", handle, "run_id", req.RunID,
@@ -1217,21 +1055,14 @@ func turnStoppedEvent(handle, role, agentID, turnID, workKey string,
 // recoverPanic settles a delivery whose handling panicked outside the turn
 // loop.
 //
-// ACKED AND RECORDED, never NAKed and never deferred, for the reason
-// [turn.Abandon] gives for every panic: a redelivery runs the same defect on
-// the same input, and a defer would only hand that defect to a peer running the
-// same build. What the panic cost is put on the record instead: the stack in
-// the log, the unhandled-exception guard on the seat, so it renders its failure
-// with a cause rather than as whatever it was last doing, and a skipped-trigger record
-// per event saying it will not come back.
+// ACKED AND RECORDED, never NAKed or deferred ([turn.Abandon]): a redelivery,
+// or a defer to a peer on the same build, runs the same defect. The cost goes
+// on the record instead: the stack in the log, the unhandled-exception guard
+// on the seat, and a skipped-trigger record per event.
 //
-// held is what the delivery still held when it panicked (see [holding]), not
-// everything it arrived with. The work key is recomputed from its events,
-// because the panic may have happened before the frame that derives it ran; it
-// is the same derivation, so the breach and the skipped records name the key a
-// completed turn would have carried. The RUN is not recomputable — it is a
-// mint, not a derivation — so it is whatever the delivery had minted, and
-// nothing when it had not.
+// held is what the delivery still held (see [holding]). The work key is
+// recomputed from its events, since the panic may precede the frame deriving
+// it; the RUN is a mint, so it is whatever had been minted, or nothing.
 func (d *Dispatcher) recoverPanic(ctx context.Context, handle string, held holding,
 	panicked *turn.PanicError,
 ) queue.Result {
@@ -1281,7 +1112,7 @@ func panicBreach(role, agentID, runID, workKey string, trace events.TraceContext
 		Agent:    agentID,
 		RoleName: role,
 		Kind:     types.GuardUnhandledException,
-		Detail:   events.ClipDiagnostic(panicked.Error()),
+		Detail:   events.Diagnostic(panicked.Error()),
 		TurnID:   runID,
 		WorkKey:  workKey,
 	}, trace)
@@ -1313,7 +1144,7 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 		// it was cut at 200 bytes, which a wrapped error spends on
 		// its outer operations before it reaches what failed.
 		rec := d.skippedRecord(handle, ev, disposition,
-			events.ClipDiagnostic(reason+", so it was not redelivered: "+cause.Error()))
+			events.Diagnostic(reason+", so it was not redelivered: "+cause.Error()))
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
 	}
@@ -1322,47 +1153,15 @@ func (d *Dispatcher) noteAbandoned(ctx context.Context, handle string, evs []*ev
 // mayOfferAnswer reports whether this delivery still has the deliveries to
 // spare for the answer route, on what the MESSAGES carry.
 //
-// THE OFFER IS WHAT IS GATED, not the hand-back. A reply the coordinator could
-// not record is handed back with a deferral, and on the broker this engine
-// ships every return spends one of the message's deliveries — so a route that
-// kept offering until the last one would hand the twenty-fifth back and the
-// broker would dead-letter a person's reply, which is the one ending this
-// route must never take. The
-// coordinator's own ceiling cannot prevent that: it is per node and per
-// process, and it resets on exactly the event (a seat handoff, a restart)
-// that does NOT reset the count the broker enforces. See
-// [sandbox.AnswerDeliveryReserve], which owns the rule and the number, and
-// [sandbox.MaxAnswerAttempts], which is the second clause and bounds one
-// process's thrash.
-//
-// EACH EVENT'S OWN COUNT, never the partition's, and the distinction is the
-// whole of this frame. [queue.DeliveriesLeft] is the SMALLEST of the
-// partition's — the right answer to "will handing this batch back dead-letter
-// something" and the wrong one to the question asked here, which is whether
-// the reply this route may be owed can still afford an attempt. Read as the
-// latter it refused a clarification reply on its FIRST delivery, with a whole
-// budget in hand, because some older message on the same conversation was
-// near its own — and it kept refusing every later reply on that conversation,
-// since a spent message stays in the partition. So the gate asks
-// [queue.DeliveriesLeftFor] per event and [sandbox.MayOfferAnswer] folds
-// them, which is where the reasoning for that fold lives.
-//
-// BOTH OFFERS ARE GATED, the held seat's as well as the free seat's. The held
-// seat's used to be exempt, because a delivery it did not consume was
-// REPUBLISHED by the park — a new message with a budget of its own. An answer
-// still owed is no longer parked: a republish lands at the TAIL of the inbox,
-// behind the person's next message, which would then be offered to the
-// question first. So both hand it back by deferral, both spend the count this
-// guard protects, and both stop offering at the same reserve.
-//
-// ON THIS NODE'S LOG EITHER WAY, and the two lines are different facts.
-// Refusing means the delivery becomes an ordinary turn while an executor may
-// still be parked on its question — the answer route giving up its claim on a
-// message, invisible anywhere else. Offering while the PARTITION's own number
-// is inside the reserve means the hand-back this may cause will also spend a
-// co-partitioned message that has nearly nothing left, which is the cost this
-// gate deliberately accepts and therefore the one an operator reading a
-// `dead_lettered` line needs told in advance.
+// THE OFFER IS GATED, not the hand-back: every deferral spends a delivery, so
+// offering to the last would let the broker dead-letter a person's reply (the
+// coordinator's ceiling resets on a handoff; the broker's count does not). See
+// [sandbox.AnswerDeliveryReserve] and [sandbox.MaxAnswerAttempts]. EACH
+// EVENT'S OWN COUNT ([queue.DeliveriesLeftFor], folded by
+// [sandbox.MayOfferAnswer]), never the partition's smallest, which refused a
+// first delivery for an older spent sibling. The two log lines are different
+// facts: refusing makes an ordinary turn while an executor may be parked;
+// offering inside the partition's reserve may spend a sibling.
 func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*events.Event) bool {
 	perMessage := make([]sandbox.AnswerHeadroom, 0, len(evs))
 	for _, ev := range evs {
@@ -1398,97 +1197,48 @@ func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*e
 // answered offers a delivery to one of this seat's executors that is waiting
 // for somebody to answer its question, and reports what to do with it.
 //
-// FAIL-OPEN WHERE NOTHING WAS MATCHED. A missing seam, a delivery on no
-// conversation anybody could reply into, one whose messages have no deliveries
-// to spare for the route ([Dispatcher.mayOfferAnswer]) and a lookup the
-// coordinator could not make all report [sandbox.AnswerNotMine], and the
-// delivery goes on to whatever the screening said to do with it — parked behind
-// a held seat, or run as the ordinary turn it looks like — which is
-// recoverable, where acking a message nothing handled is not.
+// FAIL-OPEN WHERE NOTHING WAS MATCHED: a missing seam, an unreplyable
+// conversation, no deliveries to spare ([Dispatcher.mayOfferAnswer]) and a
+// failed lookup report [sandbox.AnswerNotMine], so the screening's disposition
+// stands: recoverable, where acking an unhandled message is not.
 //
-// NOBODY'S REPLY, NEVER OFFERED: a delivery whose conversation is no key at
-// all, a per-event fallback no message can reproduce, or a SCHEDULE'S
-// ([notify.Derived]). A schedule's is the one that would otherwise be matched:
-// every fire of a schedule carries the schedule's conversation
-// ([notify.ScheduleConversation]), the very one its last fire's run parked
-// under, so the next fire — a cron's task text, posted after the question was
-// asked — would be recorded as the answer to that run's question and resume it
-// with the schedule's own task for a person's reply. Refused before the
-// coordinator is asked, and before the delivery's headroom is: a delivery that
-// cannot be an answer spends nothing of the route's.
-//
-// AND HANDED BACK WHERE A RUN IS STILL OWED IT. That is the other half, and
-// the one this frame used to get wrong: a run the coordinator matched and
-// could not resume is still waiting for this exact message, so falling through
-// would spend it on an unrelated turn. [sandbox.AnswerDeferred] is the
-// coordinator saying so, and the caller returns the delivery rather than
-// working it, with a deferral that keeps its place: a NAK would return it
-// BEHIND its conversation's newer mail (queue.OutcomeNak), where the person's
-// next message could reach the question first and be taken as its answer.
-// [sandbox.AnswerRefused] is a reply too large to be the answer, whose refusal
-// the run now holds in the answer's place (ADR-0114): returned the same way,
-// unspent, since the delivery is the only copy of the reply there is.
-//
-// THE CONVERSATION IDENTITY is the disambiguation, and the partition travels
-// beside it to tell apart runs one conversation admits. The rule — "the
-// next inbound on the question's conversation IS the answer" — is positional
-// within a CONVERSATION rather than within a batch, and the engine's own chat
-// prompt is what forces the distinction: a run launched from a top-level
-// direct message parks under the bare DM channel, while [notify.ChatPrompt]
-// tells the seat to reply as a thread, so the person's answer arrives in a
-// partition the row never named. Offered the partition, the coordinator
-// compared two strings that could not meet and the box waited out its pause
-// TTL with the answer sitting in this very inbox.
-//
-// BOTH VALUES GO, because the identity decides which runs a delivery may
-// answer and the partition which of them it does. See
-// [sandbox.ConversationRef.Best].
-//
-// AN ERROR EXPLAINS THE DISPOSITION AND NEVER OVERRIDES IT, which is the exact
-// inversion of what this frame used to do. The coordinator classifies its own
-// failures — it is the only frame that can, since it holds the run — and hands
-// back both: the disposition to act on and the error to log. Reading the error
-// instead is what spent a person's answer on an unrelated turn on the one
-// route where the run was still owed it. BOTH TRAVEL OUT of this function for
-// the same reason they travel in: a NAK carries a cause, and the cause a
-// caller would otherwise invent is the one thing it does not know.
-//
-// WHAT IS OFFERED IS WHAT THE DELIVERY SAYS, in its writers' own words
-// ([replyWords]), never the prompt it would wake the seat with: the run reads
-// it as its question's answer, and the person who gave it reads it back as
-// their reply.
-//
-// AN UNUSABLE DISPOSITION FALLS BACK TO [sandbox.AnswerNotMine], not to a
-// requeue. Nothing in this build produces one — the seam has a single
-// implementation — so it means a wiring that answered nothing, and the honest
-// reading of that is a node with no coordinator, which is a state the engine
-// supports and which cannot loop. A defer would requeue with nothing to bound
-// it: the bound lives with the RUN the coordinator matched, and a disposition
-// this frame cannot read names no run.
+// HANDED BACK WHERE A RUN IS STILL OWED IT: [sandbox.AnswerDeferred] defers
+// keeping the delivery's place (a NAK lands BEHIND newer mail,
+// queue.OutcomeNak), [sandbox.AnswerRefused] (ADR-0114) likewise, unspent: the
+// delivery is the reply's only copy. Offered are its own words ([replyWords]).
 func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.Event) (sandbox.AnswerDisposition, error) {
 	if d.Answer == nil {
 		return sandbox.AnswerNotMine, nil
 	}
+	// The identity admits the runs a delivery may answer and the partition
+	// picks among them ([sandbox.ConversationRef.Best]): a run from a
+	// top-level DM parks under the bare channel while [notify.ChatPrompt] has
+	// the seat reply as a thread, a partition the row never named.
 	conv := sandbox.ConversationRef{
 		Identity:  conversationIdentityOf(evs),
 		Partition: partitionKeyOf(evs),
 	}
+	// NEVER OFFERED: a conversation that is no key, or a SCHEDULE'S
+	// ([notify.Derived]): every fire carries the conversation its last run
+	// parked under, so the next fire's cron text would be taken as that run's
+	// answer. Refused before the coordinator and the headroom are asked.
 	if !notify.Derived(conv.Identity) || !d.mayOfferAnswer(ctx, handle, evs) {
 		return sandbox.AnswerNotMine, nil
 	}
 	disposition, err := d.Answer(ctx, handle,
 		replyOf(d.promptRegistry(), d.parties(), handle, conv, evs))
 	if err != nil {
-		// BOTH KEYS, for the reason the offer carries both: a line naming
-		// the identity alone cannot say which of its runs was picked.
-		// AND THE DISPOSITION, because the failure alone no longer says
-		// what became of the delivery.
+		// An error explains the disposition and never overrides it: reading
+		// it instead spent an answer on an unrelated turn where the run was
+		// still owed it. Both travel out, as a NAK needs the cause.
 		log.WarnContext(ctx, "sandbox_answer_dispatch_failed",
 			"agent_handle", handle, "conversation", conv.Identity,
 			"partition", conv.Partition, "disposition", disposition.String(),
 			"error", err)
 	}
 	if !disposition.Valid() {
+		// Not a requeue: a defer has nothing to bound it, the bound lives with
+		// the matched RUN, which an unreadable disposition does not name.
 		log.ErrorContext(ctx, "sandbox_answer_disposition_unknown",
 			"agent_handle", handle, "conversation", conv.Identity,
 			"disposition", disposition.String(),
@@ -1533,30 +1283,16 @@ func (d *Dispatcher) AnswerWorked(ctx context.Context, handle string, ev *events
 }
 
 // SpendAnswer records the deliveries a parked run's answer arrived in as
-// worked, in the completion ledger: a chat reply once it is recorded on its
-// run, an answer by turn once the coordinator has settled it off the seat's
-// control topic ([sandbox.Coordinator.OnAnswerGiven]), and either once its run
-// spends it — taken by a resumed turn, let go of, reaped
-// ([sandbox.CoordinatorOptions.Spent], which the engine wires here).
+// worked: a chat reply once recorded on its run, an answer by turn once the
+// coordinator has settled it ([sandbox.Coordinator.OnAnswerGiven]), and
+// either once its run spends it ([sandbox.CoordinatorOptions.Spent]).
 //
-// THE ANSWER IS SPENT, and a copy of it must become nothing: a redelivery
-// whose acknowledgement was lost, or a park's republished copy, would
-// otherwise reach a seat whose question is no longer waiting — the recorded
-// answer is matched only while its run still holds it — and be run as an
-// ordinary message the run has already been resumed with, or, for an answer
-// by turn, reach a run that has moved on and be announced a second time. The
-// ledger is the fleet's, so the copy is dropped on whichever node it reaches.
-//
-// EVERY DELIVERY, WHATEVER ITS TYPE. The ledgered set ([inbox.Ledgered]) is
-// the types that run a turn, and an answer by turn never runs one, so a filter
-// on that set recorded nothing for it at all — which every document claiming
-// its delivery is spent at the take was wrong about. What this records is that
-// the delivery was spent as an answer, and both routes read it: the ordinary
-// route through its ledger check, the answer-by-turn route before it asks the
-// coordinator ([Dispatcher.AnswerWorked]).
-//
-// FAILS OPEN, like every completion write: the answer is recorded on the run
-// either way, and while the run holds it a copy is recognised there.
+// A copy of a spent answer must become nothing: a redelivery or a park's
+// republished copy would run as an ordinary message, or be announced twice.
+// The ledger is the fleet's, so the copy is dropped on whichever node it
+// reaches. EVERY DELIVERY, WHATEVER ITS TYPE: [inbox.Ledgered] is the types
+// that run a turn, which an answer by turn never does. Both routes read this
+// ([Dispatcher.AnswerWorked]). FAILS OPEN, like every completion write.
 func (d *Dispatcher) SpendAnswer(ctx context.Context, handle string, evs []*events.Event) {
 	if d.Completions == nil {
 		return
@@ -1577,9 +1313,10 @@ func (d *Dispatcher) SpendAnswer(ctx context.Context, handle string, evs []*even
 }
 
 // park requeues a delivery and acks it, or NAKs where it could not be
-// requeued. Only behind a pause hold ([inbox.ActionPauseAndPark]): the copies
-// land on the inbox the delivery came from, and with nothing stopping the
-// consumer they would be fetched straight back.
+// requeued, as the node's own where the requeue failed for a reason of this
+// node's ([nakFailure]). Only behind a pause hold ([inbox.ActionPauseAndPark]):
+// the copies land on the inbox the delivery came from, and with nothing
+// stopping the consumer they would be fetched straight back.
 //
 // It takes the EVENTS rather than the screening that asked for them, so the
 // list it requeues is stated where it is decided.
@@ -1601,39 +1338,86 @@ func (d *Dispatcher) park(ctx context.Context, handle string, evs []*events.Even
 	// that settles its original ([goneBy]).
 	held.requeued = evs
 	if err := d.Park(ctx, handle, evs); err != nil {
-		return queue.Nak(fmt.Errorf("engine: park %s: %w", handle, err))
+		return nakFailure(ctx, fmt.Errorf("engine: park %s: %w", handle, err))
 	}
 	return queue.Ack()
 }
 
+// nakFailure NAKs a seat's mail that failed, for a retry: as THIS NODE'S OWN
+// failure ([queue.NakNode]) where [nodesFailure] says it is one, and as the
+// mail's ([queue.Nak]) otherwise. Both return the delivery on the same
+// backoff and spend the same budget; what differs is where a delivery whose
+// budget is spent is kept ([queue.RetiredTo]): as the mail's, with its group's
+// poison, which nothing replays; as the node's, with its unhandled deliveries.
+// The requeue of a partition's tail, a park's requeue and a turn's failure all
+// answer through it, so a failure one keeps out of the poison the others keep
+// out too.
+func nakFailure(ctx context.Context, err error) queue.Result {
+	if nodesFailure(ctx, err) {
+		return queue.NakNode(err)
+	}
+	return queue.Nak(err)
+}
+
+// nodesFailure reports whether err, the failure of a delivery a seat was
+// handed, is THIS NODE'S OWN or its infrastructure's rather than the work's:
+// the one answer the seat's mailbox ([nakFailure]) and its control topic
+// ([controlOutcome]) NAK by, and the sandbox coordinator counts a failed resume
+// toward its give-up by ([sandbox.CoordinatorOptions.NodesFailure]), since the
+// same failure reaches all three. The node's: what the queue tells as the
+// node's ([queue.NodeFault]), a condition of the infrastructure by the one
+// classification ([builtin.InfrastructureKind], read off the failure), and the
+// sandbox coordinator's marks ([sandbox.ErrStoreSilent],
+// [sandbox.ErrUnannounced]); never [sandbox.ErrResumeElsewhere], which the
+// give-up counts once no node can make it. The package doc's "A failure of
+// this node's is never the mail's own" says why.
+func nodesFailure(ctx context.Context, err error) bool {
+	return storeUnheard(err) || queue.NodeFault(ctx, err) || infrastructureFailure(err)
+}
+
+// storeUnheard reports whether err carries one of the sandbox coordinator's
+// marks for a store that did not answer it: a step's silence
+// ([sandbox.ErrStoreSilent]) or a hand-back no waiter can announce again
+// ([sandbox.ErrUnannounced]).
+func storeUnheard(err error) bool {
+	return errors.Is(err, sandbox.ErrStoreSilent) || errors.Is(err, sandbox.ErrUnannounced)
+}
+
+// operatorsCondition is [sandbox.CoordinatorOptions.OperatorsCondition]: the
+// kind of err where it is a condition only an operator clears
+// ([builtin.OperatorKind]), by the one classification of conditions
+// ([builtin.ConditionKind]) every failure is told by.
+func operatorsCondition(err error) (string, bool) {
+	kind, ok := builtin.ConditionKind(err)
+	return kind, ok && builtin.OperatorKind(kind)
+}
+
+// infrastructureFailure reports whether err is a condition of the
+// infrastructure the engine runs on, by the one classification of conditions
+// ([builtin.ConditionKind], [builtin.InfrastructureKind]).
+func infrastructureFailure(err error) bool {
+	kind, ok := builtin.ConditionKind(err)
+	return ok && builtin.InfrastructureKind(kind)
+}
+
 // dropWorked removes the events the completion ledger has already recorded.
 //
-// A partial overlap is the case that matters: a redelivery of (A, B) after
-// (A, B, C) was worked drops A and B and runs C, rather than re-running all
-// three or skipping all three.
+// A partial overlap matters: a redelivery of (A, B) after (A, B, C) was worked
+// drops A and B and runs C.
 //
-// TWO KEYS PER CHAT MESSAGE, either of which drops it: the delivery's own —
-// a turn that was woken for it — and the message's identity on its chat
-// backend, which a LATER turn records when its thread block showed it the
-// message still waiting (see workedthrough.go). The second is what stops a
-// failed message that comes round behind its conversation's newer mail being
-// answered a second time, out of order, after the newer one's turn answered
-// the thread it was in.
-//
-// It reports the dropped events that were covered ONLY by the second key, so
-// the record of the skip can say a later turn answered them in their thread
-// rather than that a turn was woken for them.
+// TWO KEYS PER CHAT MESSAGE, either of which drops it: the delivery's own, and
+// the message's identity on its chat backend, which a LATER turn records when
+// its thread block showed it waiting (workedthrough.go): a failed message
+// coming round behind newer mail is not answered again, out of order. It
+// reports the events covered ONLY by the second key, so the skip record says a
+// later turn answered them in their thread.
 func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*events.Event) ([]*events.Event, map[uuid.UUID]skipCause) {
 	var worked map[string]bool
 	if d.Completions != nil {
 		keys := make([]string, 0, len(evs))
 		for _, ev := range evs {
-			if !d.ledgered(ev.Type) {
-				continue
-			}
-			keys = append(keys, workkey.Derive([]string{ev.ID.String()}))
-			if chat, _, ok := chatKeyOf(ev); ok {
-				keys = append(keys, chat)
+			if d.ledgered(ev.Type) {
+				keys = append(keys, deliveryKeys(ev)...)
 			}
 		}
 		if len(keys) > 0 {
@@ -1643,6 +1427,7 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 	if len(worked) == 0 && d.SeenThrough == nil {
 		return evs, nil
 	}
+	joined := d.joinedOf(ctx, handle, evs, worked)
 	out := make([]*events.Event, 0, len(evs))
 	var skipped map[uuid.UUID]skipCause
 	skip := func(id uuid.UUID, cause skipCause) {
@@ -1659,6 +1444,8 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 		}
 		chat, edit, isChat := chatKeyOf(ev)
 		switch {
+		case joined[joinedKey(ev.ID.String())]:
+			skip(ev.ID, skipJoined)
 		case worked[workkey.Derive([]string{ev.ID.String()})]:
 			skip(ev.ID, skipWorked)
 		case isChat && edit && worked[chat]:
@@ -1674,20 +1461,47 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 	return out, skipped
 }
 
+// deliveryKeys is every completion-ledger key that drops ev's delivery
+// ([Dispatcher.dropWorked]): its own, and a chat message's identity on its
+// backend. ONE FUNCTION, so a wake the router hands a running run is claimed by
+// exactly the keys its delivery is dropped by (wakerouter.go).
+func deliveryKeys(ev *events.Event) []string {
+	keys := []string{workkey.Derive([]string{ev.ID.String()})}
+	if chat, _, ok := chatKeyOf(ev); ok {
+		keys = append(keys, chat)
+	}
+	return keys
+}
+
+// joinedOf is which of evs a running turn's run read as a wake ([joinedKey]),
+// by that mark: asked only of those whose own key is worked, so a dispatch no
+// turn worked any trigger of reads the ledger no more than it did.
+func (d *Dispatcher) joinedOf(ctx context.Context, handle string, evs []*events.Event,
+	worked map[string]bool) map[string]bool {
+	var keys []string
+	for _, ev := range evs {
+		if d.ledgered(ev.Type) && worked[workkey.Derive([]string{ev.ID.String()})] {
+			keys = append(keys, joinedKey(ev.ID.String()))
+		}
+	}
+	if len(keys) == 0 || d.Completions == nil {
+		return nil
+	}
+	return d.Completions.Worked(ctx, handle, keys)
+}
+
 // recordWorked writes the completion ledger after a turn.
 //
-// Per CONSTITUENT event, not per partition. The partition's own key covers the
-// set that ran together; a later redelivery of a SUBSET keys differently and
-// would match nothing, so the subset would run again. Recording each
-// constituent under its own key is what makes a partial overlap droppable.
+// Per CONSTITUENT event, not per partition: a redelivery of a SUBSET keys
+// differently from the partition's key and would run again; each constituent
+// under its own key makes a partial overlap droppable.
 //
-// The write fails open. A turn that ran and could not be recorded may run
-// again; a turn refused because its bookkeeping failed never runs at all.
+// The write fails open: a turn that ran and could not be recorded may run
+// again; one refused because its bookkeeping failed never runs at all.
 //
-// How the turn ended is not written here: its conversation's next turn is
-// told from the turn's end on the executor log, which the frame that ran it
-// records ([Engine.runTurn]), or the resume of a turn that detached
-// ([Engine.recordResume]).
+// How the turn ended is not written here: the next turn is told from the end
+// on the executor log ([Engine.runTurn], or [Engine.recordResume] for a
+// detached turn).
 func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Request, res turn.Result) {
 	now := d.now()
 	if d.Completions != nil {
@@ -1743,26 +1557,14 @@ func (d *Dispatcher) now() time.Time {
 // conversationIdentityOf takes the durable conversation identity from the
 // events, and partitionKeyOf takes the inbox partition key.
 //
-// TWO FUNCTIONS BECAUSE THERE ARE TWO QUESTIONS, and the dispatcher asks both
-// on every turn: the executor log, the telemetry, the episodes and a parked
-// run's answer match want the identity, while the coalescing record wants the
-// partition — it records that N events MERGED, which is what the partition
-// decides. The answer match takes both: the identity admits a run and the
-// partition picks between runs one direct message admits. One value
-// answering every question is what filed a seat's own prior turn on a direct
-// message under a key its next turn never looked up, and what lost every
-// clarification a seat was told to ask for in a thread.
-//
-// The FIRST event that names one wins, for both. A partition is one
-// conversation by construction — the broker's key function guarantees the
-// partition key, and a source's partition key refines its identity (see
-// [notify.Prompt.ConversationIdentity]) — so a later event naming a different
-// one is a routing bug, and taking the first keeps the answer stable rather
-// than depending on which event happened to sort last.
-//
-// [notify.ConversationIdentityOfAll] and [notify.KeyOfAll], not copies of
-// them: the field names lived here as literals as well, so the grammar that
-// calls itself the one definition had three.
+// TWO FUNCTIONS BECAUSE THERE ARE TWO QUESTIONS: the executor log, telemetry,
+// episodes and a parked run's answer match want the identity; the coalescing
+// record wants the partition, which decides that N events MERGED. The answer
+// match takes both. One value for both filed a seat's prior turn under a key
+// its next turn never looked up and lost thread clarifications. The FIRST
+// event naming one wins: a source's key refines its identity
+// ([notify.Prompt.ConversationIdentity]), so a later event naming another is a
+// routing bug. Delegates to [notify.ConversationIdentityOfAll], [notify.KeyOfAll].
 func conversationIdentityOf(evs []*events.Event) string {
 	return notify.ConversationIdentityOfAll(evs)
 }
@@ -1771,42 +1573,15 @@ func partitionKeyOf(evs []*events.Event) string { return notify.KeyOfAll(evs) }
 
 // DescribeTrigger renders a partition as the ask a turn is given.
 //
-// The FIRST event's own description leads, because a coalesced partition is
-// one conversation and its opening message is what the rest are replies to. A
-// digest that led with the newest would hand the seat a follow-up with no idea
-// what it follows.
-//
-// THE BRIEF, NEVER THE SUMMARY. This function is the only thing standing
-// between a wake and the string a model is asked to act on, and the two
-// interfaces answer different questions: [events.Briefer] is the ask,
-// [events.Summarizer] is one line for a dashboard row. Reading the summary
-// here handed every turn in the company a stub: "Message from alice: deploy"
-// for a notification whose body was the actual request, "(a2a_request)" for a
-// colleague's question, "(task_assigned)" for a schedule's task text. The type
-// name remains only as the last resort it was always meant to be.
-//
-// THE BRIEF, THEN THE SUMMARY, THEN THE TYPE NAME. Every wake type that runs a
-// turn states its ask through Briefer; the summary and the type name are for a
-// wake that does not — a successor's type this build decodes with no typed
-// payload still names itself rather than reaching a seat as a blank ask.
-//
-// A NOTIFICATION'S FENCES ARE MOVED ONTO fence, the turn's own token: its
-// body was fenced under a token minted for the wake, because no turn existed
-// where it was built, and everything around those fences — a display name, a
-// room's name — is neutralised, as a tool answer's other strings are
-// ([provenance.Rekey]). A caller with no turn of its own passes no token,
-// which keeps the wake's and still neutralises the rest. A parked run's answer
-// is no reader of the trigger: it records what the
-// reply says ([replyWords]), and the run it carries on fences those words under
-// its own turn's token.
-//
-// EVERY OTHER WAKE IS RENDERED HERE, so its fences are the turn's from the
-// start: a colleague's ask and a colleague's answer put the colleague's words
-// inside a fence of fence ([fencedBriefer]) — a reader with no turn of its own
-// gets a token minted for that one rendering — and every other brief, a
-// schedule's task among them, is neutralised whole: it is the company's own
-// instruction to the seat, which no fence labels as somebody else's, and which
-// nothing it says may open or close one.
+// The FIRST event leads: its opening message is what the rest reply to. THE
+// BRIEF, THEN THE SUMMARY, THEN THE TYPE NAME: [events.Briefer] is the ask;
+// [events.Summarizer] is a dashboard line that as the ask handed every turn a
+// stub, serving only a wake with no Briefer. A NOTIFICATION'S FENCES MOVE ONTO fence, the turn's own token, and what
+// surrounds them (a display name) is neutralised ([provenance.Rekey]); no
+// token keeps the wake's. A parked run's answer is no reader of the trigger
+// ([replyWords]). EVERY OTHER WAKE is rendered here under the turn's fence: a
+// colleague's words inside one ([fencedBriefer]), every other brief (a
+// schedule's task) neutralised whole, as the company's own instruction.
 func DescribeTrigger(evs []*events.Event, fence provenance.Boundary) string {
 	var parts []string
 	for _, ev := range evs {
@@ -1832,8 +1607,8 @@ func DescribeTrigger(evs []*events.Event, fence provenance.Boundary) string {
 				continue
 			}
 		}
-		if summary, ok := ev.Data.(events.Summarizer); ok {
-			if s := provenance.Neutralise(fence, summary.Summary()); s != "" {
+		if summarised(ev) {
+			if s := provenance.Neutralise(fence, ev.Summary()); s != "" {
 				parts = append(parts, s)
 				continue
 			}
@@ -1847,6 +1622,14 @@ func DescribeTrigger(evs []*events.Event, fence provenance.Boundary) string {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// summarised reports a payload that writes its own line, as a summary or as a
+// line that names what it is about ([events.Phraser]).
+func summarised(ev *events.Event) bool {
+	_, summary := ev.Data.(events.Summarizer)
+	_, phrase := ev.Data.(events.Phraser)
+	return summary || phrase
 }
 
 // fencedBriefer is a wake whose ask carries somebody else's words: its brief,
@@ -1898,17 +1681,11 @@ func delegationOf(evs []*events.Event) (int, []string) {
 
 // noteCoalesced records a partition merged into one digest trigger.
 //
-// # Here, because here is where the constituent list exists
-//
-// A coalesced digest is minted fresh on every merge and carries no memory of
-// what it absorbed; by the time a turn is running there is nothing left to
-// count. So the record is written at the one frame that still holds the
-// events — the same reason the work key is derived here.
-//
-// Nothing else emits this event, which is why Company › Integrations could
-// report how many deliveries ARRIVED and not how many turns they became: a
-// seat draining a thread's backlog as one turn looked, from the feed, like a
-// seat that ignored twelve messages.
+// Written here because this is the one frame still holding the constituent
+// list: a coalesced digest is minted fresh on every merge and remembers
+// nothing of what it absorbed. Nothing else emits this event; without it a
+// seat draining a backlog as one turn looked, from the feed, like a seat that
+// ignored twelve messages.
 func (d *Dispatcher) noteCoalesced(ctx context.Context, handle, partition string,
 	routing inbox.Routing,
 ) {
@@ -2004,6 +1781,7 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 			kept[ev.ID] = true
 		}
 	}
+	joinedBy := d.joinedBy(ctx, handle, all, skipped)
 	for _, ev := range all {
 		if ev == nil || kept[ev.ID] {
 			continue
@@ -2020,6 +1798,8 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 			reason = "a later turn was shown this edit waiting in its thread and answered it there"
 		case skipAbsorbed:
 			reason, disposition = "a completed turn already read its conversation past it, and it asks nothing", types.DispositionAbsorbed
+		case skipJoined:
+			reason, disposition = joinedReason(joinedBy[joinedKey(ev.ID.String())]), types.DispositionJoined
 		}
 		// THE SKIPPED TRIGGER'S OWN TRACE, not the dispatch's: the
 		// question this record answers is "what happened to my webhook",
@@ -2029,6 +1809,34 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
 	}
+}
+
+// joinedBy is the turn each of all's joined skips joined, by its join mark
+// ([joinedKey]): one ledger read for them all, none where nothing joined.
+func (d *Dispatcher) joinedBy(ctx context.Context, handle string, all []*events.Event,
+	skipped map[uuid.UUID]skipCause) map[string]string {
+
+	var keys []string
+	for _, ev := range all {
+		if ev != nil && skipped[ev.ID] == skipJoined {
+			keys = append(keys, joinedKey(ev.ID.String()))
+		}
+	}
+	if len(keys) == 0 || d.Completions == nil {
+		return nil
+	}
+	return d.Completions.WorkedBy(ctx, handle, keys)
+}
+
+// joinedReason is a joined skip's reason, naming the turn it joined where the
+// ledger's record does.
+func joinedReason(turnID string) string {
+	turn := "a running turn"
+	if turnID != "" {
+		turn = "running turn " + turnID
+	}
+	return "it joined " + turn + " as a message about its work, which that turn's run read: the turn's " +
+		"agent_turn_joined record names it"
 }
 
 // notificationSourceOf is the third-party app a partition came from.
@@ -2074,33 +1882,15 @@ func triggerTrace(evs []*events.Event) events.TraceContext {
 // ReplyFor says who is waiting for the turn a partition wakes, and how they
 // get an answer.
 //
-// DERIVED FROM THE TRIGGER, before the turn starts and from nothing the model
-// says. It is the half of the delivery question a model cannot get wrong: the
-// old engine asked the model to declare its own intent, and a turn that
-// declared `skip` on a direct @mention read to the person who sent it exactly
-// like the message never arriving.
-//
-// STRONGEST WINS across a coalesced partition, whatever order the events
-// arrived in. A partition is one conversation, and if any part of it asked
-// this seat something, the turn owes an answer — a merge must not be able to
-// launder an obligation. The strength order is [turn.ReplyTool] over
-// [turn.ReplyEngine] over [turn.ReplyNone]: a tool obligation is the one the
-// engine ENFORCES ([turn.Check] and [turn.OverrideDone] send a round back
-// until a tool delivered), while an A2A ask is answered by the engine from the
-// turn's artifact whichever value this returns. So where both were owed, tool
-// loses nothing for the asker and keeps the check; engine would let the turn
-// end in text the tool-side requester never sees.
-//
-// Today the inbox never builds such a partition — every type but a
-// notification burst keys uniquely and arrives alone (see [inbox.Route]) — so
-// the ranking is a contract held for the key scheme that would, rather than a
-// path that runs. It is held anyway, because the alternative is a function
-// whose answer depends on which event a broker happened to deliver first.
-//
-// The default is [turn.ReplyNone], and it is the safe half. A seat wrongly
-// told nobody is waiting keeps the freedom to end a turn having done nothing,
-// which is what makes triage cheap; a seat wrongly told somebody is must post
-// on every broadcast it observes.
+// DERIVED FROM THE TRIGGER, not from the model's say: a declared `skip` on a
+// direct @mention read like the message never arriving. STRONGEST WINS across a coalesced partition, in any arrival order, so a
+// merge cannot launder an obligation: [turn.ReplyTool] beats [turn.ReplyEngine]
+// beats [turn.ReplyNone]. A tool obligation is the one the engine ENFORCES
+// ([turn.Check], [turn.OverrideDone]); an A2A ask is answered from the
+// artifact either way, and engine would let the turn end in text a tool-side
+// requester never sees. The inbox builds no such partition today
+// ([inbox.Route]); the ranking is a contract. The default [turn.ReplyNone] is
+// the safe half: a seat wrongly told somebody waits must post on every broadcast.
 func ReplyFor(evs []*events.Event) turn.Reply {
 	out := turn.NoReply()
 	for _, ev := range evs {
@@ -2145,40 +1935,18 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			}
 
 		case types.ExternalNotification{}.EventType():
-			// The third-party app's own reading of its routing. See
-			// [notify.Prompt.Addressed]. Absent decodes as false, which is
-			// how an unaddressed notification is written, so an omission
-			// is a freedom to stay silent rather than an obligation nobody
-			// recorded.
+			// The app's own reading of its routing ([notify.Prompt.Addressed]);
+			// absent decodes false, a freedom to stay silent. OFF THE TYPED
+			// PAYLOAD, never the free-form bag: nothing writes Addressed
+			// there, so a bag read answered false for EVERY notification.
 			//
-			// OFF THE TYPED PAYLOAD, never the envelope's free-form bag.
-			// Addressed is a field of [types.ExternalNotification], and
-			// nothing has ever written it into Payload — so the bag read
-			// this replaces answered false for EVERY notification, in
-			// process and across the wire alike. The delivery obligation
-			// the reviewer enforces was therefore never raised by an
-			// inbound message: a seat could end a turn woken by a direct
-			// ask having posted nothing, and the guard that exists to
-			// catch exactly that saw ReplyNone.
-			//
-			// AND WHERE THEY ARE WAITING. The source is the vendor's own
-			// name — `mattermost`, `slack`, `jira` — which is the same
-			// vocabulary a delivering tool reports, because an MCP tool's
-			// surface is its server and a company names that server after
-			// the vendor it serves. Carried because the obligation is
-			// useless without it: "somebody is waiting on a tool" is
-			// satisfied by any tool at all, so a founder's Mattermost DM
-			// was closed out by a row in the tracker.
-			//
-			// UNLESS THE WAKE OWES ANOTHER SURFACE. The answer to a
-			// decision whose asker said it would report the outcome in a
-			// channel arrives from the TRACKER, and on the source alone a
-			// comment on the item would close the turn: the person who
-			// answered was told the outcome would be posted, and it never
-			// was. [types.ExternalNotification.Owes] names the chat
-			// surface instead, and an owed wake is awaited whether or not
-			// its source reads it as addressed — the promise is the
-			// obligation.
+			// AND WHERE THEY ARE WAITING: the source is the vendor's name
+			// (`mattermost`, `slack`, `jira`), the vocabulary a delivering
+			// tool reports; without it any tool satisfies the obligation, and
+			// a Mattermost DM was closed out by a tracker row. UNLESS THE WAKE
+			// OWES ANOTHER SURFACE: [types.ExternalNotification.Owes] names
+			// the chat a tracker-arriving decision promised its outcome to,
+			// and an owed wake is awaited though unaddressed.
 			if n, ok := events.DataAs[*types.ExternalNotification](ev); ok &&
 				(n.Addressed || n.Owes != "") {
 				owed = turn.ToolReply(cmp.Or(n.Owes, n.NotificationSource))
@@ -2189,12 +1957,19 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// is already closed. Nobody is waiting on what this turn does
 			// with it.
 		}
-		// A PICKUP'S ITEM SURVIVES A MERGE with another tool obligation: the
-		// typed answer it owes is the stricter of the two.
-		if replyRank[owed.Kind] > replyRank[out.Kind] ||
-			owed.Kind == out.Kind && out.Item == "" && owed.Item != "" {
-			out = owed
-		}
+		out = strongerReply(out, owed)
+	}
+	return out
+}
+
+// strongerReply is out with owed merged in as [ReplyFor] merges a partition's:
+// a stronger kind wins, and A PICKUP'S ITEM SURVIVES A MERGE with another tool
+// obligation, the typed answer it owes being the stricter; otherwise out
+// stands. Also how a wake a run read joins its turn's (ADR-0167).
+func strongerReply(out, owed turn.Reply) turn.Reply {
+	if replyRank[owed.Kind] > replyRank[out.Kind] ||
+		owed.Kind == out.Kind && out.Item == "" && owed.Item != "" {
+		return owed
 	}
 	return out
 }

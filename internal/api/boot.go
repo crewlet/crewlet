@@ -16,92 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/version"
 )
 
-// The boot surface: what a node's listeners answer from the moment `crewlet
-// run` binds them to the moment it hands them the node's own surface.
-//
-// # Bound before the boot, so nothing the company configures holds a probe
-//
-// A node's boot is two different things back to back. First it recovers what
-// it holds ITSELF — its store and its migrations, the embedded broker's file
-// store, the replicated estate, the logs it provisions, a join's snapshot —
-// which takes as long as the store is large, and which only the deployment can
-// bound, because only the deployment knows how large a store it gave the node.
-// Then it brings up what its COMPANY configures: the shared tool servers (each
-// allowed twice its `startup_timeout_seconds`, with no ceiling on the setting),
-// the sandboxes, the native halves, the reconciler's first apply, the
-// dashboard's projection. A listener bound only at the end of both made a
-// startup probe sized for the first also bound the second, so a company whose
-// tool server was slow to answer had its node killed and restarted into the
-// same wait for ever. (Applying the logs is neither: it catches up in the
-// background from the end of the recovery, and what waits for it is a seat's
-// acquisition, never the listener.)
-//
-// So the listener is bound before either, and /health is the line between them:
-// 503 while the node recovers ([PhaseRecovering]), which a startup probe sized
-// by the deployment bounds exactly as it did, and 200 from the moment the
-// engine says it has recovered what it holds ([PhasePreparing]) — the process
-// is alive and past the part only a dead disk could hold for ever, and the
-// company's part is the company's to bound, never the probe's.
-//
-// WHICH LEAVES ONE THING NO PROBE CATCHES, and it is the price of the line: a
-// part of the company's half that never returns. Each part that waits on
-// something else carries a bound of its own, but the reconciler's first apply
-// has no deadline beyond its parts' — cut short, it would publish a company
-// with whatever had not come up yet missing from it — so a part that hangs
-// leaves the node `preparing`, with /ready refusing it `starting`, for as long
-// as it hangs, and nothing restarts it. A restart would not have cured it
-// either: the next boot meets the same company and waits on the same part.
-// What shows it is the readiness that never comes, which a deployment watches
-// a rollout by and alerts on.
-//
-// # Answering 200 during the recovery would have been the obvious move, and wrong
-//
-// A 200 from the first instant could say only that the process exists, and a
-// boot that never finished — on a disk that stopped answering — would then have
-// nothing to restart it. That is the one thing a startup probe is for.
-//
-// # Everything else waits, and says so
-//
-// /ready answers 503 [ReasonStarting] throughout: the node is not doing its
-// work and takes no traffic. Every route the node will serve answers 503
-// [httpjson.CodeStarting] with a Retry-After, rather than the refused
-// connection it used to meet, so a caller can tell a node about to serve from
-// one that is not there.
-//
-// ONLY A ROUTE THE NODE WILL SERVE IS TOLD TO COME BACK. Every other path is
-// answered as the node answers it once it serves, or with the mux's own 404
-// where that answer is a refusal a 404 says no more than: on the public
-// listener (api.public), whose routes are the ones outside parties call,
-// exactly as [partition] answers there; on api.port of an ingress node with
-// api.public set, the 404 naming that listener for a route outside parties
-// call; and on a node without the ingress role, everything but its probes,
-// which its mux refuses with a 404 once it serves — but for the two routes
-// its own boxes dial on a node that runs seats, which it serves to this
-// host's loopback alone ([Probes]) and so tells a caller there to come back,
-// as a box on the host whose run outlived the node's last process calls back
-// while it restarts. So a socket says nothing more while it starts than it
-// does afterwards, and no caller is sent back to wait for a route that will
-// never be there. And nothing here asks for a credential, since nothing is
-// served: there is nothing a caller could be refused that it would otherwise
-// read.
-//
-// THE ARTIFACT ORIGIN (api.artifacts) IS BOUND WITH THEM on a node that serves
-// one ([ArtifactsListener]), and answers as the origin answers: an empty
-// refusal under its own inert headers, `503` with the Retry-After for a route
-// it will serve and the `405` or `404` it gives anything else, never this
-// surface's JSON ([artifactserve.Starting]).
-//
-// IN THE SAME BROWSER POSTURE where the node will serve one: on an ingress
-// node a route waits inside the CORS layer the full surface answers it in, so
-// a dashboard on an allowed origin reads `starting` rather than an opaque
-// network error — the reason [App.drainGate] sits inside that layer too.
-//
-// Once a stop has begun — a signal during the boot — the answers are a
-// drain's, as far as a starting node can give them: /health says
-// shutting_down, with the status code of the phase it is in (503 while the
-// node still recovers, since a probe sized for the recovery is still what
-// bounds it, and 200 after), /ready says draining, and every route the node
-// would have served `503 draining`.
+// The boot surface: what a node's listeners answer from `crewlet run` binding
+// them until it hands them the node's own surface. The listener is bound BEFORE
+// the boot, and /health is the line inside it. A boot first recovers what the
+// node holds itself (store, estate, a join's snapshot), which only the
+// deployment can bound, then brings up what its COMPANY configures (tool servers
+// with no ceiling on their startup timeout, sandboxes, the first apply), which
+// only the company can. /health is 503 while recovering ([PhaseRecovering]),
+// bounded by a probe sized by the deployment, and 200 once recovered
+// ([PhasePreparing]); a 200 from the first instant would leave a boot stuck on a
+// dead disk nothing to restart it. A hung company part leaves the node
+// `preparing` and nothing restarts it: the first apply has no deadline (cut
+// short it would publish a company missing parts); a restart meets the same wait.
 
 // BootRetryAfter is the Retry-After a starting node's refusal carries.
 //
@@ -128,8 +54,17 @@ type BootHealth struct {
 	Phase   string `json:"phase"`
 }
 
-// Boot answers a node's listeners while the node starts. The notes at the top
-// of this file say what it answers and why.
+// Boot answers a node's listeners while the node starts: /ready answers 503
+// [ReasonStarting] throughout, and every route the node will serve answers 503
+// [httpjson.CodeStarting] with a Retry-After, so a caller can tell a node about
+// to serve from one that is not there. Nothing asks for a credential, since
+// nothing is served. The artifact origin ([ArtifactsListener]) answers as the
+// origin does, an empty refusal under its own headers ([artifactserve.Starting]).
+// On an ingress node a route waits inside the CORS layer the full surface uses
+// (why [App.drainGate] sits inside it too), so an allowed dashboard origin reads
+// `starting`, not an opaque network error. Once a stop has begun, /health says
+// shutting_down with its phase's status code (503 while recovering, 200 after),
+// /ready says draining, and every route the node would serve is `503 draining`.
 type Boot struct {
 	node      string
 	recovered atomic.Bool
@@ -277,6 +212,15 @@ func (b *Boot) serveReady(w http.ResponseWriter, _ *http.Request) {
 }
 
 // refuse answers a route the node will serve once it has started.
+//
+// ONLY SUCH A ROUTE IS TOLD TO COME BACK; every other path is answered as the
+// serving node answers it, or with the mux's own 404 where that answer is a
+// refusal: on the public listener as [partition] does; on api.port of an ingress
+// node with api.public set, the 404 naming that listener; on a node without the
+// ingress role, everything but its probes, except the two routes its own boxes
+// dial on a node that runs seats, served to this host's loopback alone
+// ([Probes]), so a box whose run outlived the last process calls back while it
+// restarts. No caller waits for a route that will never be there.
 func (b *Boot) refuse(w http.ResponseWriter, r *http.Request) {
 	// DEBUG, not info: a vendor holding a delivery retries it, and a line per
 	// retry for the whole of a long boot is noise. The path only, never the
@@ -333,15 +277,13 @@ func loggedRoute(path string) string {
 // hard off switch for it, as everywhere.
 //
 // NEVER A NODE WITHOUT THE ROLE, its seats included: a box off the node's host
-// reaches the fleet's bridge on any node that serves the API, which relays
-// its call to the seat's holder over the broker (internal/api/mcpbridge), and
-// a box on the host dials the node's api.port on loopback, which the node
-// serves its own host alone ([Probes]) — so a node that serves no API has no
-// route a caller off its host needs it to serve.
+// reaches the fleet's bridge on any API node, which relays to the seat's holder
+// over the broker (internal/api/mcpbridge), and a box on the host dials api.port
+// on loopback ([Probes]), so no route a caller off its host needs lies here.
 //
-// ONE PREDICATE for the two moments that need it — `crewlet run` binding the
-// listener before there is an engine, and serving it once there is one — so a
-// node never binds a public listener it then serves nothing on.
+// ONE PREDICATE for `crewlet run` binding the listener before there is an
+// engine and serving it once there is one, so a node never binds a public
+// listener it then serves nothing on.
 func PublicListener(bootstrap *config.Bootstrap, nodeID string) bool {
 	return bootstrap.API.Port != 0 && bootstrap.API.Public.Enabled() &&
 		bootstrap.Profile(nodeID).RunsIngress()

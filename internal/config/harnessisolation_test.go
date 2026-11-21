@@ -9,24 +9,14 @@ import (
 // OPENCODE'S ISOLATION IS NOT AN OPERATOR'S TO UNDO FROM env.
 //
 // The opencode profile sets OPENCODE_CONFIG_PROJECT_DISABLE=1 so OpenCode reads
-// no configuration from the call's working directory or any ancestor of it:
-// with the walk on, an allow-all opencode.json above the state directory handed
-// every seat a shell and an ancestor plugin ran its code (measured on 2.0.32).
-// env is layered over the profile's environment, so a value written there —
-// "0", or an empty one, which OpenCode reads as off — reopened the walk for
-// every seat on the entry while validating clean. The switch is an isolation
-// variable now, and env naming it is refused as HOME is: on a write, and
-// warned about on apply, because the entry still runs. OPENCODE_CONFIG_DIR, the
-// call's own configuration directory, is refused the same way.
-//
-// And the refusal names the field that DOES take each of them. It named
-// overrides.config_env for every isolation variable, which refuses both of
-// these: OPENCODE_CONFIG_DIR as work_config_env's, the switch as a variable
-// "the engine already points at a directory" — so an operator who followed it
-// met a second refusal.
-//
-// A passthrough of the engine's own value through overrides is refused by
-// the profile's validator, at the overrides.
+// no configuration from the working directory or any ancestor: with the walk on,
+// an allow-all opencode.json above the state directory handed every seat a shell
+// (measured on 2.0.32). env is layered over the profile's, so "0" or an empty
+// value (read as off) reopened the walk while validating clean. env naming the
+// switch, or OPENCODE_CONFIG_DIR, is refused as HOME is: on a write, and warned
+// about on apply, because the entry still runs. The refusal names the field that
+// DOES take each: overrides.config_env refuses both. A passthrough of the
+// engine's own value through overrides is refused by the profile's validator.
 func TestOpenCodesIsolationCannotBeUndoneFromHarnessEnv(t *testing.T) {
 	t.Parallel()
 	const model = "anthropic/claude-sonnet-5"

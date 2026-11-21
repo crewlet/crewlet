@@ -50,6 +50,14 @@ export function checkStateWord(state: string): string {
 }
 
 /**
+ * "1 check failed and 2 errored": an errored check measured nothing, so it never counts as failed.
+ */
+export function notPassedWords(failed: number, errored: number): string {
+  if (failed > 0 && errored > 0) return `${plural(failed, "check")} failed and ${errored} errored`;
+  return failed > 0 ? `${plural(failed, "check")} failed` : `${plural(errored, "check")} errored`;
+}
+
+/**
  * The tone a check's state wears: success for a pass, danger for a failure,
  * info for one running, and neutral for everything that measured nothing.
  */
@@ -98,6 +106,7 @@ export function queueStateWord(state: string): string {
  */
 const EJECT_WORDS: Readonly<Record<string, string>> = {
   check_failed: "a required check failed",
+  checks_undefined: "its branch's checks file defines a required check in no form that runs",
   conflict: "its merge conflicted",
   gate_unmet: "it no longer met the branch's gate",
   head_moved: "its head moved",

@@ -42,8 +42,9 @@
 // party's page still exists is not a property of this tree, and a gate that
 // fails on somebody else's outage is one that gets skipped.
 //
-// The dashboard's own addresses (`#/worklet/ENG-42`) are held by the dashboard's
-// suite, dashboard/src/app/links.test.ts, against the route resolver itself —
+// The dashboard's own addresses (`#/worklet/ENG-42`) and every pointer at a
+// dashboard-design.md heading (which lives mostly in code) are held by the
+// dashboard's suite, dashboard/src/app/links.test.ts, against the route resolver itself —
 // this package cannot evaluate a route, and a second copy of the route table
 // here would be the drift the table's own gate exists to prevent.
 //

@@ -11,19 +11,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// A CREATE OF WHAT IS ALREADY THERE IS A COLLISION, in this domain's words
-// wherever it is found: by the framework before the publish — the guard row a
-// create's subject holds, which is what refuses the same create made again once
-// its operation ledger has forgotten it — and by the applier after it. The
-// framework's bare sentinel reached the artifacts API's fallback and was
-// answered as this node's fault, and the applier's verdict was told as a
-// malformed request; a source address keeps its own collision, which names the
-// address rather than an id nobody chose.
+// A CREATE OF WHAT IS ALREADY THERE IS A COLLISION ([artifactsdomain.ErrExists]),
+// whether the framework finds it before the publish (the guard row a create's
+// subject holds, once the ledger forgot the create) or the applier after it;
+// never this node's fault nor a malformed request. A source address keeps its
+// own collision, naming the address rather than an id nobody chose.
 //
-// AND IT IS THE FRAMEWORK'S REFUSAL TOO, in its chain and not its words: a
-// person is told a create of what is there in the state log's sentence on
-// every domain ([statelog.Sentence]), and the framework's own text names the
-// subject's broker path.
+// AND IT IS THE FRAMEWORK'S REFUSAL TOO, in its chain and not its words, which
+// name the subject's broker path: a person is told it in [statelog.Sentence].
 //
 // Mutation: drop the ErrExists arm from publishError, or tell RefusedExists as
 // ErrInvalid again, or take statelog.ErrExists out of the chain, and a case
@@ -61,8 +56,7 @@ func TestACreateOfWhatIsThereIsACollision(t *testing.T) {
 		}
 	}
 	// AND A LOST RACE STAYS THE DOMAIN'S CONFLICT, carrying the framework's
-	// sentinel and neither its words nor the subject, which a caller
-	// printing it would show a person; its sentence is the state log's.
+	// sentinel but not its words or the subject; its sentence is the state log's.
 	// Mutations: wrap the framework's error, or name the subject, and the
 	// text row goes red; drop the statelog arm from Sentence and the
 	// sentence rows do.

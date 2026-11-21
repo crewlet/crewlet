@@ -13,31 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// RecordVersion is the record shape THIS BUILD can decode — never the version
-// it stamps on what it writes.
+// RecordVersion is the record shape THIS BUILD can decode, never the version
+// it stamps on what it writes: [Encode] stamps the LOWEST version that reads
+// the record, from [versionedFields] (internal/worklet's RecordVersion states
+// why; one rule for every strict domain).
 //
-// A record above it is RETAINED rather than skipped — see the deferral
-// contract in [statelog] — which is what makes a rolling upgrade a period of
-// reduced coverage rather than an outage. What a writer stamps is the LOWEST
-// version that reads the record, computed by [Encode] from
-// [versionedFields]; internal/worklet's RecordVersion states why, and
-// the rule is one rule across every strict domain.
-//
-// It moves ONLY with the table, and exactly to the table's highest version:
-// statelogtest's declaration case refuses a build that reads a version no
-// field introduced, because such a build would accept a newer peer's record
-// at that version and drop the field it was minted for.
-//
-// # What each version added
-//
-//   - 1: every shape this domain has, a container's chart epoch
-//     ([ContainerPayload.ChartEpoch]) included.
-//   - 2: a credential's apps beside its actor ([MutationRecord.ActorApps]).
-//   - 3: an agent's comment stating whether it asks ([Notify.Asks],
-//     [CommentPatch.Asks]), the open asks it answers ([CommentPatch.Closes])
-//     and the agents it wakes for their open asks ([Notify.Awaiting]).
-//   - 4: whom an agent's record that may wake another agent was written for
-//     ([MutationRecord.WorkingFor], ADR-0109).
+// A record above it is RETAINED, not skipped (the deferral contract in
+// [statelog]), so a rolling upgrade is reduced coverage, not an outage. It
+// moves ONLY with the table, to its highest version: statelogtest's
+// declaration case refuses a build reading a version no field introduced.
+// Versions: 1 base shapes; 2 [MutationRecord.ActorApps]; 3 asks ([Notify.Asks],
+// [CommentPatch.Asks], [CommentPatch.Closes], [Notify.Awaiting]); 4
+// [MutationRecord.WorkingFor] (ADR-0109).
 const RecordVersion = 4
 
 // baseRecordVersion is version 1, the base format: what every build there has
@@ -226,15 +213,13 @@ func (e RecordEnvelope) InstallsGate() bool {
 // a gate ([RecordEnvelope.InstallsGate]), the read index's barrier, the trim's
 // trimmed record, and a reanchor's generation.
 //
-// Each is pinned at [baseRecordVersion] for its own reason, and all four
-// reasons are what an older node does with a record it cannot read. A gate it
-// deferred would leave its gate table empty while it went on applying every
-// record the gate was meant to drop, with no inverse that repairs it; a
-// barrier it retained is one more deferral row for every linearizable read;
-// a trimmed record it retained keeps every anchor it names; a generation it
-// retained is a transition it never makes. So none of them
-// may carry a versioned field, and [Encode] refuses one that does — a field
-// such a record needs is a field that belongs somewhere else.
+// Each is pinned at [baseRecordVersion] because of what an older node does
+// with a record it cannot read. A deferred gate leaves its gate table empty
+// while the node applies every record the gate should drop, with no inverse
+// to repair it; a retained barrier is one more deferral row for every
+// linearizable read; a retained trimmed record keeps every anchor it names;
+// a retained generation is a transition never made. So none may carry a
+// versioned field, and [Encode] refuses one that does.
 func (e RecordEnvelope) readByEveryBuild() bool {
 	return e.InstallsGate() || e.Op == OpBarrier || e.Op == OpTrimmed || e.Op == OpGeneration
 }
@@ -282,19 +267,16 @@ type MutationRecord struct {
 	// waking a seat for the writing agent.
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
-	// Notify is the routing snapshot, and NIL is what "wakes nobody"
-	// means.
+	// Notify is the routing snapshot, and NIL is what "wakes nobody" means.
 	//
-	// A NIL POINTER RATHER THAN A quiet FLAG, so the wake filter is "has a
-	// Notify" — a question about the record's own shape — instead of a
-	// boolean a writer can forget to set. A quiet commit is a full record,
-	// arbitrated exactly like a loud one, and writes its history row like
-	// every other: quiet means it wakes nobody, and nothing else.
+	// A nil pointer rather than a quiet flag, so the wake filter asks about
+	// the record's own shape, not a boolean a writer can forget to set. A
+	// quiet commit is a full record, arbitrated and written to history like
+	// a loud one.
 	//
-	// A COMMENT DOES NOT SUBSCRIBE ITS COMMENTER here, which is the
-	// opposite of the tracker's participants rule and deliberate: a page a
-	// hundred people have remarked on would otherwise wake a hundred seats
-	// when somebody fixes a heading.
+	// A COMMENT DOES NOT SUBSCRIBE ITS COMMENTER, unlike the tracker's
+	// participants rule: a page a hundred people remarked on would otherwise
+	// wake a hundred seats when somebody fixes a heading.
 	Notify *Notify `json:"notify,omitempty"`
 
 	// Extra carries fields a newer build wrote, so a record round-trips
@@ -433,22 +415,15 @@ func Decode(payload []byte) (MutationRecord, error) {
 // Encode renders a record, carrying back whatever a newer build wrote, and
 // stamps it with the lowest version that reads it.
 //
-// LOSSLESS IN BOTH DIRECTIONS, which is what makes a rolling upgrade safe: a
-// node that read a record it only half understood and republished it — the
-// reanchor path does exactly that — must not strip the half it did not.
+// LOSSLESS: a node republishing a half-understood record (the reanchor path)
+// must not strip the half it did not read. It shares [jsoncarry.Encode] with
+// every document shape, not a second merge: a carried field LOSES to a known
+// one, and two copies of that rule let a stale one win.
 //
-// It goes through the same [jsoncarry.Encode] every document shape here uses,
-// rather than a second merge of its own: a carried field LOSES to a known one,
-// and two implementations of that rule are one place where a stale carried
-// copy undoes the write that set it.
-//
-// A ZERO VERSION IS "STAMP IT", on the tracker's rule: every writer leaves V
-// unset and this stamps [versionedFields]' minimum over the bytes it is about
-// to publish. A set version is kept — a relay keeps its writer's, a barrier
-// and a generation their pinned [baseRecordVersion] — and refused when it is
-// below what the record carries. A record every build must read
-// ([RecordEnvelope.readByEveryBuild]) is refused whenever it carries a
-// versioned field at all, stamped or set.
+// A ZERO VERSION IS "STAMP IT" at [versionedFields]' minimum. A set version is
+// kept (a relay's, a barrier's and a generation's [baseRecordVersion]) and
+// refused when below what the record carries; a
+// [RecordEnvelope.readByEveryBuild] record is refused any versioned field.
 func Encode(rec MutationRecord) ([]byte, error) { return encodeWith(rec, versionedFields) }
 
 // encodeWith is [Encode] under a named field table — the seam the stamping

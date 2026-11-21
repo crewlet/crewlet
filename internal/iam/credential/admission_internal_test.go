@@ -125,19 +125,16 @@ func TestARehashNeverQueuesForTheCap(t *testing.T) {
 
 // A REHASH NEVER TAKES A FREED SLOT FROM A SIGN-IN WAITING FOR ONE.
 //
-// A slot a finishing derivation frees goes to a request already waiting for
-// it; a rewrite nobody waits on that took it instead would push the sign-in
-// behind it back by a derivation, under exactly the load the cap exists for.
-// The property is about the INSTANT of release, so the case asks for the slot
-// at that instant: the slot is given back and the rehash asks for it in the
-// same goroutine with nothing between them, before the waiter has been
-// scheduled at all. That it is refused is Go's own hand-off — a receive from a
+// A freed slot goes to a request already waiting; a rewrite nobody waits on
+// that took it would delay the sign-in behind it by a derivation, under the
+// load the cap exists for. The property is about the INSTANT of release, so the
+// slot is given back and the rehash asks for it in the same goroutine, before
+// the waiter is scheduled. It is refused by Go's own hand-off: a receive from a
 // full buffered channel moves a blocked sender's value into the buffer under
-// the channel's lock — so the correct cap refuses it every time.
+// the channel's lock.
 //
-// Mutation: wait for a slot by polling it rather than by blocking on the send
-// — a free pool the rehash can see before the waiter does — and the rehash
-// derives in the slot the waiter was owed.
+// Mutation: wait for a slot by polling rather than by blocking on the send,
+// and the rehash derives in the slot the waiter was owed.
 func TestARehashNeverTakesAFreedSlotFromAWaiter(t *testing.T) {
 	t.Parallel()
 	g := newGated(t, 1)
@@ -284,17 +281,14 @@ func TestAnAbandonedAttemptGivesUpItsPlace(t *testing.T) {
 // A MISS IS ONE DERIVATION AT THIS BUILD'S COST, UNDER THE CAP, EXACTLY AS A
 // HIT IS.
 //
-// A sign-in that names nobody has no verifier to check, and refused without a
-// derivation it answers in microseconds where a real name pays an argon2id
-// verification — the roster, read off a stopwatch. So a decoy verifies what was
-// presented against the hasher's one dummy verifier: the same derivation, at
-// the same cost, waiting for the same cap — and an unreadable stored verifier
-// is answered the same way.
+// Refused without a derivation, a sign-in naming nobody answers in microseconds
+// where a real name pays an argon2id verification: the roster, read off a
+// stopwatch. So a decoy verifies against the hasher's one dummy verifier, at
+// the same cost under the same cap; so does an unreadable stored verifier.
 //
-// Mutations: derive a decoy at any cost but this hasher's, or derive nothing,
-// and the recorded derivations differ; let it skip the cap and it answers
-// while every slot is taken; draw a new dummy per decoy and two decoys verify
-// against two salts.
+// Mutations: derive at any other cost, or nothing, and the recorded derivations
+// differ; skip the cap and it answers with every slot taken; draw a new dummy
+// per decoy and two decoys verify against two salts.
 func TestAMissIsOneDerivationAtThisCostUnderTheCap(t *testing.T) {
 	t.Parallel()
 	h := NewHasher(cheapParams, 1)

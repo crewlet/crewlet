@@ -20,16 +20,12 @@ import (
 // A LEAD READS A REPORT'S RECORD THROUGH THE APP, because the app is handed the
 // chart the decision asks.
 //
-// The personal questions — somebody's inbox, their day, their person record —
-// are the caller's own, their lead's, or admin's, and every one of them is the
-// tracker's, so a lead holding no tracker reads none of them however the chart
-// answers. Every rule piece of that was tested where it lives; what went
-// untested was the WIRING, and the wiring was missing: `crewlet run` built the
-// query surface with no chart at all, so every lead's read of a report's
-// record was UNKNOWN on every node for the life of the process, answered 503
-// and retried for ever. Composed through api.App, the way a caller reaches it,
-// a chart that answers is a 200 and a surface holding none is the 503 — and
-// the second row is what `api.New` now refuses to be built as.
+// The personal questions (inbox, day, person record) are the caller's own,
+// their lead's, or admin's, and all are the tracker's, so a lead holding no
+// tracker reads none however the chart answers. The rules are tested where
+// they live; this tests the WIRING through api.App: a chart that answers is a
+// 200, and a surface holding none is a 503 (UNKNOWN), which `api.New` refuses
+// to be built as.
 func TestALeadReadsAReportsInboxThroughTheApp(t *testing.T) {
 	t.Parallel()
 	const (
@@ -90,17 +86,12 @@ func TestALeadReadsAReportsInboxThroughTheApp(t *testing.T) {
 
 // A REFUSAL ON AUTHORITY SAYS WHY, over REST as it does everywhere else: the
 // rule's reason and the grants that would have admitted the caller, in the
-// envelope beside the code. It said `{"error":"unauthorized"}` and nothing
-// more, so a person refused a colleague's queue could not tell a missing
-// relation from a missing grant — and the sentence that was meant to name the
-// remedy existed only in a log line, naming a grant in words nothing held
-// against the rule.
+// envelope beside the code, so a refused person can tell a missing relation
+// from a missing grant.
 //
-// AND OVER THE SOCKET, which is the dashboard's only data channel: the error
-// frame carries the same two facts under the same keys. It carried the code
-// alone — the app reduced the refusal to the question's name on its way to
-// the socket — so the one transport the screens read was the one that could
-// not say what would change the answer. A refused WATCH says it too.
+// AND OVER THE SOCKET, the dashboard's only data channel: the error frame
+// carries the same two facts under the same keys, and a refused WATCH says it
+// too.
 func TestARefusedPersonalQuestionNamesItsReasonAndItsGrants(t *testing.T) {
 	t.Parallel()
 	const token = "a-colleague-holding-the-tracker-and-nothing-else"

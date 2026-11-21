@@ -1,16 +1,6 @@
 # Tool Capabilities
 
-Crewlet is **tool-stack agnostic**. The engine ships zero hardcoded
-knowledge of any specific integration — not in its prompts, not in its
-runtime logic. When the engine needs to reason about *what a tool does*
-(rather than *that a particular named tool exists*), it derives the
-answer from the tool's **capabilities**, sourced from the MCP server
-that advertises the tool. The LLM, in turn, chooses *which* tool to call
-from the descriptions in its catalogue.
-
-This is what lets the same engine run a company on Slack + Jira +
-Confluence + GitHub, or on Microsoft Teams + Linear + Notion + GitLab,
-with no code change — only different MCP servers in config.
+Crewlet is **tool-stack agnostic**: the engine hardcodes no integration, in prompts or runtime logic. When it must reason about *what a tool does* (not *that a named tool exists*), it derives the answer from the tool's **capabilities**, sourced from the MCP server that advertises it. The LLM chooses *which* tool to call from the descriptions in its catalogue. So one engine runs a company on Slack + Jira + Confluence + GitHub, or Teams + Linear + Notion + GitLab, with only different MCP servers in config.
 
 ---
 
@@ -18,23 +8,16 @@ with no code change — only different MCP servers in config.
 
 | Concern | Coupled approach (rejected) | Crewlet's approach |
 |---|---|---|
-| *Which* tool should the LLM call to deliver a reply? | Name `slack_conversations_add_message` etc. in the prompt | Prompt names the **capability** ("the reply tool for the channel the trigger arrived on"); the LLM maps it to a tool in its catalogue by the tool's description |
+| *Which* tool should the LLM call to deliver a reply? | Name `slack_conversations_add_message` etc. in the prompt | Prompt names the **capability** ("the reply tool for the channel the trigger arrived on"); the LLM maps it to a catalogue tool by description |
 | *May a sub-agent call this tool?* | A hardcoded denylist of `slack_*` / `jira_*` / `confluence_*` / `*copilot*` names | Derived from the tool's **MCP annotations** (`readOnlyHint` / `destructiveHint` / `openWorldHint`) |
 
-The first half is "let the LLM reason from descriptions." The second is
-"let the engine reason from annotations." Neither requires the engine to
-know a single concrete tool name.
+The LLM reasons from descriptions; the engine reasons from annotations. Neither needs a concrete tool name.
 
 ---
 
 ## Tool annotations
 
-The [MCP spec](https://modelcontextprotocol.io) lets a server advertise
-behavioural *hints* per tool. Crewlet captures them as `mcp.Annotations`
-(`internal/mcp/annotations.go`), carries them on every bridged tool
-(`mcp.Tool.Annotations`) and beside the tool in the registry
-(`tools.Entry.Annotations`), and advertises them again on the two MCP
-surfaces it *serves*:
+The [MCP spec](https://modelcontextprotocol.io) lets a server advertise behavioural *hints* per tool. Crewlet captures them as `mcp.Annotations` (`internal/mcp/annotations.go`), carries them on every bridged tool (`mcp.Tool.Annotations`) and in the registry (`tools.Entry.Annotations`), and advertises them again on the two MCP surfaces it *serves*:
 
 | Field | MCP hint | Meaning |
 |---|---|---|
@@ -44,125 +27,37 @@ surfaces it *serves*:
 | `open_world` | `openWorldHint` | The tool touches entities outside the local system (the network, external services, shared surfaces a human can see) |
 | `title` | `title` | Human-friendly name |
 
-Every hint has **three values**, `mcp.Yes`, `mcp.No` and `mcp.Unknown`
-(the server did not say). `Unknown` is never coerced to `No`: "unknown"
-and "explicitly safe" are different facts, and every classifier below
-depends on the distinction. The MCP Go SDK's own struct cannot hold it
-(two of its four hint fields are plain booleans), so Crewlet reads a
-server's annotations off the wire rather than out of the decoded struct
-and trusts only an explicit `true`. A value that is not a JSON boolean is
-read as `Unknown`.
+Every hint has **three values**: `mcp.Yes`, `mcp.No` and `mcp.Unknown` (the server did not say). `Unknown` is never coerced to `No`: "unknown" and "explicitly safe" are different facts every classifier below depends on. The MCP Go SDK's struct cannot hold it (two of its four hint fields are plain booleans), so Crewlet reads annotations off the wire and trusts only an explicit `true`. A non-boolean value is `Unknown`.
 
-First-party builtins declare their own annotations in code, registered
-with `tools.Registry.RegisterWith`, so the same classification works for
-them. The [code tools](../guides/tools-and-mcp.md#the-companys-code)' thirteen
-reads, for one, are each a proven, idempotent read: a worker may be handed any
-of them, a turn that only read code delivered nothing, and the operator
-catalogue records no call to one. Two of them read a repository's changes —
-`code_list_changes`, and `code_get_change`, a change a part at a time — and
-are reads like the rest: a reviewer [woken about a
-change](gitlet.md#how-a-seat-is-woken) that has read its diff and its
-findings has delivered nothing yet, and only a write it makes in answer
-reaches anybody — a review, a comment or an answer to its findings, each of
-which tells whom it concerns in turn ([Who a change
-wakes](gitlet.md#who-a-change-wakes); a person's side of the same
-conversation is [Review a change](../guides/gitlet.md#review-a-change)). So is
-`code_get_check_failures`, what a check of a commit said and a page of its
-kept log: a seat that read why a check failed has delivered nothing until it
-fixes the code or reruns the check. And so is `code_search`, the lines
-matching a search across the repositories the caller may read that keep a
-search index, or those its `repo:` filters name: a seat that
-found where something lives has delivered nothing until it acts on it, and a
-worker may be handed the search as it may any read — each repository still
-judged by the grant of whoever the search is made as, on the Gitlet node that
-answers it. A seat holding it is told, in its executor prompt's
-`code_search` section, to search before reading whole trees. Each change tool also names, in one table its tests
-hold to the tool list, the access its call needs on the change's repository —
-of its caller, and in a turn a colleague seat woke of that seat too; a read's
-is read, which the node that answers judges both at, and a write's is the
-least access at which the node that decides it may admit the call — the rest
-is the relation that node judges from its own chart, which no access alone
-names (an open's push of its branch, a change's owner steering it). Their
-twenty-six writes — `code_commit_files`,
-`code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`,
-`code_create_repo`, `code_update_repo`, `code_delete_repo`,
-`code_restore_repo`, `code_protect_branch`, a change's `code_open_change`,
-`code_update_change` and `code_close_change`, and its conversation's
-`code_request_review`, `code_review_change`, `code_comment_on_change`,
-`code_resolve_finding`, its findings' `code_apply_suggestions` and its
-`code_rebase_change`, its `code_merge_change`, `code_dequeue_change` and
-`code_revert_change`, a commit's checks' `code_rerun_checks` and
-`code_report_check`, a repository's `code_purge_unreachable`, and
-`code_import_repo` — are each
-`read_only: false`
-with `open_world: true`: a branch, a repository or a change is a surface every
-colleague reads, so `mcp.WritesToSharedSurface` keeps every one from a worker,
-which would write under its parent's grant; each is registered as a delivery
-to Gitlet, so a turn woken about a repository that moved a branch or
-opened a change delivered; and each but two is `idempotent: true`, since every
-one is held to what its caller read — a commit to the head it names, a create
-to a free name, a change's edit and close to the version its caller read, an
-open to the one live change a branch may head, an ask of a reviewer already
-asked and an answer a finding already holds to nothing, a rerun to the
-attempt its caller read and a check's ending reported again to the ending its
-row holds — and the same call made again is the same operation. `code_review_change` and
-`code_comment_on_change` are `idempotent: false`: a review and a comment are
-additive, and two saying the same are two, as `comment_on_work_item`'s are —
-the engine makes a re-run of the same call the same write, but the hint
-describes the tool a model is offered. `code_delete_branch`,
-`code_delete_repo`, `code_resolve_finding` and `code_purge_unreachable` are
-also `destructive: true`: each takes away what somebody else made with
-nothing the same tool keeps to undo it — a finding dismissed is a reviewer's
-blocker cleared, which no write moves back, and a purged object is gone once
-the purge commits. `code_apply_suggestions` is a commit like `code_commit_files`,
-held to the head its caller read, and the CALLER's: whoever applies a
-review's suggestions becomes an author of the change, whose approval of it
-then counts for nothing, and answers the findings applied `resolved` — an
-author's answer, which leaves a blocker standing for its raiser to judge.
-`code_rebase_change` is a forced push of the change's branch, held to the
-head its caller read, whose replayed commits keep their own authors: the
-rebaser becomes an author of the change as any pusher of a revision does.
-`code_revert_change` is a commit on a new branch whose push opens the
-revert's own change, so it changes no target: the revert is merged as any
-change is, by the same call's `merge` or later.
-`code_merge_change` merges the change from the head its caller read, or puts
-it in its target's queue, and a change its target's gate does not allow yet
-is refused in a class of its own, `not_ready`, naming every unmet
-precondition and who it waits on — never `invalid`, since nothing about the
-call was wrong, and never a retry, since its people clear it and a
-`ready_to_merge` wake follows. A seat holding it is also told, in its
-executor prompt's `code_merging` section, to end its turn rather than wait.
-`code_report_check`, `code_purge_unreachable` and `code_import_repo` are the
-three code writes no seat is offered: each is human-only in the authority
-table — a report is a check result, and a seat runs no CI whose result it
-could report ([External
-CI](../guides/gitlet.md#external-ci)); a purge drops history nothing brings
-back, which no model's say-so may erase, and it asks the person a fresh proof
-of who they are besides; and an import has Gitlet dial another host
-for the company, which a model's say-so would point at any URL a page it read
-named ([Imports and mirrors are a person's](../guides/gitlet.md#import-from-github-or-gitlab)).
-An import is a create like `code_create_repo`, `idempotent: true` and not
-destructive: its repository's id comes from the call's operation, so the same
-call made again is the same create, and a mistaken one is deleted as any
-repository is. Its `credential` is the NAME of the variable holding the
-source's token — never the token, which the tool refuses for its shape before
-anything is sent, since every record of the repository's settings would carry
-it. A purge is `idempotent: true`: its request is the
-call's operation, so the same call made again is the same request, and a
-request asked while another is open widens that one rather than adding a
-second. A seat holding the
-writes is also told, in its executor prompt's `code_writes` section, the one
-choice no description can carry: a small change is committed on the server,
-and anything to build or test belongs in a checkout. The operator-only
-`code_repo_readers` beside them is a proven, idempotent read like the thirteen,
-which no seat's registry ever holds: annotations say what a tool does,
-never who may call it, and who read a unit's repository is an admin's — a
-person's — question, decided by the authority table before anything is read
-([Who read it](gitlet.md#who-read-it)). And so are the
-[health tools](../guides/fleet.md#the-health-tools), `fleet_health` and
-`code_status`: proven, idempotent reads of the deployment, which every seat's
-registry holds and a seat is offered only where its role carries the health
-grant — again the authority table's decision, never an annotation's.
+First-party builtins declare theirs in code via `tools.Registry.RegisterWith`.
+
+The [code tools](../guides/tools-and-mcp.md#the-companys-code)' thirteen reads are each a proven, idempotent read: a worker may be handed any, a turn that only read code delivered nothing, and the operator catalogue records no call to one.
+
+- Two read a repository's changes: `code_list_changes`, and `code_get_change` (a change a part at a time). A reviewer [woken about a change](gitlet.md#how-a-seat-is-woken) that has read its diff and findings has delivered nothing; only a write in answer (a review, a comment, an answer to findings) reaches anybody, each telling whom it concerns ([Who a change wakes](gitlet.md#who-a-change-wakes); a person's side is [Review a change](../guides/gitlet.md#review-a-change)).
+- `code_get_check_failures` (what a check of a commit said, and a page of its kept log) is a read: a seat that read why a check failed has delivered nothing until it fixes the code or reruns the check.
+- `code_search` returns the lines matching a search across the repositories the caller may read that keep a search index, or those its `repo:` filters name. It is a read a worker may be handed; each repository is judged by the grant of whoever the search is made as, on the Gitlet node that answers. A seat holding it is told, in its executor prompt's `code_search` section, to search before reading whole trees.
+
+Each change tool names, in one table its tests hold to the tool list, the access its call needs on the change's repository, of its caller (and of a colleague seat that woke the turn). A read's is read; a write's is the least access at which the deciding node may admit the call, the rest being a relation that node judges from its own chart (an open's push of its branch, a change's owner steering it).
+
+The twenty-nine writes are `code_commit_files`, `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`, `code_create_tag`, `code_delete_tag`, `code_create_repo`, `code_update_repo`, `code_delete_repo`, `code_restore_repo`, `code_protect_branch`; a change's `code_open_change`, `code_update_change`, `code_close_change`; its conversation's `code_request_review`, `code_review_change`, `code_comment_on_change`, `code_delete_comment`, `code_resolve_finding`; its findings' `code_apply_suggestions`; `code_rebase_change`, `code_merge_change`, `code_dequeue_change`, `code_revert_change`; a commit's checks' `code_rerun_checks` and `code_report_check`; a repository's `code_purge_unreachable`; and `code_import_repo`.
+
+- Each is `read_only: false` with `open_world: true`: a branch, repository or change is a surface every colleague reads, so `mcp.WritesToSharedSurface` keeps each from a worker, which would write under its parent's grant.
+- Each is registered as a delivery to Gitlet, so a turn woken about a repository that moved a branch or opened a change delivered.
+- Each but two is `idempotent: true`, since each is held to what its caller read, so the same call again is the same operation: a commit to the head it names, a create to a free name, a change's edit and close to the version read, an open to the one live change a branch may head, a repeated ask or answer to nothing, a rerun to the attempt read, a repeated check ending to the ending its row holds.
+- `code_review_change` and `code_comment_on_change` are `idempotent: false`: reviews and comments are additive, and two saying the same are two, as `comment_on_work_item`'s are. The engine makes a re-run the same write, but the hint describes the tool a model is offered.
+- `code_delete_branch`, `code_delete_repo`, `code_delete_comment`, `code_resolve_finding` and `code_purge_unreachable` are also `destructive: true`: each takes away what somebody else made with nothing the same tool keeps to undo it. A deleted comment's words are cleared from every read, a dismissed finding is a reviewer's blocker cleared (no write moves it back), and a purged object is gone once the purge commits.
+- `code_apply_suggestions` is a commit like `code_commit_files`, held to the head its caller read, and the CALLER's: whoever applies a review's suggestions becomes an author of the change, whose approval of it then counts for nothing. It answers the findings applied `resolved`, an author's answer, which leaves a blocker standing for its raiser to judge.
+- `code_rebase_change` is a forced push of the change's branch, held to the head its caller read; replayed commits keep their authors, and the rebaser becomes an author of the change as any pusher of a revision does.
+- `code_revert_change` is a commit on a new branch whose push opens the revert's own change, so it changes no target: the revert is merged as any change is, by the same call's `merge` or later.
+- `code_merge_change` merges the change from the head its caller read, or queues it on its target. A change its target's gate does not allow yet is refused as `not_ready`, naming every unmet precondition and who it waits on: never `invalid` (nothing about the call was wrong), never a retry (its people clear it and a `ready_to_merge` wake follows). A seat holding it is told, in its executor prompt's `code_merging` section, to end its turn rather than wait.
+- `code_report_check`, `code_purge_unreachable` and `code_import_repo` are the three code writes no seat is offered: each is human-only in the authority table.
+  - A report is a check result, and a seat runs no CI whose result it could report ([External CI](../guides/gitlet.md#external-ci)).
+  - A purge drops history nothing brings back, which no model's say-so may erase; it also asks the person a fresh proof of who they are. It is `idempotent: true`: its request is the call's operation, so the same call again is the same request, and a request asked while another is open widens that one.
+  - An import has Gitlet dial another host for the company, which a model's say-so would point at any URL a page it read named ([Imports and mirrors are a person's](../guides/gitlet.md#import-from-github-or-gitlab)). It is a create like `code_create_repo`, `idempotent: true` and not destructive: its repository's id comes from the call's operation, and a mistaken one is deleted as any repository is. Its `credential` is the NAME of the variable holding the source's token, never the token, which the tool refuses for its shape before anything is sent, since every record of the repository's settings would carry it.
+
+A seat holding the writes is also told, in its executor prompt's `code_writes` section, the one choice no description can carry: a small change is committed on the server, and anything to build or test belongs in a checkout.
+
+The operator-only `code_repo_readers` is a proven, idempotent read like the thirteen, which no seat's registry holds: annotations say what a tool does, never who may call it, and who read a unit's repository is a person's question, decided by the authority table before anything is read ([Who read it](gitlet.md#who-read-it)). The same holds for the [health tools](../guides/fleet.md#the-health-tools), `fleet_health` and `code_status`: proven, idempotent reads of the deployment, held by every seat's registry and offered only where the seat's role carries the health grant, the authority table's decision.
 
 ### Where annotations come from, and where they go
 
@@ -177,148 +72,60 @@ flowchart TD
     ENTRY --> OUT["the surfaces Crewlet SERVES<br/>/operator/mcp and the sandbox bridge"]
 ```
 
-**The outbound half is not optional.** Both MCP surfaces this engine serves —
-`/operator/mcp`, which hands a company's tracker, knowledge base and chat to
-an operator's own assistant, and the sandbox bridge, which hands a seat's tools to
-a harness — advertise each tool's hints alongside its schema. A surface
-that published only names and schemas would give those clients no way to tell
-`search_work_items` from `remove_work_item`: a client that asks a person before
-an irreversible call would have nothing to ask on, and one that skips the
-prompt for a read would prompt on every one.
+**The outbound half is not optional.** Both MCP surfaces this engine serves, `/operator/mcp` (which hands a company's tracker, knowledge base and chat to an operator's own assistant) and the sandbox bridge (which hands a seat's tools to a harness), advertise each tool's hints alongside its schema. Without hints a client could not tell `search_work_items` from `remove_work_item`, so it could neither ask before an irreversible call nor skip the prompt for a read.
 
-A tool the engine has **not** classified advertises no annotations at all,
-rather than four "false" hints it would be read as having asserted. Only an
-explicit yes ever sets a hint on the wire, in the same direction and for the
-same reason as the inbound rule above.
+A tool the engine has **not** classified advertises no annotations, rather than four "false" hints it would be read as having asserted. Only an explicit yes ever sets a hint on the wire, as in the inbound rule above.
 
 ---
 
 ## The classifiers
 
-The engine asks annotations three questions: may a worker call this, did this
-answer reach anybody, and did this turn act outside the engine. The first two
-deliberately fail in opposite directions; the third counts everything the
-second does, and beyond that reads only the hints a tool POSITIVELY gives.
+The engine asks annotations three questions: may a worker call this, did this answer reach anybody, and did this turn act outside the engine. The first two fail in opposite directions; the third counts everything the second does, and beyond that reads only the hints a tool POSITIVELY gives.
 
 ### `mcp.WritesToSharedSurface`: may a worker call this?
 
-*Would a worker calling this tool write to a surface a human reads, under
-the parent agent's identity?* A worker posting to a channel or commenting
-on an issue as its parent would leak identity onto a transcript, so the
-[worker guard](turn-engine.md#runtime-invariants) (`subagent.Permit`)
-denies such tools.
-
-`mcp.WritesToSharedSurface` answers it, conservatively about unknowns:
+*Would a worker calling this tool write to a surface a human reads, under the parent agent's identity?* A worker posting to a channel or commenting on an issue as its parent would leak identity onto a transcript, so the [worker guard](turn-engine.md#runtime-invariants) (`subagent.Permit`) denies such tools. `mcp.WritesToSharedSurface` answers, conservatively about unknowns:
 
 - `ReadOnly` is `Yes` → **no** (a pure read).
 - `Destructive` is `Yes` → **yes**.
-- `ReadOnly` is `No` and `OpenWorld` is not `No` → **yes** (a write to
-  the outside world).
-- everything else, including all-unknown → **no**. The engine does not
-  block what it cannot classify; the task's (or its template's) explicit
-  allowlist already curates the worker surface.
+- `ReadOnly` is `No` and `OpenWorld` is not `No` → **yes** (a write to the outside world).
+- everything else, including all-unknown → **no**. The engine does not block what it cannot classify; the task's (or its template's) explicit allowlist already curates the worker surface.
 
-First-party control tools (`delegate`, `a2a_ask` and the A2A channel tools,
-and any discovery pair but the worker's own, `activate_tool` / `list_mcp_server_tools`) are denied
-separately by name, because they are Crewlet's *own* tools and naming them
-is not a third-party coupling.
+First-party control tools (`delegate`, `a2a_ask` and the A2A channel tools, and any discovery pair but the worker's own, `activate_tool` / `list_mcp_server_tools`) are denied separately by name: they are Crewlet's *own* tools, so naming them is no third-party coupling.
 
 ### The delivery check: did this answer reach anybody?
 
-The [delivery check](turn-engine.md#three-checks-in-increasing-cost) asks
-the opposite question and fails closed. `turn.Deliverable` is one
-membership test against the map `tools.Registry.Deliveries` computes, and
-two kinds of tool are in it: an MCP-served tool whose own annotations do
-**not positively** call it a read, and a first-party tool the engine
-registered as one that reaches somebody. So an unannotated server tool
-counts, and so does commenting on a Worklet item, while a diary write
-does not. The read side of that test is `mcp.ReadOnlyProven`, which exists
-beside `mcp.WritesToSharedSurface` precisely because the two questions fail
-in opposite directions: reusing the worker guard's answer here would read
-every under-annotated write tool as having reached nobody. It counts a call
-to an MCP tool that no hint marks as a read or as a write, from its server
-or from a `tool_annotations` override, without knowing that it wrote,
-though, so no correction tells a turn that its work landed somewhere else
-on such a call alone; a call to a tool marked `read_only: false` or
-`destructive: true`, by its server or by an override, is a write the engine
-knows of.
+The [delivery check](turn-engine.md#three-checks-in-increasing-cost) asks the opposite question and fails closed. `turn.Deliverable` is one membership test against the map `tools.Registry.Deliveries` computes. Two kinds of tool are in it: an MCP-served tool whose own annotations do **not positively** call it a read, and a first-party tool the engine registered as one that reaches somebody. So an unannotated server tool counts, and so does commenting on a Worklet item, while a diary write does not.
+
+The read side is `mcp.ReadOnlyProven`, separate from `mcp.WritesToSharedSurface` because reusing the worker guard's answer here would read every under-annotated write tool as having reached nobody. A call to an MCP tool that no hint marks as a read or as a write (from its server or a `tool_annotations` override) counts without the engine knowing it wrote, so no correction tells a turn that its work landed elsewhere on such a call alone. A call to a tool marked `read_only: false` or `destructive: true`, by its server or an override, is a write the engine knows of.
 
 ### `open_world` is a tri-state, and unset is not `false`
 
-Read the third rule again: `ReadOnly` is `No` **and** `OpenWorld` *not
-explicitly* `No`. A tool that writes only *private* state (an agent's
-own diary, its own learned skills, its own onboarding marker) is not a
-write to a surface a human reads, but saying so takes an explicit
-`open_world: false`. Leaving the hint unset classifies it with the public
-writes.
+The third rule above is `ReadOnly` is `No` **and** `OpenWorld` *not explicitly* `No`. A tool that writes only *private* state (an agent's own diary, learned skills, onboarding marker) is not a write to a surface a human reads, but saying so takes an explicit `open_world: false`; left unset it is classified with the public writes.
 
-That is deliberate for a third-party server, where "nobody said" has to
-mean "assume the worst" — it is the fail-closed default, and the engine reads a
-server's annotations off the wire because the MCP Go SDK flattens the absent case for
-`readOnlyHint` and `idempotentHint`, which would otherwise make every
-under-annotated tool look exactly like a public write.
+That is deliberate for a third-party server: "nobody said" means "assume the worst", the fail-closed default. The engine reads annotations off the wire because the MCP Go SDK flattens the absent case for `readOnlyHint` and `idempotentHint`, which would make every under-annotated tool look like a public write.
 
-It is a trap for **first-party** tools, and Crewlet fell into it twice. Three
-builtins that write nothing but the agent's own memory (`reflect_and_persist`,
-`refine_skill`, `mark_onboarded`) declared `read_only: false` and said nothing
-about `open_world`, so the guard denied them to workers their parent had
-explicitly granted them — blaming a write to a shared surface that never
-happens. The three person tools (`mark_inbox`, `set_pins`, `set_priorities`)
-did the same: each is written only on behalf of the person whose it is, so
-there is no second party to be surprised by one. All six say what they mean
-now, and `set_priorities` is the one that genuinely *is* open-world — a lead
-may set the queue of somebody in their line, and that person opens their day on
-work they did not choose.
+For **first-party** tools it is a trap. Builtins that write only the agent's own memory (`reflect_and_persist`, `refine_skill`, `mark_onboarded`) must declare `open_world: false`, or the guard denies them to workers their parent explicitly granted them. So must the three person tools (`mark_inbox`, `set_pins`, `set_priorities`), each written only on behalf of the person whose it is. All six now say so, except `set_priorities`, which genuinely *is* open-world: a lead may set the queue of somebody in their line, who opens their day on work they did not choose.
 
-The same applies to `tool_annotations`: a server tool that genuinely stays
-inside your network needs the key written out, because omitting it is a claim
-in the other direction.
+Likewise a `tool_annotations` entry for a server tool that stays inside your network needs the key written out.
 
 ### Did this turn act outside the engine?
 
-*Did this turn do anything outside the engine that it cannot take back?*
-`turn.Acted` answers it, and two things turn on the answer: whether a turn
-nobody asked for may end as `no_action`, which one that acted may not
-([the engine check](turn-engine.md#three-checks-in-increasing-cost)), and
-whether a broken turn's trigger is given up rather than redelivered, since a
-redelivery would do it again
-([A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway)).
-It counts every tool the delivery check counts, and beyond those only what a
-tool's own hints POSITIVELY say: that half fails open where the delivery check
-fails closed, because a true answer gives a trigger up, while the first fails
-closed with it — an MCP tool with no hints at all counts here as it counts
-there. A `no_action` sent back for a call to an MCP tool that no hint marks as
-a read or as a write, from its server or from a `tool_annotations` override,
-names it as a call the engine cannot tell from a write rather than as an act:
-a turn that only searched through one would read "acted" as false. A tool
-marked `read_only: false` or `destructive: true`, by its server or by an
-override, is named as an act; `destructive: false` alone marks neither, since
-it says only that whatever the tool changes it does not destroy, and a tool
-that only reads may carry it.
+*Did this turn do anything outside the engine that it cannot take back?* `turn.Acted` answers it, and two things turn on the answer: whether a turn nobody asked for may end as `no_action` (one that acted may not; [the engine check](turn-engine.md#three-checks-in-increasing-cost)), and whether a broken turn's trigger is given up rather than redelivered, since redelivery would do it again ([A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway)).
+
+It counts every tool the delivery check counts, and beyond those only what a tool's own hints POSITIVELY say. That half fails open where the delivery check fails closed, because a true answer gives a trigger up. An MCP tool with no hints at all counts here as it counts there. A `no_action` sent back for a call to an MCP tool that no hint marks as a read or as a write (from its server or a `tool_annotations` override) names it as a call the engine cannot tell from a write, not as an act. A tool marked `read_only: false` or `destructive: true`, by its server or an override, is named as an act; `destructive: false` alone marks neither, since it says only that the tool does not destroy, and a read-only tool may carry it.
 
 - a tool the delivery check counts → **yes**;
-- `open_world` is `Yes` and `read_only` is not `Yes` → **yes**: `a2a_ask`, a
-  reaction, publishing an artifact, `ssh_operate`;
-- everything else → **no**: a first-party tool nobody classified (the
-  executor's own `submit_work`), and **a read of the world** — `read_only:
-  true` beside `open_world: true` — which reaches outside the process and
-  changes nothing a retry would repeat or anybody needs telling about: a web
-  search, or `ssh_read`.
+- `open_world` is `Yes` and `read_only` is not `Yes` → **yes**: `a2a_ask`, a reaction, publishing an artifact, `ssh_operate`;
+- everything else → **no**: a first-party tool nobody classified (the executor's own `submit_work`), and **a read of the world** (`read_only:
+true` beside `open_world: true`), which reaches outside the process and changes nothing a retry would repeat or anybody needs telling about:
+a web search, or `ssh_read`.
 
 ---
 
 ## Operator overrides for under-annotating servers
 
-Most modern MCP servers (the official GitHub server, recent
-`mcp-atlassian`) advertise annotations. For a server that does not, an
-operator can supply them in config — without touching engine code — via
-`tool_annotations` on an `mcp_servers` entry, keyed by **bare tool
-name**. `tavily-mcp` 0.2.22 is such a server: its five tools search and
-read the web and advertise no hints at all, so without these keys each
-counts as a possible delivery, and a turn that only searched can pass the
-delivery check as one that reached somebody. With them each is a read of the
-world, which neither delivers nor counts as having
-[acted](#did-this-turn-act-outside-the-engine):
+Servers that do not advertise annotations (most modern ones do) can be corrected: an operator supplies them in config via `tool_annotations` on an `mcp_servers` entry, keyed by **bare tool name**. `tavily-mcp` 0.2.22 advertises no hints for its five web search and read tools, so without these keys each counts as a possible delivery and a turn that only searched can pass the delivery check. With them each is a read of the world, which neither delivers nor counts as having [acted](#did-this-turn-act-outside-the-engine):
 
 ```yaml
 mcp_servers:
@@ -334,31 +141,13 @@ mcp_servers:
       tavily_research: { read_only: true, open_world: true }
 ```
 
-Keys accept snake_case (`read_only`) or the MCP camelCase
-(`readOnlyHint`). Overrides win over whatever the server advertised
-(`mcp.Annotations.Merge`), and a hint the override leaves unset keeps
-the server's value. The **tool-name key** matches either the server's raw
-name or the catalogue name with the entry's `tool_prefix` applied (for a
-Slack server with `tool_prefix: slack_`, `conversations_add_message`
-**or** `slack_conversations_add_message`; the raw name wins when both are
-present), so keying by the name you see in the catalogue never silently
-no-ops. A key that is neither (a tool the server does not list, or one
-it lists under another name) overrides nothing. The server's Tools tab on
-**Settings › MCP & tools** names every key no started instance lists
-(`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)),
-and each instance's `tools_discovered` log line names the keys its own
-listing does not answer (`annotation_keys_unlisted`). Only the first is a
-mistake: one instance's listing is not the server's. A per-role child
-serves what its seat's credentials reach — `mcp-atlassian` lists no
-Confluence tool to a seat holding only a Jira credential — so a
-`confluence_*` key is right for one seat and absent from another's, while
-a key no instance lists is a misspelling or a tool the server no longer
-serves. Take the names from the server's own listing, which its
-`tools_discovered` line carries.
+Keys accept snake_case (`read_only`) or the MCP camelCase (`readOnlyHint`). Overrides win over what the server advertised (`mcp.Annotations.Merge`); a hint the override leaves unset keeps the server's value.
 
-Every tool server — including Jira/Confluence (`atlassian`), Slack, and
-GitHub — is an `mcp_servers` entry, so `tool_annotations` is declared
-there for all of them, the same way:
+The **tool-name key** matches the server's raw name or the catalogue name with the entry's `tool_prefix` applied (for a Slack server with `tool_prefix: slack_`, `conversations_add_message` **or** `slack_conversations_add_message`; the raw name wins when both are present). A key matching neither (a tool the server does not list, or lists under another name) overrides nothing.
+
+The server's Tools tab on **Settings › MCP & tools** names every key no started instance lists (`unlisted_annotations` in [`GET /mcp-servers`](../reference/api-endpoints.md#get-mcp-servers)), and each instance's `tools_discovered` log line names the keys its own listing does not answer (`annotation_keys_unlisted`). Only the first is a mistake: a per-role child serves what its seat's credentials reach (`mcp-atlassian` lists no Confluence tool to a seat holding only a Jira credential), so a `confluence_*` key is right for one seat and absent from another's, while a key no instance lists is a misspelling or a tool the server no longer serves. Take names from the server's own listing, which its `tools_discovered` line carries.
+
+Every tool server, including Jira/Confluence (`atlassian`), Slack and GitHub, is an `mcp_servers` entry, so `tool_annotations` is declared the same way on all:
 
 ```yaml
 mcp_servers:
@@ -386,35 +175,17 @@ mcp_servers:
       create_pull_request: { destructive: true }
 ```
 
-Jira and Confluence share one `mcp-atlassian` server: declare it once as
-`atlassian` and put both products' overrides on that single entry. The
-official GitHub server and recent `mcp-atlassian` already annotate their
-tools, so these overrides are usually unnecessary — they exist so an
-under-annotating build of any server is correctable without engine
-changes.
+Jira and Confluence share one `mcp-atlassian` server: declare it once as `atlassian` with both products' overrides. The official GitHub server and recent `mcp-atlassian` already annotate, so these overrides are usually unnecessary.
 
-If a server under-annotates and no override is supplied, the worker
-guard cannot auto-deny that server's write tools (the parent's explicit
-allowlist remains the curation), the delivery check counts every one of
-its tools, reads included, as a possible delivery, and every successful
-call to one counts as an [act](#did-this-turn-act-outside-the-engine),
-so a turn nobody asked for that only read through them cannot end as
-`no_action`, and one that broke after only such reads is given up rather
-than redelivered.
+If a server under-annotates and no override is supplied: the worker guard cannot auto-deny that server's write tools (the parent's explicit allowlist remains the curation); the delivery check counts every one of its tools, reads included, as a possible delivery; and every successful call to one counts as an [act](#did-this-turn-act-outside-the-engine), so a turn nobody asked for that only read through them cannot end as `no_action`, and one that broke after only such reads is given up rather than redelivered.
 
 ---
 
 ## Why not classify with an LLM, or by tool name?
 
-- **By tool name** couples the engine to one vendor's tool catalogue
-  and silently fails open for every other.
-- **By an LLM pass at boot** would be non-deterministic and add latency
-  and cost to startup for a yes/no the MCP spec already answers
-  declaratively.
+- **By tool name** couples the engine to one vendor's catalogue and silently fails open for every other.
+- **By an LLM pass at boot** would be non-deterministic and add startup latency and cost for a yes/no the MCP spec already answers declaratively.
 
-MCP annotations are the right primitive: declarative, per-tool, supplied
-by the party that actually knows the tool's behaviour (the server),
-overridable by the operator when the server falls short.
 
 ---
 

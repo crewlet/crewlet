@@ -19,6 +19,8 @@
  * — and each kind's own `pathOf` is what turns it back into a route.
  */
 
+import { inboxItemPath } from "~/app/routes.ts";
+
 export type ObjectKind =
   | "item"
   | "project"
@@ -139,12 +141,10 @@ export const KINDS: Record<ObjectKind, KindSpec> = {
   change: { label: "Change", pathOf: changeRefPath, mono: true },
   // AN ATLAS ENTRY BY ITS ID, the uuid its kind and key derive.
   atlas: { label: "Entry", pathOf: (id) => ["company", "atlas", id], mono: true },
-  // A NOTICE HAS NO PAGE OF ITS OWN, AND NO PEEK EITHER. It is a row in
-  // somebody's inbox naming a change to something else, so its "page" is the
-  // inbox that holds it — and that is where it is read in place and marked,
-  // which is why `peeks.tsx` deliberately registers no body for it and
-  // `peekable` answers false.
-  notice: { label: "Notice", pathOf: () => ["inbox"] },
+  // A NOTICE HAS NO PAGE OF ITS OWN, AND NO PEEK EITHER: its "page" is its
+  // item in the inbox, by its Worklet record id, where it is read and marked,
+  // so `peeks.tsx` registers no body for it and `peekable` answers false.
+  notice: { label: "Notice", pathOf: (id) => inboxItemPath(`notice:${id}`) },
 };
 
 /**

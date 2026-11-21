@@ -1,7 +1,7 @@
 /**
  * The work tracker's closed sets, as the dashboard's own copies: the shapes a
  * view is drawn in, the sort keys a header click sends, the change kinds a
- * history row names, and the axes a board is grouped on.
+ * history row names, the axes a board is grouped on, and an item's flow.
  *
  * Each is the ENGINE's — the query grammar refuses what it does not know, and
  * the applier writes what it writes — and each is held against it in both
@@ -171,6 +171,7 @@ export const CHANGES = [
     mark: "refresh-cw",
     phrase: "recorded that a pull request it waits on is moving again",
   },
+  { kind: "flow", mark: "circle-alert", phrase: "told that nobody is moving it" },
 ] as const satisfies readonly { kind: string; mark: string; phrase: string }[];
 
 /**
@@ -288,6 +289,25 @@ export const DECISION_MAX_OPTIONS = 4;
 export const PROJECT_PAGE = 200;
 
 /**
+ * The fewest and the most hours a project's stuck window may be
+ * (`worklet.MinStuckAfterHours` and `MaxStuckAfterHours`): Edit project offers
+ * no other. Held by the same gate.
+ */
+export const STUCK_AFTER_HOURS_MIN = 1;
+/** See [STUCK_AFTER_HOURS_MIN]. */
+export const STUCK_AFTER_HOURS_MAX = 168;
+/** The window a project that sets none reads (`worklet.DefaultStuckAfterHours`). */
+export const STUCK_AFTER_HOURS_DEFAULT = 8;
+
+/**
+ * The conversation a work item is, less its id: every wake about the item and
+ * every pickup of it is filed under this and then the item's id, so a hold the
+ * engine puts on that conversation is the item's. Held to the engine's own
+ * `worklet.ItemConversation` by `internal/worklet/client_gate_test.go`.
+ */
+export const ITEM_CONVERSATION_PREFIX = "work:task:";
+
+/**
  * The chat surfaces a structured ask's `inform` may name — where the asker
  * said it would report what was decided — as the engine's `InformSurfaces`
  * names them: `mattermost`, `slack`, and `chat`, the engine's own.
@@ -300,3 +320,41 @@ export const PROJECT_PAGE = 200;
  * occur.
  */
 export type InformSurface = "mattermost" | "slack" | "chat";
+
+/**
+ * Why an item in progress is or is not moving (ADR-0162): the engine's flow
+ * states, the word a badge says and its tone. `moving` is the ordinary case and
+ * draws no badge. Held to `worklet.FlowStates` by `client_gate_test.go`.
+ */
+export const FLOW_STATES = [
+  { state: "working", label: "Working", tone: "info" },
+  { state: "blocked", label: "Blocked", tone: "danger" },
+  { state: "waiting", label: "Waiting", tone: "neutral" },
+  { state: "held", label: "Held", tone: "warning" },
+  { state: "due", label: "Start passed", tone: "warning" },
+  { state: "stuck", label: "Stuck", tone: "warning" },
+  { state: "moving", label: "Moving", tone: "neutral" },
+] as const satisfies readonly { state: string; label: string; tone: string }[];
+
+/**
+ * The fact behind a working, waiting or held item, as the clause a sentence
+ * about the item ends with, and a badge's own word where the cause is the whole
+ * story. Held to `worklet.FlowCauses` by the same gate.
+ */
+export const FLOW_CAUSES = [
+  { cause: "turn", phrase: "an agent turn is on it" },
+  { cause: "run", phrase: "an executor run is on it" },
+  { cause: "start", phrase: "it waits for its start" },
+  { cause: "question", phrase: "its assignee asked a question on it that nobody has answered" },
+  { cause: "parked", phrase: "its assignee's run on it waits for a person's answer" },
+  { cause: "paused", phrase: "its assignee is paused" },
+  { cause: "unplaced", phrase: "no node holds its assignee's seat" },
+  { cause: "budget", phrase: "its assignee is out of its token budget" },
+  { cause: "limit", phrase: "its assignee is out of its model limit" },
+  {
+    cause: "parked_elsewhere",
+    phrase: "its assignee's run on another item waits for a person's answer",
+  },
+  { cause: "departed", label: "Assignee left", phrase: "its assignee has left the org chart" },
+  { cause: "nobody", label: "No assignee", phrase: "nobody is assigned" },
+] as const satisfies readonly { cause: string; phrase: string; label?: string }[];

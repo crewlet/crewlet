@@ -11,26 +11,16 @@ import (
 
 // Where the PARSER'S failures are in the document an operator wrote.
 //
-// # Why this is harder than reading the line yaml reports
+// The line yaml reports is not a line in that document. The strict decoder
+// cannot decode a yaml.Node with unknown keys refused, so [decodeKnown]
+// re-encodes the node and decodes that text, and every custom decoder does the
+// same with its sub-node, so a failure is reported at a line of a buffer nobody
+// wrote.
 //
-// Because the line yaml reports is not a line in that document. The strict
-// decoder cannot decode a yaml.Node with unknown keys refused, so
-// [decodeKnown] re-encodes the node and decodes the text it produced, and
-// every custom decoder does the same with its own sub-node. A failure is
-// therefore reported at a line of a buffer nobody wrote: comments and blank
-// lines are gone from it, a flow mapping has been reflowed, and a typo inside
-// a seat's `llm:` mapping is counted from the top of that mapping alone. Taken
-// at its word, a typo on line 9 of a company file was reported as `line 2`,
-// and one in a compact JSON body was always on line 1.
-//
-// So a line is never kept as it was reported. Each decodeKnown re-parses the
-// buffer it decoded, pairs every node in it with the node it was encoded
-// from, and moves each failure onto that node: its line and column in the
-// text the node was parsed from, and whether it is a mapping key. A failure
-// arriving from a nested decoder is already on a node of THIS buffer, so the
-// same pairing moves it one level further out, and by the time it leaves the
-// outermost decoder it sits on a node of the document itself. There the node
-// names its authored path (roles[0].llm.pln) and its real line.
+// So each decodeKnown re-parses its buffer, pairs every node with the node it
+// was encoded from, and moves each failure onto it: line and column in the text
+// it was parsed from, and whether it is a key. A nested decoder's failure is
+// already on a node of THIS buffer, so it moves one level out.
 
 // position is where a node sits in the text it was parsed from, and whether
 // it is a mapping key: a mapping starts where its first key does, so the two
@@ -282,20 +272,14 @@ func nodeFault(n *yaml.Node, detail string) error {
 // carryFaults hands the faults a custom unmarshaler found to the decoder that
 // called it as a *yaml.TypeError.
 //
-// # Why a TypeError, and why its lines are not yaml's
-//
-// Because it is the only error a decoder collects and keeps going after. Any
-// other error an UnmarshalYAML returns ABORTS the whole decode, so one typo in
-// a seat's `llm:` mapping used to hide every other failure in the document,
-// the key misspelled two seats earlier included, and an author fixing them
-// paid a round trip for each.
-//
-// A TypeError holds strings, though, and the decoder copies them into its
-// own. So each fault travels as one line in a form only this package writes
-// and reads ([parseCarried]): its place in the text the calling decoder
-// parsed (line, column, key or not), its kind and its detail. yaml's own
-// "line N: ..." form would lose the column and the kind, and the column is
-// what tells two failures on one line of a JSON body apart.
+// A TypeError is the only error a decoder collects and keeps going after; any
+// other error an UnmarshalYAML returns ABORTS the decode, so one typo would
+// hide every other failure and cost an author a round trip each. It holds only
+// strings, which the decoder copies into its own, so each fault travels as one
+// line in a form only this package writes and reads ([parseCarried]): its place
+// in the text the calling decoder parsed (line, column, key or not), kind and
+// detail. yaml's "line N: ..." form would lose the column and kind, and the
+// column tells two failures on one line of a JSON body apart.
 func carryFaults(err error) error {
 	if err == nil {
 		return nil

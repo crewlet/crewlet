@@ -23,17 +23,15 @@ func keyedAt(key string) doclet.Actor {
 
 // A KEYED WRITE DERIVES ITS OPERATION FROM THE KEY, on every node alike.
 //
-// Asserted across two independent nodes' stores, because that is what a
-// derivation is for: the retry may be served by a different node than the
-// first attempt, in a later process, reading rows the first attempt already
-// moved. Every keyed write here — a create, a remark, a save, a rename, an
-// edit of the remark — is sent to both and must come back under ONE
-// operation, and the create under one page id, while a different key, or none,
-// is a different operation every time.
+// Asserted across two independent nodes' stores: a retry may be served by a
+// different node, in a later process, over rows the first attempt already
+// moved. Every keyed write (create, remark, save, rename, remark edit) goes to
+// both and must come back under ONE operation, the create under one page id,
+// while a different key, or none, is a different operation every time.
 //
 // Mutation: derive any of the five from anything but the key, the verb, the
-// object and what the write says — a fresh id, the node, a row read at call
-// time — and the one-key pair splits.
+// object and what the write says (a fresh id, the node, a row read at call
+// time), and the one-key pair splits.
 func TestAKeyedWriteDerivesItsOperationFromTheKey(t *testing.T) {
 	t.Parallel()
 	key := statelog.NewOpID(keyedSince, "")
@@ -112,17 +110,15 @@ func TestAKeyedWriteDerivesItsOperationFromTheKey(t *testing.T) {
 	}
 }
 
-// A KEYED WRITE'S OPERATION CARRIES THE INSTANT ITS KEY WAS MINTED — never the
+// A KEYED WRITE'S OPERATION CARRIES THE INSTANT ITS KEY WAS MINTED, never the
 // call's own clock.
 //
-// The state log reads an operation's instant out of its id to decide whether
-// this node's ledger can vouch for a retry of it; an id minted before the
-// ledger's last loss whose row is gone is answered `unknown` rather than
-// decided again. A keyed id derived with no instant at all reads as minted
-// before every loss, so on any node whose ledger ever lost a row every keyed
-// write answered `unknown` and never published; one carrying the call's clock
-// reads as minted after the loss, and a retry that lost its first attempt's
-// row published the write a second time.
+// The state log reads an operation's instant from its id to decide whether this
+// node's ledger can vouch for a retry; an id minted before the ledger's last
+// loss whose row is gone is answered `unknown`. An id with no instant reads as
+// minted before every loss, so every keyed write then answered `unknown` and
+// never published; one with the call's clock reads as after it, so a retry that
+// lost its first row published twice.
 //
 // Mutation: derive any of the five without the key's instant, or with the
 // store's clock, and its write names the wrong one.

@@ -306,23 +306,14 @@ func trailSources(t *testing.T, memory *stubMemory) queries.Sources {
 
 // A LEAD READS THEIR OWN SEATS' TRAIL, AND NO ONE ELSE'S (ADR-0033).
 //
-// What a seat remembered and said is its trail, read under one verb
-// ([authz.ActionSeatTrailRead]) by the seat itself, whoever leads it, and an
-// admin — and by nobody else, whatever apps they hold: a lead steers, pauses
-// and answers for their agents and could do none of it well blind, while
-// somebody who merely shares the company does not read every prompt an agent
-// was given. Its rows, over a seat's memory (its sessions, the other half,
-// are held to the same rows by TestASeatsSessionsAreItsTrail):
+// A seat's trail is read under one verb ([authz.ActionSeatTrailRead]) by the
+// seat itself, whoever leads it, and an admin, and by nobody else whatever
+// apps they hold: an admin with no relation reads it; a lead holding NO
+// permission reads the seat they lead (a trail belongs to no app); that lead
+// is refused a seat they do not lead, as is a caller holding every app.
 //
-//   - an admin with no relation to the seat reads it;
-//   - a lead holding NO permission reads the seat they lead, since a seat's
-//     trail belongs to no app;
-//   - and that lead is refused the seat beside it they do not lead, as is a
-//     caller holding every app — each told admin would have admitted them.
-//
-// Mutation: make `audit.seat.read` admin-only (the company-wide trail's rule)
-// and the lead's row goes red; drop the lead arm's chart check and the
-// refused rows do.
+// Mutation: make `audit.seat.read` admin-only and the lead's row goes red;
+// drop the lead arm's chart check and the refused rows do.
 func TestALeadReadsTheirSeatsTrailAndNoOneElses(t *testing.T) {
 	t.Parallel()
 	for _, question := range []struct{ what, param string }{

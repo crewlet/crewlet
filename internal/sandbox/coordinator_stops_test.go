@@ -21,57 +21,14 @@ import (
 // THE ONE PROPERTY: a call that takes a run out of the set of things that will
 // come back must tell the engine that the turn stopped.
 //
-// # Why this file exists at all
-//
-// Four times now a path has ended or stranded a run whose turn was still
-// suspended into it and told nothing above this package, and four times the
-// symptom was a working indicator claiming an agent was busy for the life of the
-// process. Each round closed the path it found by hand-listing the others and
-// declaring them safe; each of those lists was wrong. Hand-enumeration is the
-// defect, so the enumeration is taken out of the reviewer's hands here.
-//
-// # What it checks, and why the premise is what it is
-//
-// For every exported [Coordinator] entry point, driven once per status a run
-// can hold, and each of those driven once cleanly and then once per store call
-// that drive makes with THAT CALL REFUSED: if the run was still something that
-// would come back before the call and is not after it, and this call did not
-// hand the turn to the resumer, then [CoordinatorOptions.Stopped] must have
-// fired for it.
-//
-// ALL THREE DIMENSIONS ARE DERIVED, which is the whole mechanism — a path that
-// only misreports from one entry point, under one refusal, out of one starting
-// status is found by the matrix rather than by whoever reads the diff:
-//
-//   - THE ENTRY POINTS are the coordinator's own exported method set, held to
-//     [coordinatorEntries] in both directions by
-//     [TestEveryCoordinatorEntryPointIsDriven].
-//   - THE REFUSALS are OBSERVED, never declared: whatever the drive asked the
-//     store for is what gets refused, so a path that starts calling something
-//     new is injected into on the next run without anybody updating a list.
-//   - THE STARTING STATUS is [Active], every status a record can hold, and
-//     [place] fails rather than skips on one it does not know — so a status
-//     added to the state machine has to say how a run reaches it before
-//     anything here can certify what happens from there. It was hand-written
-//     per drive, which is the same enumeration this file exists to end: a call
-//     that misreports only from a status nobody thought to arrange looks
-//     exactly like a call that is safe.
-//
-// NO (ENTRY, STATUS) PAIR IS SKIPPED, and none needs to be. Every entry point
-// here is reached by something that carries no promise about the row — a
-// broker delivery that is at-least-once and may be hours late, a seat lease
-// changing hands, a retirement — so the status is whatever the store holds
-// when the call lands, including the ones that make the call a no-op. A pair
-// that does nothing costs one cheap rig and proves it does nothing.
-//
-// # What it deliberately does not simulate
-//
-// Concurrency. Every failure injected is a store REFUSAL, never a second party
-// acting on the same row, so `ended == false` — the losing half of a race — is
-// out of scope by construction and has its own case
-// ([TestASettleSomebodyElseEndedReportsNoStop]). A property test that raced
-// would have to decide which party owes the report, which is a different
-// question from this one.
+// Hand-listing the safe paths was wrong each round, so the enumeration is
+// derived. Every exported [Coordinator] entry point is driven once per status a
+// run can hold, cleanly and then once per store call it makes with THAT CALL
+// REFUSED: if the run would have come back before and not after, and the call
+// did not hand the turn to the resumer, [CoordinatorOptions.Stopped] must have
+// fired. Derived: the entry points ([coordinatorEntries]), the refusals
+// (OBSERVED, not declared) and the starting status ([Active], every status a
+// record can hold; [place] fails on one it does not know). No pair is skipped.
 
 // entryDrive is one way of reaching a [Coordinator] entry point with a run in
 // front of it.
@@ -96,22 +53,15 @@ type entryDrive struct {
 // coordinatorEntries is EVERY exported [Coordinator] method, with the drives
 // that put a run in front of it.
 //
-// A ROSTER RATHER THAN A HAND-PICKED LIST, guarded in both directions by
-// [TestEveryCoordinatorEntryPointIsDriven]: a method added to the coordinator
-// fails the build's tests until somebody writes down how it reaches a run, and
-// an entry naming a method that no longer exists fails too. That is the whole
-// mechanism — the next path that ends a suspended run silently is caught by a
-// test rather than by whoever reads the diff.
-//
-// A DRIVE VARIES WHAT IS AROUND THE RUN, NEVER THE RUN'S OWN STATUS, which is
-// [place]'s dimension: two drives differing only in where the run had got to
-// would be a hand-written copy of the one the matrix already derives.
-//
-// Some drives are one line and prove the property trivially, because the method
-// cannot move a run at all (it reads a count, or swaps the manager). That is the
-// honest way to record it: an exemption list would be a second place to state
-// the same judgement, and a wrong exemption is invisible where a trivial drive
-// is at least visible.
+// A ROSTER, held both ways by [TestEveryCoordinatorEntryPointIsDriven]: a new
+// method fails until its drive is written, as does an entry naming a missing one.
+// A DRIVE VARIES WHAT IS AROUND THE RUN, NEVER ITS STATUS ([place]'s dimension).
+// A one-line drive for a method that cannot move a run proves the property
+// trivially; an exemption list would be a second place to state the judgement,
+// and a wrong exemption is invisible where a trivial drive is visible.
+// Concurrency is not simulated: every failure is a store REFUSAL, never a second
+// party on the row; the losing half of a race has its own case
+// ([TestASettleSomebodyElseEndedReportsNoStop]).
 var coordinatorEntries = map[string][]entryDrive{
 	"OnEvent": {{
 		name:    "a completion routed by type",
@@ -371,6 +321,27 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "the busy half of it",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.SeatHeldBySandbox("swe") },
 	}},
+	"ResumesBlocked": {
+		// IT ENDS NOTHING: it reads this node's memory of the runs whose
+		// last resume failed on a condition only an operator clears, asks
+		// the lease seam whether this node still holds each one's seat
+		// under the lease its attempt was taken with, and forgets, in that
+		// memory alone, one it no longer does. It asks the store nothing
+		// and writes nothing to it, so whatever becomes of the run is the
+		// next completion's or recovery's to say. Driven with the run
+		// remembered both ways, so the count and the letting go are each
+		// reached.
+		{
+			name:    "the alarm's reading of a run waiting for the operator, its seat held",
+			arrange: blockedUnder(rigLease),
+			call:    readsBlocked,
+		},
+		{
+			name:    "the alarm's reading of a run remembered under a lease this node no longer holds",
+			arrange: blockedUnder(Fence{Owner: "node-a:1", Epoch: rigLease.Epoch - 1}),
+			call:    readsBlocked,
+		},
+	},
 	"LaunchStopped": {{
 		// IT ENDS NOTHING: it hands the frame launching a run the stop
 		// decided on it — already ended by the stop's own ending — and
@@ -387,6 +358,24 @@ var coordinatorEntries = map[string][]entryDrive{
 		call: func(_ *testing.T, rig *coordRig) {
 			rig.coordinator.Readmit("paused", "swe")
 			rig.fireRetries()
+		},
+	}},
+	"SaveRunning": {{
+		// IT ENDS NOTHING: a save's stamp is a place on the row its license
+		// grants only a running job, and what came of it moves no status; what
+		// becomes of the run is its poll's to say.
+		name: "a running box the poll offers for a save of its session",
+		call: func(t *testing.T, rig *coordRig) {
+			run, _, _ := rig.pending.Get(t.Context(), "t1")
+			rig.coordinator.SaveRunning(t.Context(), run, rig.runner)
+		},
+	}},
+	"SaveHosted": {{
+		// IT ENDS NOTHING: a drain's save is a save as an offered one is, of a
+		// job the drain leaves running.
+		name: "a draining node saving its Direct jobs' sessions",
+		call: func(t *testing.T, rig *coordRig) {
+			rig.coordinator.SaveHosted(t.Context())
 		},
 	}},
 	"Manager": {{
@@ -581,29 +570,17 @@ func completes(t *testing.T, rig *coordRig) {
 }
 
 // completesUnreadable is the same completion with the settle's own read of the
-// row refused, which is the one failure that reaches the coordinator INSIDE a
-// tail it cannot repeat: the turn has been re-entered, so the delivery cannot
-// come round again.
+// row refused: the failure that reaches the coordinator INSIDE a tail it cannot
+// repeat, the turn having been re-entered. Its own drive, since the matrix
+// refuses a call for the whole drive and the claim reads the row too.
 //
-// Its own drive rather than a refusal of the matrix's, because the refusal
-// dimension refuses a call for the whole drive and the claim reads the row too.
-//
-// WHAT THE MATRIX DOES NOT ASSERT HERE IS THE REPORT, and that is written down
-// rather than left to be discovered, because a drive presenting itself as
-// coverage it lacks is the defect this file exists to end and not an instance
-// of it. The settle this reaches ([Coordinator.settleClaimed]) has two call
-// sites and both sit behind a resume that returned nil or
-// [ErrResumeAbandoned] — every other resume failure gives the claim back
-// instead, which is [Coordinator.unclaim]'s path and not this one. Both of
-// those count as an OWNED re-entry, so from the three statuses whose claim is
-// won ([StatusRunning], [StatusAwaiting], [StatusReseed]) [entryDrive.run]
-// takes the turn-ended-its-own-hold exemption before it asks whether a stop was
-// reported; from [StatusLaunching] and [StatusResumed] the claim is refused
-// and the earlier skip fires. So what this drive certifies is that the path
-// RUNS from every status with that read refused, and nothing about what it
-// says. That the settle REPORTS is held by
-// [TestASettleWhoseRecordCannotBeReadEndsTheRunAnyway], which drives both
-// resume outcomes by name.
+// IT ASSERTS NO REPORT. [Coordinator.settleClaimed]'s two call sites sit behind
+// a resume returning nil or [ErrResumeAbandoned] (other failures give the claim
+// back, [Coordinator.unclaim]), both an OWNED re-entry, so from the statuses
+// whose claim is won [entryDrive.run] takes the turn-ended-its-own-hold
+// exemption; from [StatusLaunching] and [StatusResumed] the claim is refused and
+// the earlier skip fires. It certifies only that the path RUNS; that the settle
+// REPORTS is held by [TestASettleWhoseRecordCannotBeReadEndsTheRunAnyway].
 func completesUnreadable(t *testing.T, rig *coordRig) {
 	t.Helper()
 	rig.coordinator.pending = &refusingStore{
@@ -678,6 +655,29 @@ func judgedUnresumable(_ *testing.T, rig *coordRig) {
 	rig.coordinator.unresumable = func(context.Context, PendingRun) (*Unresumable, error) {
 		return &Unresumable{Reason: types.ExecutorFailureItemFinished, Detail: "the item was finished"}, nil
 	}
+}
+
+// blockedUnder is this node remembering that t1's last resume failed on a
+// condition only an operator clears, under fence, its hand-back landed: the
+// state [Coordinator.ResumesBlocked] reads. Written into the memory itself,
+// because what puts it there is a completion's resume failing, which is
+// OnCompleted's drive and not this one's.
+func blockedUnder(fence Fence) func(*testing.T, *coordRig) {
+	return func(_ *testing.T, rig *coordRig) {
+		rig.coordinator.mu.Lock()
+		defer rig.coordinator.mu.Unlock()
+		if rig.coordinator.blocked == nil {
+			rig.coordinator.blocked = map[string]blockedResume{}
+		}
+		rig.coordinator.blocked["t1"] = blockedResume{agent: "swe", kind: "disk_full", since: rig.now,
+			fence: fence, counted: true}
+	}
+}
+
+// readsBlocked is the reading the engine takes into the executor_resume_blocked
+// alarm on every evaluation.
+func readsBlocked(t *testing.T, rig *coordRig) {
+	t.Logf("ResumesBlocked: %+v", rig.coordinator.ResumesBlocked())
 }
 
 // recovers takes the seat under a fresh lease, as a node claiming it does.
@@ -906,11 +906,11 @@ func (s *refusingStore) ReleaseClaim(ctx context.Context, turnID string, r Relea
 	return s.inner.ReleaseClaim(ctx, turnID, r)
 }
 
-func (s *refusingStore) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+func (s *refusingStore) LiftHold(ctx context.Context, turnID string, cond Condition, hold uint64) (bool, error) {
 	if s.called("LiftHold") {
 		return false, errRefusedCall
 	}
-	return s.inner.LiftHold(ctx, turnID, cond)
+	return s.inner.LiftHold(ctx, turnID, cond, hold)
 }
 
 func (s *refusingStore) MarkAwaiting(ctx context.Context, turnID string, q Clarification) error {
@@ -969,6 +969,15 @@ func (s *refusingStore) MarkLost(ctx context.Context, turnID, launch string, los
 		return false, errRefusedCall
 	}
 	return s.inner.MarkLost(ctx, turnID, launch, loss)
+}
+
+func (s *refusingStore) MarkClaimLost(ctx context.Context, turnID, launch string, loss JobLoss,
+	fence Fence,
+) (bool, error) {
+	if s.called("MarkClaimLost") {
+		return false, errRefusedCall
+	}
+	return s.inner.MarkClaimLost(ctx, turnID, launch, loss, fence)
 }
 
 func (s *refusingStore) AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error {
@@ -1204,6 +1213,13 @@ func (s *refusingStore) FileNote(ctx context.Context, turnID string, filing Note
 	return s.inner.FileNote(ctx, turnID, filing)
 }
 
+func (s *refusingStore) FileWake(ctx context.Context, turnID string, filing WakeFiling) (RunNote, error) {
+	if s.called("FileWake") {
+		return RunNote{}, errRefusedCall
+	}
+	return s.inner.FileWake(ctx, turnID, filing)
+}
+
 func (s *refusingStore) TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error) {
 	if s.called("TakeNotes") {
 		return nil, errRefusedCall
@@ -1225,6 +1241,20 @@ func (s *refusingStore) SettleTake(ctx context.Context, turnID string, settle No
 	return s.inner.SettleTake(ctx, turnID, settle)
 }
 
+func (s *refusingStore) ServeHook(ctx context.Context, turnID string, serve HookServe) ([]RunNote, error) {
+	if s.called("ServeHook") {
+		return nil, errRefusedCall
+	}
+	return s.inner.ServeHook(ctx, turnID, serve)
+}
+
+func (s *refusingStore) SettleHook(ctx context.Context, turnID string, settle HookSettle) ([]RunNote, error) {
+	if s.called("SettleHook") {
+		return nil, errRefusedCall
+	}
+	return s.inner.SettleHook(ctx, turnID, settle)
+}
+
 func (s *refusingStore) MarkPulled(ctx context.Context, turnID, launch string) (bool, error) {
 	if s.called("MarkPulled") {
 		return false, errRefusedCall
@@ -1237,6 +1267,15 @@ func (s *refusingStore) MarkSessionStart(ctx context.Context, turnID, launch str
 		return false, errRefusedCall
 	}
 	return s.inner.MarkSessionStart(ctx, turnID, launch, start)
+}
+
+func (s *refusingStore) OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal,
+	fence Fence,
+) (bool, error) {
+	if s.called("OweRefusal") {
+		return false, errRefusedCall
+	}
+	return s.inner.OweRefusal(ctx, turnID, launch, owed, fence)
 }
 
 func (s *refusingStore) MarkEndedAtDeadline(ctx context.Context, turnID, launch string) (bool, error) {
@@ -1281,6 +1320,13 @@ func (s *refusingStore) SettleBegun(ctx context.Context, turnID string, capture 
 		return false, errRefusedCall
 	}
 	return s.inner.SettleBegun(ctx, turnID, capture)
+}
+
+func (s *refusingStore) ReserveSave(ctx context.Context, turnID string, save SessionCapture) (bool, error) {
+	if s.called("ReserveSave") {
+		return false, errRefusedCall
+	}
+	return s.inner.ReserveSave(ctx, turnID, save)
 }
 
 func (s *refusingStore) StandBy(ctx context.Context, turnID string, capture SessionCapture) (bool, error) {

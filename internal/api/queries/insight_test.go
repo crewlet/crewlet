@@ -804,13 +804,11 @@ func TestTheTurnListEchoesItsCursorWhileThereIsMore(t *testing.T) {
 // TWO TURNS THAT START AT ONE MICROSECOND ARE BOTH ON THE WALK, once each,
 // whichever side of a page's cut they fall.
 //
-// A webhook that wakes two seats starts two turns at one instant. The cursor
-// used to be that instant alone, and a page resumed strictly below it — so a
-// page of one listing the first of them handed the walk a cursor every later
-// page was below the second turn's start for, and the second was on no page.
-// The cursor is the instant and the turn's id now, and opaque: `next` is
-// handed back as `before` as it is, and anything else there is refused rather
-// than read as a position.
+// A webhook that wakes two seats starts two turns at one instant. A cursor of
+// that instant alone, resumed strictly below it, would skip the second turn.
+// The cursor is the instant and the turn's id, and opaque: `next` is handed
+// back as `before` as it is, and anything else there is refused rather than
+// read as a position.
 //
 // Mutation: drop the id from the store's keyset (resume strictly below the
 // start), and the walk loses one of the two; drop the id from the ORDER BY,
@@ -1045,14 +1043,11 @@ func TestAnOldTurnStillNamesItsAttempts(t *testing.T) {
 
 // AND THE TWO HALVES ARE READ AT ONE INSTANT.
 //
-// The turn's rows and its attempts are two fleet reads, and each read the
-// fleet's clock for itself: the attempts a whole scatter later than the rows —
-// up to the fleet's read budget when a node is slow — so their history horizon
-// sat that much higher. A turn whose rows lay between the two horizons was
-// shown on the page and then missing from its own attempts. The fleet's clock
-// here steps two seconds on every reading, and the turn's one row sits a
-// second above the horizon under the first: inside the detail read, under the
-// horizon of any later one.
+// The turn's rows and its attempts are two fleet reads, each reading the
+// fleet's clock, so the attempts' history horizon could sit higher and a turn
+// shown on the page be missing from its own attempts. The fleet's clock here
+// steps two seconds per reading, and the turn's one row sits a second above
+// the first reading's horizon: inside the detail read, under any later one's.
 //
 // Mutation: drop `At` from the attempts query in [queries.Sources] (insight.go)
 // and the turn reports no attempt at all, not even itself.

@@ -10,12 +10,9 @@ import (
 
 // A STARRED ROOM THE READER MAY READ IS IN THEIR RAIL, WHETHER OR NOT THEY ARE IN IT.
 //
-// The rail listed memberships alone. A team's room is readable by every seat
-// and joined only by being in the team, so somebody outside it (the company's
-// founder, above the team's lead) found it only through Browse rooms, and the
-// star the room's menu offered them kept it nowhere: the Starred section is
-// drawn from the same rail. A star is the person's own wish to keep a room to
-// hand, so it now lists the room, marked as not theirs, while a private room
+// A team's room is readable by every seat and joined only by being in the
+// team, and the Starred section is drawn from the rail, so a star must list the
+// room (marked as not theirs) for somebody outside the team. A private room
 // they starred and were then taken out of answers as a room that does not
 // exist, uncounted.
 //

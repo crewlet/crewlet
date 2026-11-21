@@ -740,3 +740,60 @@ func TestWhatWaitsOnAnOwnersFixIsWhatTheirCountersAsk(t *testing.T) {
 		}
 	}
 }
+
+// WHAT WAITS ON YOU FILLS ITS PAGE ACROSS ITS TWO HALVES: needs=me runs from its review half into
+// the asker's changes awaiting a fix, each row naming its half; a smaller page resumes across the
+// boundary, nothing lost or listed twice. Mutation: serve one half a page → app!2 alone, red.
+func TestWhatWaitsOnYouFillsItsPageAcrossItsTwoHalves(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	c, _ := committerOn(t, n, n.pub)
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	web := changeRepo(t, n, "web")
+	app := changeRepo(t, n, "app")
+	open := func(repo, source string, owner gitlet.Principal) gitlet.ChangeResult {
+		t.Helper()
+		res, err := c.ProposeChange(ctx, opening(repo, source, mainRef, owner))
+		requireChanged(t, res, err)
+		return res
+	}
+	converse := func(cw gitlet.ConversationWrite) {
+		t.Helper()
+		res, err := w.Converse(ctx, cw)
+		requireConversed(t, res, err)
+	}
+	web1, web2 := open(web, featureRef, dev), open(web, releaseRef, dev)
+	app1, app2 := open(app, featureRef, dev), open(app, releaseRef, cto)
+	for _, fix := range []struct{ repo, change string }{{web, web1.ChangeID}, {web, web2.ChangeID},
+		{app, app1.ChangeID}} {
+		converse(reviewing(fix.repo, fix.change, platLead, 1, gitlet.VerdictRequestChanges, nil))
+	}
+	converse(asking(app, app2.ChangeID, cto, "dev"))
+
+	want := []string{"app!2", "app!1", "web!2", "web!1"}
+	first, err := n.reader.Read(ctx, gitlet.ReadQuery{Asker: dev, Kind: gitlet.ReadChanges, Needs: gitlet.NeedMe,
+		Limit: 50, Fresh: stale})
+	if err != nil {
+		t.Fatalf("Read(needs=me): %v", err)
+	}
+	var got []string
+	var halves []gitlet.Need
+	for _, s := range first.Changes {
+		got, halves = append(got, s.Ref), append(halves, s.WaitsFor)
+	}
+	if !slices.Equal(got, want) || first.Next != "" {
+		t.Fatalf("the first page of fifty lists %v with next %q, want %v and no next", got, first.Next, want)
+	}
+	if wantHalves := []gitlet.Need{gitlet.NeedReview, gitlet.NeedFix, gitlet.NeedFix, gitlet.NeedFix}; !slices.Equal(
+		halves, wantHalves) {
+		t.Errorf("its rows name the halves %v, want %v", halves, wantHalves)
+	}
+	for _, limit := range []int{1, 2, 3} {
+		if got, pages := listChanges(t, n, gitlet.ReadQuery{Asker: dev, Needs: gitlet.NeedMe}, limit); !slices.Equal(
+			got, want) {
+			t.Errorf("%d a page: listed %v in %d pages, want %v", limit, got, pages, want)
+		}
+	}
+}

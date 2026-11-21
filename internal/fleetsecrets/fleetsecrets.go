@@ -43,20 +43,32 @@
 // it addresses reserved rows and nothing else. The one gesture that crosses is
 // a REKEY, which re-seals every row under the active key because the keyring
 // is one keyring — and reports the engine's rows as a count rather than by
-// name ([Rekeyed]).
+// name ([Rekeyed]). The two once shared the environment-variable grammar,
+// which made the engine's key listable, revealable, deletable and decrypted
+// into every node's `${VAR}` snapshot on each apply. A rekey leaves each row's
+// provenance as it found it: it re-seals a value it did not choose, and
+// stamping the rotator over every row made every credential read as set by
+// whoever rotated the keyring.
 //
 // # A write-only value is opened for the resolver alone
 //
 // [Store.All] opens a write-only row ([Store.SetWriteOnly]); [Store.Get] and
 // [Store.Values] refuse it. Later writes of the name and a rekey keep the mark.
+// [Store.Values] answers the names asked and only those, in one round trip,
+// for the harness's batched read.
 //
 // # A plain put is right for a credential and wrong for a key
 //
 // An operator's rotation is last-write-wins by design. The engine's own keys
 // are not, and neither is a rekey: a key is minted with [Estate.Create], never
-// over one that exists, and the rekey re-seals every row at the version it
+// over one that exists, so two minters keep one key, and the rekey re-seals every row at the version it
 // read — because a plain write of what either read undoes whatever landed in
 // between.
+//
+// A row the engine itself replaces, such as an MCP server's OAuth grant
+// (`mcp/<server>/refresh`, rotated at each renewal), is read with its version
+// ([Estate.Held]) and rewritten only at it ([Estate.Swap]); only the engine's
+// view deletes it ([Estate.Delete]).
 package fleetsecrets
 
 import (
@@ -343,24 +355,16 @@ func (s *Store) get(ctx context.Context, name string, refuseWriteOnly bool) (str
 
 // All unseals every OPERATOR value, for the resolver's boot snapshot.
 //
-// ONE ROUND TRIP, because ${VAR} expansion happens per role, per provider,
-// per MCP server — the engine takes a snapshot and resolves from it rather
-// than putting the fleet's store on the path of every config read.
+// ONE ROUND TRIP: ${VAR} expansion happens per role, provider and MCP server,
+// so the engine resolves from a snapshot, not the store on every read.
+// THE ENGINE'S ROWS ARE NOT OPENED (no reference can name one; decrypting the
+// blind-index key into each resolver was all exposure); write-only rows are,
+// since resolving `${VAR}` is what they are for.
 //
-// THE ENGINE'S ROWS ARE NOT OPENED, and that is the other half of the reserved
-// namespace: no reference can name one, so decrypting the blind-index key into
-// each node's resolver on every apply was all exposure and no use.
-//
-// It opens write-only rows too: resolving `${VAR}` is what they are for.
-//
-// It FAILS CLOSED on the first row it cannot open. A partial snapshot is the worst outcome available: the names that are
-// missing resolve to whatever the environment happens to hold, which is the
-// stale-.env shadowing this whole mechanism exists to prevent, and it would
-// happen silently. A row this node cannot open is not a fleet mid-rotation —
-// every node runs the same Tier A keyring, because the config plane seals its
-// payload with that same keyring and a node that cannot open one cannot apply
-// a config either — it is a key that was dropped from the keyring, and that
-// is a boot failure to read rather than a credential to lose quietly.
+// It FAILS CLOSED on the first row it cannot open: a partial snapshot would
+// let missing names resolve silently from the environment, the stale-.env
+// shadowing this exists to prevent. Every node runs the same Tier A keyring,
+// so an unopenable row is a key dropped from it, a boot failure to read.
 func (s *Store) All(ctx context.Context) (map[string]string, error) {
 	if s == nil || s.cipher == nil {
 		return nil, secrets.ErrNoKeyring
@@ -389,24 +393,14 @@ func (s *Store) All(ctx context.Context) (map[string]string, error) {
 // Values unseals the operator values held under the names asked for, and no
 // other: a name nothing holds is simply absent from the answer.
 //
-// It is what a reader that needs SEVERAL values at once is given — a CLI run
-// resolving the `${VAR}` references of one company document, through a running
-// node's POST /secrets/reveal or, with that node's engine stopped, directly
-// (the CLI's fleetBackend) — and it exists so that reader is handed exactly
-// the credentials it asks for, the variables its command reads that the store
-// lists, rather than [Store.All]'s every value, and in one round trip rather
-// than one per name.
-//
+// It serves a reader needing SEVERAL values at once, such as a CLI run
+// resolving one document's `${VAR}` references (POST /secrets/reveal, or the
+// CLI's fleetBackend with the engine stopped), handing over only those asked.
 // A RESERVED NAME IS REFUSED before anything is read, as [Store.Get] refuses
-// one: no reference can name an engine row, so a caller asking for one has
-// built its list from something other than a document.
-//
-// A write-only row asked for refuses the whole read ([WriteOnlyError]).
-//
-// It FAILS CLOSED on a row it was asked for and cannot open, for [Store.All]'s
-// reason — an answer missing that name would let it resolve from whatever the
-// environment holds — and opens nothing it was not asked for, so an
-// unreadable row nobody named cannot fail a read that never needed it.
+// one: no reference can name an engine row. A write-only row asked for refuses
+// the whole read ([WriteOnlyError]). It FAILS CLOSED on a requested row it
+// cannot open, for [Store.All]'s reason, and opens only what was asked, so an
+// unreadable row nobody named cannot fail the read.
 func (s *Store) Values(ctx context.Context, names []string) (map[string]string, error) {
 	if s == nil || s.cipher == nil {
 		return nil, secrets.ErrNoKeyring
@@ -569,28 +563,16 @@ type Rekeyed struct {
 }
 
 // Rekey re-seals every row this node can open under the active key — the
-// operator's AND the engine's, because the keyring is one keyring: an engine
-// row left under a retired key is the blind-index key unreadable the moment
-// that key is dropped, and every sign-in by address with it.
+// operator's AND the engine's, because the keyring is one: an engine row left
+// under a retired key is the blind-index key unreadable once it is dropped,
+// and every sign-in by address with it. NOT THE WHOLE ROTATION: the keyring
+// also seals the identity estate's log-derived personal values, which the node
+// re-seals beside this pass (iamdomain's `Writer.Reseal`).
 //
-// IT IS NOT THE WHOLE ROTATION. The same keyring seals the identity estate's
-// personal values — names, addresses, second factors — in rows derived from a
-// log, which only a record can change; the node re-seals those beside this
-// pass (internal/iamdomain's `Writer.Reseal`), and `crewlet secrets rekey`
-// reports both.
-//
-// A row already under the active key is left alone, so a second run reports
-// nothing and costs one read — which is what makes this safe to put in a
-// deploy script.
-//
-// The write-only mark is kept with the provenance.
-//
-// THE PROVENANCE IS KEPT: a rekey re-seals a value it did not choose, so each
-// row goes on saying who stored it, through what and when. It used to stamp
-// the rekeyer and `rekey` over every row, which made every credential in the
-// company read as set by whoever rotated the keyring — erasing the one record
-// of who set each, the loss [secrets.Author] exists to prevent. Who rotated
-// the keyring is the rotation's own fact, and its caller reports it.
+// A row already under the active key is left alone, so a second run costs one
+// read. THE PROVENANCE AND WRITE-ONLY MARK ARE KEPT: stamping the rekeyer
+// would make every credential read as set by whoever rotated, the loss
+// [secrets.Author] exists to prevent.
 func (s *Store) Rekey(ctx context.Context, activeKeyID string) (Rekeyed, error) {
 	var out Rekeyed
 	if s == nil || s.cipher == nil {

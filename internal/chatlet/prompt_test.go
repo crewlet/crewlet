@@ -89,17 +89,15 @@ func TestAChatletWakeKeepsTheSeatsOwnContext(t *testing.T) {
 // A TYPING BURST IN A DIRECT CONVERSATION IS ONE TURN, AND TWO ASKS IN A ROOM
 // ARE TWO.
 //
-// The partition key is what the inbox partitions on, so it decides what
-// merges. In a direct conversation a person's consecutive top-level messages
-// are one conversation — that is the headline case for coalescing at all, and
-// keying them per message would spend a turn on each line somebody typed.
-// In a shared room two unrelated top-level asks must NOT merge, so the key
-// stays thread-grained: a top-level message keys on its OWN id, which is what
-// the replies under it will carry.
+// The partition key decides what the inbox merges. A person's consecutive
+// top-level DM messages are one conversation (per-message keys would spend a
+// turn on each typed line). In a shared room two unrelated top-level asks must
+// NOT merge, so the key stays thread-grained: a top-level message keys on its
+// OWN id, which its replies carry.
 //
-// A DIRECT THREAD REPLY KEEPS ITS THREAD KEY: merging it with unrelated
-// top-level pings would hand the turn one merged metadata whose thread pointer
-// names only one of two reply targets, steering the answer to the wrong place.
+// A DIRECT THREAD REPLY KEEPS ITS THREAD KEY: merged with unrelated top-level
+// pings, the turn's metadata would name only one of two reply targets and steer
+// the answer to the wrong place.
 func TestThePartitionKeyMergesADirectBurstAndNothingElse(t *testing.T) {
 	t.Parallel()
 	prompts := notify.NewPrompts(chatlet.NewPrompt())
@@ -256,19 +254,16 @@ func TestAnUnaddressedWakeIsToldItIsNewsRatherThanAnAsk(t *testing.T) {
 
 // THE SEAT IS TOLD WHY IT WAS WOKEN, IN ITS OWN TERMS, AND ONCE.
 //
-// The routing reached a conclusion the TEXT cannot always show: nothing in "we
-// should ship on Friday" says it arrived because nobody else in the unit was
-// listening. The triage teaches how to find an addressee in the words; this is
-// what the router already decided.
+// The routing reached a conclusion the TEXT may not show: nothing in "we should
+// ship on Friday" says it arrived because nobody else in the unit was
+// listening. The triage reads the words; this is what the router decided.
 //
-// A DIRECT CONVERSATION AND A MENTION ARE THE SHARED VERDICT'S to state, and
-// their rows hold this prompt to adding no line of its own: a "**Why you:**"
-// beside "**Addressed to you:**" told the seat one reason twice. Every other
-// reason is a line only this domain can write, and it is written once.
+// A DIRECT CONVERSATION AND A MENTION ARE THE SHARED VERDICT'S to state: their
+// rows hold this prompt to no extra line ("**Why you:**" beside "**Addressed
+// to you:**" says one reason twice). Every other reason is written once, here.
 //
-// THE UNKNOWN REASON IS A ROW because it is the one a rolling upgrade
-// guarantees: a newer build routed this seat deliberately, and a prompt that
-// said nothing would leave it guessing from the text alone.
+// THE UNKNOWN REASON IS A ROW because a rolling upgrade guarantees it: a newer
+// build routed this seat deliberately, and silence would leave it guessing.
 func TestThePromptSaysWhyThisSeatWasWoken(t *testing.T) {
 	t.Parallel()
 	for reason, tc := range map[chatlet.Reason]struct {

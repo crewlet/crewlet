@@ -12,15 +12,10 @@ import (
 )
 
 // EVERY BLOCK A WINDOW CAN CARRY HAS A SENTENCE OF ITS OWN, so no block
-// reaches a person as its code.
-//
-// The dashboard's banner and both CLI pages printed `abandoned_by_operator`
-// and `capacity_operation_unsealed` as the reason a window needed a person. The
-// code is for scripts, and every surface now shows [statelog.BlockedDetail]
-// instead. That holds only while every block has a sentence written for it, so
-// this walks the blocks coord DECLARES, not a list beside them: a block added
-// there and left out of [coord.MaintenanceBlocks] or of the sentences fails
-// here rather than on a screen.
+// reaches a person as its code: every surface shows [statelog.BlockedDetail],
+// and the code is for scripts. It walks the blocks coord DECLARES, not a list
+// beside them, so a block left out of [coord.MaintenanceBlocks] or of the
+// sentences fails here rather than on a screen.
 //
 // Mutation: declare a block and give it no case, or leave it out of the list,
 // and this fails; print a code inside a sentence, or an em dash, and so does
@@ -74,15 +69,10 @@ func TestEveryMaintenanceBlockHasASentenceOfItsOwn(t *testing.T) {
 }
 
 // AN ABANDONED WINDOW SAYS WHAT CLOSES IT, DECIDED BY ITS SEAL AND NEVER BY ITS
-// PHASE, with every command as the CLI takes it.
-//
-// Abandoning puts a window back at `sealing` from wherever it was, so a window
-// abandoned out of attempts, whose fleet was already in seal mode with its
-// acknowledgements recorded, was told to restart every node with `-mode seal`,
-// a fleet-wide restart that changed nothing: one set-capacity closes it. The
-// seal's own rule says which nodes it still waits on. And the commands were
-// named as no CLI takes them: `set-capacity` with no log or bytes, `abandon`
-// with no `-stream` or `-confirm`, `-mode seal` with no `crewlet run`.
+// PHASE, with every command as the CLI takes it. Abandoning puts a window back
+// at `sealing` from any phase, so one abandoned out of attempts over a fleet
+// already in seal mode needs one set-capacity, not a fleet-wide restart with
+// `-mode seal`; the seal's own rule says which nodes it still waits on.
 //
 // Mutation: decide the clause by the phase, drop a command's arguments, or
 // name the abandoning party (every surface prints them beside this), and this
@@ -109,8 +99,8 @@ func TestAnAbandonedWindowSaysWhatClosesItBySeal(t *testing.T) {
 				`once "node-1" and "node-2" have restarted with ` +
 					"`crewlet run -mode seal` and " + setCapacity + " runs again."},
 			nil},
-		// THE REVIEWED CASE: abandoned from `sealed` (out of attempts), back
-		// at `sealing`, with the seal acknowledgements the fleet already wrote.
+		// Abandoned from `sealed` (out of attempts), back at `sealing`, with the
+		// seal acknowledgements the fleet already wrote.
 		"abandoned at sealing over a seal that holds": {coord.PhaseSealing, sealed(1), nil,
 			[]string{"Its seal is waiting on no node, so " + setCapacity +
 				" closes it at the ceiling the log has."},
@@ -140,10 +130,10 @@ func TestAnAbandonedWindowSaysWhatClosesItBySeal(t *testing.T) {
 }
 
 // A WINDOW OUT OF ATTEMPTS NAMES THE WAYS OUT THAT WORK. Nothing sends the
-// target again once the last attempt's verify failed, so "run set-capacity
-// again" got the same block back. Abandoning it and running set-capacity from
-// a node in seal mode closes it at the ceiling the log has. The verb's own
-// refusal says the same sentence, so the two never disagree.
+// target again once the last attempt's verify failed, so set-capacity alone
+// gets the same block back; abandoning it and running set-capacity from a
+// node in seal mode closes it at the ceiling the log has. The verb's refusal
+// says the same sentence, so the two never disagree.
 //
 // Mutation: advise set-capacity alone, drop a command's arguments, or give the
 // refusal words of its own, and this fails.

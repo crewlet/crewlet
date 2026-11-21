@@ -21,24 +21,13 @@ const stream = "CREWLET_TRACKER_LOG"
 // REFUSES ONE MORE, AND AN ENTRY THE POSITION OR THE CLOCK ALREADY ANSWERS IS
 // PRUNED RATHER THAN COUNTED.
 //
-// [inbox.Apply] is pure over values so this rule can be exercised without a
-// database, and nothing exercised it that way: the tracker's end-to-end case
-// fills the read and snoozed lists through hundreds of real writes and never
-// reaches the unread list at all. So an off-by-one on any list, or a ceiling
-// check that skipped the unread one, shipped with every test green. This holds
-// all three to the same three facts — a list one short of the ceiling takes
-// one more, a full list refuses the next with [inbox.ErrFull] naming the list,
-// and a full list still takes a mark the position or the clock makes moot,
-// because the prune runs before the count. The end-to-end case stays in the
-// tracker: it is what proves the decide judges the STORED record and that a
-// refusal publishes nothing.
-//
-// THE BOUNDARY IS THE POSITION ITSELF, and both lists meet it: the notice AT
-// the seen-through position reads as read, so a read mark on it is pruned and
-// an unread mark on it is an exception the list holds and counts. Pools that
-// only straddled the position left both comparisons free to move by one —
-// keeping unread marks strictly below it silently dropped every one on the
-// notice somebody read through, and the whole package stayed green.
+// The tracker's end-to-end case never reaches the unread list. All three lists
+// take one more below the ceiling, refuse the next with [inbox.ErrFull] naming
+// the list, and still take a mark the position or clock makes moot (the prune
+// runs before the count). THE BOUNDARY IS THE POSITION ITSELF: a read mark AT
+// the seen-through position is pruned, an unread mark on it is held and
+// counted; pools that only straddled it left both comparisons free to move by
+// one.
 func TestEveryInboxListHoldsItsCeilingAndPrunesBeforeItCounts(t *testing.T) {
 	t.Parallel()
 	seen := inbox.Position{Stream: stream, Generation: 1, Seq: 1_000}
@@ -237,17 +226,13 @@ func TestReadingThroughANoticeKeepsItUnreadInOneGesture(t *testing.T) {
 // EVERY REFUSAL IS OF ITS CONTENT — in one of two classes a domain's writer
 // tells apart.
 //
-// [inbox.ErrFull] is the gesture naming more notices than a list holds, whose
-// remedy is `read_through`; [inbox.ErrInvalid] is every other, which a
-// domain's writer classes as its OWN content refusal with the sentence
-// unchanged — so the sentence must carry no package prefix, or a person would
-// read "inbox:" in front of what to change. A refusal that slipped into the
-// wrong class, or no class, would reach a person's surface as this node's
-// failure ("did not land") rather than as what to change.
+// [inbox.ErrFull] is a gesture naming more notices than a list holds (remedy
+// `read_through`); [inbox.ErrInvalid] is every other, classed by a domain's
+// writer as its OWN content refusal with the sentence unchanged, so it carries
+// no package prefix. The wrong class would surface as this node's failure.
 //
-// Mutation: drop the stream check, the reason check or the horizon, and a
-// case is accepted; build the full refusal as an invalid one, and it fails
-// its class.
+// Mutation: drop the stream check, the reason check or the horizon, or build
+// the full refusal as an invalid one, and a case fails.
 func TestAGestureNoRecordCouldHonourIsRefusedForWhatItSays(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2031, 4, 16, 9, 0, 0, 0, time.UTC)

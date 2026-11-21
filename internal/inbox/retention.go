@@ -35,14 +35,12 @@ const RetentionDefaultDays = 365
 // where the epoch states none. Zero for a horizon of no days, which keeps
 // nothing back from a notice.
 //
-// ONE READING FOR EVERY DOMAIN THAT KEEPS AN INBOX, for [RetentionKey]'s reason:
-// an applier that declines a notice past the horizon and a sweep that deletes
-// one must hold one horizon, and two domains reading the key their own way
-// would age one person's inbox on two clocks. FROM THE EPOCH RATHER THAN FROM
-// CONFIG, because an applier reads no configuration at all: two nodes briefly
-// on different epochs may write different notices, which is precisely why a
-// domain's notice table is classed as diverging rather than compared by the
-// identity claim.
+// ONE READING FOR EVERY DOMAIN THAT KEEPS AN INBOX: an applier declining a
+// notice past the horizon and a sweep deleting one must hold one horizon, or
+// one person's inbox ages on two clocks. FROM THE EPOCH RATHER THAN CONFIG,
+// because an applier reads no configuration: nodes briefly on different epochs
+// may write different notices, which is why a domain's notice table is classed
+// as diverging rather than compared by the identity claim.
 func Horizon(epoch map[string]any) time.Duration {
 	days := RetentionDefaultDays
 	if raw, held := epoch[RetentionKey]; held {

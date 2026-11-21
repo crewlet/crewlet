@@ -16,11 +16,8 @@ import (
 // A REDEMPTION REFUSED FOR ITS LOGIN PUBLISHES NOTHING, SO A RETRY WITH ANOTHER
 // LOGIN LANDS AND SPENDS THE LINK.
 //
-// A redemption is one record: the person, their address, their login and the
-// spent link land together or not at all. So a redeemer told their login was
-// taken has left nothing behind — no address held for a person nobody
-// finished, no link half spent — and the attempt that names another login is
-// a fresh person that lands whole.
+// A redemption is one record (person, address, login and spent link), so an
+// attempt refused for its login leaves no address held and no link half spent.
 //
 // Mutation: publish the person before deciding the login, and the refused
 // attempt's address refuses the retry.
@@ -85,16 +82,12 @@ func TestARedemptionRefusedForItsLoginPublishesNothing(t *testing.T) {
 
 // AN ENROLMENT CREATES; IT NEVER REWRITES SOMEBODY WHO EXISTS.
 //
-// An administrator's create derives its person from its operation key, so an
-// enrolment reaching a person who is already enrolled is a second request under
-// one key: a surface binds the operation it publishes to the request, so the
-// same key with another body arrives under another operation id naming the
-// same derived person — and landing it would rewrite them. What still lands is
-// the retry of the very create that made them, which the operation ledger
-// answers — WITH THE FIRST PASSWORD LINK ITS FIRST ATTEMPT ISSUED, since the
-// link is derived from the person: the same id, the same secret and the expiry
-// the record stored, not the one the retry asked for. A service account's
-// create answers no link, first time or again.
+// The person is derived from the operation key and a surface binds the
+// operation to the request, so another request under one key arrives under
+// another operation naming the same person, and landing it would rewrite
+// them. Only the create's own retry lands, answered by the ledger with the
+// first attempt's password link: its id, secret and stored expiry. A service
+// account's create answers no link.
 //
 // Mutation: drop createsNobodyTwice from the enrolment's decide, and the
 // second request lands over the existing person; mint the link per call and
@@ -124,9 +117,8 @@ func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 	}
 	rig.drain()
 
-	// THE RETRY OF THAT VERY CREATE — the one an unknown answer asks for —
-	// is answered by the ledger, with the same link and the expiry it was
-	// stored with, although the retry names a later one.
+	// THE CREATE'S OWN RETRY is answered by the ledger with the same link and
+	// its stored expiry, although the retry names a later one.
 	retry := create
 	retry.LinkExpiresAt = firstLinkExpiry.Add(time.Hour)
 	again, err := rig.create(retry)
@@ -140,9 +132,8 @@ func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 		t.Errorf("the create's own retry answered link %+v (collapsed %v), "+
 			"want the first attempt's %+v", again.Link, again.Collapsed, first.Link)
 	}
-	// THE SAME KEY FOR ANOTHER ADDRESS is another request — published under
-	// another operation, as a surface binds it — refused before it gives the
-	// existing person a second address.
+	// THE SAME KEY FOR ANOTHER ADDRESS is another request (another operation,
+	// as a surface binds it), refused before it gives the person a second address.
 	reused := create
 	reused.Email, reused.Login = "somebody.else@example.com", "somebody.else"
 	reused.OpID = statelog.StepOpID(key, "people-create", "another-request")
@@ -185,11 +176,9 @@ func TestAnEnrolmentNeverRewritesSomebodyWhoExists(t *testing.T) {
 
 // A CREATE'S PERSON AND AN ISSUE'S INVITATION ARE THE OPERATION'S.
 //
-// Each used to be minted per request, so the retry an unknown answer asks for —
-// or the ledger's answer to it — named a second object nobody created. Derived
-// from the operation key, every attempt of one operation names one id — and an
-// invitation's is derived under the company's key, because the id is what its
-// link's secret is derived from and a guessable key must not make it a
+// Derived from the operation key, every attempt of one operation names one
+// id. An invitation's also takes the company's key, because its
+// link's secret is derived from the id and a guessable key must not make a
 // guessable link.
 func TestACreatesIdentityIsItsOperationKeys(t *testing.T) {
 	t.Parallel()
@@ -262,18 +251,12 @@ func TestACreatesIdentityIsItsOperationKeys(t *testing.T) {
 }
 
 // A CREATED PERSON'S FIRST PASSWORD LINK IS THEIRS, DERIVED UNDER THE COMPANY'S
-// KEY.
+// KEY, so the ledger's answer to a retried create hands back the first link.
 //
-// The person is derived from the create's operation key, and the link from the
-// person, so the retry the ledger answers without running the decide hands
-// back the link its first attempt issued. Each half is held to what that
-// rests on: one person derives one link id — a uuid7 at the person's instant,
-// as every credential id here is — and one id one secret; another person,
-// another link; another company's key, another link, so neither half is
-// computable by somebody holding the operation key; and each in a MAC domain
-// of its own, so no link id or secret is a value the same key derives for an
-// invitation or an address. The secret carries no `.`, the separator its
-// `<id>.<secret>` link splits on.
+// One person derives one link id (a uuid7 at the person's instant) and one
+// secret; another person or company key, another link, so the operation key
+// alone computes neither half; each in a MAC domain apart from an invitation's
+// and an address's. The secret carries no `.`, its `<id>.<secret>` separator.
 //
 // Mutation: derive the link id or its secret in the invitation's domain and
 // the domain separation fails; derive them from the key alone and the
@@ -357,13 +340,11 @@ func TestAFirstPasswordLinkIsDerivedFromItsPerson(t *testing.T) {
 	}
 }
 
-// AN ISSUE RETRIED UNDER ITS KEY ANSWERS THE INVITATION IT ISSUED.
+// AN ISSUE RETRIED UNDER ITS KEY ANSWERS THE INVITATION IT ISSUED, never a
+// second one its address refuses as held by the first.
 //
-// The retry an unknown answer asks for used to name a second invitation, which
-// the address refused as held by the first — a 409 against its own first
-// attempt, and a link to the one that landed shown to nobody. Mutation: mint the
-// id per call and the retry is refused as taken; drop the terms comparison and
-// a reused key answers another request's invitation.
+// Mutation: mint the id per call and the retry is refused as taken; drop the
+// terms comparison and a reused key answers another request's invitation.
 func TestAnIssueRetriedUnderItsKeyAnswersTheInvitationItIssued(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)
@@ -393,8 +374,7 @@ func TestAnIssueRetriedUnderItsKeyAnswersTheInvitationItIssued(t *testing.T) {
 			"invitation %s", again, err, first.ID)
 	}
 	// AND THE SAME LINK: the secret is derived from the id, so the retry
-	// shows the link whose verifier the first attempt stored — a secret
-	// minted per call would hand back a link that opens nothing.
+	// shows the link whose verifier the first attempt stored.
 	if first.Secret == "" || again.Secret != first.Secret {
 		t.Errorf("the retry answered secret %q, want the first attempt's %q",
 			again.Secret, first.Secret)

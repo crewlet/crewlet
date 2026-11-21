@@ -38,7 +38,7 @@ gone thirty days after it was last used.**
 - **Sealed.** Every message, card, preview and parked turn is sealed under the
   fleet keyring with associated data naming the conversation and the record,
   because the estate is not encrypted at rest; a file the conversation keeps
-  (an image the person attached, a file a deep-work run delivered) is sealed
+  (an image the person attached) is sealed
   the same way into one object of the fleet's object store, which a row names
   and the collector deletes once the conversation's purge removes the row; the applier never opens a value,
   so every node writes identical rows. What is stored is what the person saw:
@@ -51,6 +51,8 @@ gone thirty days after it was last used.**
   person's erasure takes their conversations in the same pass. A stored card
   whose app the reader no longer holds is replaced by a notice on every read,
   and its export is not found.
+
+**Amended by ADR-0163.** Thirty days is a constant of the domain, no longer the `assistant.retention_days` setting.
 
 ## Why the obvious alternatives are wrong
 

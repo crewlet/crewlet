@@ -26,23 +26,16 @@ func checkLogArgs(extra map[string]any) map[string]any {
 }
 
 // A CHECK'S LOG IS IMMUTABLE BY ITS OBJECT, NEVER BY ITS ATTEMPT. A page asked
-// naming the object the attempt keeps (`object`, as `code_check` answers it)
-// is answered queries.Immutable — sent with a strong entity tag and kept by a
-// browser for good — and its bytes are the same however the read that found
-// the attempt was stamped: two reads answering at different positions and
-// levels give one answer. A page asked without the object is answered bare,
-// since the attempt's ending — and with it the log — may be replaced by a
-// later one (a runner declared lost that was only slow), and a request naming
-// an object the attempt no longer keeps is refused `no_log`, naming the one
-// it keeps, rather than answered with the other's bytes. A page never ends
-// inside a character: it ends before it, and the next page starts on it.
+// naming the object the attempt keeps (`object`) is answered
+// queries.Immutable, the same however the finding read was stamped. A page
+// asked without it is answered bare, since a later ending may replace the
+// log; naming an object the attempt no longer keeps is refused `no_log`. A
+// page never ends inside a character.
 //
-// Mutations: answer Immutable whether or not the request named the object →
-// the bare page is Immutable, red; drop the check of the named object against
-// the row's → a replaced log's old key is answered with the new one's bytes,
-// red; stamp the read's position on the page → the two reads differ, red; cut
-// a page at its byte limit whatever it splits → the page ends inside "é",
-// red.
+// Mutations: Immutable whether or not the object was named → the bare page
+// is Immutable; drop the object check → a replaced log's old key gets the new
+// bytes; stamp the read's position on the page → the two reads differ; cut at
+// the byte limit whatever it splits → a page ends inside "é"; all red.
 func TestACheckLogAnswerIsImmutable(t *testing.T) {
 	t.Parallel()
 	at := func(seq uint64, level statelog.ReadLevel) *stubCode {
@@ -161,19 +154,15 @@ func TestAnAttemptIsNamedBesideItsBranch(t *testing.T) {
 	}
 }
 
-// A CHECKS LISTING HANDS THE READER ITS NARROWING AS ASKED: the repository,
-// a change's number, a commit and the branch it was checked for, each
-// check's latest attempt alone, the window's two bounds, a check's name, a
-// state and where each check stands, each on the read the reader holds to the
-// grant; and a state that is no check's, a bound that is no instant, or a
-// `latest` that is neither true nor false is refused before it is asked,
-// while an order the reader does not know comes back as its refusal.
+// A CHECKS LISTING HANDS THE READER ITS NARROWING AS ASKED (repository,
+// change, commit and target, `latest`, the window's bounds, name, state,
+// standing), on the read held to the grant; a state that is no check's, a
+// bound that is no instant, or a `latest` that is no boolean is refused
+// before it is asked, and an unknown order comes back as its refusal.
 //
-// Mutations: drop `state` from the narrowing → the reader is asked for every
-// state, red; drop `latest` → the reader is asked for every attempt, red;
-// drop `target` → the reader is asked for every branch's, red; drop
-// `until` → the window is asked with no end, red; drop `standing` → the
-// window is asked for its plain listing, red.
+// Mutations: drop `state` → every state is asked; `latest` → every attempt;
+// `target` → every branch's; `until` → the window has no end; `standing` →
+// the plain listing; all red.
 func TestAChecksListingNamesItsNarrowing(t *testing.T) {
 	t.Parallel()
 	stub := &stubCode{}

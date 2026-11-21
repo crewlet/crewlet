@@ -124,7 +124,7 @@ func SearchAfterOf(h SearchHit) SearchAfter {
 // file's first.
 func (a SearchAfter) Raw() (string, error) {
 	if a.Line < 1 {
-		return "", fmt.Errorf("%w: search.after.line: %d is before a file's first line, 1", ErrInvalid, a.Line)
+		return "", refusedf("%w: search.after.line: %d is before a file's first line, 1", ErrInvalid, a.Line)
 	}
 	return GitPath("search.after.path", a.Path, a.PathB64, false)
 }
@@ -152,15 +152,15 @@ func (q SearchQuery) Hits() int {
 func (q SearchQuery) ValidateBounds() error {
 	switch {
 	case q.Limit < 0 || q.Limit > MaxSearchHits:
-		return fmt.Errorf("%w: search.limit: %d is not 1 to %d (0 is %d)", ErrInvalid, q.Limit, MaxSearchHits,
+		return refusedf("%w: search.limit: %d is not 1 to %d (0 is %d)", ErrInvalid, q.Limit, MaxSearchHits,
 			MaxSearchHits)
 	case q.Context < 0 || q.Context > MaxSearchContext:
-		return fmt.Errorf("%w: search.context: %d is not 0 to %d lines", ErrInvalid, q.Context, MaxSearchContext)
+		return refusedf("%w: search.context: %d is not 0 to %d lines", ErrInvalid, q.Context, MaxSearchContext)
 	case q.PerFile < 0 || q.PerFile > MaxSearchHits:
-		return fmt.Errorf("%w: search.per_file: %d is not 0 to %d (0 is every matching line)", ErrInvalid,
+		return refusedf("%w: search.per_file: %d is not 0 to %d (0 is every matching line)", ErrInvalid,
 			q.PerFile, MaxSearchHits)
 	case q.Context > 0 && q.Limit > MaxSearchContextHits:
-		return fmt.Errorf("%w: search.limit: %d is past the %d hits a search answering context lines may",
+		return refusedf("%w: search.limit: %d is past the %d hits a search answering context lines may",
 			ErrInvalid, q.Limit, MaxSearchContextHits)
 	}
 	return nil

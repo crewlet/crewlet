@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/config"
@@ -62,24 +60,18 @@ type fleet struct {
 	holderWait time.Duration
 }
 
-// Join makes this bridge one of its fleet's: a box's call that reaches its
-// route is answered by the node holding the run's seat, wherever that is, and
-// a call for a session this node holds is answered here wherever it landed. It
-// serves until the returned Unsubscribe runs.
+// Join makes this bridge one of its fleet's: a box's call is answered by the
+// node holding the run's seat, wherever it landed. It serves until the
+// returned Unsubscribe runs.
 //
-// # Why every node joins, and the route is wherever the API is
-//
-// A session is live state in the process holding its seat (see
-// [Bridge.verdict]), and the address a box dials is fixed when the box starts.
-// Between the two sit a load balancer in front of several nodes, which sends a
-// call wherever it likes, and a seat that moves to a peer mid-run, which
-// leaves the box dialling a node that no longer holds it. So the node a call
-// lands on reads the seat's lease — the seat is in the token — and relays the
-// whole exchange to the holder over the broker (internal/httprelay), event
-// stream included. Every node is reached that way, so [BaseURLVar] is ONE
-// address for the fleet: any node that serves the route, and a node that
-// serves none — one without the ingress role — is still reached through one
-// that does.
+// # Why every node joins
+// A session is live state in the process holding its seat ([Bridge.verdict]),
+// but a box's address is fixed at start, a load balancer sends a call
+// anywhere and a seat can move mid-run. So the node a call lands on reads the
+// seat's lease (the seat is in the token) and relays the whole exchange,
+// event stream included, to the holder (internal/httprelay). Hence
+// [BaseURLVar] is ONE address for the fleet, reaching even a node without
+// the ingress role.
 func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe, error) {
 	if b == nil {
 		return nil, errors.New("mcpbridge: no bridge to join to its fleet")
@@ -87,29 +79,9 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 	if opts.Leases == nil || opts.HolderWait <= 0 {
 		return nil, errors.New("mcpbridge: joining a fleet needs its seat leases and a holder wait")
 	}
-	// THE RELAY'S HANDLER IS THE MCP HANDLER ITSELF, behind the route's
-	// own pattern so the token reaches it as a path value — never the
-	// route's handler, which would relay a relayed call again: at the job's
-	// endpoint, and at each of the seat's MCP servers beneath it, whose name
-	// it reads as a path value too ([ServerPattern]). And the notes route's,
-	// served on the opening the token names here, for the same reason never
-	// through its own routing.
-	//
-	// EVERY ROUTE ON THE OPENING HELD HERE, behind the step that holds it to
-	// the session the job's box started ([Bridge.serveBegun]): a relayed
-	// request is as much the run's first as one that reached this node's own
-	// route, and the MCP handler alone would serve it before that is told.
-	mux := http.NewServeMux()
-	streamable := b.heldOnly(func(w http.ResponseWriter, r *http.Request, _ *binding) {
-		b.streamable.ServeHTTP(w, r)
-	})
-	mux.Handle(PathPrefix+"{token}", streamable)
-	mux.Handle(ServerPattern, streamable)
-	mux.Handle(SteerPattern, b.heldOnly(b.serveSteer))
-	mux.Handle(SkillPattern, b.heldOnly(b.serveSkill))
 	relay, err := httprelay.New(httprelay.Options{
 		Fabric: opts.Fabric, Name: RelayName, Node: opts.Node, Owner: opts.Owner,
-		Keyring: opts.Keyring, Admit: b.admitRelayed, Handler: mux,
+		Keyring: opts.Keyring, Admit: b.admitRelayed, Handler: b.relayed(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mcpbridge: %w", err)
@@ -125,14 +97,30 @@ func (b *Bridge) Join(ctx context.Context, opts FleetOptions) (queue.Unsubscribe
 	}, nil
 }
 
+// relayed is the handler a call relayed to this node is served by, once the
+// relay has admitted it ([Bridge.admitRelayed]).
+//
+// THE RELAY'S HANDLER IS THE MCP HANDLER ITSELF, behind the route's own
+// pattern so the token reaches it as a path value, never the route's
+// handler, which would relay a relayed call again: at the job's endpoint, and
+// at each of the seat's MCP servers beneath it ([ServerPattern]); and the
+// notes and skill routes' own, never their routing. EVERY ROUTE IS SERVED ON
+// THE OPENING HELD HERE ([Bridge.heldOnly]), behind the step that holds it to
+// the session the box started ([Bridge.serveBegun]), and through
+// [Bridge.serveMCP] as this node's own route is: a relayed request is as much
+// the run's first, and the MCP handler alone would serve it before that.
+func (b *Bridge) relayed() http.Handler {
+	mux := http.NewServeMux()
+	streamable := b.heldOnly(b.serveMCP)
+	mux.Handle(PathPrefix+"{token}", streamable)
+	mux.Handle(ServerPattern, streamable)
+	mux.Handle(SteerPattern, b.heldOnly(b.serveSteer))
+	mux.Handle(SkillPattern, b.heldOnly(b.serveSkill))
+	return mux
+}
+
 // admitRelayed is what this node can do for a call relayed to it: the same
 // verdict it gives a call that reached its own route.
-//
-// BUT NEVER A LOOPBACK SESSION's ([Session.Loopback]): its token is worth
-// something from this host's loopback alone, and a relayed call came from
-// wherever the box that sent it is. The client address the entry carries
-// cannot stand in for that, because it is the entry's own loopback that it
-// would name.
 func (b *Bridge) admitRelayed(r *http.Request) httprelay.Verdict {
 	// THE TOKEN IS THE FIRST SEGMENT after the prefix, whatever route under
 	// it the call is for: the MCP endpoint, one of the seat's MCP servers
@@ -142,10 +130,8 @@ func (b *Bridge) admitRelayed(r *http.Request) httprelay.Verdict {
 	if !ok {
 		return httprelay.Refuse
 	}
-	if opened := b.held(sub); opened != nil && opened.session.Loopback {
-		return httprelay.Refuse
-	}
-	return b.verdict(sub)
+	_, verdict := b.verdict(sub)
+	return verdict
 }
 
 // The pace a waiting call reads the seat's lease again at. A takeover is
@@ -159,25 +145,17 @@ const (
 )
 
 // forward answers a call this node holds no open session for: the session's
-// holder answers it, here or relayed, or the call waits for one that can. A
-// seat's holder is the one its lease names, and a pinned session's the
-// incarnation its token names ([route]).
+// holder answers it, here or relayed, or the call waits for one that can. The
+// holder is the one its seat's lease names ([route]).
 //
-// A STOPPING NODE WAITS FOR NO HOLDER ([Bridge.Shutdown]). While the call
-// waits, no node has taken it, so nothing of it runs anywhere, and a node that
-// went on waiting held its listener busy for the whole grace of a graceful
-// stop — up to [FleetOptions.HolderWait], two seat-lease lifetimes, where the
-// listener is closed without one — and was then cut, which a box's client
-// reads as a broken connection rather than an answer to retry. So the wait
-// ends at the shutdown, answered that this node is draining and when to try
-// again, and the box's retry lands on a node that stays. A call already
-// handed to its holder is left to finish, as [Bridge.forwardPoll] leaves one.
+// A STOPPING NODE WAITS FOR NO HOLDER ([Bridge.Shutdown]). A waiting call has
+// been taken by no node, and one that kept waiting would hold the listener
+// busy through the graceful stop (up to [FleetOptions.HolderWait], two
+// seat-lease lifetimes) and then be cut, which a box's client reads as a
+// broken connection, not a retry. So the wait ends at shutdown with an answer
+// that this node is draining and when to retry, landing on a node that stays.
+// A call already handed to its holder finishes, as [Bridge.forwardPoll] has it.
 func (b *Bridge) forward(w http.ResponseWriter, r *http.Request, sub subject, f *fleet) {
-	if sub.route.pinned() && sub.route.owner == "" {
-		b.refuse(w, r, sub.run, "the run's session was opened by a node that had joined "+
-			"no fleet, so only that node's own route reaches it")
-		return
-	}
 	req, err := httprelay.Read(r)
 	switch {
 	case errors.Is(err, httprelay.ErrTooLarge):
@@ -189,16 +167,10 @@ func (b *Bridge) forward(w http.ResponseWriter, r *http.Request, sub subject, f 
 	}
 	ctx := r.Context()
 	deadline := time.Now().Add(f.holderWait)
-	holds := "which holds the run's seat"
-	if sub.route.pinned() {
-		holds = "which opened the run's session"
-	}
+	const holds = "which holds the run's seat"
 	var why string
 	for attempt := 0; ; attempt++ {
-		owner, err := sub.route.owner, error(nil)
-		if !sub.route.pinned() {
-			owner, err = holderOf(ctx, f.leases, sub.route.seat)
-		}
+		owner, err := coord.Holder(ctx, f.leases, coord.SeatResource(sub.route.seat))
 		switch {
 		case err != nil:
 			why = "which node holds the run's seat could not be read: " + err.Error()
@@ -217,15 +189,6 @@ func (b *Bridge) forward(w http.ResponseWriter, r *http.Request, sub subject, f 
 				b.refuse(w, r, sub.run, "the run has ended: "+node+", "+holds+", "+
 					"holds no session for its job")
 				return
-			case httprelay.Rerouted:
-				if sub.route.pinned() {
-					// THE PROCESS THAT OPENED IT IS GONE, and its session
-					// with it: the node answers as a later incarnation,
-					// and nothing takes a pinned session over.
-					b.refuse(w, r, sub.run, "the run has ended: "+node+" no longer runs "+
-						"the process that opened its session")
-					return
-				}
 			case httprelay.Lost:
 				// THE CALL MAY HAVE RUN, so it is not offered to anyone
 				// else: the box's client decides whether to repeat it, as
@@ -259,17 +222,4 @@ func (b *Bridge) forward(w http.ResponseWriter, r *http.Request, sub subject, f 
 			return
 		}
 	}
-}
-
-// holderOf is the incarnation a seat's live lease names, or empty while no
-// node holds it.
-func holderOf(ctx context.Context, leases Leases, seat uuid.UUID) (string, error) {
-	lease, err := leases.Get(ctx, coord.SeatResource(seat))
-	if err != nil {
-		return "", err
-	}
-	if lease == nil || !lease.Live(time.Now()) {
-		return "", nil
-	}
-	return lease.Owner, nil
 }

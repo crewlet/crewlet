@@ -19,43 +19,15 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
-// THE BOOT PROBE, and what it proves.
+// THE BOOT PROBE writes, reads back and deletes ONE object under
+// `<prefix>probe/<key>` through the verbs every upload uses, proving the node
+// can store a file where it will store them. Not HeadBucket: that needs
+// s3:ListBucket over the whole bucket, which a credential scoped to one
+// company's prefix (how a bucket is shared safely) lacks.
 //
-// # Under the prefix, never about the bucket
-//
-// A node used to check its bucket with HeadBucket, which needs a right over
-// the whole bucket (s3:ListBucket). A credential scoped to one company's
-// prefix, which is how one bucket is shared between companies without each
-// reading the others' files, has no such right, so the check refused exactly
-// the credential that makes sharing safe. The probe instead writes, reads back
-// and deletes ONE object under `<prefix>probe/<key>`, through the same verbs
-// every upload uses: it proves the node can store a file where it will store
-// them, which a HeadBucket never did.
-//
-// # Then whether the provider enforces what a presigned put relies on
-//
-// A presigned put hands a client a URL it uses itself, and two bindings keep
-// it to the bytes the engine agreed to: the signed `x-amz-checksum-sha256`
-// makes any put that lands carry exactly the declared bytes, and
-// `If-None-Match: *` refuses a second put to the same name, so nobody swaps
-// the content after it was verified. Providers differ on both, and some
-// accept the headers and ignore them. So the probe asks: a put whose checksum
-// does not match its body must be refused `BadDigest`, a matching put must be
-// stored, and a second put of the same name under the condition must be
-// refused 412. Only a provider that does all three offers direct uploads
-// ([Backend.DirectUpload]); any other degrades to every upload streaming
-// through the engine, which is today's behaviour, rather than failing the
-// boot.
-//
-// The checksum half alone also decides whether the engine's own single-part
-// puts carry the header, so the provider checks what it stores and the audit
-// can read the digest back ([Backend.Stat]).
-//
-// # What fails the boot
-//
-// Only what an upload would fail on: the probe object cannot be written or
-// deleted through the engine's own path. Every other answer is a capability
-// the provider lacks, reported in health, never a refusal to start.
+// It fails the boot only on what an upload would fail on: the probe object
+// cannot be written or deleted. Every other answer is a missing capability,
+// reported in health. [capabilities] says what else it checks.
 
 // probeNamespace is where the probe's object lives under the prefix: beside
 // `files/` and never inside it, so the collector, which judges only names
@@ -68,7 +40,16 @@ const probeNamespace = "probe/"
 // leaked from a log is worthless.
 const probeTerm = time.Minute
 
-// capabilities is what the probe proved of the provider.
+// capabilities is what the probe proved of the provider: whether it enforces
+// what a presigned put relies on. Two bindings keep a client's put to the
+// agreed bytes: the signed `x-amz-checksum-sha256` and `If-None-Match: *`
+// (refuses a second put to the same name). Some providers accept the headers
+// and ignore them, so the probe requires a mismatched checksum refused
+// `BadDigest`, a matching put stored and a second conditional put refused 412.
+// Only a provider doing all three offers direct uploads
+// ([Backend.DirectUpload]); any other streams uploads through the engine. The
+// checksum half alone also makes the engine's single-part puts carry the
+// header, so the audit can read the digest back ([Backend.Stat]).
 type capabilities struct {
 	// checksums is a put whose x-amz-checksum-sha256 did not match its
 	// body was refused, and one that matched was stored.
@@ -275,20 +256,15 @@ func (b *Backend) PresignPut(ctx context.Context, name string, r objstore.Presig
 // withoutAttempts builds a presign from the bucket's client WITHOUT THE
 // CLIENT'S OWN STEPS ([paced]): the gate, the judge and the request they
 // follow are each about an attempt sent to the bucket, and a presign sends
-// none — it signs a URL somebody else sends. Nor could they stand on its
-// stack: the SDK takes the retry step out of a presign's stack before the
-// client's options run, and the gate is placed after that step, so a presign
-// built on the client's options failed — and with it the boot probe, which
-// presigns ([TestAPresignIsNoRequestOfTheClients]).
+// none: it signs a URL somebody else sends. Nor could they stand on its stack:
+// the SDK removes the retry step from a presign's stack before the client's
+// options run and the gate sits after that step, so a presign on the client's
+// options failed, and with it the boot probe ([TestAPresignIsNoRequestOfTheClients]).
 //
-// PER PRESIGN, never on [s3.NewPresignClient] at Open: client options given
-// there build a second client from the first one's options, and that client's
-// construction points the S3 Express session provider the two share at
-// itself — every session the bucket's own requests wait for in GetIdentity
-// would then be asked through a client the gate and the judge are not on. Per
-// presign, the options apply to this one operation of the bucket's own client,
-// so a session a presign of a directory bucket needs is asked through that
-// client like any other ([judge]).
+// PER PRESIGN, never on [s3.NewPresignClient] at Open: options given there
+// build a second client whose construction points the shared S3 Express
+// session provider at itself, so sessions the bucket's own requests wait for
+// would be asked through a client the gate and the judge are not on ([judge]).
 func (b *Backend) withoutAttempts(po *s3.PresignOptions) {
 	po.ClientOptions = append(po.ClientOptions, func(o *s3.Options) { o.APIOptions = b.unpaced })
 }

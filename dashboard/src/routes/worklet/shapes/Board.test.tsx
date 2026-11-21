@@ -60,6 +60,7 @@ const ORG = {
 const NOW = Date.parse("2031-04-16T12:00:00Z");
 
 const row = (key: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
+  flow: null,
   id: key.toLowerCase(),
   key,
   project: "ENG",
@@ -770,17 +771,31 @@ describe.each([
 // ---------------------------------------------------------------------------
 
 describe("the board on the work screen", () => {
+  /** ENG-2 as the engine reads it while swe's turn is on it (ADR-0162). */
+  const worked = row("ENG-2", {
+    status: "in_progress",
+    assignee: "swe",
+    flow: {
+      state: "working",
+      cause: "turn",
+      since: "2031-04-16T11:54:00Z",
+      until: null,
+      reason: "",
+    },
+  });
+
   function mountList(agents: Record<string, unknown>[]) {
     location.hash = "#/worklet?shape=board";
     const c = client(JANE, agents);
     c.answers.work_items = {
       items: [],
       groups: [
-        { key: "todo", count: 2, rows: [row("ENG-1"), row("ENG-2")] },
-        { key: "in_progress", count: 0, rows: [] },
+        { key: "todo", count: 1, rows: [row("ENG-1")] },
+        { key: "in_progress", count: 1, rows: [worked] },
       ],
       total_hint: 2,
       complete: true,
+      flow_live: true,
     };
     render(
       <ToastProvider>
@@ -818,10 +833,10 @@ describe("the board on the work screen", () => {
     turn: { started_at: "2031-04-16T11:54:00Z", stage: "running" },
   });
 
-  // THE STRIP IS ON THE TASK THE TURN IS CHARGED TO, and on no card the
-  // trigger's work key happens to name.
-  test("a running turn is drawn on the task it is charged to, never on its work key", async () => {
-    mountList([working("ENG-2", "ENG-1")]);
+  // THE STRIP IS ON THE TASK THE ENGINE READS WORKING (ADR-0162), and on no
+  // card the push's turn or its trigger's work key happens to name.
+  test("a running turn is drawn on the task the engine reads working, and on no other", async () => {
+    mountList([working("ENG-1", "ENG-1")]);
     await settle();
     expect(cardOf("ENG-2").querySelector(".work-card-live")?.textContent).toContain(
       "SWE · executing · round 3 of 20",

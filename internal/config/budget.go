@@ -14,41 +14,17 @@ import (
 )
 
 // TokenBudget is the AUTHORED form of a token budget: a `token_budget:`
-// mapping that names a ceiling for each calendar window it caps, on the
-// company and on any agent seat.
+// mapping with a ceiling per calendar window it caps (`day`, `week`,
+// `month`), on the company and on any agent seat.
 //
-//	token_budget:
-//	  day: 2000000      # one local day, midnight to midnight
-//	  month: 40000000   # one calendar month
+// Each window reopens on its own (day at the company's local midnight, week
+// on Monday, month on the 1st, all on the `timezone` clock, ADR-0018); a turn
+// is admitted only while every capped window has room.
 //
-// # A budget is a ceiling per window, not one number
-//
-// A single number was a ceiling for the life of the deployment, and a ceiling
-// nothing ever resets is one a company only escapes by an operator zeroing a
-// counter by hand. A company's spend has a rhythm — a bill per month, a
-// runaway loop that burns a day's allowance in an hour — so a budget names
-// the windows it bounds, and each one opens again on its own when the window
-// turns over: a day at the company's local midnight, a week at the start of
-// its ISO week (Monday), a month on the 1st, all on the company's one clock
-// (`timezone`, ADR-0018). Every key is optional and the windows are
-// independent: a turn is admitted only while every capped window has room.
-//
-// # An absent key is no ceiling, and 0 is refused
-//
-// The pointers are what tell the two apart, and the rule they serve is the
-// engine's for every setting whose zero is a real value: zero must mean one
-// thing or be refused. A ceiling of 0 reads as "unlimited" to some people and,
-// as the word ceiling says, as "nothing may be spent" to others — two readers,
-// two opposite companies. So there is exactly one way to leave a window
-// uncapped, which is to leave its key out, and a 0 or a negative is refused
-// naming the key to remove. Stopping a seat on purpose is not a budget's job
-// at all.
-//
-// # What the engine reads
-//
-// [TokenBudget.Ceilings]: one period to one number, capped windows only. The
-// org model carries that ([org.TokenCeilings]), so nothing downstream of the
-// configuration ever sees a pointer.
+// An absent key is no ceiling and 0 is refused: 0 reads as "unlimited" to
+// some and "nothing may be spent" to others, so a window is uncapped only by
+// leaving its key out (the pointers tell the two apart). [TokenBudget.Ceilings]
+// is what the engine reads; [org.TokenCeilings] carries it, pointer-free.
 type TokenBudget struct {
 	Day   *int `yaml:"day,omitempty" json:"day,omitempty" js:"min=1" desc:"Most tokens one day may spend, local midnight to midnight on the company clock. Absent = no daily ceiling; 0 is refused."`
 	Week  *int `yaml:"week,omitempty" json:"week,omitempty" js:"min=1" desc:"Most tokens one ISO week (from Monday, on the company clock) may spend. Absent = no weekly ceiling; 0 is refused."`
@@ -416,26 +392,16 @@ func (i IdleCeiling) sentence(key, refused, spender, held string) string {
 
 // budgetWarnings is every ceiling in the company that can never refuse a
 // turn: one another ceiling in the same budget always reaches first (see
-// [TokenBudget.warnings]), and a seat's ceiling at or above a company ceiling
-// on a window that holds the seat's whole ([holds]) — which the company's
-// reaches first, because everything a seat spends is the company's spend too.
+// [TokenBudget.warnings]), or a seat's ceiling at or above a company ceiling
+// on a window that holds the seat's whole ([holds]), since everything a seat
+// spends is the company's spend too.
 //
-// Warnings rather than refusals, because every one of them runs exactly as
-// written and none of them is dangerous: an idle ceiling admits nothing a
-// working one would refuse. What it does is mislead — a founder reading
-// "this seat may spend 5M a day" beside a company capped at 2M believes the
-// seat has a headroom it does not — and that is what a warning is for.
+// Warnings, not refusals: an idle ceiling runs as written but misleads (a
+// seat shown 5M a day beside a company capped at 2M).
 //
-// The ceiling each person's assistant is held to (`assistant.token_budget`) is
-// judged the same two ways: its own windows against each other, and against
-// the company's, since a person's assistant spend is the company's too. The
-// Budgets screen checks a change to it as it checks the company's and a
-// seat's, so a ceiling that can never refuse a question is said before it is
-// saved.
-//
-// Agent seats only. A human seat carrying a budget is refused as a conflict,
-// and a warning beside that refusal would be advice about a key that has to
-// go anyway.
+// The assistant's `assistant.token_budget` is judged the same two ways, as
+// the Budgets screen judges it before save. Agent seats only: a human seat
+// with a budget is refused as a conflict already.
 func (c *Company) budgetWarnings() []Warning {
 	out := c.TokenBudget.warnings(field("token_budget"), "company")
 	assistant := at(field("assistant"), "token_budget")
@@ -477,38 +443,17 @@ var (
 )
 
 // validateExecutorFloor refuses a token ceiling below the room an executor
-// launch needs (turn_engine.executor_min_budget_tokens), on every scope a seat
-// that runs an executor is judged by: its own `token_budget`, and the
-// company's.
+// launch needs (turn_engine.executor_min_budget_tokens), on a seat's own
+// `token_budget` and the company's.
 //
-// RUNNABLE, because such a seat never runs. Every executor launch is refused
-// while a capped window of either scope has less than the floor left, and the
-// refusal parks the seat until the window turns over — but a ceiling below the
-// floor has less than the floor left at the window's very first token, so the
-// seat parks as starved before its first launch and every window it ever opens
-// leaves it parked. Nothing at run time says why beyond "starved"; this is the
-// one place the two settings meet.
-//
-// AT THE CEILING, naming both remedies, because either is the author's to
-// choose: raise the ceiling to the floor, or lower the floor to the ceiling —
-// knowing that a floor below one request of a run admits runs that cannot
-// finish their first round. The company's ceiling binds every executor seat,
-// so it is refused once, naming the first such seat and how many more; a
-// company with no seat that runs an executor caps nothing a launch reads, and
-// is not refused.
-//
-// A ceiling below one token is not judged here: [TokenBudget.validate] and the
-// seat's own validation refuse it, and a second refusal of the same key would
-// be advice about a value that has to go anyway.
-//
-// AND IT IS WHAT THE ENGINE'S HOLD LEANS ON. A launch counts its brief beside
-// this floor, and one whose fresh brief takes it past the most room a window
-// can leave it (each ceiling less what the launch's own turn spent there
-// before it) is held rather than refused in every window for ever
-// (internal/engine's launchFloor): at this floor alone where this floor fits
-// in that room, and at the room otherwise. With every ceiling at or above this
-// floor, the room is below it only where the turn's own spend took the
-// difference, and the engine takes no hold under a ceiling this rule refuses.
+// RUNNABLE, because such a seat never runs: a launch is refused while a
+// window has less than the floor left, so it parks as starved at its first
+// token, with nothing at run time saying why. The refusal is AT THE CEILING
+// and names both remedies (raise it, or lower the floor, knowing one below a
+// request admits runs that cannot finish round one). The company's is refused
+// once, naming the first executor seat and the rest, and not with none; below
+// one token is [TokenBudget.validate]'s. internal/engine's launchFloor holds a
+// launch whose brief exceeds the room left, and none under a refused ceiling.
 func (c *Company) validateExecutorFloor() error {
 	floor := c.TurnEngine.ExecutorFloor()
 	if floor <= 0 {

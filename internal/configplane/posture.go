@@ -15,6 +15,13 @@
 // nothing on exactly the operation an operator performs to pick up a rotated
 // secret.
 //
+// Lag alone never sheds a node: it must be CONFIRMED (a failed attempt of the
+// node's own, or behind past [LagGrace]; [FleetView.LagConfirmed] is the one
+// statement of the rule), so the posture and the engine's irreversible
+// judgements agree on which nodes are behind. [RevisionOf] is likewise the one
+// pointer-to-history-row mapping, which is why this package imports coord and
+// store.
+//
 // # Three facts about a company's configuration
 //
 // What a node knows about its company is three facts, and each has one
@@ -232,19 +239,16 @@ type FleetView struct {
 
 // DecidePosture decides what a node does about its lag.
 //
-// The rule that matters, and the one that is easy to get backwards: the
-// target is the store's pointer, but LAG ALONE IS NEVER A REASON TO SHED.
-// Every successful rollout produces lag — the first node to apply advances
-// the pointer and every peer is behind until it polls. Shedding on that
-// makes the fastest node the cause of a fleet-wide outage, and the faster it
-// is, the longer the outage.
+// The target is the store's pointer, but LAG ALONE IS NEVER A REASON TO SHED
+// (easy to get backwards): every successful rollout produces lag, as the first
+// node to apply advances the pointer and every peer is behind until it polls,
+// and shedding on that makes the fastest node the cause of a fleet-wide outage.
 //
-// So lag must be CONFIRMED before it means anything: either an attempt of this
-// node's at the epoch concluded in failure, or it has been behind on that
-// epoch longer than propagation could explain. An attempt still running is
-// neither. Only then does peer health pick the action — and when no peer
-// managed the epoch either, the honest conclusion is that the revision is
-// bad rather than this node, so it keeps serving what rollback preserved.
+// So lag must be CONFIRMED: an attempt of this node's at the epoch concluded
+// in failure, or it has been behind longer than propagation explains (an
+// attempt still running is neither). Only then does peer health pick the
+// action; when no peer managed the epoch either, the revision is bad rather
+// than this node, so it keeps serving what rollback preserved.
 func DecidePosture(v FleetView) Posture {
 	if v.AppliedEpoch >= v.TargetEpoch {
 		return PostureServe
@@ -267,21 +271,13 @@ func DecidePosture(v FleetView) Posture {
 	}
 
 	if v.PeersReported > 0 || v.triedAndFailed() {
-		// Everyone who tried failed — and on a single-node deployment
-		// "everyone" is this node.
-		//
-		// This deliberately OUTRANKS exhausted attempts. Shedding exists
-		// to move work to a healthy peer; with no healthy peer it is not
-		// shedding, it is stopping. Every node in a fleet that cannot
-		// apply a revision reaches this state at the same moment, so
-		// ranking stuck first would take the whole company dark about 45
-		// seconds after a bad activation — the exact outcome this branch
-		// prevents. A lone node arrives by a shorter path still: with no
-		// peer to report anything, its own failure is the only evidence
-		// there will ever be.
-		//
-		// The retry bound is untouched: the attempt counter gates
-		// re-applying directly, so a node stops restarting its
+		// Everyone who tried failed (on a single node, "everyone" is this
+		// node). This deliberately OUTRANKS exhausted attempts: shedding moves
+		// work to a healthy peer, and with none it is stopping. Every node of
+		// a fleet that cannot apply a revision reaches this state together, so
+		// ranking stuck first would take the company dark about 45 seconds
+		// after a bad activation. The retry bound is untouched: the attempt
+		// counter gates re-applying directly, so a node stops restarting its
 		// subsystems after MaxApplyAttempts whatever posture it reports.
 		return PostureIsolated
 	}
@@ -298,13 +294,12 @@ func DecidePosture(v FleetView) Posture {
 // longer. An attempt still running is neither, and a node that is not behind
 // has no lag to confirm.
 //
-// THE RULE [DecidePosture] JUDGES BY, stated once, because a second reader
-// needs the same line drawn: the engine's irreversible judgements against the
-// active revision decline on a node that has not applied the pointer's epoch,
-// and say so at WARN only where that is a fault rather than the seconds every
-// activation and every boot spends applying it. A copy of the rule there is
-// the one that would drift — and a node the posture reads as waiting while its
-// purge duty reports it behind is two answers to one question.
+// THE RULE [DecidePosture] JUDGES BY, stated once for a second reader: the
+// engine's irreversible judgements against the active revision decline on a
+// node that has not applied the pointer's epoch, and say so at WARN only where
+// that is a fault rather than the seconds every activation and boot spends
+// applying it. A copy there would drift, leaving a node the posture reads as
+// waiting while its purge duty reports it behind.
 func (v FleetView) LagConfirmed() bool {
 	return v.AppliedEpoch < v.TargetEpoch && (v.triedAndFailed() || v.BehindFor >= LagGrace)
 }

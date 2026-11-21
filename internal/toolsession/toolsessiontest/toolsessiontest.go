@@ -15,10 +15,12 @@
 // # What the suite covers, and what it leaves to each package
 //
 // The shared gates: the seat's fence before a call and after it; a tool that
-// panics; a call that runs under the run's context and not the MCP request's;
-// arguments that did not parse; a call after the run ended; each call's place
-// in the run's call log, fixed when it arrives; an activation answered once the
-// client has re-listed; a suspend the run cannot resume, refused; the class
+// panics, answered as a failure that ends the run; a call that runs under the
+// run's context and not the MCP request's, whether the client cancels or hangs
+// up; arguments that did not parse, answered with the loop's own words; a call
+// after the run ended, refused; each call's place in the run's call log, fixed
+// when it arrives; an activation answered once the client has re-listed; a
+// suspend the run cannot resume, refused and recorded as the call that ran; the class
 // every refusal carries on the record; and an answer's image, which reaches the
 // client after its text while the record keeps its type and size alone.
 //
@@ -37,6 +39,10 @@
 // calls them, gives up on them and hangs up. A suite that called the
 // dispatcher around its session would test a path no harness takes: the session's
 // server, its tool list and its held answers are on the way of every call.
+//
+// A case hangs up by cutting the transport [Served] hands it, never by the
+// client's polite close, which waits for the calls in flight and so would hide
+// the hang-up a dying harness makes.
 //
 // The one call made around the session is the one no session can deliver: a
 // call already past the transport when the run ended ([Served.Dispatcher]).

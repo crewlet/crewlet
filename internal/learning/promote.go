@@ -21,32 +21,13 @@ import (
 //
 // # Why this is a knowledge-base page and not a skill row
 //
-// Every other skill here is AGENT-SCOPE: one seat's row, in one seat's
-// catalogue, loaded into one seat's prompt. That is deliberate — a skill is a
-// procedure a particular seat follows, and there is no unit-scope skill table
-// because a procedure four seats share is a procedure the TEAM has, which
-// makes it documentation rather than per-agent memory.
-//
-// So the output is a DRAFT PAGE under the unit's `Auto-Drafted Skills`
-// parent, which the turn-start knowledge search deliberately excludes: an
-// unvetted draft never reaches another agent. A unit lead reviews it and
-// publishes by moving it out of that parent, at which point it is an ordinary
-// knowledge-base page every seat can find. Nothing here promotes itself past
-// a person.
-//
-// # What "cross-agent" has to mean
-//
-// DISTINCT SEATS, not skills. One seat that drafted four near-identical
-// skills is a catalogue that needs curating, not a team convergence — and
-// counting rows rather than owners would promote it, presenting one agent's
-// habit as what the unit does. `min_sibling_count` is a count of AGENTS.
-//
-// # The knobs this closes
-//
-// `skill_promotion.enabled`, `min_sibling_count`, `jaccard_threshold` and
-// `budget_tokens` all validated, shipped in the example company, and had no
-// reader outside internal/config: `Skills.ListFor` existed for this pass and
-// had no caller anywhere.
+// Skills are AGENT-SCOPE; a shared procedure is documentation. The output is a
+// DRAFT PAGE under the unit's `Auto-Drafted Skills` parent, which turn-start
+// knowledge search excludes, so an unvetted draft never reaches another agent;
+// a unit lead publishes it by moving it out.
+// DISTINCT SEATS, not skills, is what "cross-agent" means: counting rows
+// would present one agent's habit as the unit's. `min_sibling_count` counts
+// AGENTS.
 
 // PromotionInterval is how often the promotion pass runs.
 //

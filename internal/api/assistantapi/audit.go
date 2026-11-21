@@ -24,23 +24,15 @@ import (
 // THE COMPLIANCE READ (decision D06): an administrator reading somebody else's
 // conversation, with a reason, recorded before it opens.
 //
-// # Recorded first, and opened only for its record
-//
 // The read is a record in the conversation's own domain before anything is
-// read, and the domain opens the conversation only for the receipt of a record
-// that has applied on this node (assistantdomain.Reader.AuditTranscript), so
-// there is no path that reads a conversation without leaving the line its
-// owner is shown: who read it, when, and why. The runtime audit record naming
-// the reader and the reason is published once the conversation opened and
-// before it is answered.
+// read, and the domain opens it only for the receipt of a record applied on this
+// node (assistantdomain.Reader.AuditTranscript), so no path reads one without
+// leaving its owner the line: who, when, why.
 //
-// # Who may
-//
-// The authority table decides, at the route: `assistant.conversation.audit_read`
-// is admin's, with a recent proof, a person present and never the assistant,
-// so neither a machine token nor an assistant grant reaches it. A POST and not
-// a GET, because it writes: a GET could be triggered cross-site and forge "an
-// administrator read this" records the Origin gate never judged.
+// `assistant.conversation.audit_read` is admin's, with a recent proof, a person
+// present and never the assistant, so no machine token or assistant grant
+// reaches it. A POST, because it writes: a GET could be triggered cross-site and
+// forge "an administrator read this" records the Origin gate never judged.
 
 // AuditReads records and opens a compliance read: the domain's writer and
 // audited reader, as [DomainAudits] composes them.

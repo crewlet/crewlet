@@ -3,22 +3,17 @@ package config
 import "time"
 
 // Scheduling configures the role/unit scheduler: recurring work a seat or a
-// unit owns, fired on a cron expression. It also carries the work pickup
-// ([WorkPickup]), the engine's own cadence for handing an idle seat its
-// ready work, which runs whether or not the cron scheduler does.
+// unit owns, fired on a cron expression. It also carries [WorkPickup], the
+// engine's cadence for handing an idle seat ready work, which runs with or
+// without the cron scheduler.
 //
-// Which CLOCK a schedule fires on is not here: a schedule that names no zone
-// of its own fires on the company's `timezone`, which is the clock every other
-// calendar edge the engine cuts is on too (ADR-0018). A default zone held by
-// the scheduler alone was a second company clock, and the standup it fired at
-// 09:00 disagreed with the tracker about which day that 09:00 was on.
+// Which CLOCK a schedule fires on is not here: one naming no zone fires on
+// the company's `timezone`, the clock every other calendar edge is on too
+// (ADR-0018); a scheduler-held default would be a second company clock.
 //
-// The scheduler starts only when it is enabled, a store exists (it needs
-// the at-most-once ledger), and at least one seat or unit declares a
-// schedule. A company with no schedules never spins up the tick loop — and
-// the three conditions are re-evaluated on every config apply, so a
-// founder's FIRST schedule arms the loop without a restart and their last
-// one removed releases its fleet duty. See engine.reconcileScheduler.
+// The scheduler starts only when enabled, a store exists (its at-most-once
+// ledger) and a schedule is declared, re-evaluated on every config apply
+// (see engine.reconcileScheduler).
 type Scheduling struct {
 	Enabled Toggle `yaml:"enabled,omitempty" json:"enabled,omitzero" desc:"Master switch for the scheduler (default on)."`
 
@@ -33,21 +28,17 @@ type Scheduling struct {
 	// smoothing knob rather than a correctness requirement.
 	JitterSeconds int `yaml:"jitter_seconds,omitempty" json:"jitter_seconds,omitempty" js:"min=0" desc:"Deterministic per-schedule jitter to spread a popular minute."`
 
-	// CatchupMinSeconds and CatchupMaxSeconds clamp the missed-tick
-	// window: after a restart the single most recent missed run fires if
-	// it falls inside it, and older ticks are never backfilled — a company
-	// that was down for a day does not want yesterday's standups.
+	// CatchupMinSeconds and CatchupMaxSeconds clamp the missed-tick window:
+	// after a restart the single most recent missed run fires if it falls
+	// inside it, and older ticks are never backfilled.
 	//
 	// The maximum is also the floor for the completion ledger's retention:
 	// deleting a row a tick could still evaluate lets that fire run twice.
 	//
-	// THE MINIMUM IS AT LEAST ONE SECOND. The scheduler reads a zero clamp
-	// as unset and puts its own two minutes back (internal/schedule's
-	// DefaultCatchupMin), so a 0 written here never meant "no floor" — and
-	// a stored revision, decoded onto the defaults with every knob written
-	// omitempty, dropped it before the scheduler ever saw it. One second is
-	// what "no floor" can honestly be: the window below it is the
-	// schedule's own half-period.
+	// THE MINIMUM IS AT LEAST ONE SECOND. The scheduler reads a zero clamp as
+	// unset and puts its own two minutes back (internal/schedule's
+	// DefaultCatchupMin), so 0 never meant "no floor"; one second is what "no
+	// floor" can honestly be: below it is the schedule's own half-period.
 	CatchupMinSeconds int `yaml:"catchup_min_seconds,omitempty" json:"catchup_min_seconds,omitempty" js:"min=1" desc:"Lower clamp on the missed-tick catchup window (at least 1)."`
 	CatchupMaxSeconds int `yaml:"catchup_max_seconds,omitempty" json:"catchup_max_seconds,omitempty" js:"min=0" desc:"Upper clamp on the missed-tick catchup window."`
 

@@ -10,22 +10,15 @@ import (
 
 // MaxBodyBytes bounds what an unverified caller can make this process buffer.
 //
-// The body must be read BEFORE the signature can be checked — the signature is
-// over the body — so without a bound anyone who can reach the port picks the
-// allocation size. 25 MiB is GitHub's own documented ceiling and the largest of
-// the six providers', so no legitimate delivery is refused by it.
+// The body is read BEFORE the signature can be checked, so without a bound
+// anyone who can reach the port picks the allocation size. 25 MiB is GitHub's
+// documented ceiling, the largest of the six providers'.
 //
-// It is NOT the transport's limit, and deriving it from one was tried and
-// withdrawn. What a delivery costs on the wire is a property of its BYTES
-// rather than its length: the published event carries the parsed body
-// re-marshaled AND the exact signed bytes as base64, and encoding/json escapes
-// '<', '>' and '&' to six bytes each — so a body of ampersands encodes at 7.3x
-// where the same length of plain text encodes at 2.3x (measured). Any single
-// divisor is therefore wrong for one of them and wasteful for the other, and
-// the one that looked safe still let an escape-heavy body through. The
-// transport answers that question itself: an event that does not fit is
-// refused with queue.ErrTooLarge, and the receiver turns that into a 413 —
-// see Receiver.accept.
+// It is NOT the transport's limit: the wire cost depends on the BYTES (the
+// event carries the re-marshaled body AND the signed bytes as base64, and
+// encoding/json escapes '<', '>' and '&' to six bytes: 7.3x for ampersands,
+// 2.3x for plain text), so no single divisor is right. An event that does not
+// fit is refused with queue.ErrTooLarge, which Receiver.accept turns into 413.
 const MaxBodyBytes = 25 << 20
 
 // errBodyTooLarge is what a body over the cap surfaces as.
@@ -85,13 +78,8 @@ func list(m map[string]any, key string) []any {
 // JSON decodes every number as a float64, so the format matters: 'f' with
 // precision -1 is the SHORTEST representation that round trips, which renders
 // an integral value with no decimal point at all. PR #42 reads "42", where a
-// naive %f reads "42.000000".
-//
-// It carried an int64-conversion branch ahead of this, and mutation testing
-// found the branch dead: measured across the range, it produces byte-identical
-// output for every value it applies to, and the values it cannot handle are
-// exactly the ones whose float-to-int conversion is undefined — which fall
-// through to here anyway.
+// naive %f reads "42.000000". No int64 branch is needed: it would be
+// byte-identical wherever it applies.
 func num(m map[string]any, key string) string {
 	switch v := m[key].(type) {
 	case string:

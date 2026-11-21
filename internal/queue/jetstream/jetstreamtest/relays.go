@@ -6,28 +6,17 @@ import (
 	"testing"
 )
 
-// Relays is a partitionable route MESH with no servers in it — the addressing
+// Relays is a partitionable route MESH with no servers in it: the addressing
 // half of [StartPartitionableCluster], for callers that start their own
-// members.
+// members. A FLEET OF ENGINES needs that, since an engine embeds a server
+// built from Tier A and harness-started servers would be a topology no
+// deployment has. It gives a cluster name no other mesh carries, a route port
+// per member, peer URLs reaching the others THROUGH a relay this process can
+// cut, and a deliberately dead advertised address.
 //
-// # Why this exists apart from Cluster
-//
-// [StartPartitionableCluster] starts the members itself, which is right when
-// what is under test is the broker. It is wrong when what is under test is a
-// FLEET OF ENGINES: an engine embeds its own server and builds it from Tier A,
-// so a harness that started the servers would be testing a topology no
-// deployment has — engines talking to brokers they did not start.
-//
-// What a caller actually needs from that harness is the addressing: a cluster
-// name its members share and no other mesh carries, a route port per member,
-// the peer URLs that reach the other members THROUGH a relay this process can
-// cut, and an advertised address that is deliberately dead so gossip cannot
-// route around the relays. That is this.
-//
-// The relays are running when this returns and are stopped when the test ends.
+// The relays run when this returns and stop when the test ends.
 // [Relays.Partition] and [Relays.Heal] are [Cluster.Partition] and
-// [Cluster.Heal] — the same forwarders, the same guarantee that a partition
-// cuts established connections rather than only refusing new ones.
+// [Cluster.Heal]: a partition cuts established connections too.
 type Relays struct {
 	c           *Cluster
 	name        string
@@ -112,19 +101,16 @@ func startRelaysOnce(ctx context.Context, t *testing.T, n int, name string) (*Re
 		// attempts on "routed to [] (want 1 peers)". The values are
 		// inherited; only the cancellation is not.
 		if err := f.start(context.WithoutCancel(ctx)); err != nil {
-			// RETURNED, NOT FATAL. A relay listener loses its port to
-			// the same race a member's does — this reserves n(n-1)+2n
-			// of them, so it loses MORE often — and the retry above
-			// tries again with a fresh set. t.Fatalf ends the test
-			// binary's goroutine instead, so the retry that exists for
-			// exactly this never runs.
+			// RETURNED, NOT FATAL: a relay listener loses its port to
+			// the same race a member's does (n(n-1)+2n of them, so more
+			// often) and the retry above tries a fresh set; t.Fatalf
+			// would skip that retry.
 			//
-			// AND CLASSIFIED, through [listenErr]: a port somebody else
-			// holds is worth another set of numbers, and a permission
-			// failure, an address this host does not have or a
-			// cancelled context answer identically however many it is
-			// offered. This one call is what keeps the sentinel meaning
-			// what its doc in [internal/queue/jetstream] says.
+			// CLASSIFIED through [listenErr]: a port somebody else holds
+			// is worth another set of numbers; a permission failure, a
+			// missing address or a cancelled context are not. This call
+			// keeps the sentinel meaning what its doc in
+			// [internal/queue/jetstream] says.
 			return mesh, fmt.Errorf("start forwarder %d->%d: %w",
 				f.from, f.to, listenErr(err))
 		}
@@ -136,18 +122,11 @@ func startRelaysOnce(ctx context.Context, t *testing.T, n int, name string) (*Re
 // StartDirectMesh reserves an n-member mesh with NO relays: members are given
 // each other's real route ports and talk directly.
 //
-// # Why this is the default shape and the relay one is not
-//
-// A relay mesh costs n(n-1) listeners and copies every route byte through user
-// space, and it forces each member to advertise a DEAD address so gossip
-// cannot route around the relays — which is what makes a partition real. That
-// is exactly right when a case cuts a member off, and it is pure cost, and
-// pure risk, under a case that never does: raft traffic for every stream group
-// in the company crossing a hand-written proxy adds a failure mode the
-// deployment under test does not have.
-//
-// So a case that partitions takes [StartRelays] and pays for it. Everything
-// else takes this.
+// This is the default shape: a relay mesh costs n(n-1) listeners, copies every
+// route byte through user space and forces a DEAD advertised address. That is
+// right for a case that cuts a member off and pure cost and risk otherwise:
+// raft traffic crossing a hand-written proxy is a failure mode the deployment
+// under test does not have. A case that partitions takes [StartRelays].
 // ctx bounds the port reservation, for [StartRelays]'s reason.
 func StartDirectMesh(ctx context.Context, t *testing.T, n int) *Relays {
 	t.Helper()
@@ -160,16 +139,9 @@ func StartDirectMesh(ctx context.Context, t *testing.T, n int) *Relays {
 // Stop releases everything this mesh holds — the relay listeners, and with
 // them the right to the ports it reserved.
 //
-// # Why a caller needs this rather than the test's own cleanup
-//
-// A harness that RETRIES a cluster start has to reserve fresh ports for each
-// attempt, because the whole reason an attempt lost is that somebody else took
-// a number this one was given, and asking for the same number again is asking
-// for the same answer (see [ClusterStartAttempts], whose remedy is explicitly
-// "trying again with different numbers"). A mesh per attempt means the failed
-// attempt's relays have to go down when that attempt does — `t.Cleanup` runs
-// when the TEST ends, which is after every attempt, so it is the wrong moment
-// by exactly the interval that matters.
+// A harness that RETRIES a cluster start reserves fresh ports per attempt (see
+// [ClusterStartAttempts]), so a failed attempt's relays must go down when that
+// attempt does; `t.Cleanup` runs when the TEST ends, after every attempt.
 //
 // Safe to call twice and safe on a direct mesh, which holds no listeners at
 // all: the cleanup registered at construction calls it again.
@@ -188,14 +160,11 @@ func (r *Relays) ClusterName() string { return r.name }
 // Member is member i's routing: the port it listens on, the peer URLs it
 // dials, and the address it advertises to gossip.
 //
-// # Why the advertised address is dead
-//
-// NATS gossips the addresses members advertise, and a member that advertised
-// its REAL route port would give its peers a path that does not run through a
-// relay — so a partition would cut the configured routes and the gossiped one
-// would carry on working, and every assertion under it would hold vacuously.
-// An implicit route is attempted once and abandoned (nats-server retries only
-// explicit ones), so a dead address costs one refused dial per gossip.
+// The advertised address is dead: a REAL one would give peers a path around
+// the relays, so a partition would cut the configured routes while the
+// gossiped one kept working and every assertion under it would hold
+// vacuously. An implicit route is attempted once and abandoned (nats-server
+// retries only explicit ones), so a dead address costs one refused dial.
 func (r *Relays) Member(i int) (port int, peers []string, advertise string) {
 	if r.direct {
 		// EVERY MEMBER'S REAL PORT, this one's included. NATS ignores a

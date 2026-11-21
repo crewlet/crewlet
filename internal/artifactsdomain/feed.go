@@ -38,7 +38,7 @@ func (t *Translator) Source() changefeed.Source {
 
 // Translate decides whether rec wakes anybody: only a comment record whose
 // snapshot names an agent does. A newer build's record is deferred to a peer
-// ([changefeed.Defer]), never acknowledged unread (#838).
+// ([changefeed.Defer]), never acknowledged unread.
 func (t *Translator) Translate(_ context.Context, rec changefeed.Record) (changefeed.Delivery, bool, error) {
 	envelope, err := DecodeEnvelope(rec.Payload)
 	if err != nil {
@@ -115,9 +115,9 @@ func recordBody(record MutationRecord) (map[string]any, error) {
 	return body, nil
 }
 
-// FeedSource opens the artifacts log's own durable consumer, a second consumer
-// over the stream the applier reads. A seam the engine fills, because which
-// broker the log lives on is the engine's business.
+// FeedSource opens the artifacts log's own durable consumer, a second one over
+// the stream the applier reads. The engine fills it: which broker holds the log
+// is the engine's business.
 type FeedSource struct {
 	Log DomainConsumer
 }

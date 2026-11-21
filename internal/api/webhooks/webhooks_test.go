@@ -30,38 +30,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// pinned is the clock every test runs on. Pinned rather than time.Now because
-// two of the five schemes sign a timestamp and check it against a replay
-// window: a suite on the real clock would assert about the window's edges by
-// sleeping.
+// pinned is the clock every test runs on, because two schemes sign a timestamp
+// checked against a replay window: the real clock would need sleeping.
 //
-// # IT NEVER REACHES THE EVENT LOG, and it is relative to now anyway
+// It is what the receiver VERIFIES against, never a row's time ([events.New]
+// and [edge.rows] use the wall clock, so [store.EventHistory]'s floor cannot
+// drop a row). Relative to now, not a literal date: a fixed date would be a
+// TIME BOMB thirty days on.
 //
-// This clock is what the receiver VERIFIES against — a replay window, a Forge
-// token's expiry, a delivery claim — and the time it writes into a Forge body
-// that carries none, but never a row's time. A delivery's ROW is the record
-// the receiver publishes, which [events.New] stamps with the wall clock, and
-// [edge.rows] reads the log back at the wall clock too — so the log's history
-// floor ([store.EventHistory], thirty days before the instant a read is asked
-// at) is measured on the clock the rows carry, and no value of this pin can
-// put a row below it.
-//
-// It is relative rather than a literal date because that was not always so.
-// When the receiver appended its own row, stamped with THIS clock, an
-// absolute date was a TIME BOMB rather than a fixture: it worked until
-// thirty days after the day somebody wrote it and then failed for ever, on
-// every machine at once, with no change to any file — the rows were written,
-// every assertion read `0 rows`, and nothing in the failure named a clock. A
-// pin that stays within an hour of the run cannot do that again, whichever
-// clock a row is next stamped with.
-//
-// TRUNCATED TO THE HOUR so a rendered timestamp is stable within one run, and
-// an hour in the PAST rather than at `now` so no assertion here depends on a
-// clock that moved between two statements of one test. An hour boundary is
-// also a whole Unix second, which is what the Standard Webhooks timestamp
-// travels as: a pin with a fraction on it makes the signed instant and
-// `pinned.Unix()` disagree by up to a second, which is exactly the quantity the
-// replay-window cases measure.
+// TRUNCATED TO THE HOUR so rendered timestamps are stable within a run, and an
+// hour in the PAST so no assertion depends on a clock that moved mid-test. An
+// hour is a whole Unix second, which the Standard Webhooks timestamp travels
+// as: a fraction would make the signed instant and `pinned.Unix()` disagree.
 var pinned = time.Now().UTC().Truncate(time.Hour).Add(-time.Hour)
 
 // recorder is a queue.Publisher that keeps the WAKES it was given, and can be

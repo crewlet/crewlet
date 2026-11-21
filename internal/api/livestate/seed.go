@@ -13,19 +13,15 @@ import (
 
 // History is what a projection is seeded with when its process starts.
 //
-// Without it every surface built from the projection started EMPTY in every
-// process: the activity feed, the spend rollup and the per-agent rows folded
-// from it all described only what had happened since this process booted, so
-// a restart, a deploy or a node joining a fleet showed an operator a company
-// that had apparently done nothing, beside a store that said otherwise.
+// Without it every surface built from the projection starts EMPTY in every
+// process, so a restart or a node joining a fleet shows a company that has
+// apparently done nothing, beside a store that says otherwise.
 //
 // EVERY HALF IS THE FLEET'S, read from every live data node's event store
-// (internal/eventfan): each one holds what that node published and the custody
-// batches it keeps, and nothing else, so a seed read from this node alone
-// described a third of a three-node fleet, and a node that joined showed
-// nothing its peers had done.
-// Which nodes answered is [History.Coverage], reported as the seed's
-// coverage rather than hidden.
+// (internal/eventfan): each holds only what that node published and the custody
+// batches it keeps, so a seed from this node alone describes a third of a
+// three-node fleet. Which nodes answered is [History.Coverage], reported
+// rather than hidden.
 type History struct {
 	// Events are persisted feed rows, in any order.
 	Events []FeedRow

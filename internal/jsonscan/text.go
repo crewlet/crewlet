@@ -44,6 +44,12 @@ func (s *Scanner) Read(p []byte) (int, error) {
 		// first byte.
 		s.whole = false
 	}
+	if err == nil {
+		if tee := s.takeTee(); tee != nil {
+			// The read ended a teed value whose writer failed: answered with the bytes it read.
+			return n, tee
+		}
+	}
 	// What ended the read, if anything did, is the scan's answer from now on: the next call answers it,
 	// after the bytes this one read.
 	err = s.stop(err)
@@ -71,25 +77,32 @@ func (s *Scanner) InvalidUTF8() bool {
 	return s.invalid
 }
 
-// passText passes over what of the current token's text is still unread, validating it.
+// passText passes over what of the current token's text is still unread, validating it, and answers the
+// failure of a teed value's writer where that ends the value.
 func (s *Scanner) passText() error {
+	var err error
 	switch s.text {
 	case textName, textString:
-		return s.passString()
+		err = s.passString()
 	case textNumber:
-		_, err := s.number(nil, true)
+		_, err = s.number(nil, true)
+	}
+	if err != nil {
 		return err
 	}
-	return nil
+	return s.teeEnded()
 }
 
 // closeText ends the current token's text: after a Name its colon comes, after a String or a Number
-// whatever follows a value.
+// whatever follows a value, which ends a tee of it.
 func (s *Scanner) closeText() {
 	if s.text == textName {
 		s.expect = expectColon
 	} else {
 		s.afterValue()
+		if s.tw != nil && s.depth == s.teeDepth {
+			s.endTee()
+		}
 	}
 	s.text = textNone
 }
@@ -118,6 +131,9 @@ func (s *Scanner) readString(p []byte) (int, error) {
 			k := copy(p[n:], b[:i])
 			n += k
 			s.pos += k
+			if s.counting {
+				s.textUnits += int64(k)
+			}
 			continue
 		}
 		switch c := b[0]; {
@@ -135,6 +151,10 @@ func (s *Scanner) readString(p []byte) (int, error) {
 			}
 			n += utf8.EncodeRune(p[n:], r)
 			s.pos += size
+			if s.counting {
+				// A pair's twelve bytes are two units, every other escape one.
+				s.textUnits += 1 + int64(size/12)
+			}
 		case c < 0x20:
 			return n, s.refuse(whereString)
 		default:
@@ -155,6 +175,9 @@ func (s *Scanner) readString(p []byte) (int, error) {
 				n += copy(p[n:], replacement)
 				s.pos++
 				s.invalid = true
+				if s.counting {
+					s.textUnits++
+				}
 				continue
 			}
 			if width > len(p)-n {
@@ -162,6 +185,9 @@ func (s *Scanner) readString(p []byte) (int, error) {
 			}
 			n += copy(p[n:], b[:width])
 			s.pos += width
+			if s.counting {
+				s.countChar(width)
+			}
 		}
 	}
 	return n, nil
@@ -170,11 +196,22 @@ func (s *Scanner) readString(p []byte) (int, error) {
 // passString passes over the open Name's or String's text to its closing quote, validating it: a string
 // takes every byte but a quote, a backslash and a control character as it stands (a byte past ASCII
 // included, which both decoders read even where it begins no character), so a run of them is passed in one
-// step, eight bytes at a time.
+// step, eight bytes at a time. Counting, each run is counted a character at a time ([Scanner.countRun]).
 func (s *Scanner) passString() error {
 	for {
 		b := s.buf[s.pos:s.end]
 		i := stringRun(b)
+		if s.counting && i > 0 {
+			if counted := s.countRun(b[:i], i == len(b) && !s.eof); counted < i {
+				// A character the next bytes may complete: read on until they say, the reader's error the
+				// answer only where they never do, as readString reads one.
+				s.pos += counted
+				if err := s.fill(utf8.UTFMax); err != nil && !utf8.FullRune(s.buf[s.pos:s.end]) {
+					return err
+				}
+				continue
+			}
+		}
 		s.pos += i
 		if i == len(b) {
 			if err := s.fill(1); err != nil {
@@ -196,6 +233,10 @@ func (s *Scanner) passString() error {
 				return err
 			}
 			s.pos += size
+			if s.counting {
+				// Every escape held to the grammar alone is one unit: a pair's halves two.
+				s.textUnits++
+			}
 		default:
 			return s.refuse(whereString)
 		}

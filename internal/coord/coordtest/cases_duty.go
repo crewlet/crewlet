@@ -12,18 +12,13 @@ import (
 // to it, whatever TTL the backend's seat leases run on, and refused beyond it.
 //
 // A group of its own because the rule is the one place a lease and a seat are
-// held to different TTLs, and because every other case here claims a seat.
-// That is how the original defect went unseen: the embedded KV refused every
-// duty longer than its seat lease bucket's age, the twin honoured any TTL, and
-// no case ever sent a duty a TTL longer than LongTTL, so the suite certified
-// both backends while no fleet ran a single long duty. And it is how it went
-// unseen a second time: the fix moved the duties alone, the cases here sent
-// the long TTL to duties alone, and the tracker's walk claims went on being
-// refused on every fleet while the suite passed.
-//
-// These cases are the one place the suite asks for more than LongTTL and
-// DEPENDS on the answer, which the LongTTL doc allows for exactly this
-// reason: the contract, not a backend, fixes this ceiling.
+// held to different TTLs, and every other case here claims a seat. A backend
+// that refused a duty longer than its seat lease bucket's age went unseen
+// while no case sent a TTL beyond LongTTL, and again when the cases sent the
+// long TTL to duties alone, so a caller class (the tracker's walk claims) was
+// still refused. These cases are the one place the suite asks for more than
+// LongTTL and DEPENDS on the answer, which the LongTTL doc allows for exactly
+// this reason: the contract, not a backend, fixes this ceiling.
 var dutyCases = []testCase{
 	{"a_duty_is_honoured_at_the_duty_ceiling", func(h *harness) {
 		// The regression the group exists for. The retention sweep asks for
@@ -86,20 +81,13 @@ var dutyCases = []testCase{
 	}},
 
 	{"a_caller_class_lease_is_honoured_beyond_the_seat_ceiling_up_to_the_contract_ceiling", func(h *harness) {
-		// The same ceiling for a class this package does not own. A
-		// caller's claim — the tracker's walk claims, `move:` and
-		// `merge:` — is sized from the work it guards, a walk's
-		// heartbeat, and never from the seat heartbeat. The embedded KV
-		// held every such claim to its seat lease bucket's age, so at
-		// the shipped 45-second seat TTL every cross-project move and
-		// every merge was refused before its first append, on every
-		// fleet. The twin honoured any TTL and every claim this suite
-		// made of a caller class sat inside LongTTL, so neither half of
-		// the suite could see it.
-		//
-		// Claimed GATED, as a caller's claim is: a duty is ungated, and
-		// a case that only ever claimed the ungated way would certify
-		// the ceiling on half the paths a claim takes.
+		// The same ceiling for a class this package does not own. A caller's
+		// claim (the tracker's walk claims, `move:`, `merge:`) is sized from
+		// the work it guards, never from the seat heartbeat; a backend holding
+		// it to its seat lease bucket's age refuses every cross-project move
+		// and merge at the shipped 45-second seat TTL. Claimed GATED, as a
+		// caller's claim is: a duty is ungated, and claiming only the ungated
+		// way would certify the ceiling on half the paths a claim takes.
 		claim := callerClass.Resource("node-a")
 		baseline := h.claim("seat:ceo", coord.AcquireOptions{Owner: "node-a:1", TTL: LongTTL})
 		lease := h.claim(claim, coord.AcquireOptions{Owner: "node-a:1", TTL: coord.MaxDutyTTL})
@@ -158,26 +146,18 @@ var dutyCases = []testCase{
 	}},
 
 	{"every_listing_reaches_duties_wherever_a_backend_keeps_them", func(h *harness) {
-		// A backend that keeps duties in a store of its own decides which
-		// stores a listing reads, and both directions of getting that
-		// wrong are live incidents. Reading only the seat store for a duty
-		// listing HIDES a running duty, which is a dashboard reporting it
-		// unheld and a second node starting it. Answering a class with
-		// whatever the STORE it was read out of holds, rather than with
-		// the leases whose own leading segment is that class, hands the
-		// seat listing this fleet's node presence back as a seat, which is
-		// a seat nobody claimed counted into capacity.
-		//
-		// So every assertion below names the class it asked for and the
+		// A backend keeping duties in a store of its own decides which stores
+		// a listing reads, and both wrong directions are live incidents.
+		// Reading only the seat store HIDES a running duty (a second node
+		// starts it). Answering a class with whatever the STORE holds, not the
+		// leases whose leading segment is that class, hands node presence back
+		// as a seat nobody claimed. So every assertion names its class and the
 		// exact set it must get, on a fleet holding all four at once.
 		//
-		// The duties and the caller's claim are taken at
-		// coord.MaxDutyTTL rather than at LongTTL deliberately. That is
-		// the TTL a backend cannot keep beside its seats, so it is what
-		// forces the separate store into existence at all; inside the
-		// seat ceiling a backend is free to hold everything in one place
-		// and this case would certify a routing decision nothing had to
-		// make.
+		// Duties and the caller's claim are taken at coord.MaxDutyTTL, not
+		// LongTTL: that TTL cannot live beside seats, so it forces the separate
+		// store into existence; inside the seat ceiling this would certify a
+		// routing decision nothing had to make.
 		duties := coord.AcquireOptions{Owner: "node-a:1", TTL: coord.MaxDutyTTL, Ungated: true}
 		h.claim(coord.WorkerResource("scheduler"), duties)
 		h.claim(coord.WorkerResource("sandbox-waiter"), duties)

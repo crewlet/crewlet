@@ -8,5 +8,6 @@
 // participant; the collection rules decide each op in the applier, from the
 // authority this surface stamps. Every read path applies the collection's read
 // rule, so a row hidden from a reader is hidden from its history and its export
-// too.
+// too. Every route and read question admits through [artifactsapi.Gate], the
+// artifacts' own admission, so the two never disagree about who may read.
 package artifactdataapi

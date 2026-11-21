@@ -2,11 +2,9 @@ package assistantdomain
 
 import "slices"
 
-// THE TABLE INVENTORIES. Three readers derive from these and none of them can
-// see the others: the domain's own Tables() map, which the framework turns into
-// a scrub list, an identity claim and a local sweep; the replay cases, which
-// assert a replay from zero reproduces every one of them; and the applier,
-// which is the only writer of any of them.
+// THE TABLE INVENTORIES, the one list three readers that cannot see each other
+// derive from: the domain's Tables() map (the framework's scrub list, identity
+// claim and local sweep), the replay cases, and the applier, the only writer.
 
 // ReproducibleTables is every table a record's payload must be able to
 // rebuild: what a replay from zero into an empty database has to end up with,
@@ -24,9 +22,8 @@ var ReproducibleTables = []string{
 }
 
 // conversationTables are the tables a purge empties of one conversation's
-// rows, each keyed by `conversation_id` except the conversation's own: ONE
-// LIST, read by the purge and the erasure alike, so a table added here is a
-// table both remove.
+// rows, each keyed by `conversation_id`: one list for the purge and the
+// erasure alike, so a table added here is one both remove.
 var conversationTables = []string{
 	"assistant_turns", "assistant_messages", "assistant_steps", "assistant_cards",
 	"assistant_proposals", "assistant_parked", "assistant_audit_reads",

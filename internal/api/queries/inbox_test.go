@@ -239,3 +239,22 @@ func TestGitletIsAskedTheCardsOfANoticesPageOnlyWhereDrawn(t *testing.T) {
 		}
 	}
 }
+
+// A RECORD IS ASKED OF EVERY SOURCE IN ITS OWN SCAN, and refused beside a cursor.
+// Mutation: leave Record off the code source's query (Gitlet is asked its whole inbox, red).
+func TestARecordIsAskedOfEverySource(t *testing.T) {
+	t.Parallel()
+	s, work, host := inboxSources(t)
+	if _, err := askHolding(t, s, "ana", "inbox", map[string]any{"record": " c-1 ", "snoozed": "include"},
+		iam.GrantWorklet, iam.GrantGitlet); err != nil {
+		t.Fatalf("inbox by record: %v", err)
+	}
+	if work.inboxQuery.Record != "c-1" || len(host.asked) != 1 || host.asked[0].Inbox.Record != "c-1" {
+		t.Errorf("the sources were asked tracker %+v and code %+v, want the record c-1 in each", work.inboxQuery,
+			host.asked)
+	}
+	if _, err := askHolding(t, s, "ana", "inbox", map[string]any{"record": "c-1",
+		"cursor": "CREWLET_CODE_LOG@1:9"}, iam.GrantGitlet); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("a record beside a cursor answered %v, want bad params", err)
+	}
+}

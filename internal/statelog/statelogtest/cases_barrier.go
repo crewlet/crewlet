@@ -19,31 +19,17 @@ func runBarrier(t *testing.T, new Factory) {
 	})
 }
 
-// ABarrierWritesNoRow certifies that the domain's own barrier — its read
-// index's append, encoded by the domain's production encoder — is applied
-// through the framework's runner and the domain's applier with no row of any
-// table the domain declares changed: a barrier's whole transaction is the
-// checkpoint and its fsync.
+// ABarrierWritesNoRow certifies that the domain's own barrier (its read
+// index's append, by its production encoder), applied through the framework's
+// runner and the domain's applier, changes no row of any declared table.
 //
-// # Why that is a contract a domain must keep
-//
-// Because a linearizable read is RELEASED on it before it commits. The apply
-// loop vouches for a barrier from its envelope alone, the moment it decodes
-// it, and hands it to a checkpoint transaction beside the loop
-// ([statelog.Runner.Reached]): every read waiting on the record before it is
-// served then, before the domain's Apply has run, let alone committed. A row
-// the domain wrote for the barrier — a counter of reads, a last-seen stamp — is
-// one those reads are served without, or one that rolls back under them, on
-// every node, with every other gate green. A domain's barrier case returning
-// a row count of zero is only a count; the tables, compared whole, are what
-// the case holds it to.
-//
-// A domain whose log has no read index states it ([Candidate.NoBarrier]), and
-// a candidate that states neither is refused: a barrier the suite was never
-// handed is one nobody certified.
-//
-// EXPORTED AND RETURNING THE VERDICT, for [Declaration]'s reason: the suite's
-// own tests hand it a domain that gets it wrong.
+// A linearizable read is released on a barrier from its envelope alone
+// ([statelog.Runner.Reached]), before the domain's Apply runs, so a row
+// written for it is one those reads miss or one that rolls back under them.
+// The tables are compared whole: a row count of zero is only a count. A
+// domain with no read index states [Candidate.NoBarrier]; one stating neither
+// is refused, since nothing else certifies its barrier. It returns the verdict
+// for [Declaration]'s reason.
 func ABarrierWritesNoRow(t *testing.T, new Factory) error {
 	t.Helper()
 	c := new(t)
@@ -65,8 +51,8 @@ func ABarrierWritesNoRow(t *testing.T, new Factory) error {
 			"to stamp its barrier like", name)
 	}
 
-	// THE GENERATION THE CANDIDATE'S RECORDS ARE STAMPED IN, which the
-	// barrier is appended in as the read index appends it: in the runner's.
+	// The generation the candidate's records are stamped in, which the read
+	// index appends its barrier in: the runner's.
 	probe, err := c.Encode(c.Kinds[0], "suite-probe", "suite-probe", 0)
 	if err != nil {
 		t.Fatalf("encode a %s %s record: %v", name, c.Kinds[0], err)
@@ -97,8 +83,8 @@ func ABarrierWritesNoRow(t *testing.T, new Factory) error {
 	loop := startLoop(t, runner)
 	defer loop.stop()
 
-	// ROWS TO CHANGE: the candidate's own records first, so a barrier case
-	// that updated rows it found — rather than inserting one — is caught too.
+	// The candidate's own records first, so a barrier that updates existing
+	// rows, rather than inserting one, is caught too.
 	appendRecords(t, c, spec, log, signer, suiteRecords(t, new))
 	if err = loop.waitPast(log.last()); err != nil {
 		return fmt.Errorf("%s's applier did not apply its own records: %w", name, err)

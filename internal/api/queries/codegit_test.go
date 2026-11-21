@@ -106,22 +106,17 @@ func stamping(q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	return a, nil
 }
 
-// AN OID QUESTION IS IMMUTABLE. A question every revision of which is a
-// whole object id is answered queries.Immutable — sent with a strong entity
-// tag and `Cache-Control: immutable` — and asks its Gitlet node for the page
-// alone (gitlet.GitQuery.Unstamped), so the page is a function of what it names;
-// and what it carries is the page and nothing a node stamped — no position,
-// no push, no coverage, no repository id, no resolved ref — even from a node
-// that stamped them. Asked by a ref it is answered bare, carrying the ref it
-// resolved and what the read stamped, and so is one asked by an abbreviation,
-// which whichever object it finds now answers; neither is asked unstamped. A
-// comparison whose merge its home could not decide is answered bare too: a
-// later read may decide it.
+// AN OID QUESTION IS IMMUTABLE. A question every revision of which is a whole
+// object id is answered queries.Immutable and asks its node for the page alone
+// (gitlet.GitQuery.Unstamped), so it carries nothing a node stamped (position,
+// push, coverage, repository id, resolved ref), even from a node that stamped
+// them. Asked by a ref or an abbreviation it is answered bare with what the
+// read stamped, and not unstamped; so is a comparison whose merge its home
+// could not decide.
 //
-// Mutation: answer Immutable whatever the spelling (read's whole check) — the
-// ref's answer is cached for a year, red; leave Unstamped unset — the oid's
-// page is cut against the stamps, red; copy the stamps onto an immutable page
-// — red.
+// Mutation: Immutable whatever the spelling → the ref's answer is cached for
+// a year; leave Unstamped unset → the page is cut against the stamps; copy
+// the stamps onto an immutable page; all red.
 func TestAnOidQuestionIsImmutable(t *testing.T) {
 	t.Parallel()
 	for _, q := range gitQuestions {
@@ -185,18 +180,14 @@ func TestAnOidQuestionIsImmutable(t *testing.T) {
 
 // A REF IS RESOLVED ONCE A QUESTION, and the read by object id is floored at
 // its move. A diff naming two refs reads both in ONE resolve at the caller's
-// freshness, and asks its Gitlet node at the furthest of the node's own write to
-// the repository, the caller's floor on the code log and where each ref last
-// moved — never at the resolve's own checkpoint. `HEAD` is the default branch,
-// which the resolve answers from the repository's row in its own transaction
-// (gitlet.HeadRef): a tree at HEAD — the Repository page's commonest question —
-// is ONE read of the rows, a resolve naming HEAD at the caller's freshness,
-// with no read of the repository ahead of it. A name no live ref holds is
-// not_found (`no_ref`), naming it, and nothing is read by object id.
+// freshness and asks its node at the furthest of the node's own write, the
+// caller's floor and where each ref last moved, never the resolve's own
+// checkpoint. A tree at `HEAD` is ONE read of the rows (gitlet.HeadRef), with
+// no read of the repository ahead of it. A name no live ref holds is
+// not_found (`no_ref`), and nothing is read by object id.
 //
-// Mutation: floor the git read at the resolve's Position — red; resolve each
-// ref in a read of its own — red; read the repository first to name its
-// default branch — red.
+// Mutation: floor at the resolve's Position; resolve each ref in its own
+// read; read the repository first to name its default branch; all red.
 func TestARefQuestionResolvesItsRefsOnceAndReadsAtTheirMove(t *testing.T) {
 	t.Parallel()
 	caller := statelog.Position{Stream: "CREWLET_CODE_LOG", Generation: 1, Seq: 30}
@@ -253,19 +244,15 @@ func TestARefQuestionResolvesItsRefsOnceAndReadsAtTheirMove(t *testing.T) {
 }
 
 // A MERGE PREVIEW IS ASKED OF THE HOME. A comparison asks what merging head
-// into base would do of the repository's home Gitlet node — the estate's
-// code.merge_preview, through the code reads (estate.CodeSeam.MergePreview,
-// keyed on the repository's git home as a read by object id is) — once, by
-// the WHOLE ids the comparison answered, so the preview merges exactly the
-// two commits compared whatever the request spelled; as the caller, at the
-// floor the comparison was read at; and answers its state and conflicts
-// beside the comparison — of two commits that have diverged, neither
-// containing the other, which is the one comparison git has to merge to
-// answer. A home that cannot answer now is unavailable, never an answer about
-// the two commits.
+// into base would do of the repository's git home (estate.CodeSeam.MergePreview)
+// once, by the WHOLE ids the comparison answered whatever the request
+// spelled, as the caller at the comparison's floor, and answers its state and
+// conflicts beside it, for two diverged commits, the one comparison git has to
+// merge to answer. A home that cannot answer is unavailable, never an answer
+// about the two commits.
 //
-// Mutation: preview the request's own spellings — an abbreviation reaches the
-// preview, red; answer the comparison without its preview — red.
+// Mutation: preview the request's own spellings; answer the comparison
+// without its preview; both red.
 func TestAMergePreviewIsAskedOfTheHome(t *testing.T) {
 	t.Parallel()
 	stub := &stubCode{floor: wrote,

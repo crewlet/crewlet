@@ -12,49 +12,29 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A REPOSITORY'S MERGE QUEUES AND ITS CHECKS, AS QUESTIONS — what the
-// dashboard's Queue and Checks sections and a change's checks tab read:
-//
-//   - `code_queue`, the live entries of merge queues beside the candidates
-//     of the trains testing them: one repository's (`repo`), one of its
-//     branches' (`target`, in full), or every repository's the asker reads;
-//   - `code_checks`, attempts of checks: one repository's newest ended first
-//     (`repo`), one change's of it (`change`) or one commit's (`oid`, for
-//     one branch beside `target`, in full), a change's and a commit's at
-//     each check's latest attempt alone where it asks (`latest=true`: what
-//     each check stands at, one page), or — naming no repository — the
-//     WINDOW, every repository's the asker reads whose attempts ended at or
-//     after `since` and before `until`; each shape narrowed by a check's
-//     `name` and a `state`; or where each check stands (`standing`, `recent`
-//     or `failing`), of a repository or of every one, within `since`;
-//   - `code_check`, one attempt whole — its row, its definition, its tail,
-//     the failures its ending named and the log a failed run kept — named on
-//     its repository's path by its commit, its check and its attempt, beside
-//     the branch it was checked for (`target`);
-//   - `code_check_log`, a page of that log's bytes;
-//   - `code_commit_marks`, a history page's commits (`commits`, whole ids) with
-//     their checks per branch and the changes they landed with; read bare and
-//     never held immutable, since a commit's checks and landings move.
-//
-// Each is decided PER REPOSITORY as every code question is: registered
-// [Requires] the gitlet app, and held to the grant the serving node derives
-// from its chart by the reader — a listing leaves out what the asker may not
-// read, a read of one repository it may not is refused [NotPermitted]. A
-// narrowing is the reader's statement's, never a filter of a page it read
-// ([gitlet.CheckQuery.State]), and the grant is tested on what it found, never
-// in place of it, so no narrowing widens what a page may hold.
-//
-// # Where the spec's paths moved
-//
-// An attempt's key holds the branch it was checked for (gitlet.CheckKey): one
-// commit is checked for every branch a change heading it merges into, so
-// /checks/{oid}/{check}/{attempt} names one attempt per such branch. The
-// branch is a ref — `refs/heads/release/1.x` — whose slashes a path segment
-// cannot carry, so it rides the query as `target`, REQUIRED, as a change's
-// listing names its repository. And the window is bounded by `since` and
-// `until`, RFC 3339 instants as `code_log`'s `since` is, never a span counted
-// back from whenever a page is read: a cursor's pages then share one bound,
-// and a window over a past interval is sought from its end.
+// A REPOSITORY'S MERGE QUEUES AND ITS CHECKS, AS QUESTIONS:
+//   - `code_queue`: live entries beside the candidates of the trains testing
+//     them, per `repo`, branch (`target`, in full) or every readable repository;
+//   - `code_checks`: attempts by `repo`, `change` or `oid`, at each check's
+//     latest alone with `latest=true`, or the WINDOW over every readable
+//     repository between `since` and `until`; narrowed by `name` and `state`,
+//     or as `standing`, `recent`, `failing`;
+//   - `code_check` (one attempt whole, beside its `target`), `code_check_log`;
+//   - `code_commit_marks`: a history page's checks and landings, never held
+//     immutable since both move.
+
+// Each check question is decided PER REPOSITORY: registered [Requires] the
+// gitlet app, held to the reader's grant (a listing omits what the asker may
+// not read, a read is refused [NotPermitted]). A narrowing is the reader's
+// statement's, never a filter of a page already read
+// ([gitlet.CheckQuery.State]).
+
+// Where the spec's paths moved: one commit is checked for every branch a
+// change heading it merges into (gitlet.CheckKey), so an attempt's path names
+// one per branch; the branch is a ref whose slashes a segment cannot carry,
+// so `target` rides the query, REQUIRED. The window's `since` and `until` are
+// RFC 3339 instants, never a span counted back from now, so a cursor's pages
+// share one bound.
 
 // The reasons a check question's `not_found` names ([NotFound.Reason]):
 //
@@ -177,24 +157,18 @@ func checkAttempt(p Params) (*gitlet.CheckQuery, error) {
 	return c, nil
 }
 
-// codeCheckLog answers a page of the log a failed run of a check kept: the
-// attempt read as the caller — at their freshness, held to their grant on
-// its repository, as `code_check` reads it — then the page, `offset` (0
-// where it names none) and `limit` bytes of it (at most, and by default,
-// [CheckLogPageBytes]), read of the object store by the object the attempt's
-// row names.
+// codeCheckLog answers a page (`offset`, `limit` bytes, at most and by default
+// [CheckLogPageBytes]) of the log a failed run kept, the attempt read as the
+// caller and held to their grant as `code_check` reads it.
 //
-// IMMUTABLE WHERE THE REQUEST NAMES THE OBJECT (`object`, the key
-// `code_check` answers as `log.object`), and bare otherwise: the attempt is
-// NOT the bytes. A check's ending is a join (gitlet.endsBefore) — a measurement
-// replaces an errored ending a runner's sweep recorded, and of two failed
-// endings across a writer's failover the earlier stands — and each ending
-// keeps its own log, under a key of its own. An answer cached by the attempt
-// alone would be served for good after the log it named was replaced; one
-// cached by the object is a function of bytes no write can change. A request
-// naming an object the attempt no longer keeps is refused `no_log`, naming
-// the one it keeps, so a screen reads that one rather than one the collector
-// may already have deleted.
+// IMMUTABLE WHERE THE REQUEST NAMES THE OBJECT (`object`, `log.object` of
+// `code_check`), bare otherwise: the attempt is NOT the bytes. An ending is a
+// join (gitlet.endsBefore) that may replace an earlier one, and each ending
+// keeps its own log under its own key, so an answer cached by the attempt
+// would outlive the log it named; one cached by the object is a function of
+// bytes no write changes. A request naming an object the attempt no longer
+// keeps is refused `no_log`, naming the one it keeps, never one the
+// collector may have deleted.
 func (s Sources) codeCheckLog(ctx context.Context, p Params) (any, error) {
 	const what = "code_check_log"
 	reads, err := s.Code.CodeReads()

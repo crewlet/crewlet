@@ -33,6 +33,19 @@ type UnsettledBatch struct {
 	WrittenAt time.Time
 }
 
+// ErrCustodyRefused marks a custody batch [EventLog.WriteCustody] refuses to
+// store whatever node is asked to: one naming no id or origin, or holding a
+// record that cannot be stored ([ErrIncompleteRecord]), refused by every node
+// before anything is written. It is the batch's own failure, and the only one
+// a custody write marks. Every other failure of WriteCustody (its transaction,
+// once every record has validated) and every failure of
+// [EventLog.SettleCustody], which takes only the batch's id and the fleet's
+// answer and refuses nothing a batch carries, is this node's store failing: a
+// full disk or a busy store fails a healthy batch that another node, or this
+// one a moment later, writes whole. internal/observe's keeper tells the two
+// apart by this mark.
+var ErrCustodyRefused = errors.New("store: the custody batch cannot be stored")
+
 // rowIdentity is one row of a batch by the event log's own (time, id) key, as
 // stored — the shape [keptSQL] binds a list of names in.
 type rowIdentity struct {
@@ -43,34 +56,23 @@ type rowIdentity struct {
 // WriteCustody writes a batch's rows into the event log and records the batch
 // unsettled, in ONE transaction.
 //
-// One transaction because the two halves are only true together: rows with no
-// unsettled record are a copy nothing will ever ask the fleet about — a second
-// copy for good if another node keeps the batch — and a record with no rows
-// would make a release delete nothing it had written. A batch written before
-// and not yet settled is written again harmlessly: each row's append is
-// idempotent, and the record keeps the instant it was first written.
+// One transaction: rows with no unsettled record are a copy nothing will ask
+// the fleet about, and a record with no rows releases nothing. Rewriting an
+// unsettled batch is harmless (idempotent appends).
 //
-// A BATCH THIS NODE HAS ALREADY SETTLED IS WRITTEN NOT AT ALL. A group
-// redelivers a batch whose acknowledgement was lost to whichever member asks
-// next, which can be this node after its settle: written again, the batch
-// would be in flight again, and its kept rows — counted and published — would
-// leave every usage count until the claim answered a second time, so a day
-// would be published short over good history in the meantime. Kept, its rows are here and
-// counting; not kept, the fleet's copy is another node's. The settle that
-// follows finds nothing unsettled and settles to nothing.
-//
-// Every record is checked before anything is written, and one that cannot be
-// stored refuses the batch: a batch partly written and recorded as whole would
-// be released incompletely.
+// A BATCH ALREADY SETTLED HERE IS NOT WRITTEN: a redelivery after a lost ack
+// would take its kept rows out of every usage count, publishing a day short.
+// Every record is checked first; one that cannot be stored refuses the whole
+// batch, and only that refusal is marked ([ErrCustodyRefused]).
 func (l *EventLog) WriteCustody(ctx context.Context, b CustodyBatch, at time.Time) error {
 	if b.ID == "" || b.Origin == "" {
-		return errors.New("store: a custody batch needs an id and an origin")
+		return fmt.Errorf("%w: it needs an id and an origin", ErrCustodyRefused)
 	}
 	rows := make([]eventRow, 0, len(b.Records))
 	for _, rec := range b.Records {
 		row, err := prepareEvent(rec, l.db.eventSeatsNow())
 		if err != nil {
-			return fmt.Errorf("store: custody batch %s: %w", b.ID, err)
+			return fmt.Errorf("%w: custody batch %s: %w", ErrCustodyRefused, b.ID, err)
 		}
 		rows = append(rows, row)
 	}
@@ -108,23 +110,15 @@ func (l *EventLog) WriteCustody(ctx context.Context, b CustodyBatch, at time.Tim
 
 // SettleCustody records what the fleet decided about a batch this node wrote,
 // in one transaction: kept, the rows stay; not kept, its rows go with it.
-// Either way the batch leaves the unsettled record and is remembered as
-// settled ([EventLog.WriteCustody] says why). A batch this node holds no
-// unsettled record of settles to nothing and records nothing: either it was
-// settled already, and the earlier settle remembered it, or it was never
-// written here.
+// Either way the batch is remembered as settled ([EventLog.WriteCustody]); one
+// with no unsettled record here settles to nothing.
 //
-// KEPT, ITS ROWS START TO COUNT — every usage count leaves out a batch in
-// flight (usage.go) — so the days they fall on are not the days this node
-// last published, and any of them may be older than the two its usage
-// publisher looks at on every tick: a batch can carry a node's events from a
-// partition that lasted days. So the settle marks the oldest usage row it made
-// count ([DB.UsageRederive]) IN THIS TRANSACTION: written in a transaction of
-// its own, a crash between the two would leave either rows counting on a day
-// nothing will derive again or a mark for rows that do not count. Not kept,
-// its rows were never counted, so no count changes and nothing is marked — a
-// fire whose trace only these rows named loses its turn label
-// ([DB.usageSchedules]), which no count is made of.
+// KEPT, ITS ROWS START TO COUNT (usage.go), on days possibly older than the
+// two the usage publisher checks each tick. So the settle marks the oldest
+// usage row it made count ([DB.UsageRederive]) IN THIS TRANSACTION: apart, a
+// crash leaves rows counting on a day nothing re-derives, or a mark for rows
+// that do not count. Not kept, nothing was counted or marked; a fire whose
+// trace only these rows named loses its turn label ([DB.usageSchedules]).
 func (l *EventLog) SettleCustody(ctx context.Context, batchID string, kept bool) error {
 	if err := l.db.Tx(ctx, func(tx *sql.Tx) error {
 		var held int

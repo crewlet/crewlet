@@ -1,6 +1,6 @@
 /**
  * Each use of a model by its glyph, one per use wherever it is named: the Use
- * it for list, the per-seat grid, Used by and its tooltip, and By job. Lucide
+ * it for list, the per-seat grid, Used by and its tooltip, and the seats' grid. Lucide
  * outlines from @crewlethq/icons, drawn in the text's ink; the Assistant takes
  * its own product mark, the spark the icon rules keep for it alone.
  */
@@ -17,11 +17,14 @@ import {
   type GlyphSize,
 } from "@crewlethq/icons/glyphs";
 import type { JobCategory } from "~/lib/modelUses.ts";
-import { ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, categoryTip } from "./words.ts";
+import { ADVISOR_USE, ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, categoryTip } from "./words.ts";
 
-export type Job = JobCategory | "assistant" | "everything" | "none";
+export type Job = JobCategory | "assistant" | "advisor" | "everything" | "none";
 
-const GLYPHS: Record<Exclude<Job, "assistant">, ComponentType<{ size?: GlyphSize | number }>> = {
+const GLYPHS: Record<
+  Exclude<Job, "assistant" | "advisor">,
+  ComponentType<{ size?: GlyphSize | number }>
+> = {
   coding: CodeGlyph,
   reviews: ListChecksGlyph,
   routines: RefreshCwGlyph,
@@ -30,25 +33,30 @@ const GLYPHS: Record<Exclude<Job, "assistant">, ComponentType<{ size?: GlyphSize
 };
 
 export function JobGlyph({ job, size = "md" }: { job: Job; size?: GlyphSize }) {
-  if (job === "assistant") return <ProductMark product="assistant" size={size} />;
+  // THE HELPERS ARE CREWLET'S OWN PRODUCTS, each drawn by its product mark.
+  if (job === "assistant" || job === "advisor") return <ProductMark product={job} size={size} />;
   const Glyph = GLYPHS[job];
   return <Glyph size={size} />;
 }
 
 /** A use by its glyph and name, with the engine fields it sets in a tooltip: a column's head. */
-export function JobName({ job }: { job: JobCategory | "assistant" | "everything" }) {
+export function JobName({ job }: { job: JobCategory | "assistant" | "advisor" | "everything" }) {
   const label =
     job === "assistant"
       ? ASSISTANT_USE.label
-      : job === "everything"
-        ? EVERYTHING.label
-        : CATEGORY_WORDS[job].label;
+      : job === "advisor"
+        ? ADVISOR_USE.label
+        : job === "everything"
+          ? EVERYTHING.label
+          : CATEGORY_WORDS[job].label;
   const tip =
     job === "assistant"
       ? ASSISTANT_USE.tip
-      : job === "everything"
-        ? EVERYTHING.hint
-        : categoryTip(job);
+      : job === "advisor"
+        ? ADVISOR_USE.tip
+        : job === "everything"
+          ? EVERYTHING.hint
+          : categoryTip(job);
   return (
     <Tooltip content={tip} placement="top">
       <span className="models-job">

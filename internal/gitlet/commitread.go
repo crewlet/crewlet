@@ -376,9 +376,9 @@ func landedTip(ctx context.Context, tx *sql.Tx, repoID, change string) (string, 
 func (q ReadQuery) validateCommit() error {
 	switch {
 	case !gitref.ValidOID(q.Commit) || q.Commit == ZeroOID:
-		return fmt.Errorf("%w: commit: %q is not a whole commit id", ErrInvalid, q.Commit)
+		return refusedf("%w: commit: %q is not a whole commit id", ErrInvalid, q.Commit)
 	case q.Limit != 0 || q.Cursor != "":
-		return fmt.Errorf("%w: limit: a commit's changes are named whole, never paged", ErrInvalid)
+		return refusedf("%w: limit: a commit's changes are named whole, never paged", ErrInvalid)
 	}
 	return nil
 }

@@ -12,17 +12,16 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// WHOM A COMMENT RECORD TOLD: the applier writes one artifact_notifications row
-// per person its [CommentNotify] names, never its author, and none past the
-// company's inbox horizon; the table is DIVERGENT, each node sweeping its own.
+// WHOM A COMMENT RECORD TOLD: one artifact_notifications row per person its
+// [CommentNotify] names, never its author, and none past the company's inbox
+// horizon; each node sweeps its own copy ([NoticesTable]).
 
 // NoticesTable is the table a comment record's notices are kept in: DIVERGENT
 // ([Domain.Tables]), neither reproducible nor the log's machinery.
 const NoticesTable = "artifact_notifications"
 
-// MaxNoticeExcerpt is how much of a remark its notice keeps: SIX HUNDRED BYTES,
-// the tracker's card excerpt, a preview a list of notices shows; the thread
-// reads the whole.
+// MaxNoticeExcerpt is how many bytes of a remark its notice keeps: the
+// tracker's card excerpt, a list's preview; the thread reads the whole.
 const MaxNoticeExcerpt = 600
 
 // DefaultPrimaryReasons is the split a person who declared none is read with:

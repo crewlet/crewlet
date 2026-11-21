@@ -100,43 +100,18 @@ type listedJSON struct {
 	Error        *struct{ Err string }
 }
 
-// Run type-checks the packages of the module rooted at root, which must hold
-// its go.mod, and hands each unit to each as it is checked: a package after
-// every package of the module it imports, its in-package tests before its
-// external test package. An error from each ends the run and is returned.
+// Run type-checks the packages of the module rooted at root (which must hold
+// its go.mod), handing each unit to each: a package after every module package
+// it imports, its in-package tests before its external test package. An error
+// from each ends the run. Export data is the BUILD CACHE'S ([buildFlags]);
+// [internal/sourcetree/decltype] is the road for a gate that cannot afford to
+// build what the judged packages import.
 //
-// THE MODULE'S ONE WAY FOR A GATE TO TYPE-CHECK ITS SOURCE, for a gate whose
-// subject is a value's type rather than its spelling — a set printed by a
-// format, a time.Time's Sub — and that would rather pay a type checker than
-// keep a walker of its own: [internal/sourcetree/decltype] is the other road,
-// reading only the declarations a judged value reaches, for a gate that cannot
-// afford to build what the judged packages import.
-//
-// THE EXPORT DATA IS THE BUILD CACHE'S: `go list -export` compiles what it
-// does not find there, run by the toolchain that built this binary and with
-// its -race and -tags ([buildFlags]), so a gate inside `go test` reads what
-// the run compiled already. Cold, it compiles everything the patterns import.
-//
-// A TEST BINARY IS ITS OWN WORLD, and Tests reads each package in it as the
-// binary compiles it. The in-package tests are checked with the package's own
-// files against plain export data, since Go refuses an in-package test that
-// imports what imports the package. The external test package is checked
-// against the package's TEST VARIANT, `p [p.test]` in go list's naming, which
-// holds what the in-package test files declare (an export_test.go's names),
-// and against the variant of every package that imports p and is compiled
-// again for the binary, `q [p.test]`.
-//
-// AND IT IS BUILT FROM SOURCE, never compiled for export data: `p [p.test]`
-// is the package the in-package unit just checked, and every `q [p.test]` is
-// a package of the module (only the module imports p), checked from its own
-// files against it in dependency order. So the export data a run asks for is
-// the plain packages' alone — what any importer reads, and what a build of
-// the module compiles anyway — and never a test variant, an external test
-// package or a test main, which `go list -export -test` would compile for
-// every listed package: on two cores that took 169 s after a source change
-// and 390 s from an empty cache for fixedwait's 52 packages, against the few
-// seconds a warm cache answers in. The variants are known from a listing
-// without -export, which compiles nothing.
+// A TEST BINARY IS ITS OWN WORLD: in-package tests are checked against plain
+// export data (Go refuses one importing what imports the package); the
+// external test package against the TEST VARIANT `p [p.test]` and each
+// importer's `q [p.test]`, BUILT FROM SOURCE, never compiled for export data:
+// `go list -export -test` does so for every package (390 s cold for 52).
 func (c TypeCheck) Run(root string, each func(*Unit) error) error {
 	if c.Fset == nil {
 		return errors.New("sourcetree: a TypeCheck positions what it parses in a FileSet, and none was given")
@@ -271,24 +246,17 @@ func exportImporter(fset *token.FileSet, exports map[string]string) types.Import
 }
 
 // list asks go list for the packages under c.Patterns and everything they
-// import: the module's own packages the patterns name, in dependency order;
-// every plain package's export data by its import path; and, with c.Tests,
-// the packages each test binary compiles again, by the package under test,
-// in dependency order, the package under test and its external test package
-// left out (the in-package unit and the External unit are those) but its
-// being compiled again recorded.
+// import: the module's packages the patterns name, in dependency order; every
+// plain package's export data by import path; and, with c.Tests, the packages
+// each test binary compiles again, by package under test, in dependency order
+// (the package and its external test package left out, but its being compiled
+// again recorded). With c.Tests it asks twice: with -test and no -export, then
+// for the export data of the plain packages that names ([Run]).
 //
-// With c.Tests it asks twice: once with -test and without -export, which
-// compiles nothing and names the test binaries' imports and variants, and
-// once for the export data of the plain packages that listing names — so no
-// test variant, external test package or test main is compiled ([Run]).
-//
-// THE TOOLCHAIN THAT BUILT THIS BINARY, because export data is read by the
-// go/types this binary carries and another go writes a version it may not
-// read: the Makefile's (CREWLET_GO, which internal/solo's roster guard lists
-// packages with for the same reason), or GOROOT's when the environment names
-// one. Neither found is fatal rather than a guess at PATH's — and a plain `go
-// test` sets neither, so outside make the caller names its go in CREWLET_GO.
+// THE TOOLCHAIN THAT BUILT THIS BINARY, because this binary's go/types may not
+// read another go's export data: the Makefile's (CREWLET_GO), or GOROOT's.
+// Neither found is fatal rather than a guess at PATH's; a plain `go test` sets
+// neither, so the caller names its go in CREWLET_GO.
 func (c TypeCheck) list(root string) ([]*Listed, map[string]string, map[string]*testBinary, error) {
 	goCmd := os.Getenv("CREWLET_GO")
 	if goCmd == "" {

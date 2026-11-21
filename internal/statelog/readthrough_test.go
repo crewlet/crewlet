@@ -13,10 +13,9 @@ import (
 
 // THE CARRY NAMES THE ROWS, AND NOTHING ELSE.
 //
-// A read transaction's checkpoint row is carried to the position the read was
-// released at only where every record between the two is one this node
-// reached without committing — a barrier, which writes no row — which holds
-// on the row's own stream and generation alone, and only forward.
+// A read's checkpoint row is carried to its release position only over
+// records this node reached without committing (barriers, which write no row),
+// on the row's own stream and generation, and only forward.
 func TestTheCheckpointIsCarriedOnlyOverWhatTheReadWasReleasedPast(t *testing.T) {
 	t.Parallel()
 	at := func(stream string, gen uint32, seq uint64) statelog.Position {
@@ -53,20 +52,15 @@ func TestTheCheckpointIsCarriedOnlyOverWhatTheReadWasReleasedPast(t *testing.T) 
 
 // A STAMPED READ IS NEVER BELOW ONE ANOTHER NODE ANSWERED BEFORE IT.
 //
-// Node A holds its commit of a barrier node B appended, so A's checkpoint row
-// stays at the write while A decodes, and reaches, every barrier after it. B
-// answers a stamped read first; A's, asked after B's had answered, appends a
-// barrier past B's and is released through it — and is stamped at or past
-// B's, because [statelog.Reader.ReadThrough] hands A's transaction its row
-// carried to that release. Handed the row alone it was stamped at the write,
-// below B's stamp on the very same rows: Gitlet's cache, synced
-// linearizable on such a node, read as behind the rows another member had
-// just answered at, and took a linearizable answer below its mark for its
-// log gone back.
+// Node A holds its commit of a barrier B appended, so A's checkpoint row stays
+// at the write while A reaches every later barrier. A's read, asked after B's
+// answered, is released past B's barrier and must be stamped at or past B's:
+// [statelog.Reader.ReadThrough] hands it the row carried to that release.
+// Handed the row alone, A stamped below B on the same rows, and a cache synced
+// linearizable (Gitlet's) took that for its log gone back.
 //
-// Released, A commits every record on the log, and a read past nothing it has
-// not committed is handed its row exactly, with the instant of the record the
-// row names.
+// Released, A commits every record, and a read past nothing uncommitted is
+// handed its row exactly, with the instant of the record the row names.
 func TestAStampedReadIsNeverBelowOneAnotherNodeAnsweredBeforeIt(t *testing.T) {
 	t.Parallel()
 	q := soloBroker(t, js.Config{SyncAlways: true})
@@ -138,15 +132,12 @@ func TestAStampedReadIsNeverBelowOneAnotherNodeAnsweredBeforeIt(t *testing.T) {
 			onB.KeyedTo)
 	}
 
-	// THE LOG'S LAST RECORD, which nothing appends past: A's own read's
-	// barrier. That is what A has to commit before its row stops moving, and
-	// never its reached position, which is how far A has decoded rather than
-	// where the log ends. A's read was released on the record before its
-	// barrier, so the barrier can still be on its way to A's loop when A has
-	// committed everything it reached, and a fetch that fails puts the
-	// reached position back on the checkpoint. Either way the two met below
-	// the end, A committed the rest between the row read below and the read
-	// compared with it, and that read was handed the later row.
+	// Wait for A to commit the log's last record (its own read's barrier),
+	// not its reached position: A's read was released on the record before
+	// its barrier, which may still be on its way to A's loop, and a failed
+	// fetch puts the reached position back on the checkpoint. Either way a
+	// wait on reached can stop below the end, and A commits the rest between
+	// the row read below and the read compared, which gets the later row.
 	_, last, err := a.log.Bounds(ctx)
 	if err != nil {
 		t.Fatalf("read the log's end: %v", err)

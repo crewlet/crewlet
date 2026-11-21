@@ -13,31 +13,14 @@ import (
 
 // Where a revision summary comes from.
 //
-// # Two channels, one meaning
+// A write must say what it changed: an operator reads the history at 3am. The
+// summary travels in the `X-Summary` header or a top-level `_summary` body
+// key. The body key exists because the body is often all a caller controls (a
+// form post, `curl -d @file`, a proxy stripping headers).
 //
-// A write to this surface must say what it changed — the revision history is
-// what an operator reads at 3am to find the change that broke something, and
-// a list of revisions with no summaries is a list of uuids. The summary
-// travels in the `X-Summary` header, or as a top-level `_summary` key in the
-// body.
-//
-// # Why the body key exists at all
-//
-// Because the body is often the only thing a caller controls. A form post, a
-// `curl -d @file`, a browser `fetch` behind a proxy that strips unknown
-// headers, a CI step piping a document through a tool that does not take
-// header arguments — all of them can put a key in a document and none of them
-// can necessarily add a header. Requiring the header makes the surface
-// unusable from those callers for a reason that has nothing to do with the
-// write.
-//
-// # It has to be REMOVED, not ignored
-//
-// Tier B's parser refuses unknown fields, deliberately: a mistyped setting
-// that silently did nothing is the failure this build refuses to have. So a
-// `_summary` left in the document would be rejected by name — the key would
-// be actively hostile rather than merely unused. It is lifted out before the
-// document is parsed.
+// It has to be REMOVED, not ignored: Tier B's parser refuses unknown fields
+// deliberately, so a `_summary` left in the document is rejected by name. It
+// is lifted out before parsing.
 
 // summaryKey is the body key a caller may put a revision summary under.
 const summaryKey = "_summary"
@@ -140,19 +123,15 @@ func rootMapping(doc *yaml.Node) *yaml.Node {
 // takeSummary takes the summary for a write, lifting `_summary` out of the
 // body.
 //
-// ONE FUNCTION FOR EVERY ROUTE THAT READS A BODY, and the reason is the
-// precedence rather than the boilerplate: several copies of "split the body,
-// then let the header win" are several chances for one of them to read the
-// header FIRST and never lift `_summary` out, which parses green and then
-// fails at the document parser, by name, as an unknown field.
+// ONE FUNCTION FOR EVERY ROUTE THAT READS A BODY, for the precedence: a copy
+// that read the header FIRST would never lift `_summary` out, and the document
+// parser would then fail on it as an unknown field.
 //
-// The key is lifted out of a dry run's body too, because the document a check
-// reads has to be the one the write will read. Whether a summary is REQUIRED
-// is [requireSummary]'s, asked later.
+// The key is lifted from a dry run's body too, so a check reads the document
+// the write will. Whether a summary is REQUIRED is [requireSummary]'s.
 //
-// It returns the remaining body, because splitting is what removes the key:
-// a caller that ignored the second result would hand the parser a document
-// with a `_summary` in it. ok is false when the request has been answered.
+// It returns the remaining body: a caller that ignored it would hand the
+// parser a `_summary`. ok is false when the request has been answered.
 func takeSummary(w http.ResponseWriter, r *http.Request, body []byte) (summary string, rest submitted, ok bool) {
 	summary, rest, err := splitSummary(body)
 	if err != nil {
@@ -172,15 +151,11 @@ func takeSummary(w http.ResponseWriter, r *http.Request, body []byte) (summary s
 // summary, answering the request itself; it reports whether the write may go
 // on. Only the hint differs per route, so only the hint is a parameter.
 //
-// Required, because the history is what an operator reads at 3am to find the
-// change that broke something: a list of revisions with no summaries is a list
-// of uuids. A dry run stores nothing, records no summary and never asks.
+// A dry run stores nothing, records no summary and never asks.
 //
-// ASKED LAST, once the write has been admitted and its document checked, and
-// never as the body is read: a caller who may not make the change is told so,
-// rather than first asked to describe it. Asked first, a credential with no
-// permission to write the configuration was answered `400 summary_required`,
-// and met the `403` that was the real answer only once it had written a
+// ASKED LAST, once the write is admitted and its document checked, never as
+// the body is read: asked first, a credential with no permission to write was
+// answered `400 summary_required` and met the real `403` only after writing a
 // sentence for a change it could never make.
 func requireSummary(w http.ResponseWriter, summary, hint string) bool {
 	if summary != "" {

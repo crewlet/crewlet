@@ -58,6 +58,10 @@ type ChangeOption struct {
 	Body string `json:"body,omitempty" untrusted:"fence"`
 	// Draft opens it as a draft, not yet asking to be merged.
 	Draft bool `json:"draft,omitempty"`
+	// Reverts is the number of the change this one reverts, set by a
+	// revert_change's build alone (an engine write's push), never by a push's
+	// options; kept on code_changes.reverts. VERSION 9 ([RevertsVersion]).
+	Reverts int64 `json:"reverts,omitempty"`
 }
 
 // ParseChangeOptions reads the change a push's options ask for, in the order

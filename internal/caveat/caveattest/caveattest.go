@@ -104,11 +104,11 @@ var valueFields = []string{"tool", "outcome", "position", "op_id", "id", "item",
 	// given.
 	"channel", "message_id", "members", "added", "emoji", "topic", "purpose",
 	// GITLET'S WRITES: the repository and the change by the names a
-	// screen opens them by, the branch a write moved, the commit it left there
-	// and the one before it, a repository's settings as the values its screen
-	// shows them by, the reviewers a change asked and the findings a write
-	// resolved, by the ids a change's screen finds them by.
-	"repo", "change", "branch", "commit", "previous", "visibility", "search",
+	// screen opens them by, the branch or tag a write moved, the commit it left
+	// there and the one before it, a repository's settings as the values its
+	// screen shows them by, the reviewers a change asked and the findings a
+	// write resolved, by the ids a change's screen finds them by.
+	"repo", "change", "branch", "tag", "commit", "previous", "visibility", "search",
 	"default_branch", "reviewers", "findings_resolved",
 	// AND ITS QUEUE, CHECKS, REVERTS AND PURGES: a queue entry by its id, the
 	// branch a merge or an entry targets and the state it reached, the commit

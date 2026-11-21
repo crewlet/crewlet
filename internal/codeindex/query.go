@@ -75,20 +75,17 @@ const (
 )
 
 // ParseQuery reads a code search as a person or a seat writes it: FILTERS
-// first — `repo:<name>`, `path:<pattern>` and `ref:<ref>`, each a word of its
-// own — then the text searched for, which is everything after them, inner
-// spaces and all. Repeated, repo: and path: each widen the search (any of
-// them); ref: names one ref. A filter word with nothing after its colon is
-// text, as is one after the text has begun: the filters LEAD, so what follows
-// them is searched for exactly as written. A text that itself begins with
-// one of the filter words is searched in regex mode, where a backslash before
-// its colon keeps it text.
+// first (`repo:<name>`, `path:<pattern>`, `ref:<ref>`), then the text searched
+// for, everything after them, inner spaces and all. Repeated, repo: and path:
+// each widen the search; ref: names one ref. A filter word with nothing after
+// its colon is text, as is one after the text has begun: the filters LEAD. A
+// text beginning with a filter word is searched in regex mode, where a
+// backslash before its colon keeps it text.
 //
-// The query is in ModeLiteral, case-sensitive; a surface that carries a mode
-// or the case beside the text sets them and holds the query to Validate.
-// ParseQuery refuses — each a *QueryError — a query past MaxQueryBytes, one
-// that is not UTF-8, one with no text after its filters, and a filter its
-// grammar refuses.
+// The query is ModeLiteral, case-sensitive; a surface carrying a mode or the
+// case sets them and holds the query to Validate. It refuses, each a
+// *QueryError, a query past MaxQueryBytes, non-UTF-8, without text after its
+// filters, or with a filter its grammar refuses.
 func ParseQuery(text string) (Query, error) {
 	trimmed := strings.TrimSpace(text)
 	if len(trimmed) > MaxQueryBytes {
@@ -266,21 +263,16 @@ func wordRune(r rune) bool {
 
 // PathFilter is a search's path: filters, matched against a file's path from
 // the repository's root as git names it ("internal/gitlet/doc.go"). Its zero
-// value matches every path. A pattern reads as a .gitignore line does,
-// without its negation, escapes and classes:
+// value matches every path. A pattern reads as a .gitignore line without
+// negation, escapes and classes:
 //
-//   - a component is matched by a glob in which * is any run of characters
-//     and ? one character, neither ever a /; every other character is itself;
+//   - a component is a glob: * any run of characters, ? one, neither a /;
 //   - ** as a whole component is any number of components, none included;
-//   - a pattern that matches a directory matches every file below it, so
-//     internal/gitlet is that directory's every file (and a file of that name);
-//   - a pattern with no / but at its end matches at any depth: *.go is every
-//     Go file, testdata every file under any directory of that name;
-//   - a leading / anchors such a pattern at the root (/Makefile), and any /
-//     inside a pattern anchors it there too (cmd/crewlet);
+//   - a pattern matching a directory matches every file below it;
+//   - no / but at its end: any depth (*.go); a leading or inner /: anchored;
 //   - a trailing / matches directories only (docs/).
 //
-// A file matches the filter when any one pattern matches it.
+// A file matches when any one pattern matches it.
 type PathFilter struct {
 	patterns []pathPattern
 }

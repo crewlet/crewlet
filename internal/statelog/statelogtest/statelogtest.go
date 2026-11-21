@@ -113,43 +113,38 @@ type Candidate struct {
 	// estate. The framework's three are already there.
 	Migrate func(ctx context.Context, db store.ReplicatedHandle) error
 
-	// Encode builds a valid record for an object of this domain. The
-	// suite varies the version to reach the deferral contract, so a
-	// version above the domain's own must still ENCODE — it is what a
-	// later build publishes and this one has to retain.
-	//
-	// A VERSION OF ZERO is the writer's own path: the record goes out with
-	// whatever version the domain's encoder stamps, which is what the
-	// versions case ([Stamping]) reads back. It carries no versioned field.
+	// Encode builds a valid record for an object of this domain. A version
+	// above the domain's own must still encode: it is what a later build
+	// publishes and this one must retain. Version zero leaves the stamp to
+	// the domain's encoder, which [Stamping] reads back; such a record
+	// carries no versioned field.
 	Encode func(kind, id, opID string, version int) ([]byte, error)
 
 	// Fields is the domain's versioned-field table — every field its
 	// records gained since the base format — or nil when there is none.
 	Fields statelog.RecordFields
 
-	// Carrying builds a valid record carrying exactly the named field
-	// and no other versioned field, with its version left for the
-	// domain's encoder to stamp. Required whenever Fields is not empty:
-	// it is what proves each field's path is where the encoder actually
-	// writes it, since a path that misses stamps nothing and fails
-	// nowhere else.
+	// Carrying builds a valid record carrying exactly the named field and
+	// no other versioned field, its version left to the encoder. Required
+	// whenever Fields is not empty: it proves each field's path is where
+	// the encoder writes it, since a path that misses stamps nothing and
+	// fails nowhere else.
 	Carrying func(field statelog.VersionedField) ([]byte, error)
 
-	// Kinds are the subject kinds the suite may publish. The first is
-	// used wherever one is needed.
+	// Kinds are the subject kinds the suite may publish; the first is used
+	// wherever one is needed.
 	Kinds []string
 
 	// Rows builds the domain's own read seam over an estate, on the log spec
 	// names — the one its production publisher decides through.
 	Rows func(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows, error)
 
-	// Write performs at least one write through the domain's OWN
-	// production write path — the writer every caller reaches, not a
-	// fixture — over the publisher the suite hands it, which decides from
-	// db, and whose records the candidate's Applier applies to db as they
-	// are appended, so a path of several steps decides each from the rows
-	// the steps before it made. It is how [Stamped] reaches the one builder
-	// that can forget the framework's stamp.
+	// Write performs at least one write through the domain's own
+	// production write path, not a fixture, over the publisher the suite
+	// hands it. The publisher decides from db and the Applier applies each
+	// record to db as it is appended, so a multi-step path decides each
+	// step from the rows the earlier ones made. It is how [Stamped] reaches
+	// the one builder that can forget the framework's stamp.
 	Write func(ctx context.Context, pub *statelog.Publisher, db store.ReplicatedReader) error
 
 	// EncodeGate builds the record that evicts nodeID from this domain's log
@@ -158,20 +153,17 @@ type Candidate struct {
 	// trim counts nodes on; see [Evictions].
 	EncodeGate func(nodeID string, readmit bool) ([]byte, error)
 
-	// EncodeTrimmed is the domain's own encoder of the trim's trimmed record
-	// (ADR-0080) — the production function the engine hands the trim, never
-	// a fixture. Required exactly when the domain's log arbitrates a kind,
-	// and so writes anchors ([statelog.WritesAnchors]); nil otherwise. See
-	// [TrimmedAnchorsGoAndAZeroWriteIsFenced].
+	// EncodeTrimmed is the production encoder of the trim's trimmed record
+	// (ADR-0080), never a fixture. Required exactly when the log arbitrates
+	// a kind and so writes anchors ([statelog.WritesAnchors]); nil
+	// otherwise. See [TrimmedAnchorsGoAndAZeroWriteIsFenced].
 	EncodeTrimmed func(statelog.Envelope) ([]byte, error)
 
-	// EncodeBarrier is the domain's own encoder of its read index's barrier
-	// — the production function the engine hands [statelog.NewReadIndex],
-	// never a fixture — for a domain whose log serves linearizable reads;
-	// NoBarrier says the log has no read index, and so no barrier. EXACTLY
-	// ONE of the two is stated, as the engine's register states it, so a
-	// candidate that names neither is refused rather than passed unasked.
-	// See [ABarrierWritesNoRow].
+	// EncodeBarrier is the production barrier encoder the engine hands
+	// [statelog.NewReadIndex], for a log that serves linearizable reads;
+	// NoBarrier says the log has no read index, so no barrier. Exactly one is stated, as
+	// the engine's register states it, so a candidate naming neither is
+	// refused rather than passed unasked. See [ABarrierWritesNoRow].
 	EncodeBarrier func(statelog.Envelope) ([]byte, error)
 	NoBarrier     bool
 }
@@ -201,7 +193,7 @@ func Run(t *testing.T, new Factory) {
 }
 
 // openEstate brings up a replicated estate with the framework's tables and
-// the candidate's own, and answers the handle the runtime would hand the
+// the candidate's own, answering the handle the runtime would hand the
 // candidate's applier and readers.
 func openEstate(t *testing.T, c Candidate) store.ReplicatedHandle {
 	t.Helper()
@@ -210,7 +202,7 @@ func openEstate(t *testing.T, c Candidate) store.ReplicatedHandle {
 }
 
 // openNodeEstate is [openEstate] answering the node's own store too, for a case
-// that runs the framework's applier — which keeps a verdict about its log in
+// that runs the framework's applier, which keeps a verdict about its log in
 // the node's file.
 func openNodeEstate(t *testing.T, c Candidate) (*store.DB, store.ReplicatedHandle) {
 	t.Helper()
@@ -228,20 +220,12 @@ func openNodeEstate(t *testing.T, c Candidate) (*store.DB, store.ReplicatedHandl
 	return node, db
 }
 
-// tableContents is what determinism and idempotency are both asserted over:
-// the exact CONTENTS of every table the domain declares, in a stable order.
-//
-// IT USED TO BE `SELECT COUNT(*)`, under a comment claiming exact contents.
-// Two nodes that applied one record and wrote different bytes into the same
-// number of rows passed — which is the whole failure the determinism contract
-// exists to catch, since an applier that reads a clock, a map iteration order
-// or this node's own id produces exactly that: the right shape, the wrong
-// values, on one node out of three. The counts were also what an encrypted
-// domain would have been certified by, and ciphertext that differs per node is
-// invisible to a count.
-//
-// Rows are rendered as text and ordered by every column, so the comparison
-// needs no per-domain key and no knowledge of what any column means.
+// tableContents is what determinism and idempotency are asserted over: the
+// exact contents of every table the domain declares, in a stable order. Not a
+// row count: an applier that reads a clock, a map order or the node's id
+// writes the right number of rows with the wrong values, and per-node
+// ciphertext is invisible to a count. Rows are rendered as text and sorted,
+// so the comparison needs no per-domain key or column knowledge.
 func tableContents(t *testing.T, db store.ReplicatedHandle, tables map[string]statelog.TableClass) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -263,10 +247,8 @@ func tableContents(t *testing.T, db store.ReplicatedHandle, tables map[string]st
 // renderTable is one table as a stable string: every column of every row, in
 // an order the rows themselves decide.
 func renderTable(ctx context.Context, tx *sql.Tx, name string) (string, error) {
-	// ORDERED BY EVERY COLUMN rather than by a primary key this suite does
-	// not know: without an ORDER BY the engine may hand back rows in any
-	// order it likes, and a comparison over that would fail on two
-	// identical tables.
+	// Sorted by the whole rendered row below, not by a primary key this
+	// suite does not know: the engine returns rows in any order.
 	rows, err := tx.QueryContext(ctx, `SELECT * FROM `+name)
 	if err != nil {
 		return "", err
@@ -291,12 +273,9 @@ func renderTable(ctx context.Context, tx *sql.Tx, name string) (string, error) {
 			if i > 0 {
 				line.WriteByte(0x1f)
 			}
-			// BYTES AS BYTES. A []byte column rendered with %v is a
-			// list of numbers and a string is not, so two tables
-			// holding the same value under different column types
-			// would compare unequal; %q over the byte form makes
-			// both render the same way and keeps a NULL distinct
-			// from an empty string.
+			// []byte and string quote alike, so one value under two
+			// column types compares equal (%v renders bytes as
+			// numbers), and NULL stays distinct from "".
 			switch v := cell.(type) {
 			case nil:
 				line.WriteString("NULL")
@@ -320,11 +299,10 @@ func renderTable(ctx context.Context, tx *sql.Tx, name string) (string, error) {
 // runTables certifies that the domain's declared tables accept the framework's
 // own statements.
 //
-// A domain declares three table NAMES and the framework writes their COLUMNS,
-// and nothing in Go connects the two. A migration that spelled a column
-// differently compiles, migrates, opens and serves every read — and fails the
-// first time a record this build cannot decode arrives, which is the rarest
-// path in the system and the one whose failure is a stalled log.
+// A domain declares three table names and the framework writes their columns,
+// and nothing in Go connects the two: a misspelled column serves every read
+// and fails only when a record this build cannot decode arrives, stalling
+// the log.
 func runTables(t *testing.T, new Factory) {
 	t.Helper()
 	c := new(t)

@@ -170,19 +170,15 @@ func TestAQuestionIsRefusedToACallerNobodyResolved(t *testing.T) {
 
 // NOBODY ASKING AND SOMEBODY LACKING THE PERMISSION ARE TWO REFUSALS.
 //
-// They ask a client for opposite things — "present a credential" and "the one
-// you presented does not carry this" — and a narrow reader meets the second
-// the moment they open a screen outside their access, which is the ordinary
-// case rather than the exceptional one. Folded together, the surface tells
-// that reader to go and get a new credential, which is how a company learns to
-// rotate working tokens over a permissions message.
+// They ask a client for opposite things ("present a credential" and "the one
+// you presented does not carry this"), and a narrow reader meets the second
+// whenever they open a screen outside their access. Folded together, that
+// reader is told to get a new credential.
 //
 // NEITHER IS REACHABLE THROUGH THE WIRED GUARD, which answers an anonymous
-// request a layer up, and every socket authenticates at its handshake. That is
-// exactly why it is asserted here: this package is reached by two transports
-// and the middleware in front of one of them is not this package's to keep, so
-// a refusal that is correct only because something upstream answers first is
-// one edit from being wrong.
+// request a layer up. That is why it is asserted here: the middleware in front
+// of one transport is not this package's to keep, and a refusal correct only
+// because something upstream answers first is one edit from being wrong.
 func TestNobodyAskingIsADifferentRefusalFromLackingThePermission(t *testing.T) {
 	t.Parallel()
 	r := queries.NewRegistry()
@@ -247,27 +243,25 @@ func TestAQuestionIsRetriedRatherThanRefusedWhenIdentityIsUnreadable(t *testing.
 // EVERY QUESTION DECLARES A POSTURE, it is the one ADR-0033 decided, and it is
 // what Answer enforces.
 //
-// THE TABLE IS STATED HERE IN FULL, in both directions: a question this build
-// answers that it does not name fails, and so does a name it holds that this
-// build does not answer — so a question whose posture is changed, or one added
-// without a decision, is a reviewed edit of this table rather than a quiet
-// change to who reads what. Then, for every one, the declaration is held to
-// what the registry does: an app's question ADMITS its app and admin, whose
-// permission includes every app, and REFUSES the other app and nothing; an
-// admin's admits admin alone; and everybody's, or one its answer decides,
-// admits a caller holding nothing.
+// THE TABLE IS STATED IN FULL, in both directions: an unnamed question this
+// build answers fails, and so does a name it does not answer, so a posture
+// change or an undecided addition is a reviewed edit rather than a quiet change
+// to who reads what. Each declaration is held to the registry: an app's
+// question ADMITS its app and admin and REFUSES the other app; an admin's admits
+// admin alone; everybody's, or one its answer decides, admits a caller with nothing.
 //
-// ADMISSION IS ASKED OF A REGISTRY CARRYING THE SAME POSTURES over answers
-// that do nothing, because an admitted question runs its answer and the
-// fixture's seams are empty values; a REFUSAL is asked of the production
-// registry itself, since the registry refuses before any answer runs.
+// ADMISSION is asked of a registry with the same postures over do-nothing
+// answers; a REFUSAL of the production registry, which refuses before answering.
 func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 	t.Parallel()
 	want := map[string]string{
 		"agent": "everybody", "live_call": "everybody", "tokens": "everybody",
 		"token_series": "everybody", "seat_activity": "everybody", "turn_outcomes": "everybody",
 		"viewer": "everybody", "schedule_runs": "everybody",
-		"budgets": "everybody", "schedules": "everybody",
+		// WHAT A PAGE'S LINES NAME: each reference is decided by the
+		// question its own page asks, so the ask itself grants nothing.
+		"references": "everybody",
+		"budgets":    "everybody", "schedules": "everybody",
 		"knowledge": "everybody", "colleague": "everybody",
 		// Hosts alone, so a reader can link a reference; never the repositories.
 		"link_hosts": "everybody",
@@ -287,7 +281,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 
 		"events": "admin", "event_series": "admin", "event": "admin",
 		"trace": "admin", "turn": "admin", "fleet": "admin",
-		"backups": "admin", "fleet_broker": "admin", "issue_reports": "admin", "advisor": "admin", "advisor_analysis": "admin", "advisor_access": "admin", "go_live_review": "admin",
+		"backups": "admin", "fleet_broker": "admin", "issue_reports": "admin", "advisor_findings": "admin", "advisor_finding": "admin", "advisor_run": "admin", "advisor_notices": "admin", "advisor_reports": "admin", "advisor_report": "admin", "advisor_snapshot": "admin", "advisor_capacity": "admin", "advisor_access": "admin", "go_live_review": "admin",
 		"diagnostics_insights": "admin",
 		"integrations":         "admin", "retention": "admin", "a2a_channels": "admin",
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",

@@ -14,20 +14,15 @@ import (
 )
 
 // THE LEDGER: every hold the company has outstanding, in one coordination
-// record, so a reservation that checks the company's total and adds to it is
-// one compare-and-set and two intents racing for the last of a budget cannot
-// both win.
-//
-// # What a hold answers for
+// record, so a reservation checking the company's total and adding to it is
+// one compare-and-set and two intents cannot both win the last of a budget.
 //
 // A hold is the bytes one upload may have put in the object store that no
-// record names: every file it minted a key for and has not yet seen named or
-// deleted. It lasts until the object collector could have deleted those bytes
-// ([holdTail] past the last instant one of them can be stored), so the bytes
-// nothing names never exceed the holds, where they used to be bounded only by
-// the collector's day. It is released early, never late: a release follows the
-// record naming the bytes or the engine deleting them, and a hold the engine
-// could not release lapses on its own.
+// record names: every file it minted a key for and has not seen named or
+// deleted. It lasts until the collector could have deleted them ([holdTail]
+// past the last instant one can be stored), so unnamed bytes never exceed the
+// holds. It is released early, never late: after the record naming the bytes
+// or the engine deleting them; one not released lapses on its own.
 
 // ledgerVersion is the ledger's format.
 const ledgerVersion = 1

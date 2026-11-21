@@ -15,6 +15,7 @@ import type {
   ModelDeviceStatus,
   ModelHealth,
   ModelJob,
+  ModelLimitState,
   ModelLimitWindow,
   ModelSignInRoute,
   RunnerCellName,
@@ -64,6 +65,23 @@ export interface ModelSittingOut {
   nodes: string[];
 }
 
+/** One window of a model's sign-in's vendor limit, as the newest report across nodes left it. */
+export interface ModelLimit {
+  window: ModelLimitWindow;
+  /** The window's length in hours as the vendor names it; 0 where unsaid. */
+  hours: number;
+  /** The model family a `model` window is of ("opus"). */
+  model?: string;
+  state: ModelLimitState;
+  /** The fraction used; null where unsaid, or the window has turned over since. */
+  used: number | null;
+  resets_at: string | null;
+  /** When the model is tried again, where it sits this window out. */
+  until: string | null;
+  seen: string;
+  stale: boolean;
+}
+
 export interface ModelLastFailure {
   kind: "auth" | "rate_limit" | "timeout" | "server" | "fatal" | (string & {});
   at: string;
@@ -85,13 +103,16 @@ export interface ModelUsage {
 }
 
 /**
- * One place that runs on a model: a seat's job, or the assistant. `position`
- * 0 is the place that runs on it; a later position is a fallback.
+ * One place that runs on a model: a seat's job, Ask Crewlet's chat, or the
+ * Advisor's findings. `position` 0 is the place that runs on it; a later
+ * position is a fallback.
  */
 export interface ModelUse {
   seat?: string;
   job?: ModelJob;
-  assistant?: "chat" | "deep_work";
+  assistant?: "chat";
+  /** The Advisor explains its findings with the model (`advisor.model`). */
+  advisor?: "findings";
   position: number;
   written?: boolean;
   source?: "seat" | "executor" | "default-entry" | "first-entry";
@@ -127,6 +148,9 @@ export interface ModelEntry {
   usage: ModelUsage;
   used_by: ModelUse[];
   device_sign_in: ModelDevice | null;
+  limits: ModelLimit[];
+  /** Why no helper (Ask Crewlet, the Advisor) can run on it, in a person's words; null where one can. */
+  helper_problem: string | null;
 }
 
 /** One model in a member's reading: nothing that names a credential, an account or a vendor's sentence. */
@@ -140,6 +164,7 @@ export interface MemberModelEntry {
   last_success: string | null;
   waiting: ModelWaiting | null;
   used_by: ModelUse[];
+  limits: ModelLimit[];
 }
 
 /** One model an alarm names, with what it says about it. */
@@ -326,11 +351,12 @@ export interface HostLoginAnswer {
   shares_login_with: string[];
 }
 
-/** One written reference to a model, by identity: a seat's job, or the assistant's chat or deep work (`configapi.RemovalAt`). */
+/** One written reference to a model, by identity: a seat's job, Ask Crewlet's chat, or the Advisor's findings (`configapi.RemovalAt`). */
 export interface ModelReferenceAt {
   seat?: string;
   job?: ModelJob;
-  assistant?: "chat" | "deep_work";
+  assistant?: "chat";
+  advisor?: "findings";
 }
 
 /** A dependant the remove refusal names: where it is, the field, and the whole chain written there. */

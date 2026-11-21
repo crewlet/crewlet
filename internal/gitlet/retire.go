@@ -63,7 +63,7 @@ func (r SweepResult) Held() bool { return r.Outcome != statelog.OutcomePending }
 // instant, so the apply reads no clock.
 func (s *Store) RetireSweep(ctx context.Context, repoID string, now time.Time) (SweepResult, error) {
 	if now.IsZero() {
-		return SweepResult{}, fmt.Errorf("%w: now: a sweep judges the grace by the "+
+		return SweepResult{}, refusedf("%w: now: a sweep judges the grace by the "+
 			"duty holder's clock, and none was given", ErrInvalid)
 	}
 	cutoff := store.EncodeTime(now.Add(-RetireGrace))

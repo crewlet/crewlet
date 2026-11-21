@@ -19,27 +19,15 @@ import (
 )
 
 // A DATASET THE NODE COULD NOT READ FOR A CONDITION SAYS WHICH, AND WHEN TO
-// COME BACK, in a person's words.
-//
-// Every one was "this node could not read <dataset> right now" under an
-// election's four seconds: a source's question refused because this node's log
-// is at its ceiling was polled every four seconds for ever, and a store
-// dataset whose read the state log refused — an error no question wrapped —
-// was logged as a failure. Now each is told in [builtin.ConditionSentence]
-// under its own hint, none where no wait clears it, and a failure that is no
-// condition is the node's own fault: `500`, with no Retry-After, where it was
-// a 503 under the same four seconds and a board polled a fault for ever.
-//
-// AND A CONDITION'S ERROR GOES TO THIS SURFACE'S LOG with the board and the
-// dataset it was for, which the fields the caller hands settle carry: a line
-// with the error alone, under another package's component, named neither.
-//
+// COME BACK, in a person's words: [builtin.ConditionSentence] under its own
+// hint, none where no wait clears it, not an election's four seconds a board
+// polled for ever. A failure that is no condition is `500`, no Retry-After.
+// Its error goes to THIS SURFACE'S LOG with the caller's board and dataset.
 // Not parallel: it installs the process's log sink.
 //
-// Mutation: answer the question's arm under the election hint again, or leave
-// a bare state-log refusal to the arm below it, and their rows go red; answer
-// the fault as a 503 and its row does; log the condition without the caller's
-// fields and the log rows do.
+// Mutation: answer the question's arm under the election hint, leave a bare
+// state-log refusal to the arm below, answer the fault as a 503, or log
+// without the caller's fields, and a row goes red.
 func TestADatasetsConditionSaysWhichAndWhenToComeBack(t *testing.T) {
 	var out syncBuffer
 	logging.Configure(slog.LevelInfo, logging.FormatText, &out)

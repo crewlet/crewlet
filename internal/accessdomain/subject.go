@@ -13,10 +13,8 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE ACCESS LOG'S SUBJECTS. Every audit record is its own object, created once
-// on a subject naming its seat and its own id, so a retried write lands once and
-// a second write for the same turn, serial, command or giver's verdict is
-// refused as existing.
+// Every audit record is its own object, created once on a subject naming its
+// seat and its own id (package doc, "Every record is created once").
 
 // ObjectKind is what an object on the access log is. A kind this build has never
 // heard of is retained as its literal, so a newer peer's records are deferred.

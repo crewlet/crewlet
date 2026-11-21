@@ -36,15 +36,11 @@ const (
 
 // A STRANGER AT THE ADDRESS CANNOT CLOSE THE WAY BACK IN.
 //
-// Many people share one address — an office, a VPN's egress, and on a
-// deployment whose proxy is not in `api.trusted_proxies` the whole internet —
-// and a bearer names nobody until it is compared, so the only curve that could
-// stand in front of the comparison is one keyed on that address. There was
-// one, and a stranger refusing one guessed value every twenty-five seconds held
-// every valid bearer at the address at 429 on every guarded route, the
-// break-glass Tier A token and `POST /auth/token` among them. What protects a
-// bearer is its value's length; what a guess costs the guesser is one more on
-// its source's count in the audit trail's per-minute failure row.
+// Many people share one address, and a bearer names nobody until compared, so
+// the only possible curve is keyed on the address; one guess every
+// twenty-five seconds would hold every valid bearer there at 429. A bearer is
+// protected by its value's length; a guess costs one more on its source's
+// count in the audit trail's per-minute failure row.
 //
 // Mutation: put a source-keyed curve back in front of the comparison and the
 // spray below is answered 429, and so is the valid token after it.
@@ -82,18 +78,13 @@ func TestAStrangerAtTheAddressCannotCloseTheWayBackIn(t *testing.T) {
 
 // VALID BEARERS IN FLIGHT TOGETHER ARE NEVER HELD OR REFUSED.
 //
-// A pipeline fanning out, an HTTP/2 client multiplexing, `xargs -P` and the
-// operator's assistant all put many requests from one address on the wire at
-// once, every one of them carrying the right value. When a bearer still being
-// resolved counted as a refused one on its address, the twelfth such request
-// waited a second, the thirteenth three and the fourteenth and every one after
-// it answered 429 — with nothing refused at all.
+// Pipelines and multiplexed clients put many requests from one address on the
+// wire at once; a bearer still being resolved must not count as a refused one.
 //
-// Each request is held inside its RESOLUTION — the identity directory's read
-// of the token's seat binding, which is I/O on a real node — until all of them
-// have arrived there, so they are genuinely being resolved together; a request
-// the guard held or turned away before resolving never arrives, and the wait
-// for it ends at the timeout below.
+// Each request is held inside its RESOLUTION (the identity directory's read of
+// the seat binding) until all have arrived, so they are genuinely resolved
+// together; one the guard held or turned away never arrives, and the wait ends
+// at the timeout below.
 //
 // Mutation: count a bearer against its address until its resolution settles,
 // and the requests past the eleventh wait or answer 429.
@@ -155,13 +146,10 @@ func (b *barrierBinding) BoundSeat(context.Context, string) (session.PersonRow, 
 // AN UNGUARDED ROUTE NEVER COMPARES A BEARER, AND NEVER READS FOR ONE.
 //
 // Nothing unguarded acts on the principal a bearer resolves to, and comparing
-// one there anyway answered a right value and a wrong one at different speeds:
-// a matching Tier A token reads the identity directory for its seat binding
-// before it answers, a refused one returns after a map compare — so a guess
-// against /health or a static asset was timed at line rate, on routes whose
-// refusals nothing counts. The request is anonymous there, and the guarded
-// route beside it is the control: the same value reads the directory once and
-// resolves.
+// one there answered right and wrong values at different speeds (a match reads
+// the identity directory, a refusal a map compare), so a guess against /health
+// could be timed on routes whose refusals nothing counts. The guarded route
+// beside it is the control: the same value reads the directory once.
 //
 // Mutation: resolve the bearer on every route, and each unguarded request
 // below reads the directory.

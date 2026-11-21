@@ -30,17 +30,12 @@ var ErrNoSuchServer = errors.New("mcp: no such server")
 // Change is what one bridge operation did to the CATALOGUE — not to the
 // process list.
 //
-// It exists because the shared tool registry lives outside this package and
-// has no way to work out on its own what a stop or a restart took away. The
-// names have to be captured BEFORE anything stops, because stopping drops the
-// bridge's own index and anything asking afterwards gets an empty answer. That
-// ordering used to be the caller's job to remember, in two places, and the one
-// that forgot left a removed server's tools in every later turn's catalogue —
-// dispatching into a stopped client for ever, as a soft failure the model
-// burned rounds retrying with nothing in the logs to explain it.
-//
-// So the bridge computes the diff itself and hands it back. A caller cannot
-// ask too late and cannot forget to ask.
+// The shared tool registry lives outside this package and cannot work out
+// what a stop or restart took away. The names must be captured BEFORE
+// anything stops, since stopping drops the bridge's index; a caller that asked
+// late left a removed server's tools in the catalogue, dispatching into a
+// stopped client as a soft failure the model retried. So the bridge computes
+// the diff itself: a caller cannot ask too late.
 type Change struct {
 	// Added are tools that must now be registered. It is not simply "the new
 	// server's tools": a tool of ANOTHER server that had been shadowed by a
@@ -107,17 +102,13 @@ func NewBridge(log *slog.Logger, sup Supervision) *Bridge {
 // Add starts a server and discovers its tools.
 //
 // REGISTRATION HAPPENS ONLY ON SUCCESS. A server whose discovery fails is
-// stopped and leaves nothing behind — not a tool, not a process, and not a
-// "yes" from Has. Recording it first is what made a live subprocess with no
-// tools answer Has("jira") with yes: a config edit read that as a healthy
-// server, so the engine's own retry never fired and the child sat there until
-// shutdown. On a bridge that retries failed starts
-// ([Supervision.RetryFailedStarts]) the SPEC is kept, so the supervisor can
-// try again — a name the bridge supervises without serving it, with no
-// process and no tools.
+// stopped and leaves no tool, process or "yes" from Has: recording it first
+// made a tool-less live subprocess read as healthy, so no retry fired. On a
+// bridge that retries failed starts ([Supervision.RetryFailedStarts]) the SPEC
+// is kept, so the supervisor can try again.
 //
-// A name that is already supervised, or already being started, is refused
-// rather than replaced — see ErrServerExists.
+// A name already supervised, or being started, is refused: see
+// ErrServerExists.
 func (b *Bridge) Add(ctx context.Context, spec Spec) (Change, error) {
 	if err := spec.validate(); err != nil {
 		return Change{}, err
@@ -386,45 +377,18 @@ func (b *Bridge) replace(ctx context.Context, spec Spec) (Change, error) {
 	return mergeChanges(stopChange, addChange), nil
 }
 
-// Reconcile brings one server to spec, whichever state it is already in, and
-// reports what the catalogue must change.
-//
-// THIS IS THE VERB A CONFIG APPLY WANTS, and Add is not. An apply builds a
-// FRESH tool registry for the new epoch and then equips it, so it has to be
-// told this server's tools again even when nothing about the server changed —
-// while the CHILD must keep running, because it is a process and restarting
-// every one of them on every apply would tear down working servers to arrive
-// back where it started.
-//
-// Add cannot do that. It refuses a name it already runs, and the caller that
-// treated the refusal as a failed server got an epoch whose catalogue silently
-// lacked every shared server's tools. Measured on the Nimbus example: the
-// engine seeds its company at boot and immediately applies it, so the shared
-// servers reached exactly one epoch — the one that was replaced a second
-// later — and no seat ever saw them.
-//
-// Three cases, one call:
+// Reconcile brings one server to spec and reports the catalogue change. A
+// config apply wants it, not Add: a FRESH registry needs the tools again while
+// the CHILD keeps running, and Add refuses a name it runs.
 //
 //   - not supervised           -> Add
 //   - supervised, same process -> refiled ([Bridge.Refile]), no restart
-//   - supervised, new process  -> Restart, so a config edit actually takes effect
+//   - supervised, new process  -> Restart, so an edited command takes effect
 //
-// The third is the other half of the same bug: without it an operator could
-// change a shared server's command, args or environment and the apply would
-// report success while the old child kept serving.
-//
-// A server with the same spec that is DOWN — its child died, or its start
-// failed on a bridge that retries — is not restarted here and not left to
-// its schedule either: its supervisor is asked to try now ([Bridge.RetryNow]),
-// because whoever reconciles has a reason to believe now is different. The
-// call does not wait for that attempt. A start can take a whole startup
-// timeout, and an apply that waited on one for every server already being
-// brought back would hold the epoch up behind it. It answers [ErrNotRunning],
-// saying why, BESIDE the change a serving server would have answered: the
-// tools such a server contributes stay in this bridge's catalogue, refusing
-// until it is back, and a fresh registry that left them out would list them in
-// a different order from the same revision applied while the server was up —
-// or not at all. The caller files the change and reports the error.
+// A same-spec server that is DOWN is not restarted: its supervisor is asked to
+// try now ([Bridge.RetryNow]) without waiting. The call answers [ErrNotRunning]
+// BESIDE the change a serving server would give: its tools stay catalogued,
+// refusing, so the caller files both.
 func (b *Bridge) Reconcile(ctx context.Context, spec Spec) (Change, error) {
 	if err := spec.validate(); err != nil {
 		return Change{}, err
@@ -458,25 +422,14 @@ func (b *Bridge) Reconcile(ctx context.Context, spec Spec) (Change, error) {
 	}
 }
 
-// Runs reports whether the bridge runs this spec's process: supervises a server
-// under its name, from a spec equal to it in all but its filing ([Bridge.Refile]).
+// Runs reports whether the bridge supervises a server under spec's name from a
+// spec equal to it in all but its filing ([Bridge.Refile]): Reconcile's own
+// comparison, on RESOLVED values, so a rotated credential answers false.
 //
-// The question a caller asks BEFORE Reconcile, when what it needs to know is
-// whether reconciling would touch a process at all — to leave a healthy
-// child out of a pass that restarts its neighbours, and to tell the operator
-// which servers it actually started rather than claiming all of them. It is
-// the same comparison Reconcile makes, so a spec this answers true for is one
-// Reconcile leaves alone, and the values compared are the RESOLVED ones: a
-// rotated credential, the config entry byte-identical, answers false.
-//
-// A server that is DOWN answers true: its child died and its supervisor is
-// bringing it back, from this spec, on its own schedule. A caller that read it
-// as a server to start would be a second retry loop over one child, racing
-// the supervisor's; one that has a reason to want it sooner asks
-// [Bridge.RetryNow]. A server still starting is not in the bridge yet, and on
-// a bridge that leaves failed starts to its owner nor is a start that failed,
-// so both answer false — which is what lets that owner retry them through the
-// same call.
+// A server that is DOWN answers true: its supervisor is bringing it back, and
+// a second start would race it; [Bridge.RetryNow] asks for sooner. A server
+// still starting, or a failed start on a bridge that leaves those to their
+// owner, answers false so that owner can retry through the same call.
 func (b *Bridge) Runs(spec Spec) bool {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -526,21 +479,16 @@ func (b *Bridge) RetryNow(name string) bool {
 
 // RestartBefore restarts one server whose current state began before the
 // instant before, and reports what it did ([RestartOutcome]): a serving
-// server's session is ended and a fresh one started at once, a down server's
-// supervisor is asked for an attempt now, and either way its restart schedule
-// starts again. A server that came up, or went down, at or after before is
-// left alone, as is a name the bridge does not supervise.
+// server's session ends and a fresh one starts, a down server's supervisor is
+// asked to try now, and its restart schedule starts again. A server that came
+// up or went down at or after before, or one not supervised, is left alone.
 //
-// AN INSTANT, NOT A COMMAND, so a request is idempotent and order-free: a
-// caller that hands the same instant twice, or late, restarts exactly what it
-// would have restarted on time, and nothing that started since, which is
-// what lets the fleet's record of a request (internal/coord's MCPRestart) stand for
-// ever without restarting a server again on every node that reads it.
+// AN INSTANT, NOT A COMMAND, so a request is idempotent and order-free: the
+// same instant twice, or late, restarts only what it would have on time, so
+// the fleet's record (internal/coord's MCPRestart) can stand for ever.
 //
-// cause is what the end is told as, in the server's down sentence while it
-// comes back. It does not wait for the restart, and it does not lift
-// [Supervision.MayStart]: an attempt the owner may not make now is still held
-// back.
+// cause is the server's down sentence while it comes back. It does not wait,
+// and does not lift [Supervision.MayStart].
 func (b *Bridge) RestartBefore(name string, before time.Time, cause string) RestartOutcome {
 	b.mu.RLock()
 	s, ok := b.servers[name]
@@ -667,12 +615,10 @@ func (b *Bridge) BlockedTools(name string) []*Definition {
 // listing left out until a restart lists again; whether it is serving is
 // [Bridge.Health]'s.
 //
-// A FACT ABOUT ONE INSTANCE, never a verdict on the key. Such a key overrides
-// nothing on this instance, which is harmless where the server simply does
-// not serve that tool here (a product this seat holds no credential for, a
-// read-only switch) and a typo where no instance serves it — and only a view
-// of every instance can tell the two apart, which is why the bridge records
-// it and the per-server rows built from every instance judge it.
+// A FACT ABOUT ONE INSTANCE, never a verdict on the key: harmless where the
+// server does not serve that tool here (no credential, a read-only switch), a
+// typo where no instance serves it. Only a view of every instance tells them
+// apart, so the per-server rows built from all instances judge it.
 func (b *Bridge) UnlistedOverrides(name string) []string {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -698,18 +644,15 @@ func (b *Bridge) Registrations() []Registration {
 
 // Call runs one tool on a NAMED SERVER INSTANCE, by the server's OWN tool name.
 //
-// This is not the path a model takes — that is Tool.Call, through the
-// catalogue, under the catalogue's name. This exists for engine code that has
-// to ask one seat's server a question about that seat before any turn runs:
-// resolving an agent's account id on its own per-role Jira instance, for
-// instance. Such a caller has the instance name and the server's tool name and
-// no catalogue entry to look up, and it deliberately bypasses tool_prefix and
-// the levels, neither of which is about what the ENGINE may ask: a level
-// decides what an agent is offered.
+// A model does not take this path (that is Tool.Call, by catalogue name). It
+// is for engine code asking one seat's server about that seat before any turn
+// runs, such as resolving an agent's account id on its per-role Jira instance.
+// It bypasses tool_prefix and the levels: a level decides what an agent is
+// offered, not what the ENGINE may ask.
 //
-// A tool the server refuses is an error here, not a Result: there is no model
-// in this path to show a failure message to. A server that is down is
-// [ErrNotRunning], with what took it down.
+// A tool the server refuses is an error, not a Result: no model is here to
+// show it to. A server that is down is [ErrNotRunning], with what took it
+// down.
 func (b *Bridge) Call(ctx context.Context, instance, tool string, args map[string]any) ([]Block, error) {
 	b.mu.RLock()
 	s, ok := b.servers[instance]

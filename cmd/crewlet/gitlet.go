@@ -42,36 +42,15 @@ import (
 
 // `crewlet gitlet` — Gitlet, the engine's own git host, from the command line.
 //
-// # Four kinds of subcommand
-//
-// status and verify ASK A RUNNING NODE, through the API's /gitlet/ routes, as
-// the person the token is bound to: the repositories are rows on the code
-// log, which the data nodes keep, and a Gitlet node's cache is files that one
-// process claims, so nothing here opens either. They are node clients in
-// `objects status`'s idiom, and their views of an answer are this command's
-// own (codeRepoView, codePushView, codeVerificationView) for its reason: a
-// struct shared with the writer ties an older binary to a newer node's answer.
-// The tests serve the writer — a real node — so the two cannot drift
-// unnoticed.
-//
-// import and purge-unreachable ACT, through the act route
-// (`POST /operator/act/{tool}`) as the person the token is bound to: the
-// tools a person's assistant calls, code_import_repo and
-// code_purge_unreachable, so a request from a shell is the same request with
-// the same record. An import creates the repository, and its home Gitlet node
-// fetches the source (codeimportnode.go).
-//
-// export and `import -local` are CLIENT-SIDE: the operator's own git, run
-// with the operator's own environment — their proxy, their configuration,
-// their credentials for another host — talks to the node's git routes exactly
-// as a person's git does. export clones a repository and writes the bundle on
-// this machine; `import -local` clones another host's repository here and
-// pushes it into one the node serves, in bounded steps (codeimport.go). The
-// engine dials nothing for either ([operatorGit]).
-//
-// credential is git's credential helper for Gitlet
-// ([gitletCredential]), which export configures for every git it runs against a
-// node, and which a person configures for their own.
+// status and verify ASK A RUNNING NODE through the API's /gitlet/ routes as the
+// token's person: repositories are rows on the code log and a node's cache is
+// files one process claims, so nothing here opens either. Their views of an
+// answer are this command's own (codeRepoView, codePushView,
+// codeVerificationView): a struct shared with the writer ties an older binary
+// to a newer node. import and purge-unreachable ACT through
+// `POST /operator/act/{tool}`, as an assistant's call does. export and
+// `import -local` are CLIENT-SIDE: the operator's own git and environment talk
+// to the node's git routes; the engine dials nothing ([operatorGit]).
 
 // gitletUsage is every `crewlet gitlet` synopsis.
 const gitletUsage = `usage: crewlet gitlet <command>
@@ -376,23 +355,18 @@ type codeReadView struct {
 	Position codePosition   `json:"position"`
 }
 
-// What one answer of the code reads may carry, and the pages the CLI asks
-// for.
+// What one answer of the code reads may carry, and the pages the CLI asks for.
 //
-// A code read's page ends at gitlet.MaxPageBytes of encoded rows — closed on the
-// row that crosses the budget, and keeping that row — so an answer carries up
-// to MaxPageBytes, one row more and its envelope, whatever its row count says.
-// The CLI reads them by that bound (codeAnswerBytes,
-// [nodeClient.forCodeReads]), never by maxNodeResponseBytes, which a
-// legitimate page carries past: every byte of a ref, a protection pattern and
-// a default branch may be one JSON writes as six (`<`, `>` and `&` are legal
-// in all three), and a history page of such pushes is 5.08 MB, a listing page
-// of such repositories 4.20 MB.
+// A page ends at gitlet.MaxPageBytes of encoded rows, closed on the row that
+// crosses the budget and keeping it, so an answer carries up to MaxPageBytes
+// plus one row and its envelope. The CLI reads by that bound (codeAnswerBytes,
+// [nodeClient.forCodeReads]), never maxNodeResponseBytes, which a legitimate
+// page passes: `<`, `>` and `&` are legal in a ref, a protection pattern and a
+// default branch, and JSON writes each as six bytes.
 //
-// So a page asks for the MOST rows the reader serves of its kind
-// (gitlet.MaxReposPerPage, gitlet.MaxPushesPerPage) — the fewest requests, the
-// reader's byte budget bounding each — and a history asks for no more than
-// the pushes still wanted.
+// A page asks for the MOST rows the reader serves of its kind
+// (gitlet.MaxReposPerPage, gitlet.MaxPushesPerPage), and a history no more
+// pushes than are still wanted.
 const (
 	// codeRowBytes is the most one row of a code read encodes to: two
 	// mebibytes, above the largest TestTheCodePagesFitOneAnswer builds — a
@@ -593,22 +567,18 @@ func floorAt(at codePosition) url.Values {
 	return q
 }
 
-// codePages reads a code listing page after page — until the node has no next
-// page, visit says stop, or want rows (zero for every one) have been read —
-// handing visit each page as it came and as this build reads it, and answers
-// the positions the first and the last page were read at.
+// codePages reads a code listing page after page until the node has no next
+// page, visit says stop, or want rows (zero for every one) have been read,
+// handing visit each page as this build reads it, and answers the positions
+// the first and the last page were read at.
 //
-// ONE BARRIER A LISTING AT MOST. The first page is read at query's level, and
-// every later one at stale floored at the first page's position (floorAt): at
-// or past it, so the pages are one monotone history whichever data node
-// answers each, and with no barrier of its own. A page read at linearizable
-// appends a barrier to the code log, and the read index single-flights only
-// the reads in flight together, so a listing paged one request after another
-// at the head paid one a page — on the log whose census counts a day's
-// barriers as the people's git reads.
+// ONE BARRIER A LISTING AT MOST. The first page is read at query's level, the
+// rest at stale floored at the first page's position (floorAt), so the pages
+// are one monotone history whichever data node answers. A linearizable page
+// appends a barrier to the code log, which the census counts as the people's
+// git reads, and the read index single-flights only reads in flight together.
 //
-// Each page asks for pageMax rows — the reader's most for the kind — or, with
-// want, no more than are still wanted.
+// Each page asks for pageMax rows, or no more than want leaves.
 func codePages(ctx context.Context, client *nodeClient, path string, query url.Values, want, pageMax int,
 	visit func(raw json.RawMessage, page codeReadView) bool,
 ) (first, last codePosition, err error) {
@@ -1105,18 +1075,15 @@ func gitletVerifyTargets(ctx context.Context, client *nodeClient, named []string
 }
 
 // verifyOne verifies one repository on the node at floor and prints what it
-// found, answering whether the node's copy is clean — or not held, which has
-// nothing to be unclean — and an error only where the node serves no verify
-// at all, which is the -api's and every repository's alike.
+// found, answering whether the node's copy is clean (or not held, which has
+// nothing to be unclean) and an error only where the node serves no verify at
+// all.
 //
-// THE CHECK IS THE NODE'S OPERATION: the POST begins it and waits a moment
-// for it (host.VerifyHold), answering it ended — a small copy's — or running,
-// and the command then reads it until it ends, because a check reads every
-// byte of the repository and can outlive any proxy's read timeout. A refusal
-// the node says clears by waiting — its verify slot or the check's memory
-// held, a node stopping — is asked again after the node's own Retry-After,
-// for up to waits.refusedFor, since the node refused it having read nothing
-// and the retry costs what the refusal did.
+// The check is the node's operation: the POST begins it and waits a moment
+// (host.VerifyHold), then the command reads it until it ends, since a check
+// reads every byte and can outlive any proxy's read timeout. A refusal that
+// clears by waiting (verify slot or memory held, a node stopping) is retried
+// after the node's Retry-After, for up to waits.refusedFor: it read nothing.
 func verifyOne(ctx context.Context, client *nodeClient, name string, floor codePosition, repair, asJSON bool,
 	waits codeVerifyWaits, stdout, stderr io.Writer,
 ) (bool, error) {
@@ -1494,29 +1461,16 @@ func gitletExport(environ config.Source, args []string, stdout, stderr io.Writer
 const maxBundleHeader = maxGitOutput
 
 // checkBundle holds the git bundle at path to what a clone of it holds it to,
-// reading it once from start to end: its HEADER a v2 or v3 bundle's — no
-// prerequisite, since a bundle of every ref of a mirror has none, and a ref
-// line for at least one ref — and its PACK whole: git's `PACK` signature, a
-// version git writes, an object count, and the trailer, the hash of every
-// byte before it (SHA-1, or SHA-256 where the bundle names that object
-// format). A pack cut short or with a byte changed is caught by that one
-// hash, at hashing speed — git's hashfile rule, held by its one
-// implementation (gitlet.HashTrailer, which a Gitlet node holds its own files to),
-// so the bytes are judged here exactly as the node that serves them judges
-// its packs.
+// reading it once: its HEADER a v2 or v3 bundle's with no prerequisite and a
+// ref line for at least one ref; its PACK whole: git's `PACK` signature, a
+// version git writes, an object count, and the trailer hash of every byte
+// before it (SHA-1, or SHA-256 where the bundle names that). One hash catches a
+// cut or changed pack (gitlet.HashTrailer, which a node holds its own files
+// to). ctx is checked before every read: the export cancels it on interrupt.
 //
-// STOPPED WITH ITS CALLER: the pack is the repository's whole size, and the
-// export catches an interrupt to cancel ctx rather than die of it, so a check
-// that took no context would read on to the end of a repository-sized file
-// after the operator asked it to stop. ctx is checked before every read.
-//
-// NOT `git bundle verify`, which reads the header and the prerequisites and
-// never the pack: a bundle with eight bytes of its pack overwritten, or cut
-// short by a hundred, is "okay" to it and fails the clone with `inflate: data
-// stream error … index-pack died`. And not `git index-pack`, which would
-// inflate and hash every object — measured at 0.11–0.14 s of CPU a mebibyte
-// (gitproc's PackWorkPerMiB) — when a pack whose trailer is its bytes' hash is
-// the pack `bundle create` wrote; the clone that restores it indexes it.
+// NOT `git bundle verify`, which never reads the pack; NOT `git index-pack`,
+// which inflates every object (0.11-0.14 s CPU a MiB, gitproc's PackWorkPerMiB)
+// when a trailer hashing its bytes is what `bundle create` wrote.
 func checkBundle(ctx context.Context, path string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1720,17 +1674,13 @@ func (g operatorGit) repoURL(name string) string {
 
 // targetEnv is the environment of a git that talks to the NODE: the
 // operator's, plus GIT_TERMINAL_PROMPT=0 (a missing credential fails rather
-// than prompts), the token in CREWLET_API_TOKEN, and — numbered after every
-// setting the operator's own GIT_CONFIG_COUNT carries — two settings:
-// credential.helper EMPTY, which clears every helper the operator's
-// configuration lists for this one invocation, so a stored and stale password
-// for the same host is never sent instead; then this binary's helper SCOPED
-// TO THE NODE'S URL (credential.<base>.helper), so the token is offered to
-// the node and to nothing else — not to a host a redirect from the node's
-// address, or from a proxy in front of it, sends git to, which git asks for a
-// credential again (http.followRedirects=initial, its default) and an
-// unscoped helper would answer. A git that talks to anything else gets none
-// of this.
+// than prompts), the token in CREWLET_API_TOKEN, and two settings numbered after
+// the operator's own GIT_CONFIG_COUNT: credential.helper EMPTY, clearing every
+// helper the operator lists so a stale stored password is never sent instead;
+// then this binary's helper SCOPED TO THE NODE'S URL (credential.<base>.helper),
+// so the token goes to the node and nothing else: git asks again after a
+// redirect (http.followRedirects=initial), and an unscoped helper would answer.
+// A git that talks to anything else gets none of this.
 func (g operatorGit) targetEnv() []string {
 	n := g.configCount
 	// Appended LAST: where a key repeats, exec gives the process the last.
@@ -1803,37 +1753,17 @@ type gitCall struct {
 }
 
 // call runs the operator's git as c says, answering what it wrote to stdout
-// where nothing else read it — on a failure too, since a push's porcelain
-// lines are its answer whatever its exit — and an error quoting the end of
-// its stderr.
+// where nothing else read it (on a failure too: a push's porcelain lines are
+// its answer) and an error quoting the end of its stderr.
 //
-// ITS PROCESS GROUP IS ITS OWN, so an interrupt — the context's — ends git
-// and everything it started, the remote helper among them, with one signal.
-// EXCEPT FOR A GIT THAT MAY ASK ITS PERSON SOMETHING (c.asks) where this
-// process has a controlling terminal: git — or the ssh it starts — asks for a
-// user name and password no credential helper holds, a host key on a first
-// connection, a key's passphrase with no agent, on /dev/tty; and a process
-// group of its own is a BACKGROUND group to that terminal, which the kernel
-// stops (SIGTTIN) at its first read, so the import waited on a stopped git
-// until somebody pressed Ctrl-C. That git runs in this command's own group
-// instead, exactly as a git the person typed would: in the foreground, its
-// prompt answerable, and a Ctrl-C reaching git and ssh from the terminal as
-// it reaches this command. The context then ends git alone (SIGTERM, then
-// WaitDelay's kill), which is what its remote helper and ssh end with. Where
-// there is no terminal — a CI job, a cron — nothing can be asked, git's
-// prompt fails on its own and says so, and the call keeps its own group.
-// The node-facing calls never prompt (targetEnv: GIT_TERMINAL_PROMPT=0, and
-// this binary as the credential helper), and keep it always.
-//
-// THE READER CAN STOP IT: a stdout writer that fails ends git at its next
-// write, which meets a closed pipe, and that writer's error is the answer —
-// what stopped git, rather than the broken pipe git died of.
-//
-// THE REPOSITORY IS NAMED, never found: `--git-dir`, not a working directory
-// git discovers it from. The operator's configuration is deliberately
-// inherited, and safe.bareRepository=explicit — a hardening git has offered
-// since 2.38 — refuses every bare repository it would discover, the mirror
-// among them ("cannot use bare repository").
+// Its process group is its own, so an interrupt ends git and its remote helper
+// with one signal, EXCEPT a git that may ask its person something (c.asks)
+// where this process has a terminal: a background group is stopped (SIGTTIN)
+// at the /dev/tty prompt, so that git runs in this command's group and the
+// context ends it alone (SIGTERM, then WaitDelay's kill). Node-facing calls
+// never prompt (targetEnv). A failing stdout writer ends git at its next write
+// and its error is the answer. The repository is named by `--git-dir`:
+// safe.bareRepository=explicit (git 2.38+) refuses every discovered bare one.
 func (g operatorGit) call(ctx context.Context, c gitCall, args ...string) ([]byte, error) {
 	verb := args[0]
 	lead := make([]string, 0, 1+2*len(c.config))

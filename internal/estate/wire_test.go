@@ -437,6 +437,7 @@ func TestEveryOperationSaysWhichLogItsFloorsAreOn(t *testing.T) {
 		executorDomain:     "CREWLET_EXECUTOR_LOG",
 		accessDomain:       "CREWLET_ACCESS_LOG",
 		atlasDomain:        "CREWLET_ATLAS_LOG",
+		advisorDomain:      "CREWLET_ADVISOR_LOG",
 	}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
@@ -484,7 +485,7 @@ func TestEveryOperationNamesTheCopyItReads(t *testing.T) {
 	t.Parallel()
 	domains := []string{trackerDomain, pagesDomain, usageDomain, codeDomain,
 		identityDomain, artifactsDomain, artifactDataDomain, chatDomain, executorDomain, accessDomain,
-		atlasDomain}
+		atlasDomain, advisorDomain}
 	for _, name := range slices.Sorted(maps.Keys(registry)) {
 		spec := registry[name]
 		_, seat := seatCopyOps[name]

@@ -57,21 +57,14 @@ var (
 
 	// ErrDuplicateIdentity reports two seats claiming one external account.
 	//
-	// A contact identity is how an inbound message finds a person, and two
-	// seats declaring one id resolve DIFFERENTLY depending on who is
-	// asking: notification registration registers the identity for
-	// NEITHER seat, while every lookup that walks the chart answers the
-	// FIRST. Both people keep a correct-looking config; the second stops
-	// receiving their own mail, and an inbound message from either
-	// resolves to nobody.
+	// Two seats declaring one contact id resolve DIFFERENTLY by asker:
+	// notification registration registers it for NEITHER, every chart walk
+	// answers the FIRST. Both configs look right; the second person loses
+	// their mail.
 	//
-	// A RUNNABLE rule (see the class note above [Organization.Validate]),
-	// like the duplicate handle it is the contact-field twin of: an
-	// identity is what an inbound message is routed by, so a company
-	// carrying a collision is not running as its author reads it — one of
-	// the two people is already unreachable. Reported as a
-	// [DuplicateError] of kind [DuplicateIdentity], naming every seat that
-	// claims the account.
+	// A RUNNABLE rule (see the class note above [Organization.Validate]), the
+	// twin of the duplicate handle. Reported as a [DuplicateError] of kind
+	// [DuplicateIdentity], naming every seat that claims the account.
 	ErrDuplicateIdentity = errors.New("duplicate contact identity")
 
 	// ErrMisplacedUnitRef reports a seat declared inside a unit whose `unit:`
@@ -125,17 +118,13 @@ var (
 //
 // # Why the seat and not its name
 //
-// Because a name does not say which seat. The errors a person makes while
-// building a chart are exactly the ones that make names ambiguous: two seats
-// called "Software Engineer", a seat whose name slugifies to nothing, a seat
-// with no name at all. A caller that has to put the problem back where it was
-// written (the config layer mapping it to a path in the document) can only do
-// that by identity, so the error holds the pointer the organization was built
-// from, and the config layer keeps a map from that pointer to where the seat
-// was authored.
+// A name does not say which seat: two seats called "Software Engineer", a name
+// that slugifies to nothing, no name at all. The config layer maps the error
+// back to a path in the document by the pointer the organization was built
+// from.
 //
-// It renders exactly as the wrapped error does: the text is what an operator
-// reads, and the pointer is for the caller that has to locate it.
+// It renders exactly as the wrapped error does: the text is for an operator,
+// the pointer for the caller that has to locate it.
 type SeatError struct {
 	// Seat is the seat the rule is about, as it sits in the organization
 	// that was validated.

@@ -18,21 +18,12 @@ import (
 // as it is read ([llm.ToolHost.Spent]), and the prose as it is written
 // ([llm.Request.Send]).
 //
-// # Why as it goes, and not once at the end
-//
-// A run is a phase's whole loop now, and the host gates it while it runs: the
-// round budget counts requests, and the token budget is charged as each one's
-// usage is read, so a refusal stops the run at the next call rather than after
-// the phase has spent what it was refused. A record read only after the harness
-// exits would gate nothing.
-//
-// # What it never does
-//
-// It never puts a line of the record anywhere a person reads. A run's record
-// carries every call's arguments and every tool's result; what leaves this
-// reader is the model's prose, the calls' names and arguments for the host
-// (which has them anyway), the harness's ids and counts, and — for a failed run —
-// the harness's own failure events, by field ([harnessprofile.MCP.FailureEvents]).
+// It reads as it goes because the host gates the run while it runs: rounds count
+// requests and tokens are charged as each one's usage is read, so a refusal
+// stops the run at the next call. No line of the record reaches a person (it
+// carries every call's arguments and tool result): only the model's prose, the
+// calls for the host, the harness's ids and counts, and a failed run's failure
+// events, by field ([harnessprofile.MCP.FailureEvents]), leave it.
 type recordReader struct {
 	p    harnessprofile.Profile
 	rule *harnessprofile.Requests
@@ -726,24 +717,17 @@ func (r *recordReader) finish() {
 	r.tell(nil, turns, spends)
 }
 
-// settle reports what the run cost that nothing has reported yet — on every
-// outcome — and returns the run's whole cost.
+// settle reports what the run cost that nothing has reported yet, on every
+// outcome, and returns the run's whole cost. total is the harness's own count:
+// the remainder is the difference per figure, never below what was charged.
+// Without it, uncounted output is estimated, and with no request shown, one
+// request of the prompt sent and the answer.
 //
-// total is the harness's own count of the run, where it gave one: the remainder is
-// the difference, figure by figure, never below what was already charged.
-// Where it gave none, what is estimated instead is what the record could not
-// count: each request's output it never gave a count for, from what the request
-// wrote, and — where it showed no request at all — one request of the prompt
-// the engine sent and the answer.
-//
-// THE REMAINDER IS A REQUEST'S where exactly one request of a record that
-// carries each request's counts read none of its own, and the harness gave its
-// total: OpenCode 2.0.32 and 2.1.4 drop a step's step_finish (the final one's
-// in 13 and 12 of 20 runs, measured), and a request told without counts
-// records its round as costing nothing. That request is told again with the
-// remainder as its counts. Two or more without counts split nothing honestly,
-// and an estimate is never a request's: either way the remainder stays the
-// run's alone.
+// THE REMAINDER IS A REQUEST'S where exactly one request of a per-request-counts
+// record read none of its own and the harness gave its total: OpenCode drops a
+// step's step_finish (13 and 12 of 20 runs), so that request recorded its round
+// as free and is told again with the remainder. Two or more split nothing
+// honestly, and an estimate is never a request's.
 func (r *recordReader) settle(total *llm.Usage, answer string) llm.Usage {
 	r.mu.Lock()
 	var rem llm.Usage

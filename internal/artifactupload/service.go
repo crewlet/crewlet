@@ -87,6 +87,7 @@ type Meter interface {
 // objective meter ([objectives.Meter]), which judges each against its bound.
 type Objectives interface {
 	Record(n objectives.Name, elapsed time.Duration, answered bool)
+	Abandon(n objectives.Name, elapsed time.Duration)
 }
 
 // Deps is what a [Service] is built from.

@@ -10,17 +10,13 @@ import (
 // Alert is one monitor notification, as the engine's own payload template
 // asks Datadog to send it.
 //
-// EVERY FIELD IS OPTIONAL, and that is a decision rather than laziness. The
-// template lives in the webhook definition at Datadog, so an operator can
-// edit it, and the reconcile that writes it cannot read the token back to
-// prove it wrote the current one. A missing field is therefore a
+// EVERY FIELD IS OPTIONAL, by decision. The template lives in the webhook
+// definition at Datadog, where an operator can edit it, so a missing field is a
 // configuration mistake, and dropping a firing monitor over one is the worst
-// available response: the alert is real whether or not its priority came
-// through.
+// response: the alert is real whether or not its priority came through.
 //
-// The template that fills this is [WebhookPayload], which the reconcile
-// writes into the webhook definition and the docs publish, so the shape asked
-// for and the shape decoded cannot drift apart.
+// The template that fills this is [WebhookPayload], which the reconcile writes
+// and the docs publish, so the shape asked for and decoded cannot drift.
 type Alert struct {
 	// ID is Datadog's notification id, stable across its own retries. The
 	// webhook route claims on it, so it is the dedupe key rather than
@@ -36,19 +32,13 @@ type Alert struct {
 	// MonitorID is the monitor itself, which is what makes a trigger and
 	// its recovery ONE conversation.
 	//
-	// Datadog's $ALERT_ID, not $ID: the latter identifies the
-	// NOTIFICATION, so keying on it would make every firing its own
-	// thread and a seat would never see that this is the fourth time
-	// tonight. It was the TITLE, on the stated reasoning that "there is no
-	// $MONITOR_ID variable" — true of that spelling, and the template is
-	// this engine's own to write — so a trigger and its recovery derived
-	// different keys and landed in two threads, which is the exact
-	// opposite of what this package promises.
+	// Datadog's $ALERT_ID, not $ID: the latter identifies the NOTIFICATION,
+	// so every firing would be its own thread. Nor the title, which carries
+	// the state and would split a trigger from its recovery.
 	//
-	// Empty for an alert delivered by a webhook definition that does not
-	// carry it — one an operator wrote by hand, or this engine's own after
-	// somebody edited its payload — which is why [Prompt.PartitionKey]
-	// still falls back to the title.
+	// Empty for an alert from a webhook definition that does not carry it (a
+	// hand-written one, or this engine's own after its payload was edited),
+	// which is why [Prompt.PartitionKey] still falls back to the title.
 	MonitorID string
 
 	// Body is the monitor message with Datadog's own notification targets
@@ -193,29 +183,16 @@ func TagValues(tags []string, key string) []string {
 
 // WebhookPayload is the template the engine asks Datadog to post.
 //
-// # It lives beside the decoder on purpose
+// It lives beside [decode], its only reader: two files would drift into a field
+// arriving empty for every alert.
 //
-// Datadog sends an empty body unless the webhook definition carries one of
-// these, and the definition is written at Datadog rather than fixed by the
-// third-party app. So the "Datadog alert format" is whatever this string says it is,
-// and [decode] is the only reader of it. Two files would be two things to
-// keep equal, and the failure when they drifted would be a field that
-// silently arrived empty for every alert.
+// Every value is quoted: an unquoted $PRIORITY expanding to nothing yields
+// `"priority": ,`, not JSON, which Datadog posts anyway. [str] still accepts a
+// number, for an operator who unquoted one.
 //
-// Every value is quoted, including $PRIORITY, because an unquoted variable
-// that expands to nothing yields `"priority": ,` which is not JSON and which
-// Datadog posts anyway. [str] still accepts a number so that an operator who
-// unquoted one by hand does not lose their alerts over it.
-//
-// $TAGS is the routing input. $LINK, $EVENT_TITLE and $ALERT_SCOPE are what
-// let a prompt tell a seat where to look rather than only that something
-// happened.
-//
-// $ALERT_ID is the MONITOR and $ID is the notification, and both are here
-// because they answer different questions: the second is the dedupe key at
-// the webhook edge, and the first is what makes a trigger and its recovery
-// one conversation. Keying the thread on the title instead put them in two,
-// because a Datadog title carries the state.
+// $TAGS is the routing input. $ALERT_ID is the MONITOR and $ID the
+// notification: the second is the dedupe key at the webhook edge, the first
+// makes a trigger and its recovery one conversation.
 const WebhookPayload = `{
   "id": "$ID",
   "monitor_id": "$ALERT_ID",

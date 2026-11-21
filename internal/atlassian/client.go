@@ -67,15 +67,12 @@ const serviceAccountsPath = "/admin/account-management/v1/orgs/%s/service-accoun
 
 // apiTokensPath mints an API token for one account.
 //
-// The step Atlassian's own reference calls impossible: its documented token
-// endpoints are read and revoke only. The admin console does it through a
-// user-manage route, and that route accepts an organization API key, so this
-// engine can mint an agent's credential rather than asking a person to create
-// one and paste it in.
+// Atlassian's documented token endpoints are read and revoke only; the admin
+// console mints through a user-manage route that accepts an organization API
+// key, so the engine mints an agent's credential itself.
 //
-// The expiry field is named `expiry`. Sending `expiresAt`, the name Atlassian
-// uses elsewhere, fails with INVALID_EXPIRY and reads as though no expiry had
-// been sent at all.
+// The expiry field is `expiry`: `expiresAt` fails with INVALID_EXPIRY, which
+// reads as though no expiry had been sent.
 //
 //nolint:gosec // a URL template, not a credential
 const apiTokensPath = "/users/%s/manage/api-tokens"

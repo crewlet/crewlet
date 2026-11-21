@@ -14,34 +14,15 @@ import (
 // THE VERDICT: what the applier decided about one record on a room's message
 // subject, identically on every data node.
 //
-// # Why a message record has one
-//
-// A message record is SEQUENCED ([statelog.PatternSequenced]): it carries no
-// expectation, the log orders it, and the applier decides it at its position,
-// as a pure function of the record and the rows it holds there. That is not
-// additive, because the records do not all commute: whether a post lands
-// depends on whether a record ahead of it archived the room or took its author
-// out of a private one, whether a reaction lands on whether thirty-two other
-// emoji are already on the message, whether an edit lands on whether a delete
-// ahead of it left a tombstone. Each of those was decided at the applier and
-// told to nobody: the writer answered `applied` for a record the applier had
-// dropped, and the change feed woke seats about a post that is in no room.
-//
-// So the applier writes a verdict for every message record it consumes
-// (`chat_verdicts`), and every reader that reports what a record did reads it:
-// the writer before it answers ([Store.Post] and the other three), a retry the
-// operation ledger answers, the change feed before it derives a wake
-// ([Translator]), and the applier itself before it decides a second copy of an
-// operation. ADR-0046 is the decision.
-//
-// # Why not arbitrated instead
-//
-// An expectation on the message subject would serialise the busiest subject in
-// the company behind itself, and its failure is the one a chat system may not
-// have: `ErrConflict` on a message somebody typed, because somebody else in the
-// room said something at the same moment. Sequencing keeps every post landing
-// in the order it was said; what the applier refuses is refused because of what
-// the room IS at that position, never because of who else spoke.
+// A message record is SEQUENCED ([statelog.PatternSequenced]) and the records do
+// not all commute (a post lands by whether a record ahead archived the room, a
+// reaction by whether thirty-two emoji are on the message). A decision told to
+// nobody made the writer answer `applied` for a dropped record and the feed wake
+// seats for a post in no room. So the applier writes a verdict per record
+// (`chat_verdicts`), read by the writer, the operation ledger, the change feed
+// ([Translator]) and the applier itself. ADR-0046. Not arbitrated: an
+// expectation would serialise the busiest subject and fail with `ErrConflict`
+// a message somebody typed because someone else spoke at the same moment.
 
 // Verdict is the applier's decision about one message record.
 type Verdict string
@@ -156,26 +137,17 @@ const verdictDropped Verdict = "dropped"
 const verdictLost Verdict = "lost"
 
 // verdictIn reads, inside tx, what this node's applier decided about operation
-// opID, whose record is at: the verdict its FIRST copy was given, which is the
-// operation's.
+// opID, whose record is at: the verdict its FIRST copy was given.
 //
-// FOUR ANSWERS, and the last two are why it reads the prefix and the prune's
-// watermark. A verdict row is a decision. No row on a snapshot that has not
-// applied everything through at ([statelog.Prefix.Applied]) — the record not
-// reached yet, or RETAINED, which moves the checkpoint without writing a row —
-// is no answer: decided false, and the caller asks another node or asks again.
-// No row on a snapshot that HAS is one of two absences that leave the same
-// bytes: a record a gate dropped — written by a node the fleet evicted before
-// it, which wrote nothing here or anywhere ([verdictDropped]) — or a verdict
-// [VerdictRetention] let go. The prune records the highest position it removed
-// (writeVerdict, apply_verdict.go), so a record above it was never pruned and
-// its absence is a gate's; one at or below it may have been, and its absence
-// vouches for nothing ([verdictLost]). That is the framework's own reading of
-// a ledger row a sweep may have taken ([statelog.Rows.LostBefore]), and for the
-// same reason: answered `dropped`, a month-old post that may be in its room
-// would have been told to the change feed as one nobody said. Only a reader a
-// month behind the record meets it — the writer reads its own the moment its
-// applier reaches it, and a retry is answered inside the mint horizon.
+// FOUR ANSWERS; the last two are why it reads the prefix and the prune's
+// watermark. No row on a snapshot short of at ([statelog.Prefix.Applied]), the
+// record not reached or RETAINED, is no answer: decided false, ask again. No
+// row on a snapshot that HAS applied it is a record a gate dropped
+// ([verdictDropped]) or a verdict [VerdictRetention] let go. The prune records
+// the highest position it removed (writeVerdict, apply_verdict.go): above it
+// the absence is a gate's, at or below it vouches for nothing ([verdictLost],
+// as [statelog.Rows.LostBefore]), since `dropped` would tell the change feed
+// that a month-old post still in its room was one nobody said.
 func verdictIn(ctx context.Context, tx *sql.Tx, opID string, at statelog.Position) (
 	Verdict, bool, error) {
 
@@ -212,19 +184,15 @@ func verdictIn(ctx context.Context, tx *sql.Tx, opID string, at statelog.Positio
 // Decisions is what the change feed reads before it derives a wake: what this
 // node's applier decided about a record.
 //
-// A WAKE IS DERIVED FROM A DECISION WHERE ONE HAS BEEN TAKEN: a post the applier
-// refused is in no room, and a seat woken for it would open a room to answer a
-// message nobody can read. The feed runs only where the estate is held (its
-// group needs data), so the applier it asks is this node's own.
+// A WAKE IS DERIVED FROM A DECISION WHERE ONE HAS BEEN TAKEN: a seat woken for
+// a refused post would answer a message nobody can read. The feed runs only
+// where the estate is held, so the applier it asks is this node's own.
 //
-// AND FROM THE RECORD WHERE NONE HAS, which is the opposite of what a refusal
-// suggests and deliberate: the record carries its own routing snapshot so that
-// the company's notifications never wait on any one node's applier, and a feed
-// that held every wake until its own copy caught up would make them do exactly
-// that — a node catching up after a restart, or one holding a record it cannot
-// decode, would stop the whole fleet's chat wakes behind the record at the head
-// of its consumer. What that costs is a wake for a post refused in a race this
-// node has not applied yet, which the woken seat finds is not there.
+// AND FROM THE RECORD WHERE NONE HAS, deliberately: the record carries its own
+// routing snapshot so notifications never wait on one node's applier, which a
+// node catching up or holding a record it cannot decode would otherwise stall
+// fleet-wide. The cost is a wake for a post refused in a race this node has not
+// applied yet; the woken seat finds it not there.
 type Decisions interface {
 	// Decided is the verdict of operation opID, whose record is at, and
 	// whether this node has one to give. ok false is no answer — not

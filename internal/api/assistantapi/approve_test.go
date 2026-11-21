@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -549,7 +550,8 @@ func TestAComplianceReadTheLogRefusedIsACondition(t *testing.T) {
 			s := newSurface(t)
 			s.audits.refuse, s.audits.unread = c.refuse, c.unread
 			r := httptest.NewRequest(http.MethodPost, auditPath,
-				strings.NewReader(`{"protocol_version": 1, "reason": "Legal hold"}`))
+				strings.NewReader(`{"protocol_version": `+
+					strconv.Itoa(wire.ProtocolVersion)+`, "reason": "Legal hold"}`))
 			r = r.WithContext(approvaltest.As(r.Context(), admin(fresh)))
 			r.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()

@@ -11,20 +11,12 @@ import (
 // refused, and the prompt-size meter. These are the events an operator reads
 // when a turn behaved oddly but did not fail.
 //
-// Two types are GONE rather than merely unpublished, and the difference
-// matters: `execute.missing_tool` and `phase.tool_activated` were both defined
-// to detect PLAN INCOMPLETENESS — "the executor found a tool the plan did not
-// list" — and there is no plan phase. `ExecuteMissingTool` carried the plan's
-// own tool list as `plan_tools`. Neither ever had a producer, so no store holds
-// a row of either, and nothing had to be migrated.
-//
-// The question each was asking is either dead or already answered better. Which
-// tools a turn reached for is the `activate_tool` ledger on its own phase card,
-// verbatim, in the round that asked; a name that resolved to nothing is a
-// failed row in that same ledger. An event that fires on every non-trivial turn
-// and means "discovery worked normally" is a row per activation, forever, for a
-// question nobody can now ask of it — the docs had already downgraded it to
-// "Routine", which is the shape of a signal that has stopped being one.
+// There is no `execute.missing_tool` or `phase.tool_activated`: both detected
+// PLAN INCOMPLETENESS, and there is no plan phase. Which tools a turn reached
+// for is the `activate_tool` ledger on its phase card, verbatim, in the round
+// that asked; a name that resolved to nothing is a failed row in that ledger.
+// An event meaning "discovery worked normally" would be a row per activation,
+// forever, for a question nobody can ask of it.
 
 func init() {
 	events.Register[ToolSkillGuardBlocked]()
@@ -96,34 +88,17 @@ func (e ToolSkillGuardBlocked) SummaryFor(actor string) string {
 }
 
 // PromptSize reports one phase's final prompt size, so prompt-slimming progress
-// is measurable over time rather than argued about.
+// is measurable. A SEPARATE ROW rather than a derivation: counting
+// AgentPhaseCompleted's verbatim prompts means hauling them across the driver,
+// the cost schema/0015 took the spend columns out of the payload to avoid.
 //
-// A SEPARATE ROW rather than a derivation, and that is the whole reason it
-// exists: AgentPhaseCompleted carries both prompts verbatim, so the size is
-// technically already stored — and reading it back means hauling every phase's
-// whole prompt and response across the driver to count them in Go, which is
-// exactly the cost schema/0015 promoted the spend columns out of the payload
-// to avoid. The measured integers — the text a phase opens with, the tool
-// definitions offered alongside it, how many there were, and one approximation
-// over the lot — answer the question at a scan.
+// IT MEASURES ONE PHASE'S OPENING FRAME, not the billed input (round N also
+// carries every prior tool result), and not every phase: a delegated worker
+// and the round-cap judge publish none.
 //
-// WHAT IT DOES NOT MEASURE, because a meter read as more than it is, is worse
-// than no meter. This row is one phase's OPENING frame: not the whole phase's
-// billed input, which on round N also carries every prior round's tool results,
-// and not every phase in the engine — a delegated worker and the round-cap
-// judge publish none of these at all.
-//
-// BYTES, NOT CHARACTERS, and the keys say so. The measurement is len() of a
-// Go string, which is bytes. The units coincide on ASCII and diverge on
-// exactly the prompts worth measuring — a roster of non-Latin names, a Slack
-// thread with emoji in it, a CJK knowledge block — where a UTF-8 rune is two
-// to four bytes, so a figure labelled as characters would silently become a
-// different quantity per company. The byte is the honest one here anyway: it
-// is what a vendor bounds a request body in and what this engine can measure
-// without a tokenizer.
-//
-// Addressed like every other phase event, so the size a turn actually paid is
-// readable on that turn rather than only in aggregate.
+// BYTES, NOT CHARACTERS: len() of a Go string. The units diverge on exactly the
+// prompts worth measuring (non-Latin names, emoji, CJK), and a byte is what a
+// vendor bounds a request in and we can measure without a tokenizer.
 type PromptSize struct {
 	Agent    string `json:"agent_id"`
 	RoleName string `json:"role"`
@@ -146,23 +121,12 @@ type PromptSize struct {
 	SystemBytes int `json:"system_bytes"`
 	UserBytes   int `json:"user_bytes"`
 
-	// ToolBytes is the COMPACT JSON size of the tool-definition array
-	// offered with the prompt, in ONE CANONICAL SHAPE — `{name,
-	// description, parameters}` per tool — chosen so a single number means
-	// the same thing whichever harness served the phase, and so a seat whose
-	// fallback chain moved it between harnesses is comparable with itself.
-	//
-	// SO IT IS A FLOOR, and the backend never sends exactly it: every harness
-	// lists those definitions over MCP — a phase on this host from its tool
-	// session, the executor's run in its box from the bridge — and hands
-	// them to its model in its own vendor's wrapping. The same property
-	// ApproximateTokens' ratio has, for the same reason: a figure that
-	// changed shape with the harness could not be compared across a chain or
-	// across builds, and comparison is what this row exists for.
-	//
-	// THE OPENING ARRAY. A mid-phase activate_tool adds a tool the harness lists
-	// from then on, so a phase that promotes three MCP tools sends more than
-	// this says.
+	// ToolBytes is the COMPACT JSON size of the tool-definition array offered
+	// with the prompt, in ONE CANONICAL SHAPE (`{name, description,
+	// parameters}` per tool), so one number means the same whichever harness
+	// served the phase. It is a FLOOR: each harness wraps the definitions in its
+	// vendor's own shape. And it is the OPENING array: a mid-phase activate_tool
+	// adds tools the harness lists from then on.
 	ToolBytes int `json:"tool_bytes"`
 
 	// ToolCount is how many definitions those bytes are, because a

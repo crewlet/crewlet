@@ -47,32 +47,26 @@ const (
 
 	// ClassAppOrAsked — a work item somebody may be ASKED about. Whoever
 	// holds the row's app, OR the person an open ask on the item names
-	// ([Object.Asked]): a colleague who put a question to somebody needs
-	// them to be able to read it and answer, and a person who answers
-	// questions is not thereby somebody who uses Worklet.
+	// ([Object.Asked]): somebody asked a question must be able to read and
+	// answer it without using Worklet.
 	//
-	// THE ASKED ARM IS NARROW BY CONSTRUCTION. It admits only a caller an
-	// OPEN ask names, and only once a surface has read the item and
-	// resolved its asks — an object nobody has read yet is answered
-	// [ErrUnresolved] for a caller without the app, so the surface reads the
-	// row and decides again — and the tracker's writer still refuses an
-	// answer from anybody but the person asked. After answering, the item
-	// is the tracker's again.
+	// THE ASKED ARM IS NARROW. It admits only a caller an OPEN ask names,
+	// and only once a surface has read the item and resolved its asks; an
+	// unread object is [ErrUnresolved] for a caller without the app, so the
+	// surface reads the row and decides again. The tracker's writer still
+	// refuses an answer from anybody but the person asked.
 	ClassAppOrAsked Class = "app_or_asked"
 
 	// ClassSelf — the acting principal's OWN working state: its diary, its
 	// episodes, its skills, its onboarding marker, a tool skill it loads
 	// into this session, its executor sessions.
 	//
-	// NO ADMIN PATH, which is what makes it its own class rather than
-	// [ClassOwnRecord]. internal/agent/builtin states the boundary these
-	// verbs rest on: they take no handle at all, because "an agent
-	// recalling another's episodes or writing into another's diary would
-	// make the per-seat memory a shared one". Somebody else READING a seat's
-	// memory is a different verb with a rule of its own
-	// ([ActionSeatTrailRead]), and admitting it here too would be a second
-	// answer to one question — which is the drift this whole package
-	// exists to remove.
+	// NO ADMIN PATH, which makes it its own class rather than
+	// [ClassOwnRecord]. internal/agent/builtin states the boundary: these
+	// verbs take no handle at all, or per-seat memory would become shared.
+	// Somebody else READING a seat's memory is a different verb with its
+	// own rule ([ActionSeatTrailRead]); admitting it here too would be a
+	// second answer to one question, the drift this package exists to remove.
 	ClassSelf Class = "self"
 
 	// ClassOwnRecord — a person's own inbox and pins. The owner, or the
@@ -90,21 +84,15 @@ const (
 	ClassOwnOrLead Class = "own_or_lead"
 
 	// ClassSavedView — a saved view, whose authority follows what the view
-	// IS rather than who is asking. A view naming an OWNER is that
-	// person's own strip and appears in nobody else's, so it is their
-	// record; a view naming none is SHARED on its container — everybody
-	// sees it as a tab, and `default` takes the container's landing tab
-	// from whichever view held it — so it is that container's lead.
+	// IS rather than who is asking. A view naming an OWNER is that person's
+	// own record; a view naming none is SHARED on its container, so it is
+	// that container's lead.
 	//
-	// ONE CLASS AND NOT TWO VERBS, which is the whole reason it exists:
-	// the table is keyed on the ACTION, so two verbs would let the CALLER
-	// choose which question is asked, and a caller writing a shared view
-	// would ask the personal one. The payload decides, and there is
-	// nothing to pick.
-	//
-	// It reads the container's KIND for [Chart.LeadsUnit]'s reason — a
-	// project key and a unit key are two relations — and the WORKSPACE
-	// container reaches no relation at all, so a company-wide tab is the
+	// ONE CLASS AND NOT TWO VERBS: the table is keyed on the ACTION, so two
+	// verbs would let the CALLER choose which question is asked, and a
+	// caller writing a shared view would ask the personal one.
+	// It reads the container's KIND for [Chart.LeadsUnit]'s reason; the
+	// WORKSPACE container reaches no relation, so a company-wide tab is the
 	// admin path alone.
 	ClassSavedView Class = "saved_view"
 
@@ -116,46 +104,28 @@ const (
 
 	// ClassTidy — taking one's own work out of circulation and putting it
 	// back: trashing, restoring and renaming a page, removing and restoring
-	// a work item, archiving a chat room and opening it again. Its
-	// container's lead, the admin path, OR whoever WROTE it ([Object.Author]:
-	// a page's creator, an item's reporter, a room's creator). A unit's room
-	// has its UNIT as its container, so the unit's lead is the lead asked; a
-	// named room has none, so nobody but its creator and admin tidies it.
+	// a work item, archiving and reopening a chat room. Its container's
+	// lead, the admin path, OR whoever WROTE it ([Object.Author]). A unit's
+	// room has its UNIT as container; a named room has none, so only its
+	// creator and admin tidy it.
 	//
-	// THE AUTHOR ARM IS WHAT MAKES IT ITS OWN CLASS rather than
-	// [ClassDestructive]. Somebody who filed a duplicate or drafted a page in
-	// the wrong place should not need a lead to tidy it up, and a container
-	// lead taking a colleague's work out of their project is a different
-	// gesture from that colleague withdrawing their own. What the author
-	// arm does NOT reach is anybody else's work: a subtree of items under
-	// theirs stays the lead's (the tool says so), and a PURGE, which
-	// nothing undoes, stays admin's.
+	// THE AUTHOR ARM MAKES IT ITS OWN CLASS rather than [ClassDestructive]:
+	// withdrawing one's own work needs no lead. It does NOT reach anybody
+	// else's: a subtree of items under theirs stays the lead's, and a PURGE,
+	// which nothing undoes, stays admin's.
 	ClassTidy Class = "tidy"
 
 	// ClassSubtree — the org chart: the seats and units of the company
 	// document. The admin path, or a LEAD over the part concerned: a unit
-	// is in a principal's SUBTREE when they are the effective lead of it or
-	// of any unit above it ([Chart.LeadsUnit]), and [Object.Container]
-	// names the unit a change reaches — empty for the company root, which no
-	// unit holds and so is nobody's subtree, refused [ReasonNotLead] like a
-	// unit somebody else leads.
-	//
-	// ONE QUESTION PER PLACE, AND THE SURFACE ASKS IT OF EVERY PLACE A
-	// WRITE REACHES, on both sides of it (internal/api/configapi): where a
-	// seat or a unit was, where it is now and what its references name,
-	// while a project, space, channel, address or contact id it states is
-	// the company's ([ActionConfigWrite]) like a credential. That is what
-	// keeps a lead inside their own team — a lead who could hand their
-	// unit to somebody else, make a report the CEO's manager or declare a
-	// project as their team's would gain authority outside it through the
-	// very relations this package decides everything else by.
-	//
-	// A WRITE NOBODY HAS READ YET ([Object.Unresolved]) is admitted to
-	// anybody bound to a seat, the only kind of principal a unit can name
-	// as its lead, so the surface can read the body and decide on what it
-	// changes; somebody bound to none leads nothing and is refused before
-	// it is read. The gate asks NO CHART: "leads somebody" would refuse a
-	// lead alone in the team they are about to staff.
+	// is in a principal's SUBTREE when they effectively lead it or any unit
+	// above it ([Chart.LeadsUnit]); [Object.Container] names the unit a
+	// change reaches, empty for the company root ([ReasonNotLead]).
+	// The surface asks it of every place a write reaches, before and after
+	// (internal/api/configapi), or a lead could hand their unit away and
+	// gain authority outside their team. A WRITE NOBODY HAS READ YET
+	// ([Object.Unresolved]) is admitted to anybody bound to a seat so the
+	// surface can read it and decide; the gate asks NO CHART, or a lead
+	// alone in a team they are about to staff would be refused.
 	ClassSubtree Class = "subtree"
 
 	// ClassDestructive — moving a task out of its project and removing a
@@ -179,15 +149,10 @@ const (
 	// reading it, their credentials, their sessions. The person the row is
 	// ABOUT, or admin.
 	//
-	// THE OBJECT IS A PERSON ID, never a login or a handle — this is the
-	// one place in the table where that is true, and it is forced: the
-	// identity estate keys on an id precisely because a person changes
+	// THE OBJECT IS A PERSON ID, never a login or a handle — the one place
+	// in the table where that holds, and it is forced: a person changes
 	// their login, and a self check against a mutable name would open
 	// somebody else's row the day they swapped.
-	//
-	// ONE CLASS where there were two: a directory READ admitted an auditor
-	// beside the people manager, and a directory GESTURE did not, and with
-	// both of those folded into admin the two rules said the same thing.
 	ClassDirectory Class = "directory"
 
 	// ClassShared is one artifact, decided by the caller's ROLE on it, the
@@ -231,66 +196,14 @@ var relationClasses = []Class{
 //
 // # The order of the checks is the contract
 //
-// STAGE FIRST, because a principal part-way through enrolment holds
-// permissions it may not yet use, and every rule below would happily honour
-// them.
-//
-// THEN THE CLASS, and an action with no class is REFUSED rather than allowed
-// or passed through. It is the one refusal that is a build mistake rather than
-// an authority fact: a verb reached this function without a row, and the
-// alternative — a default — is how a new verb ships ungated. The completeness
-// walk in this package's tests is what makes that refusal a build failure
-// instead of a production one, and [Router.Handle] refuses such an action at
-// MOUNT time so no HTTP route can reach this arm at all.
-//
-// IT CARRIES NO ERROR, which is the opposite of what it first looked like it
-// wanted. An error would make [Decision.Unknown] true, and unknown means "ask
-// me again" — so a verb with no rule would answer 503 to a request that can
-// never succeed, on every retry, for ever. The reason is a closed value a
-// caller can branch on; that is what it is for.
-//
-// THEN THE HUMAN-ONLY, SEAT-ONLY AND SEATED BARS, which are facts about the
-// VERB and therefore decided before any class reads any relation — see
-// [rule.humanOnly], [rule.seatOnly] and [rule.seated] — and the PERSON-PRESENT
-// bar where it
-// covers every arm, for the same reason: a machine token is refused a verb
-// that needs somebody at a keyboard before any class weighs what it carries
-// ([rule.presence]). Where the bar spares the self arm it is asked once the
-// class has said which arm admitted. One exception keeps a bar from naming
-// what it should not: an artifact the caller holds no relation to is answered
-// not found, exactly as the shared class answers them ([concealed]).
-//
-// THEN THE ASSISTANT'S BARS, for the same reason and with the same
-// concealment ([assistBar]): a request made through the Dashboard Assistant
-// is refused a verb it never takes, and, under a read grant, a row it only
-// carries as an approved request or a row that needs a person present.
-//
-// THEN A SEAT GRANT, where the row names one, and for an AGENT only: its role
-// carrying the grant is the whole of its answer ([rule.seatGrant]), and the
-// class below never reads it — a seat holds no permission the class could
-// admit it on, and an agent the grant refuses is told so rather than that it
-// lacks admin. Every other principal goes on to the class.
-//
-// THE ADMIN PATH IS CHECKED BEFORE THE CHART, on every class that has one,
-// because the chart can fail and the permission cannot: an administrator must
-// not be told "I cannot tell" by a node that is behind. [ClassShared] asks an
-// administrator's relations first, so an admission a share already makes is
-// not recorded as an override, and still decides the admin path before any
-// chart failure could reach the answer.
-//
-// THE ROW'S APP IS ASKED AFTER THE RELATION ([withApp]), so a refusal names
-// what would actually admit: a lead short of the app is told the app, and a
-// caller the relation refused is told admin. A caller short of the app is
-// never answered unknown on a relation row, because no answer the chart could
-// give would admit them.
-//
-// AND THE PROOF LAST, at now: a verb whose row asks for a recent proof of
-// identity refuses an ADMITTED principal whose proof is older than that
-// window ([ReasonStepUp], naming the window in [Decision.Recency]). Last,
-// because every earlier answer is one a fresher proof would not change.
-//
-// A GESTURE OF SEVERAL DECISIONS is answered in this same order by [Combine],
-// so a write decided part by part is refused as one question would have been.
+// Stage first (a half-enrolled principal holds permissions it may not use).
+// Then the class: none is REFUSED (a build mistake the completeness test and
+// [Router.Handle] catch), with NO error: [Decision.Unknown] would 503 forever. Then the verb's bars ([rule.humanOnly], [rule.seatOnly],
+// [rule.seated], [rule.presence] before the class, or after it where the bar
+// spares the self arm; [assistBar], [concealed]), a seat grant
+// ([rule.seatGrant]; an agent's whole answer), the class (admin path before
+// the chart, which can fail; the row's app after the relation, [withApp]), the
+// step-up proof last ([ReasonStepUp]). [Combine] keeps the order.
 func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Chart,
 	now time.Time) Decision {
 
@@ -389,45 +302,15 @@ func decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 // assistBar is the bar a request made through the Dashboard Assistant meets
 // on this row, and whether it meets one (ADR-0052).
 //
-// THE CLASS OF THE CREDENTIAL DECIDES, NEVER ITS SPELLING: a principal whose
-// [iam.Principal.Via] names the assistant's class is the assistant's, whether
-// or not what follows parses, exactly as internal/iamdomain reads a machine
-// token's. [iam.Principal.Assisted] answers false for a malformed name, and a
-// bar keyed on it would admit the assistant through any row whose grant id
-// it got wrong.
-//
-// TWO BARS, BOTH FACTS ABOUT THE VERB AND THE GRANT, so both are asked before
-// the class, beside the person-present bar they mirror:
-//
-//   - a verb the assistant never takes ([assistantNever]) is
-//     [ReasonAssistRefused]. The zero class reads as never, so a row nobody
-//     decided fails closed here as well as failing the build;
-//   - a read grant on a row the assistant only carries as an approved
-//     request, or on a row needing a person at the keyboard on ANY arm, is
-//     [ReasonAssistScope]. Any scope but exec reads as read, so a grant whose
-//     scope is missing or unknown reaches reads alone.
-//
-// A PERSON-PRESENT ROW IS ADMITTED TO AN EXEC GRANT, and that is the presence
-// it asks for rather than an exception to it. The row keeps a machine token
-// out because a token proves nobody is at a keyboard; an exec grant carries
-// exactly one request whose server-rendered preview the person approved from
-// their own browser, a moment ago, under their own session and Origin, at the
-// step-up the row asks (ADR-0051). That approval IS the person at the
-// keyboard, deciding this request. A read grant carries no such gesture, so it
-// is refused every presence row, the self arm of a row that spares it for a
-// machine token included.
-//
-// BEFORE THE CLASS rather than after it admits, unlike the step-up: no answer
-// the chart could give would lift either bar, and asked after the class a
-// node that could not read its chart would answer "ask me again" (503) to a
-// grant that can never take the verb. And an exec grant is not held to the
-// one verb its proposal named, because a write asks dotted verbs from inside
-// its tool; the request guard binds an exec grant to the one request the
-// person approved, which is what limits it to one write.
-//
-// A CHECK OF AN APPROVED ROW IS A READ GRANT'S TOO ([IsCheck], ADR-0055): it
-// stores nothing, so it is the preview's question of the route, asked before
-// any card is drawn. The person-present bar still holds for it.
+// THE CREDENTIAL'S CLASS DECIDES, NEVER ITS SPELLING: a [iam.Principal.Via]
+// naming the assistant's class is the assistant's even if the rest does not
+// parse. Two bars, asked before the class (no chart answer lifts them): a
+// verb the assistant never takes ([assistantNever]; the zero class fails
+// closed) is [ReasonAssistRefused]; a read grant (any scope but exec) on an
+// approved-request or person-present row is [ReasonAssistScope]. An EXEC
+// grant is admitted to a person-present row: its one request was approved
+// by the person in their own session at the step-up (ADR-0051), which IS the
+// presence. A check of an approved row is a read's ([IsCheck], ADR-0055).
 func assistBar(p iam.Principal, a Action, r rule, check bool) (Decision, bool) {
 	if !strings.HasPrefix(p.Via, iam.AssistPrefix) {
 		return Decision{}, false
@@ -456,26 +339,17 @@ func readMethod(method string) bool {
 	return method == http.MethodGet || method == http.MethodHead
 }
 
-// concealed is a bar on the VERB (an agent taking a person's verb, a person
-// taking an agent's, a credential acting as no seat taking a verb made as
-// one, a token taking one that needs somebody present) answered for the
-// object it was asked of: the bar itself, except where the object is an
-// artifact the caller holds NO RELATION to, which is answered exactly as
-// [ClassShared] answers such a caller, not found. Every bar takes it, so a
-// bar on any verb passes one rule whichever verbs carry it today.
+// concealed answers a bar on the VERB (an agent taking a person's verb, a
+// token taking one needing somebody present, and so on) for the object it was
+// asked of: the bar itself, except where the object is an artifact the caller
+// holds NO RELATION to, which is answered as [ClassShared] answers such a
+// caller, not found. Every bar takes it.
 //
-// THE BAR WOULD OTHERWISE BE AN EXISTENCE ORACLE. A surface reads the head
-// before it decides, so an id nothing holds is answered 404 there, and a bar
-// rendered as a 403 for an existing artifact tells a caller with no relation
-// that a private artifact exists (03 section 2.7: a caller with no relation is
-// answered as an unknown id). The relations are asked only on that path, and
-// the bar keeps its own name for everybody the artifact is disclosed to (its
-// audience and an administrator), so a person is still told the verb is not a
-// token's, and an agent that it is not a seat's.
-//
-// A RELATION THE CHART COULD NOT ANSWER is unknown rather than either answer:
-// the bar names the artifact's existence, the not found denies it, and the
-// node cannot tell which of the two is true for this caller.
+// THE BAR WOULD OTHERWISE BE AN EXISTENCE ORACLE: surfaces answer an unknown
+// id 404, so a 403 for an existing artifact tells a caller with no relation
+// that a private one exists (03 section 2.7). The bar keeps its own name for
+// everybody the artifact is disclosed to (audience, administrator). A relation
+// the chart could not answer is unknown: the node cannot tell which is true.
 func concealed(ctx context.Context, p iam.Principal, r rule, o Object, chart Chart,
 	bar Decision) Decision {
 
@@ -821,27 +695,13 @@ func decideSeatGrant(ctx context.Context, p iam.Principal, grant SeatGrant, char
 // withApp holds a RELATION class's decision to the row's app ([rule.app]).
 //
 // AFTER THE CLASS, so the refusal names exactly what would admit. A caller
-// the relation admitted — the owner, a lead, an author — and who lacks the
-// app is one app short, and told so. A caller the relation would only have
-// been TOLD TO RESOLVE ([ErrUnresolved]) and who lacks the app is refused the
-// same way, before anything is read: such a caller is never let through to a
-// directory lookup or a row read the app would still refuse. A caller the
-// relation refused is told admin, its admin path, which already covers every
-// app.
-//
-// AND A CHART THAT COULD NOT ANSWER CANNOT ADMIT a caller the app refuses, so
-// that caller is refused naming the app rather than answered unknown. Every
-// arm of a row that names an app needs the app — the owner's, a lead's and an
-// author's beside their relation, and the admin path through [iam.Expand],
-// which is checked before the chart — so whatever the chart would have said,
-// the answer was already no. Left unknown, it was a 503 telling a caller to
-// come back to a refusal: a person holding no app who leads a unit, asking
-// for a report's queue while the node applied a revision.
-//
-// UNCHANGED for a row naming no app, for a class that is not a relation
-// (the app classes decide on the app themselves), and for a caller who holds
-// the app — an administrator among them, through [iam.Expand] — whose unknown
-// stays unknown, because for them the chart's answer is the decision.
+// the relation admitted, or would only have told to RESOLVE ([ErrUnresolved]),
+// who lacks the app is one app short, refused before anything is read; one the
+// relation refused is told admin, which covers every app. A chart that could
+// not answer cannot admit a caller the app refuses (every arm needs the app,
+// admin through [iam.Expand]), so unknown would be a 503 for a sure no.
+// UNCHANGED for a row naming no app, a non-relation class, and a caller
+// holding the app, whose unknown stays unknown.
 func withApp(p iam.Principal, r rule, d Decision) Decision {
 	if r.app == "" || !slices.Contains(relationClasses, r.class) || p.Can(r.app) {
 		return d

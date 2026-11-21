@@ -8,19 +8,15 @@ import (
 
 // TestTheSocketDegradesOnTheSameSetReadyRefusesOn.
 //
-// Three different things are called a posture and this is the boundary between
-// two of them: the NODE posture the health body carries, and the FRAME posture
-// one socket is served in. The set is read from [divergedPostures] rather than
-// restated, because a node whose copy of the company is wrong takes itself out
-// of rotation AND stops pushing that copy at the tabs still watching. Written
-// twice, a node could leave rotation while its dashboards carried on rendering
-// what it held — which is the exact pair of facts an operator is trying to
-// reconcile when they look.
+// This is the boundary between the NODE posture the health body carries and
+// the FRAME posture one socket is served in. The set is read from
+// [divergedPostures], not restated: written twice, a node could leave rotation
+// while its dashboards carried on rendering the wrong company it held.
 //
-// `wait` and `isolated` stay LIVE for the reason /ready stays ready on them:
-// wait is ordinary propagation during a rollout, and isolated means no node
-// applied the revision, so degrading there would blind every operator at the
-// moment the fleet most needs watching.
+// `wait` and `isolated` stay LIVE as /ready stays ready on them: wait is
+// ordinary rollout propagation, and isolated means no node applied the
+// revision, so degrading would blind operators when the fleet most needs
+// watching.
 func TestTheSocketDegradesOnTheSameSetReadyRefusesOn(t *testing.T) {
 	t.Parallel()
 	for _, status := range []string{"shed", "stuck"} {

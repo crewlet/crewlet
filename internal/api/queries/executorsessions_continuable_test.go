@@ -170,6 +170,17 @@ func liveSession(harness string) (executordomain.Session, sandbox.PendingRun) {
 		SessionID: "s-1", LaunchSeq: 2, Capture: &kept, Kept: &kept, BoxSince: at.Add(-time.Hour)}
 }
 
+// overtakenBy is the final take of save's job at the place after save, refused
+// at now: a read that collected the job while save was still being kept, whose
+// keep the store then refused.
+func overtakenBy(save sandbox.SessionCapture, now time.Time) *sandbox.SessionCapture {
+	final := save
+	final.CaptureSeq, final.State, final.Final, final.Interrupted = save.CaptureSeq+1, sandbox.CaptureRefused, true,
+		false
+	final.Object, final.At, final.Reason = "", now, "the object store had no room for the session"
+	return &final
+}
+
 // continuableSources answers the sessions questions over rows, deciding each
 // row's continuity off runs and a relaunch of ana's turns on a Claude Code
 // member ([claudeTarget]).
@@ -207,28 +218,16 @@ func decided(row queries.SessionRow) string {
 }
 
 // A SESSION'S ROW SAYS WHICH LAUNCH WOULD CONTINUE IT, AND WHETHER, AS THAT
-// LAUNCH DECIDES IT. Asked of the one decision that launch takes, over the
-// turn's row on the log, its run's record, its conversation's head as the page
-// named it and the member the launch is launched on: a live turn whose job kept
-// the capture the row names, which that member's runner restores, is
-// continuable by a relaunch in any box, with no reason; a session another
-// harness wrote, which the member's runner does not take up, is not continued
-// from its capture — and, its parked box of that other harness, nowhere — saying
-// why; an ended turn's session that is its conversation's head is the next
-// turn's, continuable in any box where the member restores it; and a live turn
-// whose end is owed, whose run's ending is decided, or whose run is over, is the
-// next turn's too, undecided until its end is on the log. A whole page reads the
-// coordination store ONCE, and once more for the one live row the listing does
-// not hold, and asks the node holding the seat ONCE, about the two live rows a
-// relaunch decides, each by its turn, and the head the next turn decides, by no
-// turn; one session read alone reads its own turn's record and asks about its
-// own turn's session, and nothing else.
+// LAUNCH DECIDES IT. A live turn whose job kept a capture the launch member's
+// runner restores is continuable in any box; a session another harness wrote
+// is not, saying why. An ended head is the next turn's, as is a live turn whose
+// end is owed or decided, undecided until its end is on the log. A page reads
+// the coordination store ONCE (plus once for the live row the listing lacks)
+// and asks the seat's node ONCE; a session read alone asks about its own turn.
 //
-// Mutation: decide a row by anything but sandbox.ReadContinuityOf, read the
-// store or ask the holder once per row, ask the runner of the harness that
-// wrote the session rather than the launch's member, ask about an ended head
-// by its own turn, answer a decided ending as live, or say which launch a row
-// is about otherwise than the decision did, and a check goes red.
+// Mutation: decide a row by anything but sandbox.ReadContinuityOf, read or ask
+// once per row, ask the wrong harness's runner, ask about an ended head by its
+// own turn, or answer a decided ending as live, and a check goes red.
 func TestASessionsRowSaysWhichLaunchWouldContinueIt(t *testing.T) {
 	t.Parallel()
 	continues, continuesRun := liveSession(executor.ClaudeCodeName)
@@ -325,12 +324,11 @@ func TestASessionsRowSaysWhichLaunchWouldContinueIt(t *testing.T) {
 
 // A LIVE SESSION WHOSE RUN RECORD CANNOT BE READ IS UNDECIDED, NEVER A NO, AND
 // AN ENDED ONE NEEDS NO RECORD. A coordination store that does not answer, a
-// node wired with none to read, and a node wired with no way to ask the node
-// holding the seat what a relaunch is launched on each leave every live turn's
-// row with `continuable` null and its reason saying why — a no would tell a
-// person a session starts over that may well be continued — while the page is
-// still answered, and an ended turn's row of no conversation is decided off the
-// log alone. A page of ended turns reads nothing from the store at all.
+// node wired with none to read, and a node with no way to ask the seat's node
+// what a relaunch is launched on each leave a live row `continuable` null with
+// a reason (a no would say a session starts over that may be continued), the
+// page still answered. An ended turn of no conversation is decided off the log
+// alone, and a page of ended turns reads nothing from the store.
 //
 // Mutation: answer an unread record as a run that is over, read a node with no
 // run records as one whose runs are all over, read a node that asks no holder
@@ -389,23 +387,18 @@ func TestALiveSessionWhoseRunCannotBeReadIsUndecided(t *testing.T) {
 	}
 }
 
-// A PARKED RUN'S SESSION IS CONTINUED IN ITS OWN BOX WHERE NO OTHER BOX WOULD.
-// A person's answer carries a parked run on in the box it parked in, continuing
-// the session that box holds whatever became of its capture — so a run whose
-// kept capture no relaunch restores (written by a release no other box
-// continues, or not kept at all) is still continuable, only in its parked box,
-// with the reason no other box would, its answer recorded or its answer's claim
-// under way as much as parked; and not where the relaunch could not continue in
-// that box: its box gone (a pause past its time-to-live), its record naming no
-// session, the relaunch's member another harness or in another cell, a box on
-// an engine host that is not the host of the node holding the seat — the seat
-// moved since its job launched — or a box that ran another session of the turn
-// than the row's, started in its place, each saying why.
+// A PARKED RUN'S SESSION IS CONTINUED IN ITS OWN BOX WHERE NO OTHER BOX WOULD:
+// a person's answer carries the run on in the box it parked in whatever became
+// of its capture, so a run whose kept capture no relaunch restores, or that
+// kept none, is continuable there alone, saying why, answered or claimed as
+// much as parked; and not where the relaunch could not continue in that box
+// (box gone, no session named, another harness or cell, another engine host,
+// another session of the turn), each saying why. A newer capture not kept is
+// none of these: the kept one is continued in any box.
 //
-// Mutation: decide the row on the kept capture alone, read a box the relaunch
-// would not continue in as one it would — skip its host, or the session it
-// holds — or read an answer's claim as a run no answer carries on, and a case
-// goes red.
+// Mutation: decide on the kept capture alone, continue only the newest, read a
+// box the relaunch would not continue in as one it would, or read an answer's
+// claim as a run no answer carries on, and a case goes red.
 func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing.T) {
 	t.Parallel()
 	const older = "the session was written by Claude Code 2.1.265, older than 2.1.300"
@@ -426,8 +419,8 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 	}{
 		"its kept capture, in any box":   {target: claudeTarget(), continues: true},
 		"a release no other box resumes": {target: refusing, continues: true, inParked: true},
-		"a capture that was not kept": {target: claudeTarget(), continues: true, inParked: true,
-			run: func(r *sandbox.PendingRun) {
+		"a newer capture that was not kept, beside the one its job kept": {target: claudeTarget(),
+			continues: true, run: func(r *sandbox.PendingRun) {
 				refused := *r.Kept
 				refused.CaptureSeq, refused.State, refused.Reason = 2, sandbox.CaptureRefused, "past the seat's budget"
 				r.Capture = &refused
@@ -497,25 +490,16 @@ func TestAParkedRunsSessionIsContinuedInItsOwnBoxWhereNoOtherBoxWould(t *testing
 }
 
 // WHETHER A RELAUNCH CONTINUES IS UNDECIDED WHERE A RELAUNCH WOULD NOT DECIDE
-// NOW EITHER, never a no. The job a relaunch would follow still working, or
-// being collected — its session is taken by the read that collects it — the
-// capture of that job still being kept, which a relaunch waits for, or its
-// record sent and never answered, which a relaunch asks the log for again
-// before it decides and continues where it landed; what a
-// relaunch is launched on not to be said now — every member of the seat's
-// chain sitting out its plan, where which of them takes the relaunch decides
-// it, or the node holding the seat not answering; a round lost a second time,
-// carried on in a session of its own unless the job had submitted its work,
-// which its resume decides; and a collected job whose session no other box
-// continues, which the resume of its collection carries on in its box only
-// where its sign-in was replaced while it ran: each is `continuable` null,
-// saying why.
+// NOW EITHER, never a no: its job still working or being collected; its
+// capture, or a save beside a refused final take, still being kept or its
+// record unanswered; a target that cannot be said; a round lost a second time;
+// and a collected job whose session no other box continues. Each is
+// `continuable` null, saying why.
 //
-// Mutation: read a job still working as one that left no capture, a capture
-// still being kept, or one whose record awaits its answer, as one not kept, a
-// target that cannot be said as one with no
-// runner, a second loss as a round continued from its capture, or a collected
-// job's resume as one that carries nothing on in its box, and a case goes red.
+// Mutation: read any of those as one not kept (the save among them), a target
+// that cannot be said as one with no runner, a second loss as a round
+// continued, or a collected job's resume as carrying nothing on, and a case
+// goes red.
 func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(t *testing.T) {
 	t.Parallel()
 	sittingOut := sandbox.RelaunchTarget{Undecided: true,
@@ -548,6 +532,22 @@ func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(
 				unanswered.Object, unanswered.At = objstore.KeyAt(now.Add(-time.Minute)).String(), now
 				r.Status, r.Launch.Collected = sandbox.StatusRunning, true
 				r.Lost, r.Capture = &sandbox.JobLoss{Cause: sandbox.LossBoxGone}, &unanswered
+			}},
+		"a save of the job still being kept, beside a refused final take that overtook it": {
+			target: claudeTarget(), why: "capture 2) is still being kept",
+			run: func(r *sandbox.PendingRun, now time.Time) {
+				save := *r.Kept
+				save.CaptureSeq, save.State, save.Interrupted = 2, sandbox.CaptureBegun, true
+				save.Object, save.At = "", now.Add(-time.Second)
+				r.Saving, r.Capture = &save, overtakenBy(save, now)
+			}},
+		"a save of the job whose record awaits its answer, beside a refused final take that overtook it": {
+			target: claudeTarget(), why: "asks the executor log",
+			run: func(r *sandbox.PendingRun, now time.Time) {
+				save := *r.Kept
+				save.CaptureSeq, save.State, save.Interrupted = 2, sandbox.CaptureUnresolved, true
+				save.Object, save.At = objstore.KeyAt(now.Add(-time.Minute)).String(), now
+				r.Saving, r.Capture = &save, overtakenBy(save, now)
 			}},
 		"every member sitting out": {target: sittingOut, why: "sitting out its plan"},
 		"the holder not answering": {target: silent, why: "did not say"},
@@ -584,16 +584,13 @@ func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(
 }
 
 // A CLAIM IS DECIDED ONCE ITS READ HAS TAKEN THE JOB'S FINAL CAPTURE, OR ITS
-// TURN HAS SAID WHAT IT DOES. The read a claim makes takes the job's session
-// first, and the claim's row stays resumed for the whole resumed turn, its review
-// included — which is when a person most wants to know what a send-back would
-// continue. So once that final capture is taken and kept, the row is decided as
-// any other: continued from it in any box. And once the turn has begun, saying
-// what it does with the round, so is one whose capture no relaunch's runner
-// restores, and one whose read took no capture at all: a turn that collects its
-// job is reviewed, and its send-back continues nothing in the job's box; one
-// that carries the round on in that box continues it there. Before either, it is
-// still undecided.
+// TURN HAS SAID WHAT IT DOES. A claim's row stays resumed for the whole resumed
+// turn, review included, when a person most wants to know what a send-back
+// would continue. Once the final capture is kept, the row is decided as any
+// other. Once the turn has said what it does with the round, so is one whose
+// capture no runner restores or whose read took none: a turn that collects its
+// job continues nothing in the job's box; one that carries the round on
+// continues it there. Before either, it is undecided.
 //
 // Mutation: read every resumed row as a job still being collected, read a turn
 // that said what it does as one that has not, or read a collecting turn as one
@@ -780,44 +777,71 @@ func (l *levelledSessions) readAgain() int {
 	return l.reReads
 }
 
-// A LIVE ROW IS DECIDED ON THE LOG AS A RELAUNCH READS IT. A page read from a
-// copy of the executor log behind the run's record holds the turn's older
-// capture where the record keeps the newer — and a relaunch, which reads the
-// row at linearizable, continues the newer. So the row is read again at the
-// relaunch's level, once, and decided on that: continuable in any box with no
-// reason, where the behind copy alone read it as a log naming another capture.
-// The run's job was collected and its box handed back, so nothing else would
-// continue its session.
+// A LIVE ROW IS DECIDED ON THE LOG AS A RELAUNCH READS IT: a page read from a
+// copy behind the run's record is read again at the relaunch's level, once.
+// Where the record keeps the newer capture, the row is then continuable in any
+// box. Where it keeps the older and stamps a newer one refused that the log
+// took unseen, the read at that level names the newer, and the row is not
+// continued, saying the log keeps it. The job's box was handed back, so
+// nothing else would continue its session.
 //
-// Mutation: decide the row on the page's own read, and it says no.
+// Mutation: decide on the page's own read, or read a row naming the kept
+// capture again only where the record keeps none newer, and a case says the
+// opposite.
 func TestALiveRowIsDecidedOnTheLogAsARelaunchReadsIt(t *testing.T) {
 	t.Parallel()
-	behind, run := liveSession(executor.ClaudeCodeName)
-	newer := *run.Kept
-	newer.CaptureSeq = 2
-	run.Capture, run.Kept = &newer, &newer
-	run.Status, run.Launch.Collected, run.SandboxID = sandbox.StatusRunning, true, ""
-	applied := behind
-	applied.CaptureSeq = 2
-	store, _ := sessionObjectStore(t)
-	s := sessionSources(t, nil, store)
-	onLog := &levelledSessions{stubSessions: &stubSessions{rows: []executordomain.Session{behind}},
-		through: map[string]executordomain.Session{behind.Turn: applied}}
-	s.ExecutorSessions = onLog
-	s.SessionRuns = &stubRuns{runs: []sandbox.PendingRun{run}}
-	s.RelaunchTargets = targetOf(claudeTarget())
-	page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
-	if err != nil {
-		t.Fatalf("executor_sessions: %v", err)
-	}
-	got := rowsByTurn(t, page)[behind.Turn]
-	if got.Continuable == nil || !*got.Continuable || got.ContinuesIn != sandbox.ContinuesInAnyBox ||
-		got.NotContinuable != "" {
-		t.Errorf("a row read from a copy behind the run's record is %s, want continuable in any box with "+
-			"no reason, as a relaunch reading the log at its level continues it", decided(got))
-	}
-	if n := onLog.readAgain(); n != 1 {
-		t.Errorf("the row was read again at the relaunch's level %d times, want once", n)
+	for name, tc := range map[string]struct {
+		// refused stamps the newer capture refused, the record keeping the
+		// older; else the record keeps the newer.
+		refused   bool
+		continues bool
+		why       string
+	}{
+		"a copy behind the capture the record keeps": {continues: true},
+		"a copy behind a capture the record refused and the log took": {refused: true,
+			why: "the executor log keeps it all the same"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			behind, run := liveSession(executor.ClaudeCodeName)
+			newer := *run.Kept
+			newer.CaptureSeq = 2
+			run.Capture, run.Kept = &newer, &newer
+			if tc.refused {
+				older := *run.Kept
+				older.CaptureSeq = 1
+				newer.State, newer.Reason = sandbox.CaptureRefused, "its taker node-a stopped before it was kept"
+				run.Kept = &older
+			}
+			run.Status, run.Launch.Collected, run.SandboxID = sandbox.StatusRunning, true, ""
+			applied := behind
+			applied.CaptureSeq = 2
+			store, _ := sessionObjectStore(t)
+			s := sessionSources(t, nil, store)
+			onLog := &levelledSessions{stubSessions: &stubSessions{rows: []executordomain.Session{behind}},
+				through: map[string]executordomain.Session{behind.Turn: applied}}
+			s.ExecutorSessions = onLog
+			s.SessionRuns = &stubRuns{runs: []sandbox.PendingRun{run}}
+			s.RelaunchTargets = targetOf(claudeTarget())
+			page, err := askAsSeat(t, s, "ana", "executor_sessions", nil)
+			if err != nil {
+				t.Fatalf("executor_sessions: %v", err)
+			}
+			got := rowsByTurn(t, page)[behind.Turn]
+			switch {
+			case got.Continuable == nil || *got.Continuable != tc.continues:
+				t.Errorf("a row read from a copy behind the log is %s, want continues %v as a relaunch "+
+					"reading the log at its level decides it", decided(got), tc.continues)
+			case tc.continues && (got.ContinuesIn != sandbox.ContinuesInAnyBox || got.NotContinuable != ""):
+				t.Errorf("a row read from a copy behind the run's record is %s, want continuable in any box "+
+					"with no reason", decided(got))
+			case !strings.Contains(got.NotContinuable, tc.why):
+				t.Errorf("the row is %s, want it saying %q", decided(got), tc.why)
+			}
+			if n := onLog.readAgain(); n != 1 {
+				t.Errorf("the row was read again at the relaunch's level %d times, want once", n)
+			}
+		})
 	}
 }
 
@@ -870,17 +894,15 @@ func TestARowReadAgainIsDecidedOnTheHeadItsOwnReadNamed(t *testing.T) {
 }
 
 // A ROW NAMING ITS RUN'S KEPT CAPTURE IS NOT READ AGAIN, nor is a row the
-// decision never reaches. A read at the relaunch's level appends a barrier to
-// the executor log, and a row that already names the capture the run's record
-// keeps decides as that read would — a newer capture is stamped on the record
-// before a byte of it moves — while one whose job still works, or whose turn
-// has ended, is decided without its capture at all. So a page of such rows,
-// asked every minute, reads the log once, at its own level. And a transcript's
-// later page decides nothing again: its first page says it, once, and a later
-// one leaves it null, saying so, reading no run record and asking no node.
+// decision never reaches: beside no newer capture of the job it decides as a
+// read at the relaunch's level would (a newer one is stamped before a byte
+// moves), and a working job or an ended turn is decided without its capture,
+// so a page asked every minute reads the log once, at its own level. A
+// transcript's later page decides nothing again: it leaves the answer null,
+// saying so, reading no run record and asking no node.
 //
-// Mutation: read every live row again at the relaunch's level, or decide a
-// later page again, and a check goes red.
+// Mutation: read every live row again, or decide a later page again, and a
+// check goes red.
 func TestARowNamingItsRunsKeptCaptureIsNotReadAgain(t *testing.T) {
 	t.Parallel()
 	kept, keptRun := liveSession(executor.ClaudeCodeName)
@@ -964,14 +986,11 @@ func endedOn(conversation string, seq uint64) executordomain.Session {
 }
 
 // A SCHEDULE'S ROW SAYS WHETHER ITS NEXT FIRE CONTINUES IT. A schedule is a
-// conversation of each seat that runs it, every fire a turn of it, so a fire's
-// row is decided as any conversation's is — by the decision its next fire's
-// first launch takes — and said as the schedule's next fire (`next_fire`), in
-// the schedule's words: the newest fire's session in the schedule's line is
-// continuable in any box, and a fire that parked on a question — which read
-// the schedule before that fire did and ended after it — names the fire the
-// next one is handed instead, on its page and read alone. A chat
-// conversation's head on the same page stays its next turn's.
+// conversation of each seat that runs it, every fire a turn, so a fire's row is
+// decided as any conversation's, by its next fire's first launch, and said as
+// `next_fire`: the newest fire's session is continuable in any box, and a fire
+// that parked on a question (read the schedule before that fire, ended after)
+// names the fire the next one is handed instead. A chat head stays `next_turn`.
 //
 // Mutation: decide a schedule's row as `next_turn`, word it as a
 // conversation's, or tell a chat conversation's row as a schedule's, and a
@@ -1024,24 +1043,17 @@ func TestAScheduleRowSaysWhetherItsNextFireContinuesIt(t *testing.T) {
 }
 
 // A ROW SAYS WHETHER THE NEXT TURN CONTINUES IT, as that turn's first launch
-// decides it, on the head the read that answered the row named: the head of a
-// conversation is continuable by the next turn in any box, asked of the node
-// holding the seat by NO turn, its runner restoring it; an older row names the
-// head the next turn is handed instead; a row that names no session says which
-// of three reasons — nothing captured, its newest capture not kept (that
-// capture's own reason redacted, on the ending as much as in the sentence), or
-// the seat's budget's release — and a turn that served no conversation is
-// continued by no launch. A live turn whose first job was lost before it kept
-// anything says its relaunch continues the session its first launch was
-// handed, names it (`base_turn`), and asks the holder about that session's
-// archive. A head whose launch cannot be said is undecided, never a no. And a
-// session read alone is decided as its page decides it, on its own read's head.
+// decides it, on the head the read that answered the row named: a head is
+// continuable in any box, asked of the seat's node by NO turn; an older row
+// names the head the next turn is handed; a row naming no session gives one of
+// three reasons (nothing captured, capture not kept, redacted, budget release).
+// A live turn whose first job was lost continues the session its first launch
+// was handed (`base_turn`). An unsayable launch is undecided, never a no.
 //
-// Mutation: decide an ended row as 6b did (a relaunch's no), by its own turn's
-// target or by a head the page did not name; read an unknown target as a no;
-// drop a reason for a row with no session, or send an unkept capture's reason
-// unredacted; or ask the holder about a begun turn's own empty archive, and a
-// check goes red.
+// Mutation: decide an ended row by a relaunch's no, its own turn's target or a
+// head the page did not name; read an unknown target as a no; drop a reason
+// for a row with no session or send an unkept capture's reason unredacted; or
+// ask the holder about a begun turn's own empty archive, and a check goes red.
 func TestARowSaysWhetherTheNextTurnContinuesIt(t *testing.T) {
 	t.Parallel()
 	secret := "ghp_" + strings.Repeat("d", 36)

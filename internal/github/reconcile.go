@@ -18,27 +18,14 @@ import (
 
 // Reconcile brings a GitHub deployment in line with the company config.
 //
-// # What GitHub lets a provisioner do, and what it does not
+// GitHub has no API that creates a user or mints its token, so this cannot
+// converge accounts. It does the two things GitHub allows:
 //
-// The chat backend and the self-hosted code host can CREATE an account and
-// mint its credential, so their reconciles are about converging a fleet of
-// accounts. GitHub cannot, and the reason is not a missing scope: there is
-// no API that creates a user, and the API that once created a token on
-// somebody's behalf was withdrawn in 2020. A run that pretended otherwise
-// would print instructions dressed as actions.
-//
-// So this reconcile does the two things GitHub genuinely allows, and each
-// answers a question that is otherwise invisible until an event reaches
-// nobody:
-//
-//   - WHICH ACCOUNT each seat's credential authenticates as. That mapping is
-//     the whole of a seat's inbound routing, and nothing in the org model
-//     declares it — the engine resolves it at boot and says nothing about
-//     the seats it could not.
+//   - WHICH ACCOUNT each seat's credential authenticates as: the whole of a
+//     seat's inbound routing, declared nowhere in the org model.
 //   - THE INBOUND WEBHOOKS, registered with a secret the engine holds: one
-//     on the organization where the credential may, otherwise one per
-//     repository. Without them the deployment delivers nothing and the
-//     integration looks idle rather than unconfigured.
+//     on the organization where the credential may, else one per repository.
+//     Without them the integration looks idle rather than unconfigured.
 
 // Options are one reconcile's inputs.
 type Options struct {
@@ -66,16 +53,12 @@ type Options struct {
 	// App — each one with its own webhook baked into its own manifest.
 	//
 	// IT IS WHAT MAKES "NOTHING REGISTERED ORGANIZATION-WIDE" AN ANSWER
-	// RATHER THAN A GAP. This pass reads the organization; it cannot see
-	// an agent's app, which is private to that agent and recorded on the
-	// seat. So the same world — no org hook, no repository hooks — is the
-	// recommended arrangement when those apps exist and a company
-	// receiving nothing when they do not, and this is the only thing that
-	// tells the two apart.
-	//
-	// Counted rather than named, because nothing here has anything to say
-	// about WHICH seats: the question is whether the company's coverage
-	// comes from apps at all.
+	// RATHER THAN A GAP. This pass cannot see an agent's app, which is
+	// private to the seat, so no org hook and no repository hooks is the
+	// recommended arrangement when those apps exist and a company receiving
+	// nothing when they do not; only this count tells the two apart.
+	// Counted, not named: the question is whether coverage comes from apps
+	// at all, not which seats.
 	SeatApps int
 
 	// WebhookBase is where GitHub reaches this deployment
@@ -105,28 +88,15 @@ type Options struct {
 }
 
 // IdentityOutcome is what one run learned about a seat's own code-host
-// credential, and it has THREE values because two of them are an empty Login
-// and they lead to opposite conclusions.
+// credential, with THREE values because two of them are an empty Login and
+// lead to opposite conclusions.
 //
 // A seat that NAMES a credential which does not authenticate has a fault
-// somebody can fix: every call its tools make is refused, and an operator has
-// a variable to set or a token to reissue. A seat that names NONE has not
-// asked for one — identity on this host is each agent's OWN GitHub App, which
-// the access sync is the authority on and which this run cannot see from
-// the org chart it was handed.
-//
-// Reported as one state, they were both "Login is empty, Reason says why",
-// and every agent seat on the current per-seat-app shape — where by design no
-// `mcp_env.github` token exists anywhere — became one
-// [integration.FindingIdentityFailed]. A healthy company sat in
-// [integration.PhaseDegraded] for ever, retried on the admin backoff, over a
-// credential the design had deliberately removed: the permanent note on a
-// card with nothing wrong with it that [Result.Findings] refuses one
-// paragraph up, arrived at from the other direction.
-//
-// A value rather than a convention on Reason, for the reason [HookOutcome]
-// is one: an empty Login is what a caller sees, and no amount of prose in
-// Reason changes what [Result.Findings] does with it.
+// somebody can fix. A seat that names NONE has not asked for one: its
+// identity is its OWN GitHub App, which the access sync owns and this run
+// cannot see. Folded together, every per-seat-app seat became an
+// [integration.FindingIdentityFailed], [integration.PhaseDegraded] for ever.
+// A value, not a convention on Reason, as [HookOutcome] is.
 type IdentityOutcome string
 
 // The three outcomes.
@@ -193,21 +163,16 @@ func (s SeatIdentity) Refused() bool {
 	return !s.Routes() && s.Outcome != IdentityUnclaimed
 }
 
-// HookOutcome is what happened at one webhook target, and it has THREE
-// values because two of them were indistinguishable and led to opposite
-// actions.
+// HookOutcome is what happened at one webhook target, with THREE values
+// because two of them look alike and lead to opposite actions.
 //
-// A hook that was attempted and refused is an ingress block: events reach
-// nobody and somebody has to widen a credential. A target with NOTHING TO
-// HOOK is not — an archived repository emits no events, so a hook on it
-// would be correct and pointless — and reporting it as a block put a company
-// permanently in [integration.PhaseDegraded], retried on the admin backoff
-// for ever, over a repository that is finished.
+// A hook attempted and refused is an ingress block: events reach nobody and
+// somebody has to widen a credential. A target with NOTHING TO HOOK is not
+// (an archived repository emits no events); reporting it as a block would
+// hold the company in [integration.PhaseDegraded] over a finished repository.
 //
-// Both used to be "URL is empty, Detail says why", which is why the
-// distinction has to be a value rather than a convention: an empty URL is
-// what a caller sees, and no amount of prose in Detail changes what
-// [Result.Findings] does with it.
+// A value, not a convention on Detail: a caller sees an empty URL, and prose
+// in Detail changes nothing [Result.Findings] does with it.
 type HookOutcome string
 
 // The three outcomes.
@@ -280,15 +245,12 @@ type Result struct {
 	// is empty when it had an address to register one against.
 	//
 	// A SEPARATE FIELD because an empty Hooks list means two opposite
-	// things. A pass given no public base registers nothing by
-	// construction — every hook state it would have produced is simply
-	// absent — and Classify over no findings is Ready. So a pass run with
-	// no address for this deployment reported GitHub as working while
-	// nothing at GitHub pointed at it, which is the same not-there
-	// coverage every other rule here exists to refuse.
+	// things. A pass given no public base registers nothing by construction,
+	// and Classify over no findings is Ready, so it would report GitHub as
+	// working while nothing at GitHub pointed at it.
 	//
-	// The zero value is "nothing to report", deliberately: a Result built
-	// anywhere but Reconcile must not invent an ingress problem.
+	// The zero value is "nothing to report": a Result built anywhere but
+	// Reconcile must not invent an ingress problem.
 	NoIngress string
 
 	// NoIngressKey is the Tier A key this deployment's webhook address is
@@ -300,19 +262,15 @@ type Result struct {
 	// NoRegistrar says why this run could register no webhook AT ALL
 	// although the company asked for one, and is empty when it could.
 	//
-	// SEPARATE FROM NoIngress, whose subject is the ADDRESS. This one's is
-	// the credential: `provisioning` names an organization or a list of
-	// repositories, which is a company asking for hooks on them, and
+	// SEPARATE FROM NoIngress, whose subject is the ADDRESS; this one's is
+	// the credential: `provisioning` names hooks the company asked for, and
 	// `integrations.github.token` is what registering one takes. With no
-	// token the pass reads nothing and writes nothing — and said so only in
-	// Notes, which are not findings, so a surface that had authenticated
-	// with nobody reported READY. Measured on a live connect: `phase:
-	// ready`, `findings: []`, `routes: true`, and exactly one webhook on
-	// the organization, belonging to somebody else's deployment.
+	// token the pass reads and writes nothing, and said so only in Notes,
+	// which are not findings, so a surface that authenticated as nobody
+	// reported READY.
 	//
-	// The form asks for no token, deliberately (see [Requirements]), so
-	// this finding has no field to offer and its detail names the variable
-	// and the way out instead.
+	// The form asks for no token (see [Requirements]), so this finding has no
+	// field to offer and its detail names the variable instead.
 	NoRegistrar string
 
 	// Coverage is what this company's agents hear about, when that is
@@ -377,26 +335,17 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 	if opts.Client == nil {
-		// NO ORG CREDENTIAL IS A FINDING, NOT A FAULT. The token is
-		// optional on this host and its absence is a documented
-		// degradation: participant fan-out is off and a thread's
-		// watchers hear nothing, which is exactly what an empty Login
-		// makes Findings report. Refusing here instead turned that into
-		// "the last pass could not read this integration", which sends
-		// an operator looking for an outage rather than for a variable.
+		// NO ORG CREDENTIAL IS A FINDING, NOT A FAULT. The token is optional
+		// and its absence a documented degradation (participant fan-out
+		// off), which an empty Login makes Findings report; refusing would
+		// send an operator looking for an outage rather than a variable.
+		// Seat lookups and hooks need the credential, so the run says only
+		// what it knows.
 		//
-		// Nothing else can be read without one. Seat identities are API
-		// lookups and a hook is an API write, so the honest result is a
-		// run that says only what it knows.
-		//
-		// THE ADDRESS IS STILL REPORTED, because it is a fact about the
-		// company document rather than about GitHub and needs no
-		// credential to establish. Without it nothing at GitHub — not an
-		// org hook, not a repository hook, not the webhook in each
-		// agent's own app manifest — has anywhere to deliver to, and
-		// leaving [Result.NoIngress] empty here reported a company that
-		// receives nothing as Ready for exactly the companies most likely
-		// to have no org token.
+		// THE ADDRESS IS STILL REPORTED: it is a fact about the company
+		// document and needs no credential. Without it nothing at GitHub,
+		// the agents' own app webhooks included, has anywhere to deliver,
+		// and an empty [Result.NoIngress] here read as Ready.
 		return &Result{
 			Notes: []string{
 				"no org credential resolved, so this run read nothing at GitHub",
@@ -447,22 +396,15 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	if err != nil {
 		// THE SINK IS FLUSHED ON THE WAY OUT, WHICHEVER WAY THAT IS.
 		//
-		// [webhookSecret] seals a fresh secret BEFORE the hooks that have
-		// to carry it are registered, and the sink the loop hands in makes
-		// what it recorded visible to a running engine only inside Flush.
-		// Returning from a failure below that point left the minted secret
-		// sealed and INVISIBLE: the next pass resolved nothing, minted a
-		// second secret, failed at the same place, and went on doing that
-		// for as long as the failure lasted — a key rotated every few
-		// minutes by the loop whose whole promise is that it is safe to
-		// leave switched on, which is the exact runaway the "mint only
+		// [webhookSecret] seals a fresh secret BEFORE the hooks that carry it
+		// are registered, and the sink shows it to a running engine only
+		// inside Flush. Returning without one left the secret sealed and
+		// INVISIBLE, so every pass minted another: the runaway the "mint only
 		// where there is nothing usable" rule exists to prevent.
 		//
-		// ON AN UNCANCELLABLE COPY, the rule every teardown in this tree
-		// follows: the failure being cleaned up after is frequently the
-		// cancellation itself, and a flush that inherits a dead context
-		// does nothing at all — which is the bug again, reached through
-		// the drain instead of through a refused hook.
+		// ON AN UNCANCELLABLE COPY: the failure being cleaned up after is
+		// often the cancellation itself, and a flush inheriting a dead
+		// context does nothing.
 		if flushErr := flushSink(context.WithoutCancel(ctx), opts); flushErr != nil {
 			return res, errors.Join(err, flushErr)
 		}
@@ -493,17 +435,13 @@ func flushSink(ctx context.Context, opts Options) error {
 // interrupted reports a pass whose context is done, as the error the caller
 // must raise instead of answering.
 //
-// THE CONTEXT, NEVER THE ERROR A CALL CAME BACK WITH. `errors.Is(err,
-// context.DeadlineExceeded)` looks like the same question and is not: net/http
-// gives a Client.Timeout that very sentinel — measured, not assumed: a request
-// that outruns [ClientTimeout] under a perfectly live parent context satisfies
-// it — so testing the error would read a slow GitHub as a torn-down pass and
-// raise on exactly the case this package deliberately leaves the world alone
-// for. What is being asked is whether THIS PASS is still running, and only
-// ctx.Err answers that.
+// THE CONTEXT, NEVER THE ERROR A CALL CAME BACK WITH. net/http gives a
+// Client.Timeout the context.DeadlineExceeded sentinel (a request outrunning
+// [ClientTimeout] under a live parent satisfies it), so testing the error
+// would read a slow GitHub as a torn-down pass. Only ctx.Err says whether
+// THIS PASS is still running.
 //
-// Wrapped with %w, so a caller can still tell a cancellation from a deadline
-// and the loop's own backoff sees the sentinel it expects.
+// Wrapped with %w, so the loop's backoff still sees the sentinel it expects.
 func interrupted(ctx context.Context) error {
 	err := ctx.Err()
 	if err == nil {
@@ -646,30 +584,17 @@ func enterprise(opts Options) bool {
 }
 
 // noRegistrarReason says why a run with no organization credential could
-// register nothing that the company ASKED FOR, or "" when it asked for
-// nothing this credential is needed for.
+// register nothing the company ASKED FOR, or "" when it asked for nothing.
 //
-// # An organization is named for the agents, not for a hook
-//
-// The connect form asks for `provisioning.org` and requires it, because that
-// is where the agents' own apps are installed — and it asks for no token at
-// all, deliberately. So "the block names an organization" is not a company
-// wanting an organization-wide webhook, and reading it as one put a permanent
-// finding on the ordinary shape: every company that connects GitHub from the
-// dashboard, for ever, over a fallback that is working exactly as designed.
-// Measured on a live connect, where it survived the operator installing the
-// app and read as though the install had not taken.
-//
-// What IS a company asking for a hook this credential must register:
+// The org is named for the agents' own apps (the form requires it, with no
+// token), not for a hook, so the name alone is no wish for an org webhook.
+// A company asks for a hook this credential must register with:
 //
 //   - `org_webhook: true`, which demands one and has no fallback;
-//   - a non-empty `repos` list, which names repositories to hook and is not
-//     covered by any agent's own app.
+//   - a non-empty `repos` list, which no agent's own app covers.
 //
-// `auto` with no repositories — the default, and what the form writes — is a
-// company that takes an organization hook if one can be had and per-agent app
-// webhooks otherwise. The second is not a degradation to report; it is the
-// design.
+// `auto` with no repositories (the form's default) takes an org hook if one
+// can be had and per-agent app webhooks otherwise: the design, not a gap.
 func noRegistrarReason(opts Options) string {
 	pv := opts.Config.Provisioning
 	if pv == nil {
@@ -716,23 +641,15 @@ type ingress struct {
 // coverageFor is the note for a company whose events arrive through its
 // agents' OWN apps, or the zero finding when there is nothing to say.
 //
-// THE TEST IS WHAT IS DELIVERING, not what the config asked for. Nothing
-// organization-wide is carrying events — no org hook, no repository hook —
-// and the company's agents each have an app that is: that is one arrangement
-// however the mode field got there, so a company that chose it and a company
-// left on `org_webhook: true` with no token read the same, which is the point.
-// The second was reported as degraded over agents receiving events the whole
-// time.
+// THE TEST IS WHAT IS DELIVERING, not what the config asked for: no org or
+// repository hook while each agent's app carries events is one arrangement
+// however the mode field got there.
 //
-// Both halves of the `if` are load-bearing. With no apps there is no
-// arrangement to describe, only a company receiving nothing — and the pass
-// says so elsewhere, through the roster's own "no app of its own" finding.
-// With a hook working, the organization is covered and there is nothing
-// narrower to report.
+// Both halves of the `if` matter: with no apps the roster's "no app of its
+// own" finding speaks; with a hook working, nothing narrower is left.
 //
-// AND ONLY AT AN ADDRESS GITHUB DELIVERS TO. With none, no app's events arrive
-// either, which [noIngressReason] or [undeliverable] already says: a second
-// coverage finding saying some do would contradict it.
+// AND ONLY AT AN ADDRESS GITHUB DELIVERS TO: with none, no app's events
+// arrive either, which [noIngressReason] or [undeliverable] already says.
 func coverageFor(opts Options, hooks []HookState) integration.Finding {
 	if opts.SeatApps == 0 || noIngressReason(opts) != "" || undeliverable(opts).Kind != "" {
 		return integration.Finding{}
@@ -923,19 +840,13 @@ func ensureOrgWebhook(
 			break
 		}
 		if converged(hook, minted) {
-			// ALREADY CORRECT, and left exactly as it is.
+			// ALREADY CORRECT, and left alone: the steady state is where this
+			// loop lives, and [integration.DefaultSchedule] is anchored on a
+			// pass issuing no writes when nothing changed.
 			//
-			// THE STEADY STATE IS WHERE THIS LOOP LIVES: the reconcile
-			// runs every few minutes for the life of the deployment, and
-			// [integration.DefaultSchedule] is anchored on each pass
-			// issuing no writes when nothing has changed. An
-			// unconditional update was one write per target per pass, for
-			// ever, on a hook that needed nothing.
-			//
-			// `minted` is the half a URL comparison cannot see: GitHub
-			// never gives a secret back, so a hook pointing at the right
-			// address is still signed with the old key when this run made
-			// a new one.
+			// `minted` is the half a URL comparison cannot see: GitHub never
+			// gives a secret back, so a hook at the right address is still
+			// signed with the old key when this run made a new one.
 			state.Outcome, state.URL = HookRegistered, target
 			return state, nil
 		}
@@ -1039,29 +950,16 @@ func ensureRepoWebhook(
 
 // webhookSecret is the value every hook is registered with.
 //
-// # Minted only where there is nothing usable
+// MINTED ONLY WHERE THERE IS NOTHING USABLE: the running engine holds the
+// OLD secret, so minting every run makes GitHub sign with a key the edge
+// refuses. A resolving secret is used as is; one is minted when there is
+// none, or when the operator asked to recreate the hooks.
 //
-// The tempting shape is to mint every run, and it is an outage: the engine
-// is running with the OLD secret, and re-registering with a fresh one makes
-// GitHub sign every delivery with a key the running engine does not hold —
-// every webhook refused at the edge, from a command whose whole promise is
-// that it is safe to re-run. So a secret that already resolves is used as it
-// is, and minting happens when there is none, or when the operator asked to
-// recreate the hooks having planned the restart.
-//
-// ONE SECRET FOR EVERY TARGET, because there is one route and one configured
-// value behind it: `integrations.github.webhook_secret` is what the edge
-// verifies against, so a per-repository secret would be a key the engine
-// never checks.
-//
-// # And "nothing usable" includes what this deployment already sealed
-//
-// Which is [provision.MintSecret]'s whole subject, and the reason it is not
-// written out here: the sink is asked before anything is minted and the read
-// is three-valued. This pass had none of that — it minted whenever the RESOLVER answered empty, and
-// the resolver answers from a snapshot taken at apply time, so every pass in
-// the window after a mint sealed a second secret over the first and
-// re-registered every hook with it.
+// ONE SECRET FOR EVERY TARGET: the edge verifies against the one
+// `integrations.github.webhook_secret`.
+// "Nothing usable" includes what this deployment already sealed
+// ([provision.MintSecret]): the resolver answers from an apply-time
+// snapshot, so trusting it alone sealed a second secret after every mint.
 type webhookKey struct {
 	// Secret is the value every hook is registered with. Empty only where
 	// an error was returned: a hook must never be registered unsigned.
@@ -1140,17 +1038,15 @@ func webhookSecret(
 // converged reports a hook that already carries everything this run would
 // write, so writing it again is a request spent to change nothing.
 //
-// The URL is the caller's business — it is what selected this hook — so what
-// is left is the two fields a delivery depends on and the one thing that
-// cannot be read back. A disabled hook delivers nothing; a hook missing an
-// event type delivers everything but that one, which is a silence nobody
-// notices; and a secret this run just replaced has to be sent, because GitHub
-// answers with no secret at all and there is nothing to compare.
+// The URL selected this hook, so what is left is the two fields a delivery
+// depends on and the one thing that cannot be read back. A disabled hook
+// delivers nothing; a hook missing an event type silences that one; a
+// secret this run just replaced has to be sent, since GitHub returns none to
+// compare.
 //
-// EXTRA events are not a reason to write. An operator who added one to
-// Crewlet's hook wanted it, and rewriting the list every pass to take it away
-// again is the same argument as [integration.Reconciler]'s: converge what
-// this engine needs, and do not undo what it does not.
+// EXTRA events are not a reason to write: an operator added one on purpose.
+// Converge what this engine needs and do not undo what it does not, as
+// [integration.Reconciler] does.
 func converged(hook Webhook, minted bool) bool {
 	if minted || !hook.Active {
 		return false

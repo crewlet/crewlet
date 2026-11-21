@@ -111,19 +111,16 @@ func mustParse(t *testing.T, doc string) *config.Company {
 	return c
 }
 
-// THE CHECKS BLOCK IS HELD TO ITS RULES, each refused at the line an operator
-// wrote, one mistake one line: its timeout within a minute and six hours, a
-// secret's name one a check can name, each cell one a check runs in and
-// allowed once, every cell it names served by a backend the catalogue
-// configures — a check's box is made from it, on a Gitlet node — the cells it
-// allows holding the one a check naming none runs in, and the image a check's
-// container needs where only a check reaches one. And nothing of it on a
-// company hosting no code.
+// THE CHECKS BLOCK IS HELD TO ITS RULES, each refused at the line an operator wrote, one mistake
+// one line: timeout within a minute and six hours, a secret's name one a check can name, each
+// cell one a check runs in and allowed once, every named cell served by a configured backend (a
+// check's box is made from it, on a Gitlet node), the allowed cells holding the one a check
+// naming none runs in, and the image a check's container needs where only a check reaches one.
+// Nothing of it on a company hosting no code.
 //
-// Mutations: compare the allowed cells with code.checks.run_in alone — the
-// catalogue's default left out passes, red; drop the checks from
-// SandboxPlacements — the image a check's container needs is never asked
-// for, red.
+// Mutations: compare the allowed cells with code.checks.run_in alone — the catalogue's default
+// left out passes, red; drop the checks from SandboxPlacements — the image a check's container
+// needs is never asked for, red.
 func TestTheChecksBlockIsHeldToItsRules(t *testing.T) {
 	t.Parallel()
 	direct := cells{local: true, defaultRunIn: "direct"}

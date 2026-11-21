@@ -9,14 +9,11 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 )
 
-// STRIPPING SOMEBODY'S LAST GRANT STICKS.
-//
-// `grants` is omitempty, so an empty list does not marshal at all. A field
-// missing from the list of this document's known names is decoded AND carried
-// as unknown, and clearing it re-encodes the carried copy straight back: an
-// administrator taking somebody's last grant away left it exactly where it
-// was. Mutation: derive the known names from a marshalled zero value again and
-// the person still carries Worklet.
+// STRIPPING SOMEBODY'S LAST GRANT STICKS. `grants` is omitempty, so known
+// names taken from a marshalled zero value miss it; a field missing from them
+// is decoded AND carried as unknown, and clearing it re-encodes the carried
+// copy. Mutation: derive the known names from a marshalled zero value and the
+// person still carries Worklet.
 func TestStrippingAPersonsLastGrantSticks(t *testing.T) {
 	t.Parallel()
 	rig := newWriteRig(t)

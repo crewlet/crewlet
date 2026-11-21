@@ -52,6 +52,20 @@
 // from, so it asks again — one request in flight at a time, however many
 // callers — because refusing from a recorded failure would turn a blip at
 // boot into a minute of refusals.
+//
+// # What it trusts a key set to say
+//
+// Only RSA keys, because the relay pins RS256: a key nothing should verify
+// with is a key nothing should hold. An `oct` key above all is skipped, since
+// a symmetric key read from a published set is a secret anybody can download.
+// A key marked `use: enc` is skipped while one with no `use` is kept: the
+// field is optional, so requiring "sig" would discard every set omitting it.
+// One unusable entry is skipped, not fatal, so a rotation's retiring key
+// cannot break the incoming one. The document is read to [MaxBytes] only.
+//
+// A caller waits on its own context, never the leader's deadline, and a failed
+// flight is cleared rather than latched, so one bad minute at the provider
+// refuses nothing once it is over.
 package jwks
 
 import (
@@ -265,18 +279,14 @@ func (s *Set) stale(keyID string) (any, bool) {
 
 // fetch reads the key set, at most once at a time.
 //
-// THE LOCK IS HELD ONLY TO JOIN OR START A FLIGHT, never across the request
-// itself — which is the whole of what this package exists to get right.
+// THE LOCK IS HELD ONLY TO JOIN OR START A FLIGHT, never across the request.
 //
-// # The flight belongs to nobody's request
-//
-// Whoever finds no flight starts one, and every caller — that one included —
-// then waits on ITS OWN context: a caller with a shorter deadline gives up
-// rather than being held to somebody else's. The request itself runs on a
-// context no caller can cancel, bounded by [FetchTimeout] instead. It used to
-// run on the first caller's, so the first caller hanging up — a webhook sender
-// giving up — failed every verification waiting on the same flight, each
-// refused for somebody else's disconnect.
+// The flight belongs to nobody's request. Whoever finds none starts one, and
+// every caller, that one included, waits on ITS OWN context, so a shorter
+// deadline gives up rather than being held to somebody else's. The request
+// runs on a context no caller can cancel, bounded by [FetchTimeout]: on the
+// first caller's, its hanging up would fail every verification waiting on the
+// same flight.
 func (s *Set) fetch(ctx context.Context) (map[string]any, error) {
 	s.mu.Lock()
 	inflight := s.flight

@@ -10,19 +10,16 @@ import (
 
 // AN EXPLICIT ZERO A COMPANY MAY HOLD SURVIVES THE STORE.
 //
-// A stored revision is decoded onto the defaults ([DecodeCompany]), and every
-// numeric knob is written `omitempty` — so a non-pointer knob whose default is
-// not zero, and whose validator admits zero, loses an authored 0 on its first
-// round trip: the encoder drops it, and the decode puts the default back. A
-// company that switched the knob off had it switched back on by the first
-// stored read, with nothing anywhere saying so. Such a knob is a pointer read
-// through an accessor that applies the default (TurnEngine.ExecutorFloor is
-// one), or its validator refuses the zero.
+// A stored revision is decoded onto the defaults ([DecodeCompany]) and every
+// numeric knob is `omitempty`, so a non-pointer knob with a non-zero default
+// whose validator admits zero loses an authored 0 on its first round trip: the
+// encoder drops it and the decode restores the default, silently switching the
+// knob back on. Such a knob is a pointer read through an accessor that applies
+// the default (TurnEngine.ExecutorFloor), or its validator refuses the zero.
 //
-// WALKED, NOT LISTED: every numeric field of the company, at every depth the
-// defaults reach, is set to zero in turn; a zero validation refuses AT THAT
-// FIELD is fine, and any other must come back from the store as zero. A list
-// of the knobs known today is exactly what let the next copy land.
+// WALKED, NOT LISTED: every numeric field at every depth the defaults reach is
+// set to zero in turn; a refusal AT THAT FIELD is fine, anything else must come
+// back from the store as zero. A list of known knobs let the next copy land.
 func TestAnExplicitZeroSurvivesTheStore(t *testing.T) {
 	t.Parallel()
 	base := func() Company {

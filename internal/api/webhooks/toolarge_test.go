@@ -35,18 +35,15 @@ func encodedRawWebhookSize(t *testing.T, filler string) int {
 }
 
 // TestAnOversizedDeliveryIsRefusedPermanently pins the difference between the
-// two ways a publish can fail, which is the whole of this fix.
+// two ways a publish can fail.
 //
-// A broker that is down comes back, so a delivery it could not take is worth
-// retrying and answers 503. A delivery that does not fit on the wire will not
-// fit on the next attempt either: answering THAT as an outage asks the
-// provider to repeat a request that can never succeed — claiming and releasing
-// on every pass, forever.
+// A broker that is down comes back, so its refusal answers 503. A delivery that
+// does not fit on the wire will not fit on the next attempt either: answering
+// THAT as an outage asks the provider to repeat a request that can never
+// succeed, claiming and releasing forever.
 //
-// It is asserted through the real HTTP edge rather than against the classifier,
-// because the status code is the entire observable: everything upstream of it
-// (verify, claim, publish, release) already worked, and the bug was in what the
-// last line said about it.
+// Asserted through the real HTTP edge, because the status code is the entire
+// observable.
 func TestAnOversizedDeliveryIsRefusedPermanently(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)

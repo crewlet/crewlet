@@ -11,31 +11,17 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE EVICTION GATE ON THIS LOG, both halves: the record that installs or
-// lifts it, and the rows the trim reads to stop counting an evicted node.
+// THE EVICTION GATE ON THIS LOG: the record that installs or lifts it, and the
+// rows the trim reads to stop counting an evicted node.
 //
-// # Why this log carries its own eviction and not the tracker's
+// This log carries its own eviction because a gate is keyed on positions in ONE
+// log's sequence space: the tracker's eviction row says nothing about which
+// chat records to drop. Without it, an operator's eviction would leave this log
+// pinned behind a node never coming back, until it refuses messages.
 //
-// A gate is a rule about records on ONE log, keyed on positions in that log's
-// own sequence space — so the tracker's eviction row, at a tracker position,
-// says nothing about which chat records to drop, and the trim evaluates each
-// log's counted set on its own. Until this file the half here was an applier,
-// a fence and a table that nothing could fill: an operator's eviction lifted
-// the tracker's and the knowledge base's pins and left this log's where it
-// was, so the chat log grew toward its ceiling behind a node that was never
-// coming back — and on the log that refuses a message somebody typed when it
-// is full. The engine's node gate writes every identity-claiming log from one
-// judgement, and reports each log's outcome on its own.
-//
-// # Why the writer is not the room store
-//
-// [Store] needs a [Roster], because who a message wakes is resolved at write
-// time against the company's chart. An eviction wakes nobody and reads no
-// chart: it is said about a machine, not in a room. Hung off the store, the
-// node gate could only be built by handing it the live roster or a fake one —
-// on a node and a backend where no chat roster is wired at all, which is where
-// a log still has to be unpinned — so it is a writer of its own, built from the
-// one thing it uses.
+// The writer is not the room store: [Store] needs a [Roster] to resolve whom a
+// message wakes, an eviction reads no chart, and a node with no chat roster
+// wired is where a log still has to be unpinned.
 
 // GateWriter is the node-gate writer on this log: a node's eviction and its
 // readmission, and nothing else.
@@ -82,23 +68,15 @@ func NewGateWriter(opts GateOptions) (*GateWriter, error) {
 
 // EvictNode installs the gate that drops a node's records on this log.
 //
-// THE POSITION IS THE LOG'S OWN, and nothing else is: every node reaches the
-// same verdict about every record from the order they all already have, with
-// no clock and no coordination read — which is what makes it the fence that
-// holds when coordination cannot be reached at all.
+// THE POSITION IS THE LOG'S OWN: every node reaches the same verdict from the
+// order they all have, so the fence holds when coordination is unreachable.
 //
-// UNJUDGED HERE. Whether the node may be evicted — it must not be holding a
-// live presence lease — is a fleet question this package holds none of the
-// inputs to, and it is asked ONCE, before the first log is written, by the
-// engine's node gate: judged per log, two logs could reach two answers about
-// one node.
+// UNJUDGED HERE. Whether the node may be evicted (no live presence lease) is
+// asked ONCE by the engine's node gate before the first log is written; judged
+// per log, two logs could answer differently.
 //
-// THE ACTOR IS THE PRINCIPAL WHO RAN IT, recorded the way the node gate
-// records one on every log — the name, the kind of party and the credential
-// `iam.ActorFor` gives it — so the tracker's, the wiki's and this log's records
-// of one eviction name one party. An eviction is said about a machine rather
-// than in a room, so unlike a remark it needs no seat: a credential acting as
-// itself makes one under its own login.
+// THE ACTOR IS THE PRINCIPAL WHO RAN IT, recorded as the node gate does on
+// every log (`iam.ActorFor`). It needs no seat: it is said about a machine.
 func (g *GateWriter) EvictNode(ctx context.Context, actor Actor, opID, nodeID string) (statelog.Result, error) {
 	return g.gateNode(ctx, actor, opID, nodeID, false)
 }
@@ -115,26 +93,15 @@ func (g *GateWriter) ReadmitNode(ctx context.Context, actor Actor, opID, nodeID 
 	return g.gateNode(ctx, actor, opID, nodeID, true)
 }
 
-// gateNode publishes one eviction record, arbitrated on the node's own
-// subject so an eviction and the readmission that inverts it contend with each
-// other and with nothing else.
+// gateNode publishes one eviction record, arbitrated on the node's own subject
+// so an eviction and its inverse readmission contend with nothing else. Not in
+// [ObjectKind.Arbitrated] (the ANCHOR-row kinds): too few writes to be worth a
+// row, so the expectation is the subject's last broker sequence.
 //
-// ARBITRATED ALTHOUGH THE KIND IS NOT IN [ObjectKind.Arbitrated]'s two. That
-// set names the kinds an ANCHOR row is written for, and an eviction subject
-// takes too few writes for one to be worth a row: the publisher forms this
-// append's expectation from the subject's last sequence on the broker instead,
-// one round trip on a gesture an operator makes by hand.
-//
-// A RETRY IS ANSWERED BY THE FRAMEWORK from this node's ledger, before this
-// decision runs ([statelog.Snap.Held]); what this write adds is whether the
-// record its operation landed is still in force, judged from the node's own
-// row in the same snapshot ([statelog.GateStanding]).
-//
-// THE FRAMEWORK'S REFUSALS COME BACK IN ITS OWN WORDS. [Store.publish]
-// translates a lost race into "the room kept changing", which is the answer a
-// person posting needs; on a node's eviction subject it would name a room after
-// a node id, and the operator contending with another over one node's gate is
-// told what actually happened instead.
+// A retry is answered by the framework's ledger ([statelog.Snap.Held]); this
+// adds whether the landed record is still in force ([statelog.GateStanding]).
+// Framework refusals come back in its own words: [Store.publish]'s "the room
+// kept changing" would name a room after a node id.
 func (g *GateWriter) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 	readmit bool) (statelog.Result, error) {
 

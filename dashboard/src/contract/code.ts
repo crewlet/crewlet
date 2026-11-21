@@ -129,6 +129,23 @@ export const REPO_NAME_MAX_BYTES = 63;
  */
 export const CHANGE_STATES = ["draft", "open", "closed", "merged"] as const;
 
+/** Why a push closed a change: it deleted the source branch (`gitlet.SourceDeleted`). */
+export const SOURCE_DELETED = "source_deleted";
+
+/**
+ * Each kind of lifecycle move a change's timeline draws (`gitlet.ChangeMoveKinds`), HELD BOTH WAYS.
+ */
+export const CHANGE_MOVE_KINDS = [
+  "closed",
+  "reopened",
+  "drafted",
+  "readied",
+  "retitled",
+  "described",
+  "work_item",
+  "retargeted",
+] as const;
+
 /**
  * What a listing of changes can ask its changes to be waiting on, in the
  * engine's order (`gitlet.Needs`): a review the asker owes, a fix their own
@@ -154,6 +171,12 @@ export const CHANGE_WINDOWS = ["24h", "7d", "30d"] as const;
  * held both ways by `internal/gitlet.TestTheDashboardKnowsEverySortOfAListingOfChanges`.
  */
 export const CHANGE_SORTS = ["opened", "updated"] as const;
+
+/**
+ * Where an open change's merge stands, as a listing narrows to it (`readiness=`, `gitlet.ReadinessBuckets`);
+ * held both ways by `internal/gitlet.TestTheDashboardKnowsEveryReadinessBucket`.
+ */
+export const READINESS_BUCKETS = ["ready", "approval", "checks", "blockers"] as const;
 
 /**
  * Every precondition a live change's readiness judges, ONE A KIND, in the

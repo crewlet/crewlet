@@ -38,16 +38,22 @@ import { COLLEAGUE_QUERY_MAX } from "~/contract/wire.ts";
 import { sequenceWords } from "../keymap.ts";
 import { utf8Bytes } from "~/lib/format.ts";
 import { KIND_WORDS } from "~/lib/artifacts/words.ts";
-import { changePath, changeRef, parseChangeRef } from "~/lib/code.ts";
-import type { ArtifactKind, ArtifactListItem } from "~/protocol/index.ts";
+import { changePath, changeRef, parseChangeRef, repoPath } from "~/lib/code.ts";
+import type {
+  ArtifactKind,
+  ArtifactListItem,
+  CodeChangeSummary,
+  CodeRepoSummary,
+} from "~/protocol/index.ts";
 
 /**
  * The scopes, in the order the tab row draws them and Tab walks them.
  *
  * SEVEN, because seven questions do not fit one ranked list: the company's
  * WORK, its PAGES and its ARTIFACTS are server searches ranked by the engine
- * and cannot be ranked against a list of screens; its CODE is a scatter over
- * the Gitlet nodes that answers lines, not records, in the repositories' order; finding a PERSON wants the
+ * and cannot be ranked against a list of screens; its CODE is repositories by
+ * name, changes by title and a scatter over the Gitlet nodes that answers lines,
+ * not records, in the repositories' order; finding a PERSON wants the
  * roster and the engine's own name tiers and nothing else, so a colleague is
  * not buried under four tools whose names happen to match; and running a
  * COMMAND has no name to search for at all. ALL is the launcher over the lot.
@@ -56,7 +62,7 @@ import type { ArtifactKind, ArtifactListItem } from "~/protocol/index.ts";
  * three server questions, and a fourth would take the slot the screen under
  * the palette keeps — and a code search is a request to every Gitlet node, which
  * a launcher's every pause must not send; All offers a row that carries the
- * term to Artifacts instead, and Gitlet › Search is one Enter away in Code's.
+ * term to each instead, and Gitlet › Search is one Enter away in Code's.
  *
  * A SIGIL still opens three of them, typed in the same box in the same
  * keystroke as the query: `#` tasks, `@` agents, `>` actions. The sigil
@@ -114,6 +120,10 @@ export const ARTIFACT_HITS = 8;
  * answered by repository and file.
  */
 export const CODE_HITS = 8;
+
+/** How many repositories and changes the Code scope lists above its lines: FIVE each, so a name
+ *  or title typed whole is in view with the lines under it; the rest are Gitlet's own lists. */
+export const CODE_PLACE_HITS = 5;
 
 /**
  * The shortest term the Code scope asks the engine to search, in characters:
@@ -497,6 +507,29 @@ export function changeHits(term: string, nav: Navigator, runs: ServicesRun): Hit
       go: () => nav.to(changePath(named.repo, named.number)),
     },
   ];
+}
+
+/** The repositories a name's beginning finds (`code_repos?prefix=`), each opening its page. */
+export function repoHits(repos: readonly CodeRepoSummary[], nav: Navigator): Hit[] {
+  return repos.map((r) => ({
+    id: `repo-${r.name}`,
+    icon: "square-code",
+    label: r.name,
+    hint: r.description || "Open the repository",
+    go: () => nav.to(repoPath(r.name)),
+  }));
+}
+
+/** The changes a title's words find (`code_changes?text=`), each opening its page. */
+export function changeTitleHits(changes: readonly CodeChangeSummary[], nav: Navigator): Hit[] {
+  return changes.map((c) => ({
+    id: `titled-${c.ref}`,
+    icon: "git-pull-request",
+    label: c.title || c.ref,
+    hint: c.ref,
+    meta: c.state,
+    go: () => nav.to(changePath(c.repo, c.number)),
+  }));
 }
 
 /** The seats matching a query, in the local index's order of fit. */

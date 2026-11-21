@@ -12,6 +12,9 @@
 // take's scrub, the Claude Code thread layer, the context meter, a person's transcript): one grammar, so a
 // line one of them reads as JSON is a line every one of them reads as JSON.
 //
+// The package is a LEAF over the standard library, its tests included (a test fails on any other import): its
+// readers sit at heights no other package spans, and one engine import would stop one of them using it.
+//
 // # The contract
 //
 // [New] reads one JSON text: exactly one value, with blanks (space, tab, line feed, carriage return)
@@ -20,17 +23,27 @@
 // text, or a [Number]'s literal as written, is read with [Scanner.Read] like any io.Reader, a piece at a
 // time, never ending a read inside a UTF-8 sequence; what is not read, the next Next passes over.
 // [Scanner.InvalidUTF8] says whether the text Read handed held a byte that begins no UTF-8 character, which
-// the decoded text, U+FFFD there as for a U+FFFD written or escaped, cannot say.
+// the decoded text, U+FFFD there as for a U+FFFD written or escaped, cannot say. [Scanner.CountUnits] counts,
+// from where a reader turns it on, JavaScript's length of what the scan passes, read or passed over: in UTF-16
+// code units as written ([Scanner.Units], whose difference across a value is the value's length as written)
+// and of the current Name's or String's decoded text ([Scanner.TextUnits], zero at every other token), so a
+// reader charges a value of any length by its length (the thread layer's estimate) without holding it.
 // [Scanner.Skip] passes over a whole value and [Scanner.Capture] answers a value's bytes as written up to a
 // bound its caller names, passing over a longer one: a reader that hands a short value out raw holds it, at
-// that bound, and passes media over unheld. [Scanner.Depth] and [Scanner.Offset] say where a token sits, for
-// a reader that models a byte-level load by where a key sits in its line.
+// that bound, and passes media over unheld. [Scanner.Tee] hands a value's bytes as written to a writer as the
+// scan passes them, whether the caller reads the value's tokens or passes it, so a reader that keeps a value
+// of any length raw (compacted into a stream, say) while it reads the value's strings reads it once and holds
+// none of it. [Scanner.Depth] and [Scanner.Offset] say where a token sits, for a reader that models a
+// byte-level load by where a key sits in its line.
 //
 // EVERY BYTE IS VALIDATED, the ones a reader passes over too: a reader moved onto the scanner keeps the
 // acceptance it had, and a reader that decides from a line (the thread layer, which reads a line that is no
 // JSON value as Claude Code's own load reads it) needs to know the line was one value before it decides.
 // A refusal is an [*Error] with the [Fault] and the Offset it was met at, five faults a reader maps onto its
-// own; an error of the reader beneath passes through, wrapped. Either ends the scan.
+// own; an error of the reader beneath passes through, wrapped. Either ends the scan. A TEE'S WRITER'S ERROR
+// ENDS ONLY THE WRITING: the scan validates every byte on, and the call that ends the value answers it, a
+// [*TeeError], the scan going on past the value. A reader whose writer refuses a value (a redaction stream
+// that refuses a text) so loses that value alone, and reads the rest of its line.
 //
 // # One grammar, both decoders'
 //
@@ -72,7 +85,10 @@
 // holds up to B bytes more than the figure above from then on. A scan allocates nothing else: its test
 // reads a 64 MiB string, one of escapes and characters past ASCII, a 64 MiB name, a 64 MiB number, 64 MiB
 // of blanks and a value nested MaxDepth deep, and passes a 64 MiB string over, each within 68 KiB allocated
-// from New to io.EOF, and captures one past a 1 MiB bound within that and twice the bound.
+// from New to io.EOF, and captures one past a 1 MiB bound within that and twice the bound. A TEE HOLDS
+// NOTHING: its state is five fields that keep the struct in its size class (1,528 bytes), and a 64 MiB string
+// teed while it is read, and while Skip passes it, allocates 67,072 bytes from New to io.EOF in each of three
+// runs, one case a process, exactly what the string read untapped allocates.
 //
 // A long string is copied out in bulk: a run of plain bytes is found eight bytes at a time and copied in one
 // step, and passed over the same way, never stepped through a byte at a time. On two efficiency cores of a
@@ -80,4 +96,11 @@
 // where jsontext reads it at about 0.8 GB/s holding it whole, and read a transcript line dense with escapes
 // at about 0.5 GB/s: the scrub's two readings of a 256 MiB session cost about a second of scanning, against
 // its two-minute budget.
+//
+// COUNTING costs a pass over a text a character at a time where it leaves ASCII. On a dedicated two-core
+// slot of the build machine, three runs each: the base64 string passed over at 2.0 to 2.4 GB/s, and at 1.6 to
+// 1.9 counting; the transcript-like line at 0.76 to 0.90, and at 0.48 to 0.50 counting; and 16 MiB of CJK and
+// emoji (BenchmarkALongTextPastASCII) at 2.2 to 2.4, at 0.34 to 0.35 counting, still faster than reading it,
+// 0.20 to 0.21. Off, counting costs a branch a run. The count's five fields fit the struct's size class, so
+// the figure above stands, and counting allocates nothing.
 package jsonscan

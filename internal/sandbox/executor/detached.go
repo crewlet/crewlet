@@ -231,29 +231,26 @@ type carrier interface {
 
 // saver is a [carrier] whose session the engine packs while its run still
 // works, as a save ([Runner.PackSave]): beside its harness, from outside the
-// run's script, to a place of the save's own, named after its taker. Only
-// Claude Code's runner is one: its session is files a pack beside the harness
-// can read, in a store it takes no lock on. An OpenCode session lives in the
-// database the run's server holds, reachable only from the run's script (the
-// server's address and password are the script's alone), so none is saved.
+// run's script, to a place of the save's own, named after its taker. Both
+// runners are: Claude Code's session is files a pack beside the harness can
+// read, in a store it takes no lock on; OpenCode's is exported by a private
+// server beside the run's own, from the database both open in WAL mode with a
+// busy timeout (the package doc's "An OpenCode session saved beside its
+// running server").
 type saver interface {
-	// PackSave is the script that packs session now, beside a harness that
-	// may still be working ([claudeHeldTar]), staged in staged
+	// PackSave is the script that packs rec's session now, beside a harness
+	// that may still be working ([claudeHeldTar]), staged in staged
 	// ([Paths.SessionSaveStaging]) and moved to dest ([Paths.SessionSave]) —
 	// never [Paths.SessionCapture] nor a place another save moves over — its
 	// digest kept as every pack's is. It ends as [carrier.Pack] does
-	// ([packNothing] where the harness wrote no transcript, [packFailed] where
-	// no save was made, its error stream saying why) and runs as it does.
-	PackSave(paths Paths, session, staged, dest string) string
+	// ([packNothing] where the harness holds none of the session, [packFailed]
+	// where no save was made, its error stream saying why), or [packNoRoom]
+	// where its box lacks the memory to pack it now, and runs as it does. An
+	// error, and no script, where the record alone refuses the save: handed
+	// the record as the box holds it ([Runner.packNow]), a saver judges it
+	// before any script runs.
+	PackSave(paths Paths, rec sessionRecord, staged, dest string) (string, error)
 }
-
-// mcpHolder is a harness that can be held to the MCP servers a run hands it,
-// starting none its own configuration, a repository's or a plugin's declares
-// ([sandbox.RunRequest.OnlyMCPServers]). Only Claude Code's runner is one, as
-// the one run that asks (the assistant's deep work) runs on Claude Code alone;
-// such a run on another harness is refused rather than started on every server
-// its configuration adds up to.
-type mcpHolder interface{ HoldsToItsMCPServers() bool }
 
 // sessionTotals is a harness whose result, on a run that continues a session,
 // may state the session's spend rather than the run's: from the release
@@ -287,6 +284,12 @@ type runSpender interface {
 type contextReader interface {
 	// request is that measure, or why the stream gave none.
 	request() contextRead
+}
+
+// limitReporter is a decoder that keeps its run's last limit report line
+// ([sandbox.Result.Limits]): Claude Code's `rate_limit_event`.
+type limitReporter interface {
+	limitReport() string
 }
 
 // windowReporter is a decoder that reads off its run's stream the least context
@@ -412,6 +415,11 @@ type Runner struct {
 	// release's deadline to the one its rule gives exactly, not one moved by how
 	// long the case has run (internal/fixedwait).
 	now func() time.Time
+
+	// memo is what a take's scrub learned of texts it found unchanged
+	// ([scrubMemo]): the process's in every runner New builds, a field so a
+	// case reads its own.
+	memo *scrubMemo
 }
 
 var _ sandbox.Runner = (*Runner)(nil)
@@ -422,7 +430,8 @@ var _ sandbox.CallIdentifier = (*Runner)(nil)
 
 // New wraps a harness in the shared plumbing.
 func New(harness Harness) *Runner {
-	return &Runner{harness: harness, failureBound: sandbox.MaxFailureBytes, lineBound: maxLineBytes, now: time.Now}
+	return &Runner{harness: harness, failureBound: sandbox.MaxFailureBytes, lineBound: maxLineBytes, now: time.Now,
+		memo: processScrubMemo}
 }
 
 // Name is the harness's config name.
@@ -555,11 +564,6 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	}
 	if err := r.refuseCarried(req); err != nil {
 		return sandbox.RunHandle{}, err
-	}
-	if h, ok := r.harness.(mcpHolder); req.OnlyMCPServers && (!ok || !h.HoldsToItsMCPServers()) {
-		return sandbox.RunHandle{}, fmt.Errorf("executor: %s starts the MCP servers its own "+
-			"configuration declares, and this run asks to be held to the ones it is handed",
-			r.harness.Name())
 	}
 	if err := r.refuseSkills(req); err != nil {
 		return sandbox.RunHandle{}, err
@@ -943,10 +947,11 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 // or any piece whose path is not a regular file ([sandbox.ErrNotRegularFile],
 // which a retry would read again), degrades only itself: described, the run
 // not a success, its tokens, refs and transcript still collected and charged.
-// A read that fails is an error: the box could not be read back. Everything is
-// redacted whole before anything is bounded, since a secret cut in two
-// survives as fragments; report, failure and transcript leave whole, bounded
-// by the coordinator in one place ([sandbox.MaxRunTextBytes]).
+// A read that fails is an error. Everything is redacted whole before anything
+// is bounded, since a secret cut in two survives as fragments; report and
+// failure leave whole, and the transcript whole up to [transcriptHoldBytes],
+// past it as the record keeps it ([transcriptLines]): the coordinator bounds
+// what is sent, in one place ([sandbox.MaxRunTextBytes]).
 func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.Result, error) {
 	paths := PathsFor(box)
 	out := r.harness.Output(paths)
@@ -958,6 +963,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		spent   *runSpend
 		request contextRead
 		window  int64
+		limits  string
 	)
 	if out.Events {
 		streamed, refusal, err := r.decodeStream(ctx, box, out.Stdout)
@@ -968,7 +974,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			refused = append(refused, refusal)
 		}
 		result, last, spent, request = streamed.result, streamed.last, streamed.spent, streamed.request
-		window = streamed.window
+		window, limits = streamed.window, streamed.limits
 	}
 	if out.Result != "" {
 		raw, refusal, err := readWhole(ctx, box, out.Result, "the result its harness printed")
@@ -999,6 +1005,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			parsed := r.harness.Parse(raw)
 			if out.Events {
 				parsed.Transcript = result.Transcript
+				parsed.TranscriptElidedLines = result.TranscriptElidedLines
+				parsed.TranscriptElidedBytes = result.TranscriptElidedBytes
 			}
 			result = parsed
 		}
@@ -1012,6 +1020,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// continuation of the copy is judged under it where it is less than the
 		// engine's own reading of the model's window.
 		result.ReportedWindow = window
+		result.Limits = limits
 	}
 
 	// Which session the run took up, as its script recorded before its harness
@@ -1051,7 +1060,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// The transcript is the observability surface of an agent with no
 	// telemetry: the parser's from streamed events, else the error stream,
 	// read once and reused below for the failure detail.
-	errTail, err := box.ReadTail(ctx, paths.Err(), r.failureBound+redactContext)
+	errTail, err := box.ReadTail(ctx, paths.Err(), r.failureBound+redact.LookBack)
 	if refusal := notRegularPiece(err, paths.Err(), "the error stream"); refusal != "" {
 		refused = append(refused, refusal)
 		errTail, err = sandbox.FileTail{}, nil
@@ -1059,13 +1068,22 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	if err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading the error stream: %w", err)
 	}
-	stderr, unread := streamEnd(errTail, r.failureBound)
-	stderr = strings.TrimSpace(stderr)
-	if result.Transcript == "" && stderr != "" {
+	shown, unread := streamEnd(errTail, r.failureBound)
+	stderr := strings.TrimSpace(shown)
+	// NOTHING OF ITS END SHOWN ([settledEnd]) but blank lines, the stream is
+	// said in the engine's own words, which the failure keeps whole.
+	continued := ""
+	if stderr == "" && unread > 0 {
+		continued = continuedNote(errTail.Size, shown != "")
+	}
+	switch {
+	case result.Transcript != "":
+	case stderr != "" && unread > 0:
+		result.Transcript = unreadNote(unread, false) + "\n" + stderr
+	case stderr != "":
 		result.Transcript = stderr
-		if unread > 0 {
-			result.Transcript = unreadNote(unread, false) + "\n" + stderr
-		}
+	default:
+		result.Transcript = continued
 	}
 
 	codeText, refusal, err := readWhole(ctx, box, paths.ExitCode(), "its exit status")
@@ -1145,7 +1163,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		if crashed && result.JobEnd == "" {
 			said = append(said, "the harness exited with status "+code)
 		}
-		said = append(said, result.Error)
+		said = append(said, result.Error, continued)
 		errStream = stderr
 	default:
 		said = append(said, result.Error)
@@ -1175,9 +1193,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	for i, ref := range result.DeliveredRefs {
 		result.DeliveredRefs[i] = redact.Secrets(ref)
 	}
-	// WHOLE, as the report and the failure leave here: the coordinator is
-	// the one home of the record's bound, and holds the transcript to it
-	// after redacting it again ([sandbox.MaxRunTextBytes]).
+	// Whole up to the hold, as the report and the failure leave here: the
+	// coordinator holds the transcript to the record's bound after redacting
+	// it again ([sandbox.MaxRunTextBytes]).
 	result.Transcript = redact.Secrets(result.Transcript)
 	return result, nil
 }
@@ -1335,6 +1353,18 @@ func unreadNote(unread int64, none bool) string {
 		humanSize(unread))
 }
 
+// continuedNote is what stands for an error stream of size bytes of whose end
+// nothing is shown: the end, as read, continues what was written before the
+// read, or every line it opens is blank.
+func continuedNote(size int64, blank bool) string {
+	why := "continues what was written before it"
+	if blank {
+		why = "opens only blank lines"
+	}
+	return fmt.Sprintf("(the error stream, %s, is not shown: the end a run's failure reads of it %s)",
+		humanSize(size), why)
+}
+
 // decodeStream reads one event stream through a fresh decoder, and keeps its
 // last line — or answers a refusal where the box would not open the stream
 // because it is not a regular file ([notRegularPiece]).
@@ -1364,6 +1394,9 @@ func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path str
 	if reporter, ok := dec.Decoder.(windowReporter); ok {
 		out.window = reporter.reportedWindow()
 	}
+	if reporter, ok := dec.Decoder.(limitReporter); ok {
+		out.limits = reporter.limitReport()
+	}
 	return out, "", nil
 }
 
@@ -1378,6 +1411,8 @@ type decodedStream struct {
 	request contextRead
 	// window is the least context window the run reported ([windowReporter]).
 	window int64
+	// limits is the run's last limit report line ([limitReporter]).
+	limits string
 }
 
 // streamLast is an event stream's last line, as `tail -n 1` would copy it

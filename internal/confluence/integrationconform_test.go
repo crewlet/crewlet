@@ -12,101 +12,28 @@ import (
 	"github.com/crewlet/crewlet/internal/integration/integrationtest"
 )
 
-// The Confluence half of [integration.Reconciler]'s safety contract,
-// certified against the reconcile the loop actually runs.
+// The Confluence half of [integration.Reconciler]'s safety contract, certified
+// against the reconcile the loop runs, over instances the pass has already
+// brought into line (a stub returning (nil, nil) made "a converged pass writes
+// nothing" hold because nothing happened).
 //
-// # Why this file exists at all
-//
-// integrationtest states the contract in nine clauses and its package doc
-// calls the write-counting hook REQUIRED, because that clause is "the one
-// most likely to be wrong". Its only caller was a stub whose pass returned
-// (nil, nil), so "a converged pass writes nothing" held because nothing
-// happened — a green test over a world nobody had built and a reconciler
-// nobody had run. This points the cases at [confluence.Reconcile], over
-// instances the pass has already brought into line, and counts what they
-// receive.
-//
-// # TWO WORLDS, because a converged one cannot certify half the clauses
-//
-// A converged Confluence reports NO findings — [confluence.Result.Findings]
-// only emits for a hook that could not be established — so every case that
-// walks the findings list walked an empty one and asserted nothing about this
-// integration. That was measured rather than argued: overlaying the suite
-// with a "this findings list is empty" check reddened three cases on BOTH
-// deployments. The contract's own count was seven clauses certified where
-// four carried weight.
-//
-// So [integrationtest.Reconciler.Outstanding] is a world where the instance
-// REFUSES A REGISTRATION — a 403 from /rest/webhooks/1.0/webhook, which is
-// what an account without the permission to administer webhooks gets — and
-// the pass reports [integration.FindingIngressBlocked]: degraded, owed by the
-// administrator who can grant that permission, and a sentence naming the
-// event class that now reaches nobody.
-//
-// It is a registration rather than the other obvious choice, a credential the
-// instance refuses, and that is forced rather than preferred: Confluence's
-// pass probes its identity FIRST and returns an error when that is refused,
-// because nothing else it went on to report would be trustworthy. The spine
-// turns that error into [integration.FindingCredentialRejected] itself, in
-// [integration.Observe], so it never reaches a reconciler's findings list and
-// cannot be the world here — the suite's cases would fail on the error before
-// they read anything. A refused registration is the one genuinely outstanding
-// condition this pass reports in the shared vocabulary.
-//
-// # Both deployments, because the pass has two
-//
-// [confluence.Reconcile] forks on the client's deployment and the two halves
-// are different code with different converged predicates: Cloud walks
-// [confluence.WebhookEvents] and keeps a hook per event, Data Center keeps
-// the single signed hook named crewlet:all. A harness pinned to one certifies
-// half the surface, so the suite is driven over both. The fork is on the
-// CLIENT rather than on any address, which is why each world builds its own —
-// an httptest address is 127.0.0.1 and reads as Data Center, so the Cloud
-// branch is only reachable from a client that says so.
-//
-// # What counts as a write here, and why it is counted by route
-//
-// Two things a person would have to undo, and the suite's package doc names
-// both: a mutation at the instance, and a value sealed into this
-// deployment's own store.
-//
-//   - At the instance, the mutating routes are POST
-//     /rest/webhooks/1.0/webhook (register) and PUT and DELETE on
-//     /rest/webhooks/1.0/webhook/{id} (re-point, remove). GET on either, and
-//     GET /rest/api/user/current, are reads and are not counted. Counted by
-//     ROUTE rather than by method because the suite says so and because the
-//     distinction is real elsewhere in this org's own APIs — Atlassian models
-//     workspace discovery as a POST that discovers rather than writes — so a
-//     method-keyed counter is a habit that transfers wrongly. The price of
-//     that rule is paid in the fake: a route counted as read-only has to
-//     REFUSE a write rather than serve it, which is why its identity arm
-//     answers 405 to anything but a GET.
-//   - At this deployment, every [provision.TokenSink] Record. That is the
-//     one this integration most needs counted, and on Data Center it is the
-//     ONLY one that can see the failure: the signing secret is never returned
-//     by a listing and takes no part in the converged comparison, so a pass
-//     that re-minted it would rotate the key the engine verifies deliveries
-//     with while touching nothing at the instance at all.
-//
-// # What the cancellation clause certifies HERE, and what it does not
-//
-// "A cancelled pass reports a fault rather than health" hands the pass a
-// context that is already dead, so for this vendor it is answered by
-// [confluence.Client.Me] — the identity probe is the pass's first request and
-// it fails outright. That IS the contract's claim and it holds, but it means
-// the suite never reaches the fold that makes a pass cut short MID-WALK a
-// fault. Nothing here would notice if that fold were deleted.
-//
-// That half is pinned beside this file instead, by name, because it needs a
-// context that dies at a chosen point rather than before the first request:
-// TestACancelledCloudPassOverAConvergedSiteReportsAFaultRatherThanHealth,
-// TestACancelledCloudPassDoesNotBlameTheInstance,
-// TestACancelledDataCenterPassOverAConvergedInstanceReportsAFault and
-// TestAPassWithNoBaseOnADeadContextIsAFaultRatherThanHealth.
+// A converged Confluence reports NO findings, so cases walking the findings
+// list would assert nothing; [integrationtest.Reconciler.Outstanding] is an
+// instance that REFUSES A REGISTRATION (403: an account that cannot administer
+// webhooks), reported as [integration.FindingIngressBlocked]. It cannot be a
+// refused credential: the identity probe runs first and [integration.Observe]
+// turns its error into FindingCredentialRejected before any findings list.
 
 // world is a Confluence instance plus the pass itself as
 // [integration.Reconciler] sees it. Converged or outstanding is a property of
 // the instance, not of this type.
+//
+// Both deployments are driven: Reconcile forks on the CLIENT's deployment, and
+// a 127.0.0.1 address reads as Data Center. A write counts by ROUTE and
+// includes every [provision.TokenSink] Record (on Data Center the only sign of
+// a pass re-minting the never-listed secret). Mid-walk cancellation, which the
+// identity probe hides, is pinned by the TestACancelled* tests in hooks_test.go
+// and TestAPassWithNoBaseOnADeadContextIsAFaultRatherThanHealth.
 type world struct {
 	site *cloudSite
 	sink *countingSink
@@ -225,25 +152,13 @@ func newWorld(t *testing.T, site *cloudSite, deployment confluence.Deployment) *
 // convergedConfluence stands an instance up and converges it BY RUNNING THE
 // PASS.
 //
-// # Converged by the pass rather than by a fixture
+// A hand-seeded listing encodes what the author BELIEVES converged looks like;
+// any field it gets wrong makes the pass write every run. Running the real
+// pass makes it converged by definition. Its writes are not counted:
+// [integrationtest.Run] baselines Mutations() after Converged returns.
 //
-// The alternative is a hand-seeded listing carrying the eight hooks a
-// converged Cloud site holds. It is the tempting one and it is weaker in the
-// direction that matters: it encodes what the harness author BELIEVES
-// converged looks like, and every field the belief gets wrong — an id that
-// is only ever read off the tail of `self`, a token query the seeder wrote in
-// a different order, an `enabled` nobody thought to set — makes the pass
-// write on every run while the fixture calls the world converged. Running the
-// real pass makes the world converged by definition, and leaves only the
-// question worth asking: whether the SECOND pass writes.
-//
-// The seeding pass's own writes are not counted: [integrationtest.Run] takes
-// its baseline from Mutations() after Converged returns.
-//
-// BOTH t AND tb, deliberately. [integrationtest.TB] is the narrow interface
-// the suite's own tests drive its cases with and it has no Cleanup, so the
-// case's own reporter is tb while the server's lifetime hangs off the real
-// *testing.T of the subtest that owns this world.
+// BOTH t AND tb: [integrationtest.TB] has no Cleanup, so tb reports the case
+// while the server's lifetime hangs off the subtest's own *testing.T.
 func convergedConfluence(
 	t *testing.T, tb integrationtest.TB, deployment confluence.Deployment,
 ) *world {
@@ -278,29 +193,11 @@ func convergedConfluence(
 // outstandingConfluence stands up an instance that REFUSES one event's
 // registration, and converges everything else about it by running the pass.
 //
-// # Why this condition, out of everything that can be wrong
-//
-// It is the one an operator most needs told and the engine cannot fix: the
-// org credential can read the instance (so the pass runs and reports rather
-// than faulting) and may not administer webhooks for that event (so the
-// delivery path is blocked until somebody with the permission grants it).
-// That is [integration.FindingIngressBlocked] exactly — degraded, owed by an
-// ADMIN — and the finding carries the instance's own refusal so the person
-// reading it knows what to grant.
-//
-// # Steady-state outstanding, not first-pass outstanding
-//
-// The pass is run once here, so the world the suite's cases meet is the one
-// the loop actually sits in: everything that CAN be hooked is hooked, and the
-// same finding comes back every few minutes for as long as nobody acts. A
-// world handed over un-run would have its first pass register seven hooks and
-// its second register none, which is a world in flux rather than an
-// outstanding one — and the churn clause would be asserting about the
-// difference between a fresh instance and a converged one rather than about
-// findings that flap.
-//
-// The refusal is not counted anywhere and does not need to be: a pass over
-// this world is ALLOWED to write, because it has work to do.
+// The credential can read the instance but may not administer webhooks for
+// that event: [integration.FindingIngressBlocked], owed by an ADMIN. The pass
+// runs once here so the suite meets the steady state: an un-run world would
+// register seven hooks on the first pass and none on the second, and the churn
+// clause would assert about fresh versus converged. A pass over it MAY write.
 func outstandingConfluence(
 	t *testing.T, tb integrationtest.TB, deployment confluence.Deployment,
 ) *world {
@@ -406,17 +303,11 @@ func TestTheConfluenceReconcilerMeetsTheContract(t *testing.T) {
 
 // A ROUTE THE COUNTER TREATS AS READ-ONLY REFUSES A WRITE.
 //
-// [cloudSite.writes] counts by ROUTE, which is the rule integrationtest's
-// package doc sets and which this file's own doc restates: some third-party
-// apps model a listing as a POST, so a method-keyed counter makes the
-// converged-pass-writes-nothing clause impossible to satisfy.
-//
-// The price is that a route counted as read-only has to actually BE read-only.
-// The identity route matched on the path alone, so a mutating call there would
-// have been served as a read and counted as NOTHING — the same hole the
-// route-keyed rule exists to close, inverted, and the one place in this fake
-// where a future write would be invisible rather than merely miscounted.
-// Nothing in the pass does that today; this is what keeps it that way.
+// [cloudSite.writes] counts by ROUTE (integrationtest's package doc: some apps
+// model a listing as a POST), so a route counted as read-only has to BE
+// read-only. The identity route matched on the path alone, so a mutating call
+// there would be served as a read and counted as NOTHING, the one place in
+// this fake where a future write would be invisible.
 func TestARouteTheCounterTreatsAsReadOnlyRefusesAWrite(t *testing.T) {
 	t.Parallel()
 	site := newCloudSite(t)
@@ -441,18 +332,13 @@ func TestARouteTheCounterTreatsAsReadOnlyRefusesAWrite(t *testing.T) {
 
 // THE OUTSTANDING WORLD IS THE STEADY STATE, NOT A ONE-OFF.
 //
-// The suite's own cases would be satisfied by a world whose finding appears
-// once: each of them builds a fresh world and passes over it at most twice.
-// What the loop actually does is pass over this instance every few minutes
-// for the life of the deployment, and the two failures that matter are
-// invisible in two passes — a pass that quietly gives up reporting the block,
-// and one that re-registers the seven working hooks each time it meets the
-// refused one.
-//
-// Here rather than in the suite because it is this vendor's own risk: the
-// Cloud walk records a refusal per event and carries on, so "the pass keeps
-// going" and "the pass keeps reporting" are two different claims about the
-// same loop.
+// The suite's cases pass over a fresh world at most twice, but the loop
+// passes over this instance every few minutes for the deployment's life, and
+// two failures are invisible in two passes: one that quietly stops reporting
+// the block, and one that re-registers the seven working hooks each time it
+// meets the refused one. Here because it is this vendor's own risk: the Cloud
+// walk records a refusal per event and carries on, so "keeps going" and
+// "keeps reporting" are different claims.
 func TestTheOutstandingWorldKeepsReportingAndStaysQuiet(t *testing.T) {
 	t.Parallel()
 	for _, deployment := range []confluence.Deployment{confluence.Cloud, confluence.DataCenter} {

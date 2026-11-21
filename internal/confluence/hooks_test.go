@@ -65,21 +65,12 @@ func (s *cloudSite) serve(w http.ResponseWriter, req *http.Request) {
 	case strings.HasSuffix(path, "/rest/api/user/current") && req.Method == http.MethodGet:
 		_, _ = w.Write([]byte(`{"accountId":"acct-org"}`))
 	case strings.HasSuffix(path, "/rest/api/user/current"):
-		// THE METHOD CHECK IS PART OF THE COUNTER, and this arm is where
-		// it is kept honest.
-		//
-		// [cloudSite.writes] counts by ROUTE, which is the rule
-		// integrationtest's package doc sets: some third-party apps model a
-		// listing as a POST, so a method-keyed counter makes the
-		// converged-pass-writes-nothing clause impossible to satisfy. The
-		// price of that rule is that a route declared read-only has to
-		// actually BE read-only — this one matched on the path alone, so a
-		// mutating call here would have been served as a read and counted as
-		// nothing at all, which is that same hole inverted.
-		//
-		// Nothing in the pass does that today (it only GETs here), and a 405
-		// is what keeps it that way: the day somebody reaches this route with
-		// a write, they get a failure to read rather than a silent pass.
+		// THE METHOD CHECK IS PART OF THE COUNTER. [cloudSite.writes] counts
+		// by ROUTE (integrationtest's package doc: some apps model a listing
+		// as a POST), so a route declared read-only has to BE read-only.
+		// Matched on the path alone, a mutating call here would be served
+		// as a read and counted as nothing. The 405 turns that into a
+		// failure rather than a silent pass.
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		_, _ = w.Write([]byte(`{"message":"the identity route is read-only"}`))
 	case strings.HasSuffix(path, "/rest/webhooks/1.0/webhook") && req.Method == http.MethodGet:
@@ -1188,17 +1179,13 @@ func TestAPassWithNoBaseOnADeadContextIsAFaultRatherThanHealth(t *testing.T) {
 
 // A CLOUD HOOK SUBSCRIBED TO THE WRONG EVENT IS RE-SUBSCRIBED.
 //
-// The event list is the third thing a listing reports, and it is the one that
-// decides what actually arrives. The engine registers ONE HOOK PER EVENT
-// because the Cloud payload names none — the route stamps the event back onto
-// the body from the PATH — so a hook at the crewlet:page_created address
-// subscribed to comment_created does not merely deliver the wrong thing: it
-// delivers comment payloads STAMPED as page creations, and every seat woken by
-// one is woken about work that does not exist. A pass that compared only the
-// name and the address called that converged.
+// The engine registers ONE HOOK PER EVENT because the Cloud payload names none
+// (the route stamps the event from the PATH), so a hook at the
+// crewlet:page_created address subscribed to comment_created delivers comment
+// payloads STAMPED as page creations, waking seats about work that does not
+// exist. A pass comparing only name and address called that converged.
 //
-// Both shapes, because the converged predicate makes two claims: exactly one
-// event, and that it is this one.
+// Both shapes, because the predicate claims exactly one event, and this one.
 func TestACloudHookSubscribedToTheWrongEventsIsCorrected(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1450,18 +1437,14 @@ func TestAnUnhookedEventWithNoDetailStillSaysWhatToDo(t *testing.T) {
 
 // TEARDOWN REMOVES THIS ENGINE'S HOOKS AND NOTHING ELSE.
 //
-// Teardown had no test in this package at all, and it is the one function
-// here whose failure mode is destruction rather than drift: it walks every
-// registration the instance holds and deletes. What confines it to this
-// engine's own is the [confluence.HookNamePrefix] check — the same namespace
-// rule the two converge halves follow — and with that check wrong, a
-// disconnect silently removes every webhook the Confluence administrator ever
-// registered, for tools that have nothing to do with Crewlet. Nothing at the
-// instance records what they were.
+// Teardown's failure mode is destruction rather than drift: it walks every
+// registration the instance holds and deletes. Only the
+// [confluence.HookNamePrefix] check confines it to this engine's own; with
+// that wrong, a disconnect silently removes every webhook the administrator
+// registered for other tools, and nothing records what they were.
 //
-// SAFE TO REPEAT is the other half of its doc, and it is what a retried
-// disconnect depends on: a hook already gone is not an error, and a pass that
-// finds none has finished rather than failed.
+// SAFE TO REPEAT is what a retried disconnect depends on: a hook already gone
+// is not an error, and a pass that finds none has finished.
 func TestTeardownRemovesOnlyThisEnginesHooksAndIsSafeToRepeat(t *testing.T) {
 	t.Parallel()
 	site := newCloudSite(t)

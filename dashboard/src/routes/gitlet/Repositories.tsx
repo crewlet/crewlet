@@ -71,11 +71,12 @@ import { REPO_STATUS_FILTERS, repoStatusWord } from "~/lib/code.ts";
 import { fmtBytes, fmtDateTime, plural } from "~/lib/format.ts";
 import { indexOrg, unitByKey } from "~/lib/seats.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
+import { joinEdges } from "~/lib/range.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import { useHeldGrants } from "~/lib/viewer.ts";
 import type { CodeRepoSummary, CodeReposAnswer, CodeReposTotal } from "~/protocol/index.ts";
-import { PushSpark, SPARK_DAYS, useDayBounds } from "./activity.tsx";
+import { PushSpark, SPARK_DAYS, SPARK_WINDOW, boundsOf, useDayBounds } from "./activity.tsx";
 import { CodeList, useListSort } from "./CodeList.tsx";
 import { ImportRepoButton } from "./ImportRepo.tsx";
 import { moverOf } from "./movers.ts";
@@ -92,6 +93,7 @@ import {
   sortHeld,
   type RepoKind,
 } from "./repoListing.ts";
+import { useGitletSectionCounts } from "./sectionCounts.ts";
 import { CheckRollupMark, Face, useWhoName } from "./ui.tsx";
 import "~/styles/gitlet.css";
 
@@ -108,8 +110,6 @@ const REPOS_POLL_MS = 60_000;
 /** Where a repository's settings are written: Settings › Configuration. */
 const CONFIG_PATH: readonly string[] = ["settings", "config"];
 
-const COUNTS_PARAMS = { parts: "repos" } as const;
-
 export function Repositories() {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
@@ -122,30 +122,31 @@ export function Repositories() {
   const status = listingStatus(statusParam);
   const kind = listingKind(kindParam);
   const order = listingSort(status, sort);
-  // THE READER'S LAST 14 DAYS, moving once a day: every row's pushes by day ride the listing.
+  // THE READER'S LAST 14 DAYS, moving once a day: every row's pushes by day ride the listing, as
+  // its window's edges, so the reader's midnight is no new question (`lib/useCodeQuery.ts`).
   const bounds = useDayBounds(SPARK_DAYS);
-  const params = useMemo(
-    () => listingParams(status, kind, sort, bounds),
-    [status, kind, sort, bounds],
-  );
+  const params = useMemo(() => listingParams(status, kind, sort), [status, kind, sort]);
   // THE FIRST PAGE STAYS LIVE past Load more, and the pager joins it to the
   // pages after it (`lib/usePaged.ts`).
   const first = useCodeQuery("code_repos", params, {
     pollMs: REPOS_POLL_MS,
     enabled: bounds.length > 0,
+    window: { name: SPARK_WINDOW, edges: { day_bounds: joinEdges(bounds) } },
   });
   const paged = usePaged(
     first,
-    params,
-    (cursor) => codeRest.query("code_repos", { ...params, cursor }),
+    { ...params, window: SPARK_WINDOW },
+    (cursor, edges) => codeRest.query("code_repos", { ...params, cursor }, undefined, edges),
     (answer: CodeReposAnswer) => answer.repos ?? [],
     (repo: CodeRepoSummary) => repo.id,
     (answer: CodeReposAnswer) => answer.next ?? "",
   );
-  // THE KIND COUNTS, a second small read: its refusal costs only the figures.
-  const counts = useCodeQuery("code_counts", COUNTS_PARAMS, { pollMs: REPOS_POLL_MS });
+  // THE KIND COUNTS, the section figures' answer: its refusal costs only the figures.
+  const counts = useGitletSectionCounts({ pollMs: REPOS_POLL_MS });
   const byKind = counts.data?.counts?.repos;
   const rows = paged.items;
+  // THE DAYS THE ROWS DRAWN WERE COUNTED ON, which lag the reader's until the moved window lands.
+  const drawnBounds = useMemo(() => boundsOf(paged.edges), [paged.edges]);
   const total = paged.answers[0]?.repos_total;
   // THE CONFIGURATION, offered only to a reader who may open it — the rule
   // every lock is drawn by — since it is where a repository is declared.
@@ -265,7 +266,7 @@ export function Repositories() {
                 )
               }
               meta={(r) => <RepoMeta repo={r} unitName={unitByKey(index, r.owner.ref)?.name} />}
-              facts={(r) => <RepoFacts repo={r} bounds={bounds} />}
+              facts={(r) => <RepoFacts repo={r} bounds={drawnBounds} />}
               paged={paged}
               moreLabel="Load more repositories"
               foot={footOf(total, rows.length, paged.more, order)}

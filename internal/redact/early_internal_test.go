@@ -19,10 +19,6 @@ func lagBytes() int {
 	return len(rules()) * (stageStep + pieceBytes + longestMarker())
 }
 
-// keysBytes is what the keys' stage holds besides what it waits on: a piece,
-// four blocks' reach behind where it reads and a step past it ([streamBound]).
-const keysBytes = pieceBytes + 4*keyReach + stageAdvance + keyAhead
-
 // holdShape is a text built to hold a stream, built when asked for: a key's
 // armour beside a run, a collapsed text, or blanks that a reader decides a
 // claim past.
@@ -209,13 +205,15 @@ func earlyText(r *rand.Rand, size, runMax int) string {
 
 // reading is what a stream that holds h did with a text: what it wrote and
 // answered, the blocks its keys' stage wrote, the windows it decided early,
-// and the most its stages held between two writes.
+// and the most its stages held between two writes; of its keys' stage, both
+// the bytes and the buffer, whose capacity is its bound once it jumps there
+// ([keysBytes]), so that only the bytes show a hold growing with a run.
 type reading struct {
-	out             string
-	err             error
-	blocks          [][2]int
-	early, keysMost int
-	most            streamHeld
+	out                      string
+	err                      error
+	blocks                   [][2]int
+	early, keysMost, keysCap int
+	most                     streamHeld
 	// decidedAt is how much of the text the stages had been handed when
 	// each window was decided early.
 	decidedAt []int
@@ -244,8 +242,9 @@ func readHolding(text string, h int, r *rand.Rand, most int) reading {
 		at += n
 		if s.p != nil {
 			h := s.p.held()
-			got.most = streamHeld{max(got.most.text, h.text), max(got.most.entries, h.entries), max(got.most.stageText, h.stageText), max(got.most.stageEdits, h.stageEdits)}
+			got.most = got.most.atLeast(h)
 			got.keysMost = max(got.keysMost, s.p.keys.in.held())
+			got.keysCap = max(got.keysCap, cap(s.p.keys.in.buf))
 		}
 	}
 	got.err = s.Close()
@@ -289,19 +288,17 @@ func checkReading(t *testing.T, name, text string, got reading) {
 }
 
 // NO TEXT HOLDS A STREAM PAST ITS WINDOWS AND ITS HOLD: whatever the text, the
-// keys' stage holds no more than what it holds besides waiting on its claims
-// and the hold ([holdBytes]), every stage no more than its window, and all
-// of them together no more than [streamBound] derives with the hold in place
-// of the claims' lag; over a shape of every hold a stream was found to have,
-// at a hold small enough that a shape costs a MiB, with a run of two lengths,
-// and the most held is not more for the longer; and at the stream's own hold
-// over a run longer than it beside an armour, held to the figure the claims'
-// lag gives ([lagBytes]), which the stream's own hold is.
+// keys' stage holds no more than its own bytes plus the hold ([holdBytes]),
+// every stage no more than its window, and all together no more than
+// [streamBound] derives with the hold in place of the claims' lag. Checked over
+// a shape of every hold a stream was found to have, at a small hold, with a run
+// of two lengths (the longer holds no more); and at the stream's own hold over
+// a run longer than it beside an armour, held to the figure [lagBytes] gives.
 //
-// Mutation: decide no window before its claims are known ([keyStage.step]),
-// or let the text run twice the hold past a window first, and a shape here is
-// held past the figure; or hold the text further past a window than the
-// claims' lag ([holdBytes]), and the stream's own hold is not the figure's.
+// Mutation: decide no window before its claims are known ([keyStage.step]), or
+// let the text run twice the hold past a window, and a shape is held past the
+// figure; or hold the text further past a window than the claims' lag
+// ([holdBytes]), and the stream's own hold is not the figure's.
 func TestNoTextHoldsAStreamPastItsWindowsAndItsHold(t *testing.T) {
 	t.Parallel()
 	boundText, boundEntries := streamBound()
@@ -310,8 +307,8 @@ func TestNoTextHoldsAStreamPastItsWindowsAndItsHold(t *testing.T) {
 		t.Helper()
 		text := boundText - lagBytes() + hold
 		switch {
-		case got.keysMost > keysBytes+hold:
-			t.Errorf("%s at a hold of %d KiB: the keys' stage held %d KiB, past the %d KiB it holds besides its hold and the hold", name, hold>>10, got.keysMost>>10, (keysBytes+hold)>>10)
+		case got.keysCap > keysBytes+hold:
+			t.Errorf("%s at a hold of %d KiB: the keys' stage held a buffer of %d KiB (%d KiB of text), past the %d KiB it holds besides its hold and the hold", name, hold>>10, got.keysCap>>10, got.keysMost>>10, (keysBytes+hold)>>10)
 		case got.most.stageText > streamWindow:
 			t.Errorf("%s at a hold of %d KiB: a stage held %d bytes of its input, past the %d of its window", name, hold>>10, got.most.stageText, streamWindow)
 		case got.most.text > text || got.most.entries > boundEntries:
@@ -349,31 +346,15 @@ func TestNoTextHoldsAStreamPastItsWindowsAndItsHold(t *testing.T) {
 }
 
 // A STREAM THAT DECIDES EARLY SAYS SO: Close answers nil, and the stream wrote
-// [Secrets] of the text, its keys' stage every block the whole text's; or
-// Close answers [ErrDecidedEarly], naming the first byte of the text from
-// which what it wrote may differ, and no block the keys' stage wrote otherwise
-// than the whole text's lies before it. Over texts of runs beside armours, password's shapes and
-// AWS secrets' quoted keys drawn at random and cut at random, at a hold far
-// below the stream's own, so most of their armours' windows are decided early;
-// over a shape of every hold a stream was found to have, at a hold of 256 KiB,
-// of which exactly those named refuse, a Google token beside a key whose dots
-// run past the hold, ending with a byte of its own, a space or the text's
-// end, among those that do not; and at the stream's own hold, over a run, a
-// key's block and a run of an earlier rule, and over a key on one line with a
-// Google token on it whose dots run past the hold, each of which writes
-// Secrets: the window that reads the key read the token open, and its end,
-// before the dots, inside the window, is set only once they stop, but what
-// the window read of it differs only over the dots, which it asked nothing of.
-//
-// Mutation: step no claims stage at a marker ([ruleStage.markerToStepAt]), and
-// a run, a key's block and a run of an earlier rule at the stream's own hold
-// refuses; check an end set late from where its claim begins
-// ([keyStage.ended]), and the key on one line with a Google token on it
-// refuses; read an end set inside an early window on a claim it read open as
-// no change, and a random text here is written otherwise with Close nil; or
-// write a span an early
-// window moved to or before its start ([keyStage.readArmours]), and the stage
-// panics on a run past what claims it reads beside a key on one line.
+// [Secrets] of the text; or Close answers [ErrDecidedEarly], naming the first
+// byte from which what it wrote may differ, with no earlier block of the keys'
+// stage differing from the whole text's. Over random texts at a low hold, a
+// shape of every hold at 256 KiB (exactly those named refuse), and at the
+// stream's own hold, where a key with a Google token whose dots run past the
+// hold still writes Secrets. Mutation: step no claims stage at a marker
+// ([ruleStage.markerToStepAt]); check an end set late ([keyStage.ended]); read
+// a late end in an early window as no change; or write a span moved before its
+// start ([keyStage.readArmours]).
 func TestAStreamThatDecidesEarlySaysSo(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1170, 41))
@@ -473,31 +454,15 @@ func TestAnEarlyWindowsFootprintHoldsEveryClaimItsAnswersRead(t *testing.T) {
 
 // A LATE CHANGE TO WHAT AN EARLY WINDOW READ IS A MISS, and only that: a keys'
 // stage that decided a window early, its footprint known, refuses a claim
-// handed more than the hold past where it lies that meets the footprint, even
-// a piece past the hold or less; an end set inside the window on a claim it
-// read open where the stretch from the end to the window's end meets the
-// footprint, and not where only the claim before the end does, to the byte;
-// and a word handed late whose key lies before a block read forward the stage
-// let go, with its value past where the stage's next window begins, naming
-// the key; each named from the start of
-// a window decided early that still waits where that comes first, and a
-// window whose claims are all known waits no longer once the stage is handed
-// more ([keyStage.settle]); past [earlyWindows] waiting, the two oldest
-// merged into their hull, so a claim between their footprints is refused and
-// one between two later windows' is not ([keyStage.wait]); and refuses nothing
-// for a claim that meets no footprint, or comes within the hold.
-//
-// Mutation: check an end set late from where its claim begins
-// ([keyStage.ended]), or from a byte either side of the end, and an end set
-// past the footprint, or at its end, is refused, or one on its last byte is
-// not; drop the check of a late word behind a block let go
-// ([keyStage.handed]), or count a change late only a piece past the hold, and
-// a miss here goes unseen; name a miss from where it was found alone
-// ([keyStage.miss]), and the late word before a waiting window names its key;
-// let a window wait on once its claims are known, and the late word after it
-// is named from the window's start; merge none of the windows past
-// earlyWindows, or more of them than the two oldest, and a claim between two
-// windows' footprints is refused otherwise.
+// handed more than the hold past where it lies that meets the footprint; an
+// end set inside the window on an open claim whose stretch to the window's end
+// meets it, to the byte; and a late word whose key lies before a block let go,
+// naming the key. Each is named from the earliest window still waiting; a
+// window with all claims known stops waiting ([keyStage.settle]); past
+// [earlyWindows] waiting, the two oldest merge ([keyStage.wait]). Mutation:
+// check an end from where its claim begins or a byte off ([keyStage.ended]);
+// drop the late-word check ([keyStage.handed]); name a miss from where found
+// alone ([keyStage.miss]); never settle a window; merge other than the oldest.
 func TestALateChangeToWhatAnEarlyWindowReadIsAMiss(t *testing.T) {
 	t.Parallel()
 	const h = 1 << 20
@@ -544,7 +509,7 @@ func TestALateChangeToWhatAnEarlyWindowReadIsAMiss(t *testing.T) {
 		}, 100 << 10},
 		{"a late word behind a block let go, the window before it let go once its claims are known", func(k *keyStage, src *claimSource) {
 			src.frontier = 301 << 10
-			k.take("")
+			k.take(nil)
 			k.arrived = 4 * h
 			src.word([3]int{110 << 10, 111 << 10, -1})
 		}, 110 << 10},

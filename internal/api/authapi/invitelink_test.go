@@ -370,13 +370,11 @@ func (unreadableSeats) Seat(context.Context, string) (session.Seat, bool, error)
 
 // EVERY INVITATION'S VIEW NAMES ITS SEAT, AS THE CHART HOLDS IT NOW.
 //
-// A person holds a human seat for as long as they exist (ADR-0032), so every
-// invitation holds one and the seat is part of what its holder agrees to: the
-// view carries it on EVERY answer, never only where the chart still names it.
-// A seat the chart has retired since the issue — removed, or made an agent's —
-// is `seat: {}`, present with no handle, which is how the screen says the
-// redemption will be refused before anybody types a password. A chart this
-// node cannot read shows the stored handle alone: the page is a courtesy, and
+// Every invitation holds a human seat (ADR-0032), part of what its holder
+// agrees to, so the view carries it on EVERY answer. A seat the chart retired
+// since the issue (removed, or made an agent's) is `seat: {}`, which tells the
+// screen the redemption will be refused before a password is typed. An
+// unreadable chart shows the stored handle alone: the page is a courtesy and
 // the redemption asks again. The CONTROL is the seat as the chart names it.
 //
 // Mutation: answer nil for a seat the chart no longer holds and the key is

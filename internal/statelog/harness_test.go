@@ -20,21 +20,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// The fakes below are the framework's own seams and nothing else. A real
-// domain arrives eleven steps later; what is under test here is the write
-// authority's branching, which is decided entirely by what these seams
-// answer — so a fake that can be driven into each answer is a stronger test
-// than a real domain that can only reach the easy ones.
+// The fakes below are the framework's own seams and nothing else: the write
+// authority's branching is decided by what these seams answer, so a fake
+// driven into each answer reaches branches a real domain cannot.
 
 const (
 	probeStream = "CREWLET_PROBE_LOG"
 	probePrefix = "crewlet.probe.log"
 
-	// probeMaxRecord is the probe log's declared largest record: a
-	// hundred and twenty-eight kibibytes, enough for the sixty-kibibyte
-	// bodies the capacity cases fill a log with and the gate record they
-	// size to cross its soft ceiling, and small enough that the reserve
-	// it sizes leaves a test-sized log most of itself.
+	// probeMaxRecord is the probe log's largest record, 128 KiB: room for
+	// the capacity cases' 60 KiB bodies and the gate record sized past the
+	// soft ceiling, and small enough that its reserve leaves a test-sized
+	// log most of itself.
 	probeMaxRecord = 128 << 10
 )
 
@@ -65,12 +62,9 @@ func specOf(d statelog.Domain) statelog.StreamSpec {
 
 func (probeDomain) RecordVersion() int { return 1 }
 
-// Envelope decodes the half every build can read.
-//
-// A REAL DECODER, not a constant: the envelope carries the version, the
-// subject, the scope and the operation id, and every branch of the apply loop
-// turns on one of them. A fake that answered a constant would exercise one
-// path and report the rest green.
+// Envelope decodes the half every build can read: a REAL decoder, since every
+// branch of the apply loop turns on one of its fields, and a constant would
+// exercise one path and report the rest green.
 func (probeDomain) Envelope(payload []byte) (statelog.Envelope, error) {
 	var env statelog.Envelope
 	if err := json.Unmarshal(payload, &env); err != nil {
@@ -131,12 +125,10 @@ type applier struct {
 	// same anchor and the round budget is what ends it.
 	frozen bool
 
-	// stalled makes WaitReached BLOCK, which is the other half of the
-	// same situation and a different failure: frozen models an applier
-	// that answers instantly and never moves, and this one models an
-	// applier that does not answer at all. Only the second exercises the
-	// wait's own budget, and without it an unbounded wait there looks
-	// exactly like a fast one.
+	// stalled makes WaitReached BLOCK: an applier that does not answer at
+	// all, where frozen answers instantly and never moves. Only this
+	// exercises the wait's own budget; without it an unbounded wait looks
+	// like a fast one.
 	stalled bool
 
 	// foreign is what StreamIdentity answers: nil while this node's
@@ -148,14 +140,11 @@ type applier struct {
 	// records the log lost.
 	truncated error
 
-	// rules, when set, is what answers Voided: a REAL runner whose
-	// checkpoint carries a reanchor's rules ([reanchorRules]), so what a
-	// resolution is told depends on the generation and the sequence it
-	// asks about exactly as the applier's own drop does. A fake answering
-	// one reason for every record certified that the rules were asked and
-	// nothing about what they were asked — a resolution asking about
-	// generation zero at sequence zero, which the rules void nothing at,
-	// passed it. voidedAsked is every question, in order.
+	// rules, when set, answers Voided: a REAL runner's reanchor rules
+	// ([reanchorRules]), so the answer depends on the generation and
+	// sequence asked about, as the applier's own drop does — a constant
+	// answer would pass a resolution asking about (0, 0), where the rules
+	// void nothing. voidedAsked is every question, in order.
 	rules       statelog.Voids
 	voidedAsked []voidedQuestion
 
@@ -264,12 +253,9 @@ func newApplier() *applier {
 }
 
 // landed is what the appender calls when the broker acknowledges a record on
-// subject.
-//
-// AN ID'S FIRST ROW IS KEPT, as the real ledger's `ON CONFLICT DO NOTHING`
-// keeps it: an acknowledgement the broker served out of its duplicate window
-// names the FIRST record's sequence, and a write that reused the id on
-// another subject must find the first record's subject here, not its own.
+// subject. An id's FIRST row is kept, as the ledger's `ON CONFLICT DO NOTHING`
+// does: a duplicate-window acknowledgement names the first record's sequence,
+// so a write reusing the id on another subject must find the first subject.
 func (a *applier) landed(opID, subject string, at statelog.Position) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -328,9 +314,8 @@ func (a *applier) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statel
 	if committed.Packed() >= p.Packed() {
 		return nil
 	}
-	// BEHIND, and the wait is what the caller's budget is spent on. The
-	// context carries that budget, so blocking on it is what a real
-	// applier that never catches up does.
+	// BEHIND: block on the caller's budget, as an applier that never
+	// catches up does.
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -374,22 +359,17 @@ type fakeRows struct {
 	snap  statelog.Snap
 	calls int
 
-	// override, when a subject has one, is the anchor the snapshot
-	// reports while this node's applier has written nothing newer for
-	// it — which is how a test stages a row whose anchor is TRIMMED or
-	// left behind by a reanchor, the two states the durable row genuinely
+	// override, when a subject has one, is the anchor the snapshot reports
+	// while the applier has written nothing newer for it: a row whose
+	// anchor a trim or a reanchor left behind, which the durable row
 	// reaches and a derived value never does.
 	override map[string]statelog.Position
 
-	// pinned, when a subject has one, is the anchor the snapshot reports
-	// WHATEVER this node's applier has committed — the state a restored
-	// log's reanchor leaves: the subject's record is at or below the
-	// checkpoint, and the anchor the row holds for it is in the generation
-	// before, because the new generation's checkpoint was PLACED at the log's
-	// end rather than reached by consuming it. The fake's own derivation
-	// reads every record at or below the checkpoint as consumed in the
-	// current generation, which is exactly the invariant that transition
-	// breaks.
+	// pinned, when a subject has one, is the anchor reported WHATEVER the
+	// applier has committed: a restored log's reanchor PLACES the new
+	// generation's checkpoint at the log's end, so a record at or below it
+	// keeps an anchor in the generation before — breaking the fake's own
+	// derivation, which reads every such record as consumed in this one.
 	pinned map[string]statelog.Position
 
 	// decideErr, when set, is what the domain's own decision returns.
@@ -429,11 +409,9 @@ func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statel
 	// rows, so it is this node's committed position at this instant.
 	snap.Checkpoint = r.applier.Committed()
 	// THE ANCHOR IS WHATEVER THIS NODE'S APPLIER LAST WROTE for this
-	// subject. A staged override stands for a row the applier wrote
-	// BEFORE a trim or a reanchor and has not written since — so it holds
-	// only while the applier has nothing newer, which is the state that
-	// makes the trimmed-anchor and stale-generation branches reachable at
-	// all.
+	// subject; an override holds only while the applier has nothing newer,
+	// which is what makes the trimmed-anchor and stale-generation branches
+	// reachable.
 	snap.Anchor = r.anchorFor(ctx, subj)
 	if override && snap.Anchor.Seq == 0 {
 		snap.Anchor = staged
@@ -444,10 +422,9 @@ func (r *fakeRows) Snapshot(ctx context.Context, subj statelog.Subject, _ statel
 	if err != nil {
 		return statelog.Snap{}, err
 	}
-	// The fake holds no transaction, which is honest: what is under test
-	// is the framework's branching on what the snapshot SAYS. The
-	// checkpoint it hands the decision is the one it reports, which is the
-	// real snapshot's contract: one read, stamped and returned.
+	// No transaction: what is under test is the branching on what the
+	// snapshot SAYS. The decision gets the checkpoint the snapshot reports,
+	// as the real snapshot's contract has it.
 	d, derr := decide(nil, snap.Checkpoint)
 	if derr != nil {
 		return statelog.Snap{}, derr
@@ -803,15 +780,11 @@ func newHarnessFor(t *testing.T, domain statelog.Domain) *harness {
 // logger, as the engine's publishers have.
 func newHarnessLogging(t *testing.T, domain statelog.Domain, logger *slog.Logger) *harness {
 	t.Helper()
-	// A STORE DIRECTORY, ALWAYS. An embedded broker with none keeps its
-	// streams in memory, and every property this framework rests on is
-	// about a stream that survives.
-	//
-	// AND A DECLARED SIZE WITH IT, for brokertest's reason: left to derive
-	// its cap from the runner's free space the broker takes three quarters
-	// of it, a fact about the machine rather than about the case. A case
-	// about a full log fills the log's own ceiling, which this does not
-	// move.
+	// A STORE DIRECTORY, ALWAYS: without one streams live in memory, and
+	// every property here is about a stream that survives. And a declared
+	// size, as brokertest requires: a cap derived from free space is a fact
+	// about the machine. A full-log case fills the log's own ceiling, which
+	// this leaves alone.
 	return buildHarness(t, domain, js.Config{StoreDir: brokertest.TempDir(t),
 		StoreMaxBytes: brokertest.StoreMaxBytes}, logger)
 }
@@ -957,19 +930,12 @@ func (h *harness) writeNoWait(subject statelog.Subject, opID string, body string
 // objects its apply may make stale — and carrying the stamp its decision was
 // handed and the op id it is published under, plus an opaque body.
 //
-// THROUGH [probeDomain.Envelope]'s OWN SHAPE, because that reader is what the
-// publisher decodes the record with and what an applier files it by: a helper
-// that wrote any other shape would be testing a record no domain publishes.
-// The publisher refuses a record without its stamp and its op id; an applier
-// anchors an arbitrated record by its envelope's SUBJECT and stops on one that
-// declares no SCOPE. A record missing the last two was accepted by every case
-// here that faked the applier, and refused by the first that did not
-// ([TestAWriteRunsTheWholeWritePathOnARealApplier]).
-//
-// ALWAYS AN OBJECT, whatever subject it is published on: the kind is what the
-// record IS, and a case that publishes it where a gate belongs
-// ([TestALogFullForOrdinaryWritesStillTakesAGateRecord]) is publishing
-// precisely a record that is not one.
+// In [probeDomain.Envelope]'s own shape, which the publisher decodes and an
+// applier files by: the publisher refuses a record without its stamp and op
+// id, and an applier anchors by SUBJECT and stops on a record with no SCOPE
+// ([TestAWriteRunsTheWholeWritePathOnARealApplier]). ALWAYS an object, even
+// published where a gate belongs: the kind is what the record IS
+// ([TestALogFullForOrdinaryWritesStillTakesAGateRecord]).
 func probeRecord(stamp statelog.Stamp, subject statelog.Subject, scope statelog.ScopeSet,
 	opID, body string) []byte {
 	payload, err := json.Marshal(struct {

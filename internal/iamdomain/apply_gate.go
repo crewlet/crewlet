@@ -9,28 +9,19 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE THREE ESTATE-WIDE KINDS, and the sweep.
-//
-// An eviction and a reanchor are facts about the LOG rather than about
-// anybody's identity; an invalidation is about everybody and therefore about
-// nobody in particular. All three write one row apiece so a replay reproduces
-// them — a recovery that had to be remembered is not a recovery — and all
-// three declare the whole estate as their scope, which they can afford
-// because none of them is ever deferred.
+// THE THREE ESTATE-WIDE KINDS, and the sweep. An eviction and a reanchor are
+// facts about the LOG, and an invalidation is about everybody. Each writes a
+// row so a replay reproduces it, and each scopes the whole estate, affordable
+// because none is ever deferred.
 
 // applyInvalidation moves the fleet-wide generation every session bearer
-// carries, which ends every session in the company as each data node applies
-// it.
+// carries, ending every session in the company as each data node applies it.
 //
-// ONE ROW, MONOTONE, and the guard is what makes a redelivery harmless: a
-// record naming a generation at or below the one already stored writes
-// nothing, so the second delivery of a bump is a no-op rather than a second
-// bump that would end sessions minted since the first.
-//
-// IT WRITES NO PER-PERSON ROW AT ALL, which is the whole reason the counter
-// exists: the alternative is bumping every person's revocation epoch, which is
-// a write per person in a transaction bounded by a row budget, and a company
-// that had outgrown one transaction would end SOME of its sessions.
+// ONE MONOTONE ROW: a generation at or below the stored one writes nothing, so
+// a redelivered bump does not end sessions minted since. NO PER-PERSON ROW,
+// the counter's reason to exist: bumping every person's epoch is a write per
+// person under a transaction's row budget, and a company past one transaction
+// would end only SOME of its sessions.
 func (a *Applier) applyInvalidation(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	if at.record.Op != OpInvalidate {
 		return 0, fmt.Errorf("iamdomain: the record at %s is op %q on the "+
@@ -61,9 +52,8 @@ func (a *Applier) applyInvalidation(ctx context.Context, tx *sql.Tx, at applyCon
 	}
 	written, _ := result.RowsAffected()
 	if written > 0 {
-		// EVERY SESSION AND MACHINE TOKEN IN THE COMPANY is over, and no
-		// list could name them: that is the whole reason the counter
-		// exists. See [Moved.Everyone].
+		// EVERY SESSION AND MACHINE TOKEN is over, and no list could name
+		// them ([Moved.Everyone]).
 		a.moved.Everyone = true
 	}
 	return int(written), nil
@@ -71,15 +61,10 @@ func (a *Applier) applyInvalidation(ctx context.Context, tx *sql.Tx, at applyCon
 
 // applyEviction records a node's removal from this log, or its readmission.
 //
-// BOTH BOUNDARIES ARE THIS RECORD'S OWN POSITION: an eviction drops the node's
-// records above where it landed, and a readmission counts them again from where
-// it landed — see [Eviction] for why neither is a field of the payload.
-//
-// A READMISSION IS AN INVERSE COMMIT rather than a delete: an eviction's whole
-// history survives a replay, so a node that was evicted, readmitted and
-// evicted again reads correctly rather than as one long absence. A
-// readmission of a node this log never evicted changes no row, which is the
-// standing it asked for.
+// BOTH BOUNDARIES ARE THIS RECORD'S OWN POSITION ([Eviction] says why neither
+// is a payload field). A readmission is an INVERSE COMMIT, not a delete, so an
+// evict-readmit-evict history survives a replay rather than reading as one
+// long absence; readmitting a node never evicted changes no row.
 func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	if at.record.Op != OpEviction {
 		return 0, fmt.Errorf("iamdomain: the record at %s is op %q on an "+
@@ -129,12 +114,9 @@ func (a *Applier) applyEviction(ctx context.Context, tx *sql.Tx, at applyContext
 	return int(written), nil
 }
 
-// applyGeneration writes a reanchor's audit row.
-//
-// A REANCHOR IS A COMMITTED RECORD and therefore reproducible from the log;
-// this row is what a recovery replay writes and what the operator surface
-// reads, rather than an event that happened to a fleet and has to be
-// remembered.
+// applyGeneration writes a reanchor's audit row: what a recovery replay
+// writes and the operator surface reads, since a reanchor is a committed
+// record rather than an event a fleet must remember.
 func (a *Applier) applyGeneration(ctx context.Context, tx *sql.Tx, at applyContext) (int, error) {
 	if at.record.Op != OpGeneration {
 		return 0, fmt.Errorf("iamdomain: the record at %s is op %q on a "+
@@ -162,13 +144,10 @@ func (a *Applier) applyGeneration(ctx context.Context, tx *sql.Tx, at applyConte
 	return int(written), nil
 }
 
-// encodeGrants renders a grant list for a column.
-//
-// IT KEEPS A GRANT THIS BUILD DOES NOT KNOW, which is the whole reason it is a
-// function rather than a `json.Marshal` at the call site: an invitation issued
-// by a newer peer may confer a capability this build has never heard of, and
-// dropping it here would silently narrow what the person gets when they redeem
-// — on whichever node happened to apply the record.
+// encodeGrants renders a grant list for a column, KEEPING A GRANT THIS BUILD
+// DOES NOT KNOW (never filter at a call site): a newer peer's invitation may
+// confer one, and dropping it would narrow what the person gets on whichever
+// node applied the record.
 func encodeGrants(grants []iam.Grant) (string, error) {
 	if len(grants) == 0 {
 		return "[]", nil

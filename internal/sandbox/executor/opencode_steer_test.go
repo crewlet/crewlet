@@ -627,7 +627,9 @@ type routeInbox struct {
 	reads chan []string
 }
 
-func (i *routeInbox) Take(context.Context, string) string { return "" }
+func (i *routeInbox) Take(context.Context, string, *sandbox.NoteCall) string { return "" }
+
+func (i *routeInbox) Cancelled(context.Context, sandbox.NoteCall) {}
 
 func (i *routeInbox) Wait(_ context.Context, after int) ([]mcpbridge.SteerNote, <-chan struct{}) {
 	i.mu.Lock()

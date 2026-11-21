@@ -33,19 +33,15 @@ func clients(t *testing.T) map[string]jetstream.JetStream {
 // A WRITE WAITS THE REQUEST TERM, AND ACROSS A LINK THE TIME ITS BYTES TAKE TO
 // CROSS IT.
 //
-// A write is acknowledged only once its last byte is in, so where a connection
-// crosses a link — a leaf's link to its members, a dial to an external
-// cluster — a write's first send is given the request term AND its bytes at
-// the link's slowest allowed pace: the transport's eight-mebibyte ceiling four
-// minutes beyond a write of nothing, at the object store's floor. A connection
-// that crosses nothing — a member's own — has no crossing, and every write on
-// it waits the request term alone, which is what every client this package
-// builds holds as its default.
+// A write is acknowledged only once its last byte is in, so across a link
+// (a leaf's, a dial to an external cluster) its first send is given the
+// request term AND its bytes at the slowest allowed pace: the transport's
+// eight-mebibyte ceiling four minutes beyond a write of nothing, at the object
+// store's floor. A connection crossing nothing waits the request term alone.
 //
-// Mutation: build a client without the request term and set RequestTerm to
-// anything but the library's own five seconds, and the row crossing no link
-// goes red; leave the crossing out of the bound, and the rows across a link
-// do.
+// Mutation: set RequestTerm to anything but the library's own five seconds
+// without the client's, and the row crossing no link goes red; leave the
+// crossing out of the bound, and the rows across a link do.
 func TestAWriteWaitsTheRequestTermAndAcrossALinkItsBytesCrossing(t *testing.T) {
 	t.Parallel()
 	for name, js := range clients(t) {
@@ -99,12 +95,9 @@ func TestAWritesRequestCrossesRawWhereAReadsReplyIsBase64(t *testing.T) {
 // A CALLER'S OWN DEADLINE IS KEPT, and only a write whose caller set none is
 // held to the budget.
 //
-// The budget is what a write is given where nobody said how long it may wait.
-// A caller that did knows what its wait is for — a turn's budget, a request's
-// reply margin — so a deadline shorter than the budget is never extended to
-// it, and a longer one never shortened, on the first send and on every send
-// after it. In a bubble, where the clock moves only when every goroutine
-// waits, each deadline is exact.
+// The budget is for a write whose caller said nothing. A caller that did knows
+// what its wait is for, so a shorter deadline is never extended to the budget
+// and a longer one never shortened, on every send. Exact in a bubble.
 //
 // Mutation: hold the write to the budget in place of its caller's deadline,
 // and the shorter deadline is extended; hold it to the budget beside its
@@ -148,22 +141,14 @@ func TestAWriteKeepsItsCallersDeadline(t *testing.T) {
 // MAKE, so the budget's end is fixed when it starts; and a pause between two
 // sends is held to the budget as it stands.
 //
-// A write is sent again where its answer decided nothing — nobody heard it,
-// or a leader refused a compare-and-set while another write to the subject
-// was in flight — and every send carries the whole message across the link
-// again. So where its caller set no deadline the first send is given the
-// request term and its crossing, and each later one a crossing more, up to
-// WriteSends sends; a send past those is given the budget as it stands, so a
-// write met by an in-flight answer on every attempt ends at the request term
-// and WriteSends crossings however many attempts it makes. A pause that would
-// outlast the budget ends at its end, with the deadline's error; one inside
-// it ends when it was asked to. Exact, in a bubble.
+// Every send carries the whole message across the link again. So the first is
+// given the request term and its crossing, each later one a crossing more up to
+// WriteSends; a send past those gets the budget as it stands. A pause that
+// would outlast the budget ends at its end, with the deadline's error.
 //
 // Mutation: give every send the first send's budget, and the second and third
-// sends are short of their crossing; let every send after the first add its
-// crossing, with no end, and the fourth is a crossing past the bound; let a
-// pause run past the budget as it stands, and the pause past it is waited out
-// whole.
+// are short of their crossing; add a crossing with no end, and the fourth is
+// past the bound; let a pause run past the budget, and it is waited out whole.
 func TestEverySendOfAWriteIsGivenItsOwnCrossingUpToTheSendsAWriteMayMake(t *testing.T) {
 	t.Parallel()
 	js := clients(t)["embedded"]
@@ -207,16 +192,14 @@ func TestEverySendOfAWriteIsGivenItsOwnCrossingUpToTheSendsAWriteMayMake(t *test
 // nothing after it moves the bound.
 //
 // The client re-sends a write nobody heard inside the one context it is
-// handed, and a KV write's re-sends cannot be turned off, so each call of it
-// is given every crossing the budget gives, at once: the request term and
-// WriteSends crossings from the budget's start, whatever was sent before it.
-// A second call — an attempt after an in-flight answer — waits the same bound,
-// and so does a send after it. A caller's own deadline is kept. Exact, in a
-// bubble.
+// handed (a KV write's re-sends cannot be turned off), so each call is given
+// every crossing at once: the request term and WriteSends crossings from the
+// budget's start, whatever was sent before. A second call and a send after it
+// wait the same bound. A caller's own deadline is kept.
 //
-// Mutation: give a call the first send's budget, and a write its client sends
-// again inside one context runs out short of its crossings; add the whole
-// bound for every call, and the second call's is past it.
+// Mutation: give a call the first send's budget, and a client's re-sends run
+// short of their crossings; add the whole bound per call, and the second is
+// past it.
 func TestACallThatMakesEverySendItselfWaitsTheBudgetsWholeBound(t *testing.T) {
 	t.Parallel()
 	js := clients(t)["embedded"]

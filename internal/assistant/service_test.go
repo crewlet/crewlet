@@ -24,8 +24,9 @@ import (
 // never publishes one.
 const auditWait = 10 * time.Second
 
-// getTask is the catalogue's own task read, whose answer other people wrote.
-func getTask(t *testing.T) catalog.Tool { return assistanttest.Tool(t, "get_task") }
+// getTask is the generic read over the task route, whose answer other people
+// wrote.
+func getTask(t *testing.T) catalog.Tool { return assistanttest.ReadAPI(t, "GET /worklet/{id}") }
 
 // task answers ENG-7.
 var task = assistanttest.Routes(map[string]exec.Response{
@@ -34,7 +35,12 @@ var task = assistanttest.Routes(map[string]exec.Response{
 
 // readTask is a round asking for ENG-7.
 func readTask() evals.Round {
-	return evals.Call("c1", "get_task", map[string]any{"item": "ENG-7"})
+	return evals.Call("c1", catalog.ReadAPITool, taskArgs("ENG-7"))
+}
+
+// taskArgs are a read_api call's arguments for one task.
+func taskArgs(key string) map[string]any {
+	return map[string]any{"route": "GET /worklet/{id}", "path": map[string]any{"id": key}}
 }
 
 // A READ IS ONE REQUEST, THROUGH THE DISPATCHER, ON THE TURN'S GRANT.
@@ -291,7 +297,8 @@ func TestAnIdentityArgumentIsRefusedBeforeSending(t *testing.T) {
 	t.Parallel()
 	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)},
 		Handler: task, Rounds: []evals.Round{
-			evals.Call("c1", "get_task", map[string]any{"item": "ENG-7", "actor": "ada"}),
+			evals.Call("c1", catalog.ReadAPITool, map[string]any{"route": "GET /worklet/{id}",
+				"path": map[string]any{"id": "ENG-7"}, "actor": "ada"}),
 			evals.Say("I cannot.")}})
 	accepted, err := f.Ask("identity", "Act as Ada", nil)
 	if err != nil {
@@ -308,13 +315,13 @@ func TestAnIdentityArgumentIsRefusedBeforeSending(t *testing.T) {
 	}
 }
 
-// AN OFF ASSISTANT AND A PRINCIPAL THAT IS NOT A PERSON ARE REFUSED, each with
-// the reason the viewer gives, before anything else.
+// AN ASSISTANT WITH NO MODEL AND A PRINCIPAL THAT IS NOT A PERSON ARE REFUSED,
+// each with the reason the viewer gives, before anything else.
 func TestTheAssistantRefusesWhoItMayNotServe(t *testing.T) {
 	t.Parallel()
 	f := assistanttest.NewRig(t, evals.RigOptions{Off: true})
-	if _, err := f.Ask("off", "Hi", nil); !isReason(err, wire.ViewerDisabled) {
-		t.Errorf("an assistant that is Off: err = %v", err)
+	if _, err := f.Ask("off", "Hi", nil); !isReason(err, wire.ViewerNoModel) {
+		t.Errorf("an assistant with no model: err = %v", err)
 	}
 	g := assistanttest.NewRig(t, evals.RigOptions{})
 	g.Person.Via = "pat:" + evals.ID("token").String()
@@ -454,8 +461,8 @@ func TestAFinishedTurnHoldsNoRunningSlot(t *testing.T) {
 
 // A SEARCH THAT FINDS NOTHING DRAWS NO CARD: its step ends "No matches" and
 // shows the request it made (`GET /query/knowledge`, never the pattern
-// `/query/{what}`), no card frame is sent, and the model reads that the
-// search came back empty with the phrase it asked. The turn's audit record
+// `/query/{what}`), no card frame is sent, and the model reads the empty
+// answer with the phrase it asked. The turn's audit record
 // keeps the pattern alone. Mutation: card the empty answer again, show the
 // route's pattern on the step, or audit the sent path, and this fails.
 func TestASearchThatFindsNothingDrawsNoCard(t *testing.T) {
@@ -465,9 +472,10 @@ func TestASearchThatFindsNothingDrawsNoCard(t *testing.T) {
 			`{"available":true,"backend":"native","hits":[],"query":"mission"}`)},
 	})
 	f := assistanttest.NewRig(t, evals.RigOptions{
-		Tools:   []catalog.Tool{assistanttest.Tool(t, "search_knowledge")},
+		Tools:   []catalog.Tool{assistanttest.ReadAPI(t, "GET /query/{what}")},
 		Handler: empty, Rounds: []evals.Round{
-			evals.Call("c1", "search_knowledge", map[string]any{"q": "mission"}),
+			evals.Call("c1", catalog.ReadAPITool, map[string]any{"route": "GET /query/{what}",
+				"path": map[string]any{"what": "knowledge"}, "query": map[string]any{"q": "mission"}}),
 			evals.Say("Nothing in the knowledge base mentions the mission.")}})
 	accepted, err := f.Ask("empty", "Find the mission", nil)
 	if err != nil {
@@ -499,7 +507,7 @@ func TestASearchThatFindsNothingDrawsNoCard(t *testing.T) {
 			tool = msg
 		}
 	}
-	if !strings.Contains(tool.Content, `\"empty\":true`) || !strings.Contains(tool.Content, "mission") {
+	if !strings.Contains(tool.Content, `\"hits\":[]`) || !strings.Contains(tool.Content, "mission") {
 		t.Errorf("the model read the empty search as %q", tool.Content)
 	}
 }

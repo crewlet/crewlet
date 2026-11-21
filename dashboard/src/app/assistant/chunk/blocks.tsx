@@ -25,12 +25,6 @@
  * address it writes is opened (`ASSISTANT_WORDS` in `lib/markdown.ts`): a link
  * is live only where the dashboard built it, and no picture is fetched. A card
  * this build cannot draw is a sentence saying so.
- *
- * A DEEP RUN IS ONE CARD, NOT A STEP AMONG STEPS: the step whose `deep` is set
- * is drawn as `DeepWorkCard` (its goal, its limits, its latest activity),
- * redrawn in place as the engine re-sends it under the same step id, and the
- * steps it made (`parent` is its index) are nested under it rather than
- * listed in the run chip.
  */
 
 import { type ReactNode } from "react";
@@ -39,15 +33,12 @@ import {
   Button,
   Callout,
   CopyButton,
-  DeepWorkCard,
   OpenInAppCard,
   ProposalCard,
   Prose,
   ReceiptStrip,
   RefusalCard,
   type ChangeListRow,
-  type DeepWorkMeasure,
-  type DeepWorkState,
   type ProposalState,
   type ReceiptStripTone,
   type RunState,
@@ -57,12 +48,10 @@ import {
 import { LayoutDashboardGlyph } from "@crewlethq/icons/glyphs";
 import { DiffView } from "~/components/DiffView.tsx";
 import {
-  ASSISTANT_DEEP_ACTIVITY_LINES,
   type AssistantBriefAction,
   type AssistantBriefPoint,
   type AssistantBriefCard,
   type AssistantCardEvent,
-  type AssistantDeepProgress,
   type AssistantErrorCard,
   type AssistantProposalCard,
   type AssistantStepEvent,
@@ -80,9 +69,10 @@ import { openInApp, type InAppTarget } from "./openInApp.ts";
 import { pageActionPreview, usePageSnapshot, type PageActionPreview } from "../context.ts";
 import { changedNothing, type ActionLocal, type ActionLocalState } from "./pageActions.ts";
 import { DraftFile } from "./DraftFile.tsx";
-import { drawValue } from "./changeValue.tsx";
+import { drawPhrase, drawValue } from "./changeValue.tsx";
+import { phraseText } from "./phrase.ts";
+import { Phrase, Phrases } from "./refs.tsx";
 import type { ProposalLocal, TurnPhase, TurnView } from "./turn.ts";
-import { FilesCard } from "./files.tsx";
 import { cautionOf } from "./taint.ts";
 import { recordWord } from "../brief.ts";
 
@@ -91,7 +81,6 @@ type WireProposalState = AssistantProposalCard["state"];
 type WireChangeKind = AssistantProposalCard["changes"][number]["kind"];
 type WireWordOp = NonNullable<AssistantProposalCard["changes"][number]["words"]>[number]["op"];
 type WireColumnType = AssistantTableCard["columns"][number]["type"];
-type WireDeepState = AssistantDeepProgress["state"];
 
 /** A step's state as `StepList` draws it. */
 export const STEP_STATE: Record<WireStepState, StepState> = {
@@ -101,16 +90,6 @@ export const STEP_STATE: Record<WireStepState, StepState> = {
   refused: "refused",
   stopped: "stopped",
   waiting: "waiting",
-};
-
-/** A deep run's state as `DeepWorkCard` draws it. */
-export const DEEP_STATE: Record<WireDeepState, DeepWorkState> = {
-  starting: "starting",
-  running: "running",
-  waiting: "waiting",
-  finished: "finished",
-  stopped: "stopped",
-  failed: "failed",
 };
 
 /** A turn's phase as `RunChip` draws it. */
@@ -231,10 +210,6 @@ export function runChipOf(
   const elapsed = turn.done?.duration_ms ?? Math.max(0, now - Date.parse(turn.askedAt));
   const taken = turn.done?.steps ?? turn.steps.length;
   const state = RUN_STATE[turn.phase];
-  // THE ASSISTANT SWITCHED TO DEEP WORK: the chip says so while the run works.
-  if (BUSY.has(turn.phase) && deepRunsOf(turn).some((run) => DEEP_ACTIVE.has(run.deep.state))) {
-    return { state: RUN_STATE.working, title: "Deep work", meta: fmtElapsed(elapsed) };
-  }
   switch (turn.phase) {
     case "sending":
     case "thinking":
@@ -250,14 +225,21 @@ export function runChipOf(
       return { state, title: "Applying", meta: stepMeta(taken) };
     case "awaiting_approval":
       return { state, title: "Waiting for your approval", meta: stepMeta(taken) };
-    case "completed":
+    case "completed": {
       // A TURN READ BACK FROM ITS TRANSCRIPT carries no duration; the time
       // since it was asked is not how long it ran, so it says Done alone.
-      return {
-        state,
-        title: turn.done ? `Done in ${fmtDuration(turn.done.duration_ms)}` : "Done",
-        meta: stepMeta(taken),
-      };
+      const done = turn.done ? `Done in ${fmtDuration(turn.done.duration_ms)}` : "Done";
+      // A REFUSED STEP IS SAID ON THE CHIP, never only behind it.
+      const refused = turn.steps.filter((s) => s.state === "refused").length;
+      if (refused > 0) {
+        return {
+          state: RUN_STATE.refused,
+          title: `${done}, ${refused === 1 ? "1 step" : `${refused} steps`} refused`,
+          meta: stepMeta(taken),
+        };
+      }
+      return { state, title: done, meta: stepMeta(taken) };
+    }
     case "stopped":
     case "expired": {
       const done = turn.steps.filter((s) => s.state === "done").length;
@@ -300,19 +282,18 @@ const BUSY: ReadonlySet<TurnPhase> = new Set(["sending", "thinking", "working"])
  * drawn: only while the assistant itself is busy on the turn, never while it
  * waits on the person or applies an approved change, which their cards say.
  *
- * THE STATUS IS WHAT IS HAPPENING NOW: "Stopping" once a stop is on its way,
- * the running step's own sentence while a tool runs, and "Thinking" while
- * nothing of the answer is written yet. Once the answer's words are arriving
- * the mark stands alone after them, with no words of its own, as a caret
- * would have but never inside the text.
+ * WHAT IS HAPPENING NOW, AND FOR HOW LONG: "Stopping", the running step's
+ * sentence (the run chip counts its time), or "Thinking" then "Answering" with
+ * the time since the question, so a long answer never reads as stalled.
  */
-export function thinkingOf(turn: TurnView): { status: string | undefined } | null {
+export function thinkingOf(turn: TurnView, now: number): { status: string } | null {
   if (!BUSY.has(turn.phase)) return null;
   if (turn.stopping) return { status: "Stopping" };
   const running = turn.steps.filter((step) => step.state === "running").at(-1);
   if (running) return { status: running.label };
   const writing = (turn.replies.at(-1)?.text.trim() ?? "") !== "";
-  return { status: writing ? undefined : "Thinking" };
+  const elapsed = fmtElapsed(Math.max(0, now - Date.parse(turn.askedAt)));
+  return { status: `${writing ? "Answering" : "Thinking"}, ${elapsed}` };
 }
 
 /**
@@ -327,51 +308,14 @@ export function stepDuration(ms: number | undefined): string | undefined {
   return ms === undefined || ms < STEP_DURATION_FLOOR_MS ? undefined : fmtDuration(ms);
 }
 
-/** The deep run states in which the run is still at work. */
-const DEEP_ACTIVE: ReadonlySet<WireDeepState> = new Set(["starting", "running"]);
-
-/** A deep run of a turn, and the steps it made. */
-export interface DeepRun {
-  step: AssistantStepEvent;
-  deep: AssistantDeepProgress;
-  children: AssistantStepEvent[];
-}
-
-/** A turn's deep runs, in step order, each with the steps nested under it. */
-export function deepRunsOf(turn: TurnView): DeepRun[] {
-  return turn.steps.flatMap((step) =>
-    step.deep
-      ? [
-          {
-            step,
-            deep: step.deep,
-            children: turn.steps.filter((child) => child.parent === step.index),
-          },
-        ]
-      : [],
-  );
-}
-
-/**
- * The steps the run chip lists: every step but a deep run and the steps it
- * nests. A step naming a parent no deep run in the turn has (its run not yet
- * heard) stays in the chip rather than being lost.
- */
-export function chipStepsOf(turn: TurnView): AssistantStepEvent[] {
-  const runs = new Set(turn.steps.flatMap((step) => (step.deep ? [step.index] : [])));
-  return turn.steps.filter(
-    (step) => !step.deep && (step.parent === undefined || !runs.has(step.parent)),
-  );
-}
-
 /** A turn's chip steps as `StepList` draws them; `technical` for an administrator. */
 export function stepsOf(turn: TurnView, technical: boolean): StepListStep[] {
-  return stepListOf(chipStepsOf(turn), technical);
+  return stepListOf(turn.steps, technical);
 }
 
 /**
  * Steps as `StepList` draws them: the engine's sentence for each, its time,
- * and what its line says under it ([stepDetail]).
+ * why it failed or was refused as prose ([stepNote]), and the request under it.
  */
 export function stepListOf(
   steps: readonly AssistantStepEvent[],
@@ -379,121 +323,35 @@ export function stepListOf(
 ): StepListStep[] {
   return steps.map((step) => {
     const duration = stepDuration(step.duration_ms);
+    const note = stepNote(step);
     const detail = stepDetail(step, technical);
     return {
       id: step.step_id,
       label: step.label,
       state: STEP_STATE[step.state],
       ...(duration === undefined ? {} : { duration }),
+      ...(note === "" ? {} : { note }),
       ...(detail === "" ? {} : { detail }),
     };
   });
 }
 
-/**
- * What a step's line says under its sentence: for a step that failed or was
- * refused, why, in the engine's sentence for a person.
- *
- * NO TOOL NAME, EVER, AND THE REQUEST ONLY FOR AN ADMINISTRATOR. A step's
- * sentence ("Listing tasks") is what it did; "list_tasks · GET /worklet" is
- * how the engine spells it, which a person does not read. The request, in
- * mono, is the administrator's: the same technical detail a proposal keeps
- * behind its disclosure.
- */
-export function stepDetail(step: TurnView["steps"][number], technical: boolean): string {
-  const request = technical && step.request ? `${step.request.method} ${step.request.route}` : "";
-  if (step.state !== "failed" && step.state !== "refused") return request;
-  const why = step.refusal
+/** Why a step failed or was refused, in the engine's sentence for a person; empty for any other. */
+export function stepNote(step: TurnView["steps"][number]): string {
+  if (step.state !== "failed" && step.state !== "refused") return "";
+  return step.refusal
     ? [step.refusal.message, step.refusal.hint].filter(Boolean).join(" ")
     : (step.summary ?? "");
-  if (why === "") return request;
-  return request === "" ? why : `${why} (${request})`;
 }
-
-/** A deep run's time, rounded to the second it is said in. */
-const wholeSeconds = (ms: number) => Math.floor(Math.max(0, ms) / 1000) * 1000;
 
 /**
- * A deep run's limits as meters: its time against its deadline, its Crewlet
- * calls against their cap and the share of its budget used. A settled run's
- * time is how long it ran, where its step says so.
+ * The request a step made, in mono under its sentence, for an administrator.
+ *
+ * NO TOOL NAME, EVER: "Listing tasks" is what it did; "list_tasks · GET
+ * /worklet" is how the engine spells it, which a person does not read.
  */
-export function deepMeasures(run: DeepRun, now: number): DeepWorkMeasure[] {
-  const { deep, step } = run;
-  const measures: DeepWorkMeasure[] = [];
-  const started = Date.parse(deep.started_at);
-  const deadline = Date.parse(deep.deadline_at);
-  if (Number.isFinite(started) && Number.isFinite(deadline) && deadline > started) {
-    const total = deadline - started;
-    const end = DEEP_ACTIVE.has(deep.state)
-      ? now
-      : step.duration_ms !== undefined
-        ? started + step.duration_ms
-        : Math.min(now, deadline);
-    const spent = wholeSeconds(Math.min(total, end - started));
-    measures.push({
-      key: "time",
-      label: "Time",
-      value: spent,
-      max: total,
-      hint: `${fmtDuration(spent)} of ${fmtDuration(total)}`,
-    });
-  }
-  if (deep.max_steps > 0) {
-    measures.push({
-      key: "calls",
-      label: "Crewlet calls",
-      value: deep.steps,
-      max: deep.max_steps,
-      hint: `${fmtExact(deep.steps)} of ${fmtExact(deep.max_steps)}`,
-    });
-  }
-  const budget = Math.min(100, Math.max(0, deep.budget_percent));
-  measures.push({
-    key: "budget",
-    label: "Budget used",
-    value: budget,
-    max: 100,
-    hint: `${Math.round(budget)}%`,
-    valueText: `${Math.round(budget)} percent of the run's budget`,
-  });
-  return measures;
-}
-
-/** What a deep run's foot says: what a waiting run waits on, why one stopped or failed. */
-export function deepNote(deep: AssistantDeepProgress): string | undefined {
-  switch (deep.state) {
-    case "waiting":
-      return "Waiting for your approval of the change below.";
-    case "stopped":
-      return deep.reason ?? "It stopped before it finished.";
-    case "failed":
-      return deep.reason ?? "It could not finish.";
-    default:
-      return undefined;
-  }
-}
-
-/** A deep run, as its card at its latest state, with the steps it made nested under it. */
-export function DeepRunBlock({
-  run,
-  now,
-  technical,
-}: {
-  run: DeepRun;
-  now: number;
-  technical: boolean;
-}) {
-  return (
-    <DeepWorkCard
-      state={DEEP_STATE[run.deep.state]}
-      goal={run.deep.goal}
-      measures={deepMeasures(run, now)}
-      activity={(run.deep.activity ?? []).slice(-ASSISTANT_DEEP_ACTIVITY_LINES)}
-      steps={stepListOf(run.children, technical)}
-      note={deepNote(run.deep)}
-    />
-  );
+export function stepDetail(step: TurnView["steps"][number], technical: boolean): string {
+  return technical && step.request ? `${step.request.method} ${step.request.route}` : "";
 }
 
 /**
@@ -516,6 +374,9 @@ export function ReplyProse({ text, dimmed = false }: { text: string; dimmed?: bo
  * `prose md` is the class pair the dashboard's Markdown rhythm is written for,
  * as every other rendered body here carries it, so the reply's paragraphs are
  * spaced. An answer whose mentions are chips (`reads.tsx`) is drawn by it too.
+ *
+ * ITS WORDS READ AT A MEASURE, ITS TABLES AND CODE AT THE THREAD'S WIDTH
+ * (`ask-answer`): a measure on the whole block cut a table to a column.
  */
 export function ProseBlock({
   children,
@@ -525,7 +386,7 @@ export function ProseBlock({
   dimmed?: boolean;
 }) {
   return (
-    <Prose as="div" measure="narrow" dimmed={dimmed} className="prose md">
+    <Prose as="div" measure="none" dimmed={dimmed} className="prose md ask-answer">
       {children}
     </Prose>
   );
@@ -534,14 +395,18 @@ export function ProseBlock({
 /**
  * A proposal's change rows in `ChangeList`'s grammar (D10): the facts first,
  * then WHO WILL SEE THE RESULT where its visibility changes (a share, a
- * comment others are told of, D09), as one more fact, then the changes.
+ * comment others are told of, D09), as one more fact, then the changes. A
+ * record a row names is drawn as itself, opened with `open`.
  */
-export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
+export function changeRowsOf(
+  proposal: AssistantProposalCard,
+  open: (target: InAppTarget) => void,
+): ChangeListRow[] {
   const rows = proposal.changes.map((change): ChangeListRow => {
     const note = change.note;
     const base = note === undefined ? { label: change.label } : { label: change.label, note };
-    const to = drawValue(change.to ?? "", change.items);
-    const from = drawValue(change.from ?? "", change.from_items);
+    const to = drawPhrase(change.to, change.items, open);
+    const from = drawPhrase(change.from, change.from_items, open);
     switch (CHANGE_KIND[change.kind]) {
       case "fact": {
         const value = change.to === undefined && change.from !== undefined ? from : to;
@@ -564,8 +429,8 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
         // a line diff the way the page's own History draws it: a word diff
         // ran its headings and bullets into one paragraph and read a line
         // break as a word removed and added again.
-        const before = change.from ?? "";
-        const after = change.to ?? "";
+        const before = phraseText(change.from);
+        const after = phraseText(change.to);
         if (before.includes("\n") || after.includes("\n")) {
           return {
             ...base,
@@ -608,7 +473,11 @@ export function changeRowsOf(proposal: AssistantProposalCard): ChangeListRow[] {
   const at = facts < 0 ? rows.length : facts;
   return [
     ...rows.slice(0, at),
-    { kind: "fact", label: "Who will see it", value: audience.join(", ") },
+    {
+      kind: "fact",
+      label: "Who will see it",
+      value: <Phrases phrases={audience} sep=", " open={open} />,
+    },
     ...rows.slice(at),
   ];
 }
@@ -726,8 +595,9 @@ function Proposal({
 }: {
   proposal: AssistantProposalCard;
   local: ProposalLocal | undefined;
-  on: ProposalHandlers;
+  on: CardHandlers;
 }) {
+  const open = on.openHere;
   // THE PAGE UNDER THE DRAWER IS READ AGAIN AS IT MOVES, so the card's rows
   // and its gate are the screen's as it is now.
   usePageSnapshot();
@@ -753,9 +623,9 @@ function Proposal({
       // WHAT IT DOES LEADS THE CARD, above every row, in the engine's words:
       // what a destructive change takes away (ADR-0055), never only a
       // struck-through row among the others.
-      summary={proposal.summary}
-      changes={screen ? screen.rows.map(previewRow) : changeRowsOf(proposal)}
-      note={proposal.note}
+      summary={proposal.summary ? <Phrase phrase={proposal.summary} open={open} /> : undefined}
+      changes={screen ? screen.rows.map(previewRow) : changeRowsOf(proposal, open)}
+      note={proposal.note ? <Phrase phrase={proposal.note} open={open} /> : undefined}
       // THE SCREEN'S GATE HOLDS APPROVE, with its sentence, before the person
       // presses anything; the page checks it again when it applies the change.
       approveBlocked={screen?.blocked ?? undefined}
@@ -771,7 +641,9 @@ function Proposal({
         state === "expired" || state === "stale" ? () => on.prepareAgain(proposal) : undefined
       }
       onRetry={unknown || proposal.failure?.retryable ? () => on.approve(proposal) : undefined}
-      receipt={proposal.receipt?.summary}
+      receipt={
+        proposal.receipt ? <Phrase phrase={proposal.receipt.summary} open={open} /> : undefined
+      }
       failure={failure}
       failureOutcome={unknown ? "unknown" : undefined}
       // THE ROUTE'S NEXT STEP, on its own line in the failure strip, where the
@@ -1014,8 +886,6 @@ export function CardBlock({
           {card.notice.text}
         </Callout>
       );
-    case "file":
-      return <FilesCard card={card.file} />;
     case "brief":
       return <Brief brief={card.brief} on={on} />;
   }

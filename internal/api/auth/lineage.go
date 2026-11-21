@@ -16,31 +16,22 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// WHO A CREDENTIAL'S NAME STANDS FOR NOW: the fourth question the guard
-// answers, for a surface that holds the NAME of a credential rather than the
-// credential itself.
-//
-// # Why a surface would hold only the name
-//
-// A view ticket is minted on the dashboard's origin for the signed-in viewer
-// and opened on the artifact origin, which holds no credential and never sees
-// a cookie: that is the whole point of the origin. So the ticket carries the
-// name of the credential it was minted through (`session:<lineage>`,
-// `pat:<id>`, a Tier A token's `token:<id>`, the development principal's
-// login), and every document the frame loads asks again who that credential
-// stands for, from the identity rows, so a sign-out, a revocation, a
-// suspension or a seat move ends the frame at its next document.
-//
-// # The same composition as a request's, and no second policy
-//
-// Each class is decided by the table its bearer is decided by
-// ([session.StandingByName], [credential.CheckHeld]) over the rows alone, and
-// composed by the function its bearer is composed by (the session arm's
-// principal, [Guard.machinePrincipal], [Guard.principalFor]), so a ticket's
-// principal is the one a request through the same credential would get on
-// this node. What only a bearer can prove (its signature, a session's idle
-// deadline, a token's secret) was proved by the request that minted the
-// ticket, and the ticket never outlives the credential's absolute deadline.
+// WHO A CREDENTIAL'S NAME STANDS FOR NOW: the guard's fourth question, for a
+// surface holding the NAME of a credential, not the credential.
+
+// A view ticket is minted on the dashboard's origin and opened on the artifact
+// origin, which never sees a cookie. It carries the name of the credential it
+// was minted through (`session:<lineage>`, `pat:<id>`, `token:<id>`, the
+// development principal's login), and every document the frame loads asks the
+// identity rows again, so a sign-out, revocation, suspension or seat move ends
+// the frame at its next document.
+
+// No second policy: each class is decided by its bearer's table
+// ([session.StandingByName], [credential.CheckHeld]) over the rows alone and
+// composed by its bearer's function ([Guard.machinePrincipal],
+// [Guard.principalFor]), so a ticket's principal is a request's on this node.
+// What only a bearer proves (signature, idle deadline, secret) was proved when
+// the ticket was minted, which never outlives the credential's absolute deadline.
 
 // ErrNoLineage reports a principal acting through no credential a name can
 // stand for: a seat's own turn, the engine itself.

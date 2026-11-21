@@ -13,35 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// MOVING SOMEBODY'S VALUES ONTO THE KEYRING'S ACTIVE KEY.
+// Moving people's values onto the keyring's active key. These rows derive from
+// the log, so a node cannot re-seal them in place (it would diverge from its
+// peers, and a replay from the floor would write the old ciphertext back): each
+// person holding a value under an old key gets an ordinary content update
+// ([Writer.UpdatePerson]) carrying the same values sealed afresh.
 //
-// A keyring rotation adds a key, makes it active, re-seals what the old key
-// sealed, and then drops the old one. Everything the keyring seals in the
-// company's secret store is re-sealed in place by `crewlet secrets rekey`;
-// what it seals in THIS estate cannot be, because these rows are derived from
-// the log and a node that rewrote its own would hold different bytes from its
-// peers — and a replay from the floor would write the old ciphertext back. So
-// a person's values move the only way anything here changes: a RECORD, one
-// per person holding a value under a key other than the active one, which is
-// an ordinary content update ([Writer.UpdatePerson]) whose document carries the
-// same name, address and seeds sealed afresh. Every data node applies it and
-// holds the new ciphertext; the old key can then be dropped without a single
-// value in any row becoming unreadable.
-//
-// # What is not moved, and why that is enough
-//
-// An OUTSTANDING INVITATION's address is not re-sealed: the only record that
-// could carry it again is a re-issue, which the directory refuses while the
-// invitation is open — one open invitation per address — and it stops being
-// redeemable when it expires anyway. So it is COUNTED ([SealedCount.Invitations]) and a rotation waits
-// for it to be redeemed or to lapse before dropping the old key, exactly as it
-// waits out the session lifetime for the cookies the old key signed. One that
-// has lapsed is not counted: nothing opens its address again.
-//
-// THE TRAIL is not moved either: an authentication-trail row carries the
-// record that wrote it, and nothing ever opens the payload inside — the trail
-// is read for who did what, which is in the clear. A trail row sealed under a
-// dropped key is a trail row exactly as useful as before.
+// An open invitation's address is not moved, since a re-issue is refused while
+// it is open: it is counted ([SealedCount.Invitations]) and a rotation waits
+// for it to be redeemed or lapse, as it waits out the cookies the old key
+// signed; a lapsed one is not counted, since nothing opens its address again.
+// The authentication trail is not moved either: nothing opens its
+// payloads, and who did what is in the clear.
 
 // SealedCount is how many of the values this estate opens are sealed under
 // each keyring key — what a rotation has to move before the old key goes.
@@ -65,10 +48,8 @@ func (c SealedCount) InvitationsOutside(active string) int {
 	return secrets.KeyCounts(c.Invitations).Outside(active)
 }
 
-// The two PASSES [Reader.SealedKeys] counts the people's and the open
-// invitations' sealed values by: every value, by definition, read off the rows
-// whole — no index narrows "every row holding a sealed value", and the count
-// is what an operator retires a keyring key on.
+// The statements [Reader.SealedKeys] counts by: full scans, since no index
+// narrows "every row holding a sealed value".
 const (
 	sealedPeopleStatement = `
 		SELECT name_sealed FROM iam_people
@@ -82,12 +63,10 @@ const (
 )
 
 // SealedKeys counts the sealed values this node's rows hold that anything
-// opens, by the keyring key each is sealed under, without opening one; now is
-// what an invitation's expiry is judged against.
-//
-// THE KEY ID IS READ OFF THE ENVELOPE ([secrets.EnvelopeKeyID]), which is the
-// one parse of that format: what a rotation has to move must be countable on a
-// node that could not open a single value.
+// opens, by the keyring key each is sealed under, without opening one; now
+// judges an invitation's expiry. The key id comes off the envelope
+// ([secrets.EnvelopeKeyID]), so a node that cannot open a value can still count
+// what a rotation must move.
 func (r *Reader) SealedKeys(ctx context.Context, now time.Time) (SealedCount, error) {
 	out := SealedCount{People: map[string]int{}, Invitations: map[string]int{}}
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
@@ -130,18 +109,12 @@ type ResealReport struct {
 // Reseal moves every person's values onto the keyring's active key, one
 // record per person who holds a value under another.
 //
-// IT IS ITS OWN RETRY. Each person's record is decided in their own snapshot
-// against what their row holds NOW, so a pass run again after one that did not
-// finish re-seals only what is still under an old key, and a pass over an
-// estate already moved publishes nothing. That is also why each record takes a
-// fresh operation id rather than one derived from the person: a later rotation
-// moving the same person again is a new operation, which a derived id would
-// have collapsed into the old one's.
-//
-// A PERSON WHO FAILS DOES NOT STOP THE REST: they are independent people, and
-// one unconfirmed record must not leave everybody after them on a key that is
-// about to be dropped. Every failure is returned with the report of what
-// moved.
+// It is its own retry: each record is decided against the person's row now,
+// so a rerun moves only what is still under an old key. Each record takes a
+// fresh operation id, not one derived from the person, or a later rotation
+// moving the same person would collapse into this one's. A person who fails
+// does not stop the rest, who would otherwise stay on a key about to be
+// dropped; every failure is returned with the report.
 func (w *Writer) Reseal(ctx context.Context, reader *Reader) (ResealReport, error) {
 	var report ResealReport
 	if w.sealer == nil {
@@ -162,9 +135,8 @@ func (w *Writer) Reseal(ctx context.Context, reader *Reader) (ResealReport, erro
 			PersonID: id, OpID: statelog.NewOpID(w.Now(), "reseal"),
 			Reason: "re-sealed under keyring key " + w.sealer.active,
 			Apply: func(p Person) (Person, error) {
-				// THE LAST RUN'S COUNT, which is the one the landed
-				// record carries: a decide may run again against a
-				// fresh snapshot.
+				// The last run's count is the landed record's: a decide may rerun
+				// against a fresh snapshot.
 				next, n, err := w.sealer.reseal(id, p)
 				moved = n
 				if err == nil && n == 0 {
@@ -186,8 +158,8 @@ func (w *Writer) Reseal(ctx context.Context, reader *Reader) (ResealReport, erro
 	return report, errors.Join(errs...)
 }
 
-// The two PASSES [Reader.sealedOutside] finds the people holding a stale name
-// or address by, each every person holding one, by definition.
+// The scans [Reader.sealedOutside] finds stale names and addresses by; each
+// reads every person holding one.
 const (
 	sealedNamesStatement = `SELECT id, name_sealed FROM iam_people
 		WHERE length(name_sealed) > 0`
@@ -241,12 +213,11 @@ func (r *Reader) sealedOutside(ctx context.Context, active string) ([]string, er
 // reseal is one person's document with every value sealed under a key other
 // than the active one opened and sealed again, and how many it moved.
 //
-// A VALUE THIS KEYRING CANNOT OPEN REFUSES THE WHOLE PERSON rather than being
-// skipped: it is a key already dropped from the ring, and a record that moved
-// the rest would report the person moved while one of their values stays
-// unreadable for ever — which is the state the operator is about to drop the
-// old key on the strength of. internal/fleetsecrets' rekey refuses the same
-// way, for the same reason.
+// A value this keyring cannot open refuses the whole person rather than being
+// skipped: its key is already dropped, and a record moving the rest would
+// report the person moved while that value stays unreadable, the very state
+// the operator drops the old key on. internal/fleetsecrets' rekey refuses the
+// same way.
 func (s *Sealer) reseal(personID string, p Person) (Person, int, error) {
 	moved := 0
 	move := func(sealed string, open func(string) (string, error),

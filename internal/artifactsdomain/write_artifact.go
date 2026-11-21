@@ -487,10 +487,8 @@ func (w *Writer) Patch(ctx context.Context, c Call, id artifacts.ID, p Patch) (W
 	return w.written(ctx, id, opID, res, err)
 }
 
-// labelsFull is the refusal of a label for a version of an artifact that
-// already keeps count labelled versions ([ErrLabelsFull]), naming the remedy a
-// person and a model both take: remove a label from a version that no longer
-// needs one.
+// labelsFull refuses a label once an artifact keeps count labelled versions
+// ([ErrLabelsFull]), naming the remedy, which a person and a model both read.
 func labelsFull(count int) error {
 	return fmt.Errorf("%w: it keeps %d. Remove a label from a version that no "+
 		"longer needs one, then label this one", ErrLabelsFull, count)
@@ -685,23 +683,18 @@ func (w *Writer) Transfer(ctx context.Context, c Call, id artifacts.ID, toSeat s
 	return w.written(ctx, id, opID, res, err)
 }
 
-// LinkWorkItem links an artifact that already exists to one tracker work item,
-// so the item's listing finds it ([ListQuery.WorkItem]) exactly as it finds one
-// created or published for the item. The record changes no artifact state; its
-// history row names the item.
+// LinkWorkItem links an existing artifact to one tracker work item, so the
+// item's listing finds it ([ListQuery.WorkItem]); the record changes no
+// artifact state, and its history row names the item.
 //
-// IDEMPOTENT FROM THE CALLER'S VIEW, in both of the ways a caller repeats it. A
-// retry under the same key is the same operation, answered from the ledger. A
-// second link to an item the artifact's history already names (an earlier
-// link, or a create or a publish made for it) publishes nothing and answers
-// success: the artifact is on the item's listing already, and a history that
-// recorded every repeat would say the link happened twice.
+// IDEMPOTENT: a retry under the same key is answered from the ledger, and a
+// link to an item the history already names (by a link, create or publish)
+// publishes nothing and answers success, so history never says it twice.
 //
-// WHO MAY LINK, AND WHETHER THE ITEM EXISTS, ARE DECIDED BEFORE THIS: the
-// caller's read of the artifact and their write of the item are the API's
-// (internal/api/artifactsapi), and the item is the tracker's, another log this
-// writer does not read. The item is stamped on the call's authority; a call
-// already charged to another item is refused rather than silently relinked.
+// WHO MAY LINK (reading the artifact, writing the item), AND WHETHER THE ITEM
+// EXISTS, are the API's to decide (internal/api/artifactsapi): the item is the
+// tracker's log, which this writer does not read. The item is stamped on the call's authority; a call already
+// charged to another item is refused rather than silently relinked.
 func (w *Writer) LinkWorkItem(ctx context.Context, c Call, id artifacts.ID, item string) (Written, error) {
 	if err := validCall(c); err != nil {
 		return Written{}, err
@@ -817,16 +810,12 @@ func (w *Writer) written(ctx context.Context, id artifacts.ID, opID string, res 
 // and writes the deletion marker. A retry under the same key collapses every
 // step that landed and lands the rest.
 //
-// # Why the purge is committed before anything irreversible
-//
-// A dependent's removal cannot be undone: the datastore's deletion marker is
-// never lifted. A purge judged only before that step and again after it left a
-// restore free to land between the two, and a crash there left the artifact for
-// anybody to restore, either way a live artifact whose data was gone for good.
-// Once the first step has landed, a restore is refused and the artifact is
-// never served or written again, so the only way forward is the purge itself:
-// its retry, another purge by an administrator, or the trash reaper, which
-// finishes every purge that has begun ([Reader.TrashedBefore]).
+// THE PURGE IS COMMITTED BEFORE ANYTHING IRREVERSIBLE: a dependent's deletion
+// marker is never lifted, so a restore landing mid-purge, or a crash leaving
+// the artifact restorable, would leave it live with its data gone. Once begun,
+// a restore is refused and the artifact never served or written again; only
+// the purge goes forward: its retry, an administrator's purge, or the trash
+// reaper, which finishes every begun purge ([Reader.TrashedBefore]).
 func (w *Writer) Purge(ctx context.Context, c Call, id artifacts.ID) (Written, error) {
 	return w.purge(ctx, c, id, nil)
 }
@@ -938,10 +927,10 @@ func (w *Writer) purge(ctx context.Context, c Call, id artifacts.ID, guard func(
 
 // beginPurge is the purge's first step: the artifact committed to its purge on
 // its own subject, under the guard where the caller gave one, before any
-// dependent's irreversible step. An artifact a purge has already begun on (this
-// gesture's earlier attempt, or another purge's) publishes nothing and goes on:
-// a begun purge only ever finishes. It answers only once the record is durable,
-// so the dependents never run behind a step whose outcome nobody knows.
+// dependent's irreversible step. A purge already begun (by this gesture or
+// another) publishes nothing and goes on: a begun purge only finishes. It
+// answers only once the record is durable, so the dependents never run behind
+// a step whose outcome nobody knows.
 func (w *Writer) beginPurge(ctx context.Context, c Call, id artifacts.ID, opID string,
 	guard func(Head) bool, at time.Time) error {
 

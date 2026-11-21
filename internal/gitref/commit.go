@@ -6,30 +6,17 @@ import (
 	"unicode/utf8"
 )
 
-// CommitText is why git would not write s into a commit AS IT IS GIVEN — its
-// message, or a part of its author's or committer's identity — and "" when it
-// would.
+// CommitText is why git would not write s into a commit AS IT IS GIVEN (its
+// message, or part of an identity), and "" when it would.
 //
-// GIT'S UTF-8 IS NOT GO'S. Its has_invalid_utf8 (commit.c) refuses, beside
-// everything unicode/utf8 refuses, Unicode's noncharacters, which unicode/utf8
-// takes as it takes any other rune, and its ensure_utf8 then rewrites every
-// byte of a sequence it refused as though the byte were Latin-1 — so a valid
-// Go string ending in U+FFFE goes into history ending in the six bytes of
-// "ï¿¾", while git prints a warning and exits 0. The rule is the WHOLE
-// commit's, since ensure_utf8 reads every byte commit-tree writes: what a
-// commit's identity holds (internal/gitlet/gitproc's Identity) and the message
-// it reads from its standard input alike.
-//
-// One rule here, below both of its readers: the pool that runs commit-tree
-// (internal/gitlet/gitproc) holds an identity to it before any process starts,
-// and the code domain holds an engine write's message to it as it validates
-// the write (internal/gitlet's EngineWrite) — the tool that asks a write, the
-// wire it crosses and the Gitlet node that builds it, by one reading. Two copies
-// of it would refuse one text in one place and rewrite it in the other.
-//
-// A NUL is not this rule's: git cuts a commit's message at its first NUL and
-// an environment variable cannot carry one, so each reader refuses it in its
-// own words.
+// GIT'S UTF-8 IS NOT GO'S. has_invalid_utf8 (commit.c) also refuses Unicode's
+// noncharacters, which unicode/utf8 accepts, and ensure_utf8 then rewrites each
+// byte of a refused sequence as Latin-1: a Go string ending in U+FFFE goes
+// into history as the six bytes of "ï¿¾" while git warns and exits 0. The
+// rule covers the WHOLE commit-tree input, identity and message alike, and
+// lives below both readers (gitproc's identity check, internal/gitlet's
+// EngineWrite) so they cannot disagree. A NUL is not this rule's: each reader
+// refuses it itself (git cuts a message at it, an env variable cannot carry it).
 func CommitText(s string) string {
 	if !utf8.ValidString(s) {
 		return "is not UTF-8: git would rewrite the commit's bytes as though they were Latin-1"

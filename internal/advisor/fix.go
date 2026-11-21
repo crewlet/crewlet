@@ -29,10 +29,10 @@ const (
 	FixOpenPage FixKind = "open_page"
 	// FixNone is the engine's or a vendor's own work: nothing for a person.
 	FixNone FixKind = "none"
-	// FixDraftWithAssistant is prose the engine cannot build (a policy):
-	// Ask Crewlet drafts it from Prompt, and its own preview (ADR-0051)
-	// binds the person's approval.
-	FixDraftWithAssistant FixKind = "draft_with_assistant"
+	// FixAskCrewlet is what the engine cannot build (a policy, a change
+	// whose fix did not take): Ask Crewlet drafts it from Prompt, and its
+	// own preview (ADR-0051) binds the person's approval.
+	FixAskCrewlet FixKind = "ask_crewlet"
 )
 
 // Fix is what fixes a finding. Options is always a list, empty for a fix
@@ -54,11 +54,15 @@ type Fix struct {
 	// what that page opens on: an item's key, a seat's handle.
 	Page   Page   `json:"page,omitempty"`
 	Target string `json:"target,omitempty"`
-	// Prompt is the question a draft_with_assistant fix asks Ask Crewlet, in
+	// Prompt is the question an ask_crewlet fix asks Ask Crewlet, in
 	// the engine's words: the evidence and the change to draft, nothing more.
 	Prompt string `json:"prompt,omitempty"`
 	// Act is the atlas tool call an atlas_act fix sends, once per entry.
 	Act *AtlasAct `json:"act,omitempty"`
+	// Reassign, where set, is the items a person may move to another seat
+	// with one press, beside the fix's own kind, which a reader that knows no
+	// reassign still shows.
+	Reassign *Reassign `json:"reassign,omitempty"`
 }
 
 // Page is a dashboard page an open_page fix is taken on, by the name the
@@ -83,7 +87,14 @@ func (p Page) Valid() bool { return slices.Contains(Pages(), p) }
 type Option struct {
 	Label  string `json:"label"`
 	Change Change `json:"change"`
+	// Also are the further changes the option makes with Change, each to
+	// its own entity, re-checked and sent in order after it: a finding about
+	// one cause on many seats changes them all at once (ADR-0166).
+	Also []Change `json:"also,omitempty"`
 }
+
+// Changes is every change the option makes, Change first.
+func (o Option) Changes() []Change { return append([]Change{o.Change}, o.Also...) }
 
 // The entity collections a change writes, as the config surface names them
 // (configapi.EntityRoles and configapi.EntityUnits; a test holds them equal).

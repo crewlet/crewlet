@@ -10,49 +10,27 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// A diary note's vector: computed as it is written, and FILLED later for the
-// notes that were written without one.
-//
-// # Why the similarity half had nothing to find
-//
-// `## Personal memory` is built from two halves, the notes most similar to the
-// turn's ask and the most recent fifty, and the similarity half reads only rows
-// with a vector. No writer ever set one: the column was declared, the recall
-// was written against it, and every note landed NULL — so a durable fact older
-// than the newest fifty could not reach the relevance filter by push or by
-// refresh_memory, and, never selected, it was the first thing the 500-entry
-// trim evicted. A note is now embedded as it is written ([Diary.Write]), and
-// every note without a vector of the current model is filled by the node
-// holding its seat ([Diary.Unfilled], [Diary.FillEmbeddings]).
-//
-// # A filled note travels because setting its vector stamps it
-//
-// The memory changelog carries a diary row once its CHANGE SEQUENCE — a number
-// the row takes when it is inserted — passes the watermark the last carry
-// left. An update in place that took no new number would leave the row behind
-// that watermark, so a vector set on it would stay on this node, and the
-// seat's next holder would recall from a copy that has none. So the table
-// stamps a row with a fresh sequence whenever its vector is set (a trigger,
-// node migration 0041), in the statement that sets it, and the watermark
-// carries the filled note like a new one. The receiving end is the
-// other half: a peer that already holds the vectorless row takes the carried
-// vector over it rather than skipping a row it has (internal/learning/memsync).
-//
-// It used to MOVE the row instead — `rowid = max(rowid) + 1` — and the rowid
-// is the one number here that is reused: with the newest note deleted by the
-// trim or the expiry, the next insert or fill took a rowid at or below the
-// watermark and was never carried at all.
+// A diary note's vector is computed as it is written ([Diary.Write]) and
+// FILLED later by the seat's node ([Diary.Unfilled], [Diary.FillEmbeddings]):
+// the similarity half of `## Personal memory` reads only rows with a vector,
+// so without one a durable fact older than the newest fifty is never recalled
+// and is first evicted by the 500-entry trim. A filled note travels because
+// setting its vector stamps it: the memory changelog carries a row once its
+// CHANGE SEQUENCE passes the last carry's watermark, so an update with no new
+// number would leave the vector on this node. A trigger (node migration 0041)
+// gives the row a fresh sequence when its vector is set; a peer holding the
+// vectorless row takes the carried vector (internal/learning/memsync). Not
+// `rowid = max(rowid) + 1`: rowids are reused, so a row is never carried.
 
 // DiaryEmbedBudget bounds embedding one note as it is written.
 //
-// TWO SECONDS — search.QueryEmbedBudget's figure, and ONLY its figure: that
+// TWO SECONDS, search.QueryEmbedBudget's figure and ONLY its figure: that
 // budget is also held at twice a semantic scan's, which says nothing about a
-// note, so tuning one leaves the other where it is. This one's reasons are its
-// own. A note is one short input — at most [MaxContentChars] bytes —
-// which a hosted endpoint answers in a few hundred milliseconds at the p99; the
-// reflect_and_persist call that writes one has a model waiting on it mid-turn;
-// and a miss costs only the vector, never the note: it lands without one, and
-// the node holding the seat fills it later.
+// note, so tuning one leaves the other. Here a note is one short input (at
+// most [MaxContentChars] bytes) which a hosted endpoint answers in a few
+// hundred milliseconds at the p99; the reflect_and_persist call that writes it
+// has a model waiting mid-turn; and a miss costs only the vector, which the
+// node holding the seat fills later.
 const DiaryEmbedBudget = 2 * time.Second
 
 // embedNote is the note's vector, or none.
@@ -79,18 +57,16 @@ func (d *Diary) embedNote(ctx context.Context, e DiaryEntry) Vector {
 }
 
 // Unfilled returns up to limit of a seat's live notes that have no vector of
-// model at this store's width — written while the company had no embedding
-// provider or none answered, embedded under a model the company has since
-// moved off, or at a width a restart left behind — newest first, strictly
-// after the cursor (see [FillCursor]).
+// model at this store's width (written with no embedding provider answering,
+// embedded under a model since moved off, or at a width a restart left
+// behind), newest first, strictly after the cursor (see [FillCursor]).
 //
 // THE WIDTH AS WELL AS THE MODEL, because one model answers at whatever width
-// is asked: a store reopened at a new width holds notes of the same model that
+// is asked: a store reopened at a new width holds same-model notes that
 // recall's width filter no longer admits, and only a fill brings them back.
 //
-// A note with no text is never returned: there is nothing to embed, and a row
-// that could never be filled would be read on every pass for ever. A note's
-// vector is of its content, as [Diary.Write] embeds it.
+// A note with no text is never returned: a row that could never be filled
+// would be read on every pass for ever.
 func (d *Diary) Unfilled(ctx context.Context, agentID, model string, now time.Time,
 	after FillCursor, limit int,
 ) ([]Unfilled, error) {

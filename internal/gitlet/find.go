@@ -1,7 +1,6 @@
 package gitlet
 
 import (
-	"fmt"
 	"strings"
 	"unicode/utf8"
 )
@@ -56,17 +55,17 @@ func (q FindQuery) validate() error {
 	}
 	switch {
 	case q.Query == "":
-		return fmt.Errorf("%w: find.query: name the characters to find", ErrInvalid)
+		return refusedf("%w: find.query: name the characters to find", ErrInvalid)
 	case len(q.Query) > MaxFindQueryBytes:
-		return fmt.Errorf("%w: find.query: %d bytes, past the %d a find takes", ErrInvalid, len(q.Query),
+		return refusedf("%w: find.query: %d bytes, past the %d a find takes", ErrInvalid, len(q.Query),
 			MaxFindQueryBytes)
 	case !utf8.ValidString(q.Query):
-		return fmt.Errorf("%w: find.query: not UTF-8: a find matches the characters a person types", ErrInvalid)
+		return refusedf("%w: find.query: not UTF-8: a find matches the characters a person types", ErrInvalid)
 	case strings.IndexByte(q.Query, 0) >= 0:
-		return fmt.Errorf("%w: find.query: a query holds no NUL, which no path holds", ErrInvalid)
+		return refusedf("%w: find.query: a query holds no NUL, which no path holds", ErrInvalid)
 	}
 	if q.Limit < 0 || q.Limit > MaxFindLimit {
-		return fmt.Errorf("%w: find.limit: %d is not 1 to %d: a find answers 1 to %d files, %d when left out",
+		return refusedf("%w: find.limit: %d is not 1 to %d: a find answers 1 to %d files, %d when left out",
 			ErrInvalid, q.Limit, MaxFindLimit, MaxFindLimit, DefaultFindLimit)
 	}
 	return nil

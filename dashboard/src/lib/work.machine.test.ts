@@ -36,6 +36,7 @@ import {
 import type { WorkGroup, WorkSummary } from "~/protocol/index.ts";
 
 const row = (key: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
+  flow: null,
   id: key.toLowerCase(),
   key,
   project: "ENG",

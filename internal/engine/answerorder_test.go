@@ -36,23 +36,15 @@ import (
 // THE R1/R2 RACE, end to end through a seat's inbox, on BOTH backends.
 //
 //  1. An executor parks with a question in a chat thread.
-//  2. The first reply, R1, arrives; the run's resume fails on something
-//     transient.
-//  3. The person's next message, R2, arrives before anything retries.
-//  4. The run asks a SECOND question later, and a copy of R1 arrives after it.
+//  2. The first reply, R1, arrives; the run's resume fails transiently.
+//  3. The next message, R2, arrives before anything retries.
+//  4. The run asks a SECOND question, and a copy of R1 arrives after it.
 //
-// The run must be resumed with R1, R2 must not answer the question (it is
-// worked as an ordinary turn, AFTER the resume), and R1 must not answer the
-// second question.
+// The run must resume with R1, R2 must be worked as an ordinary turn AFTER the
+// resume, and R1 must not answer the second question.
 //
-// It went the other way because R1's delivery was handed back with a Nak,
-// which on JetStream returns it after its backoff BEHIND R2 — so R2 reached
-// the still-waiting run first and was spliced in as its answer, and R1 came
-// round to answer whatever was asked next — while the in-memory twin replayed
-// a Nak at the head, so every engine test certified the order production never
-// gave. The same scenario runs here on the twin and on an embedded JetStream
-// broker at the conformance suite's timings, and both must tell the same
-// story.
+// A JetStream Nak returns R1 BEHIND R2; the twin replays it at the head, so
+// twin-only tests certified an order production never gave. Runs on both.
 func TestTheFirstReplyAnswersTheQuestionOnEveryBackend(t *testing.T) {
 	// NOT PARALLEL, and for the broker's sake rather than any shared state:
 	// at the conformance suite's two-second ack wait, a handler a contended
@@ -140,14 +132,25 @@ func (r *answerResumer) resumedWith() []string {
 // inboxHold is the engine's sandbox seat hold, on the queue under test.
 type inboxHold struct{ q queue.EventQueue }
 
-func (h inboxHold) Hold(ctx context.Context, handle string) error {
-	return h.q.PauseTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle),
+func (h inboxHold) Hold(ctx context.Context, handle string, at queue.Attachment) error {
+	return h.q.PauseTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle), at,
 		string(inbox.HoldSandbox))
 }
 
-func (h inboxHold) Release(ctx context.Context, handle string) error {
-	return h.q.ResumeTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle),
+func (h inboxHold) Release(ctx context.Context, handle string, at queue.Attachment) error {
+	return h.q.ResumeTopic(ctx, fixtureInbox(handle), fixtureInboxGroup(handle), at,
 		string(inbox.HoldSandbox))
+}
+
+// fixtureAttachment is the attachment of handle's inbox on q that a seat taken
+// now is recovered for, as a node's acquisition reads it before the attach.
+func fixtureAttachment(t *testing.T, q queue.EventQueue, handle string) queue.Attachment {
+	t.Helper()
+	at, err := q.Attachment(t.Context(), fixtureInbox(handle), fixtureInboxGroup(handle))
+	if err != nil {
+		t.Fatalf("Attachment: %v", err)
+	}
+	return at
 }
 
 // fixtureOrg is the company the hand-built rigs in these cases stand in for.
@@ -452,7 +455,7 @@ func runAnswerOrder(t *testing.T, q queue.EventQueue) {
 	if err := store.MarkAwaiting(ctx, "t1", sandbox.Clarification{AskedAt: time.Now().UTC()}); err != nil {
 		t.Fatalf("MarkAwaiting: %v", err)
 	}
-	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1); err != nil {
+	if err := coordinator.RecoverSeat(ctx, "swe", "node-a", 1, fixtureAttachment(t, q, "swe"), nil); err != nil {
 		t.Fatalf("RecoverSeat: %v", err)
 	}
 

@@ -168,6 +168,59 @@ func TestAPersonMarksTheirOwnCommentNotices(t *testing.T) {
 	}
 }
 
+// A NOTICE NAMED BY ITS RECORD IS THAT NOTICE, read, snoozed or unread; another person's and an
+// unknown one answer nothing. Mutation: drop the record branch of the scan (jane's whole inbox
+// answers, red).
+func TestACommentNoticeIsReadByItsRecord(t *testing.T) {
+	t.Parallel()
+	n := newHarness(t)
+	ctx := t.Context()
+	jane, bo := person("jane", artifacts.RoleOwner), person("bo", artifacts.RoleCommenter)
+	id := n.commented(jane, "Named")
+	for _, body := range []string{"one", "two", "three"} {
+		if _, err := n.writer.OpenThread(ctx, bo, artifactsdomain.ThreadInput{Artifact: id, Body: body,
+			Notify: told(as("jane", artifactsdomain.NotifyOwner, true), as("kim", artifactsdomain.NotifyMention,
+				true))}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var ids []string
+	for _, notice := range n.inboxOf(artifactsdomain.InboxQuery{Handle: "jane"}).Notices {
+		ids = append(ids, notice.RecordID)
+	}
+	kims := n.inboxOf(artifactsdomain.InboxQuery{Handle: "kim"}).Notices
+	if len(ids) != 3 || len(kims) != 3 {
+		t.Fatalf("jane holds %d notices and kim %d, want three each", len(ids), len(kims))
+	}
+	if _, err := n.writer.MarkInbox(ctx, jane, artifactsdomain.MarkInput{Gesture: artifactsdomain.MarkGesture{
+		Read: []string{ids[0]}, Snooze: []artifactsdomain.MarkSnooze{{RecordID: ids[1],
+			Until: monday.Add(time.Hour)}}}}); err != nil {
+		t.Fatalf("mark: %v", err)
+	}
+	for i, want := range []struct{ read, snoozed bool }{{true, false}, {false, true}, {false, false}} {
+		page := n.inboxOf(artifactsdomain.InboxQuery{Handle: "jane", Record: ids[i], Snoozed: inbox.SnoozeInclude})
+		if len(page.Notices) != 1 || page.Notices[0].RecordID != ids[i] {
+			t.Fatalf("jane's read of %s answers %v, want that notice alone", ids[i], excerpts(page))
+		}
+		if got := page.Notices[0]; got.Read != want.read || got.Snoozed != want.snoozed || got.Title != "Named" {
+			t.Errorf("the notice %s reads %+v, want read %v and snoozed %v on its artifact", ids[i], got, want.read,
+				want.snoozed)
+		}
+	}
+	if page := n.inboxOf(artifactsdomain.InboxQuery{Handle: "jane", Record: ids[0], Unread: true}); len(
+		page.Notices) != 0 {
+		t.Errorf("an unread read of a read notice answers %v", excerpts(page))
+	}
+	if page := n.inboxOf(artifactsdomain.InboxQuery{Handle: "bo", Record: ids[2],
+		Snoozed: inbox.SnoozeInclude}); len(page.Notices) != 0 {
+		t.Errorf("bo's read of a record that told jane answers %v", excerpts(page))
+	}
+	if page := n.inboxOf(artifactsdomain.InboxQuery{Handle: "jane", Record: "no-such-record",
+		Snoozed: inbox.SnoozeInclude}); len(page.Notices) != 0 {
+		t.Errorf("jane's read of an unknown record answers %v", excerpts(page))
+	}
+}
+
 // A CARD READS ITS THREAD AS IT STANDS: status and resolver, quote and live
 // remark count, in the order named, and nothing for a missing thread.
 func TestACardReadsItsThreadAsItStands(t *testing.T) {

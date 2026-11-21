@@ -14,97 +14,57 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 )
 
-// THE BLIND INDEX: how this estate looks somebody up without holding what it
-// looked them up by.
+// THE BLIND INDEX: how this estate looks somebody up by email without holding
+// the address, which a plain column would put in every node's database,
+// snapshot, backup and directory record.
 //
-// # The problem a plain column has
-//
-// An email address is the thing a person signs in with, so something has to
-// resolve one to a person on every sign-in. The obvious column holds the
-// address in the clear, and then the address is in every data node's database,
-// in every snapshot a node donates, in every backup, and in every record a
-// directory decision publishes onto the log.
-//
-// # A keyed hash, and why keyed rather than plain
-//
-// A blind is an HMAC-SHA256 of the NORMALISED address under a key the company
-// holds. A node with the key computes it from an address; nobody without the
-// key can go the other way.
-//
-// PLAIN SHA-256 WOULD NOT DO, and the reason is the size of the input space
-// rather than the strength of the hash: an address is drawn from a set an
-// attacker can enumerate — a company's domain plus a name list is a few
-// million guesses — so an unkeyed digest of one is a lookup table, not a
-// blind. The key is what makes the set unenumerable without it.
-//
-// # ONE KEY FOR THE COMPANY, and it can never be per node
-//
-// The blind is the value a DIRECTORY DECIDE COMPARES an address by. Two nodes
-// that computed different blinds for one address would each find the other's
-// person absent, and BOTH enrolments would land — which is the duplicate
-// identity the directory exists to refuse, arriving through the one door its
-// decide cannot watch. So the key is a fleet secret, read through the
-// company's sealed store, and a node that cannot read it refuses rather than
-// guessing.
-//
-// # It is NOT a password hash and must never be used as one
-//
-// HMAC is fast on purpose: this runs on every sign-in and every lookup. What
-// makes it safe here is that the input is an address rather than a secret —
-// an attacker who recovers one has learned an email address they could have
-// guessed. A credential goes through internal/iam's own verifier, which is
-// deliberately slow.
+// A blind is an HMAC-SHA256 of the NORMALISED address under the company's key.
+// KEYED, because addresses are enumerable (a domain plus a name list is a few
+// million guesses), so a plain digest is a lookup table. ONE KEY FOR THE
+// COMPANY, never per node: a directory decide compares by the blind, and nodes
+// deriving different blinds would each admit a duplicate identity, so a node
+// that cannot read the key refuses rather than guessing. NOT A PASSWORD HASH:
+// HMAC is fast because the input is an address, not a secret; a credential
+// goes through internal/iam's deliberately slow verifier.
 
 // BlindKeyName is where the company's blind-index key lives in the fleet
 // secret store.
 //
-// ONE NAME, and it carries no version: rotating this key is not a rotation in
-// the ordinary sense — every blind in the estate is derived from it, so a new
-// key means re-deriving every blind the directory holds, which is a
-// re-publication of the whole directory rather than a re-encryption of it. That is an operation
-// somebody plans, not a sweep that runs, so there is no second name for a
-// previous key to live under and no arm here that tries both.
+// ONE NAME, with no version: every blind derives from the key, so rotating it
+// means re-publishing the whole directory, a planned operation rather than a
+// sweep, and nothing here tries a previous key.
 //
-// IN THE ENGINE'S OWN NAMESPACE of the company's secret store
-// ([secrets.Reserved]). It used to be an environment-variable name, which
-// made it an operator secret: listable,
-// revealable — and a PUT of a different value orphaned every address in the
-// directory and let each be enrolled again, while `${…}` in an `mcp_env` handed
-// the key that makes every address enumerable to a child process. No operator
-// surface addresses it now, and a lost key comes back with the coordination
-// store it lived in.
+// IN THE ENGINE'S OWN NAMESPACE ([secrets.Reserved]), never an operator
+// secret: one an operator could list, reveal, PUT over (orphaning every
+// address so each could enrol again) or hand to a child process through `${…}`
+// in an `mcp_env`. A lost key comes back with the coordination store it lived
+// in.
 const BlindKeyName = "iam/blind-index-key"
 
 // blindDomain separates this HMAC's inputs from every other use of the same
-// key, in the shape internal/runtoken established: a key is only ever safe in
-// one domain, and two uses that shared one would let a value minted for the
-// first be presented to the second.
+// key, in internal/runtoken's shape: two uses sharing a domain would let a
+// value minted for one be presented to the other.
 const blindDomain = "crewlet/iam/blind/v1"
 
 // ErrNoBlindKey reports that this node cannot compute a blind at all.
 //
-// DISTINCT FROM A LOOKUP THAT FOUND NOBODY, and the distinction is the whole
-// three-valued rule this tree applies everywhere: "nobody holds this address"
-// and "this node could not tell" send a request to opposite places — a sign-in
-// refused, and a sign-in answered 503 while an operator is told the key is
-// missing.
+// DISTINCT FROM A LOOKUP THAT FOUND NOBODY (the three-valued rule): "nobody
+// holds this address" refuses a sign-in, while "this node could not tell"
+// answers 503 and tells an operator the key is missing.
 var ErrNoBlindKey = errors.New("no email lookup key")
 
 // Blinder derives the blind index for a value the company matches on.
 //
-// A VALUE TYPE HOLDING THE KEY, rather than a function taking it at every call
-// site: the key is read once per epoch from the sealed store, and a signature
-// that took it each time would have every caller deciding where to get it
-// from — which is how one of them comes to derive a blind under a key nobody
-// else has.
+// A VALUE HOLDING THE KEY, read once per epoch from the sealed store, not a
+// key passed at every call site: a caller choosing where to get it is how one
+// derives a blind under a key nobody else has.
 type Blinder struct{ key []byte }
 
 // NewBlinder builds one over the company's key.
 //
-// It refuses an EMPTY key rather than deriving under one, because an empty
-// HMAC key is a valid HMAC key: it would produce stable, plausible blinds that
-// any other deployment with the same bug could reproduce, and the estate would
-// look exactly as it does when it is working.
+// It refuses an EMPTY key: an empty HMAC key is valid and yields stable,
+// plausible blinds any deployment with the same bug could reproduce, while the
+// estate looks as if it works.
 func NewBlinder(key []byte) (*Blinder, error) {
 	if len(key) == 0 {
 		return nil, fmt.Errorf("%w: the company's %s isn't set, so this node "+
@@ -121,16 +81,11 @@ func NewBlinder(key []byte) (*Blinder, error) {
 // Blinds is where a writer or a sign-in gets the company's blinder, at the
 // moment it needs one.
 //
-// # A source rather than a value, because the key is minted on first use
-//
-// The key does not exist until some node mints it, and the node that mints it
-// is whichever first needs a blind — which is after every node has booted and
-// built its writer. A blinder fixed at construction was therefore nil on every
-// node of every fresh deployment, and every enrolment with an address, every
-// invitation and every sign-in by address was refused for a key nothing ever
-// wrote. An error here is the third value, as everywhere in this estate: the
-// key could not be established, which is neither "nobody holds this address"
-// nor a blind.
+// A SOURCE, NOT A VALUE: whichever node first needs a blind mints the key,
+// after every node has built its writer, so a blinder fixed at construction
+// would be nil on a fresh deployment and refuse every address. An error is the
+// third value: the key could not be established, which is neither "nobody
+// holds this address" nor a blind.
 type Blinds interface {
 	Blinder(ctx context.Context) (*Blinder, error)
 }
@@ -148,25 +103,21 @@ func (b *Blinder) Blinder(context.Context) (*Blinder, error) {
 
 // MinBlindKeyBytes is the floor under the blind-index key.
 //
-// THIRTY-TWO, which is SHA-256's own block-derived output width and the same
-// floor internal/whsec puts under a webhook signing key. HMAC accepts a key of
-// any length and pads a short one, so nothing below this layer refuses one —
-// which is exactly why the refusal is here, at the edge where the value is
-// accepted, rather than trusted where it is used.
+// THIRTY-TWO, SHA-256's output width and internal/whsec's floor for a webhook
+// signing key. HMAC pads a short key, so nothing below refuses one: the
+// refusal belongs here, where the value is accepted.
 const MinBlindKeyBytes = 32
 
 // Email is the blind for an email address.
 //
-// IT NORMALISES FIRST, through [iam.NormalizeEmail], which is the same fold
-// the org chart matches a vendor payload's address by. Two folds would mean
-// one address reaching a seat and a different person.
+// IT NORMALISES FIRST, through [iam.NormalizeEmail], the fold the org chart
+// matches a vendor payload's address by: two folds would let one address reach
+// a seat and a different person.
 func (b *Blinder) Email(address string) (string, error) {
 	folded := iam.NormalizeEmail(address)
 	if folded == "" {
-		// NOT FINDABLE, which every surface answers as a value the caller
-		// typed: an address of nothing but whitespace reaches here past a
-		// check for an empty one, and unclassified it was a 500 telling an
-		// administrator the engine was broken.
+		// NOT FINDABLE, a value the caller typed: a whitespace-only address
+		// passes an empty check, and must not answer as a 500.
 		return "", fmt.Errorf("%w: the email address is empty",
 			ErrNotFindable)
 	}
@@ -174,23 +125,17 @@ func (b *Blinder) Email(address string) (string, error) {
 }
 
 // InvitationID is the invitation an issue names, derived from the operation
-// key it is published under — so a retry of an issue whose outcome nobody could
-// establish names the invitation its first attempt issued, and hands back the
-// link to it rather than a second invitation the address then refuses.
+// key it is published under, so a retry whose outcome nobody could establish
+// names the invitation its first attempt issued and hands back its link.
 //
-// # Under the company's key, although the id is no longer the credential
+// UNDER THE COMPANY'S KEY: the id opens nothing alone (the link's SECRET does,
+// [Blinder.InvitationSecret]), but the secret derives from it, so a plain hash
+// of a typed key would let anybody who saw the key compute the link. Its own
+// MAC domain ([invitationIDDomain]) keeps any address's blind from being an
+// invitation id.
 //
-// The id opens nothing on its own — the link's SECRET does, and the estate
-// keeps only its verifier ([Blinder.InvitationSecret]) — but the id is what the
-// secret is derived from, so its entropy is still not the caller's to choose: a
-// key somebody typed, derived under a plain hash, would let anybody who saw the
-// key compute the invitation it names and the link that opens it. Under the
-// company's key it is unguessable without that key whatever the operation key
-// was — and in a MAC domain of its own ([invitationIDDomain]), so no blind of
-// any address is ever an invitation id.
-//
-// A UUID7 AT THE KEY'S INSTANT, which is the instant a redemption's operation
-// id carries: the key must be a uuid7 ([operationKey]).
+// A UUID7 AT THE KEY'S INSTANT, the instant a redemption's operation id
+// carries: the key must be a uuid7 ([operationKey]).
 func (b *Blinder) InvitationID(key string) (string, error) {
 	if b == nil || len(b.key) == 0 {
 		return "", ErrNoBlindKey
@@ -207,30 +152,18 @@ func (b *Blinder) InvitationID(key string) (string, error) {
 // key derives, for [blindDomain]'s reason.
 const invitationIDDomain = "crewlet/iam/invitation-id/v1"
 
-// InvitationSecret is the secret an invitation's LINK carries beside its id —
-// the half that is the credential.
+// InvitationSecret is the secret an invitation's LINK carries beside its id:
+// the half that is the credential. The id is stored in the clear (primary key,
+// record, snapshots, backups, the cluster port, proxy logs), so the link is
+// `<id>.<secret>` and the estate keeps only [InvitationVerifier] of the secret.
 //
-// # Why the id is no longer enough
+// DERIVED, NOT MINTED: a MAC of the id under the company's key in its own
+// domain ([invitationSecretDomain]), so an issuer's retry with the same
+// operation key hands back the same link. Only a key holder can compute it,
+// and that holder can already read every sealed address.
 //
-// The id is stored in the clear, as it must be: it is the row's primary key,
-// in the record that issued it, in every snapshot and backup, readable off the
-// cluster port, and in the access log of every proxy a link's GET passed
-// through. When the link was the id alone, every one of those places held a
-// working invitation — the one credential in this estate kept as itself rather
-// than as a verifier, where a token and a recovery code both keep a hash. So the link now carries `<id>.<secret>`, and what the estate
-// keeps is [InvitationVerifier] of the secret and never the secret.
-//
-// # Derived, not minted, and still unguessable
-//
-// It is a MAC of the invitation's id under the company's key, in a domain of
-// its own ([invitationSecretDomain]), so the RETRY an unknown answer asks an
-// issuer for — the same operation key, deriving the same id — hands back the
-// same link rather than one whose secret the estate never recorded. Nobody
-// without the company's key can compute it from an id, and a node that holds
-// the key can already read every sealed address in the company.
-//
-// Thirty-two bytes, URL-safe base64 without padding: the value rides in a URL
-// fragment and a form field, and nothing in either has to be escaped.
+// Thirty-two bytes, URL-safe base64 without padding: it rides a URL fragment
+// and a form field unescaped.
 func (b *Blinder) InvitationSecret(id string) (string, error) {
 	if b == nil || len(b.key) == 0 {
 		return "", ErrNoBlindKey
@@ -248,26 +181,17 @@ func (b *Blinder) InvitationSecret(id string) (string, error) {
 const invitationSecretDomain = "crewlet/iam/invitation-secret/v1"
 
 // PasswordLinkID is the credential id of the FIRST PASSWORD LINK an
-// administrator's create issues a person, derived from the person under the
-// company's key ([Writer.Create]).
+// administrator's create issues a person ([Writer.Create]), derived from the
+// person, who derives from the create's operation key ([CreatedPersonID]): a
+// retry with that key, answered from the ledger without running the decide,
+// hands back the link the first attempt issued. A redemption's person is
+// minted per attempt and never gets one.
 //
-// # Derived from the person, and why that is enough
-//
-// The person is itself derived from the create's operation key
-// ([CreatedPersonID]), so the retry an unknown answer asks for — the same key
-// — names the same person and therefore the same link, and the framework that
-// answers that retry from its ledger, without running the decide, hands back
-// the link the first attempt issued rather than one whose verifier the estate
-// never recorded. A redemption's person is minted per attempt and is never
-// handed one.
-//
-// UNDER THE COMPANY'S KEY, in a MAC domain of its own
-// ([passwordLinkIDDomain]): the id is in the clear on the credential's row and
-// in every snapshot, and the secret is derived from it, so an id anybody could
-// compute from a person's id would be one step from a link anybody could.
-//
-// A UUID7 AT THE PERSON'S INSTANT, as every credential id this estate mints
-// is a uuid7 — so a person id that is not one is [ErrInvalid].
+// UNDER THE COMPANY'S KEY, in its own MAC domain ([passwordLinkIDDomain]): the
+// id is in the clear and the secret derives from it, so an id computable from
+// a person's id would be one step from a computable link. A UUID7 AT THE
+// PERSON'S INSTANT, as every credential id here, so a person id that is not
+// one is [ErrInvalid].
 func (b *Blinder) PasswordLinkID(personID string) (string, error) {
 	if b == nil || len(b.key) == 0 {
 		return "", ErrNoBlindKey
@@ -287,20 +211,15 @@ func (b *Blinder) PasswordLinkID(personID string) (string, error) {
 const passwordLinkIDDomain = "crewlet/iam/password-link-id/v1"
 
 // PasswordLinkSecret is the secret a first password link carries beside its
-// id — the half that is the credential, which the estate keeps only as
-// [credential.ResetVerifier] of — derived from the link's id under the
-// company's key, for [Blinder.InvitationSecret]'s reason: the create's retry
-// hands back the same link.
+// id (the estate keeps only its [credential.ResetVerifier]), derived from the
+// link's id under the company's key for [Blinder.InvitationSecret]'s reason:
+// the create's retry hands back the same link. Its encoding is an
+// invitation's, which carries no `.`, the separator `<id>.<secret>` splits on.
 //
-// The same thirty-two bytes and the same URL-safe base64 as an invitation's,
-// which carries no `.` — the separator the link's `<id>.<secret>` splits on.
-//
-// WHAT THE DERIVATION EXPOSES, stated: anybody holding the company's key can
-// compute an open link's secret from the id its row holds, and set the
-// person's password while it is open. That key holder already holds the fleet
-// keyring and can open every sealed address and sign any record this log
-// accepts, so it is no reach they did not have — the property an invitation's
-// derived secret rests on too.
+// WHAT THE DERIVATION EXPOSES: a key holder can compute an open link's secret
+// from its row's id and set the person's password. That holder already holds
+// the fleet keyring, opens every sealed address and signs any record this log
+// accepts, so it is no new reach; an invitation's secret rests on the same.
 func (b *Blinder) PasswordLinkSecret(linkID string) (string, error) {
 	if b == nil || len(b.key) == 0 {
 		return "", ErrNoBlindKey
@@ -317,9 +236,8 @@ func (b *Blinder) PasswordLinkSecret(linkID string) (string, error) {
 // id, from an invitation's and from every blind the same key derives.
 const passwordLinkSecretDomain = "crewlet/iam/password-link-secret/v1"
 
-// mac is one keyed digest of value in a domain of its own — the shape every
-// derivation here but an address's blind shares: the domain, a separator, the
-// value.
+// mac is one keyed digest of value in its own domain (the domain, a separator,
+// the value): every derivation here but an address's blind.
 func (b *Blinder) mac(domain, value string) []byte {
 	mac := hmac.New(sha256.New, b.key)
 	_, _ = mac.Write([]byte(domain))
@@ -331,9 +249,9 @@ func (b *Blinder) mac(domain, value string) []byte {
 // InvitationVerifier is what the estate keeps of an invitation's link secret:
 // its SHA-256, hex.
 //
-// A HASH AND NOT argon2, for the rule internal/iam/credential states: spend
-// cost where an attacker has a shortcut, and a secret this engine derived from
-// thirty-two bytes of MAC has no dictionary to grind.
+// A HASH, NOT argon2 (internal/iam/credential's rule: spend cost where an
+// attacker has a shortcut): a secret derived from thirty-two bytes of MAC has
+// no dictionary to grind.
 func InvitationVerifier(secret string) string {
 	sum := sha256.Sum256([]byte(secret))
 	return hex.EncodeToString(sum[:])
@@ -341,18 +259,14 @@ func InvitationVerifier(secret string) string {
 
 // derive is the one HMAC, and the one encoding.
 //
-// THE CLASS IS INSIDE THE MAC rather than beside it, so a blind of one kind of
-// value can never collide with a blind of another even where the two values
-// are equal. An address is the only class this build derives, and the class
-// stays in the input because every blind an estate already holds was derived
-// with it: dropping it would re-key every address in the company. A
-// separator between the class and the value is what stops `("emai", "lx@y")`
-// and `("email", "x@y")` producing one blind.
+// THE CLASS IS INSIDE THE MAC, so blinds of different classes never collide on
+// equal values. Only addresses are derived, but every blind an estate holds
+// includes the class, so dropping it would re-key every address. The separator
+// stops `("emai", "lx@y")` and `("email", "x@y")` producing one blind.
 //
-// HEX rather than base64, because the result is read as well as compared: it
-// is an invitation's trail object and a value an operator reading a record
-// compares by eye, and hex carries no padding and nothing a path, a LIKE or a
-// subject reads as structure.
+// HEX, not base64: the result is read as well as compared (an invitation's
+// trail object, a value an operator compares by eye), and hex carries no
+// padding and nothing a path, a LIKE or a subject reads as structure.
 func (b *Blinder) derive(class, value string) (string, error) {
 	if b == nil || len(b.key) == 0 {
 		return "", ErrNoBlindKey

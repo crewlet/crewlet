@@ -23,50 +23,14 @@ import (
 // APPLY, SERVES THE HUMAN WRITE SURFACE — WITH NO RESTART — AND ONLY THEN TAKES
 // ITS FIRST PERSON, ONTO THE HUMAN SEAT THAT COMPANY DECLARES.
 //
-// # Why this is the case the core runtime exists for
-//
-// The quickstart's own route is to start a node with nothing configured and
-// build the company from there, and the dashboard's "create the company" path
-// needs a session to do it with. A node's whole durable state used to come up
-// with its FIRST COMPANY, so a node started with none had no identity estate —
-// no /auth, no /iam, nobody to sign in — and the surfaces its API took from
-// the engine at startup (the write surface, the board, the operator's
-// assistant) were absent for the life of the process: the company arrived by
-// apply, and nobody could file work in it until somebody restarted the node.
-//
-// # Why the first session is the token's and not a person's
-//
-// Every person holds a human seat for as long as they are here (ADR-0032), and
-// a node with no company has no seat to give anybody — so the session that
-// creates the company is the deployment's own Tier A token, exchanged for a
-// cookie, and the first PERSON arrives once the company declares the seat they
-// will hold. This case used to invite its founder onto no seat at all, on this
-// node, before any company existed; that is exactly what is refused now.
-//
-// # What it asserts, in the order a founder meets it
-//
-//   - Before any company, the write surface is MOUNTED and says why it cannot
-//     serve: `503 no_active_revision`, never the 404 of a route that does not
-//     exist and never a panic over a nil half.
-//   - The deployment's Tier A token is exchanged for a session on a node that
-//     has no company at all, because the identity estate is the engine's core
-//     and runs from boot.
-//   - Nobody can be invited or created yet: a person named onto no seat is
-//     `400 seat_required`, and one named onto the seat the company is about to
-//     declare is `409 no_active_revision` — a refusal naming its remedy, never
-//     the 503 no wait would clear.
-//   - The first company is applied, and the apply names the `native` stage.
-//   - The same cookie files work through `/worklet/items` on the same API, with
-//     nothing rebuilt: the surface reads the halves its request finds, and the
-//     item is recorded as written by the token, under its own login.
-//   - And now the first person is invited onto the founder's seat, signs in,
-//     and files work AS that seat.
-//
-// Mutations, each run: build the core with the first company instead of at
-// boot and the exchange is refused, there being no session table to open one
-// in; take the write surface's halves once when the API is wired and the
-// token's write is the first phase's 503 for ever; answer a seat lookup on a
-// node with no company as unavailable and the founder's invitation is a 503.
+// A person holds a human seat (ADR-0032) and a node with no company has none,
+// so the first session is the Tier A token exchanged for a cookie (the identity
+// estate runs from boot). Before the company the write surface is mounted and
+// says `503 no_active_revision`, never a 404 or a nil panic; an invitation onto
+// no seat is `400 seat_required`, onto the seat the company will declare `409
+// no_active_revision`. After apply the same cookie files work through
+// `/worklet/items` with nothing rebuilt, recorded as written by the token; then
+// the first person is invited onto the founder's seat and files work AS it.
 func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) {
 	t.Parallel()
 	model := newScriptedModel(t)

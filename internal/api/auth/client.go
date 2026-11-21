@@ -10,34 +10,21 @@ import (
 
 // WHO IS ACTUALLY CALLING, behind however many proxies this deployment sits
 // behind.
+
+// The trust setting is a CIDR list, not a bool, because the question is "is
+// THIS peer the proxy", and a bool is wrong both ways:
 //
-// # Why this is a CIDR list rather than a bool
-//
-// The question a forwarded header poses is not "does this deployment sit
-// behind a proxy" — it is "is THIS peer the proxy". A bool answers the first
-// while every per-source rule in this engine needs the second, and it is wrong
-// in both settings:
-//
-//   - TRUE trusts a header anybody can send. An attacker picks their own
-//     `X-Forwarded-For`, which is their own rate-limit bucket and their own
-//     row in the audit trail — so the throttle never fires and the log names
-//     whoever they decided to blame.
-//   - FALSE behind a real proxy buckets the entire internet under one address.
-//     The throttle's curve for a login then belongs to everybody at once: a
-//     stranger guessing at somebody's login puts that person's own sign-in
-//     behind the same thirty-second wait, which is a slowdown the defence
-//     caused, and every audit row names the proxy. `crewlet validate` warns
-//     about exactly this shape — an `https` external URL, which only a proxy
-//     can terminate, with no proxy trusted.
-//
-// # What it is used for, and why that makes the default fail-safe
-//
-// The failed-sign-in throttle, and the source on every refusal this engine
-// logs. Empty is the default and means the peer address IS the client address,
-// which is correct for a node reached directly and merely pessimistic behind a
-// proxy: everybody shares one bucket, which is the second failure above — so
-// a deployment behind a proxy has to name it, and this file is what makes that
-// setting do anything at all.
+//   - TRUE trusts a header anybody can send: an attacker picks their own
+//     `X-Forwarded-For`, so the throttle never fires and the audit row names
+//     whoever they chose to blame.
+//   - FALSE behind a real proxy buckets the internet under one address: a
+//     stranger's guesses put the victim's own sign-in behind the same wait,
+//     and every audit row names the proxy. `crewlet validate` warns about an
+//     `https` external URL with no proxy trusted.
+
+// Used by the failed-sign-in throttle and every logged refusal's source. Empty,
+// the default, means the peer IS the client: right when reached directly,
+// merely pessimistic behind a proxy, which therefore has to name it.
 
 // Clients resolves a caller's own address, holding this deployment's trusted
 // blocks.
@@ -73,18 +60,11 @@ func (c *Clients) Of(r *http.Request) string {
 //
 // # The walk, and why it goes right to left
 //
-// `X-Forwarded-For` is appended to by each hop, so the list reads
-// client, proxy1, proxy2 — with the NEAREST proxy last. The peer this node
-// accepted from is therefore the rightmost entry's author, and the only
-// entries this deployment has any reason to believe are the ones written by
-// peers it trusts. So the walk starts at the right and stops at the FIRST
-// address that is not a trusted proxy: that is the closest hop this deployment
-// cannot vouch for, and everything to its left is whatever that hop chose to
-// claim.
-//
-// Taking the LEFTMOST entry — which reads naturally as "the original client" —
-// is the classic form of this bug: it is the one value entirely under the
-// caller's control.
+// `X-Forwarded-For` is appended to by each hop (client, proxy1, proxy2, the
+// NEAREST proxy last), so only entries written by trusted peers are believable.
+// The walk stops at the FIRST address that is not a trusted proxy: the closest
+// hop this deployment cannot vouch for, and everything left of it is that hop's
+// claim. The LEFTMOST entry is the classic bug: entirely caller-controlled.
 func Client(r *http.Request, trusted []*net.IPNet) string {
 	peer := hostOf(r.RemoteAddr)
 	if len(trusted) == 0 || !trustedIP(peer, trusted) {

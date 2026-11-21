@@ -1,49 +1,29 @@
 /**
- * Attempts of checks, listed and opened — what Gitlet › Checks, a change's
- * Checks tab and a repository's draw, each over its own question.
- *
- * # A listing is the engine's, a page at a time
- *
- * `code_checks` answers newest ended first (a repository's and the window's)
- * or by the checks of one commit (a change's), and a narrowing — a state, a
- * check's name — is the engine's, sought rather than filtered out of a page.
- * A page of the window is the rows the reader's grant keeps of those it read,
- * so it may be short or even empty with a `next`: Load more follows it. The pager is the one every
- * paged list shares (`lib/usePaged.ts`), which joins each page to the one
- * before it, because the cursor was minted from that page's last row.
- *
- * # One attempt opens in a pane
- *
- * A listing carries every column but the wide ones; the pane reads the one
- * attempt whole (`code_check`): its definition, the failures its ending named
- * — each path:line a link into the diff it was checked on, the comparison of
- * the attempt's base and its commit on that file — the tail of its output,
- * and the log a failed run kept, read a page at a time on demand
- * (`code_check_log`, by its object, which never changes under the reader).
- *
- * COLOUR IS STATE: passed is success, failed is danger, and an attempt that
- * measured nothing wears no verdict's tone (`lib/checks.ts`). What a check
- * measured is a duration and an exit code; it runs no model, so nothing here
- * is tokens.
+ * Runs of checks, listed and opened: a repository's and a change's Checks tabs list them a page at
+ * a time (`code_checks`), and every checks view opens one in the pane here (`code_check`), its log
+ * read on demand by its object (`code_check_log`).
  */
 
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode, type RefObject } from "react";
 import {
   Button,
+  ButtonLink,
   Callout,
-  Card,
   CodeBlock,
+  Count,
   EmptyValue,
+  IconButton,
   Skeleton,
   TableDateCell,
   TableNumberCell,
   TableTextCell,
   Tag,
 } from "@crewlethq/ui";
+import { CircleCheckGlyph, CircleXGlyph, XGlyph } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { PageFailed, QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { shortOID } from "~/lib/code.ts";
+import { refName, shortOID } from "~/lib/code.ts";
 import { checkPurposeWord, checkStateTone, checkStateWord } from "~/lib/checks.ts";
 import { fmtBytes, fmtDuration, plural } from "~/lib/format.ts";
 import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
@@ -54,8 +34,13 @@ import type {
   CodeCheckRow,
   CodeChecksAnswer,
 } from "~/protocol/index.ts";
+import { ChangeRefPill } from "../ChangeRow.tsx";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
-import { RefName } from "../ui.tsx";
+import { BranchChip, RefName } from "../ui.tsx";
+import { EndedAgo, CheckMark } from "./marks.tsx";
+import { checkedWords, tailLines, testsWords } from "./standing.ts";
+import { RerunCheck } from "./Rerun.tsx";
+import { Tail } from "./Tail.tsx";
 import "~/styles/gitlet.css";
 
 /**
@@ -197,25 +182,17 @@ function EndedAt({ at }: { at: string | undefined }) {
   return <TableDateCell value={at} now={now} />;
 }
 
-/**
- * One listing of attempts, paged, with the pane of the one opened beneath
- * it: the question `params` asks of `code_checks`, every row of which is
- * drawn — a narrowing, the Checks section's window's end among them, is the
- * engine's.
- */
+/** A repository's or a change's runs, paged, with the pane of the one opened beneath them. */
 export function CheckListing({
   params,
   label,
   showRepo,
   empty,
-  header,
 }: {
   params: CodeParams;
   label: string;
   showRepo: boolean;
   empty: { title: string; hint: string };
-  /** Drawn above the grid with every row the pager holds: a section's chart and facets. */
-  header?: (rows: readonly CodeCheckRow[], more: boolean) => ReactNode;
 }) {
   const first = useCodeQuery("code_checks", params, { pollMs: CHECKS_POLL_MS });
   const paged = usePaged(
@@ -233,7 +210,6 @@ export function CheckListing({
 
   return (
     <>
-      {header?.(rows, more)}
       {first.loading && rows.length === 0 && (
         <Skeleton variant="text" rows={5} label={`Loading ${label}`} />
       )}
@@ -280,83 +256,182 @@ export function CheckListing({
   );
 }
 
-/**
- * One attempt read whole: what it ran, what it said, where it failed — each
- * failure a link into the diff it was checked on — the tail of its output,
- * and the log a failed run kept, a page at a time.
- */
+/** One run read whole: its heading, tests, facts, failures, the end of its output, and its log on demand. */
 export function CheckPane({
   row,
   repo,
   onClose,
+  headingRef,
+  later = null,
+  onOpenLater,
 }: {
   row: CodeCheckRow;
   repo: string;
   onClose: () => void;
+  /** Where its host moves focus as it opens. */
+  headingRef?: RefObject<HTMLHeadingElement | null>;
+  /** A later attempt of the same check, where one is known, and how to open it. */
+  later?: number | null;
+  onOpenLater?: (attempt: number) => void;
 }) {
-  const read = useCodeQuery("code_check", {
-    name: repo,
-    oid: row.oid,
-    check: row.name,
-    attempt: row.attempt,
-    target: row.target,
-  });
-  const d: CodeCheckDetail | undefined = read.data?.check;
+  // READ AGAIN UNTIL IT HAS ENDED, so an open run's pane moves on as its row does.
+  const [ended, setEnded] = useState(false);
+  const read = useCodeQuery(
+    "code_check",
+    { name: repo, oid: row.oid, check: row.name, attempt: row.attempt, target: row.target },
+    { pollMs: ended ? undefined : CHECKS_POLL_MS },
+  );
+  const d = withChange(read.data?.check, row);
+  const shown = d ?? row;
+  const hasEnded = d !== undefined && d.state !== "queued" && d.state !== "running";
+  if (hasEnded !== ended) setEnded(hasEnded);
+  // A RERUN'S RECEIPT names the attempt it queued, which is then the latest known.
+  const [queued, setQueued] = useState<number | null>(null);
+  const latest = Math.max(later ?? 0, queued ?? 0) || null;
   return (
-    <section aria-label={`Check ${row.name}, attempt ${row.attempt}`}>
-      <Card>
-        <Card.Header>
-          <Card.Title>
-            <span className="row gap-2 wrap">
-              <span className="mono">{row.name}</span>
-              <span className="t-caption">{`attempt ${row.attempt}`}</span>
-              <CheckStateTag state={d?.state ?? row.state} />
-            </span>
-          </Card.Title>
-          <Button size="small" variant="ghost" onClick={onClose}>
-            Close
-          </Button>
-        </Card.Header>
+    <section className="code-check-pane" aria-label={`Check ${row.name}, attempt ${row.attempt}`}>
+      <div className="code-check-pane__head">
+        <CheckMark state={shown.state} />
+        <h2 ref={headingRef} tabIndex={-1} className="code-check-pane__title">
+          {paneHeading(shown)}
+        </h2>
+        {shown.required && (
+          <Tag size="xs" appearance="outline">
+            Required
+          </Tag>
+        )}
+        <IconButton
+          className="code-check-pane__close"
+          label={`Close ${row.name}`}
+          icon={<XGlyph />}
+          size="sm"
+          variant="ghost"
+          onClick={onClose}
+        />
+      </div>
+      <div className="code-check-pane__body">
+        {latest !== null && latest > row.attempt && (
+          <p className="code-check-pane__later">
+            {`A later run, attempt ${latest}, is its latest: `}
+            {onOpenLater ? (
+              <button type="button" className="t-link" onClick={() => onOpenLater(latest)}>
+                <strong>open it</strong>
+              </button>
+            ) : (
+              <strong>open it from the list</strong>
+            )}
+          </p>
+        )}
         <QueryState
           error={read.error}
           refusal={read.refusal}
           detail={read.detail}
           loading={read.loading}
         >
-          {d && <CheckWhole repo={repo} d={d} />}
+          {d && <CheckWhole repo={repo} d={d} latest={latest} onReran={setQueued} />}
         </QueryState>
-      </Card>
+      </div>
     </section>
   );
 }
 
-function CheckWhole({ repo, d }: { repo: string; d: CodeCheckDetail }) {
-  const facts: { label: string; value: ReactNode }[] = [
-    {
-      label: "Checking",
-      value: checkPurposeWord(d.purpose) || <EmptyValue label="Not recorded" />,
-    },
-    {
-      label: "Commit",
+/** A run read whole, with the change it judges from its listed row: only a standing listing names it. */
+function withChange(
+  d: CodeCheckDetail | undefined,
+  row: CodeCheckRow,
+): CodeCheckDetail | undefined {
+  return (
+    d && {
+      ...d,
+      change: d.change ?? row.change,
+      source_ref: d.source_ref ?? row.source_ref,
+      change_head: d.change_head ?? row.change_head,
+    }
+  );
+}
+
+/** "e2e failed for api!17", "unit passed on main's tip", "lint running". */
+export function paneHeading(r: CodeCheckRow): string {
+  const said = r.state ? `${r.name} ${checkStateWord(r.state)}` : r.name;
+  if (r.change) return `${said} for ${r.change.ref}`;
+  if (r.purpose === "tip") return `${said} on ${refName(r.target).name}'s tip`;
+  return said;
+}
+
+function CheckWhole({
+  repo,
+  d,
+  latest,
+  onReran,
+}: {
+  repo: string;
+  d: CodeCheckDetail;
+  latest: number | null;
+  onReran: (attempt: number) => void;
+}) {
+  const tests = testsWords(d);
+  const checked = checkedWords(d);
+  const branch = d.source_ref && d.purpose !== "tip" ? d.source_ref : d.target;
+  const facts: { label: string; value: ReactNode }[] = [{ label: "Repository", value: repo }];
+  if (d.change) {
+    facts.push({
+      label: "Change",
       value: (
-        <a className="t-link mono" href={commitHref(repo, d.oid)}>
-          {shortOID(d.oid)}
-        </a>
+        <span className="code-check-pane__change">
+          <ChangeRefPill change={d.change} />
+          <span className="code-check-pane__change-title">{d.change.title}</span>
+        </span>
       ),
-    },
-    { label: "For", value: <RefName gitRef={d.target} /> },
-    { label: "Ran", value: fmtDuration(d.duration_ms ?? null) },
-  ];
-  if (d.exit_code !== undefined) facts.push({ label: "Exit code", value: String(d.exit_code) });
+    });
+  }
+  facts.push({
+    label: "Commit",
+    value: (
+      <span>
+        <a className="t-link mono" href={commitHref(repo, d.change_head ?? d.oid)}>
+          {shortOID(d.change_head ?? d.oid)}
+        </a>{" "}
+        on <BranchChip name={refName(branch).name} />
+      </span>
+    ),
+  });
+  if (checked) {
+    facts.push({
+      label: "Checked",
+      value: (
+        <span>
+          {checked.before}
+          <RefName gitRef={d.target} />
+          {checked.after}
+        </span>
+      ),
+    });
+  }
+  facts.push({ label: "Ran", value: <Ran d={d} /> });
+  if (d.def?.run) {
+    facts.push({ label: "Runs", value: <code className="code-check-pane__run">{d.def.run}</code> });
+  }
   if (d.reason) facts.push({ label: "Why it ended", value: d.reason.replaceAll("_", " ") });
   if (d.placement || d.runner) {
     facts.push({ label: "Ran on", value: [d.placement, d.runner].filter(Boolean).join(" · ") });
   }
-  if (d.def?.run) facts.push({ label: "Runs", value: <span className="mono">{d.def.run}</span> });
+  const lines = d.tail ? tailLines(d.tail) : [];
   return (
     <div className="col gap-3">
-      {d.summary && <p>{d.summary}</p>}
-      <dl className="code-facts" aria-label="The attempt">
+      {tests && (
+        <p
+          className="code-check-pane__tests"
+          data-tone={
+            tests.failed === null ? checkStateTone(d.state) : tests.failed ? "danger" : "success"
+          }
+        >
+          {tests.failed !== null &&
+            (tests.failed ? <CircleXGlyph size="sm" /> : <CircleCheckGlyph size="sm" />)}
+          {tests.words}
+        </p>
+      )}
+      {d.summary && d.summary !== tests?.words && <p>{d.summary}</p>}
+      <dl className="code-facts" aria-label="The run">
         {facts.map((f) => (
           <div key={f.label}>
             <dt>{f.label}</dt>
@@ -364,25 +439,40 @@ function CheckWhole({ repo, d }: { repo: string; d: CodeCheckDetail }) {
           </div>
         ))}
       </dl>
-      {d.url && (
-        <a className="t-link" href={d.url} target="_blank" rel="noreferrer">
-          Its run on the CI that reported it →
-        </a>
-      )}
+      <div className="row gap-2 wrap">
+        <RerunCheck row={d} latest={latest} onReran={onReran} />
+        {d.url && (
+          <ButtonLink size="small" variant="secondary" href={d.url} external>
+            Open in CI
+          </ButtonLink>
+        )}
+      </div>
       {(d.failures?.length ?? 0) > 0 && (
         <Failures repo={repo} d={d} failures={d.failures ?? []} omitted={d.failures_omitted ?? 0} />
       )}
-      {d.tail && (
-        <CodeBlock
-          plain
-          selectable
-          focusWhenScrollable
-          label="The end of its output"
-          code={d.tail}
-        />
-      )}
+      {d.tail && <Tail d={d} lines={lines} />}
       {d.log && <LogPages repo={repo} d={d} object={d.log.object} size={d.log.size} />}
     </div>
+  );
+}
+
+/** "1m 52s · ended 20 minutes ago · attempt 1". */
+function Ran({ d }: { d: CodeCheckDetail }) {
+  const parts: ReactNode[] = [];
+  if (d.finished_at && d.duration_ms) parts.push(fmtDuration(d.duration_ms));
+  if (d.finished_at) parts.push(<EndedAgo word="ended" at={d.finished_at} />);
+  else if (d.started_at) parts.push(<EndedAgo word="started" at={d.started_at} />);
+  else if (d.queued_at) parts.push(<EndedAgo word="queued" at={d.queued_at} />);
+  parts.push(`attempt ${d.attempt}`);
+  return (
+    <span>
+      {parts.map((p, i) => (
+        <Fragment key={i}>
+          {i > 0 && " · "}
+          {p}
+        </Fragment>
+      ))}
+    </span>
   );
 }
 
@@ -417,7 +507,9 @@ function Failures({
 }) {
   return (
     <div className="col gap-1">
-      <strong>{plural(failures.length + omitted, "failure")}</strong>
+      <h3 className="code-check-pane__part">
+        Failures <Count value={failures.length + omitted} label="failures" />
+      </h3>
       <ul className="col gap-1" aria-label="Failures">
         {failures.map((f, i) => (
           <li key={i} className="col">
@@ -507,7 +599,7 @@ function LogPages({
             onClick={() => void read()}
             loading={log.reading}
           >
-            {started ? "Read more of the log" : `Read its log (${fmtBytes(size)})`}
+            {started ? "Read more of the log" : `Read its log, ${fmtBytes(size)}`}
           </Button>
         )}
         {log.next === null && <span className="t-caption">That is the whole log.</span>}
