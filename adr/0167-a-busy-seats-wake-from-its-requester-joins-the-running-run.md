@@ -39,3 +39,8 @@ Another writer's wake about a written record is ADR-0168's candidate.
 ## Amendment: a seat runs up to its cap of runs
 
 A seat holds up to its cap of runs, one per conversation (ADR-0169); its inbox is held once its runs hold every slot, its router reads it while any run holds, and a wake a run's steps read makes its conversation that run's.
+
+## Amendment: the router's decisions are shared with the screen of a flowing inbox
+
+Below the seat's cap its inbox flows (ADR-0169), so a wake reaches the dispatcher while a run holds the seat: the screen routes it to the run it relates to on this rule, as the router would, under the router's own memo and lock, so one wake read by both is filed and triaged once, and then sets it aside until the run leaves. The router still runs while any run holds the seat, reading mail the dispatcher has not taken; the backlog read skips what its client holds aside, decided already.
+

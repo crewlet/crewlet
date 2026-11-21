@@ -837,8 +837,8 @@ func TestTheExecutorFloorIsThreeValued(t *testing.T) {
 
 // staticRemaining is a headroom reader that answers what the case says.
 // roomForRuns gives seat a cap of n runs at once (ADR-0169), for a case that
-// launches several of its runs and settles none: at the default of one the
-// second launch is refused, which is not what such a case is about.
+// launches several of its runs and settles none: past the seat's cap a launch
+// is refused, which is not what such a case is about.
 func roomForRuns(seat *org.Role, n int) {
 	if seat.Sandbox == nil {
 		seat.Sandbox = &org.RoleSandbox{}

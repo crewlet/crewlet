@@ -146,7 +146,7 @@ func (c *Coordinator) takingOver(ctx context.Context, handle string, runs []Pend
 		c.runs[handle] = counts
 	}
 	c.mu.Unlock()
-	c.seatFreed(handle, was, counts)
+	c.seatFreed(ctx, handle, was, counts)
 	c.reconcileHold(ctx, handle)
 	return takeovers
 }
@@ -212,7 +212,7 @@ func (c *Coordinator) wroteCountLocked(w *countWrite, landed bool) func() {
 	}
 	was, runs := c.adjustLocked(w.handle, move.holding, move.awaiting)
 	return func() {
-		c.seatFreed(w.handle, was, runs)
+		c.seatFreed(c.life, w.handle, was, runs)
 		c.reconcileHold(c.life, w.handle)
 	}
 }

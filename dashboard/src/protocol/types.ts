@@ -822,7 +822,7 @@ export interface Overlay {
   last_error?: ErrorInfo | null;
   budget?: BudgetMeter | null;
   /** The turns the seat is on, oldest first by start, `[]` when it is on none:
-   *  up to its `sandbox.max_concurrent_runs` at once, one by default. Always
+   *  up to its `sandbox.max_concurrent_runs` at once, two by default. Always
    *  present, for `stopped_reason`'s reason. */
   turns?: LiveTurn[];
   /** The newest turn the seat ended, or null while none is known. */

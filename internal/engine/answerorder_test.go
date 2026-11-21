@@ -142,6 +142,10 @@ func (h inboxHold) Release(ctx context.Context, handle string, at queue.Attachme
 		string(inbox.HoldSandbox))
 }
 
+func (h inboxHold) Readmit(ctx context.Context, handle, key, _ string) (int, error) {
+	return h.q.Readmit(ctx, fixtureInbox(handle), fixtureInboxGroup(handle), key)
+}
+
 // fixtureAttachment is the attachment of handle's inbox on q that a seat taken
 // now is recovered for, as a node's acquisition reads it before the attach.
 func fixtureAttachment(t *testing.T, q queue.EventQueue, handle string) queue.Attachment {
