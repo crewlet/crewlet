@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/es256"
 	"github.com/crewlet/crewlet/internal/whsec"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -75,6 +76,15 @@ const (
 
 	// ShapeAppleKeyID is an Apple API key's ID: ten capital letters or digits.
 	ShapeAppleKeyID Shape = "apple_key_id"
+
+	// ShapeAppleAdsKey is an Apple Ads API user's private key, the P-256 key
+	// whose public half the person uploaded: one PEM block, SEC 1 as
+	// `openssl ecparam` writes it or PKCS #8, pasted whole, never minted.
+	ShapeAppleAdsKey Shape = "apple_ads_key"
+
+	// ShapeAppleAdsID is an Apple Ads API user's client or team ID:
+	// SEARCHADS. and an identifier.
+	ShapeAppleAdsID Shape = "apple_ads_id"
 )
 
 // The patterns the identifier shapes hold a value to.
@@ -95,7 +105,7 @@ var (
 // judges whole ([Shape.Problem]) in place of a credential's one-line rule.
 func (s Shape) Multiline() bool {
 	return s == ShapeES256Key || s == ShapeCertificateAuthority || s == ShapeSSHCertificateAuthority ||
-		s == ShapeAppleKey
+		s == ShapeAppleKey || s == ShapeAppleAdsKey
 }
 
 // Problem is the sentence for a pasted value this shape refuses, "" for one it
@@ -131,6 +141,18 @@ func (s Shape) Problem(noun, value string) string {
 				"PRIVATE KEY to END PRIVATE KEY.", noun)
 		}
 		return ""
+	case ShapeAppleAdsKey:
+		if _, err := es256.ParseKey(value); err != nil {
+			return fmt.Sprintf("This %s is not a P-256 private key: paste the whole file openssl wrote, from "+
+				"BEGIN EC PRIVATE KEY to END EC PRIVATE KEY.", noun)
+		}
+		return ""
+	case ShapeAppleAdsID:
+		if config.AppleAdsID(value) {
+			return ""
+		}
+		return fmt.Sprintf("This %s is not an Apple Ads ID: it is SEARCHADS. followed by an identifier, as "+
+			"Account Settings, API shows it.", noun)
 	case ShapeAppleKeyID:
 		if appleKeyIDShape().MatchString(value) {
 			return ""
@@ -197,7 +219,8 @@ func opaqueTokenRune(r rune) bool {
 //
 // A VENDOR-ISSUED IDENTIFIER IS NEVER MINTED: a value of [ShapeUUID],
 // [ShapeScalewayAccessKey], [ShapeGoogleServiceAccount], [ShapeGoogleProvider],
-// [ShapeAppleKey] or [ShapeAppleKeyID] names something the vendor made, and one Crewlet made up would name nothing.
+// [ShapeAppleKey], [ShapeAppleKeyID], [ShapeAppleAdsKey] or [ShapeAppleAdsID] names something the vendor
+// or the person made, and one Crewlet made up would name nothing.
 func (s Shape) Mint(token func() string) (string, error) {
 	switch s {
 	case ShapeSigningKey:
@@ -209,7 +232,7 @@ func (s Shape) Mint(token func() string) (string, error) {
 	case ShapeES256Key:
 		return mintES256()
 	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleServiceAccount, ShapeGoogleProvider, ShapeAppleKey,
-		ShapeAppleKeyID:
+		ShapeAppleKeyID, ShapeAppleAdsKey, ShapeAppleAdsID:
 		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
 	default:
 		return token(), nil
