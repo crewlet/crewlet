@@ -163,6 +163,30 @@
 // moves (internal/jsprovision's Timing.Following), each wait capped by one
 // message at the transport's bound crossing at the floor.
 //
+// # A node's leases ride a link of their own
+//
+// A renewal sent behind a large write on the same link crosses only after it,
+// and at the floor one message at the transport's ceiling holds a link four
+// minutes, past every lease (crewlet/crewlet#1035). So a node's holds get a
+// connection nothing else rides (Queue.DialLeases):
+//
+//   - on a LEAF, a second leaf link in an account of its own (LeaseAccount),
+//     dialled directly, not through the tunnel, and asking the members to
+//     ISOLATE it: a member then tells it no other leaf's interest, only its
+//     own clients' (leafnode.go, v2.15.3: a member never forwards one of a
+//     leaf's links' interest to its other link, and sends an isolated link no
+//     leaf's). Its JetStream requests ride the fleet's domain as the queue's
+//     do. Every wait that asks for a link asks by account (awaitLinked,
+//     Queue.Link, Queue.LeaseLink), since either link up says nothing of the
+//     other;
+//   - on an EXTERNAL broker, a second dial, unmetered, whose pings give a
+//     silently dead socket up within one heartbeat of the shortest lease
+//     (dialLeaseOptions);
+//   - on a MEMBER, an in-process connection: there is no link to keep apart.
+//
+// Its close for good stops the node, as the coordination connection's does
+// (Queue.Lost).
+//
 // # A pull allocates for what it receives, never for what it may
 //
 // The client library's fetches size their delivery channels by the BATCH a
@@ -460,8 +484,9 @@
 //     global account, never the system one;
 //   - an IN-PROCESS client of this process signing with a key minted at each
 //     start that nothing outside the process ever holds: the engine's, bound to
-//     the global account, and the membership code's, bound to the system
-//     account (membership.go).
+//     the global account; the lease connection's, bound to the lease account
+//     on a leaf and the global one elsewhere; and the membership code's, bound
+//     to the system account (membership.go).
 //
 // Every other connection is refused, counted ([Server.OnPeerRefused]) and
 // logged once a minute per class (broker_peer_refused); nats-server's own
@@ -473,8 +498,8 @@
 //	                              optional leaf listener; + routes and leaves
 //	                              presenting a ring key, + an operator on the
 //	                              client listener from this host
-//	leaf                          no listener; one outbound link presenting
-//	                              the active key
+//	leaf                          no listener; two outbound links, data and
+//	                              lease, each presenting the active key
 //
 // THE KEYS ARE THE KEYRING'S, derived per key ([FleetAuthFrom]) by the rule
 // every consumer of secrets.keys follows (internal/runtoken), so the keyring's

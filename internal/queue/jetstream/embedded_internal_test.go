@@ -97,7 +97,7 @@ func TestAConnectionToItsOwnBrokerHandshakesWithinTheListenerBudget(t *testing.T
 	for _, clustered := range []bool{false, true} {
 		e := *broker
 		e.clustered = clustered
-		nc, err := e.connect(watched{})
+		nc, err := e.connect(watched{}, e.auth.engine)
 		if err != nil {
 			t.Fatalf("clustered=%v: connect: %v", clustered, err)
 		}
@@ -245,7 +245,7 @@ func TestAClusteredMemberIsReadyOnlyOnceTheLeaderAnswers(t *testing.T) {
 		t.Fatalf("start the member: %v", err)
 	}
 	t.Cleanup(e.shutdown)
-	nc, err := e.connect(watched{})
+	nc, err := e.connect(watched{}, e.auth.engine)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

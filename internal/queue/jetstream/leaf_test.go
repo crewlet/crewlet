@@ -122,21 +122,22 @@ func TestALeafRefusesEveryMemberSetting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a plain leaf was refused: %v", err)
 	}
-	if opts.JetStream || !opts.DontListen || scratch != "" || len(opts.LeafNode.Remotes) != 1 {
+	if opts.JetStream || !opts.DontListen || scratch != "" || len(opts.LeafNode.Remotes) != 2 {
 		t.Fatalf("a leaf built as JetStream=%t DontListen=%t scratch=%q remotes=%d — "+
-			"want no JetStream, no listener, nothing on disk and one link",
+			"want no JetStream, no listener, nothing on disk and two links",
 			opts.JetStream, opts.DontListen, scratch, len(opts.LeafNode.Remotes))
 	}
-	// AND ITS ONE LINK PRESENTS THE ACTIVE KEY'S LEAF NKEY, never a
-	// credential in a URL.
-	link := opts.LeafNode.Remotes[0]
-	if link.Nkey != testFleetAuth().leafSeed() {
-		t.Error("a leaf's link presents no leaf nkey of its ring")
-	}
-	for _, u := range link.URLs {
-		if u.User != nil {
-			t.Errorf("a leaf's link URL %s carries a userinfo, which is sent beside "+
-				"the nkey in clear", u.Host)
+	// AND EACH LINK PRESENTS THE ACTIVE KEY'S LEAF NKEY, never a credential
+	// in a URL.
+	for _, link := range opts.LeafNode.Remotes {
+		if link.Nkey != testFleetAuth().leafSeed() {
+			t.Errorf("a leaf's link in %q presents no leaf nkey of its ring", link.LocalAccount)
+		}
+		for _, u := range link.URLs {
+			if u.User != nil {
+				t.Errorf("a leaf's link URL %s carries a userinfo, which is sent beside "+
+					"the nkey in clear", u.Host)
+			}
 		}
 	}
 }

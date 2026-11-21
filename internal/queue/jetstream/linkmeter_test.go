@@ -368,9 +368,18 @@ func TestALeafsDataLinkCrossesItsTunnel(t *testing.T) {
 	leaf := startTestServer(t, leafCfg)
 	meter := leaf.embedded.linkMeter()
 
+	// THE DATA LINK, read by the member as the link not isolated: the lease
+	// link beside it lands on a member of its own choosing.
+	holdsData := func(m testServer) bool {
+		if m.embedded == nil {
+			return false
+		}
+		data, _, _ := memberLinks(t, m.Server, false)
+		return data != nil
+	}
 	on := func() int {
 		for i, m := range members {
-			if m.embedded != nil && m.embedded.ns.NumLeafNodes() > 0 {
+			if holdsData(m) {
 				return i
 			}
 		}
@@ -385,7 +394,7 @@ func TestALeafsDataLinkCrossesItsTunnel(t *testing.T) {
 	members[first].stop()
 	other := 1 - first
 	until(t, "the leaf's link to the other member, through its tunnel", func() bool {
-		return members[other].embedded.ns.NumLeafNodes() > 0 && meter.openedSockets() > opened
+		return holdsData(members[other]) && meter.openedSockets() > opened
 	})
 }
 

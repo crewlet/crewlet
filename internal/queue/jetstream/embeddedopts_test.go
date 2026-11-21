@@ -136,7 +136,7 @@ func TestTheClientIsToldTheCeiling(t *testing.T) {
 	}
 	t.Cleanup(e.shutdown)
 
-	nc, err := e.connect(watched{})
+	nc, err := e.connect(watched{}, e.auth.engine)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -226,8 +226,12 @@ func TestEveryServerAuthenticatesAndOnlyAClusteredMemberRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if one.engine.public == other.engine.public || one.system.public == other.system.public {
+	if one.engine.public == other.engine.public || one.system.public == other.system.public ||
+		one.leases.public == other.leases.public {
 		t.Error("two starts minted one key: each start mints its own")
+	}
+	if one.leases.public == one.engine.public {
+		t.Error("the lease connection presents the engine's key, so no account can tell them apart")
 	}
 	if solo := authFor(t, Config{}); solo.system.declared() {
 		t.Error("a solo member minted a system account key it never declares")
