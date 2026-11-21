@@ -9,14 +9,14 @@ import (
 // The curated tools, for the acts agents make most, each with typed
 // arguments; the generic tools reach every other method.
 const (
-	toolListProperties = "ga4_list_properties"
-	toolRunReport      = "ga4_run_report"
-	toolRealtime       = "ga4_run_realtime_report"
-	toolMarkKeyEvent   = "ga4_mark_key_event"
-	toolRead           = "ga4_read"
-	toolOperate        = "ga4_operate"
-	toolSpend          = "ga4_spend"
-	toolAdmin          = "ga4_admin"
+	toolListProperties = "google_analytics_list_properties"
+	toolRunReport      = "google_analytics_run_report"
+	toolRealtime       = "google_analytics_run_realtime_report"
+	toolMarkKeyEvent   = "google_analytics_mark_key_event"
+	toolRead           = "google_analytics_read"
+	toolOperate        = "google_analytics_operate"
+	toolSpend          = "google_analytics_spend"
+	toolAdmin          = "google_analytics_admin"
 )
 
 // genericTools are the generic tools by class.
@@ -30,7 +30,7 @@ func genericTools() map[growth.Class]string {
 // propertyArg is a property's ID, which every property-level tool names.
 func propertyArg() map[string]any {
 	return map[string]any{"type": "string", "pattern": "^[0-9]{1,20}$",
-		"description": "The numeric property ID, one of this agent's properties (ga4_list_properties)."}
+		"description": "The numeric property ID, one of this agent's properties (google_analytics_list_properties)."}
 }
 
 // stringList is an array of strings.
@@ -53,7 +53,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 		"property":   propertyArg(),
 		"start_date": map[string]any{"type": "string", "description": "First day, YYYY-MM-DD, or Google's NdaysAgo, yesterday or today. Default 28daysAgo."},
 		"end_date":   map[string]any{"type": "string", "description": "Last day, YYYY-MM-DD, NdaysAgo, yesterday or today. Default yesterday."},
-		"dimensions": stringList("Up to 9 dimension API names (date, sessionSource, pagePath ...); ga4_read getMetadata lists them."),
+		"dimensions": stringList("Up to 9 dimension API names (date, sessionSource, pagePath ...); google_analytics_read getMetadata lists them."),
 		"metrics":    stringList("Up to 10 metric API names (sessions, activeUsers, keyEvents ...)."),
 		"dimension_filter": map[string]any{"type": "object",
 			"description": "A FilterExpression as the Data API takes it."},
@@ -87,7 +87,7 @@ func toolDefs(ops []growth.Operation) []growth.Tool {
 			Description: "Read a property's last 30 minutes of activity (60 on Analytics 360). Never cached.",
 			Parameters:  realtime},
 		{Name: toolMarkKeyEvent, Class: growth.ClassOperate, Operations: []string{"analyticsadmin.properties.keyEvents.create"},
-			Description: "Mark an event as a key event on a property. It changes reporting only; unmarking is ga4_admin's keyEvents.delete.",
+			Description: "Mark an event as a key event on a property. It changes reporting only; unmarking is google_analytics_admin's keyEvents.delete.",
 			Parameters:  keyEvent},
 	}
 	for _, class := range []growth.Class{growth.ClassRead, growth.ClassOperate, growth.ClassSpend, growth.ClassAdmin} {

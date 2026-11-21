@@ -198,7 +198,7 @@ func objectArg(v any) map[string]any {
 	return m
 }
 
-// markKeyEvent is ga4_mark_key_event's request.
+// markKeyEvent is google_analytics_mark_key_event's request.
 func (p *Product) markKeyEvent(call growth.Call) (googlegrowth.Request, error) {
 	op, _ := p.Catalog().Operation("analyticsadmin.properties.keyEvents.create")
 	property, _ := call.Args["property"].(string)

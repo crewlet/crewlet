@@ -60,14 +60,14 @@ func TestAnEngineOffersAGrowthProductsToolsToTheSeatsItsLaneGrants(t *testing.T)
 	}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if _, ok := reg.Lookup("ga4_read"); !ok {
-		t.Fatal("the engine's growth deps registered no ga4_read")
+	if _, ok := reg.Lookup("google_analytics_read"); !ok {
+		t.Fatal("the engine's growth deps registered no google_analytics_read")
 	}
 	growth, dev := shownTools(t, c, "growth", reg), shownTools(t, c, "dev", reg)
-	if !slices.Contains(growth, "ga4_read") || slices.Contains(growth, "ga4_operate") {
+	if !slices.Contains(growth, "google_analytics_read") || slices.Contains(growth, "google_analytics_operate") {
 		t.Errorf("the seat at read was shown %v", growth)
 	}
-	if slices.Contains(dev, "ga4_read") {
+	if slices.Contains(dev, "google_analytics_read") {
 		t.Errorf("the seat that is off was shown %v", dev)
 	}
 }
