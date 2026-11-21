@@ -2176,6 +2176,26 @@ func (i *runInbox) recordPulled(base context.Context, launch string) {
 	}
 }
 
+// inboxItems is how the run's harness admits each note of due not yet served
+// to launch, by note id, where its session record confirms a take
+// ([executor.ConfirmsByRecord]): the id it admits the note under and the
+// digest of messages' text for it, the very text the poll hands over, so the
+// serve recorded under them is one the job's receipts settle. Nil for a
+// harness confirmed otherwise.
+func (i *runInbox) inboxItems(launch string, due []openedNote, messages []string) map[string]sandbox.InboxItem {
+	if !executor.ConfirmsByRecord(i.harness) {
+		return nil
+	}
+	out := make(map[string]sandbox.InboxItem, len(due))
+	for k, o := range due {
+		if o.held.Served != launch {
+			out[o.held.ID] = sandbox.InboxItem{ID: executor.InboxID(i.harness, launch, o.held.ID),
+				Digest: executor.ItemDigest(messages[k])}
+		}
+	}
+	return out
+}
+
 // Wait is the waiting notes past the cursor after, each served to the job on
 // the record first — see [mcpbridge.SteerInbox].
 //
@@ -2197,6 +2217,7 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 		return nil, changed
 	}
 	var due []openedNote
+	var messages []string
 	var unserved []string
 	// THE JOB'S OWN ITEMS AND A PERSON'S NOTES ALONE: one for another job is
 	// never served to this one, so the cursor below would stop at it for good.
@@ -2205,6 +2226,7 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 			continue
 		}
 		due = append(due, o)
+		messages = append(messages, i.message(ctx, o))
 		if o.held.Served != launch {
 			unserved = append(unserved, o.held.ID)
 		}
@@ -2212,7 +2234,8 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 	served := map[string]bool{}
 	if len(unserved) > 0 {
 		marked, err := i.steers.store.ServeNotes(ctx, i.ident.turn.TurnID, sandbox.NoteServe{
-			IDs: unserved, Launch: launch, Statuses: steerTakeStatuses, Wakes: wakesHanded(due)})
+			IDs: unserved, Launch: launch, Statuses: steerTakeStatuses, Wakes: wakesHanded(due),
+			Inbox: i.inboxItems(launch, due, messages)})
 		if err != nil {
 			log.WarnContext(ctx, "steer_notes_unserved", "turn_id", i.ident.turn.TurnID, "error", err.Error(),
 				"detail", "the poll is answered without the notes the record could not mark served; they "+
@@ -2223,7 +2246,7 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 		}
 	}
 	var out []mcpbridge.SteerNote
-	for _, o := range due {
+	for k, o := range due {
 		// UP TO THE FIRST NOTE NOT MARKED, never past it: the poller's cursor
 		// moves past every note it is answered, and one past an unmarked note
 		// would never ask for that note again.
@@ -2232,7 +2255,7 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 		}
 		out = append(out, mcpbridge.SteerNote{
 			Seq: o.held.Seq, ID: o.held.ID, Inbox: executor.InboxID(i.harness, launch, o.held.ID),
-			Message: i.message(ctx, o),
+			Message: messages[k],
 		})
 	}
 	return out, changed

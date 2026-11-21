@@ -78,8 +78,6 @@ import {
   product,
 } from "../../words.ts";
 import { canExecute, factsOf, type Draft } from "../draft.ts";
-import { EXECUTOR_HARNESSES } from "../../executors.ts";
-import { either } from "./HarnessStep.tsx";
 
 /** The choices, in the order offered: every seat job, each category, Ask Crewlet, the Advisor, none yet. */
 const CHOICES: readonly Exclude<Intent, "custom">[] = [
@@ -305,7 +303,7 @@ export function UseItFor({
     const job = jobsOf(draft.intent)[0];
     return job ? draft.uses.jobs[job] : [];
   }, [draft.uses, draft.intent]);
-  const noCoding = `${product(draft.harness)} cannot run a seat's executor. Choose ${either(EXECUTOR_HARNESSES.map(product))} to code.`;
+  const noCoding = `${product(draft.harness)} cannot run a seat's executor. Choose Claude Code or OpenCode to code.`;
   const slow = draft.model.trim() !== "" && !isFastModel(draft.model);
 
   const options: ChoiceListOption[] = CHOICES.map((intent) => {

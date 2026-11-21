@@ -69,11 +69,13 @@ type MainThreadAsk struct {
 }
 
 // AskedTake is one hook's serve whose receipt is asked: its take
-// ([HookServed.Take]) and the boundary it was served at
-// ([HookServed.Boundary]), which the runner reads as its harness's own event.
+// ([HookServed.Take]), the boundary it was served at ([HookServed.Boundary]),
+// which the runner reads as its harness's own event, and a poll serve's item
+// digest ([HookServed.Digest]).
 type AskedTake struct {
 	Take     string
 	Boundary types.SteerBoundary
+	Digest   string
 }
 
 // TakeReceipts is what the job's session shows of the takes asked: each asked
@@ -116,8 +118,8 @@ type MainThreadReading struct {
 // askedTakes is every hook's serve on run's copy whose receipt only its job's
 // session settles: of each unread note or item for the job ([RunNote.IsFor]),
 // its serves to the job that no loss struck or that its harness cancelled,
-// once each, in the record's order. A serve at a boundary no hook answers
-// ([hookBoundary]) is asked nothing.
+// once each, in the record's order. A serve the job's record cannot settle
+// ([askedBoundary]) is asked nothing.
 func askedTakes(run PendingRun) []AskedTake {
 	var takes []AskedTake
 	for _, n := range run.Steer.Notes {
@@ -125,21 +127,22 @@ func askedTakes(run PendingRun) []AskedTake {
 			continue
 		}
 		for _, h := range n.Serves {
-			if h.Launch != run.LaunchID || !hookBoundary(h.Boundary) || (h.Lost != "" && h.Lost != ServeCancelled) ||
+			if h.Launch != run.LaunchID || !askedBoundary(h.Boundary) || (h.Lost != "" && h.Lost != ServeCancelled) ||
 				slices.ContainsFunc(takes, func(t AskedTake) bool { return t.Take == h.Take }) {
 				continue
 			}
-			takes = append(takes, AskedTake{Take: h.Take, Boundary: types.SteerBoundary(h.Boundary)})
+			takes = append(takes, AskedTake{Take: h.Take, Boundary: types.SteerBoundary(h.Boundary), Digest: h.Digest})
 		}
 	}
 	return takes
 }
 
-// hookBoundary reports whether a serve at boundary was a hook's: after a step's
-// tool calls, or as the run was about to finish.
-func hookBoundary(boundary string) bool {
+// askedBoundary reports whether a serve at boundary is one the job's record can
+// settle: a hook's, after a step's tool calls or as the run was about to
+// finish, or a poll's recorded under its inbox id ([NoteServe.Inbox]).
+func askedBoundary(boundary string) bool {
 	switch types.SteerBoundary(boundary) {
-	case types.SteerBoundaryToolBatch, types.SteerBoundaryFinish:
+	case types.SteerBoundaryToolBatch, types.SteerBoundaryFinish, types.SteerBoundaryStep:
 		return true
 	}
 	return false
@@ -163,7 +166,7 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 	if !asksMainThread(run, read, traits) {
 		return MainThreadReading{}
 	}
-	counts, uncounted := read == BoxReadCollect, !traits.CountsCutOff
+	counts, uncounted := read == BoxReadCollect && traits.Reads, !traits.CountsCutOff
 	counted := counts && at.final && (!uncounted || !at.cutOff)
 	ask := MainThreadAsk{Session: run.SessionRan(), Release: result.HarnessVersion, Count: counted,
 		Next: counted, Ended: !at.cutOff}

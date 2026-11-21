@@ -815,3 +815,97 @@ func TestAVerdictTheStoreRefusesOnceIsAskedAgainWithinItsRoom(t *testing.T) {
 		t.Fatal("the verdict asked again did not land")
 	}
 }
+
+// A POLL SERVE A SESSION RECORD HOLDS IS CONFIRMED THROUGH THE ONE RECEIPTS
+// PATH: a poll recorded under the inbox id its harness admitted the note by is
+// asked of the job's record at its read, beside its item's digest for a record
+// that holds text; a record holding the item settles the note and publishes
+// it, and a record that cannot be read decides nothing, leaving the note
+// waiting. A runner that confirms off its record and reads no thread is asked
+// the takes alone, never a count.
+//
+// Mutation: ask no poll serve of the record, drop its digest from the ask,
+// settle it off another id, publish an undecided record's notes, or ask such a
+// runner a count, and a case goes red.
+func TestAPollServeASessionRecordHoldsIsConfirmedThroughTheReceipts(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		receipts  TakeReceipts
+		published []string
+	}{
+		"a record holding the inbox id": {TakeReceipts{Held: []string{"msg_n1"}}, []string{"n1"}},
+		"a record that cannot be read":  {TakeReceipts{Why: "the session record could not be read"}, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rig := newCoordRig(t)
+			rig.runner.Thread = ThreadTraits{Receipts: true}
+			spy := watchConfirmed(rig.coordinator)
+			launched := rig.launch("t1")
+			fileNote(t, rig.pending, "t1", "n1")
+			if _, err := rig.pending.ServeNotes(t.Context(), "t1", NoteServe{IDs: []string{"n1"},
+				Launch: launched.LaunchID, Statuses: []string{StatusLaunching, StatusRunning},
+				Inbox: map[string]InboxItem{"n1": {ID: "msg_n1", Digest: "digest-n1"}}}); err != nil {
+				t.Fatalf("the poll: %v", err)
+			}
+			thread := &receiptThread{receipts: tc.receipts}
+			rig.runner.MainThread = thread.read
+			if _, _, err := rig.coordinator.readBox(t.Context(), rig.get("t1"), BoxReadStop); err != nil {
+				t.Fatalf("the read: %v", err)
+			}
+			asked := thread.asks()
+			if len(asked) != 1 || asked[0].Count || !slices.Equal(asked[0].Takes,
+				[]AskedTake{{Take: "msg_n1", Boundary: types.SteerBoundaryStep, Digest: "digest-n1"}}) {
+				t.Errorf("the record was asked %+v, want the poll's inbox id and digest alone and no count", asked)
+			}
+			if got := spy.ids(); !slices.Equal(got, tc.published) {
+				t.Errorf("published %v, want %v", got, tc.published)
+			}
+			if read := readOf(t, rig, "n1"); (read != nil) != (len(tc.published) > 0) {
+				t.Errorf("the note's read is %+v", read)
+			}
+		})
+	}
+}
+
+// A WAKE SERVED ONCE SETTLES AT THE RUN'S END, off the record the end leaves: a
+// read before the harness flushed its record decides nothing and leaves the
+// wake waiting on its one serve (MaxWakeServes), and the collection, re-reading
+// the record, settles it and publishes it, so the engine claims it rather than
+// running it as a turn of its own.
+//
+// Mutation: lose the wake's serve to an undecided read, or settle the end's
+// collection without re-reading the record, and this goes red.
+func TestAWakeServedOnceSettlesAtTheRunsEndOffItsRecord(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.runner.Thread = ThreadTraits{Receipts: true}
+	spy := watchConfirmed(rig.coordinator)
+	launched := rig.launch("t1")
+	wake, err := rig.pending.FileWake(t.Context(), "t1", WakeFiling{Launch: launched.LaunchID,
+		Wake: SealedWake{ID: "w-1", Sealed: []byte(strings.Repeat("s", 64))}})
+	if err != nil {
+		t.Fatalf("filing the wake: %v", err)
+	}
+	if _, err := rig.pending.ServeNotes(t.Context(), "t1", NoteServe{IDs: []string{wake.ID},
+		Launch: launched.LaunchID, Statuses: []string{StatusLaunching, StatusRunning},
+		Wakes: map[string]int{wake.ID: 1}, Inbox: map[string]InboxItem{wake.ID: {ID: "msg_w"}}}); err != nil {
+		t.Fatalf("the poll: %v", err)
+	}
+	if err := rig.coordinator.settleReceipts(t.Context(), rig.get("t1"),
+		TakeReceipts{Why: "the session record could not be read"}, BoxReadStop); err != nil {
+		t.Fatalf("the early read: %v", err)
+	}
+	if got := spy.ids(); len(got) != 0 || readOf(t, rig, wake.ID) != nil {
+		t.Fatalf("an undecided read published %v or read the wake", got)
+	}
+	thread := sessionShows("msg_w")
+	rig.runner.MainThread = thread.read
+	rig.runner.Finish(wholeAccount())
+	if _, _, err := rig.coordinator.readBox(t.Context(), rig.get("t1"), BoxReadCollect); err != nil {
+		t.Fatalf("the collection: %v", err)
+	}
+	if got := spy.ids(); !slices.Equal(got, []string{wake.ID}) || readOf(t, rig, wake.ID) == nil {
+		t.Errorf("the run's end published %v, want the wake its record holds, read", got)
+	}
+}
