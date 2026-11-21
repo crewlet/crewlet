@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,9 +16,11 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -198,21 +201,7 @@ func TestABusySeatsWakeIsRoutedSetAsideAndReadmittedAsTheRunLeaves(t *testing.T)
 	t.Parallel()
 	ctx := t.Context()
 	r, coordinator := besideRig(t)
-	var ran [][]string
-	d := &Dispatcher{
-		Ledgered: inbox.Ledgered, Completions: r.ledger, Now: time.Now, NoteDeferred: func(string) {},
-		Turn: func(_ context.Context, req Request) (turn.Result, error) {
-			ran = append(ran, wakeIDsOf(req.Events))
-			return turn.Result{Decision: phase.Done}, nil
-		},
-		Beside: r.e.beside, SetAside: r.e.setAside, HoldAside: r.e.holdAside,
-		HoldSandbox: r.e.holdSandboxSeat,
-	}
-	if err := r.q.SubscribeBatch(ctx, r.subject, r.group, func(ctx context.Context, evs []*events.Event) queue.Result {
-		return d.Dispatch(ctx, "swe", evs)
-	}, notify.KeyOf, nil); err != nil {
-		t.Fatalf("SubscribeBatch: %v", err)
-	}
+	ran := subscribeBeside(t, r)
 
 	read := r.post(t, "lead", "chat:C1", "use staging, not production", 7)
 	box := boundInbox(t, r.runs, r.store, "run-1", r.job)
@@ -230,21 +219,16 @@ func TestABusySeatsWakeIsRoutedSetAsideAndReadmittedAsTheRunLeaves(t *testing.T)
 	unread := r.post(t, "lead", "chat:C1", "and ping me after", 8)
 	other := r.post(t, "ceo", "chat:C1", "and fix the logo", 9)
 	stranger := r.post(t, "ceo", "chat:C2", "what is the build status", 10)
-	if len(ran) != 1 || !slices.Equal(ran[0], []string{stranger.ID.String()}) {
-		t.Fatalf("turns ran on %v, want the stranger's message alone, beside the run", ran)
+	if got := ran(); len(got) != 1 || !slices.Equal(got[0], []string{stranger.ID.String()}) {
+		t.Fatalf("turns ran on %v, want the stranger's message alone, beside the run", got)
 	}
 	if got := r.filed(t); !slices.Contains(got, read.ID.String()) || !slices.Contains(got, unread.ID.String()) {
 		t.Fatalf("the run's record holds wakes %v, want both follow-ups", got)
 	}
 
-	if err := r.store.SetStatus(ctx, "run-1", sandbox.StatusAwaiting, sandbox.Fence{}); err != nil {
-		t.Fatalf("SetStatus: %v", err)
-	}
-	if err := coordinator.OnStarted(ctx, types.ExecutorLaunched{AgentHandle: "swe", TurnID: "run-1"}); err != nil {
-		t.Fatalf("OnStarted: %v", err)
-	}
+	runLeaves(t, r, coordinator)
 	var after []string
-	for _, turnRan := range ran[1:] {
+	for _, turnRan := range ran()[1:] {
 		after = append(after, turnRan...)
 	}
 	slices.Sort(after)
@@ -253,6 +237,92 @@ func TestABusySeatsWakeIsRoutedSetAsideAndReadmittedAsTheRunLeaves(t *testing.T)
 	if !slices.Equal(after, want) {
 		t.Fatalf("after the run left, turns ran on %v, want the unread follow-up and the other "+
 			"writer's message, and never the follow-up the run read", after)
+	}
+}
+
+// A WAKE ABOUT A RECORD A RUN WROTE WAITS ASIDE ON THAT RUN; THE SAME WAKE BEFORE
+// THE RUN WROTE IT STARTS BESIDE IT. The screen reads each run's written set as
+// the seat router does ([Engine.writtenOf]): the requester's review of a change
+// run-1 opened, in the change's conversation and about no item of the run's, is
+// filed for the run's job and set aside under its key until the run leaves, then
+// runs unread; the review before the run opened the change relates to none of
+// its work and starts at once.
+//
+// Mutation: hand relatedRun no written set, and the second review starts beside.
+func TestAWakeAboutWhatARunWroteWaitsAsideOnIt(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	r, coordinator := besideRig(t)
+	ran := subscribeBeside(t, r)
+
+	before := r.reviewOf(t, "lead", "c-1", "rename the flag before it merges", 7)
+	if got := ran(); len(got) != 1 || !slices.Equal(got[0], []string{before.ID.String()}) {
+		t.Fatalf("turns ran on %v, want the review of a change the run never wrote, beside it", got)
+	}
+
+	row := mustRow(t, r.store, "run-1")
+	ledger := newBridgeLedger(r.store, nil)
+	ledger.bind(sandbox.OpenedJob{LaunchID: r.job, Round: row.Round})
+	opened := mcpbridge.Call{Call: tools.Call{Name: "code_open_change"}, Seq: 1,
+		StartedAt: time.Date(2026, 11, 21, 9, 0, 0, 0, time.UTC),
+		Wrote:     []types.WrittenRecord{types.ConversationWritten(gitlet.ChangeConversation("c-1"))}}
+	if err := ledger.Record(ctx, "run-1", opened); err != nil {
+		t.Fatalf("record the call that opened the change: %v", err)
+	}
+
+	after := r.reviewOf(t, "lead", "c-1", "and drop the old flag with it", 8)
+	if got := ran(); len(got) != 1 {
+		t.Fatalf("turns ran on %v, want the review of the change the run opened waiting aside on it", got)
+	}
+	if got := r.filed(t); !slices.Contains(got, after.ID.String()) {
+		t.Fatalf("the run's record holds wakes %v, want the review of the change it opened", got)
+	}
+
+	runLeaves(t, r, coordinator)
+	if got := ran(); len(got) != 2 || !slices.Equal(got[1], []string{after.ID.String()}) {
+		t.Fatalf("after the run left, turns ran on %v, want the review it never read, readmitted", got)
+	}
+}
+
+// subscribeBeside subscribes to swe's inbox a dispatcher screening with r's
+// engine's own routing, answering the wakes of each turn it started.
+func subscribeBeside(t *testing.T, r *routerRig) func() [][]string {
+	t.Helper()
+	var mu sync.Mutex
+	var ran [][]string
+	d := &Dispatcher{
+		Ledgered: inbox.Ledgered, Completions: r.ledger, Now: time.Now, NoteDeferred: func(string) {},
+		Turn: func(_ context.Context, req Request) (turn.Result, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			ran = append(ran, wakeIDsOf(req.Events))
+			return turn.Result{Decision: phase.Done}, nil
+		},
+		Beside: r.e.beside, SetAside: r.e.setAside, HoldAside: r.e.holdAside,
+		HoldSandbox: r.e.holdSandboxSeat,
+	}
+	if err := r.q.SubscribeBatch(t.Context(), r.subject, r.group,
+		func(ctx context.Context, evs []*events.Event) queue.Result { return d.Dispatch(ctx, "swe", evs) },
+		notify.KeyOf, nil); err != nil {
+		t.Fatalf("SubscribeBatch: %v", err)
+	}
+	return func() [][]string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(ran)
+	}
+}
+
+// runLeaves takes run-1 out of Holding, parked on a question, and has the
+// coordinator recount it: the transition that readmits what waited on it.
+func runLeaves(t *testing.T, r *routerRig, coordinator *sandbox.Coordinator) {
+	t.Helper()
+	ctx := t.Context()
+	if err := r.store.SetStatus(ctx, "run-1", sandbox.StatusAwaiting, sandbox.Fence{}); err != nil {
+		t.Fatalf("SetStatus: %v", err)
+	}
+	if err := coordinator.OnStarted(ctx, types.ExecutorLaunched{AgentHandle: "swe", TurnID: "run-1"}); err != nil {
+		t.Fatalf("OnStarted: %v", err)
 	}
 }
 
