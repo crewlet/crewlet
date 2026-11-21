@@ -30,45 +30,62 @@ var stopCauses = map[StoppedReason]worklet.FlowCause{
 	StoppedProvider: worklet.FlowCauseLimit,
 }
 
+// PostureSeat is one agent seat as [LiveState.Posture] reads it: the handle an
+// item is assigned to, and the runs it holds at once (its
+// sandbox.max_concurrent_runs).
+type PostureSeat struct {
+	Handle string
+	Runs   int
+}
+
 // Posture answers the seats' posture now. seats names the company's agent
-// seats, agent id to handle: the flow keys a seat by the handle an item is
-// assigned to, the projection by the id derived from it (ADR-0013). A seat
-// with nothing to state is left out, which the flow reads as free.
-func (s *LiveState) Posture(seats map[string]string) worklet.Posture {
+// seats by agent id: the flow keys a seat by the handle an item is assigned
+// to, the projection by the id derived from it (ADR-0013). A seat with nothing
+// to state is left out, which the flow reads as free.
+func (s *LiveState) Posture(seats map[string]PostureSeat) worklet.Posture {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.placement == nil || !s.pausesRead || !s.runsRead || s.budget == nil {
 		return worklet.Posture{}
 	}
 	out := worklet.Posture{Live: true, Seats: map[string]worklet.SeatPosture{}}
-	for id, handle := range seats {
-		if handle == "" {
+	for id, seat := range seats {
+		if seat.Handle == "" {
 			continue
 		}
-		if seat, ok := s.postureOf(id); ok {
-			out.Seats[handle] = seat
+		if posture, ok := s.postureOf(id, seat.Runs); ok {
+			out.Seats[seat.Handle] = posture
 		}
 	}
 	return out
 }
 
-// postureOf is one seat's posture, and whether it states anything.
+// postureOf is one seat's posture, holding runs runs at once, and whether it
+// states anything.
 //
 // Called under s.mu.
-func (s *LiveState) postureOf(agentID string) (worklet.SeatPosture, bool) {
+func (s *LiveState) postureOf(agentID string, runs int) (worklet.SeatPosture, bool) {
 	agent := s.agents[agentID]
 	var out worklet.SeatPosture
 	if turnWorks(agent) {
-		if item := worklistItem(agent.turn.WorkItem); item != "" {
-			out.On = append(out.On, worklet.PostureItem{Item: item,
-				Cause: worklet.FlowCauseTurn, Since: instant(agent.turn.StartedAt)})
+		turns := workingTurns(agent)
+		slices.SortFunc(turns, func(a, b *LiveTurn) int {
+			return cmp.Or(newStamp(a.StartedAt).chronological(newStamp(b.StartedAt)),
+				cmp.Compare(a.TurnID, b.TurnID))
+		})
+		for _, turn := range turns {
+			if item := worklistItem(turn.WorkItem); item != "" {
+				out.On = append(out.On, worklet.PostureItem{Item: item,
+					Cause: worklet.FlowCauseTurn, Since: instant(turn.StartedAt)})
+			}
 		}
 	}
-	// THE OLDEST RUN WAITING ON A PERSON is the one the seat is parked on:
-	// a seat whose run works takes no other work, so a second is a
-	// straggler the next reconcile settles.
-	runs := s.runsHeldBy(agentID)
-	for _, run := range runs {
+	// EVERY RUN WAITING ON A PERSON, oldest first. It holds the seat's other
+	// items only while the seat's runs fill its cap: a seat with a run's
+	// slot free takes other work beside it.
+	held := s.runsHeldBy(agentID)
+	out.Full = len(held) >= max(runs, 1)
+	for _, run := range held {
 		item := worklistItem(run.WorkItem)
 		if item == "" {
 			continue
@@ -78,16 +95,15 @@ func (s *LiveState) postureOf(agentID string) (worklet.SeatPosture, bool) {
 			out.On = append(out.On, worklet.PostureItem{Item: item,
 				Cause: worklet.FlowCauseRun, Since: instant(run.StartedAt)})
 		case ExecutorAwaiting, ExecutorReseed:
-			if out.Parked == "" {
-				out.Parked, out.ParkedSince = item, instant(run.PausedAt)
-			}
+			out.Parked = append(out.Parked, worklet.PostureItem{Item: item,
+				Cause: worklet.FlowCauseParked, Since: instant(run.PausedAt)})
 		}
 	}
 	if reason, stopped := s.stopOf(agentID, agent); stopped {
 		out.Stop = stopCauses[reason]
 		out.StopSince, out.StopUntil = s.stopBounds(reason, agent)
 	}
-	return out, len(out.On) > 0 || out.Parked != "" || out.Stop != ""
+	return out, len(out.On) > 0 || len(out.Parked) > 0 || out.Stop != ""
 }
 
 // stopBounds is when a stop began and when it lifts, where the projection

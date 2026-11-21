@@ -81,7 +81,7 @@ func within(at, from, to time.Time) bool {
 
 // posture is the seat's live facts at an instant, as the expression binds
 // them: its stop, ranked as the live projection ranks stops, and its parked
-// run.
+// runs.
 func (h SeatHistory) posture(at time.Time) SeatPosture {
 	var out SeatPosture
 	if !h.covers(at) {
@@ -99,11 +99,15 @@ func (h SeatHistory) posture(at time.Time) SeatPosture {
 		}
 	}
 	for _, park := range h.Parks {
-		if park.Item != "" && within(at, park.From, park.To) &&
-			(out.Parked == "" || park.From.Before(out.ParkedSince)) {
-			out.Parked, out.ParkedSince = park.Item, park.From
+		if park.Item != "" && within(at, park.From, park.To) {
+			out.Parked = append(out.Parked, PostureItem{Item: park.Item, Cause: FlowCauseParked, Since: park.From})
 		}
 	}
+	slices.SortFunc(out.Parked, func(a, b PostureItem) int { return a.Since.Compare(b.Since) })
+	// FULL WHEREVER A RUN WAS PARKED: the retained events say nothing of the
+	// seat's other runs or its cap at the instant, so a park reads as filling
+	// the seat, which is exact for a seat of one.
+	out.Full = len(out.Parked) > 0
 	return out
 }
 

@@ -60,6 +60,7 @@ import {
   type SeatKind,
 } from "~/lib/seats.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
+import { callOf } from "~/lib/seatturn.ts";
 import { InboxWaitingTags } from "~/components/InboxWaitingTags.tsx";
 import { EngineLine } from "~/components/InlineToken.tsx";
 import type { AgentRow, FeedRow, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
@@ -175,7 +176,7 @@ export function SeatCard({
   // THE STATUS, OR NONE: a person is not run by the engine, and an idle seat
   // draws none, for the reason `statusOf` gives.
   const status = seat.kind === "human" ? undefined : statusOf(activityOf(agent));
-  const call = agent?.live_call;
+  const call = callOf(agent);
   // Decoded ONCE, by the helper the attention queue also reads: the number on
   // this card and the sentence in that row are the same reading of one field.
   const round = call ? roundLabel(call) : null;

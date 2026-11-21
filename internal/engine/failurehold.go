@@ -129,7 +129,11 @@ func failureBasis(c *Company, handle string, kind failureKind) (string, bool) {
 	return "", false
 }
 
-// lastFailures is each seat's latest failure that will repeat, on this node.
+// lastFailures is each seat's latest failure that will repeat, on this node,
+// in the order its turns END: a seat running turns side by side (ADR-0169)
+// repeats a failure when two endings in a row are it, and any of its turns
+// that works ends the run of failures, as a seat whose models work is not one
+// a retry cannot cure.
 type lastFailures struct {
 	mu   sync.Mutex
 	last map[uuid.UUID]coord.SeatFailure

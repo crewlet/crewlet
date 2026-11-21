@@ -3,7 +3,7 @@
  * executor's run, which is the work of the `execute` round that launched it.
  *
  * A phase arrives twice over its life and in two different shapes: live, as
- * the `live_call` on a seat's overlay (re-broadcast twice per tool-loop round),
+ * its turn's entry in `live_calls` on a seat's overlay (re-broadcast twice per tool-loop round),
  * and durably, as an `agent_phase_completed` event once it finishes. The
  * dashboard this replaces gave those two shapes DIFFERENT IDENTITIES — the
  * live row was keyed `live|turn|phase|iteration` and the stored row
@@ -1125,7 +1125,7 @@ function fromLaunchEvent(ev: EventRecord, p: Record<string, unknown>): PhaseReco
  *
  * Every screen that renders a phase reads two sources: a query, answered ONCE
  * at mount, and the seat's live overlay. Neither covers a phase that finishes
- * while the reader is looking at it — the overlay's `live_call` is cleared the
+ * while the reader is looking at it — the overlay's call for it is cleared the
  * moment it lands, and the query is never re-asked — so the phase, and with it
  * the whole turn, went away. Most visibly on a seat's first turn, where the
  * mount-time history is empty and the page was left saying the seat had never

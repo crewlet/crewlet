@@ -251,8 +251,11 @@ func TestAnAnswersWriteMovesItsSeatsCountOnce(t *testing.T) {
 	t.Run("the claim of an answer", func(t *testing.T) {
 		t.Parallel()
 		rig := newCoordRig(t)
+		// ROOM FOR BOTH: t1's answer resumes beside t2's run, in another
+		// conversation (ADR-0169).
+		rig.withCap(2)
 		parkOnAQuestion(t, rig)
-		rig.launch("t2")
+		rig.launchWith("t2", func(r *PendingRun) { r.ConversationKey = "another conversation" })
 		rig.coordinator.syncSeat(t.Context(), "swe")
 		if got := seatCounts(rig); got.holding != 1 || got.awaiting != 1 {
 			t.Fatalf("the premise: the seat counts %d holding and %d awaiting; want t2 holding and t1 "+
@@ -452,7 +455,10 @@ func (deleteRefused) Finish(context.Context, string, string) (PendingRun, bool, 
 // to its turn.
 func claimedBeside(t *testing.T, rig *coordRig) {
 	t.Helper()
-	run := rig.launch("t2")
+	// ROOM FOR BOTH: t1 runs beside t2, past the default cap of one and in
+	// another conversation, which one run works at a time (ADR-0169).
+	rig.withCap(2)
+	run := rig.launchWith("t2", func(r *PendingRun) { r.ConversationKey = "another conversation" })
 	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t2", CompletionTail(run.LaunchID),
 		rigLease); err != nil || !won {
 		t.Fatalf("ClaimForResume t2 = %v, %v", won, err)

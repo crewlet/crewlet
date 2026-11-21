@@ -226,13 +226,16 @@ func pushedCall(t *testing.T, raw []byte) map[string]any {
 	t.Helper()
 	var env struct {
 		Data []struct {
-			LiveCall map[string]any `json:"live_call"`
+			LiveCalls []map[string]any `json:"live_calls"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal(raw, &env); err != nil || len(env.Data) != 1 {
+	if err := json.Unmarshal(raw, &env); err != nil || len(env.Data) != 1 || len(env.Data[0].LiveCalls) > 1 {
 		t.Fatalf("agents frame %s: %v", raw, err)
 	}
-	return env.Data[0].LiveCall
+	if len(env.Data[0].LiveCalls) == 0 {
+		return nil
+	}
+	return env.Data[0].LiveCalls[0]
 }
 
 // carriesDetail reports whether a pushed call carries any heavy field.
@@ -378,7 +381,11 @@ func TestATabThatMissedACallsClearingIsToldItIsBehind(t *testing.T) {
 // wholeCall is the projection's call, as a snapshot carries it.
 func wholeCall(t *testing.T, s *stream.Service) map[string]any {
 	t.Helper()
-	raw, err := json.Marshal(s.State().AgentOverlay(leadSeat).LiveCall)
+	calls := s.State().AgentOverlay(leadSeat).LiveCalls
+	if len(calls) != 1 {
+		t.Fatalf("live calls = %+v, want the lead's one", calls)
+	}
+	raw, err := json.Marshal(calls[0])
 	if err != nil {
 		t.Fatal(err)
 	}

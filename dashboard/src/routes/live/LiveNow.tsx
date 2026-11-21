@@ -89,6 +89,8 @@ import { useViewer } from "~/lib/viewer.ts";
 import { ADMIN } from "~/lib/access.ts";
 import { GrantRequired } from "~/app/frame/GrantRequired.tsx";
 import { awaitingPerson, indexOrg, seatBadgeOf, workingLongestFirst } from "~/lib/seats.ts";
+import { callOf, callsOf, turnOf } from "~/lib/seatturn.ts";
+import { turnIdOf } from "~/lib/turns.ts";
 import { phaseKey, type PhaseRecord } from "~/lib/phases.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -191,8 +193,8 @@ export function liveFilterKeys(
  * that round's work — so the filter that keeps `execute` keeps it.
  */
 function runningPhase(row: AgentRow): string {
-  if (row.turn?.stage === "parked") return "execute";
-  return row.live_call?.phase ?? row.current_phase ?? "context";
+  if (turnOf(row)?.stage === "parked") return "execute";
+  return callOf(row)?.phase ?? row.current_phase ?? "context";
 }
 
 export function LiveNow() {
@@ -244,9 +246,7 @@ export function LiveNow() {
   const runningKeys = useMemo(
     () =>
       agents.flatMap((a) =>
-        a.live_call
-          ? [phaseKey(a.live_call.turn_id, a.live_call.phase, a.live_call.iteration)]
-          : [],
+        callsOf(a).map((call) => phaseKey(call.turn_id, call.phase, call.iteration)),
       ),
     [agents],
   );
@@ -404,7 +404,12 @@ export function LiveNow() {
               ) : running.length > 0 ? (
                 <ul className="live-list">
                   {running.map((row) => (
-                    <LiveTurnRow key={row.id} row={row} index={index} now={now} />
+                    <LiveTurnRow
+                      key={`${row.id}:${turnIdOf(row)}`}
+                      row={row}
+                      index={index}
+                      now={now}
+                    />
                   ))}
                 </ul>
               ) : (

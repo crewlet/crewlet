@@ -1349,21 +1349,25 @@ test("the live row appears only where the engine reads the item working", async 
   const on = (key: string, activity = "working") => ({
     handle: "swe",
     activity,
-    turn: {
-      turn_id: "run-9",
-      started_at: "2031-04-16T11:57:00Z",
-      stage: "phases",
-      work_item: { backend: "native", id: key === "ENG-42" ? "t-1" : "t-9", key, project: "ENG" },
-    },
+    turns: [
+      {
+        turn_id: "run-9",
+        started_at: "2031-04-16T11:57:00Z",
+        stage: "phases",
+        work_item: { backend: "native", id: key === "ENG-42" ? "t-1" : "t-9", key, project: "ENG" },
+      },
+    ],
     // THE SEVENTH ROUND IN FLIGHT: `round_num` is zero-based.
-    live_call: {
-      turn_id: "run-9",
-      phase: "execute",
-      round_num: 6,
-      rounds_used: 6,
-      max_rounds: 25,
-      versions: ZERO_VERSIONS,
-    },
+    live_calls: [
+      {
+        turn_id: "run-9",
+        phase: "execute",
+        round_num: 6,
+        rounds_used: 6,
+        max_rounds: 25,
+        versions: ZERO_VERSIONS,
+      },
+    ],
   });
   expect(liveOn([on("ENG-42")] as never, detail({ task: task({ assignee: "swe" }) }))).toBeNull();
   expect(liveOn([on("ENG-42", "stopped")] as never, WORKED)).toBeNull();
@@ -1414,13 +1418,15 @@ test("the live row counts rounds from one and names the phase running", async ()
   const working = (live_call: Record<string, unknown>) => ({
     handle: "swe",
     activity: "working",
-    turn: {
-      turn_id: "run-9",
-      started_at: "2031-04-16T11:57:00Z",
-      stage: "phases",
-      work_item: { backend: "native", id: "t-1", key: "ENG-42", project: "ENG" },
-    },
-    live_call: { turn_id: "run-9", max_rounds: 25, ...live_call, versions: ZERO_VERSIONS },
+    turns: [
+      {
+        turn_id: "run-9",
+        started_at: "2031-04-16T11:57:00Z",
+        stage: "phases",
+        work_item: { backend: "native", id: "t-1", key: "ENG-42", project: "ENG" },
+      },
+    ],
+    live_calls: [{ turn_id: "run-9", max_rounds: 25, ...live_call, versions: ZERO_VERSIONS }],
   });
   const liveText = async (live_call: Record<string, unknown>) => {
     cleanup();
@@ -1453,19 +1459,23 @@ test("the live row says a sub-minute turn's seconds, as the profile does", async
       {
         handle: "swe",
         activity: "working",
-        turn: {
-          turn_id: "run-9",
-          started_at: new Date(NOW - 30_000).toISOString(),
-          stage: "phases",
-          work_item: { backend: "native", id: "t-1", key: "ENG-42", project: "ENG" },
-        },
-        live_call: {
-          turn_id: "run-9",
-          phase: "execute",
-          round_num: 1,
-          max_rounds: 24,
-          versions: ZERO_VERSIONS,
-        },
+        turns: [
+          {
+            turn_id: "run-9",
+            started_at: new Date(NOW - 30_000).toISOString(),
+            stage: "phases",
+            work_item: { backend: "native", id: "t-1", key: "ENG-42", project: "ENG" },
+          },
+        ],
+        live_calls: [
+          {
+            turn_id: "run-9",
+            phase: "execute",
+            round_num: 1,
+            max_rounds: 24,
+            versions: ZERO_VERSIONS,
+          },
+        ],
       },
     ] as never,
     answers: { work_item: WORKED },

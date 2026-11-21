@@ -788,6 +788,10 @@ type BridgeAppend struct {
 	// count them.
 	Absorbed []ElidedCall
 
+	// Wrote is the records Call's committed writes created or wrote, folded
+	// into the log's set ([BridgeLog.Wrote]). A record's alone.
+	Wrote []types.WrittenRecord
+
 	// Spent is the session's running total of what its bridged calls cost the
 	// engine. A record's alone.
 	Spent EngineSpend
@@ -1763,6 +1767,21 @@ type BridgeLog struct {
 	// in too ([takeEarlier]), so only a kind folded in after the turn's last
 	// collection read is in no outcome.
 	Committed []string `json:"committed,omitempty"`
+
+	// Wrote is every record the TURN'S calls created or wrote, each once, in
+	// the order the logs took them, named as a wake about it is
+	// ([types.WrittenRecord]): what a busy seat's router hands a wake about to
+	// the running run (internal/engine, ADR-0167). Folded in by the append
+	// taking a call's record ([BridgeAppend.Wrote]; late, abandoned and an
+	// earlier round's alike, as each ran), and KEPT BY EVERY OPENING as
+	// [BridgeLog.Committed] is, so it lives as long as the log through a park,
+	// a relaunch and a takeover. HERE, NOT ON THE RECORD: the append is the one
+	// step that knows what a call wrote, and the store writes no two keys at
+	// once. Held to [types.MaxWrittenRecords]; WroteMore says a record was
+	// refused for want of room, which the append that first refused one says
+	// ([CoordStore.AppendBridgeCall]). Read through [PendingStore.TurnLog].
+	Wrote     []types.WrittenRecord `json:"wrote,omitempty"`
+	WroteMore bool                  `json:"wrote_more,omitempty"`
 
 	// InFlight are the round's calls that have BEGUN AND NOT FINISHED: each entry,
 	// written by the bridge before its tool runs ([AppendBegin]), carries the call's

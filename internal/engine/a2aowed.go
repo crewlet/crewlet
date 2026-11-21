@@ -101,10 +101,11 @@ func (o colleagueOwed) heldByPark(ctx context.Context, ch a2a.Channel) (bool, er
 	return held, nil
 }
 
-// holdsInbox reports whether a run keeps its seat's inbox held: one the engine
-// is driving ([sandbox.Holding]), or one owed the resume of an answer a person
-// gave it — the two conditions the coordinator holds a seat's inbox for
-// (sandbox's seathold.go).
+// holdsInbox reports whether a run keeps the ask on its seat's inbox owed: one
+// the engine is driving ([sandbox.Holding]), or one owed the resume of an
+// answer a person gave it — the conditions the coordinator holds a seat's inbox
+// for (sandbox's seathold.go). Below the seat's cap (ADR-0169) a driven run
+// holds no inbox, and the seat is then taking its mail, the ask included.
 func holdsInbox(run sandbox.PendingRun) bool {
 	return slices.Contains(sandbox.Holding, run.Status) || run.Status == sandbox.StatusAnswered
 }

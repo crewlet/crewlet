@@ -46,6 +46,7 @@ import { useToastClearOf } from "~/app/toastInset.tsx";
 import { waitedOn } from "~/lib/budget.ts";
 import { plural, possessive } from "~/lib/format.ts";
 import type { SeatLive } from "~/lib/seatLive.ts";
+import { turnsOf } from "~/lib/seatturn.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useWriteAccess, type WriteAccess } from "~/lib/useWriteAccess.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
@@ -299,10 +300,28 @@ export function SeatControlDialog({
   );
 }
 
+/**
+ * The turns of a seat a person may steer, each with the words its control
+ * says: one per turn the seat is on (`lib/seatturn.ts`), since a seat runs up
+ * to its `sandbox.max_concurrent_runs` at once and a note is for one turn. A
+ * seat on one turn is steered as it always was, with no `which`; one on
+ * several names each turn by its item ("on ENG-4"), or by its place ("2 of 3"),
+ * and `short` is that name alone, for a button's own word.
+ */
+export function steerTargets(s: SeatLive): { turnId: string; which: string; short: string }[] {
+  const turns = turnsOf(s.row);
+  return turns.map((t, i) => {
+    if (turns.length === 1) return { turnId: t.turn_id, which: "", short: "" };
+    const short = t.work_item?.key || `${i + 1} of ${turns.length}`;
+    return { turnId: t.turn_id, which: t.work_item?.key ? ` on ${short}` : ` ${short}`, short };
+  });
+}
+
 /** What a screen keeps to control seats: which dialog is open, and the one press that needs none. */
 export interface SeatControls {
   open: (kind: SeatControl, seats: readonly SeatLive[]) => void;
-  steer: (s: SeatLive) => void;
+  /** Opens the note for turn `turnId` of seat `s` ([steerTargets]). */
+  steer: (s: SeatLive, turnId: string) => void;
   /**
    * Draws a dialog a control handed over (`dialogPresenter.tsx`), in the
    * screen's `dialog` rather than inside the table the control sits in.
@@ -319,7 +338,7 @@ export interface SeatControls {
  */
 export function useSeatControls(): SeatControls {
   const [shown, setShown] = useState<{ kind: SeatControl; seats: SeatLive[] } | null>(null);
-  const [steering, setSteering] = useState<SeatLive | null>(null);
+  const [steering, setSteering] = useState<{ s: SeatLive; turnId: string } | null>(null);
   const [presented, setPresented] = useState<ReactNode | null>(null);
   const steerWrite = useAct("steer_turn");
   const resume = useAct("resume_seat");
@@ -358,7 +377,7 @@ export function useSeatControls(): SeatControls {
       }
       setShown({ kind, seats: apply });
     },
-    steer: (s) => setSteering(s),
+    steer: (s, turnId) => setSteering({ s, turnId }),
     present: setPresented,
     dialog: (
       <>
@@ -366,10 +385,10 @@ export function useSeatControls(): SeatControls {
         {shown && (
           <SeatControlDialog kind={shown.kind} seats={shown.seats} onClose={() => setShown(null)} />
         )}
-        {steering && steering.row?.turn && (
+        {steering && (
           <SteerTurnDialog
-            turnId={steering.row.turn.turn_id}
-            seat={steering.seat.name}
+            turnId={steering.turnId}
+            seat={steering.s.seat.name}
             write={steerWrite}
             onClose={() => {
               steerWrite.dismiss();
@@ -408,8 +427,8 @@ export function SeatControlButtons({
   const stopHeld =
     controlHeld(pauseAccess, s) ?? (isRunning(s) ? undefined : "It is not on a turn.");
   const steerHeld = controlHeld(steerAccess, s);
-  // A TURN THAT HAS NOT ENDED takes a note; a reader who may not steer it sees Steer held.
-  const steers = !!s.row?.turn;
+  // EACH TURN THAT HAS NOT ENDED takes a note; a reader who may not steer it sees Steer held.
+  const steers = steerTargets(s);
   const name = s.seat.name;
   const toggle = s.paused
     ? {
@@ -452,19 +471,21 @@ export function SeatControlButtons({
             Pause and stop
           </Button>
         )}
-        {!compact && steers && (
-          <Button
-            tooltip
-            size="small"
-            variant="secondary"
-            leadingIcon={<CompassGlyph size="sm" />}
-            disabledReason={steerHeld}
-            aria-label={`Steer ${possessive(name)} turn`}
-            onClick={() => controls.steer(s)}
-          >
-            Steer
-          </Button>
-        )}
+        {!compact &&
+          steers.map((t) => (
+            <Button
+              key={t.turnId}
+              tooltip
+              size="small"
+              variant="secondary"
+              leadingIcon={<CompassGlyph size="sm" />}
+              disabledReason={steerHeld}
+              aria-label={`Steer ${possessive(name)} turn${t.which}`}
+              onClick={() => controls.steer(s, t.turnId)}
+            >
+              {t.short ? `Steer · ${t.short}` : "Steer"}
+            </Button>
+          ))}
       </span>
     );
   }
@@ -490,17 +511,19 @@ export function SeatControlButtons({
           onClick={() => controls.open("stop", [s])}
         />
       )}
-      {!compact && steers && (
-        <IconButton
-          tooltip
-          size="sm"
-          variant="ghost"
-          label={`Steer ${possessive(name)} turn`}
-          icon={<CompassGlyph />}
-          disabledReason={steerHeld}
-          onClick={() => controls.steer(s)}
-        />
-      )}
+      {!compact &&
+        steers.map((t) => (
+          <IconButton
+            key={t.turnId}
+            tooltip
+            size="sm"
+            variant="ghost"
+            label={`Steer ${possessive(name)} turn${t.which}`}
+            icon={<CompassGlyph />}
+            disabledReason={steerHeld}
+            onClick={() => controls.steer(s, t.turnId)}
+          />
+        ))}
     </span>
   );
 }

@@ -23,7 +23,7 @@ type clockedGate struct {
 	refusing func() (Refusal, bool)
 }
 
-func (g *clockedGate) admit(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+func (g *clockedGate) admit(ctx context.Context, _, _ string, _ ResumeRoute) (context.Context, func(), error) {
 	g.mu.Lock()
 	g.asked++
 	g.mu.Unlock()
@@ -184,11 +184,11 @@ func TestARefireTheStoreDidNotAnswerIsKeptForItsBackstop(t *testing.T) {
 		var unanswered atomic.Bool
 		unanswered.Store(true)
 		next := &clockedGate{refusing: func() (Refusal, bool) { return Refusal{}, false }}
-		failing := func(ctx context.Context, handle string, route ResumeRoute) (context.Context, func(), error) {
+		failing := func(ctx context.Context, handle, conversation string, route ResumeRoute) (context.Context, func(), error) {
 			if unanswered.Load() {
 				return nil, nil, fmt.Errorf("node: reading the lease of seat %s: %w", handle, errStoreUnanswered)
 			}
-			return next.admit(ctx, handle, route)
+			return next.admit(ctx, handle, conversation, route)
 		}
 		rig.restart(t, rig.queue, "node-b", rigLease, failing)
 		if err := rig.recoverSeat(t.Context(), rigLease.Owner, rigLease.Epoch); err != nil {
@@ -482,7 +482,7 @@ type liftAfterFence struct {
 func (s *liftAfterFence) settle() { s.settleOnce.Do(func() { close(s.claimed) }) }
 
 // gate admits every resume, settling the claim on its admission's release.
-func (s *liftAfterFence) gate(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+func (s *liftAfterFence) gate(ctx context.Context, _, _ string, _ ResumeRoute) (context.Context, func(), error) {
 	return ctx, s.settle, nil
 }
 
@@ -541,7 +541,7 @@ type liftBeforeFence struct {
 func (s *liftBeforeFence) settle() { s.settleOnce.Do(func() { close(s.claiming) }) }
 
 // gate admits every resume, settling the claim on its admission's release.
-func (s *liftBeforeFence) gate(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+func (s *liftBeforeFence) gate(ctx context.Context, _, _ string, _ ResumeRoute) (context.Context, func(), error) {
 	return ctx, s.settle, nil
 }
 
@@ -1183,7 +1183,7 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		// the keep the resume makes that the signal landed.
 		rig.coordinator.pending = unlistedRuns{rig.coordinator.pending}
 		var signalled sync.Once
-		rig.coordinator.gate = func(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+		rig.coordinator.gate = func(ctx context.Context, _, _ string, _ ResumeRoute) (context.Context, func(), error) {
 			signalled.Do(func() { rig.coordinator.Readmit("budget", "swe") })
 			return ctx, func() {}, nil
 		}

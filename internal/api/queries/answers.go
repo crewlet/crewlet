@@ -1410,17 +1410,17 @@ func (s Sources) agentSeat(handle string) (*org.Role, string) {
 	return seat, id.String()
 }
 
-// liveCall answers `live_call{agent_id}`: the seat's in-flight call with every
-// field, and the version of each, or null while it has none.
+// liveCall answers `live_call{agent_id}`: the seat's in-flight calls, one per
+// turn, each with every field and its versions; `[]` while it has none.
 //
 // The repair for an `agents` push the socket dropped. A push leaves out a heavy
 // field its tabs already hold at the version it names (internal/api/stream's
-// pushAgents), so a tab that missed one asks for the call whole here.
+// pushAgents), so a tab that missed one asks for the calls whole here.
 //
 // BY AGENT ID, the key every `agents` push uses; a role name may be shared. The
 // handle is a label, empty for an id the company no longer holds.
 //
-// MASKED AS THE `agents` PUSH IS ([livestate.MaskCall]): the call whole to a
+// MASKED AS THE `agents` PUSH IS ([livestate.MaskCalls]): each call whole to a
 // reader the seat's trail is open to, its status alone to anybody else.
 func (s Sources) liveCall(ctx context.Context, p Params) (any, error) {
 	agentID := strings.TrimSpace(p.String("agent_id"))
@@ -1439,14 +1439,12 @@ func (s Sources) liveCall(ctx context.Context, p Params) (any, error) {
 	// same seat: the answer runs on its own goroutine and can be delivered
 	// after a push generated later (a clear, a new call), so the tab drops
 	// an answer whose sequence is behind what it has applied. Always carried,
-	// a null call included — see [livestate.Overlay.LiveCallSeq].
+	// an empty list included — see [livestate.Overlay.LiveCallSeq].
 	answer := map[string]any{"agent_id": agentID, "handle": handle,
-		"live_call": nil, "live_call_seq": 0}
+		"live_calls": []any{}, "live_call_seq": 0}
 	if overlay := s.State.AgentOverlay(agentID); overlay != nil {
 		answer["live_call_seq"] = overlay.LiveCallSeq
-		if overlay.LiveCall != nil {
-			answer["live_call"] = overlay.LiveCall.For(s.reach(ctx, handle))
-		}
+		answer["live_calls"] = livestate.MaskCalls(overlay.LiveCalls, s.reach(ctx, handle))
 	}
 	return answer, nil
 }

@@ -709,6 +709,14 @@ func posted(tool string, written chatlet.Written, channelID, again string) (tool
 	return jsonResult(postReceipt(written, channelID))
 }
 
+// chatWritten is the record a message write wrote: the conversation the message
+// is in, as a wake about a reply in its thread is stamped
+// ([chatlet.MessageConversation]). None for an answer the node could not vouch
+// for, which names no room ([chatlet.Written]).
+func chatWritten(w chatlet.Written) types.WrittenRecord {
+	return types.ConversationWritten(chatlet.MessageConversation(w.Channel, w.Message))
+}
+
 // postNext is [unknownNext] for a message, in one place: a post comes back
 // unknown two ways (an answer that said so, a data node that never answered)
 // that must say the same. `look` names the read that shows the room.
@@ -827,7 +835,7 @@ func (t *postMessage) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return chatWriteFailure(ctx, PostMessageTool, err,
 			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
 	}
-	commit(turn, written.Outcome.Outcome, types.CommittedChat)
+	commit(turn, written.Outcome.Outcome, types.CommittedChat, chatWritten(written))
 	t.deps.settle(ctx, written.Outcome.Position)
 	return posted(PostMessageTool, written, id, again)
 }
@@ -909,7 +917,7 @@ func (t *replyInThread) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return chatWriteFailure(ctx, ReplyInThreadTool, err,
 			postNext(false, again, "Read the room with "+ReadChannelTool)), nil
 	}
-	commit(turn, written.Outcome.Outcome, types.CommittedChat)
+	commit(turn, written.Outcome.Outcome, types.CommittedChat, chatWritten(written))
 	t.deps.settle(ctx, written.Outcome.Position)
 	return posted(ReplyInThreadTool, written, id, again)
 }
@@ -1012,7 +1020,7 @@ func (t *sendDM) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return directPostFailure(ctx, to, room, err, again), nil
 	}
-	commit(turn, written.Outcome.Outcome, types.CommittedChat)
+	commit(turn, written.Outcome.Outcome, types.CommittedChat, chatWritten(written))
 	t.deps.settle(ctx, written.Outcome.Position)
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
 		// The open landed and the answer says so: only the post is in doubt.

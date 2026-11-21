@@ -455,9 +455,9 @@ func TestAnInheritedAnswerResumesAsItsSeatIsEstablished(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// ONE AFTER THE OTHER: a seat resumes one of its runs at a time
-	// (sandbox.SeatCoding), so the second is resumed once the first has let go
-	// of the seat, on the re-check that letting go arms.
+	// ONE AFTER THE OTHER: a seat at its default cap resumes one of its runs at
+	// a time (sandbox.SeatFull), so the second is resumed once the first has let
+	// go of the seat, on the re-check that letting go arms.
 	for range 3 {
 		if resumer.count() == 2 {
 			break

@@ -275,7 +275,7 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 	// A TURN IN FLIGHT KEEPS THE DRAIN OPEN, as the two did when the engine
 	// was told to stop. Admitted as every turn is, so the drain waits on its
 	// slot.
-	_, finish, err := e.node.AdmitTurn(t.Context(), "swe")
+	_, finish, err := e.node.AdmitTurn(t.Context(), "swe", "")
 	if err != nil {
 		t.Fatalf("AdmitTurn: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestADrainingNodeLeavesACompletionForTheSeatsNextHolder(t *testing.T) {
 		close(drained)
 	}()
 	eventually(t, "the drain to close the node's turn gate", func() bool {
-		_, release, err := e.node.AdmitTurn(t.Context(), "swe")
+		_, release, err := e.node.AdmitTurn(t.Context(), "swe", "")
 		if err == nil {
 			release()
 			return false
@@ -583,13 +583,13 @@ func TestACompletionRefusedOnAWaitResumesOnceItClears(t *testing.T) {
 			limited.Store(true)
 			var refusals atomic.Int32
 			r.gate = func(next sandbox.TurnGate) sandbox.TurnGate {
-				return func(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
+				return func(ctx context.Context, handle, conversation string, route sandbox.ResumeRoute) (context.Context, func(), error) {
 					if limited.Load() {
 						refusals.Add(1)
 						return nil, nil, &sandbox.TurnRefused{Cause: errors.New("provider limit reached"),
 							Refusal: sandbox.Refusal{Condition: waitLimit, Reason: "provider limit reached"}}
 					}
-					return next(ctx, handle, route)
+					return next(ctx, handle, conversation, route)
 				}
 			}
 			e := r.start(t)
@@ -665,7 +665,7 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 	r := newDrainRig(t)
 	e := r.start(t)
 
-	_, release, err := e.admitResume(t.Context(), "swe", sandbox.ResumeAnswer)
+	_, release, err := e.admitResume(t.Context(), "swe", "", sandbox.ResumeAnswer)
 	if err != nil {
 		t.Fatalf("admitResume on a serving node: %v", err)
 	}
@@ -680,12 +680,12 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 	// precedes until the drain has closed the gate.
 	var refused *sandbox.TurnRefused
 	eventually(t, "the drain to refuse the next resume", func() bool {
-		_, next, err := e.admitResume(t.Context(), "swe", sandbox.ResumeCompletion)
+		_, next, err := e.admitResume(t.Context(), "swe", "", sandbox.ResumeCompletion)
 		if err == nil {
 			next()
 			return false
 		}
-		return errors.As(err, &refused) && !errors.Is(err, node.ErrSeatBusy)
+		return errors.As(err, &refused) && !errors.Is(err, node.ErrSeatFull)
 	})
 	if refused.Condition != sandbox.Draining || !errors.Is(refused, node.ErrDraining) {
 		t.Fatalf("a resume on a draining node was refused as %+v, want it waiting on %q "+
@@ -727,7 +727,7 @@ func TestAResumedTurnTakesASlotUnderTheNodesCeiling(t *testing.T) {
 	r.seedRun(t, e, "t1")
 	fired := firedCompletions(e)
 
-	_, release, err := e.node.AdmitTurn(t.Context(), "swe")
+	_, release, err := e.node.AdmitTurn(t.Context(), "swe", "")
 	if err != nil {
 		t.Fatalf("AdmitTurn: %v", err)
 	}

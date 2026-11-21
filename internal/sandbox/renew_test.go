@@ -699,7 +699,7 @@ type refusingGate struct {
 	asked int
 }
 
-func (g *refusingGate) gate(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+func (g *refusingGate) gate(ctx context.Context, _, _ string, _ ResumeRoute) (context.Context, func(), error) {
 	g.mu.Lock()
 	g.asked++
 	n := g.asked
@@ -887,7 +887,7 @@ type racingGate struct {
 	asked int
 }
 
-func (g *racingGate) gate(ctx context.Context, _ string, _ ResumeRoute) (context.Context, func(), error) {
+func (g *racingGate) gate(ctx context.Context, _, _ string, _ ResumeRoute) (context.Context, func(), error) {
 	g.mu.Lock()
 	g.asked++
 	n := g.asked
@@ -1490,7 +1490,7 @@ func TestAnAnnouncementFromAReadBeforeTheClockEndsNothing(t *testing.T) {
 	}
 	// atTheLimit refuses every resume on a condition that clears by waiting,
 	// whose refusal is acknowledged wherever a waiter stands behind it.
-	atTheLimit := func(context.Context, string, ResumeRoute) (context.Context, func(), error) {
+	atTheLimit := func(context.Context, string, string, ResumeRoute) (context.Context, func(), error) {
 		return nil, nil, &TurnRefused{Refusal: Refusal{Condition: conditionLimit,
 			Reason: "every model of the seat's chain is at its usage limit"}}
 	}

@@ -301,6 +301,23 @@ func heldSeats(n *Notify, known func(string) (exists, human bool)) []Recipient {
 	return out
 }
 
+// MessageConversation is the conversation message m in room c is in, as every
+// wake about it, a reply in its thread included, is stamped: the identity the
+// keys [Parser.inbound] stamps give it ([notify.ChatPrompt.ConversationIdentity]
+// under [AddressRule]) namespaced by this source. A seat's post records it
+// (internal/agent/builtin), and a running run's router finds a reply in the
+// thread by it, exactly (ADR-0167): the thread in a room, the line in a direct
+// conversation. "" for a room or message with no id.
+func MessageConversation(c Channel, m Message) string {
+	if c.ID == "" || m.ID == "" {
+		return ""
+	}
+	meta := map[string]string{notify.ChannelField: c.ID, notify.ChannelTypeField: string(c.Kind),
+		notify.MessageIDField: m.ID, notify.ThreadField: m.ThreadRoot}
+	meta[notify.ThreadAnchorField] = notify.Anchor(meta)
+	return notify.Namespaced(Source, NewPrompt().ConversationIdentity(meta, ""))
+}
+
 // inbound is the delivery every recipient of this record shares, before the
 // per-recipient reason is stamped on it.
 func (p *Parser) inbound(record MutationRecord) notify.Inbound {

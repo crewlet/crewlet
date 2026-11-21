@@ -50,13 +50,15 @@ const running = (phase: string, roundNum = 0): AgentRow =>
     id: "ada",
     role: "Ada Lovelace",
     activity: "working",
-    live_call: {
-      phase,
-      in_progress: true,
-      round_num: roundNum,
-      rounds_used: Math.max(roundNum + 1, 0),
-      updated_at: new Date().toISOString(),
-    } as LiveCall,
+    live_calls: [
+      {
+        phase,
+        in_progress: true,
+        round_num: roundNum,
+        rounds_used: Math.max(roundNum + 1, 0),
+        updated_at: new Date().toISOString(),
+      } as LiveCall,
+    ],
   }) as AgentRow;
 
 const PHASES = ["execute", "review"] as const;

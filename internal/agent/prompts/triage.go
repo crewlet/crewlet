@@ -53,10 +53,12 @@ type WakeTriage struct {
 	// whether it asks for an answer.
 	Wake steer.Wake
 
-	// InConversation, AboutItem and ByLead are why the message is weighed at
-	// all: written in the conversation the turn works in, about the work item
-	// it is charged to, or by somebody who leads the seat.
-	InConversation, AboutItem, ByLead bool
+	// InConversation, AboutItem, AboutWritten and ByLead are why the message
+	// is weighed at all, the engine's facts: written in the conversation the
+	// turn works in, about the work item it is charged to, about a record its
+	// run created or wrote (a reply under its post, a review of the change it
+	// opened), or by somebody who leads the seat.
+	InConversation, AboutItem, AboutWritten, ByLead bool
 }
 
 // BuildWakeTriage is the user message for one triage under fence, minted for
@@ -78,6 +80,9 @@ func BuildWakeTriage(fence provenance.Boundary, in WakeTriage) string {
 	}
 	if in.AboutItem {
 		why = append(why, "about the work item the running task is charged to")
+	}
+	if in.AboutWritten {
+		why = append(why, "about something the running task created or wrote")
 	}
 	if in.ByLead {
 		why = append(why, "by somebody who leads the seat")

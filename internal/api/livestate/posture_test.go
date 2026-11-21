@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +21,16 @@ import (
 // reads: its seats named by the handles items are assigned to.
 type projected struct {
 	state *livestate.LiveState
-	seats map[string]string
+	seats map[string]livestate.PostureSeat
+}
+
+// seatsOfOne is agent ids to handles, each seat holding one run at a time.
+func seatsOfOne(handles map[string]string) map[string]livestate.PostureSeat {
+	out := map[string]livestate.PostureSeat{}
+	for id, handle := range handles {
+		out[id] = livestate.PostureSeat{Handle: handle, Runs: 1}
+	}
+	return out
 }
 
 func (p projected) SeatPostures() worklet.Posture { return p.state.Posture(p.seats) }
@@ -149,7 +159,7 @@ func TestAFlowReadsTheSeatsStopReasonAndItsReset(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 27, 23, 20, 0, 0, time.UTC)
 	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
-	seats := map[string]string{"id-lead": "lead", "id-dev": "dev", "id-ops": "ops"}
+	seats := seatsOfOne(map[string]string{"id-lead": "lead", "id-dev": "dev", "id-ops": "ops"})
 	e := newFlowEstate(t, projected{state: s, seats: seats})
 	touched := now.Add(-time.Hour)
 	for id, on := range map[string]string{"urgent": "lead", "busy": "lead", "dev-turn": "dev",
@@ -228,6 +238,55 @@ func TestAFlowReadsTheSeatsStopReasonAndItsReset(t *testing.T) {
 	}
 }
 
+// A RUN PARKED ON A PERSON HOLDS ITS SEAT'S OTHER WORK ONLY WHILE THE SEAT'S
+// RUNS FILL ITS CAP. A seat running two at once (sandbox.max_concurrent_runs:
+// 2) with one run parked has a slot free and takes other work; once a second
+// run fills it, the parked run holds the rest until a person answers. Every
+// parked run's item reads waiting on its own.
+//
+// Mutation: read any parked run as holding the seat, or keep only the oldest
+// parked run, and the free seat's item is held or the second ask is lost.
+func TestAParkedRunHoldsItsSeatOnlyAtItsCap(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 27, 23, 20, 0, 0, time.UTC)
+	s := livestate.New(livestate.WithClock(func() time.Time { return now }))
+	e := newFlowEstate(t, projected{state: s,
+		seats: map[string]livestate.PostureSeat{"id-ops": {Handle: "ops", Runs: 2}}})
+	for _, item := range []string{"asked", "asked-too", "other"} {
+		e.task(item, "ops", worklet.PriorityNormal, now.Add(-time.Hour))
+	}
+	s.SetPlacement(map[string]bool{"id-ops": true})
+	s.SeedPauses(nil)
+	s.Apply(env("budget_meters", map[string]any{"meter_id": "m-1", "seq": 1, "timezone": "UTC",
+		"org": map[string]any{"windows": []any{}}}, streamOnly))
+	run := func(turnID, item string, status livestate.ExecutorStatus, paused string) livestate.ExecutorRecord {
+		return livestate.ExecutorRecord{LaunchID: "l-" + turnID, WrittenAt: now, Entry: livestate.ExecutorEntry{
+			TurnID: turnID, AgentID: "id-ops", Status: status, StartedAt: "2026-10-27T22:00:00Z",
+			PausedAt: paused,
+			WorkItem: &types.WorkItem{Backend: types.WorkWorklet, ID: item, Key: "ENG-" + item, Project: "ENG"},
+		}}
+	}
+	ask := run("tn-ask", "asked", livestate.ExecutorAwaiting, "2026-10-27T22:30:00Z")
+	s.ReconcileExecutors([]livestate.ExecutorRecord{ask}, now)
+	flows, _ := e.flows(now)
+	if flows["asked"] != "waiting/parked since 2026-10-27T22:30:00Z" {
+		t.Errorf("asked reads %s, want waiting on its person", flows["asked"])
+	}
+	if strings.HasPrefix(flows["other"], "held/parked_elsewhere") {
+		t.Errorf("other reads %s with a run's slot free, want it not held", flows["other"])
+	}
+
+	s.ReconcileExecutors([]livestate.ExecutorRecord{ask,
+		run("tn-ask-too", "asked-too", livestate.ExecutorAwaiting, "2026-10-27T22:40:00Z")}, now)
+	flows, _ = e.flows(now)
+	if flows["asked-too"] != "waiting/parked since 2026-10-27T22:40:00Z" {
+		t.Errorf("asked-too reads %s, want the second parked run's item waiting too", flows["asked-too"])
+	}
+	if flows["other"] != "held/parked_elsewhere since 2026-10-27T22:30:00Z" {
+		t.Errorf("other reads %s with both runs parked, want held since the first parked", flows["other"])
+	}
+}
+
 // EVERY STOP REASON THE SEAT'S ROW CAN STATE IS ONE AN ITEM'S FLOW NAMES: a
 // reason added to the ranking without a cause would hold a seat's items with
 // no word for why.
@@ -254,7 +313,7 @@ func TestEveryStopReasonIsAFlowCause(t *testing.T) {
 				"provider_keys": []any{"default"}}, at("2026-06-14T11:00:00Z"), id("k")))
 		}
 		wantState(t, s, "id-a", livestate.ActivityStopped, reason)
-		seat, held := s.Posture(map[string]string{"id-a": "a"}).Seats["a"]
+		seat, held := s.Posture(seatsOfOne(map[string]string{"id-a": "a"})).Seats["a"]
 		if !held || !seat.Stop.Valid() || seat.Stop == "" {
 			t.Errorf("a seat stopped for %q reads posture %+v, want a flow cause naming it", reason, seat)
 		}

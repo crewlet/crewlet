@@ -129,6 +129,7 @@ import type {
   WorkTombstone,
 } from "~/protocol/index.ts";
 import { ago } from "~/lib/ago.ts";
+import { narrowTo, turnsOf } from "~/lib/seatturn.ts";
 
 /** How often a task and its sub-tasks are asked again: nothing pushes either. */
 const ITEM_POLL_MS = 15_000;
@@ -273,15 +274,20 @@ function useItemChrome(
 /**
  * The seat running a turn on this task now: its assignee, where the engine
  * reads the task's flow `working` (ADR-0162) and the seat's own state is
- * `working` too. No turn is matched to the task by its key or id here.
+ * `working` too. Whether the task is worked is the flow's to say, never a turn
+ * matched by key; a seat on several turns at once is read through the one
+ * charged to this task's id where one is (`narrowTo`), else its first.
  */
 export function liveOn(
   rows: readonly AgentRow[],
-  detail: Pick<WorkItemDetail, "flow"> & { task: { assignee?: string } },
+  detail: Pick<WorkItemDetail, "flow"> & { task: { assignee?: string; id?: string } },
 ): AgentRow | null {
   const handle = detail.task.assignee;
   if (detail.flow?.state !== "working" || !handle) return null;
-  return rows.find((row) => row.handle === handle && row.activity === "working") ?? null;
+  const seat = rows.find((row) => row.handle === handle && row.activity === "working");
+  if (!seat) return null;
+  const here = turnsOf(seat).find((t) => detail.task.id && t.work_item?.id === detail.task.id);
+  return (here && narrowTo(seat, here.turn_id)) ?? seat;
 }
 
 /**
