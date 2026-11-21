@@ -197,6 +197,12 @@ const (
 	// SourceWebPage is a page Ask Crewlet read from a host the company lists
 	// (ADR-0151), written by whoever runs that site.
 	SourceWebPage Source = "web_page"
+
+	// SourceBrowserPage is a page a seat's own browser shows it — its text,
+	// its title and address, what it logged — as its box's browser server
+	// hands it over, written by whoever runs that site, so it is read at
+	// [TrustExternal] naming no writer.
+	SourceBrowserPage Source = "browser_page"
 )
 
 // Sources are every surface.
@@ -209,6 +215,7 @@ var Sources = []Source{
 	SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
 	SourceChangeDescription, SourceChangeReview, SourceChangeComment, SourceCheckLog,
 	SourceTurnEnding, SourceServerOutput, SourceDelegatedRequest, SourceAtlas, SourceWebPage,
+	SourceBrowserPage,
 }
 
 // Valid reports whether s is one of [Sources].

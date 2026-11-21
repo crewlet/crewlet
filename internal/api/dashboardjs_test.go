@@ -1060,7 +1060,7 @@ const (
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
 	// kit releases account for its growth, and the last measure was 7180.3 KiB,
-	// after a seat's several turns at once and its run cap in the org builder.
+	// after a proposal's caution learned to name a page in an agent's browser.
 	// A raise names the measured size and its cause in its commit.
 	treeBudget = 5<<20 + 2061<<10
 )
