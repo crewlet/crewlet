@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/delegated"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -28,7 +29,7 @@ func TestTheAccessDomainIsACertifiedDomain(t *testing.T) {
 			Domain:  accessdomain.Domain{},
 			Applier: accessdomain.NewApplier(),
 			// Migrate is nil: the tables ship in the replicated estate's own
-			// migrations (0151, and 0161 for the verdicts).
+			// migrations (0151, 0161 for the verdicts, 0201 for growth).
 			Encode:        encodeSuiteRecord,
 			Fields:        accessdomain.VersionedFields(),
 			Carrying:      carryingSuiteRecord,
@@ -161,6 +162,9 @@ func suitePayload(kind accessdomain.ObjectKind, id string) (
 		request := suiteTurn("request/" + id)
 		return accessdomain.VerdictSubject(id, request, "reviewer"), accessdomain.OpVerdict, sentinel,
 			verdictOf(id, request, "reviewer")
+	case accessdomain.KindGrowth:
+		g := growthOf(id, suiteTurn("held/"+id), growth.StepApplied)
+		return accessdomain.GrowthSubject(id, g.ID), accessdomain.OpGrowth, sentinel, g
 	case accessdomain.KindExpiry:
 		return accessdomain.ExpirySubject(suiteStamped), accessdomain.OpExpire,
 			accessdomain.ScopeSet{Terms: []accessdomain.ScopeTerm{{Kind: accessdomain.TermDomain}}},
@@ -185,6 +189,21 @@ func verdictOf(id, request, by string) accessdomain.Verdict {
 		User: "crewlet-ops", SubjectSealed: "sealed", WordsSealed: "sealed", ContentKey: "k1"}
 }
 
+// growthOf is step of a held spend call of seat id, as a peer publishes it.
+func growthOf(id, held string, step growth.Step) accessdomain.Growth {
+	g := accessdomain.Growth{V: 1, ID: accessdomain.GrowthID(held, step), Handle: id, HeldCall: held,
+		Product: "fakeads", Connection: "eu", Account: "act_1", Target: "c1", Tool: "fakeads_raise_budget",
+		Class: growth.ClassSpend, Step: step, Operation: string(make64('d')),
+		Changes: []accessdomain.GrowthChange{{Field: "daily_budget", Label: "Daily budget", Before: "50000000",
+			After: "60000000", Money: true}},
+		Money: &accessdomain.GrowthMoney{Currency: "EUR", DeltaMicros: 10_000_000, DailyMicros: 50_000_000,
+			DailyAfterMicros: 60_000_000, PerChangeCapMicros: 20_000_000, DailyCapMicros: 100_000_000}}
+	if step == growth.StepAllowed {
+		g.AnsweredBy, g.Answerer = accessdomain.GrowthByPerson, "ops-lead"
+	}
+	return g
+}
+
 // carryingSuiteRecord is a record carrying exactly one versioned field, its
 // version left to the encoder: the suite holds the stamp to the field's own.
 func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
@@ -195,6 +214,10 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		return rawRecord(accessdomain.VerdictSubject(id, request, "reviewer"), "suite-node",
 			"suite-carrying-verdict", accessdomain.OpVerdict, accessdomain.ScopeSet{Subject: true},
 			verdictOf(id, request, "reviewer"))
+	case "Subject.Kind growth":
+		g := growthOf(id, suiteTurn("held/"+id), growth.StepAsked)
+		return rawRecord(accessdomain.GrowthSubject(id, g.ID), "suite-node", "suite-carrying-growth",
+			accessdomain.OpGrowth, accessdomain.ScopeSet{Subject: true}, g)
 	}
 	return nil, fmt.Errorf("no suite record carries %s: add one here with its row", field.Name)
 }
