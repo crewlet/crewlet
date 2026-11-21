@@ -78,7 +78,7 @@ func (f *fakeAds) Catalog() growth.Catalog {
 
 func (f *fakeAds) Level(handle string) growth.Level { return f.levels[handle] }
 
-func (f *fakeAds) Call(_ context.Context, call growth.Call) (any, error) {
+func (f *fakeAds) Run(_ context.Context, call growth.Call) (any, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, call.Tool)

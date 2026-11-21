@@ -49,10 +49,10 @@ type GrowthProduct interface {
 	// Level is the seat's level on the product's lane now, "" for a seat the
 	// lane is off for.
 	Level(handle string) growth.Level
-	// Call makes a read or operate call. Its answer encodes as a JSON object
+	// Run makes a read or operate call. Its answer encodes as a JSON object
 	// and declares every field holding somebody's words (ADR-0040). A
 	// [*growth.Refusal] reached no vendor and is said to the agent.
-	Call(ctx context.Context, call growth.Call) (any, error)
+	Run(ctx context.Context, call growth.Call) (any, error)
 	// Prepare reads a held call's target live and builds what a person is
 	// asked: refused (a [*growth.Refusal]: out of scope, the spend guard, the
 	// vendor's own validation), or the hold.
@@ -160,7 +160,7 @@ func (t *growthTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, args m
 	if refusal != nil {
 		return *refusal, nil
 	}
-	answer, err := t.product.Call(ctx, growth.Call{Handle: handle, Turn: turn.RunID, Tool: t.Name(), Args: args})
+	answer, err := t.product.Run(ctx, growth.Call{Handle: handle, Turn: turn.RunID, Tool: t.Name(), Args: args})
 	if err != nil {
 		return growthFailure(ctx, t.Name(), err), nil
 	}
