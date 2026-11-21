@@ -433,6 +433,7 @@ export function sandboxWords(role: ConfigRole): string {
     env?: Record<string, unknown>;
     mcp?: { servers?: unknown[] };
     max_turns?: number;
+    max_concurrent_runs?: number;
   };
   const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
   const parts: string[] = [];
@@ -444,6 +445,9 @@ export function sandboxWords(role: ConfigRole): string {
   if (servers > 0) parts.push(count(servers, "tool server", "tool servers"));
   if (typeof box.max_turns === "number") {
     parts.push(box.max_turns === 0 ? "no turn cap" : `up to ${box.max_turns} turns`);
+  }
+  if (typeof box.max_concurrent_runs === "number") {
+    parts.push(count(box.max_concurrent_runs, "run at a time", "runs at once"));
   }
   if (parts.length === 0) return "The catalogue's defaults";
   const [first, ...rest] = parts;

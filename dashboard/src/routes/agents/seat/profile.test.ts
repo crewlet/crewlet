@@ -319,12 +319,15 @@ describe("the setup card's words", () => {
             env: { GH_TOKEN: "${GH}", REGION: "eu" },
             mcp: { servers: ["github"] },
             max_turns: 40,
+            max_concurrent_runs: 2,
           },
         }),
       ),
-    ).toBe("2 setup steps · 2 variables · 1 tool server · up to 40 turns");
+    ).toBe("2 setup steps · 2 variables · 1 tool server · up to 40 turns · 2 runs at once");
     // Zero is an explicit "uncapped", said as itself rather than as a cap of 0.
     expect(sandboxWords(role({ sandbox: { max_turns: 0 } }))).toBe("No turn cap");
+    // A cap written as 1 is said as the one run it allows, not hidden as the default.
+    expect(sandboxWords(role({ sandbox: { max_concurrent_runs: 1 } }))).toBe("1 run at a time");
   });
 
   test("placement is a pinned node, a set of labels, or any node", () => {
