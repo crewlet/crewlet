@@ -22,7 +22,9 @@ const (
 	// answerOwnBound is a page its domain cuts by a filler of its own, at a
 	// bound no larger than [statelog.AnswerBytes] ([op.ownBound]): a usage
 	// page at a record's edge ([usage.Fill]), Gitlet's at a row past its
-	// bytes (gitlet.MaxPageBytes).
+	// bytes (gitlet.MaxPageBytes). The row that crosses the bound stays, so
+	// the page may pass it by that row; the reply ceiling's other half holds
+	// it (a push row encodes to some 1.7 MB at its worst, past one record).
 	answerOwnBound answerKind = "own_bound"
 
 	// answerOne is one value bounded where it is written: one record under

@@ -298,7 +298,7 @@ var opCodeRepoState = define("code.repo_state", opRead, codeDomain, false,
 		}
 		snap, err := b.Code.Snapshot(ctx, q)
 		return snap, ranNothing(err)
-	}).ownBound(gitlet.MaxPageBytes + gitlet.MaxRecordBytes).answeredWhole()
+	}).ownBound(gitlet.MaxPageBytes).answeredWhole()
 
 // opCodePushOutcome is what became of one push: the receiver's wait on a push
 // whose record resolved pending or unknown.
@@ -330,7 +330,7 @@ var opCodeRead = define("code.read", opRead, codeDomain, false,
 		}
 		answer, err := b.Code.Read(ctx, q)
 		return answer, ranNothing(err)
-	}).ownBound(gitlet.MaxPageBytes + gitlet.MaxRecordBytes).
+	}).ownBound(gitlet.MaxPageBytes).
 	judgesGrant(func(q gitlet.ReadQuery) bool { return q.Asker.Kind == gitlet.PrincipalAgent })
 
 // opCodeQueueDue is a page of the queue work a repository's HOME Gitlet node
@@ -352,7 +352,7 @@ var opCodeQueueDue = define("code.queue_due", opRead, codeDomain, false,
 		}
 		answer, err := b.Code.QueueDue(ctx, q)
 		return answer, ranNothing(err)
-	}).ownBound(gitlet.MaxPageBytes + gitlet.MaxRecordBytes).answeredWhole()
+	}).ownBound(gitlet.MaxPageBytes).answeredWhole()
 
 // opCodeTurnsMoved is which of a set of turns pushed, opened a change or gave
 // a review: the advisor's read, which names no asker.
