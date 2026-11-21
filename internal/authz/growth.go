@@ -55,9 +55,33 @@ func growthRule(a Action) (rule, bool) {
 }
 
 // ruleOf is a's row: the table's, or a growth tool's from its catalog.
-func ruleOf(a Action) (rule, bool) {
-	if r, ok := rules[a]; ok {
+func ruleOf(a Action) (rule, bool) { return ruleIn(rules, growthRule, a) }
+
+// ruleIn is [ruleOf] over table and a growth tool's row.
+//
+// A NAME BOTH CLAIM IS NO VERB: either row would decide the other's call, so
+// it fails closed for both, and [Router.Handle] refuses its route at start.
+func ruleIn(table map[Action]rule, growthOf func(Action) (rule, bool), a Action) (rule, bool) {
+	r, inTable := table[a]
+	g, isGrowth := growthOf(a)
+	switch {
+	case inTable && isGrowth:
+		return rule{}, false
+	case inTable:
 		return r, true
+	case isGrowth:
+		return g, true
 	}
-	return growthRule(a)
+	return rule{}, false
+}
+
+// growthVerbs is every tool a registered catalog lists.
+func growthVerbs() []Action {
+	var out []Action
+	for _, c := range growth.Catalogs() {
+		for _, t := range c.Tools {
+			out = append(out, Action(t.Name))
+		}
+	}
+	return out
 }
