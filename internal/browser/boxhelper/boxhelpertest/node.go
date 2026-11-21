@@ -112,11 +112,18 @@ type grammar struct {
 }
 
 // What Node and npm answer --version with: v and three numbers, and the three
-// numbers alone.
+// numbers alone, either followed by a prerelease's tag (Node's -alpha.1, -rc.2
+// and nightlies, npm's -pre.0). A prerelease is a version of its major:
+// ci.yml's `latest` installs whichever Node is newest, a prerelease included.
 var (
-	nodeAnswer = grammar{"Node", regexp.MustCompile(`^v(([0-9]+)\.[0-9]+\.[0-9]+)$`)}
-	npmAnswer  = grammar{"npm", regexp.MustCompile(`^(([0-9]+)\.[0-9]+\.[0-9]+)$`)}
+	nodeAnswer = grammar{"Node", regexp.MustCompile(`^v(([0-9]+)\.[0-9]+\.[0-9]+` + prerelease + `)$`)}
+	npmAnswer  = grammar{"npm", regexp.MustCompile(`^(([0-9]+)\.[0-9]+\.[0-9]+` + prerelease + `)$`)}
 )
+
+// prerelease is a version's optional prerelease tag, as semver.org spells
+// one: a hyphen, then identifiers of letters, digits and hyphens, joined by
+// dots.
+const prerelease = `(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`
 
 // versionTimeout bounds one --version: a node or an npm answers in well under
 // a second, so a minute is a hang, never a slow machine.

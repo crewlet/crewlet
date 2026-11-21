@@ -120,13 +120,14 @@ func npmOf(node string) string {
 // each is a missing prerequisite (internal/prereqtest): it fails under the
 // requirement the make targets set, naming what makes it present, and skips
 // otherwise. Found, its --version, asked without NODE_OPTIONS or npm's
-// settings, decides: the machine's at or above the floor, the floor's of it
-// exactly. Not parallel: it sets the variables the helpers read.
+// settings, decides: the machine's at or above the floor, a prerelease by its
+// major, the floor's of it exactly. Not parallel: it sets what helpers read.
 //
 // Mutations, each red: drop an exact-major check (a newer major stands for the
 // floor), a floor check (an older one runs the cases), what a program that
-// cannot answer printed, the NODE_OPTIONS drop, or the npm settings' drop in a
-// case npm reads.
+// cannot answer printed, the NODE_OPTIONS drop, the npm settings' drop in a
+// case npm reads, or the prerelease tag (a prerelease names no version); take
+// any text for a tag (an empty one passes).
 func TestANodeOrNPMIsFoundRequiredOrSkippedAndHeldToTheFloor(t *testing.T) {
 	floor, npmFloor := boxhelper.MinNodeMajor, boxhelper.MinNPMMajor
 	at := func(major int) string { return fmt.Sprintf("v%d.4.1", major) }
@@ -137,6 +138,8 @@ func TestANodeOrNPMIsFoundRequiredOrSkippedAndHeldToTheFloor(t *testing.T) {
 	nodeAt, nodeCurrent, nodeUnderOptions := nodeStub(t, at(floor)), nodeStub(t, at(floor+4)), nodeStub(t, at(floor+4))
 	npmAtFloor, npmCurrent := npmStub(t, npmAt(npmFloor)), npmStub(t, npmAt(npmFloor+2))
 	npmUnderOptions := npmStub(t, npmAt(npmFloor+2))
+	nodePrerelease := nodeStub(t, fmt.Sprintf("v%d.0.0-alpha.0.1.1", floor+5)) // as ci.yml's `latest` installed one
+	npmPrerelease := npmStub(t, fmt.Sprintf("%d.0.0-pre.1", npmFloor+2))
 	floorAt, floorUnderOptions := floorBuild(t, at(floor), npmAt(npmFloor)), floorBuild(t, at(floor), npmAt(npmFloor))
 	floorNodeUnderOptions := nodeStub(t, at(floor))
 	type row struct {
@@ -155,6 +158,14 @@ func TestANodeOrNPMIsFoundRequiredOrSkippedAndHeldToTheFloor(t *testing.T) {
 			fatal: fmt.Sprintf("below boxhelper.MinNodeMajor %d", floor)},
 		{name: "a node of no Node version", require: "1", path: filepath.Dir(nodeStub(t, "22.4.1")), find: Node,
 			fatal: "names no Node version"},
+		{name: "a prerelease node", require: "1", path: filepath.Dir(nodePrerelease), find: Node,
+			want: nodePrerelease},
+		{name: "a prerelease node below the floor", require: "1",
+			path: filepath.Dir(nodeStub(t, fmt.Sprintf("v%d.0.0-rc.1", floor-1))), find: Node,
+			fatal: fmt.Sprintf("is Node %d.0.0-rc.1, below boxhelper.MinNodeMajor %d", floor-1, floor)},
+		{name: "a node whose prerelease tag is empty", require: "1",
+			path: filepath.Dir(nodeStub(t, fmt.Sprintf("v%d.0.0-", floor+4))), find: Node,
+			fatal: "names no Node version"},
 		{name: "a node that cannot start", require: "1", path: filepath.Dir(nodeCannotStart), find: Node,
 			fatal: "exit status 127", says: []string{loader}},
 		{name: "a node at the floor", require: "1", path: filepath.Dir(nodeAt), find: Node, want: nodeAt},
@@ -168,6 +179,10 @@ func TestANodeOrNPMIsFoundRequiredOrSkippedAndHeldToTheFloor(t *testing.T) {
 			fatal: fmt.Sprintf("is npm 9.2.0, below boxhelper.MinNPMMajor %d", npmFloor), says: []string{npmRemedy}},
 		{name: "an npm of no npm version", require: "1", path: filepath.Dir(npmStub(t, "v10.9.9")), find: NPM,
 			fatal: "names no npm version"},
+		{name: "a prerelease npm", require: "1", path: filepath.Dir(npmPrerelease), find: NPM, want: npmPrerelease},
+		{name: "a prerelease npm below the floor", require: "1",
+			path: filepath.Dir(npmStub(t, fmt.Sprintf("%d.0.0-pre.1", npmFloor-1))), find: NPM,
+			fatal: fmt.Sprintf("is npm %d.0.0-pre.1, below boxhelper.MinNPMMajor %d", npmFloor-1, npmFloor)},
 		{name: "an npm that cannot start", require: "1", path: filepath.Dir(npmCannotStart), find: NPM,
 			fatal: "exit status 127", says: []string{loader}},
 		{name: "an npm at the floor", require: "1", path: filepath.Dir(npmAtFloor), find: NPM, want: npmAtFloor},
