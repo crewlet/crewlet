@@ -743,9 +743,10 @@ sequenceDiagram
   that carries the answer carries the notes in its brief.
 
 A message the turn's own requester sends about its work while the run works
-reaches it the same way without anybody steering: the seat's router hands it
-over from the held inbox as a wake, rendered as that writer's message rather
-than a note
+(in its conversation, about its work item, or about a record the run created
+or wrote, such as a review of the change it opened) reaches it the same way
+without anybody steering: the seat's router hands it over from the held inbox
+as a wake, rendered as that writer's message rather than a note
 ([ADR-0167](../../adr/0167-a-busy-seats-wake-from-its-requester-joins-the-running-run.md)).
 **A lead's chat message steers like `steer_turn`**: a message to the busy seat
 from a person who leads it, which the seat's triage finds redirects the work,

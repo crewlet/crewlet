@@ -610,6 +610,11 @@ type Call struct {
 	// (turnctx.Written), which its collection settles the turn's outcome by.
 	Committed []types.CommittedChange
 
+	// Wrote is the records the call's committed writes created or wrote
+	// (turnctx.Written.Wrote), named as a wake about each is, which the run's
+	// router reads to hand such a wake to the running run (ADR-0167).
+	Wrote []types.WrittenRecord
+
 	// Abandoned marks a call NOBODY WAITED FOR when it returned: its harness
 	// cancelled or hung up ([toolsession.Call.Abandoned]), or its opening ended
 	// while the tool ran ([binding.endKeeping]). The effect happened, but the
@@ -1669,7 +1674,8 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		}
 		written := writtenOf(s.Surface)
 		r := ran{name: in.Name, args: args, digest: digest, seq: seq, callID: callID, abandoned: in.Abandoned,
-			written: written, before: written.Changes(), started: started, until: entry.Until}
+			written: written, before: written.Changes(), wroteBefore: written.Records(), started: started,
+			until: entry.Until}
 		r.res, r.broke, r.err = o.execute(admitted, in.Name, args)
 		r.took = time.Since(r.started)
 		a, after := o.conclude(c, r)
@@ -1807,10 +1813,11 @@ type ran struct {
 	callID string
 	// abandoned is the call's request's [toolsession.Call.Abandoned].
 	abandoned <-chan struct{}
-	// written is the set the call commits to; before is what it held as the tool
-	// started.
-	written *turnctx.Written
-	before  []types.CommittedChange
+	// written is the set the call commits to; before and wroteBefore are its
+	// kinds and records as the tool started.
+	written     *turnctx.Written
+	before      []types.CommittedChange
+	wroteBefore []types.WrittenRecord
 	// started is when the bridge took the call; took how long to its answer.
 	started time.Time
 	took    time.Duration
@@ -1922,7 +1929,7 @@ func (o *binding) conclude(c *bridgedCall, r ran) (answer, func()) {
 		Seq: r.seq, StartedAt: r.started.UTC(), Duration: r.took,
 		Origin: res.Origin, Server: res.Server, Source: res.Source, Held: res.Held,
 		Digest: digest, CallID: r.callID, Absorbed: res.Absorbed, Committed: r.written.Since(r.before),
-		Abandoned: abandoned,
+		Wrote: r.written.RecordsSince(r.wroteBefore), Abandoned: abandoned,
 	}, r.until)
 	return answer{result: toolsession.Result{Output: res.Output, Failed: res.Failed, Images: res.Images},
 		own: own}, after

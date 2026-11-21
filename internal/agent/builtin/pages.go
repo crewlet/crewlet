@@ -541,7 +541,7 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 	if err != nil {
 		return pageWriteFailure(ctx, WritePageTool, err, next), nil
 	}
-	commit(turn, got.Outcome.Outcome, types.CommittedPage)
+	commit(turn, got.Outcome.Outcome, types.CommittedPage, pageWritten(got.Page.ID))
 	if got.Outcome.Outcome == statelog.OutcomeUnknown {
 		return pageUnknown(WritePageTool, got.Outcome, next), nil
 	}
@@ -556,6 +556,13 @@ func (t *writePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args ma
 		"revision": got.Revision, "outcome": outcomeOf(got.Outcome),
 		"position": positionOf(got.Outcome.Position),
 	}, "")
+}
+
+// pageWritten is the record a write to page id wrote, a save or a comment
+// alike, named as every wake about the page is stamped
+// ([doclet.PageConversation]).
+func pageWritten(id string) types.WrittenRecord {
+	return types.ConversationWritten(doclet.PageConversation(id))
 }
 
 // createStatus is the status a new page is written in, or the sentence that
@@ -803,7 +810,7 @@ func (t *savePage) CallForTurn(ctx context.Context, turn *turnctx.Turn, args map
 	if err != nil {
 		return pageWriteFailure(ctx, SavePageTool, err, saveNext), nil
 	}
-	commit(turn, got.Outcome.Outcome, types.CommittedPage)
+	commit(turn, got.Outcome.Outcome, types.CommittedPage, pageWritten(detail.Page.ID))
 	if got.Outcome.Outcome == statelog.OutcomeUnknown {
 		return pageUnknown(SavePageTool, got.Outcome, saveNext), nil
 	}
@@ -987,7 +994,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 		if err != nil {
 			return pageWriteFailure(ctx, CommentOnPageTool, err, editNext), nil
 		}
-		commit(turn, written.Outcome.Outcome, types.CommittedComment)
+		commit(turn, written.Outcome.Outcome, types.CommittedComment, pageWritten(detail.Page.ID))
 		if written.Outcome.Outcome == statelog.OutcomeUnknown {
 			return pageUnknown(CommentOnPageTool, written.Outcome, editNext), nil
 		}
@@ -1030,7 +1037,7 @@ func (t *commentOnPage) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if err != nil {
 		return pageWriteFailure(ctx, CommentOnPageTool, err, commentNext(false)), nil
 	}
-	commit(turn, written.Outcome.Outcome, types.CommittedComment)
+	commit(turn, written.Outcome.Outcome, types.CommittedComment, pageWritten(detail.Page.ID))
 	if written.Outcome.Outcome == statelog.OutcomeUnknown {
 		return pageUnknown(CommentOnPageTool, written.Outcome,
 			commentNext(written.Outcome.Unvouched)), nil

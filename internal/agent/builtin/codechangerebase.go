@@ -103,7 +103,7 @@ func (t *codeRebaseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return t.deps.failedWrite(ctx, turn, tool, cv.g.c, repo, op, err), nil
 	}
-	commit(turn, res.Outcome, types.CommittedCode)
+	commit(turn, res.Outcome, types.CommittedCode, cv.wrote())
 	out := codeBranchAnswer{Repo: repo.Name, RenamedTo: repo.Redirect, RedirectUntil: repo.RedirectUntil,
 		Branch: strings.TrimPrefix(w.Ref, branchRoot), OpID: cv.g.c.actor.Operation}
 	switch {

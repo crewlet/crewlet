@@ -1066,6 +1066,12 @@ func worstLog(t *testing.T) BridgeLog {
 	for i := range MaxCallsInFlight {
 		bridged.InFlight = append(bridged.InFlight, worstEntry(t, i))
 	}
+	// THE WRITTEN SET AT ITS BOUND, each id at its own in the bytes that escape
+	// the most, and one record more, refused, which marks it ([BridgeLog.wrote]).
+	for i := range types.MaxWrittenRecords + 1 {
+		bridged.wrote([]types.WrittenRecord{{Kind: types.WrittenConversation,
+			ID: fmt.Sprintf("%04d", i) + strings.Repeat("<", types.MaxWrittenIDBytes-4)}})
+	}
 	return bridged
 }
 
@@ -1353,6 +1359,10 @@ func TestTheWholeLogFitsItsBudget(t *testing.T) {
 	if bridged.LateElided != elidedWorst {
 		t.Errorf("the log counts %d of its %d dropped calls late, want every one: the count is measured at "+
 			"the most it can be", bridged.LateElided, elidedWorst)
+	}
+	if len(bridged.Wrote) != types.MaxWrittenRecords || !bridged.WroteMore {
+		t.Errorf("the log's written set holds %d records (full %v), want its bound and the mark: the set is "+
+			"measured at its most", len(bridged.Wrote), bridged.WroteMore)
 	}
 	if !slices.Equal(bridged.Committed, everyKind()) {
 		t.Errorf("the log's union of what its calls committed holds %d kinds, want every one of the %d: the "+

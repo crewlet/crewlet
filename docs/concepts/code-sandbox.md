@@ -60,7 +60,7 @@ The details, each load-bearing:
 
   **The record lands in two writes, and the state says which one it is at.** The turn's parked state (`internal/agent/execstate`: the round, the closed rounds, the surface and the skills it had loaded, the task, what it was asked and by whom, the items it wrote, the spend no segment has paid yet, the turn's deadline and the context it froze at its start — no conversation, since there is no engine loop to re-enter) is written by the turn as its frame unwinds, *after* the launch returns. So the launch opens the row as `launching` and the unwinding turn writes its state, flipping the row to `running` in the same compare-and-swap. In between, the job is already executing and the row has nothing to resume — so **nothing polls or claims a `launching` run**: a completion claimed in that window would find no turn to resume and would have to fail a run that finished. The window is milliseconds on an idle host and hundreds of milliseconds on a loaded one, and a trivial run is exactly the one that fits inside it.
 - **A seat runs up to its cap of runs, one per conversation.** `sandbox.max_concurrent_runs` (one where unset) is how many of a seat's runs hold it at once, and no two of them work one conversation: its own, or one a wake its steps read came from ([ADR-0169](https://github.com/crewlet/crewlet/blob/main/adr/0169-a-seat-runs-up-to-its-cap-of-runs-one-per-conversation.md)). Each launch and each answer's resume takes a slot in the same step as its write, refused at the cap or on a busy conversation, and the answer then waits for a slot. Below the cap the seat takes new work as usual, except a message of a conversation one of its runs works, which waits at the head of its inbox, the inbox held, until that run leaves. A launch's [budget floor](#budgets) counts the seat's other runs at the static floor each, since a run's spend is charged at its collection; and a checkout of a branch another of its runs pushes is refused, naming it. What follows is a seat at its cap, which at the default of one is a seat whose run is working.
-- **A seat at its cap takes no other work, and that is every turn.** While its runs hold every slot (or the seat owes an answer's resume, or a reply a run let go of), the seat **starts no turn**: not for new work, not for a colleague's message. What reaches the run meanwhile is a message **about its work**: the seat's [router](#notes-to-a-running-run) reads the held inbox and hands the run its own requester's message in its conversation or about its work item ([ADR-0167](https://github.com/crewlet/crewlet/blob/main/adr/0167-a-busy-seats-wake-from-its-requester-joins-the-running-run.md)), anybody's information about the work, and a lead's correction as their note, each decided by a triage the engine gates ([ADR-0168](https://github.com/crewlet/crewlet/blob/main/adr/0168-a-busy-seats-other-wakes-are-triaged-and-the-engine-gates-the-choice.md)); a request for other work waits. And **no person's answer to a different run of the same seat is resumed meanwhile**, whether that answer is a chat reply or one given [by naming the run](#answering-a-parked-run). That is the rule, not a cost of the mechanism: an agent in the middle of its work is busy with it, and it takes up the next thing when this one is done, as a person would; resuming a second run beside the first would put two of the seat's turns in flight at once, each acting for the seat without seeing the other. So **a seat runs no more executor runs at once than its cap**. A chat reply waits on the broker with the rest of the mail and is offered when the busy run **settles or parks on its own question**, which for a long job can be hours; an answer given by naming the run travels on the seat's control topic instead, is recorded on its run at once, and its resume waits for the busy run and then runs ahead of the held mail. Nothing is lost while either waits (the reply keeps its place and the question its anchor), and a parked run whose box outlives `pause_ttl_seconds` in the meantime re-seeds from its branch when the answer arrives.
+- **A seat at its cap takes no other work, and that is every turn.** While its runs hold every slot (or the seat owes an answer's resume, or a reply a run let go of), the seat **starts no turn**: not for new work, not for a colleague's message. What reaches the run meanwhile is a message **about its work**: the seat's [router](#notes-to-a-running-run) reads the held inbox and hands the run its own requester's message in its conversation, about its work item or about a record the run wrote ([ADR-0167](https://github.com/crewlet/crewlet/blob/main/adr/0167-a-busy-seats-wake-from-its-requester-joins-the-running-run.md)), anybody's information about the work, and a lead's correction as their note, each decided by a triage the engine gates ([ADR-0168](https://github.com/crewlet/crewlet/blob/main/adr/0168-a-busy-seats-other-wakes-are-triaged-and-the-engine-gates-the-choice.md)); a request for other work waits. And **no person's answer to a different run of the same seat is resumed meanwhile**, whether that answer is a chat reply or one given [by naming the run](#answering-a-parked-run). That is the rule, not a cost of the mechanism: an agent in the middle of its work is busy with it, and it takes up the next thing when this one is done, as a person would; resuming a second run beside the first would put two of the seat's turns in flight at once, each acting for the seat without seeing the other. So **a seat runs no more executor runs at once than its cap**. A chat reply waits on the broker with the rest of the mail and is offered when the busy run **settles or parks on its own question**, which for a long job can be hours; an answer given by naming the run travels on the seat's control topic instead, is recorded on its run at once, and its resume waits for the busy run and then runs ahead of the held mail. Nothing is lost while either waits (the reply keeps its place and the question its anchor), and a parked run whose box outlives `pause_ttl_seconds` in the meantime re-seeds from its branch when the answer arrives.
 - **Busy while it runs.** While its runs HOLD every slot of the seat's cap, the seat's inbox is **held** (the `sandbox` hold): the coordinator takes it as the launch that fills the last slot opens its run's row — and when a node that takes the seat over recovers runs still going, before the mailbox opens — and lifts it when one of them settles or parks on a question. The hold is taken for the attachment of the inbox the seat holds on that node, so a hold decided while the node held the seat and asked after its release detached the inbox is refused by the queue: it never gates the inbox the node attaches if it takes the seat back, which a seat retaken with nothing to recover would otherwise attach held, with nothing left to lift it. Held, nothing is fetched: the mail waits on the broker in order, nothing is held against a broker ack window during an hours-long run, no new turn starts and nothing runs at all until the run is done. The mail is still read: the seat's router hands the run each message its own requester wrote about its work (see [Notes to a running run](#notes-to-a-running-run)). A person's chat reply to *another* of the seat's runs waits with the rest of its mail and is offered when the run settles or parks; an answer by turn to one travels on the seat's control topic, is recorded at once, and its resume waits for the run and then runs ahead of the held mail. A colleague's [A2A ask](event-system.md#ephemeral-a2a-channels-internala2a) waits with the held mail as a chat reply does, and its channel is not closed under it: the idle sweep spares a channel whose seat's inbox is held, as it spares one whose ask a run's record carries. A run parked waiting on a human answer holds nothing — the seat works as usual, and its deliveries are offered to that question before they become turns (see [Mid-run clarification](#mid-run-clarification-ask_and_wait)).
 
   A delivery that reaches a held seat anyway (it raced the hold, or the queue refused to take it) asks for the hold again and is deferred, keeping its place at the head of the inbox — never requeued behind the seat's newer mail.
@@ -1877,15 +1877,16 @@ a run holds the seat: it reads the held inbox without consuming it, at once, on
 each publish to the inbox or its lane, when the seat's dispatch goes idle and
 at least every two minutes, and files each wake written by **the run's own
 requester** (the same seat, credential and whom-for its turn works for) in the
-run's conversation or about its work item; another writer's message, a
-schedule's fire, a colleague's ask or answer and a delegated review (each
-answered on a channel of its own), and one the completion ledger has worked
-stay queued for turns of their own (ADR-0167). Each wake is decided once per
-job (`crewlet.seat.wakes.routed`). Only the engine files a wake, while the record names
-the job launching or running with its ending undecided, signed under the fleet
-keyring in a key domain of its own (`seat.wake.item`) bound to the turn, the
-job and the wake, so no writer of the coordination store can rewrite whose
-words it carries or whether it asks for an answer. Wakes filed between two of
+run's conversation, about its work item, or about a record the run created or
+wrote (below); another writer's message, a schedule's fire, a colleague's ask
+or answer and a delegated review (each answered on a channel of its own), and
+one the completion ledger has worked stay queued for turns of their own
+(ADR-0167). Each wake is decided once per job (`crewlet.seat.wakes.routed`,
+rule `conversation`, `work_item` or `wrote`). Only the engine files a wake,
+while the record names the job launching or running with its ending undecided,
+signed under the fleet keyring in a key domain of its own (`seat.wake.item`)
+bound to the turn, the job and the wake, so no writer of the coordination store
+can rewrite whose words it carries or whether it asks for an answer. Wakes filed between two of
 the job's steps join its newest item while nothing has served it, at most four
 an item and 8 KiB of seals; a job holds at most four items and a turn eight,
 and a wake past either is left to a turn of its own. A Claude Code hook serves
@@ -1914,9 +1915,25 @@ launch, told to a fresh session and, as a message it may already show, to a
 continued session that may lack it, as is one its job was served and never
 confirmed. The review reads no wake.
 
+**What the run wrote** is kept on its call log: each bridged call whose write
+landed adds the record it wrote, named exactly as a wake about that record is.
+A work item it filed, updated or commented on is named by `<backend>:<id>`; a
+change it opened, edited, reviewed, commented on, rebased or merged, the
+thread of a chat message it posted (a direct conversation's whole line), a page
+it saved or commented on and an artifact it remarked on are named by the
+conversation their wakes are stamped with. A review of the change the run
+opened, a reply under its post or a comment on the item it filed reaches the
+run instead of waiting. Reads, refused or failed writes and calls that
+committed nothing add nothing, and neither does a push the box makes over git,
+a change its collection opens or a held call a person approved, none of which
+passes the bridge. The set lives as long as the call log, through a park, a
+relaunch, a new round and a takeover, and holds 128 records; past them a record
+is refused, none held is dropped, and the node says so once
+(`sandbox_run_written_set_full`).
+
 **Another writer's message about the work, and a lead's, is triaged.** A wake
 the requester rule leaves that was written in the run's conversation, about its
-work item, or by somebody who [leads the seat](organization-model.md#management-hierarchy) is
+work item, about a record the run wrote, or by somebody who [leads the seat](organization-model.md#management-hierarchy) is
 described once per job by one call on the seat's `llm_triage` chain (falling
 back to `llm`, then `default`): `input`, `steer`, `request` or `noise`. The
 model only describes it; the engine decides (ADR-0168):
@@ -2448,7 +2465,7 @@ A run's record and its tool log are each **one value** in the coordination store
 |---|---|---|---|
 | The tool log | Its calls: `calls`, `elided`, `elided_calls`, `absorbed_calls` | 3,473,408 (3.3125 MiB) | each call's own share, two hundred calls, and the identities of the calls the log counts without listing them |
 | The tool log | Its calls in flight: `in_flight` | 1,048,576 (1 MiB) | 256 entries, each its call's identity and the id its harness gave it, at most 4 KiB |
-| The tool log | Everything else: the tool names of the turn's earlier rounds, the log's own fields, and room for what a later version adds | 1,768,558 (1.69 MiB) | each field's own bound |
+| The tool log | Everything else: the tool names of the turn's earlier rounds, the records the run wrote (128 at most), the log's own fields, and room for what a later version adds | 1,768,558 (1.69 MiB) | each field's own bound |
 | The record | The parked turn's state (`execute_state`) | 2,097,152 (2 MiB) | the park, which condenses it to fit and refuses it past that |
 | The record | Everything else, the turn's wake items within 100 KiB, and 156 KiB for fields a later version adds | 4,193,390 (4 MiB less 914 bytes) | each field's own bound, held by the write that puts it on the record |
 

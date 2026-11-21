@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -102,6 +103,16 @@ func (cv conversing) send(ctx context.Context, w gitlet.ConversationWrite) (gitl
 	return cv.decided(ctx, w)
 }
 
+// wrote is the record a write to cv's change wrote ([changeRecord]): an ask for
+// review or a thread's resolution as much as a comment, since a wake answering
+// one is about what the turn wrote, though neither is an outcome of the turn's.
+func (cv conversing) wrote() types.WrittenRecord {
+	if cv.change == nil {
+		return types.WrittenRecord{}
+	}
+	return changeRecord(cv.change.ID)
+}
+
 // decided stamps w's asker, ceiling and written-for together from the call's
 // caller (the ceiling from its own bound carrier, never from tool arguments),
 // then validates it as every change writer does (ConversationWrite.Validate),
@@ -120,7 +131,7 @@ func (cv conversing) decided(ctx context.Context, w gitlet.ConversationWrite) (g
 		r := g.deps.failedWrite(ctx, g.turn, g.tool, g.c, g.repo, w.OpID, err)
 		return gitlet.ConversationResult{}, &r
 	}
-	commit(g.turn, res.Outcome, conversed(w))
+	commit(g.turn, res.Outcome, conversed(w), cv.wrote())
 	if res.Refusal != "" {
 		r := conversationRefused(g.tool, res)
 		return gitlet.ConversationResult{}, &r

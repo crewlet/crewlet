@@ -125,6 +125,10 @@ func TestACommentsPromptSaysWhereItWasMadeAndHowToAnswer(t *testing.T) {
 		p.ConversationIdentity(in.Metadata, in.Subject) != "artifact:"+artifact {
 		t.Errorf("the owner's wake is not addressed or not partitioned by its artifact")
 	}
+	stamped := notify.NewPrompts(p).Conversation(in)
+	if got := artifactsdomain.ArtifactConversation(artifact); got == "" || got != stamped {
+		t.Errorf("a remark on the artifact records %q, and a wake about it is stamped %q (ADR-0167)", got, stamped)
+	}
 	if _, err := json.Marshal(in.Writer); err != nil || in.Writer == nil || in.Writer.Seat != "jane" {
 		t.Errorf("the wake's writer is %+v", in.Writer)
 	}

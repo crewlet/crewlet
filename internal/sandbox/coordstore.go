@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/origin"
 	"github.com/crewlet/crewlet/internal/words"
@@ -477,7 +478,8 @@ func (l BridgeLog) opened(launch string, o logOpening) (BridgeLog, []BridgeCall)
 	}
 	read := o.reads(l)
 	if l.Round != o.round {
-		next := BridgeLog{Launch: launch, Round: o.round, Committed: slices.Clone(l.Committed)}
+		next := BridgeLog{Launch: launch, Round: o.round, Committed: slices.Clone(l.Committed),
+			Wrote: slices.Clone(l.Wrote), WroteMore: l.WroteMore}
 		next.PriorCalls, next.PriorCallsElided = l.priorFor(o.round)
 		if !read {
 			return next, nil
@@ -2319,23 +2321,32 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 		return call
 	}
 	// SET ON EVERY ASK OF decide, which reruns on a lost race: what the last
-	// attempt's log takes the append for, whether it wrote, and the log decided on.
-	taken, wrote := takeNone, false
+	// attempt's log takes the append for, whether it wrote, the log decided on
+	// and whether its written set first refused a record ([BridgeLog.WroteMore]).
+	taken, wrote, filled := takeNone, false, false
 	var logged BridgeLog
 	_, won, err := s.runs.MutateSandboxRunPart(ctx, turnID, coord.RunLog, func(current coord.Record, found bool) ([]byte, error) {
-		taken, wrote, logged = takeNone, false, BridgeLog{}
+		taken, wrote, filled, logged = takeNone, false, false, BridgeLog{}
 		if !found {
 			return nil, nil
 		}
 		if err := json.Unmarshal(current.Value, &logged); err != nil {
 			return nil, fmt.Errorf("sandbox: decode the log of run %s: %w", turnID, err)
 		}
+		full := logged.WroteMore
 		var refused error
 		if taken, wrote, refused = logged.take(a, stamped); refused != nil || !wrote {
 			return nil, refused
 		}
+		filled = logged.WroteMore && !full
 		return json.Marshal(logged)
 	})
+	if won && filled {
+		// ONCE A RUN, by the write that marked the set: the mark rides the log.
+		log.WarnContext(ctx, "sandbox_run_written_set_full", "turn_id", turnID, "launch_id", a.Launch,
+			"held", len(logged.Wrote), "detail", "the run's calls wrote more records than its log keeps "+
+				"(types.MaxWrittenRecords); a wake about one past them waits for a turn of its own")
+	}
 	switch {
 	case err != nil:
 		// Includes a begin with no room ([ErrCallsInFlight]): nothing written.
@@ -2473,7 +2484,16 @@ func (l *BridgeLog) take(a BridgeAppend, stamp func(BridgeCall) BridgeCall) (log
 		// runner or bound ([keptCall]).
 		l.appendCall(stamp(call), a.Absorbed)
 	}
+	l.wrote(a.Wrote)
 	return taken, true, nil
+}
+
+// wrote folds records into the turn's written set ([BridgeLog.Wrote]), marking
+// it full where one was refused for room; nothing it holds is dropped.
+func (l *BridgeLog) wrote(records []types.WrittenRecord) {
+	var full bool
+	l.Wrote, full = types.FoldWritten(l.Wrote, records...)
+	l.WroteMore = l.WroteMore || full
 }
 
 // takeEarlier lists a, a record of an earlier round ([takeEarlier]), as a late
@@ -2487,6 +2507,7 @@ func (l *BridgeLog) takeEarlier(a BridgeAppend, stamp func(BridgeCall) BridgeCal
 	call := a.Call
 	call.Seq, call.Late = 0, true
 	l.appendCall(stamp(call), a.Absorbed)
+	l.wrote(a.Wrote)
 	return true
 }
 
