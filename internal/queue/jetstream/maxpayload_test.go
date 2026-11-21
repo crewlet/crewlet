@@ -213,7 +213,9 @@ func TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild(t *testi
 		removeScratch(scratch)
 		t.Fatalf("configure the broker: %v", err)
 	}
-	auth.ns = ns
+	if err := auth.bind(ns); err != nil {
+		t.Fatal(err)
+	}
 	started := startJoined(ns)
 	t.Cleanup(func() { shutdownAndClean(ns, started, scratch) })
 	if !ns.ReadyForConnections(listenTimeout) {

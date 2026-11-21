@@ -314,7 +314,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// row and the record are written by different processes' worth of code.
 	var launch string
 	waitFor(t, "the resumed phase's record to name its launch", func() bool {
-		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
+		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, 0, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}
@@ -344,7 +344,7 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	// beside the phase records of the round that launched it.
 	var record map[string]any
 	waitFor(t, "the launch's own record", func() bool {
-		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
+		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, 0, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}
@@ -628,7 +628,7 @@ func (n *codingNode) settledOutcome(t *testing.T, turnID string) string {
 	t.Helper()
 	var outcome string
 	waitFor(t, "the settled turn to state its outcome", func() bool {
-		evs, err := n.engine.Backends().Store.Events().Turn(t.Context(), turnID, time.Now())
+		evs, _, err := n.engine.Backends().Store.Events().Turn(t.Context(), turnID, 0, time.Now())
 		if err != nil {
 			t.Fatalf("the turn's events: %v", err)
 		}
@@ -1107,7 +1107,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	}
 	var collected string
 	waitFor(t, "the resumed phase's record to name the launch it collected", func() bool {
-		rows, _, err := second.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
+		rows, _, err := second.engine.Backends().Store.Events().Phases(t.Context(), "", 60, 0, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}

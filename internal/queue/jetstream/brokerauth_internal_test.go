@@ -124,13 +124,13 @@ func signerOfUser(t *testing.T, u processUser) signer {
 // Admitted: a route with a ring key's route credential; a leaf link with a ring
 // key's leaf nkey, and an operator on the client listener with its operator
 // nkey, each signing the nonce; this process's clients in process, as the
-// engine (global account) or membership (system account).
+// engine (global account), the lease connection (a leaf's lease account, else
+// global) or membership (system account).
 // Refused: the operator's key in process, the engine's over a socket, a leaf
 // key as an operator, a key off the ring, a failed proof, a username or token.
-//
-// Mutations, each red: engine key over TCP; any validly signed nkey; operator
-// or system key on the wrong account; leaf key as operator; leaf checked
-// against the active key only (the k1 row).
+// Mutations, each red: engine or lease key over TCP; any validly signed nkey;
+// operator, system or lease key on the wrong account; leaf key as operator;
+// leaf checked against the active key only (the k1 row).
 func TestTheAuthenticatorAdmitsOnlyItsFourKinds(t *testing.T) {
 	t.Parallel()
 	member := Config{ServerName: "a", ClusterName: "fleet", StoreDir: brokertest.TempDir(t),
@@ -164,6 +164,7 @@ func TestTheAuthenticatorAdmitsOnlyItsFourKinds(t *testing.T) {
 	}
 	foreign := signerOfSeed(t, string(foreignSeed))
 	engine, sys := signerOfUser(t, auth.engine), signerOfUser(t, auth.system)
+	leases := signerOfUser(t, auth.leases)
 	routeUser := func(id string) (string, string) {
 		return runtoken.KeyTag(RouteKeyDomain, id), auth.fleet.routes[runtoken.KeyTag(RouteKeyDomain, id)].password
 	}
@@ -203,6 +204,7 @@ func TestTheAuthenticatorAdmitsOnlyItsFourKinds(t *testing.T) {
 		{"a leaf with a password", server.LEAF, overTCP, server.ClientOpts{Username: "leaf", Password: "p"}, PeerRefusal{ListenerLeaf, PresentedUnknown}, nil},
 		{"the engine in process", server.CLIENT, overPipe, nkey(engine), admitted, global},
 		{"the membership code in process", server.CLIENT, overPipe, nkey(sys), admitted, system},
+		{"the lease connection in process", server.CLIENT, overPipe, nkey(leases), admitted, global},
 		{"nothing in process", server.CLIENT, overPipe, server.ClientOpts{}, PeerRefusal{ListenerClient, PresentedNone}, nil},
 		{"an operator key in process", server.CLIENT, overPipe, nkey(operators[1]), PeerRefusal{ListenerClient, PresentedUnknown}, nil},
 		{"a foreign key in process", server.CLIENT, overPipe, nkey(foreign), PeerRefusal{ListenerClient, PresentedUnknown}, nil},
@@ -212,6 +214,7 @@ func TestTheAuthenticatorAdmitsOnlyItsFourKinds(t *testing.T) {
 		{"an operator on the other ring key", server.CLIENT, overTCP, nkey(operators[0]), admitted, global},
 		{"the engine key over TCP", server.CLIENT, overTCP, nkey(engine), PeerRefusal{ListenerClient, PresentedUnknown}, nil},
 		{"the system key over TCP", server.CLIENT, overTCP, nkey(sys), PeerRefusal{ListenerClient, PresentedUnknown}, nil},
+		{"the lease key over TCP", server.CLIENT, overTCP, nkey(leases), PeerRefusal{ListenerClient, PresentedUnknown}, nil},
 		{"a leaf key over TCP", server.CLIENT, overTCP, nkey(leaves[1]), PeerRefusal{ListenerClient, PresentedUnknown}, nil},
 		{"a foreign key over TCP", server.CLIENT, overTCP, nkey(foreign), PeerRefusal{ListenerClient, PresentedUnknown}, nil},
 		{"an operator key with a bad signature", server.CLIENT, overTCP, badSig(operators[1]), PeerRefusal{ListenerClient, PresentedInvalid}, nil},
@@ -260,6 +263,20 @@ func TestTheAuthenticatorAdmitsOnlyItsFourKinds(t *testing.T) {
 	c := &fakeConn{kind: server.CLIENT, opts: nkey(signerOfUser(t, stray)), nonce: nonce, remote: overPipe}
 	if solo.Check(c) {
 		t.Errorf("a solo member admitted a system key in process, bound as %+v", c.registered)
+	}
+
+	// A LEAF BINDS THE LEASE KEY TO ITS LEASE ACCOUNT, whose link nothing else
+	// rides; the engine's stays on the global account.
+	leaf := testAuth(t, Config{ServerName: "leaf", FleetAuth: fleetAuthOf(t, authRing),
+		LeafURLs: []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", freePort(t.Context(), t))}})
+	for _, k := range []struct {
+		name, want string
+		user       processUser
+	}{{"lease", LeaseAccount, leaf.leases}, {"engine", server.DEFAULT_GLOBAL_ACCOUNT, leaf.engine}} {
+		c := &fakeConn{kind: server.CLIENT, opts: nkey(signerOfUser(t, k.user)), nonce: nonce, remote: overPipe}
+		if !leaf.Check(c) || c.registered == nil || c.registered.Account.Name != k.want {
+			t.Errorf("a leaf bound its %s key as %+v, want account %s", k.name, c.registered, k.want)
+		}
 	}
 }
 

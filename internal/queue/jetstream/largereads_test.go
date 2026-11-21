@@ -192,18 +192,25 @@ func leafReading(t *testing.T) (*server.Server, *Queue) {
 	return member.embedded.ns, q
 }
 
-// leafLink is the member's one connection to its leaf, as the member reports
-// it: its id, which a closed and redialled link changes, and the bytes it has
-// carried towards the leaf.
+// leafLink is the member's data link from its leaf, as the member reports it:
+// its id, which a closed and redialled link changes, and the bytes it has
+// carried towards the leaf. The leaf's lease link beside it is the one it
+// asked to isolate ([memberLinks]).
 func leafLink(t *testing.T, member *server.Server) server.LeafInfo {
 	t.Helper()
 	leafz, err := member.Leafz(nil)
 	if err != nil {
 		t.Fatalf("read the member's leaf connections: %v", err)
 	}
-	if len(leafz.Leafs) != 1 {
-		t.Fatalf("the member holds %d leaf connections, want the one to its leaf: the link "+
-			"was closed and not yet dialled again", len(leafz.Leafs))
+	var data []*server.LeafInfo
+	for _, l := range leafz.Leafs {
+		if !l.IsIsolated {
+			data = append(data, l)
+		}
 	}
-	return *leafz.Leafs[0]
+	if len(data) != 1 {
+		t.Fatalf("the member holds %d data links, want the one to its leaf: the link "+
+			"was closed and not yet dialled again", len(data))
+	}
+	return *data[0]
 }

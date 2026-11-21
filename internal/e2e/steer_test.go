@@ -94,7 +94,7 @@ func TestAPersonSteersALiveExecutor(t *testing.T) {
 
 	// AND THE LAUNCH'S OWN RECORD SAYS IT ARRIVED, in the harness's own words.
 	waitFor(t, "the run's transcript to show the note arrive", func() bool {
-		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, nil, time.Now())
+		rows, _, err := n.engine.Backends().Store.Events().Phases(t.Context(), "", 60, 0, nil, time.Now())
 		if err != nil {
 			t.Fatalf("phases: %v", err)
 		}
@@ -293,7 +293,7 @@ func deliveredRecord(t *testing.T, n *codingNode, turnID, noteID string) map[str
 	t.Helper()
 	var delivered map[string]any
 	waitFor(t, "the note's delivery on the record", func() bool {
-		evs, err := n.engine.Backends().Store.Events().Turn(t.Context(), turnID, time.Now())
+		evs, _, err := n.engine.Backends().Store.Events().Turn(t.Context(), turnID, 0, time.Now())
 		if err != nil {
 			t.Fatalf("the turn's events: %v", err)
 		}
