@@ -62,7 +62,7 @@ export const DEFAULT_HARNESS = "claude-code";
  * harness is skipped at launch, and that entry serves the text phases alone (the
  * reviewer, workers, onboarding and side passes).
  */
-export const EXECUTOR_HARNESSES = ["claude-code", "opencode"] as const;
+export const EXECUTOR_HARNESSES = ["claude-code", "opencode", "copilot"] as const;
 
 /** An entry's `auth.mode` when it names none. */
 export const DEFAULT_HARNESS_AUTH_MODE: HarnessAuthMode = "subscription";

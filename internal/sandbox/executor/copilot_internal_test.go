@@ -116,7 +116,7 @@ func TestALaunchedCopilotRunReadsAsItsAnswerSpendAndNote(t *testing.T) {
 		t.Errorf("the transcript does not show the note:\n%s", res.Transcript)
 	}
 	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(copilotFixture(t, "launched.events.jsonl")),
-		[]string{"msg_inbox1"})
+		served("msg_inbox1"))
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 		t.Fatalf("held = %v (%v), want the note", held, err)
 	}
@@ -321,7 +321,7 @@ func TestACopilotNoteIsHeldOnlyOnceARequestCarriedIt(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.fixture, func(t *testing.T) {
 			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(copilotFixture(t, c.fixture)),
-				[]string{"msg_inbox1", "msg_never"})
+				served("msg_inbox1", "msg_never"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -329,6 +329,36 @@ func TestACopilotNoteIsHeldOnlyOnceARequestCarriedIt(t *testing.T) {
 				t.Fatalf("held = %v, want msg_inbox1 %v and nothing never sent", held, c.held)
 			}
 		})
+	}
+}
+
+// served is the takes of inbox ids, as the seam asks for them (a digest
+// beside each, which a record of ids never reads).
+func served(inboxes ...string) []ServedTake {
+	out := make([]ServedTake, len(inboxes))
+	for i, inbox := range inboxes {
+		out[i] = ServedTake{InboxID: inbox, Digest: "sha256:not-read"}
+	}
+	return out
+}
+
+// The ids held come back in serve order, each once, whatever the record's
+// order and however often a take was served. (steered, with a second note's
+// line copied in before its own, under another id.)
+//
+// Mutation: answer in the record's order, or once a serve — the case fails.
+func TestACopilotRecordAnswersItsTakesInServeOrderOnce(t *testing.T) {
+	var events []byte
+	for l := range bytes.Lines(copilotFixture(t, "steered.events.jsonl")) {
+		if bytes.Contains(l, []byte(`"clientTurnId":"crewlet-note:msg_inbox1"`)) {
+			events = append(events, bytes.ReplaceAll(l, []byte("msg_inbox1"), []byte("msg_inbox0"))...)
+		}
+		events = append(events, l...)
+	}
+	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(events),
+		served("msg_never", "msg_inbox1", "msg_inbox0", "msg_inbox1"))
+	if err != nil || !slices.Equal(held, []string{"msg_inbox1", "msg_inbox0"}) {
+		t.Fatalf("held = %v (%v), want msg_inbox1 then msg_inbox0, once each", held, err)
 	}
 }
 
@@ -342,7 +372,7 @@ func TestACopilotQueuedNoteIsHeldOnceARequestCarriedIt(t *testing.T) {
 	if !bytes.Contains(events, []byte(`"delivery":"queued"`)) {
 		t.Fatal("the fixture holds no queued note")
 	}
-	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(events), []string{"msg_inbox1"})
+	held, err := copilotNotesHeld(t.Context(), bytes.NewReader(events), served("msg_inbox1"))
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 		t.Fatalf("held = %v (%v), want the queued note", held, err)
 	}
@@ -364,14 +394,14 @@ func TestACopilotNoteIsNotHeldByATornLastLine(t *testing.T) {
 			break
 		}
 	}
-	if held, _ := copilotNotesHeld(t.Context(), bytes.NewReader(through), []string{"msg_inbox1"}); len(held) != 1 {
+	if held, _ := copilotNotesHeld(t.Context(), bytes.NewReader(through), served("msg_inbox1")); len(held) != 1 {
 		t.Fatalf("the record through the note's usage record holds %v, want the note", held)
 	}
 	for name, torn := range map[string][]byte{
 		"cut mid-line":    through[:len(through)-40],
 		"with no newline": through[:len(through)-1],
 	} {
-		held, err := copilotNotesHeld(t.Context(), bytes.NewReader(torn), []string{"msg_inbox1"})
+		held, err := copilotNotesHeld(t.Context(), bytes.NewReader(torn), served("msg_inbox1"))
 		if err != nil || len(held) != 0 {
 			t.Errorf("%s: held = %v (%v), want none", name, held, err)
 		}
@@ -633,12 +663,12 @@ func TestACopilotNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	const session = "55555555-5555-4555-8555-555555555555"
 	box.Put(PathsFor(box).CopilotSessionDir(session)+"/events.jsonl", string(copilotFixture(t, "steered.events.jsonl")))
-	held, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, []string{"msg_inbox1"})
+	held, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1"))
 	if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
 		t.Fatalf("held = %v (%v), want the steered note", held, err)
 	}
 	box.ReadErr = func(string) error { return io.ErrUnexpectedEOF }
-	if _, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, []string{"msg_inbox1"}); err == nil {
+	if _, err := (Copilot{}).notesHeld(t.Context(), box, Session{ID: session}, served("msg_inbox1")); err == nil {
 		t.Fatal("an unreadable record answered as a reading")
 	}
 }

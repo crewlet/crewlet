@@ -169,8 +169,9 @@ func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) erro
 	return nil
 }
 
-// copilotNotesHeld is, of the inbox ids asked, in the order asked, those whose
-// note a session's events.jsonl shows reached the model: its `user.message`
+// copilotNotesHeld is the inbox ids of takes, in serve order and once each,
+// whose note a session's events.jsonl shows reached the model (Digest unread:
+// the record names a note by its id): its `user.message`
 // under its clientTurnId ([CopilotClientTurnID]), delivered `steering` or
 // `queued`, AND a `session.usage_record` after it, a request made with it.
 //
@@ -180,10 +181,10 @@ func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) erro
 // refused before it was sent leaves it and a `session.error`. A LAST LINE WITH NO
 // NEWLINE is a write cut off, so a usage record there proves nothing, whole or
 // not; a line past the line bound is read as no line.
-func copilotNotesHeld(ctx context.Context, events io.Reader, inboxes []string) ([]string, error) {
-	asked := make(map[string]string, len(inboxes))
-	for _, inbox := range inboxes {
-		asked[CopilotClientTurnID(inbox)] = inbox
+func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake) ([]string, error) {
+	asked := make(map[string]string, len(takes))
+	for _, take := range takes {
+		asked[CopilotClientTurnID(take.InboxID)] = take.InboxID
 	}
 	pending := map[string]bool{}
 	held := map[string]bool{}
@@ -226,9 +227,9 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, inboxes []string) (
 		}
 	}
 	var out []string
-	for _, inbox := range inboxes {
-		if held[inbox] && !slices.Contains(out, inbox) {
-			out = append(out, inbox)
+	for _, take := range takes {
+		if held[take.InboxID] && !slices.Contains(out, take.InboxID) {
+			out = append(out, take.InboxID)
 		}
 	}
 	return out, nil
@@ -249,17 +250,17 @@ func (l *lastByte) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// notesHeld is, of the inbox ids asked ([Copilot.inboxID]), those whose note
+// notesHeld is the inbox ids of takes ([Copilot.inboxID]) whose note
 // the box's copy of session shows reached the model ([copilotNotesHeld]): its
 // [recordConfirmer], as its extension confirms nothing (ruling 1 of #1818's
 // design), which the Runner's main-thread read asks for the takes it is asked.
 // An error where the record could not be read, which is neither held nor not.
 func (Copilot) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
-	inboxIDs []string) ([]string, error) {
+	takes []ServedTake) ([]string, error) {
 	events, err := box.OpenFile(ctx, PathsFor(box).CopilotSessionDir(session.ID)+"/events.jsonl")
 	if err != nil {
 		return nil, fmt.Errorf("executor: opening the Copilot session's record: %w", err)
 	}
 	defer func() { _ = events.Close() }()
-	return copilotNotesHeld(ctx, events, inboxIDs)
+	return copilotNotesHeld(ctx, events, takes)
 }

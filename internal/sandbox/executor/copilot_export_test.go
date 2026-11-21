@@ -24,7 +24,7 @@ func CopilotConfirmsATake(t *testing.T) {
 	const session = "55555555-5555-4555-8555-555555555555"
 	box.Put(PathsFor(box).CopilotSessionDir(session)+"/events.jsonl", string(copilotFixture(t, "steered.events.jsonl")))
 	reading := NewCopilot().ReadMainThread(t.Context(), box, sandbox.MainThreadAsk{Session: session,
-		Takes: []sandbox.AskedTake{{Take: "msg_inbox1"}, {Take: "msg_never"}}})
+		Takes: []sandbox.AskedTake{{Take: "msg_inbox1", Digest: "sha256:not-read"}, {Take: "msg_never"}}})
 	if !slices.Equal(reading.Receipts.Held, []string{"msg_inbox1"}) {
 		t.Fatalf("receipts = %+v, want msg_inbox1 held", reading.Receipts)
 	}
