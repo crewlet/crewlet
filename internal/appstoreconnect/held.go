@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"sort"
@@ -46,10 +47,12 @@ func hexSum(data []byte) string {
 }
 
 // before is a held act's target as it reads now: its attributes, and their
-// digest, which the approval binds.
+// digest, which the approval binds. unread is a target only the Admin key may
+// read, which reads nothing: the approval binds the request alone.
 type before struct {
 	attrs  map[string]any
 	digest string
+	unread bool
 }
 
 // beforeOf reads m's target: the resource a PATCH or DELETE names; a POST's
@@ -61,8 +64,12 @@ func (p *Product) beforeOf(ctx context.Context, m made) (before, error) {
 		data, _ := json.Marshal(ref)
 		return before{attrs: map[string]any{}, digest: hexSum(data)}, nil
 	}
-	resp, err := m.team.client.Do(ctx, m.slot, Request{Method: "GET", Path: "/v1/" + typ + "/" + url.PathEscape(id),
-		Read: true, Reserved: true})
+	path := "/v1/" + typ + "/" + url.PathEscape(id)
+	slot, err := m.reader(path)
+	if errors.Is(err, ErrNoKey) {
+		return before{attrs: map[string]any{}, digest: hexSum([]byte("unread")), unread: true}, nil
+	}
+	resp, err := m.team.client.Do(ctx, slot, Request{Method: "GET", Path: path, Read: true, Reserved: true})
 	if err != nil {
 		return before{}, err
 	}
@@ -186,17 +193,16 @@ func (p *Product) Card(ctx context.Context, call growth.Call, approved string) (
 	if err != nil {
 		return growth.Card{}, err
 	}
-	if m.slot == adminSlot {
-		// NOT READ AGAIN WITH THE ADMIN KEY, whose every call is on the access
-		// log: the card shows the request as asked, and Apply reads the target.
-		return cardOf(call, m, before{attrs: map[string]any{}}, false, []string{"The target is read again with " +
-			"the Admin key only when the change is applied; Allow once sends nothing if it moved since the ask."}), nil
-	}
 	b, err := p.beforeOf(ctx, m)
 	if err != nil {
 		return growth.Card{}, said(err)
 	}
-	return cardOf(call, m, b, !growth.BindingHolds(approved, binding(m, b)), nil), nil
+	var findings []string
+	if b.unread {
+		findings = append(findings, "Only the Admin key may read the target, and it makes the allowed change "+
+			"alone: Allow once sends exactly this request without reading the target first.")
+	}
+	return cardOf(call, m, b, !growth.BindingHolds(approved, binding(m, b)), findings), nil
 }
 
 // cardOf is m's card over its target's state b.

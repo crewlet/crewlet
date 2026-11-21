@@ -22,6 +22,8 @@ import (
 // Admin key may create. A team that keeps no Admin key turns it on with one a
 // person pastes once: each app's request is signed with it at once, and the
 // key is never sealed, logged or recorded, and dropped when the call returns.
+// The create is an admin act the administrator who pasted the key allows in
+// person, so the access log holds their allow before it and its outcome.
 
 // AnalyticsEnable is one turn-on: the connection, the pasted Admin key's ID
 // and .p8, and the human seat of the administrator who pasted it.
@@ -166,13 +168,16 @@ func (p *Product) createAnalytics(ctx context.Context, t *team, op growth.Operat
 		"attributes":    map[string]any{"accessType": "ONGOING"},
 		"relationships": map[string]any{"app": map[string]any{"data": map[string]any{"type": "apps", "id": app}}}}}
 	m := made{op: op, class: op.Class, path: op.Path, body: body, app: app, team: t, slot: adminSlot}
-	rec := recordOf(growth.Call{ID: uuid.Must(uuid.NewV7()).String(), Handle: by, Tool: ToolAnalytics}, m)
+	rec := recordOf(growth.Call{Handle: by, Tool: ToolAnalytics, HeldCall: uuid.Must(uuid.NewV7()).String()}, m)
+	if err := p.allow(ctx, rec, by); err != nil {
+		return AnalyticsApp{App: app, State: AnalyticsFailed, Detail: said(err).Error()}
+	}
 	once := NewClient(p.deps.Base, t.client.issuer, map[string]Key{adminSlot: key}, p.deps.HTTP)
 	_, err := once.Do(ctx, adminSlot, Request{Method: "POST", Path: op.Path, Body: body, Reserved: true})
 	var apiErr *APIError
 	switch {
 	case err == nil:
-		p.note(ctx, growth.StepMade, rec)
+		p.note(ctx, growth.StepApplied, rec)
 		return AnalyticsApp{App: app, State: AnalyticsOn}
 	case errors.As(err, &apiErr) && apiErr.Status == http.StatusConflict:
 		// ONE ONGOING REQUEST PER APP: Apple refuses a second.

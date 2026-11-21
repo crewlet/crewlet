@@ -65,8 +65,30 @@ func argsDigest(call growth.Call) string {
 	return hexSum(data)
 }
 
-// note records a step, logging a record that did not land: the act itself
-// never waits on the log's answer.
+// allow records an administrator's allow of a held act before it runs: the
+// act runs only once the record landed as the act's one answer, since an
+// earlier answer (the engine's lapse) stands.
+func (p *Product) allow(ctx context.Context, r growth.Record, answerer string) error {
+	if p.deps.Audit == nil {
+		return growth.Refuse(growth.RefusedUnavailable, "this node records no act, so nothing was sent.")
+	}
+	r.Answerer = answerer
+	first, err := p.deps.Audit.Verdict(ctx, growth.StepAllowed, r)
+	switch {
+	case err != nil:
+		log.ErrorContext(ctx, "app_store_connect_unrecorded", "tool", r.Tool, "step", string(growth.StepAllowed),
+			"error", err.Error())
+		return growth.Refuse(growth.RefusedUnavailable, "the access log did not record the administrator's "+
+			"answer, so nothing was sent. Call again.")
+	case !first:
+		return growth.Refuse(growth.RefusedForbidden, "the call already holds an answer (it lapsed, or another "+
+			"answer came first), which stands. Nothing was sent.")
+	}
+	return nil
+}
+
+// note records a step after the act, logging a record that did not land as an
+// error: the act is made, and its answer says so whatever the log said.
 func (p *Product) note(ctx context.Context, step growth.Step, r growth.Record) {
 	if p.deps.Audit == nil {
 		return
@@ -85,7 +107,7 @@ func (p *Product) note(ctx context.Context, step growth.Step, r growth.Record) {
 		_, err = p.deps.Audit.Verdict(ctx, step, r)
 	}
 	if err != nil {
-		log.WarnContext(ctx, "app_store_connect_unrecorded", "tool", r.Tool, "step", string(step), "error", err.Error())
+		log.ErrorContext(ctx, "app_store_connect_unrecorded", "tool", r.Tool, "step", string(step), "error", err.Error())
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -382,12 +383,15 @@ func TestSalesArePerCurrencyAndCutToTheSeatsApps(t *testing.T) {
 
 // THE ADMIN KEY MAKES ACCOUNT CHANGES AN ADMINISTRATOR ALLOWS, AND NOTHING
 // ELSE: a read goes through another key, or is refused where only the Admin
-// key could make it, even as the one key that would work; an admin act is
-// prepared and applied through it with the card never calling with it; and
-// every step names the key it went through.
+// key could make it, even as the one key that would work; a write only Admin
+// may make is an admin act, held, never an operate one made at once; an admin
+// act is prepared, carded and applied with every read through another key and
+// only the act itself through the Admin key; and every step names its key.
 //
-// Mutation: let keyFor take the Admin slot for any call, and the read of the
-// team's certificates goes through the Admin key.
+// Mutation: let keyFor take the Admin slot for any call, read a target with
+// the call's own key, or class an Admin-only write operate, and the Admin key
+// reads the team's certificates or the user, or creates a report request at
+// once.
 func TestTheAdminKeyMakesApprovedAccountChangesAlone(t *testing.T) {
 	t.Parallel()
 	s := &store{}
@@ -402,15 +406,26 @@ func TestTheAdminKeyMakesApprovedAccountChangesAlone(t *testing.T) {
 		Args: map[string]any{"operation": "users_getCollection"}}); err != nil {
 		t.Fatalf("a read another key may make answered %v", err)
 	}
+	request := map[string]any{"operation": "analyticsReportRequests_createInstance", "reason": "turn on analytics",
+		"body": map[string]any{"data": map[string]any{"type": "analyticsReportRequests",
+			"attributes":    map[string]any{"accessType": "ONGOING"},
+			"relationships": map[string]any{"app": map[string]any{"data": map[string]any{"type": "apps", "id": "111"}}}}}}
+	if _, err := p.Prepare(ctx, growth.Call{ID: "o1", Handle: "growth", Tool: appstoreconnect.ToolOperate,
+		Args: request}); refusal(err) != growth.RefusedInvalid {
+		t.Errorf("an Admin-only write called as operate answered %v", err)
+	}
+	if hold, err := p.Prepare(ctx, growth.Call{ID: "o2", Handle: "growth", Tool: appstoreconnect.ToolAdmin,
+		Args: request}); err != nil || hold.Class != growth.ClassAdmin {
+		t.Errorf("an Admin-only write was prepared as %q (%v)", hold.Class, err)
+	}
 	remove := growth.Call{ID: "a1", Handle: "growth", Tool: appstoreconnect.ToolAdmin, Args: map[string]any{
 		"operation": "users_deleteInstance", "path": map[string]any{"id": "U1"}, "reason": "left the team"}}
 	hold, err := p.Prepare(ctx, remove)
 	if err != nil || hold.Class != growth.ClassAdmin || hold.Ask.Via != "admin" {
 		t.Fatalf("the admin act was prepared as %+v (%v)", hold, err)
 	}
-	before := len(s.kids)
-	if _, err := p.Card(ctx, remove, hold.Binding); err != nil || len(s.kids) != before {
-		t.Errorf("the card answered %v and called %v", err, s.kids[before:])
+	if card, err := p.Card(ctx, remove, hold.Binding); err != nil || card.Moved {
+		t.Errorf("the card is %+v (%v)", card, err)
 	}
 	approved := remove
 	approved.HeldCall, approved.Approver = "h1", "founder"
@@ -418,7 +433,7 @@ func TestTheAdminKeyMakesApprovedAccountChangesAlone(t *testing.T) {
 		t.Fatalf("the approved admin act answered %v and wrote %v", err, s.writes)
 	}
 	for _, k := range s.kids {
-		if strings.HasSuffix(k, " "+adminKeyID) && !strings.Contains(k, "/v1/users/U1") {
+		if strings.HasSuffix(k, " "+adminKeyID) && k != "DELETE /v1/users/U1 "+adminKeyID {
 			t.Errorf("the Admin key made %s", k)
 		}
 	}
@@ -432,9 +447,26 @@ func TestTheAdminKeyMakesApprovedAccountChangesAlone(t *testing.T) {
 	}
 }
 
+// Every write only Admin may make (with the Account Holder, whom no key
+// carries) is an admin act, lowered by no state: the Admin key makes nothing
+// else, so classed lower it could never be made.
+//
+// Mutation: class one such operation operate in operations.go, and this names it.
+func TestAnAdminOnlyWriteIsAnAdminAct(t *testing.T) {
+	t.Parallel()
+	for _, op := range appstoreconnect.Catalog().Operations {
+		adminOnly := slices.Contains(op.Roles, appstoreconnect.RoleAdmin) && !slices.ContainsFunc(op.Roles,
+			func(r string) bool { return r != appstoreconnect.RoleAdmin && r != appstoreconnect.RoleAccountHolder })
+		if adminOnly && op.Class != growth.ClassRead && (op.Class != growth.ClassAdmin || len(op.States) > 0) {
+			t.Errorf("%s is only Admin's and classed %s, lowered by %v", op.ID, op.Class, op.States)
+		}
+	}
+}
+
 // APP STORE ANALYTICS IS TURNED ON WITH AN ADMIN KEY PASTED ONCE: an app
 // already on is left alone, each new request is signed with the pasted key
-// alone, every step is recorded as the person's through the Admin key, and
+// alone, each is recorded as an admin act the person allowed in person and
+// its outcome, through the Admin key, and
 // neither the answer nor a record holds the key; a key that does not read, or
 // a connection nobody named, sends nothing.
 //
@@ -461,9 +493,15 @@ func TestAppStoreAnalyticsIsTurnedOnWithAKeyPastedOnce(t *testing.T) {
 	if len(posts) != 1 || !strings.HasSuffix(posts[0], " P1A2S3T4E5") {
 		t.Errorf("the creates were signed %v, want once with the pasted key", posts)
 	}
-	if len(a.steps) != 1 || a.steps[0].step != growth.StepMade || a.steps[0].rec.Via != "admin" ||
-		a.steps[0].rec.Handle != "founder" || a.steps[0].rec.Tool != appstoreconnect.ToolAnalytics {
+	if len(a.steps) != 2 || a.steps[0].step != growth.StepAllowed || a.steps[0].rec.Answerer != "founder" ||
+		a.steps[1].step != growth.StepApplied || a.steps[1].rec.HeldCall != a.steps[0].rec.HeldCall {
 		t.Errorf("the steps are %+v", a.steps)
+	}
+	for _, st := range a.steps {
+		if st.rec.Via != "admin" || st.rec.Handle != "founder" || st.rec.Tool != appstoreconnect.ToolAnalytics ||
+			st.rec.Class != growth.ClassAdmin {
+			t.Errorf("the %s step is %+v", st.step, st.rec)
+		}
 	}
 	if raw, _ := json.Marshal([]any{apps, a.steps}); strings.Contains(string(raw), "PRIVATE KEY") {
 		t.Error("the pasted key reached the answer or a record")

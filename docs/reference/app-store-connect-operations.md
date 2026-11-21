@@ -5,10 +5,10 @@ Every operation of App Store Connect API 4.6.1 as Crewlet offers it, generated f
 | Class | Operations |
 |---|---|
 | [read](#read) | 851 |
-| [operate](#operate) | 77 |
+| [operate](#operate) | 73 |
 | [public](#public) | 282 |
 | spend | 0 |
-| [admin](#admin) | 132 |
+| [admin](#admin) | 136 |
 | never | 0 |
 
 ## read
@@ -873,7 +873,6 @@ Every operation of App Store Connect API 4.6.1 as Crewlet offers it, generated f
 |---|---|---|---|---|---|
 | AccessibilityDeclarations | `accessibilityDeclarations_createInstance` | `POST /v1/accessibilityDeclarations` |  | Account Holder, Admin, App Manager, Marketing |  |
 | AlternativeDistributionPackages | `alternativeDistributionPackages_createInstance` | `POST /v1/alternativeDistributionPackages` |  | Account Holder, Admin, App Manager |  |
-| AnalyticsReportRequests | `analyticsReportRequests_createInstance` | `POST /v1/analyticsReportRequests` |  | Account Holder, Admin |  |
 | AppAssetLibraryImages | `appAssetLibraryImages_createInstance` | `POST /v1/appAssetLibraryImages` |  | Account Holder, Admin, App Manager, Marketing |  |
 | AppAssetLibraryImages | `appAssetLibraryImages_updateInstance` | `PATCH /v1/appAssetLibraryImages/{id}` |  | Account Holder, Admin, App Manager, Marketing |  |
 | AppAssetLibraryVideos | `appAssetLibraryVideos_createInstance` | `POST /v1/appAssetLibraryVideos` |  | Account Holder, Admin, App Manager, Marketing |  |
@@ -899,9 +898,6 @@ Every operation of App Store Connect API 4.6.1 as Crewlet offers it, generated f
 | BackgroundAssets | `backgroundAssets_createInstance` | `POST /v1/backgroundAssets` |  | Account Holder, Admin, App Manager, Developer |  |
 | BetaAppReviewDetails | `betaAppReviewDetails_updateInstance` | `PATCH /v1/betaAppReviewDetails/{id}` |  | Account Holder, Admin, App Manager |  |
 | BuildBetaDetails | `buildBetaDetails_updateInstance` | `PATCH /v1/buildBetaDetails/{id}` |  | Account Holder, Admin, App Manager |  |
-| BuildUploadFiles | `buildUploadFiles_createInstance` | `POST /v1/buildUploadFiles` |  | Account Holder, Admin |  |
-| BuildUploadFiles | `buildUploadFiles_updateInstance` | `PATCH /v1/buildUploadFiles/{id}` |  | Account Holder, Admin |  |
-| BuildUploads | `buildUploads_createInstance` | `POST /v1/buildUploads` |  | Account Holder, Admin |  |
 | Builds | `builds_appEncryptionDeclaration_updateToOneRelationship` | `PATCH /v1/builds/{id}/relationships/appEncryptionDeclaration` |  | Account Holder, Admin, App Manager |  |
 | GameCenterAchievementVersions | `gameCenterAchievementVersionsV2_createInstance` | `POST /v2/gameCenterAchievementVersions` |  | Account Holder, Admin, App Manager, Developer, Marketing |  |
 | GameCenterAchievements | `gameCenterAchievements_createInstance` | `POST /v1/gameCenterAchievements` |  | Account Holder, Admin, App Manager, Developer, Marketing |  |
@@ -1245,6 +1241,7 @@ Every operation of App Store Connect API 4.6.1 as Crewlet offers it, generated f
 | AlternativeDistributionDomains | `alternativeDistributionDomains_deleteInstance` | `DELETE /v1/alternativeDistributionDomains/{id}` |  | Account Holder, Admin | cannot be undone |
 | AlternativeDistributionKeys | `alternativeDistributionKeys_createInstance` | `POST /v1/alternativeDistributionKeys` |  | Account Holder, Admin |  |
 | AlternativeDistributionKeys | `alternativeDistributionKeys_deleteInstance` | `DELETE /v1/alternativeDistributionKeys/{id}` |  | Account Holder, Admin | cannot be undone |
+| AnalyticsReportRequests | `analyticsReportRequests_createInstance` | `POST /v1/analyticsReportRequests` |  | Account Holder, Admin |  |
 | AnalyticsReportRequests | `analyticsReportRequests_deleteInstance` | `DELETE /v1/analyticsReportRequests/{id}` |  | Account Holder, Admin | cannot be undone |
 | AndroidToIosAppMappingDetails | `androidToIosAppMappingDetails_createInstance` | `POST /v1/androidToIosAppMappingDetails` |  | Account Holder, Admin, App Manager |  |
 | AndroidToIosAppMappingDetails | `androidToIosAppMappingDetails_deleteInstance` | `DELETE /v1/androidToIosAppMappingDetails/{id}` |  | Account Holder, Admin, App Manager | cannot be undone |
@@ -1282,6 +1279,9 @@ Every operation of App Store Connect API 4.6.1 as Crewlet offers it, generated f
 | BetaFeedbackScreenshotSubmissions | `betaFeedbackScreenshotSubmissions_deleteInstance` | `DELETE /v1/betaFeedbackScreenshotSubmissions/{id}` |  | Account Holder, Admin, App Manager | cannot be undone |
 | BetaGroups | `betaGroups_deleteInstance` | `DELETE /v1/betaGroups/{id}` | live: public | Account Holder, Admin, App Manager, Developer, Marketing | cannot be undone |
 | BetaTesters | `betaTesters_deleteInstance` | `DELETE /v1/betaTesters/{id}` | live: public | Account Holder, Admin, App Manager, Developer, Marketing | cannot be undone |
+| BuildUploadFiles | `buildUploadFiles_createInstance` | `POST /v1/buildUploadFiles` |  | Account Holder, Admin |  |
+| BuildUploadFiles | `buildUploadFiles_updateInstance` | `PATCH /v1/buildUploadFiles/{id}` |  | Account Holder, Admin |  |
+| BuildUploads | `buildUploads_createInstance` | `POST /v1/buildUploads` |  | Account Holder, Admin |  |
 | BuildUploads | `buildUploads_deleteInstance` | `DELETE /v1/buildUploads/{id}` |  | Account Holder, Admin | cannot be undone |
 | BundleIdCapabilities | `bundleIdCapabilities_createInstance` | `POST /v1/bundleIdCapabilities` |  | Account Holder, Admin, App Manager, Developer |  |
 | BundleIdCapabilities | `bundleIdCapabilities_deleteInstance` | `DELETE /v1/bundleIdCapabilities/{id}` |  | Account Holder, Admin, App Manager | cannot be undone |

@@ -34,7 +34,7 @@ A key's variable may be named at its own field alone: the company document refus
 
 ## Roles and keys
 
-Each call goes through the connected key with the least access whose role may make it, and a key Apple refuses is never retried with another. The Admin key can manage the team's users and keys, so it makes an account change an administrator allowed, or a change Apple lets only Admin make, and nothing else: never a read or an operate change, even where it is the only key that could. Every call through it is on the access log, and a pass checks that it reads as a key without calling Apple with it. Every slot is empty until a person fills it, and removing a key from the company document takes effect on the next call.
+Each call goes through the connected key with the least access whose role may make it, and a key Apple refuses is never retried with another. The Admin key can manage the team's users and keys, so it makes an act an administrator allowed and nothing else: never a read, a check of what a call names or an operate change, even where it is the only key that could. A change Apple lets only Admin make is an admin act, held for an administrator; a target only Admin may read is not read first, and the administrator allows the exact request. Every call through it is on the access log, and a pass checks that it reads as a key without calling Apple with it. Every slot is empty until a person fills it, and removing a key from the company document takes effect on the next call.
 
 | Slot | Apple role | What agents can do with it |
 |---|---|---|

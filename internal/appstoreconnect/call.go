@@ -96,7 +96,7 @@ func (p *Product) concrete(ctx context.Context, handle, tool string, args map[st
 	if err := p.place(ctx, seat, &m, args); err != nil {
 		return made{}, err
 	}
-	slot, ok := keyFor(op, m.team.slots, adminMay(op, class))
+	slot, ok := keyFor(op, m.team.slots, class == growth.ClassAdmin)
 	if !ok {
 		return made{}, noKey(op, m.team.slots)
 	}
@@ -311,15 +311,8 @@ func (p *Product) placeTeam(seat *config.RoleAppStoreConnect, m *made, args map[
 type teamLister struct{ t *team }
 
 func (l teamLister) listPage(ctx context.Context, path, cursor string) ([]resourceRef, string, error) {
-	slot := ""
-	for _, role := range leastFirst {
-		for _, s := range l.t.slots {
-			if slotRole[s] == role && slot == "" && role != RoleFinance && role != RoleSales && role != RoleAccessToReports {
-				slot = s
-			}
-		}
-	}
-	if slot == "" {
+	slot, ok := readerOf(l.t, path)
+	if !ok {
 		return nil, "", fmt.Errorf("%w: reading %s", ErrNoKey, path)
 	}
 	q := url.Values{"limit": {"200"}}
@@ -340,4 +333,29 @@ func (l teamLister) listPage(ctx context.Context, path, cursor string) ([]resour
 		return nil, "", fmt.Errorf("appstoreconnect: read %s: %w", path, err)
 	}
 	return doc.Data, cursorOf(doc.Links.Next), nil
+}
+
+// readByTemplate is every read operation by its path template.
+var readByTemplate = sync.OnceValue(func() map[string]growth.Operation {
+	out := map[string]growth.Operation{}
+	for _, op := range operations {
+		if op.Method == "GET" {
+			out[op.Path] = op
+		}
+	}
+	return out
+})
+
+// readerOf is the least-privileged connected key, never the Admin key, whose
+// role may read path: a read, a placement search or a target's state.
+func readerOf(t *team, path string) (string, bool) {
+	parts := strings.Split(path, "/")
+	if len(parts) >= 4 {
+		parts[3] = "{id}"
+	}
+	op, ok := readByTemplate()[strings.Join(parts, "/")]
+	if !ok {
+		return "", false
+	}
+	return keyFor(op, t.slots, false)
 }

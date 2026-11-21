@@ -80,7 +80,7 @@ func (p *Product) reviewCall(ctx context.Context, handle, app string, opID strin
 	if err := p.placeApp(ctx, seat, &m, app); err != nil {
 		return made{}, err
 	}
-	slot, ok := keyFor(op, m.team.slots, adminMay(op, m.class))
+	slot, ok := keyFor(op, m.team.slots, m.class == growth.ClassAdmin)
 	if !ok {
 		return made{}, noKey(op, m.team.slots)
 	}
