@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -168,29 +169,35 @@ func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) erro
 	return nil
 }
 
-// copilotNotesHeld is, of the inbox ids asked, those whose note Copilot's own
-// record shows reached the model, read off a session's events.jsonl: the
-// note's `user.message` under its clientTurnId ([CopilotClientTurnID]),
-// delivered `steering` or `queued`, AND a `session.usage_record` after it — a
-// model request made once it was in the conversation.
+// copilotNotesHeld is, of the inbox ids asked, in the order asked, those whose
+// note Copilot's own record shows reached the model, read off a session's
+// events.jsonl: the note's `user.message` under its clientTurnId
+// ([CopilotClientTurnID]), delivered `steering` or `queued`, AND a
+// `session.usage_record` after it, a model request made once it was in the
+// conversation.
 //
 // THE LINE ALONE IS NO PROOF (ruling 1 of #1818's design, measured on 1.0.114):
-// Copilot writes the line before the request it rides, flushing about every
-// 100 ms, so a process killed in that gap leaves the line and no request; and a
-// request refused before it was sent (past the model's prompt budget) leaves
-// the line and a `session.error`, no record. Either way the note is not held,
-// and is served again. A line past the line bound is read as no line.
-func copilotNotesHeld(ctx context.Context, events io.Reader, inboxes []string) (map[string]bool, error) {
+// Copilot writes it before the request it rides, flushing about every 100 ms, so
+// a process killed in that gap leaves the line and no request, and a request
+// refused before it was sent leaves it and a `session.error`. A LAST LINE WITH NO
+// NEWLINE is a write cut off, so a usage record there proves nothing, whole or
+// not; a line past the line bound is read as no line.
+func copilotNotesHeld(ctx context.Context, events io.Reader, inboxes []string) ([]string, error) {
 	asked := make(map[string]string, len(inboxes))
 	for _, inbox := range inboxes {
 		asked[CopilotClientTurnID(inbox)] = inbox
 	}
 	pending := map[string]bool{}
 	held := map[string]bool{}
-	err := readLines(bufio.NewReaderSize(events, lineChunkBytes), maxLineBytes, func(line []byte) error {
+	// moved is what the line read last moved to held, taken back where that
+	// line turns out to be the file's unended last.
+	var moved []string
+	src := &lastByte{r: events}
+	err := readLines(bufio.NewReaderSize(src, lineChunkBytes), maxLineBytes, func(line []byte) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		moved = moved[:0]
 		ev, ok := decodeCopilotEvent(line)
 		if !ok {
 			return nil
@@ -203,30 +210,58 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, inboxes []string) (
 			}
 		case "session.usage_record":
 			for inbox := range pending {
-				held[inbox] = true
+				if !held[inbox] {
+					held[inbox] = true
+					moved = append(moved, inbox)
+				}
 			}
 			clear(pending)
 		}
 		return nil
-	}, func(int64) error { return nil })
+	}, func(int64) error { moved = moved[:0]; return nil })
 	if err != nil {
 		return nil, fmt.Errorf("executor: reading which notes the Copilot session holds: %w", err)
 	}
-	return held, nil
+	if src.read && src.last != '\n' {
+		for _, inbox := range moved {
+			delete(held, inbox)
+		}
+	}
+	var out []string
+	for _, inbox := range inboxes {
+		if held[inbox] && !slices.Contains(out, inbox) {
+			out = append(out, inbox)
+		}
+	}
+	return out, nil
+}
+
+// lastByte is r, remembering the last byte it handed out.
+type lastByte struct {
+	r    io.Reader
+	last byte
+	read bool
+}
+
+func (l *lastByte) Read(p []byte) (int, error) {
+	n, err := l.r.Read(p)
+	if n > 0 {
+		l.last, l.read = p[n-1], true
+	}
+	return n, err
 }
 
 // notesHeld is, of the inbox ids asked ([Copilot.inboxID]), those whose note
 // the box's copy of session shows reached the model ([copilotNotesHeld]): the
 // confirm path of a runner whose extension never confirms (ruling 1 of #1818's
-// design), read off the record by the runner, as a hook runner's receipts are
-// read off its main thread. An error where the record could not be read, which
-// is neither held nor not.
-func (Copilot) notesHeld(ctx context.Context, box sandbox.Sandbox, session string,
-	inboxes []string) (map[string]bool, error) {
-	events, err := box.OpenFile(ctx, PathsFor(box).CopilotSessionDir(session)+"/events.jsonl")
+// design), read off the record by the runner inside its read of the session.
+// An error where the record could not be read, which is neither held nor not.
+func (Copilot) notesHeld(ctx context.Context, box sandbox.Sandbox, session Session,
+	inboxIDs []string) ([]string, error) {
+	events, err := box.OpenFile(ctx, PathsFor(box).CopilotSessionDir(session.ID)+"/events.jsonl")
 	if err != nil {
 		return nil, fmt.Errorf("executor: opening the Copilot session's record: %w", err)
 	}
 	defer func() { _ = events.Close() }()
-	return copilotNotesHeld(ctx, events, inboxes)
+	return copilotNotesHeld(ctx, events, inboxIDs)
 }
