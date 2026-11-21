@@ -15,9 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/linktest"
 )
 
-// handBackRate is the case's fair shared link: 64 KiB a second, so the upload
-// holds the data link for some ten seconds.
-const handBackRate = 64 << 10
+// handBackRate is the case's fair shared link: 128 KiB a second, so the
+// upload ([outlastingBytes]) holds the data link for some twelve seconds.
+const handBackRate = 128 << 10
 
 // awaited waits for ch within a liveness bound.
 func awaited[T any](t *testing.T, ch <-chan T, what string) T {

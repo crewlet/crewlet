@@ -18,28 +18,30 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/jetstream/linktest"
 )
 
-// floorRate is the object store's floor in bytes a second, a mebibyte in
-// objstore.MiBPace: the slowest link a node may run on.
-const floorRate = (1 << 20) * int64(time.Second) / int64(objstore.MiBPace)
+// scaledRate is the case's link: twice the object store's floor, a mebibyte
+// in objstore.MiBPace, so bulk crossing it reads moving to the data path's
+// meter, which asks 0.7 of the floor, whatever the steps its acknowledged
+// bytes move in.
+const scaledRate = 2 * (1 << 20) * int64(time.Second) / int64(objstore.MiBPace)
 
-// floorInflight is what the case's first-in, first-out link reads of a
+// scaledInflight is what the case's first-in, first-out link reads of a
 // connection ahead of carrying it, its congestion window: what a renewal on
-// the lease link queues behind of the data link's bulk, under a second at
-// floorRate.
-const floorInflight = 32 << 10
+// the lease link queues behind of the data link's bulk, under half a second
+// at scaledRate.
+const scaledInflight = 32 << 10
 
-// outlastingBytes is a bulk whose crossing outlasts the floor TTL: 640 KiB,
-// 18.75 s at floorRate against config.MinLeaseTTL's 15 s. The link paces it,
+// outlastingBytes is a bulk whose crossing outlasts the floor TTL: 1.5 MiB,
+// 22.5 s at scaledRate against config.MinLeaseTTL's 15 s. The link paces it,
 // so the crossing takes that long whatever the runner's speed.
-const outlastingBytes = 640 << 10
+const outlastingBytes = 1536 << 10
 
-// overTheFloor is a member and a leaf of it across one first-in, first-out
-// link at the floor, holding leases at the floor TTL, and a seat the leaf
+// overAScaledLink is a member and a leaf of it across one first-in, first-out
+// link at scaledRate, holding leases at the floor TTL, and a seat the leaf
 // holds.
-func overTheFloor(t *testing.T) (leafAcross, string, *coord.Lease) {
+func overAScaledLink(t *testing.T) (leafAcross, string, *coord.Lease) {
 	t.Helper()
 	f := openLeafAcross(t, config.MinLeaseTTL, func(t testing.TB, target string) *linktest.Link {
-		return linktest.SharedFIFO(t, target, floorRate, floorInflight)
+		return linktest.SharedFIFO(t, target, scaledRate, scaledInflight)
 	})
 	if got := f.leafStore.TTL(); got != config.MinLeaseTTL {
 		t.Fatalf("the leaf holds leases at %v, want the floor TTL %v", got, config.MinLeaseTTL)
@@ -88,13 +90,13 @@ func (f leafAcross) bulkOnTheDataLink(t *testing.T) <-chan error {
 		done <- err
 	}()
 	pollUntil(t, time.Minute, "the bulk on the data link", func() bool {
-		return carried() > before+floorInflight
+		return carried() > before+scaledInflight
 	})
 	return done
 }
 
-// A LARGE WRITE ON THE DATA LINK KEEPS THE NODE'S SEATS (#1035): at the floor,
-// behind a first-in, first-out link, a leaf's upload whose crossing outlasts
+// A LARGE WRITE ON THE DATA LINK KEEPS THE NODE'S SEATS (#1035): behind a
+// first-in, first-out link, a leaf's upload whose crossing outlasts
 // the TTL holds the data path's probe unanswered for the whole crossing, past
 // its bound. The link moves throughout, so the data path stays proven, and the
 // renewals, on the lease link, keep landing: the seat's epoch never moves.
@@ -106,7 +108,7 @@ func (f leafAcross) bulkOnTheDataLink(t *testing.T) <-chan error {
 // renewals rode the data link: each waits the upload out, past its term.
 func TestALargeWriteOnTheDataLinkKeepsTheNodesSeats(t *testing.T) {
 	t.Parallel()
-	f, seat, lease := overTheFloor(t)
+	f, seat, lease := overAScaledLink(t)
 	q := f.leaf.Queue.(*jetstream.Queue)
 	done := f.bulkOnTheDataLink(t)
 	renewals := 0
@@ -149,7 +151,7 @@ func TestALargeWriteOnTheDataLinkKeepsTheNodesSeats(t *testing.T) {
 // the link moved since, so only the cap refuses, past the minute.
 func TestADataLinkThatDiesMidWriteIsRefusedWithinTheProbesBound(t *testing.T) {
 	t.Parallel()
-	f, seat, lease := overTheFloor(t)
+	f, seat, lease := overAScaledLink(t)
 	_ = f.bulkOnTheDataLink(t)
 	f.link.Blackhole(server.DEFAULT_GLOBAL_ACCOUNT)
 	t.Cleanup(func() { f.link.Mend(server.DEFAULT_GLOBAL_ACCOUNT) })
