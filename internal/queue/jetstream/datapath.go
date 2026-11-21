@@ -179,13 +179,13 @@ func (d *dataPath) run(ctx context.Context) {
 			cancel()
 			out = false
 		case <-tick.C:
-			if d.move != nil && errors.Is(d.verdict(time.Now()), d.names.unproven) {
+			if why := d.refusedHere(); why != nil {
 				if out {
 					cancel()
 					<-answered
 					out = false
 				}
-				d.relink()
+				d.relink(why)
 			}
 			switch {
 			case !out:
@@ -199,12 +199,24 @@ func (d *dataPath) run(ctx context.Context) {
 	}
 }
 
-// relink moves the link off the member its verdict refuses, and forgets the
-// probe and the refusal that judged that member, so the next member is judged
-// on its own answers: by its silence a bound after its first probe, or its
-// first "not available" while the last success is past its budget.
-func (d *dataPath) relink() {
-	why := d.verdict(time.Now())
+// refusedHere is the verdict where it refuses the member the link is on, a
+// link d moves; nil otherwise, a first hop that is down included, since that
+// link is already dialling again.
+func (d *dataPath) refusedHere() error {
+	if d.move == nil {
+		return nil
+	}
+	if why := d.verdict(time.Now()); errors.Is(why, d.names.unproven) {
+		return why
+	}
+	return nil
+}
+
+// relink moves the link off the member its verdict refused for why, and
+// forgets the probe and the refusal that judged that member, so the next is
+// judged on its own answers: by its silence a bound after its first probe, or
+// its first "not available" while the last success is past its budget.
+func (d *dataPath) relink(why error) {
 	err := d.move()
 	d.mu.Lock()
 	d.asked, d.refused = time.Time{}, nil
