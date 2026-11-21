@@ -25,6 +25,7 @@ import { join } from "node:path";
 
 import * as writes from "~/components/writes.tsx";
 import * as seatControls from "~/components/seatControls.tsx";
+import * as foldIn from "~/components/FoldInButtons.tsx";
 import { AppAnnouncer } from "~/app/announcer.tsx";
 import { Router } from "~/app/router.tsx";
 import type { ActionTool } from "~/protocol/act.ts";
@@ -107,6 +108,12 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "a parked run's answer, made in the pane, and the read that marks an answered " +
       "question's notices (an ask is answered through components/writes.tsx)",
     suite: "routes/inbox/Inbox.test.tsx",
+  },
+  "components/FoldInButtons.tsx": {
+    why:
+      "a fold-in's two answers, whether another person's request joins a running executor's " +
+      "work, drawn in a decision row and the Inbox's pane, each rendered below",
+    suite: null,
   },
   "components/Composer.tsx": {
     why:
@@ -613,6 +620,40 @@ const SEAT_CONTROLS: Readonly<Record<string, Fixture>> = {
   },
 };
 
+/**
+ * A fold-in put to the reader. Who may answer is the engine's (the run's
+ * requester, a lead of its seat, an administrator; never the asker), so the
+ * buttons hold only as the tool does and draw the engine's refusal under them.
+ */
+const FOLD_IN: Readonly<Record<string, Fixture>> = {
+  FoldInButtons: {
+    props: {
+      item: {
+        id: "f-1",
+        turn_id: "run-1",
+        launch_id: "job-1",
+        seat: "swe",
+        requester: "jane",
+        asker: "ceo",
+        asker_kind: "human",
+        conversation: "chat:C1",
+        words: "also redo the logo",
+        cut: 0,
+        put_to: ["jane"],
+        asked_at: "2026-11-14T12:00:00Z",
+        decision: {
+          question: "ceo asked swe for work of their own",
+          options: [],
+          role: "approver",
+        },
+      },
+      seat: "SWE",
+    },
+    name: /^Add it to the running work$/,
+    tool: "answer_executor",
+  },
+};
+
 /** The modules whose controls are rendered below, each with a fixture for every control it exports. */
 const RENDERED: readonly {
   path: string;
@@ -621,6 +662,7 @@ const RENDERED: readonly {
 }[] = [
   { path: "components/writes.tsx", module: writes, fixtures: WRITES },
   { path: "components/seatControls.tsx", module: seatControls, fixtures: SEAT_CONTROLS },
+  { path: "components/FoldInButtons.tsx", module: foldIn, fixtures: FOLD_IN },
 ];
 
 /** The controls a module exports: its components, by their capitalised names. */

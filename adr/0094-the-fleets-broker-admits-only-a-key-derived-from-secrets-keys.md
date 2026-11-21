@@ -25,7 +25,9 @@ connection:
   global account and never the system one;
 - an **in-process client** of this process signing with a key minted at each
   start that nothing outside the process holds: the engine's own, bound to the
-  global account, and the membership code's, bound to the system account.
+  global account; the lease connection's, bound to a leaf's lease account and
+  to the global account elsewhere; and the membership code's, bound to the
+  system account.
 
 Every other connection is refused, counted and logged. A clustered member's
 client listener — which nats-server needs open for its routes to start — binds

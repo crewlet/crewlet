@@ -331,8 +331,11 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// Its question is answered or never asked; a reply now is the new job's.
 		existing.Question, existing.Audience = "", ""
 		existing.QuestionContext, existing.Decision = "", nil
-		// The held call and its audience are the old job's.
+		// The held call and its audience are the old job's, and so are its
+		// fold-ins: an answer to one would let a request join work it was
+		// never asked for.
 		existing.HeldCall = nil
+		existing.FoldIns = nil
 		existing.AudienceHandles, existing.AudienceFallback = nil, false
 		// EVERYTHING ITS ANSWER WAS MEASURED AGAINST: the next question is
 		// anchored on its own asking, and a reply one question declined may be

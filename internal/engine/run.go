@@ -535,6 +535,9 @@ type Engine struct {
 	// read the node's own memory ([Engine.buildGitletHost]).
 	gitMemory int64
 
+	// setMemoryLimit is Options.setMemoryLimit, kept likewise ([Engine.limitMemory]).
+	setMemoryLimit func(int64) int64
+
 	// compactorEstate is Options.compactorEstate, kept likewise: nil hands the
 	// compactor the router's code seam as it is ([Engine.buildGitletHost]).
 	compactorEstate func(gitletcompact.Estate) gitletcompact.Estate
@@ -1035,6 +1038,10 @@ type Engine struct {
 	// wakeRouters is this node's routers of its busy seats' held inboxes
 	// (wakerouter.go, ADR-0167).
 	wakeRouters seatRouters
+
+	// waitsTold is what each wake waiting behind a busy seat was told of why
+	// it waits, so a person is told each reason once (foldin.go).
+	waitsTold waitsTold
 	// codeSearchWire is this node's code search scatter envelopes, both
 	// halves, and codeSearchLocal the answerer its own searches go to where it
 	// has no broker (codesearch.go).
@@ -1311,6 +1318,11 @@ type Options struct {
 	// the code cache budgets its background work from in place of the node's
 	// own ([gitproc.Options.Memory]), zero for the node's own.
 	gitMemory int64
+
+	// setMemoryLimit is what sets the runtime's memory limit in place of
+	// debug.SetMemoryLimit, so a case reads the limit its node would set; nil
+	// sets it, but in a test binary, which no case's figure may limit.
+	setMemoryLimit func(int64) int64
 
 	// compactorEstate stands between the Gitlet compactor and the router's
 	// code seam it lists and proposes through ([gitletcompact.Options.Estate]),
@@ -1610,6 +1622,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		cacheDisk:           opts.cacheDisk,
 		sizedByTheMachine:   sizedByTheMachine(ctx),
 		gitMemory:           opts.gitMemory,
+		setMemoryLimit:      opts.setMemoryLimit,
 		compactorEstate:     opts.compactorEstate,
 		homeSeams:           opts.homeSeams,
 		committerPublisher:  opts.committerPublisher,

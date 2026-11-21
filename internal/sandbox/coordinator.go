@@ -519,6 +519,12 @@ type CoordinatorOptions struct {
 	// value. Nil tells nobody.
 	Busy func(handle string)
 
+	// FoldInAnswered is told a seat a person answered a fold-in of one of its
+	// runs (foldin.go): the answer is on the run's row already, and the
+	// engine's router of the seat reads it at once rather than at its
+	// backstop. Nil tells nobody.
+	FoldInAnswered func(handle string)
+
 	// Hold holds a seat's inbox while one of its runs holds the seat or an
 	// answer it owes awaits its resume ([SeatHold]). Nil holds nothing (a test's
 	// coordinator).
@@ -744,6 +750,8 @@ type Coordinator struct {
 	served func(ctx context.Context, run PendingRun) []string
 	// busy is [CoordinatorOptions.Busy].
 	busy func(handle string)
+	// foldInAnswered is [CoordinatorOptions.FoldInAnswered].
+	foldInAnswered func(handle string)
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
 	node  string
 	boxes BoxReader
@@ -1039,6 +1047,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		wakesEnded:         opts.WakesEnded,
 		served:             opts.Served,
 		busy:               opts.Busy,
+		foldInAnswered:     opts.FoldInAnswered,
 		node:               opts.Node,
 		boxes:              opts.Boxes,
 		nudge:              opts.Nudge,
@@ -1388,6 +1397,14 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 		answer := c.renewing(ctx, *payload, ev, c.OnCompleted(ctx, *payload, ev))
 		return c.lost(payload.AgentHandle, c.oweRefused(ctx, *payload, answer))
 	case *types.ExecutorAnswerGiven:
+		if payload.FoldIn != "" {
+			// A FOLD-IN'S ANSWER IS RECORDED ALREADY (AnswerDesk.AnswerFoldIn):
+			// this delivery only tells the seat's router to read it.
+			if c.foldInAnswered != nil {
+				c.foldInAnswered(payload.AgentHandle)
+			}
+			return nil
+		}
 		return c.lost(payload.AgentHandle, c.OnAnswerGiven(ctx, *payload, ev))
 	}
 	return nil

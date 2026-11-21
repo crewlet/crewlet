@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -296,21 +297,22 @@ func (c *Counterparties) Get(ctx context.Context, observer string, subject Subje
 	return p, true, nil
 }
 
-// List returns every profile one observer holds, most recently updated first.
+// List returns the profiles one observer holds, most recently updated first,
+// NOT by interaction count: who this seat works with, not whom it spoke to most
+// last quarter.
 //
-// ORDERED BY LAST UPDATE, not interaction count: the question is "who is this
-// seat working with", not whom it spoke to a hundred times last quarter.
-//
-// CEILINGED BY A CONSTANT: counterparties are bounded by the company, not by
-// time, and a seat past [MaxProfilesListed] has a report, not a panel.
-//
-// AND PAGED BELOW IT, in the statement: limit is how many the caller will draw,
-// absent or past the ceiling meaning the ceiling. Every row carries the whole
-// trait bag, the one unbounded column, so a caller keeping the first row of a
-// ceiling's worth read two hundred bags to draw one name.
-func (c *Counterparties) List(ctx context.Context, observer string, limit int) ([]Profile, error) {
+// PAGED IN THE STATEMENT to limit rows, absent or past [MaxProfilesListed]
+// meaning that ceiling (counterparties are bounded by the company, and a seat
+// past it has a report, not a panel), because every row carries its whole
+// trait bag, the one unbounded column. And ENDED BY BYTES, before the profile
+// that would take the text the page holds past maxBytes, the bag counted as
+// the JSON it is stored as.
+func (c *Counterparties) List(ctx context.Context, observer string, limit, maxBytes int) ([]Profile, error) {
 	if c == nil || c.db == nil || observer == "" {
 		return nil, nil
+	}
+	if maxBytes <= 0 {
+		return nil, errors.New("learning: a profile listing needs a byte bound to end at")
 	}
 	if limit <= 0 || limit > MaxProfilesListed {
 		limit = MaxProfilesListed
@@ -328,7 +330,10 @@ func (c *Counterparties) List(ctx context.Context, observer string, limit int) (
 	}
 	defer rows.Close()
 
-	var out []Profile
+	var (
+		out  []Profile
+		held int
+	)
 	for rows.Next() {
 		var (
 			p                                Profile
@@ -340,6 +345,12 @@ func (c *Counterparties) List(ctx context.Context, observer string, limit int) (
 			&corroborated, &p.InteractionCount, &p.LastWorkKey); err != nil {
 			return nil, fmt.Errorf("learning: scan profile for %s: %w", observer, err)
 		}
+		// Counted before the bag is decoded: p.Traits is still nil here.
+		size := textBytes(p) + len(traits)
+		if !fitsBytes(len(out), held, size, maxBytes) {
+			break
+		}
+		held += size
 		p.FirstSeenAt = store.DecodeTime(firstSeen)
 		p.LastUpdatedAt = store.DecodeTime(updated)
 		p.LastCorroboratedAt = store.DecodeTime(corroborated)

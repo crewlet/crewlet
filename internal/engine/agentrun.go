@@ -474,9 +474,10 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		// holds `ask_and_wait` and nothing tells it when to park on it.
 		Ask: askBrief(company.Org, l.seat),
 		// THE RUN AS A PERSON READS IT ([turnctx.Turn.Title]): what the
-		// turn was asked, in its trigger's own words. Never the brief's
-		// task, whose fence lines and escapes are a model's, and which a
-		// resume reads off the park ([resumeTask]) and never off the row.
+		// turn was asked, in its trigger's own words, redacted. Never the
+		// brief's task, whose fence lines and escapes are a model's, and
+		// which a resume reads off the park ([resumeTask]) and never off
+		// the row.
 		Task:  l.turn.Title,
 		Label: l.turn.Title,
 		// A RUN CARRIED ON WITH A PERSON'S ANSWER, continued in its own

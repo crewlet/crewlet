@@ -461,6 +461,12 @@ func (parkedRun) Deliver(context.Context, types.ExecutorAnswerGiven) (uuid.UUID,
 // could name who gave it.
 func (parkedRun) Answerer(sandbox.PendingRun) string { return "" }
 
+// AnswerFoldIn finds no fold-in: no run here holds one.
+func (parkedRun) AnswerFoldIn(context.Context, sandbox.PendingRun, string, sandbox.FoldInAnswered) (sandbox.FoldIn,
+	error) {
+	return sandbox.FoldIn{}, sandbox.ErrFoldInClosed
+}
+
 // viewedHost is Gitlet holding web!42, open unless closed, whose marks writer answers mark.
 type viewedHost struct {
 	writingHost

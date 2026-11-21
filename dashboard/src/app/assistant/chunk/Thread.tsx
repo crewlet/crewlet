@@ -143,6 +143,10 @@ function answerText(turn: TurnView): string {
   return turn.replies.map((r) => r.text).join("\n\n");
 }
 
+/** What a turn whose snapshot left part of it out says, where it begins. */
+export const CUT_LINE =
+  "Part of this turn isn't shown here. Reopen the conversation to see all of it.";
+
 /** The cards no answer of the turn holds: none. */
 const NO_CARDS: readonly AssistantCardEvent[] = [];
 
@@ -244,6 +248,11 @@ function Turn({
       >
         {turn.question}
       </MessageBubble>
+      {turn.cut ? (
+        <Text as="p" variant="caption" tone="secondary">
+          {CUT_LINE}
+        </Text>
+      ) : null}
       {turn.refusal ? (
         <LimitCallout
           variant={

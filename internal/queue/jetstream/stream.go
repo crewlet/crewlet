@@ -101,6 +101,21 @@
 // Timing.Following holds hedged requests' ceilings past their spans while it
 // moves.
 //
+// # A node's leases ride a link of their own
+//
+// A renewal queued behind a large write crosses only after it, and at the floor
+// one message at the transport's ceiling outlasts every lease.
+// Queue.DialLeases offers holds a watched connection nothing else rides: on a
+// leaf a second leaf link in LeaseAccount, past the tunnel and ISOLATED, so it is told
+// no other leaf's interest; on an external broker a second dial that gives a
+// dead socket up within a heartbeat of the shortest lease; on a member one in
+// process. Each link is read by its account, never by a count.
+//
+// The lease link proves nothing of the data path, so Queue.DataPath judges a
+// probe of the fleet's JetStream: unanswered past a request's term, refused only
+// while the data link carried nothing (a probe queued behind a crossing is not
+// a dead path); past the link's own ping tolerance, refused regardless.
+//
 // # A pull allocates for what it receives, never for what it may
 //
 // The client library sizes a fetch's delivery channel by the BATCH a pull may
@@ -259,10 +274,11 @@
 // clustered member's loopback client listener presenting the nkey derived under
 // [ClientKeyDomain], bound to the global account, never the system one; and an
 // IN-PROCESS client signing with a key minted at each start that nothing outside
-// the process holds, the engine's bound to the global account and the membership
-// code's (membership.go) to the system account. Every other connection is
-// refused, counted ([Server.OnPeerRefused]) and logged once a minute per class
-// (broker_peer_refused).
+// the process holds: the engine's bound to the global account, the lease
+// connection's to [LeaseAccount] on a leaf and the global account elsewhere, and
+// the membership code's (membership.go) to the system account. Every other
+// connection is refused, counted ([Server.OnPeerRefused]) and logged once a
+// minute per class (broker_peer_refused).
 //
 // THE KEYS ARE THE KEYRING'S, derived per key ([FleetAuthFrom]) by the rule
 // every consumer of secrets.keys follows (internal/runtoken), so the keyring's

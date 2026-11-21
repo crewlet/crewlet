@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/kept"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -61,15 +62,20 @@ const (
 	// notes' tellings), and that this build carries without reading: STATED HERE,
 	// so the next field a build adds is added inside it, and the build that adds
 	// it moves its own figure out of this one, as the turn's wake items took
-	// theirs ([wakeRowBytes]). The turn's read of its conversation
-	// ([PendingRun.Base]) has its own place, at [ConversationBaseMaxBytes].
-	ExtraRowBytes = 256<<10 - wakeRowBytes
+	// theirs ([wakeRowBytes]) and the job's fold-ins theirs ([foldInRowBytes]).
+	// The turn's read of its conversation ([PendingRun.Base]) has its own
+	// place, at [ConversationBaseMaxBytes].
+	ExtraRowBytes = 256<<10 - wakeRowBytes - foldInRowBytes
 
 	// wakeRowBytes is the turn's wake items' figure, moved out of the room a
 	// later build adds keys in: [MaxTurnWakes] items at their bound, a hundred
 	// KiB, which the 99,696 bytes TestTheWholeRowFitsItsBudget weighs them at
 	// leave a little over.
 	wakeRowBytes = 100 << 10
+
+	// foldInRowBytes is the job's fold-ins' figure, moved out of the room a
+	// later build adds keys in: [MaxJobFoldIns] at [MaxFoldInBytes] each.
+	foldInRowBytes = MaxJobFoldIns * MaxFoldInBytes
 
 	// MaxAnswerBytes bounds a recorded answer as the row holds it (its seal
 	// and deliveries, [RecordedAnswer]) and, apart, the copies letting go of
@@ -202,6 +208,27 @@ const (
 	// delivery. [MaxTurnWakes] items at it fit [wakeRowBytes] of the row.
 	MaxWakeItemBytes = 8 << 10
 
+	// MaxJobFoldIns bounds the fold-ins one job asks ([PendingRun.FoldIns]),
+	// answered or not: FOUR, [MaxJobWakes]. Each puts a request in front of a
+	// person who decides it by hand while the run works, so four other
+	// requests behind one job is already a queue that belongs in turns of its
+	// own, which is where a fifth waits; and four at [MaxFoldInBytes] is
+	// sixteen KiB of a row read and written whole on every flip.
+	MaxJobFoldIns = MaxJobWakes
+
+	// MaxFoldInBytes bounds one fold-in as the row writes it ([FoldIn]): FOUR
+	// KIB, an excerpt of the asker's words an approver reads beside who asked,
+	// where and whom it is put to. The words are display alone (the delivery
+	// on the inbox is what joins), so the engine cuts them to fit and says how
+	// much more is where they were written ([FoldIn.Cut]).
+	MaxFoldInBytes = 4 << 10
+
+	// MaxFoldInPutTo bounds the seats a fold-in is put to ([FoldIn.PutTo]):
+	// EIGHT, the run's requester and the seven nearest of the seat's leads. A
+	// lead further up still answers it; a question put to the whole top of a
+	// deep chart is put to nobody in particular.
+	MaxFoldInPutTo = 8
+
 	// MaxWakeIDBytes bounds a wake's id ([SealedWake.ID]), of the id charset
 	// so it is written as itself: SIXTY-FOUR BYTES, past the delivery's UUID
 	// its filer names it by.
@@ -232,8 +259,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_319_118
-	measuredSpare       = 379_190
+	measuredOtherFields = 2_335_519
+	measuredSpare       = 379_173
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -498,6 +525,37 @@ func keptCall(call BridgeCall, argsBudget int) BridgeCall {
 // redacts it reads only as far as its redaction settles.
 func OutputOpening(output string, outputBytes int) (opening string, ok bool) {
 	return rowRecord.Opening(output, outputBytes)
+}
+
+// RedactedOpening is what a reader may show of a call's output the log cut
+// (output and outputBytes, as [OutputOpening] reads them): the redaction of
+// the opening's SETTLED lines alone ([redact.Settled]), which is the opening
+// of the whole's redaction, since a credential the log's cut ran across left
+// a head no rule knows. whole is the size it is the opening of: its own bytes
+// and the bytes the log measured past those lines, unread and so unredacted,
+// at least one. A text the log's marker does not read back off is settled as
+// it stands.
+func RedactedOpening(output string, outputBytes int) (shown string, whole int) {
+	opening, ok := OutputOpening(output, outputBytes)
+	if !ok {
+		opening = output
+	}
+	settled := opening[:redact.Settled(opening)]
+	shown = redact.Secrets(settled)
+	return shown, len(shown) + max(outputBytes-len(settled), 1)
+}
+
+// ShownOutput is a call's output as the log keeps it (output, outputBytes
+// as [BridgeCall] holds them) as a person reading the log is shown it, and the
+// size beside it: whole, redacted; cut, its [RedactedOpening] marked as the
+// log marks a cut, the size that opening is of beside it, so [OutputOpening]
+// reads it back. The log itself stays as the harness was handed it.
+func ShownOutput(output string, outputBytes int) (shown string, shownBytes int) {
+	if outputBytes == 0 {
+		return redact.Secrets(output), 0
+	}
+	opening, whole := RedactedOpening(output, outputBytes)
+	return rowRecord.Cut(opening, whole), whole
 }
 
 // ValidCallID reports whether id is one the log keeps as the id a call's
@@ -902,9 +960,20 @@ func (l BridgeLog) ElisionKnown() bool {
 var widestInstant = time.Date(9999, 12, 31, 23, 59, 59, 999_999_999, time.FixedZone("", 14*3600))
 
 // keptTitle is a run's title as its row keeps it: within [MaxRunTitleBytes]
-// as the row holds it, the cut said.
+// as the row holds it, the cut said, and NEVER INSIDE A MARKER the redaction
+// wrote, which the launching turn's title holds ([LaunchRequest.Task]): one
+// cut in part reads as the title's own words, so the cut moves back to where
+// the markers begin ([redact.MarkersAround]).
 func keptTitle(s string) string {
-	title, _ := rowRecord.Text(s, MaxRunTitleBytes)
+	title, cut := rowRecord.Text(s, MaxRunTitleBytes)
+	if cut == 0 {
+		return title
+	}
+	if opening, ok := rowRecord.Opening(title, cut); ok {
+		if begin, _, inside := redact.MarkersAround(s, len(opening)); inside {
+			title, _ = rowRecord.TextOf(s[:begin], len(s), MaxRunTitleBytes)
+		}
+	}
 	return title
 }
 

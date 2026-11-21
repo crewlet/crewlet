@@ -347,9 +347,9 @@ const CheckPieceBytes = 64 << 20
 const MaintenanceMemoryPerCore int64 = 256 << 20
 
 // ServingMemoryPerCore is what a Gitlet node keeps, for each core of its git
-// pool its memory backs once what the engine keeps beside Gitlet is kept (its
-// pools and the store's page cache), for the broker, the engine, the rest of
-// the store and the read lane: what the background work's budget leaves out.
+// pool its memory backs once what the engine keeps beside Gitlet is kept
+// (internal/nodebudget's lines), for the broker, the engine's own heap and the
+// rest of the store: what the background work's budget leaves out.
 //
 // WHAT gitproc.CoreMemory LEAVES, 896 MiB, after the transfer lane's default
 // share and MaintenanceMemoryPerCore: a node with CoreMemory a core gives

@@ -42,7 +42,7 @@ func TestATurnReadsEveryEventItTouchedNotOnlyItsPhases(t *testing.T) {
 		}
 	}
 
-	got, err := log.Turn(t.Context(), "turn-1", time.Now())
+	got, _, err := log.Turn(t.Context(), "turn-1", 0, time.Now())
 	if err != nil {
 		t.Fatalf("Turn: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestEveryReadCarriesTheWorkKeyColumn(t *testing.T) {
 	appendAsWritten(t, log, "e-1", "agent_phase_completed", time.Now().UTC().Add(-time.Minute),
 		map[string]any{"turn_id": "run-1", "work_key": "wk-1", "phase": "execute"})
 
-	rows, err := log.Turn(t.Context(), "run-1", time.Now())
+	rows, _, err := log.Turn(t.Context(), "run-1", 0, time.Now())
 	if err != nil {
 		t.Fatalf("Turn: %v", err)
 	}

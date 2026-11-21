@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -382,6 +383,18 @@ type Queue struct {
 	//
 	// Set only while the queue is idle: nothing reads it under the lock.
 	timing jsprovision.Timing
+
+	// readyAt is when the boot's readiness answer proved the path to the
+	// fleet's JetStream: the data path's first proof ([Queue.ProveDataPath]).
+	readyAt time.Time
+	// path is the data path's probe once started; under mu.
+	path *dataPath
+	// pathTiming is ZERO FOR PRODUCTION ([Queue.dataPathTiming]); set only by
+	// this package's tests, before the probe starts.
+	pathTiming dataPathTiming
+	// leases is the lease connection last handed out ([Queue.LeaseLink]);
+	// under mu.
+	leases *nats.Conn
 }
 
 type attachKey struct{ topic, group string }
@@ -450,7 +463,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	var err error
 	own := watched{loss: q.lost, settles: true}
 	if embedded != nil {
-		q.nc, err = embedded.connect(own)
+		q.nc, err = embedded.connect(own, embedded.auth.engine)
 	} else {
 		q.nc, err = dial(cfg, own, dialled)
 	}
@@ -479,6 +492,7 @@ func newQueueOn(ctx context.Context, cfg Config, embedded *embeddedServer, owns 
 	if err := embedded.awaitClusterReady(ctx, q.js, q.cfg.Replicas); err != nil {
 		return nil, q.abandonOpen(err)
 	}
+	q.readyAt = time.Now()
 	if err := q.ensureStreams(ctx); err != nil {
 		return nil, q.abandonOpen(err)
 	}
@@ -1114,7 +1128,7 @@ func (q *Queue) DialWatched() (*nats.Conn, error) {
 // for good is recorded.
 func (q *Queue) dialSecond(at watched) (*nats.Conn, error) {
 	if q.embedded != nil {
-		return q.embedded.connect(at)
+		return q.embedded.connect(at, q.embedded.auth.engine)
 	}
 	if q.cfg.URL == "" {
 		return nil, fmt.Errorf("jetstream: this queue has no embedded server " +
@@ -1123,9 +1137,77 @@ func (q *Queue) dialSecond(at watched) (*nats.Conn, error) {
 	return dial(q.cfg, at, q.link.meter)
 }
 
+// DialLeases opens the LEASE CONNECTION, which nothing but a node's holds ride
+// (package doc, "A node's leases ride a link of their own"). The caller owns and
+// closes it; its close for good is this queue's loss ([Queue.Lost]).
+//
+// On a leaf it is handed out once the LEASE LINK is up and the fleet's
+// JetStream answers across it, within [clusterReadyTimeout], or refused naming
+// the link and the key presented. On an external broker it is a second dial
+// ([dialLeaseOptions]); on a member, an in-process connection.
+func (q *Queue) DialLeases(ctx context.Context) (*nats.Conn, error) {
+	if q.isClosed() {
+		return nil, ErrClosed
+	}
+	at := watched{loss: q.lost}
+	var nc *nats.Conn
+	var err error
+	switch {
+	case q.embedded != nil:
+		nc, err = q.embedded.connect(at, q.embedded.auth.leases)
+	case q.cfg.URL != "":
+		nc, err = dialLeases(q.cfg, at)
+	default:
+		return nil, errors.New("jetstream: this queue has no embedded server and no URL, " +
+			"so a lease connection cannot be opened")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("jetstream: open the lease connection: %w", err)
+	}
+	if q.embedded != nil && q.embedded.leaf {
+		js, err := q.cfg.API().Client(nc)
+		if err == nil {
+			err = q.embedded.awaitLeaseLink(ctx, js)
+		}
+		if err != nil {
+			at.untrack(nc)
+			nc.Close()
+			return nil, fmt.Errorf("jetstream: the lease connection: %w", err)
+		}
+	}
+	q.mu.Lock()
+	q.leases = nc
+	q.mu.Unlock()
+	return nc, nil
+}
+
+// LeaseLink reports whether the lease connection [Queue.DialLeases] last
+// handed out reaches the fleet's broker right now: it is connected and, on a
+// leaf, its lease link is up. No round trip, as [Queue.Link].
+func (q *Queue) LeaseLink() error {
+	q.mu.Lock()
+	nc, closed := q.leases, q.closed
+	q.mu.Unlock()
+	switch {
+	case closed:
+		return ErrClosed
+	case nc == nil:
+		return errors.New("jetstream: this node has opened no lease connection")
+	}
+	if status := nc.Status(); status != nats.CONNECTED {
+		return fmt.Errorf("jetstream: this node's lease connection to the broker is %s",
+			strings.ToLower(status.String()))
+	}
+	if q.embedded != nil && q.embedded.leaf && !q.embedded.linked(LeaseAccount) {
+		return fmt.Errorf("jetstream: this leaf has no lease link (account %s) to any member "+
+			"of the fleet, so no lease it holds can be renewed", LeaseAccount)
+	}
+	return nil
+}
+
 // Lost is closed once NATS has closed, FOR GOOD, this queue's own connection or
-// a second one dialled through [Queue.DialWatched] — and [Queue.LostCause] then
-// says which, why, and what to change.
+// a second one dialled through [Queue.DialWatched] or [Queue.DialLeases] — and
+// [Queue.LostCause] then says which, why, and what to change.
 //
 // Never closed by this queue's own [Queue.Stop], nor by an owner closing what
 // [Queue.DialWatched] gave it: see [connectionLoss] for why only a close the
@@ -1184,8 +1266,8 @@ func (q *Queue) AcksLost() <-chan struct{} { return q.lost.acks }
 // publish while its own connection reads as healthy. A node that DIALLED an
 // external cluster uses one client connection, unusable while it reconnects.
 //
-// So both are asked: the client connection, and the leaf link if any.
-// Neither is a round trip, so a readiness probe may ask on every call.
+// So both are asked, neither a round trip: the client connection, and the
+// leaf's DATA LINK by its account ([leafRemotes]).
 func (q *Queue) Link() error {
 	if q.isClosed() {
 		return ErrClosed
@@ -1194,7 +1276,7 @@ func (q *Queue) Link() error {
 		return fmt.Errorf("jetstream: this node's connection to the broker is %s",
 			strings.ToLower(status.String()))
 	}
-	if q.embedded != nil && q.embedded.leaf && q.embedded.ns.NumLeafNodes() == 0 {
+	if q.embedded != nil && q.embedded.leaf && !q.embedded.linked(server.DEFAULT_GLOBAL_ACCOUNT) {
 		return errors.New("jetstream: this leaf has no link to any member of the " +
 			"fleet, so every stream and bucket it uses is out of reach")
 	}
@@ -1875,6 +1957,7 @@ func (q *Queue) Stop(ctx context.Context) error {
 	// And every attachment ended with them: a stopped client carries no
 	// hold, and no attachment one could be asked for, into anything.
 	q.current = map[attachKey]queue.Attachment{}
+	path := q.path
 	q.mu.Unlock()
 
 	// Stop attachments concurrently so one unresponsive consumer bounds
@@ -1888,6 +1971,10 @@ func (q *Queue) Stop(ctx context.Context) error {
 	}
 	wg.Wait()
 	q.awaitKeeps(ctx)
+	// Before the connection the probe asks over closes under it.
+	if path != nil {
+		path.stop()
+	}
 
 	if q.nc != nil {
 		q.nc.Close()

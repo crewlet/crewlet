@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestOnlyAWakeAboutTheRunsWorkOrFromItsLeadIsTriaged`, `internal/engine.TestTheEngineGatesTheTriagesChoice`, `internal/engine.TestTheTriagesDecisionsAreClosedAndItsPromptNamesEach`, `internal/engine.TestATriagePlaysOverTheRealToolSessionAndFencesTheWake`, `internal/engine.TestALeadsBurstIsOneNoteAndPastTheCapItStays`, `internal/engine.TestAnInputWakeFromAnotherWriterJoinsAsInformationAndBindsTheTurn`, `internal/engine.TestNoiseIsAbsorbedOnlyOwingNothingAndARequestOrAFailureStays`, `internal/engine.TestASteerNoteHoldsWholeWakesWithinANotesBound`, `internal/agent/prompts.TestATriageReadsTheWakeAndTheTaskInTheirFences`, `internal/agent/prompts.TestAnotherWritersWakeIsToldAsInformation`
+- **Enforced-by:** `internal/engine.TestOnlyAWakeAboutTheRunsWorkOrFromItsLeadIsTriaged`, `internal/engine.TestTheEngineGatesTheTriagesChoice`, `internal/engine.TestTheTriagesDecisionsAreClosedAndItsPromptNamesEach`, `internal/engine.TestATriagePlaysOverTheRealToolSessionAndFencesTheWake`, `internal/engine.TestALeadsBurstIsOneNoteAndPastTheCapItStays`, `internal/engine.TestAnInputWakeFromAnotherWriterJoinsAsInformationAndBindsTheTurn`, `internal/engine.TestNoiseIsAbsorbedOnlyOwingNothingAndARequestOrAFailureStays`, `internal/engine.TestASteerNoteHoldsWholeWakesWithinANotesBound`, `internal/engine.TestAWaitingPersonIsToldWhyOncePerWake`, `internal/notify.TestAWaitingMessageIsToldWhyItWaits`, `internal/agent/prompts.TestATriageReadsTheWakeAndTheTaskInTheirFences`, `internal/agent/prompts.TestAnotherWritersWakeIsToldAsInformation`
 - **Cost-when-tried:** under ADR-0167 alone a colleague's fact about a running run's work ("the customer is on the EU region"), a lead's "stop, roll back" in chat and a "thanks!" in the run's room all waited for the run to end: the run worked on without the fact or the correction, and each message then started a turn of its own over a finished result, the thanks included.
 - **Tag-status:** unreleased
 
@@ -25,3 +25,13 @@
 **Rewriting the lead's waiting note with a later message.** A note a harness may already hold cannot be taken back, and a reseal would hand the run two versions of one note.
 
 **Claiming a lead's note at its read.** A note is read on more paths than a wake (a box hand-over, a brief, a hook, a poll, the review), and a park between filing and read would let the message run again beside its note.
+
+## Amendment: a request is put to who may let it join
+
+The gate's `request` from a person or an agent seat other than the run's requester (a non-lead's `steer`
+included) is put to the run's requester and the seat's leads as a fold-in before it waits, and
+joins as a steer note once one of them approves it, under [ADR-0109](0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)'s
+amendment "another writer's request joins only on approval", which states the rule. Until an answer it is
+left undecided, followed from the run's record at each read with no second triage; refused, unanswered when
+the job ends, past a job's four fold-ins, or with nobody to put it to, it waits for a turn of its own. A
+person whose wake waits is told why, once per wake and reason, on the conversation's queued line.

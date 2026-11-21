@@ -270,7 +270,7 @@ func TestAKeyListingCostsAConsumerAndSaysSoAtDebug(t *testing.T) {
 	rec := &recordedLines{}
 	srv.embedded.ns.SetLoggerV2(rec, true, false, false)
 
-	nc, err := srv.embedded.connect(watched{})
+	nc, err := srv.embedded.connect(watched{}, srv.embedded.auth.engine)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

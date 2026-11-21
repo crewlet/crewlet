@@ -648,7 +648,7 @@ func runRow(run sandbox.PendingRun, calls sandbox.BridgeLog, opened runOpened) m
 		// bridged, so an empty log is a run that has called nothing — a
 		// fact the run's page states — and never "not known", which a
 		// reader is told only by the key being absent (a withheld body).
-		"bridge_calls":        nonNil(calls.Calls),
+		"bridge_calls":        nonNil(shownCalls(calls.Calls)),
 		"bridge_calls_elided": calls.Elided,
 		// AND WHAT THOSE WERE, by tool and argument digest with how many
 		// calls had each and how many failed: the count bound costs the board
@@ -716,7 +716,10 @@ func withDecision(run sandbox.PendingRun, row map[string]any) map[string]any {
 // reads with the question, and `held_arguments`, what the call would send,
 // opened from their seal (null where it does not open here), which only a
 // reader of the seat's trail reads: an administrator or the seat's lead, who
-// are who may approve it. Both ABSENT on a run that holds none.
+// are who may approve it. Both ABSENT on a run that holds none. The arguments
+// are shown AS THE CALL WOULD SEND THEM, never redacted as the call log is
+// ([shownCalls]): an approval consents to those bytes, which the resume holds
+// the call to, and some must be read whole before one (an SSH command's stdin).
 func withHeld(run sandbox.PendingRun, opened runOpened, row map[string]any) map[string]any {
 	if held := run.HeldCall; held != nil {
 		row["held_call"] = map[string]any{

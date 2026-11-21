@@ -1448,6 +1448,8 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 			skip(ev.ID, skipJoined)
 		case marked[steeredKey(ev.ID.String())]:
 			skip(ev.ID, skipSteered)
+		case marked[foldedKey(ev.ID.String())]:
+			skip(ev.ID, skipFolded)
 		case marked[absorbedKey(ev.ID.String())]:
 			skip(ev.ID, skipTriaged)
 		case worked[workkey.Derive([]string{ev.ID.String()})]:
@@ -1479,7 +1481,8 @@ func deliveryKeys(ev *events.Event) []string {
 
 // markedOf is which of evs a running turn took while its run held the seat, by
 // the mark it recorded: read as a wake ([joinedKey]), filed as its lead's steer
-// note ([steeredKey]) or absorbed by its triage ([absorbedKey]). Asked only of
+// note ([steeredKey]) or as an approved fold-in's ([foldedKey]), or absorbed by
+// its triage ([absorbedKey]). Asked only of
 // those whose own key is worked, so a dispatch no turn worked any trigger of
 // reads the ledger no more than it did.
 func (d *Dispatcher) markedOf(ctx context.Context, handle string, evs []*events.Event,
@@ -1487,7 +1490,7 @@ func (d *Dispatcher) markedOf(ctx context.Context, handle string, evs []*events.
 	var keys []string
 	for _, ev := range evs {
 		if id := ev.ID.String(); d.ledgered(ev.Type) && worked[workkey.Derive([]string{id})] {
-			keys = append(keys, joinedKey(id), steeredKey(id), absorbedKey(id))
+			keys = append(keys, joinedKey(id), steeredKey(id), foldedKey(id), absorbedKey(id))
 		}
 	}
 	if len(keys) == 0 || d.Completions == nil {
@@ -1808,6 +1811,8 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 			reason, disposition = joinedReason(markedBy[joinedKey(ev.ID.String())]), types.DispositionJoined
 		case skipSteered:
 			reason, disposition = steeredReason(markedBy[steeredKey(ev.ID.String())]), types.DispositionJoined
+		case skipFolded:
+			reason, disposition = foldedReason(markedBy[foldedKey(ev.ID.String())]), types.DispositionJoined
 		case skipTriaged:
 			reason, disposition = triagedReason(markedBy[absorbedKey(ev.ID.String())]), types.DispositionAbsorbed
 		}
@@ -1837,6 +1842,8 @@ func (d *Dispatcher) markedBy(ctx context.Context, handle string, all []*events.
 			keys = append(keys, joinedKey(id))
 		case skipSteered:
 			keys = append(keys, steeredKey(id))
+		case skipFolded:
+			keys = append(keys, foldedKey(id))
 		case skipTriaged:
 			keys = append(keys, absorbedKey(id))
 		}

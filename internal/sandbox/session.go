@@ -877,12 +877,12 @@ const (
 // SEVEN MINUTES, from the measured worst: the minute a take may wait for its
 // spool's room ([spoolRoomWait]), the archive read twice out of a box at its
 // floor pace of a mebibyte a second (96 s at 48 MiB), and the slowest session
-// a harness writes scrubbed at its 256 MiB of plaintext (238 s): 394 s counted
-// apart though the last two overlap. Only sessions a harness writes set it.
-// A take still scrubbing at its end FAILS CLOSED: nothing is kept, its place
-// is refused and the last kept copy stands, so a box costs only its own
-// session (docs/concepts/code-sandbox.md, "Seven minutes for the scrub";
-// ADR-0073).
+// a harness writes scrubbed at its 256 MiB of plaintext (246 s, 251 s at worst
+// under the engine's memory limit): 407 s counted apart though the last two
+// overlap. Only sessions a harness writes set it. A take still scrubbing at
+// its end FAILS CLOSED: nothing is kept, its place is refused and the last
+// kept copy stands, so a box costs only its own session
+// (docs/concepts/code-sandbox.md, "Seven minutes for the scrub"; ADR-0073).
 const SessionScrubWait = 7 * time.Minute
 
 // SessionTakeBudget is the most a take adds to the read of a box it is made in:
