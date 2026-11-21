@@ -2,6 +2,7 @@ package redact
 
 import (
 	"cmp"
+	"fmt"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -100,34 +101,18 @@ func (h heldLines) settledByLoop() int {
 // hold's bar counted at the rewritable point of that line start (the package
 // doc's "Settled in one pass"), and the claims' pairs are exactly the blocks
 // ending on a claim's key's line before the key: over random lines, bars,
-// pairs, spans and claims, each against a reading of every line start.
+// pairs, spans and claims, each against a reading of every line start, and a
+// bar's hi at a line start, where the rewritable point stands, half the time.
 //
 // Mutation: wake no unread bar passed before a pair lowered the rewritable
-// point, or take a block ending at the key's line start as ending on it, and
-// the sweep or the pairs come out otherwise.
+// point, or wake one only once the point falls below its hi, or take a block
+// ending at the key's line start as ending on it, and the sweep or the pairs
+// come out otherwise.
 func TestTheSweepSettlesWhereNoBarStandsAtItsRewritablePoint(t *testing.T) {
 	t.Parallel()
-	r := rand.New(rand.NewPCG(1666, 5))
-	for trial := range 20000 {
-		var b strings.Builder
-		for range 1 + r.IntN(12) {
-			b.WriteString(strings.Repeat("x", r.IntN(4)) + "\n")
-		}
-		h := heldLines{whole: b.String()}
+	check := func(name string, h heldLines, bars, pairs []bar, r0 int) {
+		t.Helper()
 		end := len(h.whole)
-		at := func() int { return r.IntN(end + 1) }
-		var bars, pairs []bar
-		for range r.IntN(6) {
-			lo := at()
-			bars = append(bars, bar{lo: lo, hi: lo + r.IntN(end-lo+1), unread: r.IntN(2) == 0})
-		}
-		for range r.IntN(3) {
-			pairs = append(pairs, bar{lo: lineStart(h.whole, at()), hi: at()})
-		}
-		r0 := lineStart(h.whole, at())
-		if r.IntN(3) == 0 {
-			r0 = end
-		}
 		slices.SortFunc(bars, byHi)
 		slices.SortFunc(pairs, byHi)
 		want := end
@@ -144,9 +129,45 @@ func TestTheSweepSettlesWhereNoBarStandsAtItsRewritablePoint(t *testing.T) {
 			want = lineStart(h.whole, want-1)
 		}
 		if got := h.sweep(bars, end, r0, pairs); got != want {
-			t.Fatalf("trial %d: swept to %d, where the largest line start no bar stands over is %d: lines %q, bars %v, pairs %v, rewritable %d",
-				trial, got, want, h.whole, bars, pairs, r0)
+			t.Fatalf("%s: swept to %d, where the largest line start no bar stands over is %d: lines %q, bars %v, pairs %v, rewritable %d",
+				name, got, want, h.whole, bars, pairs, r0)
 		}
+	}
+	// An unread bar passed while the point stood above its hi, which a pair
+	// then lowers the point to exactly: it stands, and the sweep falls past it.
+	check("an unread bar's hi at the lowered point", heldLines{whole: strings.Repeat("xxx\n", 5)},
+		[]bar{{lo: 13, hi: 20}, {lo: 1, hi: 16, unread: true}, {lo: 9, hi: 14}}, []bar{{lo: 16, hi: 10}}, 20)
+
+	r := rand.New(rand.NewPCG(1666, 5))
+	for trial := range 20000 {
+		var b strings.Builder
+		for range 1 + r.IntN(12) {
+			b.WriteString(strings.Repeat("x", r.IntN(4)) + "\n")
+		}
+		h := heldLines{whole: b.String()}
+		end := len(h.whole)
+		at := func() int { return r.IntN(end + 1) }
+		// hi is the line start at or after a point from lo half the time.
+		upTo := func(lo int) int {
+			hi := lo + r.IntN(end-lo+1)
+			if r.IntN(2) == 0 && hi > 0 && h.whole[hi-1] != '\n' {
+				hi += strings.IndexByte(h.whole[hi:], '\n') + 1
+			}
+			return hi
+		}
+		var bars, pairs []bar
+		for range r.IntN(6) {
+			lo := at()
+			bars = append(bars, bar{lo: lo, hi: upTo(lo), unread: r.IntN(2) == 0})
+		}
+		for range r.IntN(3) {
+			pairs = append(pairs, bar{lo: lineStart(h.whole, at()), hi: upTo(0)})
+		}
+		r0 := lineStart(h.whole, at())
+		if r.IntN(3) == 0 {
+			r0 = end
+		}
+		check(fmt.Sprintf("trial %d", trial), h, bars, pairs, r0)
 
 		h.spans = nil
 		for s := 0; s < end; {
