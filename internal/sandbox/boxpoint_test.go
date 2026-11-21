@@ -15,7 +15,7 @@ import (
 
 // pointAt is a box's point at tokens, the engine's own pair's 170,000 where
 // the cases say nothing else: OpenCode 2.3.0's on a 200,000-token limit.
-func pointAt(tokens int64) OpenCodePoint { return OpenCodePoint{Release: "2.3.0", Tokens: tokens} }
+func pointAt(tokens int64) BoxPoint { return BoxPoint{Release: "2.3.0", Tokens: tokens, Charge: 4} }
 
 // briefOf is a brief of n bytes.
 func briefOf(n int) string { return strings.Repeat("b", n) }
@@ -35,15 +35,15 @@ func TestOpenCodeSendsWholeStrictlyBelowThePoint(t *testing.T) {
 	brief := briefOf(8001)
 	for _, tc := range []struct {
 		name  string
-		point OpenCodePoint
+		point BoxPoint
 		bound int64
 		want  bool
 	}{
 		{name: "one token under, with the brief", point: pointAt(170000), bound: 167998, want: true},
 		{name: "at the point, with the brief", point: pointAt(170000), bound: 167999},
-		{name: "compaction off, far past", point: OpenCodePoint{Release: "2.3.0", Never: true}, bound: 900000,
+		{name: "compaction off, far past", point: BoxPoint{Release: "2.3.0", Never: true}, bound: 900000,
 			want: true},
-		{name: "a marked point, far under", point: OpenCodePoint{Tokens: 170000, Mark: PointDefaulted}, bound: 10},
+		{name: "a marked point, far under", point: BoxPoint{Tokens: 170000, Mark: PointDefaulted}, bound: 10},
 		{name: "a point at or below zero", point: pointAt(0), bound: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -55,8 +55,8 @@ func TestOpenCodeSendsWholeStrictlyBelowThePoint(t *testing.T) {
 			}
 		})
 	}
-	if got := OpenCodeCharge(8001); got != 2001 {
-		t.Errorf("OpenCodeCharge(8001) = %d, want 2001", got)
+	if got := Charge(4).Tokens(8001); got != 2001 {
+		t.Errorf("8,001 bytes at four a token = %d, want 2001", got)
 	}
 }
 
@@ -158,7 +158,7 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureLogs(t)
 			rig, opened, req := opencodeKept(t, true, "2.3.0")
-			rig.runner.Point = func(PointAsk) (OpenCodePoint, error) { return pointAt(tc.point), nil }
+			rig.runner.Point = func(PointAsk) (BoxPoint, error) { return pointAt(tc.point), nil }
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 				rig.runner, tc.reused, false, RunSources{})
 			t.Cleanup(got.release)
@@ -185,7 +185,7 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 	t.Run("the copy in its own box", func(t *testing.T) {
 		logs := captureLogs(t)
 		rig := newCoordRig(t)
-		rig.runner.Point = func(PointAsk) (OpenCodePoint, error) { return pointAt(100007), nil }
+		rig.runner.Point = func(PointAsk) (BoxPoint, error) { return pointAt(100007), nil }
 		req := launchReq("t1")
 		req.Model = "stub/model"
 		req.Continue = &Continuation{SessionID: "sess-own", Brief: savePointSameBox, Told: toldBySavePoint,
@@ -239,7 +239,7 @@ func TestTheOwnCopyIsReadToo(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rig, opened, req := opencodeKept(t, tc.interrupted, "2.3.0")
-			rig.runner.Point = func(PointAsk) (OpenCodePoint, error) { return pointAt(170000), nil }
+			rig.runner.Point = func(PointAsk) (BoxPoint, error) { return pointAt(170000), nil }
 			sources := RunSources{System: "the run's own"}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 				rig.runner, tc.reused, false, sources)
@@ -287,13 +287,13 @@ func TestAFailedReadHandsTheSummarizedBrief(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
-		point func(PointAsk) (OpenCodePoint, error)
+		point func(PointAsk) (BoxPoint, error)
 	}{
-		{name: "the box could not be asked", point: func(PointAsk) (OpenCodePoint, error) {
-			return OpenCodePoint{}, errors.New("the box is gone")
+		{name: "the box could not be asked", point: func(PointAsk) (BoxPoint, error) {
+			return BoxPoint{}, errors.New("the box is gone")
 		}},
-		{name: "a mark", point: func(PointAsk) (OpenCodePoint, error) {
-			return OpenCodePoint{Tokens: 900000, Mark: PointDefaulted}, nil
+		{name: "a mark", point: func(PointAsk) (BoxPoint, error) {
+			return BoxPoint{Tokens: 900000, Mark: PointDefaulted}, nil
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -354,7 +354,7 @@ func TestAnOpenCodeTellingByAReadingIsJudgedOnItsOwnBrief(t *testing.T) {
 			rig, opened, req := opencodeKept(t, true, readFor)
 			req.Session.Exact = &ExactTelling{Resumer: readFor, Brief: tc.reading, Replaced: tc.reading,
 				Told: toldByReading}
-			rig.runner.Point = func(PointAsk) (OpenCodePoint, error) { return pointAt(110000), nil }
+			rig.runner.Point = func(PointAsk) (BoxPoint, error) { return pointAt(110000), nil }
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 				rig.runner, false, false, RunSources{})
 			t.Cleanup(got.release)

@@ -11,7 +11,7 @@ import (
 // package doc says why the runner cannot decide it.
 
 // PointMark is why a box's OpenCode point could not be read for a launch, ""
-// where it was ([OpenCodePoint.Mark]). Every mark is read as a session that
+// where it was ([BoxPoint.Mark]). Every mark is read as a session that
 // may compact before its first request. A named string, so a word a later
 // build writes reads as the value it is rather than a panic; marks never leave
 // the launch that read them.
@@ -64,9 +64,10 @@ var PointMarks = []PointMark{PointUnread, PointRelease, PointPair, PointPlugin, 
 // Valid reports whether this build knows m.
 func (m PointMark) Valid() bool { return slices.Contains(PointMarks, m) }
 
-// OpenCodePoint is what a box's OpenCode compacts a continued session's first
-// request at, read in that box at the launch ([PointReader]).
-type OpenCodePoint struct {
+// BoxPoint is what a box's harness compacts a continued session's first
+// request at, read in that box at the launch ([PointReader];
+// [FirstRequestBox]).
+type BoxPoint struct {
 	// Release is the box's OpenCode release, as it answered it.
 	Release string
 	// Tokens is the point: OpenCode compacts where its count of the session
@@ -89,12 +90,10 @@ type OpenCodePoint struct {
 	// entries of every plugin folder the read listed, by path: never a
 	// plugin's options, which may hold a credential.
 	Plugins []string
+	// Charge is what the brief and BoxBytes count for in the harness's own
+	// estimate, as the box's runner states it.
+	Charge Charge
 }
-
-// OpenCodeCharge is OpenCode's estimate of n bytes of text, rounded up: at
-// least its own round(UTF-16 length / 4) of any text of n UTF-8 bytes, since a
-// string's UTF-8 bytes are never fewer than its UTF-16 units.
-func OpenCodeCharge(n int64) int64 { return (max(n, 0) + 3) / 4 }
 
 // SendsWhole reports whether OpenCode, at p, sends a continued session's
 // first request without compacting it first: compaction off (Never), or
@@ -104,7 +103,7 @@ func OpenCodeCharge(n int64) int64 { return (max(n, 0) + 3) / 4 }
 // count has no bound, or its reply's provider (countProvider) is not the
 // launch's (provider): OpenCode anchors its count on a reply of the run's
 // current provider alone, so another provider's count bounds nothing.
-func (p OpenCodePoint) SendsWhole(count *ResumedCount, countProvider, provider, brief string) bool {
+func (p BoxPoint) SendsWhole(count *ResumedCount, countProvider, provider, brief string) bool {
 	switch {
 	case p.Mark != "":
 		return false
@@ -115,7 +114,7 @@ func (p OpenCodePoint) SendsWhole(count *ResumedCount, countProvider, provider, 
 	if !ok || countProvider == "" || countProvider != provider {
 		return false
 	}
-	return bound+OpenCodeCharge(int64(len(brief)))+OpenCodeCharge(p.BoxBytes) < p.Tokens
+	return bound+p.Charge.Tokens(int64(len(brief)))+p.Charge.Tokens(p.BoxBytes) < p.Tokens
 }
 
 // ModelProvider is the provider a `--model` argument names, as OpenCode
@@ -180,12 +179,12 @@ type RunSources struct {
 // that may be a summary. Three answers, as [SessionRestorer.CheckCarry]'s: a
 // point, a mark, and an error where the box could not be asked.
 type PointReader interface {
-	ReadOpenCodePoint(ctx context.Context, box Sandbox, ask PointAsk) (OpenCodePoint, error)
+	ReadBoxPoint(ctx context.Context, box Sandbox, ask PointAsk) (BoxPoint, error)
 }
 
 // SummarizedTelling is a relaunch's briefs told as a continuation that may be
 // a summary, beside the held telling, where the launch decides between them
-// in its box ([OpenCodePoint.SendsWhole]): every call of the round from its
+// in its box ([BoxPoint.SendsWhole]): every call of the round from its
 // start, every lead its record keeps, and a guard that arms nothing.
 type SummarizedTelling struct {
 	// Brief is the run's prompt in the box the session was last worked in,

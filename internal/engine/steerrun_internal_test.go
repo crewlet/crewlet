@@ -508,7 +508,7 @@ func TestARunIsSteerableAfterItsLaunchingNodeRestarts(t *testing.T) {
 
 	// BEFORE THE RESTART the run reads one note at a batch.
 	c.file(t, "run-1", "req-before", "use the staging database")
-	before := c.e.runSteers.inbox(identityOfRun(row), 1)
+	before := c.e.runSteers.inbox(identityOfRun(row), 1, row.Harness)
 	before.Bind(t.Context(), row.LaunchID, provenance.NewBoundary())
 	got := before.Take(t.Context(), mcpbridge.SteerEventFinish, hookCall())
 	if !strings.Contains(got, "staging") {
@@ -1669,7 +1669,7 @@ func TestAConfirmationAnInboxServingNoJobCannotTakeSaysSo(t *testing.T) {
 		t.Errorf("a confirmation reaching a closed inbox answered %v, want ErrNoteUntaken", err)
 	}
 	// AN INBOX NOT YET BOUND takes no read either.
-	unbound := runs.inbox(identityOfRun(mustRow(t, store, "run-1")), 1)
+	unbound := runs.inbox(identityOfRun(mustRow(t, store, "run-1")), 1, executor.ClaudeCodeName)
 	t.Cleanup(unbound.Close)
 	if err := unbound.Read(ctx, []string{"n-1"}); !errors.Is(err, mcpbridge.ErrNoteUntaken) {
 		t.Errorf("a confirmation reaching an inbox not yet bound answered %v, want ErrNoteUntaken", err)
@@ -1956,7 +1956,7 @@ roles:
 	// THE RECOVERY'S SESSION, with an inbox of its own, as reopenAgentRun
 	// builds it.
 	row := mustRow(t, store, "run-1")
-	inbox := runs.inbox(identityOfRun(row), 1)
+	inbox := runs.inbox(identityOfRun(row), 1, row.Harness)
 	t.Cleanup(inbox.Close)
 	ledger := newBridgeLedger(store, nil)
 	session := &mcpbridge.Session{RunID: "run-1", Handle: "swe", Role: swe.Name, Surface: surface,
@@ -2799,7 +2799,7 @@ func TestAnOpenCodeRunsNoteIsReadAtItsNextStepByItsJob(t *testing.T) {
 		t.Fatalf("the plugin's poll and read: %v", seen.err)
 	}
 	if len(seen.notes) != 1 || seen.notes[0].ID != "req-1" ||
-		seen.notes[0].Inbox != executor.OpenCodeInboxID(launch, "req-1") ||
+		seen.notes[0].Inbox != executor.InboxID(executor.OpenCodeName, launch, "req-1") ||
 		!strings.Contains(seen.notes[0].Message, "use the staging database") {
 		t.Fatalf("the poll answered %+v, want the note under the id job %s admits it as", seen.notes, launch)
 	}

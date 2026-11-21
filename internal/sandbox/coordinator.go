@@ -2063,14 +2063,11 @@ type noteReader interface{ ReadsNotes() bool }
 // never asked for its turn's notes ([RunSteer.Pulled]), telling a run whose
 // harness's reading was switched off from one with nothing to read.
 //
-// RELIABLE for a harness that reads notes: a Claude Code run reaches its Stop
-// hook, an OpenCode plugin asks as the session starts working. A run that
-// succeeded without asking had its reading disabled (Claude Code: a managed
-// policy allowing only managed hooks or disabling all, or a release older than
-// 2.1.163, executor claudeNotesFloor; OpenCode: a policy denying the plugin or a
-// plugin that failed to load), and every note waited for its review. Only for a
-// run whose record names its seat ([LaunchRequest.SteerSeat]); logged on the
-// collecting node.
+// RELIABLE for a harness that reads notes: its reader asks before the run can
+// succeed. A run that succeeded without asking had its reading disabled, as
+// its runner says what can do that ([notesOffWhy]), and every note waited for
+// its review. Only for a run whose record names its seat
+// ([LaunchRequest.SteerSeat]); logged on the collecting node.
 func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, result Result) {
 	if !result.Success || len(run.Steer.Seat) == 0 || run.Steer.Pulled == run.LaunchID {
 		return
@@ -2086,17 +2083,14 @@ func (c *Coordinator) warnNotesUnasked(ctx context.Context, run PendingRun, resu
 	if reader, ok := runner.(noteReader); !ok || !reader.ReadsNotes() {
 		return
 	}
+	detail := "the run succeeded and its harness never asked for its turn's notes, so a note sent " +
+		"while it worked waited for its review instead of reaching it between its steps. Something in " +
+		"the box switched the harness's reading off"
+	if why := notesOffWhy(runner); why != "" {
+		detail += ": " + why
+	}
 	log.WarnContext(ctx, "steer_reader_never_ran", "turn_id", run.TurnID,
-		"launch_id", run.LaunchID, "agent", run.Harness,
-		"detail", "the run succeeded and its harness never asked for its turn's notes, so a "+
-			"note sent while it worked waited for its review instead of reaching it between its "+
-			"steps. Something in the box switched the harness's reading off: for Claude Code, a "+
-			"managed policy that allows only managed hooks (allowManagedHooksOnly, "+
-			"strictPluginOnlyCustomization) or disables every hook (disableAllHooks), or a "+
-			"release older than 2.1.163, the oldest whose Stop hook's answer reaches the model, "+
-			"which the run starts without its hooks and whose error stream says so; "+
-			"for OpenCode, a managed policy that denies the run's notes plugin "+
-			"(integration.use), or a plugin OpenCode failed to load, which its own log names")
+		"launch_id", run.LaunchID, "agent", run.Harness, "detail", detail)
 }
 
 // readBox is the part of a collection touching the box, made on its host's node:
@@ -2239,12 +2233,13 @@ const hookVerdictRetry = time.Second
 
 // settleHookReceipts settles run's job's hooks' serves by what the job's session
 // showed of them ([PendingStore.SettleHook]) and publishes every note and wake a
-// serve handed over ([CoordinatorOptions.SteersConfirmed]) on every Claude Code read.
+// serve handed over ([CoordinatorOptions.SteersConfirmed]) on every read of a job
+// whose harness's hooks serve receipts ([ThreadTraits.HookReceipts]).
 // A verdict the store does not answer within its room is [ErrStoreSilent],
 // returned before the read's take; the package doc's "A HOOK'S NOTE" says why.
 func (c *Coordinator) settleHookReceipts(ctx context.Context, run PendingRun, receipts HookReceipts,
 	read BoxRead) error {
-	if run.Harness != ClaudeCodeHarness {
+	if traits := c.threadTraits(run.Harness); !traits.Reads || !traits.HookReceipts {
 		return nil
 	}
 	notes, asked := run.Steer.Notes, askedTakes(run)
@@ -2520,7 +2515,7 @@ func (c *Coordinator) publishCollected(ctx context.Context, run PendingRun, resu
 			"turn_id", run.TurnID, "launch_id", run.LaunchID)
 		return run.Launch
 	}
-	ev := events.New(collectedRecord(run, facts, result, c.now()), events.TraceContext{
+	ev := events.New(collectedRecord(run, facts, result, c.pinnedWindow(run.Harness, facts.Model), c.now()), events.TraceContext{
 		TraceID: run.TraceID, ParentSpanID: run.SpanID,
 	})
 	ev.Source = run.Role
@@ -2540,7 +2535,8 @@ func (c *Coordinator) publishCollected(ctx context.Context, run PendingRun, resu
 // which is on the resumed phase record, so the two never sum past the turn's
 // spend. Its clock is the store's instant for the launch and this node's for the
 // collection, so DURATION includes the waiter's poll interval.
-func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collected time.Time) types.ExecutorCollected {
+func collectedRecord(run PendingRun, facts LaunchRecord, result Result, pinned int,
+	collected time.Time) types.ExecutorCollected {
 	// THE SESSION AND RELEASE THE BOX NAMED are held to the shapes a harness gives
 	// them, whatever the runner or host made of them: each is the box's word, and
 	// one of any other shape is none, never cut (a shortened id names another).
@@ -2605,10 +2601,9 @@ func collectedRecord(run PendingRun, facts LaunchRecord, result Result, collecte
 		HarnessSessionContinued: result.Continued,
 		HarnessSessionFellBack:  BoundFellBack(result.FellBack),
 	}
-	// The window the run was pinned to, from the model its launch recorded.
-	if run.Harness == ClaudeCodeHarness {
-		rec.ContextWindowTokens = ClaudeCodeWindow(facts.Model).Tokens
-	}
+	// The window the run was pinned to, as its runner pins the model its launch
+	// recorded ([windowPinner]), none for a runner that pins none.
+	rec.ContextWindowTokens = pinned
 	if kept := result.Kept; kept != nil {
 		rec.SessionTakenBytes = kept.Bytes
 		// AND WHY IT WAS NOT KEPT, at the executor log's bound for the reason: it

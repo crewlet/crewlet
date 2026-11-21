@@ -505,11 +505,17 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	p := PathsFor(box)
 	out := r.harness.Output(p)
 	files := []string{p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(), p.Result(), p.Findings(), p.Brief(), p.FreshBrief(), p.System(),
-		p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.OpenCodeConfig(),
 		p.BaseResult(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.MCPConfig(), p.MCPConfigFresh(),
 		p.JobScript(), p.JobScript() + ".next", p.JobEnded(), p.JobEnded() + ".next"}
+	dirs := []string{p.CommitAttribution(), p.SessionStaging()}
+	// EVERY HARNESS'S, not this run's alone: the box may last have run another.
+	for _, h := range harnesses {
+		if a, ok := h.(artifactHolder); ok {
+			ownFiles, ownDirs := a.artifacts(p)
+			files, dirs = append(files, ownFiles...), append(dirs, ownDirs...)
+		}
+	}
 	// The stream too, where it lives apart from the result: it is only
 	// truncated when the next job starts, and a peek between the clear and
 	// the start would show the previous job's stream as this one's.
@@ -522,10 +528,7 @@ func (r *Runner) ClearArtifacts(ctx context.Context, box sandbox.Sandbox) error 
 	// archive ([Paths.SessionPackStaging]) are named per taker or per pack, so
 	// they cannot be listed and are matched by a glob outside the quotes: one
 	// whose node stopped part way would otherwise stay for the box's life.
-	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " +
-		shellQuoteAll([]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(),
-			p.CommitAttribution(), p.SessionStaging(), p.ClaudeSkillsPlugin(),
-			p.OpenCodeSkills(), p.OpenCodeSkillsPlugin()}) +
+	cmd := "rm -f " + shellQuoteAll(files) + "; rm -rf " + shellQuoteAll(dirs) +
 		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + saveFiles +
 		"; rm -rf " + sandbox.ShellQuote(p.WorkDir()) + "/" + packStagingFiles
 	if _, err := box.Exec(ctx, cmd, sandbox.ExecOptions{}); err != nil {

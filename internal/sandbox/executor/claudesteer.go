@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/words"
@@ -125,29 +124,13 @@ func claudeSteerSettings(w sandbox.SteerWiring, env map[string]string) claudeNot
 // answer carries at least one.
 const ClaudeContextBudget = 9000
 
-// UTF16Len is s's length as Claude Code (JavaScript) measures it, in UTF-16
-// code units. An invalid UTF-8 byte counts as one, as U+FFFD.
-func UTF16Len(s string) int {
-	n := 0
-	for len(s) > 0 {
-		r, size := utf8.DecodeRuneInString(s)
-		s = s[size:]
-		if r >= 0x10000 {
-			n += 2
-			continue
-		}
-		n++
-	}
-	return n
-}
-
 // claudeNoteSeparator joins the notes of one answer.
 const claudeNoteSeparator = "\n\n"
 
-// ClaudeNotesThatFit is how many of messages, from the first, one hook answer
-// carries within [ClaudeContextBudget] — at least one, or an oversized note
+// notesThatFit is how many of messages, from the first, one Claude Code hook
+// answer carries within [ClaudeContextBudget] — at least one, or an oversized note
 // would wait for ever.
-func ClaudeNotesThatFit(messages []string) int {
+func (ClaudeCode) notesThatFit(messages []string) int {
 	total := 0
 	for i, msg := range messages {
 		size := UTF16Len(msg)
@@ -162,23 +145,12 @@ func ClaudeNotesThatFit(messages []string) int {
 	return len(messages)
 }
 
-// ClaudeRoomBeside is how many UTF-16 units one hook answer has left for a
+// roomBeside is how many UTF-16 units one Claude Code hook answer has left for a
 // second message once it carries first: what the engine holds its account of a
 // late call to, beside a person's widest note, so the two always share one
-// answer ([ClaudeNotesThatFit]).
-func ClaudeRoomBeside(first string) int {
+// answer ([ClaudeCode.notesThatFit]).
+func (ClaudeCode) roomBeside(first string) int {
 	return ClaudeContextBudget - UTF16Len(first) - UTF16Len(claudeNoteSeparator)
-}
-
-// HookNote is one message a hook answer hands the harness: a person's note,
-// whose sender By the transcript line names; a wake item, whose messages'
-// writers Writers names, one a message; or the engine's account of a late call
-// (Call), which the line names by its kind ([hookCallOne]).
-type HookNote struct {
-	By      string
-	Message string
-	Call    bool
-	Writers []string
 }
 
 // claudeHookAnswer is a Claude Code hook's answer: context for the model, and
@@ -193,7 +165,7 @@ type claudeHookOutput struct {
 	AdditionalContext string `json:"additionalContext"`
 }
 
-// ClaudeHookAnswer is the answer to a Claude Code hook at event handing its
+// hookAnswer is the answer to a Claude Code hook at event handing its
 // model notes, wakes and late calls: their messages joined as additional
 // context, and a transcript line naming the notes' senders, the wakes' writers
 // and how many late calls, in that order, ending in take's token
@@ -203,7 +175,7 @@ type claudeHookOutput struct {
 // the loop or block a step; at the finish the model continues its turn, whose
 // answer is the run's (measured on 2.1.263 and 2.1.310). The transcript line
 // reaches only the run's stream, never a request.
-func ClaudeHookAnswer(event, take string, notes []HookNote) string {
+func (ClaudeCode) hookAnswer(event, take string, notes []HookNote) string {
 	if len(notes) == 0 {
 		return ""
 	}
@@ -280,7 +252,7 @@ func ClaudeHookAnswer(event, take string, notes []HookNote) string {
 }
 
 // The hook's line names the late calls it hands over in these words: one, or
-// a count and the plural ([ClaudeHookAnswer]). A line naming notes names them
+// a count and the plural ([ClaudeCode.hookAnswer]). A line naming notes names them
 // first, so one that opens with either names calls alone ([hookLineKind]).
 const (
 	hookCallOne   = "a call that finished after its run stopped waiting for it"
@@ -289,7 +261,7 @@ const (
 
 // The hook's line names the wakes it hands over in these words: one, its
 // writer between the first two, or a count, the plural and the writers
-// ([ClaudeHookAnswer]). Named after the notes and before the calls, so a line
+// ([ClaudeCode.hookAnswer]). Named after the notes and before the calls, so a line
 // opening with either names no note ([hookLineKind]).
 const (
 	hookWakeOne   = "a message from "

@@ -971,7 +971,7 @@ func fenceEnd(text string, from, at int) (past int, inside bool) {
 
 // headedIn is every note, wake and late call text carries, by kind, each from its
 // heading to the next one's or to text's end — a hook's answer joins what one
-// step is handed in one text (ClaudeHookAnswer) — trimmed of the system
+// step is handed in one text ([ClaudeCode.hookAnswer]) — trimmed of the system
 // reminder a harness closes them in, in order and one at a time, so a reader
 // that stops reads no further.
 func headedIn(text string) iter.Seq2[EntryKind, string] {

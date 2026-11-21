@@ -933,7 +933,7 @@
 // OpenCode compacts a session before a request where its count of it reaches
 // the point its box sets for the run's model: the model's limit, read off the
 // box's catalog and documents, less a buffer. Only the box the run is handed
-// can say that point, so the launch asks it there ([Runner.ReadOpenCodePoint],
+// can say that point, so the launch asks it there ([Runner.ReadBoxPoint],
 // opencodepoint.go), in ONE exec under the run's own environment, the
 // engine's own document set aside as the run's script sets it aside
 // (OPENCODE_CONFIG_CONTENT), in the run's working directory: the box's login
@@ -1083,7 +1083,7 @@
 //     ([threadLine.Estimate]), an attachment's stored rendering or a PDF
 //     read's pages ([threadLine.AttachmentEstimate]), and an attachment the
 //     harness renders again by its type at two bytes a token of its line
-//     ([sandbox.ClaudeCharge]), which bounds any rendering of what the line
+//     ([claudeChargeBytes]), which bounds any rendering of what the line
 //     holds; a system record and every other record nothing, as the harness
 //     charges them;
 //   - A MAIN COMPACT BOUNDARY restarts it: no anchor, and the estimate of the

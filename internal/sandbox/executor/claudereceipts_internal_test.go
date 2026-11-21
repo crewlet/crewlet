@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -26,9 +27,9 @@ var (
 	rhOtherFire  = "hook-" + rcUUID(104)
 	rhBatch      = claudeEventToolBatch
 	rhStop       = claudeEventFinish
-	rhAskBatch   = sandbox.AskedTake{Take: rhBatchTake, Event: rhBatch}
-	rhAskStop    = sandbox.AskedTake{Take: rhStopTake, Event: rhStop}
-	rhAskUntaken = sandbox.AskedTake{Take: rhUntaken, Event: rhStop}
+	rhAskBatch   = sandbox.AskedTake{Take: rhBatchTake, Boundary: types.SteerBoundaryToolBatch}
+	rhAskStop    = sandbox.AskedTake{Take: rhStopTake, Boundary: types.SteerBoundaryFinish}
+	rhAskUntaken = sandbox.AskedTake{Take: rhUntaken, Boundary: types.SteerBoundaryFinish}
 )
 
 // rhSuccess is a hook's success at event, of firing, whose stdout, the hook's
@@ -164,8 +165,8 @@ func TestATakeIsHeldOnlyWhereItsTokenAndAContextShareAFiring(t *testing.T) {
 	for _, thread := range ctProbeThreads {
 		release := strings.Split(thread, "/")[0]
 		got := rhRead(t, release, true, rhProbe(t, thread),
-			sandbox.AskedTake{Take: ctProbeBatchTake, Event: rhBatch}, sandbox.AskedTake{Take: ctProbeStopTake,
-				Event: rhStop})
+			sandbox.AskedTake{Take: ctProbeBatchTake, Boundary: types.SteerBoundaryToolBatch}, sandbox.AskedTake{Take: ctProbeStopTake,
+				Boundary: types.SteerBoundaryFinish})
 		rhWant(t, thread, got, []string{ctProbeBatchTake, ctProbeStopTake}, nil, nil)
 	}
 	rhWant(t, "the whole pairs", rhRead(t, "2.1.322", true, rhBase(), rhAskBatch, rhAskStop),
@@ -245,7 +246,7 @@ func TestABatchPairBeforeAClearedReplyIsRestartedAndAStopPairIsNot(t *testing.T)
 // red.
 func TestAPairTheResumeDoesNotHandIsNotHeld(t *testing.T) {
 	t.Parallel()
-	later := sandbox.AskedTake{Take: rhLaterTake, Event: rhBatch}
+	later := sandbox.AskedTake{Take: rhLaterTake, Boundary: types.SteerBoundaryToolBatch}
 	// The batch's system message is record 5; the fallback after the Stop's
 	// pair takes it back.
 	withdrawn := rhChained(rhCall("x1"), rhPair(rhBatch, rhBatchFire, rhBatchTake), rhCall("x2"),
@@ -303,8 +304,8 @@ func TestAPairIsHeldOnlyOnAThreadEverySizePathReadsAlike(t *testing.T) {
 	}
 	for _, thread := range ctProbeThreads {
 		got := rhRead(t, strings.Split(thread, "/")[0], true, rhProbeWhole(t, thread),
-			sandbox.AskedTake{Take: ctProbeBatchTake, Event: rhBatch}, sandbox.AskedTake{Take: ctProbeStopTake,
-				Event: rhStop})
+			sandbox.AskedTake{Take: ctProbeBatchTake, Boundary: types.SteerBoundaryToolBatch}, sandbox.AskedTake{Take: ctProbeStopTake,
+				Boundary: types.SteerBoundaryFinish})
 		rhWant(t, thread+" whole", got, nil, nil, nil)
 		if !strings.Contains(got.Why, "every size path") {
 			t.Errorf("%s whole: why %q; want the size paths named", thread, got.Why)
@@ -346,7 +347,7 @@ func TestAReadAskedMoreTakesThanAHookRecordNamesAnswers(t *testing.T) {
 	walkThread(t.Context(), strings.NewReader(raw), threadPlainMax, testPass(t), &alone)
 	takes := []sandbox.AskedTake{rhAskBatch, rhAskStop}
 	for i := len(takes); i <= maxAskedTakes; i++ {
-		takes = append(takes, sandbox.AskedTake{Take: rcUUID(500 + i), Event: rhBatch})
+		takes = append(takes, sandbox.AskedTake{Take: rcUUID(500 + i), Boundary: types.SteerBoundaryToolBatch})
 	}
 	box, paths := cntBox(raw, nil)
 	got := ClaudeCode{}.readMainThread(t.Context(), box, paths, sandbox.MainThreadAsk{Session: ctSession,
@@ -407,7 +408,7 @@ func TestAbsenceIsProvenOnlyByAThreadThatMeetsEveryCondition(t *testing.T) {
 		}},
 	} {
 		got := rhRead(t, "2.1.322", true, tc.lines(t), append(slices.Clone(takes),
-			sandbox.AskedTake{Take: rhLaterTake, Event: rhBatch})...)
+			sandbox.AskedTake{Take: rhLaterTake, Boundary: types.SteerBoundaryToolBatch})...)
 		rhWant(t, name, got, tc.held, nil, nil)
 	}
 	box, paths := cntBox(cntThread(rhBase()...)+strings.TrimSuffix(rcPrompt(10, 11, 1100), "}"), nil)
@@ -426,7 +427,7 @@ func TestAnAskPastTheMasksDecidesNoTake(t *testing.T) {
 	t.Parallel()
 	takes := []sandbox.AskedTake{rhAskBatch, rhAskStop}
 	for i := len(takes); i <= maxAskedTakes; i++ {
-		takes = append(takes, sandbox.AskedTake{Take: rcUUID(300 + i), Event: rhStop})
+		takes = append(takes, sandbox.AskedTake{Take: rcUUID(300 + i), Boundary: types.SteerBoundaryFinish})
 	}
 	got := rhRead(t, "2.1.322", true, rhBase(), takes...)
 	rhWant(t, fmt.Sprintf("%d asked", len(takes)), got, nil, nil, nil)
@@ -449,7 +450,7 @@ func TestAnAskPastTheMasksDecidesNoTake(t *testing.T) {
 // case goes red; read it as a stray name, and the second does.
 func TestAHookCancelledLineDeniesNothing(t *testing.T) {
 	t.Parallel()
-	later := sandbox.AskedTake{Take: rhLaterTake, Event: rhBatch}
+	later := sandbox.AskedTake{Take: rhLaterTake, Boundary: types.SteerBoundaryToolBatch}
 	alone := rhChained(rhCall("x1"), []rhRecord{rhAttach(rhCancelled(rhBatch, rhLaterFire)),
 		rhReply(rcSaid("done"))}, rhPair(rhStop, rhStopFire, rhStopTake))
 	rhWant(t, "a cancelled firing alone at its event", rhRead(t, "2.1.322", true, alone, later, rhAskStop),
@@ -483,7 +484,7 @@ func TestOneWalkReadsTheThreadForTheCountAndTheReceipts(t *testing.T) {
 	raw := cntThread(rhProbe(t, ctProbeThreads[1])...)
 	var alone resumedReading
 	walkThread(t.Context(), strings.NewReader(raw), threadPlainMax, testPass(t), &alone)
-	takes := []sandbox.AskedTake{{Take: ctProbeBatchTake, Event: rhBatch}, {Take: ctProbeStopTake, Event: rhStop}}
+	takes := []sandbox.AskedTake{{Take: ctProbeBatchTake, Boundary: types.SteerBoundaryToolBatch}, {Take: ctProbeStopTake, Boundary: types.SteerBoundaryFinish}}
 	saved, _ := claudePrecompact(ctSession)
 	for name, tc := range map[string]struct {
 		count bool

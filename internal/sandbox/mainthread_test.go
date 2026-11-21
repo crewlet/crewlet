@@ -104,7 +104,8 @@ func TestTheCollectionReadsAnOpenCodeCopyItsJobEndedItself(t *testing.T) {
 	rig := newCoordRig(t)
 	rig.launch("t1")
 	run := rig.get("t1")
-	run.Harness = OpenCodeHarness
+	run.Harness = "opencode"
+	rig.runner.Thread = testThreadTraits["opencode"]
 	for name, tc := range map[string]struct {
 		read  BoxRead
 		at    capturePoint
@@ -258,8 +259,13 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 	// ANY INSTANT: the budget reads only whether the turn has a cap, since the
 	// host decides on its own clock whether it has passed.
 	capAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
-	claude, open := PendingRun{Harness: ClaudeCodeHarness}, PendingRun{Harness: OpenCodeHarness}
-	capped := PendingRun{Harness: ClaudeCodeHarness, Deadline: capAt}
+	claude, open := PendingRun{Harness: "claude-code"}, PendingRun{Harness: "opencode"}
+	capped := PendingRun{Harness: "claude-code", Deadline: capAt}
+	// EACH HARNESS AS ITS RUNNER STATES IT: hooks whose serves its thread shows,
+	// and a plugin that confirms its own, each reading its thread.
+	budget := func(run PendingRun, read BoxRead) time.Duration {
+		return BoxReadBudget(run, read, testThreadTraits[run.Harness])
+	}
 	for name, tc := range map[string]struct {
 		run  PendingRun
 		read BoxRead
@@ -274,12 +280,12 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 	} {
 		named := tc.run
 		named.Harness = ""
-		if got, want := BoxReadBudget(tc.run, tc.read), BoxReadBudget(named, tc.read)+tc.more; got != want {
+		if got, want := budget(tc.run, tc.read), budget(named, tc.read)+tc.more; got != want {
 			t.Errorf("%s: the read's budget is %v, want %v", name, got, want)
 		}
 	}
 	for _, run := range []PendingRun{claude, open} {
-		if got := BoxReadBudget(run, BoxReadCollect) - BoxReadBudget(PendingRun{}, BoxReadCollect); got != 36*time.Second {
+		if got := budget(run, BoxReadCollect) - budget(PendingRun{}, BoxReadCollect); got != 36*time.Second {
 			t.Errorf("an uncapped %s collection waits %v more than one that reads no thread, want 36s",
 				run.Harness, got)
 		}
@@ -296,7 +302,7 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 		// at the slowest node's crossing.
 		"a capped": {run: capped, held: held + JobEndBudget + discardGrace + coord.MaxValueCrossing},
 	} {
-		if got, want := BoxReadBudget(tc.run, BoxReadCollect),
+		if got, want := budget(tc.run, BoxReadCollect),
 			pollBound+time.Duration(float64(tc.held)/BoxReadAnswerShare); got != want {
 			t.Errorf("%s turn's Claude Code collection's budget is %v, want %v", name, got, want)
 		}
@@ -320,7 +326,7 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 		"a Claude Code job's loss":                  {run: claude, read: BoxReadLoss, more: share + verdict},
 		"an OpenCode collection":                    {run: open, read: BoxReadCollect},
 	} {
-		got, want := BoxReadBudget(served(tc.run), tc.read), BoxReadBudget(tc.run, tc.read)+tc.more
+		got, want := budget(served(tc.run), tc.read), budget(tc.run, tc.read)+tc.more
 		if off := got - want; off < -time.Microsecond || off > time.Microsecond {
 			t.Errorf("%s whose copy holds a serve: the read's budget is %v, want %v", name, got, want)
 		}
@@ -734,4 +740,11 @@ func TestTheProviderRidesBesideTheCount(t *testing.T) {
 		err, ErrCaptureUnbounded) {
 		t.Errorf("a stamp naming a provider past its bound is refused with %v, want %v", err, ErrCaptureUnbounded)
 	}
+}
+
+// testThreadTraits is what each harness's runner states its main-thread read
+// settles (internal/sandbox/executor's), for cases that name a harness.
+var testThreadTraits = map[string]ThreadTraits{
+	"claude-code": {Reads: true, CountsCutOff: true, HookReceipts: true, PlacesWithResumeRead: true},
+	"opencode":    {Reads: true},
 }

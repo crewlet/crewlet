@@ -69,7 +69,7 @@ room otherwise. The launch decides that, once the brief exists; no
 session is refused for its size alone, since a seat with no capped window
 protects no budget by refusing it. What bounds a continued run's every request
 is its harness's own compaction: Claude Code's at the window Claude Code holds
-the run's model to, at most the pin (`sandbox.ClaudeCodeWindow`), and OpenCode's
+the run's model to, at most the pin (the Claude Code runner's `PinnedWindow`), and OpenCode's
 at the point its box's catalog and documents set for the run's model, which a
 continuation's launch reads in that box
 ([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md)).

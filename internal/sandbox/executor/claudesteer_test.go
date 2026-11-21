@@ -34,20 +34,20 @@ func TestANoteIsMeasuredInUTF16Units(t *testing.T) {
 func TestAHookAnswerCarriesTheOldestNotesThatFit(t *testing.T) {
 	t.Parallel()
 	half := strings.Repeat("a", executor.ClaudeContextBudget/2-1)
-	if got := executor.ClaudeNotesThatFit([]string{half, half, "x"}); got != 2 {
+	if got := executor.HookNotesThatFit(executor.ClaudeCodeName, []string{half, half, "x"}); got != 2 {
 		t.Errorf("two half-budget notes and a third: %d fit, want 2", got)
 	}
 	// ASTRAL CHARACTERS: in runes these fit, in UTF-16 units they do not.
 	astral := strings.Repeat("🚀", executor.ClaudeContextBudget/4+1)
-	if got := executor.ClaudeNotesThatFit([]string{astral, astral}); got != 1 {
+	if got := executor.HookNotesThatFit(executor.ClaudeCodeName, []string{astral, astral}); got != 1 {
 		t.Errorf("two notes each over a quarter of the budget in astral characters: %d fit, "+
 			"want 1", got)
 	}
 	whole := strings.Repeat("a", executor.ClaudeContextBudget+100)
-	if got := executor.ClaudeNotesThatFit([]string{whole, "x"}); got != 1 {
+	if got := executor.HookNotesThatFit(executor.ClaudeCodeName, []string{whole, "x"}); got != 1 {
 		t.Errorf("a note past the budget on its own: %d carried, want it alone", got)
 	}
-	if got := executor.ClaudeNotesThatFit(nil); got != 0 {
+	if got := executor.HookNotesThatFit(executor.ClaudeCodeName, nil); got != 0 {
 		t.Errorf("no notes: %d", got)
 	}
 }
@@ -56,7 +56,7 @@ func TestAHookAnswerCarriesTheOldestNotesThatFit(t *testing.T) {
 // `continue` or `reason` could stop the loop or block a step.
 func TestAHookAnswerIsContextAndNeverADecision(t *testing.T) {
 	t.Parallel()
-	got := executor.ClaudeHookAnswer("Stop", hookTake, []executor.HookNote{
+	got := executor.HookAnswer(executor.ClaudeCodeName, "Stop", hookTake, []executor.HookNote{
 		{By: "ada", Message: "## A note from ada\nuse <staging> & main"},
 		{By: "bob", Message: "## A note from bob\ntag it"},
 		{By: "ada", Message: "## A note from ada\nand push"},
@@ -81,11 +81,11 @@ func TestAHookAnswerIsContextAndNeverADecision(t *testing.T) {
 	if !strings.Contains(got, "<staging> & main") {
 		t.Errorf("the note's own characters were escaped: %s", got)
 	}
-	one := executor.ClaudeHookAnswer("PostToolBatch", hookTake, []executor.HookNote{{By: "ada", Message: "m"}})
+	one := executor.HookAnswer(executor.ClaudeCodeName, "PostToolBatch", hookTake, []executor.HookNote{{By: "ada", Message: "m"}})
 	if !strings.Contains(one, `"systemMessage":"crewlet: a note from ada reached the run `+hookToken+`"`) {
 		t.Errorf("one note after a batch answered %s", one)
 	}
-	if none := executor.ClaudeHookAnswer("Stop", hookTake, nil); none != "" {
+	if none := executor.HookAnswer(executor.ClaudeCodeName, "Stop", hookTake, nil); none != "" {
 		t.Errorf("no notes answered %q, want nothing", none)
 	}
 }
@@ -113,7 +113,7 @@ func TestAHookAnswerNamesItsTakeAndTheLiveLineLeavesItOut(t *testing.T) {
 		"PostToolBatch": "a note from ada reached the run",
 		"Stop":          "a note from ada reached the run as it was finishing",
 	} {
-		answer := executor.ClaudeHookAnswer(event, hookTake, []executor.HookNote{{By: "ada", Message: "m"}})
+		answer := executor.HookAnswer(executor.ClaudeCodeName, event, hookTake, []executor.HookNote{{By: "ada", Message: "m"}})
 		var out struct {
 			SystemMessage string `json:"systemMessage"`
 		}

@@ -170,6 +170,9 @@ func startProbe(t *testing.T, node, plugin string) *probe {
 	go func() {
 		defer close(p.reports)
 		scan := bufio.NewScanner(stdout)
+		// A REPORT CARRIES THE ADMISSION'S WHOLE TEXT, a note at the probe's
+		// widest among them ([probeNoteUnits]).
+		scan.Buffer(make([]byte, 0, 64*1024), 1<<20)
 		for scan.Scan() {
 			var r probeReport
 			if err := json.Unmarshal(scan.Bytes(), &r); err != nil {
@@ -308,7 +311,7 @@ func (p *probe) quiet(d time.Duration, why string) {
 // type, so a field it renames is a field this stand-in renames too.
 func noteNumbered(seq int) mcpbridge.SteerNote {
 	id := "note-" + string(rune('0'+seq))
-	return mcpbridge.SteerNote{Seq: seq, ID: id, Inbox: executor.OpenCodeInboxID("job-1", id),
+	return mcpbridge.SteerNote{Seq: seq, ID: id, Inbox: executor.InboxID(executor.OpenCodeName, "job-1", id),
 		Message: "## A note from ada, sent while this turn was running\n\nnote " + id}
 }
 
@@ -337,6 +340,11 @@ func wantAdmitted(t *testing.T, input map[string]any, session string, note mcpbr
 	}
 }
 
+// probeNoteUnits is the widest note the plugin's probe admits, in UTF-16 units:
+// far past every runner's ceiling, so a plugin that cut a note anywhere below
+// it is caught (openCodePollCeiling says what it stands for).
+const probeNoteUnits = 100_000
+
 const (
 	steerSession = "ses_0123456789abcdef0123456789abcdef"
 	otherSession = "ses_fedcba9876543210fedcba9876543210"
@@ -352,7 +360,8 @@ const (
 // Mutations, each red: admit with `resume: true`; open the gate at setup;
 // advance the cursor on a failed admission; leave the gate open on
 // `succeeded`; confirm any delivery; retry a 401 or a 404; drop the doubling,
-// or its reset; await a poll in setup; write a file beside the plugin.
+// or its reset; await a poll in setup; write a file beside the plugin; cut a
+// long note's text.
 func TestThePluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 	t.Parallel()
 	node := nodeForNotes(t)
@@ -419,7 +428,7 @@ func TestThePluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 		// CONFIRMED ONLY ON ITS OWN SESSION'S DELIVERY OF A NOTE IT ADMITTED.
 		pr.event("a", "session.inbox.delivered", otherSession, map[string]any{"inboxID": first.Inbox})
 		pr.event("a", "session.inbox.delivered", steerSession,
-			map[string]any{"inboxID": executor.OpenCodeInboxID("job-1", "not-admitted")})
+			map[string]any{"inboxID": executor.InboxID(executor.OpenCodeName, "job-1", "not-admitted")})
 		route.none(300*time.Millisecond, "OpenCode delivered no note this plugin admitted to its session")
 		pr.event("a", "session.inbox.delivered", steerSession, map[string]any{"inboxID": first.Inbox})
 		read := route.next("POST read", "confirm the note OpenCode delivered")
@@ -451,6 +460,25 @@ func TestThePluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 		}
 		pr.quiet(500*time.Millisecond, "the execution settled before the third note")
 		route.none(time.Second, "the session's execution succeeded")
+	})
+
+	t.Run("admits a note of 100,000 UTF-16 units whole", func(t *testing.T) {
+		t.Parallel()
+		route, pr := newNotesRoute(t), startProbe(t, node, entry)
+		pr.setup("a", route.url(), steerSession)
+		pr.expect("setup")
+		pr.event("a", "session.execution.started", steerSession, nil)
+		long := noteNumbered(1)
+		long.Message += "\n\n" + strings.Repeat("a", probeNoteUnits-executor.UTF16Len(long.Message)-2)
+		route.next("GET notes", "poll once the session's execution started").reply(http.StatusOK, notesBody(long))
+		input := pr.expect("prompt-started").Input
+		wantAdmitted(t, input, steerSession, long)
+		if text, _ := input["text"].(string); executor.UTF16Len(text) != probeNoteUnits {
+			t.Errorf("the plugin admitted %d UTF-16 units of a %d-unit note", executor.UTF16Len(text), probeNoteUnits)
+		}
+		if !pr.expect("prompt").OK {
+			t.Fatal("the stand-in refused an admission it was not told to")
+		}
 	})
 
 	t.Run("moves its cursor past a note only once the note is admitted", func(t *testing.T) {
@@ -676,7 +704,7 @@ func TestThePluginReadsTheBridgesOwnNotesRoute(t *testing.T) {
 	}
 	entry := filepath.Join(steerPluginOf(t, cfgPath).Package, "index.js")
 
-	note := mcpbridge.SteerNote{Seq: 3, ID: "req-7", Inbox: executor.OpenCodeInboxID("job-1", "req-7"),
+	note := mcpbridge.SteerNote{Seq: 3, ID: "req-7", Inbox: executor.InboxID(executor.OpenCodeName, "job-1", "req-7"),
 		Message: "## A note from ada, sent while this turn was running\n\nTarget the release branch."}
 	inbox := &routeInbox{notes: []mcpbridge.SteerNote{note}, reads: make(chan []string, 4)}
 	endpoint := probeBridge(t, inbox, &probeLedger{})

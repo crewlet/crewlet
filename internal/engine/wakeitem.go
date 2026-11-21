@@ -218,10 +218,9 @@ func (s *runSteers) fileWake(ctx context.Context, turnID, job string, w steer.Wa
 }
 
 // maxWakeItemUnits is the most UTF-16 units one wake item's message may take
-// ([wakeItemMessage]): what one Claude Code hook answer has left beside a
-// person's widest note, as a late call's account is held to
-// ([maxLateItemUnits]), so a note and a wake always share one answer.
-var maxWakeItemUnits = maxLateItemUnits
+// ([wakeItemMessage]): the engine's one item bound ([maxLateItemUnits]), so a
+// note and a wake always share one answer.
+const maxWakeItemUnits = maxLateItemUnits
 
 // wakeItemMessage is the wakes of one item as the inbox hands them to the
 // model of the job they are for, oldest first ([prompts.WakeMessage]), under b

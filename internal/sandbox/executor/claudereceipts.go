@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -50,6 +51,19 @@ func hookEventOf(event string) hookEvent {
 	case claudeEventToolBatch:
 		return hookEventBatch
 	case claudeEventFinish:
+		return hookEventStop
+	}
+	return hookEventNone
+}
+
+// askedEventOf is the Claude Code hook event a serve at boundary answered
+// ([sandbox.AskedTake.Boundary]): PostToolBatch after a step's calls, Stop at
+// the finish.
+func askedEventOf(boundary types.SteerBoundary) hookEvent {
+	switch boundary {
+	case types.SteerBoundaryToolBatch:
+		return hookEventBatch
+	case types.SteerBoundaryFinish:
 		return hookEventStop
 	}
 	return hookEventNone
@@ -246,7 +260,7 @@ func (r *hookReading) receipts(ctx context.Context, ask sandbox.MainThreadAsk) s
 	held := make([]bool, len(ask.Takes))
 	var heldAt [hookEventStop + 1]bool
 	for i, take := range ask.Takes {
-		t, event := r.takes[i], hookEventOf(take.Event)
+		t, event := r.takes[i], askedEventOf(take.Boundary)
 		if t.opened && (!t.closed || t.event != event) {
 			stray = true
 		}
@@ -287,7 +301,7 @@ func (r *hookReading) receipts(ctx context.Context, ask sandbox.MainThreadAsk) s
 		unproven = "the resume's model cannot place the thread: " + string(unplaced)
 	}
 	for i, take := range ask.Takes {
-		t, event := r.takes[i], hookEventOf(take.Event)
+		t, event := r.takes[i], askedEventOf(take.Boundary)
 		switch {
 		case held[i], t.opened && t.closed && t.event == event && event != hookEventNone:
 			continue

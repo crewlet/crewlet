@@ -206,7 +206,7 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 		return []HookServed{{Take: take, Launch: launch, Boundary: string(boundary), Lost: lost}}
 	}
 	batch, finish := types.SteerBoundaryToolBatch, types.SteerBoundaryFinish
-	run := PendingRun{TurnID: "t1", LaunchID: job, Harness: ClaudeCodeHarness}
+	run := PendingRun{TurnID: "t1", LaunchID: job, Harness: "claude-code"}
 	run.Steer.Notes = []RunNote{
 		{ID: "batch", Serves: serve("take-batch", job, batch, "")},
 		{ID: "finish", Serves: serve("take-finish", job, finish, "")},
@@ -219,8 +219,8 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 		{ID: "the same take", Serves: serve("take-batch", job, batch, "")},
 		{ID: "a brief's", Serves: serve("take-brief", job, types.SteerBoundaryBrief, "")},
 	}
-	want := []AskedTake{{Take: "take-batch", Event: "PostToolBatch"}, {Take: "take-finish", Event: "Stop"},
-		{Take: "take-cancelled", Event: "PostToolBatch"}, {Take: "take-item", Event: "PostToolBatch"}}
+	want := []AskedTake{{Take: "take-batch", Boundary: batch}, {Take: "take-finish", Boundary: finish},
+		{Take: "take-cancelled", Boundary: batch}, {Take: "take-item", Boundary: batch}}
 	if got := askedTakes(run); !slices.Equal(got, want) {
 		t.Errorf("the read asks %+v, want %+v", got, want)
 	}
@@ -244,7 +244,7 @@ func TestACollectionReadsReceiptsOnlyWhereItsJobHasServedNotes(t *testing.T) {
 	rig.coordinator.readMainThread(t.Context(), rig.get("t1"), nil, rig.runner, BoxReadStop,
 		capturePoint{cutOff: true}, Result{})
 	asked := thread.asks()
-	if len(asked) != 2 || asked[1].Count || !slices.Equal(asked[1].Takes, []AskedTake{{Take: "take-n1", Event: "Stop"}}) {
+	if len(asked) != 2 || asked[1].Count || !slices.Equal(asked[1].Takes, []AskedTake{{Take: "take-n1", Boundary: finish}}) {
 		t.Errorf("a stop with a served note asked %+v, want its take and no count", asked)
 	}
 }
@@ -294,7 +294,7 @@ func TestEveryEndingReadPublishesWhatItsJobsHooksRead(t *testing.T) {
 		rig := newCoordRig(t)
 		spy := watchConfirmed(rig.coordinator)
 		run := rig.launch("t1")
-		run.Harness = ClaudeCodeHarness
+		run.Harness = "claude-code"
 		served := func(id string) RunNote {
 			return RunNote{ID: id, Read: &NoteRead{Launch: run.LaunchID, Take: "take-" + id},
 				Serves: []HookServed{{Take: "take-" + id, Launch: run.LaunchID,
@@ -315,7 +315,7 @@ func TestEveryEndingReadPublishesWhatItsJobsHooksRead(t *testing.T) {
 		rig := newCoordRig(t)
 		spy := watchConfirmed(rig.coordinator)
 		run := rig.launch("t1")
-		run.Harness = ClaudeCodeHarness
+		run.Harness = "claude-code"
 		run.Steer.Notes = []RunNote{{ID: "wake", For: run.LaunchID,
 			Wake: &WakeItem{Wakes: []SealedWake{{ID: "w-1"}}}, Read: &NoteRead{Launch: run.LaunchID, Take: "take-wake"},
 			Serves: []HookServed{{Take: "take-wake", Launch: run.LaunchID,

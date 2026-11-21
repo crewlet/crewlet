@@ -149,10 +149,16 @@ func fakeRunners(play fakePlayer) map[string]sandbox.Runner {
 	if play == nil {
 		play = demoRun
 	}
+	real := sandboxRunners()
 	runners := make(map[string]sandbox.Runner, len(executor.Names()))
 	for _, name := range executor.Names() {
 		runner := sandbox.NewFakeRunner(name)
 		runner.Player = play
+		// WHAT THE HARNESS'S RUNNER STATES, so a fake run is read as its harness's is.
+		runner.Thread = sandbox.ThreadTraitsOf(real[name])
+		if r, ok := real[name].(*executor.Runner); ok {
+			runner.Pin = r.PinnedWindow
+		}
 		runners[name] = runner
 	}
 	return runners

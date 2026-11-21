@@ -37,10 +37,11 @@ const MainThreadReadWait = 27 * time.Second
 
 // mainThreadReader is a [Runner] whose harness reads the main thread of the
 // session a job's box ran: ONE READ, which every reading a collection asks of
-// that thread shares ([MainThreadAsk]). Optional: a runner that is none reads
-// nothing, and a Claude Code count asked of it is [CountUnread].
+// that thread shares ([MainThreadAsk]), and what that read settles
+// ([ThreadTraits]). Optional: a runner that is none reads nothing.
 type mainThreadReader interface {
 	ReadMainThread(ctx context.Context, box Sandbox, ask MainThreadAsk) MainThreadReading
+	ThreadTraits() ThreadTraits
 }
 
 // MainThreadAsk is what a box read asks of its job's main thread.
@@ -68,19 +69,12 @@ type MainThreadAsk struct {
 }
 
 // AskedTake is one hook's serve whose receipt is asked: its take
-// ([HookServed.Take]) and the Claude Code hook event it answered,
-// "PostToolBatch" or "Stop".
+// ([HookServed.Take]) and the boundary it was served at
+// ([HookServed.Boundary]), which the runner reads as its harness's own event.
 type AskedTake struct {
-	Take  string
-	Event string
+	Take     string
+	Boundary types.SteerBoundary
 }
-
-// The Claude Code hook events a serve answers, by its boundary
-// ([HookServed.Boundary]).
-const (
-	hookEventToolBatch = "PostToolBatch"
-	hookEventFinish    = "Stop"
-)
 
 // HookReceipts is what the job's session shows of the takes asked: each asked
 // take in one list at most, or in none where the read cannot decide it, Why
@@ -122,8 +116,8 @@ type MainThreadReading struct {
 // askedTakes is every hook's serve on run's copy whose receipt only its job's
 // session settles: of each unread note or item for the job ([RunNote.IsFor]),
 // its serves to the job that no loss struck or that its harness cancelled,
-// once each, in the record's order. A serve at a boundary no Claude Code hook
-// answers is asked nothing.
+// once each, in the record's order. A serve at a boundary no hook answers
+// ([hookBoundary]) is asked nothing.
 func askedTakes(run PendingRun) []AskedTake {
 	var takes []AskedTake
 	for _, n := range run.Steer.Notes {
@@ -131,51 +125,49 @@ func askedTakes(run PendingRun) []AskedTake {
 			continue
 		}
 		for _, h := range n.Serves {
-			event := hookEventOf(h.Boundary)
-			if h.Launch != run.LaunchID || event == "" || (h.Lost != "" && h.Lost != ServeCancelled) ||
+			if h.Launch != run.LaunchID || !hookBoundary(h.Boundary) || (h.Lost != "" && h.Lost != ServeCancelled) ||
 				slices.ContainsFunc(takes, func(t AskedTake) bool { return t.Take == h.Take }) {
 				continue
 			}
-			takes = append(takes, AskedTake{Take: h.Take, Event: event})
+			takes = append(takes, AskedTake{Take: h.Take, Boundary: types.SteerBoundary(h.Boundary)})
 		}
 	}
 	return takes
 }
 
-// hookEventOf is the Claude Code hook event a serve at boundary answered, ""
-// for a boundary no hook answers.
-func hookEventOf(boundary string) string {
+// hookBoundary reports whether a serve at boundary was a hook's: after a step's
+// tool calls, or as the run was about to finish.
+func hookBoundary(boundary string) bool {
 	switch types.SteerBoundary(boundary) {
-	case types.SteerBoundaryToolBatch:
-		return hookEventToolBatch
-	case types.SteerBoundaryFinish:
-		return hookEventFinish
+	case types.SteerBoundaryToolBatch, types.SteerBoundaryFinish:
+		return true
 	}
-	return ""
+	return false
 }
 
 // readMainThread reads run's job's main thread in box through runner, once, for
-// every reading read asks of it ([asksMainThread]): at a Claude Code or an
-// OpenCode job's collection what its harness counts the copy at and estimates
-// its next request at, and at a Claude Code job's collection, stop or loss the
-// receipts of the hooks' serves the copy holds ([askedTakes]). A job not over,
-// a runner that reads no thread and an OpenCode job whose harness did not end
-// its own run (its export may lack what its copy holds) are counted
-// [CountUnread] with no count read. The count carries the least window the run
+// every reading read asks of it ([asksMainThread]): at the collection of a job
+// whose runner reads its thread what its harness counts the copy at and
+// estimates its next request at, and where its hooks serve receipts, at its
+// collection, stop or loss the receipts of the hooks' serves the copy holds
+// ([askedTakes]). A job not over, and one whose harness did not end its own
+// run where the runner counts no cut-off copy ([ThreadTraits.CountsCutOff]),
+// are counted [CountUnread] with no count read. The count carries the least window the run
 // reported ([Result.ReportedWindow]). Held within [Coordinator.mainThreadWait],
 // armed here: past it the read ends where it is, the count is [CountUnread]
 // and no receipt is decided; a marked count is logged.
 func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sandbox, runner Runner,
 	read BoxRead, at capturePoint, result Result) MainThreadReading {
 
-	if !asksMainThread(run, read) {
+	traits := ThreadTraitsOf(runner)
+	if !asksMainThread(run, read, traits) {
 		return MainThreadReading{}
 	}
-	counts, openCode := read == BoxReadCollect, run.Harness == OpenCodeHarness
-	counted := counts && at.final && (!openCode || !at.cutOff)
+	counts, uncounted := read == BoxReadCollect, !traits.CountsCutOff
+	counted := counts && at.final && (!uncounted || !at.cutOff)
 	ask := MainThreadAsk{Session: run.SessionRan(), Release: result.HarnessVersion, Count: counted,
 		Next: counted, Ended: !at.cutOff}
-	if asksHookReceipts(run) {
+	if asksHookReceipts(run, traits) {
 		ask.Takes = askedTakes(run)
 	}
 	var reading MainThreadReading
@@ -199,17 +191,18 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 		switch {
 		case !at.final:
 			why = "the job was not over as its box was read, so its harness may still write its thread"
-		case openCode && at.cutOff:
-			why = "the job's harness did not end its own run, so its export may lack what its copy holds"
+		case uncounted && at.cutOff:
+			why = "the job's harness did not end its own run, so its record of the session may lack what " +
+				"its copy holds"
 		case !reads:
 			why = "the job's runner reads no main thread"
 		}
-		// THE SAME OUTCOME FOR EITHER HARNESS: a marked count bounds no first
-		// request, so the copy is told as a cut-off one; an OpenCode one's
-		// floor, which only its count would bound, reads its newest
-		// request's input as well.
+		// THE SAME OUTCOME FOR EVERY HARNESS: a marked count bounds no first
+		// request, so the copy is told as a cut-off one; the floor of one
+		// whose cut-off copy is uncounted, which only its count would bound,
+		// reads its newest request's input as well.
 		outcome := "a relaunch that continues this copy in its box is told it as a cut-off one"
-		if openCode {
+		if uncounted {
 			outcome += ", and is held to its newest request's input"
 		}
 		log.InfoContext(ctx, "executor_session_count_unbounded", "turn_id", run.TurnID,
@@ -245,19 +238,35 @@ func unboundedBecause(mark CountMark) string {
 }
 
 // asksMainThread reports whether read of run's box asks the job's main thread
-// anything: a Claude Code or an OpenCode job's collection, and any read of a
-// box whose copy holds a serve its thread settles ([asksHookReceipts]).
-// [BoxReadBudget] holds the read's wait for exactly these.
-func asksMainThread(run PendingRun, read BoxRead) bool {
-	collects := read == BoxReadCollect && (run.Harness == ClaudeCodeHarness || run.Harness == OpenCodeHarness)
-	return collects || asksHookReceipts(run)
+// anything, its runner's read settling traits: the collection of a job whose
+// runner reads its thread, and any read of a box whose copy holds a serve its
+// thread settles ([asksHookReceipts]). [BoxReadBudget] holds the read's wait
+// for exactly these.
+func asksMainThread(run PendingRun, read BoxRead, traits ThreadTraits) bool {
+	collects := read == BoxReadCollect && traits.Reads
+	return collects || asksHookReceipts(run, traits)
 }
 
 // asksHookReceipts reports whether the read of run's box asks its job's
-// session for receipts: a Claude Code job's copy that holds a serve to the job
-// ([PendingRun.asksReceipts]). Only Claude Code's hooks serve a take its
-// thread shows, so an OpenCode job's read asks none, nor holds a verdict's
-// share ([BoxReadBudget]).
-func asksHookReceipts(run PendingRun) bool {
-	return run.Harness == ClaudeCodeHarness && run.asksReceipts()
+// session for receipts: the copy of a job whose harness's hooks serve takes its
+// thread shows ([ThreadTraits.HookReceipts]) holding a serve to the job
+// ([PendingRun.asksReceipts]). Any other job's read asks none, nor holds a
+// verdict's share ([BoxReadBudget]).
+func asksHookReceipts(run PendingRun, traits ThreadTraits) bool {
+	return traits.Reads && traits.HookReceipts && run.asksReceipts()
+}
+
+// threadTraits is what the runner c's manager holds for harness settles by
+// reading its main thread, zero where the node has no runtime or no runner
+// for it.
+func (c *Coordinator) threadTraits(harness string) ThreadTraits {
+	manager := c.mgr()
+	if manager == nil {
+		return ThreadTraits{}
+	}
+	runner, err := manager.RunnerFor(harness)
+	if err != nil {
+		return ThreadTraits{}
+	}
+	return ThreadTraitsOf(runner)
 }
