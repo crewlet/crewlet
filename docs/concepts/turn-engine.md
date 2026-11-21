@@ -754,6 +754,14 @@ read as one note; anybody else's information about the work joins as a wake,
 and a request waits for a turn of its own
 ([Code Sandbox](code-sandbox.md#notes-to-a-running-run),
 [ADR-0168](../../adr/0168-a-busy-seats-other-wakes-are-triaged-and-the-engine-gates-the-choice.md)).
+**An approved fold-in steers too**: another person's or seat's request waiting
+behind the run is put to the run's requester and the seat's leads, and once
+one of them approves it, it is filed as that approver's note saying who asked
+and who approved, the asker's words in their fence, so the run takes it up as
+part of the work on the requester's apps. Refused or unanswered when the job
+ends, it waits for a turn of its own; the model never decides it
+([Code Sandbox](code-sandbox.md#folding-another-writers-request-in),
+[ADR-0109](../../adr/0109-a-turn-somebody-woke-is-held-to-the-apps-they-use.md)).
 
 ### Rules
 

@@ -61,15 +61,20 @@ const (
 	// notes' tellings), and that this build carries without reading: STATED HERE,
 	// so the next field a build adds is added inside it, and the build that adds
 	// it moves its own figure out of this one, as the turn's wake items took
-	// theirs ([wakeRowBytes]). The turn's read of its conversation
-	// ([PendingRun.Base]) has its own place, at [ConversationBaseMaxBytes].
-	ExtraRowBytes = 256<<10 - wakeRowBytes
+	// theirs ([wakeRowBytes]) and the job's fold-ins theirs ([foldInRowBytes]).
+	// The turn's read of its conversation ([PendingRun.Base]) has its own
+	// place, at [ConversationBaseMaxBytes].
+	ExtraRowBytes = 256<<10 - wakeRowBytes - foldInRowBytes
 
 	// wakeRowBytes is the turn's wake items' figure, moved out of the room a
 	// later build adds keys in: [MaxTurnWakes] items at their bound, a hundred
 	// KiB, which the 99,696 bytes TestTheWholeRowFitsItsBudget weighs them at
 	// leave a little over.
 	wakeRowBytes = 100 << 10
+
+	// foldInRowBytes is the job's fold-ins' figure, moved out of the room a
+	// later build adds keys in: [MaxJobFoldIns] at [MaxFoldInBytes] each.
+	foldInRowBytes = MaxJobFoldIns * MaxFoldInBytes
 
 	// MaxAnswerBytes bounds a recorded answer as the row holds it (its seal
 	// and deliveries, [RecordedAnswer]) and, apart, the copies letting go of
@@ -202,6 +207,27 @@ const (
 	// delivery. [MaxTurnWakes] items at it fit [wakeRowBytes] of the row.
 	MaxWakeItemBytes = 8 << 10
 
+	// MaxJobFoldIns bounds the fold-ins one job asks ([PendingRun.FoldIns]),
+	// answered or not: FOUR, [MaxJobWakes]. Each puts a request in front of a
+	// person who decides it by hand while the run works, so four other
+	// requests behind one job is already a queue that belongs in turns of its
+	// own, which is where a fifth waits; and four at [MaxFoldInBytes] is
+	// sixteen KiB of a row read and written whole on every flip.
+	MaxJobFoldIns = MaxJobWakes
+
+	// MaxFoldInBytes bounds one fold-in as the row writes it ([FoldIn]): FOUR
+	// KIB, an excerpt of the asker's words an approver reads beside who asked,
+	// where and whom it is put to. The words are display alone (the delivery
+	// on the inbox is what joins), so the engine cuts them to fit and says how
+	// much more is where they were written ([FoldIn.Cut]).
+	MaxFoldInBytes = 4 << 10
+
+	// MaxFoldInPutTo bounds the seats a fold-in is put to ([FoldIn.PutTo]):
+	// EIGHT, the run's requester and the seven nearest of the seat's leads. A
+	// lead further up still answers it; a question put to the whole top of a
+	// deep chart is put to nobody in particular.
+	MaxFoldInPutTo = 8
+
 	// MaxWakeIDBytes bounds a wake's id ([SealedWake.ID]), of the id charset
 	// so it is written as itself: SIXTY-FOUR BYTES, past the delivery's UUID
 	// its filer names it by.
@@ -232,8 +258,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_319_068
-	measuredSpare       = 379_240
+	measuredOtherFields = 2_335_469
+	measuredSpare       = 379_223
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].

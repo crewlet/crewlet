@@ -16,7 +16,6 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/delegated"
-	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/textcut"
@@ -395,16 +394,10 @@ type heldTool interface {
 	Digest() string
 }
 
-// heldEvidence is what a held call cites: the work item the run is on, where it
-// is a Crewlet Works task (the one kind of item a task reference names).
+// heldEvidence is what a held call cites ([sandbox.TaskEvidence]).
 func heldEvidence(turn *turnctx.Turn) []decision.Evidence {
-	if turn == nil || turn.WorkItem == nil || turn.WorkItem.Backend != types.WorkWorklet ||
-		turn.WorkItem.ID == "" {
+	if turn == nil {
 		return nil
 	}
-	label := turn.WorkItem.Key
-	if len(label) > decision.MaxEvidenceLabel {
-		label = ""
-	}
-	return []decision.Evidence{{Kind: decision.EvidenceTask, Ref: turn.WorkItem.ID, Label: label}}
+	return sandbox.TaskEvidence(turn.WorkItem)
 }

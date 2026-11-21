@@ -697,6 +697,14 @@ type ExecutorAnswerGiven struct {
 	// names that call, and records none that names one for a question that
 	// is not.
 	Approval string `json:"approval,omitempty"`
+
+	// FoldIn names the fold-in this tells of, by its id, where a person
+	// answered whether another writer's request joins a running job's work
+	// (internal/sandbox's FoldIn), and is empty for every other answer. The
+	// answer is recorded on the run's row before this is sent, so it carries
+	// no LaunchID: the holder only reads the row again, and a build that
+	// predates fold-ins spends it as an answer naming no question.
+	FoldIn string `json:"fold_in,omitempty"`
 }
 
 // EventType is the "executor_answer_given" wire type.
