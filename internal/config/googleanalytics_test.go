@@ -1,10 +1,15 @@
 package config_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/authz/orgchart"
 	"github.com/crewlet/crewlet/internal/config"
+	_ "github.com/crewlet/crewlet/internal/googleanalytics"
+	"github.com/crewlet/crewlet/internal/growth"
 )
 
 // googleAnalyticsDoc is a company on Google Cloud's identity with Google
@@ -32,7 +37,8 @@ roles:
 // A GOOGLE ANALYTICS BLOCK SIGNS IN THROUGH THE GOOGLE CLOUD IDENTITY: an
 // enabled block validates beside a provisioned Google Cloud block, a seat
 // names its level and properties, and its level reaches the role the chart
-// decides growth tools by.
+// decides growth tools by: at operate, the read and operate grants and never
+// administer.
 func TestAGoogleAnalyticsBlockAndSeatValidate(t *testing.T) {
 	t.Parallel()
 	c, err := config.ParseCompany([]byte(googleAnalyticsDoc("    enabled: true\n    properties: [\"123456789\"]",
@@ -47,6 +53,12 @@ func TestAGoogleAnalyticsBlockAndSeatValidate(t *testing.T) {
 	seat := o.AgentSeatByHandle("growth-lead")
 	if seat == nil || seat.GrowthLevels["google_analytics"] != "operate" {
 		t.Fatalf("the seat's growth levels are %v, want google_analytics at operate", seat)
+	}
+	for _, l := range growth.Levels() {
+		carried := slices.Contains(orgchart.GrantedSeats(o, authz.GrowthSeatGrant("google_analytics", l)), "growth-lead")
+		if want := l != growth.LevelAdminister; carried != want {
+			t.Errorf("the seat carries google_analytics_%s: %v, want %v", l, carried, want)
+		}
 	}
 }
 
