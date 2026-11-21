@@ -264,10 +264,12 @@ func (p *Product) prepareReplies(ctx context.Context, call growth.Call) (growth.
 	}
 	ask := recordOf(call, m)
 	ask.Operation = replyBinding(m.app, rs)
+	changes := make([]growth.CardChange, 0, len(rs))
 	for _, r := range rs {
-		ask.Changes = append(ask.Changes, growth.RecordChange{Field: "responseBody", Label: "Reply to review " + r.review.ID,
-			Before: r.current, After: r.text, Text: true})
+		changes = append(changes, growth.CardChange{Field: "responseBody", Label: "Reply to review " + r.review.ID,
+			Before: r.current, After: r.text})
 	}
+	ask.Changes = recordChanges(changes, true)
 	return growth.Hold{Class: growth.ClassPublic, Binding: replyBinding(m.app, rs), Question: question,
 		Context: textcut.Within(b.String(), sandbox.MaxAskContextBytes-1024),
 		Subject: delegated.Subject(delegated.KindPublicPost, append([]string{m.app}, ids...)...), Ask: ask}, nil
@@ -316,9 +318,9 @@ func (p *Product) applyReplies(ctx context.Context, call growth.Call, approved s
 	defer release()
 	rec := recordOf(call, m)
 	rec.Operation = replyBinding(m.app, rs)
-	rec.Answerer = call.Approver
-	p.note(ctx, growth.StepAllowed, rec)
-	rec.Answerer = ""
+	if err := p.allow(ctx, rec, call.Approver); err != nil {
+		return nil, err
+	}
 	if !growth.BindingHolds(approved, replyBinding(m.app, rs)) {
 		p.note(ctx, growth.StepVoid, rec)
 		return nil, growth.ErrMoved

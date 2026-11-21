@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/growth"
@@ -139,15 +140,39 @@ type step struct {
 	rec  growth.Record
 }
 
-// audit keeps every step.
+// audit keeps every step as the access log would: it refuses a record the
+// log's own validation refuses, failing the test, keeps one answer and one
+// outcome per act, and fails the step refuse names.
 type audit struct {
-	mu    sync.Mutex
-	steps []step
+	t      *testing.T
+	mu     sync.Mutex
+	steps  []step
+	phases map[string]bool
+	refuse growth.Step
 }
 
 func (a *audit) add(s growth.Step, r growth.Record) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := accessdomain.GrowthOf(s, r).Validate(); err != nil {
+		a.t.Errorf("the access log refuses the %s record %+v: %v", s, r, err)
+		return false, err
+	}
+	if s == a.refuse {
+		return false, errors.New("the access log is unreachable")
+	}
+	phase := r.Call + r.HeldCall + "/outcome"
+	switch s {
+	case growth.StepAllowed, growth.StepDenied, growth.StepLapsed:
+		phase = r.Call + r.HeldCall + "/answer"
+	}
+	if a.phases == nil {
+		a.phases = map[string]bool{}
+	}
+	if a.phases[phase] {
+		return false, nil
+	}
+	a.phases[phase] = true
 	a.steps = append(a.steps, step{s, r})
 	return true, nil
 }
@@ -196,7 +221,7 @@ func productKeys(t *testing.T, s *store, level string, team bool, admin *config.
 			AppStoreConnect: &config.RoleAppStoreConnect{Enabled: &on, Level: level, Apps: []string{"111"},
 				TeamResources: team}}}},
 	}
-	a := &audit{}
+	a := &audit{t: t}
 	p := appstoreconnect.New(appstoreconnect.Deps{
 		Company: func() *config.Company { return company },
 		Resolve: func(v string) string {
@@ -230,7 +255,7 @@ func TestAReadReachesOnlyTheSeatsApps(t *testing.T) {
 	s := &store{}
 	p, _ := product(t, s, "read", false)
 	ctx := context.Background()
-	got, err := p.Run(ctx, growth.Call{Handle: "growth", Tool: appstoreconnect.ToolRead,
+	got, err := p.Run(ctx, growth.Call{ID: "r1", Handle: "growth", Tool: appstoreconnect.ToolRead,
 		Args: map[string]any{"operation": "apps_getCollection"}})
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +269,7 @@ func TestAReadReachesOnlyTheSeatsApps(t *testing.T) {
 		"team users":   {"operation": "users_getCollection"},
 		"a write here": {"operation": "appStoreVersionLocalizations_updateInstance", "path": map[string]any{"id": "L1"}},
 	} {
-		if _, err := p.Run(ctx, growth.Call{Handle: "growth", Tool: appstoreconnect.ToolRead, Args: args}); refusal(err) == "" {
+		if _, err := p.Run(ctx, growth.Call{ID: "r2", Handle: "growth", Tool: appstoreconnect.ToolRead, Args: args}); refusal(err) == "" {
 			t.Errorf("%s answered %v, want a refusal before Apple", name, err)
 		}
 	}
@@ -308,7 +333,7 @@ func TestAPublicActIsMadeOnlyOnWhatWasApproved(t *testing.T) {
 	s := &store{state: "READY_FOR_SALE", reviewed: "It crashes on launch."}
 	p, a := product(t, s, "operate", false)
 	ctx := context.Background()
-	if _, err := p.Run(ctx, growth.Call{Handle: "growth", Tool: appstoreconnect.ToolReviews,
+	if _, err := p.Run(ctx, growth.Call{ID: "r1", Handle: "growth", Tool: appstoreconnect.ToolReviews,
 		Args: map[string]any{"app": "111"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -333,6 +358,11 @@ func TestAPublicActIsMadeOnlyOnWhatWasApproved(t *testing.T) {
 		t.Fatalf("an edited review's reply answered %v and wrote %v", err, s.writes)
 	}
 	s.reviewed = "It crashes on launch."
+	// THE VOID CALL HOLDS ITS ONE ANSWER AND OUTCOME: the reply is asked again.
+	if _, err := p.Apply(ctx, approved, hold.Binding); refusal(err) != growth.RefusedForbidden || len(s.writes) != 0 {
+		t.Fatalf("a void call applied again answered %v and wrote %v", err, s.writes)
+	}
+	approved.HeldCall = "h2"
 	if _, err := p.Apply(ctx, approved, hold.Binding); err != nil || len(s.writes) != 1 {
 		t.Fatalf("an approved reply answered %v and wrote %v", err, s.writes)
 	}
@@ -358,7 +388,7 @@ func TestAPublicActIsMadeOnlyOnWhatWasApproved(t *testing.T) {
 func TestSalesArePerCurrencyAndCutToTheSeatsApps(t *testing.T) {
 	t.Parallel()
 	p, _ := product(t, &store{}, "read", false)
-	got, err := p.Run(context.Background(), growth.Call{Handle: "growth", Tool: appstoreconnect.ToolSales,
+	got, err := p.Run(context.Background(), growth.Call{ID: "s1", Handle: "growth", Tool: appstoreconnect.ToolSales,
 		Args: map[string]any{"date": "yesterday"}})
 	if err != nil {
 		t.Fatal(err)
@@ -516,5 +546,55 @@ func TestAppStoreAnalyticsIsTurnedOnWithAKeyPastedOnce(t *testing.T) {
 			strings.Contains(err.Error(), "not a key") {
 			t.Errorf("%s answered %v", name, err)
 		}
+	}
+}
+
+// EVERY RECORD IS ONE THE ACCESS LOG ACCEPTS (the fake audit applies its
+// validation): free text and long values go as their digest, a field the log
+// may not name is left out and counted; and an allow that does not land
+// stops the act, which never runs unrecorded.
+//
+// Mutation: keep values in the clear, keep a personal field, or make the act
+// after a failed allow, and the log refuses the record or a write goes out.
+func TestEveryActIsRecordedAsTheLogAcceptsIt(t *testing.T) {
+	t.Parallel()
+	s := &store{state: "PREPARE_FOR_SUBMISSION"}
+	p, a := product(t, s, "operate", false)
+	ctx := context.Background()
+	long := strings.Repeat("Take notes anywhere. ", 40)
+	edit := growth.Call{ID: "c1", Handle: "growth", Tool: appstoreconnect.ToolOperate, Args: map[string]any{
+		"operation": "appStoreVersionLocalizations_updateInstance", "path": map[string]any{"id": "L1"},
+		"body": map[string]any{"data": map[string]any{"type": "appStoreVersionLocalizations", "id": "L1",
+			"attributes": map[string]any{"description": long, "supportEmail": "pat@example.com", "locale": "en-US"}}},
+		"reason": "refresh the listing"}}
+	hold, err := p.Prepare(ctx, edit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Apply(ctx, edit, hold.Binding); err != nil {
+		t.Fatal(err)
+	}
+	last := a.steps[len(a.steps)-1]
+	got := map[string]growth.RecordChange{}
+	for _, c := range last.rec.Changes {
+		got[c.Field] = c
+	}
+	if last.step != growth.StepMade || !got["description"].Text || got["locale"].Text || got["locale"].After != "en-US" ||
+		got["unrecordedFields"].After != "1" || len(got) != 3 {
+		t.Errorf("the made record's changes are %+v", last.rec.Changes)
+	}
+
+	s.state = "READY_FOR_SALE"
+	publish := edit
+	publish.ID, publish.Tool = "", appstoreconnect.ToolPublish
+	held, err := p.Prepare(ctx, publish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved := publish
+	approved.HeldCall, approved.Approver = "h1", "founder"
+	a.refuse = growth.StepAllowed
+	if _, err := p.Apply(ctx, approved, held.Binding); refusal(err) != growth.RefusedUnavailable || len(s.writes) != 1 {
+		t.Errorf("an act whose allow did not land answered %v and wrote %v", err, s.writes)
 	}
 }

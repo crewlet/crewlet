@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/url"
+	"regexp"
+	"strconv"
+	"sync"
 
+	"github.com/crewlet/crewlet/internal/accessdomain"
 	"github.com/crewlet/crewlet/internal/growth"
 )
 
@@ -14,6 +17,10 @@ import (
 func recordOf(call growth.Call, m made) growth.Record {
 	r := growth.Record{Product: Kind, Tool: call.Tool, Class: m.class, Handle: call.Handle, Turn: call.Turn, Via: m.slot,
 		Call: call.ID, HeldCall: call.HeldCall, Operation: operationDigest(m)}
+	if r.HeldCall != "" {
+		// A HELD CALL IS NAMED BY ITS HELD CALL ALONE, as the log keys its act.
+		r.Call = ""
+	}
 	if m.team != nil {
 		r.Connection = m.team.id
 	}
@@ -27,15 +34,42 @@ func recordOf(call growth.Call, m made) growth.Record {
 	return r
 }
 
-// recordChanges are card changes as the access log keeps them; text marks
-// words that are published, which the log keeps as a digest.
-func recordChanges(ch []growth.CardChange, text bool) []growth.RecordChange {
+// recordChanges are card changes as the access log keeps them, so the log
+// accepts every record: a published word, free text and any value the log
+// refuses in the clear go as their digest and length; a field the log may not
+// name, or one past its bound, is left out and counted in a change of its own.
+func recordChanges(ch []growth.CardChange, public bool) []growth.RecordChange {
 	out := make([]growth.RecordChange, 0, len(ch))
+	left := 0
 	for _, c := range ch {
-		out = append(out, growth.RecordChange{Field: c.Field, Label: c.Label, Before: c.Before, After: c.After,
-			Money: c.Money, Text: text})
+		if !accessdomain.GrowthFieldRecordable(c.Field) || len(out) == accessdomain.MaxGrowthChanges-1 {
+			left++
+			continue
+		}
+		label := c.Label
+		if len(label) > accessdomain.GrowthLabelMaxBytes || !accessdomain.GrowthValueRecordable(label) {
+			label = ""
+		}
+		text := (public || !inClear(c.Before) || !inClear(c.After)) && c.Before+c.After != ""
+		out = append(out, growth.RecordChange{Field: c.Field, Label: label, Before: c.Before, After: c.After,
+			Money: c.Money && !text, Text: text})
+	}
+	if left > 0 {
+		out = append(out, growth.RecordChange{Field: unrecordedField, Label: "Fields left out",
+			After: strconv.Itoa(left)})
 	}
 	return out
+}
+
+// unrecordedField is the change that counts the fields a record leaves out.
+const unrecordedField = "unrecordedFields"
+
+// tokenShape is a value kept in the clear: a state, a number, an ID or a flag,
+// never words somebody wrote.
+var tokenShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Za-z0-9_.:+-]{1,128}$`) })
+
+func inClear(v string) bool {
+	return v == "" || (tokenShape().MatchString(v) && accessdomain.GrowthValueRecordable(v))
 }
 
 // failureOf is a failure's closed word for the access log.
@@ -111,16 +145,15 @@ func (p *Product) note(ctx context.Context, step growth.Step, r growth.Record) {
 	}
 }
 
-// accountOf is the account a request on path names for the log, for a step
-// whose call is not made concrete.
+// accountOf is the account a request names for the log, for a step whose
+// call is not made concrete; "unknown" where it names none the log may keep.
 func accountOf(args map[string]any) string {
-	if app, _ := args["app"].(string); app != "" {
-		return app
+	app, _ := args["app"].(string)
+	if path, _ := args["path"].(map[string]any); app == "" && path != nil {
+		app, _ = path["id"].(string)
 	}
-	if path, _ := args["path"].(map[string]any); path != nil {
-		if id, _ := path["id"].(string); id != "" {
-			return url.PathEscape(id)
-		}
+	if !accessdomain.GrowthIDRecordable(app) {
+		return "unknown"
 	}
-	return "unknown"
+	return app
 }

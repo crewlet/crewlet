@@ -252,9 +252,9 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 	defer release()
 	rec := recordOf(call, m)
 	if held {
-		rec.Answerer = call.Approver
-		p.note(ctx, growth.StepAllowed, rec)
-		rec.Answerer = ""
+		if err := p.allow(ctx, rec, call.Approver); err != nil {
+			return nil, err
+		}
 	}
 	b, err := p.beforeOf(ctx, m)
 	if err != nil {
