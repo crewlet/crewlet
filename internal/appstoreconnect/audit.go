@@ -12,7 +12,7 @@ import (
 // recordOf is the access log's record of call made as m: its account the app,
 // or the team for a call no app owns.
 func recordOf(call growth.Call, m made) growth.Record {
-	r := growth.Record{Product: Kind, Tool: call.Tool, Class: m.class, Handle: call.Handle, Turn: call.Turn,
+	r := growth.Record{Product: Kind, Tool: call.Tool, Class: m.class, Handle: call.Handle, Turn: call.Turn, Via: m.slot,
 		Call: call.ID, HeldCall: call.HeldCall, Operation: operationDigest(m)}
 	if m.team != nil {
 		r.Connection = m.team.id

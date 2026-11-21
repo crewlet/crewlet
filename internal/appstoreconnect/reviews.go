@@ -80,10 +80,9 @@ func (p *Product) reviewCall(ctx context.Context, handle, app string, opID strin
 	if err := p.placeApp(ctx, seat, &m, app); err != nil {
 		return made{}, err
 	}
-	slot, ok := keyFor(op, m.team.slots)
+	slot, ok := keyFor(op, m.team.slots, adminMay(op, m.class))
 	if !ok {
-		return made{}, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("no connected key may make %s: it needs "+
-			"the %s role. No call was made.", op.ID, words.Or(rolesNames(op.Roles))))
+		return made{}, noKey(op, m.team.slots)
 	}
 	m.slot = slot
 	return m, nil

@@ -186,10 +186,21 @@ func (p *Product) Card(ctx context.Context, call growth.Call, approved string) (
 	if err != nil {
 		return growth.Card{}, err
 	}
+	if m.slot == adminSlot {
+		// NOT READ AGAIN WITH THE ADMIN KEY, whose every call is on the access
+		// log: the card shows the request as asked, and Apply reads the target.
+		return cardOf(call, m, before{attrs: map[string]any{}}, false, []string{"The target is read again with " +
+			"the Admin key only when the change is applied; Allow once sends nothing if it moved since the ask."}), nil
+	}
 	b, err := p.beforeOf(ctx, m)
 	if err != nil {
 		return growth.Card{}, said(err)
 	}
+	return cardOf(call, m, b, !growth.BindingHolds(approved, binding(m, b)), nil), nil
+}
+
+// cardOf is m's card over its target's state b.
+func cardOf(call growth.Call, m made, b before, moved bool, findings []string) growth.Card {
 	target := m.op.Resource
 	if _, id := typeAndID(m.path); id != "" {
 		target += " " + id
@@ -198,7 +209,7 @@ func (p *Product) Card(ctx context.Context, call growth.Call, approved string) (
 		Account: growth.Account{Kind: Kind, Connection: m.team.id, ID: m.app, State: growth.AccountServing},
 		Acts: []growth.CardAct{{Target: target, Summary: verbOf(m.op.Method) + " " + m.op.Resource,
 			Changes: changesOf(m, b), Danger: m.op.Danger}},
-		Reason: reasonOf(call.Args), Moved: !growth.BindingHolds(approved, binding(m, b))}, nil
+		Reason: reasonOf(call.Args), Moved: moved, Findings: findings}
 }
 
 // leaseOf is the lease a write on m holds: one write per app, or per team.

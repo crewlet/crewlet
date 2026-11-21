@@ -198,7 +198,7 @@ func (p *Product) appsOf(ctx context.Context, t *team) ([]appInfo, error) {
 		return t.apps, nil
 	}
 	op, _ := Catalog().Operation("apps_getCollection")
-	slot, ok := keyFor(op, t.slots)
+	slot, ok := keyFor(op, t.slots, false)
 	if !ok {
 		return nil, fmt.Errorf("%w: listing apps", ErrNoKey)
 	}

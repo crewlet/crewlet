@@ -29,11 +29,13 @@ func (p *Product) Prove(ctx context.Context) ([]integration.Finding, error) {
 	var findings []integration.Finding
 	for _, t := range teams {
 		for _, slot := range t.slots {
+			if slot == adminSlot {
+				// READ AS A KEY, NEVER CALLED WITH: the Admin key makes approved
+				// account changes alone, so a pass proves it parses (teamsNow).
+				continue
+			}
 			subject := "integrations." + Kind + ".connections." + t.id + ".keys." + slot
 			path := "/v1/apps"
-			if slot == "admin" {
-				path = "/v1/users"
-			}
 			_, err := t.client.Do(ctx, slot, Request{Method: "GET", Path: path, Query: url.Values{"limit": {"1"}},
 				Read: true, Reserved: true})
 			var apiErr *APIError

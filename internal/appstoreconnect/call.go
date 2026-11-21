@@ -96,11 +96,9 @@ func (p *Product) concrete(ctx context.Context, handle, tool string, args map[st
 	if err := p.place(ctx, seat, &m, args); err != nil {
 		return made{}, err
 	}
-	slot, ok := keyFor(op, m.team.slots)
+	slot, ok := keyFor(op, m.team.slots, adminMay(op, class))
 	if !ok {
-		return made{}, growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("no connected key may make %s: it "+
-			"needs a key with the %s role. A person adds one on the integration's page. No call was made.", op.ID,
-			words.Or(rolesNames(op.Roles))))
+		return made{}, noKey(op, m.team.slots)
 	}
 	m.slot = slot
 	if class != op.Class {
@@ -109,6 +107,24 @@ func (p *Product) concrete(ctx context.Context, handle, tool string, args map[st
 		}
 	}
 	return m, nil
+}
+
+// noKey is the refusal of a call no connected key may make, saying why where
+// the Admin key could: it is kept for account changes an administrator allows.
+func noKey(op growth.Operation, connected []string) error {
+	others := slices.DeleteFunc(slices.Clone(op.Roles), func(r string) bool { return r == RoleAdmin })
+	switch {
+	case slices.Contains(connected, adminSlot) && len(rolesNames(others)) == 0:
+		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("only the Admin role may make %s, and Crewlet "+
+			"uses the Admin key for account changes an administrator allows alone. No call was made.", op.ID))
+	case slices.Contains(connected, adminSlot):
+		return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("%s needs a key with the %s role: Crewlet uses "+
+			"the Admin key for account changes an administrator allows alone. A person adds one on the "+
+			"integration's page. No call was made.", op.ID, words.Or(rolesNames(others))))
+	}
+	return growth.Refuse(growth.RefusedForbidden, fmt.Sprintf("no connected key may make %s: it needs a key with "+
+		"the %s role. A person adds one on the integration's page. No call was made.", op.ID,
+		words.Or(rolesNames(op.Roles))))
 }
 
 // rolesNames are roles as setup names them, the Account Holder aside.

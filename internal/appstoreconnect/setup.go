@@ -15,9 +15,9 @@ const defaultConnection = "main"
 // slotWords are each key slot's label and what it unlocks, as the form shows
 // them.
 var slotWords = map[string][2]string{
-	"admin":             {"Admin key", "Users, invitations and every account change, each asked of an administrator."},
+	"admin":             {"Admin key", "Can manage team users and keys; used only for changes an administrator allows."},
 	"app_manager":       {"App Manager key", "Versions, submissions, prices, in-app purchases and external TestFlight."},
-	"developer":         {"Developer key", "Builds and TestFlight; with access to certificates, identifiers and profiles, signing and devices."},
+	"developer":         {"Developer key", "Builds and TestFlight; with that access, certificates, identifiers, profiles and devices."},
 	"marketing":         {"Marketing key", "Listings, reviews, custom product pages, in-app events and internal TestFlight. Recommended first."},
 	"finance":           {"Finance key", "Sales, finance and analytics reports."},
 	"sales":             {"Sales key", "Sales and analytics reports."},

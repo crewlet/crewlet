@@ -51,7 +51,7 @@ func (p *Product) sales(ctx context.Context, call growth.Call) (any, error) {
 		return nil, growth.Refuse(growth.RefusedUnavailable, "add the team's vendor number to read sales. No call was made.")
 	}
 	op, _ := Catalog().Operation(opSales)
-	slot, ok := keyFor(op, t.slots)
+	slot, ok := keyFor(op, t.slots, false)
 	if !ok {
 		return nil, growth.Refuse(growth.RefusedForbidden, "sales need a Finance, Sales or Access to Reports key. No call was made.")
 	}
