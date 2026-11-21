@@ -15,8 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button, Money, Text } from "@crewlethq/ui";
-import { AgoTime } from "~/components/AgoTime.tsx";
+import { Button, Money, RelativeTime, Text } from "@crewlethq/ui";
 import type {
   GrowthChangeField,
   GrowthChangeRow,
@@ -26,6 +25,8 @@ import type {
 import { useOrgIndex } from "~/lib/seats.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import { useQuery } from "~/lib/useQuery.ts";
+import { useNow } from "~/lib/clock.ts";
+import { fmtDateTime } from "~/lib/format.ts";
 import "~/styles/growth.css";
 
 /** How often the newest changes are read again: an agent's act lands within a minute of being made. */
@@ -103,6 +104,12 @@ interface PageState {
   /** False where this node could not read every record, so the page may be missing some. */
   complete: boolean;
   error: QueryErrorCode | null;
+}
+
+/** When a change was made: short, as it stands alone in its row's head. */
+function When({ at }: { at: string }) {
+  const now = useNow();
+  return <RelativeTime value={at} now={now} title={fmtDateTime(at)} />;
 }
 
 /** One page's read, handed up as it lands: the newest page polled, an older one once. */
@@ -214,7 +221,7 @@ export function RecentChanges({
             <span className="growth-change__head">
               <span className="growth-change__what">{row.target || row.tool}</span>
               <span className="growth-change__when">
-                <AgoTime value={row.at} />
+                <When at={row.at} />
               </span>
             </span>
             <span className="growth-change__step">{stepWords(row, nameOf)}</span>
