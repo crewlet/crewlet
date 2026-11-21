@@ -805,6 +805,14 @@ var rules = sync.OnceValue(func() []rule {
 		token(runTokenPattern, "run-token").bounded(&boundFunc{runTokenWithin[string], runTokenWithin[[]byte]}),
 		token(googleTokenPattern, "google-token"),
 		token(jwtPattern, "jwt").bounded(&boundFunc{jwtWithin[string], jwtWithin[[]byte]}),
+		// A Google refresh token (`1//0` and some hundred base64url
+		// characters), which a consent grant holds and a token endpoint's
+		// error can echo, and a Google OAuth client's secret. Sixty at least,
+		// so a run inside a base64 blob, where `+` and `/` end it within a
+		// few dozen, is no token. Before the vendors' rules, for the Google
+		// access token's reason: a long base64url body spells their prefixes.
+		token(`1//0[0-9A-Za-z_-]{60,}`, "google-refresh-token"),
+		token(`GOCSPX-[0-9A-Za-z_-]{20,}`, "google-client-secret"),
 		token(`sk-proj-[A-Za-z0-9_-]{20,}`, "api-key"),
 		token(`sk-ant-[A-Za-z0-9_-]{20,}`, "api-key"),
 		token(`sk-[A-Za-z0-9_-]{20,}`, "api-key"),
