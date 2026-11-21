@@ -2297,6 +2297,80 @@
         "null"
       ]
     },
+    "GoogleAds": {
+      "additionalProperties": false,
+      "properties": {
+        "approvers": {
+          "description": "Handles of human seats an agent's spend, publish and admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "customers": {
+          "description": "The Google Ads accounts agents may be given, at most 200, each with the manager account it is reached through. Absent: every account an agent's identity is added to directly. Optional.",
+          "items": {
+            "$ref": "#/$defs/GoogleAdsCustomer"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on. Needs integrations.google_cloud on with its provisioning block, whose identity agents sign in through.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "spend": {
+          "$ref": "#/$defs/GrowthSpend",
+          "description": "Each account's spending caps, in its own currency. An account without both caps refuses every spend call; reads, operate calls and pausing still work. Optional."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "GoogleAdsCustomer": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "The account's 10-digit customer ID, without hyphens.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "manager": {
+          "description": "The 10-digit customer ID of the manager account the identity is added to, where it reaches this account through a manager. Optional.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "GoogleAnalytics": {
       "additionalProperties": false,
       "properties": {
@@ -2404,6 +2478,70 @@
             "string",
             "number",
             "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "GrowthCap": {
+      "additionalProperties": false,
+      "properties": {
+        "account": {
+          "description": "The ad account's ID, as the vendor writes it.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "currency": {
+          "description": "The account's currency as an ISO 4217 code (EUR). It must equal the account's own currency, read live, or every spend call on the account is refused.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "daily": {
+          "description": "The ceiling on the account's daily capacity after any approved change, a decimal amount in the account's currency (200.00). It limits the budgets agents may set, not what the vendor delivers on one day.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "per_change": {
+          "description": "The most one approved change may add to the account's daily capacity, a decimal amount in the account's currency (50.00).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "GrowthSpend": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "description": "The spending caps of each ad account agents may ask to spend on. An account without both caps refuses every spend call; reads, operate calls and pausing still work.",
+          "items": {
+            "$ref": "#/$defs/GrowthCap"
+          },
+          "type": [
+            "array",
             "null"
           ]
         }
@@ -2625,6 +2763,10 @@
         "gitlab": {
           "$ref": "#/$defs/GitLab",
           "description": "GitLab instance, webhook signing and provisioning. Absent = disabled."
+        },
+        "google_ads": {
+          "$ref": "#/$defs/GoogleAds",
+          "description": "Google Ads: agents read and manage accounts as their own Google growth identity, through the Google Cloud connection's identity, spend held to each account's caps. Absent = disabled."
         },
         "google_analytics": {
           "$ref": "#/$defs/GoogleAnalytics",
@@ -4716,6 +4858,49 @@
         "null"
       ]
     },
+    "RoleGoogleAds": {
+      "additionalProperties": false,
+      "properties": {
+        "customers": {
+          "description": "10-digit customer IDs this agent may reach, within integrations.google_ads.customers when that is set. Required when the agent is on.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent may reach Google Ads. Off turns its Google growth identity off once no other Google growth product is on for it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): reports, planning and settings, nothing changed. operate: also pausing, lowering budgets and bids, negatives and other changes that spend nothing more. administer: also asks an administrator to approve each change that spends, publishes ad text, removes or touches users, links and billing.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleGoogleAnalytics": {
       "additionalProperties": false,
       "properties": {
@@ -4846,6 +5031,10 @@
         "gitlab": {
           "$ref": "#/$defs/RoleGitLab",
           "description": "This seat's GitLab service account: whether it is on, its role and its projects."
+        },
+        "google_ads": {
+          "$ref": "#/$defs/RoleGoogleAds",
+          "description": "This seat's Google Ads access: whether it is on, its level and its accounts."
         },
         "google_analytics": {
           "$ref": "#/$defs/RoleGoogleAnalytics",

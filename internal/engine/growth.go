@@ -3,16 +3,21 @@ package engine
 import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googleads"
 	"github.com/crewlet/crewlet/internal/googleanalytics"
 )
 
-var _ builtin.GrowthProduct = (*googleanalytics.Product)(nil)
+var (
+	_ builtin.GrowthProduct = (*googleanalytics.Product)(nil)
+	_ builtin.GrowthProduct = (*googleads.Product)(nil)
+)
 
 // growthProducts are the growth products this engine's tools reach, each on
 // the running document, its resolver, the engine's tokens and its access log.
 func (e *Engine) growthProducts() []builtin.GrowthProduct {
 	return []builtin.GrowthProduct{
 		googleanalytics.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), nil),
+		googleads.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), spendLeases{engine: e}, e.GrowthAudit(), nil),
 	}
 }
 

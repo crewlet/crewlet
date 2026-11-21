@@ -468,6 +468,7 @@ type RoleIntegrations struct {
 	GoogleCloud     *RoleGoogleCloud     `yaml:"google_cloud,omitempty" json:"google_cloud,omitempty" desc:"This seat's own Google Cloud service account: whether it is on, its level and its projects."`
 	SSH             *RoleSSH             `yaml:"ssh,omitempty" json:"ssh,omitempty" desc:"This seat's SSH access: whether it is on, its level and its servers."`
 	GoogleAnalytics *RoleGoogleAnalytics `yaml:"google_analytics,omitempty" json:"google_analytics,omitempty" desc:"This seat's Google Analytics access: whether it is on, its level and its properties."`
+	GoogleAds       *RoleGoogleAds       `yaml:"google_ads,omitempty" json:"google_ads,omitempty" desc:"This seat's Google Ads access: whether it is on, its level and its accounts."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
