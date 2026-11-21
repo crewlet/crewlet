@@ -2641,7 +2641,7 @@ describe("the pane", () => {
       };
     }
     /** The approvals route's traffic, the first POST refused for a step-up where `stepUp`. */
-    function approvals(stepUp: boolean) {
+    function approvals(stepUp: boolean, whole: unknown = WHOLE) {
       const sent: { method: string; body: unknown }[] = [];
       const base = globalThis.fetch;
       vi.stubGlobal(
@@ -2655,7 +2655,7 @@ describe("the pane", () => {
               status,
               headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
             });
-          if (method === "GET") return json(200, WHOLE);
+          if (method === "GET") return json(200, whole);
           if (stepUp && sent.filter((s) => s.method === "POST").length === 1) {
             return json(403, {
               error: "step_up_required",
@@ -2709,6 +2709,83 @@ describe("the pane", () => {
       expect(confirmed).toBe(1);
       for (const post of sent.filter((s) => s.method === "POST")) {
         expect(post.body).toEqual({ answer: "once", arguments_sha256: WHOLE.arguments_sha256 });
+      }
+      expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
+    });
+
+    // A GROWTH ASK IS DECIDED ON ITS CARD, in the pane: the budget before and
+    // after in the account's currency, Allow once at a step-up with the digest
+    // of what was shown, and the person's note carried back to the agent.
+    // Mutation: draw a growth ask through the held-call buttons, and this is red.
+    test("a growth ask is decided on its card in the pane, after a step-up, with its note", async () => {
+      const sent = approvals(true, {
+        ...WHOLE,
+        question: "Raise the daily budget of Spring sale?",
+        card: {
+          act: "ad_spend",
+          product: "google_ads",
+          tool: "google_ads_raise_budget",
+          account: {
+            product: "google_ads",
+            account: "123-456-7890",
+            account_name: "Nimbus Ads",
+            currency: "EUR",
+            time_zone: "Europe/Berlin",
+            state: "serving",
+          },
+          acts: [
+            {
+              target: "Spring sale",
+              summary: "Raise the daily budget",
+              changes: [
+                {
+                  field: "amount_micros",
+                  label: "Daily budget",
+                  before: "40000000",
+                  after: "60000000",
+                  money: true,
+                },
+              ],
+            },
+          ],
+          money: null,
+          findings: [],
+          reason: "Spent out by noon.",
+          lapses_at: new Date(Date.now() + 3_600_000).toISOString(),
+          moved: false,
+          other_open_asks: 0,
+        },
+      });
+      uninstall = setStepUpConfirmer(async () => true);
+      location.hash = "#/inbox/run/turn-9";
+      const run = heldRun({
+        server: "crewlet",
+        tool: "google_ads_raise_budget",
+        fixed: true,
+        approvers: "admin",
+        act: "ad_spend",
+      });
+      mount({
+        answers: {
+          decisions: decisionsOf({ kind: "run", at: run.updated_at, run }),
+          executors: { runs: [run] },
+        },
+      });
+      await settle();
+      expect(await screen.findByText("€60.00")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Always allow" })).toBeNull();
+      fireEvent.change(screen.getByRole("textbox", { name: /Note to the agent/ }), {
+        target: { value: "Once." },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
+      await waitFor(() => expect(sent.filter((s) => s.method === "POST")).toHaveLength(2));
+      for (const post of sent.filter((s) => s.method === "POST")) {
+        expect(post.body).toEqual({
+          answer: "once",
+          arguments_sha256: WHOLE.arguments_sha256,
+          note: "Once.",
+        });
       }
       expect(posted.some((p) => p.tool === "answer_executor")).toBe(false);
     });

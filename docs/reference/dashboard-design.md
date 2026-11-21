@@ -650,7 +650,7 @@ Four runs. First, under no label: what needs you, what reached you, what is your
 | **Structure** | `#/company/org` | none |
 | **Schedules** | `#/company/schedules` | none |
 | **Integrations** | `#/company/integrations` | none; every reader opens it, an app's state and connecting are an Admin's on the page |
-| **Budgets** | `#/company/budgets` | none (tokens only; nothing in this product renders money) |
+| **Budgets** | `#/company/budgets` | none (tokens only; the one money drawn is a growth integration's, rule 19) |
 | *Workspace* | | |
 | **Worklet** | `#/worklet` | none |
 | **Gitlet** | `#/gitlet` | none; locked, naming Gitlet, for a reader without Gitlet access (as Worklet's row is without Worklet's), since every section reads a code question the engine refuses them (ADR-0110); a holder's answers are held to their own grant. Hidden where the company hosts no code in the engine (`code.backend` is not `gitlet`). See [The Gitlet workspace](#the-gitlet-workspace) |
@@ -1650,6 +1650,8 @@ An excerpt the engine COMPOSED names its author by name as the head does ("maya-
 **Three viewer states, three sentences.** A reader with no credential, a reader whose credential no seat claims, and a bound reader. The unbound reader is a token's session or a service account (never a person, who always holds a seat) and is told what binding its row to a human seat would add (`crewlet iam bind`, or a row created with `-seat`). The conditions a person decides are listed for all three; a person's updates and decisions need a credential bound to their seat; every write control is drawn for all three, disabled with the reason.
 
 **Without Worklet the Inbox stays.** Seats stopped on a spent budget, conditions a person decides and comments on artifacts arrive under every backend, so the Inbox is never hidden with Worklet (see [the sidebar](#the-sidebar)): it draws those, and its updates are the comments and, where the company hosts code, Gitlet's. The asks are Worklet's notices.
+
+**A growth decision is decided on its card.** An agent's held spend, publish or account administration call (`ad_spend`, `public_post`, `account_admin`) opens in the reading pane as the engine's card (`GET /mcp-approvals/{id}`'s `card`), never as its arguments: the account with its currency and zone; each change before and after, money in the account's currency; for spend, the account's daily budgets against both caps and the vendor's own rule on spending past a budget; for publishing, every text whole under the review it answers (its stars, author and an excerpt) with its length against the vendor's limit and any reply it replaces, a batch of up to ten allowed or denied together, and a change customers see (a live listing's edit, a delete) as the fields it changes; the vendor's findings, the agent's reason and when the ask lapses. It is answered **Allow once** or **Deny** at a fresh sign-in with an optional note back to the agent, never Always allow. A target that moved holds Allow once, since allowing it would run nothing, and keeps Deny so the agent asks again; a lapsed ask is expired; any act that cannot be undone waits for a tick; an amount whose currency the vendor did not name is never drawn and cannot be allowed there. A refused answer reads the call again, so the card says where it stands. A call whose card could not be read (its vendor did not answer) is decided on the call itself, its question and every argument, Allow once or Deny. A decision row elsewhere opens the same card in a dialog (**Review and decide**). A person allows what they read, so every name and text wraps and none is cut.
 
 ### My work is one person's day
 
@@ -4673,7 +4675,7 @@ Services not in use and apps nobody connected are the list's alone; a home with 
 - **Overview**: the issues, each a row with what is wrong, its subjects as chips (a long list folded to a count that expands in place), what to do, **who owes the next move** (*Waiting on you*, *Crewlet is on it*, *The app is on it*) and the one control that answers it. It holds the reconcile loop's findings in the engine's words and the facts a surface's row states (a secret that did not resolve, an address that moved, deliveries that reach no agent, a pass that failed with nothing to show), each once. A working tool says so; an advisory (an access wider than asked) is a note, never an issue.
 - **Agents**: each agent with its standing, its tier where the app grades one (the engine's words, beside the name, weighted by trust only on a scale the engine names), what it reaches, and its own step at the app (*Create app on GitHub*, *Install on GitHub*); and **Check now**, which asks the reconcile loop to look at the tool at once (`POST /setup/integrations/{kind}/check`).
 - **Activity**: provisioning passes and each surface's deliveries.
-- **Settings**: what the tool is set to, a credential named and never shown.
+- **Settings**: what the tool is set to, a credential named and never shown. A marketing, growth or app store product adds its **Connections** (who Crewlet is at the vendor through each, the roles it holds there, and every account each reaches with its currency, zone and state, drawn as a list that keeps each name whole and moves each ID to its own line rather than break it, breaking only one wider than a line), the vendor's **roles** (each with what it allows at the vendor and what Crewlet offers a seat through it, the held ones marked), and for a spending product its **Spending caps**: per account, in the account's own currency, the most one change may add and the ceiling on the daily budgets after any change, both or neither and the first no higher than the second, typed as text and stored at the currency's own digits, a raise confirmed at a fresh sign-in. A stored currency that is missing or not the account's own stays editable in place, and a save over caps another admin changed since the form opened is reloaded, never written over.
 
 The header's one action is exactly one of four, decided by `actionFor` from the same inputs as the state:
 
@@ -5608,30 +5610,38 @@ Structure shows the draft as an Org chart and a Table, both reading one module (
     fails on an unhashed name under `assets/`. The engine gzips text once per
     file at the best level for a client that asks, so nothing is pre-compressed
     and no proxy is needed ([API endpoints](api-endpoints.md#wiring)).
-19. **Tokens, never money.** Every spend figure the dashboard draws is a token
-    count: on Spend, a seat's profile, a task's cost, a turn's phases and the
-    landing screen's pulse. The engine records a price only where one is
-    reported, and only a subscription harness reports one, so a currency figure
-    covers the minority of calls while the token count beside it covers all, and
-    reads as the company's spend while being a fraction. So no screen draws a
-    price, a currency sign before a figure, a currency code or an `Intl`
-    currency format, and the client declares no price field at all, since a
-    field `protocol/types.ts` declares is one line from being drawn. The
-    engine's price stays on its API ([API endpoints](api-endpoints.md#token-spend-breakdown)).
-    Two places a price can be read on a screen: a record shown **verbatim**, as
-    stored (an event's own payload), because dropping a field would misreport
-    the record, and nothing there is drawn as a figure; and an artifact sheet's
-    own cells, where a number column whose schema declares a currency is the
-    author's data, drawn by the design system's sheet model in the author's
-    format, never an engine-recorded figure. The bundle gate admits exactly that
-    construct and the currency signs the sheet strips from typed input before
-    parsing a number, each written as the whole construct; a currency format or
-    sign anywhere else is refused. Three gates, each over a different artefact:
-    the SOURCE, where `src/money.test.tsx` parses every shipped module (comments
-    excluded, so a note can name what it forbids); the SCREENS, where the same
-    suite renders the landing screen, Spend, a task, a seat's Overview and
-    Activity tabs and a turn over wire fixtures carrying a price everywhere the
-    engine puts one, and reads text and attributes back for any trace; and the
-    BUNDLE, where `TestTheDashboardRendersNoPrice` scans every module the engine
-    serves, lazy chunks included, because the committed bundle is what a browser
-    runs.
+19. **Tokens for what agents spend; money only a vendor's, through the kit.**
+    Every figure of what agents spend is a token count: on Spend, a seat's
+    profile, a task's cost, a turn's phases and the landing screen's pulse. The
+    engine records a price only where one is reported, and only a subscription
+    harness reports one, so a currency figure covers the minority of calls
+    while the token count beside it covers all, and reads as the company's
+    spend while being a fraction. So no screen draws a model price, and the
+    client declares no price field at all, since a field `protocol/types.ts`
+    declares is one line from being drawn. The engine's price stays on its API
+    ([API endpoints](api-endpoints.md#token-spend-breakdown)).
+    The one money a screen draws is a growth integration's own: a vendor
+    account's ad spend, earnings, proceeds and spending caps, in the account's
+    currency as the vendor reports it. It is drawn only by the design system's
+    `Money` (`formatMoney`), from integer micros, never through a float and
+    never summed across currencies, and only the growth modules
+    (`contract/growth.ts`, `components/growth/`, `routes/growth/`) name a
+    currency, as data; none spells a code or a sign or asks `Intl` for a
+    currency format itself.
+    Two other places a price can be read on a screen: a record shown
+    **verbatim**, as stored (an event's own payload), because dropping a field
+    would misreport the record, and nothing there is drawn as a figure; and an
+    artifact sheet's own cells, where a number column whose schema declares a
+    currency is the author's data, drawn by the design system's sheet model in
+    the author's format, never an engine-recorded figure. Three gates, each
+    over a different artefact: the SOURCE, where `src/money.test.tsx` parses
+    every shipped module (comments excluded, so a note can name what it
+    forbids) and admits a currency's name in the growth modules alone; the
+    SCREENS, where the same suite renders the landing screen, Spend, a task, a
+    seat's Overview and Activity tabs and a turn over wire fixtures carrying a
+    price everywhere the engine puts one, and reads text and attributes back
+    for any trace; and the BUNDLE, where `TestTheDashboardRendersNoPrice` scans
+    every module the engine serves, lazy chunks included, and admits exactly
+    the sheet model's currency format and the signs it strips from typed
+    input, and `Money`'s formatter and its ISO 4217 table, each written as the
+    whole construct, because the committed bundle is what a browser runs.
