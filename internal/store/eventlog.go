@@ -1821,7 +1821,7 @@ func (l *EventLog) phaseList(ctx context.Context, agentID string, limit, maxByte
 	// THE ORDER EACH STATEMENT READ IN, across all of them: the instant as
 	// the column holds it, then the id, both descending — the primary key's
 	// own order, which the cursor a later page resumes from is cut in.
-	slices.SortFunc(rows, func(a, b EventRecord) int { return newerFirst(a, b) })
+	slices.SortFunc(rows, newerFirst)
 	rows, cut := phasesWithin(rows, cutAt, maxBytes)
 	rows, more := pastPage(rows, limit)
 	return rows, more || cut, nil
