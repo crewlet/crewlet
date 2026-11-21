@@ -956,17 +956,15 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 	return zw.Close()
 }
 
-// firstReadings runs read, a first reading of an archive, on first, writing
-// into spool, the take's, and planning on a plan it answers, which holds the
-// large slot until its letGo. Its caller removes the spool on every way out,
-// a panic's included, so it makes it before the reading. It reads again,
-// reopened: on from a unit a reading must read again as text alone, its plan
-// and its spool up to that unit kept and what it spooled of the unit passed
-// over ([errReadBothWays], [errTextAgain], [tarPlan.memberAt]); and from the
-// start, its spool emptied, where the memo's answer for a text diverged
-// ([errMemoDiverged]), once with that text's first chunk looked up no more,
-// so the take's other texts keep their answers, and again with no lookups
-// where that diverged too.
+// firstReadings runs read, a first reading, on first, writing into spool
+// (made by its caller, who removes it on every way out) and planning on a
+// plan holding the large slot until its letGo. EVERY RE-READ OF THE BOX IS
+// HERE: the second reading reads the spool alone and is never handed reopen.
+// It reads again on from a unit to read as text alone, the plan and spool up
+// to it kept and the unit's spooled ways cut back ([errReadBothWays],
+// [errTextAgain], [tarPlan.memberAt]); and from the start, the spool emptied,
+// where the memo's answer for a text diverged ([errMemoDiverged]), once with
+// that text's first chunk looked up no more, then with no lookups at all.
 func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scrubber, b scrubBounds,
 	spool *unitSpool, read func(io.Reader, scrubber, *tarPlan) error) (*tarPlan, error) {
 
