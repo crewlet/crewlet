@@ -76,13 +76,13 @@ func (Copilot) inboxID(launch, noteID string) string {
 	return hex.EncodeToString(sum[:])[:32]
 }
 
-// copilotPollCeiling is the most UTF-16 units one note the extension sends can
-// carry: 100,000, the largest measured whole on 1.0.114 (notes of 4,505, 9,000,
-// 20,000 and 100,000 units, two-unit characters among them, each reached the
-// model's next request as one message identical to the one sent). Copilot cuts
-// no message; past this the only bound is the model's prompt budget, which a
-// 1,000,000-unit note met.
-const copilotPollCeiling = 100_000
+// copilotPollCeiling is the most UTF-16 units one note the extension sends may
+// carry: 4,505, the engine's item bound (internal/engine's maxLateItemUnits)
+// the note contract holds every poll runner to. Copilot carries far more whole
+// (measured on 1.0.114: notes of 4,505, 9,000, 20,000 and 100,000 units, two-unit
+// characters among them, each reached the model's next request as one message
+// identical to the one sent), so the shared bound holds and is the ceiling.
+const copilotPollCeiling = 4505
 
 // pollCeiling is [copilotPollCeiling].
 func (Copilot) pollCeiling() int { return copilotPollCeiling }

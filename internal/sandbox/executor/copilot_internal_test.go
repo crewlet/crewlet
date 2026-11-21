@@ -501,6 +501,16 @@ func TestACopilotInboxIDIsTheJobsAndTheNotes(t *testing.T) {
 	}
 }
 
+// The poll ceiling is the contract's per-message bound, which Copilot was
+// measured to carry whole many times over.
+//
+// Mutation: state the measured 100,000 as the ceiling — the case fails.
+func TestACopilotNoteIsHeldToTheSharedItemBound(t *testing.T) {
+	if got := (Copilot{}).pollCeiling(); got != 4505 {
+		t.Fatalf("pollCeiling = %d, want the shared 4,505-unit bound", got)
+	}
+}
+
 // The runner reads a note's confirmation off the box's own copy of the
 // session, and says it could not where the record is not there to read.
 //
