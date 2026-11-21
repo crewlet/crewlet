@@ -179,7 +179,7 @@ func TestANodeOrNPMIsFoundRequiredOrSkippedAndHeldToTheFloor(t *testing.T) {
 		{name: "the floor unset", find: Floor, skip: "`make node` fetches it"},
 		{name: "the floor relative", require: "1", floor: "bin/node", find: Floor, fatal: "not an absolute path"},
 		{name: "the floor missing", require: "1", floor: filepath.Join(t.TempDir(), "node"), find: Floor,
-			fatal: "names nothing this case can run"},
+			fatal: "names nothing this case can reach"},
 		{name: "a floor of the next even major", require: "1", floor: nodeStub(t, at(floor+2)), find: Floor,
 			fatal: "a floor nobody is testing"},
 		{name: "a floor below the floor", require: "1", floor: nodeStub(t, at(floor-2)), find: Floor,

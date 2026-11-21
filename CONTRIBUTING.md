@@ -451,8 +451,9 @@ the case is covered somewhere: the two defects this gate was written after ran
 NOWHERE and looked like ordinary capability skips. `go test` prints nothing
 about a skipped subtest without `-v`, which the suite job never passes.
 
-**A program the suite needs is found through `internal/prereqtest`**, the one
-rule for it: `OnPath` for a program on `PATH`, `Named` for one a variable
+**A program or directory the suite needs is found through
+`internal/prereqtest`**, the one rule for it: `OnPath` for a program on
+`PATH`, and `Named` or `NamedDir` for a program or a directory a variable
 names. It FAILS the case under the `make` targets that run the suite
 (`CREWLET_REQUIRE_PREREQUISITES=1`, the Makefile's `REQUIRED`) and skips it,
 in the same words, only in a bare `go test` outside make. Never write a
