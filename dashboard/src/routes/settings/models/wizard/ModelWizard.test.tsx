@@ -974,6 +974,25 @@ test("a changed provider clears the model and key typed for the last one, and th
   expect(screen.getByText(/Sent as openai\/<model>\./)).toBeTruthy();
 });
 
+/**
+ * THE STORED KEY IS ITS OWN SCOPE'S: replacing it ends when the method moves,
+ * so "Keep the stored key" never names the old secret for another sign-in.
+ */
+test("a replaced key's Keep is offered only on its own method, and the secret follows the method", () => {
+  show({ editing: "sonnet", target: { step: "signin", focus: "credential" } });
+  expect(screen.getByRole("button", { name: /Keep the stored key/ })).toBeTruthy();
+  const method = (value: string) =>
+    fireEvent.click(document.querySelector(`input[type="radio"][value="${value}"]`)!);
+  method("token");
+  expect(screen.queryByRole("button", { name: /Keep the stored/ })).toBeNull();
+  expect((screen.getByLabelText(/Stored as/) as HTMLInputElement).value).toBe(
+    "CLAUDE_CODE_OAUTH_TOKEN",
+  );
+  method("api-key");
+  expect(screen.getByText("ANTHROPIC_API_KEY_SONNET")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /Replace the key/ })).toBeTruthy();
+});
+
 /** A model check whose lines are `lines`, as the engine answers one. */
 const checked = (
   lines: { check: string; ok: boolean; detail: string; kind?: string; remedy?: string }[],

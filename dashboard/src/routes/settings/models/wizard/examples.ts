@@ -10,6 +10,12 @@
 
 import { CLOUD_FIELDS, namesProvider, providersFor, type Draft } from "./draft.ts";
 
+/** A new model's name, for any harness: a name is the company's, never a vendor's. */
+export const NAME_EXAMPLE = "main-model";
+
+/** Qwen Code's OpenAI-compatible endpoint, as its vendor documents it. */
+export const ENDPOINT_EXAMPLE = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1";
+
 /** One vendor's spelling: an example model id, and its key's and token's prefixes. */
 interface Vendor {
   label: string;

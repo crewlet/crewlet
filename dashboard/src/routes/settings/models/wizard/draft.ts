@@ -400,13 +400,19 @@ export function credentialValues(d: Draft): Record<string, string> {
 
 /**
  * The model's id as its harness takes it: OpenCode's and Pi's name the chosen
- * provider first, always, since a provider's own ids may hold a slash
- * (OpenRouter's `qwen/qwen3-coder`).
+ * provider before the provider's own id, always, since that id may itself hold
+ * a slash or the provider's name (OpenRouter's `qwen/qwen3-coder`, `openrouter/auto`).
  */
 export function modelId(d: Pick<Draft, "harness" | "provider" | "model">): string {
   const model = d.model.trim();
-  if (!namesProvider(d.harness) || !model) return model;
-  return model.startsWith(`${d.provider}/`) ? model : `${d.provider}/${model}`;
+  return namesProvider(d.harness) && model ? `${d.provider}/${model}` : model;
+}
+
+/** A catalogue id offered for the draft's harness as the draft holds it: the provider's own id. */
+export function catalogueModel(d: Pick<Draft, "harness" | "provider">, id: string): string {
+  return namesProvider(d.harness) && id.startsWith(`${d.provider}/`)
+    ? id.slice(d.provider.length + 1)
+    : id;
 }
 
 /** The choices a model id is named under: the harness, and the provider or cloud it is sent to. */
@@ -472,6 +478,11 @@ export function withChoices(
       advisor: helpers && next.uses.advisor,
     };
     if (dropsCoding || dropsHelper) next.intent = intentOf(next.uses);
+    if (original && next.harness === original.harness) {
+      next.uses = original.uses;
+      next.intent = original.intent;
+      next.runIn = original.runIn;
+    }
   }
   return { draft: next, named: stays };
 }

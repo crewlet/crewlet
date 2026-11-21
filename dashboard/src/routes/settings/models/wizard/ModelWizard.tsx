@@ -67,6 +67,7 @@ import {
   STEP_LABELS,
   baseOf,
   canExecute,
+  credentialScope,
   credentialValues,
   distinctProblems,
   draftOf,
@@ -375,6 +376,8 @@ export function ModelWizard({
     const next = withChoices(draft, patch, { original, taken, named: variableNamed });
     setDraft(next.draft);
     setVariableNamed(next.named);
+    // THE STORED CREDENTIAL IS ONLY ITS OWN SCOPE'S, so replacing it ends where the scope moved.
+    if (original && credentialScope(next.draft) !== credentialScope(original)) setReplacing(false);
     setEngineProblems([]);
     setCheck({ kind: "idle" });
     setPrepared(null);
@@ -384,6 +387,11 @@ export function ModelWizard({
   };
 
   const changeHarness = (harness: Harness) => {
+    // BACK ON THE EDITED MODEL'S HARNESS, its own sign-in comes back with it.
+    if (original && harness === original.harness) {
+      set({ harness, method: original.method, provider: original.provider, cloud: original.cloud });
+      return;
+    }
     const providers = providersFor(harness);
     set({
       harness,

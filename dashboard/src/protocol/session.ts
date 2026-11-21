@@ -96,10 +96,17 @@ export function isLater(next: LogPosition, held: LogPosition): boolean {
  * the configuration), and no table of routes to questions would stay true, so
  * every live read asks again, quietly: each `useQuery`, and each `useRest`.
  * A rare, human-paced event, against a screen that otherwise drew what it held
- * before the change until it was reloaded. A revision this node applied is
- * the other such event (`Store.applyHealth`).
+ * before the change until it was reloaded.
  */
 export const EVERY_QUESTION = "*";
+
+/**
+ * What a revision this node applied moved: every read that asks again on a
+ * reconnect (`refetchOnReconnect`), since a config write answers before the
+ * node applies it and many answers are read from what it applied. A read that
+ * opted out of reconnects (a transcript, a code search) is not moved by one.
+ */
+export const APPLIED_REVISION = "*applied";
 
 /**
  * Two positions on ONE log in log order: negative when `a` is earlier, zero

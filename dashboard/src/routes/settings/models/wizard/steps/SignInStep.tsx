@@ -27,7 +27,7 @@ import {
   type Draft,
   type Method,
 } from "../draft.ts";
-import { credentialExample } from "../examples.ts";
+import { credentialExample, ENDPOINT_EXAMPLE } from "../examples.ts";
 import { AgoTime } from "~/components/AgoTime.tsx";
 
 export const METHOD_WORDS: Record<Method, { label: string; detail: string }> = {
@@ -261,7 +261,7 @@ export function SignInStep({
           kind="text"
           label="Endpoint"
           value={draft.endpoint}
-          placeholder="https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+          placeholder={ENDPOINT_EXAMPLE}
           help="The OpenAI-compatible address Qwen Code calls. Empty uses the harness's own."
           onChange={(v) => onChange({ endpoint: v })}
         />

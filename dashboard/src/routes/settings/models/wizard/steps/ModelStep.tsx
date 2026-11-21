@@ -37,7 +37,14 @@ import {
 import { useQuery } from "~/lib/useQuery.ts";
 import type { ModelAlias } from "~/protocol/models.ts";
 import { product } from "../../words.ts";
-import { effortLevels, factsOf, modelId, namesProvider, type Draft } from "../draft.ts";
+import {
+  catalogueModel,
+  effortLevels,
+  factsOf,
+  modelId,
+  namesProvider,
+  type Draft,
+} from "../draft.ts";
 import { modelExample } from "../examples.ts";
 
 /** An alias's name, with the version it resolves to when the sign-in reaches the vendor's own service. */
@@ -146,8 +153,11 @@ export function ModelStep({
     return (answer?.models ?? [])
       .filter((m) => !q || m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
       .slice(0, 50)
-      .map((m) => ({ value: m.id, label: m.id, hint: m.name }));
-  }, [answer, draft.model]);
+      .map((m) => {
+        const id = catalogueModel(draft, m.id);
+        return { value: id, label: id, hint: m.name };
+      });
+  }, [answer, draft]);
 
   const example = modelExample(draft);
   const naming =

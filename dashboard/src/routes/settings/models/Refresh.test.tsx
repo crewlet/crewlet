@@ -102,34 +102,47 @@ test("a removal the engine refuses leaves the model listed and says why", async 
   expect(listed()).toEqual(["default", "spare"]);
 });
 
-// EVERY WRITE ON THE PAGE IS A REVISION (an add or an edit through the wizard,
-// a removal, a use moved): whichever it was, the list follows this node's apply.
+// AN ADD OR AN EDIT, BY THIS TAB'S WIZARD OR ANYONE ELSE, is a revision: the
+// list is drawn as the engine answers once this node applies it.
+const edited = (): ModelEntriesAnswer => {
+  const a = answer("default", "spare");
+  a.entries[1] = modelEntry({ key: "spare", model: "claude-sonnet-5-5" });
+  return a;
+};
+const rows = () =>
+  screen
+    .getAllByRole("row")
+    .map((r) =>
+      /^(default|spare|fresh)(\S*)/
+        .exec(r.textContent ?? "")
+        ?.slice(1)
+        .join(" "),
+    )
+    .filter(Boolean);
+
 test.each([
-  ["added", answer("default", "spare", "fresh"), ["default", "fresh", "spare"]],
-  ["edited", { ...answer("default", "spare") }, ["default", "spare"]],
+  [
+    "added",
+    () => answer("default", "spare", "fresh"),
+    ["default opus", "fresh opus", "spare haiku"],
+  ],
+  ["edited", edited, ["default opus", "spare claude-sonnet-5-5"]],
 ] as const)(
   "a model %s is drawn as the engine answers once this node applies it",
-  async (_, next, keys) => {
+  async (_, next, want) => {
     let served = answer("default", "spare");
-    const { store, asked } = mountSettings(
+    const { store } = mountSettings(
       <Models />,
       { llm_entries: () => served, config: DOC },
       { hash: "#/settings/models" },
     );
     await act(afterMicrotasks);
-    const before = asked.filter((q) => q === "llm_entries").length;
-    served = next as ModelEntriesAnswer;
+    expect(rows()).toEqual(["default opus", "spare haiku"]);
+    served = next();
     await act(async () => {
       store.applyHealth(healthFrame({ applied_epoch: 5 }));
     });
     await act(afterMicrotasks);
-    expect(asked.filter((q) => q === "llm_entries").length).toBe(before + 1);
-    expect(asked.filter((q) => q === "config").length).toBeGreaterThan(1);
-    expect(
-      screen
-        .getAllByRole("row")
-        .map((r) => /^(default|spare|fresh)/.exec(r.textContent ?? "")?.[1])
-        .filter(Boolean),
-    ).toEqual([...keys]);
+    expect(rows()).toEqual([...want]);
   },
 );

@@ -16,6 +16,7 @@ import { HARNESS_FACTS } from "~/contract/harnesses.ts";
 import {
   HARNESSES,
   baseOf,
+  catalogueModel,
   credentialValues,
   effortLevels,
   factsOf,
@@ -234,6 +235,19 @@ describe("a changed choice", () => {
     expect(keptOf(back.draft, original, undefined, false).credential).toBe(true);
   });
 
+  test("of harness back to the edited model's gives its uses and place to run back", () => {
+    const original = draft({
+      intent: "assistant",
+      uses: { ...noUses(), assistant: true, advisor: true },
+      runIn: "direct",
+    });
+    const editing = { original, taken: [], named: true };
+    const away = withChoices(original, { harness: "codex" }, editing).draft;
+    expect([away.uses.assistant, away.runIn]).toEqual([false, ""]);
+    const back = withChoices(away, { harness: "claude-code" }, editing).draft;
+    expect([back.uses, back.intent, back.runIn]).toEqual([original.uses, "assistant", "direct"]);
+  });
+
   test("of harness drops the uses the new harness cannot run", () => {
     const helper = draft({
       intent: "assistant",
@@ -260,26 +274,34 @@ describe("a changed choice", () => {
 });
 
 describe("a model id on a harness that names its provider", () => {
-  test("always names the chosen provider, a provider's own slash included", () => {
+  test("always names the chosen provider before the provider's own id, a slash or its name included", () => {
     const oc = { harness: "opencode", provider: "openrouter" };
     expect(modelId({ ...oc, model: "qwen/qwen3-coder" })).toBe("openrouter/qwen/qwen3-coder");
-    expect(modelId({ ...oc, model: "openrouter/qwen/qwen3-coder" })).toBe(
-      "openrouter/qwen/qwen3-coder",
-    );
+    expect(modelId({ ...oc, model: "openrouter/auto" })).toBe("openrouter/openrouter/auto");
     expect(modelId({ ...oc, provider: "groq", model: "openai/gpt-oss-120b" })).toBe(
       "groq/openai/gpt-oss-120b",
     );
   });
 
-  test("an edit saved as it opened writes the model it read", () => {
-    const raw = {
-      harness: "opencode",
-      model: "openrouter/qwen/qwen3-coder",
-      env: { OPENROUTER_API_KEY: "${OR_KEY}" },
-    };
-    const model = view({ key: "open", harness: "opencode", model: raw.model, raw });
-    expect(entityOf(draftOf(model), baseOf(model)).model).toBe("openrouter/qwen/qwen3-coder");
+  test("a catalogue id is held as the provider's own id", () => {
+    const oc = { harness: "opencode", provider: "openrouter" };
+    expect(catalogueModel(oc, "openrouter/qwen/qwen3-coder")).toBe("qwen/qwen3-coder");
+    expect(catalogueModel(oc, "openrouter/openrouter/auto")).toBe("openrouter/auto");
+    expect(
+      catalogueModel({ harness: "claude-code", provider: "anthropic" }, "claude-opus-5-5"),
+    ).toBe("claude-opus-5-5");
   });
+
+  test.each(["openrouter/qwen/qwen3-coder", "openrouter/openrouter/auto", "groq/groq/compound"])(
+    "an edit of %s saved as it opened writes the model it read",
+    (id) => {
+      const provider = id.split("/")[0]!;
+      const variable = provider === "groq" ? "GROQ_API_KEY" : "OPENROUTER_API_KEY";
+      const raw = { harness: "opencode", model: id, env: { [variable]: "${KEY}" } };
+      const model = view({ key: "open", harness: "opencode", model: id, raw });
+      expect(entityOf(draftOf(model), baseOf(model)).model).toBe(id);
+    },
+  );
 });
 
 /** ONE TABLE FOR EVERY EXAMPLE: the placeholder, the key's prefix and the hint name one vendor. */
