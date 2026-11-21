@@ -830,6 +830,12 @@ type Role struct {
 	// grants admit to ssh_read and ssh_operate. Empty is no grant.
 	SSHLevel string `yaml:"ssh_level,omitempty" json:"ssh_level,omitempty"`
 
+	// GrowthLevels is the seat's level on each growth lane it is on at, by
+	// the lane's kind ("read", "operate" or "administer"), which
+	// internal/authz's growth grants admit to that product's tools. A lane
+	// that is off is absent.
+	GrowthLevels map[string]string `yaml:"growth_levels,omitempty" json:"growth_levels,omitempty"`
+
 	// Delegate is whether an enabled delegation rule names this agent seat a
 	// delegate, which internal/authz's delegate grant admits to
 	// review_delegated (ADR-0125). False is no grant.

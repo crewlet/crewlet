@@ -36,6 +36,37 @@ type growthBlock interface {
 	GrowthSpend() *GrowthSpend
 }
 
+// growthSeat is a growth integration's seat block.
+type growthSeat interface {
+	// GrowthSeatLevel is the seat's level where its block is on, and ""
+	// where it is off.
+	GrowthSeatLevel() string
+}
+
+// GrowthLevels is the seat's level on each growth lane it is on at, by the
+// lane's kind: what internal/authz's growth grants admit to that product's
+// tools (org.Role.GrowthLevels). Found by reflection over the seat's blocks,
+// so a product adds no row here.
+func (r *Role) GrowthLevels() map[string]string {
+	out := map[string]string{}
+	v := reflect.ValueOf(&r.Integrations).Elem()
+	for n := range v.NumField() {
+		f := v.Field(n)
+		if f.Kind() != reflect.Pointer || f.IsNil() || !v.Type().Field(n).IsExported() {
+			continue
+		}
+		if s, ok := f.Interface().(growthSeat); ok {
+			if level := s.GrowthSeatLevel(); level != "" {
+				out[jsonName(v.Type().Field(n))] = level
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // growthAt is one growth block and where the document holds it.
 type growthAt struct {
 	path  Path
@@ -185,21 +216,16 @@ var growthConnectionID = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 })
 
-// checkGrowthConnections holds a block's connection names to their shape, each
-// once: a block may hold several connections to its vendor (several teams,
-// organizations or business portfolios), each named by its id.
+// checkGrowthConnections holds a block's connection ids, the keys of its
+// connections, to their shape: a block may hold several connections to its
+// vendor (several teams, organizations or business portfolios), each under its
+// id, a map key so a setup form's merge patch can address one.
 func checkGrowthConnections(p *problems, here Path, ids []string) {
-	seen := map[string]bool{}
-	for i, id := range ids {
-		at := at(idx(here, i), "id")
-		switch {
-		case !growthConnectionID().MatchString(id):
-			p.add(at, ErrUnknownValue, "%q is not a connection id: lowercase letters, digits and "+
+	for _, id := range ids {
+		if !growthConnectionID().MatchString(id) {
+			p.add(entry(here, id), ErrUnknownValue, "%q is not a connection id: lowercase letters, digits and "+
 				"hyphens, starting with a letter, at most 32", id)
-		case seen[id]:
-			p.add(at, ErrConflict, "%q names two connections", id)
 		}
-		seen[id] = true
 	}
 }
 

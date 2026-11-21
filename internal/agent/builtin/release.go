@@ -441,7 +441,7 @@ func (t *askToMerge) HeldWords(turn *turnctx.Turn, args map[string]any) (questio
 		"once, as %s; a change pushed to since is not merged. The target's own rules still apply.",
 		handle, where, a.ref, a.head, map[string]string{releaseMerge: "a merge commit",
 			releaseSquash: "one squashed commit"}[a.method], handle)
-	b.WriteString("\n\n**Reason given**\n\n" + inertMarkdown(redact.Secrets(a.reason)))
+	b.WriteString("\n\n**Reason given**\n\n" + words.Inert(redact.Secrets(a.reason)))
 	return question, b.String()
 }
 
@@ -719,8 +719,8 @@ func (t *askToDeploy) HeldWords(turn *turnctx.Turn, args map[string]any) (questi
 	fmt.Fprintf(&b, "%s asks to deploy commit `%s` of `%s` to `%s`, shipping %s. Allow once tells %s it may "+
 		"deploy exactly that commit there, once; Crewlet does not deploy it.", handle, a.commit, a.where(),
 		a.environment, a.changeRefs, handle)
-	b.WriteString("\n\n**Rollback**\n\n" + inertMarkdown(redact.Secrets(a.rollback)))
-	b.WriteString("\n\n**Reason given**\n\n" + inertMarkdown(redact.Secrets(a.reason)))
+	b.WriteString("\n\n**Rollback**\n\n" + words.Inert(redact.Secrets(a.rollback)))
+	b.WriteString("\n\n**Reason given**\n\n" + words.Inert(redact.Secrets(a.reason)))
 	return question, b.String()
 }
 

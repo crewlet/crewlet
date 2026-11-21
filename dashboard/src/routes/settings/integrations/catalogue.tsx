@@ -178,6 +178,7 @@ const SURFACE_NAMES: Record<string, string> = {
   aws: "AWS",
   google_cloud: "Google Cloud",
   ssh: "SSH",
+  app_store_connect: "App Store Connect",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -262,6 +263,14 @@ export const CATALOG: Entry[] = [
     vendor: "expo",
     surfaces: surfacesOf("expo"),
     doc: "expo",
+  },
+  {
+    key: "app_store_connect",
+    name: "App Store Connect",
+    description: "Apps, listings, reviews and replies, TestFlight, prices, sales and analytics.",
+    vendor: "app-store-connect",
+    surfaces: surfacesOf("app_store_connect"),
+    doc: "app-store-connect",
   },
   {
     key: "digitalocean",

@@ -60,6 +60,7 @@ export type AtlasFamily = "calls" | "runs_on" | "around";
 export type AtlasVendor =
   | "aws"
   | "anthropic"
+  | "apple"
   | "atlassian"
   | "cloudflare"
   | "cursor"
@@ -724,6 +725,7 @@ export const ATLAS_FACT_SPECS = {
     words: [
       "aws",
       "anthropic",
+      "apple",
       "atlassian",
       "cloudflare",
       "cursor",

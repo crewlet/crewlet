@@ -160,6 +160,7 @@ export const FAMILIES: Readonly<Record<AtlasFamily, GraphEdgeFamily>> = {
 export const VENDORS: Readonly<Record<AtlasVendor, { name: string; mark?: MarkVendor }>> = {
   aws: { name: "AWS", mark: "aws" },
   anthropic: { name: "Anthropic" },
+  apple: { name: "Apple" },
   atlassian: { name: "Atlassian", mark: "atlassian" },
   cloudflare: { name: "Cloudflare", mark: "cloudflare" },
   cursor: { name: "Cursor" },
