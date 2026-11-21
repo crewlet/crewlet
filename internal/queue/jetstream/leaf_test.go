@@ -122,22 +122,34 @@ func TestALeafRefusesEveryMemberSetting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a plain leaf was refused: %v", err)
 	}
-	if opts.JetStream || !opts.DontListen || scratch != "" || len(opts.LeafNode.Remotes) != 1 {
+	if opts.JetStream || !opts.DontListen || scratch != "" || len(opts.LeafNode.Remotes) != 2 {
 		t.Fatalf("a leaf built as JetStream=%t DontListen=%t scratch=%q remotes=%d — "+
-			"want no JetStream, no listener, nothing on disk and one link",
+			"want no JetStream, no listener, nothing on disk and two links",
 			opts.JetStream, opts.DontListen, scratch, len(opts.LeafNode.Remotes))
 	}
-	// AND ITS ONE LINK PRESENTS THE ACTIVE KEY'S LEAF NKEY, never a
-	// credential in a URL.
-	link := opts.LeafNode.Remotes[0]
-	if link.Nkey != testFleetAuth().leafSeed() {
-		t.Error("a leaf's link presents no leaf nkey of its ring")
-	}
-	for _, u := range link.URLs {
-		if u.User != nil {
-			t.Errorf("a leaf's link URL %s carries a userinfo, which is sent beside "+
-				"the nkey in clear", u.Host)
+	// AND EACH LINK PRESENTS THE ACTIVE KEY'S LEAF NKEY, never a credential
+	// in a URL; the lease link, dialling past the tunnel, waits out its dial
+	// for the tunnel's term, not nats-server's one second.
+	leaseLinks := 0
+	for _, link := range opts.LeafNode.Remotes {
+		if link.Nkey != testFleetAuth().leafSeed() {
+			t.Errorf("a leaf's link in %q presents no leaf nkey of its ring", link.LocalAccount)
 		}
+		if link.LocalAccount == LeaseAccount {
+			leaseLinks++
+			if link.DialTimeout != tunnelDial {
+				t.Errorf("a leaf's lease link dials for %v, want the tunnel's %v", link.DialTimeout, tunnelDial)
+			}
+		}
+		for _, u := range link.URLs {
+			if u.User != nil {
+				t.Errorf("a leaf's link URL %s carries a userinfo, which is sent beside "+
+					"the nkey in clear", u.Host)
+			}
+		}
+	}
+	if leaseLinks != 1 {
+		t.Errorf("a leaf holds %d links in %s, want one", leaseLinks, LeaseAccount)
 	}
 }
 
@@ -265,7 +277,7 @@ func TestALeafWithNoMemberToReachNamesTheLink(t *testing.T) {
 		_ = q.Stop(context.WithoutCancel(t.Context()))
 		t.Fatal("a leaf with no member listening opened a queue")
 	}
-	for _, want := range []string{"stream.leaf.urls", "made no link",
+	for _, want := range []string{"stream.leaf.urls", "made no link to any member",
 		"secrets.keys id \"jetstream-test\"", "broker_peer_refused"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q, so an operator is not told "+

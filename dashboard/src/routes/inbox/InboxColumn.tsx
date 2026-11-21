@@ -418,6 +418,12 @@ function rowWords(row: InboxRow, index: OrgIndex): { text: string; excerpt?: str
               (row.subject.run.question ?? "").trim() ||
               (questionWithheld(row.subject.run) ? QUESTION_WITHHELD : "Parked on a question"),
           };
+        case "fold_in":
+          return {
+            // WHAT THEY ASK, as their words: the pane says which work it would join.
+            text: "Asked to add this to running work:",
+            excerpt: row.subject.foldIn.words,
+          };
         case "seat":
           return { text: budgetLine(row.subject.seat.window?.period) };
       }
@@ -472,6 +478,7 @@ function qualifierOf(row: InboxRow): { word: ReactNode; danger: boolean } | null
   }
   if (row.kind !== "decision") return null;
   if (row.subject.kind === "run") return { word: "executor", danger: false };
+  if (row.subject.kind === "fold_in") return { word: "asks to join", danger: false };
   if (row.subject.kind === "seat") return { word: "stopped", danger: true };
   return null;
 }

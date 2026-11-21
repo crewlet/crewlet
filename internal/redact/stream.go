@@ -105,11 +105,11 @@ func (e *decidedEarly) Unwrap() error { return ErrDecidedEarly }
 var errStreamClosed = errors.New("redact: write to a closed stream")
 
 // Stream redacts a text written to it in pieces, writing the redacted text to
-// the writer it was made with, in one pass and bounded memory, or refuses it.
-// However the text is cut into writes, it holds no more than its stages'
-// windows (output trails them; nothing is written before [wholeBytes]), whether
-// it refuses depends on the text alone, and where Close answers nil it wrote
-// exactly [Secrets] of the text. Writes to its writer cut at any byte.
+// the writer it was made with, in one pass, or refuses it. However the text
+// is cut into writes, it holds its stages' windows (a live stream also the
+// text past its settled point, any length: [settling]), whether it refuses
+// depends on the text and its flushes alone ([Stream.Flush]), and where
+// Close answers nil it wrote exactly [Secrets]. Writes cut at any byte.
 //
 // A refusal is [ErrDecidedEarly], from Close and every later write: the keys'
 // stage decided a window before the rules' claims there were known. What was
@@ -133,11 +133,40 @@ type Stream struct {
 	// hold is how far the keys' stage lets the text run past a window
 	// before it decides it ([holdBytes]).
 	hold int
+	// live is a live stream's ([NewLiveStream]), nil in any other. final
+	// and held are what Flush answered last, kept for after the stream
+	// stops, and emitted how much the stream wrote of its head itself.
+	live    *live
+	final   int64
+	held    int
+	emitted int64
+}
+
+// live is what a live stream keeps beside its stages: the text past the
+// settled point, which its stages have not been handed.
+type live struct {
+	// settled is the settled point in head while the text is held whole,
+	// up to which Flush wrote head's redaction, and view the settling that
+	// asks of head past it: a settling, not a [growing], so nothing but
+	// Write appends to head or moves its bytes. raw is the text past the
+	// settled point once the stages run, a copy, so head's buffer goes.
+	settled int
+	view    settling[[]byte]
+	raw     growing
 }
 
 // NewStream is a Stream that writes what it redacts to w.
 func NewStream(w io.Writer) *Stream {
 	return newStreamHolding(w, holdBytes())
+}
+
+// NewLiveStream is a Stream whose Flush writes the text's redaction as far as
+// [Settled] settles it: its stages are handed only settled text, asked of as
+// each line ends ([settling]).
+func NewLiveStream(w io.Writer) *Stream {
+	s := NewStream(w)
+	s.live = &live{}
+	return s
 }
 
 // newStreamHolding is a Stream whose keys' stage decides a window once the
@@ -156,6 +185,9 @@ func (s *Stream) Write(p []byte) (int, error) {
 		return 0, errStreamClosed
 	case s.err != nil:
 		return 0, s.err
+	case s.p != nil && s.live != nil:
+		s.settleIn(p)
+		return len(p), s.err
 	case s.p != nil:
 		s.p.feed(p)
 		s.endErr()
@@ -174,6 +206,17 @@ func (s *Stream) Write(p []byte) (int, error) {
 		for _, f := range s.p.feeds() {
 			f.poison = s.poison
 		}
+		if l := s.live; l != nil {
+			// What Flush wrote of the head is the start of what the
+			// stages write ([Settled]), so the end drops it.
+			s.end.skip = s.emitted
+			s.p.feed(s.head[:l.settled])
+			l.raw = growing{l.view}
+			l.raw.text = bytes.Clone(s.head[l.settled:])
+			l.view, s.head = settling[[]byte]{}, nil
+			s.settleIn(p[n:])
+			return len(p), s.err
+		}
 		s.p.feed(s.head)
 		s.head = nil
 		s.p.feed(p[n:])
@@ -181,6 +224,86 @@ func (s *Stream) Write(p []byte) (int, error) {
 		s.stopOnMiss()
 	}
 	return len(p), s.err
+}
+
+// settleIn takes p as the next of a live stream's text, and hands its stages
+// what is settled.
+func (s *Stream) settleIn(p []byte) {
+	s.live.raw.write(p)
+	s.settle()
+}
+
+// settle hands a live stream's stages the text [Settled] settled since it
+// last asked.
+func (s *Stream) settle() {
+	s.live.raw.settle(s.p.feed)
+	s.endErr()
+	s.stopOnMiss()
+}
+
+// Flush writes the redaction of the text as far as it is settled, and answers
+// how many bytes of all the stream has written are final (a prefix of Secrets
+// of the text whatever is written after it or the stream answers later) and
+// how many bytes of the text are not yet in what it wrote. On a Stream from
+// NewStream it writes nothing and counts only what no window decided early
+// waits on, and held is a lower bound. After an error it answers the counts
+// it last had.
+//
+// Each stage is handed only settled text, and decides all it holds as it does
+// at the text's end ([pipeline.decideHeld]): the redaction composes there. So
+// later windows fall elsewhere, and only in a layout that can refuse
+// ([ErrDecidedEarly]) can a flush spare a refusal, make one, or move its byte.
+func (s *Stream) Flush() (final int64, held int, err error) {
+	l := s.live
+	switch {
+	case s.err != nil:
+		return s.final, s.held, s.err
+	case s.closed:
+		return s.written(), 0, nil
+	case s.p == nil && l != nil:
+		// One settling across flushes, so a flush with no new line
+		// break asks nothing.
+		l.view.text = s.head[l.settled:]
+		if n := l.view.next(); n > 0 {
+			s.emit(Secrets(string(s.head[l.settled : l.settled+n])))
+			l.settled += n
+			l.view.scanned -= n
+		}
+	case s.p != nil && l != nil:
+		if s.settle(); s.p != nil {
+			s.p.decideHeld()
+			s.endErr()
+			s.stopOnMiss()
+		}
+	}
+	if s.err != nil {
+		return s.final, s.held, s.err
+	}
+	s.final, s.held = s.counts()
+	return s.final, s.held, nil
+}
+
+// counts is what Flush answers of a stream that has not stopped.
+func (s *Stream) counts() (final int64, held int) {
+	l := s.live
+	switch {
+	case s.p == nil && l != nil:
+		return s.emitted, len(s.head) - l.settled
+	case s.p == nil:
+		return 0, len(s.head)
+	case l != nil:
+		return s.written(), len(l.raw.text)
+	}
+	return s.emitted + s.p.keys.finalWritten(), s.p.keys.arrived + len(s.p.carry) - s.p.lent - s.p.keys.pos
+}
+
+// written is how many bytes the stream has written.
+func (s *Stream) written() int64 {
+	n := s.emitted
+	if s.end != nil {
+		n += s.end.n
+	}
+	return n
 }
 
 // stopOnMiss stops the stream where its keys' stage found a window it decided
@@ -193,6 +316,7 @@ func (s *Stream) stopOnMiss() {
 		if s.err == nil {
 			s.err = s.p.keys.missed
 		}
+		s.final = s.emitted + s.p.keys.finalWritten()
 		s.p = nil
 	}
 }
@@ -205,14 +329,25 @@ func (s *Stream) Close() error {
 		return s.err
 	}
 	s.closed = true
+	if s.live != nil {
+		s.live.view.text = nil
+	}
 	if s.err != nil {
 		s.p, s.head = nil, nil
 		return s.err
 	}
 	if s.p == nil {
-		s.emit(Secrets(string(s.head)))
+		from := 0
+		if s.live != nil {
+			from = s.live.settled
+		}
+		s.emit(Secrets(string(s.head[from:])))
 		s.head = nil
 		return s.err
+	}
+	if l := s.live; l != nil {
+		s.p.feed(l.raw.text)
+		l.raw.text = nil
 	}
 	s.p.close()
 	s.endErr()
@@ -228,12 +363,14 @@ func (s *Stream) endErr() {
 	}
 }
 
-// emit writes text to the stream's writer.
+// emit writes text to the stream's writer, counted in what it wrote.
 func (s *Stream) emit(text string) {
 	if s.err != nil || text == "" {
 		return
 	}
-	_, s.err = io.WriteString(s.w, text)
+	n, err := io.WriteString(s.w, text)
+	s.emitted += int64(n)
+	s.err = err
 }
 
 // pipeline is the stages a text is redacted by: the claims (every rule but the
@@ -249,8 +386,10 @@ type pipeline struct {
 	rules sink
 	// carry is the text written past the last offset that is a multiple of
 	// [pieceBytes], held until the next multiple is written or the text
-	// ends ([pipeline.feed]).
+	// ends ([pipeline.feed]), and lent how much of it a flush handed the
+	// stages already ([pipeline.decideHeld]).
 	carry []byte
+	lent  int
 }
 
 // newPipeline is the stages, writing what they redact to out: the rules alone
@@ -293,7 +432,7 @@ func newPipeline(out *endSink, keys bool, hold int) *pipeline {
 		claims = stage
 		p.claims = stage
 	}
-	p.keys = &keyStage{to: next, sources: p.sources, hold: hold}
+	p.keys = &keyStage{to: next, sources: p.sources, hold: hold, out: out}
 	p.keys.in.bound, p.keys.in.grow = keysBytes+hold, keysBytes
 	for _, src := range p.sources {
 		src.keys = p.keys
@@ -367,8 +506,8 @@ func (p *pipeline) feed(b []byte) {
 		if len(p.carry) < pieceBytes {
 			return
 		}
-		p.write(p.carry)
-		p.carry = p.carry[:0]
+		p.write(p.carry[p.lent:])
+		p.carry, p.lent = p.carry[:0], 0
 	}
 	for len(b) >= pieceBytes && !p.missed() {
 		p.write(b[:pieceBytes])
@@ -410,10 +549,10 @@ func (p *pipeline) missed() bool {
 
 // close ends the text, handing the stages what it carried first.
 func (p *pipeline) close() {
-	if len(p.carry) > 0 {
-		p.write(p.carry)
-		p.carry = nil
+	if len(p.carry) > p.lent {
+		p.write(p.carry[p.lent:])
 	}
+	p.carry, p.lent = nil, 0
 	if p.keys == nil {
 		p.rules.close()
 		return
@@ -426,6 +565,34 @@ func (p *pipeline) close() {
 		return
 	}
 	p.keys.close()
+}
+
+// decideHeld hands the stages what it carried, and has each decide all it
+// holds as at the text's end, in order, staying open for what follows: what a
+// live stream's flush does once its stages hold only settled text. The rest
+// of the carried piece is handed once the text reaches the piece's end, so
+// every later piece ends at the text's own offset ([pipeline.feed]).
+//
+// Settled's promise is that the redaction composes at the settled point: cut
+// there, the text redacts as the two parts do apart. So no stage's decision
+// crosses it, and deciding each stage there as at an end decides what the
+// whole text does, and no claim decided there changes later.
+func (p *pipeline) decideHeld() {
+	if len(p.carry) > p.lent {
+		p.write(p.carry[p.lent:])
+		p.lent = len(p.carry)
+	}
+	if p.missed() {
+		return
+	}
+	if p.keys == nil {
+		p.rules.decideHeld()
+		return
+	}
+	p.claims.decideHeld()
+	if !p.missed() {
+		p.keys.decideHeld()
+	}
 }
 
 // sink is what a stage writes to: the next stage, or the end.
@@ -447,25 +614,37 @@ type sink interface {
 	// closeEdit says where in the text as written the last edit handed ends,
 	// where it was handed with its end to come ([edit]).
 	closeEdit(rawEnd int)
-	// close ends the input.
+	// close ends the input, and decideHeld decides all of it as at the
+	// input's end, keeping it open ([pipeline.decideHeld]).
 	close()
+	decideHeld()
 }
 
 // endSink is the end: what the last stage writes, written straight to w,
-// and the first error w gave, after which it writes nothing. It keeps no
-// output: w keeps none of a view it is handed (io.Writer's contract), and a
-// string (a marker, a value's escaped break) is copied through scratch rather
-// than handed to io.WriteString, which copies it to the heap for a writer
-// that has no WriteString of its own.
+// less the first skip bytes, n how many it wrote, and the first error w gave,
+// after which it writes nothing. It keeps no output: w keeps none of a view
+// it is handed (io.Writer's contract), and a string (a marker, a value's
+// escaped break) is copied through scratch rather than handed to
+// io.WriteString, which copies it to the heap for a writer that has no
+// WriteString of its own.
 type endSink struct {
 	w       io.Writer
 	err     error
+	n       int64
+	skip    int64
 	scratch [512]byte
 }
 
 func (e *endSink) put(b []byte) {
+	if e.skip > 0 {
+		k := min(e.skip, int64(len(b)))
+		e.skip -= k
+		b = b[k:]
+	}
 	if e.err == nil && len(b) > 0 {
-		_, e.err = e.w.Write(b)
+		var n int
+		n, e.err = e.w.Write(b)
+		e.n += int64(n)
 	}
 }
 
@@ -491,6 +670,7 @@ func (e *endSink) putRepeat(c byte, n int) {
 func (e *endSink) took([]edit)   {}
 func (e *endSink) closeEdit(int) {}
 func (e *endSink) close()        {}
+func (e *endSink) decideHeld()   {}
 
 // fanout hands its input to several readers.
 type fanout []sink
@@ -528,6 +708,12 @@ func (f fanout) closeEdit(rawEnd int) {
 func (f fanout) close() {
 	for _, r := range f {
 		r.close()
+	}
+}
+
+func (f fanout) decideHeld() {
+	for _, r := range f {
+		r.decideHeld()
 	}
 }
 
@@ -871,6 +1057,21 @@ func (s *ruleStage) close() {
 	s.in.drop()
 	if s.to != nil {
 		s.to.close()
+	}
+}
+
+// decideHeld decides all the stage holds as at its input's end, then stays
+// open: its claims are known to where it decided, not past it.
+func (s *ruleStage) decideHeld() {
+	s.in.eof = true
+	for s.step() {
+	}
+	s.in.eof, s.done = false, false
+	if s.raw != nil {
+		s.src.frontier = s.raw.at(s.pos)
+	}
+	if s.to != nil {
+		s.to.decideHeld()
 	}
 }
 
@@ -1811,6 +2012,11 @@ type keyStage struct {
 	// ([keyStage.handed]).
 	hold  int
 	early [][4]int
+	// decided is every window decided early whose claims are still to be
+	// known, footprint or none: its end and what the end had written when
+	// it was decided ([keyStage.finalWritten]); out is the end.
+	decided []earlyWrite
+	out     *endSink
 	// beginsEarly are the windows decided early whose answers read where
 	// claims begin, each its start and end and the hull of where it asked
 	// ([claims.askedBegins]): a claim handed late that begins there is a
@@ -1939,6 +2145,38 @@ func (k *keyStage) miss(at int) {
 	k.missed = &decidedEarly{at: at}
 }
 
+// earlyWrite is a window decided early: its end in the text, and how many
+// bytes the end had written when it was decided.
+type earlyWrite struct {
+	end     int
+	written int64
+}
+
+// decide keeps w until the claims over its window are known: the oldest two
+// merged, keeping the earlier write, where [earlyWindows] wait already.
+func (k *keyStage) decide(w earlyWrite) {
+	if len(k.decided) == earlyWindows {
+		a, b := k.decided[0], k.decided[1]
+		k.decided[1] = earlyWrite{max(a.end, b.end), min(a.written, b.written)}
+		k.decided = slices.Delete(k.decided, 0, 1)
+	}
+	k.decided = append(k.decided, w)
+}
+
+// finalWritten is how many bytes of what the end wrote are final whatever
+// the claims still to come say: those it had written when the first window
+// still waiting on its claims was decided, since what it wrote before then
+// came from text the stages wrote before that window. Every window counts,
+// not only one that asked of the claims: a late word can change a block it
+// read forward and let go ([keyStage.handed]).
+func (k *keyStage) finalWritten() int64 {
+	n := k.out.n
+	for _, w := range k.decided {
+		n = min(n, w.written)
+	}
+	return n
+}
+
 // wait keeps a window decided early, w, until the claims over it are known:
 // the oldest two merged where [earlyWindows] wait already.
 func (k *keyStage) wait(w [4]int) {
@@ -1961,6 +2199,7 @@ func (k *keyStage) settle() {
 	f := k.frontier()
 	k.early = slices.DeleteFunc(k.early, func(w [4]int) bool { return w[1] < f })
 	k.beginsEarly = slices.DeleteFunc(k.beginsEarly, func(w [4]int) bool { return w[1] < f })
+	k.decided = slices.DeleteFunc(k.decided, func(w earlyWrite) bool { return w.end < f })
 }
 
 // take hands the stage the next stretch of the text.
@@ -1979,6 +2218,19 @@ func (k *keyStage) close() {
 	k.in.drop()
 	if k.missed == nil {
 		k.to.close()
+	}
+}
+
+// decideHeld decides all the stage holds as at the text's end, its claims
+// decided to there, and stays open ([pipeline.decideHeld]).
+func (k *keyStage) decideHeld() {
+	k.in.eof = true
+	for k.step() {
+	}
+	k.in.eof, k.done = false, false
+	k.settle()
+	if k.missed == nil {
+		k.to.decideHeld()
 	}
 }
 
@@ -2022,7 +2274,9 @@ func (k *keyStage) step() bool {
 	early := false
 	foot, starts := [2]int{len(text) + 1, -1}, [2]int{len(text) + 1, -1}
 	if _, n := k.final(writeTo); armour || n > 0 {
-		early = k.frontier() <= hi
+		// At the input's end every claims stage has decided all it holds,
+		// at a flush as at Close ([keyStage.decideHeld]).
+		early = !k.in.eof && k.frontier() <= hi
 		if early && k.arrived-k.hold <= hi {
 			return false
 		}
@@ -2032,6 +2286,7 @@ func (k *keyStage) step() bool {
 		str := string(text)
 		c = k.claimsIn(str, lo)
 		if early {
+			k.decide(earlyWrite{lo + len(text), k.out.n})
 			c.footprint, c.begins = &foot, &starts
 			if o := k.observe; o != nil && o.decided != nil {
 				o.decided(lo, lo+len(text))

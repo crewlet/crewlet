@@ -181,6 +181,7 @@ export function inboxSelection(row: InboxRow | null): InboxSelection | null {
       const s = row.subject;
       if (s.kind === "ask") return of("task", taskId(s.ask), "decision");
       if (s.kind === "run") return of("run", s.run.turn_id, "decision");
+      if (s.kind === "fold_in") return of("run", s.foldIn.turn_id, "decision");
       return of("seat", s.seat.row.handle ? String(s.seat.row.handle) : undefined, "agent");
     }
     case "condition":
@@ -227,6 +228,7 @@ export function inboxResources(needs: readonly InboxRow[]): InboxResource[] {
       const s = row.subject;
       if (s.kind === "ask") add("task", s.ask.key_collision ? s.ask.id : s.ask.key);
       else if (s.kind === "run") add("run", s.run.turn_id);
+      else if (s.kind === "fold_in") add("run", s.foldIn.turn_id);
       else add("seat", s.seat.row.handle ? String(s.seat.row.handle) : undefined);
     } else if (row.kind === "condition" && row.item.subject === "seat") {
       add("seat", row.item.who);
@@ -517,6 +519,8 @@ export function rowWho(row: InboxRow, index: OrgIndex): Who | null {
           return whoOf(index, row.subject.ask.asked_by);
         case "run":
           return whoOf(index, row.subject.run.agent_handle);
+        case "fold_in":
+          return whoOf(index, row.subject.foldIn.asker);
         case "seat":
           return whoOf(index, row.subject.seat.row.handle ?? row.subject.seat.row.role);
       }
@@ -576,6 +580,10 @@ export function rowItem(row: InboxRow): ItemRef | null {
           const ref = row.subject.run.work_item;
           return ref ? turnItem(ref) : null;
         }
+        case "fold_in": {
+          const ref = row.subject.foldIn.work_item;
+          return ref ? turnItem(ref) : null;
+        }
         case "seat": {
           const r = row.subject.seat.row;
           const ref = r.turn?.work_item ?? r.live_call?.work_item;
@@ -620,6 +628,8 @@ export function rowKey(row: InboxRow): string {
           return row.subject.ask.key;
         case "run":
           return row.subject.run.work_item?.key ?? "";
+        case "fold_in":
+          return row.subject.foldIn.work_item?.key ?? "";
         case "seat": {
           const r = row.subject.seat.row;
           return r.turn?.work_item?.key ?? r.live_call?.work_item?.key ?? "";
@@ -1272,6 +1282,8 @@ export function questionOf(row: InboxRow): string | null {
       return row.key;
     case "run":
       return runQuestionKey(row.subject.run.turn_id, row.subject.run.launch_id);
+    case "fold_in":
+      return row.key;
     case "seat":
       return null;
   }

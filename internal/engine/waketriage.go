@@ -347,20 +347,33 @@ func isRequester(run sandbox.PendingRun, o wakeOrigin) bool {
 }
 
 // routeMemo is what a router remembers across reads, by job: the wakes
-// decided, each wake's triage verdict and how many triages each job made; and,
+// decided, each wake's triage verdict and how many triages each job made, and
+// the wakes whose fold-in it saw asked and no answer settle (foldin.go); and,
 // by turn and lead, a steer note's wakes whose filing the store did not
 // answer, filed as exactly that note again.
 type routeMemo struct {
 	decided    map[string]map[string]bool
 	verdicts   map[string]map[string]triageVerdict
 	triaged    map[string]int
+	foldIns    map[string]map[string]string
 	unanswered map[string][]string
 }
 
 func newRouteMemo() *routeMemo {
 	return &routeMemo{decided: map[string]map[string]bool{}, verdicts: map[string]map[string]triageVerdict{},
-		triaged: map[string]int{}, unanswered: map[string][]string{}}
+		triaged: map[string]int{}, foldIns: map[string]map[string]string{}, unanswered: map[string][]string{}}
 }
+
+// ask remembers that run's job's fold-in for wake is asked and unsettled.
+func (m *routeMemo) ask(run sandbox.PendingRun, wake string) {
+	if m.foldIns[run.LaunchID] == nil {
+		m.foldIns[run.LaunchID] = map[string]string{}
+	}
+	m.foldIns[run.LaunchID][wake] = run.TurnID
+}
+
+// settle forgets job's fold-in for wake: an answer settled it.
+func (m *routeMemo) settle(job, wake string) { delete(m.foldIns[job], wake) }
 
 func (m *routeMemo) done(job, id string) bool { return m.decided[job][id] }
 
@@ -458,6 +471,12 @@ func (e *Engine) triageRun(ctx context.Context, handle string, run sandbox.Pendi
 		e.noteRouted(ctx, handle, run, id, routeLeftQueued, ruleNone, stayNoWords, nil)
 		return
 	}
+	// A FOLD-IN THE JOB ASKED FOR IT DECIDES IT, whatever this router
+	// remembers: the row is the question's one copy (foldin.go).
+	if f, asked := run.FoldInFor(id); asked {
+		e.followFoldIn(ctx, handle, run, w, f, ev, memo)
+		return
+	}
 	v, known := memo.verdict(job, id)
 	if !known {
 		switch {
@@ -484,7 +503,6 @@ func (e *Engine) triageRun(ctx context.Context, handle string, run sandbox.Pendi
 	case gateAbsorb:
 		e.absorbWake(ctx, handle, run, w, memo)
 	default:
-		memo.mark(job, id)
 		why := stayRequest
 		switch {
 		case v.failed():
@@ -494,7 +512,18 @@ func (e *Engine) triageRun(ctx context.Context, handle string, run sandbox.Pendi
 		case v.decision == triageNoise:
 			why = stayOwes
 		}
+		// ANOTHER WRITER'S REQUEST IS PUT TO WHO MAY LET IT JOIN (foldin.go),
+		// and waits on their answer undecided.
+		if (why == stayRequest || why == stayNotLead) && foldable(o, facts) {
+			asked, refused := e.askFoldIn(ctx, handle, run, w, ev, memo)
+			if asked {
+				return
+			}
+			why = refused
+		}
+		memo.mark(job, id)
 		e.noteRouted(ctx, handle, run, id, routeLeftQueued, v.rule(), why, nil)
+		e.tellWaiting(ctx, handle, ev, id, facts.person, runsAfterLine)
 	}
 }
 

@@ -49,3 +49,38 @@ test("the badge is the engine's total with the reader's seats and conditions, ne
   expect(needsYouCount({ ...answer, capped: true }, 0, 0)).toEqual({ waiting: 1, capped: true });
   expect(needsYouCount(null, 2, 3)).toEqual({ waiting: null, capped: false });
 });
+
+test("a fold-in put to the reader waits on them, and one they may answer for somebody else is apart", () => {
+  const foldIn = (id: string, at: string, needs: boolean): DecisionItem => ({
+    kind: "fold_in",
+    at,
+    fold_in: {
+      id,
+      turn_id: "t-1",
+      launch_id: "job-1",
+      seat: "pm",
+      requester: "founder",
+      asker: "ceo",
+      asker_kind: "human",
+      conversation: "chat:C1",
+      words: "also redo the logo",
+      cut: 0,
+      put_to: ["founder"],
+      asked_at: at,
+      decision: { question: "ceo asked pm for work of their own", options: [], role: "approver" },
+    },
+    put_to_you: needs,
+    may_answer: true,
+    needs_you: needs,
+  });
+  const folded: DecisionsAnswer = {
+    ...answer,
+    items: [
+      foldIn("put-to-me", "2026-11-14T12:00:00Z", true),
+      foldIn("a-lead-may", "2026-11-14T13:00:00Z", false),
+    ],
+  };
+  const { yours, others } = splitDecisions(decisionSubjects(folded, []));
+  expect(yours.map((s) => (s.kind === "fold_in" ? s.foldIn.id : ""))).toEqual(["put-to-me"]);
+  expect(others.map((s) => (s.kind === "fold_in" ? s.foldIn.id : ""))).toEqual(["a-lead-may"]);
+});

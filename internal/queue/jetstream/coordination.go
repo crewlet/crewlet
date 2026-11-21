@@ -53,7 +53,7 @@ func OpenCoordination(ctx context.Context, cfg Config) (*Coordination, error) {
 		return nil, fmt.Errorf("start embedded nats: %w", err)
 	}
 	c := &Coordination{owned: e, where: "this node's broker on " + cfg.StoreDir}
-	if c.conn, err = e.connect(watched{}); err != nil {
+	if c.conn, err = e.connect(watched{}, e.auth.engine); err != nil {
 		c.Close()
 		return nil, fmt.Errorf("connect nats: %w", err)
 	}

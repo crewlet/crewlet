@@ -1033,6 +1033,10 @@ type Engine struct {
 	// wakeRouters is this node's routers of its busy seats' held inboxes
 	// (wakerouter.go, ADR-0167).
 	wakeRouters seatRouters
+
+	// waitsTold is what each wake waiting behind a busy seat was told of why
+	// it waits, so a person is told each reason once (foldin.go).
+	waitsTold waitsTold
 	// codeSearchWire is this node's code search scatter envelopes, both
 	// halves, and codeSearchLocal the answerer its own searches go to where it
 	// has no broker (codesearch.go).

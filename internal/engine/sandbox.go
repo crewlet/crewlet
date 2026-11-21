@@ -2836,6 +2836,9 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// wake from the run's requester about its work handed to it. See
 		// wakerouter.go.
 		Busy: e.seatRunsMoved,
+		// AND A FOLD-IN A PERSON ANSWERED is read by the seat's router at
+		// once. See foldin.go.
+		FoldInAnswered: e.nudgeRouter,
 		// A run that stops with a turn still suspended into it takes the
 		// working indicator down with it, whichever way it stopped: the
 		// agent is waiting on a person, or is never coming back at all,
@@ -3999,6 +4002,7 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// costs seconds, not a client timeout per seat: the driver detaches and
 	// bounds each request itself ([notify.StatusDriver.ClearFor]).
 	e.Status().ClearFor(ctx, handle)
+	e.waitsTold.forgetSeat(handle)
 
 	// REFLECTION FIRST, so nothing new writes the seat's memory here after
 	// the flush below.
