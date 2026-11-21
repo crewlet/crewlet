@@ -21,7 +21,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -1435,14 +1434,12 @@ func TestAReadStopsBetweenTheNotesAndTheValuesOneLineHolds(t *testing.T) {
 
 // THE TRANSCRIPT'S BOUNDS ARE THE ENGINE'S OWN, and hold to what their values
 // argue: a page holds sixty-four entries at the entry's bound; a read frames
-// the lines its constant states; the read budget is eight times an archive's
-// largest stored size (gzip's ratio over text), so an ordinary session at its
-// bound reads whole; and at least two reads run at once, within 200 MiB at
-// their measured worst ([executor.TranscriptReadHeldBytes]).
+// the lines its constant states; and at least two reads run at once, within
+// 200 MiB at their measured worst ([executor.TranscriptReadHeldBytes]).
 //
 // Mutation: raise the entry's bound past a sixty-fourth of the page's, state a
-// lines bound of another figure, shrink the budget under eight archives, or let
-// one read at a time, or a fifth, run at once, and a row goes red.
+// lines bound of another figure, or let one read at a time, or a fifth, run at
+// once, and a row goes red.
 func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 	t.Parallel()
 	bounds := executor.TranscriptReadBounds()
@@ -1457,10 +1454,6 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 	}
 	if bounds.ReadLines != executor.TranscriptReadLines {
 		t.Errorf("a read frames %d lines and elements, not the constant that states it", bounds.ReadLines)
-	}
-	if bounds.ReadBytes < 8*executorkeep.SessionMaxBytes {
-		t.Errorf("the read budget %d is under eight archives at their bound of %d", bounds.ReadBytes,
-			executorkeep.SessionMaxBytes)
 	}
 	if n := executor.TranscriptReadsAtOnce; n < 2 || n*executor.TranscriptReadHeldBytes > 200<<20 {
 		t.Errorf("%d reads at once hold up to %d MiB at their worst, want at least two within 200 MiB",

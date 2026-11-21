@@ -135,11 +135,10 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"turn_engine.conversation_session.retention_days", ErrOutOfRange,
 		},
 		{
-			// ONE SESSION AT ITS BOUND, sealed, is a little over 32 MiB: a
-			// budget of exactly 32 would refuse outright a capture the
-			// session bound admits.
-			"a seat's session budget below one session at its bound",
-			"name: Acme\nturn_engine:\n  conversation_session:\n    max_bytes_per_seat: 33554432\n",
+			// THE FLOOR IS ONE SESSION AT ITS BOUND, sealed (a little over
+			// 48 MiB) and rounded up to 49 MiB, so a byte under it is refused.
+			"a seat's session budget a byte under its floor",
+			"name: Acme\nturn_engine:\n  conversation_session:\n    max_bytes_per_seat: 51380223\n",
 			"turn_engine.conversation_session.max_bytes_per_seat", ErrOutOfRange,
 		},
 		{

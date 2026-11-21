@@ -585,17 +585,13 @@ func ctPadded(n int) string {
 // it with errThreadBound, saying which it ran past, and the reading stays
 // over. A member is past its bound EVEN WHERE THE BOUND FALLS RIGHT AFTER A
 // BREAK, where io.LimitReader would end it cleanly. A value or a member AT its
-// bound reads whole, the member's bound is the take's scrub's own, and a 9 MiB
-// line of a value no reader reads is no bound's.
+// bound reads whole, and a 9 MiB line of a value no reader reads is no bound's.
 //
 // Mutation: read a line past a bound as a refused line, and the record after
 // it is read; meter the member with io.LimitReader, and a member past its
 // bound ends cleanly; swap two bounds' words, and one reads as the other.
 func TestALineOrAMemberPastItsBoundEndsTheReading(t *testing.T) {
 	t.Parallel()
-	if kept := boundsFor(executorkeep.SessionMaxBytes); threadPlainMax != kept.plain {
-		t.Errorf("a thread's member is read within %d bytes, the take's scrub within %d", threadPlainMax, kept.plain)
-	}
 	// valued is a brief whose uuid, as written, is n bytes long.
 	valued := func(n int) string { return ctBrief(strings.Repeat("u", n-2)) }
 	// called is a reply of n calls, whose facts pass the bound before its

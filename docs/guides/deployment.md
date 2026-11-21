@@ -164,9 +164,9 @@ hours of each other:
 - A [kept session's](../concepts/code-sandbox.md#each-launchs-session-kept)
   capture is stamped on the run's record by the clock of the node taking it,
   and any other node reads it as still being kept until its life and two
-  hours have passed by its own clock, about three hours and twelve minutes; a
+  hours have passed by its own clock, about three hours and twenty minutes; a
   read standing by beside it is read as standing until its window and two
-  hours have passed, about four hours and thirty-seven and a half minutes.
+  hours have passed, about four hours and fifty and a half minutes.
   Neither wait holds that long on that reading alone: a turn's end holds each
   capture for its life, and each standby for its window and its takeover's
   life, from the moment it first sees it, on its own clock. A reader whose
@@ -201,12 +201,6 @@ takes the store's word for it ([Coordination](../concepts/coordination.md#the-th
 
 NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
-
-The same hour bounds one step of a single machine's own clock: a node removes
-a session spool a crash left behind only once it is an hour older than the
-longest a keep may wait to open it, by that machine's clock, so NTP stepping
-the clock forward by up to an hour to correct it never removes a spool a keep
-is still about to upload.
 
 Every data node reads the fleet's clocks on its position heartbeat, every ten
 seconds, off the position register in the coordination store, which it reads on

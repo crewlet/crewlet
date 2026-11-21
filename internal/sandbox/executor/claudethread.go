@@ -17,7 +17,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/agent/steer"
-	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -37,12 +36,11 @@ import (
 // FACTS ARE HELD TO [threadLineMax] IN SUM", says why.
 const threadLineMax = 8 << 20
 
-// threadPlainMax is the most of one member a reader reads: the bound a kept
-// session's archive is held to ([scrubExpansion] times
-// executorkeep.SessionMaxBytes, the figure [heldPlainMax] packs to), so a
-// thread past it is one no kept session holds. A reader of an archive meters
+// threadPlainMax is the most of one member a reader reads: what a kept
+// session's scrub reads ([scrubPlainMax], the figure [heldPlainMax] packs to),
+// so a thread past it is one no kept session holds. A reader of an archive meters
 // the archive at it and hands each member what is left.
-const threadPlainMax = int64(scrubExpansion) * executorkeep.SessionMaxBytes
+const threadPlainMax = scrubPlainMax
 
 // threadLinesMax is the most whole lines a reading reads, of one thread or of
 // every thread member of an archive between them. PAST IT THE READING FAILS

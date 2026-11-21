@@ -20,7 +20,6 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -131,7 +130,7 @@ func hsFixture(t *testing.T, release, name string, edits ...[2]string) (archive 
 var hsMain = claudeProjectPrefix + ctSession + ".jsonl"
 
 // hsBounds is what a reading of a kept session is held to.
-func hsBounds() scrubBounds { return boundsFor(executorkeep.SessionMaxBytes) }
+func hsBounds() scrubBounds { return plainBounds(scrubPlainMax) }
 
 // hsLogged is a call the log kept as a success that answered output.
 func hsLogged(id, output string) sandbox.LoggedCall {
