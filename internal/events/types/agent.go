@@ -504,7 +504,7 @@ type TurnCompleted struct {
 	// payload for nothing.
 	//
 	// No larger than the trigger it was read from, which crossed the queue
-	// in one message already.
+	// in one message already. REDACTED, as every record of the turn is.
 	Ask string `json:"ask,omitempty"`
 	// AskProvenance is who wrote Ask, as ONE label over the whole of it
 	// ([provenance.Label], ADR-0040): the labels of every part of the ask

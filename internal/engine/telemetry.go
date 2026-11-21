@@ -584,7 +584,9 @@ func (e *Engine) publishTurnCompleted(ctx context.Context, t turnTelemetry,
 		EndedAt:       ended,
 		DurationMS:    int(ended.Sub(t.startedAt) / time.Millisecond),
 		TaskSummary:   t.trigger.Summary,
-		Ask:           t.unspokenAsk(),
+		// REDACTED, on the record alone: the turn-start judgements read the
+		// ask part by part (askParts) and the park keeps it as it came.
+		Ask:           redact.Secrets(t.unspokenAsk()),
 		AskProvenance: t.unspokenAskLabel(),
 		PlanSummary:   planSummary(res),
 		// ReviewOutcome is the reviewer's decision, which is the turn's
