@@ -263,15 +263,6 @@ func (f *FleetStore) SweepMarkers(ctx context.Context, cutoff time.Time) (int64,
 		if err != nil {
 			errs = append(errs, err)
 		}
-		if kv.Bucket() == f.config.Bucket() {
-			// AND THE ACTIVATION'S BODIES no pointer names any more.
-			n, err = f.sweepBodies(ctx, pass, cutoff)
-			swept += n
-			if err != nil {
-				errs = append(errs, err)
-			}
-			continue
-		}
 		if kv.Bucket() != f.runs.Bucket() {
 			continue
 		}
@@ -286,6 +277,17 @@ func (f *FleetStore) SweepMarkers(ctx context.Context, cutoff time.Time) (int64,
 		}
 	}
 	return swept, errors.Join(errs...)
+}
+
+// SweepBodies removes the activation's bodies no pointer names, written before
+// cutoff — see [coord.ActivationBodies]. Its own walk of the config bucket,
+// metadata only, at its own horizon ([coord.BodyRetention]).
+func (f *FleetStore) SweepBodies(ctx context.Context, cutoff time.Time) (int64, error) {
+	pass, err := walkForSweep(ctx, f.js, f.config)
+	if err != nil {
+		return 0, err
+	}
+	return f.sweepBodies(ctx, pass, cutoff)
 }
 
 // sweepBodies removes, from the config bucket's pass, every activation body

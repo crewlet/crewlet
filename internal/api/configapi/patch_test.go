@@ -506,7 +506,7 @@ func TestAWriteWithNoRaceStillActivates(t *testing.T) {
 // A FIELD THIS BUILD DOES NOT KNOW SURVIVES A WRITE MADE BY THIS BUILD.
 //
 // A rolling upgrade puts two builds on one coordination store, and the
-// activation pointer carries the payload — so an older node holds, byte for
+// activation pointer names the body — so an older node holds, byte for
 // byte, a document a NEWER peer wrote. Decoding that into this build's struct
 // and marshalling it back drops every field this build cannot represent, and
 // the older node then publishes the result as the fleet's configuration: the

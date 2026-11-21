@@ -171,6 +171,29 @@ func TestABodysReadIsGivenTheArrivalOfItsRecordedSize(t *testing.T) {
 	}
 }
 
+// A BODY'S CROSSING IS HELD TO WHAT A KEY HOLDS. The size is the pointer's
+// word, and any admitted connection writes the pointer: a negative one would
+// confirm a lag before its grace, a huge one would stretch the grace without
+// end. Across a link, a size below nothing crosses as nothing does and one past
+// the bound as the bound does.
+//
+// Mutation: drop the clamp in BodyCrossing, and both rows go red.
+func TestABodysCrossingIsHeldToWhatAKeyHolds(t *testing.T) {
+	t.Parallel()
+	store := openFleetVia(t, jsOf(embeddedNATS(t)), AcrossLink, fmt.Sprintf("x%d", bucketSeq.Add(1)))
+	crossing := func(size int) time.Duration {
+		return store.BodyCrossing(coord.Activation{Body: coord.BodyRef{Bytes: size}})
+	}
+	for size, want := range map[int]time.Duration{
+		-1 << 30:                 crossing(0),
+		coord.MaxValueBytes << 4: crossing(coord.MaxValueBytes),
+	} {
+		if got := crossing(size); got != want {
+			t.Errorf("a pointer recording %d bytes gives its body %v to cross, want %v", size, got, want)
+		}
+	}
+}
+
 // flipDeadlines is the config bucket's handle that records the deadline of
 // every compare-and-set it is handed: the flips, and nothing else.
 type flipDeadlines struct {
@@ -217,6 +240,21 @@ func TestAFlipLandsWithinHalfTheBodysRetentionOfItsWrite(t *testing.T) {
 			t.Errorf("flip %d is bounded at %v, want %v: half the body's retention after its write",
 				i+1, deadline, want)
 		}
+	}
+}
+
+// A FLIP IS GIVEN TWICE THE BODY'S WRITE AT ITS BOUND. flipBy runs from before
+// the body's write, which across a link at the slowest pace takes up to
+// coord.MaxValueCrossing at the bound, resends included; the flip behind it
+// gets as long again. Bounded tighter, an activation at the bound fails on a
+// slow link; looser, every superseded body is kept longer (coord.BodyRetention).
+//
+// Mutation: halve coord.BodyRetention, and flipBy is short of it.
+func TestAFlipIsGivenTwiceTheBodysWriteAtItsBound(t *testing.T) {
+	t.Parallel()
+	if flipBy < 2*coord.MaxValueCrossing {
+		t.Errorf("a flip may land up to %v after its body's write begins, short of twice the %v "+
+			"a body at its bound takes to write across a link", flipBy, coord.MaxValueCrossing)
 	}
 }
 

@@ -996,7 +996,7 @@ var payloadCases = []fleetCase{{
 	},
 }}
 
-// bodySweepCases hold the marker sweep to the activation's bodies: it removes
+// bodySweepCases hold the body sweep to the activation's bodies: it removes
 // one no pointer names once it is past the cutoff, and nothing else.
 var bodySweepCases = []fleetCase{{
 	// A BODY IS SWEPT ONLY ONCE IT IS OLD AND UNNAMED. Young, a flip still in
@@ -1016,20 +1016,51 @@ var bodySweepCases = []fleetCase{{
 		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
-		if _, err = h.f.SweepMarkers(h.ctx, time.Now().Add(-time.Hour)); err != nil {
-			h.t.Fatalf("SweepMarkers an hour back: %v", err)
+		if _, err = h.f.SweepBodies(h.ctx, time.Now().Add(-time.Hour)); err != nil {
+			h.t.Fatalf("SweepBodies an hour back: %v", err)
 		}
 		if _, found, readErr := h.f.Body(h.ctx, first); readErr != nil || !found {
 			h.t.Errorf("rev-1's body after a sweep it is younger than: found=%v err=%v, want kept", found, readErr)
 		}
-		if _, err = h.f.SweepMarkers(h.ctx, time.Now().Add(time.Hour)); err != nil {
-			h.t.Fatalf("SweepMarkers an hour on: %v", err)
+		if _, err = h.f.SweepBodies(h.ctx, time.Now().Add(time.Hour)); err != nil {
+			h.t.Fatalf("SweepBodies an hour on: %v", err)
 		}
 		if _, found, readErr := h.f.Body(h.ctx, first); readErr != nil || found {
 			h.t.Errorf("rev-1's body after a sweep past it: found=%v err=%v, want removed", found, readErr)
 		}
 		if got, found, err := h.f.Body(h.ctx, second); err != nil || !found || string(got) != `{"v":2}` {
 			h.t.Errorf("the pointer's body after every sweep = %q found=%v err=%v, want kept", got, found, err)
+		}
+	},
+}, {
+	// A REFERENCE NO WRITE MAKES IS REFUSED BEFORE IT SIZES A READ. Any
+	// admitted connection can write the pointer, so its length and digest
+	// are held to their shape: a negative or oversized length would size the
+	// read and the posture's grace, and a digest that is no digest names no key.
+	//
+	// Mutation: drop coord.BodyRef.Check from Body, and the forged digests
+	// read as swept or as an outage, never as the corruption they are.
+	name: "a pointer naming a body no write makes is refused as corrupt",
+	fn: func(h *fleetHarness) {
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1",
+			Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		digest := published.Body.SHA256
+		for _, forged := range []coord.BodyRef{
+			{Bytes: -1, SHA256: digest},
+			{Bytes: 0, SHA256: digest},
+			{Bytes: coord.MaxValueBytes + 1, SHA256: digest},
+			{Bytes: published.Body.Bytes, SHA256: strings.ToUpper(digest)},
+			{Bytes: published.Body.Bytes, SHA256: digest[:63]},
+			{Bytes: published.Body.Bytes, SHA256: "../" + digest[3:]},
+		} {
+			at := published
+			at.Body = forged
+			if _, found, err := h.f.Body(h.ctx, at); !errors.Is(err, coord.ErrBodyCorrupt) || found {
+				h.t.Errorf("the body of %+v: found=%v err=%v, want coord.ErrBodyCorrupt", forged, found, err)
+			}
 		}
 	},
 }}

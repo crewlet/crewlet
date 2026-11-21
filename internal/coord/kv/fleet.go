@@ -603,7 +603,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 			"Crewlet per-node status records (MCP, models, runners, infra); a node that stops writing ages out",
 			cfg.StatusFreshness},
 		{&store.config, configSuffix,
-			"Crewlet activation pointer; NO TTL — its revision IS the epoch", 0},
+			"Crewlet activation pointer and the bodies it names; NO TTL — the pointer's revision IS the epoch", 0},
 		{&store.budgets, budgetSuffix,
 			"Crewlet token counters, a slot per calendar window; the bucket TTL outlasts the longest window",
 			cfg.BudgetRetention},
@@ -1438,11 +1438,11 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 	}, nil
 }
 
-// flipBy is how long after its body is written a flip may still land: half of
-// [coord.BodyRetention], so the sweep, which removes only a body written longer
-// ago than that and read before the pointer, never removes one a flip in flight
-// names, with the other half left for the clock skew between this node and the
-// broker that stamps the body.
+// flipBy is how long after its body's write begins a flip may still land: half
+// of [coord.BodyRetention], so the sweep, which removes only a body written
+// longer ago than that and read before the pointer, never removes one a flip
+// in flight names, with the other half left for the clock skew between this
+// node and the broker that stamps the body.
 const flipBy = coord.BodyRetention / 2
 
 // bodyPrefix is the key class of the activation's bodies in the config bucket,
@@ -1626,6 +1626,9 @@ func (f *FleetStore) Body(ctx context.Context, a coord.Activation) (json.RawMess
 	if !a.Body.Named() {
 		return nil, false, fmt.Errorf("coord/kv: read the body of %s: %w", a.RevisionID, coord.ErrBodyless)
 	}
+	if err := a.Body.Check(); err != nil {
+		return nil, false, fmt.Errorf("coord/kv: read the body of %s: %w", a.RevisionID, err)
+	}
 	key := bodyKey(a.Body)
 	entry, err := getSized(ctx, f.js, f.config, key, a.Body.Bytes)
 	if errors.Is(err, jetstream.ErrKeyNotFound) {
@@ -1645,9 +1648,12 @@ func (f *FleetStore) Body(ctx context.Context, a coord.Activation) (json.RawMess
 
 // BodyCrossing is how long a's body takes to cross this node's connection at
 // the slowest pace its reach allows: a read's reply of the body and the most
-// header a write carries, none in process.
+// header a write carries, none in process. The recorded size is held to what
+// a key holds, so a pointer naming another size stretches no grace past it
+// and shortens none below nothing ([coord.BodyRef.Check]).
 func (f *FleetStore) BodyCrossing(a coord.Activation) time.Duration {
-	return jsapi.Crossing(a.Body.Bytes+kvHeaderBytes, f.reach.pace())
+	size := min(max(a.Body.Bytes, 0), coord.MaxValueBytes)
+	return jsapi.Crossing(size+kvHeaderBytes, f.reach.pace())
 }
 
 // Target reads the pointer: a small record ([coord.MaxPointerBytes]), read at

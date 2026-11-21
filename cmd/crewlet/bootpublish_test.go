@@ -716,8 +716,8 @@ func TestAnOfflineChangeOnAnUnconfirmedPublishIsPublishedOverIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if target.RevisionID != made || target.Epoch != landed.Epoch+1 {
-		t.Errorf("the fleet is on %s at epoch %d, want the change %s published over %s's "+
+	if target.RevisionID != made || target.Epoch <= landed.Epoch {
+		t.Errorf("the fleet is on %s at epoch %d, want the change %s published past %s's "+
 			"epoch %d", target.RevisionID, target.Epoch, made, sent, landed.Epoch)
 	}
 	if after := bootRow(t, db); after.ID != made || after.Offer != nil {

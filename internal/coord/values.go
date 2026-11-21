@@ -73,11 +73,15 @@ const MaxPointerBytes = 8 << 10
 const MaxSummaryBytes = 4 << 10
 
 // BodyRetention is how long the activation's body a pointer no longer names
-// stays before the marker sweep removes it ([Markers.SweepMarkers]). A write
-// flips the pointer to its body no later than half of this after it wrote the
+// stays before its sweep removes it ([ActivationBodies]). A write flips the
+// pointer to its body no later than half of this after it began writing the
 // body, so the sweep never removes a body a flip still in flight will name
-// (internal/coord/kv's Activate, ADR-0175).
-const BodyRetention = MarkerRetention
+// (internal/coord/kv's Activate, ADR-0175). Half an hour for that half: over
+// twice [MaxValueCrossing], which bounds the body's write at its bound across a
+// link at the slowest pace, resends included, so the flip behind it has as
+// long again. The other half is for clock skew. Every superseded body is kept
+// this long, so no longer than the flip needs (ADR-0175 counts the bytes).
+const BodyRetention = time.Hour
 
 // ErrSummaryTooLong is a revision summary past [MaxSummaryBytes], refused
 // before anything is written: a definite answer that names the summary, since

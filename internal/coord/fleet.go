@@ -325,7 +325,8 @@ type Activation struct {
 	// It is the coordination store's own revision of the pointer key, not
 	// a number this engine keeps: an append-only sequence the store
 	// assigns is the one counter two nodes activating at the same instant
-	// cannot both win.
+	// cannot both win. INCREASING, NEVER CONSECUTIVE: the body's write takes
+	// a revision of the same sequence, so no reader counts on a gap's size.
 	Epoch      int64
 	RevisionID string
 	At         time.Time
@@ -364,6 +365,23 @@ func BodyOf(payload json.RawMessage) BodyRef {
 // Named reports whether r names a body at all: a pointer written before
 // bodies had keys names none.
 func (r BodyRef) Named() bool { return r.SHA256 != "" }
+
+// Check refuses a reference no write makes, with [ErrBodyCorrupt]: a length
+// outside 1..[MaxValueBytes], or a digest that is not 64 lowercase hex digits.
+// Any admitted connection can write the pointer (ADR-0094), and the length
+// sizes a read and the posture's grace ([Plane.BodyCrossing]), so it is held
+// to its shape before either trusts it.
+func (r BodyRef) Check() error {
+	if r.Bytes < 1 || r.Bytes > MaxValueBytes {
+		return fmt.Errorf("%w: it names a body of %d bytes, outside 1 to %d",
+			ErrBodyCorrupt, r.Bytes, MaxValueBytes)
+	}
+	if len(r.SHA256) != sha256.Size*2 || strings.Trim(r.SHA256, "0123456789abcdef") != "" {
+		return fmt.Errorf("%w: it names the digest %q, which is not 64 lowercase hex digits",
+			ErrBodyCorrupt, textcut.Within(r.SHA256, sha256.Size*2))
+	}
+	return nil
+}
 
 // Describes reports whether payload is exactly the body r names, by length
 // and digest.
@@ -745,7 +763,7 @@ func ActivationValue(req ActivationRequest, body BodyRef, at time.Time) ([]byte,
 // ([ActivationAt]), and a later instant can encode longer — a millisecond on,
 // ".1Z" is ".101Z" — while a config write's dry run sizes the pointer its
 // write would make at an instant before that write's own, the origin's
-// included. So a request this sizes within [MaxValueBytes] is one the store
+// included. So a request this sizes within [MaxPointerBytes] is one the store
 // takes at whatever instants it is written at. For a caller holding a write to
 // the bound before it commits to anything (internal/api/configapi), which has
 // no instant but its own, and for both backends.
@@ -1551,12 +1569,20 @@ type Markers interface {
 	// part-way reports the markers already removed beside the error.
 	//
 	// It also removes a part ([RunParts]) written before cutoff whose run's
-	// record, read after the part is found, is gone ([SandboxRuns]); and an
-	// activation's body ([Plane.Body]) written before cutoff that the
-	// pointer, read after the body is found, does not name. A flip names a
-	// body written at most half of [BodyRetention] before it, so a cutoff
-	// [BodyRetention] back never removes a body a flip in flight will name.
+	// record, read after the part is found, is gone ([SandboxRuns]).
 	SweepMarkers(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// ActivationBodies is the sweep of the activation's bodies no pointer names,
+// at its own horizon ([BodyRetention]), under the maintenance duty.
+type ActivationBodies interface {
+	// SweepBodies removes every body ([Plane.Body]) written before cutoff
+	// that the pointer, read after the body is found, does not name,
+	// reporting how many went. A flip names a body written at most half of
+	// [BodyRetention] before it, so a cutoff [BodyRetention] back never
+	// removes a body a flip in flight will name. The one answer it changes:
+	// the body of an activation the pointer moved past becomes absent.
+	SweepBodies(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 // Fleet is a backend that serves all of the shared state, which is what the
@@ -1612,6 +1638,7 @@ type Fleet interface {
 	BackupRegister
 	MaintenanceRegister
 	Markers
+	ActivationBodies
 	Custody
 	UploadReservations
 	SaveAllowances
