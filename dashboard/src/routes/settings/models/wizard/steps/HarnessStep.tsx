@@ -11,7 +11,7 @@
  */
 
 import { ChoiceCards, FormField, Input, Text } from "@crewlethq/ui";
-import { EXECUTOR_HARNESSES } from "../../executors.ts";
+import { EXECUTOR_HARNESSES } from "~/contract/models.ts";
 import { HarnessMark, MARK_SIZE } from "../../HarnessMark.tsx";
 import { product } from "../../words.ts";
 import {
@@ -50,7 +50,7 @@ const HARNESS_WORDS: Readonly<Record<string, { description: string; methods: str
 };
 
 /** "A or B", "A, B or C". */
-export const either = (parts: readonly string[]) =>
+const either = (parts: readonly string[]) =>
   parts.length < 3 ? parts.join(" or ") : `${parts.slice(0, -1).join(", ")} or ${parts.at(-1)}`;
 
 /** What a harness with no box runner does: its turns on the host, and Ask Crewlet where the engine allows it. */
