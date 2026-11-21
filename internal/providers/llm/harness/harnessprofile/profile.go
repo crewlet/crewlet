@@ -958,6 +958,15 @@ type Profile struct {
 	// would go to another vendor.
 	APIKeyEnvShared bool `yaml:"api_key_env_shared,omitempty"`
 
+	// APIKeyModelEnv is the variable the harness reads its model from when its
+	// key variable signs it in, for a harness whose metered key is part of a
+	// model of its own: Kimi Code's KIMI_MODEL_NAME, beside KIMI_MODEL_API_KEY,
+	// adds a provider that becomes its default and refuses a --model naming
+	// any other (2.3.1, 2.7.2). Under auth.mode api-key the entry's model goes
+	// here and model_args is not passed; under any other mode it is removed.
+	// The engine owns it, as it does api_key_env: an entry's env may not set it.
+	APIKeyModelEnv string `yaml:"api_key_model_env,omitempty"`
+
 	// EnvSignIn declares that the harness reads its model provider's credential
 	// from its OWN environment, under that provider's variable, so a
 	// credential-named variable in an entry's `env` signs it in.
@@ -1690,6 +1699,7 @@ func (p *Profile) problems() []string {
 	}
 	p.validateLimitEvents(add)
 	p.validateEventReports(add)
+	p.validateAPIKeyModelEnv(add)
 	p.validateSignIn(add)
 	// An auth marker fires KindAuth, which exhausts the credential as a
 	// spent plan does, so an unusable sentinel costs the same as above.
@@ -2430,6 +2440,25 @@ func (p *Profile) validateLimitEvents(add func(string, ...any)) {
 				"the sentence at said_path", what)
 		}
 		e.Reset.validate(what, add)
+	}
+}
+
+// validateAPIKeyModelEnv holds [Profile.APIKeyModelEnv] to a key it goes beside
+// and a model it can carry: without api_key_env no mode puts it in place, and
+// one sharing a name with the key or the token would overwrite it.
+func (p *Profile) validateAPIKeyModelEnv(add func(string, ...any)) {
+	name := p.APIKeyModelEnv
+	switch {
+	case name == "":
+	case p.APIKeyEnv == "":
+		add("api_key_model_env %q is set with no api_key_env: the model goes beside the "+
+			"key, under auth.mode api-key", name)
+	case name == p.APIKeyEnv || name == p.TokenEnv || IsCredentialName(name):
+		add("api_key_model_env %q names a credential variable: it carries the model, "+
+			"beside the key in api_key_env", name)
+	case !p.TakesModel():
+		add("api_key_model_env %q is set, but model_args takes no {model}: the harness "+
+			"takes no model to put there", name)
 	}
 }
 

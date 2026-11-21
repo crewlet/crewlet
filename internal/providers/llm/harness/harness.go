@@ -790,7 +790,7 @@ func (p *Provider) argv(tools bool) []string {
 		complete = m.CompleteArgs
 	}
 	args := append([]string(nil), complete...)
-	if p.model != "" {
+	if p.model != "" && !p.modelInEnv() {
 		model := p.profile.EffortModel(p.model, p.effort)
 		for _, arg := range p.profile.ModelArgs {
 			args = append(args, strings.ReplaceAll(arg, "{model}", model))
@@ -799,18 +799,31 @@ func (p *Provider) argv(tools bool) []string {
 	return append(args, p.profile.EffortArgs(p.effort)...)
 }
 
-// callEnv is the operator's env for a call, with the effort's variables over it.
+// callEnv is the operator's env for a call, with the effort's variables over it,
+// and the model where the harness reads it beside its key ([Provider.modelInEnv]).
 func (p *Provider) callEnv() map[string]string {
 	effort := p.profile.EffortEnv(p.effort)
-	if len(effort) == 0 {
+	inEnv := p.model != "" && p.modelInEnv()
+	if len(effort) == 0 && !inEnv {
 		return p.env
 	}
 	out := maps.Clone(p.env)
 	if out == nil {
-		out = make(map[string]string, len(effort))
+		out = make(map[string]string, len(effort)+1)
 	}
 	maps.Copy(out, effort)
+	if inEnv {
+		out[p.profile.APIKeyModelEnv] = p.profile.EffortModel(p.model, p.effort)
+	}
 	return out
+}
+
+// modelInEnv reports whether the call's model goes in the profile's
+// api_key_model_env rather than on model_args: under auth.mode api-key, where
+// the key the harness is signed in by is part of a model of its own
+// ([harnessprofile.Profile.APIKeyModelEnv]).
+func (p *Provider) modelInEnv() bool {
+	return p.profile.APIKeyModelEnv != "" && p.auth.Mode == AuthAPIKey
 }
 
 // completion turns a finished invocation into an answer or a classified

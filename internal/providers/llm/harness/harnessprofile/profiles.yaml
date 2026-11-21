@@ -3721,13 +3721,23 @@ kimi-code:
   # NO capture_token_args: this harness mints no headless token. KIMI_API_KEY is
   # the METERED Moonshot platform key and it is not read from the shell at
   # all — the vendor is explicit that `export KIMI_API_KEY=…` gives no
-  # provider its key. The harness reads a key from its environment only as part
-  # of a model of its own: `KIMI_MODEL_NAME` with `KIMI_MODEL_API_KEY` (and
-  # `KIMI_MODEL_PROVIDER_TYPE`, `KIMI_MODEL_BASE_URL`) add a provider that
-  # becomes its default (measured on 2.3.1 and 2.7.2). This profile signs in
-  # through config.toml instead, so there is no api_key_env: the key alone
-  # names no model. A metered account is configured by writing the key into
-  # the credential home's config.toml, which then travels to every seat.
+  # provider its key.
+  #
+  # THE KEY IS READ FROM THE ENVIRONMENT AS PART OF A MODEL OF ITS OWN, measured
+  # on 2.3.1 and 2.7.2: `KIMI_MODEL_NAME` with `KIMI_MODEL_API_KEY` add a
+  # provider (`__kimi_env__`) that becomes the harness's default, on Moonshot's
+  # endpoint unless `KIMI_MODEL_BASE_URL` and `KIMI_MODEL_PROVIDER_TYPE` (kimi,
+  # openai or anthropic) name another. A name with no key fails ("provider
+  # __kimi_env__ has no credential configured"), and beside it `--model` naming
+  # any model fails ("Model … is not configured in config.toml"), so under
+  # auth.mode api-key the entry's model goes in KIMI_MODEL_NAME and model_args
+  # is not passed (api_key_model_env), with no config.toml needed. The engine
+  # owns both: set in an entry's env, they would swap its model and provider
+  # and sign it in uncounted, so config refuses them there. The endpoint's two
+  # variables say which account a key reaches (identity_env).
+  api_key_env: KIMI_MODEL_API_KEY
+  api_key_model_env: KIMI_MODEL_NAME
+  identity_env: [KIMI_MODEL_BASE_URL, KIMI_MODEL_PROVIDER_TYPE]
   #
   # THE SENTINELS ARE THIS HARNESS'S OWN CLASSIFICATION, not the vendor's prose,
   # and that is what a measurement bought. A real 429 exits 1 with
