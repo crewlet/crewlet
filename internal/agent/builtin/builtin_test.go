@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -425,6 +426,12 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		// its parent grants one reads as the seat's delegate.
 		builtin.ListSessionsTool: false,
 		builtin.ReadSessionTool:  false,
+		// A GROWTH PRODUCT'S: its reads are reads; every other class changes
+		// or asks to change the company's vendor account.
+		growthReadTool:    false,
+		growthOperateTool: true,
+		growthSpendTool:   true,
+		growthAdminTool:   true,
 	}
 
 	reg := tools.NewRegistry()
@@ -1165,6 +1172,9 @@ func fullDeps(t *testing.T) builtin.Deps {
 			Chart: chartLeads},
 		// AND A DELEGATE'S VERDICT, over a desk holding no request.
 		Delegated: builtin.DelegatedDeps{Desk: &fakeDesk{}},
+		// AND THE GROWTH TOOLS, one fake product's, at no seat's level.
+		Growth: builtin.GrowthDeps{Products: []builtin.GrowthProduct{&fakeAds{levels: map[string]growth.Level{}}},
+			Requesters: codeRequesters(), Chart: chartLeads, Audit: &growthAudit{}},
 		// AND THE ATLAS, over the settings acme runs, and an agent's two
 		// records in it, over its log and a day's count.
 		Atlas:       builtin.AtlasDeps{Settings: runsAcme},

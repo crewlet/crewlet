@@ -418,6 +418,11 @@ type LaneSpec struct {
 	// credential ([IssuedCredential]). Never one of [Catalog.Credentials].
 	Issued string
 
+	// EngineHeld is a lane whose credential the engine holds and calls with
+	// itself, which no seat, variable or box ever holds (a growth lane,
+	// ADR-0170): it names no sealed or issued field.
+	EngineHeld bool
+
 	// Grants is a lane that takes extra grants beside its level ([Grant]):
 	// its session is a [Granter], its Observe reads them back and its steps
 	// take [OpGrants]. Static, so a tool and the dashboard know without a

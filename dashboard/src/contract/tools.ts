@@ -44,6 +44,7 @@ type BuiltinGroupKey =
   | "health"
   | "atlas"
   | "servers"
+  | "growth"
   | "colleagues"
   | "memory"
   | "discovery";
@@ -63,7 +64,8 @@ type BuiltinGroupKey =
  * grant, the deployment's health being an admin's read. `ssh_read`,
  * `ssh_operate`: an agent whose SSH access is on with a server, and one at
  * operate. `delegated_decisions`: an agent a delegated-decisions rule names a
- * delegate (ADR-0125).
+ * delegate (ADR-0125). `growth_read`, `growth_operate`, `growth_administer`: an
+ * agent on the tool's growth product at that level or above.
  */
 export type BuiltinGate =
   | "everybody"
@@ -83,7 +85,10 @@ export type BuiltinGate =
   | "health_tools"
   | "ssh_read"
   | "ssh_operate"
-  | "delegated_decisions";
+  | "delegated_decisions"
+  | "growth_read"
+  | "growth_operate"
+  | "growth_administer";
 
 export interface ToolRow {
   name: string;
