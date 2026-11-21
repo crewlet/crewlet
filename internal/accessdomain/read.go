@@ -777,6 +777,8 @@ var minAtStatements = []string{
 		WHERE at >= ? AND at < ?`,
 	`SELECT MIN(at) FROM access_verdicts INDEXED BY access_verdicts_expiry_idx
 		WHERE at >= ? AND at < ?`,
+	`SELECT MIN(at) FROM access_growth INDEXED BY access_growth_expiry_idx
+		WHERE at >= ? AND at < ?`,
 }
 
 // ExpirableHours lists, oldest first and at most limit of them, the hours that

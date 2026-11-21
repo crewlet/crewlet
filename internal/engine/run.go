@@ -47,6 +47,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/mirror"
 	"github.com/crewlet/crewlet/internal/gitlet/readaudit"
 	"github.com/crewlet/crewlet/internal/googleauth"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -398,6 +399,10 @@ type Engine struct {
 	// statusRecords is this node's status record writer: its MCP, model and
 	// runner rows and infra summary, beside its presence (nodestatusrecord.go).
 	statusRecords statusRecords
+
+	// growthSignals is what this node's growth products met at their vendors,
+	// published on its status record ([Engine.GrowthSignals]).
+	growthSignals atomic.Pointer[growth.Signals]
 
 	// reviews is this node's watched copy of the definitions the fleet's MCP
 	// tools' levels were decided on ([mcpReviews]).

@@ -82,7 +82,8 @@ inbox:                                  # optional — a person's inbox, every n
   retention_days: 365                   #   how long it keeps one (default 365, 30..3650). See
                                         #   "A person's inbox" under "Tracker" below.
 access_history:                         # optional: what each agent was told about its access,
-  retention_days: 400                   #   and every SSH certificate and command, kept this long
+  retention_days: 400                   #   every SSH certificate and command, delegated verdict
+                                        #   and growth step, kept this long
                                         #   (default 400, 90..3650); each agent's newest told
                                         #   record stays while the agent exists.
 atlas:                                  # optional: the atlas, the map of what the company runs on

@@ -869,6 +869,10 @@ func New(opts Options) (*App, error) {
 		sources.Delegated = d.DelegatedReads()
 		sources.DelegatedGitHub = d.DelegatedGitHub()
 	}
+	// And what agents changed on the growth accounts (ADR-0171).
+	if g, ok := opts.Runtime.(growthRuntime); ok {
+		sources.Growth = g.GrowthReads()
+	}
 	// And the company's atlas, where the runtime reads one (ADR-0126).
 	if a, ok := opts.Runtime.(atlasRuntime); ok {
 		sources.Atlas = a.AtlasReads()

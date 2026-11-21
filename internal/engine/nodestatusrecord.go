@@ -151,11 +151,12 @@ func (e *Engine) removeStatusRecord(ctx context.Context) {
 // finding, what the node's file says it runs on, and the runs of its seats
 // waiting for an operator, off the executor coordinator's memory: what every
 // data node raises executor_resume_blocked from, since this node may evaluate
-// no alarm table of its own ([Engine.executorReading]).
+// no alarm table of its own ([Engine.executorReading]); and what its growth
+// products met at their vendors, which every node's notices read.
 func (e *Engine) statusRecordRows(ctx context.Context) coord.NodeStatusRecord {
 	return coord.NodeStatusRecord{
 		MCP: e.mcpStatus(ctx), Models: e.modelStatus(ctx), Runners: e.runnerStatus(),
-		Infra: NodeInfra(e.boot), ResumesBlocked: e.resumesBlocked(),
+		Infra: NodeInfra(e.boot), ResumesBlocked: e.resumesBlocked(), Growth: e.growthSignalRows(),
 	}
 }
 
