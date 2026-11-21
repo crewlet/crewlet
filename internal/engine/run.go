@@ -1005,6 +1005,11 @@ type Engine struct {
 	usageEvery time.Duration
 	// resumeGate is Options.resumeGate.
 	resumeGate func(sandbox.TurnGate) sandbox.TurnGate
+	// turns is how many turns this node runs at once, node.max_concurrent
+	// as its gate resolves it, read at boot since the coordinator is built
+	// before the node: the reads of its runs' boxes it makes at once
+	// ([sandbox.CoordinatorOptions.Collections]).
+	turns int
 
 	// history is the fleet's turn-level history reader, and stopHistoryServe
 	// withdraws this node as an answerer (history.go).
@@ -1608,6 +1613,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		mirrorSeams:         opts.mirrorSeams,
 		usageEvery:          opts.usageEvery,
 		resumeGate:          opts.resumeGate,
+		turns:               node.TurnsAtOnce(opts.Bootstrap.Node.MaxConcurrent),
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
 		boxTokens:           boxTokens,

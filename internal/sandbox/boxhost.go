@@ -502,11 +502,18 @@ func (c *Coordinator) hosts(run PendingRun) bool {
 }
 
 // boxResult is the part of a read that touches the box, made where the box
-// is: by this node where it hosts the box, and asked of the node that does
-// otherwise ([BoxReader]). A collection's answer from another node's host
-// keeps the clock on a host whose store alone is silent ([hostUnsettled]).
+// is: by this node where it hosts the box, holding one of its collections for
+// the read alone ([Coordinator.collectionSlot]), and asked of the node that
+// does otherwise ([BoxReader]), whose own slots bound it. A collection's
+// answer from another node's host keeps the clock on a host whose store alone
+// is silent ([hostUnsettled]).
 func (c *Coordinator) boxResult(ctx context.Context, run PendingRun, read BoxRead) (Result, bool, error) {
 	if c.hosts(run) {
+		collecting, err := c.collectionSlot(ctx, run.TurnID)
+		if err != nil {
+			return Result{}, false, err
+		}
+		defer collecting()
 		return c.readBox(ctx, run, read)
 	}
 	if c.boxes == nil {

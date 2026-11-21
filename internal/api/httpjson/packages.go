@@ -47,7 +47,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"learning": true, "ledger": true, "ledgerfit": true, "ledgerstore": true,
 		"livestate": true, "llm": true, "llmtest": true, "logging": true, "maintenance": true,
 		"lint": true, "linktest": true, "manifest": true, "mcprelay": true, "mediatype": true,
-		"llmapi": true, "mattermost": true, "mcp": true, "mcpapi": true, "mcpbridge": true, "mcpreview": true, "memobj": true, "modelcatalog": true, "modelnote": true,
+		"llmapi": true, "mattermost": true, "mcp": true, "mcpapi": true, "mcpbridge": true, "mcpreview": true, "memobj": true, "nodememory": true, "modelcatalog": true, "modelnote": true,
 		"memory": true, "memread": true, "memsync": true, "metrics": true, "migrate": true, "mirror": true,
 		"named": true, "natsobj": true, "node": true, "notify": true, "oauth": true, "objstore": true,
 		"objstoretest": true, "observe": true, "operator": true,
