@@ -4,7 +4,9 @@
  *
  * # Grouped by need, Crewlet's own service first
  *
- * Chat, Work tracking, Docs and knowledge, Code and Observability. Each of
+ * Chat, Work tracking, Docs and knowledge, Code, Observability, Cloud and
+ * Infrastructure, then the apps a company grows with: Mobile apps,
+ * Advertising, Analytics and Ad revenue (`categories.ts`). Each of
  * Crewlet's own services opens its group (Chatlet, Worklet, Doclet, Gitlet), so
  * the built-in answer to a need sits beside the apps that answer it in its
  * place, with In use or Not in use on its line. Each names Crewlet beside
@@ -69,11 +71,12 @@ import {
   useBuiltIns,
   useIntegrations,
   toolFor,
+  type BuiltInService,
   type Intent,
   type Model,
 } from "./model.ts";
 import { AppPane } from "./AppPane.tsx";
-import { DIRECTORY, entryOf, type Line } from "./categories.ts";
+import { SHOWN, entryOf, type Group, type Line } from "./categories.ts";
 import { Landing } from "./Landing.tsx";
 import { ServicePane } from "./ServicePane.tsx";
 import { ServiceDot, ServiceMark, useDisconnect } from "./parts.tsx";
@@ -86,6 +89,65 @@ function selects(line: Line, kind: string | undefined): boolean {
 }
 
 /** The intents an arrival may ask an app's page to open its form for: the home's fixes. */
+/**
+ * The directory's groups as the list draws them: each line's mark, its name
+ * (and its maker's, for a product), its state, and whether it is the one open.
+ */
+export function directoryGroups(
+  shown: readonly Group[],
+  {
+    kind,
+    model,
+    services,
+    catalog = CATALOG,
+  }: {
+    kind?: string | undefined;
+    model: Model | null;
+    services: BuiltInService[];
+    catalog?: readonly Entry[];
+  },
+): DirectoryGroup[] {
+  return shown.map((group) => ({
+    key: group.key,
+    label: group.label,
+    items: group.lines.map((line) => {
+      const selected = selects(line, kind);
+      const itemHref = href(["company", "integrations", line.key]);
+      if (line.kind === "service") {
+        const s = services.find((x) => x.key === line.key)!;
+        return {
+          key: line.key,
+          href: itemHref,
+          selected,
+          mark: <ServiceMark service={s} size="md" />,
+          label: s.name,
+          ...(s.vendor ? { hint: s.vendor } : {}),
+          status: <ServiceDot service={s} />,
+        };
+      }
+      const app = entryOf(line, catalog)!;
+      const appTool = model?.byKey.get(app.key);
+      // A PRODUCT'S STATE IS ITS OWN: Jira says nothing while only
+      // Confluence is connected.
+      const on =
+        appTool &&
+        (line.kind === "product"
+          ? appTool.sections.some((s) => s.tool.key === line.key && s.tool.configured)
+          : appTool.configured);
+      const words = appTool && on ? BUCKET_WORDS[appTool.bucket] : undefined;
+      return {
+        key: line.key,
+        href: itemHref,
+        selected,
+        mark: <VendorMark vendor={app.vendor} size="md" />,
+        label: line.kind === "product" ? line.name : app.name,
+        ...(line.kind === "product" ? { hint: app.name } : {}),
+        ...(words ? { status: <StatusDot tone={words.tone}>{words.label}</StatusDot> } : {}),
+      };
+    }),
+  }));
+}
+
 const ARRIVALS: readonly Intent[] = ["connect", "continue", "rotate", "settings", "agents"];
 
 export function Integrations({ kind }: { kind?: string }) {
@@ -129,7 +191,7 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
   const service = services.find((s) => s.key === kind);
   const tool = model ? toolFor(model, kind) : undefined;
   const entry = CATALOG.find((e) => e.key === kind || e.surfaces.some((s) => s.key === kind));
-  const product = DIRECTORY.flatMap((g) => g.lines).find(
+  const product = SHOWN.flatMap((g) => g.lines).find(
     (l): l is Extract<Line, { kind: "product" }> => l.kind === "product" && l.key === kind,
   );
   // THE CRUMB NAMES WHAT THE PAGE IS ABOUT, not the segment.
@@ -162,47 +224,8 @@ function Directory({ kind, model }: { kind?: string | undefined; model: Model | 
 
   // THE SCREEN'S WIDTH, the question the kit's one-pane rule answers.
   const onePane = useScreenBelow(PHONE_BREAKPOINT);
-  const groups = useMemo<DirectoryGroup[]>(
-    () =>
-      DIRECTORY.map((group) => ({
-        key: group.key,
-        label: group.label,
-        items: group.lines.map((line) => {
-          const selected = selects(line, kind);
-          const itemHref = href(["company", "integrations", line.key]);
-          if (line.kind === "service") {
-            const s = services.find((x) => x.key === line.key)!;
-            return {
-              key: line.key,
-              href: itemHref,
-              selected,
-              mark: <ServiceMark service={s} size="md" />,
-              label: s.name,
-              ...(s.vendor ? { hint: s.vendor } : {}),
-              status: <ServiceDot service={s} />,
-            };
-          }
-          const app = entryOf(line)!;
-          const appTool = model?.byKey.get(app.key);
-          // A PRODUCT'S STATE IS ITS OWN: Jira says nothing while only
-          // Confluence is connected.
-          const on =
-            appTool &&
-            (line.kind === "product"
-              ? appTool.sections.some((s) => s.tool.key === line.key && s.tool.configured)
-              : appTool.configured);
-          const words = appTool && on ? BUCKET_WORDS[appTool.bucket] : undefined;
-          return {
-            key: line.key,
-            href: itemHref,
-            selected,
-            mark: <VendorMark vendor={app.vendor} size="md" />,
-            label: line.kind === "product" ? line.name : app.name,
-            ...(line.kind === "product" ? { hint: app.name } : {}),
-            ...(words ? { status: <StatusDot tone={words.tone}>{words.label}</StatusDot> } : {}),
-          };
-        }),
-      })),
+  const groups = useMemo(
+    () => directoryGroups(SHOWN, { kind, model, services }),
     [kind, model, services],
   );
 
