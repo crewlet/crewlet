@@ -490,13 +490,28 @@ type CoordinatorOptions struct {
 	// nothing.
 	SteersEnded func(ctx context.Context, run PendingRun) error
 
-	// SteersConfirmed publishes, as delivered, every note a hook's serve to the
-	// run's job is recorded as having handed over ([readByServeOf]). Called on
-	// every Claude Code box read, asked or not ([Coordinator.settleHookReceipts]),
-	// so a verdict whose answer was lost is published by the next read. Ids
-	// derive from the turn and each note, so a repeat is the same records; nil
-	// publishes nothing.
+	// SteersConfirmed publishes, as delivered, every note and wake item a hook's
+	// serve to the run's job is recorded as having handed over ([readByServeOf]),
+	// the engine claiming each wake. Called on every Claude Code box read, asked
+	// or not ([Coordinator.settleHookReceipts]), so a verdict whose answer was
+	// lost is published by the next read. Ids derive from the turn and each note,
+	// so a repeat is the same records; nil publishes nothing.
 	SteersConfirmed func(ctx context.Context, run PendingRun, notes []RunNote)
+
+	// WakesEnded reports the wake items of a job a relaunch replaced that no
+	// step read, which its write removed ([PriorBox.Wakes]): each unconfirmed
+	// or unread, its delivery left to a turn of its own. Called once the write
+	// landed, never on the launch's path to fail it: the engine publishes off it,
+	// under an id from the turn and the wake. Nil reports nothing.
+	WakesEnded func(ctx context.Context, run PendingRun, wakes []RunNote)
+
+	// Busy is told a seat's runs holding it went from none to some on this
+	// node or back, or that this node let the seat go: the engine's router of
+	// the seat's held inbox follows it, reading [Coordinator.SeatRuns]. Not an
+	// owed answer's hold, which leaves no run to hand a wake to. Called outside
+	// the coordinator's lock, possibly out of order, hence a read rather than a
+	// value. Nil tells nobody.
+	Busy func(handle string)
 
 	// Hold holds a seat's inbox while one of its runs holds the seat or an
 	// answer it owes awaits its resume ([SeatHold]). Nil holds nothing (a test's
@@ -645,12 +660,16 @@ type CoordinatorOptions struct {
 	// coordination store. Nil takes no save.
 	Saves SaveLedgers
 
-	// SpoolDir is where this node spools sealed sessions: a capture's between its
-	// take and keep ([Coordinator.spool]), a relaunch's fetched session between
-	// fetch and run start ([Coordinator.fetchSession]); every take and fetch
-	// sweeps leftovers ([Coordinator.sweepSpools]). Empty is os.TempDir; a test
-	// names its own directory so what is left is the case's to see.
+	// SpoolDir is where this node spools a capture's sealed session between its
+	// take and keep ([Coordinator.spool]), in a directory of the process's own
+	// under it ([Coordinator.spoolHere]). Empty is os.TempDir; a test names its
+	// own directory so what is left is its own.
 	SpoolDir string
+
+	// Spools is told each final take's wait for spool room and the room held
+	// ([SpoolMeter]): the engine's meter records them in the node's metrics. Nil
+	// measures nothing.
+	Spools SpoolMeter
 
 	// Now is the clock, injectable for tests.
 	Now func() time.Time
@@ -701,10 +720,14 @@ type Coordinator struct {
 	closeStopped func(ctx context.Context, run PendingRun, calls RunCalls) (executorkeep.Ending, error)
 	// turnLost is [CoordinatorOptions.TurnLost].
 	turnLost func(ctx context.Context, run PendingRun, calls RunCalls) executorkeep.Ending
-	// steersEnded is [CoordinatorOptions.SteersEnded], and steersConfirmed
-	// [CoordinatorOptions.SteersConfirmed].
+	// steersEnded is [CoordinatorOptions.SteersEnded], steersConfirmed
+	// [CoordinatorOptions.SteersConfirmed] and wakesEnded
+	// [CoordinatorOptions.WakesEnded].
 	steersEnded     func(ctx context.Context, run PendingRun) error
 	steersConfirmed func(ctx context.Context, run PendingRun, notes []RunNote)
+	wakesEnded      func(ctx context.Context, run PendingRun, wakes []RunNote)
+	// busy is [CoordinatorOptions.Busy].
+	busy func(handle string)
 	// node, boxes and nudge are [CoordinatorOptions.Node], Boxes and Nudge.
 	node  string
 	boxes BoxReader
@@ -751,6 +774,9 @@ type Coordinator struct {
 	// 0.04 to 0.46 s a Claude Code pack of 1 to 20 MiB (package doc, "A pack in a
 	// node's own memory, one at a time").
 	sharedPack chan struct{}
+	// spoolRoom is the room every spool of this process shares, in bytes
+	// ([spoolRoomBytes], spoolroom.go).
+	spoolRoom *spoolRoom
 
 	// mainThreadWait bounds reading a job's main thread at its collection
 	// ([MainThreadReadWait], [Coordinator.readMainThread]); verdictWait and
@@ -763,11 +789,13 @@ type Coordinator struct {
 	// keepLife is the lifetime every keep runs under, off the read that took its
 	// capture ([Coordinator.keepLater]); keeping counts them: [Coordinator.Stop]
 	// lets those under way finish for [sessionKeepDrain], then ends them.
-	// spoolDir is [CoordinatorOptions.SpoolDir], resolved.
+	// spoolDir is [CoordinatorOptions.SpoolDir], resolved, and spools the
+	// coordinator's own directory under it (spooldir.go).
 	keepLife context.Context
 	endKeeps context.CancelFunc
 	keeping  sync.WaitGroup
 	spoolDir string
+	spools   ownSpools
 
 	// mu guards runs, the two seat-level answers the inbox screening reads on
 	// every delivery, and attempts beside them. In memory rather than a store
@@ -982,6 +1010,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		turnLost:           opts.TurnLost,
 		steersEnded:        opts.SteersEnded,
 		steersConfirmed:    opts.SteersConfirmed,
+		wakesEnded:         opts.WakesEnded,
+		busy:               opts.Busy,
 		node:               opts.Node,
 		boxes:              opts.Boxes,
 		nudge:              opts.Nudge,
@@ -992,6 +1022,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		saves: saveState{ledger: opts.Saves, slots: make(chan struct{}, maxConcurrentSaves),
 			memos: map[string]*saveMemo{}},
 		sharedPack:   make(chan struct{}, 1),
+		spoolRoom:    newSpoolRoom(opts.Spools),
 		relaunchWait: relaunchCaptureWait,
 		holdingsWait: holdingsReadWait,
 		endWait:      JobEndWait,
@@ -1055,6 +1086,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 	if opts.Takers != nil {
 		c.taker = newTakerLease(opts.Takers, opts.Incarnation, opts.TakerTTL)
 	}
+	c.sweepSpools()
 	return c, nil
 }
 
@@ -1105,6 +1137,7 @@ func (c *Coordinator) Stop() {
 	}
 	c.endKeeps()
 	<-kept
+	c.closeSpools()
 	if c.taker != nil {
 		c.taker.stop()
 	}
@@ -1249,10 +1282,14 @@ func (c *Coordinator) moved(handle string) {
 
 // seatFreed signals [SeatCoding] for a seat whose last holding run has just
 // left [Holding], so an answer owed on it is resumed now rather than at its
-// backstop. Called outside c.mu, which [Coordinator.Readmit] takes.
+// backstop, and tells [CoordinatorOptions.Busy] of a seat that became busy or
+// free. Called outside c.mu, which [Coordinator.Readmit] takes.
 func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
 	if was.holding > 0 && now.holding == 0 {
 		c.Readmit(SeatCoding, handle)
+	}
+	if (was.holding > 0) != (now.holding > 0) && c.busy != nil {
+		c.busy(handle)
 	}
 }
 
@@ -2064,8 +2101,8 @@ const hookVerdictWait = 10 * time.Second
 const hookVerdictRetry = time.Second
 
 // settleHookReceipts settles run's job's hooks' serves by what the job's session
-// showed of them ([PendingStore.SettleHook]) and publishes every note a serve
-// handed over ([CoordinatorOptions.SteersConfirmed]) on every Claude Code read.
+// showed of them ([PendingStore.SettleHook]) and publishes every note and wake a
+// serve handed over ([CoordinatorOptions.SteersConfirmed]) on every Claude Code read.
 // A verdict the store does not answer within its room is [ErrStoreSilent],
 // returned before the read's take; the package doc's "A HOOK'S NOTE" says why.
 func (c *Coordinator) settleHookReceipts(ctx context.Context, run PendingRun, receipts HookReceipts,
@@ -2099,7 +2136,7 @@ func (c *Coordinator) settleHookReceipts(ctx context.Context, run PendingRun, re
 	}
 	var confirmed []RunNote
 	for _, n := range notes {
-		if n.For == "" && readByServeOf(n, run.LaunchID) {
+		if (n.For == "" || n.IsWake()) && readByServeOf(n, run.LaunchID) {
 			confirmed = append(confirmed, n)
 		}
 	}
@@ -5605,6 +5642,10 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	// release's detach: forgotten, never lifted (its mail is the successor's to
 	// order). See [Coordinator.forgetHold].
 	c.forgetHold(handle)
+	// AND THE ROUTER OF ITS HELD INBOX stops: the seat's mail is the successor's.
+	if c.busy != nil {
+		c.busy(handle)
+	}
 	log.Debug("sandbox_seat_released", "seat", handle)
 }
 

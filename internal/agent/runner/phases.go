@@ -474,6 +474,26 @@ type Resume struct {
 	// whatever the record says of its read ([Runner.toldNotes]). A fresh run is
 	// told it as every note.
 	Served []string
+
+	// Wakes are the wakes on the run's record a session continued from it may
+	// hold (sandbox.RunNote.Wake), in the order filed: each a step read, the
+	// turn's worked, and each its job was served and never shown reading. A
+	// continuation that may lack one tells it again ([Runner.toldWakes]), and a
+	// fresh run is told every one read ([Runner.wakesRead]).
+	Wakes []HeldWake
+}
+
+// HeldWake is a wake a run was handed ([Resume.Wakes]): the wake; its place
+// among the turn's reads, its read's or else its hook serve's, zero for
+// neither; whether a step read it; and whether that read is one no session of
+// its job is known to hold, taken before the session's last restart
+// (Restarted) or at a hook's step (Hook, for a box [UnheldTelling] names).
+type HeldWake struct {
+	steer.Wake
+	Place     int
+	Read      bool
+	Restarted bool
+	Hook      bool
 }
 
 // ResumeLead is one lead of the turn's, as the resume opened it.
@@ -876,8 +896,9 @@ func (r *Runner) executorBrief(ctx context.Context, notes string, history []ledg
 		// from the turn as corrected, then the notes this brief is first to read: the
 		// run is a fresh session, so its brief carries them ([Runner.steered]). IN
 		// THE ORDER THE RECORD READ THEM, including a lost take's note and a hook's
-		// served one ([Runner.inReadOrder]).
-		Steered: r.readFirst(fresh),
+		// served one ([Runner.inReadOrder]). Then every wake a step of the turn's
+		// run read, which the turn worked ([Runner.wakesRead]).
+		Steered: append(r.readFirst(fresh), r.wakesRead()...),
 	})
 }
 

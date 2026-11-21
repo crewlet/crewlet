@@ -169,7 +169,8 @@ A deployment has one keyring, and everything authenticated across a fleet derive
 
 - **Seals** the company config and the secret store's rows. A sealed company document is an authenticated one, so a node refuses one its peers published unsealed. It also seals, each in a key domain of its own so none opens as another:
   - a person's answer to a parked executor, onto the executor's row (`seat.run.answer`), opened by whichever node resumes the executor before the turn is handed anything of it;
-  - each note a person sends a turn whose executor is in its box, onto the executor's row (`seat.steer.note`), beside an anchor naming the seat it serves (`seat.steer.seat`).
+  - each note a person sends a turn whose executor is in its box, onto the executor's row (`seat.steer.note`), beside an anchor naming the seat it serves (`seat.steer.seat`);
+  - each message the engine hands such an executor as a wake about its work, onto the same row (`seat.wake.item`).
 - **Signs** the three per-run tokens a sandbox carries: its telemetry's, its tool bridge's and a coding box's git credential. Also signs, in their own domains:
   - what carried each session of an executor on, kept beside the run's record for the job whose brief told it (`seat.run.lead`), an answer's words among it, which a later brief to a session that may lack that brief tells again;
   - every box read one node asks of the node whose host a `direct` or `container` box is on (`sandbox.box_read`).

@@ -1,55 +1,54 @@
+
 # Turn Engine
 
-Each agent turn in Crewlet runs through a two-stage **Executor → Reviewer** loop orchestrated by the turn engine (`internal/agent/turn/loop.go`). The executor is the seat's harness's own agentic run in a box — its own shell and editor, the seat's tools over the bridge, ending with `submit_work` — launched detached, the turn parking until the run is collected ([Code Sandbox](code-sandbox.md)); the reviewer is the engine's own tool loop on this host. Each stage has its own system prompt, its own tool surface, and optionally its own model. The turn engine also owns delegation to short-lived **workers** and enforces the delegation-depth / stall / worker-allowlist invariants in code.
+Each agent turn runs a two-stage **Executor → Reviewer** loop, orchestrated by the turn engine (`internal/agent/turn/loop.go`). The executor is the seat's harness's own agentic run in a box (its own shell and editor, the seat's tools over the bridge, ending with `submit_work`), launched detached; the turn parks until the run is collected ([Code Sandbox](code-sandbox.md)). The reviewer is the engine's own tool loop on this host. Each stage has its own system prompt, tool surface and optionally model. The engine also owns delegation to short-lived **workers** and enforces the delegation-depth / stall / worker-allowlist invariants in code.
 
 ---
 
 ## Why two stages?
 
-The engine used to plan in one conversation and act in another. That split cost the actor everything the planner learned: tool RESULTS were not forwarded, so content had to be smuggled through the plan's own steps, and the planner had to NAME the tools it expected to call — against a catalogue it was never shown, so it guessed. Every guess that missed became a "phantom" the engine then had to reason about, and the delivery gate was built entirely out of reconciling those guesses with reality. Both recorded delivery incidents came from that reconciliation.
+An earlier engine planned in one conversation and acted in another. Tool results were not forwarded, so content was smuggled through plan steps, and the planner had to name tools from a catalogue it never saw. Each missed guess became a "phantom" the delivery gate had to reconcile. One agentic loop removes the reconciliation. What remains:
 
-One agentic loop removes the reconciliation rather than improving it. What remains:
+- **Onboarding** (first turn only, conditional) runs *before* the executor when the agent has no onboarding marker for its current org chain. It reads the team's `Onboarding` pages, captures conventions via `reflect_and_persist`, and calls `mark_onboarded`. It has its **own** round budget (`turn_engine.onboarding_max_tool_rounds`, default 10): inside the executor it could consume every round before `submit_work`, silently dropping a first-turn request. Skipped on resume turns and once the agent is marked. See [First-turn onboarding](#first-turn-onboarding).
+- **Executor** decides what to do and does it in one run of the seat's harness in a box (shell, editor and checkout beside the seat's tools, reached over the [tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)). The turn parks while it runs and resumes, in the same turn, when the run is collected. It starts with every first-party tool in reach (all but `mark_onboarded`) and its MCP servers by name, discovering and activating MCP tools as needed. It ends with `submit_work`: an outcome, a summary, and the deliveries it claims.
+- **Reviewer** judges the work. No domain tools; a single `submit_review` structured-output tool forces the decision enum. There is no handoff or *waiting* decision. When the turn cannot finish without a manager or peer, the reviewer splits on whether they have been told, which the tool log settles, not the agent's prose. **Not yet** → `self_iterate`, and the note tells the next round to reach them with its own colleague-surface tools (no special escalation mechanism). **Already asked** → `done`: their reply is what re-triggers the agent, so another round cannot produce it and would only repeat the question. Being blocked is the **executor's** word, the `blocked` outcome, whose `evidence` the schema demands; `done` / `self_iterate` / `failed` are the **reviewer's** verdict on whether that was good enough. A handoff never excuses the requester: whoever triggered the turn is still owed a reply where *they* asked, so a turn that asks a colleague while the requester hears nothing is overturned (see [Who is waiting](#who-is-waiting-and-how-they-get-an-answer) below).
 
-- **Onboarding** (first turn only, conditional) runs *before* the executor when the agent has no onboarding marker for its current org chain. It reads the team's `Onboarding` pages, captures conventions via `reflect_and_persist`, and calls `mark_onboarded`. It has its **own** round budget (`turn_engine.onboarding_max_tool_rounds`, default 10) so onboarding never competes with the turn's own budget — if it ran inside the executor it could consume every round before the agent ever called `submit_work`, silently dropping a first-turn request. Skipped on resume turns and once the agent is marked. See [First-turn onboarding](#first-turn-onboarding).
-- **Executor** decides what to do and does it, in one run of the seat's harness in a box — its own shell, editor and checkout beside the seat's tools, reached over the [tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box). The turn parks while it runs and resumes, in the same turn, when the run is collected. It starts with every first-party tool in its reach — all but `mark_onboarded` — and its MCP servers by name; it discovers and activates MCP tools as it turns out to need them. It ends by calling `submit_work` with an outcome, a summary, and the deliveries it claims.
-- **Reviewer** judges the work. No domain tools; a single `submit_review` structured-output tool forces the decision enum. There is no handoff decision, and no *waiting* decision either. When the turn cannot finish without a manager or peer, the reviewer splits on whether they have been told — a fact the tool log settles, not the agent's prose. **Not yet** → `self_iterate`, and the note tells the next round to reach them with its own colleague-surface tools, the same tools a human teammate would use (there is no special escalation mechanism). **Already asked** → `done`: their reply is what re-triggers the agent, so no further round of *this* turn can produce it, and sending it back burns the iterations the real work needs while posting the same question a second time. Being blocked is the **executor's** word for what happened — the `blocked` outcome, whose `evidence` the schema demands — and `done` / `self_iterate` / `failed` are the **reviewer's** for whether that was good enough. One thing a handoff never buys: whoever triggered the turn is still owed a reply where *they* asked, which is why a turn that asks a colleague while the requester hears nothing is overturned (see [Who is waiting](#who-is-waiting-and-how-they-get-an-answer) below).
-
-**Workers** (`delegate`) are short-lived helpers the executor hands narrowly-scoped work to — web research, a bounded read, summarising something large — without it counting as colleague delegation. See [Workers](#workers) below.
+**Workers** (`delegate`) are short-lived helpers for narrowly-scoped work (web research, a bounded read, summarising something large) that does not count as colleague delegation. See [Workers](#workers) below.
 
 ---
 
 ## Phase-specific tool surfaces
 
-Each phase gets a filtered view over the shared `tools.Registry` through a `tools.Surface` (`internal/tools/surface.go`). This is the key constraint that keeps LLM payloads tight while still letting the executor recover from an under-specified catalogue.
+Each phase gets a filtered view over the shared `tools.Registry` through a `tools.Surface` (`internal/tools/surface.go`), keeping LLM payloads tight while letting the executor recover from an under-specified catalogue.
 
 | Phase | Tools | System prompt | Notes |
 |-------|---------------|---------------|-------|
-| **Onboarding** | `reflect_and_persist` and `mark_onboarded` active from the first round, plus the `activate_tool` / `list_mcp_server_tools` discovery meta-tools | One-line identity + the onboarding instructions (which pages to read, persist conventions, then `mark_onboarded`) + `## Tools to discover` | Runs only on a first turn for an unmarked agent, on its own budget. Activates its knowledge-base tools from `## Tools to discover`, which lists every tool it can reach and does not hold: a first-party one (`search_knowledge` on either backend, `get_page` on Doclet) by name and description, an MCP server (the Confluence server's page tools) by name, its tools listed with `list_mcp_server_tools` first. **No required-skill guard**: onboarding is a fixed read → persist → mark workflow and the prompt is its own guidance, so the load-before-use tax is skipped. Terminates on `mark_onboarded`; on budget exhaustion the agent stays unmarked and retries next turn. |
-| **Executor** | Every tool its seat holds — the first-party ones and every MCP server's — except `mark_onboarded` and the tools of a server that runs in its box (`role.sandbox.mcp.servers`), plus `submit_work`, and `delegate` where the seat may hand work to [workers](#workers) | Identity + **full policy text** + role profile + skills metadata + roster (leads) + the executor's contract + prefetch blocks | The system prompt lists **no tool**: every one the executor holds reaches its harness as a tool definition over the bridge — the engine's own as tools of the `crewlet` MCP server, which the harness keeps in front of its model on every request, and each MCP server's under that server's own name, with what the company says the server is for as the server's MCP instructions ([Code Sandbox](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)) — so a second copy of each description in the system prompt was the same words paid for twice, ~17 KB with every builtin wired. A seat's MCP tools (often 50 to 150 per role) are kept out of the requests that do not need them by the harness itself — Claude Code's tool search, OpenCode's Code Mode — as a person's harness keeps theirs; the engine's own discovery step (`list_mcp_server_tools`, then `activate_tool`) did that by hand, two rounds at a time, and is on no executor's surface. `delegate` has a `## Your workers` block beside it where the company publishes worker templates. A tool left out of the universe the surface is built from is out of reach. Nothing is named in advance, so nothing has to be reconciled afterwards. Mission, vision, backstory, full policy text, and behavioral guidelines render directly into the prompt from the in-memory `Organization` model, with no database seed step. `mark_onboarded` is the whole phase-scoped denylist, kept from every executor: a seat that could mark itself here would permanently skip orientation. |
-| **Review** | `submit_review` meta-tool only | One-line identity + the rules that decide its decision + the round's intent, outcome, tool log, the replies the engine refused as too large for its run (`## Replies the agent did not get`, [ADR-0114](../../adr/0114-a-reply-too-large-for-its-run-is-its-questions-refusal.md): in no call of the round's, and rendered only for a round that had one, it says that a question asked again after such a reply is the follow-up the engine asked for, which the duplicate rule does not hold against the agent) and produced text | No catalogue, no policies, no prefetch. Whether anything was DELIVERED is settled before this prompt is built — the reviewer's question is whether the work is any good, and neither its prompt nor `submit_review`'s schema asks the other question. What each decision means is the schema's to say, beside the field; the rule that the agent ran as a harness with its own shell — its edits, commands, tests and commits are in no log, so its local work is judged on its report and the refs under `## What the agent delivered`, and a missing shell call is never fabrication — renders on every review, and `a2a_ask` is named only where the seat holds it. |
-| **Worker** | The task's (or its template's) allowlist minus the engine-control denylist (`delegate`, `a2a_ask` and the A2A channel tools, the discovery meta-tools) **and** minus any tool whose [MCP annotations](tool-capabilities.md) mark it a write to a shared surface, **and** minus anything the parent cannot itself call — plus `submit_result` always | Persona (template or inline) + `## Tools to discover` (what it can reach and was not granted) + mandated preamble | Fresh context; a wall-clock timeout; runtime-clamped `max_turns`. A worker CAN discover and activate more *read-only* tools itself, against the safety-filtered universe its grant was cut from — so discovery cannot widen it into a write or a control tool. External writes are denied by *capability* (derived from MCP annotations), not by a hardcoded name list, so the guard holds for any tool stack. |
+| **Onboarding** | `reflect_and_persist` and `mark_onboarded` active from the first round, plus the `activate_tool` / `list_mcp_server_tools` discovery meta-tools | One-line identity + the onboarding instructions (pages to read, persist conventions, then `mark_onboarded`) + `## Tools to discover` | Only on a first turn for an unmarked agent, on its own budget. Activates its knowledge-base tools from `## Tools to discover`, which lists every tool it can reach and does not hold: a first-party one (`search_knowledge` on either backend, `get_page` on Doclet) by name and description, an MCP server (the Confluence server's page tools) by name, its tools listed with `list_mcp_server_tools` first. **No required-skill guard**: the workflow is fixed read → persist → mark. Terminates on `mark_onboarded`; on budget exhaustion the agent stays unmarked and retries next turn. |
+| **Executor** | Every tool its seat holds (first-party and every MCP server's) except `mark_onboarded` and the tools of a server that runs in its box (`role.sandbox.mcp.servers`), plus `submit_work`, and `delegate` where the seat may hand work to [workers](#workers) | Identity + **full policy text** + role profile + skills metadata + roster (leads) + the executor's contract + prefetch blocks | The system prompt lists **no tool**: every held tool reaches the harness as a tool definition over the bridge (the engine's own as tools of the `crewlet` MCP server; each MCP server's under its own name, with what the company says it is for as the server's MCP instructions; [Code Sandbox](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)). A second copy in the prompt would cost ~17 KB with every builtin wired. A seat's MCP tools (often 50 to 150 per role) are kept out of requests that do not need them by the harness itself (Claude Code's tool search, OpenCode's Code Mode), so `list_mcp_server_tools` then `activate_tool` is on no executor's surface. `delegate` has a `## Your workers` block beside it where the company publishes worker templates. A tool left out of the universe the surface is built from is out of reach. Mission, vision, backstory, full policy text and behavioral guidelines render from the in-memory `Organization` model, with no database seed step. `mark_onboarded` is the whole phase-scoped denylist: a seat that could mark itself here would permanently skip orientation. |
+| **Review** | `submit_review` meta-tool only | One-line identity + the rules that decide its decision + the round's intent, outcome, tool log, the replies the engine refused as too large for its run (`## Replies the agent did not get`, [ADR-0114](../../adr/0114-a-reply-too-large-for-its-run-is-its-questions-refusal.md): in no call of the round's, rendered only for a round that had one; it says a question asked again after such a reply is the follow-up the engine asked for, which the duplicate rule does not hold against the agent) and produced text | No catalogue, no policies, no prefetch. Whether anything was DELIVERED is settled before this prompt is built; the reviewer judges only whether the work is any good. Each decision's meaning lives in the schema beside the field. On every review, a rule renders that the agent ran as a harness with its own shell: its edits, commands, tests and commits are in no log, so local work is judged on its report and the refs under `## What the agent delivered`, and a missing shell call is never fabrication. `a2a_ask` is named only where the seat holds it. |
+| **Worker** | The task's (or its template's) allowlist minus the engine-control denylist (`delegate`, `a2a_ask` and the A2A channel tools, the discovery meta-tools) **and** minus any tool whose [MCP annotations](tool-capabilities.md) mark it a write to a shared surface, **and** minus anything the parent cannot itself call, plus `submit_result` always | Persona (template or inline) + `## Tools to discover` (what it can reach and was not granted) + mandated preamble | Fresh context; a wall-clock timeout; runtime-clamped `max_turns`. A worker CAN discover and activate more *read-only* tools itself, against the safety-filtered universe its grant was cut from, so discovery cannot widen it into a write or control tool. External writes are denied by *capability* (from MCP annotations), not a hardcoded name list. |
 
 ---
 
 ## First-turn onboarding
 
-A fresh agent (no onboarding marker for its current org chain) needs to read its team's `Onboarding` knowledge-base pages and internalise the conventions before doing real work. This runs as a **dedicated phase before the executor** (`internal/agent/runner/onboarding.go`), gated on the marker store (`agent_onboarding_markers`):
+A fresh agent (no marker for its current org chain) reads its team's `Onboarding` knowledge-base pages before real work. This is a **dedicated phase before the executor** (`internal/agent/runner/onboarding.go`), gated on the marker store (`agent_onboarding_markers`):
 
-1. The engine checks the marker (`Runner.Onboard`). The read has **three answers**: marked for the current chain skips; definitively unmarked runs the pass; a lookup that *failed* (`onboarding_state_unknown_skipping`) **skips this turn and retries the check next turn**. Collapsing a failed lookup into "not onboarded" would re-run a full onboarding pass for an already-marked agent on any transient database error. Two further guards make onboarding run once per org chain: a **process-local latch** (`runner.Latch`, the chain hash this process has seen marked, set the moment a pass marks or a read confirms the marker) short-circuits before any database read, and a **cross-process pass lease** (`Markers.Claim`, held for at most `runner.ClaimTTL`, 15 minutes, and released explicitly when the pass ends) lets exactly one turn run the pass when two turns for the same unmarked seat start at once, for example on two nodes during a rolling restart. A turn that loses the lease skips the pass (`onboarding_claimed_elsewhere_skipping`). The lease also excludes a concurrent pass inside one process, so there is no separate in-process lock.
-2. Otherwise it runs the onboarding pass with its **own** round budget (`turn_engine.onboarding_max_tool_rounds`, default 10). The agent activates its knowledge-base tools (`activate_tool` on a first-party one listed under `## Tools to discover`, after `list_mcp_server_tools` on an MCP server's), reads the pages, captures conventions with `reflect_and_persist`, and calls `mark_onboarded` (which terminates the phase). Onboarding is a **discovery-capable phase**: its prompt lists the tools it can reach and its surface supports `activate_tool` exactly like the executor. (Without that, the agent could *see* its knowledge-base tools but every `activate_tool` would hit an "availability gate", so it would never read its pages, never mark, and the pass would re-fire every turn.) Its header names its knowledge-base tools by capability, never by product or tool name: it once said they were always MCP tools, which on Doclet, the default backend, sent every seat to list a server for a first-party tool it could have activated by name. Its rounds are governed by the round-cap **extension judge**, which extends this pass alone — the executor is its harness's own run, capped by its `max_turns` — so the base cap can be extended up to `onboarding_max_tool_rounds_ceiling` (default 20) when the agent is still making progress, so a near-done pass isn't cut off mid-read.
-3. The turn then proceeds to the executor, whatever became of the pass — a pass that failed leaves the seat un-onboarded, which is where it already was, and it retries next turn. **The one exception is a pass the budget refused**: its refused round is counted, so every later call of the turn is certain to be refused (on the turn's own clock — see [invariant 4](#runtime-invariants)), and the turn ends there — published as `budget_exhausted` like a refusal inside the loop, its seat [parked](agent-runtime.md#the-budget-park) — with no executor phase opened. The executor is never told to onboard and never reaches `mark_onboarded`, so onboarding cannot also happen inside it and re-spend the turn's budget: a turn whose pass did not run — the marker unreadable, the lease held elsewhere — leaves onboarding to a later turn's pass.
+1. The engine checks the marker (`Runner.Onboard`), which has **three answers**: marked for the current chain skips; definitively unmarked runs the pass; a lookup that *failed* (`onboarding_state_unknown_skipping`) **skips this turn and retries next turn** (treating it as "not onboarded" would re-run a full pass for a marked agent on any transient database error). Two more guards make onboarding run once per org chain: a **process-local latch** (`runner.Latch`, the chain hash this process has seen marked) short-circuits before any database read, and a **cross-process pass lease** (`Markers.Claim`, held at most `runner.ClaimTTL`, 15 minutes, released explicitly when the pass ends) lets exactly one turn run the pass when two turns for the same unmarked seat start at once (for example two nodes in a rolling restart). A turn that loses the lease skips the pass (`onboarding_claimed_elsewhere_skipping`). The lease also excludes a concurrent pass inside one process, so there is no in-process lock.
+2. Otherwise it runs the pass with its **own** round budget (`turn_engine.onboarding_max_tool_rounds`, default 10). The agent activates its knowledge-base tools (`activate_tool` on a first-party one listed under `## Tools to discover`, after `list_mcp_server_tools` on an MCP server's), reads the pages, captures conventions with `reflect_and_persist`, and calls `mark_onboarded` (which terminates the phase). Onboarding is a **discovery-capable phase**: its prompt lists the tools it can reach and its surface supports `activate_tool` like the executor's (without that, every `activate_tool` would hit an "availability gate" and the pass would re-fire every turn). Its header names knowledge-base tools by capability, never by product or tool name (on Doclet, the default backend, they are first-party, not MCP). Its rounds are governed by the round-cap **extension judge**, which extends this pass alone (the executor is its harness's own run, capped by `max_turns`): the base cap can extend up to `onboarding_max_tool_rounds_ceiling` (default 20) while the agent is still making progress.
+3. The turn then proceeds to the executor, whatever became of the pass: a failed pass leaves the seat un-onboarded and it retries next turn. **The one exception is a pass the budget refused**: its refused round is counted, so every later call of the turn is certain to be refused (on the turn's own clock; see [invariant 4](#runtime-invariants)), and the turn ends there, published as `budget_exhausted` like a refusal inside the loop, its seat [parked](agent-runtime.md#the-budget-park), with no executor phase opened. The executor is never told to onboard and never reaches `mark_onboarded`, so onboarding cannot re-spend the turn's budget there. A turn whose pass did not run (marker unreadable, lease held elsewhere) leaves onboarding to a later turn.
 
-**Why a separate phase.** If onboarding were only a hint injected into the executor's prompt, the agent would do the page-reads + `reflect_and_persist` + `mark_onboarded` inside its own round budget — on a first turn that could burn every round before it ever called `submit_work`, and the turn would fall through to a silent skip (the request dropped). Giving onboarding its own budget means a first turn always has its full budget for actual work.
+**Why a separate phase.** As a hint in the executor's prompt, page-reads + `reflect_and_persist` + `mark_onboarded` would burn the turn's rounds, possibly before `submit_work`, and the request would be silently dropped. Its own budget leaves a first turn its full budget for work.
 
-The marker invalidates itself when the org chain changes (`learning.ChainHash`, a hash of the seat's path through the organization), so a role move or a reorganization re-triggers onboarding for the new context. Set `onboarding_max_tool_rounds: 0` to turn onboarding off: the dedicated pass is all of it, and no seat is then told to onboard anywhere. When no marker store is wired (a node with no store), onboarding is skipped, because there is no way to record completion and the pass would otherwise run every turn. A human seat never onboards.
+The marker invalidates itself when the org chain changes (`learning.ChainHash`, a hash of the seat's path through the organization), so a role move or reorganization re-triggers onboarding. Set `onboarding_max_tool_rounds: 0` to turn onboarding off entirely; no seat is then told to onboard anywhere. With no marker store wired (a node with no store), onboarding is skipped, since completion cannot be recorded and the pass would run every turn. A human seat never onboards.
 
-On the dashboard, onboarding renders as its own phase within the turn it rode in on, on the same neutral tag every phase takes — a phase is a category, and a category is its word rather than a colour. Inside a chart it is counted in the Auxiliary band: it is one-time setup that happens to ride the first turn, not part of that turn's task.
+On the dashboard, onboarding renders as its own phase within the turn it rode in on, on the same neutral tag every phase takes. In a chart it counts in the Auxiliary band: one-time setup, not part of the turn's task.
 
 ---
 
 ## The work submission
 
-The executor ends by calling `submit_work` (the tool and its decoder are in `internal/agent/runner/submit.go`), which is where the turn's account of itself becomes something the engine can act on. The submission decodes into `turn.Work` (`internal/agent/turn/loop.go`):
+The executor ends by calling `submit_work` (the tool and its decoder are in `internal/agent/runner/submit.go`), which turns the turn's account of itself into something the engine can act on. The submission decodes into `turn.Work` (`internal/agent/turn/loop.go`):
 
 ```go
 type Work struct {
@@ -73,84 +72,84 @@ type Work struct {
 }
 ```
 
-**A field the schema does not declare is refused, naming it**, and goes back to the model like any other rejected submission — at any depth, and in `submit_review` and a [`delegate`](#one-call-a-graph-of-tasks) call too, which decode the same way. Decoded the obvious way it was dropped, so a misspelt optional field was accepted as an answer the model did not give: a reviewer's misspelt `completed_work` never told the next round what had already landed, so it could fire the same post a second time, and a delegated task's `afer` for `after` ran at once, on input it was told to wait for.
+**A field the schema does not declare is refused, naming it**, and goes back to the model like any rejected submission, at any depth, and in `submit_review` and a [`delegate`](#one-call-a-graph-of-tasks) call too. Silently dropping it would accept a misspelt optional field as an answer the model did not give (a reviewer's `completed_work`, or a task's `afer` for `after`, which would run at once).
 
-To hand a task off to a colleague the executor reaches them where the work lives — a chat mention, an issue comment or reassignment, or `a2a_ask` — and reports that as the delivery. There is no dedicated `delegate` outcome: a handoff is just a colleague-surface tool call.
+To hand a task to a colleague the executor reaches them where the work lives (a chat mention, an issue comment or reassignment, or `a2a_ask`) and reports that as the delivery. There is no dedicated `delegate` outcome: a handoff is a colleague-surface tool call.
 
-**Real code work** is the executor's own run. Every agent seat's executor is its harness's own agentic run (Claude Code / OpenCode) in a box, with a real shell, a real editor and a real checkout, and the seat's tools reaching it over the [tool bridge](llm-backends.md#the-tool-bridge). The launch **parks** the turn (detached run); when the run completes the engine **resumes the same turn** with what the run submitted, so the engine's check and the reviewer judge it in the same turn. See [Code Sandbox](code-sandbox.md).
+**Real code work** is the executor's own run: every agent seat's executor is its harness's agentic run (Claude Code / OpenCode) in a box with a real shell, editor and checkout, the seat's tools reaching it over the [tool bridge](llm-backends.md#the-tool-bridge). The launch **parks** the turn; when the run completes the engine **resumes the same turn** with what the run submitted, so the engine's check and the reviewer judge it in the same turn. See [Code Sandbox](code-sandbox.md).
 
 ### Who is waiting, and how they get an answer
 
-Whether a turn OWES an answer is derived by the engine at dispatch, from the trigger's own type, before any model runs (`engine.ReplyFor`). It is the half of the delivery question a model cannot get wrong — the old engine asked the planner to declare its own intent, and a turn that declared `skip` on a direct @mention read to the person who sent it exactly like the message never arriving.
+Whether a turn OWES an answer is derived at dispatch from the trigger's own type, before any model runs (`engine.ReplyFor`), because a model can get it wrong: a turn that declared `skip` on a direct @mention read to the sender like the message never arriving.
 
 | `Reply` | Trigger | What delivery means |
 |---|---|---|
-| `none` | A schedule fired, a broadcast mentioned the seat in passing, an internal event woke it | Nothing is owed. The turn may end having done nothing at all, which is what makes triage cheap |
-| `tool` | An assignment, or a notification the source's own routing marks as an ask — a direct message, a personal mention | The answer only exists if a tool put it there |
-| `engine` | A colleague asked over A2A | There is no tool to call: the engine replies on the channel the ask opened, with the turn's answer, once the turn ends, and closes it. The segment that parks on its executor's run answers nothing; the frame that ends the turn does — the resumed segment that collects the run and settles the review, or the close a person's stop of the run makes — off the ask the launch wrote onto the run's record. A run **lost** under its parked turn (its box gone or unreadable, its suspension never recorded, its tail abandoned by a node that died, its seat retired) ends the turn with no frame of it left, so the run's ending answers instead, as one of its steps on whichever node finishes it: the reply says its executor's work in its box was lost, with the reason and the sentence its `executor_failed` announced. A turn that ends without parking (stopped at the delegation depth cap, or broken or stopped at or before its executor's launch) is answered by its dispatch, and its reply says it could not answer |
+| `none` | A schedule fired, a broadcast mentioned the seat in passing, an internal event woke it | Nothing is owed. The turn may end having done nothing, which makes triage cheap |
+| `tool` | An assignment, or a notification the source's own routing marks as an ask (a direct message, a personal mention) | The answer only exists if a tool put it there |
+| `engine` | A colleague asked over A2A | No tool to call: the engine replies on the channel the ask opened, with the turn's answer, once the turn ends, and closes it. The segment that parks on its executor's run answers nothing; the frame that ends the turn does (the resumed segment that collects the run and settles the review, or the close a person's stop of the run makes), off the ask the launch wrote onto the run's record. A run **lost** under its parked turn (box gone or unreadable, suspension never recorded, tail abandoned by a dead node, seat retired) leaves no frame, so the run's ending answers instead, as one of its steps on whichever node finishes it: the reply says its executor's work in its box was lost, with the reason and the sentence its `executor_failed` announced. A turn that ends without parking (stopped at the delegation depth cap, or broken or stopped at or before its executor's launch) is answered by its dispatch, and its reply says it could not answer |
 
-A source's reading of its own routing is [`notify.Prompt.Addressed`](../index.md#integrations) — a tracker answers from its routing reason (assigned, mentioned), a chat backend from the rule it declares (`notify.AddressRule`): a direct conversation, or the seat named in the message or in the thread it is in — never a thread it merely spoke in. The conservative answer is FALSE: a seat wrongly told nobody is waiting keeps the freedom to stay silent, while one wrongly told somebody is must post on every broadcast it observes. A coalesced trigger takes the STRONGEST obligation of its constituents — a merge must not be able to launder an ask.
+A source's reading of its own routing is [`notify.Prompt.Addressed`](../index.md#integrations): a tracker answers from its routing reason (assigned, mentioned), a chat backend from the rule it declares (`notify.AddressRule`): a direct conversation, or the seat named in the message or in the thread it is in, never a thread it merely spoke in. The conservative answer is FALSE: a seat wrongly told nobody is waiting may stay silent, while one wrongly told somebody is must post on every broadcast it observes. A coalesced trigger takes the STRONGEST obligation of its constituents, so a merge cannot launder an ask.
 
-**There is no fourth value, and no default.** A turn started without one is refused before any phase runs, because none of the three is a safe reading of "the caller did not say": permissive exempts a turn that owes somebody an answer, strict loops every unaddressed turn to exhaustion. That refusal exists because the omission shipped — the dispatch path derived the obligation correctly, handed it to the runner, and dropped it before the loop, so the decode-time check below stayed armed while **both** of the engine-side gates were skipped on every non-sandbox turn. Nothing about the result said so: the turn simply had no delivery gate.
+**There is no fourth value, and no default.** A turn started without one is refused before any phase runs: permissive exempts a turn that owes an answer, strict loops every unaddressed turn to exhaustion. (The omission once shipped: dispatch derived it correctly but dropped it before the loop, so both engine-side gates were skipped on every non-sandbox turn, with nothing in the result saying so.)
 
 ### Three checks, in increasing cost
 
-The turn engine checks the executor's account against its own record three times, and the order is the design (`internal/agent/turn/verify.go`):
+The engine checks the executor's account against its own record three times (`internal/agent/turn/verify.go`):
 
-1. **At decode time**, inside the loop. A `delivered` on a `tool`-awaited turn must cite a call the engine recorded that reached the surface the ask came from; a `no_action` on any awaited turn is refused outright ("silence is not a decline"), and on any other turn once its record shows it acted outside the engine (below), naming what it called. That second refusal is the live submission's alone: the collection replays a made submission against every call the round made, those after it included, so a `no_action` made before the run acted is collected as made and corrected by the check below, never rescued as a round that submitted nothing. A `blocked` needs evidence. A wrong claim costs one bounced tool call the model can fix — not a review round, and not a silently accepted no-op. The refusal lists what IS citable, because the failure this catches is usually a model naming the tool it MEANT to call.
-2. **Before the reviewer** (`Check`). Two of its three answers cost no model call: a `no_action` nobody asked for, in a turn that changed nothing outside the engine, ends the turn as skipped; a claim the record refutes loops back with an engine correction — a `no_action` after the turn acted among them. What it cannot do is judge whether the work was any GOOD — everything that passes goes to the reviewer.
-3. **After the reviewer** (`OverrideDone`). A `done` on a `tool`-awaited turn where nothing reached the party waiting is overturned to `self_iterate`. This is the recorded failure: the reviewer's model judges the produced TEXT, finds a good answer in it, and says done even though nothing put that answer anywhere a person can see. The engine's correction is appended LAST, because on this path the reviewer wrote none of its own — and where the turn did reach *somewhere*, just not the asker, the correction says so by name, because "no tool was called" reads as plainly false to a model looking at its own successful write and gets argued with rather than acted on. It says so *only* where the record shows such a write, and one the engine knows of (`turn.KnownDelivered`): telling a turn that only read that it "reached somebody" sends the model looking for a write it never made, and a read through an MCP tool that no hint marks as a read or as a write, which the check counts as a delivery to that server, is still a read to the model that made it. Where the turn called something that acts without delivering — asked a colleague, reacted — the correction names that too, for the same reason.
+1. **At decode time**, inside the loop. A `delivered` on a `tool`-awaited turn must cite a call the engine recorded that reached the surface the ask came from; a `no_action` on any awaited turn is refused outright ("silence is not a decline"), and on any other turn once its record shows it acted outside the engine (below), naming what it called. That second refusal is the live submission's alone: the collection replays a made submission against every call the round made, those after it included, so a `no_action` made before the run acted is collected as made and corrected by the check below, never rescued as a round that submitted nothing. A `blocked` needs evidence. A wrong claim costs one bounced tool call, not a review round. The refusal lists what IS citable, since the usual failure is naming the tool it MEANT to call.
+2. **Before the reviewer** (`Check`). Two of its three answers cost no model call: a `no_action` nobody asked for, in a turn that changed nothing outside the engine, ends the turn as skipped; a claim the record refutes loops back with an engine correction (a `no_action` after the turn acted among them). It cannot judge whether the work was GOOD; everything that passes goes to the reviewer.
+3. **After the reviewer** (`OverrideDone`). A `done` on a `tool`-awaited turn where nothing reached the party waiting is overturned to `self_iterate` (the reviewer's model judges the produced TEXT, finds a good answer, and says done though nothing put it anywhere a person can see). The engine's correction is appended LAST, since the reviewer wrote none of its own. Where the turn reached *somewhere* but not the asker, the correction says so by name, because "no tool was called" reads as false to a model looking at its own successful write. It says so *only* where the record shows a write the engine knows of (`turn.KnownDelivered`): telling a turn that only read that it "reached somebody" sends the model looking for a write it never made, and a read through an MCP tool no hint marks as read or write, which the check counts as a delivery to that server, is still a read to the model. Where the turn called something that acts without delivering (asked a colleague, reacted), the correction names that too.
 
-**All three read the whole turn's record, not the current round's** (`turn.Record`: every call the closed rounds made, then this round's). The obligation is the turn's: somebody waiting is answered once, and a round the reviewer sends back for something else does not un-answer them. The [prior-work ledger](#prior-work-ledger-across-self_iterate-rounds) tells every later round exactly that — an earlier round's successful write already ran, do not issue it again — so a check reading the round alone demanded the one thing the round was forbidden to do. That shipped: a seat answered a founder's comment on a work item with a comment of its own; its reviewer sent the round back to re-read the item first; the second round re-read it, cited the comment, and had that citation refused eleven times as "nothing delivered" until its round cap ran out; the reviewer's `done` was overturned for the same reason; and the third round, told to find the tool that delivers on `work` through MCP discovery, posted the same acknowledgement in a chat channel — which could never count — and the turn ended on the iteration cap, recorded as failed for having answered in its first round. An earlier round's delivery is now citable in a later round's `deliveries`, and the ledger's header says so. Whether a later round *also* owed a delivery — a correction the first answer needs — is a judgement about the work, which is the reviewer's; the review prompt says the engine's check covers every round so a reviewer does not read a round with no write of its own as a turn that reached nobody. The one thing that still reads the last round alone is `Result.Delivered`, because its question — does the person waiting know how the turn *ended* — is a different one (see [how a turn ends on the executor log](#how-a-turn-ends-on-the-executor-log)).
+**All three read the whole turn's record, not the current round's** (`turn.Record`: every call the closed rounds made, then this round's): somebody waiting is answered once, and a round sent back for something else does not un-answer them. The [prior-work ledger](#prior-work-ledger-across-self_iterate-rounds) tells later rounds an earlier successful write already ran, so a check reading the round alone would demand what the round is forbidden to do. An earlier round's delivery is citable in a later round's `deliveries`. Whether a later round *also* owed one is the reviewer's judgement; the review prompt says the engine's check covers every round, so a reviewer does not read a round with no write of its own as a turn that reached nobody. Only `Result.Delivered` reads the last round alone, because its question (does the person waiting know how the turn *ended*) differs (see [how a turn ends on the executor log](#how-a-turn-ends-on-the-executor-log)).
 
-**What counts as having acted** is one rule (`turn.Acted`), the one a broken turn's redelivery is decided by ([A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway)): a call that delivers (below), or one whose own annotations say it is open-world and do not say it is read-only. `a2a_ask`, a reaction, publishing or sharing an artifact, opening or changing a room and `ssh_operate` count though none delivers. A read of the world — `ssh_read`, or a web search annotated `read_only` and `open_world`, as the curated catalogue files Tavily's tools — does not: it reaches outside the process and changes nothing anybody sees. A `no_action` after an act is sent back because something happened: ended as skipped, the turn leaves no episode and nothing reviewed, so the conversation's next turn would not know. The check used to read deliveries alone, so a turn nobody asked for that asked a colleague, reacted or published and then said `no_action` ended skipped; it now reports what it did and is reviewed.
+**What counts as having acted** is one rule (`turn.Acted`), also the one a broken turn's redelivery is decided by ([A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway)): a call that delivers (below), or one whose own annotations say it is open-world and do not say it is read-only. `a2a_ask`, a reaction, publishing or sharing an artifact, opening or changing a room and `ssh_operate` count though none delivers. A read of the world (`ssh_read`, or a web search annotated `read_only` and `open_world`, as the curated catalogue files Tavily's tools) does not. A `no_action` after an act is sent back and reviewed, not ended as skipped, because a skipped turn leaves no episode and nothing reviewed, so the conversation's next turn would not know.
 
-**Every correction that turns on an act names the tools the turn acted with** (`turn.ActedWith`: the first five by name, then how many more): the `no_action` correction and the live `no_action` refusal, for any act, a delivery included, and each correction that finds the turn acted but delivered nothing the engine knows of — a refuted delivery claim, an overturned `done`, the decode-time refusal of a delivery claim with nothing to cite. Told "no tool that acts outside the engine was called" after it asked a colleague, a model reads the correction as false and argues with it, and it argues the same way when told it acted after it only searched. So both `no_action` texts name apart (`turn.ActedAccount`) a call to an MCP tool that no hint marks as a read or as a write, from its server or from a `tool_annotations` override: as a call the engine cannot tell from a write, which the delivery check counts whatever it did. A tool marked `read_only: false` or `destructive: true`, by its server or by an override, is named as an act. And a correction says a turn filed the work somewhere else or reached somebody only on a write the engine knows of (`turn.KnownDelivered`), a call to a tool so marked among them, never on a call to a tool that no hint marks as a read or as a write: the others name that as a call, as they name an ask.
+**Every correction that turns on an act names the tools the turn acted with** (`turn.ActedWith`: the first five by name, then how many more): the `no_action` correction and live refusal, and each correction that finds the turn acted but delivered nothing the engine knows of (a refuted claim, an overturned `done`, a decode-time refusal with nothing to cite). A model told "no tool that acts outside the engine was called" after it asked a colleague argues. Both `no_action` texts name apart (`turn.ActedAccount`) a call to an MCP tool no hint marks as read or write, from its server or a `tool_annotations` override, as a call the engine cannot tell from a write, which the delivery check counts. A tool marked `read_only: false` or `destructive: true` is named as an act. A correction says a turn filed work elsewhere or reached somebody only on a write the engine knows of (`turn.KnownDelivered`), never on an unmarked call.
 
-**Every refusal ends by naming how to deliver where the asker is** (`turn.Remedy`). On the engine's own surfaces — `work` for the tracker, `page` for the knowledge base, `chat` for the engine's own chat — that is the first-party tools that deliver there (`comment_on_work_item`, `update_work_item`, `reply_in_thread`, …), which no discovery call lists. On a vendor's surface it is the tools of the MCP server of the same name, which the executor holds from its first round as it holds the first-party ones; only a phase that reaches its MCP tools by discovery is pointed at `list_mcp_server_tools` and `activate_tool`. Only where the asker's surface cannot be named does it fall back to the general instruction, which names no discovery tool to an executor. It used to send every seat to discovery, which is the misdirection in the incident above.
+**Every refusal ends by naming how to deliver where the asker is** (`turn.Remedy`). On the engine's own surfaces (`work` for the tracker, `page` for the knowledge base, `chat` for the engine's own chat) that is the first-party tools that deliver there (`comment_on_work_item`, `update_work_item`, `reply_in_thread`, …), which no discovery call lists. On a vendor's surface it is the tools of the MCP server of the same name, which the executor holds from its first round; only a phase that reaches MCP tools by discovery is pointed at `list_mcp_server_tools` and `activate_tool`. Where the asker's surface cannot be named, it falls back to the general instruction, which names no discovery tool to an executor.
 
-**What counts as a delivery, and where it lands** is one rule, applied everywhere. A tool delivers (`turn.Deliverable`) when it is **MCP-served and not positively annotated read-only**, or when it is a **first-party tool the engine registered as one that reaches somebody**: Worklet's writes, Doclet's and Chatlet's three posting tools (`post_message`, `reply_in_thread`, `send_dm`) do, `reflect_and_persist` and `use_skill` do not, and the flag is set at registration rather than derived from annotations, because a diary write and a work-item comment are annotated identically. Each one is **scoped to its own source** (below), so a chat post does not discharge an obligation the tracker raised: the tools are first-party either way, and "this turn wrote something somewhere" is not the question the gate asks. A **reaction is not a delivery** and is deliberately not registered as one — it wakes nobody and obliges nothing, so if an emoji counted, every addressed turn could close itself out with a thumb. "Not a known read" is POSITIVE: an unannotated MCP tool counts as a possible delivery, which is the fail-closed direction, since the alternative exempts every tool a server forgot to [annotate](tool-capabilities.md). Only SUCCESSFUL calls count: a failed post did not post, and counting it would close the check on exactly the turn that needs to iterate.
+**What counts as a delivery, and where it lands** is one rule. A tool delivers (`turn.Deliverable`) when it is **MCP-served and not positively annotated read-only**, or a **first-party tool the engine registered as one that reaches somebody**: Worklet's writes and Doclet's and Chatlet's three posting tools (`post_message`, `reply_in_thread`, `send_dm`) do; `reflect_and_persist` and `use_skill` do not. The flag is set at registration, not derived from annotations, because a diary write and a work-item comment are annotated identically. Each is **scoped to its own source** (below), so a chat post does not discharge an obligation the tracker raised. A **reaction is not a delivery**, deliberately: it wakes nobody and obliges nothing, so if an emoji counted every addressed turn could close itself with a thumb. "Not a known read" is POSITIVE: an unannotated MCP tool counts as a possible delivery (fail-closed; the alternative exempts every tool a server forgot to [annotate](tool-capabilities.md)). Only SUCCESSFUL calls count: a failed post did not post, and counting it would close the check on the turn that needs to iterate.
 
-Each delivering tool also declares **which surface it reaches**: an MCP tool's is its own server (`mattermost`, `slack`, `github`), and an engine builtin's is the change feed's own source: `work` for Worklet, `page` for Doclet, `chat` for Chatlet. Those are the same names an inbound notification reports its source under, and the gate compares the two, because "did this turn reach anybody" and "did the person waiting get told" are different questions, and only the second one matters to the asker. Asking the first is how a founder's Mattermost DM was closed out by a row in the tracker: the seat filed a work item instead of answering, every check passed, and the thread's last message stayed a clarification question the founder had already been answered out from under.
+Each delivering tool also declares **which surface it reaches**: an MCP tool's is its own server (`mattermost`, `slack`, `github`), an engine builtin's is the change feed's own source: `work` for Worklet, `page` for Doclet, `chat` for Chatlet. These are the names an inbound notification reports its source under, and the gate compares the two, because "did this turn reach anybody" and "did the person waiting get told" differ, and only the second matters to the asker (asking the first let a row in the tracker close out a founder's Mattermost DM).
 
-**A notification may owe a surface other than its own source.** The answer to a [decision](../guides/worklet.md#asking-for-a-decision) whose asker promised to report the outcome in a chat channel arrives from Worklet (`work`), and on its source alone a comment on the item would close the turn. So the asker's copy carries `owes` (the chat surface the decision's `inform` named), and the obligation is raised on that surface instead: the turn is sent back until a tool on `slack`, `mattermost` or the engine's own `chat` has run, whether or not Worklet read the wake as addressed. Only the asker's copy owes it, and a merge of wakes carries it through; Worklet partitions an owing wake apart from the rest of the item's conversation, so one turn never owes two surfaces.
+**A notification may owe a surface other than its own source.** The answer to a [decision](../guides/worklet.md#asking-for-a-decision) whose asker promised to report the outcome in a chat channel arrives from Worklet (`work`), and on its source alone a comment on the item would close the turn. So the asker's copy carries `owes` (the chat surface the decision's `inform` named), and the obligation is raised there instead: the turn is sent back until a tool on `slack`, `mattermost` or the engine's own `chat` has run, whether or not Worklet read the wake as addressed. Only the asker's copy owes it, a merge of wakes carries it through, and Worklet partitions an owing wake apart from the rest of the item's conversation, so one turn never owes two surfaces.
 
-The surface check **narrows only where it can**, and the two fallbacks are the design rather than leniency:
+The surface check **narrows only where it can**; the two fallbacks are the design, not leniency:
 
-- An obligation with **no named surface** is one the engine could not place. An assignment is the honest case: moving the item, commenting on the ticket and replying in the thread the work came from are all real answers, and nothing can pick between them. Only a notification names a surface, because only a notification knows one.
-- A surface **this seat holds no tool for** leaves nothing to enforce. The seat could not have answered there however many rounds it spent, so insisting would turn an operator's missing integration into a seat that never finishes a turn.
+- An obligation with **no named surface** is one the engine could not place. An assignment is the honest case: moving the item, commenting on the ticket and replying in the originating thread are all real answers. Only a notification names a surface.
+- A surface **this seat holds no tool for** leaves nothing to enforce: insisting would turn an operator's missing integration into a seat that never finishes a turn.
 
-That second fallback is also where the rule is currently weakest, and deliberately so rather than by oversight: a vendor's surface is its **MCP server's name**, which holds only while one server serves one source. The shipped Atlassian setup breaks that — one `atlassian` server serves both Jira and Confluence while inbound events carry `jira` or `confluence` — so those two obligations find no matching surface and take the fallback, which is the pre-existing "any delivery counts". Nothing regresses there; the check simply does not yet narrow for them. Closing it needs the server to declare which sources it serves, which is a config change rather than a derivation.
+The second fallback is the weak point: a vendor's surface is its **MCP server's name**, which holds only while one server serves one source. The shipped `atlassian` server serves Jira and Confluence while events carry `jira` or `confluence`, so those take the fallback ("any delivery counts"); narrowing needs the server to declare its sources, a config change.
 
-In both, the flat question is the answer — so the check is strictly stricter than the one it replaces, and never stricter than the seat can satisfy. The decode-time refusal uses the same rule and the same fallbacks, or a model would be told one thing at submission and judged by another.
+So the check is strictly stricter than the one it replaced, and never stricter than the seat can satisfy. The decode-time refusal uses the same rule and fallbacks, so a model is not told one thing at submission and judged by another.
 
-`no_action` is narrowly scoped: it means **"nobody was actually asking the agent to do anything"** — informational triggers, passing references, broadcasts where the addressee was clearly someone else. It also means the turn changed nothing outside the engine: one that asked a colleague, reacted to a message or published an artifact reports that as `delivered`, and its `no_action` is refused ([above](#three-checks-in-increasing-cost)). A read changes nothing, but only a read the engine can tell is one: a call to an MCP tool not marked read-only counts as a change, as the delivery check counts it, and where no hint marks the tool as a read or as a write, from its server or from a `tool_annotations` override, the refusal names the call as one the engine cannot tell from a write. When the agent *was* directly asked / @mentioned / assigned but is declining (out of scope, wrong owner, already handled, deferring), it must instead post a brief explanation via the originating channel's reply tool and report that as `delivered`. A direct request answered with silence looks like the ping was lost; the one-line decline closes the loop. The `outcome` field's own description states the rule, the executor's contract says where the decline goes, and the decoder enforces it in code, so the notification prompts do not restate it. What a source's prompt adds is what only the source knows: how something the agent *holds* is declined *there* — a task or issue assigned to it is reassigned to whoever should own it, a review request is moved to the right reviewer — and, on chat, which messages are addressed at all. An agent asked about somebody else's task or issue is not told to move it, since it is not the agent's to move: it declines the way the contract says, with a reply naming who should answer. And no prompt tells an agent it reads as addressed to stay silent. A chat message the engine reads as addressed (a direct message, a mention of the seat, a reply in a thread it follows) carries that verdict in place of the triage guidance, because the triage tells an unaddressed seat that silence beats noise, and on an addressed message that is the one answer the decoder refuses.
+`no_action` is narrowly scoped: it means **"nobody was actually asking the agent to do anything"** (informational triggers, passing references, broadcasts addressed to someone else) and that the turn changed nothing outside the engine. One that asked a colleague, reacted or published an artifact reports `delivered`, and its `no_action` is refused ([above](#three-checks-in-increasing-cost)). A read changes nothing, but only a read the engine can tell is one: an MCP tool not marked read-only counts as a change, and where no hint (from its server or a `tool_annotations` override) marks it read or write, the refusal names the call as one the engine cannot tell from a write. When the agent *was* directly asked / @mentioned / assigned but is declining (out of scope, wrong owner, already handled, deferring), it must post a brief explanation via the originating channel's reply tool and report that as `delivered`; silence looks like a lost ping. The `outcome` field's description states the rule, the executor's contract says where the decline goes, and the decoder enforces it, so notification prompts do not restate it. A source's prompt adds only what the source knows: how something the agent *holds* is declined *there* (an assigned task or issue is reassigned to whoever should own it, a review request moved to the right reviewer) and, on chat, which messages are addressed at all. An agent asked about somebody else's task or issue declines with a reply naming who should answer, not by moving it. No prompt tells an agent it reads as addressed to stay silent: a chat message the engine reads as addressed (a direct message, a mention of the seat, a reply in a thread it follows) carries that verdict in place of the triage guidance, which tells an unaddressed seat silence beats noise, the one answer the decoder refuses on an addressed message.
 
-**The per-phase headers say only what the model cannot learn elsewhere, each rule once.** A seat's phase runs inside a vendor's harness whose model and harness already know how to be an agent, so the engine states what nothing else can: the seat's identity and chart, the company's own words, what it prefetched, and the phase's contract. A rule about a tool or a submission field lives in that tool's description or that field's schema, which reach the model beside the tool on every round; a rule about the turn (act with tool calls, finish the arc and discover what is missing, stay reachable, how to judge a blocked round) lives in the header. Each rule left traces to an observed turn-ending failure, and it is written once: the review contract was once three copies that drifted until the submission schema asked the reviewer about delivery in words its prompt had retired. `internal/agent/prompts/budget_test.go` holds the prompts under explicit token budgets (executor < 1,030, review < 620, the whole turn < 2,625), each measured with every section a tool on the seat's surface turns on (the escalation guidance Worklet brings by default, the workers list, the MCP servers left to discover) rather than against a synthetic catalogue, so the prose cannot grow unchecked. The tool definitions have a budget of their own where a family is large enough to need one: every seat of a company hosting code carries the thirteen code reads' definitions in every round's catalogue, about 20.9 KB (~5,200 tokens) that no cache serves, and a seat whose `role.code.access` is `full_access` — the one tier any repository's grant lets change something, and so the only one offered them — twenty-three code writes' 29.1 KB (~7,300 tokens) beside them, 50.0 KB (~12,500 tokens) in all (`code_report_check`, `code_purge_unreachable` and `code_import_repo`, each a person's alone, are shown to no seat); `TestTheCodeToolsCatalogueStaysUnderBudget` (`internal/agent/builtin`) holds the reads under 22,100 bytes and all thirty-nine under 57,500 as their definitions are rendered — the grammar every revision argument takes is stated once, in `code_resolve`'s description, rather than in each of the twelve arguments that take one.
+**The per-phase headers say only what the model cannot learn elsewhere, each rule once.** A seat's phase runs inside a vendor's harness that already knows how to be an agent, so the engine states the seat's identity and chart, the company's own words, what it prefetched, and the phase's contract. A rule about a tool or submission field lives in that tool's description or field's schema; a rule about the turn (act with tool calls, finish the arc and discover what is missing, stay reachable, how to judge a blocked round) lives in the header. `internal/agent/prompts/budget_test.go` holds the prompts under token budgets (executor < 1,030, review < 620, the whole turn < 2,625), each measured with every section a tool on the seat's surface turns on (the escalation guidance Worklet brings by default, the workers list, the MCP servers left to discover), not a synthetic catalogue. Tool definitions have their own budget where a family is large: every seat of a company hosting code carries the thirteen code reads' definitions in every round's catalogue, about 20.9 KB (~5,200 tokens) that no cache serves, and a seat whose `role.code.access` is `full_access` (the one tier any repository's grant lets change something, so the only one offered them) twenty-three code writes' 29.1 KB (~7,300 tokens) beside them, 50.0 KB (~12,500 tokens) in all (`code_report_check`, `code_purge_unreachable` and `code_import_repo`, each a person's alone, are shown to no seat). `TestTheCodeToolsCatalogueStaysUnderBudget` (`internal/agent/builtin`) holds the reads under 22,100 bytes and all thirty-nine under 57,500 as rendered; the grammar every revision argument takes is stated once, in `code_resolve`'s description.
 
-**Prompt caching does not make repetition free.** A phase on this host is a run of its harness's own loop, handed one prompt: the system prompt on the harness's system channel where it has one, then the conversation so far as one user text, the seat's tools reaching it as an MCP server rather than in any prompt (see [how the prompt itself travels](llm-backends.md#how-the-prompt-itself-travels)). Within a run the harness re-sends that prefix on every request; a phase that needs another run — after a person's note, a corrective, a call too long to hold the harness for — starts a fresh process handed the whole conversation again. What can be reused across requests and runs is the system prompt above all, and only if its bytes do not move — which is why every builder is a pure function of turn-start inputs and what grows during a phase rides the conversation. Across turns even that does not hold: the prefetch blocks (the thread, memory, knowledge, similar prior work, the counterparty) are resolved per turn and sit inside the system prompt. And a seat's budget charges cached input in full, so every byte of a header is paid on every round whether a cache served it or not.
+**Prompt caching does not make repetition free.** A phase on this host is a run of its harness's own loop, handed one prompt: the system prompt on the harness's system channel where it has one, then the conversation so far as one user text, the seat's tools reaching it as an MCP server rather than in any prompt (see [how the prompt itself travels](llm-backends.md#how-the-prompt-itself-travels)). Within a run the harness re-sends that prefix every request; a phase needing another run (after a person's note, a corrective, a call too long to hold the harness for) starts a fresh process handed the whole conversation again. Only the system prompt is reusable across requests and runs, and only if its bytes do not move, so every builder is a pure function of turn-start inputs and what grows during a phase rides the conversation. Across turns even that fails: the prefetch blocks (thread, memory, knowledge, similar prior work, counterparty) are resolved per turn inside the system prompt. And a seat's budget charges cached input in full, so every byte of a header is paid every round whether a cache served it or not.
 
 ---
 
 ## The roster allowance
 
-One section does not grow with the diff — it grows with the company. A lead's direct reports are rendered **twice**: as a name list on the identity block's `Direct reports:` line, and as a profile block each under `## Your Team`. Both used to render every report, and neither stopped. A full agent profile measures ~119 tokens and a human's ~148 (a person also carries contact IDs and availability), so a lead of 25 measures ~3,494 tokens of roster alone — more than the *whole turn's* budget is. **A lead of an ordinary unit could not be prompted at all.**
+A lead's direct reports are rendered **twice**: as a name list on the identity block's `Direct reports:` line, and as a profile block each under `## Your Team`. A full agent profile measures ~119 tokens and a human's ~148 (a person also carries contact IDs and availability), so a lead of 25 would measure ~3,494 tokens of roster alone, more than the *whole turn's* budget.
 
-The two renderings now share **one allowance of 1,000 tokens**, spent from a single counter. One counter and not one each, because two caps of a thousand let the prompt pay two thousand: neither knows what the other spent, and nothing above them adds the two up. The counter is charged for *both* renderings of every report it admits, which is also why the two sections can never name different people.
+Both renderings share **one allowance of 1,000 tokens** from a single counter. One counter, not one each, because two caps would let the prompt pay twice and nothing adds them up. The counter is charged for *both* renderings of every report it admits, so the two sections never name different people.
 
-What the counter buys is a ladder, and a lead reads it in this order:
+The counter buys a ladder, read in this order:
 
 | Rung | What renders | What it buys |
 |---|---|---|
-| **1 — full profile** | name, handle, background, goal, responsibilities; for a human, contact IDs and availability — and, for a person no message can reach, how their work reaches them instead | What a lead actually assigns work from. Capped at **half** the allowance, because a profile costs 119–148 tokens against 11–18 for a name: undivided, it buys seven profiles and one name, and then cannot afford the ninth colleague's *name* |
-| **2 — name and handle** | `- **Ana Ruiz** (ana-ruiz)`, and `— **human teammate**` where the seat is a person | That the team does not end at the last profile. The human marker survives the cap deliberately: it is how the lead knows this colleague answers asynchronously rather than taking an engine turn |
-| **3 — the closing line** | ``and 457 more — `lookup_colleague` names them`` | The only rung that gives the lead a **move**. It names the tool because a model told only that colleagues were omitted has nothing to do about it, and invents the missing names instead. Its cost is reserved *before* the first profile, so a truncated roster can never claim to be the whole team |
+| **1 — full profile** | name, handle, background, goal, responsibilities; for a human, contact IDs and availability, and for a person no message can reach, how their work reaches them instead | What a lead assigns work from. Capped at **half** the allowance: a profile costs 119–148 tokens against 11–18 for a name, so undivided it buys seven profiles and one name |
+| **2 — name and handle** | `- **Ana Ruiz** (ana-ruiz)`, and `— **human teammate**` where the seat is a person | That the team does not end at the last profile. The human marker survives the cap: it tells the lead this colleague answers asynchronously rather than taking an engine turn |
+| **3 — the closing line** | ``and 457 more — `lookup_colleague` names them`` | The only rung that gives the lead a **move**. It names the tool because a model told only that colleagues were omitted invents the names. Its cost is reserved *before* the first profile, so a truncated roster never claims to be the whole team |
 
-The ladder only ever descends: a report that will not fit at rung 1 sends every later one to rung 2, so the profiles are the head of the chart's own order rather than whichever colleagues happened to have a short backstory. What this costs in practice: a lead of 25 gets three full profiles and **names every one of its reports**; a lead of 500 gets three full profiles, ~40 more names, and a lookup for the rest.
+The ladder only descends: a report that will not fit at rung 1 sends every later one to rung 2, so profiles are the head of the chart's own order. A lead of 25 gets three full profiles and **names every one of its reports**; a lead of 500 gets three full profiles, ~40 more names, and a lookup for the rest.
 
-**The allowance caps rendering, never authorization.** `manages` is untouched — it is read from the chart on every lookup, a seat still manages every report the allowance had no room to describe, `lookup_colleague` resolves any of them, and the dashboard's own chart still shows the whole team. A cap read as an authorization cap would be a lead silently stripped of reports it is still accountable for; `TestCappingTheRosterDoesNotCapManages` exists to keep that reading from ever becoming true.
+**The allowance caps rendering, never authorization.** `manages` is read from the chart on every lookup, a seat still manages every report the allowance had no room for, `lookup_colleague` resolves any of them, and the dashboard's chart shows the whole team. `TestCappingTheRosterDoesNotCapManages` guards this.
 
-The whole turn's budget is the allowance plus the prose: the turn's own prose measures ~1,497 tokens (both prompts, with every gated section rendered — the ~91 of `## Reading the company's code`, which only a seat of a company hosting code is sent, and the ~71 of `## Changing the company's code`, which only a seat of a company serving Gitlet's writes is sent, the ~56 of `## Merging a change`, which only a seat holding `code_merge_change` is sent, and the ~45 of `## Searching the company's code`, which only a seat holding `code_search` is sent, among them), the allowance spends ~987 of its 1,000 on a lead of 500, a mixed company pays another ~93 for the `## Human colleagues` note, and the whole measures ~2,577 against a budget of 2,625. The review prompt is unmoved by the roster — it renders a one-line identity naming the reviewer's *manager*, not its reports, so a lead of 500 and a lead of one measure the same ~572.
+The whole turn's budget is the allowance plus the prose. The prose measures ~1,497 tokens (both prompts, every gated section rendered: ~91 for `## Reading the company's code`, sent only to a seat of a company hosting code; ~71 for `## Changing the company's code`, only a seat of a company serving Gitlet's writes; ~56 for `## Merging a change`, only a seat holding `code_merge_change`; ~45 for `## Searching the company's code`, only a seat holding `code_search`). The allowance spends ~987 of 1,000 on a lead of 500, a mixed company pays ~93 more for the `## Human colleagues` note, and the whole measures ~2,577 against a budget of 2,625. The review prompt is unmoved by the roster (its one-line identity names the reviewer's *manager*), so a lead of 500 and a lead of one both measure ~572.
 
 ---
 
@@ -172,114 +171,84 @@ type Review struct {
 }
 ```
 
-Its words are held where they are made: `submit_review` refuses a `final_artifact` past 256 KiB (what a run's own report may weigh, since it is returned in that report's place) and `notes` or `completed_work` past 32 KiB each (what an executor's whole submission may weigh), naming the field, its size and its bound, so the reviewer shortens them. The artifact is the turn's answer on every record and reply that carries it, and the notes are every later round's brief, so a cut at each reader would hand each a different opening of one text.
+`submit_review` refuses a `final_artifact` past 256 KiB (what a run's own report may weigh) and `notes` or `completed_work` past 32 KiB each (what an executor's whole submission may weigh), naming the field, its size and its bound. The artifact is the turn's answer on every record and reply, and the notes are every later round's brief, so a cut at each reader would give each a different opening of one text.
 
 - `done` → return `FinalArtifact` (fallback: the executor's text), unless the post-review override overturns it.
-- `self_iterate` → record the round in the [prior-work ledger](#prior-work-ledger-across-self_iterate-rounds) and loop back. Capped at `turn_engine.max_iterations` (default 3); two unchanged-artifact rounds publish a `turn.guard_breach(kind="stall")` and terminate the turn as `failed` (engine-driven, not an LLM decision).
+- `self_iterate` → record the round in the [prior-work ledger](#prior-work-ledger-across-self_iterate-rounds) and loop back. Capped at `turn_engine.max_iterations` (default 3); two unchanged-artifact rounds publish a `turn.guard_breach(kind="stall")` and end the turn `failed` (engine-driven, not an LLM decision).
 - `failed` → the reviewer's own judgement that another round would not change the answer. No guard fired, so none is reported.
 
-When a turn cannot finish without a manager or peer — a capability gap requiring someone else's identity / credentials, or a decision above the agent's authority — the reviewer asks **whether they have been told**. The tool log settles that, not the agent's prose:
+When a turn cannot finish without a manager or peer (a capability gap needing someone else's identity or credentials, or a decision above the agent's authority), the reviewer asks **whether they have been told**. The tool log settles that, not the agent's prose:
 
-- **Not asked yet** → `self_iterate`, naming who to reach in `notes`. The next round reaches them directly with its own colleague-surface tools (a Slack mention, a Jira comment, `a2a_ask`) — the same way a human teammate asks for help, and the same way an agent reaches a [human seat](humans-in-the-org.md).
-- **Already asked** → `done`. The colleague replies asynchronously and that reply re-triggers the agent, so no further round of *this* turn can produce it. Sending it back spends the iterations the real work needs and posts the same question a second time at somebody who has not had a chance to answer.
+- **Not asked yet** → `self_iterate`, naming who to reach in `notes`. The next round reaches them with its own colleague-surface tools (a Slack mention, a Jira comment, `a2a_ask`), as it would a [human seat](humans-in-the-org.md).
+- **Already asked** → `done`. The colleague replies asynchronously and that reply re-triggers the agent, so no further round of *this* turn can produce it; another round would burn iterations and repost the question.
 - **Nothing anyone replies would finish it** → `failed`.
 
-Being blocked is the **executor's** word for what happened — `submit_work`'s `blocked` outcome, whose `evidence` the schema demands — and `done` / `self_iterate` / `failed` are the **reviewer's** for whether that was good enough. There is deliberately no fourth decision meaning *blocked, and rightly so*: it would copy one axis onto the other, and the next kind of blocked would want a fifth. What the turn was blocked on is carried forward on its end on the executor log instead ([below](#how-a-turn-ends-on-the-executor-log)), which the seat's next turn on that thread is told, so it can tell a question it asked from work it finished.
+Being blocked is the **executor's** word: `submit_work`'s `blocked` outcome, whose `evidence` the schema demands. `done` / `self_iterate` / `failed` are the **reviewer's** word on whether that was good enough. There is no fourth decision meaning *blocked, and rightly so*: it would copy one axis onto the other. What the turn was blocked on is carried forward on its end on the executor log ([below](#how-a-turn-ends-on-the-executor-log)), which the seat's next turn on that thread is told, so it can tell a question it asked from work it finished.
 
-A handoff never excuses leaving the requester in silence: whoever triggered the turn is owed a reply where *they* asked, so a turn that asks a colleague on one surface while the requester hears nothing on another is overturned to `self_iterate`.
+A handoff never excuses silence toward the requester: whoever triggered the turn is owed a reply where *they* asked, so a turn that asks a colleague on one surface while the requester hears nothing is overturned to `self_iterate`.
 
 There is **no** engine-side handoff dispatcher, **no** `ask_colleague` decision, and **no** `role.fallback` chain: escalation is ordinary tool use.
 
 ### Prior-work ledger across `self_iterate` rounds
 
-Every phase on the engine host rebuilds its LLM conversation from scratch on each round, and so does the executor wherever its relaunch starts a harness session of its own: it starts from `[system, user]`. Without a record kept *outside* that conversation, a `self_iterate` round starts blind: it cannot tell that round 1 already posted to Slack, so it does it again and the side effect fires twice. (A relaunch that [continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session) holds its earlier rounds' calls in that session, so it is told the same rules without the list, and only a call of theirs that a call it is told could be taken for is listed again; where it may hold those rounds only in a summary's words, it is told that it may show calls of theirs no list holds one by one.)
+Every phase on the engine host rebuilds its LLM conversation from scratch each round, and so does an executor whose relaunch starts a harness session of its own: it starts from `[system, user]`. Without a record kept *outside* that conversation, a `self_iterate` round cannot tell that round 1 already posted to Slack, and the side effect fires twice. (A relaunch that [continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session) holds earlier rounds' calls in that session, so it gets the same rules without the list, and only a call of theirs that a told call could be mistaken for is listed again; where it may hold earlier rounds only in a summary, it is told it may show calls no list holds one by one.)
 
-The turn's iteration ledger is that record. The engine appends one `ledger.Iteration` (`internal/agent/ledger/iteration.go`) immediately before each loop-back, and renders the accumulated records into two places:
+The engine appends one `ledger.Iteration` (`internal/agent/ledger/iteration.go`) immediately before each loop-back and renders the accumulated records into two places:
 
 | Consumer | Where | Why |
 |---|---|---|
-| **Executor** | `## Already done earlier in this turn` in the **user** message — the rules and the list for a session of its own, the rules alone for one that continues the turn's session, which holds the list, but an earlier round's call a told call could be taken for, listed again | Do the gap, not the whole task again — and it is what actually fires side effects, so it holds the evidence |
-| **Review** | `## Earlier rounds (already delivered)` in the system prompt | Makes the duplicate-delivery rule work turn-wide instead of only inside one round |
+| **Executor** | `## Already done earlier in this turn` in the **user** message: rules and list for a session of its own; rules alone for one that continues the turn's session (plus any earlier call a told call could be taken for) | Do the gap, not the whole task again. It is what fires side effects, so it holds the evidence |
+| **Review** | `## Earlier rounds (already delivered)` in the system prompt | Makes the duplicate-delivery rule work turn-wide, not only inside one round |
 
-The block rides the **user** message for the executor, never its system prompt: that prompt is frozen at turn start (the prefetch blocks) so its prefix stays byte-stable for provider prefix caching, and a section that grows each round would invalidate that cache on every loop. The boundary is what a value VARIES WITH, not how big it is: the chat thread a turn was woken in is the largest block the prefetch renders — up to 8000 bytes, its middle condensed past that — and it sits in the *system* prompt, because it is resolved once at turn start and never moves again, while a three-line ledger that grows each round sits in the user message. (The trigger's own `## Thread context` guidance still rides the user message, inside the notification body — a different section under a deliberately different name from the system prompt's `## The thread so far`, so the model is never shown two sections with one heading saying different things.) On round 1 the ledger is empty and the message is byte-identical to a single-pass turn.
+The block rides the **user** message for the executor, never its system prompt: that prompt is frozen at turn start (the prefetch blocks) so its prefix stays byte-stable for provider prefix caching, and a section growing each round would invalidate the cache every loop. The boundary is what a value VARIES WITH, not its size: the chat thread a turn was woken in (up to 8000 bytes, its middle condensed past that) is resolved once at turn start and sits in the *system* prompt; a three-line ledger that grows each round sits in the user message. (The trigger's own `## Thread context` guidance rides the user message inside the notification body, under a name deliberately different from the system prompt's `## The thread so far`, so the model never sees two sections with one heading saying different things.) On round 1 the ledger is empty and the message is byte-identical to a single-pass turn.
 
-**ONE call list per round**, because one phase makes the calls. It was two while the turn planned in one conversation and acted in another, and the split was load-bearing then: the delivery gate took a different view of each. Nothing takes two views of one list.
+**One call list per round**, because one phase makes the calls.
 
-**Two layers, deliberately.** The tool-call list is *engine-recorded*, so it cannot be forgotten — which matters most on the post-review `done` → `self_iterate` override, where the reviewer decided `done` and therefore wrote no prose at all, yet a partial delivery may already have landed. `Review.CompletedWork` is the reviewer's gloss on top, expressing what the mechanical log cannot: *"the post landed and reads fine — follow up in that thread rather than re-posting."* Same trust order the reviewer already applies to `## What the agent did` over `## What the agent produced`.
+**Two layers.** The tool-call list is *engine-recorded*, so it cannot be forgotten, which matters most on the post-review `done` → `self_iterate` override, where the reviewer wrote no prose yet a partial delivery may have landed. `Review.CompletedWork` is the reviewer's gloss on top, saying what the log cannot: *"the post landed and reads fine — follow up in that thread rather than re-posting."* The reviewer trusts `## What the agent did` over `## What the agent produced` in the same order.
 
-**A delivery the ledger records still counts.** The engine's delivery checks read the whole turn's record, closed rounds included (see [Three checks](#three-checks-in-increasing-cost)), so a round that is told not to repeat an earlier round's comment may — and should — name it in `submit_work`'s `deliveries`; the executor's header says so. Before, the ledger forbade the write and the check demanded it, and a round sent back for a re-read could satisfy neither.
+**A delivery the ledger records still counts.** The delivery checks read the whole turn's record, closed rounds included (see [Three checks](#three-checks-in-increasing-cost)), so a round told not to repeat an earlier comment may, and should, name it in `submit_work`'s `deliveries`; the executor's header says so.
 
-**Reads are marked, not merged with writes.** Tool *results* are deliberately not carried across rounds, so a read the next round needs must be re-run — telling it "do not repeat" a `jira_get_issue` would push it to invent the data instead. Each record carries the positively-known read names the delivery check resolves from [MCP annotations](tool-capabilities.md), reads render as `→ success (read)`, and the prompt permits re-running exactly those. Failed calls stay marked `→ error`: they did not take effect and may be retried, but for one whose line says its outcome is unknown, a call still in flight as its round was read ([The tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)), listed failed so no delivery check takes it for a delivery. What it did may have taken effect, so every rule a failed call is read by, the executor's `## Already done earlier in this turn` (with the list or without it) and the reviewer's, excepts it in those terms, the executor's adding that it is checked before it is made again: told that every failed call did not take effect, a reviewer would send the round back to make such a call again, and a run would make it again, a second post or delegation. Only the reads the round actually CALLED are recorded, not the whole surface's annotation set: the row is persisted across the executor's park, and carrying every read-only tool on a large MCP surface makes it grow with the catalogue rather than with what the round did.
+**Reads are marked, not merged with writes.** Tool *results* are not carried across rounds, so a read the next round needs must be re-run; telling it "do not repeat" a `jira_get_issue` would push it to invent the data. Each record carries the positively-known read names the delivery check resolves from [MCP annotations](tool-capabilities.md), reads render as `→ success (read)`, and the prompt permits re-running exactly those. Only reads the round actually CALLED are recorded, not the surface's whole annotation set, because the row is persisted across the executor's park and would otherwise grow with the catalogue. Failed calls are marked `→ error`: they did not take effect and may be retried. The exception is a call whose line says its outcome is unknown, one still in flight as its round was read ([The tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)): it is listed failed so no delivery check takes it for a delivery, but it may have taken effect, so every rule a failed call is read by (the executor's `## Already done earlier in this turn`, with or without the list, and the reviewer's) excepts it in those terms, the executor's adding that it is checked before it is made again. Told that every failed call did not take effect, a reviewer would send the round back to repeat it, and a run would repeat it (a second post or delegation).
 
-**A park too large for its row drops whole rounds, never their calls.** A turn parks on every executor launch, carrying the ledger in the run's record, which holds it to a share ([what a run's record and its log keep](code-sandbox.md#what-a-runs-record-and-its-log-keep)). Past that share, once every round's payloads are cut to their openings, the park folds whole rounds from the middle into one entry standing for them (`ledger.Iteration.Through`) — the first round, which says what the turn set out to do, and as many of the newest as fit stay — and past that every round into one. The entry keeps the rounds' calls, counted by tool with their outcomes (an unknown outcome apart), which is what the delivery checks read, so a reply a dropped round posted still answers the turn, and what the next round is shown, so it does not post it again; and the artifact hash of its last round, so the stall guard still compares each round with the one before it. It renders as `### Iterations 2–40`, saying that what those rounds set out to do, produced and were told is not kept, never as a round that did nothing.
+**A park too large for its row drops whole rounds, never their calls.** A turn parks on every executor launch, carrying the ledger in the run's record, which holds it to a share ([what a run's record and its log keep](code-sandbox.md#what-a-runs-record-and-its-log-keep)). Past that share, once every round's payloads are cut to their openings, the park folds whole rounds from the middle into one entry (`ledger.Iteration.Through`), keeping the first round (what the turn set out to do) and as many of the newest as fit, and past that folds every round into one. The entry keeps the rounds' calls counted by tool with their outcomes (an unknown outcome apart), which is what the delivery checks read and what the next round is shown, so a reply a dropped round posted still answers the turn and is not posted again; and the artifact hash of its last round, so the stall guard still compares each round with the one before. It renders as `### Iterations 2–40`, saying those rounds' aims, output and instructions are not kept, never as a round that did nothing.
 
-**A call counted by tool is read like one listed.** A record that no longer lists calls one by one counts them by tool — a long run's middle its row dropped, a parked turn's rounds condensed past their calls, rounds a park dropped whole — and the executor's header says those calls ran all the same: the ones not counted as failed already ran, read by the rules of a `→ success` line, and one counted with an unknown outcome may have taken effect, so it is checked before it is made again.
+**A call counted by tool is read like one listed.** Wherever calls are counted by tool (a long run's dropped middle, a parked turn's condensed rounds, rounds a park dropped whole), the executor's header says they ran all the same: those not counted as failed already ran, read by the rules of a `→ success` line, and one counted with an unknown outcome may have taken effect, so it is checked before it is made again.
 
-**A call whose arguments are not known never reads as one made with none.** Its line says why in their place: sealed for a person's approval (a call held for one, and the call they approved), kept on no record (a call still in flight as its round was read, whose entry keeps its identity alone), or in text that could not be read (a record something cut or damaged, or arguments the model wrote that did not parse, which the call was refused for unrun). Drawn `tool()`, each read as the tool called with none, a different call, and a run told to check whether one took effect before making it again had nothing to check by. A call made with no arguments is still drawn `tool()`, and one in text that could not be read is counted, where no digest of it was recorded, as a call of its tool whose arguments are not known. What a person reads follows the same rule: the phase record marks such a call (`held`, `approved`, `arguments_unknown`, in the [table below](#what-a-turn-records-about-its-time)), and the execute card, the trace's call detail and the executors board say in place of its arguments that they are sealed or not known, and why, never `{}` or "(none)". A call the loop itself answered for arguments that did not parse is marked the same way.
+**A call whose arguments are not known never reads as one made with none.** Its line says why in their place: sealed for a person's approval (a call held for one, and the call they approved), kept on no record (a call in flight as its round was read, whose entry keeps its identity alone), or in text that could not be read (a damaged record, or model-written arguments that did not parse, which the call was refused for unrun). Drawn `tool()`, each would read as the tool called with none, and a run told to check whether one took effect would have nothing to check by. A call made with no arguments is still drawn `tool()`; one in text that could not be read is counted, where no digest was recorded, as a call of its tool with unknown arguments. People see the same: the phase record marks such a call (`held`, `approved`, `arguments_unknown`, in the [table below](#what-a-turn-records-about-its-time)), and the execute card, the trace's call detail and the executors board say in place of its arguments that they are sealed or not known, and why, never `{}` or "(none)". A call the loop itself answered for unparsed arguments is marked the same way.
 
 ### What the ledger budgets, and why
 
 One principle decides every budget: **budget payloads, never structure — and rewrite a payload, never cut it.**
 
-A *payload* is a tool **argument** — a message body, page HTML, a diff — or a failed call's error document. It is unbounded, gets re-authored next round, and can never answer "did this already fire" on its own, so carrying it whole only buries the two lines that can. *Structure* is everything else — the round's own account of what it set out to do, the draft under review, the reviewer's correction, the trigger, the reply that was sent — and it is carried **verbatim**: it is exactly what the next round must act on, and the ledger is its only carrier.
+A *payload* is a tool **argument** (a message body, page HTML, a diff) or a failed call's error document. It is unbounded, gets re-authored next round, and cannot answer "did this already fire" on its own, so carrying it whole buries the two lines that can. *Structure* is everything else (the round's own account of what it set out to do, the draft under review, the reviewer's correction, the trigger, the reply that was sent) and is carried **verbatim**: the next round must act on it and the ledger is its only carrier.
 
-It used not to be. Six further limits sat beside the ones below, cutting each of those at 400–2000 runes — the principle above applied to the half it excludes. A reviewer's correction trimmed mid-instruction loses the engine-critical part of the only carrier it has, and unlike a chat message or an issue comment there is no surface to go back and re-read.
-
-**A payload past its budget is rewritten, not cut.** The budgets below were once where a payload was cut, and what survived was its opening — a message body's greeting, an error page's preamble — read by the next round as though it were the call. The ledger now only *names* the payloads past their budget; the runner has each one rewritten to fit by the seat's auxiliary model (`internal/compact`, on `llm_auxiliary`, charged to the seat's token windows like any auxiliary call) and marked `(condensed)`, so what survives is what the payload *said*. A rewrite is cached by its input, so the block re-rendered for the executor and again for the reviewer pays for each payload once per turn. Where no rewrite can be had, an argument or an error is shown by its **size and digest** — never a fragment of it — which still tells two identical calls from two different ones, and a round's own produced text is shown **whole**, because it is the draft the next round exists to revise.
+**A payload past its budget is rewritten, not cut.** The ledger only *names* the payloads past their budget; the runner has each rewritten to fit by the seat's auxiliary model (`internal/compact`, on `llm_auxiliary`, charged to the seat's token windows like any auxiliary call) and marked `(condensed)`, so what survives is what the payload *said*, not its opening. A rewrite is cached by its input, so the block re-rendered for the executor and the reviewer pays for each payload once per turn. Where no rewrite can be had, an argument or error is shown by its **size and digest**, never a fragment, which still tells two identical calls from two different ones; a round's own produced text is shown **whole**, being the draft the next round exists to revise.
 
 | Budget | Value | Anchored on |
 |---|---|---|
 | `ValueLimit` | 200 | A Confluence/GitHub URL with query params runs ~180 chars, so an identifier is always carried as itself; only a body, a document or an error page is past it, and it is rewritten to about thirty words |
-| `MaxReadCalls` | 12 | The recon a normal round does; only reads are ever omitted — they are re-runnable by construction — and the line says how many |
+| `MaxReadCalls` | 12 | The recon a normal round does; only reads are ever omitted (they are re-runnable by construction) and the line says how many |
 | `RenderedArtifactLimit` | 4000 | A full draft; past it a round's output is rewritten deliverable-first, reasoning compressed hardest |
 
-Whether a value is past its budget is judged in **characters**, so an identifier in a script whose characters are several bytes each — a channel name, a page title — is never handed to a model to paraphrase. There is no longer a budget on a call's serialised argument object as a whole: it existed to drop whole keys once every value had been *cut*, and with each value rewritten to its own budget a call's line is bounded by its argument count.
+A value's budget is judged in **characters**, so an identifier in a multi-byte script (a channel name, a page title) is never handed to a model to paraphrase. A call's serialised argument object as a whole has no budget: with each value rewritten to its own, a call's line is bounded by its argument count.
 
-A prior round's **produced text** is kept whole in the record and rewritten at `RenderedArtifactLimit` only when *rendered* into the next round's block — `Work.Text` is every assistant message of that round's tool loop concatenated, and the block accumulates one of those per `self_iterate` and is re-sent on every round of both phases that follow, so the product is what the bound answers.
+A prior round's **produced text** is kept whole in the record and rewritten at `RenderedArtifactLimit` only when *rendered* into the next round's block: `Work.Text` is every assistant message of that round's tool loop concatenated, and the block accumulates one per `self_iterate` and is re-sent on every later round of both phases.
 
-The text of every payload is on the phase event the ledger line summarises, whole wherever that record has room for it: a phase's record holds each of its payloads to a share of one message, and keeps the opening of one past it, saying how much it left out ([event system](event-system.md#what-an-agent-record-keeps)).
+The text of every payload is on the phase event the ledger line summarises, whole where the record has room: a phase's record holds each payload to a share of one message and keeps the opening of one past it, saying how much it left out ([event system](event-system.md#what-an-agent-record-keeps)).
 
-**The ledger survives the park.** Every executor launch parks the turn and its run's collection resumes it, often in another process, so the records are serialised into the pending run's `execute_state` (`internal/agent/execstate`, the turn's parked state, which carries no conversation) and rehydrated onto the resumed turn. Without that round-trip, a turn that self-iterated before its latest launch would forget those rounds and re-fire their deliveries after the resume. That blob carries an explicit version, and a version the reading build does not know is refused loudly and the row left for a node that understands it, because a parked run can outlive the build that parked it and nothing rewrites a parked row; a reshape takes a new version, and a reader for an older one is kept only once a tag has shipped it. It is also carried EXACTLY: the sandbox layer holds it as bytes it never decodes, and the reader keeps every number as the digits it was written in — read as a double, a nineteen-digit id a model passed as a tool argument resumed as a different id.
+**The ledger survives the park.** Every executor launch parks the turn and its run's collection resumes it, often in another process, so the records are serialised into the pending run's `execute_state` (`internal/agent/execstate`, the turn's parked state, which carries no conversation) and rehydrated onto the resumed turn. The blob carries an explicit version; a version the reading build does not know is refused loudly and the row left for a node that understands it, because a parked run can outlive the build that parked it and nothing rewrites a parked row. A reshape takes a new version, and a reader for an older one is kept only once a tag has shipped it. It is carried EXACTLY: the sandbox layer holds it as bytes it never decodes, and the reader keeps every number as its written digits (read as a double, a nineteen-digit id a model passed as a tool argument resumed as a different id).
 
-**So does the round count.** The parked round travels in the same blob and the
-resumed turn starts its counter there rather than at one, so `max_iterations`
-bounds the **turn** rather than each half of it: a turn that parked at round
-three of three comes back with that round to finish and no more. The counter
-restarted at one before, which handed every resumed turn a second full budget
-and re-used iteration numbers the parked half had already spent — so the
-resumed phases' records collided with the earlier rounds' on the
-`turn_id` + phase + iteration key every screen files a phase under, and the
-prior-work block rendered two sections numbered the same. The one round the cap
-cannot refuse is the collected one itself: its run was launched and paid for
-in that round, so it is collected even where `max_iterations` has been lowered
-past it while the box worked — refusing it would throw away a run already paid
-for and leave its turn closed by nobody.
+**So does the round count.** The parked round travels in the same blob and the resumed turn starts its counter there, not at one, so `max_iterations` bounds the **turn**, not each half: a turn that parked at round three of three comes back with that round to finish and no more.  A restarted counter would give a second full budget and collide on the `turn_id` + phase + iteration key. The one round the cap cannot refuse is the collected one: its run was launched and paid for in that round, so it is collected even if `max_iterations` was lowered past it while the box worked.
 
-The **task description** is not mutated by a `self_iterate` round: the correction is prefixed to the user MESSAGE instead. Appending review notes to the task carried them into the knowledge-search query builders, the run's brief, and the episode / turn-completed publishers — all of which want the requester's actual ask.
+The **task description** is not mutated by a `self_iterate` round: the correction is prefixed to the user MESSAGE instead, because appending review notes to the task would carry them into the knowledge-search query builders, the run's brief, and the episode / turn-completed publishers, which all want the requester's actual ask.
 
 ### One scope wider: how the conversation's earlier turns ended
 
-Everything above is scoped to a single turn. The seat's next turn on *this
-Slack thread / issue / pull request* — or a schedule's next fire, a schedule
-being a conversation of each seat that runs it
-([Scheduling](scheduling.md#each-fire-continues-the-last-fires-session)) —
-continues the session its last turn left
-([Code Sandbox](code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)),
-which holds what that turn did and said; what no transcript holds — whether
-its reply reached the party waiting, its reviewer's last word, what landed,
-what blocked it, who stopped it — is told from each turn's end on the executor
-log ([below](#how-a-turn-ends-on-the-executor-log)). That account rides the
-same user message, immediately above `## Task`, under its own heading: read
-once, at the turn's dispatch, rendered under the turn's token and frozen on
-every park, so every brief of the turn carries the same bytes; bounded by
-leaving whole turns out, the newest kept and the rest counted, never by
-cutting or rewriting one. The executor receives it; the reviewer does not,
-because the reviewer judges *this* turn's work and the ledger above already
-carries its duplicate-delivery rule.
+The seat's next turn on *this Slack thread / issue / pull request*, or a schedule's next fire (a schedule being a conversation of each seat that runs it, [Scheduling](scheduling.md#each-fire-continues-the-last-fires-session)), continues the session its last turn left ([Code Sandbox](code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)), which holds what that turn did and said. What no transcript holds (whether its reply reached the party waiting, its reviewer's last word, what landed, what blocked it, who stopped it) is told from each turn's end on the executor log ([below](#how-a-turn-ends-on-the-executor-log)). That account rides the same user message, immediately above `## Task`, under its own heading: read once at the turn's dispatch, rendered under the turn's token and frozen on every park, so every brief of the turn carries the same bytes; bounded by leaving whole turns out (newest kept, the rest counted), never by cutting or rewriting one. The executor receives it; the reviewer does not, because it judges *this* turn's work and the ledger already carries its duplicate-delivery rule.
 
 ### Engine-driven `failed` outcome
 
-A turn can also end `failed` without the reviewer choosing it. Every failed turn publishes `agent_turn_completed` with `failed: true` and a classified `error` / `error_kind`, and the engine publishes one dedicated event beside it naming the cause (`Engine.publishFailure`):
+A turn can end `failed` without the reviewer choosing it. Every failed turn publishes `agent_turn_completed` with `failed: true` and a classified `error` / `error_kind`, plus one dedicated event naming the cause (`Engine.publishFailure`):
 
 | Cause | Dedicated event | `error_kind` on the summary |
 |---|---|---|
@@ -292,27 +261,27 @@ A turn can also end `failed` without the reviewer choosing it. Every failed turn
 | A condition of the environment: the coordination store not answering, no data node serving, a busy or closed store, the event queue down, the file store full or silent, a state-log refusal (of the log, the node or the broker, or of the write itself for what it is: a record too large, an object deleted for good, an operation id reused or an operation superseded), the fleet's nodes holding different keys, the fleet mid-upgrade with no data node of a build that [reads the call whole](scaling.md#a-build-reads-what-it-is-asked-whole-or-runs-none-of-it), or the host's disk full, read-only or failing, or its process out of file descriptors | none | the condition's own kind: `coordination_unavailable`, `no_data_node`, `store_busy`, `estate_closed`, `queue_not_live`, `queue_unavailable`, `file_store_full`, `file_store_unavailable`, `state_log_unavailable`, `state_log_write_refused`, `fleet_keys_differ`, `fleet_builds_differ`, `executor_unanswered`, `disk_full`, `disk_read_only`, `disk_failed` or `open_files_exhausted` |
 | Any other broken phase | none | the provider's classified kind where there is one, else `error` |
 
-The `error_kind` on the turn's summary is the **same classifier** the failed phase's record uses (`runner.ErrorKind`), so the two records of one failure name it alike. It used to read `error` for every cause but a guard, while the phase record beside it said `auth` or `rate_limit`. A condition of the environment is read by the one classification every tool and API answer uses (`builtin.ConditionKind`), so a record's kind and a refusal's words cannot disagree about what failed; the host's disk and descriptor failures are read by the error number the system call returned, never by its words. `error` is left for a failure nothing classified, which is what an [engine issue report](../guides/engine-issue-reports.md) reads as the engine's own defect.
+The summary's `error_kind` is the **same classifier** the failed phase's record uses (`runner.ErrorKind`), so both records of one failure name it alike (`auth`, `rate_limit`, …). A condition of the environment is read by the one classification every tool and API answer uses (`builtin.ConditionKind`); the host's disk and descriptor failures are read by the error number the system call returned, never its words. `error` is left for a failure nothing classified, which an [engine issue report](../guides/engine-issue-reports.md) reads as the engine's own defect.
 
-Those dedicated events are what the seat's `last_error` is taken from. A chain every member of which refused for a usage limit also parks the seat, which then reads `stopped` with the reason `provider` until the limit lifts (see [Agent States](agent-runtime.md#agent-states)); a chain that failed otherwise is a failed turn and no stop. A reviewer's own `failed` fired no guard, so it publishes none of them.
+The seat's `last_error` is taken from those dedicated events. A chain every member of which refused for a usage limit also parks the seat, which reads `stopped` with the reason `provider` until the limit lifts (see [Agent States](agent-runtime.md#agent-states)); a chain that failed otherwise is a failed turn and no stop. A reviewer's own `failed` fired no guard, so it publishes none of them.
 
-A panic is the one cause that is both an error and a breach: the error says what broke and names the phase and round, the breach names the guard. The summary carries both, keeping the error's own text and taking the guard as its `error_kind`.
+A panic is both an error and a breach: the error says what broke and names the phase and round, the breach names the guard. The summary carries both, keeping the error's text and taking the guard as its `error_kind`.
 
-**The phase that died publishes too.** A phase that returns an error never reaches its ordinary completion record, so a failed phase used to leave nothing behind but the `agent_phase_started` that opened it: the dashboard showed an in-flight LLM call whose response never arrived, and read "No response text yet" where the error belonged. Every operator-visible phase runs through one body (`Runner.runPhase`), and its failure path publishes the missing `agent_phase_completed` with `failed: true`, the error, and whatever the loop managed before it died: the conversation, the tool calls that ran, the tokens already billed, the round it was on, folded onto the rounds of any earlier extension. It then returns the original error unchanged, so the failure classification above is unaffected.
+**The phase that died publishes too.** A phase that returns an error never reaches its ordinary completion record, so every operator-visible phase runs through one body (`Runner.runPhase`), whose failure path publishes (instead of leaving only the opening `agent_phase_started`) the missing `agent_phase_completed` with `failed: true`, the error, and whatever the loop managed before it died (the conversation, the tool calls that ran, the tokens already billed, the round it was on, folded onto the rounds of any earlier extension). It returns the original error unchanged, so the classification above is unaffected.
 
-**A panic is an unhandled exception, not a crash and not a retry.** A panic in a phase (a provider SDK, an MCP client, a tool handler) is recovered at the turn loop, logged as `turn_phase_panicked` with its stack, and ends the turn as `failed` with `turn.guard_breach(kind="unhandled_exception")`. The published detail carries the panic's value and never its stack, because the event store is readable by anyone the dashboard serves. A panic outside a phase, in the dispatcher's own stages or in a turn's set-up and tear-down, is recovered one frame further out (`dispatch_panicked`, or `sandbox_resume_panicked` on the resume path) and publishes the same breach. That breach names the run the panic ended in `turn_id` — the id the turn's own `agent_turn_started` was published under, so the row saying it began and the row saying why it stopped are one turn's — and its unit of work in `work_key`; a panic in a screening stage, before any run was minted, names no run. Either way the trigger is recorded and acknowledged rather than redelivered: a redelivery runs the same defect on the same input. Only what the delivery still holds is recorded: when a partition that would not merge has already requeued its tail, a panic in the head's turn records the head, and the tail's copies still run. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway).
+**A panic is an unhandled exception, not a crash and not a retry.** A panic in a phase (a provider SDK, an MCP client, a tool handler) is recovered at the turn loop, logged as `turn_phase_panicked` with its stack, and ends the turn `failed` with `turn.guard_breach(kind="unhandled_exception")`. The published detail carries the panic's value, never its stack, because the event store is readable by anyone the dashboard serves. A panic outside a phase, in the dispatcher's own stages or a turn's set-up and tear-down, is recovered one frame further out (`dispatch_panicked`, or `sandbox_resume_panicked` on the resume path) and publishes the same breach. The breach names the run the panic ended in `turn_id` (the id the turn's own `agent_turn_started` was published under) and its unit of work in `work_key`; a panic in a screening stage, before any run was minted, names no run. Either way the trigger is recorded and acknowledged, not redelivered, since a redelivery runs the same defect on the same input. Only what the delivery still holds is recorded: when a partition that would not merge has already requeued its tail, a panic in the head's turn records the head, and the tail's copies still run. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway).
 
-A delegated worker is the one exception, and it is contained one frame nearer. `delegate` runs its workers on goroutines of their own, where a panic the turn loop cannot see would end the whole process, so each worker recovers its own and hands it back to the executor as that worker's result, with status `failed` and the panic's value as its error, logged as `subagent_panicked` with its stack. The executor reads it beside its siblings' answers and the turn goes on.
+A delegated worker is the exception, contained one frame nearer. `delegate` runs workers on their own goroutines, where an unseen panic would end the process, so each worker recovers its own and hands it to the executor as that worker's result, with status `failed` and the panic's value as its error, logged as `subagent_panicked` with its stack. The executor reads it beside its siblings' answers and the turn goes on.
 
-The dashboard renders that record as a failed invocation (error first, partial work beneath it) and keeps it on screen. The failure is held until the agent does real work again: the projection clears it only on a new phase or turn activity, or a new instance of the seat, so the `agent_turn_completed` published beside the failure cannot erase its cause.
+The dashboard renders that record as a failed invocation (error first, partial work beneath) and keeps it on screen until the agent does real work again: the projection clears it only on a new phase or turn activity, or a new instance of the seat, so the `agent_turn_completed` published beside the failure cannot erase its cause.
 
 ---
 
 ## Workers
 
-An executor hands narrowly-scoped work to short-lived **workers** with the `delegate` tool. A worker runs its own tool loop with a slice of the parent's tools, cannot delegate further, cannot contact colleagues, cannot write to any shared surface, and reports back inside the same turn — the parent still finishes the job itself.
+An executor hands narrowly-scoped work to short-lived **workers** with the `delegate` tool. A worker runs its own tool loop with a slice of the parent's tools, cannot delegate further, cannot contact colleagues, cannot write to any shared surface, and reports back inside the same turn; the parent still finishes the job itself.
 
-Use it for work that is genuinely separable: several independent reads, a bounded research task, summarising something large, or a gather-then-synthesise shape. Do **not** use it for something one or two of your own tool calls would do — a worker costs a whole prompt and a model call — and do not use it to reach a colleague. That is what the [colleague-surface tools](#colleague-surface-tools) are for.
+Use it for genuinely separable work: several independent reads, a bounded research task, summarising something large, or a gather-then-synthesise shape. Do **not** use it for what one or two of your own tool calls would do (a worker costs a whole prompt and a model call), or to reach a colleague: that is what the [colleague-surface tools](#colleague-surface-tools) are for.
 
 ### One call, a graph of tasks
 
@@ -326,23 +295,23 @@ Use it for work that is genuinely separable: several independent reads, a bounde
 ]}
 ```
 
-Tasks with no `after` run concurrently, bounded by `max_parallel`. A task with `after` waits for those tasks and is given their **submitted answers** in its own first user message — so the parent writes the shape of the work once instead of making two calls and re-typing the first call's results into the second's prompts.
+Tasks with no `after` run concurrently, bounded by `max_parallel`. A task with `after` waits for those tasks and gets their **submitted answers** in its own first user message, so the parent writes the work's shape once instead of re-typing one call's results into the next.
 
-Execution is by **topological wave**: everything whose dependencies have settled runs, then the next wave. It is not the tightest possible schedule — a long task in wave one holds back a short one in wave two — and that is deliberate: a wave boundary is a barrier, and a barrier is checkable, where a per-task readiness queue's failure modes (a task started while its dependency was mid-write; a deadlock when a wave's last worker is queued behind a dependent) are the ones nobody finds in review.
+Execution is by **topological wave**: everything whose dependencies have settled runs, then the next wave. A long task in wave one holds back a short one in wave two, deliberately: a wave boundary is a checkable barrier, where a per-task readiness queue risks a task started mid-write of its dependency or a deadlock.
 
-The whole graph is validated **before anything runs**: unique ids, resolvable `after`, no cycles, no more than `max_tasks_per_call` tasks, every named worker visible to this seat, every named model configured. A graph that cannot run must not run half of itself — three workers' tokens spent on work whose consumer will never execute is a report the parent cannot act on. Every refusal names the task and says what to write instead, including the members of a cycle.
+The whole graph is validated **before anything runs**: unique ids, resolvable `after`, no cycles, no more than `max_tasks_per_call` tasks, every named worker visible to this seat, every named model configured. A graph that cannot run must not run half of itself. Every refusal names the task and says what to write instead, including the members of a cycle.
 
 ### A worker submits, it does not narrate
 
-A worker ends by calling `submit_result` with typed arguments, the same way every other phase in this engine ends. What comes back is **fields the parent can index** rather than prose it has to re-parse with another model call. The shape is the task's own `output`, else the worker template's `output` schema, else a default `{result, notes}` — so a task's `output` is also the one way an **inline** worker, which has no template, answers in fields. A task's `output` is held to the rule a template's is held to at load (below) and refused **before anything runs**, naming the task: a schema no submission can satisfy would spend the worker's whole round budget failing to answer.
+A worker ends by calling `submit_result` with typed arguments, like every other phase. What comes back is **fields the parent can index**, not prose to re-parse. The shape is the task's own `output`, else the worker template's `output` schema, else a default `{result, notes}`; so a task's `output` is also the one way an **inline** worker, which has no template, answers in fields. A task's `output` is held to the rule a template's is at load (below) and refused **before anything runs**, naming the task: a schema no submission can satisfy would spend the worker's whole round budget failing to answer.
 
-A worker's rules say its round cap, and before its last round it is told to submit what it has and say what is missing, so a worker that read until its cap still answers. A worker that answers in prose is asked again — at most twice in a row — to call `submit_result`, since text is not recorded (the [tool loop's finishing corrective](#round-cap-extension-judge)); one that still never submits reports `no_result` **with its prose attached**. Nothing is synthesised from the transcript: that would put words in the worker's mouth on the one question the parent asked, and a dependent fed a fabricated answer produces a confident wrong one. A task whose `after` did not **succeed** is `skipped_dependency_failed`, and the skip names which dependency broke the chain and how.
+A worker's rules say its round cap, and before its last round it is told to submit what it has and say what is missing. A worker that answers in prose is asked again, at most twice in a row, to call `submit_result`, since text is not recorded (the [tool loop's finishing corrective](#round-cap-extension-judge)); one that still never submits reports `no_result` **with its prose attached**. Nothing is synthesised from the transcript: that would put words in the worker's mouth, and a dependent fed a fabricated answer produces a confident wrong one. A task whose `after` did not **succeed** is `skipped_dependency_failed`, and the skip names which dependency broke the chain and how.
 
-Statuses: `ok`, `no_result`, `skipped_dependency_failed`, `never_started`, `timed_out`, `budget_exhausted`, `cancelled`, `failed`. A skip is classified **before** the deadline is consulted, so the same graph under the same deadline reports the same statuses — a call that ran out of time reports the broken chain rather than a scattering of timeouts. Results always come back in the order the parent wrote the tasks.
+Statuses: `ok`, `no_result`, `skipped_dependency_failed`, `never_started`, `timed_out`, `budget_exhausted`, `cancelled`, `failed`. A skip is classified **before** the deadline is consulted, so the same graph under the same deadline reports the same statuses (a call that ran out of time reports the broken chain, not a scattering of timeouts). Results come back in the order the parent wrote the tasks.
 
 ### Worker templates
 
-The stable half of a worker — persona, tool set, model, answer shape — lives in top-level `workers:` config, where a founder can read it, edit it live and version it with the rest of the company. What stays per call is the only thing that genuinely varies: the task.
+The stable half of a worker (persona, tool set, model, answer shape) lives in top-level `workers:` config, where a founder can read, edit live and version it with the company. Only the task varies per call.
 
 ```yaml
 workers:
@@ -366,19 +335,19 @@ roles:
     workers: [researcher]    # omit to see EVERY template
 ```
 
-Visible templates render as a sorted `## Your workers` block in the executor's prompt and are named in the `delegate` tool's own description, so a model choosing one mid-loop does not have to scroll back.
+Visible templates render as a sorted `## Your workers` block in the executor's prompt and are named in the `delegate` tool's own description.
 
-**A template is a request, not a grant.** Naming a tool in `workers:` confers nothing: every name still passes the same filter as a task's own list — the parent's live tools, minus the engine-control denylist, minus shared-surface writes. `workers:` is founder-owned Tier B config, and Tier B is never a privilege-escalation path. A task's `tools` may name a tool as the executor's harness shows it (`mcp__crewlet__get_page` in Claude Code): a name that is none of the engine's is read without a built-in harness's prefix for the engine's tools.
+**A template is a request, not a grant.** Naming a tool in `workers:` confers nothing: every name passes the same filter as a task's own list, the parent's live tools minus the engine-control denylist minus shared-surface writes. `workers:` is founder-owned Tier B config, and Tier B is never a privilege-escalation path. A task's `tools` may name a tool as the executor's harness shows it (`mcp__crewlet__get_page` in Claude Code): a name that is none of the engine's is read without a built-in harness's prefix for the engine's tools.
 
-Templates are validated at **load**, not at spawn: a description and a system prompt are required, the model key must exist, `max_turns` must fit `max_turns_ceiling`, and an `output` schema must be an object with at most 12 named properties, at most 3 levels deep, whose `required` entries are properties it actually has. A keyword the engine does not read is passed through untouched — the provider implements JSON Schema, not the engine.
+Templates are validated at **load**, not at spawn: a description and a system prompt are required, the model key must exist, `max_turns` must fit `max_turns_ceiling`, and an `output` schema must be an object with at most 12 named properties, at most 3 levels deep, whose `required` entries are properties it has. A keyword the engine does not read is passed through untouched: the provider implements JSON Schema, not the engine.
 
 ---
 
 ## Colleague-surface tools
 
-Agents collaborate per surface through the upstream MCP tools directly, not a generic `ask_colleague` tool or engine-side wrappers (thin `slack_message` / `jira_comment`-style 1:1 MCP forwards would only accumulate maintenance debt). Each tool description encodes when to use that surface — workplace manners live in tool descriptions, not a routing layer. Agents call these tools during Execute for every kind of collaboration — questions, status updates, handoffs, and manager escalation alike.
+Agents collaborate per surface through the upstream MCP tools directly, not a generic `ask_colleague` tool or engine-side wrappers (thin `slack_message` / `jira_comment`-style 1:1 forwards would only accumulate maintenance debt). Each tool description encodes when to use that surface; workplace manners live in tool descriptions, not a routing layer. Agents call these tools during Execute for every kind of collaboration: questions, status updates, handoffs, and manager escalation.
 
-The engine prompts never name these tools (see [Tool Capabilities](tool-capabilities.md)) — they describe the *capability* ("the reply tool for the channel the trigger arrived on") and the LLM picks the matching tool from its catalogue. The table below is an example for the common Slack + Atlassian + GitHub stack; a deployment on Linear / Teams / GitLab gets the same behaviour with its own tools.
+The engine prompts never name these tools (see [Tool Capabilities](tool-capabilities.md)); they describe the *capability* ("the reply tool for the channel the trigger arrived on") and the LLM picks the matching tool. The table is an example for a Slack + Atlassian + GitHub stack; a deployment on Linear / Teams / GitLab behaves the same with its own tools.
 
 | Tool (example) | Surface | Purpose |
 |------|---------|---------|
@@ -386,29 +355,25 @@ The engine prompts never name these tools (see [Tool Capabilities](tool-capabili
 | `jira_add_comment` / `jira_update_issue` | Jira | In-ticket collaboration and reassignment |
 | `confluence_add_comment` / `confluence_reply_to_comment` | Confluence | Page discussion; an `@mention` is Atlassian user markup in the comment's body (see [Confluence](../integrations/confluence.md#mentioning-other-agents-in-confluence-comments)) |
 | `request_copilot_review` | GitHub | Request an automated review on an existing PR (an un-promoted lightweight option; code authoring goes through the [code sandbox](code-sandbox.md), not here) |
-| `a2a_ask` | Private A2A channel | The one engine builtin (`internal/agent/builtin/a2a.go`). Narrowly scoped: tight-loop or mechanical sync only, one ask and one answer, then the channel closes. The engine sends the reply and closes the channel itself, from the frame that ends the answering turn ([above](#who-is-waiting-and-how-they-get-an-answer)); there is no send/close tool. See the tool description |
+| `a2a_ask` | Private A2A channel | The one engine builtin (`internal/agent/builtin/a2a.go`). Tight-loop or mechanical sync only, one ask and one answer, then the channel closes. The engine sends the reply and closes the channel itself, from the frame that ends the answering turn ([above](#who-is-waiting-and-how-they-get-an-answer)); there is no send/close tool. See the tool description |
 
 ### What a delegation records
 
-Delegation bookkeeping rides on the event envelope (`events.Event`, `internal/events/event.go`) rather than on an event of its own: `delegation_depth`, `parent_turn_id` and `delegation_chain` are stamped onto every event the turn engine publishes for a turn, so each one names the turn it descends from and the handles the work has already passed through. A chain that reaches `turn_engine.delegation_depth_limit` ends the turn with `turn.guard_breach(kind="depth_cap")` before any phase runs.
+Delegation bookkeeping rides on the event envelope (`events.Event`, `internal/events/event.go`), not on an event of its own: `delegation_depth`, `parent_turn_id` and `delegation_chain` are stamped onto every event the turn engine publishes for a turn, naming the turn it descends from and the handles the work has passed through. A chain that reaches `turn_engine.delegation_depth_limit` ends the turn with `turn.guard_breach(kind="depth_cap")` before any phase runs.
 
-`a2a_ask` is the only colleague call the engine itself mediates, so it is the only one that also records the *edge*: `a2a.Service.Open` publishes `a2a_channel_opened` (`channel_id`, `requester`, `target`, `participants`) and an `a2a_message_sent` for the brief, then wakes the target with an `a2a_request` carrying `delegation_depth + 1` and the requester appended to the chain. The answer is a second `a2a_message_sent` plus an `a2a_message` wake on the asker's inbox (`Service.Reply`), under the ask's own trace, and `a2a_channel_closed` records the channel ending with its message count, its duration and the participant who closed it.
+`a2a_ask` is the only colleague call the engine mediates, so it alone records the *edge*: `a2a.Service.Open` publishes `a2a_channel_opened` (`channel_id`, `requester`, `target`, `participants`) and an `a2a_message_sent` for the brief, then wakes the target with an `a2a_request` carrying `delegation_depth + 1` and the requester appended to the chain. The answer is a second `a2a_message_sent` plus an `a2a_message` wake on the asker's inbox (`Service.Reply`), under the ask's own trace. `a2a_channel_closed` records the end with its message count, duration and the participant who closed it.
 
-All three audit records carry the `turn_id` and `work_key` of the turn that **published** them — the asking turn for the channel and the brief, the answering turn for the reply and the close. That is what puts an ask on its turn's own page: the Turn screen reads `WHERE turn_id = ?`, so a record without the key is in no turn's answer however the client bands it. It is a separate idea from the envelope's `parent_turn_id`, which the two *wakes* carry to point back at what asked for them; they hold the same value because the frame calling the service is both the turn writing the record and the parent of the wake it triggers.
+All three audit records carry the `turn_id` and `work_key` of the turn that **published** them: the asking turn for the channel and the brief, the answering turn for the reply and the close. That puts an ask on its turn's page (the Turn screen reads `WHERE turn_id = ?`). It is separate from the envelope's `parent_turn_id`, which the two *wakes* carry to point back at what asked for them; the values match because the calling frame is both the writing turn and the wake's parent.
 
-A delegation graph drawn from this is therefore an **A2A graph, not a company-wide one**. Every other row above is an upstream MCP tool called like any other: the engine records that `jira_update_issue` ran, not who now holds the ticket, so a handoff across a shared surface is observed at neither end. It comes back as an inbound webhook, and no shipped integration round-trips the delegation metadata through the external surface, so that trigger arrives at depth 0 with an empty chain — a cross-surface hop breaks the chain rather than extending it.
+A delegation graph drawn from this is an **A2A graph, not a company-wide one**. Every other row above is an upstream MCP tool called like any other: the engine records that `jira_update_issue` ran, not who now holds the ticket, so a handoff across a shared surface is observed at neither end. It returns as an inbound webhook, and no shipped integration round-trips the delegation metadata, so that trigger arrives at depth 0 with an empty chain: a cross-surface hop breaks the chain.
 
 ---
 
 ## Per-phase LLM models
 
-`llm` IS the executor's chain — the seat's model, and what its own work runs
-on. There is no `llm_execute` beside it: the turn's work happens in one
-conversation, so a second field naming the model that conversation runs on
-would be two spellings of one setting.
+`llm` IS the executor's chain: the seat's model, and what its own work runs on. There is no `llm_execute`, since the turn's work happens in one conversation.
 
-What a role CAN route separately are the satellites, each of which an operator
-may point somewhere cheaper:
+A role CAN route the satellites separately, each somewhere cheaper:
 
 ```yaml
 roles:
@@ -430,55 +395,26 @@ roles:
     llm: claude-sonnet
 ```
 
-Resolution order for a satellite (`phase.Registry.Chain`): the role's per-phase chain, which is the flat `role.llm_<phase>` field (`llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge`) or else the same key inside the `llm` mapping → the role's own `llm` chain (the mapping's `default`, or the plain string or list) → the provider keyed `"default"` → the first provider configured. The flat field wins over the same key inside the mapping, so a seat can take a shared mapping and override one phase without restating the block.
+Resolution order for a satellite (`phase.Registry.Chain`): the role's per-phase chain, which is the flat `role.llm_<phase>` field (`llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge`) or else the same key inside the `llm` mapping → the role's own `llm` chain (the mapping's `default`, or the plain string or list) → the provider keyed `"default"` → the first provider configured. The flat field wins over the mapping key, so a seat can take a shared mapping and override one phase.
 
 ---
 
 ## Round-cap extension judge
 
-The first-turn onboarding pass, which runs on the engine's own tool loop,
-has a tool-call round cap (`onboarding_max_tool_rounds`, 10 by default). When
-the LLM exhausts it before finishing, the pass ends unmarked and retries next
-turn, which throws away in-progress work whenever the agent was actually close
-to done — the cap is a static guess, not a progress check.
+The first-turn onboarding pass, which runs on the engine's own tool loop, has a tool-call round cap (`onboarding_max_tool_rounds`, 10 by default). When the LLM exhausts it before finishing, the pass ends unmarked and retries next turn, discarding in-progress work even if the agent was close.
 
-The executor is not judged. It is its harness's own run, whose rounds the
-harness counts against `role.sandbox.max_turns` /
-`providers.sandbox.default_max_turns` where either sets a cap, and runs
-uncapped otherwise ([Code Sandbox](code-sandbox.md)), so there is no engine
-loop for a judge to extend. A run that stops without submitting — on such a
-cap or any other way — is rescued: the engine writes an
-`incomplete` outcome and the reviewer judges the record.
+The executor is not judged. It is its harness's own run, whose rounds the harness counts against `role.sandbox.max_turns` / `providers.sandbox.default_max_turns` where either sets a cap, and uncapped otherwise ([Code Sandbox](code-sandbox.md)). A run that stops without submitting, on such a cap or any other way, is rescued: the engine writes an `incomplete` outcome and the reviewer judges the record.
 
-The **extension judge** interposes between exhaustion and rescue: a
-cheap LLM call inspects the tool log and the last assistant message and
-decides:
+The **extension judge** interposes between exhaustion and rescue: a cheap LLM call inspects the tool log and the last assistant message and decides:
 
-- `extend`: the agent is making meaningful progress; grant the
-  rounds it asked for (`AdditionalRounds`, advisory, bounded by the
-  per-phase ceiling and `extension_round_step`).
-- `rescue` — the agent is thrashing / stuck; fall through to the
-  existing rescue path.
+- `extend`: meaningful progress; grant the rounds asked for (`AdditionalRounds`, advisory, bounded by the per-phase ceiling and `extension_round_step`).
+- `rescue`: thrashing or stuck; fall through to the rescue path.
 
-Extensions chain: when an extended run exhausts again, the judge fires
-once more, up to the configured ceiling. Token budget cascade still
-bounds the whole thing economically; the ceiling is a sanity check.
+Extensions chain: when an extended run exhausts again, the judge fires again, up to the ceiling.
 
-**The judge reads the ask's foreign words fenced, and its reason reaches
-the seat defused.** The turn's ask it is shown carries other people's words
-under the turn's [fence](agent-runtime.md#text-somebody-else-wrote) token;
-the judge reads them moved onto a token minted for its call, with every
-other line of its evidence escaped and the standing sentence in its prompt,
-so a message telling it to grant fifty rounds is read as that message. Its
-one-sentence reason is written into the pass's conversation with the nudge,
-escaped under the turn's token.
+**The judge reads the ask's foreign words fenced, and its reason reaches the seat defused.** The ask it is shown carries other people's words under the turn's [fence](agent-runtime.md#text-somebody-else-wrote) token; the judge reads them moved onto a token minted for its call, with every other line of evidence escaped and a standing sentence in its prompt, so a message telling it to grant fifty rounds is read as that message. Its one-sentence reason is written into the pass's conversation with the nudge, escaped under the turn's token.
 
-**A phase that submitted on its last round is finished, not exhausted.**
-Exhaustion means the budget ran out with the model still *asking for
-tools*, and a submission on the last round is a call too — so it used to
-read as one, the judge was asked (and charged) about a phase that had
-nothing left to do, and its grant ran more priced rounds after the
-submission. A loop its terminator ended never reports exhaustion.
+**A phase that submitted on its last round is finished, not exhausted.** A submission is itself a tool call, so it must not count as the model still asking for tools: the judge is not asked or charged, and no granted rounds run after a submission. A loop its terminator ended never reports exhaustion.
 
 ```mermaid
 flowchart TD
@@ -496,68 +432,15 @@ flowchart TD
     linkStyle 2 stroke:#f59e0b,color:#f59e0b
 ```
 
-**Nothing the judge is shown is cut.** The last 12 calls are a window,
-and the line says how many it shows of how many — the question is whether
-the phase is repeating itself *now*. Within it, every call renders exactly
-as the [prior-work ledger](#what-the-ledger-budgets-and-why) renders it: its
-arguments as sorted JSON, a payload past the ledger's budget rewritten by
-the seat's auxiliary model (from the same cache, so a payload the ledger
-already condensed costs nothing here) or, with no rewrite, shown by its
-size and digest — which is what still tells two identical calls from two
-different ones. The turn's ask past 8 KiB and the phase's last words past
-4 KiB are rewritten the same way, and shown whole if no rewrite can be had.
-They used to be cut — the arguments at 200 bytes, so two posts sharing an
-opening read as one call repeated, and "what it last said" at its first 800
-bytes, so the judge read what the phase said *first*.
+**Nothing the judge is shown is cut.** The last 12 calls are a window, and the line says how many it shows of how many. Each call renders as the [prior-work ledger](#what-the-ledger-budgets-and-why) renders it: arguments as sorted JSON; a payload past the ledger's budget rewritten by the seat's auxiliary model (same cache, so one the ledger condensed costs nothing here) or, with no rewrite, shown by size and digest, which still tells identical calls from different ones. The turn's ask past 8 KiB and the phase's last words past 4 KiB are rewritten the same way, and shown whole if no rewrite can be had.
 
-The judge is best-effort: any failure (timeout, provider error, parse
-error) maps to a conservative `rescue` decision so a flaky judge can
-never block the host phase. The judge's own LLM call is published as
-an `AgentPhaseCompleted` event with `phase="judge"`, `host_phase` and
-`host_iteration` naming the round that asked, the verdict in `decision`
-and the judge's own wording in `notes` — so a dashboard groups it under
-that round and an operator can see how often it fires and what it
-decides. **A judge that was never asked publishes nothing**: the policy
-declining to ask and the judge saying no are different facts, and an
-event for the first would claim a model call that did not happen.
+The judge is best-effort: any failure (timeout, provider error, parse error) maps to `rescue`, so a flaky judge never blocks the host phase. Its own LLM call is published as an `AgentPhaseCompleted` event with `phase="judge"`, `host_phase` and `host_iteration` naming the round that asked, the verdict in `decision` and the judge's wording in `notes`, so a dashboard groups it under that round. **A judge that was never asked publishes nothing**: declining to ask and the judge saying no are different facts.
 
-**And it is charged.** The judge runs outside the tool loop, which is
-where every other model call is metered, so its tokens go through the
-turn's shared budget explicitly. A refusal there does not fail the
-phase — the extension is a generosity on a phase that has already run
-out of rounds, so a seat at its cap simply stops extending, which is
-the same outcome as the judge saying no. But the refused judgement is
-counted, so the window reads past its ceiling and the turn makes no
-further model call: the next phase's first round is refused before it
-is sent, and the turn ends `budget_exhausted` (see invariant 4 below).
-And a judge is **not called at all** once a refusal is already certain —
-a worker the phase's last round delegated to was refused by the seat,
-say — and the phase ends unextended with `budget_exhausted` as its
-reason. Its spend is reported apart from the turn's own totals for the
-same reason a worker's is: it is already counted once by the meter, and
-folding it in would stop the phase events summing to the turn's
-number.
+**And it is charged.** The judge runs outside the tool loop, where every other model call is metered, so its tokens go through the turn's shared budget explicitly. A refusal there does not fail the phase: a seat at its cap simply stops extending, as if the judge said no. But the refused judgement is counted, so the window reads past its ceiling and the turn makes no further model call: the next phase's first round is refused before it is sent, and the turn ends `budget_exhausted` (see invariant 4 below). A judge is **not called at all** once a refusal is already certain (say, a worker the last round delegated to was refused by the seat), and the phase ends unextended with `budget_exhausted` as its reason. Its spend is reported apart from the turn's totals, like a worker's, since the meter counts it once already.
 
-**A phase that finishes by a call is asked again, not rescued.** Every
-phase of the engine's own tool loop but the judge finishes by calling a
-tool, and says so to the loop by naming it (`TerminateAfter`): the
-**reviewer** by `submit_review`, **onboarding** by `mark_onboarded`, every
-**worker** by `submit_result`. (The executor's run ends with `submit_work`
-too, but over the bridge and outside this loop: its harness's own loop is not
-the engine's to correct, and a run that ends without the call is rescued as
-`incomplete` at once.) A successful call to that tool ends the phase; a failed one goes back to
-the model to fix. So a round that ends with **no tool call** is never a
-finish there, however it reads — no submission can have succeeded yet,
-or the phase would already have ended. It is a model that wrote its
-report where nobody reads it. The measured case was an executor on a
-harness entry, driven on this host, whose last reply was one fenced JSON block
-holding `submit_work`'s *arguments*: the phase ended on it, the engine
-rescued it as `incomplete`, and the reviewer then read the fenced JSON
-as "what the agent produced".
+**A phase that finishes by a call is asked again, not rescued.** Every phase of the engine's own tool loop but the judge finishes by calling a tool, named to the loop (`TerminateAfter`): the **reviewer** by `submit_review`, **onboarding** by `mark_onboarded`, every **worker** by `submit_result`. (The executor's run ends with `submit_work` too, but over the bridge and outside this loop: a run that ends without the call is rescued as `incomplete` at once.) A successful call ends the phase; a failed one goes back to the model to fix. So a round with **no tool call** is never a finish there, however it reads: it is a model that wrote its report where nobody reads it.
 
-The loop follows a run that ended that way with another, opened by a
-**finishing corrective** naming the tool, verbatim (the reviewer's shown; several are
-offered as "one of …"):
+The loop follows such a run with another, opened by a **finishing corrective** naming the tool, verbatim (the reviewer's shown; several are offered as "one of …"):
 
 > Your last reply ended without calling `submit_review`, so this phase has
 > not finished. Nothing written in a reply is read or delivered — a report
@@ -565,144 +448,39 @@ offered as "one of …"):
 > done, call `submit_review` now with that report as its arguments; if
 > something is still left to do, call the tool that does it.
 
-It is bounded by `maxFinishingCorrectives` = **2** per run of rounds
-without the call — prose or nothing at all, one allowance for both — and
-each corrective is a full priced round charged like any other: against
-the reviewer's four rounds (`reviewRounds`) it leaves one for the submission; a worker with
-`max_turns: 1` has no round left to read one and gets none. The second
-send is the same message as the first, and is still worth its round:
-in a phase that finishes by a call, a round without the call cannot end
-the phase except into its rescue — a whole extra executor round for the
-reviewer, an unmarked seat that re-runs onboarding on every turn — so the second attempt is weighed
-against that rather than against nothing. A model that still has not
-called after two correctives ends the phase without its submission, and
-the rescue below takes over.
+It is bounded by `maxFinishingCorrectives` = **2** per run of rounds without the call (prose or nothing, one allowance for both), and each corrective is a full priced round charged like any other: against the reviewer's four rounds (`reviewRounds`) it leaves one for the submission; a worker with `max_turns: 1` has no round left to read one and gets none. The second send is the same message and is worth its round, since without a call the phase can only end in its rescue (a whole extra executor round for the reviewer, an unmarked seat that re-runs onboarding every turn). After two correctives without a call the phase ends without its submission and the rescue below takes over.
 
-**No request forces a call, the corrective included.** A request offers
-tools and never names a tool choice — the provider contract has no field
-for one, and no harness takes one: the tools reach the harness as an MCP server
-and its own loop decides whether to call one — so the reviewer, onboarding
-and every worker get the model deciding, on their corrective rounds too. The
-loop is what enforces the call. The forced choice was retired from the
-contract while the engine still called vendors' APIs itself, because
-several current models refuse a forced one outright — Claude Opus 5.5,
-Sonnet 5.5, Fable 5.1 and Mythos 5.1 among them — and the reviewer and
-onboarding, which used to ask for one, failed on those models before the
-corrective that actually enforces the call could run.
+**No request forces a call, the corrective included.** A request offers tools and never names a tool choice: the provider contract has no field for one and no harness takes one (the tools reach the harness as an MCP server and its own loop decides). The loop is what enforces the call.
 
-Before the finishing corrective, a reviewer that thought and stopped fell through
-to the rescue, which sends the whole turn back for another executor
-round — a whole extra turn spent on the one failure a model reliably
-fixes when it is asked again.
+**The round says so on the record.** A round that answered with prose and no tool call in a phase that had to end in one carries `declined: true` on its `round_narration` entry, on the live frame and on `agent_phase_completed`. Whether the engine asked again needs no second flag: a later round exists exactly when it did. A declined round that is the phase's last ended without its submission; `rescue_fired` says what the engine wrote instead.
 
-**The round says so on the record.** A round that answered with prose
-and no tool call in a phase that had to end in one carries
-`declined: true` on its `round_narration` entry, on the live frame and on
-`agent_phase_completed` alike. Whether
-the engine asked again needs no second flag: a later round exists exactly
-when it did, and a declined round that is the phase's last is one the
-bound or the budget left unanswered — the phase ended without its
-submission, and `rescue_fired` says what the engine wrote instead.
+**No corrective is sent that nothing will read, and none is lost.** On the last round of a loop's budget no round follows, so the loop appends no corrective there, finishing or empty alike. A finishing corrective the round earned is **handed back** to the phase, so the outcome does not turn on which round a decline landed on (the last round is where a phase most naturally submits; the extension nudge tells it to).
 
-**No corrective is sent that nothing will read — and none is lost
-either.** On the last round of a loop's budget no round follows, so the
-loop appends no corrective there, finishing or empty alike, rather than
-leave an unanswered message at the end of the recorded conversation. A
-finishing corrective the round earned is **handed back** to the phase
-instead. That round matters: the round a budget ends on is the one a
-phase most naturally submits on — the extension nudge tells it to — and
-without the hand-back the outcome turned on *which* round a decline
-landed on, the same fenced JSON re-asked one round earlier and rescued
-as `incomplete` on the cap with the ceiling's rounds unspent.
+Where the phase may run past its budget (extensions on and the ceiling above the rounds used), the engine sends the corrective itself and continues the phase **without the judge**: this phase has done its work and lacks only the reporting call. The continuation is bounded by the finishing allowance itself:
 
-Where the phase may run past its budget — extensions on and the ceiling
-above the rounds used — the engine sends the corrective itself and
-continues the phase **without the judge**. The judge's question is
-whether a phase still working deserves more rounds; this one has done
-its work and is missing only the call that reports it. What bounds the
-continuation instead is the finishing allowance itself: it is *shared*
-with the rounds before it rather than reset, so a phase split across the
-cap is asked no more often than one that was not; it is as long as the
-correctives left to read, so a continuation that turns back to work and
-exhausts is the judge's question again; and the rounds a phase runs past
-its budget this way are capped at that same two, so working and
-declining by turns cannot extend a phase round by round on nobody's
-decision. With extensions off, or a ceiling equal to the budget, the cap
-stays hard: the phase ends on the declined round, and is rescued.
+- it is *shared* with the rounds before it, not reset, so a phase split across the cap is asked no more often than one that was not;
+- it is as long as the correctives left to read, so a continuation that turns back to work and exhausts is the judge's question again;
+- the rounds run past budget this way are capped at that same two, so working and declining by turns cannot extend a phase round by round.
 
-**The executor is not covered.** An executor runs
-[detached in a box](llm-backends.md#the-executors-run-in-a-box) and makes its
-rounds inside a harness the turn does not drive — the turn is parked until the run reports — so
-the engine's loop never sees a run end in prose and cannot start another. Its submission arrives over the
-bridge or not at all; a run that ends without one is rescued exactly as
-a phase on this host whose correctives ran out.
+With extensions off, or a ceiling equal to the budget, the cap stays hard: the phase ends on the declined round and is rescued.
 
-**A round that said nothing at all is not a finish either.** The other
-half of "think then stop" is a round with **no tool call and no prose** —
-a model that spent its whole output budget on hidden reasoning. It costs
-real tokens (Claude Code on `haiku` bills hundreds for one) and reaches
-nobody, and the loop used to take the same branch it takes for a model
-that answered. It now re-prompts once, naming what went wrong — but only in a
-loop that does not finish by a call, which today is only a worker whose
-submission tool a granted tool of the same name shadowed. Every phase
-that finishes by a call gets the **finishing corrective** above instead,
-on its allowance: that is the better instruction for a phase whose output
-*is* a call, and the empty-answer corrective — "write it in the response
-itself, or call a tool" — would steer a submission phase straight into
-its rescue. The empty round is still counted either way:
+**The executor is not covered.** It runs [detached in a box](llm-backends.md#the-executors-run-in-a-box), making its rounds inside a harness the turn does not drive (the turn is parked until the run reports), so the engine's loop never sees a run end in prose. Its submission arrives over the bridge or not at all; a run without one is rescued as a phase on this host whose correctives ran out.
+
+**A round that said nothing at all is not a finish either.** A round with **no tool call and no prose** (a model that spent its output budget on hidden reasoning) costs real tokens and reaches nobody. The loop re-prompts once, naming what went wrong, but only in a loop that does not finish by a call, which today is only a worker whose submission tool a granted tool of the same name shadowed. Every phase that finishes by a call gets the **finishing corrective** above instead, on its allowance, since the empty-answer corrective ("write it in the response itself, or call a tool") would steer a submission phase straight into its rescue. The empty round is counted either way (Claude Code on `haiku` bills hundreds of tokens for one):
 
 > Your last reply was empty: you produced no visible response and called
 > no tool. Whatever you worked out, write it in the response itself, or
 > call a tool to act on it.
 
-The bound is **one**, not two, and the asymmetry with the finishing
-corrective is keyed on the loop's **contract**, not on the round. Where
-the empty-answer corrective fires, a prose answer is a legitimate finish,
-so whatever the model writes next *is* the phase's result: there is no
-rescue for a second nudge to be weighed against, and a phase that still
-answers nothing simply ends with nothing, which its record counts. In a
-loop that finishes by a call the same empty round draws on the finishing
-allowance of two, because there the alternative is the rescue. Neither
-corrective is ever sent on a round with no round after it, so neither can
-eat a delegated task's whole allowance.
+The bound is **one**, not two, keyed on the loop's **contract**: where the empty-answer corrective fires, a prose answer is a legitimate finish and there is no rescue to weigh a second nudge against, so a phase that still answers nothing ends with nothing, which its record counts. In a loop that finishes by a call the same empty round draws on the finishing allowance of two. Neither corrective is sent on a round with no round after it, so neither can eat a delegated task's whole allowance.
 
-Both allowances bound a **run** of rounds that produced nothing, not the
-phase's lifetime: a round that emits a tool call clears them, so the
-model's next stall is a new stall and earns its own nudge. Counted for
-the phase instead, they bound a different quantity — how many times a
-model may *ever* stall — and one stall early disarms the corrective for
-every round after it. That was the shape of a real incident: an executor
-on a 24-round budget stalled at round 2, filed a work item at round 3,
-had a submission bounced at round 4, and broke on the stall at round 5
-with nineteen rounds unspent, one round before the message it had just
-said it was about to send. The allowance clears on the **call**, not on
-the call's success — a tool that returned an error is a round the model
-has to read and answer, which is the opposite of one that has stopped
-responding.
+Both allowances bound a **run** of rounds that produced nothing, not the phase's lifetime: a round that emits a tool call clears them, so the next stall earns its own nudge. The allowance clears on the **call**, not on its success: a tool that returned an error is a round the model has to read and answer, the opposite of a stall.
 
-Rounds that reached nobody are still counted on the phase record as
-`empty_answer_rounds` — that stays a phase **total**, since it measures
-what the turn cost rather than what the loop will tolerate — and the
-dashboard badges them.
+Rounds that reached nobody are counted on the phase record as `empty_answer_rounds`, a phase **total** (it measures what the turn cost, not what the loop tolerates), and the dashboard badges them.
 
-The **judge** takes no tools at all — it answers in two lines of text,
-and a tool on its surface would invite a model to call it and answer
-nothing. It does not run in the tool loop, so none of the correctives
-above apply to it. Inside the loop, a text answer is a legitimate finish
-only where the loop names no submission.
+The **judge** takes no tools at all: it answers in two lines of text, and a tool would invite a model to call it and answer nothing. None of the correctives apply to it. Inside the loop, a text answer is a legitimate finish only where the loop names no submission.
 
-**No submission never goes silent.** An executor run that ended without
-calling `submit_work` — on its `max_turns` cap or any other way — or a phase on
-this host that kept answering in prose through both correctives, has produced
-text and no account of itself. Discarding the
-turn wastes everything it did; calling it delivered puts words in its mouth on
-the one question that matters. So the engine writes the outcome `incomplete`
-and marks the round RESCUED — both load-bearing. `incomplete` is its own value
-rather than a defaulted `delivered` because the two must stay
-distinguishable: an engine-written word carries none of the model's
-commitment. The mark is what makes the pre-review checks stand down (there is
-nothing anybody committed to) and what tells the reviewer, in prose, that the
-word it is reading is the engine's.
+**No submission never goes silent.** An executor run that ended without calling `submit_work` (on its `max_turns` cap or otherwise), or a phase on this host that kept answering in prose through both correctives, has produced text and no account of itself. Discarding the turn wastes its work; calling it delivered puts words in its mouth. So the engine writes the outcome `incomplete` and marks the round RESCUED, both load-bearing. `incomplete` is its own value, not a defaulted `delivered`, because an engine-written word carries none of the model's commitment. The mark makes the pre-review checks stand down (nobody committed to anything) and tells the reviewer, in prose, that the word it reads is the engine's.
 
 **Configuration** (per `turn_engine`):
 
@@ -712,20 +490,17 @@ word it is reading is the engine's.
 | `onboarding_max_tool_rounds_ceiling` | `20` | Hard cap on total onboarding rounds with extensions (2x base 10) |
 | `extension_round_step` | `8` | Max rounds the judge may grant per call |
 
-The judge covers **onboarding** alone: the executor is its harness's own run, whose rounds the harness counts against `max_turns`, so there is no engine loop for a judge to extend. (The reviewer has no knob: it holds one submission tool, so its budget is a structural fact rather than an operator preference.) (Onboarding has no rescue path — a `rescue`/ceiling outcome just ends the pass unmarked and it retries next turn — so the judge is purely additive there.)
+The judge covers **onboarding** alone: the executor is its harness's own run (rounds counted against `max_turns`). The reviewer has no knob: it holds one submission tool, so its budget is structural. Onboarding has no rescue path (a `rescue`/ceiling outcome ends the pass unmarked and it retries next turn), so the judge is purely additive there.
 
-**Per-role provider**: set `role.llm_judge` to a small/fast model
-(Haiku-class). Resolution follows the standard phase chain:
-`role.llm_judge` → `role.llm` → `"default"` → first provider. If
-unset, the judge runs on whatever the role's primary model is.
+**Per-role provider**: set `role.llm_judge` to a small/fast model (Haiku-class). Resolution follows the standard phase chain: `role.llm_judge` → `role.llm` → `"default"` → first provider. If unset, the judge runs on the role's primary model.
 
 ### How a round ends
 
-A round is one model request, as the harness's own record shows it, and it carries a **stop reason** (`llm.StopReason`) where the record names one: `end` — the model answered — `tool_use` — it asked for calls to run — or `cap` — the harness's own turn cap ended its run at that request with the model still working. Those are what a harness can honestly report; the profile maps its record's own words onto them (`requests.stops`), and recognises its cap by its exit status and what it printed (`cap`). A run its cap ended is the phase out of rounds by another name, never a failure. A missing reason reads as an ordinary end, because a record that names none has not said the response was cut short. Every round records its reason (`rounds[].stop_reason` on the phase record), and a harness whose record shows no requests has its whole run recorded as one round ([Rounds, runs and the harness's record](llm-backends.md#rounds-runs-and-the-harnesss-record)).
+A round is one model request, as the harness's own record shows it, and it carries a **stop reason** (`llm.StopReason`) where the record names one: `end` (the model answered), `tool_use` (it asked for calls to run) or `cap` (the harness's own turn cap ended its run at that request with the model still working). The profile maps its record's words onto these (`requests.stops`) and recognises its cap by exit status and what it printed (`cap`). A run its cap ended is the phase out of rounds, never a failure. A missing reason reads as an ordinary end. Every round records its reason (`rounds[].stop_reason` on the phase record), and a harness whose record shows no requests has its whole run recorded as one round ([Rounds, runs and the harness's record](llm-backends.md#rounds-runs-and-the-harnesss-record)).
 
-There is no reason for a response cut short. A harness whose model hit its output ceiling, filled its context window or declined the request says so its own way — as prose, which the loop reads like any other answer (and a phase that has to end in a call meets the [finishing corrective](#round-cap-extension-judge) over it), or as a failed run, which the backend reports as `server` — unless the harness's words match one of its profile's limit or login markers — so the seat's chain hands the call to its next model. What each model does at those edges is its vendor's harness to keep current, which is the reason the harness is the backend.
+There is no reason for a response cut short. A harness whose model hit its output ceiling, filled its context window or declined says so its own way: as prose, which the loop reads like any answer (a phase that has to end in a call meets the [finishing corrective](#round-cap-extension-judge) over it), or as a failed run, which the backend reports as `server`, unless the harness's words match one of its profile's limit or login markers, so the seat's chain hands the call to its next model. What each model does at those edges is its vendor's harness to keep current, which is why the harness is the backend.
 
-**A call whose arguments did not parse is answered, not run.** A tool call whose arguments are not one JSON object carries the parse error (`llm.ToolCall.ArgumentsError`), and the loop answers it with a **failed** tool result saying why instead of running the tool with `{}` — a write the model never asked for. The model reads it and calls again. The tool session marks such a call as the harness's `tools/call` request arrives, and a box's bridge answers it in the same words and records it with no arguments, marked as a call whose arguments did not parse (`sandbox.BridgeCall.ArgsUnparsed`), so a resumed turn's ledger says its arguments were in text that could not be read, never `tool()`, the tool called with none; where the harness handed the server an object of its own making instead — Claude Code turns an array into one — the call's entry in the harness's record, which keeps what the model wrote, marks it (`llm.TurnCall.ArgumentsError`). Some harnesses never send one — Qwen Code repairs the arguments first, and Kimi Code reads them as `{}` and calls only a tool that requires no argument — so a tool validates its own arguments as well ([per harness](llm-backends.md#what-each-harness-does-with-the-seats-tools)). Every failed tool result is marked as failed on the conversation (`llm.Message.Failed`), not only this one.
+**A call whose arguments did not parse is answered, not run.** A tool call whose arguments are not one JSON object carries the parse error (`llm.ToolCall.ArgumentsError`), and the loop answers it with a **failed** tool result saying why instead of running the tool with `{}`. The model reads it and calls again. The tool session marks such a call as the harness's `tools/call` request arrives; a box's bridge answers in the same words and records it with no arguments, marked as unparsed (`sandbox.BridgeCall.ArgsUnparsed`), so a resumed turn's ledger says the arguments were unreadable text, never `tool()`. Where the harness handed the server an object of its own making instead (Claude Code turns an array into one), the call's entry in the harness's record, which keeps what the model wrote, marks it (`llm.TurnCall.ArgumentsError`). Some harnesses never send one (Qwen Code repairs the arguments first; Kimi Code reads them as `{}` and calls only a tool that requires no argument), so a tool validates its own arguments too ([per harness](llm-backends.md#what-each-harness-does-with-the-seats-tools)). Every failed tool result is marked failed on the conversation (`llm.Message.Failed`).
 
 ---
 
@@ -733,7 +508,7 @@ There is no reason for a response cut short. A harness whose model hit its outpu
 
 A harness's transcript cannot say how its turn ended: whether the reply the seat was about to send reached the person waiting, what the reviewer decided, who stopped the turn and why, what lost it. So every turn that launched its executor ends with an **end** on the executor log — the account the turn's row keeps beside the [session the turn kept](code-sandbox.md#each-launchs-session-kept) — and the conversation's next turn, which continues the session its head left (of the conversation's ended turns with a session, the one that read it last), is told it ([Code Sandbox](code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)). So does a turn of a conversation that ended in its own frame before it launched, where nothing failed there: refused at the delegation cap. A turn of no conversation that never launched records no end, since no later turn is told one, and neither does a turn whose frame failed before it launched: its delivery is handed back, to be parked or run again.
 
-**Owed on the run's record, recorded by the run's ending.** Whatever decides how the turn ended writes that ending onto the run's record first; the run's ending then records it on the log, under the one operation every path that ends the turn derives, and only **after every capture of the turn has settled** — the end tombstones the turn, and a capture recorded after it would be refused, so the stopped or lost job's own session is never lost to its turn's end. The record is not deleted while it still owes its end, and the seat's mail waits behind it as behind every ending kept for its retry: an end the log does not answer is asked again, under the same operation, until it does — never dropped, and never overtaken by the conversation's next turn. The ending records it **off the frame that decided the ending** — the resume that ended the turn, a person's stop, a seat's recovery — by its own retry, armed at once, because a capture still being kept and the log's write after it are not that frame's to wait on; a seat's retirement, which holds the seat's lease and a budget of its own, decides its endings and records their ends on its own frame. So a run's record outlives the resume that ended its turn by the settling of the turn's captures — at most each capture's whole life from the moment the end first sees it and one more read of the record, on which the end decides, about an hour and twenty-five and a half minutes at the bounds — every change of its record counted at the thirteen minutes a change of a record at its bound takes to cross a link at the slowest pace allowed — or where a read stands by for a capture that does not land, that read's window and its takeover's life after it, each with that read, about four hours and sixteen and a half minutes from the moment the end first sees the read; and for a capture whose taker stopped, its taker lease's TTL and one read of the executor log ([Code Sandbox](code-sandbox.md#each-launchs-session-kept)) — and the end's write, and the seat takes its next mail once the record is gone. That holds against the frame that ended the turn too, whose recount of the seat can run beside the retry's: whichever of the two is written second reads the store again first, so a listing read before the record's delete never counts the run as holding after it. And against a seat taken back: a node that takes the seat again while an earlier attempt of its own is still finishing the ending keeps the ending as well, holding the mail until the record is gone, and a node that takes the seat over reads every run it fences again, finishing an ending the seat's last holder decided between its listing and its fence, and taking over no run that is gone by then. An ending waiting for a capture takes a read of the record that fails for no answer, and goes on waiting: the end is never recorded off a record it could not read. The end is **decided once**: a second path that ends the same turn finds it owed and records that one, and once the log has it the record says so, so an attempt at the ending after a crash decides nothing again and answers no colleague twice; and two attempts at one ending on a node never run at once. An end a **newer build** owed — a field or an outcome this build does not know — is left owed for a node of that build to record, never re-encoded without what this build could not read.
+**Owed on the run's record, recorded by the run's ending.** Whatever decides how the turn ended writes that ending onto the run's record first; the run's ending then records it on the log, under the one operation every path that ends the turn derives, and only **after every capture of the turn has settled** — the end tombstones the turn, and a capture recorded after it would be refused, so the stopped or lost job's own session is never lost to its turn's end. The record is not deleted while it still owes its end, and the seat's mail waits behind it as behind every ending kept for its retry: an end the log does not answer is asked again, under the same operation, until it does — never dropped, and never overtaken by the conversation's next turn. The ending records it **off the frame that decided the ending** — the resume that ended the turn, a person's stop, a seat's recovery — by its own retry, armed at once, because a capture still being kept and the log's write after it are not that frame's to wait on; a seat's retirement, which holds the seat's lease and a budget of its own, decides its endings and records their ends on its own frame. So a run's record outlives the resume that ended its turn by the settling of the turn's captures — at most each capture's whole life from the moment the end first sees it and one more read of the record, on which the end decides, about an hour and thirty-three and a half minutes at the bounds — every change of its record counted at the thirteen minutes a change of a record at its bound takes to cross a link at the slowest pace allowed — or where a read stands by for a capture that does not land, that read's window and its takeover's life after it, each with that read, about four hours and thirty-seven and a half minutes from the moment the end first sees the read; and for a capture whose taker stopped, its taker lease's TTL and one read of the executor log ([Code Sandbox](code-sandbox.md#each-launchs-session-kept)) — and the end's write, and the seat takes its next mail once the record is gone. That holds against the frame that ended the turn too, whose recount of the seat can run beside the retry's: whichever of the two is written second reads the store again first, so a listing read before the record's delete never counts the run as holding after it. And against a seat taken back: a node that takes the seat again while an earlier attempt of its own is still finishing the ending keeps the ending as well, holding the mail until the record is gone, and a node that takes the seat over reads every run it fences again, finishing an ending the seat's last holder decided between its listing and its fence, and taking over no run that is gone by then. An ending waiting for a capture takes a read of the record that fails for no answer, and goes on waiting: the end is never recorded off a record it could not read. The end is **decided once**: a second path that ends the same turn finds it owed and records that one, and once the log has it the record says so, so an attempt at the ending after a crash decides nothing again and answers no colleague twice; and two attempts at one ending on a node never run at once. An end a **newer build** owed — a field or an outcome this build does not know — is left owed for a node of that build to record, never re-encoded without what this build could not read.
 
 **A relaunch that fails in its launch leaves the end to its resumed turn.** The failed launch decides the run's ending, but while the resumed turn that relaunched is still running on the node its record waits: the turn learns of the failure from the launch, owes its own account of how it ended — answering its colleague as it does — and the ending records that end once the turn's captures settle. A turn whose run's record is gone — a dispatch's first launch abandoned once its record was written, whether the turn's own fence refused it or its box, its job or its attach failed, or a record the seat's next holder finished while the turn ran elsewhere — records its end at once, owed on the record instead where one turns out to be there. So does a dispatched turn of a conversation that ends in its own frame without launching at all and without an error, refused at the delegation cap, which has no record to owe it on.
 
@@ -758,30 +533,72 @@ A turn that **owed the engine's answer** to a colleague's `a2a_ask` ends saying 
 
 Every invariant is enforced in code, not in prompts (`internal/agent/turn/guards.go`, `internal/tools/surface.go`, `internal/agent/skills/guard.go`):
 
-1. **Workers cannot delegate, contact colleagues, or write to shared surfaces.** `subagent.Permit` denies the first-party control tools (`delegate`, `a2a_ask` and the A2A channel tools, the discovery pair) and any tool whose [MCP annotations](tool-capabilities.md) classify it a write to an external shared surface — regardless of what the task or its template named. It also denies anything the parent cannot itself call, read LIVE: a tool the executor activated mid-phase is inheritable, and one it never had is not. The latter is derived from capability, not a tool-name list, so it covers any tool stack. **A `workers:` template is subject to every one of these**, which is what keeps founder-owned Tier B config out of the privilege-escalation path. Workers **can** discover and activate *read-only* tools themselves (see invariant 7): the discovery catalogue is built from the same three filters as the grant, so a worker can find the read tool it needs (e.g. a Jira JQL search) but can never widen itself into a write or a control tool.
-2. **No recruitment.** Colleague tools require an explicit handle / channel / issue_key / PR URL. There is no "find someone to help me" primitive that would auto-create a role.
-3. **Delegation depth cap.** The trigger event carries `delegation_depth`. When it meets `turn_engine.delegation_depth_limit` (default 3), the engine publishes a `turn.guard_breach(kind="depth_cap")` and terminates the turn as `failed` before any phase runs. This is the always-on backstop against runaway / circular delegation: it is checked at the top of every turn regardless of how the turn was triggered, and `a2a_ask` propagates the chain so the recipient's turn inherits the accumulated depth.
-4. **Per-turn budget cascade.** Agent budget → phase budgets → the delegation slice (default 20% of the parent's remaining). Exhaustion publishes `budget_exhausted` — naming the refusing window and when it resets — and marks the turn failed; the seat is then [parked](agent-runtime.md#the-budget-park) until that window turns over or a revision raises the ceiling, and a delivery that reaches a seat whose window is already refusing is parked before any turn starts. ONE slice covers a whole `delegate` call whatever its task count, so a fan-out cannot multiply the operator's fraction by N; the wrapper judges and records each worker round on the slice in one step under a lock before it charges the parent's counter, so concurrent workers can't both pass the cap check and overshoot. A worker round is charged once its reply is in, so a round the slice refuses has already been billed: it is still charged to the seat's and the company's counters and still counts against the slice, and the worker stops (`budget_exhausted`). Where the company or the seat refuses the same round, theirs is the refusal reported, and the worker is `failed` on the seat's or the company's budget — whichever refused — rather than its own slice. A call whose slice divided by its task count falls below `min_tokens_per_task` is refused UP FRONT — N workers that each die mid-round have spent the whole slice and produced nothing. And a capped seat whose remaining budget cannot be read, or has nothing left, is not offered `delegate` for the phase at all: the slice is a fraction of that remainder, and a remainder of zero would otherwise read as no ceiling.
+1. **Workers cannot delegate, contact colleagues, or write to shared surfaces.** `subagent.Permit` denies the first-party control tools (`delegate`, `a2a_ask` and the A2A channel tools, the discovery pair) and any tool whose [MCP annotations](tool-capabilities.md) classify it a write to an external shared surface, whatever the task or its template named. It also denies anything the parent cannot itself call, read LIVE: a tool the executor activated mid-phase is inheritable, one it never had is not. This is derived from capability, not a tool-name list. **A `workers:` template is subject to all of it**, keeping founder-owned Tier B config out of the privilege-escalation path. Workers **can** discover and activate *read-only* tools (invariant 7): the discovery catalogue uses the same three filters as the grant, so a worker finds the read tool it needs (e.g. a Jira JQL search) but never widens itself into a write or control tool.
+2. **No recruitment.** Colleague tools require an explicit handle / channel / issue_key / PR URL. No primitive auto-creates a role to help.
+3. **Delegation depth cap.** The trigger event carries `delegation_depth`. When it meets `turn_engine.delegation_depth_limit` (default 3), the engine publishes `turn.guard_breach(kind="depth_cap")` and ends the turn `failed` before any phase runs. Checked at the top of every turn; `a2a_ask` propagates the chain so the recipient inherits the depth.
+4. **Per-turn budget cascade.** Agent budget → phase budgets → the delegation slice (default 20% of the parent's remaining). Exhaustion publishes `budget_exhausted` (naming the refusing window and when it resets) and fails the turn; the seat is then [parked](agent-runtime.md#the-budget-park) until that window turns over or a revision raises the ceiling, and a delivery reaching a seat whose window already refuses is parked before any turn starts.
+   - ONE slice covers a whole `delegate` call whatever its task count, so a fan-out cannot multiply the fraction by N. Each worker round is judged and recorded on the slice in one step under a lock before the parent's counter is charged, so concurrent workers cannot overshoot.
+   - A worker round is charged once its reply is in, so a round the slice refuses was already billed: it still counts against the seat's, company's and slice's counters, and the worker stops (`budget_exhausted`). Where the company or seat refuses the same round, that refusal is reported and the worker is `failed` on that budget.
+   - A call whose slice divided by its task count is below `min_tokens_per_task` is refused UP FRONT: N workers dying mid-round spend the slice for nothing.
+   - A capped seat whose remaining budget cannot be read, or is zero, is not offered `delegate` for the phase: zero would read as no ceiling.
 
-   **A refusal also stops every later model call of the turn, before it is made.** A refused round is counted, so the window it was refused in reads past its ceiling, and the turn's ceilings are pinned: every later charge in that window is refused, whatever its size, until the window turns over on the turn's own clock. The turn's one meter — every phase, the judge and every worker charge it, and every [auxiliary call](../guides/budgets-and-spend.md#auxiliary-spend) the turn makes (its context assembly, and every rewrite its ledger, the judge's evidence and its tools ask for) is post-charged through it — keeps each window it has seen with no room left (the one a refusal named, any other window of either scope the same refused round filled, one an admitted round filled exactly, and one an auxiliary call's post-charge took to or past its ceiling), and every call asks it first: the tool loop before each round, the first included; the round-cap judge, before it is consulted and again once its evidence is condensed; an executor before each launch, again once its brief is built; and each of the turn's auxiliary calls, which is not made at all while a window is full, since the rewrite would feed a round that is never sent — all but the task card's, which is written after the segment's last round as the turn's record rather than an input to one, so a turn the budget ended still gets its card. So the reviewer after a refused judgement, the executor after a correction, the executor's first round after a context assembly that took the seat past its day, the parent's next round and every sibling's after a worker's refusal, and a worker that starts once its call's slice is spent (in a later wave, or behind `max_parallel`) are each refused without being sent — they used to send a whole round the vendor billed and the meter then refused. Each is a refusal as surely as a refused charge, so the meter records it on the shared counter as one: the first call it holds in a window stamps that window's `refused_at` — the "last refused" every screen and `crewlet budgets show` read — on the scope the refusal names, judged against the counter as it stands, and once per window for each part of the turn however often it asks (a turn resumed from its executor records again in a window still full). Before it did, the stamp was written only by the charge a hold prevents, and a window the turn's own context assembly had filled refused every call while saying it had refused none. The refusal they are told is named as the counter names one, the company's before the seat's, so a seat's refusal that left the company's day full is reported as the company's: that is the refusal every later charge meets, since the company is judged first. What the meter has not seen is spend outside the turn — another seat spending the company's last room since this turn last charged, a background pass on the seat's own counter — and that is left to the next charge, which is the gate. And what it holds is certain on the turn's own calendar only: a peer that moved the shared counter onto the next window sooner — a node whose clock runs ahead, or one that applied a company `timezone` moved east while this turn ran — can end the refusal before the turn's clock does, and the turn then stops on a refusal the counter no longer makes. That fails closed: the turn ends `budget_exhausted`, the [budget park](agent-runtime.md#the-budget-park) reads the counter, finds nothing refusing and parks nothing, and the delivery runs again (or is recorded, if the turn had already written outside the engine, as after any refusal) — so it costs the turn's work so far, never a call billed and then refused.
-5. **Worker timeouts.** A per-task deadline from `turn_engine.delegation.task_timeout_seconds` (default 300 s) and an aggregate `call_timeout_seconds` (default 900 s) over the whole call, waves included, plus a `max_parallel` concurrency limit. Hitting the aggregate cap does *not* discard the workers that already finished — they come back with their real answers, and only the ones still running are reported as timed out. Their tokens were spent either way. The aggregate cap also counts toward how long an executor's box waits for any call over the [tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): its harness is told to wait as long as the bridge can take to answer one, which counts the longest bound the seat's tools declare, `delegate`'s among them.
-6. **Stall detection.** Two `self_iterate` decisions with the same artifact hash publish a `turn.guard_breach(kind="stall")` and terminate the turn as `failed`. The threshold is a constant, not a knob: two identical rounds is the earliest point at which "unchanged" is a fact rather than a single sample, and the round cap already bounds how long a turn that IS changing may run. Max-iteration exhaustion (the executor/reviewer loop hit `max_iterations` without `done`) publishes `turn.guard_breach(kind="max_iter")` with the same terminal effect.
-7. **Tool surface isolation between phases.** Each phase builds its tool list from scratch. The onboarding pass and a discovery-capable worker each carry `## Tools to discover` — what their universe holds and their surface does not offer yet, rendered by one function (`tools.Snapshot.Discoverable`) — and the same `activate_tool` / `list_mcp_server_tools` discovery meta-tools. The executor carries neither: it holds every tool its seat does from its launch. A worker's universe is the safety-filtered one the grant was cut from (read-only / non-control / non-shared-write), so discovery cannot breach invariant 1. Review and Judge list nothing to discover and cannot discover tools. A `self_iterate` builds a fresh surface, which is correct where its LLM context started over too: a relaunch whose run starts a harness session of its own. A relaunch that [continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session) — within the turn, in whatever box — offers the same tools, every one its seat holds, and arms its skill guard with what that session loaded (invariant 8), because the continued model remembers it. A parked executor run is the exception, because its calls are made against the surface its launch built, and that surface outlives the segment. Every segment that re-enters the run rebuilds that surface the same way: the surface and skill-guard state the launch recorded — every tool the run can reach — and then every skill the run's own job loaded over the bridge replayed onto them, never an earlier job's of the round, whose session the run's may not be. That holds where the run goes on calling (a node reopens a working run's bridge session after a restart or a seat move) and where the run is collected; a relaunch carrying the round on keeps the surface and arms its guard for the session it takes up (invariant 8). The collection makes no gated call of its own: it reads the run's bridged calls as its call log and its submission, and its phase record states the tools the run held as `tools_available` — every tool it could reach, with nothing left to discover and no `tool_catalogue` beside it.
-8. **Required-skill guard (load-before-use).** A [tool skill](tool-skills.md) gates the tools its trigger covers (the `required: true` default; `required: false` opts out for advisory content): within one phase session, calls to those tools are rejected (with an instructive error and a `phase.tool_skill_blocked` event) until the LLM has loaded the skill body — via `load_tool_skill`, or, for a seat's executor, its harness's own skill tool, whose loads the bridge records as that call ([the executor's skills](tool-skills.md#the-executors-skills-are-its-harnesss-own)). Enforced at the shared dispatch gate; tracked per LLM session because the executor and each worker run on separate message histories — and carried across the executor's park: the parked state holds the keys the launch armed the guard with before its run started, and the guard a call a person approved is made under — rebuilt by the answer's resume before its relaunch — and the guard of a run reopened by a node that took it over while it works have every skill that run loaded over the bridge replayed onto them too, since the calls made under them are held to them. A relaunch's guard is the session's its run takes up, armed once its launch has decided which — once it knows its box, and before the run starts. One that continues the session of the job it follows — a reviewer's send-back as much as a run carried on, from that job's kept capture in whatever box, or as the job's own box holds it ([Code Sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)) — continues a transcript that still holds the bodies it loaded, so its guard holds the skills that job's launch was armed with and those the job's own session loaded, through the point its capture was saved at where the capture is what is restored, and, where the job's own box's copy is, only where the job's harness ended its own run ([Code Sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)); never an earlier round's or an earlier job's loads, made in a session the run's is not. A relaunch whose run starts a session of its own starts with an empty guard — a send-back or a run carried on alike, and a launch that found it could not continue the session after all. A run whose box finds only as it starts that it cannot restore the session — an archive that does not unpack, an import OpenCode refuses — starts a session of its own and says so by the bridge token its harness dials, before its first call, so its guard is put back to empty; and every later rebuild of the guard — the collection's, a relaunch that carries the run on or continues its session, a node taking it over — reads what the box said off the run's record, holding the skills the launch armed only where the box took the session up, and none where it said nothing ([Which session the box started](code-sandbox.md#which-session-the-box-started)).
-9. **A busy seat queues, it never drops.** A seat's inbox is one pull consumer that fetches again only after its handler returns, so a trigger that arrives during a minutes-long turn waits on the broker rather than erroring. Erroring instead would NAK it into bounded redelivery (25 deliveries, then the dead-letter topic) and spend that budget on events whose only problem is when they arrived. A seat whose executor run is working, every turn's, potentially hours (`sandbox.Coordinator.SeatHeldBySandbox`), is handled differently: its inbox is **held** (`inbox.HoldSandbox`) by the sandbox coordinator for as long as a run holds the seat, taken at the transition that makes the run hold it, including the recovery a new owner runs before the mailbox opens, and lifted at the one that ends it, so the consumer fetches nothing and the mail waits on the broker in order, against no ack window and with nothing running. A delivery that reaches a held seat anyway (it raced the hold, or the queue refused it) asks for the hold again and is deferred at the head of the inbox (`inbox.ActionHoldAndDefer`), never requeued: a republish lands back on the inbox the consumer is still reading. A seat whose run is working takes no other work, a person's answer to another of its runs included: the agent is busy with that run, and a second run resumed beside it would put two of the seat's turns in flight at once. A chat reply waits with its mail and is offered when the run settles or parks. An answer by turn travels on the seat's control topic instead, so it is recorded at once, and its resume waits for the run and then runs ahead of the held mail. A seat also runs one turn at a time on its node, whichever road the turn arrives by (`node.ErrSeatBusy`): a mailbox delivery that finds the seat mid-turn is deferred, a completion is handed back, and a recorded answer's resume waits for the running turn to end. A run waiting on such an answer holds nothing at all, so its seat keeps working and every delivery is simply offered to that match before it becomes a turn. The offer answers one of three things, the delivery was **consumed** (the answer is recorded on the run it answers, which owns its resume from there), is **still owed** to a run because the answer could not be recorded, or is **nobody's**, so it becomes an ordinary turn. A delivery still owed to a run is **deferred** back to the broker, never NAK'd and never requeued: a NAK and a requeue both put it behind the person's next message, which would then be offered to the question first. The hand-backs are bounded by three clauses, whichever ends first: the deliveries the *message* has left (the offer stops with five of them in reserve for the ordinary route, which is the only clause a seat handoff does not reset), 10 attempts within one process, and the run's own `pause_ttl_seconds`. See [Mid-run clarification](code-sandbox.md#mid-run-clarification-ask_and_wait).
-10. **A phase that breaks is not one case.** `turn.Run` returns an error only when a *phase itself* broke; a failed turn, an exhausted round budget and a not-done review are all results. What the dispatcher does with that error depends on what broke and on what the turn's own record shows it already did: a turn that **panicked** is **recorded and acked** whatever its record says, because a redelivery runs the same defect on the same input; so is a turn whose phase refused for a reason a redelivery would meet again (`turn.ErrPermanent`: its executor's round lost with its host past its limit), because every redelivery would be refused the same way; a turn that reached outside the engine (a delivery, a colleague ask, a reaction — never a read of the world) is **recorded and acked** too, because a redelivery would repeat writes it cannot take back; one whose record shows nothing of the kind is **redelivered** exactly as before, which keeps the retry for every pre-effect failure — except where a redelivery would only be refused again, and its delivery is deferred instead: a refused budget, whose seat is [parked](agent-runtime.md#the-budget-park) until the window turns over; a chain every model of which is at its usage limit, whose seat is [parked](llm-backends.md#falling-back-between-entries) until the first is tried again; and a failure a retry cannot cure, the second time in a row, which [pauses its seat](agent-runtime.md#pausing-a-seat) until its settings change or a person resumes it. A redelivery comes back **behind** the conversation's newer mail, so in a chat thread the newer message's turn usually runs first and answers the thread with the failed message in front of it; that turn records the waiting messages its thread block showed it as worked through, and the failed message is dropped when it comes round rather than answered a second time, out of order (see [the completion ledger](seat-ownership.md#the-completion-ledger)). A failure that is the *node's* rather than the message's — a hold, a park or a pause the queue refused to take — is deferred rather than NAK'd, so its delivery keeps its place at the head of the seat's inbox. `turn.Abandon` is that one rule, read by the dispatcher and by the sandbox resume alike. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway) for the predicate and why it is deliberately narrow.
+   **A refusal also stops every later model call of the turn, before it is made.** A refused round is counted, so its window reads past its ceiling, and the turn's ceilings are pinned: every later charge in that window is refused, whatever its size, until the window turns over on the turn's own clock.
+   - The turn's one meter is charged by every phase, the judge and every worker, and post-charged by every [auxiliary call](../guides/budgets-and-spend.md#auxiliary-spend) (context assembly and every rewrite its ledger, the judge's evidence and its tools ask for). It remembers each window seen with no room left: the one a refusal named, any other window of either scope the same refused round filled, one an admitted round filled exactly, and one an auxiliary post-charge took to or past its ceiling.
+   - Every call asks it first: the tool loop before each round (the first included); the round-cap judge before it is consulted and again once its evidence is condensed; an executor before each launch and again once its brief is built; each auxiliary call, not made at all while a window is full, except the task card, written after the last round as the turn's record so a budget-ended turn still gets one.
+   - So the reviewer after a refused judgement, the executor after a correction or after a context assembly that took the seat past its day, the parent's and siblings' next rounds after a worker's refusal, and a worker starting once its slice is spent (later wave, or behind `max_parallel`) are refused without being sent.
+   - Each hold is recorded on the shared counter as a refusal: the first held call in a window stamps that window's `refused_at` (the "last refused" every screen and `crewlet budgets show` read) on the scope the refusal names, once per window per part of the turn (a turn resumed from its executor records again in a window still full).
+   - The refusal reported is named as the counter names one, the company's before the seat's, since the company is judged first.
+   - Spend outside the turn (another seat spending the company's last room, a background pass) is not seen; the next charge, the gate, handles it.
+   - The hold is certain on the turn's own calendar only: a peer that moved the shared counter to the next window sooner (clock ahead, or a company `timezone` moved east mid-turn) can end the refusal early. That fails closed: the turn ends `budget_exhausted`, the [budget park](agent-runtime.md#the-budget-park) finds nothing refusing and parks nothing, and the delivery runs again (or is recorded, if the turn had already written outside the engine). It costs the turn's work so far, never a call billed then refused.
+5. **Worker timeouts.** A per-task deadline `turn_engine.delegation.task_timeout_seconds` (default 300 s), an aggregate `call_timeout_seconds` (default 900 s) over the whole call, waves included, and a `max_parallel` concurrency limit. Hitting the aggregate cap does *not* discard finished workers: they return real answers and only those still running are reported timed out (their tokens were spent either way). The aggregate cap also counts toward how long an executor's box waits for any call over the [tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box): its harness waits as long as the bridge can take, the longest bound the seat's tools declare, `delegate`'s among them.
+6. **Stall detection.** Two `self_iterate` decisions with the same artifact hash publish `turn.guard_breach(kind="stall")` and end the turn `failed`. A constant, not a knob: two identical rounds is the earliest point where "unchanged" is a fact. Max-iteration exhaustion (the executor/reviewer loop hit `max_iterations` without `done`) publishes `turn.guard_breach(kind="max_iter")` with the same effect.
+7. **Tool surface isolation between phases.** Each phase builds its tool list from scratch.
+   - The onboarding pass and a discovery-capable worker carry `## Tools to discover` (what their universe holds and their surface does not offer yet, rendered by `tools.Snapshot.Discoverable`) and the `activate_tool` / `list_mcp_server_tools` meta-tools. The executor carries neither: it holds every tool its seat does from launch. A worker's universe is the safety-filtered one its grant was cut from, so discovery cannot breach invariant 1. Review and Judge cannot discover.
+   - A `self_iterate` builds a fresh surface, correct where its LLM context started over too (a relaunch whose run starts a harness session of its own). A relaunch that [continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session), in whatever box, offers every tool its seat holds and arms its skill guard with what that session loaded (invariant 8), because the continued model remembers it.
+   - A parked executor run is the exception: its calls run against the surface its launch built, which outlives the segment. Every segment re-entering the run rebuilds it the same way: the surface and skill-guard state the launch recorded (every tool the run can reach), then every skill the run's own job loaded over the bridge replayed onto them, never an earlier job's, whose session the run's may not be. This holds where the run goes on calling (a node reopens a working run's bridge session after a restart or seat move) and where it is collected; a relaunch carrying the round on keeps the surface and arms its guard for the session it takes up.
+   - The collection makes no gated call: it reads the run's bridged calls as its call log and submission, and its phase record states the tools the run held as `tools_available`, with no `tool_catalogue` beside it.
+8. **Required-skill guard (load-before-use).** A [tool skill](tool-skills.md) gates the tools its trigger covers (`required: true` default; `required: false` opts out for advisory content): within one phase session, calls to those tools are rejected (instructive error and a `phase.tool_skill_blocked` event) until the LLM has loaded the skill body, via `load_tool_skill` or, for a seat's executor, its harness's own skill tool, whose loads the bridge records as that call ([the executor's skills](tool-skills.md#the-executors-skills-are-its-harnesss-own)). Enforced at the shared dispatch gate; tracked per LLM session because the executor and each worker have separate message histories.
+   - **Across a park:** the parked state holds the keys the launch armed the guard with before the run started. The guard a person-approved call is made under (rebuilt by the answer's resume before its relaunch) and that of a run reopened by a node taking it over have every skill the run loaded over the bridge replayed onto them too.
+   - **A relaunch's guard** is that of the session its run takes up, armed once the launch knows its box, before the run starts.
+   - One that continues the session of the job it follows (a send-back as much as a run carried on; from the job's kept capture in any box, or as the job's own box holds it, see [Code Sandbox](code-sandbox.md#a-relaunch-continues-the-turns-session)) continues a transcript still holding the bodies loaded. Its guard holds the skills that job's launch was armed with and those its session loaded: through the point the capture was saved where the capture is restored, and, where the job's own box's copy is, only where the job's harness ended its own run. Never an earlier round's or job's loads.
+   - A relaunch whose run starts its own session starts with an empty guard, as does a launch that found it could not continue the session after all.
+   - A run whose box finds only as it starts that it cannot restore the session (an archive that does not unpack, an import OpenCode refuses) starts its own session and says so by the bridge token its harness dials, before its first call, so its guard is reset to empty. Every later rebuild (the collection's, a relaunch, a node taking over) reads what the box said off the run's record, holding the skills the launch armed only where the box took the session up, and none where it said nothing ([Which session the box started](code-sandbox.md#which-session-the-box-started)).
+9. **A busy seat queues, it never drops.** A seat's inbox is one pull consumer that fetches again only after its handler returns, so a trigger arriving during a long turn waits on the broker. Erroring would NAK it into bounded redelivery (25 deliveries, then the dead-letter topic) and spend that budget on events whose only problem is timing.
+   - **Executor run working** (potentially hours; `sandbox.Coordinator.SeatHeldBySandbox`): the inbox is **held** (`inbox.HoldSandbox`) by the sandbox coordinator while a run holds the seat, taken at the transition that makes the run hold it (including the recovery a new owner runs before the mailbox opens) and lifted at the one that ends it. The consumer fetches nothing; mail waits on the broker in order, against no ack window.
+   - A delivery reaching a held seat anyway (it raced the hold, or the queue refused it) asks for the hold again and is deferred at the head of the inbox (`inbox.ActionHoldAndDefer`), never requeued: a republish lands back on the inbox the consumer is still reading.
+   - A seat whose run is working takes no other work, a person's answer to another of its runs included, since a second resumed run would put two turns in flight. A chat reply waits with its mail and is offered when the run settles or parks. An answer by turn travels on the seat's control topic, so it is recorded at once and its resume waits for the run, then runs ahead of the held mail.
+   - A seat runs one turn at a time on its node, whichever road the turn arrives by (`node.ErrSeatBusy`): a mailbox delivery finding it mid-turn is deferred, a completion is handed back, a recorded answer's resume waits.
+   - A run waiting on an answer holds nothing, so its seat keeps working and every delivery is first offered to that match. The offer answers: **consumed** (answer recorded on the run, which owns its resume), **still owed** to a run because the answer could not be recorded, or **nobody's**, so it becomes an ordinary turn.
+   - A delivery still owed is **deferred** back to the broker, never NAK'd or requeued: both put it behind the person's next message, which would then be offered to the question first. Hand-backs end at whichever comes first: the deliveries the *message* has left (the offer stops with five in reserve for the ordinary route; the only clause a seat handoff does not reset), 10 attempts within one process, and the run's `pause_ttl_seconds`. See [Mid-run clarification](code-sandbox.md#mid-run-clarification-ask_and_wait).
+10. **A phase that breaks is not one case.** `turn.Run` returns an error only when a *phase itself* broke; a failed turn, an exhausted round budget and a not-done review are results. The dispatcher's action depends on what broke and what the turn's record shows it already did:
+    - **Recorded and acked:** a turn that **panicked**, whatever its record says (a redelivery runs the same defect on the same input); a turn whose phase refused for a reason a redelivery would meet again (`turn.ErrPermanent`: its executor's round lost with its host past its limit); a turn that reached outside the engine (a delivery, a colleague ask, a reaction, never a read), since a redelivery would repeat writes it cannot take back.
+    - **Redelivered:** a turn whose record shows nothing of the kind (the retry for every pre-effect failure).
+    - **Deferred instead**, where a redelivery would only be refused again: a refused budget, whose seat is [parked](agent-runtime.md#the-budget-park) until the window turns over; a chain every model of which is at its usage limit, whose seat is [parked](llm-backends.md#falling-back-between-entries) until the first is tried again; a failure a retry cannot cure, the second time in a row, which [pauses its seat](agent-runtime.md#pausing-a-seat) until its settings change or a person resumes it.
+    - A redelivery comes back **behind** the conversation's newer mail, so in a chat thread the newer message's turn usually runs first and answers with the failed message in front of it; that turn records the waiting messages its thread block showed as worked through, and the failed message is dropped when it comes round rather than answered twice, out of order (see [the completion ledger](seat-ownership.md#the-completion-ledger)).
+    - A failure that is the *node's* rather than the message's (a hold, park or pause the queue refused to take) is deferred rather than NAK'd, keeping the delivery's place at the head of the seat's inbox.
+    - `turn.Abandon` is that one rule, read by the dispatcher and the sandbox resume alike. See [A turn that broke halfway](seat-ownership.md#a-turn-that-broke-halfway) for the predicate and why it is deliberately narrow.
 
-11. **A parked turn's seat is busy from the launch's own write.** The launch counts the run into the seat's busy set, and takes the seat's inbox hold, in the step that takes the answer to the write that opens the run's row (`Coordinator.Launch`), before the box is provisioned, so before the turn can return and the seat's consumer move on; the write is recorded before it is sent, so a recount between the two counts the run where it was: no row, or the claim a resumed turn relaunches, which holds the seat already. A turn whose executor launched then writes its parked state to that row before its frame unwinds (`Engine.persistSuspension`, which is also what opens the run to the completion poll). The launch also publishes `executor_launched` to the seat's control topic, and processing it recounts the seat's busy count from the pending store's own list of the seat's active runs (`Coordinator.syncSeat`), so a redelivered start, a restart and a seat takeover converge on the same answer (a node taking the seat over counts each run its recovery takes over through the same record, made before any fence and answered once the recovery has done with the run, starting the seat's counts afresh, so a recount off the control topic, which is attached first, never counts a run beside it); a recount that a launch moved the seat under is read again rather than written back, and a recount counts a run whose claim this node is giving back, or parking on its question, as the claim it still is, whatever the store's row says by then, since the release's or the park's own answer moves that count, once, in the step that settles the write: a recount that read the row after the write landed, written before that step, would count the run where the write put it a second time. The same holds for each write a person's answer moves its run by, the record that takes it off its question, the claim that resumes it and a decline that puts it back: until the write's answer is taken, a recount counts the run where it was, so a seat holding a second question is never read as having none open, the state in which that question's answer would run as an unrelated turn. Two such writes out on one run move its count in the order they were made, whatever order their answers come back in, and each that lands puts the run in the set its own status names, never moving it by the sets it was made from and to, since an earlier write whose answer was lost may have landed: a claim's release is one such write, so a reply recorded to the question a park put on the row, while that park's release is owed, moves the run from the claim to its answer once the release is found moved on, and never takes a question the seat never counted out of the question set. A write whose answer comes after the node let the seat go moves nothing, so a node that takes the seat back counts the write's run once, where its recovery finds it, never on top of a park's or an answer's move made for a seat it no longer held. And a write whose store call panics, which the queue's handler recovers, is answered as one that did not land, as is a claim's release whose answer was never taken, so neither holds a later write's move on its run behind it, nor refuses every later claim of its job. The seat used to count as busy only once that event was processed — asynchronously, on a subscription nothing orders before the parking turn returns — so a delivery the inbox handed out in that window started a turn beside the run. A launch that fails after opening the row gives the seat back as the delete that ends the row lands, and so does the ending of a run the node settles as lost or a person stops: the delete is recorded before it is sent, a recount meanwhile counts the run where it was whether or not its listing still has the row, and the delete's answer takes it out once, so a recount read after the delete never leaves the seat's other run counted by nothing; a delete that did not land moves nothing, the run staying counted where a recount reads its row while the ending kept for its retry holds the seat's mail behind it. Every other ending moves no count at its delete: its caller recounts the seat once it returns, which reads the store's own answer, the recovery that ends a run counts it in no set, and a retired seat's counts go with the seat. A run parked on a clarification question does not hold the seat at all, because the answer arrives on its inbox; the first reply posted after the question is recorded on the run, and while its resume is owed the coordinator holds the seat's inbox so its later mail waits behind it (see [Mid-run clarification](code-sandbox.md#mid-run-clarification-ask_and_wait)). On completion the coordinator claims the row and marks the seat busy through result collection; a resume that fails un-claims the row so a redelivery can retry (the parked turn is never lost), unless the resumed turn must not be resumed again (`sandbox.ErrResumeAbandoned`: it had already written outside the engine, it panicked, a person stopped it, its relaunch failed and ended its run with it, or it was refused for a reason every retry would meet again — `turn.ErrPermanent`, its round lost with its host past its limit), in which case the run is settled instead of un-claimed (its box reclaimed, its record deleted and the seat's busy count recounted), so the completion is not redelivered into a turn a retry must not re-enter and the seat is not left parked on a turn that is over. A resume abandoned *before its turn began* (a panic re-entering the turn, or a run no build will resume: one parked in a format no running build reads, or whose question is about a work item finished since) is settled the same way, but nothing ran, so a person's reply that drove it is handed on rather than spent, and the run is announced lost (`executor_failed`, reason `resume_broken`, `state_retired` or `item_finished`) — no completion of the turn's own will ever say what became of it. **A resume becomes a turn at one write**: once the segment is certain to run, and before any of it does, the engine calls the coordinator's commit (`sandbox.ResumeRequest.Begin`), which for a person's recorded answer records on the run that this turn took it (`answer.taken_at`), under the claimant's own seat lease, and records the reply's delivery as worked in the completion ledger — a commit that cannot be made is a retry, and the turn does not run. It is what the seat's next holder reads when it finds a claim whose node stopped mid-resume: an answer no turn took is given back to the run and the run resumed with it — or, after 3 such revivals or past the run's `pause_ttl_seconds`, handed back to the seat as the ordinary message it is, once — and one a turn took is spent; the take, the revival and the hand-back are exclusive in the store's own write, so never two of them (see [Mid-run clarification](code-sandbox.md#mid-run-clarification-ask_and_wait)). **A claim that cannot be given back is settled too**, and for a reason that has nothing to do with repeated writes: a row left in the claim is read by no completion poll, re-claimed by no redelivery, matched by no answer and expired by no pause reaper, so "leave it for the next attempt" is a turn destroyed in silence with its box paused and billed until the seat happens to change hands. That covers every hand-back of a claim, a collection's, the park a completion asked for and the revert a resume makes, retried or held on its seat's conditions, where the store refuses it, and it is announced as `executor_failed` with reason `claim_unreverted`. A hand-back the store did not answer is no refusal, and very often the same silence the claim was handed back for, so the node keeps the claim, makes the release again at most 30 seconds apart with the seat's mail held behind it, counts the seat held by the claim the run still is, and claims nothing of the job meanwhile (a person's answer is claimed only once the series that owes the release has made it, whether the release is the one the answer's own resume owes or a park's whose question the store recorded, and that series then resumes the answer), never ending the run for the store's silence; a seat that moves first has the claim reaped by its next holder, as a claim whose node stopped is (see [Code Sandbox](code-sandbox.md#failure-modes)). It is settled only while the run is still that claim, which the store checks as it decides the run's ending (and the box goes after the decision): a hand-back that reported a failure may have landed, and a run it reached is owed its retry, not an ending. Every ending is decided on the run's record before any of it is done, and the record takes no other write from then on, so whichever node finishes it announces the loss once, under the identity the decision recorded (see [Code Sandbox](code-sandbox.md#how-a-coding-task-runs)).
+11. **A parked turn's seat is busy from the launch's own write.** The launch counts the run into the seat's busy set, and takes the seat's inbox hold, in the step that takes the answer to the write that opens the run's row (`Coordinator.Launch`), before the box is provisioned, so before the turn can return and the seat's consumer move on. The write is recorded before it is sent, so a recount between the two counts the run where it was: no row, or the claim a resumed turn relaunches, which holds the seat already. The turn then writes its parked state to that row before its frame unwinds (`Engine.persistSuspension`, which also opens the run to the completion poll). Waiting for the asynchronous `executor_launched` event would let a delivery start a turn beside the run.
+    - **Recounts.** The launch publishes `executor_launched` to the seat's control topic; processing it recounts the seat's busy count from the pending store's own list of its active runs (`Coordinator.syncSeat`), so a redelivered start, a restart and a seat takeover converge. A node taking the seat over counts each run its recovery takes over through the same record, made before any fence and answered once the recovery is done with the run, starting the counts afresh, so a recount off the control topic (attached first) never counts a run beside it. A recount that a launch moved the seat under is read again, not written back.
+    - **Writes in flight count where they were.** A recount counts a run whose claim this node is giving back, or parking on its question, as the claim it still is, since the release's or park's own answer moves that count once, in the step that settles the write; reading the row after the write landed would count the run twice. Likewise for each write a person's answer moves its run by (the record taking it off its question, the claim that resumes it, a decline putting it back): until the write's answer is taken, a recount counts the run where it was, so a seat with a second question is never read as having none open, which would run that question's answer as an unrelated turn.
+    - **Ordering.** Two writes out on one run move its count in the order made, whatever order their answers return, and each that lands puts the run in the set its own status names, never by the sets it was made from and to, since an earlier write whose answer was lost may have landed. A claim's release is one such write: a reply recorded to a park's question while that park's release is owed moves the run from the claim to its answer once the release is found moved on, and never takes a question the seat never counted out of the question set.
+    - A write answered after the node let the seat go moves nothing, so a node taking the seat back counts the run once, where its recovery finds it. A write whose store call panics (the queue's handler recovers), or a claim's release whose answer was never taken, is answered as one that did not land, so neither holds a later write's move behind it nor refuses every later claim of its job.
+    - **Endings.** A launch that fails after opening the row gives the seat back as the delete that ends the row lands, as does the ending of a run the node settles as lost or a person stops: the delete is recorded before it is sent, a recount meanwhile counts the run where it was whether or not its listing still has the row, and the delete's answer takes it out once. A delete that did not land moves nothing: the run stays counted where a recount reads its row, while the ending kept for retry holds the seat's mail behind it. Every other ending moves no count at its delete: its caller recounts once it returns, the recovery that ends a run counts it in no set, and a retired seat's counts go with it.
+    - **A run parked on a clarification question does not hold the seat**, because the answer arrives on its inbox; the first reply posted after the question is recorded on the run, and while its resume is owed the coordinator holds the seat's inbox so later mail waits behind it (see [Mid-run clarification](code-sandbox.md#mid-run-clarification-ask_and_wait)).
+    - **Completion and resume.** On completion the coordinator claims the row and marks the seat busy through result collection. A failed resume un-claims the row so a redelivery can retry (the parked turn is never lost), unless the turn must not be resumed again (`sandbox.ErrResumeAbandoned`: it had written outside the engine, panicked, a person stopped it, its relaunch failed and ended its run, or it was refused for a reason every retry would meet, `turn.ErrPermanent`). Then the run is settled instead (box reclaimed, record deleted, seat's busy count recounted), so the completion is not redelivered into a turn that must not be re-entered and the seat is not left parked on a finished turn.
+    - A resume abandoned *before its turn began* (a panic re-entering the turn, or a run no build will resume: parked in a format no running build reads, or whose question is about a work item finished since) is settled the same way, but since nothing ran, a person's reply that drove it is handed on rather than spent, and the run is announced lost (`executor_failed`, reason `resume_broken`, `state_retired` or `item_finished`), as no completion of the turn's own will say what became of it.
+    - **A resume becomes a turn at one write.** Once the segment is certain to run, before any of it does, the engine calls the coordinator's commit (`sandbox.ResumeRequest.Begin`). For a person's recorded answer it records on the run that this turn took it (`answer.taken_at`), under the claimant's own seat lease, and records the reply's delivery as worked in the completion ledger. A commit that cannot be made is a retry and the turn does not run. The seat's next holder reads this when it finds a claim whose node stopped mid-resume: an answer no turn took is given back to the run, which is resumed with it (or, after 3 such revivals or past `pause_ttl_seconds`, handed back to the seat once as the ordinary message it is); one a turn took is spent. The take, revival and hand-back are exclusive in the store's own write (see [Mid-run clarification](code-sandbox.md#mid-run-clarification-ask_and_wait)).
+    - **A claim that cannot be given back is settled too.** A row left in the claim is read by no completion poll, re-claimed by no redelivery, matched by no answer and expired by no pause reaper, so "leave it for the next attempt" silently destroys the turn, its box paused and billed until the seat changes hands. This covers every hand-back of a claim (a collection's, a completion's park, a resume's revert) where the store refuses it, and is announced as `executor_failed` with reason `claim_unreverted`.
+    - A hand-back the store did not answer is no refusal, and often the same silence the claim was handed back for. The node keeps the claim, repeats the release at most 30 seconds apart with the seat's mail held behind it, counts the seat held by the claim, and claims nothing of the job meanwhile (a person's answer is claimed only once the series that owes the release has made it, then that series resumes the answer). It never ends the run for the store's silence; a seat that moves first has the claim reaped by its next holder, as a claim whose node stopped is (see [Code Sandbox](code-sandbox.md#failure-modes)).
+    - The run is settled only while it is still that claim, which the store checks as it decides the ending (the box goes after): a hand-back that reported a failure may have landed, and a run it reached is owed its retry, not an ending. Every ending is decided on the run's record before any of it is done and the record takes no other write after, so whichever node finishes it announces the loss once, under the identity the decision recorded (see [Code Sandbox](code-sandbox.md#how-a-coding-task-runs)).
 
 ---
 
 ## Steering a running turn
 
-A person watching a turn sometimes sees it heading the wrong way — about to
-post to the wrong channel, re-reading what it already has, missing the one
-constraint nobody wrote down. Stopping it (a [pause with
-`stop_running`](agent-runtime.md#pausing-a-seat)) throws away what it has done;
-waiting for it to finish costs a second turn. A **steer** is the third answer:
+A person watching a turn sometimes sees it heading the wrong way. Stopping it (a [pause with
+`stop_running`](agent-runtime.md#pausing-a-seat)) throws away its work;
+waiting costs a second turn. A **steer** is the third answer:
 a short note, sent with [`steer_turn`](../reference/api-endpoints.md#steering-a-running-turn),
 that the turn reads at its **next step** and keeps to for the rest of the turn.
 
@@ -804,10 +621,13 @@ yet:
   serves, which a person's authority is decided on; a reader opens both before
   using either
   ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)).
-  The one other entry, an item handing a late call to the job working on its
-  round, is the tool log's own account, unsealed, and is never handed as
-  anybody's note ([A relaunch continues the turn's
-  session](code-sandbox.md#a-relaunch-continues-the-turns-session)).
+  The two other entries are items for the job working on its round: one
+  handing it a late call, the tool log's own account, unsealed and never
+  handed as anybody's note ([A relaunch continues the turn's
+  session](code-sandbox.md#a-relaunch-continues-the-turns-session)); and a
+  wake, somebody's message about its work, signed in a key domain of its own
+  and handed in its writer's fence, never as a note ([Notes to a running
+  run](code-sandbox.md#notes-to-a-running-run)).
 
 The launch **hands the box over in the write that creates the record**: the
 box stops taking notes just before that write, and every note it held that the
@@ -848,402 +668,373 @@ sequenceDiagram
 ### Where a note lands
 
 - **A round of the engine's own loop.** At the opening of a harness run,
-  immediately after the seat fence. The harness drives its own requests and the
-  engine never writes inside a run, so a note that arrives while one is going
+  right after the seat fence. The engine never writes inside a run, so a note arriving during one
   ends it once every call of the response it arrived during has its answer, and
-  the next run — handed the conversation so far — opens with the note. That is
-  the one point where the conversation is complete, so a note can never sit
-  between a call and its result, which a provider rejects and a model would
-  read as the tool's output; and it is never folded into a tool's result,
+  the next run, handed the conversation so far, opens with the note. That is
+  the one point where the conversation is complete, so a note never sits
+  between a call and its result (a provider rejects that; a model would
+  read it as the tool's output) and is never folded into a tool's result,
   which any tool's output could imitate. After the fence, so a turn whose seat
   moved or that a person stopped is not handed an instruction it will never act
-  on. And as a **user** message, never a system message: the system prompt is
+  on. As a **user** message, never a system message: the system prompt is
   the frozen prefix a provider caches on.
-- **A launch's brief.** A note waiting when the turn launches its executor —
-  the first launch, or a relaunch — goes into the launch's brief, recorded read
-  by the write that opens the launch. A brief that starts a fresh session
+- **A launch's brief.** A note waiting when the turn launches its executor
+  (first launch or relaunch) goes into the brief, recorded read
+  by the write that opens the launch. A brief starting a fresh session
   carries every note the turn has read; one that [continues the turn's
   session](code-sandbox.md#a-relaunch-continues-the-turns-session) carries the
-  notes the session has not read — every note read after the session was saved,
-  by the run that went on in it or by a review, which is never the session's —
-  and then the new ones. A session whose harness was cut off, or is not known
-  to have ended its own run, is told every note the turn has read before the
-  new ones, as notes it may already show: the session is not known to hold
-  its job's brief, which told the notes the session it continued lacked. One whose
-  harness ended its own run is told, the same way, every note from the first
-  read its record marks unanswered — a review's take whose answer never
-  reached it, below — or restarted, a note its session shows a hook took only
-  before its last restart, or from the first note a hook served that no step
-  has read, since it may lack that note and holds the ones after it. And a
-  note the run's bridge served its harness — OpenCode's or a hook's, below,
-  which it may hold with nothing yet saying so — is told to a continued
-  session the same way, among the new ones as much as among the read. In a
-  box running a Claude Code release whose resume the engine has not read,
-  every note from the first one a hook's step read is told so too. Such a
-  session is told again, apart and before its calls, the messages its job's
-  brief opened with as well, the answer, review or turn's task that carried it
-  on, which the engine keeps beside the run's record for it ([A relaunch
+  notes the session has not read (every note read after the session was saved,
+  by the run that went on in it or by a review, which is never the session's)
+  and then the new ones. A continued session is told again, as notes it may already show:
+  - every note the turn has read, if its harness was cut off or is not known
+    to have ended its own run (it is not known to hold its job's brief, which told the notes the session it continued lacked);
+  - if its harness ended its own run, every note from the first
+    read its record marks unanswered (a review's take whose answer never
+    reached it, below) or restarted (a note its session shows a hook took only
+    before its last restart), or from the first note a hook served that no step
+    has read, since it may lack that note and holds the ones after it;
+  - a note the run's bridge served its harness (OpenCode's or a hook's, below),
+    which it may hold with nothing yet saying so, among the new ones as much as among the read;
+  - in a box running a Claude Code release whose resume the engine has not read,
+    every note from the first one a hook's step read.
+
+  Such a session is also told again, apart and before its calls, the messages its job's
+  brief opened with (the answer, review or turn's task that carried it
+  on), which the engine keeps beside the run's record ([A relaunch
   continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session));
-  a note is never among them, each note being told by the rule above.
+  a note is never among them.
 - **Between the executor's own steps.** The executor's [tool bridge serves its
-  notes](code-sandbox.md#notes-to-a-running-run) to its harness, and a harness
-  that takes them there reads a note after its current step. Each note is
+  notes](code-sandbox.md#notes-to-a-running-run) to its harness, which reads a note after its current step. Each note is
   recorded **served** to the run's job by a write before the answer, so a note
   its harness may hold is never one the record says nothing of, and is
   recorded read only once that
   is known: OpenCode's plugin confirms it, and a Claude Code hook's note once
   the job's own session shows the hook took it, which the read of the job's
-  box finds as the job is collected, stopped or lost (a session that may not
-  show the notes it was handed is told them again when it is continued, as
-  notes it may already show: a launch's brief, above). A serve the store did
+  box finds as the job is collected, stopped or lost. A serve the store did
   not answer within the hook's five seconds hands the harness nothing and is
   removed, its notes waiting for the next step; one the harness gave up is
-  served again at the job's next step, three times at most. **Claude Code** takes
-  them through hooks the run is started with: once every tool call of a batch
-  the main agent made has its result (`tool_batch`) — the model reads the note
-  after those results, as context the harness adds of its own: a system message after them, or on some
-  models a reminder at the end of the last one — and as the run is about to
-  finish (`finish`), when a note continues the turn and
-  the run's result is the answer given after it. A subagent's batch takes
-  nothing, because a note handed to a delegated loop binds that piece of work
-  alone; the note waits for the main agent's next step. **OpenCode** takes
-  them through a plugin its run's server loads, which hands each note to the
-  run's own session while it works, each recorded **served** to the run's job
-  before the plugin is handed it, and read only once the plugin confirms
-  OpenCode delivered it; OpenCode puts it before the model at the
-  session's next step (`step`) — after the tool results of the step in flight,
-  or after a final step that called no tool, so a note sent while the run
-  writes its answer still reaches it, and the run's result is the answer given
-  after it. A note that arrives once the session has settled waits for the
-  review.
+  served again at the job's next step, three times at most.
+  - **Claude Code** takes
+    notes through hooks the run is started with: once every tool call of a batch
+    the main agent made has its result (`tool_batch`), the model reads the note
+    after those results, as context the harness adds (a system message, or on some
+    models a reminder at the end of the last result); and as the run is about to
+    finish (`finish`), when a note continues the turn and
+    the run's result is the answer given after it. A subagent's batch takes
+    nothing, because a note handed to a delegated loop binds that piece of work
+    alone; the note waits for the main agent's next step.
+  - **OpenCode** takes
+    them through a plugin its run's server loads, which hands each note to the
+    run's own session while it works, each recorded **served** before the plugin gets it, and read only once the plugin confirms
+    OpenCode delivered it. OpenCode puts it before the model at the
+    session's next step (`step`), after the tool results of the step in flight,
+    or after a final step that called no tool, so a note sent while the run
+    writes its answer still reaches it, and the run's result is the answer given
+    after it. A note arriving once the session has settled waits for the
+    review.
 - **The review's first round.** A note the run never took is read by the
-  segment that reviews the run, before its first provider call — so the work
+  segment that reviews the run, before its first provider call, so the work
   is always judged against the note.
 - **A run parked on its question** holds its notes: `steer_turn` answers
   `reads: "after_answer"`, its harness takes nothing while it waits, and the launch
   that carries the answer carries the notes in its brief.
 
+A message the turn's own requester sends about its work while the run works
+reaches it the same way without anybody steering: the seat's router hands it
+over from the held inbox as a wake, rendered as that writer's message rather
+than a note, and a wake from anybody else waits for a turn of its own
+([Code Sandbox](code-sandbox.md#notes-to-a-running-run),
+[ADR-0167](../../adr/0167-a-busy-seats-wake-from-its-requester-joins-the-running-run.md)).
+
 ### Rules
 
 - **It binds the rest of the turn.** A note read once is carried, as the same
-  message, into every later phase: the reviewer that judges the work opens with
-  it, and so does every executor iteration after it. A segment that resumes the
-  turn from its run carries every note the run's record says the turn read —
-  the record is the carry, whichever node resumes it — in the order the
-  record's own writes read them, never by any node's clock: the launch, the
-  run's bridge and the resumed segment can each be on a different node, and a
-  later note is the one that wins. Without that the reviewer would grade the
-  work against the task the person had corrected.
+  message, into every later phase: the reviewer opens with it, and so does every
+  later executor iteration. A segment that resumes the turn from its run carries
+  every note the run's record says the turn read, in the order the record's own
+  writes read them, never by any node's clock (launch, bridge and resumed
+  segment can each be on a different node); a later note wins. Otherwise the
+  reviewer would grade the work against the task the person had corrected.
 - **Not every loop reads it.** A [worker](#workers) is a leaf its parent
   directs, so a note offered while a worker runs waits for the executor's next
-  round. An executor's subagents take nothing: a note handed to a delegated
-  loop would bind that piece of work alone. The onboarding pass and the
-  extension judge do not read notes either.
-- **Whose turn it is to steer.** The seat's holder, whoever leads the seat,
-  or an administrator (`admin`) — never a seat, and never any reader,
-  since everybody signed in holds a credential. Once the turn's run is out the
-  seat is the one the record's sealed anchor names, read by the asking node
-  itself. Before that the seat is the one thing the asking node cannot know,
-  because the turn runs wherever its seat is held, so the decision takes two
-  steps: first on the turn as named — `admin` admits there and then, and a
-  caller who leads nobody is refused with exactly the answer a seat they do not
-  lead gets — and otherwise a **probe** asks the node running the turn which
-  seat it is, and the note is decided on that seat before it is offered. A
-  probe nobody answers is `unavailable`, never a refusal: no answer says nothing
-  about whose turn it was. An anchor that does not open decides nothing, and
-  the note is refused `unavailable` under no wait, the tool's sentence saying
-  why. One sealed under a key the asking node does not hold is the fleet's
-  nodes not holding the same keys, the condition a note the running node
-  cannot verify is too, and the sentence says only that an administrator needs
-  to give the fleet's nodes the same keys. That sentence is the calling
-  assistant's; a person steering from the dashboard is answered in the
-  refusal's code alone (ADR-0060). The keys that node holds are in its log
-  (`steer_seat_key_unknown`, `held_keys`), where whoever administers the
-  keyring reads them.
+  round. An executor's subagents take nothing: a note given to a delegated loop
+  would bind that piece alone. The onboarding pass and the extension judge read
+  no notes.
+- **Whose turn it is to steer.** The seat's holder, whoever leads the seat, or
+  an administrator (`admin`) — never a seat, and never any reader, since
+  everybody signed in holds a credential. Once the turn's run is out, the seat
+  is the one the record's sealed anchor names, read by the asking node. Before
+  that the asking node cannot know the seat (the turn runs wherever its seat is
+  held), so the decision takes two steps: first on the turn as named — `admin`
+  is admitted there and then, and a caller who leads nobody is refused with
+  exactly the answer a seat they do not lead gets — and otherwise a **probe**
+  asks the node running the turn which seat it is, and the note is decided on
+  that seat before it is offered. A probe nobody answers is `unavailable`,
+  never a refusal: no answer says nothing about whose turn it was. An anchor
+  that does not open decides nothing, and the note is refused `unavailable`
+  under no wait, the tool's sentence saying why. An anchor sealed under a key
+  the asking node does not hold means the fleet's nodes do not hold the same
+  keys (as for a note the running node cannot verify); the sentence says only
+  that an administrator needs to give the fleet's nodes the same keys. That
+  sentence is the calling assistant's; a person steering from the dashboard is
+  answered in the refusal's code alone (ADR-0060). The keys that node holds are
+  in its log (`steer_seat_key_unknown`, `held_keys`), where whoever administers
+  the keyring reads them.
 - **One node answers a scatter.** Every node serves the subject and the note
-  names the turn; the node running it is the only one that can answer, so
-  nothing has to know where a turn runs. It keeps answering `closed` (the
-  tool's `not_running`) for the last 256 turns it ended, because a note races a
-  turn's end by seconds. No answer at all inside the two-second budget is
-  `unknown`, never `not_running`: a reply lost on the way back looks exactly
-  like none.
+  names the turn; only the node running it can answer, so nothing has to know
+  where a turn runs. It keeps answering `closed` (the tool's `not_running`) for
+  the last 256 turns it ended, because a note races a turn's end by seconds. No
+  answer inside the two-second budget is `unknown`, never `not_running`: a
+  reply lost on the way back looks like none.
 - **Only a note the fleet signed reaches a turn.** The scatter and every answer
-  to it are signed under the fleet keyring and bound to one request — an id and
-  a deadline inside the signature, the answer naming the id — and every
+  to it are signed under the fleet keyring and bound to one request (an id and
+  a deadline inside the signature, the answer naming the id), and every
   person's note on a run's record is sealed under the same keyring (a late
   call's item, the log's own account, is not, and speaks for nobody), by the
-  same rule every
-  state-log record and every estate request is held to
+  rule every state-log record and estate request is held to
   ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md)).
   A note whose seal does not open is never handed to a model, carried or
   recorded as anybody's (`steer_note_unverified`, at ERROR); one under a key a
   node does not hold waits for a node that holds it (`steer_note_key_unknown`,
-  naming the keys this node holds), and the run's harness confirming it to
-  such a node is turned away to ask again (`steer_read_key_unknown`).
-- **A note is one note.** Its id is the person's request id, so a retry of one
-  request is answered `accepted` without being read twice. A turn holds at most
-  **five** unread notes and takes at most **ten** in all — refused past them
-  with `notes_full` (send it again once the turn has read what it holds) and
-  `notes_spent` (nothing more this turn) — and each note is at most
-  **2,000 characters**: a paragraph re-points work in flight, and more than that
-  is a brief that belongs on the work item.
+  naming the keys this node holds), and the run's harness confirming it to such
+  a node is turned away to ask again (`steer_read_key_unknown`).
+- **A note is one note.** Its id is the person's request id, so a retry is
+  answered `accepted` without being read twice. A turn holds at most **five**
+  unread notes and takes at most **ten** in all; past them it refuses with
+  `notes_full` (send again once the turn has read what it holds) and
+  `notes_spent` (nothing more this turn). Each note is at most **2,000
+  characters**: more than a paragraph is a brief that belongs on the work item.
 - **What became of it is on the record.** A note the turn reads is recorded
   `agent_turn_steered{delivered}` with the phase, iteration and round that first
   read it, the kind of step that read it (`boundary`: `round`, `brief`,
-  `tool_batch`, `finish` or `step`) and, for a read by the executor in its
-  box, its launch (`launch_id`); the phase's `steers[]` and the live call's say the same.
-  A note a Claude Code hook served is recorded `delivered` at the hook's step
-  once the job's session shows the hook took it, by the node that read the
-  job's box. A note a review's take recorded read while its answer was lost has no
-  `delivered` record of that take, and the execute phase's `steers[]` does not
-  list it there: its harness was never handed it, and the review reads it
-  carried, as it reads every note the turn has read, which records nothing
-  anew. A note a first segment's box held when the segment ended without
-  launching a run is recorded `expired` as the box closes. Every note on a
-  run's record that no step reported reading is recorded by the node that
-  finishes the run's ending, as the record knows it, before the record is
-  deleted, under an id derived from the ending, so a retried ending records it
-  once: `delivered` with `retold` where a later launch's brief told a note a
-  take had never handed over and that launch's job started, at that brief;
-  `unconfirmed` where the run's harness was handed it and never confirmed it,
-  OpenCode's plugin or a hook's job's session (its session may hold it);
-  `missed` where a take whose answer was lost recorded it read and no later
-  launch whose job started told it, at that take's step, a launch that told it
-  again and failed before its job started among them, or where every serve of
-  it to a job's hooks was lost and one of those serves' sessions proves it
-  absent, at the last of them; `unconfirmed` too, at the last of them, where
-  every lost serve was one its harness gave up, since the answer can outrun
-  the cancel; and `expired` where it still waits or was read first into the
-  brief of a job that never started. A park is never an ending: a question can wait
-  days, and the segment that resumes reads what waited. A note is not carried
-  to a later turn: it is about the work in flight.
+  `tool_batch`, `finish` or `step`) and, for a read by the executor in its box,
+  its launch (`launch_id`); the phase's `steers[]` and the live call say the
+  same. A note a Claude Code hook served is recorded `delivered` at the hook's
+  step once the job's session shows the hook took it, by the node that read the
+  job's box. A note a review's take recorded read while its answer was lost has
+  no `delivered` record of that take, and the execute phase's `steers[]` does
+  not list it there (its harness was never handed it); the review carried it,
+  as it carries every note the turn has read, recording nothing anew. A note a
+  first segment's box held when the segment ended without launching a run is
+  recorded `expired` as the box closes. Every note on a run's record that no
+  step reported reading is recorded by the node that finishes the run's ending,
+  before the record is deleted, under an id derived from the ending (a retried
+  ending records it once):
+  - `delivered` with `retold`: a later launch's brief told a note a take had
+    never handed over, and that launch's job started; recorded at that brief.
+  - `unconfirmed`: the run's harness was handed it and never confirmed it
+    (OpenCode's plugin, or a hook's job's session, which may hold it); also, at
+    the last serve, where every lost serve was one its harness gave up, since
+    the answer can outrun the cancel.
+  - `missed`: a take whose answer was lost recorded it read and no later launch
+    whose job started told it, at that take's step (a launch that told it again
+    and failed before its job started is among them); or every serve of it to a
+    job's hooks was lost and one of those serves' sessions proves it absent, at
+    the last of them.
+  - `expired`: it still waits, or was read first into the brief of a job that
+    never started.
+
+  A park is never an ending: a question can wait days, and the resuming segment
+  reads what waited. A note is not carried to a later turn: it is about the work
+  in flight.
 
 ---
 
 ## The working status
 
-A turn triggered by a chat message raises a **working status** in that
-thread — "*Agent SWE is thinking…*" under the composer — for as long as the
-agent is on it. The turn engine owns the lifecycle, and it is the same on both
-chat backends; what differs is only what the indicator can *say* (see
+A turn triggered by a chat message raises a **working status** in that thread
+("*Agent SWE is thinking…*" under the composer) while the agent is on it. The
+turn engine owns the lifecycle, the same on both chat backends; only what the
+indicator can *say* differs (see
 [Mattermost § Working status](../integrations/mattermost.md#working-status),
 whose indicator carries no text):
 
 | Point in the turn | Effect |
 |---|---|
-| Turn start, before the turn assembles anything | Indicator raised, so the thread read, the knowledge search and the runner build all happen with the agent visibly on it. Not while the trigger is still queued behind a busy agent: nothing is running yet, and the indicator says one is |
-| Each phase opening | Next line drawn from that phase's pool — *is getting crewleted in…* → *is crewleting…* → *is marking its own homework…* (see [Slack § Behaviour](../integrations/slack.md#behaviour)) |
+| Turn start, before the turn assembles anything | Indicator raised, so the thread read, knowledge search and runner build happen with the agent visibly on it. Not while the trigger is queued behind a busy agent: nothing is running yet |
+| Each phase opening | Next line from that phase's pool — *is getting crewleted in…* → *is crewleting…* → *is marking its own homework…* (see [Slack § Behaviour](../integrations/slack.md#behaviour)) |
 | Turn end (a reply, a skipped turn, a failure, a guard breach, budget exhaustion, a runner that could not be built) | Indicator cleared |
-| The executor launched its run — every turn's — and the run's row landed | Indicator **held** — the agent has neither replied nor given up, and the same `turn_id` resumes when the run completes |
-| A suspension the engine could not record | Indicator cleared: the run is settled and its box reclaimed on the spot, so nothing is coming back. A store that could not say whether the write landed keeps it instead, because a run it moved to running is one the completion poll resumes |
-| That run parked on a clarification question | Indicator cleared — the agent has stopped and a person may take days to answer. One turn's hold, so a second turn working in the same thread keeps its own |
-| A park the engine could not record | **Held where the claim went back, cleared where it could not.** A park arrives holding the run's claim, and the claim is the promise that a tail will run: given back, the completion is polled, collected and parked again, so the box really is still working and the indicator is honest. Unable to go back, the row would sit in a claim nothing re-takes — no poll, no redelivery, no answer, no reaper — so the run is settled like any other lost turn and the hold goes down with it |
-| That run settled instead of resuming — its box could not be read back, its row carried none of its turn's parked state, or a claim it took could not be given back | Indicator cleared: the record is deleted and the box reclaimed, so the parked turn is never resumed. The same hold and the same rule as a park; only the reason differs |
-| The resumed turn came back, the run's record could not be READ to find out which box to settle, and the store ended the run anyway | Indicator cleared. The store is asked to end the run while it is still the claim the tail took, and a claim it does end is a turn nothing will resume. Staying quiet would leave the row in a claim no poll, redelivery, answer or reaper picks up, with the indicator over it |
-| That same settle DECLINED, because the resumed turn had relaunched its executor (a reviewer's send-back, or an answer carrying the run on) before it returned | Indicator **left standing**, and what it now describes is the relaunched job. The ending is licensed for the claim alone, so a row the relaunch took back through launching is left to whoever moved it, no stop is reported, and that turn is coming back after all: the relaunched job's completion resumes the same `turn_id`, exactly as the suspended-for-a-run row above says |
+| The executor launched its run — every turn's — and the run's row landed | Indicator **held**: the agent has neither replied nor given up, and the same `turn_id` resumes when the run completes |
+| A suspension the engine could not record | Indicator cleared: the run is settled and its box reclaimed, so nothing is coming back. A store that could not say whether the write landed keeps it, because a run it moved to running is one the completion poll resumes |
+| That run parked on a clarification question | Indicator cleared: a person may take days to answer. One turn's hold, so a second turn in the same thread keeps its own |
+| A park the engine could not record | **Held where the claim went back, cleared where it could not.** A park arrives holding the run's claim, the promise that a tail will run: given back, the completion is polled, collected and parked again, so the box is still working and the indicator honest. Unable to go back, the row would sit in a claim nothing re-takes (no poll, redelivery, answer or reaper), so the run is settled like any other lost turn and the hold goes down with it |
+| That run settled instead of resuming — its box could not be read back, its row carried none of its turn's parked state, or a claim it took could not be given back | Indicator cleared: the record is deleted and the box reclaimed, so the parked turn is never resumed. Same rule as a park; only the reason differs |
+| The resumed turn came back, the run's record could not be READ to find out which box to settle, and the store ended the run anyway | Indicator cleared. The store is asked to end the run while it is still the claim the tail took, and a claim it does end is a turn nothing will resume; staying quiet would leave the row in a claim nothing picks up, with the indicator over it |
+| That same settle DECLINED, because the resumed turn had relaunched its executor (a reviewer's send-back, or an answer carrying the run on) before it returned | Indicator **left standing**, now describing the relaunched job. The ending is licensed for the claim alone, so a row the relaunch took back through launching is left to whoever moved it, no stop is reported, and the turn is coming back after all: the relaunched job's completion resumes the same `turn_id` |
 | The seat leaves the company's agent seats — removed from the chart, or made a person's and not an agent's again within the retirement grace | Indicator cleared as each of its runs is ended. The hold has usually gone down with the seat already; this covers the order in which it has not |
-| That run's resume | The hold taken back, never a second indicator over the first — and cleared when the resumed turn ends. A resume driven by a person's ANSWER has no hold left to take back and raises a fresh indicator off the answer's own thread |
-| A resume that never reached its turn — a reply this build cannot read, a runner it could not build — or one whose turn broke without writing outside the engine, unless it is given up (it panicked, its relaunch failed and ended its run with it, or it was refused for good: `turn.ErrPermanent`, its round lost with its host past its limit), which settles the run and clears the indicator like any other turn end | **Held where a box's completion drove it, cleared where a person's answer did.** The claim reverts to exactly where it was taken from, and the two routes came from opposite facts: a live run, so the retry finds a box still working and nothing could put a cleared indicator back; or a question still open, so the run is awaiting that same person again — and nothing is left claiming otherwise, because this frame is the only thing that clears it: the coordinator's revert reports no stop (the same revert on the completion route puts a run back to a box that *is* still working), and the message that carried the answer is **handed back rather than run**, so no fresh turn comes along to raise an indicator in its place. The next attempt at that message raises its own. It used to fall through and be worked as an ordinary chat message, which answered the person with a turn instead of with the executor they were replying to. Where the revert itself cannot be written there is no retry on either route — the row is stuck in the claim — so the run is settled and the indicator cleared |
-| This node hands the seat to a peer, or shuts down | Indicator cleared, because a kept-alive one would otherwise be re-asserted by a node that is no longer running the turn |
+| That run's resume | The hold taken back, never a second indicator over the first — cleared when the resumed turn ends. A resume driven by a person's ANSWER has no hold left to take back and raises a fresh indicator off the answer's own thread |
+| A resume that never reached its turn — a reply this build cannot read, a runner it could not build — or one whose turn broke without writing outside the engine, unless it is given up (it panicked, its relaunch failed and ended its run with it, or it was refused for good: `turn.ErrPermanent`, its round lost with its host past its limit), which settles the run and clears the indicator like any other turn end | **Held where a box's completion drove it, cleared where a person's answer did.** The claim reverts to where it was taken from. Completion route: a live run, so the retry finds a box still working and nothing could put a cleared indicator back. Answer route: a question still open, so the run is awaiting that person again; the coordinator's revert reports no stop and the answering message is **handed back rather than run**, so no fresh turn raises an indicator, and the next attempt at that message raises its own (it is never worked as an ordinary chat message). Where the revert itself cannot be written there is no retry on either route (the row is stuck in the claim), so the run is settled and the indicator cleared |
+| This node hands the seat to a peer, or shuts down | Indicator cleared, because a kept-alive one would be re-asserted by a node no longer running the turn |
 
-A trigger that is not a chat message raises nothing at all: a schedule tick, an
-`a2a_ask`, a work-item assignment and a sandbox completion carry no channel and
-no thread, so there is no composer for an indicator to appear under.
+A trigger that is not a chat message raises nothing: a schedule tick, an
+`a2a_ask`, a work-item assignment and a sandbox completion carry no channel or
+thread, so there is no composer to show an indicator under.
 
 The mechanism is Slack's
 [`assistant.threads.setStatus`](https://docs.slack.dev/reference/methods/assistant.threads.setStatus/)
 (there is no public typing API for bots —
 [slackapi/bolt-js#885](https://github.com/slackapi/bolt-js/issues/885)),
-driven by `internal/notify` and posted with the
-agent's own bot token. Sessions are keyed by `(handle, channel, thread_ts)`
-and reference-counted by `turn_id`, so two *different* turns for one agent in
-one thread — a queued follow-up, a colleague's ask arriving mid-conversation —
-share one heartbeat and the indicator comes down when the last of them
-finishes. A suspend/resume pair is one `turn_id` rather than two, so the
+driven by `internal/notify` and posted with the agent's own bot token. Sessions
+are keyed by `(handle, channel, thread_ts)` and reference-counted by `turn_id`,
+so two *different* turns for one agent in one thread (a queued follow-up, a
+colleague's ask mid-conversation) share one heartbeat and the indicator comes
+down when the last finishes. A suspend/resume pair is one `turn_id`, so the
 resumed half takes that single hold back instead of counting it twice.
 
-Every call is best-effort — the indicator is cosmetic and can never fail a
-turn, and it never delays one either: a raise and a phase change write the
-session's state and wake its own goroutine, so a chat instance that is slow to
-answer costs the agent's work nothing. What bounds an indicator whose turn
-never came back is the backend's own expiry (about two minutes on Slack) plus
-the points above where this node takes its own down — a run that parked or was
-settled, a seat handed to a peer, and shutdown. A process that is killed
-outright leaves the last one to lapse.
+Every call is best-effort: the indicator is cosmetic, can never fail a turn and
+never delays one (a raise and a phase change write the session's state and wake
+its own goroutine). An indicator whose turn never came back is bounded by the
+backend's own expiry (about two minutes on Slack) plus the points above where
+this node takes its own down. A process killed outright leaves the last one to
+lapse.
 
-Taking an indicator down stops its heartbeat **between** posts rather than in
-the middle of one: a request already sent is finished, and only then is the
-clear sent. Abandoning it instead would not withdraw it — the chat server
-still holds it, and could apply it after the clear, leaving "is thinking…" over
-a turn that had ended (or, on Mattermost, a typing indicator shown after the
-reply). Each request — the raise, a re-assertion, the clear — has five seconds,
-so a teardown waits at most one of each however many indicators it takes down,
-and the clear goes out even when the turn, the drain or the shutdown that asked
-for it has already been cancelled. A request that runs out of time is the one
-case left that can land late, and the backend's own expiry then takes it down.
+Taking an indicator down stops its heartbeat **between** posts, not in the
+middle of one: a request already sent is finished, and only then is the clear
+sent. Abandoning it would not withdraw it, since the chat server could apply it
+after the clear, leaving "is thinking…" over an ended turn (on Mattermost, a
+typing indicator after the reply). Each request (raise, re-assertion, clear)
+has five seconds, so a teardown waits at most one of each however many
+indicators it takes down, and the clear goes out even when the turn, drain or
+shutdown that asked for it is already cancelled. A request that times out is
+the one case that can land late; the backend's expiry then takes it down.
 
-Whether it appears at all is the org-wide `typing_status` setting on the chat
-block that triggered the turn (`always` by default, and the only other value is
-`addressed` — there is no `off`, because a reader who sees nothing cannot tell
-an agent working from an agent that is dead). The decision is the backend
-driver's, not the turn's: the turn says who it is and what woke it, and each
-chat surface answers for its own conversations, so a company running both is
-one wiring rather than two. On Slack the wording comes from per-phase pools
-that `integrations.slack.status_phrases` can replace. See
+Whether it appears is the org-wide `typing_status` setting on the chat block
+that triggered the turn: `always` by default, the only other value `addressed`
+(there is no `off`: a reader who sees nothing cannot tell a working agent from a
+dead one). The decision is the backend driver's: the turn says who it is and
+what woke it, and each chat surface answers for its own conversations. On Slack
+the wording comes from per-phase pools that `integrations.slack.status_phrases`
+can replace. See
 [Slack § Working Status](../integrations/slack.md#working-status-is-thinking)
 and [Mattermost § Working status](../integrations/mattermost.md#working-status).
-On the engine's [own chat](chatlet.md) the setting is `chat.chatlet.typing_status`,
-with the same two values and the same default, and the indicator is shown in
-the room on the dashboard: it is raised on the node running the turn as the
-seat's member of the room's [presence](chatlet.md#presence-typing-and-the-working-indicator),
-never written to the log, because it is true for minutes and worthless the
-moment the turn ends. Every node raises it for its own seats, including a node
-that serves no HTTP API, and the room's presence carries it to whichever node
-holds the sockets looking at the room. Its wording is the default phrase pools.
+On the engine's [own chat](chatlet.md) the setting is
+`chat.chatlet.typing_status`, same two values and default; the indicator shows
+in the dashboard room, raised on the node running the turn as the seat's member
+of the room's
+[presence](chatlet.md#presence-typing-and-the-working-indicator), never written
+to the log (true for minutes, worthless once the turn ends). Every node raises
+it for its own seats, including one that serves no HTTP API, and the room's
+presence carries it to whichever node holds the sockets looking at the room. Its
+wording is the default phrase pools.
 
 ---
 
 ## A turn's two identities
 
-A turn carries **two ids, and they are not the same value**. Getting this
-round the right way is what stops a retry being invisible.
+A turn carries **two ids, and they are not the same value**; this is what keeps
+a retry visible.
 
 | | What it names | Reproduced by a redelivery? |
 |---|---|---|
 | **run id** (`turn_id` on every event) | ONE execution of a turn | **No** — minted per dispatch |
 | **work key** (`work_key`) | the unit of work: the trigger events the dispatch derived it from | **Yes** — that is what it is for |
 
-A turn that breaks *before* it reached outside the engine is not abandoned:
-its trigger is NAK'd and the broker redelivers it, backing off from one second
-to thirty across twenty-five attempts (invariant 10 above). **So one unit of
-work legitimately runs more than once** — a seat whose LLM credentials were
-missing fails, an operator fixes them, and the next redelivery succeeds.
+A turn that breaks *before* it reached outside the engine is not abandoned: its
+trigger is NAK'd and the broker redelivers it, backing off from one second to
+thirty across twenty-five attempts (invariant 10 above). **So one unit of work
+legitimately runs more than once** (a seat's missing LLM credentials fail the
+turn, an operator fixes them, the next redelivery succeeds).
 
-Each of those runs is its own turn: its own `turn_id`, its own phase records,
-its own row in **Turns**, its own outcome and its own token count. That is why
-a turn that failed and then recovered shows as two rows rather than one row
-that is somehow both — and the dashboard marks the second one `re-run` so the
-two read as what they are. The work key is what relates them: ask for
-`work_key` on `/events` or on the turns list to get every attempt at one
+Each run is its own turn: its own `turn_id`, phase records, row in **Turns**,
+outcome and token count. A turn that failed and then recovered shows as two
+rows, the second marked `re-run` on the dashboard. The work key relates them:
+ask for `work_key` on `/events` or on the turns list to get every attempt at one
 trigger.
 
 Everything that must happen **once per unit of work however many times it
-runs** keys on the work key, never on the run: the completion ledger, the
+runs** keys on the work key, never the run: the completion ledger, the
 [episode row](agent-learning.md), the counterparty interaction count, and the
 derived ids that make a re-run's tracker comment, work-item update and **filed
-work item** land once.
-A create's id is derived from the work key, the project and the title, so a
-turn that filed its work and then broke files it once, not again on the retry;
-two creates of the same title into the same project in one run are the one
-pair that collapses, and that pair is a repetition rather than two pieces of
-work. Everything that
-describes **one execution** keys on the run: the phase records, the live view,
-an [executor's launch](code-sandbox.md) and its MCP bridge session.
+work item** land once. A create's id is derived from the work key, the project
+and the title, so a turn that filed its work and then broke files it once; two
+creates of the same title into the same project in one run are the one pair
+that collapses, being a repetition rather than two pieces of work. Everything
+that describes **one execution** keys on the run: the phase records, the live
+view, an [executor's launch](code-sandbox.md) and its MCP bridge session.
 
-Those derived ids name the **call** as well as the work: the unit of work, the
-tool, the verb, the item, and a digest of the tool call's own arguments. So a
-re-run that makes the same call writes once, while two different calls in one
-turn — an item moved to `in_progress` and later to `done`, two comments on one
-item, one write two tools each make with the same arguments — are two writes.
-Every id a call's writes carry is derived from **one key per call**, the same
-for the tracker, the knowledge base and chat, digest included, so one object
-named two ways — a page by its id and by `ENG/Runbook`, a room by its id and by
-its name — is two different calls, to the digest and to the count below
-alike. Each id also carries **how many different calls to the same tool the
-run made before it**, so a call made again after a different one is a new
-write: an item moved to `in_progress`, then `done`, then back to `in_progress`
-ends `in_progress`, where the third move used to be answered as the first
-one's retry and the item stayed `done`.
-Where two tools write one state in opposite directions — `join_channel` and
-`leave_channel` on a chat room's membership — the count is kept across the
-pair, so a join after a leave is a new write rather than the first join's
-retry. A call repeated with nothing different in between — an executor that
-asks twice, a retry after `unknown` — keeps its count and stays one write. Each id also carries **when the unit of
-work began** (the earliest trigger it was derived from), which a re-run
-reproduces exactly; that instant is what lets a node whose operation ledger may
-have lost the first run's row since answer a re-run `unknown` rather than apply
-it twice (see
+Derived ids name the **call** as well as the work: the unit of work, the tool,
+the verb, the item, and a digest of the call's own arguments. A re-run making
+the same call writes once; two different calls in one turn (an item moved to
+`in_progress` and later `done`, two comments on one item, one write two tools
+each make with the same arguments) are two writes. Every id a call's writes
+carry derives from **one key per call**, the same for tracker, knowledge base
+and chat, digest included, so one object named two ways (a page by its id and
+by `ENG/Runbook`, a room by its id and by its name) is two different calls, to
+the digest and to the count below alike. Each id also carries **how many
+different calls to the same tool the run made before it**, so a call made again
+after a different one is a new write: an item moved to `in_progress`, then
+`done`, then back to `in_progress` ends `in_progress`. Where two tools write one
+state in opposite directions (`join_channel` and `leave_channel` on a room's
+membership) the count is kept across the pair, so a join after a leave is a new
+write. A call repeated with nothing different in between (an executor that asks
+twice, a retry after `unknown`) keeps its count and stays one write. Each id
+also carries **when the unit of work began** (the earliest trigger it was
+derived from), which a re-run reproduces exactly; that instant lets a node whose
+operation ledger may have lost the first run's row answer a re-run `unknown`
+rather than apply it twice (see
 [Replication](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted)).
-A wake Worklet, Doclet or Chatlet produces is stamped
-with the instant of the change it announces rather than the moment it was delivered, so
-every copy of it — a change-feed redelivery, a delivery retried after a failed
-publish — carries the same instant as well as the same id, and a re-run woken
-by a later copy derives the first run's ids.
+A wake Worklet, Doclet or Chatlet produces is stamped with the instant of the
+change it announces, not its delivery, so every copy (a change-feed redelivery,
+a delivery retried after a failed publish) carries the same instant and id, and
+a re-run woken by a later copy derives the first run's ids.
 
-**A unit of work older than the ledger is rebased.** The instant an id carries
-is only useful while every node's operation ledger still covers it: the ledger
-keeps its rows thirty days, and an id minted before what a node's ledger swept,
-whose row is gone, is answered `unknown` and never published. Two things put a
-turn past that point. A trigger can be **dispatched** a month after it arrived
-— a seat's mailbox keeps what is published while nothing consumes it, so a seat
-nobody placed for a month, or a fleet that was down, is handed a backlog that
-old — and a turn can be **resumed** a month after it parked (below). Minted at
-the start, every write such a turn made would be lost on every node. So an
-attempt that finds its work's start **more than twenty-nine days** behind its
-own clock is rebased: its writes are minted at the attempt instead, and that
-instant is recorded in the fleet's [coordination store](coordination.md) under
-the unit of work — or under the run, for a turn with none — and logged as
-`turn_rebased`. A later attempt at the same work — the re-run a redelivery is,
-a retried resume, the next half of a turn parked on its executor's run, on whichever
-node takes it — inherits the recorded instant while it lies within the same
-twenty-nine days of its own clock, so a write the attempt before it made still
-collapses onto the first copy; past that it is rebased again. Every attempt is
-judged against its **own** clock, never against a decision an earlier attempt
-took: a retry weeks later is exactly as far past the ledger as if nobody had
-judged it before. The line sits a day short of the thirty because an attempt is
-judged when it starts and goes on deciding writes while it runs, and a day is
-far more than one attempt's rounds. What the rebase costs is the collapse
-across the line: an attempt judged just short of it and a retry judged just past
-it write under two instants, so a write the first made and the second repeats
-is written twice — the cheaper failure by far against every write lost. A
-comment on a work item, an item `create_work_item` files and a view
-`save_work_view` creates are spared that: each one's id is the key of its own
-row rather than an operation, and is derived as the work began even in a
-rebased attempt, so what the first attempt posted, filed or saved is found by
-its id and answered from its row rather than made again beside it — an answer,
-an edit or an unwatch since then stands, nobody is woken twice, and no second
-item takes a second key. The ordinary turn pays nothing for any of this: the
-coordination store is read only by an attempt whose start is past the line,
-since no earlier attempt can have rebased before it. An attempt that needs the
-store and cannot read it does not run; its delivery is handed back and retried.
+**A unit of work older than the ledger is rebased.** The ledger keeps rows thirty
+days; an id minted before what a node's ledger swept is answered `unknown` and
+never published. A trigger **dispatched** a month after it arrived (a backlog in
+a seat's mailbox, a fleet that was down) or a turn **resumed** a month after it
+parked (below) would lose every write. So an attempt that finds its work's start
+**more than twenty-nine days** behind its own clock is rebased: its writes are
+minted at the attempt instead, that instant is recorded in the fleet's
+[coordination store](coordination.md) under the unit of work (or the run, for a
+turn with none) and logged as `turn_rebased`. A later attempt at the same work
+(a re-run, a retried resume, the next half of a parked turn, on any node)
+inherits the recorded instant while it lies within twenty-nine days of its own
+clock; past that it is rebased again. Every attempt is judged against its
+**own** clock, never an earlier attempt's decision. The line is a day short of
+thirty because an attempt decides writes while it runs. The cost: an attempt
+judged just short of the line and a retry just past it write under two instants,
+so a write both make is written twice, the cheaper failure against every write
+lost. A comment on a work item, an item `create_work_item` files and a view
+`save_work_view` creates are spared: each id is the key of its own row, derived
+as the work began even in a rebased attempt, so the first attempt's result is
+found by its id and answered from its row (an answer, edit or unwatch since
+then stands, nobody is woken twice, no second item takes a second key). The ordinary turn pays nothing: the
+coordination store is read only by an attempt past the line. An attempt that
+needs the store and cannot read it does not run; its delivery is handed back and
+retried.
 
 **A re-run is recognised call for call, and only when its calls are the same.**
-Everything a derived id is made of — the work, the tool, the verb, the item,
-the arguments, the count — is something a re-run reproduces only by making the
-same calls, with the same arguments, in the same order. The model behind a
-re-run is sampled again, and where it words a title or a comment differently,
-that call is a different write: the re-run files a second item or posts a
-second comment beside the first run's. Nothing can soundly tell a reworded
-call from a new one — the arguments *are* the write, and two different sets of
-them may be one intent phrased twice or two intents — and a run that crashed
-leaves nothing a re-run could compare against: what it had called lived in
-that process, and only an executor run's bridged calls are written down. A call the
-re-run makes identically is still collapsed onto the first run's, and a
-re-run's `update_work_item` that sets fields to values they already hold
-changes nothing either way.
+Everything a derived id is made of (work, tool, verb, item, arguments, count) is
+reproduced by a re-run only by making the same calls, with the same arguments,
+in the same order. The model is sampled again, and where it words a title or
+comment differently, that call is a different write: the re-run files a second
+item or posts a second comment beside the first run's. Nothing can soundly tell
+a reworded call from a new one (the arguments *are* the write), and a run that
+crashed leaves nothing to compare against: only an executor run's bridged calls
+are written down. A call the re-run makes identically is still collapsed onto
+the first run's, and a re-run's `update_work_item` that sets fields to values
+they already hold changes nothing either way.
 
 A **resumed** turn is not a re-run. The collection of an executor's run
-re-enters the turn that parked on it, carrying the turn's id, its work key and when that work began
-on the run's row, so a park/resume pair is one turn on every screen and writes
-under the same ids in both halves — unless the resume comes **more than
-twenty-nine days after that work began**, when it is rebased like any other
-attempt (above): every attempt at the resume is judged against its own clock,
-and a resumed half whose earlier half was rebased inherits that instant rather
-than taking one of its own (see
-[Code Sandbox](code-sandbox.md#how-a-coding-task-runs)). Every segment that
-carries the executor's run on starts from what the turn already called — its
+re-enters the turn that parked on it, carrying the turn's id, work key and when
+that work began on the run's row, so a park/resume pair is one turn on every
+screen and writes under the same ids in both halves — unless the resume comes
+**more than twenty-nine days after that work began**, when it is rebased like
+any other attempt (above): each attempt at the resume is judged against its own
+clock, and a resumed half whose earlier half was rebased inherits that instant
+(see [Code Sandbox](code-sandbox.md#how-a-coding-task-runs)). Every segment that
+carries the executor's run on starts from what the turn already called: its
 collection once the run reports, its relaunch after a person
 [answers the run's question](code-sandbox.md#mid-run-clarification-ask_and_wait),
 and the session a node
 [re-opens](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
-for a run still going when it takes the seat over — so the counts in its ids
-continue rather than start again. What it starts from is the rounds the turn
-closed before the run and every call the run made over the tool bridge, each
-read by its canonical arguments, the form every later call is counted in: a
-first-party tool's value from a fixed set is read as its schema spells it, so a
-repeat the model spelt `Draft` after `draft` is the same call, not a new one. A
-delegated worker counts from the run's calls and its own, never a sibling's, and
-the run counts every worker's calls once their wave is done.
+for a run still going when it takes the seat over; so the counts in its ids
+continue. It starts from the rounds the turn closed before the run and every
+call the run made over the tool bridge, each read by its canonical arguments
+(a first-party tool's value from a fixed set is read as its schema spells it, so
+`Draft` after `draft` is the same call). A delegated worker counts from the
+run's calls and its own, never a sibling's, and the run counts every worker's
+calls once their wave is done.
 
 Where that shows on the screens:
 
@@ -1252,65 +1043,64 @@ Where that shows on the screens:
 | **Turns** | two rows, the later one tagged `re-run` |
 | A seat's **Turns** tab | two cards, the later one tagged `attempt 2/2` |
 | A **turn's own page** | the badge, plus a button to each other attempt saying whether it failed |
-| **Cost** and a seat's spend | two rows with their own real bills, each tagged `re-run` — the tokens are not summed, because each attempt genuinely spent them |
+| **Cost** and a seat's spend | two rows with their own real bills, each tagged `re-run`; tokens are not summed, because each attempt spent them |
 
 `adr/0017` records the decision and what folding the two into one value cost.
 
 ## Which work a turn is on
 
-A turn is charged to **one work item or to none** — never split between two —
-and every turn-level record says which, as `work_item{backend, id, key,
+A turn is charged to **one work item or to none**, never split, and every
+turn-level record says which, as `work_item{backend, id, key,
 project}` beside `work_item_basis`, the rule that named it. `backend` is
-`native` (Worklet), `jira`, `github` or `gitlab`; `id` is the identity (`key` is the label
-a person reads, and a rename or a move changes it); and
-`<backend>:<id>` is what is unique across trackers. The rules are tried in
-order, and the first that names an item wins:
+`native` (Worklet), `jira`, `github` or `gitlab`; `id` is the identity (`key` is
+the label a person reads; a rename or move changes it); `<backend>:<id>` is
+unique across trackers. The rules are tried in order, and the first that names
+an item wins:
 
 | Basis | When | Where the item comes from |
 |---|---|---|
-| `trigger` | the wake is about one item | a Worklet wake names its task; a Jira webhook names its issue by **issue id**; a GitHub event names `<repository id>#<number>` and a GitLab one `<project id>!<iid>` (or `#<iid>` for an issue). A code host's numeric repository or project id is what a rename or a transfer does not change, and GitHub's own global id is not used because a pull request has two: a comment carries its issue face's and a review its pull request face's |
+| `trigger` | the wake is about one item | a Worklet wake names its task; a Jira webhook its issue by **issue id**; a GitHub event `<repository id>#<number>` and a GitLab one `<project id>!<iid>` (or `#<iid>` for an issue). A code host's numeric repository or project id survives a rename or transfer; GitHub's global id is not used because a pull request has two (a comment carries its issue face's, a review its pull request face's) |
 | `asked_by` | the turn answers a colleague's `a2a_ask` | the item the **asking** turn was on, carried on the `a2a_request` wake: help given on a task is work on it, and the colleague's own trigger names nothing |
-| `resume` | the turn resumes after its executor parked it | the item the executor's row recorded at launch — the event that resumes it, a box's completion or a person's chat answer, names none |
+| `resume` | the turn resumes after its executor parked it | the item the executor's row recorded at launch (the resuming event, a box's completion or a person's chat answer, names none) |
 | `sole_write` | nothing above named an item, and the turn's own writes committed to **exactly one** task | resolved at completion only, because only then is "exactly one" a fact |
 
-Otherwise the turn is on nothing, which is the ordinary case for a chat wake,
-and the keys are **absent** rather than null. A wake that names no item — a
-person's priority list changing, a branch build, a Jira delivery that carried
-an issue key and no issue id — names nothing rather than an item keyed on a
-label.
+Otherwise the turn is on nothing (the ordinary case for a chat wake), and the
+keys are **absent**, not null. A wake that names no item (a person's priority
+list changing, a branch build, a Jira delivery that carried an issue key and no
+issue id) names nothing rather than an item keyed on a label.
 
 The first three are known before the turn runs, so `agent_turn_started`, every
 phase record and the live frames carry them from the start. The fourth appears
-only on the two completion records. **What counts as a write** is a task record
-Worklet's writer *committed* (`applied` or `pending`), made through any of
-the turn's tools or its delegated workers; a write the broker refused, one whose
-outcome is `unknown`, and a write to something that is not a task (a project's
-settings, somebody's list) count for nothing.
+only on the two completion records. **A write** is a task record Worklet's
+writer *committed* (`applied` or `pending`), made through any of the turn's
+tools or delegated workers; a write the broker refused, one whose outcome is
+`unknown`, and a write to something that is not a task (a project's settings,
+somebody's list) count for nothing.
 
 **Every turn parks on its executor's run**, so a turn is one turn in several
 segments. What it wrote before the park travels on its parked state
-(`execstate`, `Written`), and a segment that
-parks concludes no sole write — the resumed half may write a second item — so
-the segment that finishes the turn judges "exactly one" over the whole turn.
+(`execstate`, `Written`), and a segment that parks concludes no sole write (the
+resumed half may write a second item), so the segment that finishes the turn
+judges "exactly one" over the whole turn.
 
 **A Worklet item is charged for the turn.** Each completed segment adds what it
-spent to the task's own counters — its phases, its delegated workers, the
-round-cap judge, the auxiliary calls made inside it (tallied by the segment as
-each returns, its card's rewrite included) and, on a resumed segment, the
-launch it collected and what the engine spent on that launch while no segment
-was running (the executor's bridged tools and delegated workers, and the
-condensing of its report or failure at collection) — under
-an id naming the segment (`turn/<turn_id>/dispatch`,
-`turn/<turn_id>/resume/<launch_id>`), so a segment recorded twice counts once
-and only the dispatch segment counts a turn. A parked segment on nothing hands
-what it spent on its parked state (`execstate`, `Uncharged`), and the segment that finishes
-the turn pays it if a sole write charges the turn. See
+spent to the task's own counters: its phases, delegated workers, the round-cap
+judge, the auxiliary calls made inside it (tallied as each returns, its card's
+rewrite included) and, on a resumed segment, the launch it collected and what
+the engine spent on that launch while no segment was running (the executor's
+bridged tools and delegated workers, and condensing its report or failure at
+collection). The charge is under an id naming the segment
+(`turn/<turn_id>/dispatch`, `turn/<turn_id>/resume/<launch_id>`), so a segment
+recorded twice counts once and only the dispatch segment counts a turn. A parked
+segment on nothing hands what it spent on its parked state (`execstate`,
+`Uncharged`), and the segment that finishes the turn pays it if a sole write
+charges the turn. See
 [Spend is on the task](../guides/worklet.md#spend-is-on-the-task) and
 [ADR-0022](https://github.com/crewlet/crewlet/blob/main/adr/0022-a-turn-is-charged-to-one-work-item.md).
 
 ### A turn's stages
 
-One `turn_id` moves through four stages, and the records say which it is in:
+One `turn_id` moves through four stages, and the records say which:
 
 | Stage | What says so |
 |---|---|
@@ -1319,166 +1109,64 @@ One `turn_id` moves through four stages, and the records say which it is in:
 | **parked** | the newest `agent_turn_completed` / `turn_completed` carries `suspended: true` — the segment ended on its executor's detached run, and the same `turn_id` completes again when the run is collected |
 | **done** | a completion **without** `suspended`, or an `executor_failed` for the run a parked turn was waiting on: nothing resumes a turn whose run failed (a run whose job was lost with its host resumes its turn, to carry the round on) |
 
-A reader that took any completion for the end listed a parked turn as finished,
-with its first segment's duration. The turns list (`GET /turns`) reads the
-stages this way. The newest end makes a turn `complete` or `parked`, never
-both. An end is a completion or a lost run, and a lost run used to leave its
-turn parked for good. The turn's `duration_ms` is the sum of every segment's own
-measurement, which is the time the turn worked and not the time its executor
-took between segments. A segment is measured to the instant its work ended —
-the same instant its task's turn row takes its wall time from — even though its
-completion is published after its card has been rewritten to fit the task, so
-the two agree and neither counts the rewrite. The live projection reads the same four stages onto each
-seat's `turn`, from `context` to `parked`, so a seat whose turn is parked says
-so rather than saying it is idle (see [Agent States](agent-runtime.md#agent-states)).
+The turns list (`GET /turns`) reads the stages this way: the newest end makes a
+turn `complete` or `parked`, never both, and an end is a completion or a lost
+run. The turn's `duration_ms` is the sum of every segment's own measurement:
+the time the turn worked, not the time its executor took between segments. A
+segment is measured to the instant its work ended (the instant its task's turn
+row takes its wall time from), so the card rewrite published before the
+completion is not counted. The live projection reads the same four stages onto
+each seat's `turn`, from `context` to `parked`, so a parked seat says so rather
+than idle (see [Agent States](agent-runtime.md#agent-states)).
 
 ### Finding everything on one item
 
 The event log promotes the item into a column (`work_item`, node migration
 `0033`) holding `<backend>:<id>`, so `GET /events?work_item=` and
 `GET /turns?work_item=` answer "everything that happened on this item" with an
-index seek rather than a read of every payload in the window. It is a column
-of the node's own audit log, derived by the writer from each event it stores
-exactly as `turn_id` and `work_key` are. The episode memory files a turn
-under the same identity, in a column of the same name.
+index seek rather than a payload scan. It is a column of the node's own audit
+log, derived by the writer from each stored event as `turn_id` and `work_key`
+are. The episode memory files a turn under the same identity, in a column of the
+same name.
 
 ---
 
 ## Events and tracing
 
-Every turn opens one `agent.turn` OTel span with child spans `agent.turn.execute`, `agent.turn.review`, `agent.turn.judge` (one per extension-judge call, nested under the phase that fired it). A worker does not open a span of its own; it reports as an `agent_phase_completed` event with `phase=subagent`, `host_phase=execute`, its `task_id`, its `worker` template and the `host_round` whose `delegate` call spawned it, so a dashboard groups it under the executor round that delegated it and can pair it with a node of the graph. Each call also emits one `subagent_batched` carrying that graph and every task's status. The trigger event's OTel context is restored exactly once at the turn boundary so the span hierarchy is stable across agents.
+Every turn opens one `agent.turn` OTel span with child spans `agent.turn.execute`, `agent.turn.review`, `agent.turn.judge` (one per extension-judge call, nested under the phase that fired it). A worker opens no span; it reports as an `agent_phase_completed` event with `phase=subagent`, `host_phase=execute`, its `task_id`, its `worker` template and the `host_round` whose `delegate` call spawned it, so a dashboard groups it under the executor round that delegated it and can pair it with a graph node. Each call also emits one `subagent_batched` carrying that graph and every task's status. The trigger event's OTel context is restored exactly once at the turn boundary so the span hierarchy is stable across agents.
 
-The extension judge additionally emits an `AgentPhaseCompleted` event with `phase="judge"` carrying its model, token counts, duration and decision (`extend` / `rescue`), with the judge's own reason in `notes` — the same event as the executor / review phases, so **Turns** and the seat's own transcript render judge calls alongside the main phases without any frontend change. It carries no prompt and no response: the reason is the part of the answer a reader needs, and the evidence the judge read is the host phase's own record.
-
+The extension judge also emits an `AgentPhaseCompleted` event with `phase="judge"` carrying its model, token counts, duration and decision (`extend` / `rescue`), with its own reason in `notes` — the same event as the executor / review phases, so **Turns** and the seat's transcript render judge calls alongside the main phases. It carries no prompt and no response: the reason is what a reader needs, and the evidence the judge read is the host phase's own record.
 ### What streams during a turn
 
-A phase is not one LLM call — it is a loop of them, run by the seat's harness in
-one or more harness runs, and an operator watching the dashboard is watching that
-loop. Two events carry it:
+A phase is a loop of LLM calls, run by the seat's harness in one or more harness runs; the dashboard shows that loop. Two events carry it:
 
 | Event | When | Persisted |
 |---|---|---|
 | `AgentTurnProgress` | Once before the first request; as each harness run opens; as each model request is read; before and after each tool call; and as each run ends | No — stream only |
 | `AgentPhaseCompleted` | Once, when the phase ends | Yes |
 
-**Before the first request**, because the phase's prompt exists before its
-answer does. `AgentPhaseStarted` cannot carry it — every phase runner
-publishes that event and only then builds its prompt — so the projection
-seeds a placeholder call with no messages, and a live row showed "No
-prompt recorded" for the whole of the phase's first and largest LLM call.
-The opening update carries `prompt_messages` and nothing else, tagged
-`round_num = -1` (consumers read `round_num + 1` as "rounds so far", so
-the sentinel keeps it at zero rather than claiming a round).
+**Before the first request**, because the prompt exists before its answer. `AgentPhaseStarted` cannot carry it (every phase runner publishes that event and only then builds its prompt). The opening update carries `prompt_messages` only, tagged `round_num = -1` (consumers read `round_num + 1` as "rounds so far", so the sentinel keeps it at zero).
 
-**As each run opens, and as each request is read**, because a round has more
-than one moment worth showing. A run's opening frame carries
-`run_started_at`, its launch, which a reader draws the run in flight from — the
-harness's own requests are timed only once its record shows them, and a run's
-first moments are a process starting. A request's frame fires the instant the
-harness's record shows the model has answered, before any of the calls it asked for
-run: the model's prose is what explains the tool call that is about to happen,
-and holding it back until the round's slowest tool returns is holding it back
-for exactly as long as it is most useful. Then one frame **before each call**,
-listing it in `running_calls` — each `{id, round, name, arguments,
-started_at}` — because an execution is recorded only once its call has
-answered: a slow MCP server or a delegated worker takes minutes, and a live view
-that learned of a call only when it returned showed a seat doing nothing for
-exactly the stretch somebody was watching it. A **list**, because a harness may make
-a response's calls at once, and `id` — the call's id, the harness's own where it
-named one — is what tells two calls of one response apart and what the call's
-`tool_executions[]` row carries once it has answered. A frame after each call
-drops it from the list. A run that reads a person's
-[note](#steering-a-running-turn) publishes once more as it opens, the moment it
-takes the note, with the note's `{round, note_id}` in `steers`. And a frame
-fires as each run ends, adding it to `invocations` — the runs that have ended,
-each with its first and last round — and clearing `run_started_at`. The final
-request — the one that ends the phase by making no tool call — publishes when
-it is read, which is how a phase's closing answer streams at all.
+**As each run opens, and as each request is read:**
+- A run's opening frame carries `run_started_at`, its launch, which a reader draws the run in flight from.
+- A request's frame fires the instant the harness's record shows the model has answered, before any call it asked for runs: the prose explains the coming tool call.
+- One frame **before each call** lists it in `running_calls` — each `{id, round, name, arguments, started_at}` — because an execution is recorded only once its call has answered, and a slow MCP server or delegated worker takes minutes. A **list**, because a harness may make a response's calls at once. `id` is the call's id (the harness's own where it named one); it tells two calls of one response apart and is what the call's `tool_executions[]` row carries. A frame after each call drops it.
+- A run that reads a person's [note](#steering-a-running-turn) publishes once more as it opens, with the note's `{round, note_id}` in `steers`.
+- A frame fires as each run ends, adding it to `invocations` (the runs that have ended, each with first and last round) and clearing `run_started_at`.
+- The final request, the one that ends the phase by making no tool call, publishes when read, which is how a phase's closing answer streams.
 
-**The same text either way.** Both events build their `response` with
-`internal/agent/toolloop` over the same
-message list, so what streams live is what you read when you expand the
-finished turn — not a second assembly of it that can disagree.
+**The same text either way.** Both events build `response` with `internal/agent/toolloop` over the same message list, so what streams live is what you read in the finished turn.
 
-**A round is published while it is being written.** `llm.Request.OnDelta` asks
-a backend to stream; the tool loop accumulates the fragments into the round in
-flight and republishes at most five times a second, which is below the rate at
-which appearing text stops reading as live and well inside what the socket hub
-can carry. The fragment rides `partial_round` on `agent_turn_progress` —
-live-only, so nothing persists a half-written sentence — and is cleared the
-instant the round commits, because from then on its narration is
-authoritative. Watching is opt-in per CALL: only the tool loop sets `OnDelta`,
-because every other provider call in the engine (reflection, summaries, the
-extension judge) wants an answer rather than a running commentary. And a
-round streams only as finely as its harness's record does: a record that carries
-the model's text as it is written (Claude Code's `text_delta` events) streams
-it in fragments, and one that writes a response's prose only once it is
-finished delivers it in one piece ([what streams](llm-backends.md#finding-the-answer-in-the-harnesss-output)).
-Nothing above the backend reads the absence of fragments as a failure. The
-frame shows the round in flight redacted, a line at a time as its lines
-complete ([the live frame](event-system.md#what-an-agent-record-keeps)).
+**A round is published while it is being written.** `llm.Request.OnDelta` asks a backend to stream; the tool loop accumulates fragments into the round in flight and republishes at most five times a second. The fragment rides `partial_round` on `agent_turn_progress`, live-only (nothing persists a half-written sentence), cleared the instant the round commits. Watching is opt-in per CALL: only the tool loop sets `OnDelta`; reflection, summaries and the extension judge want an answer, not commentary. A round streams only as finely as its harness's record: Claude Code's `text_delta` events stream fragments; a record that writes prose only once finished delivers it in one piece ([what streams](llm-backends.md#finding-the-answer-in-the-harnesss-output)). Nothing above the backend reads absent fragments as a failure. The frame shows the round in flight redacted, a line at a time as its lines complete ([the live frame](event-system.md#what-an-agent-record-keeps)).
 
-**A tab is sent what moved.** Five frames a second would otherwise mean the
-whole call five times a second to every open dashboard — the prompt, every
-committed round's narration, every tool call — when only the round being
-written and the call in flight are moving. So a seat's `agents` push carries a
-call's heavy fields only when their version moved since the last push for the
-same call, and names every version always: a tab keeps the copy it holds of a
-field the push left out, and a tab that missed the push which moved one — the
-socket drops a slow tab's oldest frame — knows from the next push, and asks
-for the call whole. See [What the projection carries, and what the wire
+**A tab is sent what moved.** A seat's `agents` push carries a call's heavy fields only when their version moved since the last push for the same call, and names every version always. A tab keeps the copy it holds of a field the push left out; a tab that missed the push which moved one (the socket drops a slow tab's oldest frame) sees it from the next push and asks for the call whole. See [What the projection carries, and what the wire
 sends](../reference/api-endpoints.md#what-the-projection-carries-and-what-the-wire-sends).
 
-**`response` is a join, so the split travels beside it.** That string is
-the rounds' assistant turns joined with a blank line — every round's but a
-corrective's repeats: in a run of rounds that called nothing, the first
-answer is kept and the later ones, which re-wrote the same report in reply
-to a finishing corrective rather than to the task, are not, so a worker's
-`no_result` hands its parent its report once rather than three times, and a
-reviewer's prose reaches the record of its verdict once the same way. Every one of those rounds is
-still in `round_narration`, marked `declined`. And the join cannot
-be undone — its parts are separated by a blank line and prose contains
-blank lines, so a reader handed only the string cannot say which round
-said what. So both events also carry
-`round_narration`: one `{round, content}` per round, recorded
-where the round's assistant message is appended, which is the last frame
-that knows which round the turn belongs to — plus `declined: true` on a
-round that answered in prose where the phase had to end in a call (see
-[a phase that finishes by a call is asked again](#round-cap-extension-judge)). Its `round` matches
-`tool_executions[].round`, and that shared number is the whole contract —
-it is what lets a consumer interleave the two lists into one ledger of
-"what it said, what it called" without a second ordering
-rule. The three builders of that field used to be three hand-written
-assemblies, and the live one streamed a round's tool calls against an
-empty response whose prose arrived only once the phase was over.
+**`response` is a join, so the split travels beside it.** `response` is the rounds' assistant turns joined with a blank line, except that every round's but a corrective's repeats: in a run of rounds that called nothing, the first answer is kept and later ones (re-written reports answering a finishing corrective) are not, so a worker's `no_result` hands its parent its report once, and a reviewer's prose reaches its verdict's record once. Every such round is still in `round_narration`, marked `declined`. The join cannot be undone (prose contains blank lines), so both events also carry `round_narration`: one `{round, content}` per round, recorded where the round's assistant message is appended, plus `declined: true` on a round that answered in prose where the phase had to end in a call (see [a phase that finishes by a call is asked again](#round-cap-extension-judge)). Its `round` matches `tool_executions[].round`; that shared number is the whole contract for interleaving the two lists into one ledger of "what it said, what it called".
 
-**A prompt carries its outline.** `agent_phase_completed` publishes
-`system_sections` and `user_sections` beside `system_prompt` and
-`user_prompt`, and every message of the live opening frame's
-`prompt_messages` carries its own `sections` — one
-`{key, title, bytes, headed?}` per part of the prompt, in order, recorded
-by the builder in
-`internal/agent/prompts` as it appends each part. The text alone cannot
-say where a part ends: a chat trigger's body carries the engine's own
-`## Triage — decide BEFORE replying` and `## Thread context`, a pull
-request's description opens on its own `# Title`, a reviewer's evidence
-quotes a model's `## Summary`, and a reader splitting on `##` lines files
-each of those beside the task, review evidence or ledger that holds it.
-The builder knows, so the builder says: the whole trigger is the `task`
-section of the user message, each ledger and each piece of review
-evidence is one section, and a part with no heading of its own (the
-identity line, a worker's mandated rules) gets a title the builder chose.
+**A prompt carries its outline.** `agent_phase_completed` publishes `system_sections` and `user_sections` beside `system_prompt` and `user_prompt`, and every message of the live opening frame's `prompt_messages` carries its own `sections` — one `{key, title, bytes, headed?}` per part, in order, recorded by the builder in `internal/agent/prompts` as it appends each part. Text alone cannot say where a part ends: a chat trigger's body carries the engine's own `## Triage — decide BEFORE replying` and `## Thread context`, a pull request's description opens on its own `# Title`, a reviewer's evidence quotes a model's `## Summary`, so splitting on `##` lines misfiles them. The whole trigger is the `task` section of the user message, each ledger and each piece of review evidence is one section, and a part with no heading of its own (the identity line, a worker's mandated rules) gets a title the builder chose.
 
-**`headed: true` marks a part that opens on its own heading line**, whose
-text is its `title`; it is absent on every other part. A reader cannot
-tell the two kinds apart from the text, because a part the builder named
-often *opens* with somebody else's heading: a worker's persona, a task
-prompt the executor wrote and a trigger's body are other people's
-markdown, and "## Goal" or "# Fix the login bug" as their first line is
-the content's heading, nested under the part's title — not the part's
-own. A reader that took it for the part's own drew the builder's title
-in its place and lost the heading's words, so a reader takes a part as
-headed only when the map says so.
+**`headed: true` marks a part that opens on its own heading line**, whose text is its `title`; absent on every other part. A part the builder named often *opens* with somebody else's heading (a worker's persona, an executor-written task prompt, a trigger's body: "## Goal" is the content's heading, nested under the part's title). A reader takes a part as headed only when the map says so.
 
 | Prompt | Section keys, in the order they can appear |
 |---|---|
@@ -1489,143 +1177,76 @@ headed only when the map says so.
 | Onboarding system / user | `identity`, `onboarding_phase`, `what_to_do`, `discoverable_tools` / `instruction` |
 | Worker system / user | `task`, `tool_skills`, `discoverable_tools`, `worker_rules` / `dependencies`, `dependency_1` … `dependency_N`, `task` |
 
-The prefetched blocks are keyed on the [`prefetch_summary`](agent-runtime.md#system-prompts-per-phase)
-field that measured each one (`thread_context_hit`, `thread_context_bytes`,
-…), so a reader can put a block beside what the prefetch recorded about it.
-A key is a stable identifier; a title may carry the seat's own words (a
-unit's name). The map never changes a byte of the prompt — it is carried
-beside it, and the prompt's bytes are its cache key.
+The prefetched blocks are keyed on the [`prefetch_summary`](agent-runtime.md#system-prompts-per-phase) field that measured each one (`thread_context_hit`, `thread_context_bytes`, …). A key is a stable identifier; a title may carry the seat's own words (a unit's name). The map never changes a byte of the prompt (its bytes are its cache key).
 
-**The sections tile the prompt exactly**: the prompt is valid UTF-8, the
-sections' `bytes` sum to its length in UTF-8 bytes, every boundary falls
-on a rune boundary, every section is at least one byte, and no key
-repeats. The first rule is the one external content can break — a
-vendor's body with a stray byte — and JSON delivers such text with each
-invalid byte rewritten to U+FFFD, three bytes for one, so a map measured
-over what the builder joined no longer tiles what a reader receives. A separator between two parts
-belongs to the section before it, so a headed section starts with its own
-heading line. A prompt with no map omits the field, and a reader derives the outline from the prompt's own headings; a
-reader that finds a map breaking any of the rules above must do the same
-rather than slice by it. The engine never publishes one: a map that fails
-the check is withheld, and the node logs `prompt_outline_withheld` at
-warn naming the phase — a builder that started producing broken maps
-would otherwise degrade every screen with no symptom anybody could
-find.
+**The sections tile the prompt exactly**: the prompt is valid UTF-8, the sections' `bytes` sum to its length in UTF-8 bytes, every boundary falls on a rune boundary, every section is at least one byte, and no key repeats. External content can break the first rule: JSON rewrites each invalid byte to U+FFFD (three bytes for one), so a map measured over what the builder joined would no longer tile what a reader receives. A separator between two parts belongs to the section before it, so a headed section starts with its own heading line. A prompt with no map omits the field, and a reader derives the outline from the prompt's own headings; a reader that finds a map breaking any rule must do the same rather than slice by it. The engine withholds a map that fails the check and logs `prompt_outline_withheld` at warn naming the phase.
 
-**Every phase, workers included.** A [delegated worker](#workers) publishes
-the same `subagent` phase event with the same pair, because its card is the
-same round ledger and reads it the same way: its narration is what puts the
-worker's prose beside the tool calls each round made, where its
-executions alone would leave the ledger as bare tool rows with nothing that
-asked for them.
+**Every phase, workers included.** A [delegated worker](#workers) publishes the same `subagent` phase event with the same pair, because its card is the same round ledger: its narration puts its prose beside the tool calls each round made.
 
-**And one scale per phase, not per loop invocation.** The tool loop numbers
-its rounds from 1 each time it is *entered*, and an extended phase enters it
-again — so every publisher folds the invocation onto the rounds behind it.
-All three do it through one function, because they were three places that had
-to agree and did not: the live frame carried the invocation alone (an
-extension's first frame collapsed a twenty-round ledger to one), the round in
-flight was never renumbered (its streaming text overwrote the block of a
-committed round twenty rounds earlier), and the completed record took the
-invocation's token counters (every round before the extension billed, then
-dropped from the report).
+**And one scale per phase, not per loop invocation.** The tool loop numbers its rounds from 1 each time it is *entered*, and an extended phase enters it again, so every publisher folds the invocation onto the rounds behind it, all through one function. Otherwise a live frame would carry the invocation alone, the round in flight would overwrite a committed round's block, and the completed record would take only the invocation's token counters.
 
-**Never load-bearing.** Every phase telemetry publish is a live view of
-the phase, not part of it: a failure is logged
-(`phase_telemetry_publish_failed`) and not returned, so a broker hiccup
-cannot kill an otherwise healthy turn, and cannot stand in for the real
-error when the phase is already dying. This matters most for the opening
-update, which fires before the provider is called at all: a publish error
-returned there would end a phase that had not yet run.
+**Never load-bearing.** Every phase telemetry publish is a live view, not part of the phase: a failure is logged (`phase_telemetry_publish_failed`) and not returned, so a broker hiccup cannot kill a healthy turn or stand in for the real error of a dying one. This matters most for the opening update, which fires before the provider is called.
 
-Every **executor** phase is one phase in two segments. The launch publishes
-its `agent_phase_started`, carrying the fresh brief — the prompt a run that
-starts a session of its own is sent; a relaunch that continues a session
-publishes the continuation it handed its run as the phase's opening frame once
-it has its box, before the run starts — and parks without an
-`agent_phase_completed` of its own; the collection publishes the
-phase's completion, covering both: **one round**, from the launch to the
-collection, with the run's bridged calls inside it at the instants the bridge
-measured them, and a duration that is both segments' work and never the run
-between them (the launching segment's half travels on the parked state). The
-collected record carries no prompt — the launch's records already have it —
-and no tokens of the run: the run's own turns and tokens are on each
-launch's own `executor_collected` record, which is **no phase** but the
-round's work. Every spend reader files it under `execute`, and the dashboard
-draws a round's launches inside its card ([each launch is published as its own
-record](code-sandbox.md#what-ends-a-run-each-launch-is-published-as-its-own-record)).
+Every **executor** phase is one phase in two segments. The launch publishes `agent_phase_started`, carrying the fresh brief (the prompt a run that starts its own session is sent; a relaunch that continues a session publishes the continuation it handed its run, once it has its box, before the run starts), and parks without an `agent_phase_completed`. The collection publishes the completion covering both: **one round**, from launch to collection, with the run's bridged calls inside it at the instants the bridge measured, and a duration that is both segments' work and never the run between them (the launching segment's half travels on the parked state). The collected record carries no prompt (the launch's records have it) and no tokens of the run: those are on each launch's `executor_collected` record, which is **no phase** but the round's work. Every spend reader files it under `execute`, and the dashboard draws a round's launches inside its card ([each launch is published as its own record](code-sandbox.md#what-ends-a-run-each-launch-is-published-as-its-own-record)).
 
 ### What a turn records about its time
 
-Every figure below is measured by the process doing the work, at the frame
-that makes the call, and carried on the record as a start and a duration. A
-reader that reconstructed timing from when events arrived subtracted two
-publishers' clocks and a queue's latency, and a phase started on one node and
-finished on another had no honest answer at all. Starts are UTC instants;
-durations are milliseconds on the publishing node's monotonic clock, so a
-wall-clock correction mid-call cannot report a negative or inflated one.
+Every figure below is measured by the process doing the work, at the frame that makes the call, and carried as a start and a duration; timing reconstructed from event arrival would subtract two publishers' clocks and a queue's latency. Starts are UTC instants; durations are milliseconds on the publishing node's monotonic clock, so a wall-clock correction cannot report a negative or inflated one.
 
 | Where | Field | What it measures |
 |---|---|---|
-| `agent_phase_completed` | `started_at` | When **this segment** of the phase began. An executor is one phase in two segments — its launch and its collection — and its `duration_ms` covers both, so `started_at` is deliberately not "published minus duration" — that instant is when the first segment began, possibly a day earlier on another node, and the gap between the segments was the executor's launch rather than this phase |
+| `agent_phase_completed` | `started_at` | When **this segment** of the phase began. An executor is one phase in two segments (launch, collection) and its `duration_ms` covers both, so `started_at` is deliberately not "published minus duration": that instant is when the first segment began, possibly a day earlier on another node |
 | | `duration_ms` | The phase's own wall clock, extensions and an executor's launching segment included |
-| | `rounds[]` | One entry per model request, as the harness's record showed it: `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls, stop_reason}` — `stop_reason` is `end`, `tool_use` or `cap`, absent where the record named none. A run whose record shows no requests is one entry, untimed. The **model's half** of the round only — its tool calls are timed on their own rows — so a slow model and a slow tool are never one number. `round` is the scale `tool_executions[].round` and `round_narration[].round` share, across an extension and a resume. A collected executor states **one** round — the engine's one request, the launch, and its one answer, the collection — timed from the launch to the collection with the run's calls inside it, and carrying no tokens: the run's own turns and tokens are on each launch's `executor_collected` record |
-| | `max_rounds` / `round_ceiling` | The round cap the phase **ended** under (its base budget plus every extension the judge granted) and the most it could ever have been raised to. Never a ceiling below the cap: with extensions off the ceiling is the cap. An executor states `1` for both — its one round is the run, whose own turns are bounded by `max_turns`, not by this |
-| | `cache_read_tokens` / `cache_write_tokens` | The provider's prompt cache's share of `input_tokens`, summed over the rounds. A **breakdown** of the input, never an addition to it: `total_tokens` is still input plus output, and the cache's share is `cache_read_tokens / input_tokens` |
-| | `provider_key` | The `providers.llm` entry that **served** the phase — the operator's name beside the vendor's `model`. The chain reports the member that answered, so after a hand-off it is the entry that took over rather than the head that failed; latched with `model` by the same rule (the first completion that names one), and stated by the head until then. Empty on a phase no entry answered, exactly as its `model` is. A judge names its entry, and a worker the member of its own chain that answered |
+| | `rounds[]` | One entry per model request, as the harness's record showed it: `{round, started_at, duration_ms, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls, stop_reason}` — `stop_reason` is `end`, `tool_use` or `cap`, absent where the record named none. A run whose record shows no requests is one entry, untimed. The **model's half** of the round only (tool calls are timed on their own rows). `round` is the scale `tool_executions[].round` and `round_narration[].round` share, across an extension and a resume. A collected executor states **one** round, timed from launch to collection with the run's calls inside it, carrying no tokens (those are on each launch's `executor_collected` record) |
+| | `max_rounds` / `round_ceiling` | The round cap the phase **ended** under (base budget plus every extension granted) and the most it could ever have been raised to. With extensions off the ceiling is the cap. An executor states `1` for both: its one round is the run, whose own turns are bounded by `max_turns` |
+| | `cache_read_tokens` / `cache_write_tokens` | The provider's prompt cache's share of `input_tokens`, summed over the rounds. A **breakdown** of the input, never an addition: `total_tokens` is still input plus output, and the cache's share is `cache_read_tokens / input_tokens` |
+| | `provider_key` | The `providers.llm` entry that **served** the phase, beside the vendor's `model`. After a hand-off it is the entry that took over, not the head that failed; latched with `model` (the first completion that names one), the head until then. Empty on a phase no entry answered, as its `model` is. A judge names its entry, and a worker the member of its own chain that answered |
 | | `host_round` | On a worker (`phase=subagent`): the round of the executor whose `delegate` call spawned it. On a judge: the round the host phase ran out on. `host_iteration` names the turn iteration, which one phase of forty rounds spans whole |
 | | `launch_id` | On a collected executor: which launch it collected, since one turn can launch more than once |
 | | `work_item` | The item the turn is charged to, as the turn knew it when the record was published — absent while nothing named one |
-| | `invocations[]` | One entry per harness run of the phase, in order: `{started_at, duration_ms, provider_key, model, outcome, first_round, last_round, requests_observed, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. `outcome` is `end` (its model stopped), `cap` (its harness's own turn cap), `stopped` (the engine ended it: the phase finished, parked, paused for a note, handed a call to the next run, needed a re-list, ran out of rounds or was stopped) or `failed`. `first_round` and `last_round` name the run's rounds on the `rounds[].round` scale, both 0 on a run that made no request; `requests_observed` is false where the harness's record showed none and the run is one round. `tool_calls` counts the seat's tools it called. The dashboard groups a phase's rounds under "harness run N" by it |
-| `tool_executions[]` | `call_id` | The call's id — the harness's own where it named one (and the id its record joined the call by), the loop's otherwise — what pairs the call with its result in the conversation |
-| | `started_at` / `duration_ms` | When the call was handed to the surface and how long the surface took to answer — an executor run's call, which ran inside its harness's own loop, as the bridge it was made over timed it. **Absent** on a row nothing timed — a call whose arguments did not parse, one refused before any tool ran, one its run ended before — because absent means "not recorded" and a zero would mean "instant" |
-| | `origin` / `server` | Who **answered**: `builtin` or `mcp:<server>`, and the bare server name for the second. Absent on a call no tool answered — an unknown name, one not offered to the surface, one the skill guard refused — since the surface refused it before any server saw it |
-| | `source` | Whose tool the call **named**, in the same grammar, on every call whose name resolved to a registered tool, the ones refused before any tool ran included. A refused call is filed under the server it was for by this, which is what a server's count of refused calls reads. Absent on a name nothing registered |
-| | `refusal` | The class of a failure the engine classified (`forbidden` for a call refused where it was made, `unavailable` for an MCP server that was not running, and the rest of the classes a first-party tool states). Absent on a success and on a third-party server's own failure, which the engine does not classify |
+| | `invocations[]` | One entry per harness run of the phase, in order: `{started_at, duration_ms, provider_key, model, outcome, first_round, last_round, requests_observed, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, tool_calls}`. `outcome` is `end` (its model stopped), `cap` (its harness's own turn cap), `stopped` (the engine ended it: the phase finished, parked, paused for a note, handed a call to the next run, needed a re-list, ran out of rounds or was stopped) or `failed`. `first_round` and `last_round` are on the `rounds[].round` scale, both 0 on a run that made no request; `requests_observed` is false where the harness's record showed none and the run is one round. `tool_calls` counts the seat's tools it called. The dashboard groups a phase's rounds under "harness run N" by it |
+| `tool_executions[]` | `call_id` | The call's id — the harness's own where it named one (and the id its record joined the call by), the loop's otherwise — pairing the call with its result in the conversation |
+| | `started_at` / `duration_ms` | When the call was handed to the surface and how long it took to answer (an executor run's call as the bridge it was made over timed it). **Absent** on a row nothing timed (arguments that did not parse, a call refused before any tool ran, one its run ended before): absent means "not recorded", zero would mean "instant" |
+| | `origin` / `server` | Who **answered**: `builtin` or `mcp:<server>`, and the bare server name for the second. Absent on a call no tool answered (an unknown name, one not offered to the surface, one the skill guard refused) |
+| | `source` | Whose tool the call **named**, in the same grammar, on every call whose name resolved to a registered tool, refused ones included; a server's count of refused calls reads it. Absent on a name nothing registered |
+| | `refusal` | The class of a failure the engine classified (`forbidden` for a call refused where it was made, `unavailable` for an MCP server that was not running, and the rest of the classes a first-party tool states). Absent on a success and on a third-party server's own failure |
 | | `held` / `approved` | An executor run's call held for a person's approval (recorded `success: false`, since nothing it asked for happened, and no failure: the run's question for a person), and the call they let be made. Both withhold their arguments, which ride the run's record sealed, so `arguments` on either is `{}` and the dashboard says they are sealed. Absent on every other call |
-| | `arguments_unknown` | Why no record holds what the call was made with: `unread`, arguments in text that could not be read (what the model wrote did not parse and the call was answered unrun, or an executor run's record of the call does not read back), or `unkept`, an executor run's call still in flight as its round was read, whose entry kept its identity alone. `arguments` on such a row is not what the call sent, and the dashboard says the arguments are not known, and why, rather than drawing `{}`, which reads as the tool called with none. Absent on every other call |
+| | `arguments_unknown` | Why no record holds what the call was made with: `unread` (arguments in text that could not be read: the model's did not parse and the call was answered unrun, or an executor run's record of the call does not read back) or `unkept` (an executor run's call still in flight as its round was read, whose entry kept its identity alone). `arguments` on such a row is not what the call sent, and the dashboard says the arguments are not known, and why, rather than drawing `{}`. Absent on every other call |
 | `agent_turn_progress` | `rounds[]`, the cache tokens | As on the record, so far |
-| | `max_rounds` / `round_ceiling` | The cap the phase is running under **now** — an extension raises it mid-phase — and on the opening frame, before the model has answered once |
-| | `round_started_at` | When the latest round's provider call was made: the round being written while the model answers, the round whose tools are running after it has. Every round publishes a frame the moment its call is made, so a start later than every entry in `rounds[]` is a model call in flight and one equal to the last is that round's tools; the frame names the new round (`round_num`) and nothing from the one before it. Without it a unary round said nothing until it answered, and for the whole of a slow call a reader saw the previous round as the one in flight |
-| | `run_started_at` | When the harness run in flight was launched — the run whose rounds are past every entry in `invocations[]`, which lists only the runs that have ended. Absent between runs |
-| | `running_calls` | The calls in flight, in the order they arrived, each `{id, round, name, arguments, started_at}`: listed by the frame published immediately before a call runs and gone from the frame after it returns. Absent whenever no call is running |
+| | `max_rounds` / `round_ceiling` | The cap the phase is running under **now** (an extension raises it mid-phase), including on the opening frame |
+| | `round_started_at` | When the latest round's provider call was made: the round being written while the model answers, the round whose tools are running after it has. Every round publishes a frame the moment its call is made, so a start later than every entry in `rounds[]` is a model call in flight and one equal to the last is that round's tools; the frame names the new round (`round_num`) and nothing from the one before |
+| | `run_started_at` | When the harness run in flight was launched — the run whose rounds are past every entry in `invocations[]`. Absent between runs |
+| | `running_calls` | The calls in flight, in arrival order, each `{id, round, name, arguments, started_at}`: listed by the frame published immediately before a call runs and gone from the frame after it returns. Absent whenever no call is running |
 | | `invocations[]` | As on the record: the runs that have ended so far |
 | `agent_phase_started` | `work_item` | As on the record |
-| `executor_collected` | `started_at` / `duration_ms` | One launch of the executor's run, from its launch — dated by the store when it named the job — to its collection on the node that read the result, so the completion poll's interval is inside it. **Not a phase**: the round's work, published once per launch when it is collected ([each launch is published as its own record](code-sandbox.md#what-ends-a-run-each-launch-is-published-as-its-own-record)) |
+| `executor_collected` | `started_at` / `duration_ms` | One launch of the executor's run, from its launch (dated by the store when it named the job) to its collection on the node that read the result, so the completion poll's interval is inside it. **Not a phase**: the round's work, published once per launch when collected ([each launch is published as its own record](code-sandbox.md#what-ends-a-run-each-launch-is-published-as-its-own-record)) |
 | | `iteration` / `launch_id` | The executor round that launched it and the job: a round can launch more than once, so a launch is `(turn_id, iteration, launch_id)` |
 | | `activity_transcript` | The launch's own account of what it did, redacted; a long one keeps its first 64 KiB and its last 191 KiB in whole lines, with a note line where its middle was, all within 256 KiB. `activity_transcript_elided_lines` and `activity_transcript_elided_bytes` count what that left out (absent on a transcript kept whole) |
-| | `harness_turns` | The model turns the launch's harness reported its own loop took — its provider calls, which the engine neither made nor timed, and what every spend figure's `calls` counts the record as. Claude Code reports them; OpenCode's stream carries no count a reader can trust, so its launches report none and count as one call. The executor's own record counts none |
+| | `harness_turns` | The model turns the launch's harness reported its own loop took (its provider calls, which the engine neither made nor timed), and what every spend figure's `calls` counts the record as. Claude Code reports them; OpenCode's stream carries no trustworthy count, so its launches report none and count as one call. The executor's own record counts none |
 | | `cost_usd` | What the launch's harness said it billed, where it says so — the one figure that sees a subscription harness's spend, which never passes through the engine's token meter. The dashboard draws tokens and never money |
 | | `harness_session` / `harness_version` | The harness's own session the launch ran, and its release — each absent where the box named none of the shape a harness gives it |
 | | `brief` / `harness_session_continued` / `harness_session_fell_back` | Which brief the launch handed its run — `continued`, `continued_new_box`, `continued_conversation` or `fresh` ([a relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session), [a conversation's next turn continues its last turn's session](code-sandbox.md#a-conversations-next-turn-continues-its-last-turns-session)) — whether the run took up the session it was asked to continue, and why not where it did not, in one sentence cut to 1 KiB ([the whole record fits its event](code-sandbox.md#what-ends-a-run-each-launch-is-published-as-its-own-record)) |
 | | `session_taken_bytes` / `session_not_kept` | What the collection [took of the launch's session](code-sandbox.md#each-launchs-session-kept) to be kept: its sealed size, or why none was taken, cut to 1 KiB; whether it then landed is logged after the read (`executor_session_kept`, `executor_session_not_kept`); absent where nothing was taken |
 | `subagent_batched` | `started_at` / `round` | When the delegate call began and the executor round that made it, so a fan-out is placed under its call; each worker's `host_round` matches it |
-| `prefetch_summary` | `started_at` / `duration_ms` | The context assembly — the stretch between `agent_turn_started` and the first phase opening, which reads a diary, a thread and a knowledge base and calls an auxiliary model for two of them |
+| `prefetch_summary` | `started_at` / `duration_ms` | The context assembly: the stretch between `agent_turn_started` and the first phase opening, which reads a diary, a thread and a knowledge base and calls an auxiliary model for two of them |
 
-Every one of these is **additive and optional**: a figure nothing measured (a
-call whose arguments did not parse) is absent, decodes as absent and re-encodes as
-absent (a zero start is omitted rather than written as the year 1), so a
-timeline reads a missing figure as "not recorded". The cache counts are the one producer of that
-figure in the engine — every backend reports them on its completion, and until
-the loop kept them they reached nothing past the round's span attribute. The
-runner's own tally of a turn carries them too, beside the delegated workers'
-input and output kept apart from the turn's own totals.
+Every one of these is **additive and optional**: a figure nothing measured is absent, decodes as absent and re-encodes as absent (a zero start is omitted, not written as the year 1), so a timeline reads a missing figure as "not recorded". Every backend reports the cache counts on its completion; the runner's own tally of a turn carries them too, beside the delegated workers' input and output kept apart from the turn's own totals.
 
 ### Turn source (the triggering event)
 
-Every per-phase telemetry event (`AgentPhaseStarted`, `AgentPhaseCompleted`, `AgentTurnProgress`) and the `AgentTurnCompleted` aggregate carries a compact `trigger` descriptor, built by `types.DescribeTrigger` from the turn's trigger event. It records the `{id, type, summary, actor, timestamp}` of the event that *caused* the turn (a task assignment, notification, A2A request, schedule tick, or [work pickup](scheduling.md#the-work-pickup), whose `work_pickup` names the work item under the origin reason `pickup`, so the turn is filed on the item). When the trigger is an external notification it additionally carries the originating `integration` (slack, jira, github and so on), the human `sender`, and the `source_event_type`, so the dashboard labels the source with the actual integration (a branded Slack or Jira badge with the sender) instead of a generic "external notification". **Turns** renders this as the turn's own header line (what woke it, and the integration badge when one did) and the seat's transcript carries the same, linking to the full event when the trigger was persisted (`#/live/events/{id}`). The descriptor is empty for engine-internal turns with no trigger.
+Every per-phase telemetry event (`AgentPhaseStarted`, `AgentPhaseCompleted`, `AgentTurnProgress`) and the `AgentTurnCompleted` aggregate carries a compact `trigger` descriptor, built by `types.DescribeTrigger` from the turn's trigger event. It records the `{id, type, summary, actor, timestamp}` of the event that *caused* the turn (a task assignment, notification, A2A request, schedule tick, or [work pickup](scheduling.md#the-work-pickup), whose `work_pickup` names the work item under the origin reason `pickup`, so the turn is filed on the item). An external notification additionally carries the originating `integration` (slack, jira, github and so on), the human `sender`, and the `source_event_type`, so the dashboard shows a branded badge with the sender instead of a generic "external notification". **Turns** renders this as the turn's header line and the seat's transcript carries the same, linking to the full event when the trigger was persisted (`#/live/events/{id}`). The descriptor is empty for engine-internal turns with no trigger.
 
-Each phase row in that view leads with its **phase word** on the neutral pill (execute / review / auxiliary / subagent / judge / onboarding): a phase is a category, and the dashboard spends colour only on state, so a row that FAILED is the one that carries a hue — the danger rail — and every other row reads by its word. The standalone per-phase detail card is drawn the same way. Inside a chart a phase takes the series of the band the engine counts it in (see the [dashboard design](../reference/dashboard-design.md#the-one-rule)).
+Each phase row leads with its **phase word** on the neutral pill (execute / review / auxiliary / subagent / judge / onboarding): the dashboard spends colour only on state, so a FAILED row alone carries a hue (the danger rail). The standalone per-phase detail card is drawn the same way. Inside a chart a phase takes the series of the band the engine counts it in (see the [dashboard design](../reference/dashboard-design.md#the-one-rule)).
 
 | Event | Purpose |
 |-------|---------|
-| `agent_turn_started` | A turn beginning, published **before** its context is gathered, so a seat whose prefetch is reading a long thread is visibly working and a turn that dies there still leaves a row naming its run. Carries `turn_id`, `work_key`, the seat (`agent_id`, `agent_handle`, `role`), the `trigger` descriptor, `conversation_key` and `started_at` (the same instant `turn_completed` reports), plus `work_item` / `work_item_basis`, which are **absent** while nothing named the item the turn is on. Its depth and chain are the envelope's `delegation_depth` / `delegation_chain`. A turn resumed from its executor publishes one per segment with `resumed: true` under the **same** `turn_id`, once the segment is certain to run and the coordinator has recorded that it began (for a person's answer, that this turn took it) — a resume that could not start is retried as the same run, so it announces nothing. Every start is paired with the turn's `agent_turn_completed`, a turn whose runner could not be built included. A start with no completion is a turn that died in its own frames: a panic recovered outside the loop, which the `turn.guard_breach` under the same `turn_id` names, or a process that died under it |
+| `agent_turn_started` | A turn beginning, published **before** its context is gathered, so a seat whose prefetch reads a long thread is visibly working and a turn that dies there still leaves a row naming its run. Carries `turn_id`, `work_key`, the seat (`agent_id`, `agent_handle`, `role`), the `trigger` descriptor, `conversation_key` and `started_at` (the same instant `turn_completed` reports), plus `work_item` / `work_item_basis`, **absent** while nothing named the item. Its depth and chain are the envelope's `delegation_depth` / `delegation_chain`. A turn resumed from its executor publishes one per segment with `resumed: true` under the **same** `turn_id`, once the segment is certain to run and the coordinator has recorded that it began (for a person's answer, that this turn took it); a resume that could not start is retried as the same run and announces nothing. Every start is paired with the turn's `agent_turn_completed`, a turn whose runner could not be built included. A start with no completion is a turn that died in its own frames: a panic recovered outside the loop, which the `turn.guard_breach` under the same `turn_id` names, or a process that died under it |
 | `agent_turn_completed` | Extended with top-level fields `turn_id`, `execute_model`, `review_model`, `subagent_count`, `subagent_tokens` (and its halves `subagent_input_tokens` / `subagent_output_tokens`; on a resumed segment these include the workers its executor run delegated to over the tool bridge, which ran while no segment was running), `cache_read_tokens` / `cache_write_tokens` over the turn's own phases, `work_item` / `work_item_basis` (see [Which work a turn is on](#which-work-a-turn-is-on) — the one record that can name a `sole_write`), `suspended` on a segment that parked rather than ended, `iterations`, `decision`, `trigger` (the turn's source descriptor) (inherits `delegation_depth` / `parent_turn_id` / `delegation_chain` from the `Event` base). `turn_completed`, the learning subsystem's record of the same turn, carries the same `work_item`, `work_item_basis` and `suspended`, and `ask` — what the turn was asked, without the integration's wrapping — on a wake whose `interactions` do not already say it (a colleague's question, a schedule's task, a resumed segment); it has no `task_id` |
 | `turn.guard_breach` | A runtime invariant stopped the turn; `kind` names which one (`depth_cap`, `stall`, `max_iter`, `scheduled_timeout`, `request_refused`, `unhandled_exception`) and `detail` carries its message |
-| `a2a_channel_opened` / `a2a_message_sent` / `a2a_channel_closed` | The channel an `a2a_ask` opened and its traffic, the only *recorded* delegation edge (see [What a delegation records](#what-a-delegation-records)). The target's `a2a_request` wake carries `delegation_depth + 1` and the requester appended to `delegation_chain`. Each record names the turn that published it in `turn_id` / `work_key`, which is what draws the exchange on that turn's page; a close performed by the idle sweep carries neither, because no turn finished it |
-| `prompt.size` | The size of one phase's OPENING prompt — the system and user text, and the **tool-definition array** (as compact JSON, with its count), plus a ~4-bytes-per-token approximation over all of it — so prompt growth is measurable across builds without reading every phase payload back. The figures are **bytes**, under keys that say so (`system_bytes`, `user_bytes`, `tool_bytes`): that is what the engine can measure without a tokenizer and what a vendor bounds a request body in, and a byte count agrees with a character count on ASCII while diverging on a prompt carrying non-Latin names, emoji or CJK. The array is counted because a harness is handed it literally wherever it runs — over its run's tool session on this host, and over the tool bridge for the executor's run in a box — and sends it to its model with every request; the figure is the **opening** array's, since a mid-phase `activate_tool` on a phase that discovers its tools adds to what later requests send. It is measured in one **canonical** shape (`{name, description, parameters}` per tool) rather than in any harness's own, so that one number is comparable across a chain that moved a seat between harnesses. For a phase on this host it is a **floor** — every harness reads the same definitions in its vendor's own wrapping, so the backend sends more than the row says — and for an executor it is what the run **holds** rather than what each request carries: its harness keeps a large MCP server's definitions out of the requests that do not need them (Claude Code's tool search, OpenCode's Code Mode) |
+| `a2a_channel_opened` / `a2a_message_sent` / `a2a_channel_closed` | The channel an `a2a_ask` opened and its traffic, the only *recorded* delegation edge (see [What a delegation records](#what-a-delegation-records)). The target's `a2a_request` wake carries `delegation_depth + 1` and the requester appended to `delegation_chain`. Each record names the turn that published it in `turn_id` / `work_key`, which draws the exchange on that turn's page; a close by the idle sweep carries neither, because no turn finished it |
+| `prompt.size` | The size of one phase's OPENING prompt: the system and user text, and the **tool-definition array** (compact JSON, with its count), plus a ~4-bytes-per-token approximation over all of it, so prompt growth is measurable across builds. Figures are **bytes** (`system_bytes`, `user_bytes`, `tool_bytes`): measurable without a tokenizer, and what a vendor bounds a request body in (bytes diverge from characters on non-Latin names, emoji or CJK). The array is counted because a harness is handed it literally wherever it runs (over its run's tool session on this host, over the tool bridge for an executor's run in a box) and sends it with every request; the figure is the **opening** array's, since a mid-phase `activate_tool` on a phase that discovers its tools adds to later requests. It is measured in one **canonical** shape (`{name, description, parameters}` per tool), so one number is comparable across a chain that moved a seat between harnesses. For a phase on this host it is a **floor** (each harness wraps the definitions its own way, so the backend sends more); for an executor it is what the run **holds** rather than what each request carries, since its harness keeps a large MCP server's definitions out of requests that do not need them (Claude Code's tool search, OpenCode's Code Mode) |
 | `phase.tool_skill_blocked` | The required-skill guard rejected a tool call: the session tried a tool covered by a required [tool skill](tool-skills.md) (the default; `required: false` opts out) before loading it via `load_tool_skill`. Carries the tool name and the missing skill keys; the LLM recovers by loading and retrying |
-| `budget_exhausted` | The token budget ended the turn: a charge it refused, or a call the turn did not make because its meter already knew the budget would refuse it ([invariant 4](#runtime-invariants)); published by the engine beside `agent_turn_completed` when the tool loop's budget check returns `toolloop.BudgetError`. Names the scope, the refusing window (`period`, `window`, `resets_at`) and that window's spend and ceiling — the spend with the refused round counted, so a window a charge refused reads past its ceiling by that round, and one a round filled reads at or past it. Where the company's window and the seat's are both full the company's is named, because the company is judged first: a seat's refusal that left the company's day full is reported as the company's |
+| `budget_exhausted` | The token budget ended the turn: a charge it refused, or a call the turn did not make because its meter already knew the budget would refuse it ([invariant 4](#runtime-invariants)); published beside `agent_turn_completed` when the tool loop's budget check returns `toolloop.BudgetError`. Names the scope, the refusing window (`period`, `window`, `resets_at`) and that window's spend and ceiling — the spend with the refused round counted, so a window a charge refused reads past its ceiling by that round, and one a round filled reads at or past it. Where the company's window and the seat's are both full the company's is named, because the company is judged first (a seat's refusal that left the company's day full is reported as the company's) |
 | `llm_unavailable` | Every member of the seat's provider chain failed retryably; carries the chain it tried and the last error |
 
 ---

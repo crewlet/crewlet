@@ -12,14 +12,14 @@ import (
 )
 
 // TestBacklogReportsMailThePublishAlreadyAcked is the READ-YOUR-OWN-WRITE
-// requirement queuetest.Capabilities places on every inspection function a
-// backend supplies, asserted against the broker this one actually runs.
+// requirement [queue.EventQueue.Backlog] states, asserted against the broker
+// this backend actually runs.
 //
 // A NET, NOT A PROOF. The property breaks only when the server's own
 // accounting falls behind, under CPU contention and never on demand, so this
 // case cannot fail reliably when it is broken; it never fails when it holds,
 // costs nothing, and CI is the loaded machine where the violation lives. What
-// defends the property is the reasoning at Backlog and queuetest.Capabilities.
+// defends the property is the reasoning at Backlog.
 func TestBacklogReportsMailThePublishAlreadyAcked(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -59,7 +59,7 @@ func TestBacklogReportsMailThePublishAlreadyAcked(t *testing.T) {
 		if int(info.NumPending)+info.NumAckPending == 0 {
 			consumerWasBehind++
 		}
-		got, err := reader.Backlog(context.Background(), topic, group)
+		got, err := reader.Backlog(context.Background(), topic, group, 16)
 		if err != nil {
 			t.Fatalf("Backlog: %v", err)
 		}
@@ -182,7 +182,7 @@ func settledBacklog(t *testing.T, q *Queue, topic, group string, want int) []int
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		evs, err := q.Backlog(context.Background(), topic, group)
+		evs, err := q.Backlog(context.Background(), topic, group, 16)
 		if err != nil {
 			t.Fatalf("Backlog: %v", err)
 		}

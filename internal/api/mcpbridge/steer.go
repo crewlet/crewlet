@@ -152,11 +152,12 @@ const steerTakeBudget = 5 * time.Second
 const steerHold = 10 * time.Second
 
 // steerReadIDs is the most notes one read names: everything one job can be
-// owed, a turn's notes ([steer.MaxTurnNotes]) and the job's own items
-// ([sandbox.MaxJobItems]). OpenCode's plugin names every note it owes in one
-// read and sends it again on every retry, so a read refused for its count is
-// refused again forever and confirms nothing more for the rest of the run.
-const steerReadIDs = steer.MaxTurnNotes + sandbox.MaxJobItems
+// owed, a turn's notes ([steer.MaxTurnNotes]) and the job's own items, its late
+// calls' ([sandbox.MaxJobItems]) and its wakes' ([sandbox.MaxJobWakes]).
+// OpenCode's plugin names every note it owes in one read and sends it again on
+// every retry, so a read refused for its count is refused again forever and
+// confirms nothing more for the rest of the run.
+const steerReadIDs = steer.MaxTurnNotes + sandbox.MaxJobItems + sandbox.MaxJobWakes
 
 // steerReadBody bounds a read's body: a read names at most [steerReadIDs]
 // notes, each a short id, a couple of kilobytes in all, and 64 KiB is far past

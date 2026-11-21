@@ -42,6 +42,16 @@
 // owner and editors; a read whose record cannot be written is refused. A
 // listing never shows an artifact on the admin path at all.
 //
+// # A trashed artifact is not hidden from a reader it is disclosed to
+//
+// Content of a trashed artifact is `artifact_trashed` (`409`) on every route and
+// every read question (`queries.ErrArtifactTrashed`), and on a room's join and
+// withdrawal, to a reader the admission disclosed it to; a caller with no
+// relation is answered `not_found`, because the admission decides before the
+// trash is looked at, so nothing about existence leaks. A purged artifact stays
+// `not_found` on the questions and `410 data_gone` on the routes: a purge is
+// permanent, and the trash is a state a restore ends.
+//
 // # The API origin never renders an artifact
 //
 // A page runs on the artifact origin, in a sandboxed frame, under a view

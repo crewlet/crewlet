@@ -17,6 +17,11 @@
 // ever written to a response: a request from a browser or a script carries no
 // note, so a route telling one is a no-op, and the in-process dispatcher
 // reads the note off the context rather than off the answer.
+//
+// The package is a leaf over the standard library, so every route and the
+// assistant's dispatcher can import it without a cycle. The operator surface
+// tells a refused call's sentence and a successful call's note on its
+// arguments.
 package modelnote
 
 import (

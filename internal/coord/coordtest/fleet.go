@@ -200,6 +200,15 @@ func (h *fleetHarness) workedAt(scope string, keys ...string) map[string]time.Ti
 	return got
 }
 
+func (h *fleetHarness) workedBy(scope string, keys ...string) map[string]string {
+	h.t.Helper()
+	got, err := h.f.WorkedBy(h.ctx, scope, keys)
+	if err != nil {
+		h.t.Fatalf("WorkedBy(%s): %v", scope, err)
+	}
+	return got
+}
+
 func (h *fleetHarness) record(scope, key, detail string, at time.Time) {
 	h.t.Helper()
 	if err := h.f.Record(h.ctx, scope, key, detail, at); err != nil {

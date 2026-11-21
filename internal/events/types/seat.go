@@ -8,9 +8,9 @@ import (
 )
 
 // A person's control over a running seat: pausing, resuming, a turn a pause
-// stopped, and a note sent a running turn. A pause itself is a coordination
-// record (coord.SeatPause); these are the fleet's account, published once by
-// the writer whose compare-and-set won.
+// stopped, a note sent a running turn, and a wake handed to one. A pause itself
+// is a coordination record (coord.SeatPause); these are the fleet's account,
+// published once by the writer whose compare-and-set won.
 //
 // # Who did it, in three halves
 //
@@ -24,6 +24,7 @@ func init() {
 	events.Register[SeatResumed]()
 	events.Register[AgentTurnStopped]()
 	events.Register[AgentTurnSteered]()
+	events.Register[AgentTurnJoined]()
 	events.Register[SeatPlaced]()
 	events.Register[SeatReleased]()
 }
@@ -332,6 +333,92 @@ func (e AgentTurnSteered) SummaryFor(actor string) string {
 		return lead(actor, "was handed a note from "+e.SteeredBy+" and never confirmed reading it")
 	default:
 		return lead(actor, "was sent a note from "+e.SteeredBy)
+	}
+}
+
+// JoinOutcome is what became of a wake the engine handed a running turn's run
+// as an item of its job (internal/sandbox's RunNote.Wake).
+type JoinOutcome string
+
+const (
+	// JoinDelivered — a step of the run read the wake, so the turn worked it:
+	// its delivery is recorded worked and starts no turn of its own.
+	JoinDelivered JoinOutcome = "delivered"
+
+	// JoinUnconfirmed — the wake was handed to the run's harness, which never
+	// confirmed reading it, so its session may hold it. Its delivery stays on
+	// the seat's inbox and runs as a turn of its own.
+	JoinUnconfirmed JoinOutcome = "unconfirmed"
+
+	// JoinUnread — nothing handed the wake to the run before its job ended. Its
+	// delivery stays on the seat's inbox and runs as a turn of its own.
+	JoinUnread JoinOutcome = "unread"
+)
+
+// JoinOutcomes is every outcome this build records.
+var JoinOutcomes = []JoinOutcome{JoinDelivered, JoinUnconfirmed, JoinUnread}
+
+// Valid reports whether an outcome off the wire is one this build knows.
+func (o JoinOutcome) Valid() bool { return slices.Contains(JoinOutcomes, o) }
+
+// AgentTurnJoined records what became of one wake handed to a running turn's
+// run ([JoinOutcome]), once a wake and under one id: by the node whose read
+// confirmed it, and by the node that ended its job (a relaunch, or the turn's
+// ending). ONE CONSTRUCTOR, internal/agent/steer's Joined. It carries none of
+// the message's words, which the conversation it was written in keeps.
+type AgentTurnJoined struct {
+	Agent       string `json:"agent_id"`
+	AgentHandle string `json:"agent_handle"`
+	RoleName    string `json:"role"`
+	TurnID      string `json:"turn_id"`
+	// WorkKey is the unit of work the turn was dispatched for — see
+	// [AgentPhaseCompleted.WorkKey] and ADR-0017.
+	WorkKey string `json:"work_key,omitempty"`
+
+	// WakeID is the wake's identity as it was filed, and TriggerIDs the
+	// deliveries on the seat's inbox it stands for.
+	WakeID     string      `json:"wake_id"`
+	TriggerIDs []string    `json:"trigger_ids,omitempty"`
+	Outcome    JoinOutcome `json:"outcome"`
+
+	// LaunchID is the job the wake was handed to, and Boundary and Iteration
+	// the step that read a delivered one or served an unconfirmed one: where
+	// no step is known Boundary is absent, which tells Iteration's 0 apart.
+	LaunchID  string        `json:"launch_id"`
+	Boundary  SteerBoundary `json:"boundary,omitempty"`
+	Iteration int           `json:"iteration"`
+
+	// WrittenBy and WrittenByKind are who wrote the message, WrittenOn the
+	// surface it was written on, OwesAnswer whether it asked for an answer,
+	// and SentAt when it was written.
+	WrittenBy     string    `json:"written_by"`
+	WrittenByKind string    `json:"written_by_kind,omitempty"`
+	WrittenOn     string    `json:"written_on,omitempty"`
+	OwesAnswer    bool      `json:"owes_answer"`
+	SentAt        time.Time `json:"sent_at"`
+}
+
+// EventType is the "agent_turn_joined" wire type.
+func (AgentTurnJoined) EventType() string { return "agent_turn_joined" }
+
+// Role is the seat whose turn the wake joined.
+func (e AgentTurnJoined) Role() string { return e.RoleName }
+
+// AgentID is the instance whose turn the wake joined.
+func (e AgentTurnJoined) AgentID() string { return e.Agent }
+
+// SummaryFor names who wrote the message and what became of it, an outcome this
+// build does not know said as no more than the message having been handed over.
+func (e AgentTurnJoined) SummaryFor(actor string) string {
+	switch e.Outcome {
+	case JoinDelivered:
+		return lead(actor, "read a message from "+e.WrittenBy+" about its work")
+	case JoinUnconfirmed:
+		return lead(actor, "was handed a message from "+e.WrittenBy+" and never confirmed reading it")
+	case JoinUnread:
+		return lead(actor, "ended its job before reading a message from "+e.WrittenBy)
+	default:
+		return lead(actor, "was handed a message from "+e.WrittenBy)
 	}
 }
 

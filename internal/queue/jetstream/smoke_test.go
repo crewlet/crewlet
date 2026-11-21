@@ -134,7 +134,7 @@ func TestPublishWithNoSubscriptionIsDropped(t *testing.T) {
 	// CORROBORATION, not the proof: interest retention discards a message
 	// no consumer covers as it is stored, so the mailbox made after it
 	// holds nothing.
-	if held, err := q.Backlog(ctx, topic, group); err != nil || len(held) != 0 {
+	if held, err := q.Backlog(ctx, topic, group, 16); err != nil || len(held) != 0 {
 		t.Errorf("the mailbox made after a publish holds %d event(s) (%v); a publish "+
 			"with no subscription must be dropped", len(held), err)
 	}

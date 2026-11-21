@@ -72,6 +72,11 @@ type Dispatcher struct {
 	// settles nothing.
 	Settled func(ctx context.Context, handle string, wakes []string)
 
+	// Idle is told a seat whose last dispatch running on this node has
+	// returned, its delivery settled: the router of its held inbox reads
+	// nothing while one runs (wakerouter.go). Nil tells nobody.
+	Idle func(handle string)
+
 	// DeadLettered is told of a delivery whose hand-back retires a message:
 	// the one place that holds both the message's headroom and why it failed.
 	DeadLettered func(ctx context.Context, handle string, result queue.Result)
@@ -381,9 +386,14 @@ func (d *Dispatcher) enter(handle string) {
 
 func (d *Dispatcher) leave(handle string) {
 	d.runningMu.Lock()
-	defer d.runningMu.Unlock()
-	if d.running[handle]--; d.running[handle] <= 0 {
+	d.running[handle]--
+	idle := d.running[handle] <= 0
+	if idle {
 		delete(d.running, handle)
+	}
+	d.runningMu.Unlock()
+	if idle && d.Idle != nil {
+		d.Idle(handle)
 	}
 }
 
@@ -1406,12 +1416,8 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 	if d.Completions != nil {
 		keys := make([]string, 0, len(evs))
 		for _, ev := range evs {
-			if !d.ledgered(ev.Type) {
-				continue
-			}
-			keys = append(keys, workkey.Derive([]string{ev.ID.String()}))
-			if chat, _, ok := chatKeyOf(ev); ok {
-				keys = append(keys, chat)
+			if d.ledgered(ev.Type) {
+				keys = append(keys, deliveryKeys(ev)...)
 			}
 		}
 		if len(keys) > 0 {
@@ -1421,6 +1427,7 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 	if len(worked) == 0 && d.SeenThrough == nil {
 		return evs, nil
 	}
+	joined := d.joinedOf(ctx, handle, evs, worked)
 	out := make([]*events.Event, 0, len(evs))
 	var skipped map[uuid.UUID]skipCause
 	skip := func(id uuid.UUID, cause skipCause) {
@@ -1437,6 +1444,8 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 		}
 		chat, edit, isChat := chatKeyOf(ev)
 		switch {
+		case joined[joinedKey(ev.ID.String())]:
+			skip(ev.ID, skipJoined)
 		case worked[workkey.Derive([]string{ev.ID.String()})]:
 			skip(ev.ID, skipWorked)
 		case isChat && edit && worked[chat]:
@@ -1450,6 +1459,35 @@ func (d *Dispatcher) dropWorked(ctx context.Context, handle string, evs []*event
 		}
 	}
 	return out, skipped
+}
+
+// deliveryKeys is every completion-ledger key that drops ev's delivery
+// ([Dispatcher.dropWorked]): its own, and a chat message's identity on its
+// backend. ONE FUNCTION, so a wake the router hands a running run is claimed by
+// exactly the keys its delivery is dropped by (wakerouter.go).
+func deliveryKeys(ev *events.Event) []string {
+	keys := []string{workkey.Derive([]string{ev.ID.String()})}
+	if chat, _, ok := chatKeyOf(ev); ok {
+		keys = append(keys, chat)
+	}
+	return keys
+}
+
+// joinedOf is which of evs a running turn's run read as a wake ([joinedKey]),
+// by that mark: asked only of those whose own key is worked, so a dispatch no
+// turn worked any trigger of reads the ledger no more than it did.
+func (d *Dispatcher) joinedOf(ctx context.Context, handle string, evs []*events.Event,
+	worked map[string]bool) map[string]bool {
+	var keys []string
+	for _, ev := range evs {
+		if d.ledgered(ev.Type) && worked[workkey.Derive([]string{ev.ID.String()})] {
+			keys = append(keys, joinedKey(ev.ID.String()))
+		}
+	}
+	if len(keys) == 0 || d.Completions == nil {
+		return nil
+	}
+	return d.Completions.Worked(ctx, handle, keys)
 }
 
 // recordWorked writes the completion ledger after a turn.
@@ -1743,6 +1781,7 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 			kept[ev.ID] = true
 		}
 	}
+	joinedBy := d.joinedBy(ctx, handle, all, skipped)
 	for _, ev := range all {
 		if ev == nil || kept[ev.ID] {
 			continue
@@ -1759,6 +1798,8 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 			reason = "a later turn was shown this edit waiting in its thread and answered it there"
 		case skipAbsorbed:
 			reason, disposition = "a completed turn already read its conversation past it, and it asks nothing", types.DispositionAbsorbed
+		case skipJoined:
+			reason, disposition = joinedReason(joinedBy[joinedKey(ev.ID.String())]), types.DispositionJoined
 		}
 		// THE SKIPPED TRIGGER'S OWN TRACE, not the dispatch's: the
 		// question this record answers is "what happened to my webhook",
@@ -1768,6 +1809,34 @@ func (d *Dispatcher) noteSkipped(ctx context.Context, handle string, all, surviv
 		rec.Source = "engine.dispatch"
 		d.Observe(ctx, rec)
 	}
+}
+
+// joinedBy is the turn each of all's joined skips joined, by its join mark
+// ([joinedKey]): one ledger read for them all, none where nothing joined.
+func (d *Dispatcher) joinedBy(ctx context.Context, handle string, all []*events.Event,
+	skipped map[uuid.UUID]skipCause) map[string]string {
+
+	var keys []string
+	for _, ev := range all {
+		if ev != nil && skipped[ev.ID] == skipJoined {
+			keys = append(keys, joinedKey(ev.ID.String()))
+		}
+	}
+	if len(keys) == 0 || d.Completions == nil {
+		return nil
+	}
+	return d.Completions.WorkedBy(ctx, handle, keys)
+}
+
+// joinedReason is a joined skip's reason, naming the turn it joined where the
+// ledger's record does.
+func joinedReason(turnID string) string {
+	turn := "a running turn"
+	if turnID != "" {
+		turn = "running turn " + turnID
+	}
+	return "it joined " + turn + " as a message about its work, which that turn's run read: the turn's " +
+		"agent_turn_joined record names it"
 }
 
 // notificationSourceOf is the third-party app a partition came from.
@@ -1888,12 +1957,19 @@ func ReplyFor(evs []*events.Event) turn.Reply {
 			// is already closed. Nobody is waiting on what this turn does
 			// with it.
 		}
-		// A PICKUP'S ITEM SURVIVES A MERGE with another tool obligation: the
-		// typed answer it owes is the stricter of the two.
-		if replyRank[owed.Kind] > replyRank[out.Kind] ||
-			owed.Kind == out.Kind && out.Item == "" && owed.Item != "" {
-			out = owed
-		}
+		out = strongerReply(out, owed)
+	}
+	return out
+}
+
+// strongerReply is out with owed merged in as [ReplyFor] merges a partition's:
+// a stronger kind wins, and A PICKUP'S ITEM SURVIVES A MERGE with another tool
+// obligation, the typed answer it owes being the stricter; otherwise out
+// stands. Also how a wake a run read joins its turn's (ADR-0167).
+func strongerReply(out, owed turn.Reply) turn.Reply {
+	if replyRank[owed.Kind] > replyRank[out.Kind] ||
+		owed.Kind == out.Kind && out.Item == "" && owed.Item != "" {
+		return owed
 	}
 	return out
 }

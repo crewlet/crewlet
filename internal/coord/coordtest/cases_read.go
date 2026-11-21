@@ -137,27 +137,18 @@ var readCases = []testCase{
 	}},
 
 	{"resources_that_need_encoding_round_trip_and_stay_distinct", func(h *harness) {
-		// A STIMULUS gap, found by reading what the suite sends rather
-		// than by mutating what a backend answers: every other case here
-		// names a resource like "seat:ceo", so no case could ever reach a
-		// backend's key encoding. No mutation can reveal that — the input
-		// simply never arrives.
+		// A STIMULUS gap: every other case names a resource like "seat:ceo",
+		// so none reaches a backend's key encoding, and no mutation can reveal
+		// an input that never arrives. A resource name is "seat:" plus a
+		// HANDLE, which nothing in coord.go restricts; on a subject-addressed
+		// store a dot separates and * and > are wildcards, so an unescaped name
+		// is a COLLISION, two seats sharing one record, which defeats the
+		// mutual exclusion this primitive exists to provide.
 		//
-		// It is not hypothetical. A resource name is "seat:" plus a
-		// HANDLE, handles come from the org, and nothing in coord.go
-		// restricts them. On a subject-addressed store a dot is a
-		// separator and * and > are wildcards, so an unescaped name is
-		// not a lookup failure but a COLLISION: two seats sharing one
-		// record, which is the mutual exclusion this whole primitive
-		// exists to provide. internal/coord/kv carries its own key
-		// round-trip test because its author knew that; the contract
-		// suite gave the next backend no such warning.
-		//
-		// The assertion is a property, never an encoding. A backend that
-		// cannot represent a name may REFUSE it — the same latitude a
-		// store has to refuse a TTL it cannot honour rather than clamp it
-		// silently — but one that accepts it must return it unchanged and
-		// must never let two names land on one record.
+		// The assertion is a property, never an encoding: a backend that
+		// cannot represent a name may REFUSE it (as it may refuse a TTL it
+		// cannot honour), but one that accepts it must return it unchanged and
+		// never let two names land on one record.
 		type claimed struct {
 			resource string
 			owner    string
@@ -372,59 +363,28 @@ var readCases = []testCase{
 		h.requireSet("worker hints", h.preferred(coord.ClassWorker, "node-a"), "worker:scheduler")
 	}},
 
-	// --- meta: what the holder IS --------------------------------------
+	// --- meta: what the holder IS ---
 	//
-	// Meta is the one field that crosses a wire — the ownership key
-	// carries it as JSON — so the suite separates the two
-	// properties it could assert about a round trip and requires exactly
-	// one of them.
-	//
-	// The VALUE must survive: meta_values_survive_the_round_trip writes a
-	// number, a bool, a []string and a nested map and compares canonical
-	// JSON. A codec that drops what it cannot encode fails it, because a
-	// peer reads this payload to decide whether a node may run a seat.
-	//
-	// The TYPE need not: measured, an int comes back float64 from the
-	// embedded-NATS store and int from one that keeps Go types, and both
-	// are correct — coord.go promises only map[string]any. Requiring one
-	// shape would write a codec choice into the contract, so the case is
-	// mutation-checked in BOTH directions: it fails a lossy codec AND
-	// passes a Go-native one, which is what stops it from becoming a type
-	// requirement wearing a value requirement's name.
-	//
-	// The remaining payloads below are pre-shaped and cannot see either
-	// property on their own; the one case above is what covers them.
-	//
-	// What stays unsettled is the contract's own wording: coord.go says
-	// only that Meta is map[string]any, so nothing tells a caller whether
-	// it may depend on the Go type of a value it reads back. The silence
-	// has teeth — reverting the memory twin to hand the caller its own map
-	// straight back passes every case here, so a backend that preserves Go
-	// types is certified today, and a caller writing meta["replicas"].(int)
-	// is right against that backend and panics against the embedded-NATS
-	// store, which returns float64. Until Lease.Meta says one way or the
-	// other, read meta the way placement.rolesFromMeta does: accept either
-	// shape.
+	// Meta crosses a wire as JSON, so the suite requires its VALUE to survive
+	// (meta_values_survive_the_round_trip compares canonical JSON; peers place
+	// seats from it) but not its TYPE: an int comes back float64 from the NATS
+	// store and coord.go promises only map[string]any. The case is mutation-
+	// checked BOTH ways (fails a lossy codec, passes a Go-native one), so it
+	// never becomes a type requirement. Unsettled: a caller relying on a Go
+	// type panics against the NATS store, so read meta as
+	// placement.rolesFromMeta does, accepting either shape.
 
 	{"meta_values_survive_the_round_trip", func(h *harness) {
-		// The property the free-form payload actually owes, separated
-		// from the one it does not.
-		//
-		// A backend picks its own wire format, so the Go TYPE carrying a
-		// value is its business — measured, a number written here comes
-		// back float64 from a JSON store and int from one that keeps Go
-		// types, and both are correct. What no backend may do is LOSE
-		// what a holder advertised about itself, because a peer reads it
-		// to decide whether this node may run a seat, and a codec that
-		// silently drops the entries it cannot encode leaves that peer
-		// deciding against a profile the node never published.
+		// A backend picks its wire format, so the Go TYPE of a value is its
+		// business; what none may do is LOSE what a holder advertised, since a
+		// peer decides whether this node may run a seat from it and a codec
+		// silently dropping entries leaves it deciding on a profile never
+		// published.
 		//
 		// So this compares canonical JSON: int(3) and float64(3) are one
-		// value, []string{"a"} and []any{"a"} are one list, and a dropped
-		// or mangled entry is still a difference. Deliberately the only
-		// case here that writes NON-JSON-native Go types — every other
-		// meta fixture is pre-shaped, which is precisely why none of them
-		// can see a codec that loses things.
+		// value, []string{"a"} and []any{"a"} one list, and a dropped or
+		// mangled entry still differs. It is the only case writing NON-JSON-
+		// native Go types; the pre-shaped fixtures cannot see a lossy codec.
 		payload := map[string]any{
 			"replicas": 3,
 			"ratio":    1.5,

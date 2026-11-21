@@ -344,6 +344,20 @@
 // That session's own context with its brief: the kept capture's measure
 // (SessionBasis.ContextTokens) or the box copy's (SessionBasis.CopyContext),
 // never a newer capture's.
+//
+// # A busy seat's wake router
+//
+// While one of a seat's executor runs holds it, the node holding the seat
+// reads the held inbox through the queue's backlog read, which consumes and
+// spends nothing, and files to the run, as a wake item for its job, each wake
+// from the run's own requester in its conversation or about its work item
+// ([routeOf]); another writer's never (ADR-0109). One router per busy seat
+// ([Engine.seatRunsMoved]), nudged by a stream subscription on the inbox and
+// its lane and by the seat's dispatch going idle, with a backstop read
+// ([routeBackstop]); each wake decided once per job. A claimed wake's delivery
+// is skipped `joined`, naming its turn, its seen-through mark moved at the
+// claim and its owed answer the resumed turn's ([runSteers.turnReply]); an
+// unread one runs on its own (ADR-0167).
 package engine
 
 import (
