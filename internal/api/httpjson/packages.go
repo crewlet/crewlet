@@ -23,7 +23,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"approval": true, "approvaltest": true, "assistant": true, "assistantapi": true, "assistantdomain": true,
 		"assistanttest": true, "capability": true, "cards": true, "catalog": true, "evals": true, "exec": true,
 		"live": true, "proposal": true, "tabular": true, "wire": true,
-		"appstoreconnect": true, "atlaswake": true, "atlassian": true, "atlassianhost": true, "auth": true, "authapi": true, "aws": true,
+		"appleads": true, "appstoreconnect": true, "atlaswake": true, "atlassian": true, "atlassianhost": true, "auth": true, "authapi": true, "aws": true,
 		"authevents": true, "authz": true, "auxspend": true, "backoff": true,
 		"backup": true, "backuptest": true, "brandformat": true, "browser": true, "brokertest": true, "builtin": true, "cache": true, "chain": true, "changefeed": true,
 		"canon": true, "canvasformat": true, "catalogue": true, "caveat": true, "caveattest": true, "cdp": true, "chatlet": true, "checkrun": true, "chromiumtest": true, "commentanchor": true, "edits": true,
