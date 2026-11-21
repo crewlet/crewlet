@@ -62,7 +62,7 @@ func stated(context int64) string {
 // readPoint is the point a box of release decides for the launch's stub/m,
 // the session written by release, from models, the documents and the lines.
 func readPoint(release string, models []byte, config []byte, listing string,
-	sources *sandbox.RunSources) sandbox.OpenCodePoint {
+	sources *sandbox.RunSources) sandbox.BoxPoint {
 	ask := sandbox.PointAsk{Model: "stub/m", Release: release, Writer: release, Sources: sources}
 	return openCodePointOf(ask, openCodeAnswers{release: release, models: models, config: config,
 		listing: listing}, Paths{Home: "/box"})

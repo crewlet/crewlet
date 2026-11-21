@@ -530,6 +530,18 @@ answers, with the commands that clone it, and the box's git reaches nothing
 the run did not check out ([Code
 Sandbox](../concepts/code-sandbox.md#repositories-on-gitlet)).
 
+**Nor are the three tools for the runs around a run:** `list_runs`,
+`message_run` and `wait_for_run`, offered on an executor's run's surface beside
+`ask_and_wait` when its launch found other runs in flight on its seat
+([A seat's runs see each other](../concepts/code-sandbox.md#a-seats-runs-see-each-other)).
+`list_runs` takes nothing and answers each run's `turn_id`, `seat`, `stage`,
+`work_item`, `same_requester` and `takes_messages`, and for a run working for
+the same requester its `conversation` kind, `this_conversation`, `branch`,
+`started` and `title`, the title fenced. `message_run` takes a `turn_id` and
+`text` (at most 1,000 characters, never cut). `wait_for_run` takes a `turn_id`,
+a `reason` and the `branch` the run pushed, records the wait, and tells the run
+to end its turn.
+
 **Every revision is a commit id or a ref.** A whole or abbreviated commit id
 (7 or more hex digits) costs nothing; anything else — a branch, a tag, a
 whole ref, `HEAD` — is resolved to the commit it points at as part of the
@@ -1386,8 +1398,11 @@ A call to a tool at `approve` is never made until a person answers it
   the model is told the seat's own run, its executor, may ask.
 - **What the call would send stays sealed.** The arguments ride the run's
   record encrypted under the fleet keyring, never in the question, call log or
-  ledger, and are shown only to who may approve: an administrator (the MCP
-  answer's `approvals`) and the seat's lead (the run on the executors board).
+  ledger, and are shown only to an administrator (the MCP answer's
+  `approvals`) and the seat's lead (the run on the executors board): as the
+  call would send them to a person who may answer it while it waits, and with
+  any credential in them replaced by a marker in every other view, a call
+  already answered included.
 - **An administrator or the seat's lead answers it**, with
   [`POST /mcp-approvals/{id}`](../reference/api-endpoints.md#post-mcp-approvalsid),
   a person and never Ask Crewlet:

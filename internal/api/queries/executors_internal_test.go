@@ -119,7 +119,7 @@ func TestARunRowSaysWhatBecameOfItsAnswers(t *testing.T) {
 	}
 	run.Answer = &answer
 	sources := Sources{RunAnswers: seal}
-	row := runRow(run, sandbox.BridgeLog{}, sources.opened(run))
+	row := runRow(run, sandbox.BridgeLog{}, sources.opened(run, false))
 	if got := row["answer_ids"]; !slices.Equal(got.([]string), []string{"a1"}) {
 		t.Errorf("answer_ids = %v, want the recorded answer's delivery", got)
 	}
@@ -142,7 +142,7 @@ func TestARunRowSaysWhatBecameOfItsAnswers(t *testing.T) {
 		t.Errorf("a node with no seal names %q as the answerer, want nobody", by)
 	}
 	unanswered := sandbox.PendingRun{TurnID: "t2", Status: sandbox.StatusAwaiting}
-	empty := runRow(unanswered, sandbox.BridgeLog{}, sources.opened(unanswered))
+	empty := runRow(unanswered, sandbox.BridgeLog{}, sources.opened(unanswered, false))
 	if got := empty["answer_ids"]; got == nil || len(got.([]string)) != 0 || empty["answered_by"] != "" {
 		t.Errorf("a run with no recorded answer shows %v by %v, want empty", got, empty["answered_by"])
 	}
@@ -170,7 +170,7 @@ func TestARunRowSaysItsAnswerIsARefusal(t *testing.T) {
 	}
 	run.Answer, run.AnswerRefusal = &answer, &refusal
 	sources := Sources{RunAnswers: seal}
-	row := runRow(run, sandbox.BridgeLog{}, sources.opened(run))
+	row := runRow(run, sandbox.BridgeLog{}, sources.opened(run, false))
 	got, ok := row["answer_refused"].(map[string]any)
 	if !ok || got["messages"] != 2 || got["bytes"] != 600<<10 || got["max_bytes"] != 512<<10 {
 		t.Errorf("answer_refused = %v, want two messages at 600 KiB past 512 KiB", row["answer_refused"])
@@ -186,7 +186,7 @@ func TestARunRowSaysItsAnswerIsARefusal(t *testing.T) {
 		t.Fatalf("Seal: %v", err)
 	}
 	plain.Answer = &words
-	if got := runRow(plain, sandbox.BridgeLog{}, sources.opened(plain))["answer_refused"]; got != nil {
+	if got := runRow(plain, sandbox.BridgeLog{}, sources.opened(plain, false))["answer_refused"]; got != nil {
 		t.Errorf("a row answered with words carries answer_refused %v, want null", got)
 	}
 }

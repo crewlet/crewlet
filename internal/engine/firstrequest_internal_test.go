@@ -13,10 +13,12 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/executordomain"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -54,19 +56,10 @@ func TestTheProbeJudgesUnderTheChainsSmallestStandardWindow(t *testing.T) {
 			e, _ := launchRigRestoring(t, c, bridgeFor(t, mcpbridge.Options{
 				Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 			}), &keptLog{rows: map[string]executordomain.Session{}, archives: map[string][]byte{}})
-			if got := launcherOn(e, c, seat, "t1").continuationWindow(); got != tc.want {
+			if got := launcherOn(e, c, seat, "t1").continuationWindow(); !sameWindow(got, tc.want) {
 				t.Errorf("the probe's window is %+v, want %+v", got, tc.want)
 			}
 		})
-	}
-	for mode, want := range map[harness.AuthMode]sandbox.ClaudeRoute{
-		harness.AuthSubscription: sandbox.ClaudeRouteAnthropic, harness.AuthAPIKey: sandbox.ClaudeRouteAnthropic,
-		harness.AuthInheritEnv: sandbox.ClaudeRouteAnthropic, harness.AuthEnv: sandbox.ClaudeRouteElsewhere,
-		harness.AuthMode("a-later-builds-mode"): sandbox.ClaudeRouteElsewhere,
-	} {
-		if got := claudeRoute(mode); got != want {
-			t.Errorf("an entry signed in by %q is judged on the route %q, want %q", mode, got, want)
-		}
 	}
 }
 
@@ -80,17 +73,19 @@ func TestTheProbeJudgesUnderTheChainsSmallestStandardWindow(t *testing.T) {
 func TestEveryBasisTheProbeAnswersCarriesTheWindow(t *testing.T) {
 	t.Parallel()
 	c, seat := executorCompany(t)
-	unknown := sandbox.ExecutorWindow{Tokens: sandbox.FallbackExecutorWindow, Standard: sandbox.FallbackExecutorWindow}
+	unknown := sandbox.ExecutorWindow{Tokens: 200_000, Standard: 200_000}
 	noRuntime := launcherOn(&Engine{}, c, seat, "t1").ProbeSession(t.Context())
 	if noRuntime.Window != (sandbox.ExecutorWindow{}) || noRuntime.Why == "" {
 		t.Errorf("a node with no sandbox runtime answers %+v, want an unknown window and why", noRuntime)
 	}
 	k := newKeptLaunch(t, 40000, 0, 0)
-	if got := k.l.ProbeSession(k.ctx); !got.Continues() || got.Window != unknown {
+	if got := k.l.ProbeSession(k.ctx); !got.Continues() || !sameWindow(got.Window, unknown) ||
+		got.Traits[executor.ClaudeCodeName].FirstRequest != sandbox.FirstRequestWindow {
 		t.Errorf("the kept branch answers %+v, want the chain's window", got)
 	}
 	nothingKept := launcherOn(k.e, k.l.company, k.l.seat, "t-nothing-kept")
-	if got := nothingKept.ProbeSession(k.ctx); got.Continues() || got.Window != unknown {
+	if got := nothingKept.ProbeSession(k.ctx); got.Continues() || !sameWindow(got.Window, unknown) ||
+		got.Traits[executor.OpenCodeName].FirstRequest != sandbox.FirstRequestBox {
 		t.Errorf("a turn that kept nothing answers %+v, want the chain's window beside why", got)
 	}
 }
@@ -161,12 +156,12 @@ func TestAnInBoxContinuationIsJudgedByItsCollectionsCount(t *testing.T) {
 			t.Parallel()
 			c, seat := executorCompany(t)
 			recorder := &probingRecorder{basis: runner.SessionBasis{Why: "the turn keeps no session",
-				Window: sandbox.ClaudeCodeWindow("claude-sonnet-4-5")}}
+				Window: claudeWindowOf("claude-sonnet-4-5")}}
 			r, err := c.RunnerFor(t.Context(), seat.Handle(), tools.NewRegistry(), RunnerInput{
 				Task: "fix the failing test", Reply: turn.ToolReply(""), Launcher: recorder,
 				Sessions: testSessions(t),
 				Resume: runnerResume(resumeInput{
-					Run: sandbox.PendingRun{Harness: sandbox.ClaudeCodeHarness, Launch: sandbox.LaunchRecord{
+					Run: sandbox.PendingRun{Harness: executor.ClaudeCodeName, Launch: sandbox.LaunchRecord{
 						HarnessEnd: sandbox.HarnessEndOwnRun, BasisRestart: new(""),
 						ResumedCount: &sandbox.ResumedCount{Tokens: tc.tokens, Restart: new("")}}},
 					State: execstate.State{Version: execstate.Version, Round: 1},
@@ -299,8 +294,8 @@ func TestTheFloorJudgesAMemberUnderTheWindowClaudeCodeHoldsItTo(t *testing.T) {
 		"opus behind a switch read as neither": {member: envSigned(t, "opus", map[string]string{
 			"CLAUDE_CODE_USE_BEDROCK": "perhaps"}), want: 200_000},
 	} {
-		if got := floorWindow(tc.member).Tokens; got != tc.want {
-			t.Errorf("%s: the floor judges the member under %d, want %d", name, got, tc.want)
+		if got, _ := floorWindow(tc.member); got.Tokens != tc.want {
+			t.Errorf("%s: the floor judges the member under %d, want %d", name, got.Tokens, tc.want)
 		}
 	}
 	kept := launchFloor{context: 300_000}
@@ -312,4 +307,17 @@ func TestTheFloorJudgesAMemberUnderTheWindowClaudeCodeHoldsItTo(t *testing.T) {
 		windowRoom{}, kept); why != "" {
 		t.Errorf("a session of 300,000 tokens is not continued on an opus member: %s", why)
 	}
+}
+
+// claudeWindowOf is the window Claude Code holds a run of model, signed in by its
+// plan, to, as its runner states it.
+func claudeWindowOf(model string) sandbox.ExecutorWindow {
+	w, _ := executor.Window(executor.ClaudeCodeName, executor.WindowAsk{Model: model, AuthMode: config.AuthSubscription})
+	return w
+}
+
+// sameWindow reports whether a and b are the same window and standard window,
+// equally known: what a case states of a window, not its runner's headroom.
+func sameWindow(a, b sandbox.ExecutorWindow) bool {
+	return a.Tokens == b.Tokens && a.Standard == b.Standard && a.Known == b.Known
 }

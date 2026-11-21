@@ -175,7 +175,7 @@ func (p Profile) Clone() Profile {
 		out.LimitEvents = make([]LimitEvent, len(p.LimitEvents))
 		for i, e := range p.LimitEvents {
 			out.LimitEvents[i] = LimitEvent{Match: cloneMatches(e.Match),
-				SaidPath: slices.Clone(e.SaidPath), Reset: e.Reset}
+				SaidPath: slices.Clone(e.SaidPath), Reset: e.Reset, In: e.In}
 		}
 	}
 	out.LimitMarkers = append([]LimitMarker(nil), p.LimitMarkers...)

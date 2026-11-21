@@ -94,7 +94,7 @@ func boundInbox(t *testing.T, runs *runSteers, store sandbox.PendingStore, turnI
 	if err != nil || !found {
 		t.Fatalf("Get %s = %v, %v", turnID, found, err)
 	}
-	inbox := runs.inbox(identityOfRun(run), 1)
+	inbox := runs.inbox(identityOfRun(run), 1, run.Harness)
 	inbox.Bind(t.Context(), launch, provenance.NewBoundary())
 	t.Cleanup(inbox.Close)
 	return inbox
@@ -833,7 +833,7 @@ func TestANotesInboxIDIsItsJobs(t *testing.T) {
 	if again := waitFor(boundInbox(t, runs, store, "run-1", first)); again[0].Inbox != firstNotes[0].Inbox {
 		t.Errorf("two polls of one job answered ids %q and %q, want one", firstNotes[0].Inbox, again[0].Inbox)
 	}
-	if want := executor.OpenCodeInboxID(first, "req-1"); firstNotes[0].Inbox != want {
+	if want := executor.InboxID(executor.OpenCodeName, first, "req-1"); firstNotes[0].Inbox != want {
 		t.Errorf("the note's inbox id is %q, want %q, the job's", firstNotes[0].Inbox, want)
 	}
 	relaunched, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
@@ -844,7 +844,7 @@ func TestANotesInboxIDIsItsJobs(t *testing.T) {
 	}
 	second := waitFor(boundInbox(t, runs, store, "run-1", relaunched.LaunchID))
 	if second[0].Inbox == firstNotes[0].Inbox ||
-		second[0].Inbox != executor.OpenCodeInboxID(relaunched.LaunchID, "req-1") {
+		second[0].Inbox != executor.InboxID(executor.OpenCodeName, relaunched.LaunchID, "req-1") {
 		t.Errorf("the relaunch's poll answered id %q, want its own job's, not %q", second[0].Inbox,
 			firstNotes[0].Inbox)
 	}

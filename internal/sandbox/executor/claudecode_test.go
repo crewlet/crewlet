@@ -936,7 +936,7 @@ func TestEverySettingsFileHasAPinnedCopyHoldingTheEnginesCompactionPoint(t *test
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	pin := map[string]any{
-		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(sandbox.ClaudeCodeWindow(model).Tokens),
+		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(executor.NewClaudeCode().PinnedWindow(model)),
 		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":     "",
 		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
 		"CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "",

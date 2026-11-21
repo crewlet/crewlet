@@ -48,6 +48,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// The access log's operation ledger, swept per node like every
 		// domain's.
 		"access_ops",
+		// The activation's bodies no pointer names: content addressed, a
+		// key per document, so each activation leaves one behind.
+		"activation_bodies",
 		// The advisor log's operation ledger (see pages_ops).
 		"advisor_ops",
 		// The diary's Expire has no other caller: unswept, expired
@@ -302,6 +305,7 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"scheduled_runs":        maintenance.ScheduledRunRetention,
 		"a2a_channels":          maintenance.ChannelRetention,
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
+		"activation_bodies":     coord.BodyRetention,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
 		"seat_mailboxes":        maintenance.MailboxRetirementGrace,
 		"chat_read_state":       maintenance.ChatReadForgetGrace,

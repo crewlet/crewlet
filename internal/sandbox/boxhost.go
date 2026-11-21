@@ -147,7 +147,7 @@ var ErrBoxNotHosted = errors.New("sandbox: the node asked does not hold this run
 // ([BoxReadRequest.AnswerBudget]). A host that is only slow must not be taken
 // for one that stopped. Only a node asking another node's host waits on it. See
 // the package doc, "Box read budget".
-func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
+func BoxReadBudget(run PendingRun, read BoxRead, traits ThreadTraits) time.Duration {
 	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing
 	if read.mayEnd(run) {
 		held += JobEndBudget
@@ -155,10 +155,10 @@ func BoxReadBudget(run PendingRun, read BoxRead) time.Duration {
 	if read.recordsTheCap(run) {
 		held += discardGrace + coord.MaxValueCrossing
 	}
-	if asksMainThread(run, read) {
+	if asksMainThread(run, read, traits) {
 		held += MainThreadReadWait
 	}
-	if asksHookReceipts(run) {
+	if asksHookReceipts(run, traits) {
 		held += hookVerdictWait + coord.MaxValueCrossing
 	}
 	return pollBound + time.Duration(float64(held)/BoxReadAnswerShare)

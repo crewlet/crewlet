@@ -488,7 +488,7 @@ func TestALeadOfAnotherSessionIsToldInWordsTrueOfAnySession(t *testing.T) {
 		func(r *runner.Resume) {
 			// A Claude Code copy whose collection counted nothing: it may be
 			// a summary, so every lead the run keeps is told, marked or not.
-			r.Run.Harness = sandbox.ClaudeCodeHarness
+			r.Run.Harness = "claude-code"
 			r.Leads, r.Base = []runner.ResumeLead{keptLead(task), keptLead(review)}, &base
 		}).Continue.Brief
 	section := leadsSection(brief)
@@ -541,7 +541,7 @@ func TestAnAnswerBeforeATaskThatDoesNotOpenIsToldOnItsOwn(t *testing.T) {
 		func(r *runner.Resume) {
 			// A Claude Code copy whose collection counted nothing: it may be
 			// a summary, so every lead the run keeps is told.
-			r.Run.Harness = sandbox.ClaudeCodeHarness
+			r.Run.Harness = "claude-code"
 			r.Leads = []runner.ResumeLead{keptLead(answerOf("job-1", 1, 1, "use the release branch")),
 				keptLead(unread)}
 			r.Base = baseTurn
@@ -575,7 +575,7 @@ func TestAnAnswerToldInsideATaskIsHandedOnTold(t *testing.T) {
 	task := sandbox.Lead{Kind: sandbox.LeadKindTask, Job: "job-2", Seq: 2, Round: 1, Task: &sandbox.LeadTask{}}
 	again := relaunchedInBox(t, inBoxCarryNamed(t, "a person's answer"), sandbox.HarnessEndOwnRun, nil,
 		func(r *runner.Resume) {
-			r.Run.Harness = sandbox.ClaudeCodeHarness
+			r.Run.Harness = "claude-code"
 			r.Leads = []runner.ResumeLead{keptLead(answerOf("job-1", 1, 1, "use the release branch")),
 				keptLead(task)}
 			r.Base = baseTurn

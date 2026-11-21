@@ -376,13 +376,14 @@ func TestTheRowCarriesTheColleaguesAskTheTurnAnswers(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
 	req := launchReq("t1")
-	req.Turn.ColleagueAsk = &ColleagueAsk{ChannelID: "a2a-1", Question: "which branch?",
-		Chain: []string{"ceo"}, TraceID: "tr-ask", SpanID: "sp-ask"}
+	asked := ColleagueAsk{ChannelID: "a2a-1", Chain: []string{"ceo"}, TraceID: "tr-ask",
+		SpanID: "sp-ask"}.WithQuestion("which branch?")
+	req.Turn.ColleagueAsk = &asked
 	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	got := rig.get("t1").ColleagueAsk
-	if got == nil || got.ChannelID != "a2a-1" || got.Question != "which branch?" ||
+	if got == nil || got.ChannelID != "a2a-1" || got.RawQuestion() != "which branch?" ||
 		len(got.Chain) != 1 || got.TraceID != "tr-ask" || got.SpanID != "sp-ask" {
 		t.Fatalf("the row carries ask %+v, want the launch's", got)
 	}
@@ -431,7 +432,7 @@ func TestAJobRecordsTheEntryItWasLaunchedOn(t *testing.T) {
 	if got := rig.get("t1").Launch; got.ProviderKey != "fallback" || got.Model != "sonnet" {
 		t.Fatalf("the job's record = %+v, want the entry and model it was launched on", got)
 	}
-	rec := collectedRecord(rig.get("t1"), rig.get("t1").Launch, Result{Success: true}, time.Now())
+	rec := collectedRecord(rig.get("t1"), rig.get("t1").Launch, Result{Success: true}, 0, time.Now())
 	if rec.ProviderKey != "fallback" || rec.Model != "sonnet" {
 		t.Errorf("the job's launch record is filed under %q/%q, want fallback/sonnet",
 			rec.ProviderKey, rec.Model)

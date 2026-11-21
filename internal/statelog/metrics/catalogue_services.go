@@ -150,13 +150,16 @@ func serviceInstruments() []Instrument {
 			Name: SeatWakesRouted, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome", "rule"},
 			Shows: "What the router of a seat whose executor run holds it " +
-				"decided for each wake waiting on the seat's held inbox, once " +
-				"per wake and job (ADR-0167, ADR-0168): `joined` when it handed " +
-				"the wake to the run (a lead's steer as their note), `absorbed` " +
-				"when its triage found it noise owing nothing, `refused` when " +
-				"the run's record took no more, and `left_queued` when it waits " +
-				"for a turn of its own. `rule` names what decided: the " +
-				"requester rule's `conversation`, `work_item` or `wrote` (a " +
+				"decided for each wake reaching the seat, once per wake and job " +
+				"(ADR-0167, ADR-0168, ADR-0169): `joined` when it handed the " +
+				"wake to the run (a lead's steer as their note), `absorbed` when " +
+				"its triage found it noise owing nothing, `refused` when the " +
+				"run's record took no more, and `left_queued` when it waits for " +
+				"a turn of its own; and below the seat's cap, `waited` for each " +
+				"wake set aside until the run it relates to leaves (whatever " +
+				"else was counted of it), and `started` for each related to no " +
+				"run, which starts a turn beside them. `rule` names what decided: " +
+				"the requester rule's `conversation`, `work_item` or `wrote` (a " +
 				"record the run created or wrote); the triage's " +
 				"`triage_input`, `triage_steer`, `triage_request`, " +
 				"`triage_noise`, or `triage_failed` for a triage that decided " +
@@ -164,10 +167,28 @@ func serviceInstruments() []Instrument {
 				"let it join, `foldin_asked` (`left_queued` while it waits), " +
 				"then `foldin_approved` (`joined` as the approver's note), " +
 				"`foldin_refused`, or `foldin_expired` when its job ended " +
-				"unanswered; or `none`. `triage_failed` climbing is a seat whose " +
+				"unanswered; `run` for a wake waiting on a run other than by its " +
+				"conversation; or `none`. `triage_failed` climbing is a seat whose " +
 				"triage chain is failing, and `foldin_expired` beside few " +
 				"answers is approvers not reached. The `seat_wake_left_queued`, " +
-				"`seat_wake_triaged` and `seat_wake_foldin_*` lines name the reason.",
+				"`seat_wake_triaged`, `seat_wake_foldin_*` and `seat_wake_aside` " +
+				"lines name the reason.",
+		},
+		{
+			Name: SeatRunCalls, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"tool", "outcome"},
+			Shows: "What became of each call an executor's run made to the tools " +
+				"for the runs in flight around it (ADR-0176), by `tool` (the " +
+				"run tool called, or `wait_answered` for the engine's answer " +
+				"to a wait): `listed`, `sent`, `waited`, " +
+				"`resumed` when a wait's run left its seat and the wait was " +
+				"answered, `failed` when a store or the publish failed, or " +
+				"`refused_` and the reason (`self`, `unknown_run`, `requester`, " +
+				"`not_working`, `harness`, `bound`, `cycle`, `caller_done`, " +
+				"`invalid`). " +
+				"`refused_requester` climbing is runs of one seat working for " +
+				"different people on the same work; `refused_bound` runs talking " +
+				"past what a handoff needs. The `seat_run_*` lines name the runs.",
 		},
 
 		// ---- the object store's S3 requests ---------------------------

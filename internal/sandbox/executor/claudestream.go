@@ -517,7 +517,7 @@ func (d *claudeEvents) Result() sandbox.Result {
 }
 
 // claudeSteerPrefix opens the `system/informational` line a hook of the run's
-// own prints as it hands the model a note or a late call ([ClaudeHookAnswer]):
+// own prints as it hands the model a note or a late call ([ClaudeCode.hookAnswer]):
 // the event that fired it, then the line's own opening (measured on 2.1.263
 // and 2.1.310).
 var claudeSteerPrefix = regexp.MustCompile(`^(?:` + claudeEventToolBatch + `|` +

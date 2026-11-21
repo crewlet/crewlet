@@ -36,9 +36,12 @@ other tool at `approve`, one that declares nothing included (`mcp.RiskOf`,
    other turn, and an agent's answer, names none.
 2. **The arguments are sealed at rest**: encrypted under the fleet keyring
    (`CallSeal`), bound to the run, the job and the call, kept out of the
-   question, the call log and the turn's ledger, and opened only for a person
-   who may approve the call (an administrator's `approvals`, the seat's
-   trail on the executors board) and for the resume that makes it.
+   question, the call log and the turn's ledger, and opened as sent only for
+   a person who may answer the call while it waits and for the engine making
+   it. Every view opens them by one rule (`CallSeal.OpenArgumentsFor`: an
+   administrator's `approvals`, the seat's trail on the executors board,
+   `GET /mcp-approvals/{id}`), and shows every other reader, and every reader
+   once the call is answered, them redacted with no digest.
 3. **Only its approval route answers it**: `POST /mcp-approvals/{id}`,
    `tools.approve`, an administrator or a lead of the seat, a person and
    never the assistant. A chat reply never answers a held call,

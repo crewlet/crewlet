@@ -56,6 +56,11 @@ const SteerSeatDomain = "seat.steer.seat"
 // own, so no note opens as a wake nor a wake as a person's note.
 const SteerWakeDomain = "seat.wake.item"
 
+// SteerRunDomain is the key domain a message one run sends another with
+// `message_run` is sealed in on the receiving run's record (ADR-0176): its own,
+// so no wake opens as a run's message nor a run's message as a wake.
+const SteerRunDomain = "seat.run.message"
+
 // steerTakeStatuses are the statuses a run's own harness takes notes in: from the
 // launch that opens its job — the job may be working before its turn has
 // parked into the record — to the claim of its completion.
@@ -133,6 +138,7 @@ type runSteers struct {
 	note *sealPair
 	seat *sealPair
 	wake *sealPair
+	run  *sealPair
 
 	store sandbox.PendingStore
 	pub   queue.Publisher
@@ -217,10 +223,10 @@ func newSealPair(domain string, ring recordseal.Keyring) (*sealPair, error) {
 	return &sealPair{signer: signer, verifier: verifier}, nil
 }
 
-// steerSeals is the three seals a run's record carries notes and wakes under,
-// built over the fleet keyring before anything is opened, as every channel's
-// are.
-type steerSeals struct{ note, seat, wake *sealPair }
+// steerSeals is the four seals a run's record carries notes, wakes and other
+// runs' messages under, built over the fleet keyring before anything is
+// opened, as every channel's are.
+type steerSeals struct{ note, seat, wake, run *sealPair }
 
 func newSteerSeals(ring recordseal.Keyring) (steerSeals, error) {
 	note, err := newSealPair(SteerNoteDomain, ring)
@@ -235,18 +241,23 @@ func newSteerSeals(ring recordseal.Keyring) (steerSeals, error) {
 	if err != nil {
 		return steerSeals{}, err
 	}
-	return steerSeals{note: note, seat: seat, wake: wake}, nil
+	run, err := newSealPair(SteerRunDomain, ring)
+	if err != nil {
+		return steerSeals{}, err
+	}
+	return steerSeals{note: note, seat: seat, wake: wake, run: run}, nil
 }
 
 // Domains is the key domains the seals sign in, for the gate that holds every
 // channel's domains apart.
-func (s steerSeals) Domains() (string, string, string) {
-	return SteerNoteDomain, SteerSeatDomain, SteerWakeDomain
+func (s steerSeals) Domains() (string, string, string, string) {
+	return SteerNoteDomain, SteerSeatDomain, SteerWakeDomain, SteerRunDomain
 }
 
 // newRunSteers is a node's run steers over its run store and its queue.
 func newRunSteers(seals steerSeals, store sandbox.PendingStore, pub queue.Publisher) *runSteers {
-	return &runSteers{note: seals.note, seat: seals.seat, wake: seals.wake, store: store, pub: pub, now: time.Now}
+	return &runSteers{note: seals.note, seat: seals.seat, wake: seals.wake, run: seals.run, store: store, pub: pub,
+		now: time.Now}
 }
 
 // claimingIn is s recording the wakes its runs read in completions, the
@@ -1654,6 +1665,8 @@ type runInbox struct {
 	steers *runSteers
 	ident  runIdentity
 	round  int
+	// harness is the run's harness, whose delivery the inbox answers in.
+	harness string
 
 	mu     sync.Mutex
 	launch string
@@ -1782,18 +1795,19 @@ func kept[T any](list []T) []T {
 	return list
 }
 
-// inbox is the inbox of a run identified by ident, for the turn iteration round;
-// it serves nothing until it is bound to the run's job.
+// inbox is the inbox of a run identified by ident, on harness, for the turn
+// iteration round; it serves nothing until it is bound to the run's job.
 //
-// ONE INBOX WHATEVER THE RUN'S HARNESS: Claude Code's hooks take notes through
-// [runInbox.Take] and OpenCode's plugin through [runInbox.Wait] and
-// [runInbox.Read], and each reaches only the half its own harness calls, so the
-// inbox has nothing to tell apart.
-func (s *runSteers) inbox(ident runIdentity, round int) *runInbox {
+// ONE INBOX WHATEVER THE RUN'S HARNESS: a harness answered by hooks takes notes
+// through [runInbox.Take] and one whose plugin polls through [runInbox.Wait]
+// and [runInbox.Read], each reaching only the half its own harness calls; the
+// answer's shape and an admitted note's id are the harness's own
+// ([executor.HookAnswer], [executor.InboxID]).
+func (s *runSteers) inbox(ident runIdentity, round int, harness string) *runInbox {
 	if s == nil {
 		return nil
 	}
-	return &runInbox{steers: s, ident: ident, round: round}
+	return &runInbox{steers: s, ident: ident, round: round, harness: harness}
 }
 
 // Bind starts serving the inbox for the job launch, whose session fences its
@@ -1894,7 +1908,7 @@ func (i *runInbox) Take(ctx context.Context, event string, call *sandbox.NoteCal
 		}
 		messages = append(messages, hookMessage(c, notes, launch, unanswered, candidates))
 	}
-	fit := executor.ClaudeNotesThatFit(messages)
+	fit := executor.HookNotesThatFit(i.harness, messages)
 	candidates, messages = candidates[:fit], messages[:fit]
 	ids := make([]string, 0, len(candidates))
 	for _, c := range candidates {
@@ -1937,7 +1951,7 @@ func (i *runInbox) Take(ctx context.Context, event string, call *sandbox.NoteCal
 	if len(hook) == 0 {
 		return ""
 	}
-	return executor.ClaudeHookAnswer(event, take, hook)
+	return executor.HookAnswer(i.harness, event, take, hook)
 }
 
 // candidates is the boundary a hook at event answers, the record it chose on
@@ -2217,7 +2231,7 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 			break
 		}
 		out = append(out, mcpbridge.SteerNote{
-			Seq: o.held.Seq, ID: o.held.ID, Inbox: executor.OpenCodeInboxID(launch, o.held.ID),
+			Seq: o.held.Seq, ID: o.held.ID, Inbox: executor.InboxID(i.harness, launch, o.held.ID),
 			Message: i.message(ctx, o),
 		})
 	}

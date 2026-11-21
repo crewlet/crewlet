@@ -404,7 +404,7 @@ recorded SERVED to the job's hooks in a write before the answer
 (`sandbox.PendingStore.ServeHook`), keeping the hook's call and naming the
 answer's own take, whose token ends the hook's transcript line, which Claude
 Code records in the session's main thread and never sends the model
-(`executor.ClaudeHookAnswer`). A note is recorded read only by the verdict of a
+(`executor.HookAnswer`). A note is recorded read only by the verdict of a
 read of the job's main thread (`sandbox.PendingStore.SettleHook`), made at EVERY
 read of the job's box at its end: its collection, a stop's and a loss's, a
 loss's box read whatever the company keeps of its sessions. It is one walk with

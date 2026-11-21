@@ -31,7 +31,7 @@ func TestAPassIsSpacedByItsDeliveriesAndIsNoFailure(t *testing.T) {
 	msg := &answeredMsg{md: &jetstream.MsgMetadata{NumDelivered: 4,
 		Sequence: jetstream.SequencePair{Stream: 7}}}
 
-	a.apply(t.Context(), msg, &events.Event{Type: "external_notification"},
+	a.apply(t.Context(), delivery{msg: msg, ev: &events.Event{Type: "external_notification"}},
 		queue.Pass("newer_record", errors.New("a peer on a newer build reads it")))
 
 	if len(msg.delays) != 1 || msg.naked != 0 || msg.termed != 0 {

@@ -169,7 +169,7 @@ func TestAHookAnswerNamesWhatReachedTheRun(t *testing.T) {
 			executor.EntryNote},
 		{"a note alone", []executor.HookNote{note}, "a note from ada reached the run", executor.EntryNote},
 	} {
-		answer := executor.ClaudeHookAnswer("PostToolBatch", hookTake, tc.notes)
+		answer := executor.HookAnswer(executor.ClaudeCodeName, "PostToolBatch", hookTake, tc.notes)
 		var out struct {
 			SystemMessage string `json:"systemMessage"`
 		}

@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // servedByAHook serves note id to run's job at a hook after a batch, as the
@@ -72,7 +73,7 @@ func TestTheResumedSegmentCarriesWhatItsCollectionConfirmed(t *testing.T) {
 		parkOnARun(t, c.e, c.rig, "run-1")
 		c.file(t, "run-1", "req-1", "use the staging database")
 		run := c.rig.row(t, "run-1")
-		if run.Harness != sandbox.ClaudeCodeHarness {
+		if run.Harness != executor.ClaudeCodeName {
 			t.Fatalf("the premise: the run is on %q, want a Claude Code job", run.Harness)
 		}
 		servedByAHook(t, c.e.sandbox.Load().pending, run, "req-1")
@@ -106,7 +107,7 @@ func TestTheResumedSegmentCarriesWhatItsCollectionConfirmed(t *testing.T) {
 			t.Fatalf("filing the note = %+v, %v", filed, err)
 		}
 		first := rig.row(t, "run-lost")
-		if first.Harness != sandbox.ClaudeCodeHarness {
+		if first.Harness != executor.ClaudeCodeName {
 			t.Fatalf("the premise: the run is on %q, want a Claude Code job", first.Harness)
 		}
 		pending := e.sandbox.Load().pending

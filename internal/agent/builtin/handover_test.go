@@ -52,6 +52,7 @@ import (
 // written, and an entry that hands nothing over fails until it goes. Never a
 // hand-kept list: the reads somebody remembers are not the reads there are.
 var handsOverWords = map[string]string{
+	builtin.ListRunsTool:             "TestListRunsHandsATitleOverInTheFenceOfWhatItsTurnWasAsked",
 	builtin.AnswerKnowledgeTool:      "TestEveryUntrustedReadIsFenced/answer_knowledge",
 	builtin.AnswerExecutorTool:       "TestEveryUntrustedReadIsFenced/answer_executor",
 	builtin.CodeBlameTool:            "TestEveryUntrustedReadIsFenced/code_blame",
@@ -264,6 +265,11 @@ func sweepCalls(t *testing.T) []sweepCall {
 			if name == builtin.AskToMergeTool || name == builtin.AskToDeployTool {
 				c.refused = tools.RefusalForbidden
 			}
+			// A MESSAGE OR A WAIT acts for the job that calls, which the
+			// sweep's turn names none of; neither answers anybody's words.
+			if name == builtin.MessageRunTool || name == builtin.WaitForRunTool {
+				c.refused = tools.RefusalUnavailable
+			}
 			out = append(out, c)
 		}
 		for _, v := range sweepVariants(r) {
@@ -438,6 +444,14 @@ func newSweepRig(t *testing.T) *sweepRig {
 	seat := tools.NewRegistry()
 	if _, err := builtin.Register(seat, deps); err != nil {
 		t.Fatal(err)
+	}
+	// AND THE TOOLS FOR THE RUNS AROUND AN EXECUTOR'S RUN, which the engine
+	// hands its surface outside the registry: a run beside the caller's of the
+	// same requester carries the sweep's words in its title.
+	for _, tool := range builtin.NewRunTools(sweepRuns{}) {
+		if err := seat.RegisterWith(tool, tools.OriginBuiltin, tools.Annotations{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// THE OPERATOR CATALOGUE OVER THE SAME STORES, acting as whoever the

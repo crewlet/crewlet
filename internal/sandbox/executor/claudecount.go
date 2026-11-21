@@ -19,7 +19,7 @@ import (
 
 // The bound takes the anchor's four counts through [threadLine.Usage] and
 // charges every chained line ([threadHead.Chained]) after its place at
-// [sandbox.ClaudeCharge]: two bytes a token of the line and its break, no more
+// [claudeChargeBytes]: two bytes a token of the line and its break, no more
 // than any rate the harness counts a block at, syntax bytes covering rounding;
 // so it is never below the harness's count. It reads only the line layer, under
 // its one set of options (head, Usage, ToolResultsCleared, UUID,
@@ -164,7 +164,7 @@ func (r *resumedReading) line(l threadLine) {
 			newestReads: r.newestReads, flagged: r.flagged}
 		return
 	}
-	charge, marks := sandbox.ClaudeCharge(l.Size), lineMarksOf(&l.Bytes)
+	charge, marks := claudeCharge(l.Size), lineMarksOf(&l.Bytes)
 	if l.Head.Type != recordAssistant || !l.Head.Main() {
 		r.after(charge, marks)
 		return

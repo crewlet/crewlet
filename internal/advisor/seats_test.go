@@ -11,8 +11,8 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// teamShape is a company whose Eng unit holds two seats doing one job, and a
-// reviewer doing another.
+// teamShape is a company whose Eng unit holds two seats doing one job, each
+// one turn at a time, and a reviewer doing another.
 const teamShape = `name: Acme
 providers:
   llm:
@@ -30,11 +30,13 @@ units:
       - name: Dev A
         handle: dev-a
         llm: p
+        sandbox: {max_concurrent_runs: 1}
         goal: Ship the backlog.
         responsibilities: [code]
       - name: Dev B
         handle: dev-b
         llm: p
+        sandbox: {max_concurrent_runs: 1}
         goal: Ship the backlog.
         responsibilities: [code]
       - name: Reviewer
@@ -126,7 +128,8 @@ func TestAGroupWhoseWorkWaitedWhileItWasBusyIsOfferedASeat(t *testing.T) {
 		"a group that changed in the week": func() *advisor.Staffing {
 			s := staffing(t, 7, busy, due, items)
 			s.Documents = append(s.Documents, company(t, replace(t, teamShape,
-				"      - name: Dev B\n        handle: dev-b\n        llm: p\n        goal: Ship the backlog.\n        responsibilities: [code]\n", "")))
+				"      - name: Dev B\n        handle: dev-b\n        llm: p\n        sandbox: {max_concurrent_runs: 1}\n"+
+					"        goal: Ship the backlog.\n        responsibilities: [code]\n", "")))
 			return s
 		}(),
 		"nine items":       staffing(t, 7, busy, due, map[string]int{"dev-a": 5, "dev-b": 4}),
@@ -170,7 +173,8 @@ func TestOverlappingTurnsNeverReadAboveTheirSeatsCapacity(t *testing.T) {
 	week := 7 * 24 * time.Hour
 	capped := func(doc, handle string) string {
 		at := "        handle: " + handle + "\n        llm: p\n"
-		return replace(t, doc, at, at+"        sandbox: {max_concurrent_runs: 2}\n")
+		return replace(t, doc, at+"        sandbox: {max_concurrent_runs: 1}\n",
+			at+"        sandbox: {max_concurrent_runs: 2}\n")
 	}
 	shape := capped(capped(teamShape, "dev-a"), "dev-b")
 	due := map[string]time.Duration{"dev-a": 20 * time.Hour, "dev-b": 15 * time.Hour}

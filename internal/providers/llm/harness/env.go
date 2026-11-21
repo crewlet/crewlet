@@ -174,6 +174,11 @@ func childZone() (string, *time.Location) {
 // the plan sat unused, which is the failure the default mode exists to
 // prevent.
 func applyAuth(env map[string]string, p harnessprofile.Profile, auth Auth) {
+	if auth.Mode != AuthAPIKey && p.APIKeyModelEnv != "" {
+		// The model the key goes beside, and the key's own half: set only
+		// with it, so nothing else signs the harness in through it.
+		delete(env, p.APIKeyModelEnv)
+	}
 	switch auth.Mode {
 	case AuthAPIKey:
 		if p.APIKeyEnv != "" && auth.APIKey != "" {

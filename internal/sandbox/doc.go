@@ -193,7 +193,8 @@
 // increment), clamped at zero, and the inbox hold follows at the transition.
 // A seat holds up to its cap of runs in [Holding], one per conversation
 // (ADR-0169): a launch or an answer's resume reserves its slot with its write,
-// under the lock, or waits ([SeatFull], [ConversationBusy]).
+// under the lock, or waits ([SeatFull], [ConversationBusy]). Mail waiting on a
+// run waits aside, readmitted as the run leaves ([Coordinator.readmitFreed]).
 //
 // # Recounting a seat
 //
@@ -212,11 +213,10 @@
 //
 // # The seat's inbox hold
 //
-// Held while its runs hold every slot, a delivery waits on a conversation one
-// works, or an answer or ending is owed ([SeatHold]): parked mail would loop
-// through the consumer. An answer by turn travels on the control topic and is
-// recorded on arrival. This node alone agrees on the hold, taken for one
-// [queue.Attachment] so a late one is refused, never carried onto the next.
+// At the cap, with its aside mail full, or with an answer or ending owed
+// ([SeatHold]); parked mail would loop. An answer by turn travels on the
+// control topic and is recorded on arrival. This node's alone, taken for one
+// [queue.Attachment], so a late one is refused.
 //
 // # Routing a control-topic delivery
 //

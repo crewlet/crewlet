@@ -228,7 +228,7 @@ func TestAProbeAnswersTheKeptSessionOfTheJobARelaunchFollows(t *testing.T) {
 		Harness: "claude-code", Release: "2.1.310", Through: 2, Owed: []int{1}, NoteCursor: 4, Interrupted: true,
 		CapturedAt: keptAt, Home: "/boxes/4f2a/home", ContextTokens: 40000, CopyContext: 40000, KeptTurn: "t1",
 		// THE WINDOW OF A CHAIN WHOSE ONE MEMBER'S MODEL THIS BUILD DOES NOT KNOW.
-		Window: sandbox.ExecutorWindow{Tokens: sandbox.FallbackExecutorWindow, Standard: sandbox.FallbackExecutorWindow}}
+		Window: claudeWindowOf("claude-next-preview"), Traits: sessionTraits()}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the probe answered %+v, want %+v", got, want)
 	}

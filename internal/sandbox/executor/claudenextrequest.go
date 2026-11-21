@@ -179,7 +179,7 @@ func nextCharge(l threadLine) (threadEstimate, bool) {
 		if typ, _ := l.AttachmentType(); typ == attachmentPDFReads {
 			return threadEstimate{}, false
 		}
-		return estimateFlat(sandbox.ClaudeCharge(l.Size)), true
+		return estimateFlat(claudeCharge(l.Size)), true
 	}
 	return threadEstimate{}, true
 }

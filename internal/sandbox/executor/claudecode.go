@@ -17,7 +17,7 @@ import (
 )
 
 // ClaudeCodeName is this runner's config name.
-const ClaudeCodeName = sandbox.ClaudeCodeHarness
+const ClaudeCodeName = "claude-code"
 
 // ClaudeCode drives Claude Code headless.
 //
@@ -743,7 +743,7 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 	}
-	pin := claudeSettingsPin(sandbox.ClaudeCodeWindow(req.Model))
+	pin := claudeSettingsPin(claudeCodeWindow(req.Model))
 	if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSettings(), paths.ClaudeSettingsPinned(),
 		newClaudeSettings(nil), newClaudeSettings(pin)); err != nil {
 		return "", err
@@ -882,7 +882,7 @@ func (ClaudeCode) Output(paths Paths) Output {
 // Pins is the session's layout ([claudeSessionLayout]) under the window of the
 // model req's run works under, logging a model whose window this build does not know.
 func (ClaudeCode) Pins(ctx context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
-	window := sandbox.ClaudeCodeWindow(req.Model)
+	window := claudeCodeWindow(req.Model)
 	if !window.Known {
 		log.WarnContext(ctx, "executor_context_window_unknown", "model", req.Model,
 			"window_tokens", window.Tokens, "detail", "this build does not know the model's context "+
@@ -924,7 +924,7 @@ func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
 		// second memory the engine's calls are kept from (docs/concepts/llm-backends.md,
 		// "Between turns").
 		{Name: "CLAUDE_CODE_DISABLE_AUTO_MEMORY", Value: "1"},
-		// The model's window ([sandbox.ClaudeCodeWindow]), compacted at less the
+		// The model's window ([claudeCodeWindow]), compacted at less the
 		// harness's headroom; a subagent's `autoCompactWindow` can only LOWER it
 		// (2.1.312+), so no request carries more. The switches that move it are
 		// unset ([claudeCompactionOff]) and pinned in the settings.
@@ -1704,4 +1704,38 @@ func lastLine(text []byte) []byte {
 		text = text[i+1:]
 	}
 	return bytes.TrimSpace(text)
+}
+
+// threadTraits is what Claude Code's main-thread read settles: a cut-off copy
+// is counted (its thread is the copy itself), its hooks' serves show in the
+// thread, and a capture is raised only where its release's resume was read.
+func (ClaudeCode) threadTraits() sandbox.ThreadTraits {
+	return sandbox.ThreadTraits{CountsCutOff: true, HookReceipts: true, PlacesWithResumeRead: true}
+}
+
+// sessionTraits is how a relaunch judges a Claude Code session: by the run's
+// window, its calls keyed by their own ids, a brief at
+// [claudeChargeBytes].
+func (ClaudeCode) sessionTraits() sandbox.SessionTraits {
+	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestWindow, CallKeying: sandbox.CallKeyingByCallID,
+		Charge: claudeChargeBytes}
+}
+
+// resumeRead reports whether release is one whose resume this build read
+// ([claudeResumeRead]).
+func (ClaudeCode) resumeRead(release string) bool { return claudeResumeRead(release) }
+
+// notesOffWhy is what switches Claude Code's reading of notes off.
+func (ClaudeCode) notesOffWhy() string {
+	return "a managed policy that allows only managed hooks (allowManagedHooksOnly, " +
+		"strictPluginOnlyCustomization) or disables every hook (disableAllHooks), or a release older than " +
+		"2.1.163, the oldest whose Stop hook's answer reaches the model, which the run starts without its " +
+		"hooks and whose error stream says so"
+}
+
+// artifacts is what a Claude Code run leaves in its box of its own.
+func (ClaudeCode) artifacts(p Paths) (files, dirs []string) {
+	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
+			p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned()},
+		[]string{p.ClaudeSkillsPlugin()}
 }

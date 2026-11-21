@@ -343,7 +343,10 @@ func unsettledLoops(ctx context.Context, q *Queue, since map[uint64]uint64, down
 		pair := [2]string{l.Topic, l.Group}
 		isEmpty, read := empty[pair]
 		if !read {
-			held, err := inspector(q).Backlog(ctx, l.Topic, l.Group, 1)
+			// BESIDE q, FOR q: mail q holds aside waits for a Readmit, a
+			// verb, and pins the ack floor; read past it as q's own read is.
+			held, err := inspector(q).backlogFor(ctx, l.Topic, l.Group, 1,
+				q.heldOf(attachKey{l.Topic, l.Group}))
 			switch {
 			case err != nil && ctx.Err() != nil:
 				// The bound ended inside the read: the loop is still

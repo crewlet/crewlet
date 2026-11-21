@@ -299,6 +299,13 @@ func (g *submitGate) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 					"takes no submission. END YOUR TURN NOW: their answer, and what the call "+
 					"returned, arrive as your next prompt, and you submit your work once you "+
 					"have finished it."), nil
+			case found && run.AskedBy(launch) && run.WaitsFor != nil:
+				// A WAIT ON ANOTHER RUN parks the job as a question does
+				// (ADR-0176), and is said as the wait it is.
+				return refused(tools.RefusalNotRunning, "You are waiting for run "+run.WaitsFor.Turn+
+					" to leave its seat, so this run is parked and takes no submission. END YOUR TURN "+
+					"NOW: how that run went arrives as your next prompt, and you submit your work once "+
+					"you have finished it."), nil
 			case found && run.AskedBy(launch):
 				return refused(tools.RefusalNotRunning, "You asked a person a question in "+
 					"this run, so it is parked on their answer and takes no submission. "+
