@@ -742,6 +742,13 @@ type NoteServe struct {
 	// Wakes is how many wakes the poll hands over of each wake item it names,
 	// by id ([handsWhole]).
 	Wakes map[string]int
+
+	// Inbox is the id the harness admits each note under, by note id, for a
+	// harness whose session record confirms a take by it: the serve is then
+	// recorded under that id, as a hook's is under its token, so a read asks
+	// the record for it and a settle finds it ([PendingStore.SettleHook]).
+	// Nil for a harness confirmed otherwise, whose serve records no take.
+	Inbox map[string]string
 }
 
 // HookServe is a hook's take serving notes to its job's harness
@@ -1142,6 +1149,7 @@ func (s *CoordStore) ServeNotes(ctx context.Context, turnID string, serve NoteSe
 		}
 		notes := slices.Clone(run.Steer.Notes)
 		marked := false
+		at := s.clock()
 		for i, held := range notes {
 			if !held.Waiting() || !held.IsFor(serve.Launch) || !slices.Contains(serve.IDs, held.ID) ||
 				!handsWhole(held, serve.Wakes) {
@@ -1149,9 +1157,16 @@ func (s *CoordStore) ServeNotes(ctx context.Context, turnID string, serve NoteSe
 			}
 			if held.Served != serve.Launch {
 				held.Served = serve.Launch
-				notes[i] = held
 				marked = true
 			}
+			if take := serve.Inbox[held.ID]; take != "" && !slices.ContainsFunc(held.Serves, func(h HookServed) bool {
+				return h.Launch == serve.Launch && h.Take == take
+			}) {
+				held.Serves = append(slices.Clone(held.Serves), HookServed{Take: take, Launch: serve.Launch,
+					Boundary: string(types.SteerBoundaryStep), At: at})
+				marked = true
+			}
+			notes[i] = held
 			served = append(served, held)
 		}
 		run.Steer.Notes = notes

@@ -2186,6 +2186,21 @@ func (i *runInbox) recordPulled(base context.Context, launch string) {
 // never read it. A note the serve did not answer — its write failed, or the
 // record moved on from the job — is not answered either, nor is any after it,
 // and they wait for the next poll.
+// inboxIDs is the id the run's harness admits each of ids under, by note id,
+// where its session record confirms a take by it ([executor.ConfirmsByRecord]):
+// the serve is then recorded under that id, which the job's receipts settle.
+// Nil for a harness confirmed otherwise.
+func (i *runInbox) inboxIDs(launch string, ids []string) map[string]string {
+	if !executor.ConfirmsByRecord(i.harness) {
+		return nil
+	}
+	out := make(map[string]string, len(ids))
+	for _, id := range ids {
+		out[id] = executor.InboxID(i.harness, launch, id)
+	}
+	return out
+}
+
 func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, <-chan struct{}) {
 	launch, watch := i.bound()
 	if launch == "" {
@@ -2212,7 +2227,8 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 	served := map[string]bool{}
 	if len(unserved) > 0 {
 		marked, err := i.steers.store.ServeNotes(ctx, i.ident.turn.TurnID, sandbox.NoteServe{
-			IDs: unserved, Launch: launch, Statuses: steerTakeStatuses, Wakes: wakesHanded(due)})
+			IDs: unserved, Launch: launch, Statuses: steerTakeStatuses, Wakes: wakesHanded(due),
+			Inbox: i.inboxIDs(launch, unserved)})
 		if err != nil {
 			log.WarnContext(ctx, "steer_notes_unserved", "turn_id", i.ident.turn.TurnID, "error", err.Error(),
 				"detail", "the poll is answered without the notes the record could not mark served; they "+

@@ -111,6 +111,15 @@ func PollCeiling(harness string) (int, bool) {
 	return 0, false
 }
 
+// ConfirmsByRecord reports whether harness's session record confirms a take
+// by the inbox id its note was admitted under ([recordConfirmer]): the poll's
+// serves of its run are then recorded under those ids
+// (sandbox.NoteServe.Inbox), so its receipts can settle them.
+func ConfirmsByRecord(harness string) bool {
+	_, ok := harnessNamed(harness).(recordConfirmer)
+	return ok
+}
+
 // confirms reports whether h, a harness that reads notes ([noteReader]), can
 // confirm a take, by one of three: its hooks' serves its thread shows
 // ([sandbox.ThreadTraits.Receipts]); the notes its session record holds, read
