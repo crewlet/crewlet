@@ -64,6 +64,21 @@ func memoryReserve(transfers, cores int, memory, engine int64) int64 {
 		perBackedCore(cores, max(0, memory-engine), ServingMemoryPerCore)
 }
 
+// memoryNeeded is the least memory at and past which a node keeping engine
+// bytes beside Gitlet, with transfers transfers on cores read slots, holds
+// memoryReserve within it: what code_cache_memory_short tells it to have. The
+// serving share keeps ServingMemoryPerCore of each CoreMemory past engine, so
+// memory added is partly kept again at the next boot; this is where the two
+// meet, a step of perBackedCore's at a time, or the share's cap where that
+// comes first. At the default lanes only a node of one transfer is short, and
+// it needs no second at this memory, so the next boot keeps the same.
+func memoryNeeded(transfers, cores int, engine int64) int64 {
+	fixed := int64(transfers) * gitproc.TransferMemory
+	step, share := gitproc.CoreMemory>>20, ServingMemoryPerCore>>20
+	steps := max(1, (fixed+step-share-1)/(step-share))
+	return engine + min(fixed+int64(cores)*ServingMemoryPerCore, fixed+(steps-1)*share)
+}
+
 // maintenanceBudget is what a node of mem gives its background work after
 // reserve, never below zero. Zero (a gitlet.max_transfers whose TransferMemory
 // takes the memory, or memory lowered in place below what the lanes were sized
@@ -89,14 +104,17 @@ func (c *Cache) initMemory(pool *gitproc.Pool) {
 
 // warnShort is Open's: a node whose memory is short of what it keeps
 // (memoryReserve: the executor's pools, its transfers and its serving share)
-// says so once, at boot, with the shortfall. It is not refused: a small or
-// development node runs seats beside Gitlet on 2 GiB, and serves while it is
-// not at every worst case at once (docs/concepts/gitlet.md, "The budget").
+// says so once, at boot, with the shortfall and the memory that holds it
+// (memoryNeeded). It is not refused: a small or development node runs seats
+// beside Gitlet on 2 GiB, and serves while it is not at every worst case at
+// once (docs/concepts/gitlet.md, "The budget").
 func (c *Cache) warnShort(pool *gitproc.Pool) {
 	if short := c.memReserve - c.memory.Bytes; short > 0 {
+		transfers := pool.Slots(gitproc.ClassTransfer)
 		c.log.Warn("code_cache_memory_short", "memory", c.memory.Bytes, "memory_from", c.memory.From,
-			"pools", pool.Reserved(), "transfer_slots", pool.Slots(gitproc.ClassTransfer),
-			"memory_reserved", c.memReserve, "shortfall", short)
+			"pools", pool.Reserved(), "transfer_slots", transfers, "memory_reserved", c.memReserve,
+			"shortfall", short,
+			"memory_needed", memoryNeeded(transfers, pool.Slots(gitproc.ClassRead), pool.Reserved()))
 	}
 }
 
