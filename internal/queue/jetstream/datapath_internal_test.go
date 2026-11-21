@@ -143,11 +143,10 @@ func refusedMoving(m *LinkMeter, path func() error) (bool, error) {
 // counted in the meter's readings: (a) blackholed idle, refused within a probe
 // period and a bound, never before a bound, the lease link standing; (b) a
 // mebibyte crossing four bounds ahead of the probe, never refused while the
-// link reads moving (a relay a loaded runner stalls past a bound is a still
-// link, rightly refused); (c) two mebibytes blackholed six seconds in, refused
-// once the link reads still over a bound, never while it reads moving, and
-// within two bounds; (d) a probe never answered while bulk moves, refused at
-// the cap as a link that moves, never before.
+// link reads moving (a relay a loaded runner stalls is still, rightly
+// refused); (c) two mebibytes blackholed six seconds in, refused once the link
+// reads still over a bound, never while moving, and within two bounds; (d) a
+// probe never answered while bulk moves, refused at the cap, never before.
 //
 // Mutant: the silence clause dropped — (b). Mutant: silence read over less
 // than the bound — (c). Mutant: no cap — (d). Mutant: DataPath reads only the
