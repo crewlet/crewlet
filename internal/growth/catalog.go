@@ -31,6 +31,10 @@ type Operation struct {
 	// Fields classes a write by what it changes ([Classify]): pausing and
 	// lowering are operate, enabling and raising spend.
 	Fields []FieldRule
+	// Classes are the further classes a product's own per-call rule can bring
+	// a write to, for a write [FieldRule] cannot class (a mutate of several
+	// operations, each compared with what it changes); Class is the highest.
+	Classes []Class
 	// Roles are the catalog's roles ([Role.ID]) that may call it; empty is
 	// every role.
 	Roles []string
@@ -139,7 +143,7 @@ func number(v any) (*big.Rat, bool) {
 
 // classes is every class a call of op can come to.
 func (op Operation) classes() []Class {
-	out := []Class{op.Class}
+	out := append([]Class{op.Class}, op.Classes...)
 	for _, r := range op.States {
 		out = append(out, r.Class)
 	}
@@ -254,6 +258,12 @@ func (c Catalog) Validate() error {
 			if strings.TrimSpace(st.When) == "" || !st.Class.Callable() || st.Class == op.Class {
 				bad("growth: %s operation %s state rule %q needs a state and a callable class other than "+
 					"the operation's", c.Kind, op.ID, st.When)
+			}
+		}
+		for _, k := range op.Classes {
+			if !k.Callable() || k.Rank() >= op.Class.Rank() {
+				bad("growth: %s operation %s may come to %q, which needs to be a callable class below its own",
+					c.Kind, op.ID, k)
 			}
 		}
 		for _, f := range op.Fields {
