@@ -212,8 +212,8 @@
 // the block's first line where the value's line opens alike, and the word the
 // claims, reading the key's line as written, take for the value is the
 // wrapping's, and shown. So a gutter the value's line repeats letter for
-// letter is the wrapping's and shown, though a run of base64, even a key's
-// last run the line below its END repeats. A key the claims
+// letter is the wrapping's, and is shown, though it be a run of base64, even a
+// key's last run where the line below its END repeats it. A key the claims
 // read no value of has none the cut keeps, and its block is written whole
 // too: where the line below opens with the gutter and then an armour, the
 // claims read no value, the armour ending the read, while the rule reads that
