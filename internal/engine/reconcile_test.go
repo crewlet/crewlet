@@ -428,9 +428,9 @@ func TestReactivatingAnUnchangedRevisionAppliesAgain(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("Target: found=%v err=%v", found, err)
 	}
-	payload, found, err := p.fleet.Payload(t.Context(), target.RevisionID)
+	payload, found, err := p.fleet.Body(t.Context(), target)
 	if err != nil || !found {
-		t.Fatalf("Payload: found=%v err=%v", found, err)
+		t.Fatalf("Body: found=%v err=%v", found, err)
 	}
 	// The pointer is append-only, so re-activating the SAME revision mints a
 	// new epoch every node watches: how a rotated secret reaches the fleet.
@@ -559,7 +559,7 @@ func TestARefusedReactivationOfTheRunningRevisionIsStillTheFleets(t *testing.T) 
 			if err != nil {
 				t.Fatalf("Target: %v", err)
 			}
-			payload, _, err := p.fleet.Payload(t.Context(), target.RevisionID)
+			payload, _, err := p.fleet.Body(t.Context(), target)
 			if err != nil {
 				t.Fatalf("Payload: %v", err)
 			}
@@ -1171,27 +1171,25 @@ func TestTheFleetRowSaysWhichEpochThisNodeLastApplied(t *testing.T) {
 			"applied %d, want %d and 0", row.Epoch, row.Applied, refusedFirst)
 	}
 
-	// Epochs up to 5 move the pointer with no tick between them, so the one
-	// apply below is of epoch 5.
+	// Four activations move the pointer with no tick between them, so the one
+	// apply below is of the last of them.
 	var applied int64
 	for range 4 {
 		applied = p.activate(t.Context(), t, companyDoc)
 	}
-	if applied != 5 {
-		t.Fatalf("the pointer is at epoch %d; the case needs 5", applied)
-	}
 	if err := p.recon.Tick(t.Context()); err != nil {
-		t.Fatalf("apply epoch 5: %v", err)
+		t.Fatalf("apply epoch %d: %v", applied, err)
 	}
 	refused := p.activatePayload(t, "broken", brokenRevision)
 	if err := p.recon.Tick(t.Context()); err == nil {
 		t.Fatal("a revision that cannot be built applied cleanly")
 	}
 	row := p.fleetRow(t)
-	if row.Epoch != 6 || refused != 6 || row.Applied != 5 ||
+	if row.Epoch != refused || row.Applied != applied ||
 		configplane.ApplyStatus(row.Status) != configplane.StatusError {
 		t.Errorf("the fleet says this node attempted epoch %d (%s) and applied %d, want "+
-			"the refusal of 6 beside the 5 it runs", row.Epoch, row.Status, row.Applied)
+			"the refusal of %d beside the %d it runs", row.Epoch, row.Status, row.Applied,
+			refused, applied)
 	}
 }
 
@@ -1415,8 +1413,9 @@ func TestAReusedEpochNeverMarksAnUnappliedRevisionAsTheBootRow(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 
-	// A FRESH COORDINATION STORE whose first activation — the same epoch —
-	// names another revision this node holds.
+	// A FRESH COORDINATION STORE whose activation at the same epoch names
+	// another revision this node holds: the stores count epochs apart (the
+	// KV's body takes a revision of its own), so it activates up to it.
 	recreated := memory.NewFleet()
 	document := p.seal(t, yamlToJSON(t, companyDoc))
 	other, err := p.store.Configs().Insert(t.Context(), store.Revision{
@@ -1426,12 +1425,14 @@ func TestAReusedEpochNeverMarksAnUnappliedRevisionAsTheBootRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store the other revision: %v", err)
 	}
-	published, err := recreated.Activate(t.Context(), coord.ActivationRequest{
-		RevisionID: other, Summary: "elsewhere", Payload: document, At: pinnedNow.Add(time.Hour),
-		ExpectAbsent: true, Origin: anOrigin,
-	})
-	if err != nil {
-		t.Fatalf("activate on the recreated store: %v", err)
+	var published coord.Activation
+	for published.Epoch < epoch {
+		if published, err = recreated.Activate(t.Context(), coord.ActivationRequest{
+			RevisionID: other, Summary: "elsewhere", Payload: document, At: pinnedNow.Add(time.Hour),
+			Origin: anOrigin,
+		}); err != nil {
+			t.Fatalf("activate on the recreated store: %v", err)
+		}
 	}
 	if published.Epoch != epoch {
 		t.Fatalf("the recreated store is at epoch %d, want the reused %d", published.Epoch, epoch)
@@ -1464,8 +1465,12 @@ func (s *swappablePlane) Target(ctx context.Context) (coord.Activation, bool, er
 	return s.plane().Target(ctx)
 }
 
-func (s *swappablePlane) Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
-	return s.plane().Payload(ctx, revisionID)
+func (s *swappablePlane) Body(ctx context.Context, a coord.Activation) (json.RawMessage, bool, error) {
+	return s.plane().Body(ctx, a)
+}
+
+func (s *swappablePlane) BodyCrossing(a coord.Activation) time.Duration {
+	return s.plane().BodyCrossing(a)
 }
 
 func (s *swappablePlane) RecordApply(ctx context.Context, status coord.NodeApply) error {
@@ -1548,9 +1553,9 @@ type heldPayload struct {
 	entered  chan struct{}
 }
 
-func (h *heldPayload) Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
-	payload, found, err := h.Plane.Payload(ctx, revisionID)
-	if revisionID == h.revision {
+func (h *heldPayload) Body(ctx context.Context, a coord.Activation) (json.RawMessage, bool, error) {
+	payload, found, err := h.Plane.Body(ctx, a)
+	if a.RevisionID == h.revision {
 		h.once.Do(func() {
 			close(h.entered)
 			h.during()
@@ -1600,13 +1605,12 @@ func TestARevisionThatCannotBeBuiltLeavesTheNodeServing(t *testing.T) {
 	}
 }
 
-// bodiless is a plane whose pointer names a revision it holds no body for,
-// which the store cannot produce (the body is written in the pointer's own
-// record): what a node sees when the pointer moved between its reads of the
-// target and the body.
+// bodiless is a plane whose pointer names a body it no longer holds: what a
+// node sees when the pointer moved on between its reads of the target and the
+// body, and the sweep took the body.
 type bodiless struct{ coord.Plane }
 
-func (bodiless) Payload(context.Context, string) (json.RawMessage, bool, error) {
+func (bodiless) Body(context.Context, coord.Activation) (json.RawMessage, bool, error) {
 	return nil, false, nil
 }
 
@@ -2540,14 +2544,14 @@ type midApplyPlane struct {
 	withheld atomic.Pointer[string]
 }
 
-func (m *midApplyPlane) Payload(ctx context.Context, revisionID string) (json.RawMessage, bool, error) {
+func (m *midApplyPlane) Body(ctx context.Context, a coord.Activation) (json.RawMessage, bool, error) {
 	if fn := m.during.Load(); fn != nil {
 		(*fn)()
 	}
-	if id := m.withheld.Load(); id != nil && *id == revisionID {
+	if id := m.withheld.Load(); id != nil && *id == a.RevisionID {
 		return nil, false, nil
 	}
-	return m.planeBackend.Payload(ctx, revisionID)
+	return m.planeBackend.Body(ctx, a)
 }
 
 // observe makes fn the window's observer.

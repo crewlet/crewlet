@@ -205,10 +205,14 @@ func (p *pass) close() {
 // watchWalk is a pass NOTHING certifies — the marker sweep's — over a watcher
 // it opens and stops on every return, so no early return leaks one. [passOver]
 // says why its quiet counts from the start.
+//
+// METADATA ONLY: every sweep decides on a key's operation, revision and
+// instant, never its value, and a bucket of activation bodies or run logs
+// walked whole moves megabytes across a link for nothing.
 func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (map[string]jetstream.KeyValueEntry, error) {
 	// Watch, not IgnoreDeletes, for [beginPass]'s reasons: the sweep is after
 	// the markers.
-	w, err := kv.Watch(ctx, keys)
+	w, err := kv.Watch(ctx, keys, jetstream.MetaOnly())
 	if err != nil {
 		return nil, unavailable("read "+what, err)
 	}
@@ -515,6 +519,37 @@ func getLatest(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 		return nil, err
 	}
 	return read.live(ctx, key)
+}
+
+// getSized is [getLatest] of a key whose value the caller knows to be
+// valueBytes, from a record that names it (the activation's body, its size on
+// the pointer): its read is given the time that reply takes to arrive, its
+// handling and its crossing at the bucket's pace (jsapi's Leader.Carrying),
+// beyond the read term, so a reply of megabytes across a link is asked for
+// once and waited for whole. Never [holdingLarge]'s bound for the bucket: the
+// small records beside it keep the read term.
+func getSized(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
+	key string, valueBytes int) (jetstream.KeyValueEntry, error) {
+
+	read, err := sizedReader(js, kv, valueBytes)
+	if err != nil {
+		return nil, err
+	}
+	return read.live(ctx, key)
+}
+
+// sizedReader is the leader reader [getSized] reads through.
+func sizedReader(js jetstream.JetStream, kv jetstream.KeyValue, valueBytes int) (*leaderReader, error) {
+	read, err := newLeaderReader(js, kv)
+	if err != nil {
+		return nil, err
+	}
+	var pace time.Duration
+	if b, ok := kv.(settledBucket); ok {
+		pace = b.pace
+	}
+	read.leader = read.leader.Carrying(valueBytes+kvHeaderBytes, pace)
+	return read, nil
 }
 
 // operationOf reads what a stored KV message IS from its headers by the

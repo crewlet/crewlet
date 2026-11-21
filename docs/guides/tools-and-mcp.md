@@ -1398,8 +1398,11 @@ A call to a tool at `approve` is never made until a person answers it
   the model is told the seat's own run, its executor, may ask.
 - **What the call would send stays sealed.** The arguments ride the run's
   record encrypted under the fleet keyring, never in the question, call log or
-  ledger, and are shown only to who may approve: an administrator (the MCP
-  answer's `approvals`) and the seat's lead (the run on the executors board).
+  ledger, and are shown only to an administrator (the MCP answer's
+  `approvals`) and the seat's lead (the run on the executors board): as the
+  call would send them to a person who may answer it while it waits, and with
+  any credential in them replaced by a marker in every other view, a call
+  already answered included.
 - **An administrator or the seat's lead answers it**, with
   [`POST /mcp-approvals/{id}`](../reference/api-endpoints.md#post-mcp-approvalsid),
   a person and never Ask Crewlet:

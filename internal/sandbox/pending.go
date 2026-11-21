@@ -402,8 +402,11 @@ type RecordedEnding struct {
 // depth ([PendingRun.DelegationDepth]). No Extra, so a later field is a top-level
 // key (wirekeys.go).
 type ColleagueAsk struct {
-	ChannelID    string   `json:"channel_id"`
-	Question     string   `json:"question,omitempty"`
+	ChannelID string `json:"channel_id"`
+	// question is the colleague's words as asked, `question` on the wire: read
+	// through [ColleagueAsk.Question], redacted, and by the answer alone
+	// [ColleagueAsk.RawQuestion]. Its two encodings are in colleagueask.go.
+	question     string
 	Chain        []string `json:"chain,omitempty"`
 	TraceID      string   `json:"trace_id,omitempty"`
 	SpanID       string   `json:"span_id,omitempty"`
@@ -2555,7 +2558,8 @@ type PendingStore interface {
 	// delegates (ADR-0125) and answers the held call as written. ONLY WHILE THE CALL
 	// WAITS ON ITS DELEGATES: run awaiting on launch, ending undecided, held call
 	// heldID not escalated, v.By one of its delegates with no answer yet. Otherwise
-	// false and nothing written; an answer past its bounds is an error.
+	// false and nothing written; an answer past its bounds is an error. Its
+	// reason and findings are recorded redacted ([HeldVerdict.Redacted]).
 	GiveDelegateVerdict(ctx context.Context, turnID, launch, heldID string, v HeldVerdict) (HeldCall, bool, error)
 
 	// EscalateHeld puts a held call waiting on its delegates to people, on the terms
