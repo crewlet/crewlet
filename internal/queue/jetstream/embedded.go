@@ -1275,9 +1275,9 @@ func (e *embeddedServer) presentedKey() string {
 	return e.auth.fleet.activeID
 }
 
-// leafRemotes parses a leaf's URLs into its two remotes, each presenting seed
-// (the active key's leaf nkey, [FleetAuth]): the DATA LINK in the global
-// account and the isolated LEASE LINK in [LeaseAccount] (package doc).
+// leafRemotes parses a leaf's URLs into its two remotes, the DATA LINK in the
+// global account and the isolated LEASE LINK in [LeaseAccount] (package doc),
+// each presenting seed ([FleetAuth]) and dialled in order where inOrder.
 //
 // ONE REMOTE WITH EVERY URL FOR EACH ACCOUNT: a remote per member would bring
 // interest in by every link; a remote rotates through its own shuffled copy,
@@ -1286,8 +1286,7 @@ func (e *embeddedServer) presentedKey() string {
 // addLeafNodeConnection, v2.15.3: same leaf, cluster and remote account). An
 // nkey, never a credential in the URL (Tier A refuses one): CONNECT signs the
 // member's nonce, where a userinfo would cross in clear. The member's first
-// INFO is waited for [leafHandshakeTerm]. inOrder dials the URLs as given,
-// unshuffled ([Config.LeafURLsInOrder]).
+// INFO is waited for [leafHandshakeTerm].
 func leafRemotes(urls []string, seed string, inOrder bool) ([]*server.RemoteLeafOpts, error) {
 	parsed := func() ([]*url.URL, error) {
 		out := make([]*url.URL, 0, len(urls))
