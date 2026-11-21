@@ -3427,7 +3427,7 @@ A node whose `node.roles` leave out `ingress` (a [satellite](../guides/satellite
 |---|---|
 | `starting` | It has not started yet; its probes are still the boot's ([While a node is starting](#while-a-node-is-starting)). |
 | `draining` | It is stopping. |
-| `broker_unlinked` | It cannot reach the fleet's broker: a leaf whose link to every member is down, or a connection to an external cluster that is reconnecting. `detail` carries the cause. Ahead of what follows, since each of those is what a lost broker looks like. |
+| `broker_unlinked` | It cannot reach the fleet's broker: a leaf whose link to every member is down, a connection to an external cluster that is reconnecting, or the fleet's JetStream not answering across its data path or its lease link. `detail` names which, and the cause. Ahead of what follows, since each of those is what a lost broker looks like. |
 | `unconfigured` | Its engine runs no company revision. |
 | `shed`, `stuck` | Its [config posture](../concepts/control-plane.md#operator-surface) is diverged. `wait` and `isolated` stay ready, as on an ingress node. |
 | `no_presence` | It does not hold its presence lease (its last renew is older than the TTL), so no peer counts it and nothing routes to it. |

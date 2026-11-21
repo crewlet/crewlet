@@ -475,9 +475,10 @@ failed the same way under the beat's fifteen seconds, on any link below about
 - **A caller's own deadline** is kept, but on an external broker the client
   does not check it while a write waits for the connection (which a large
   write holds for its whole length) or while the write is in the socket. A
-  write, a lease renewal among them, is held behind every large write ahead of
-  it, each for up to the client's write deadline of about eight minutes, and
-  then for its own ([Delivery Semantics](event-system.md#delivery-semantics)).
+  write is held behind every large write ahead of it on its connection, each
+  for up to the client's write deadline of about eight minutes, and then for
+  its own ([Delivery Semantics](event-system.md#delivery-semantics)). A node's
+  holds ride a connection of their own ([below](#backends)).
 - Each node states how its connection reaches the store when it opens it, from
   its broker's kind, since the store cannot see how the connection was made.
 - A node's MCP listings are written on a pass of their own beside its
@@ -490,9 +491,8 @@ failed the same way under the beat's fifteen seconds, on any link below about
   `coord.MaxValueCrossing`, thirteen minutes across a link at the floor, none
   in the store's own process), and the caller's bound is its reason plus that
   ([What a run's record and its log keep](code-sandbox.md#what-a-runs-record-and-its-log-keep)).
-- Not covered, and the event system's to say: a link slower than the floor, a
-  link busy with traffic ahead of the write, and the lease renewals a large
-  write holds behind it
+- Not covered, and the event system's to say: a link slower than the floor,
+  and a link busy with traffic ahead of the write
   ([Delivery Semantics](event-system.md#delivery-semantics)).
 
 A read of a **large value waits as long as its reply takes to cross.** The
@@ -765,7 +765,11 @@ Two things stay **per-process**:
 | External NATS | The same KV, on a cluster this node dials | A fleet whose stream and everything on it should outlive any engine |
 | Memory | An in-process twin | Tests |
 
-**The coordination store lives on the stream's own broker.** The engine starts or dials exactly one broker and opens the leases and shared records on it: over the queue's own connection on an external broker, and over a second connection to the same in-process server on the embedded one (shared by the seat-memory replay and the backup's stream copies, so neither sits on the read loop every mailbox consumes through). Two connections can fail independently, leaving a node renewing leases on one while the one carrying its inbox is gone: alive to peers, deaf to its work, holding every seat. So **both are watched**: the NATS client closing either for good stops the node, which exits for its supervisor to restart ([Seat Ownership](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)). A split lasts no longer than a reconnect. ([ADR-0001](https://github.com/crewlet/crewlet/blob/main/adr/0001-one-broker-carries-the-stream-and-the-coordination-store.md) records the decision.)
+**The coordination store lives on the stream's own broker.** The engine starts or dials exactly one broker and opens the leases and shared records on it: over the queue's own connection on an external broker, and over a second connection to the same in-process server on the embedded one (shared by the seat-memory replay and the backup's stream copies, so neither sits on the read loop every mailbox consumes through).
+
+**A node's holds ride a connection of their own.** Its claims, renewals, releases, presence and fencing epochs go over a **lease connection** nothing else rides: on a leaf a second leaf link to the members' one leaf port, isolated from other leaves' interest; on an external broker a second dial, named `crewlet-leases`, that gives a dead socket up within a heartbeat of the shortest lease; on a member a third in-process connection. Every read of the fleet's leases (a lease's lookup, the listings, the watches, the placement hints and the protocol gate's view) stays on the coordination connection, so the lease link carries what this node holds and nothing that grows with the fleet, and no write the node sends, however large, queues a renewal ([ADR-0169](https://github.com/crewlet/crewlet/blob/main/adr/0169-a-nodes-holds-ride-a-connection-nothing-else-rides.md)).
+
+Connections can fail independently, leaving a node renewing leases on one while the one carrying its inbox is gone: alive to peers, deaf to its work, holding every seat. So **every connection the node cannot run without is watched**: the NATS client closing one for good stops the node, which exits for its supervisor to restart ([Seat Ownership](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)). A split lasts no longer than a reconnect. ([ADR-0001](https://github.com/crewlet/crewlet/blob/main/adr/0001-one-broker-carries-the-stream-and-the-coordination-store.md) records the decision.) And two links can reach the broker apart, so **a node takes or keeps a hold only while its data path answers**: the queue probes the fleet's JetStream over its own connection every five seconds, and a claim or renewal is refused as unknown, before anything is sent, while that probe is unproven (a release never is). The lease link is probed the same way and moved off a member that stops answering ([ADR-0173](https://github.com/crewlet/crewlet/blob/main/adr/0173-a-node-takes-or-keeps-a-hold-only-while-its-data-path-answers.md); the numbers are in [Seat Ownership](seat-ownership.md#the-node-whose-broker-is-gone-and-why-it-leaves-too)).
 
 The twin is held to the **same certified suite** as the real backends (`internal/coord/coordtest`), because a twin that agrees only with itself proves nothing.
 

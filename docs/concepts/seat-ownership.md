@@ -34,6 +34,8 @@ seat:{seat-id}   owner=node-a:9f3c1e70   epoch=7   acquired_at=…   expires_at=
 
 **A renewal is one round trip, and a pass sends them together.** The store keeps the record it last wrote of each lease it holds and the revision the broker gave that write, and renews with one write at that revision, which lands only while the record is still exactly that write ([Coordination](coordination.md#a-renewal-of-its-own-write-is-one-round-trip)). The heartbeat sends a pass's renewals together, up to 64 at once, with the presence's claim beside them: a pass over N seats is ⌈N/64⌉ round trips (100 seats at a 100 ms round trip in 0.2 s). Sequential two-trip renewals would let twenty seats at 100 ms fill the 4-second renew period of the [15-second floor TTL](coordination.md#the-lease-ttl-bounds-seats-and-presence-only), and seventy-five outrun the TTL. On the slowest link the engine allows, at the [object store's floor](object-store.md#the-fleets-own-bucket--nats-the-default) and a 0.6 s satellite round trip, the link sets the pace, carrying about 36 renewals at once. Each renewal is stamped at the instant it was sent, and answers are applied one at a time in order, so what a pass decides about a seat never depends on which answer came first.
 
+**Renewals take a path of their own.** A node's claims, renewals and releases ride its **lease connection**, which nothing else rides (on a satellite, a second leaf link on the same port), so no upload, event or record it sends queues one; every listing and watch of the fleet's leases stays on its other connection ([Coordination](coordination.md#backends)). And it takes or keeps a seat only while its data path answers, since a seat it cannot serve should move ([below](#the-node-whose-broker-is-gone-and-why-it-leaves-too)).
+
 ## Placement
 
 Placement is deliberately dumb, and lives in `internal/seat`:
@@ -479,12 +481,24 @@ So the engine ends the node at once through the same exit with its own code: the
 
 The other process that neither works nor dies has a **broker connection the NATS client has closed for good**: a message past a lowered `max_payload`, credentials the server refuses twice in a row, an error the client does not retry, or this node's own embedded broker gone with its reconnects spent. The watchdog sees healthy duties, but nothing is reachable: no lease renewed, no mailbox consumed, nothing published. Peers take its seats when the leases lapse, and the node stays up answering its liveness probe, the wedged node's problem in another shape.
 
-So it leaves too, by the **opposite exit**: nothing is stuck, so it takes the graceful path a `SIGTERM` takes (drain, listener, teardown, in that order), logs `engine_fatal`, and exits with status 1, printing on stderr what closed and what to change ([Deployment](../guides/deployment.md#an-external-nats-server)). Counted are the connections the node cannot run without: the queue's, and on an embedded broker the coordination store's second connection. Which went decides what the drain does with running turns:
+So it leaves too, by the **opposite exit**: nothing is stuck, so it takes the graceful path a `SIGTERM` takes (drain, listener, teardown, in that order), logs `engine_fatal`, and exits with status 1, printing on stderr what closed and what to change ([Deployment](../guides/deployment.md#an-external-nats-server)). Counted are the connections the node cannot run without: the queue's, the lease connection its holds ride, and on an embedded broker the coordination store's second connection. Which went decides what the drain does with running turns:
 
 - **The queue's own connection.** Every delivery is acknowledged over it, so nothing a running turn concludes can be recorded and whichever node takes the seat reruns the message. Finishing the turn would only double every side effect (chat post, comment, tracker write) and delay the exit. So the drain **ends at once**: running turns are cancelled, not waited for, and the log says `drain_cut` with the in-flight count. The listener and teardown follow in the usual order.
-- **Only the coordination store's connection.** Acknowledgements still land over the queue's, so a finishing turn is recorded and not rerun. The drain **waits** for running turns as on `SIGTERM`, and still ends with no signal or kill grace behind it, because every lease and ledger write a finishing turn makes over the closed connection fails at once.
+- **Only the coordination store's or the lease connection.** Acknowledgements still land over the queue's, so a finishing turn is recorded and not rerun. The drain **waits** for running turns as on `SIGTERM`, and still ends with no signal or kill grace behind it, because every lease and ledger write a finishing turn makes over the closed connection fails at once.
 
-Either way, leases it cannot release over a closed connection lapse at the TTL, as a crashed node's do. A snapshot donor's connection is not counted: it serves peers that fall behind, a node whose donor is down still serves its own company, and the donor [dials again](../guides/retention.md) rather than stopping the node.
+Either way, leases it cannot release over a closed connection lapse at the TTL, as a crashed node's do.
+
+**A connection that stays open can still lead nowhere**, since a node's two links can land on different members. So a node **takes or keeps a hold only while its data path answers**: the queue asks the fleet's JetStream over its own connection every five seconds, and a claim or a renewal is refused as unknown, before anything is sent, while that answer is missing (a release never is). A refused renewal keeps the seat to its TTL, then drops it, and a peer claims it. On the shipped 45-second lease:
+
+| What failed | Refused | Seats dark |
+|---|---|---|
+| The queue's connection reconnecting, or a leaf's data link down | at once | the TTL, as before |
+| The data link's member cut off from its peers, the lease link through another | 30 s after its last success, the member answering "not available" | up to 80 s |
+| The data flow dead without a word, the link carrying nothing | a probe unanswered for 5 s, asked every 5 s | 55 to 65 s |
+| The data link moving but nothing answering | at the link's own ping tolerance, about four minutes on the shipped pings | up to 291 s |
+| The lease link's member answering nothing | renewals fail; the link is moved to the next member within two probes of silence, or 30 s of "not available" | the TTL if no member answers in time |
+
+The verdict is logged as it changes (`data_path_unproven` and `data_path_proven`, `lease_link_unproven`, `lease_link_proven` and `lease_link_moved`), and `/ready` answers `broker_unlinked` naming the data path or the lease link ([ADR-0173](https://github.com/crewlet/crewlet/blob/main/adr/0173-a-node-takes-or-keeps-a-hold-only-while-its-data-path-answers.md)). A snapshot donor's connection is not counted: it serves peers that fall behind, a node whose donor is down still serves its own company, and the donor [dials again](../guides/retention.md) rather than stopping the node.
 
 ## Sandbox control is owner-routed
 
