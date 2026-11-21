@@ -173,16 +173,16 @@ function engine(findings: AdvisorKeptFinding[], run: AdvisorRunSummary | null = 
 
 /** An assistant the reader may ask, recording what each control was handed. */
 function assistant() {
-  const drafted: string[] = [];
+  const about: { question: string; send: boolean }[] = [];
   const asked: string[] = [];
   const control: AssistantControl = {
     open: false,
     unavailable: null,
     toggle: () => {},
     ask: (q) => asked.push(q),
-    draft: (q) => drafted.push(q),
+    askAbout: (question, { send }) => about.push({ question, send }),
   };
-  return { control, drafted, asked };
+  return { control, about, asked };
 }
 
 function mount(
@@ -572,12 +572,13 @@ test("findings of one class are one row, each subject inside it with its own fix
 });
 
 // ASK CREWLET ABOUT THIS opens the finding's own page with the question in the
-// box for the person to send: never sent for them, and never naming the
-// finding by its id, which the page's context names.
+// box of a new conversation, for the person to send: never sent for them,
+// never asked in the conversation open, and never naming the finding by its
+// id, which the page's context names.
 test("Ask Crewlet about this drafts a question on the finding's page, never sends it", async () => {
   const f = finding({ title: "Slow reviews" });
   const { answer } = engine([f]);
-  const { control, drafted, asked } = assistant();
+  const { control, about, asked } = assistant();
   mount(answer, "findings", control);
   await screen.findByText("Slow reviews");
   fireEvent.click(screen.getByRole("button", { name: "More for Slow reviews" }));
@@ -585,8 +586,9 @@ test("Ask Crewlet about this drafts a question on the finding's page, never send
     fireEvent.click(await screen.findByRole("menuitem", { name: "Ask Crewlet about this" }));
   });
   expect(asked).toEqual([]);
-  expect(drafted).toHaveLength(1);
-  expect(drafted[0]).not.toContain(f.id);
+  expect(about).toHaveLength(1);
+  expect(about[0]!.send).toBe(false);
+  expect(about[0]!.question).not.toContain(f.id);
   expect(window.location.hash).toBe(`#/advisor/findings/${f.id}`);
 });
 

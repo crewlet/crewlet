@@ -62,7 +62,7 @@ function control(unavailable: AssistantControl["unavailable"]): AssistantControl
     unavailable,
     toggle: () => undefined,
     ask: () => undefined,
-    draft: () => undefined,
+    askAbout: () => undefined,
   };
 }
 

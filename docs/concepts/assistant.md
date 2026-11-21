@@ -14,6 +14,8 @@ Select **Ask** in the page bar, or press `Mod+.` (`Cmd+.` on a Mac, `Ctrl+.` els
 
 **Ask Crewlet** in the sidebar (or `g q`) opens its own page: all your conversations beside the open one, newest first under the day last used, with a title search. Page and panel hold the same conversation (an answer still arriving shows in both); **Open in full page** in the panel's head moves it. On the page, the Ask button and `Mod+.` focus its message box. A question asked on the page carries no screen.
 
+**Ask Crewlet about this** (in a finding's menu or an Advisor action that asks, in a chat message's menu, and **Draft with Ask Crewlet** in a room's message box) always starts a new conversation about that thing, with its screen attached; the one you had open stays under **Conversations**. **Ask**, `Mod+.`, a question from the command palette and opening the panel again all go back to the conversation you had open.
+
 The panel greets you and says what it can see for you: the apps your permissions open. Under **This page** it offers a brief of the current screen, then a few things to ask from anywhere.
 
 **Brief me on this page.** One press starts a conversation whose first answer is a brief in a fixed shape:

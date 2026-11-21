@@ -95,7 +95,7 @@ export function useDecisions(reload: () => void) {
 /**
  * Ask Crewlet about a finding, or null where the reader may not ask: the
  * finding's own page, so the page context names it and its facts stand beside
- * the conversation, with the question waiting in the box for the person to
+ * a new conversation, with the question waiting in the box for the person to
  * send or change ([questionAbout]). Never asked for them: the drawer sent a
  * question they had not read, in their name.
  */
@@ -107,6 +107,6 @@ export function useAskAbout(): ((f: AdvisorKeptFinding) => void) | null {
   return (f) => {
     const page = ["advisor", "findings", f.id];
     if (route.path.join("/") !== page.join("/")) nav.to(page);
-    assistant.draft(questionAbout(f));
+    assistant.askAbout(questionAbout(f), { send: false });
   };
 }
