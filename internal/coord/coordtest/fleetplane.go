@@ -1019,14 +1019,14 @@ var bodySweepCases = []fleetCase{{
 		if _, err = h.f.SweepMarkers(h.ctx, time.Now().Add(-time.Hour)); err != nil {
 			h.t.Fatalf("SweepMarkers an hour back: %v", err)
 		}
-		if _, found, err := h.f.Body(h.ctx, first); err != nil || !found {
-			h.t.Errorf("rev-1's body after a sweep it is younger than: found=%v err=%v, want kept", found, err)
+		if _, found, readErr := h.f.Body(h.ctx, first); readErr != nil || !found {
+			h.t.Errorf("rev-1's body after a sweep it is younger than: found=%v err=%v, want kept", found, readErr)
 		}
 		if _, err = h.f.SweepMarkers(h.ctx, time.Now().Add(time.Hour)); err != nil {
 			h.t.Fatalf("SweepMarkers an hour on: %v", err)
 		}
-		if _, found, err := h.f.Body(h.ctx, first); err != nil || found {
-			h.t.Errorf("rev-1's body after a sweep past it: found=%v err=%v, want removed", found, err)
+		if _, found, readErr := h.f.Body(h.ctx, first); readErr != nil || found {
+			h.t.Errorf("rev-1's body after a sweep past it: found=%v err=%v, want removed", found, readErr)
 		}
 		if got, found, err := h.f.Body(h.ctx, second); err != nil || !found || string(got) != `{"v":2}` {
 			h.t.Errorf("the pointer's body after every sweep = %q found=%v err=%v, want kept", got, found, err)
