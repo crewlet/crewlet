@@ -1066,7 +1066,7 @@ func (s *suite) runCore(t *testing.T) {
 	// The two points get different rules, and the asymmetry is deliberate;
 	// see queue.EventQueue's Start and Stop.
 
-	// BEFORE START a backend picks its answer and applies it to all twenty-two.
+	// BEFORE START a backend picks its answer and applies it to all twenty-three.
 	t.Run("an_unstarted_queue_answers_the_same_way_for_every_verb", func(t *testing.T) {
 		t.Parallel()
 		q := s.newQueue(t)
@@ -1093,7 +1093,7 @@ func (s *suite) runCore(t *testing.T) {
 	// seat is silently deaf while reporting itself running: the incident
 	// Stop's own doc exists to prevent. A restart-only case would be gated
 	// per backend and could run nowhere; this one is ungated and requires
-	// all twenty-two verbs to refuse with queue.ErrNotLive: a hold that
+	// all twenty-three verbs to refuse with queue.ErrNotLive: a hold that
 	// cannot be TAKEN cannot survive anything.
 	t.Run("a_stopped_queue_refuses_every_verb", func(t *testing.T) {
 		t.Parallel()
@@ -1221,6 +1221,9 @@ type verbResult struct {
 // table can hold every shape of the contract's methods in one list.
 func second(_ bool, err error) error { return err }
 
+// countErr is second for a count's shape.
+func countErr(_ int, err error) error { return err }
+
 // listErr is second for the listing's shape.
 func listErr(_ []queue.Subscription, err error) error { return err }
 
@@ -1289,6 +1292,7 @@ func lifecycleVerbs(ctx context.Context, q queue.EventQueue, ns string) []verbRe
 		{"Attachment", atErr},
 		{"PauseTopic", pauseErr},
 		{"ResumeTopic", resumeErr},
+		{"Readmit", countErr(q.Readmit(ctx, topic, "g", "probe"))},
 		{"Serve", serveErr},
 		{"Ask", askErr},
 		{"Broadcast", q.Broadcast(ctx, topic, []byte("probe"))},

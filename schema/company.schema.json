@@ -5006,7 +5006,7 @@
           ]
         },
         "max_concurrent_runs": {
-          "description": "How many of this seat's executor runs hold it at once, at most one per conversation. Unset = 1.",
+          "description": "How many of this seat's executor runs hold it at once, at most one per conversation. Unset = 2.",
           "minimum": 1,
           "type": [
             "integer",

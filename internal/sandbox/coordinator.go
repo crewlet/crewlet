@@ -847,10 +847,12 @@ type Coordinator struct {
 	// conversations (seatcap.go). Under mu.
 	reserved map[string]int
 	heldRuns map[string]heldRun
-	// waiting is each seat's conversations a delivery waits on, held at the
-	// head of its inbox while a run works them ([Coordinator.HoldForConversation]).
-	// Under mu.
-	waiting map[string]map[string]struct{}
+	// freed is each seat's keys its runs leaving [Holding] freed, readmitted
+	// on its inbox where no run still holds them ([Coordinator.readmitFreed]),
+	// and asideFull each seat whose inbox holds as many deliveries aside as it
+	// keeps ([Coordinator.HoldForAside]). Under mu.
+	freed     map[string][]freedKey
+	asideFull map[string]bool
 
 	// moves counts what this node has done to each seat's runs that a recount
 	// from the store must not be read across (every [Coordinator.adjustLocked]
@@ -1097,7 +1099,8 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		runs:         map[string]seatRuns{},
 		reserved:     map[string]int{},
 		heldRuns:     map[string]heldRun{},
-		waiting:      map[string]map[string]struct{}{},
+		freed:        map[string][]freedKey{},
+		asideFull:    map[string]bool{},
 		moves:        map[string]uint64{},
 		attempts:     map[answerKey]map[string]answerBudget{},
 		retries:      map[string]*answerRetry{},
@@ -1386,16 +1389,15 @@ func (c *Coordinator) moved(handle string) {
 	c.moves[handle]++
 }
 
-// seatFreed signals [ConversationBusy] for a seat one of whose runs has just
-// left [Holding], and [SeatFull] where that freed a slot below its cap, so an
-// answer owed on it is resumed now rather than at its backstop, and tells
-// [CoordinatorOptions.Busy] of a seat that became busy or free. Called outside
-// c.mu, which [Coordinator.Readmit] takes.
-func (c *Coordinator) seatFreed(handle string, was, now seatRuns) {
+// seatFreed readmits on the seat's inbox what its runs leaving [Holding] freed
+// ([Coordinator.readmitFreed]), signals [ConversationBusy] for a seat one of
+// whose runs has just left, and [SeatFull] where that freed a slot below its
+// cap, so an answer owed on it is resumed now rather than at its backstop, and
+// tells [CoordinatorOptions.Busy] of a seat that became busy or free. Called
+// outside c.mu, which [Coordinator.Readmit] takes.
+func (c *Coordinator) seatFreed(ctx context.Context, handle string, was, now seatRuns) {
+	c.readmitFreed(ctx, handle)
 	if now.holding < was.holding {
-		c.mu.Lock()
-		c.pruneWaitingLocked(handle)
-		c.mu.Unlock()
 		c.Readmit(ConversationBusy, handle)
 		if now.holding < c.capOf(handle) {
 			c.Readmit(SeatFull, handle)
@@ -1429,7 +1431,10 @@ func (c *Coordinator) OnEvent(ctx context.Context, ev *events.Event) error {
 	case *types.ExecutorAnswerGiven:
 		if payload.FoldIn != "" {
 			// A FOLD-IN'S ANSWER IS RECORDED ALREADY (AnswerDesk.AnswerFoldIn):
-			// this delivery only tells the seat's router to read it.
+			// this delivery only hands back the wake it decides, should it wait
+			// aside ([Coordinator.readmitFoldIn]), and tells the seat's router
+			// to read it.
+			c.readmitFoldIn(ctx, *payload)
 			if c.foldInAnswered != nil {
 				c.foldInAnswered(payload.AgentHandle)
 			}
@@ -1509,7 +1514,7 @@ func (c *Coordinator) syncSeat(ctx context.Context, handle string) {
 			c.runs[handle] = counts
 		}
 		c.mu.Unlock()
-		c.seatFreed(handle, was, counts)
+		c.seatFreed(ctx, handle, was, counts)
 		// The hold follows the recount, as it follows every transition.
 		c.reconcileHold(ctx, handle)
 		return
@@ -5741,7 +5746,8 @@ func (c *Coordinator) ReleaseSeat(handle string) {
 	maps.DeleteFunc(c.writing, func(_ string, w *runWrites) bool { return w.handle == handle })
 	// AND ITS SLOTS AND HELD RUNS with them: a recovery here counts afresh.
 	delete(c.reserved, handle)
-	delete(c.waiting, handle)
+	delete(c.freed, handle)
+	delete(c.asideFull, handle)
 	maps.DeleteFunc(c.heldRuns, func(_ string, r heldRun) bool { return r.handle == handle })
 	// AND A STOP OF ONE OF ITS LAUNCHES NO FRAME TOOK: its turns run on the next
 	// holder.

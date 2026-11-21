@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 )
 
@@ -182,12 +186,12 @@ func TestAConversationARunWorksStartsNoSecondRun(t *testing.T) {
 
 // THE INBOX IS HELD AT THE CAP AND RELEASED BELOW IT. At a cap of two one run
 // leaves the inbox open and two hold it; one leaving opens it again. Below the
-// cap a delivery of a conversation a run works holds it
-// ([Coordinator.HoldForConversation]) until that run leaves, not until any
-// run does. At the default cap of one, one run holds it, as it always did.
+// cap an inbox holding as many aside as it keeps is held
+// ([Coordinator.HoldForAside]) until a readmit hands some back, not until a run
+// leaves with nothing aside. At the default cap of one, one run holds it.
 //
-// Mutation: hold at the first run and one run holds it; release a
-// conversation's hold when any run leaves and "b" leaving opens it.
+// Mutation: hold at the first run and one run holds it; lift the aside hold on
+// any run leaving and "b" leaving opens it.
 func TestTheInboxIsHeldAtTheCapAndReleasedBelowIt(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -212,20 +216,21 @@ func TestTheInboxIsHeldAtTheCapAndReleasedBelowIt(t *testing.T) {
 		t.Fatal("the inbox stayed held after a run left a seat at its cap")
 	}
 
-	c.HoldForConversation(t.Context(), "swe", "a")
+	holds.setAside("swe", "a", 1)
+	c.HoldForAside(t.Context(), "swe")
 	if !holds.holding("swe") {
-		t.Fatal("a delivery waiting on a conversation a run works did not hold the inbox")
+		t.Fatal("an inbox holding as many aside as it keeps was left open")
 	}
 	if err := enter(c, "t3", "b"); err != nil {
 		t.Fatal(err)
 	}
 	leave(c, "t3", "b")
 	if !holds.holding("swe") {
-		t.Fatal("another run leaving released the hold a delivery waits under on conversation a")
+		t.Fatal("a run leaving with nothing aside lifted the hold on a full inbox")
 	}
 	leave(c, "t1", "a")
 	if holds.holding("swe") {
-		t.Fatal("the inbox stayed held after the run working the waited-on conversation left")
+		t.Fatal("the inbox stayed held after a readmit handed back what waited aside")
 	}
 
 	one := newCoordRig(t)
@@ -235,5 +240,89 @@ func TestTheInboxIsHeldAtTheCapAndReleasedBelowIt(t *testing.T) {
 	}
 	if !oneHolds.holding("swe") {
 		t.Fatal("at the default cap of one a run left its seat's inbox open")
+	}
+}
+
+// A RUN LEAVING READMITS WHAT WAITED ON IT, AT THE TRANSITION THAT FREES IT, AND
+// NEVER A CONVERSATION ANOTHER OF THE SEAT'S RUNS STILL HOLDS. A run's own key
+// and each conversation it works are freed as it leaves, here by the recount a
+// takeover's recovery makes, reading the store's word that the run no longer
+// holds; a conversation another run served stays aside until that run leaves.
+//
+// Mutation: readmit every freed key whatever still holds it, and "a" is
+// readmitted while t3 serves it; free no key on a recount, and t1 parking
+// readmits nothing.
+func TestARunLeavingReadmitsWhatWaitedOnItAndNeverWhatAnotherHolds(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	rig := newCoordRig(t)
+	rig.withCap(3)
+	holds := rig.withHold()
+	c := rig.coordinator
+	c.served = func(_ context.Context, run PendingRun) []string {
+		if run.TurnID == "t3" {
+			return []string{"a"}
+		}
+		return nil
+	}
+	rig.launchWith("t1", func(run *PendingRun) { run.ConversationKey = "a" })
+	rig.launchWith("t3", func(run *PendingRun) { run.ConversationKey = "c" })
+	for _, turn := range []string{"t1", "t3"} {
+		if err := c.OnStarted(ctx, types.ExecutorLaunched{AgentHandle: "swe", TurnID: turn}); err != nil {
+			t.Fatalf("OnStarted(%s): %v", turn, err)
+		}
+	}
+	if got := holds.readmitted(); len(got) != 0 {
+		t.Fatalf("runs entering the seat readmitted %v", got)
+	}
+
+	if err := rig.pending.SetStatus(ctx, "t1", StatusAwaiting, rigLease); err != nil {
+		t.Fatalf("SetStatus(t1): %v", err)
+	}
+	c.syncSeat(ctx, "swe")
+	if got := holds.readmitted(); !slices.Equal(got, []string{"swe/" + RunKey("t1")}) {
+		t.Fatalf("t1 leaving readmitted %v, want its own key alone: t3 still serves a", got)
+	}
+
+	if err := rig.pending.SetStatus(ctx, "t3", StatusAwaiting, rigLease); err != nil {
+		t.Fatalf("SetStatus(t3): %v", err)
+	}
+	c.syncSeat(ctx, "swe")
+	got := holds.readmitted()
+	slices.Sort(got)
+	if want := []string{"swe/a", "swe/c", "swe/" + RunKey("t3")}; !slices.Equal(got, want) {
+		t.Fatalf("t3 leaving readmitted %v, want %v", got, want)
+	}
+}
+
+// AN ANSWERED FOLD-IN HANDS BACK THE WAKE IT DECIDES. A request another writer
+// left on a busy seat waits aside on its run (internal/engine's beside) while
+// the fold-in put to the run's approvers waits; their answer reaches the seat
+// on its control topic, and the wake is readmitted under the run's key and its
+// conversation's, so the screen files it on an approval or sets it aside again
+// on a refusal, now rather than when the run leaves.
+//
+// Mutation: readmit nothing on a fold-in's answer, and nothing is readmitted.
+func TestAnAnsweredFoldInReadmitsTheWakeItDecides(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	rig := newCoordRig(t)
+	holds := rig.withHold()
+	run := rig.launchWith("t1", func(run *PendingRun) { run.ConversationKey = "a" })
+	f := FoldIn{ID: uuid.NewString(), Launch: run.LaunchID, Wake: uuid.NewString(), Asker: "ceo",
+		Conversation: "b", Words: "and fix the logo", PutTo: []string{"lead"}}
+	if _, err := rig.pending.AskFoldIn(ctx, "t1", f); err != nil {
+		t.Fatalf("AskFoldIn: %v", err)
+	}
+	_ = holds.readmitted()
+	answered := events.New(types.ExecutorAnswerGiven{AgentHandle: "swe", TurnID: "t1", FoldIn: f.ID},
+		events.TraceContext{})
+	if err := rig.coordinator.OnEvent(ctx, answered); err != nil {
+		t.Fatalf("OnEvent: %v", err)
+	}
+	got := holds.readmitted()
+	slices.Sort(got)
+	if want := []string{"swe/b", "swe/" + RunKey("t1")}; !slices.Equal(got, want) {
+		t.Fatalf("an answered fold-in readmitted %v, want %v", got, want)
 	}
 }
