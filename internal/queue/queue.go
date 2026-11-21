@@ -153,8 +153,9 @@
 // over about 2 MiB at the floor, and the connection with it. A caller's own
 // deadline is never extended, but on an external broker it is not checked
 // while its request waits for the connection's lock, so it can be held behind
-// every large write ahead of it (crewlet/crewlet#1035). Not covered: a link
-// slower than the floor or busy with other traffic (ADR-0161).
+// every large write ahead of it; a node's holds ride a connection of their own
+// (ADR-0174). Not covered: a link slower than the floor or busy with other
+// traffic (ADR-0161).
 //
 // # Broker connections and authentication
 //

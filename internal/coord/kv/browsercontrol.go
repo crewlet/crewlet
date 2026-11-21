@@ -164,11 +164,11 @@ func (s *Store) BrowserControl(ctx context.Context, launch uuid.UUID) (coord.Bro
 		return coord.BrowserControl{}, false, err
 	}
 	resource := coord.BrowserControlResource(launch)
-	e, err := s.readOne(ctx, s.laneFor(resource), resource)
+	e, err := s.lookOne(ctx, s.laneFor(resource), resource)
 	if err != nil || e == nil {
 		return coord.BrowserControl{}, false, err
 	}
-	was, err := s.judge(ctx, *e, s.newClock())
+	was, err := s.judge(ctx, *e, s.viewClock())
 	if err != nil {
 		return coord.BrowserControl{}, false, err
 	}

@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -513,10 +515,66 @@ var threadDecoding = jsonv2.JoinOptions(
 
 // wireDecode decodes raw, one JSON value, into v under [threadDecoding]: every
 // small value the layer keeps as written and every value the package's other
-// readers of a harness's record read ([claudeEventWire], [claudeResultWire],
-// [openCodeMeasuredWire]).
+// readers of a harness's record read ([openCodeMeasuredWire]); a struct of raw
+// values is [wireAlias]'s.
 func wireDecode(raw []byte, v any) error {
 	return jsonv2.Unmarshal(raw, v, threadDecoding)
+}
+
+// wireAlias decodes raw, one JSON object, into v, a pointer to a struct whose
+// every field is a json.RawMessage named by its json tag (an embedded struct's
+// fields its own, under the outer struct's): each the value of the last key of
+// its name ([eachKey]), RAW'S OWN BYTES, NEVER A COPY: decoded by [wireDecode],
+// each value kept is copied, so a 32 MiB line read for its result or its
+// message's text is held again at each level ([claudeResultWire],
+// [claudeEventWire], [claudeMessageWire], [claudeBlockWire]). v is valid only
+// while raw is: a reader copies what it keeps.
+func wireAlias(raw []byte, v any) error {
+	target := reflect.ValueOf(v).Elem()
+	fields := wireAliasFields(target.Type())
+	return eachKey(raw, func(name []byte, value json.RawMessage, at int) error {
+		if index, ok := fields[string(name)]; ok {
+			end := at + len(value)
+			target.FieldByIndex(index).SetBytes(raw[at:end:end])
+		}
+		return nil
+	})
+}
+
+// wireAliasIndex is each struct type [wireAlias] decodes, mapped to its fields'
+// indexes by name, built once a type.
+var wireAliasIndex sync.Map
+
+// wireAliasFields is t's fields' indexes by name ([wireAlias]); a field that is
+// no json.RawMessage is a programming error, refused where the type is first read.
+func wireAliasFields(t reflect.Type) map[string][]int {
+	if known, ok := wireAliasIndex.Load(t); ok {
+		return known.(map[string][]int)
+	}
+	fields := map[string][]int{}
+	var walk func(t reflect.Type, at []int)
+	walk = func(t reflect.Type, at []int) {
+		var embedded []reflect.StructField
+		for i := range t.NumField() {
+			f := t.Field(i)
+			f.Index = append(slices.Clone(at), i)
+			name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			switch {
+			case f.Anonymous:
+				embedded = append(embedded, f)
+			case f.Type != reflect.TypeFor[json.RawMessage]() || name == "":
+				panic(fmt.Sprintf("executor: %s.%s is no named json.RawMessage, which wireAlias reads", t, f.Name))
+			case fields[name] == nil:
+				fields[name] = f.Index
+			}
+		}
+		for _, f := range embedded {
+			walk(f.Type, f.Index)
+		}
+	}
+	walk(t, nil)
+	wireAliasIndex.Store(t, fields)
+	return fields
 }
 
 // eachElement hands each element of list, raw JSON holding one list, to each,

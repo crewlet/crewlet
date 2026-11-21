@@ -30,9 +30,9 @@ func (s *Store) WatchLive(ctx context.Context, class coord.Class) (<-chan coord.
 	// it afterwards ends nothing the watch needs.
 	start, cancelStart := ctx, context.CancelFunc(func() {})
 	if _, bounded := ctx.Deadline(); !bounded {
-		start, cancelStart = context.WithTimeout(ctx, s.js.Options().DefaultTimeout)
+		start, cancelStart = context.WithTimeout(ctx, s.view.Options().DefaultTimeout)
 	}
-	w, err := l.kv.Watch(start, coord.DocumentFilter(string(class)), jetstream.UpdatesOnly())
+	w, err := l.list.Watch(start, coord.DocumentFilter(string(class)), jetstream.UpdatesOnly())
 	cancelStart()
 	if err != nil {
 		return nil, unavailable("watch the "+string(class)+" leases", err)

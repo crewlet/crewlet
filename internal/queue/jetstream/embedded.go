@@ -540,7 +540,7 @@ func embeddedOptions(cfg Config, auth *brokerAuth) (*server.Options, string, err
 		opts.JetStreamDomain = jsapi.Domain
 	}
 	if leaf {
-		remotes, err := leafRemotes(cfg.LeafURLs, cfg.FleetAuth.leafSeed())
+		remotes, err := leafRemotes(cfg.LeafURLs, cfg.FleetAuth.leafSeed(), cfg.LeafURLsInOrder)
 		if err != nil {
 			return nil, "", err
 		}
@@ -1135,6 +1135,26 @@ func (e *embeddedServer) linked(account string) bool {
 	return err == nil && leafz.NumLeafs > 0
 }
 
+// relink drops this leaf's link in account, so its remote dials the next of
+// its URLs once the leaf's reconnect interval has passed (leafnode.go
+// pickNextURL, v2.15.3): how the lease link leaves a member that answers
+// nothing ([Queue.DialLeases]).
+func (e *embeddedServer) relink(account string) error {
+	leafz, err := e.ns.Leafz(&server.LeafzOptions{Account: account})
+	if err != nil {
+		return fmt.Errorf("jetstream: find the leaf's link in account %s: %w", account, err)
+	}
+	if len(leafz.Leafs) == 0 {
+		return fmt.Errorf("jetstream: the leaf has no link in account %s to move", account)
+	}
+	for _, l := range leafz.Leafs {
+		if err := e.ns.DisconnectClientByID(l.ID); err != nil {
+			return fmt.Errorf("jetstream: drop the leaf's link in account %s: %w", account, err)
+		}
+	}
+	return nil
+}
+
 // embeddedReconnectWait is how long a connection to this process's own broker
 // waits between reconnect attempts: the external dial's second, since nothing
 // about the wait differs by where the server runs.
@@ -1255,9 +1275,9 @@ func (e *embeddedServer) presentedKey() string {
 	return e.auth.fleet.activeID
 }
 
-// leafRemotes parses a leaf's URLs into its two remotes, each presenting seed
-// (the active key's leaf nkey, [FleetAuth]): the DATA LINK in the global
-// account and the isolated LEASE LINK in [LeaseAccount] (package doc).
+// leafRemotes parses a leaf's URLs into its two remotes, the DATA LINK in the
+// global account and the isolated LEASE LINK in [LeaseAccount] (package doc),
+// each presenting seed ([FleetAuth]) and dialled in order where inOrder.
 //
 // ONE REMOTE WITH EVERY URL FOR EACH ACCOUNT: a remote per member would bring
 // interest in by every link; a remote rotates through its own shuffled copy,
@@ -1267,7 +1287,7 @@ func (e *embeddedServer) presentedKey() string {
 // nkey, never a credential in the URL (Tier A refuses one): CONNECT signs the
 // member's nonce, where a userinfo would cross in clear. The member's first
 // INFO is waited for [leafHandshakeTerm].
-func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
+func leafRemotes(urls []string, seed string, inOrder bool) ([]*server.RemoteLeafOpts, error) {
 	parsed := func() ([]*url.URL, error) {
 		out := make([]*url.URL, 0, len(urls))
 		for i, raw := range urls {
@@ -1290,12 +1310,12 @@ func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
 		return nil, err
 	}
 	return []*server.RemoteLeafOpts{
-		{URLs: data, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm},
+		{URLs: data, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm, NoRandomize: inOrder},
 		// PAST THE TUNNEL, so it dials for itself: given the tunnel's term
 		// ([tunnelDial]), since nats-server's one second leaves a lease link
 		// that dropped unable to dial again behind a deep queue.
 		{URLs: leases, Nkey: seed, FirstInfoTimeout: leafHandshakeTerm, DialTimeout: tunnelDial,
-			LocalAccount: LeaseAccount, RequestIsolation: true},
+			LocalAccount: LeaseAccount, RequestIsolation: true, NoRandomize: inOrder},
 	}, nil
 }
 
@@ -1389,8 +1409,8 @@ const externalHandshake = jsapi.RequestTerm
 // So: one message at queue.MaxPayloadBytes behind the larger buffer, at the
 // floor (jsapi.Sending). The cost: a dead connection under a large Write is
 // given up only at this deadline, holding the connection's lock, so every
-// caller (a lease renewal too) waits behind each large Write ahead of it;
-// bounding that needs the write windowed (crewlet/crewlet#1035).
+// caller on the queue's connection waits behind each large Write ahead of it;
+// a renewal rides the lease connection, whose lock no bulk takes (ADR-0174).
 var externalWriteDeadline = jsapi.Sending(
 	max(nats.DefaultWriteBufSize, nats.DefaultReconnectBufSize)+queue.MaxPayloadBytes, objstore.MiBPace)
 
