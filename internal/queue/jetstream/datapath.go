@@ -22,6 +22,26 @@ import (
 // reach even though its first hop is up.
 var ErrDataPathUnproven = errors.New("jetstream: this node's data path to the fleet's JetStream is unproven")
 
+// ErrLeaseLinkUnproven is what [Queue.LeaseLink] wraps once the lease link's
+// own probe has gone unanswered past its bound, or been answered "not
+// available" for too long: the member it landed on answers nothing, so the
+// link is moved to the next ([dataPath.relink]).
+var ErrLeaseLinkUnproven = errors.New("jetstream: this node's lease link to the fleet's JetStream is unproven")
+
+// pathNames is what a proven path is called in its refusals and log lines.
+type pathNames struct {
+	link, path      string
+	unproven        error
+	refused, proven string
+}
+
+var (
+	dataPathNames = pathNames{link: "data link", path: "data path", unproven: ErrDataPathUnproven,
+		refused: "data_path_unproven", proven: "data_path_proven"}
+	leaseLinkNames = pathNames{link: "lease link", path: "lease link", unproven: ErrLeaseLinkUnproven,
+		refused: "lease_link_unproven", proven: "lease_link_proven"}
+)
+
 // dataPathProbeEvery is how often the data path is probed: once a heartbeat
 // at the shortest lease config allows ([leaseDeadAfter]), so at least once a
 // heartbeat at every TTL.
@@ -60,6 +80,11 @@ type dataPathTiming struct {
 // [Queue.DataPath] reads with no round trip.
 type dataPath struct {
 	timing dataPathTiming
+	names  pathNames
+	// move, where set, moves the link off the member it landed on when the
+	// verdict refuses it ([dataPath.relink]): the lease link's, which has no
+	// ping of its own a cut-off member would fail. Nil on the data path.
+	move func() error
 	// firstHop is the queue's connection and, on a leaf, its data link
 	// ([Queue.Link]).
 	firstHop func() error
@@ -88,9 +113,22 @@ type dataPath struct {
 // startDataPath starts the probe, proven as of proven, until stop.
 func startDataPath(timing dataPathTiming, firstHop func() error, meter *LinkMeter,
 	log *slog.Logger, proven time.Time) *dataPath {
+	return (&dataPath{timing: timing, names: dataPathNames, firstHop: firstHop, meter: meter,
+		log: log, proven: proven}).start()
+}
+
+// startLeaseLink starts the lease link's probe, unmetered, proven as of
+// proven: refused as the data path is, and moved by move once it is.
+func startLeaseLink(timing dataPathTiming, firstHop, move func() error, log *slog.Logger,
+	proven time.Time) *dataPath {
+	return (&dataPath{timing: timing, names: leaseLinkNames, move: move, firstHop: firstHop,
+		log: log, proven: proven}).start()
+}
+
+// start runs d's probe until stop.
+func (d *dataPath) start() *dataPath {
 	ctx, cancel := context.WithCancel(context.Background())
-	d := &dataPath{timing: timing, firstHop: firstHop, meter: meter, log: log,
-		cancel: cancel, done: make(chan struct{}), proven: proven}
+	d.cancel, d.done = cancel, make(chan struct{})
 	go d.run(ctx)
 	return d
 }
@@ -141,6 +179,14 @@ func (d *dataPath) run(ctx context.Context) {
 			cancel()
 			out = false
 		case <-tick.C:
+			if d.move != nil && errors.Is(d.verdict(time.Now()), d.names.unproven) {
+				if out {
+					cancel()
+					<-answered
+					out = false
+				}
+				d.relink()
+			}
 			switch {
 			case !out:
 				ask()
@@ -151,6 +197,27 @@ func (d *dataPath) run(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// relink moves the link off the member its verdict refuses, and forgets the
+// probe and the refusal that judged that member, so the next member is judged
+// on its own answers: by its silence a bound after its first probe, or its
+// first "not available" while the last success is past its budget.
+func (d *dataPath) relink() {
+	why := d.verdict(time.Now())
+	err := d.move()
+	d.mu.Lock()
+	d.asked, d.refused = time.Time{}, nil
+	d.mu.Unlock()
+	if err != nil {
+		d.log.Warn("lease_link_move_failed", "cause", why.Error(), "error", err.Error(),
+			"detail", "the "+d.names.link+" answers nothing and could not be moved, so it is "+
+				"judged again at the next probe")
+		return
+	}
+	d.log.Warn("lease_link_moved", "cause", why.Error(),
+		"detail", "the "+d.names.link+" was dropped so it dials the next member: the one it was "+
+			"on answers nothing, and no lease this node holds could be renewed through it")
 }
 
 // answer records what one probe was answered, where it was answered at all.
@@ -192,7 +259,7 @@ func (d *dataPath) verdict(now time.Time) error {
 	d.mu.Unlock()
 	if refused != nil && now.Sub(proven) >= d.timing.notAvailable {
 		return fmt.Errorf("%w: the fleet's JetStream answers it that it is not available "+
-			"(%v), with no success for %s", ErrDataPathUnproven, refused,
+			"(%v), with no success for %s", d.names.unproven, refused,
 			now.Sub(proven).Round(time.Millisecond))
 	}
 	if asked.IsZero() {
@@ -200,13 +267,13 @@ func (d *dataPath) verdict(now time.Time) error {
 	}
 	age := now.Sub(asked)
 	if age >= d.timing.bound && !d.moving(d.timing.bound) {
-		return fmt.Errorf("%w: the data link carried nothing for %s and the fleet's JetStream "+
-			"has not answered its probe for %s", ErrDataPathUnproven,
+		return fmt.Errorf("%w: the %s carried nothing for %s and the fleet's JetStream "+
+			"has not answered its probe for %s", d.names.unproven, d.names.link,
 			d.timing.bound.Round(time.Millisecond), age.Round(time.Millisecond))
 	}
 	if age >= d.timing.cap {
-		return fmt.Errorf("%w: the data link moves but the fleet's JetStream has not answered "+
-			"its probe for %s, the link's own tolerance", ErrDataPathUnproven,
+		return fmt.Errorf("%w: the %s moves but the fleet's JetStream has not answered "+
+			"its probe for %s, the link's own tolerance", d.names.unproven, d.names.link,
 			age.Round(time.Millisecond))
 	}
 	return nil
@@ -222,12 +289,12 @@ func (d *dataPath) report(err error) {
 	switch {
 	case !changed:
 	case err != nil:
-		d.log.Warn("data_path_unproven", "error", err.Error(),
-			"detail", "this node's data path to the fleet's JetStream is not proven, so "+
+		d.log.Warn(d.names.refused, "error", err.Error(),
+			"detail", "this node's "+d.names.path+" to the fleet's JetStream is not proven, so "+
 				"nothing may take or keep a hold on its word")
 	default:
-		d.log.Info("data_path_proven",
-			"detail", "this node's data path to the fleet's JetStream answers again")
+		d.log.Info(d.names.proven,
+			"detail", "this node's "+d.names.path+" to the fleet's JetStream answers again")
 	}
 }
 
