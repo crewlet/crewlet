@@ -69,6 +69,11 @@ const (
 	// followed by 17 capital letters or digits.
 	ShapeScalewayAccessKey Shape = "scaleway_access_key"
 
+	// ShapeMetaToken is a Meta access token, a system user's as Business
+	// Settings generates it: EAA and letters and digits, issued by Meta and
+	// never minted.
+	ShapeMetaToken Shape = "meta_token"
+
 	// ShapeAppleKey is a private key Apple issued as a .p8 file: one PKCS#8
 	// PEM block holding a P-256 key, pasted whole, never minted.
 	ShapeAppleKey Shape = "apple_p8_key"
@@ -88,6 +93,7 @@ var (
 	scalewayAccessKeyShape = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
 	})
+	metaTokenShape  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^EAA[A-Za-z0-9]{30,}$`) })
 	appleKeyIDShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Z0-9]{10}$`) })
 )
 
@@ -149,6 +155,12 @@ func (s Shape) Problem(noun, value string) string {
 		}
 		return fmt.Sprintf("This %s is not a Scaleway access key: it is SCW followed by 17 capital "+
 			"letters or digits, 20 characters in all. Paste the access key shown beside the secret key.", noun)
+	case ShapeMetaToken:
+		if metaTokenShape().MatchString(value) {
+			return ""
+		}
+		return fmt.Sprintf("This %s is not a Meta access token: it is EAA followed by letters and digits. "+
+			"Paste the token Business Settings, System users, Generate new token shows once.", noun)
 	case ShapeGoogleServiceAccount:
 		if _, ok := config.GoogleCloudServiceAccount(value); ok {
 			return ""
@@ -208,6 +220,9 @@ func (s Shape) Mint(token func() string) (string, error) {
 		return GenerateSSHCertificateAuthority()
 	case ShapeES256Key:
 		return mintES256()
+	case ShapeMetaToken:
+		// MINTED BY META ALONE: one Crewlet made up would sign nothing in.
+		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
 	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleServiceAccount, ShapeGoogleProvider, ShapeAppleKey,
 		ShapeAppleKeyID:
 		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
