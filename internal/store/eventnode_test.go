@@ -48,7 +48,7 @@ func TestARowNamesTheNodeThatPublishedItNotTheOneHoldingIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	turn, err := log.Turn(ctx, "tn-1", time.Time{})
+	turn, _, err := log.Turn(ctx, "tn-1", 0, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
