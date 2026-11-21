@@ -156,3 +156,24 @@ func TestAnIncompleteFormIsNotChecked(t *testing.T) {
 		t.Errorf("checking the provisioner on its own: %v, want not checkable", err)
 	}
 }
+
+// A VALUE NO CALL COULD USE IS NAMED IN A PERSON'S WORDS: the field to change,
+// with no package's name in front of it, wherever the check that refused it
+// lives.
+//
+// Mutation: hand the error's own text to the verdict, and the person reads
+// `googleauth: integrations.google_cloud...`.
+func TestAnUnusableValueIsNamedWithoutAPackagesName(t *testing.T) {
+	t.Parallel()
+	w := newProbeWorld(t)
+	for field, value := range map[string]string{
+		"provisioner": "ops@acme.example",
+		"provider":    "projects/123456789012/locations/global/workloadIdentityPools/crewlet",
+	} {
+		_, err := w.check(t, map[string]string{field: value})
+		if err == nil || strings.Contains(err.Error(), "googleauth") || strings.Contains(err.Error(), "googlecloud") ||
+			!strings.Contains(err.Error(), "integrations.google_cloud.provisioning."+field) {
+			t.Errorf("an unusable %s answered %v, want the field named in plain words", field, err)
+		}
+	}
+}

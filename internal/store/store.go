@@ -224,15 +224,28 @@ const (
 	// report what happened.
 	defaultBusyTimeout = 5 * time.Second
 
-	// nodeCacheKiB is the page cache each connection keeps, on either file:
-	// 32 MiB, for the B-TREE INTERIOR PAGES rather than scans, so a lookup's
-	// descent stays off the file; big sequential reads are the OS page
-	// cache's job, and a per-connection cache for them is N copies.
+	// pageCacheMaxKiB is the most page cache one connection keeps, on either
+	// file: 32 MiB, for the B-TREE INTERIOR PAGES rather than scans, so a
+	// lookup's descent stays off the file; big sequential reads are the OS
+	// page cache's job, and a per-connection cache for them is N copies.
 	// In KiB (a negative `PRAGMA cache_size`, see [openPool]) so it means
 	// the same whatever the page size. Read back at every open as
 	// [Capabilities.PageCacheKiB]: a driver that ignores it leaves each
 	// connection on its default, far from the symptom.
-	nodeCacheKiB = 32 << 10
+	pageCacheMaxKiB = 32 << 10
+
+	// pageCacheFloorKiB is the least: 2 MiB, SQLite's own default, and what a
+	// handle opened without a node's memory keeps ([Options.PageCacheKiB]).
+	// Measured (BenchmarkAKeyedReadAtThePageCacheFloor, eight readers on two
+	// cores over a 1 GiB file): a keyed read takes 33-36 µs at the floor and
+	// 30-33 µs at 8 MiB or the cap, so the floor costs a read a tenth at most.
+	pageCacheFloorKiB = 2 << 10
+
+	// pageCacheShare is the node's memory over the most its store's
+	// connections cache together ([PageCacheKiB]): a sixteenth, 128 MiB of
+	// 2 GiB, beside Gitlet's 224 MiB a transfer and the executor's pools, and
+	// every connection's cap by 16 GiB on a node of the default pools.
+	pageCacheShare = 16
 )
 
 // defaultReaderConns is how many connections ORDINARY readers get when
@@ -312,6 +325,12 @@ type Options struct {
 	// learns its width from its first apply via [DB.LearnEmbeddingDim].
 	EmbeddingDim int
 
+	// PageCacheKiB is the page cache each connection of either file keeps,
+	// the replicated estate's included ([PageCacheKiB] sizes it by a node's
+	// memory). 0 means the floor: what a tool, a backup or a copy opened
+	// alone needs, and a node whose memory could not be read.
+	PageCacheKiB int
+
 	// pins is how many connections [DB.Writer] may hold for the life of
 	// the handle. Set for the replicated estate's handle from the logs it
 	// was opened for ([DB.OpenReplicated]), and zero on every other: the
@@ -342,6 +361,40 @@ func (o Options) readers() int {
 // A method so [OpenNode] and [Pending] cannot drift on the bound.
 func (o Options) poolSize() int {
 	return o.readers() + identityReserve + o.pins
+}
+
+// pageCacheKiB is the page cache each connection keeps: [Options.PageCacheKiB]
+// within the floor and the cap.
+func (o Options) pageCacheKiB() int {
+	return min(max(o.PageCacheKiB, pageCacheFloorKiB), pageCacheMaxKiB)
+}
+
+// PageCacheShare is the most a node's conns connections cache together on
+// memory bytes, its line in the node's memory budget (docs/guides/deployment.md,
+// "The page cache"): a [pageCacheShare]th of the memory, never below each
+// connection's floor nor above its cap. No connection caches more than its part
+// ([PageCacheKiB]), and it grows more slowly than the memory, as
+// internal/gitlet/cache's memory_needed asks of what a node keeps.
+func PageCacheShare(memory int64, conns int) int64 {
+	n := int64(max(conns, 1))
+	return min(max(max(memory, 0)/pageCacheShare, n*pageCacheFloorKiB<<10), n*pageCacheMaxKiB<<10)
+}
+
+// PageCacheKiB is the page cache each of a node's conns connections keeps on
+// memory bytes: its part of [PageCacheShare], in whole KiB.
+func PageCacheKiB(memory int64, conns int) int {
+	return int(PageCacheShare(memory, conns) / int64(max(conns, 1)) >> 10)
+}
+
+// NodeConnections is how many connections a node opened with o keeps: its
+// own file's pool and, where it holds the replicated estate for logs logs
+// ([DB.OpenReplicated]; 0 where it holds none), that file's.
+func (o Options) NodeConnections(logs int) int {
+	n := o.poolSize()
+	if logs > 0 {
+		n += o.replicated(logs).poolSize()
+	}
+	return n
 }
 
 // identityKey marks a context as identity work. Its own unexported type, as
@@ -729,7 +782,7 @@ func openConnected(ctx context.Context, path string, opts Options) (*sql.DB, *co
 	if err := prepareTursoLibrary(); err != nil {
 		return nil, nil, err
 	}
-	pool, conns, err := openPool(path, opts.busyTimeout(), opts.WrapDriver)
+	pool, conns, err := openPool(path, opts.busyTimeout(), opts.pageCacheKiB(), opts.WrapDriver)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -948,7 +1001,7 @@ func (d *DB) SQL() *sql.DB {
 //
 // It answers that connector beside the pool, for the one connection a handle
 // opens outside it ([DB.connector]).
-func openPool(path string, busy time.Duration,
+func openPool(path string, busy time.Duration, cacheKiB int,
 	wrap func(driver.Driver) driver.Driver,
 ) (*sql.DB, *connector, error) {
 	// sql.Open is lazy — it validates the driver name and nothing else — so
@@ -1004,9 +1057,9 @@ func openPool(path string, busy time.Duration,
 			// replicated estate's pinned writers included: a session
 			// pragma is the one place every connection passes, and a
 			// pragma sent through the pool would reach whichever
-			// connection answered and no other. The figure, and what the
-			// cache is for, are [nodeCacheKiB]'s; negative is KiB.
-			fmt.Sprintf("PRAGMA cache_size = %d", -nodeCacheKiB),
+			// connection answered and no other. The figure is the
+			// handle's ([Options.PageCacheKiB]); negative is KiB.
+			fmt.Sprintf("PRAGMA cache_size = %d", -cacheKiB),
 			// TEMPORARY STORAGE IS MEMORY: the default is a per-connection
 			// temp FILE, made at the first BEGIN IMMEDIATE (every write,
 			// begin.go) and removed only when its connection closes, so exits

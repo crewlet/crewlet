@@ -281,7 +281,7 @@ func openRejoinNodeOver(t testing.TB, wrap func(driver.Driver) driver.Driver) *r
 	}
 	listened := back.Store
 	if wrap != nil {
-		opts := storeOptions(&b, cfg)
+		opts := storeOptions(&b, cfg, 0)
 		opts.WrapDriver = wrap
 		wrapped, openErr := store.OpenNode(t.Context(), b.Store.Path, opts)
 		if openErr != nil {

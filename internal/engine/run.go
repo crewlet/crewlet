@@ -46,7 +46,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 	"github.com/crewlet/crewlet/internal/gitlet/mirror"
 	"github.com/crewlet/crewlet/internal/gitlet/readaudit"
-	"github.com/crewlet/crewlet/internal/googlecloud"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/authevents"
 	"github.com/crewlet/crewlet/internal/iamdomain"
@@ -118,7 +118,7 @@ type Engine struct {
 	// googleCloudIssuer holds the access tokens issued to agents' Google
 	// Cloud service accounts, one per account, in memory only. See
 	// googlecloudtoken.go.
-	googleCloudIssuer googlecloud.SeatIssuer
+	googleCloudIssuer googleauth.SeatIssuer
 	// issuers replaces the integrations that issue seat credentials, for a
 	// test of their shared contract; nil is the build's ([Engine.seatIssuers]).
 	issuers []seatIssuer
@@ -529,6 +529,9 @@ type Engine struct {
 	// gitMemory is Options.gitMemory, kept likewise: zero has the git pool
 	// read the node's own memory ([Engine.buildGitletHost]).
 	gitMemory int64
+
+	// setMemoryLimit is Options.setMemoryLimit, kept likewise ([Engine.limitMemory]).
+	setMemoryLimit func(int64) int64
 
 	// compactorEstate is Options.compactorEstate, kept likewise: nil hands the
 	// compactor the router's code seam as it is ([Engine.buildGitletHost]).
@@ -1307,6 +1310,11 @@ type Options struct {
 	// own ([gitproc.Options.Memory]), zero for the node's own.
 	gitMemory int64
 
+	// setMemoryLimit is what sets the runtime's memory limit in place of
+	// debug.SetMemoryLimit, so a case reads the limit its node would set; nil
+	// sets it, but in a test binary, which no case's figure may limit.
+	setMemoryLimit func(int64) int64
+
 	// compactorEstate stands between the Gitlet compactor and the router's
 	// code seam it lists and proposes through ([gitletcompact.Options.Estate]),
 	// nil for none, so a case about the compaction-behind alarm can show a
@@ -1605,6 +1613,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		cacheDisk:           opts.cacheDisk,
 		sizedByTheMachine:   sizedByTheMachine(ctx),
 		gitMemory:           opts.gitMemory,
+		setMemoryLimit:      opts.setMemoryLimit,
 		compactorEstate:     opts.compactorEstate,
 		homeSeams:           opts.homeSeams,
 		committerPublisher:  opts.committerPublisher,
@@ -1690,7 +1699,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// servers retry that refusal on, before anything reads a seat's token:
 	// every reader of one installation meets the held refusal within the wait
 	// instead of asking GitHub again ([github.Issuer]). The same for every
-	// agent's Google Cloud token ([googlecloud.SeatIssuer]).
+	// agent's Google Cloud token ([googleauth.SeatIssuer]).
 	e.githubIssuer.RetryWait = e.seatRetryDelay
 	e.googleCloudIssuer.RetryWait = e.seatRetryDelay
 

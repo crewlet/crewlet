@@ -62,6 +62,7 @@ type wakeSealBody struct {
 	Seen         string           `json:"seen"`
 	Text         string           `json:"text" untrusted:"fence"`
 	Cut          int              `json:"cut"`
+	Informs      bool             `json:"informs"`
 }
 
 // errNoWakeSeal is a wake sealed by run steers built with no wake seal.
@@ -89,7 +90,7 @@ func (s *runSteers) sealWake(turnID, job string, w steer.Wake) (_ sandbox.Sealed
 			TurnID: turnID, Job: job, ID: w.ID, Triggers: w.Triggers, Keys: w.Keys, By: w.By,
 			ByKind: string(w.ByKind), WorkingFor: w.WorkingFor, Conversation: w.Conversation,
 			Partition: w.Partition, Label: w.Label, OwesAnswer: w.OwesAnswer, At: w.At.UTC(),
-			Owes: w.Owes, Seen: w.Seen, Text: string(runes), Cut: w.Cut,
+			Owes: w.Owes, Seen: w.Seen, Text: string(runes), Cut: w.Cut, Informs: w.Informs,
 		})
 		if marshalErr != nil {
 			return sandbox.SealedWake{}, fmt.Errorf("engine: sealing wake %s to turn %s: %w", w.ID, turnID,
@@ -140,7 +141,7 @@ func (s *runSteers) openWake(turnID, job string, sealed sandbox.SealedWake) (ste
 	return steer.Wake{ID: body.ID, Triggers: body.Triggers, Keys: body.Keys, By: body.By,
 		ByKind: iam.ActorKind(body.ByKind), WorkingFor: body.WorkingFor, Conversation: body.Conversation,
 		Partition: body.Partition, Label: body.Label, OwesAnswer: body.OwesAnswer, At: body.At,
-		Owes: body.Owes, Seen: body.Seen, Text: body.Text, Cut: body.Cut}, true
+		Owes: body.Owes, Seen: body.Seen, Text: body.Text, Cut: body.Cut, Informs: body.Informs}, true
 }
 
 // wakeUnverified says once that a wake on turnID's record does not open.
@@ -532,20 +533,33 @@ func (s *runSteers) served(ctx context.Context, run sandbox.PendingRun) []string
 // well (ADR-0167), each one's own ([steer.Wake.Owes]) merged as a wake of the
 // turn's own partition would be ([strongerReply]), so the delivery check and
 // the review hold the turn to answering it. A wake no step read owes this turn
-// nothing: it runs as a turn of its own.
+// nothing: it runs as a turn of its own. And every lead's steer note the
+// engine filed from chat ([steer.Note.Owes], ADR-0168), read or waiting: its
+// delivery was claimed at the filing, and the turn's review reads a waiting one.
 func (s *runSteers) turnReply(run sandbox.PendingRun) (turn.Reply, error) {
 	reply, err := resumeReply(run)
 	if err != nil || s == nil {
 		return reply, err
 	}
+	merge := func(owes string) {
+		if owed := turn.ParseReply(owes); owes != "" && owed.Valid() {
+			reply = strongerReply(reply, owed)
+		}
+	}
 	for _, n := range run.Steer.Notes {
-		if n.WakeEnd() != types.JoinDelivered {
+		if n.IsWake() {
+			if n.WakeEnd() == types.JoinDelivered {
+				for _, w := range s.openWakes(run.TurnID, n) {
+					merge(w.Owes)
+				}
+			}
 			continue
 		}
-		for _, w := range s.openWakes(run.TurnID, n) {
-			if owed := turn.ParseReply(w.Owes); w.Owes != "" && owed.Valid() {
-				reply = strongerReply(reply, owed)
-			}
+		if n.For != "" || n.LateCall != nil {
+			continue
+		}
+		if note, ok := s.open(run.TurnID, n); ok {
+			merge(note.Owes)
 		}
 	}
 	return reply, nil

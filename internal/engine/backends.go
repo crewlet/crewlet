@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/learning/memsync"
+	"github.com/crewlet/crewlet/internal/nodememory"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj"
@@ -27,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/testbinary"
 )
 
 // Backends is the infrastructure a node runs on.
@@ -334,15 +336,42 @@ func OpenBackends(ctx context.Context, b *config.Bootstrap, c *config.Company, r
 // opened on the handle this returns when the engine is built ([holdEstate]),
 // whichever caller opened the store.
 func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*store.DB, error) {
-	db, err := store.OpenNode(ctx, b.Store.Path, storeOptions(b, c))
+	db, err := store.OpenNode(ctx, b.Store.Path, storeOptions(b, c, storeMemory()))
 	if err != nil {
 		return nil, fmt.Errorf("engine: store: %w", err)
 	}
 	return db, nil
 }
 
+// storeMemory is the node memory the store's page cache is sized by
+// ([store.PageCacheKiB]): none, so the floor, where it cannot be read, which
+// says so, and in a test binary ([storeSizedBy]).
+func storeMemory() int64 {
+	m, err := nodememory.Read()
+	if err != nil {
+		log.Warn("store_page_cache_floor", "error", err)
+		return 0
+	}
+	return storeSizedBy(m.Bytes)
+}
+
+// storeSizedBy is the memory a node of memory bytes sizes its store's page
+// cache by: all of it, but none in a test binary, whose many engines share
+// one machine and keep the floor ([pageCacheSized]).
+func storeSizedBy(memory int64) int64 {
+	if !pageCacheSized() {
+		return 0
+	}
+	return memory
+}
+
+// pageCacheSized is whether this process sizes its store's page cache by the
+// node's memory: everywhere but a test binary.
+func pageCacheSized() bool { return !testbinary.Running() }
+
 // storeOptions is what this node's own database is opened with, decided from
-// Tier A and the company.
+// Tier A, the company and the node's memory (each connection's page cache, a
+// share of memory across every connection of both files the node holds).
 //
 // APART FROM THE OPEN so that what the file is opened as can be asked of a
 // node's configuration without one.
@@ -350,7 +379,7 @@ func openStore(ctx context.Context, b *config.Bootstrap, c *config.Company) (*st
 // NO PINS: the writers the state log's apply loops pin are on the REPLICATED
 // estate's pool, which [holdEstate] sizes for the register ([estateLogs]) on a
 // node that holds it — never on this file, which no apply loop writes.
-func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
+func storeOptions(b *config.Bootstrap, c *config.Company, memory int64) store.Options {
 	opts := store.Options{
 		MaxOpenConns:   b.Store.MaxOpenConns,
 		ReplicatedPath: b.Store.ReplicatedPath,
@@ -382,7 +411,18 @@ func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
 	if c != nil && c.Providers.Embeddings != nil {
 		opts.EmbeddingDim = c.Providers.Embeddings.Width()
 	}
+	opts.PageCacheKiB = store.PageCacheKiB(memory, opts.NodeConnections(heldLogs(b)))
 	return opts
+}
+
+// heldLogs is how many state logs the replicated estate a node of b holds is
+// opened for ([holdEstate]): every registered one on a data node, none
+// elsewhere.
+func heldLogs(b *config.Bootstrap) int {
+	if !HoldsEstate(b) {
+		return 0
+	}
+	return estateLogs()
 }
 
 // openNATS builds a JetStream stream, embedded or external, and the

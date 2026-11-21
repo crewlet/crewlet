@@ -7,9 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
+
+// cloudPlatform is the scope the cloud identity's tokens are minted with.
+var cloudPlatform = []string{googleauth.ScopeCloudPlatform}
 
 // delegated is a new account the provisioner may mint for, by unique ID.
 func (w *clientWorld) delegated(t *testing.T) string {
@@ -32,17 +36,17 @@ func TestOneSeatMintServesEveryReaderWhileItIsGood(t *testing.T) {
 	t.Parallel()
 	w := newClientWorld(t)
 	account := w.delegated(t)
-	issuer := &googlecloud.SeatIssuer{Now: w.clock.now}
-	first, err := issuer.Token(t.Context(), w.c, account, 50*time.Minute)
-	if err != nil || !first.ExpiresAt.Equal(w.clock.now().Add(googlecloud.MaxTokenLifetime)) {
+	issuer := &googleauth.SeatIssuer{Now: w.clock.now}
+	first, err := issuer.Token(t.Context(), w.c.Connection(), account, cloudPlatform, 50*time.Minute)
+	if err != nil || !first.ExpiresAt.Equal(w.clock.now().Add(googleauth.MaxTokenLifetime)) {
 		t.Fatalf("first mint: %v, expires %s; want an hour's token", err, first.ExpiresAt)
 	}
 	w.clock.advance(30 * time.Minute)
-	again, _ := issuer.Token(t.Context(), w.c, account, 10*time.Minute)
+	again, _ := issuer.Token(t.Context(), w.c.Connection(), account, cloudPlatform, 10*time.Minute)
 	if again.Token != first.Token {
 		t.Error("a reader the held token still serves was handed a new one")
 	}
-	renewed, _ := issuer.Token(t.Context(), w.c, account, 50*time.Minute)
+	renewed, _ := issuer.Token(t.Context(), w.c.Connection(), account, cloudPlatform, 50*time.Minute)
 	if renewed.Token == first.Token || renewed.Token == "" {
 		t.Error("a reader the held token cannot serve was handed it")
 	}
@@ -55,16 +59,16 @@ func TestASeatMintGoogleRefusedIsHeldForItsWait(t *testing.T) {
 	w := newClientWorld(t)
 	account := w.delegated(t)
 	w.f.edit(func(f *fakeGoogle) { f.mintRefusals = 1 })
-	issuer := &googlecloud.SeatIssuer{Now: w.clock.now, RetryWait: func(int) time.Duration { return time.Minute }}
-	_, refused := issuer.Token(t.Context(), w.c, account, time.Minute)
-	if googlecloud.Status(refused) != http.StatusForbidden {
+	issuer := &googleauth.SeatIssuer{Now: w.clock.now, RetryWait: func(int) time.Duration { return time.Minute }}
+	_, refused := issuer.Token(t.Context(), w.c.Connection(), account, cloudPlatform, time.Minute)
+	if googleauth.Status(refused) != http.StatusForbidden {
 		t.Fatalf("the refused mint answered %v", refused)
 	}
-	if _, err := issuer.Token(t.Context(), w.c, account, time.Minute); !errors.Is(err, refused) {
+	if _, err := issuer.Token(t.Context(), w.c.Connection(), account, cloudPlatform, time.Minute); !errors.Is(err, refused) {
 		t.Fatalf("a reader within the wait was answered %v, want the held refusal", err)
 	}
 	w.clock.advance(time.Minute)
-	if _, err := issuer.Token(t.Context(), w.c, account, time.Minute); err != nil {
+	if _, err := issuer.Token(t.Context(), w.c.Connection(), account, cloudPlatform, time.Minute); err != nil {
 		t.Fatalf("the first reader after the wait: %v, want Google asked again", err)
 	}
 }
@@ -73,7 +77,7 @@ func TestASeatMintGoogleRefusedIsHeldForItsWait(t *testing.T) {
 // a fresh grant is told apart from the connection's own refusal.
 func TestASeatTokenRefusalSaysWhatToFix(t *testing.T) {
 	t.Parallel()
-	denied := &googlecloud.APIError{Status: http.StatusForbidden, Code: "PERMISSION_DENIED", Message: "denied"}
+	denied := &googleauth.APIError{Status: http.StatusForbidden, Code: "PERMISSION_DENIED", Message: "denied"}
 	for _, tc := range []struct {
 		name     string
 		err      error
@@ -82,11 +86,11 @@ func TestASeatTokenRefusalSaysWhatToFix(t *testing.T) {
 		passes   bool
 	}{
 		{"a grant not applied", denied, true, "Agents tab", false},
-		{"an account disabled", &googlecloud.APIError{Status: http.StatusBadRequest,
+		{"an account disabled", &googleauth.APIError{Status: http.StatusBadRequest,
 			Message: "The service account is disabled."}, false, "turn the agent back on", false},
-		{"a rate limit", &googlecloud.APIError{Status: http.StatusTooManyRequests, Message: "slow down"}, false,
+		{"a rate limit", &googleauth.APIError{Status: http.StatusTooManyRequests, Message: "slow down"}, false,
 			"slow down", true},
-		{"Google failing", &googlecloud.APIError{Status: http.StatusServiceUnavailable, Message: "later"}, false,
+		{"Google failing", &googleauth.APIError{Status: http.StatusServiceUnavailable, Message: "later"}, false,
 			"later", true},
 	} {
 		said, passes := googlecloud.TokenRefusal(tc.err)
@@ -98,7 +102,7 @@ func TestASeatTokenRefusalSaysWhatToFix(t *testing.T) {
 	// THE PROVISIONER REFUSED IS THE CONNECTION'S, whatever its status.
 	w := newClientWorld(t)
 	w.f.edit(func(f *fakeGoogle) { f.refuse["POST /v1/token"] = http.StatusForbidden })
-	_, _, err := w.c.SeatToken(t.Context(), "100", time.Hour)
+	_, _, err := w.c.Connection().SeatToken(t.Context(), "100", cloudPlatform, time.Hour)
 	said, passes := googlecloud.TokenRefusal(err)
 	if googlecloud.StillGranting(err) || passes || !strings.Contains(said, "Cloud Shell block") {
 		t.Errorf("the provisioner refused is told %q (passes %v), want the connection's fix", said, passes)

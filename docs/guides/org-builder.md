@@ -666,7 +666,7 @@ Shown and not changed: each schedule's cron, timezone, runner and task, and the 
 | Schedules: enabled | Agent seats. |
 | Integrations | Agent seats; see below. |
 | Owns: tracker project, knowledge space | Agent seats. The seat's own `project` and `space`, as for a unit: not a permission, shown unless the company runs no tracker or no knowledge base. Changing either takes `admin`. |
-| Models per phase: reviewer, sub-agents, auxiliary, round-cap judge | Agent seats, on **Model**. `llm_review`, `llm_subagent`, `llm_auxiliary` and `llm_judge`, each a chain of the company's providers in order; empty uses the seat's model. A chain written as a per-phase mapping is shown and left to the configuration document. |
+| Models per phase: reviewer, sub-agents, auxiliary, round-cap judge, wake triage | Agent seats, on **Model**. `llm_review`, `llm_subagent`, `llm_auxiliary`, `llm_judge` and `llm_triage`, each a chain of the company's providers in order; empty uses the seat's model. A chain written as a per-phase mapping is shown and left to the configuration document. |
 | Learning | Agent seats, on **Advanced**. `learning_enabled`: the company's default (unset), on or off. Off skips reflection after the seat's turns; episodes are still written. |
 | Workers it may delegate to | Agent seats, on **Advanced**. `workers`, chosen from the delegate templates the company publishes; empty is every one. |
 | Placement: pinned to node, node labels | Agent seats, on **Advanced**. `placement.node` and `placement.labels`, each label written `key=value`; a node must carry every label to run the seat. |

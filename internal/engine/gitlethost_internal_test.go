@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/nodebudget"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -209,7 +210,8 @@ func TestANodeKeepsTheExecutorsPoolsBeforeGitlet(t *testing.T) {
 		}
 		boot := testBootstrap(t)
 		boot.Node.Roles = roles
-		return n.gitCache.BackgroundBudget(), gitWork(boot.Profile("node-a"), &boot).MemoryPools(memory)
+		work := gitWork(boot.Profile("node-a"), &boot)
+		return n.gitCache.BackgroundBudget(), nodebudget.Node{Work: work}.Of(memory, 0).Runtime
 	}
 	seats, seatsPools := sized(nil, memory)
 	alone, alonePools := sized(withoutSeats, memory)
@@ -225,9 +227,10 @@ func TestANodeKeepsTheExecutorsPoolsBeforeGitlet(t *testing.T) {
 
 // bootSizedCodeNode boots a node with roles (nil: every role) for
 // [gitletHostAlone], its git pool sized as a node of memory bytes rather than as
-// the machine running the case, and its transfer lane pinned ([PinGitLanes]);
+// the machine running the case, and its transfer lane pinned ([PinGitLanes]),
+// each of with applied to its options;
 // it stops with t.
-func bootSizedCodeNode(t *testing.T, roles []string, memory int64) *Engine {
+func bootSizedCodeNode(t *testing.T, roles []string, memory int64, with ...func(*Options)) *Engine {
 	t.Helper()
 	b := testBootstrap(t)
 	dir := brokertest.TempDir(t)
@@ -239,8 +242,12 @@ func bootSizedCodeNode(t *testing.T, roles []string, memory int64) *Engine {
 	SeedStore(t, &b)
 	company := parseCompany(t, gitletHostAlone)
 	RequireNodeGit(t, &b, company)
-	e, err := New(t.Context(), WithGitMemory(Options{Bootstrap: &b, Company: company,
-		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)}, memory))
+	opts := WithGitMemory(Options{Bootstrap: &b, Company: company,
+		ActivatedAt: time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC)}, memory)
+	for _, w := range with {
+		w(&opts)
+	}
+	e, err := New(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

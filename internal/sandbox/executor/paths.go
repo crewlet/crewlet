@@ -385,7 +385,7 @@
 // own MainThreadReadWait cuts it. One such line to the bound, 18.6 to 18.8 s
 // (20.8 to 21.7 s estimating), one record of few facts, holds none. That
 // waiter, a later one, or one behind a take's piece (which holds the slot its
-// whole scrub, 238 s at the bound) ends with [errLargeWait] and reads as no
+// whole scrub, 251 s at the bound) ends with [errLargeWait] and reads as no
 // reading (count unread), the safe side, as a read past MainThreadReadWait
 // is, the wait spent inside it. The longest piece the archive's bound admits,
 // a 46 MiB OpenCode image (a 64.3 MB data URI), held it 8.7 s (4.8 from the
@@ -394,8 +394,8 @@
 // # The memory a node keeps for these pools
 //
 // [NodeWork.MemoryPools] adds up the pools a node runs, each at its worst by
-// the constant beside its measurement, twice over for the heap's growth at the
-// default GOGC: where it hosts boxes, the base tier at its turns
+// the constant beside its measurement, half again, the heap's room under the
+// memory limit: where it hosts boxes, the base tier at its turns
 // (node.max_concurrent, bounding every read of its runs' boxes) and its
 // peers' reads, the takes and both large slots;
 // and the transcript reads its API or its seats make. A Gitlet node keeps them

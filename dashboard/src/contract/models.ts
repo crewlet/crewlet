@@ -158,7 +158,7 @@ export type ModelCheckName =
  * `internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes`.
  */
 export type ModelJob =
-  "executor" | "review" | "subagent" | "auxiliary" | "judge" | "assistant" | "advisor";
+  "executor" | "review" | "subagent" | "auxiliary" | "judge" | "triage" | "assistant" | "advisor";
 
 /**
  * The seat field each seat job is written in, as the page writes it: the
@@ -172,6 +172,7 @@ export const SEAT_JOB_FIELDS = {
   subagent: "llm_subagent",
   auxiliary: "llm_auxiliary",
   judge: "llm_judge",
+  triage: "llm_triage",
 } as const;
 
 /**

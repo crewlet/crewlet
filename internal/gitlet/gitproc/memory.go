@@ -47,6 +47,18 @@ const TransferShare = CoreMemory / TransfersPerProcess
 // transfer sends its packs' deltas as stored, so this figure stands.
 const TransferMemory int64 = 224 << 20
 
+// ReadMemory is what one read-lane slot is taken to hold: what a node keeps
+// back for each (internal/nodebudget's ReadLane), as the lane admits a slot a
+// core whatever the memory.
+//
+// 128 MiB, measured (peak anonymous memory, git 2.56): over crewlet's history
+// cut at its newest commit within 100 000 objects (81 696), diff --stat across
+// the whole tree held 105 MiB, grep 37 and rev-list --objects 28, rounded up a
+// fifth. The base differs from TransferMemory's 120 000-object list: a read
+// walks a tree, not an object list. It grows with the tree: 146-171 MiB at
+// 543 000 objects, as a transfer's does past TransferMemory.
+const ReadMemory int64 = 128 << 20
+
 // TransferBytesPerObject is the memory one transfer of a whole repository (a
 // clone's pack-objects) holds for every object in the repository's packs,
 // past what TransferMemory covers.
@@ -88,14 +100,14 @@ func resolveMemory(o Options, read func() (nodememory.Memory, error)) (nodememor
 	return m, nil
 }
 
-// resolveReserve is what o.Reserve keeps of a node of memory bytes: nothing
-// without one, and a refusal for a negative answer, which would size the lanes
-// past the memory read.
-func resolveReserve(o Options, memory int64) (int64, error) {
+// resolveReserve is what o.Reserve keeps of a node of memory bytes and
+// readSlots read slots: nothing without one, and a refusal for a negative
+// answer, which would size the lanes past the memory read.
+func resolveReserve(o Options, memory int64, readSlots int) (int64, error) {
 	if o.Reserve == nil {
 		return 0, nil
 	}
-	kept := o.Reserve(memory)
+	kept := o.Reserve(memory, readSlots)
 	if kept < 0 {
 		return 0, fmt.Errorf("gitproc: Options.Reserve kept %d bytes of a node of %d: what the node keeps "+
 			"beside Gitlet is never negative", kept, memory)
@@ -106,6 +118,16 @@ func resolveReserve(o Options, memory int64) (int64, error) {
 // Reserved is what New kept of the node's memory beside Gitlet before sizing
 // the lanes (Options.Reserve), fixed for the pool's life as the lanes are.
 func (p *Pool) Reserved() int64 { return p.reserved }
+
+// ReservedAt is what Options.Reserve keeps of a node of memory bytes: what the
+// node would keep beside Gitlet given that memory, as a short node is told to
+// have (internal/gitlet/cache's code_cache_memory_short). Never negative.
+func (p *Pool) ReservedAt(memory int64) int64 {
+	if p.reserve == nil {
+		return 0
+	}
+	return max(0, p.reserve(memory, p.Slots(ClassRead)))
+}
 
 // Memory is the node's memory as New read it — or as Options.Memory gave
 // it — and what the pool's lanes were sized by.

@@ -361,13 +361,14 @@ type Options struct {
 	// of its machine; negative is refused.
 	Memory int64
 
-	// Reserve is what the node keeps of its memory, given the memory read,
-	// for holders beside Gitlet before the lanes are sized: the executor's
-	// pools the node runs (internal/sandbox/executor's NodeWork.MemoryPools).
+	// Reserve is what the node keeps of its memory, given the memory read and
+	// the read lane's width, for holders beside Gitlet before the lanes are
+	// sized: internal/nodebudget's lines (the Go runtime's share for the
+	// executor's pools, the store's page cache, the read lane).
 	// nil keeps nothing; a negative answer is refused. The
 	// TRANSFER lane's default and the cache's budget are sized by what it
 	// leaves ([Pool.Reserved]).
-	Reserve func(memory int64) int64
+	Reserve func(memory int64, readSlots int) int64
 
 	// Home is HOME for every process: absolute; created when absent; its
 	// mode is set to hostbox.DirMode; it must be EMPTY.
@@ -419,8 +420,10 @@ type Pool struct {
 	// the node.
 	memory      nodememory.Memory
 	fixedMemory bool
-	// reserved is what Options.Reserve kept of memory ([Pool.Reserved]).
+	// reserved is what Options.Reserve kept of memory ([Pool.Reserved]), and
+	// reserve the function itself ([Pool.ReservedAt]).
 	reserved int64
+	reserve  func(memory int64, readSlots int) int64
 
 	// slotWait, killGrace, remoteStall and captureMax are SlotWait,
 	// KillGrace, TransferStall (Remote.config derives a remote run's TCP
@@ -541,13 +544,13 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 	if err != nil {
 		return nil, err
 	}
-	reserved, err := resolveReserve(o, memory.Bytes)
-	if err != nil {
-		return nil, err
-	}
 	cpuSlots := int64(o.MaxProcesses)
 	if cpuSlots == 0 {
 		cpuSlots = int64(runtime.GOMAXPROCS(0))
+	}
+	reserved, err := resolveReserve(o, memory.Bytes, int(cpuSlots))
+	if err != nil {
+		return nil, err
 	}
 	transferSlots := int64(o.MaxTransfers)
 	if transferSlots == 0 {
@@ -621,6 +624,7 @@ func New(ctx context.Context, o Options) (*Pool, error) {
 		memory:      memory,
 		fixedMemory: o.Memory > 0,
 		reserved:    reserved,
+		reserve:     o.Reserve,
 		read:        newLane(ClassRead, cpuSlots),
 		maint:       newLane(ClassMaintenance, (cpuSlots+1)/2),
 		// THE TRANSFER LANE GRANTS BY SHARE (share.go): a held slot is

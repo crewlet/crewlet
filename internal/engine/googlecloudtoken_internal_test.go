@@ -18,6 +18,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -168,7 +169,7 @@ func googleCloudEngine(t *testing.T, c *Company, g *seatGoogle, made time.Time) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	e.issuers = []seatIssuer{googleCloudSeatIssuer{engine: e, tokens: &googlecloud.SeatIssuer{}, http: g.client}}
+	e.issuers = []seatIssuer{googleCloudSeatIssuer{engine: e, tokens: &googleauth.SeatIssuer{}, http: g.client}}
 	return e
 }
 

@@ -965,7 +965,7 @@ const WALL: DateShape = Object.freeze({
  * phase elsewhere in this tree, and an unqualified `PHASE_ORDER` is how one of
  * two unrelated orders gets changed in the other's name.
  */
-const LLM_PHASE_ORDER = ["default", "review", "subagent", "auxiliary", "judge"];
+const LLM_PHASE_ORDER = ["default", "review", "subagent", "auxiliary", "judge", "triage"];
 
 /** One row of a seat's model setting: which phase, and the chain it runs on. */
 export interface PhaseChain {

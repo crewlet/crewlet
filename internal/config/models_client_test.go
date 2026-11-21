@@ -122,6 +122,7 @@ roles:
     llm_subagent: big
     llm_auxiliary: big
     llm_judge: big
+    llm_triage: big
 `))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
