@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/delegated"
@@ -29,19 +31,28 @@ import (
 // it lapses unanswered after a day. Every write is classed by its product
 // against its target first, and refused here where it comes to more than its
 // tool makes. No credential reaches a box: the product makes every call in the
-// engine.
+// engine. Every step is on the access log: a held call's ask once it is held
+// ([GrowthAudit]), and what the product makes by the product.
 
 // GrowthDeps are what the growth tools act through. Requesters and Chart decide
-// whoever a turn acts for ([companyRequester]); without them, or without a
-// product, no growth tool is registered.
+// whoever a turn acts for ([companyRequester]), and Audit records each held
+// call's ask; without them, or without a product, no growth tool is registered.
 type GrowthDeps struct {
 	Products   []GrowthProduct
 	Requesters Requesters
 	Chart      authz.Chart
+	Audit      GrowthAudit
 }
 
 func (d GrowthDeps) serves() bool {
-	return len(d.Products) > 0 && d.Requesters != nil && d.Chart != nil
+	return len(d.Products) > 0 && d.Requesters != nil && d.Chart != nil && d.Audit != nil
+}
+
+// GrowthAudit is the access log's record of a growth act's steps, as the held
+// call writes its ask (internal/engine's GrowthAudit, ADR-0171). first is false
+// where the act already holds the record.
+type GrowthAudit interface {
+	Asked(ctx context.Context, r growth.Record) (first bool, err error)
 }
 
 // GrowthProduct is one growth integration as its tools reach it: implemented
@@ -165,7 +176,8 @@ func (t *growthTool) CallForTurn(ctx context.Context, turn *turnctx.Turn, args m
 	if refusal != nil {
 		return *refusal, nil
 	}
-	call := growth.Call{Handle: handle, Turn: turn.RunID, Tool: t.Name(), Args: args}
+	call := growth.Call{ID: uuid.Must(uuid.NewV7()).String(), Handle: handle, Turn: turn.RunID, Tool: t.Name(),
+		Args: args}
 	if t.def.Class == growth.ClassRead {
 		answer, err := t.product.Run(ctx, call)
 		if err != nil {
@@ -290,9 +302,11 @@ func (t *growthHeldTool) BeforeHold(ctx context.Context, turn *turnctx.Turn, _ m
 	return refusal
 }
 
-// PrepareHold reads the call's target live and builds its hold.
+// PrepareHold reads the call's target live and builds its hold, which records
+// its ask on the access log once it is held.
 func (t *growthHeldTool) PrepareHold(ctx context.Context, turn *turnctx.Turn, args map[string]any) (HeldPrep, *tools.Result) {
-	hold, err := t.product.Prepare(ctx, growth.Call{Handle: turn.Handle(), Turn: turn.RunID, Tool: t.Name(), Args: args})
+	handle := turn.Handle()
+	hold, err := t.product.Prepare(ctx, growth.Call{Handle: handle, Turn: turn.RunID, Tool: t.Name(), Args: args})
 	if err != nil {
 		r := growthFailure(ctx, t.Name(), err)
 		return HeldPrep{}, &r
@@ -300,7 +314,15 @@ func (t *growthHeldTool) PrepareHold(ctx context.Context, turn *turnctx.Turn, ar
 	if r := t.within(ctx, hold); r != nil {
 		return HeldPrep{}, r
 	}
-	return HeldPrep{Binding: hold.Binding, Subject: hold.Subject, Question: hold.Question, Context: hold.Context}, nil
+	ask := hold.Ask
+	ask.Product, ask.Tool, ask.Class = t.product.Catalog().Kind, t.Name(), t.def.Class
+	ask.Handle, ask.Turn, ask.Call, ask.Answerer, ask.Failure = handle, turn.RunID, "", "", ""
+	return HeldPrep{Binding: hold.Binding, Subject: hold.Subject, Question: hold.Question, Context: hold.Context,
+		Held: func(ctx context.Context, heldID string) error {
+			ask.HeldCall = heldID
+			_, err := t.deps.Audit.Asked(ctx, ask)
+			return err
+		}}, nil
 }
 
 // Binding, Subject and HeldWords are read in [growthHeldTool.PrepareHold].

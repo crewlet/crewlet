@@ -208,6 +208,15 @@ func (r engineRuntime) AtlasReads() builtin.AtlasDeps { return engine.AtlasToolD
 // takes it.
 func (r engineRuntime) DelegatedReads() queries.DelegatedReads { return r.engine.SSHAccess() }
 
+// growthRuntime is a runtime whose access log the growth changes read answers
+// from: the engine's, and no test runtime that keeps none.
+type growthRuntime interface {
+	GrowthReads() queries.GrowthReads
+}
+
+// GrowthReads is the engine's access log, as the growth changes read takes it.
+func (r engineRuntime) GrowthReads() queries.GrowthReads { return r.engine.GrowthAudit() }
+
 // DelegatedGitHub is the company's GitHub as a rule's form reads it, through
 // the agents' apps of the wiring the engine holds now.
 func (r engineRuntime) DelegatedGitHub() queries.DelegatedGitHub { return r.engine }
