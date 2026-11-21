@@ -2,8 +2,8 @@
 
 - **Status:** accepted
 - **Authority:** `internal/queue/jetstream`
-- **Enforced-by:** `internal/queue/jetstream.TestALinksMeterCountsWhatCrossesItEachWay`, `internal/queue/jetstream.TestALinksMeterStandsStillOnABlackholedLink`, `internal/learning/memsync.TestAHydrationBehindADownloadOnItsLinkIsNotRefused`, `internal/learning/memsync.TestAHydrationOnASilentLinkIsRefusedForItsSilence`, `internal/learning/memsync.TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull`, `internal/jsprovision.TestACeilingRunsOnlyWhileItsLinkIsStill`, `internal/engine.TestANodesHydrationReadsItsLinksMeter`, `internal/objstore/natsobj.TestATransferBehindAMovingLinkIsNotStalled`
-- **Measured:** the meter reads its link every 250 ms (a quarter of a read term) and keeps a minute of readings; a link is moving at 70% of the floor of 30 s a MiB, about 24.5 KB/s, in either direction, midway between the 40% of background a documented fleet's quiet link carries and the floor a busy one does; one message at the transport's 8 MiB takes 240 s to cross at the floor, and 248 s to arrive with its handling, which caps every hold; a replay is placed again past 8.5 MB read across a link (one transport message and a 139,810-byte window) and refused at 253 s with nothing heard; a held wait is judged again every 250 ms (a request) or every second (a replay), so a link that falls still ends it within its span and that judgment of its last byte
+- **Enforced-by:** `internal/queue/jetstream.TestALinksMeterCountsWhatCrossesItEachWay`, `internal/queue/jetstream.TestALinksMeterStandsStillOnABlackholedLink`, `internal/learning/memsync.TestAHydrationBehindADownloadOnItsLinkIsNotRefused`, `internal/learning/memsync.TestAHydrationOnASilentLinkIsRefusedForItsSilence`, `internal/learning/memsync.TestAReplayHearingNothingOnAMovingLinkIsPlacedAgainPastOneTransportPull`, `internal/jsprovision.TestACeilingRunsOnlyWhileItsLinkIsStill`, `internal/engine.TestANodesHydrationReadsItsLinksMeter`, `internal/objstore/natsobj.TestATransferBehindAMovingLinkIsNotStalled`, `internal/queue/jetstream.TestTheDataPathIsProvenEndToEnd`
+- **Measured:** the meter reads its link every 250 ms (a quarter of a read term) and keeps a minute of readings; a link is moving at 70% of the floor of 30 s a MiB, about 24.5 KB/s, in either direction, midway between the 40% of background a documented fleet's quiet link carries and the floor a busy one does; one message at the transport's 8 MiB takes 240 s to cross at the floor, and 248 s to arrive with its handling, which caps every hold but the data path's probe, capped at 246 s on the shipped pings (two minutes, two out) with a probe period and a read term; a replay is placed again past 8.5 MB read across a link (one transport message and a 139,810-byte window) and refused at 253 s with nothing heard; a held wait is judged again every 250 ms (a request) or every second (a replay), so a link that falls still ends it within its span and that judgment of its last byte
 - **Cost-when-tried:** a replay timed by words alone was refused behind one download in flight on its own link (15.5 s of it against a 20.5 s stall at the shipped lease), and behind any event past about 0.67 MiB; at the floor lease the stall was 10.2 s, so one download refused it there too
 - **Tag-status:** unreleased
 
@@ -19,7 +19,9 @@ floor over that span, in either direction, the wait ends as it did. Where it
 did, the wait is held: the reply may be among what the link carries.
 
 **And every hold is capped, by choice, at one message at the transport's
-bound.** A wait held past its span is held by at most what one message at the
+bound** — but the data path's probe (`Queue.DataPath`), held to its link's
+own ping tolerance, past which the link is closed as stale whatever it
+carries. A wait held past its span is held by at most what one message at the
 transport's ceiling takes to cross at the floor (`Timing.Following`'s beyond,
 memsync's `quietCap`), and a replay that has watched one such message and one
 of its own pulls cross with nothing for it is placed again (memsync's
@@ -72,6 +74,6 @@ stopped answering to the caps on every link.
 ## What this does not decide
 
 What a link's window is, or how many transfers share it (the object store's
-and memsync's own docs); what the lease gate refuses on a link that moves but
-never answers its probe (ADR for the gate); and the time bounds of requests
+and memsync's own docs); what the lease gate makes of the data path's verdict
+(ADR for the gate); and the time bounds of requests
 that read no meter yet, which keep their own until they are given one.
