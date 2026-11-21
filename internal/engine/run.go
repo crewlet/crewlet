@@ -1577,7 +1577,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		// Over the fleet's run records, built here, not with the sandbox runtime:
 		// an ingress-only node with no runtime still files a person's note on a
 		// run another node launched.
-		runSteers:           newRunSteers(steerSeals, sandbox.NewCoordStore(backends.Fleet), backends.Queue),
+		runSteers: newRunSteers(steerSeals, sandbox.NewCoordStore(backends.Fleet), backends.Queue).
+			claimingIn(ledgerstore.NewFleetCompletions(backends.Fleet)),
 		codeSearchWire:      codeSearchWire,
 		presenceWire:        presenceWire,
 		relayWire:           relayWire,

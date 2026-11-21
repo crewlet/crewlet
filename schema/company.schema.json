@@ -1285,9 +1285,9 @@
           ]
         },
         "max_bytes_per_seat": {
-          "description": "Object-store bytes one seat's captured executor sessions may hold; past it the oldest ended turns' sessions are released. It is also the allowance of the seat's saves of running sessions, which the object store keeps for about a day once a newer one replaces them, so a seat holds up to twice it (default 64 MiB, 33 MiB..64 GiB).",
+          "description": "Object-store bytes one seat's captured executor sessions may hold; past it the oldest ended turns' sessions are released. It is also the allowance of the seat's saves of running sessions, which the object store keeps for about a day once a newer one replaces them, so a seat holds up to twice it (default 64 MiB, 49 MiB..64 GiB).",
           "maximum": 68719476736,
-          "minimum": 34603008,
+          "minimum": 51380224,
           "type": [
             "integer",
             "null"

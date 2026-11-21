@@ -1,17 +1,20 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
-	"os"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
@@ -25,9 +28,8 @@ import (
 // (internal/estate's ExecutorReads) at the level a relaunch reads it
 // (executordomain.RelaunchRead: a capture another node recorded is read at
 // `linearizable`), as the sandbox's view of it ([executorkeep.TurnRow]); and
-// the sealed object it names, fetched and opened through the domain's session
-// store, or streamed opened for a reading of what the session holds
-// (holdings.go). The row is the leaf's type because the sandbox links no state
+// the sealed object it names, streamed opened through the domain's session
+// store, for a restore or a reading of what the session holds (holdings.go). The row is the leaf's type because the sandbox links no state
 // log: the log's own row type carries its positions, and so its graph.
 type SessionRestore interface {
 	// Session reads one turn's row (executordomain.Reader.Session, made the
@@ -35,20 +37,13 @@ type SessionRestore interface {
 	// [ErrTurnRowNotFound] where the log holds no row for the turn.
 	Session(ctx context.Context, handle, turn string) (executorkeep.TurnRow, error)
 
-	// Fetch copies the sealed object row names into dst, checked against the
-	// row (executordomain.SessionStore.Fetch), and OpenSpooled opens what it
-	// copied against the row's associated data
-	// (executordomain.SessionStore.OpenSpooled).
-	Fetch(ctx context.Context, row executorkeep.TurnRow, dst io.Writer) error
-	OpenSpooled(row executorkeep.TurnRow, sealed io.Reader) (io.Reader, error)
-
 	// Open streams the sealed object row names, every chunk authenticated
 	// against the row's associated data before a byte is handed out
 	// (executordomain.SessionStore.Open). WHAT IT HANDS OUT IS PROVISIONAL
 	// UNTIL io.EOF, since a stream cut short is known only at the read past its
-	// last whole chunk: it serves a reader that decides nothing until the
-	// stream has ended ([Coordinator.HoldingsOf]), never a restore, which
-	// writes what it reads into a box and so fetches the object first ([Coordinator.fetchSession]). A row naming no
+	// last whole chunk: its reader decides nothing until the stream has ended
+	// ([Coordinator.HoldingsOf]), and a restore reads it whole once before it
+	// streams it again into a box, held to that read ([Coordinator.fetchSession]). A row naming no
 	// object, an object the store no longer holds and bytes not sealed for the
 	// row are unreadable, at the call or from the Read that reaches the fault.
 	// The caller closes what it answers.
@@ -1383,8 +1378,8 @@ type continuedLaunch struct {
 	// capture states one above zero; nil otherwise ([LaunchRecord.Continued]).
 	// Written on the job's record ([BoxRef.Continued]).
 	point *ContinuedPoint
-	// release removes what the launch spooled to carry the session in, once
-	// the run has started (or failed to).
+	// release closes the session's stream into the box once the run has
+	// started (or failed to).
 	release func()
 }
 
@@ -1692,10 +1687,9 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	if err != nil {
 		return continuedLaunch{}, fmt.Sprintf("the session could not be fetched: %v", err)
 	}
-	body, err := fetched.open(c.restore)
+	body, err := fetched.open(ctx, c.restore)
 	if err != nil {
-		fetched.remove()
-		return continuedLaunch{}, fmt.Sprintf("the session's spool could not be opened: %v", err)
+		return continuedLaunch{}, fmt.Sprintf("the session could not be read again to carry it: %v", err)
 	}
 	if unused != "" {
 		c.exactUnused(ctx, req, unused)
@@ -1707,10 +1701,7 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: kept.Interrupted}
 	return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
 		kept: true, exact: exact != "", unheld: unheld, summarized: summarized, carried: carried,
-		measure: measure, restart: restart, point: point, release: func() {
-			_ = body.Close()
-			fetched.remove()
-		}}, ""
+		measure: measure, restart: restart, point: point, release: func() { _ = body.Close() }}, ""
 }
 
 // continuedPoint is the save point of kept, the capture launch req hands its
@@ -1917,19 +1908,15 @@ func (c *Coordinator) continueBase(ctx context.Context, req LaunchRequest, opene
 	if err != nil {
 		return continuedLaunch{}, fmt.Sprintf("the session could not be fetched: %v", err)
 	}
-	body, err := fetched.open(c.restore)
+	body, err := fetched.open(ctx, c.restore)
 	if err != nil {
-		fetched.remove()
-		return continuedLaunch{}, fmt.Sprintf("the session's spool could not be opened: %v", err)
+		return continuedLaunch{}, fmt.Sprintf("the session could not be read again to carry it: %v", err)
 	}
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: base.Interrupted}
 	return continuedLaunch{brief: want.Replaced, fresh: req.Brief, session: base.SessionID,
 		kind: BriefContinuedConversation, kept: true, carried: carried,
 		measure: carriedMeasure(base.ContextTokens, MeasureBase, ""),
-		release: func() {
-			_ = body.Close()
-			fetched.remove()
-		}}, ""
+		release: func() { _ = body.Close() }}, ""
 }
 
 // notContinued logs why a launch did not continue a session it was offered,
@@ -1952,66 +1939,116 @@ const (
 	startsItsOwn = "the run starts a session of its own, handed the brief written for one"
 )
 
-// restoreSpoolPrefix names a launch's spool of the session it carries, under
-// [spoolPrefix] and in the same directory, so a spool a crash left behind is
-// swept with the captures' ([Coordinator.sweepSpools]).
-const restoreSpoolPrefix = spoolPrefix + "restore-"
-
-// fetchedSession is a kept session spooled SEALED on this node's disk, its seal
-// opened whole once, ready to be carried into a box.
+// fetchedSession is a kept session read whole once from the object store, its
+// seal opened and the archive it holds digested, ready to be streamed into a
+// box by a second read held to the first ([fetchedSession.open]).
 type fetchedSession struct {
-	row  executorkeep.TurnRow
-	file string
+	row    executorkeep.TurnRow
+	digest [sha256.Size]byte
+	size   int64
 }
 
-// fetchSession spools row's session sealed and checks it can be read whole,
-// before any of it reaches a box (executordomain.SessionStore.Fetch), in the
-// coordinator's spool directory ([Coordinator.spoolDirectory]), where its sweep
-// looks.
+// fetchSession reads row's session whole once and checks it opens, before any
+// of it reaches a box, spooling nothing ([SessionRestore.Open]).
 func (c *Coordinator) fetchSession(ctx context.Context, row executorkeep.TurnRow) (*fetchedSession, error) {
-	c.sweepSpools()
-	file, err := os.CreateTemp(c.spoolDirectory(), restoreSpoolPrefix+"*")
+	body, err := c.restore.Open(ctx, row)
 	if err != nil {
-		return nil, fmt.Errorf("a spool for the session on this node's disk: %w", err)
-	}
-	fetched := &fetchedSession{row: row, file: file.Name()}
-	if err = errors.Join(c.restore.Fetch(ctx, row, file), file.Close()); err != nil {
-		fetched.remove()
 		return nil, err
 	}
-	// THE SEAL OPENED WHOLE ONCE: a chunk that does not authenticate is found
-	// here, not part way through writing the archive into the box.
-	body, err := fetched.open(c.restore)
-	if err == nil {
-		_, err = io.Copy(io.Discard, body)
-		err = errors.Join(err, body.Close())
-	}
-	if err != nil {
-		fetched.remove()
+	digest := sha256.New()
+	size, err := io.Copy(digest, body)
+	if err = errors.Join(err, body.Close()); err != nil {
 		return nil, err
 	}
+	fetched := &fetchedSession{row: row, size: size}
+	digest.Sum(fetched.digest[:0])
 	return fetched, nil
 }
 
-// open streams the spooled session opened; the caller closes it.
-func (f *fetchedSession) open(restore SessionRestore) (io.ReadCloser, error) {
-	file, err := os.Open(f.file)
+// open streams the session again, held to the read [Coordinator.fetchSession]
+// made: its last byte is handed out only once every byte before it, and the
+// end after it, match that read, so a box's write of it ends in an error, never
+// a whole file, where the store answered otherwise. The caller closes it.
+func (f *fetchedSession) open(ctx context.Context, restore SessionRestore) (io.ReadCloser, error) {
+	body, err := restore.Open(ctx, f.row)
 	if err != nil {
 		return nil, err
 	}
-	plain, err := restore.OpenSpooled(f.row, file)
-	if err != nil {
-		_ = file.Close()
-		return nil, err
+	return &matchedRead{body: body, want: f, digest: sha256.New()}, nil
+}
+
+// errReadAgainDiffers is a second read of a kept session that is not the one
+// the first read found whole.
+var errReadAgainDiffers = errors.New("sandbox: the kept session read again is not the one read whole")
+
+// matchedRead is [fetchedSession.open]'s reader: n is how many bytes the body
+// handed over, held the checked last byte, handed out once the whole matched;
+// end and err are for good.
+type matchedRead struct {
+	body   io.ReadCloser
+	want   *fetchedSession
+	digest hash.Hash
+	n      int64
+	held   []byte
+	end    bool
+	err    error
+}
+
+func (m *matchedRead) Read(p []byte) (int, error) {
+	switch {
+	case len(m.held) > 0:
+		n := copy(p, m.held)
+		m.held = m.held[n:]
+		return n, nil
+	case m.err != nil:
+		return 0, m.err
+	case m.end:
+		return 0, io.EOF
+	case len(p) == 0:
+		return 0, nil
 	}
-	return spooledReader{Reader: plain, Closer: file}, nil
+	if rest := m.want.size - m.n; rest > 1 {
+		n, err := m.body.Read(p[:min(int64(len(p)), rest-1)])
+		m.n += int64(n)
+		_, _ = m.digest.Write(p[:n])
+		switch {
+		case errors.Is(err, io.EOF):
+			m.err = fmt.Errorf("%w: it ended at %d of %d bytes", errReadAgainDiffers, m.n, m.want.size)
+			return n, m.err
+		case err != nil:
+			m.err = err
+			return n, err
+		}
+		return n, nil
+	}
+	if err := m.tail(); err != nil {
+		m.err = err
+		return 0, err
+	}
+	m.end = true
+	return m.Read(p)
 }
 
-// remove deletes the spool.
-func (f *fetchedSession) remove() { _ = os.Remove(f.file) }
-
-// spooledReader is an opened spool: its plaintext, and the file it closes.
-type spooledReader struct {
-	io.Reader
-	io.Closer
+// tail reads what is left of the body and one byte past it, and checks the
+// whole against the first read before any of it is handed out.
+func (m *matchedRead) tail() error {
+	left := m.want.size - m.n
+	buf := make([]byte, left+1)
+	n, end, err := objstore.Fill(m.body, buf)
+	m.n += int64(n)
+	switch {
+	case err != nil:
+		return err
+	case !end || int64(n) != left:
+		return fmt.Errorf("%w: it holds %d bytes or more, the first read %d", errReadAgainDiffers, m.n,
+			m.want.size)
+	}
+	_, _ = m.digest.Write(buf[:n])
+	if !bytes.Equal(m.digest.Sum(nil), m.want.digest[:]) {
+		return fmt.Errorf("%w: its bytes differ", errReadAgainDiffers)
+	}
+	m.held = buf[:n]
+	return nil
 }
+
+func (m *matchedRead) Close() error { return m.body.Close() }

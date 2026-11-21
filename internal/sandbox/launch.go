@@ -894,6 +894,11 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	if req.Recorded != nil {
 		req.Recorded(opened.LaunchID)
 	}
+	// THE JOB THIS ONE REPLACED IS OVER, and the wakes it never read with it,
+	// which the write removed: reported once, the launch going on regardless.
+	if c.wakesEnded != nil && len(opened.Prior.Wakes) > 0 {
+		c.wakesEnded(ctx, opened, opened.Prior.Wakes)
+	}
 	// A STOP OF THE TURN'S LAST LAUNCH IS NOT THIS ONE'S: this job is new.
 	// Nor is a clock on the store of the last job's host, nor a re-fire's
 	// announcement of it this node still owes: that job's run settled here,

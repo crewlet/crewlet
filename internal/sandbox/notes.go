@@ -22,8 +22,9 @@ import (
 // every change: a hook's serve is no read ([PendingStore.ServeHook],
 // [PendingStore.SettleHook]); an item for one job ([RunNote.For]) reaches only
 // that job; a note is sealed and never read here ([RunNote.Sealed]), and a
-// filing is a person's note alone ([ErrNoteKind]). The bounds are
-// internal/agent/steer's ([NoteFiling]). See the package doc, "A turn's notes".
+// filing is a person's note alone ([ErrNoteKind]), a wake the store's to file
+// ([PendingStore.FileWake]). The bounds are internal/agent/steer's
+// ([NoteFiling]). See the package doc, "A turn's notes".
 
 // RunSteer is the notes a person sent the run's turn: on the record from the
 // run's launch to its turn's end.
@@ -129,7 +130,7 @@ type RunNote struct {
 	Place int `json:"place,omitempty"`
 
 	// Serves are the note's serves to ONE job's hooks, oldest first, at most
-	// [MaxNoteServes] ([HookServed]): a serve to another job replaces them. A
+	// [RunNote.MaxServes] ([HookServed]): a serve to another job replaces them. A
 	// serve is LIVE while no loss struck it, the note waits, and Served names
 	// its job ([RunNote.LiveServe]): a note a later job's poll served has no
 	// live hook serve. Kept once the note is read, as the history its read was
@@ -139,12 +140,12 @@ type RunNote struct {
 	// For is the one job the item is for, where the store made it that job's
 	// alone. Filed by the store alone, never by a filer
 	// ([PendingStore.FileNote] refuses one with [ErrNoteKind]): a late-call
-	// item ([RunNote.LateCall]), the one kind this build files. Wherever one
-	// is, it is counted apart ([MaxJobItems]), handed over only inside that
-	// job ([RunNote.IsFor]), passed over by every reader of a person's notes
-	// (the ending, the carry, the review, a launch's brief, the capture's
-	// cursor), and removed by the launch that opens the next job
-	// ([openNotes]). Empty for a person's note, an item of the whole turn.
+	// item ([RunNote.LateCall]) or a wake item ([RunNote.Wake]). Wherever one
+	// is, it is counted apart ([MaxJobItems], [MaxJobWakes]), handed over only
+	// inside that job ([RunNote.IsFor]), passed over by every reader of a
+	// person's notes (the ending, the carry, the review, a launch's brief), and
+	// removed by the launch that opens the next job, but for a wake item read,
+	// which is the turn's ([openNotes]). Empty for a person's note.
 	For string `json:"for,omitempty"`
 
 	// LateCall is the call a LATE-CALL ITEM hands its job, always beside For:
@@ -158,6 +159,13 @@ type RunNote struct {
 	// as anybody's note. Nil on every person's note. See the package doc, "A
 	// late call is handed to the job working as it lands".
 	LateCall *LateCall `json:"late_call,omitempty"`
+
+	// Wake is the wakes a WAKE ITEM hands its job, always beside For:
+	// somebody's messages about the run's work, each sealed by the engine in a
+	// domain of its own. FILED BY THE STORE ALONE, at the engine's word
+	// ([PendingStore.FileWake]); nil on every person's note and late call. See
+	// the package doc, "A wake joins a running run".
+	Wake *WakeItem `json:"wake,omitempty"`
 
 	// LostTake is TRANSIENT, and set on a note a launch's brief carries
 	// ([PendingRun.BriefNotes]) alone: the take that recorded the note read
@@ -730,6 +738,10 @@ type NoteServe struct {
 
 	Launch   string
 	Statuses []string
+
+	// Wakes is how many wakes the poll hands over of each wake item it names,
+	// by id ([handsWhole]).
+	Wakes map[string]int
 }
 
 // HookServe is a hook's take serving notes to its job's harness
@@ -759,6 +771,10 @@ type HookServe struct {
 	// nothing: the write removes each one's serve to the job before it
 	// serves, so the note is served again without spending its bound.
 	Unanswered []string
+
+	// Wakes is how many wakes the hook hands over of each wake item it names,
+	// by id ([handsWhole]).
+	Wakes map[string]int
 }
 
 // HookSettle is a settle of a job's hooks' serves ([PendingStore.SettleHook]),
@@ -846,12 +862,12 @@ func viewOf(update coord.SandboxRunUpdate) (NotesView, error) {
 var errNoteBounds = errors.New("sandbox: a note is filed with the turn's bounds, and none were given")
 
 // ErrNoteKind is a filing of a note that is not a person's: one naming the job
-// it is for ([RunNote.For]) or a call it hands one ([RunNote.LateCall]),
-// refused by [PendingStore.FileNote] before anything is written. An item for
-// one job is the store's to file, in its own writes of the record, never a
-// filer's: the engine files a person's note, which reaches a job only as that
-// person's words, and a filer that could name a job could hand it words on the
-// store's account instead.
+// it is for ([RunNote.For]), a call it hands one ([RunNote.LateCall]) or wakes
+// ([RunNote.Wake]), refused by [PendingStore.FileNote] before anything is
+// written. An item for one job is the store's to file, in its own writes of
+// the record, never a filer's: the engine files a person's note, which reaches
+// a job only as that person's words, and a filer that could name a job could
+// hand it words on the store's account instead.
 var ErrNoteKind = errors.New("sandbox: a filed note is a person's: an item for one job is the " +
 	"store's to file, never a filer's")
 
@@ -867,10 +883,10 @@ func (s *CoordStore) FileNote(ctx context.Context, turnID string, filing NoteFil
 	switch {
 	case filing.MaxWaiting <= 0 || filing.MaxNotes <= 0:
 		return "", PendingRun{}, errNoteBounds
-	case note.For != "" || note.LateCall != nil:
+	case note.For != "" || note.LateCall != nil || note.Wake != nil:
 		// REFUSED, AND NO ANSWER OF A STATUS: whatever the record holds,
 		// nothing a filer hands in is filed as an item.
-		return "", PendingRun{}, fmt.Errorf("sandbox: note %s to run %s names job %q or a call: %w",
+		return "", PendingRun{}, fmt.Errorf("sandbox: note %s to run %s names job %q, a call or wakes: %w",
 			note.ID, turnID, note.For, ErrNoteKind)
 	case note.ID == "" || len(note.Sealed) == 0:
 		return "", PendingRun{}, fmt.Errorf("sandbox: a note to run %s needs its id and its seal", turnID)
@@ -953,16 +969,17 @@ func personsNotes(notes []RunNote, job string) (mine, waiting int) {
 	return mine, waiting
 }
 
-// LateCallStatuses are the statuses a late-call item is filed in: those a run's
-// own harness takes notes in, from the launch that opens its job to the claim
-// of its completion (internal/engine's steerTakeStatuses, held equal by a
-// test). A job parked, claimed or collected is handed nothing more, so the
-// call is left to the next continuation, which tells it.
-var LateCallStatuses = []string{StatusLaunching, StatusRunning}
+// ItemStatuses are the statuses an item for one job is filed in, a late call's
+// or a wake's: those a run's own harness takes notes in, from the launch that
+// opens its job to the claim of its completion (internal/engine's
+// steerTakeStatuses, held equal by a test). A job parked, claimed or collected
+// is handed nothing more: a late call is left to the next continuation, which
+// tells it, and a wake to a turn of its own.
+var ItemStatuses = []string{StatusLaunching, StatusRunning}
 
 // fileLateItems files a late-call item for job, of the round round, for each of
 // calls the record does not hold one of yet ([RunNote.LateCall]): in ONE live
-// write of the record, pinned to the job, [LateCallStatuses] and an undecided
+// write of the record, pinned to the job, [ItemStatuses] and an undecided
 // ending, in the calls' order and up to [MaxJobItems] items for the job. A call
 // an older build appended unnumbered, one a person approved and one no save
 // point leaves unheld are none. See the package doc, "A late call is handed
@@ -981,14 +998,16 @@ func (s *CoordStore) fileLateItems(ctx context.Context, turnID, job, round strin
 	var filed, spent int
 	moved := false
 	_, _, _, err := s.writeFound(ctx, turnID, true, Fence{}, func(run *PendingRun) bool {
-		filed, spent, moved = 0, 0, run.LaunchID != job || !slices.Contains(LateCallStatuses, run.Status)
+		filed, spent, moved = 0, 0, run.LaunchID != job || !slices.Contains(ItemStatuses, run.Status)
 		if moved {
 			return false
 		}
 		notes := slices.Clone(run.Steer.Notes)
+		// THE JOB'S LATE CALLS ALONE: its wakes count toward a bound of their
+		// own ([MaxJobWakes]) and crowd out no call.
 		held := 0
 		for _, n := range notes {
-			if n.For == job {
+			if n.For == job && n.LateCall != nil {
 				held++
 			}
 		}
@@ -1124,7 +1143,8 @@ func (s *CoordStore) ServeNotes(ctx context.Context, turnID string, serve NoteSe
 		notes := slices.Clone(run.Steer.Notes)
 		marked := false
 		for i, held := range notes {
-			if !held.Waiting() || !held.IsFor(serve.Launch) || !slices.Contains(serve.IDs, held.ID) {
+			if !held.Waiting() || !held.IsFor(serve.Launch) || !slices.Contains(serve.IDs, held.ID) ||
+				!handsWhole(held, serve.Wakes) {
 				continue
 			}
 			if held.Served != serve.Launch {
@@ -1241,7 +1261,8 @@ func (s *CoordStore) ServeHook(ctx context.Context, turnID string, serve HookSer
 		at := s.clock()
 		order, placed := run.Steer.Reads+1, false
 		for i, held := range notes {
-			if !slices.Contains(serve.IDs, held.ID) || !held.Waiting() || !held.IsFor(serve.Launch) {
+			if !slices.Contains(serve.IDs, held.ID) || !held.Waiting() || !held.IsFor(serve.Launch) ||
+				!handsWhole(held, serve.Wakes) {
 				continue
 			}
 			if live, ok := held.LiveServe(); ok && live.Launch == serve.Launch {
@@ -1252,7 +1273,7 @@ func (s *CoordStore) ServeHook(ctx context.Context, turnID string, serve HookSer
 			serves := slices.DeleteFunc(slices.Clone(held.Serves), func(h HookServed) bool {
 				return h.Launch != serve.Launch
 			})
-			if len(serves) >= MaxNoteServes {
+			if len(serves) >= held.MaxServes() {
 				continue
 			}
 			// THE FIRST SERVE PLACES THE NOTE among the turn's reads, once a
@@ -1508,14 +1529,17 @@ func (s *CoordStore) WatchNotes(ctx context.Context, turnID string) (<-chan Note
 }
 
 // openNotes is the write a launch makes of the turn's notes on the record it
-// opens ([PendingStore.BeginLaunch]), in order: every item for one job removed;
-// the brief's notes ([PendingRun.BriefNotes]) recorded read by the job; the
-// notes it tells again ([PendingRun.RetoldNotes]) recorded read, told again;
-// then the notes the first segment's box held ([PendingRun.HandedNotes]) filed
-// waiting, whatever the turn's bounds say, since the box accepted each under
-// them. See the package doc, "A turn's notes".
+// opens ([PendingStore.BeginLaunch]), in order: every item for one job removed,
+// but a wake item read, whose delivery the turn worked and every later launch
+// tells ([RunNote.Wake]); the brief's notes ([PendingRun.BriefNotes]) recorded
+// read by the job; the notes it tells again ([PendingRun.RetoldNotes])
+// recorded read, told again; then the notes the first segment's box held
+// ([PendingRun.HandedNotes]) filed waiting, whatever the turn's bounds say,
+// since the box accepted each under them. See the package doc, "A turn's notes".
 func openNotes(steer *RunSteer, run PendingRun, launch string, at time.Time) {
-	steer.Notes = slices.DeleteFunc(steer.Notes, func(held RunNote) bool { return held.For != "" })
+	steer.Notes = slices.DeleteFunc(steer.Notes, func(held RunNote) bool {
+		return held.For != "" && (!held.IsWake() || held.Read == nil)
+	})
 	order := steer.Reads + 1
 	for _, note := range run.BriefNotes {
 		if note.ID == "" {

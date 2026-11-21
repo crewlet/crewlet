@@ -228,8 +228,8 @@ function arm(ctx, url, session) {
   // none is owed. One at a time; a failed confirmation is made again after a
   // pause, and a note never confirmed waits for the run's review. Every note
   // owed is one this job's poll returned: at most a turn's ten notes and the
-  // job's own ten items, which is what one read may name
-  // (internal/api/mcpbridge's steerReadIDs).
+  // job's own items, ten late calls and four wakes, which is what one read may
+  // name (internal/api/mcpbridge's steerReadIDs).
   const confirm = async () => {
     if (confirming) return
     confirming = true

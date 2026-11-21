@@ -1187,7 +1187,7 @@ func TestAnOpenCodeReadingIsHeldToItsBounds(t *testing.T) {
 	}
 	archive := ohGzip(t, doc)
 	_, err := (OpenCode{}).readHoldings(t.Context(), io.MultiReader(bytes.NewReader(archive), ohFailing{}),
-		ohArchive("2.2.7"), ask, boundsFor(1<<20))
+		ohArchive("2.2.7"), ask, plainBounds(8<<20))
 	if err == nil {
 		t.Error("a store's stream failing past the archive: read; want no reading")
 	}

@@ -59,6 +59,13 @@ const (
 	// handed only such calls over ([hookLineKind]).
 	EntryLateCall EntryKind = "late_call"
 
+	// EntryWake is a message somebody wrote about this work while the run
+	// worked, as the engine handed it to the run: the engine's heading naming
+	// its writer, where it was written, and the writer's words in their fence
+	// ([wakeHeadOpen]); or the line the run's own hook printed as it handed
+	// such messages and no note over ([hookLineKind]).
+	EntryWake EntryKind = "wake"
+
 	// EntryModel is what the model wrote.
 	EntryModel EntryKind = "model"
 
@@ -83,7 +90,7 @@ const (
 
 // EntryKinds are every kind an entry can be.
 var EntryKinds = []EntryKind{
-	EntryBrief, EntryNote, EntryLateCall, EntryModel, EntryToolCall, EntryToolResult, EntrySummary,
+	EntryBrief, EntryNote, EntryLateCall, EntryWake, EntryModel, EntryToolCall, EntryToolResult, EntrySummary,
 	EntryUnread,
 }
 
@@ -97,12 +104,12 @@ func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 //
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
 // was not, one read as more entries or fewer, one no longer read. 2: OpenCode
-// 2's kinds; 3: every key exactly as written; 4: a late call an entry of its
-// own; 5: an OpenCode message of any length, a value past the bound one entry,
-// the lines bound; 6: a Claude Code line of any length, framed by JSON's blanks
-// alone, an escaped heading read, either harness's value past
-// [TranscriptValueMaxBytes] one entry.
-const TranscriptVersion = 6
+// 2's kinds; 3: every key as written; 4: a late call an entry of its own; 5: an
+// OpenCode message of any length, a value past the bound one entry, the lines
+// bound; 6: a Claude Code line of any length, framed by JSON's blanks alone, an
+// escaped heading read, a value past [TranscriptValueMaxBytes] one entry; 7: a
+// wake an entry of its own, and no heading read inside a fence.
+const TranscriptVersion = 7
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
 // sends it.
@@ -249,13 +256,12 @@ const (
 	// TranscriptReadBytes is the most bytes one read takes as the archive
 	// inflates, and the most the members of a tar hand the reader.
 	//
-	// 256 MiB: eight times the most an archive is stored as (internal/executorkeep's
-	// SessionMaxBytes, 32 MiB), gzip's ratio over JSON, so an ordinary archive
+	// What a kept session's scrub reads ([scrubPlainMax]), so an archive kept
 	// reads whole and one that inflates past it stops there. A tar's members are
 	// held to it APART, on what they hand out: a sparse member hands out holes
 	// the archive does not hold, and unmetered, a member of 1.5 KiB could hold the
 	// read for its declared size, up to an exbibyte.
-	TranscriptReadBytes = 256 << 20
+	TranscriptReadBytes = scrubPlainMax
 
 	// TranscriptReadLines is the most lines and elements one read frames.
 	//
@@ -412,7 +418,7 @@ const TranscriptReadHeldBytes = 29 << 20
 // tenth more for a node busier than that machine. Every credential shape
 // takes 33 s. Dense tokens and a kept session's text, mostly random bytes,
 // pack to 179 and 177 MiB of 240 ([keptGzipLevel]), so no archive within its
-// 32 MiB bound holds the budget's worth of them. A value of `pwd=x` lines, a
+// 48 MiB bound holds the budget's worth of them. A value of `pwd=x` lines, a
 // password's value every six bytes the budget long, which no harness or tool
 // writes, takes 98 s (129 escaped in a JSON string): it sets no wait, and a
 // read of it fails closed once it runs past [TranscriptAnsweredWithin].
@@ -864,16 +870,26 @@ func (b *transcriptBuilder) answered(id string) string {
 
 // ---- notes and late calls ----------------------------------------------- //
 
-// headingOpen opens both headings the engine hands a running job words under:
-// a person's note's ([noteHeadOpen]) and a late call's ([lateCallHead]).
+// headingOpen opens every heading the engine hands a running job words under:
+// a person's note's ([noteHeadOpen]), a late call's ([lateCallHead]) and a
+// wake's ([wakeHeadOpen]).
 const headingOpen = "## A "
 
+// fenceOpen and fenceClose open the two marker lines of a fence around words
+// somebody else wrote (internal/provenance's Fence), which the words inside it
+// never spell, the fence escaping them. A heading between the two is the
+// writer's, never the engine's ([fenceEnd]).
+const (
+	fenceOpen  = "[untrusted:"
+	fenceClose = "[/untrusted:"
+)
+
 // headingAt is where the first heading in text at or after from opens, where
-// its line ends and which kind it heads, and false where there is none: a
-// note's (its opening, a sender's name, [noteHeadClose] closing the line) or a
-// late call's ([lateCallHead], the whole line). Every one opens so wherever a
-// harness filed it, so it is found by its heading, never by a record shape a
-// release can move. from is a line's start, or the line break before one.
+// its line ends and which kind it heads ([headingKind]), and false where there
+// is none; never one inside a fence ([fenceEnd]), which is its writer's words.
+// Every heading opens so wherever a harness filed it, so it is found by it,
+// never by a record shape a release can move. from is a line's start, or the
+// line break before one.
 //
 // A HEADING STARTS ITS LINE, or follows nothing on it but a harness's framing
 // ([headingFraming]), so words a tool wrote into a line (an error the engine
@@ -887,6 +903,10 @@ func headingAt(text string, from int) (at, end int, kind EntryKind, ok bool) {
 			return 0, 0, "", false
 		}
 		at = from + i
+		if past, inside := fenceEnd(text, from, at); inside {
+			from = past
+			continue
+		}
 		start := from + strings.LastIndexByte(text[from:at], '\n') + 1
 		end = len(text)
 		if n := strings.IndexByte(text[at:], '\n'); n >= 0 {
@@ -908,11 +928,49 @@ func headingKind(line string) (EntryKind, bool) {
 	case len(line) > len(noteHeadOpen)+len(noteHeadClose) && strings.HasPrefix(line, noteHeadOpen) &&
 		strings.HasSuffix(line, noteHeadClose):
 		return EntryNote, true
+	case len(line) > len(wakeHeadOpen)+len(wakeHeadClose) && strings.HasPrefix(line, wakeHeadOpen) &&
+		strings.HasSuffix(line, wakeHeadClose):
+		return EntryWake, true
 	}
 	return "", false
 }
 
-// headedIn is every note and late call text carries, by kind, each from its
+// fenceTokenMax bounds the token a fence's opening names before its first
+// space: a provenance boundary's sixteen characters, and room. An opening
+// naming a longer one, or none, opens no fence.
+const fenceTokenMax = 64
+
+// fenceEnd reports whether at, in text past from, falls inside a fence that
+// opens at or after from, and where that fence ends: past its closing line, or
+// at text's end where it never closes. Each opening is read once and the scan
+// only moves on, so a text of many openings costs about its length.
+func fenceEnd(text string, from, at int) (past int, inside bool) {
+	for from < at {
+		i := strings.Index(text[from:at], fenceOpen)
+		if i < 0 {
+			return 0, false
+		}
+		open := from + i
+		head := text[open+len(fenceOpen) : min(len(text), open+len(fenceOpen)+fenceTokenMax)]
+		token, _, named := strings.Cut(head, " ")
+		if !named || token == "" {
+			from = open + len(fenceOpen)
+			continue
+		}
+		closing := strings.Index(text[open:], fenceClose+token+"]")
+		if closing < 0 {
+			return len(text), true
+		}
+		past = open + closing + len(fenceClose) + len(token) + 1
+		if past > at {
+			return past, true
+		}
+		from = past
+	}
+	return 0, false
+}
+
+// headedIn is every note, wake and late call text carries, by kind, each from its
 // heading to the next one's or to text's end — a hook's answer joins what one
 // step is handed in one text (ClaudeHookAnswer) — trimmed of the system
 // reminder a harness closes them in, in order and one at a time, so a reader
@@ -941,7 +999,7 @@ func headedIn(text string) iter.Seq2[EntryKind, string] {
 var headingFraming = regexp.MustCompile(`^\s*(?:<system-reminder>\s*)?(?:\w+` +
 	regexp.QuoteMeta(claudeHookContext) + `\s*)?$`)
 
-// opensWithHeading reports text that is a note or a late call — its first
+// opensWithHeading reports text that is a note, a wake or a late call — its first
 // heading has nothing before it but what a harness frames one with — as
 // against a brief that carries a note further down, as a launch's brief does
 // with the notes that arrived before it.
@@ -979,14 +1037,18 @@ func claudeThread(name string) (string, bool) {
 	return "", false
 }
 
-// hookLineKind is the kind of entry the line the run's own hook printed is:
+// hookLineKind is the kind of entry the line the run's own hook printed is: a
+// wake where it opens with wakes ([hookWakeOne], a count and [hookWakesMany]),
 // a late call where it names such calls alone ([hookCallOne], a count and
 // [hookCallsMany]), and a note otherwise, as every line naming a note opens
 // with it.
 func hookLineKind(line string) EntryKind {
 	count, rest, _ := strings.Cut(line, " ")
-	if strings.HasPrefix(line, hookCallOne) ||
-		(count != "" && strings.Trim(count, "0123456789") == "" && strings.HasPrefix(rest, hookCallsMany)) {
+	counted := count != "" && strings.Trim(count, "0123456789") == ""
+	switch {
+	case strings.HasPrefix(line, hookWakeOne) || (counted && strings.HasPrefix(rest, hookWakesMany)):
+		return EntryWake
+	case strings.HasPrefix(line, hookCallOne) || (counted && strings.HasPrefix(rest, hookCallsMany)):
 		return EntryLateCall
 	}
 	return EntryNote
