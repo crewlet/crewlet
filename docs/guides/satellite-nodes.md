@@ -499,12 +499,13 @@ It is a full engine process with roles subtracted. Before choosing a host:
   unanswered on a quiet link, thirty after the fleet answers "not available",
   and at the link's own ping tolerance (four minutes on the shipped pings) when
   the link moves but nothing answers. A satellite whose data link dies silently
-  frees its seats 55 to 65 seconds later at the shipped 45-second lease, and
+  frees its seats within 55 seconds at the shipped 45-second lease, and
   one on a member cut off from its peers within 80
   ([ADR-0173](../../adr/0173-a-node-takes-or-keeps-a-hold-only-while-its-data-path-answers.md)).
-  Its lease link is probed the same way and moved to the next member once the
-  one it is on stops answering; while no member answers, its leases lapse on
-  their TTL.
+  Its lease link is probed the same way and moved to the next member five
+  seconds after the one it is on stops answering, judged afresh where it lands
+  and never by what the satellite's own server answers while the link is down;
+  while no member answers, its leases lapse on their TTL.
 - **Its share of the fleet's presence reads.** Every node reads every node's
   presence a few times a heartbeat over its data link: under two fifths of a
   floor-rate link in a fleet of up to 16 nodes at the floor lease, or 32 at the

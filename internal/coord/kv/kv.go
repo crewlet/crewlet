@@ -1284,9 +1284,9 @@ func (s *Store) giveBack(ctx context.Context, l *lane, resource string, claiming
 	return false, contended("giveBack", resource)
 }
 
-// Renew extends a lease the caller still holds at this epoch. Never gated:
-// refusing during a mixed-version window would drop a seat mid-turn and
-// prevent nothing. Where this store wrote the record last ([knownRecords]),
+// Renew extends a lease the caller still holds at this epoch. Never held to
+// the protocol gate: refusing during a mixed-version window would drop a seat
+// mid-turn and prevent nothing; the carrier still refuses it ([Config.Carrier]). Where this store wrote the record last ([knownRecords]),
 // one write at its revision decides; otherwise, or once that write loses its
 // comparison, it reads the record and decides.
 func (s *Store) Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error) {

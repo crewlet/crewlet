@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/queue`
-- **Enforced-by:** `internal/queue/topics.TestNoPackageBuildsASubjectByHand`, the `queuetest` conformance suite every backend runs, `internal/queue/jetstream.TestEveryConnectionANodeDependsOnIsWatched`, which holds that the queue's own connection and every second one `DialWatched` opens are watched on both dials while a donor's `DialOwned` one is not, `internal/engine.TestTheCoordinationConnectionIsWatched`, which holds that the embedded broker's coordination connection is one of the watched kind, and `internal/engine.TestTheLeaseConnectionIsWatched`, which holds the same of the lease connection on every topology
+- **Enforced-by:** `internal/queue/topics.TestNoPackageBuildsASubjectByHand`, the `queuetest` conformance suite every backend runs, `internal/queue/jetstream.TestEveryConnectionANodeDependsOnIsWatched`, which holds that the queue's own connection, every second one `DialWatched` opens and the lease connection `DialLeases` opens are watched on both dials while a donor's `DialOwned` one is not, `internal/engine.TestTheCoordinationConnectionIsWatched`, which holds that the embedded broker's coordination connection is one of the watched kind, and `internal/engine.TestTheLeaseConnectionIsWatched`, which holds that the engine's lease connection is one of the watched kind
 - **Measured:** creating a durable consumer with nothing attached is an ordinary API call at about 1.7 ms. The delivery budget before a message is dead-lettered is 25 rather than the ~10 a broker with a free handoff would need, because every path back to the broker — the Nak a node uses to hand a seat back included — increments the delivery count.
 - **Cost-when-tried:** the Apache Pulsar backend. It has no compare-and-set, so it could not hold the coordination state at all, and every Pulsar deployment ran a second NATS estate beside it to serve one company. And a second connection to the one broker, dialled UNWATCHED: the embedded broker's coordination connection was opened with no closed handler, so NATS closing it for good left a node consuming work over the queue's connection while every lease renewal failed, reported by nothing.
 - **Tag-status:** unreleased
@@ -38,7 +38,8 @@ How many connections that is depends on the topology:
   streams, and on the queue's own connection either would sit on the read loop
   every mailbox consumes through. The node's holds ride a third
   (`jetstream.Queue.DialLeases`), which on a leaf crosses a second leaf link,
-  on the same port, so no bulk the node sends queues a renewal.
+  on the same port, so no bulk the node sends queues a renewal where the path
+  shares fairly between connections.
 
 A snapshot donor's connection (`jetstream.Queue.DialOwned`) is held to the same
 broker and is not one of them: it serves peers that fell behind, a node whose

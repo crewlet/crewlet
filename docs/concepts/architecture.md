@@ -164,7 +164,8 @@ an external broker it rides the queue's own connection; on the embedded one it
 holds a second connection to the same in-process server, shared with the
 seat-memory replay and the backup's stream copies so none sits on the read loop
 every mailbox consumes through. A node's holds ride a lease connection of their
-own on every topology, so no bulk the node sends queues a renewal. The
+own on every topology, so no bulk the node sends queues a renewal where the path
+shares fairly between connections. The
 connections can fail independently, so each is watched: the NATS client closing
 one for good stops the node, and a node holds leases only while its data path
 answers. Only

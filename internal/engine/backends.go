@@ -81,17 +81,17 @@ type Backends struct {
 	// merely dialled.
 	stopServer func()
 
-	// conn is the SECOND connection, the one the coordination store rides
-	// on an embedded broker — dialled through [jetstream.Queue.DialWatched],
+	// conn is the SECOND connection, the one the coordination store's reads
+	// and fleet buckets ride on an embedded broker, its holds aside — dialled through [jetstream.Queue.DialWatched],
 	// so NATS closing it for good stops the node as the queue's own would.
 	// Held here so Close releases it in its place in the order, after the
 	// queue and before the server; the store does not own it. Nil on an
 	// external broker, where the store rides the queue's own.
 	conn *nats.Conn
 
-	// rides is the connection the coordination store rides on EVERY
-	// topology: conn above on an embedded broker, the queue's own on an
-	// external one. Not owned here — see [Backends.CoordinationConn].
+	// rides is the connection the coordination store's reads and fleet
+	// buckets ride on EVERY topology, its holds aside ([Backends.leases]):
+	// conn above on an embedded broker, the queue's own on an external one. Not owned here — see [Backends.CoordinationConn].
 	rides *nats.Conn
 
 	// coordination is the JetStream client over rides, in the API this
@@ -206,7 +206,7 @@ func (b *Backends) API() jsapi.API { return b.api }
 func (b *Backends) Conn() *nats.Conn { return b.conn }
 
 // CoordinationConn is the broker connection this node's coordination store
-// rides, on every topology: the second connection [Backends] owns on an
+// reads over, its holds aside (ADR-0174), on every topology: the second connection [Backends] owns on an
 // embedded broker, the queue's own on an external one. Nil only where there is
 // no broker at all (a Backends built around the memory twin).
 //

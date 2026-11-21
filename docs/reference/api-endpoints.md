@@ -3441,7 +3441,7 @@ A node whose `node.roles` leave out `ingress` (a [satellite](../guides/satellite
   "draining": false,
   "posture": "serve",
   "reason": "broker_unlinked",
-  "detail": "jetstream: this leaf has no link to any member of the fleet, so every stream and bucket it uses is out of reach"
+  "detail": "the data path: jetstream: this leaf has no link to any member of the fleet, so every stream and bucket it uses is out of reach"
 }
 ```
 
