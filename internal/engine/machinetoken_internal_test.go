@@ -40,6 +40,10 @@ func (d tokenDirectory) PersonByLoginVouched(_ context.Context, login string) (
 	return d.bound, d.vouch, nil
 }
 
+func (d tokenDirectory) SeatHoldersHeld(ctx context.Context) ([]iamdomain.SeatHolder, error) {
+	return d.SeatHolders(ctx)
+}
+
 func (d tokenDirectory) SeatHolders(context.Context) ([]iamdomain.SeatHolder, error) {
 	return nil, d.err
 }

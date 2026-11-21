@@ -403,3 +403,6 @@ export const COVERAGE: Readonly<Record<AtlasCoverageSource, string>> = {
 export function valueWord(text: string): string {
   return text.replaceAll("_", " ");
 }
+
+/** What a count of the atlas log the engine cut at its bytes says beside it. */
+export const ACTIVITY_CUT = "The count stopped at its limit: some days and entries are not in it.";

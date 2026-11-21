@@ -19,6 +19,12 @@ import (
 
 // The comment threads the rig answers, and every comment write recorded as a call.
 
+func (w *writes) ThreadsPage(ctx context.Context, id artifacts.ID, _ string) (
+	[]artifactsdomain.CommentThread, string, error) {
+	threads, err := w.Threads(ctx, id)
+	return threads, "", err
+}
+
 func (w *writes) Threads(_ context.Context, id artifacts.ID) ([]artifactsdomain.CommentThread, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -165,7 +171,7 @@ func TestTheThreadsArePlacedOnTheVersionAsked(t *testing.T) {
 		Name: "pricing"}, "sam")
 	g.writes.hold(page, commentanchor.Whole(), "sam")
 
-	got, err := g.svc.Comments(t.Context(), person("bob"), deck, 0)
+	got, err := g.svc.Comments(t.Context(), person("bob"), deck, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +182,7 @@ func TestTheThreadsArePlacedOnTheVersionAsked(t *testing.T) {
 	if !strings.HasPrefix(got.Threads[0].Crop, "data:image/png;base64,") {
 		t.Errorf("the crop is answered %q, want a data URL", got.Threads[0].Crop)
 	}
-	got, err = g.svc.Comments(t.Context(), person("sam"), page, 2)
+	got, err = g.svc.Comments(t.Context(), person("sam"), page, 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +190,7 @@ func TestTheThreadsArePlacedOnTheVersionAsked(t *testing.T) {
 		got.Version != 2 || got.Head != 2 {
 		t.Errorf("the page's threads answered %+v", got)
 	}
-	if _, err := g.svc.Comments(t.Context(), person("jane"), binned, 0); err == nil {
+	if _, err := g.svc.Comments(t.Context(), person("jane"), binned, 0, ""); err == nil {
 		t.Error("a trashed artifact's threads were answered")
 	}
 }

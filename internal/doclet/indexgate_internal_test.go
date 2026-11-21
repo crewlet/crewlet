@@ -183,6 +183,7 @@ func pageReads(t *testing.T) map[string]pageIndexed {
 		"one revision":               seek(revs, revisionStatement, "p-0001", 1),
 		"an ancestor":                seek(heads, ancestorStatement, "p-0001"),
 		"a container's skills":       seek(container, skillPagesStatement, "TS", string(StatusTrashed)),
+		"a page of them":             seek(container, skillPagesAfterStatement, "TS", string(StatusTrashed), "a", "a", "p-1"),
 		"a window's last saves":      seek(history, lastSavesStatement(len(ids)), "h-1", "h-2"),
 		"a window's labels":          seek(labels, pageLabelsStatement(len(ids)), "p-0001", "p-0002"),
 		"a window's children":        at(parent, of(childCountStatement(ids, listSpec{}))),

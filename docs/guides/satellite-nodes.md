@@ -403,6 +403,12 @@ It is a full engine process with roles subtracted. Before choosing a host:
   is admitted to claim seats only once a data node answers that its copy is
   level with its logs; while none does, its tools fail naming the estate
   nobody served.
+  - **Each answer is one message.** A read that answers a list stops at
+    4 MiB of rows, half of a message, and says where it stopped the way
+    that read says any page is short (a cursor, `more`, `truncated`), so a
+    long list arrives in pages rather than as a reply too large to send. A
+    read whose caller needs one snapshot whole (the seat registry, a
+    window's sums) is refused past that size instead, naming what to narrow.
   - Its turns' events go to a data node's event log (the audit trail cannot
     live in a store deleted at next boot), so `GET /events` on that data node
     shows them.

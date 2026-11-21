@@ -279,6 +279,7 @@ func executorCensuses() map[string]executorPlanned {
 func executorPasses() map[string]executorPlanned {
 	return map[string]executorPlanned{
 		"the seats holding sessions":      {handlesStatement, nil},
+		"a page of them":                  {handlesPageStatement, []any{"ana"}},
 		"the sessions by sealing key":     {sealedKeysStatement, nil},
 		"the bases every live turn holds": {heldEverywhereStatement, nil},
 	}

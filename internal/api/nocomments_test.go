@@ -13,6 +13,10 @@ import (
 // comment write, for a surface whose case is about something else.
 type noComments struct{}
 
+func (noComments) ThreadsPage(context.Context, artifacts.ID, string) ([]artifactsdomain.CommentThread, string, error) {
+	return []artifactsdomain.CommentThread{}, "", nil
+}
+
 func (noComments) Threads(context.Context, artifacts.ID) ([]artifactsdomain.CommentThread, error) {
 	return []artifactsdomain.CommentThread{}, nil
 }

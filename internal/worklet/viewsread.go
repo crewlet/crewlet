@@ -144,8 +144,25 @@ const (
 // ONE READ TRANSACTION for the saved rows and the viewer's pins, so the strip
 // describes one instant.
 func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
+	listing, _, err := r.viewsPage(ctx, q, "", false)
+	return listing, err
+}
+
+// ViewsPage is [Reader.Views] a page at a time, as a node holding no data
+// reads it: the implicit views on the first page, then the saved ones by rank
+// after `after`, held to the bytes the read carries ([statelog.RowsOf]), with
+// the cursor of the page after, empty on the last. Pins are NOT put first:
+// [PinnedFirst] over every page's saved rows does that.
+func (r *Reader) ViewsPage(ctx context.Context, q ViewQuery, after string) (ViewListing, string, error) {
+	return r.viewsPage(ctx, q, after, true)
+}
+
+// viewsPage is a strip, whole and pins first, or a page of it.
+func (r *Reader) viewsPage(ctx context.Context, q ViewQuery, after string,
+	paged bool) (ViewListing, string, error) {
+
 	if q.Level == "" {
-		return ViewListing{}, fmt.Errorf("worklet: this view read names no " +
+		return ViewListing{}, "", fmt.Errorf("worklet: this view read names no " +
 			"level — a surface resolves an absent read_level to its own " +
 			"default before it reads")
 	}
@@ -154,16 +171,16 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 	// from one with no saved views, so the mismatch is named instead.
 	switch {
 	case !ValidContainerKind(q.Container.Kind):
-		return ViewListing{}, fmt.Errorf("worklet: %q is not a container a "+
+		return ViewListing{}, "", fmt.Errorf("worklet: %q is not a container a "+
 			"view strip belongs to — the four are %s, %s, %s and %s",
 			q.Container.Kind, ContainerWorkspace, ContainerProject,
 			ContainerUnit, ContainerPerson)
 	case q.Container.Kind == ContainerWorkspace && q.Container.ID != "":
-		return ViewListing{}, fmt.Errorf("worklet: a view read names workspace "+
+		return ViewListing{}, "", fmt.Errorf("worklet: a view read names workspace "+
 			"container %q — the workspace is the top of the company and "+
 			"carries no id", q.Container.ID)
 	case q.Container.Kind != ContainerWorkspace && q.Container.ID == "":
-		return ViewListing{}, fmt.Errorf("worklet: a view read names a %s "+
+		return ViewListing{}, "", fmt.Errorf("worklet: a view read names a %s "+
 			"container with no id — name the project, unit or person whose "+
 			"strip this is", q.Container.Kind)
 	}
@@ -171,17 +188,18 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 	if q.Counts {
 		switch {
 		case q.Viewer == "":
-			return ViewListing{}, fmt.Errorf("worklet: a view read asks for " +
+			return ViewListing{}, "", fmt.Errorf("worklet: a view read asks for " +
 				"its pinned views' counts and names no viewer — pins are a " +
 				"person's, so a strip nobody is looking at has none to count")
 		case q.Now.IsZero() || q.Zone == nil:
-			return ViewListing{}, fmt.Errorf("worklet: a view read asks for " +
+			return ViewListing{}, "", fmt.Errorf("worklet: a view read asks for " +
 				"counts with no instant or no clock — a surface passes the " +
 				"company's own, which every relative date in a view is cut on")
 		}
 	}
 
 	var listing ViewListing
+	var next string
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level:     q.Level,
 		Scope:     stripScope(q),
@@ -196,9 +214,22 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 			return err
 		}
 		implicit := implicitViews(q.Container)
-		saved, err := savedViews(ctx, tx, q.Container, q.Units, q.Viewer, pinned)
+		var held *statelog.RowBytes
+		if paged {
+			held = statelog.RowsOf(ctx)
+			if after != "" {
+				implicit = nil
+			}
+			for _, row := range implicit {
+				held.TakeEncoded(row)
+			}
+		}
+		saved, cursor, err := savedViews(ctx, tx, q.Container, q.Units, q.Viewer, pinned, after, held)
 		if err != nil {
 			return err
+		}
+		if next = cursor; !paged {
+			saved = PinnedFirst(saved)
 		}
 		// THE IMPLICIT ONES FIRST, then the saved, in a fresh slice:
 		// appending onto `implicit` would write through its spare capacity.
@@ -219,7 +250,7 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 		return nil
 	})
 	if err != nil {
-		return ViewListing{}, err
+		return ViewListing{}, "", err
 	}
 	listing.Level = served.Level
 	listing.Complete = served.Complete
@@ -227,7 +258,7 @@ func (r *Reader) Views(ctx context.Context, q ViewQuery) (ViewListing, error) {
 	if served.Incomplete != nil {
 		listing.Incomplete = incompleteFrom(served.Incomplete)
 	}
-	return listing, nil
+	return listing, next, nil
 }
 
 // stripScope is the closure of one strip read, WIDER than the container
@@ -383,15 +414,19 @@ func implicitViews(container Container) []ViewRow {
 	return rows
 }
 
-// savedViews reads the container's own views, pinned-for-this-viewer first,
-// then by rank.
+// savedViews reads the container's own views by rank, after the cursor
+// `after` and up to the bytes held keeps (every row for nil), and the cursor
+// of the rest where held refused one. [PinnedFirst] puts the viewer's pins
+// first: TWO ORDERS CONCATENATED, not sorted together, since within each half
+// the rank is somebody's arrangement.
 //
 // A PERSONAL VIEW IS PRIVATE TO ITS OWNER, enforced HERE: filtered in SQL
 // rather than after the fact, so it cannot ride a page boundary into somebody
 // else's strip. A DELETED VIEW is in nobody's strip; its row only guards its
 // version ([Writer.DeleteView]).
 func savedViews(ctx context.Context, tx *sql.Tx, container Container,
-	units Units, viewer string, pinned map[string]bool) ([]ViewRow, error) {
+	units Units, viewer string, pinned map[string]bool, after string,
+	held *statelog.RowBytes) ([]ViewRow, string, error) {
 
 	// A UNIT CONTAINER IS READ UNDER ITS TEAM'S KEY, what a save stores
 	// ([CanonicalContainer]), so the team's name finds views saved under it.
@@ -411,27 +446,37 @@ func savedViews(ctx context.Context, tx *sql.Tx, container Container,
 		own = " OR owner = ?"
 		args = append(args, viewer)
 	}
+	resume := ""
+	if after != "" {
+		var c viewCursor
+		if err := json.Unmarshal([]byte(after), &c); err != nil {
+			return nil, "", fmt.Errorf("%w: the cursor %q is not one a page answered", ErrInvalid, after)
+		}
+		resume = ` AND (rank, name, id) > (?, ?, ?)`
+		args = append(args, string(c.Rank), c.Name, c.ID)
+	}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, name, type, owner, protected, is_default, rank, icon,
 		       params_json
 		FROM tracker_views
 		WHERE container_kind = ? AND container_id IN (`+placeholders(len(ids))+`)
-		  AND (owner = ''`+own+`) AND deleted_at IS NULL
-		ORDER BY rank, name`, args...)
+		  AND (owner = ''`+own+`) AND deleted_at IS NULL`+resume+`
+		ORDER BY rank, name, id`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("worklet: read %s %s's views: %w",
+		return nil, "", fmt.Errorf("worklet: read %s %s's views: %w",
 			container.Kind, container.ID, err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var shared, first []ViewRow
+	var out []ViewRow
+	var next string
 	for rows.Next() {
 		var row ViewRow
 		var protected, isDefault int
 		var params []byte
 		if err := rows.Scan(&row.ID, &row.Name, &row.Type, &row.Owner,
 			&protected, &isDefault, &row.Rank, &row.Icon, &params); err != nil {
-			return nil, fmt.Errorf("worklet: scan a view of %s %s: %w",
+			return nil, "", fmt.Errorf("worklet: scan a view of %s %s: %w",
 				container.Kind, container.ID, err)
 		}
 		row.Container = container
@@ -439,24 +484,33 @@ func savedViews(ctx context.Context, tx *sql.Tx, container Container,
 		row.Protected, row.Default = protected == 1, isDefault == 1
 		if len(params) > 0 {
 			if err := json.Unmarshal(params, &row.Params); err != nil {
-				return nil, fmt.Errorf("worklet: decode view %s's params: %w",
+				return nil, "", fmt.Errorf("worklet: decode view %s's params: %w",
 					row.ID, err)
 			}
 		}
-		if row.Pinned = pinned[row.ID]; row.Pinned {
-			first = append(first, row)
-			continue
+		row.Pinned = pinned[row.ID]
+		if held != nil && !held.TakeEncoded(row) {
+			// AN EMPTY CURSOR'S PLACE where the implicit views filled the
+			// page: the next one starts at the first saved view.
+			var at viewCursor
+			if len(out) > 0 {
+				last := out[len(out)-1]
+				at = viewCursor{Rank: last.Rank, Name: last.Name, ID: last.ID}
+			}
+			cursor, err := json.Marshal(at)
+			if err != nil {
+				return nil, "", err
+			}
+			next = string(cursor)
+			break
 		}
-		shared = append(shared, row)
+		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("worklet: read %s %s's views: %w",
+		return nil, "", fmt.Errorf("worklet: read %s %s's views: %w",
 			container.Kind, container.ID, err)
 	}
-	// TWO ORDERS CONCATENATED, not sorted together: within each half the
-	// rank is somebody's arrangement, and one sort over a pinned flag would
-	// re-rank the shared strip for one reader.
-	return append(first, shared...), nil
+	return out, next, nil
 }
 
 // pinnedViews is the viewer's own pins, and empty for an anonymous read.

@@ -563,6 +563,8 @@ export interface AtlasActivityAnswer extends AtlasRead {
   from: string;
   days: number[];
   entries: AtlasEntryActivity[];
+  /** The count stopped at the bytes one read answers: some days and entries are not in it. */
+  truncated: boolean;
 }
 
 /** How a source's last read went (`collect.State`): never read, read whole,

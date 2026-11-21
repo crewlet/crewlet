@@ -448,6 +448,16 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 	for i := range out {
 		out[i].Ask = asks[out[i].CommentID]
 	}
+	// HELD TO THE ANSWER'S BYTES with each row's ask on it, since an ask
+	// can outweigh its row ([statelog.RowBytes]): the page ends before the
+	// first row past them, and the cursor resumes after the last row kept.
+	held := statelog.RowsOf(ctx)
+	for i := range out {
+		if !held.TakeEncoded(out[i]) {
+			out, more = out[:i], true
+			break
+		}
+	}
 	next := ""
 	if more && len(out) > 0 {
 		last := out[len(out)-1]

@@ -40,7 +40,7 @@ var opChatActivity = define("chat.activity", opRead, chatDomain, false,
 			return chatlet.Activity{}, errNoHalf
 		}
 		return b.Chat.Activity(ctx, a.Viewer, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type chatThreadsArgs struct {
 	Viewer string
@@ -54,7 +54,7 @@ var opChatThreads = define("chat.threads", opRead, chatDomain, false,
 			return chatlet.FollowedThreads{}, errNoHalf
 		}
 		return b.Chat.Threads(ctx, a.Viewer, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type chatSavedArgs struct {
 	Viewer string
@@ -68,7 +68,7 @@ var opChatSaved = define("chat.saved", opRead, chatDomain, false,
 			return chatlet.SavedMessages{}, errNoHalf
 		}
 		return b.Chat.Saved(ctx, a.Viewer, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type chatSentArgs struct {
 	Viewer string
@@ -82,7 +82,7 @@ var opChatSent = define("chat.sent", opRead, chatDomain, false,
 			return chatlet.SentMessages{}, errNoHalf
 		}
 		return b.Chat.Sent(ctx, a.Viewer, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type chatLinksArgs struct {
 	Viewer string
@@ -96,7 +96,7 @@ var opChatLinks = define("chat.links", opRead, chatDomain, false,
 			return chatlet.SharedLinks{}, errNoHalf
 		}
 		return b.Chat.Links(ctx, a.Viewer, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type chatMessageArgs struct {
 	Viewer string
@@ -110,7 +110,7 @@ var opChatMessage = define("chat.message", opRead, chatDomain, false,
 			return chatlet.OneMessage{}, errNoHalf
 		}
 		return b.Chat.Message(ctx, a.Viewer, a.Query, a.Fresh)
-	})
+	}).oneAnswer()
 
 // Activity answers a page of the viewer's Activity.
 func (c Chat) Activity(ctx context.Context, viewer string, q chatlet.ActivityQuery,

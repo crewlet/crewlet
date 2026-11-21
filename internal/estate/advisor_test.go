@@ -225,6 +225,18 @@ func (advisorDomainReads) AlarmEpisodes(context.Context, time.Time,
 	statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error) {
 	return nil, nil
 }
+func (advisorDomainReads) EpisodesPage(context.Context, string, string,
+	statelog.Freshness) ([]advisordomain.FindingRow, string, error) {
+	return nil, "", nil
+}
+func (advisorDomainReads) ClassRunsPage(context.Context, string,
+	statelog.Freshness) (map[string]time.Time, string, error) {
+	return nil, "", nil
+}
+func (advisorDomainReads) AlarmEpisodesPage(context.Context, time.Time, string,
+	statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, string, error) {
+	return nil, "", nil
+}
 
 // THE ADVISOR LOG FROM A NODE HOLDING NO DATA IS A DATA NODE'S: an opening, a
 // dismissal's hold and an alarm's series cross whole with the version they
