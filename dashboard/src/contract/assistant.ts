@@ -416,6 +416,8 @@ export interface AssistantSnapshotEvent {
   messages: AssistantMessage[];
   steps: AssistantStepEvent[];
   cards: AssistantCardEvent[];
+  /** The turn's records passed one frame and some are left out; the transcript holds them all. */
+  cut?: boolean;
 }
 
 /** One engine-built card: its kind and exactly that kind's body. */

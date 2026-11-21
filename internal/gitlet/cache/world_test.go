@@ -123,7 +123,10 @@ func newPoolOf(t testing.TB, layout cache.Layout, path string, processes, transf
 		processes = 2
 	}
 	o := gitproc.Options{Path: path, Home: layout.Home, MaxProcesses: processes, MaxTransfers: transfers,
-		Memory: memory, Reserve: reserve}
+		Memory: memory}
+	if reserve != nil {
+		o.Reserve = func(memory int64, _ int) int64 { return reserve(memory) }
+	}
 	pool, err := gitproc.New(t.Context(), o)
 	if err != nil {
 		t.Fatalf("gitproc.New over %s: %v", layout.Home, err)

@@ -77,14 +77,14 @@ func TestEveryEventReadIsFlooredAtTheInstantItIsAskedAt(t *testing.T) {
 			return log.TraceEventCount(ctx, "tr-edge", at)
 		}},
 		{"Turn", func(at time.Time) (int, error) {
-			rows, err := log.Turn(ctx, "tn-edge", at)
+			rows, _, err := log.Turn(ctx, "tn-edge", 0, at)
 			return len(rows), err
 		}},
 		{"TurnEventCount", func(at time.Time) (int, error) {
 			return log.TurnEventCount(ctx, "tn-edge", at)
 		}},
 		{"TurnClosing", func(at time.Time) (int, error) {
-			rows, err := log.TurnClosing(ctx, "tn-edge", 5, at)
+			rows, err := log.TurnClosing(ctx, "tn-edge", 5, 0, at)
 			return len(rows), err
 		}},
 		{"TurnTraces", func(at time.Time) (int, error) {
@@ -103,11 +103,11 @@ func TestEveryEventReadIsFlooredAtTheInstantItIsAskedAt(t *testing.T) {
 			return 1, err
 		}},
 		{"Phases", func(at time.Time) (int, error) {
-			rows, _, err := log.Phases(ctx, "", 10, nil, at)
+			rows, _, err := log.Phases(ctx, "", 10, 0, nil, at)
 			return len(rows), err
 		}},
 		{"AgentPhases", func(at time.Time) (int, error) {
-			rows, _, err := log.AgentPhases(ctx, "id-pm", nil, at)
+			rows, _, err := log.AgentPhases(ctx, "id-pm", 0, nil, at)
 			return len(rows), err
 		}},
 	} {

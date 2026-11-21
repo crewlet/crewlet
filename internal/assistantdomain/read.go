@@ -296,6 +296,13 @@ type Transcript struct {
 	SummaryThrough int
 }
 
+// TurnTranscript is what one turn wrote, in a [Transcript]'s order.
+type TurnTranscript struct {
+	Messages []Message
+	Steps    []wire.StepEvent
+	Cards    []Card
+}
+
 // ---- listings ----------------------------------------------------------- //
 
 // Conversations is one page of the owner's conversations, the most recently
@@ -558,40 +565,17 @@ func (r *Reader) transcriptIn(ctx context.Context, tx *sql.Tx, id uuid.UUID,
 		ColumnSummary)); err != nil {
 		return Transcript{}, fmt.Errorf("conversation %s's summary: %w", id, err)
 	}
+	written, err := r.recordsIn(ctx, tx, id, uuid.Nil)
+	if err != nil {
+		return Transcript{}, err
+	}
+	t.Messages, t.Steps, t.Cards = written.Messages, written.Steps, written.Cards
 	if err := eachRow(ctx, tx, `SELECT `+turnColumns+` FROM assistant_turns
 		WHERE conversation_id = ? ORDER BY seq`, []any{conversation}, func(row rowScanner) error {
 		turn, err := r.scanTurn(row)
 		t.Turns = append(t.Turns, turn)
 		return err
 	}); err != nil {
-		return Transcript{}, err
-	}
-	if err := eachRow(ctx, tx, `SELECT id, turn_id, role, text_sealed, created_at,
-		page_title_sealed, page_screen, apps, attachments_sealed FROM assistant_messages
-		WHERE conversation_id = ? ORDER BY version, id`, []any{conversation},
-		func(row rowScanner) error {
-			m, err := r.scanMessage(row, id)
-			t.Messages = append(t.Messages, m)
-			return err
-		}); err != nil {
-		return Transcript{}, err
-	}
-	if err := eachRow(ctx, tx, `SELECT id, body_sealed FROM assistant_steps
-		WHERE conversation_id = ? ORDER BY turn_id, idx, id`, []any{conversation},
-		func(row rowScanner) error {
-			s, err := r.scanStep(row, id)
-			t.Steps = append(t.Steps, s)
-			return err
-		}); err != nil {
-		return Transcript{}, err
-	}
-	if err := eachRow(ctx, tx, `SELECT `+cardColumns+` FROM assistant_cards k
-		WHERE k.conversation_id = ? ORDER BY k.version, k.id`, []any{conversation},
-		func(row rowScanner) error {
-			card, err := r.scanCard(row)
-			t.Cards = append(t.Cards, card)
-			return err
-		}); err != nil {
 		return Transcript{}, err
 	}
 	if err := eachRow(ctx, tx, `SELECT `+proposalColumns+` FROM assistant_proposals
@@ -613,6 +597,89 @@ func (r *Reader) transcriptIn(ctx context.Context, tx *sql.Tx, id uuid.UUID,
 		return Transcript{}, err
 	}
 	return t, nil
+}
+
+// TurnTranscript is what one of the owner's turns wrote, read by the turn's
+// own index entries: a stream's snapshot is of one turn, and a read of its
+// whole conversation grows with every turn before it.
+func (r *Reader) TurnTranscript(ctx context.Context, owner, turn uuid.UUID) (TurnTranscript, error) {
+	var out TurnTranscript
+	err := r.readChild(ctx, "assistant_turns", turn, func(tx *sql.Tx) error {
+		var conversation string
+		err := tx.QueryRowContext(ctx, `SELECT conversation_id FROM assistant_turns
+			WHERE id = ? AND owner_id = ?`, turn.String(), owner.String()).Scan(&conversation)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: turn %s", ErrNotFound, turn)
+		}
+		if err != nil {
+			return err
+		}
+		id, err := uuid.Parse(conversation)
+		if err != nil {
+			return fmt.Errorf("assistantdomain: turn %s's conversation %q: %w", turn, conversation, err)
+		}
+		out, err = r.recordsIn(ctx, tx, id, turn)
+		return err
+	})
+	return out, err
+}
+
+// recordsIn reads the messages, steps and cards of conversation in tx, those
+// of turn alone unless turn is uuid.Nil, in a [Transcript]'s order.
+func (r *Reader) recordsIn(ctx context.Context, tx *sql.Tx, conversation,
+	turn uuid.UUID) (TurnTranscript, error) {
+
+	out := TurnTranscript{Messages: []Message{}, Steps: []wire.StepEvent{}, Cards: []Card{}}
+	q, args := recordQueries(turn != uuid.Nil), []any{conversation.String()}
+	if turn != uuid.Nil {
+		args = append(args, turn.String())
+	}
+	if err := eachRow(ctx, tx, q.messages, args, func(row rowScanner) error {
+		m, err := r.scanMessage(row, conversation)
+		out.Messages = append(out.Messages, m)
+		return err
+	}); err != nil {
+		return TurnTranscript{}, err
+	}
+	if err := eachRow(ctx, tx, q.steps, args, func(row rowScanner) error {
+		s, err := r.scanStep(row, conversation)
+		out.Steps = append(out.Steps, s)
+		return err
+	}); err != nil {
+		return TurnTranscript{}, err
+	}
+	if err := eachRow(ctx, tx, q.cards, args, func(row rowScanner) error {
+		card, err := r.scanCard(row)
+		out.Cards = append(out.Cards, card)
+		return err
+	}); err != nil {
+		return TurnTranscript{}, err
+	}
+	return out, nil
+}
+
+// recordStatements are the reads of what a conversation's turns wrote.
+type recordStatements struct{ messages, steps, cards string }
+
+// recordQueries is a conversation's record reads, bound to its id, and to a
+// turn's id after it where oneTurn: then each seeks the table's turn index
+// (replicated/0202), never the conversation's rows of every turn.
+func recordQueries(oneTurn bool) recordStatements {
+	of := func(alias string) string {
+		if !oneTurn {
+			return alias + `conversation_id = ?`
+		}
+		return alias + `conversation_id = ? AND ` + alias + `turn_id = ?`
+	}
+	return recordStatements{
+		messages: `SELECT id, turn_id, role, text_sealed, created_at, page_title_sealed,
+			page_screen, apps, attachments_sealed FROM assistant_messages
+			WHERE ` + of("") + ` ORDER BY version, id`,
+		steps: `SELECT id, body_sealed FROM assistant_steps
+			WHERE ` + of("") + ` ORDER BY turn_id, idx, id`,
+		cards: `SELECT ` + cardColumns + ` FROM assistant_cards k
+			WHERE ` + of("k.") + ` ORDER BY k.version, k.id`,
+	}
 }
 
 // Turn is one of the owner's turns.

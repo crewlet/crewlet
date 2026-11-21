@@ -92,7 +92,10 @@
 // rate, which holds them while the counter cannot be read. A segment is
 // numbered after the newest seq the fleet holds and never below the parked
 // record's, and a stream is answered by the node holding the frames its client
-// has not drawn.
+// has not drawn. Frames a log no longer holds are answered by a snapshot read
+// from that one turn's records, one frame cut to wire.FrameMaxBytes
+// (snapshot.go) like every other, so a peer's replay page always fits the
+// broker.
 //
 // # A turn's end is settled
 //

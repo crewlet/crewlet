@@ -357,13 +357,17 @@ func storeMemory() int64 {
 
 // storeSizedBy is the memory a node of memory bytes sizes its store's page
 // cache by: all of it, but none in a test binary, whose many engines share
-// one machine and keep the floor.
+// one machine and keep the floor ([pageCacheSized]).
 func storeSizedBy(memory int64) int64 {
-	if testbinary.Running() {
+	if !pageCacheSized() {
 		return 0
 	}
 	return memory
 }
+
+// pageCacheSized is whether this process sizes its store's page cache by the
+// node's memory: everywhere but a test binary.
+func pageCacheSized() bool { return !testbinary.Running() }
 
 // storeOptions is what this node's own database is opened with, decided from
 // Tier A, the company and the node's memory (each connection's page cache, a

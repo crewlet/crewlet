@@ -465,17 +465,20 @@ const liveFrameBytes = 1 << 20
 
 // worstRunning is a phase in flight at its worst: the worst record's rounds,
 // calls and prose, a hundred calls in flight with arguments past their share,
-// and a round being written with three abandoned attempts.
+// and a round being written with as many abandoned attempts as a frame shows.
 func worstRunning() toolloop.Result {
 	res := worstRecord(false).Result
 	for i := range 100 {
 		res.Running = append(res.Running, toolloop.RunningCall{ID: named(64), Round: worstRounds,
 			Name: fmt.Sprintf("%d%s", i, worst(2*sandbox.MaxBridgeCallNameBytes)), Args: worstArgs(200)})
 	}
-	res.Partial = &toolloop.Partial{Round: worstRounds + 1, Content: worst(1 << 20)}
-	for range 3 {
+	// IN LINES, since only the settled lines of the round in flight and of an
+	// attempt are shown (writingTail, liveTail): one line shows as nothing.
+	lines := strings.Repeat(worst(99)+"\n", 1<<20/100)
+	res.Partial = &toolloop.Partial{Round: worstRounds + 1, Content: lines}
+	for range liveAbandonedAttempts {
 		res.Partial.Abandoned = append(res.Partial.Abandoned, toolloop.Narration{Round: worstRounds + 1,
-			Content: worst(1 << 20)})
+			Content: lines})
 	}
 	return res
 }
@@ -484,15 +487,15 @@ func worstRunning() toolloop.Result {
 // "The live frame"): past its live shares it keeps the newest of what grows
 // and its round window, and says what it left out.
 //
-// Mutation: carry the frame's calls, its prose, its calls in flight or its
-// abandoned attempts whole, or drop its round window, and the frame is past
-// its budget; count nothing it leaves out, and a reader takes the frame for
-// the whole phase.
+// Mutation: carry the frame's calls, its prose, its calls in flight, its round
+// in flight or its abandoned attempts whole, or drop its round window, and the
+// frame is past its budget; count nothing it leaves out, and a reader takes
+// the frame for the whole phase.
 func TestARunningPhasesFrameAtEveryBoundStaysUnderAMiB(t *testing.T) {
 	t.Parallel()
 	pub := &collector{}
 	var mu sync.Mutex
-	worstEmitter(pub, &mu).progress(context.Background(), phase.Review, 1, worstRunning(),
+	worstEmitter(pub, &mu).progress(context.Background(), phase.Review, 1, new(liveWords), worstRunning(),
 		roundCaps{max: worstRounds, ceiling: worstRounds})
 	ev, size := published(t, pub)
 	if size > liveFrameBytes {
@@ -503,6 +506,12 @@ func TestARunningPhasesFrameAtEveryBoundStaysUnderAMiB(t *testing.T) {
 	if frame.CallsElided == 0 || frame.RoundsElided == 0 || frame.RunningElided == 0 || len(frame.ElidedCalls) == 0 {
 		t.Errorf("the frame says it left out %d calls (%d tallies), %d rounds and %d calls in flight; want each",
 			frame.CallsElided, len(frame.ElidedCalls), frame.RoundsElided, frame.RunningElided)
+	}
+	writing, _ := frame.PartialRound["content"].(string)
+	attempts, _ := frame.PartialRound["abandoned"].([]types.RoundNarration)
+	if len(writing) < partialTail-100 || len(attempts) != liveAbandonedAttempts {
+		t.Errorf("the frame carries %d bytes of the round in flight and %d attempts, want each at its bound",
+			len(writing), len(attempts))
 	}
 }
 
@@ -545,7 +554,7 @@ func TestARunningPhasesListKeepsItsNewestCalls(t *testing.T) {
 		execs = append(execs, toolloop.Execution{Round: 1, Name: fmt.Sprintf("tool_%03d", i),
 			Args: worstArgs(20), Output: worst(4 << 10)})
 	}
-	got := keptList(liveExecutions(execs), liveList, nil)
+	got := keptList(new(liveWords).executions(execs), liveList, nil)
 	if got.Elided == 0 || got.Elided+len(got.Rows) != len(execs) || listBytes(got.Rows) > liveListBytes {
 		t.Fatalf("the list keeps %d rows (%d bytes) and counts %d, want the newest within %d and the rest counted",
 			len(got.Rows), listBytes(got.Rows), got.Elided, liveListBytes)
@@ -564,7 +573,7 @@ func TestARunningPhasesListKeepsItsNewestCalls(t *testing.T) {
 // harness's fan-out puts its bodies on every frame.
 func TestARunningPhasesCallsInFlightKeepTheirShare(t *testing.T) {
 	t.Parallel()
-	got, more := keptRunning(runningCalls(worstRunning().Running))
+	got, more := keptRunning(new(liveWords).runningCalls(worstRunning().Running))
 	raw, _ := json.Marshal(got)
 	if len(got) == 0 || len(raw) > liveRunningBytes || more == 0 || len(got)+more != 100 {
 		t.Errorf("the frame lists %d calls in flight (%d bytes) and counts %d more, want the first within %d and "+
@@ -586,19 +595,20 @@ func TestARunningPhasesCallsInFlightKeepTheirShare(t *testing.T) {
 // outage's retries outgrow the share.
 func TestARoundInFlightKeepsItsNewestAbandonedAttemptsTails(t *testing.T) {
 	t.Parallel()
-	attempt := worst(1<<20) + "where it died"
+	// IN LINES, since only an attempt's settled lines are shown (liveTail).
+	attempt := strings.Repeat(worst(99)+"\n", 1<<20/100) + "where it died\n"
 	var abandoned []toolloop.Narration
 	for range liveAbandonedAttempts + 2 {
 		abandoned = append(abandoned, toolloop.Narration{Round: 2, Content: attempt})
 	}
-	out := partialRound(&toolloop.Partial{Round: 2, Content: "now", Abandoned: abandoned})
+	out := new(liveWords).partialRound(&toolloop.Partial{Round: 2, Content: "now", Abandoned: abandoned})
 	rows, _ := out["abandoned"].([]types.RoundNarration)
 	if len(rows) != liveAbandonedAttempts || listBytes(rows) > liveAbandonedBytes {
 		t.Fatalf("the round keeps %d attempts (%d bytes), want the newest %d within %d", len(rows),
 			listBytes(rows), liveAbandonedAttempts, liveAbandonedBytes)
 	}
 	for _, row := range rows {
-		if content, _ := row["content"].(string); !strings.HasSuffix(content, "where it died") {
+		if content, _ := row["content"].(string); !strings.HasSuffix(content, "where it died\n") {
 			t.Errorf("an attempt keeps %.40q…, want its tail", content)
 		}
 	}

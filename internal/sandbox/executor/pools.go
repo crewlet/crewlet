@@ -19,11 +19,12 @@ type NodeWork struct {
 }
 
 // MemoryPools is the most w's pools hold at once on a node of memory bytes,
-// each at its worst, grown by [heapGrowth]: what the node keeps beside Gitlet
-// before its git lanes and background work are sized (internal/gitlet/gitproc's
-// Options.Reserve; the package doc's "The memory a node keeps for these
-// pools"). One term a pool; a pool whose worst is a share of the node's
-// memory reads memory.
+// each at its worst live with the heap's room under the engine's memory limit
+// ([limitHeadroomHalves]; internal/engine's limitMemory): what the node keeps
+// beside Gitlet before its git lanes and background work are sized
+// (internal/gitlet/gitproc's Options.Reserve; the package doc's "The memory a
+// node keeps for these pools"). One term a pool; a pool whose worst is a share
+// of the node's memory reads memory.
 func (w NodeWork) MemoryPools(memory int64) int64 {
 	live := int64(w.transcriptReads()) * TranscriptReadHeldBytes
 	if w.Boxes {
@@ -32,7 +33,7 @@ func (w NodeWork) MemoryPools(memory int64) int64 {
 			CollectionLargeReadsAtOnce*threadChainHeldBytes +
 			HoldingsReadsAtOnce*threadChainHeldBytes
 	}
-	return heapGrowth * live
+	return live * limitHeadroomHalves / 2
 }
 
 // transcriptReads is how many transcripts w's node decodes at once: every
@@ -48,9 +49,15 @@ func (w NodeWork) transcriptReads() int {
 	return 0
 }
 
-// heapGrowth is how far the heap grows past what is live before the collector
-// runs at Go's default GOGC, 100, which the engine runs at with no GOMEMLIMIT:
-// to twice it. Every figure [MemoryPools] adds is live, and each peak measured
-// at the default is within twice it (a transcript read's 58 MiB of 29, the
-// chain's 70 of 43, a base pass's 8 of 5.3).
-const heapGrowth = 2
+// limitHeadroomHalves is the heap's room under the engine's memory limit, in
+// halves of what is live: 1.5x. With none the collector never pauses (the
+// scrub 2.3x slower); with half again every wait holds. Measured, GOMEMLIMIT at
+// the binary's runtime overhead plus live x h, on two cores, beside the default:
+//
+//	h                     1.25         1.5         2            default
+//	main thread, empty    25.5-26.2 s  23.5 s      22.5-23.3 s  22.3 s
+//	main thread, ordinary 3.7-4.2 s    2.8-2.9 s   2.35-2.4 s   2.34 s
+//	scrub, a pwd string   263 s        249-251 s   245 s        246 s
+//
+// The scrub sets it: internal/sandbox's SessionScrubWait keeps 13 s at 1.5.
+const limitHeadroomHalves = 3
