@@ -87,12 +87,13 @@ function alarmsKey(health: ReturnType<typeof useEngineHealth>): string {
 }
 
 /**
- * Calls `reload` when the fleet applies a configuration or the alarms move,
- * never on the first draw (the read is already in flight then).
+ * Calls `reload` when the alarms move, never on the first draw (the read is
+ * already in flight then). An applied configuration re-reads every question
+ * (`Store.applyHealth`).
  */
 function useReloadOnChange(reload: () => void): void {
   const health = useEngineHealth();
-  const key = `${health?.applied_epoch ?? 0}|${alarmsKey(health)}`;
+  const key = alarmsKey(health);
   const seen = useRef(key);
   useEffect(() => {
     if (seen.current === key) return;

@@ -41,7 +41,7 @@ import type {
 import { type InboxChange, LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import type { EngineHealth } from "../contract/health.ts";
 import type { ToolRow } from "../contract/tools.ts";
-import { comparePositions, type LogPosition } from "./session.ts";
+import { comparePositions, EVERY_QUESTION, session, type LogPosition } from "./session.ts";
 
 /**
  * How many completed-phase envelopes a tab keeps, PAYLOAD AND ALL.
@@ -822,10 +822,16 @@ export class Store {
   }
 
   applyHealth(health: EngineHealth | null | undefined): void {
+    const was = this.state.lastHealth?.applied_epoch;
     this.state.health = health ?? null;
     if (health) this.state.lastHealth = health;
     this.link(!!health);
     this.emit("health");
+    // A CONFIGURATION THIS NODE APPLIED re-reads every answer: a config write
+    // answers before the node applies it, and many answers are read from what
+    // it applied, so the read the write fired was older than the write.
+    if (health && was !== undefined && health.applied_epoch > was)
+      session.written(null, null, [EVERY_QUESTION]);
   }
 
   setConnected(value: boolean): void {

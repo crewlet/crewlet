@@ -23,6 +23,7 @@ import type {
 } from "./types.ts";
 import { healthFrame } from "~/test/health.ts";
 import { eventually } from "~/test/settle.ts";
+import { EVERY_QUESTION, session } from "./session.ts";
 
 /** The engine's sentence for a read refused on a log at its ceiling
  *  (`statelog.ConditionSentence`), which is what a frame's `detail` carries:
@@ -1579,4 +1580,22 @@ describe("chat", () => {
     store.applyChatChange(change());
     expect(fn).toHaveBeenCalledTimes(1);
   });
+});
+
+// A CONFIGURATION THIS NODE APPLIED RE-READS EVERY ANSWER: a config write
+// answers once its revision is active, before this node applies it, so the
+// read it fired drew the state from before it, and a screen with no poll kept
+// that until a reload.
+test("a newer configuration applied on this node asks every question again, and nothing else does", () => {
+  const heard: (readonly string[])[] = [];
+  const stop = session.onWritten((_, refreshes) => heard.push(refreshes));
+  const store = new Store();
+  store.applyHealth(healthFrame({ applied_epoch: 4 }));
+  store.applyHealth(healthFrame({ applied_epoch: 4 }));
+  store.setConnected(false);
+  store.applyHealth(healthFrame({ applied_epoch: 4 }));
+  expect(heard).toEqual([]);
+  store.applyHealth(healthFrame({ applied_epoch: 5 }));
+  expect(heard).toEqual([[EVERY_QUESTION]]);
+  stop();
 });
