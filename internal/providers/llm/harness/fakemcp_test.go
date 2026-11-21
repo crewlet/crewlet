@@ -69,6 +69,11 @@ type fakeScript struct {
 	// entry — answers, as Claude Code's result event.
 	TextAnswer string `json:"text_answer,omitempty"`
 
+	// RecordEnd is a line the recorder of a harness keeping its record in a
+	// file of its own ends that record on, where it plays one (Kimi Code's
+	// turn.ended).
+	RecordEnd string `json:"record_end,omitempty"`
+
 	// RecordFile writes the record — every event but the result — to this
 	// file in the working directory instead of stdout: a harness that keeps its
 	// record in a file of its own.

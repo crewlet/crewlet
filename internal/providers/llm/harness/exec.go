@@ -173,6 +173,10 @@ type rawResult struct {
 	// [invocation.failOn], which stopped the run; "" for none.
 	failureMarker string
 
+	// record is the harness's record's own reports of how the run ended, one
+	// a line, where its profile reads one there ([recordEvents]); "" otherwise.
+	record string
+
 	// cut is a run the engine ended over its output: a one-answer stream past
 	// [maxOutput], a stream that ran maxOutput ahead of the engine's reading,
 	// or a volume that would not keep the room ahead. Nil for none. Every
@@ -770,14 +774,17 @@ func classifyFailureEvents(p harnessprofile.Profile, stdout string) (markerHit, 
 	return markerHit{}, false
 }
 
-// limitEventHit is one decoded stdout event read as the harness's own structured
-// limit report ([harnessprofile.LimitEvent]), when it meets every condition of
-// one: the vendor's sentence is the string at the event's said path, or the
-// whole line where it names none, and the reset is read from that sentence as
-// of the run's end, in its zone. [classifyEvents] walks the stream.
-func limitEventHit(p harnessprofile.Profile, doc map[string]any, line string, out harnessOutput) (markerHit, bool) {
+// limitEventHit is one decoded event of stdout or the record (in) read as the
+// harness's own structured limit report ([harnessprofile.LimitEvent]), when it
+// meets every condition of one looked for there: the vendor's sentence is the
+// string at the event's said path, or the whole line where it names none, and
+// the reset is read from that sentence as of the run's end, in its zone.
+// [classifyEvents] walks both.
+func limitEventHit(
+	p harnessprofile.Profile, in harnessprofile.EventSource, doc map[string]any, line string, out harnessOutput,
+) (markerHit, bool) {
 	for _, event := range p.LimitEvents {
-		if !matches(doc, event.Match) {
+		if event.In != in || !matches(doc, event.Match) {
 			continue
 		}
 		said := line
