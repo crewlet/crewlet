@@ -92,3 +92,7 @@ func applyFailure(err error) growth.Failure {
 	}
 	return growth.FailureEngineError
 }
+
+// Fail records r as a failed step, r.Failure saying why: an allowed call the
+// product refused at its apply, such as a spend its caps no longer allow.
+func (c *Client) Fail(ctx context.Context, r growth.Record) { c.note(ctx, growth.StepFailed, r) }
