@@ -66,6 +66,8 @@ type Leaser interface {
 type Product struct {
 	deps   Deps
 	owners *owners
+	// applyBound cuts an act under its lease: growth.ApplyBound.
+	applyBound time.Duration
 
 	mu    sync.Mutex
 	stamp string
@@ -99,7 +101,7 @@ func New(deps Deps) *Product {
 	if deps.Base == "" {
 		deps.Base = BaseURL
 	}
-	return &Product{deps: deps, owners: newOwners(maxOwners)}
+	return &Product{deps: deps, owners: newOwners(maxOwners), applyBound: growth.ApplyBound}
 }
 
 // Catalog is the product's catalog.

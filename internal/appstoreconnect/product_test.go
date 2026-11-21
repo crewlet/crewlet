@@ -37,6 +37,8 @@ type store struct {
 	writes   []string
 	// kids is each request's key, "METHOD path kid", from its token's header.
 	kids []string
+	// hang holds every write until its caller gives up.
+	hang bool
 	// analytics is the apps holding an ongoing analytics request.
 	analytics map[string]bool
 }
@@ -61,6 +63,10 @@ func (s *store) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.Unlock()
 	body, _ := io.ReadAll(r.Body)
 	s.kids = append(s.kids, r.Method+" "+r.URL.Path+" "+kidOf(r))
+	if s.hang && r.Method != "GET" {
+		<-r.Context().Done()
+		return
+	}
 	w.Header().Set("X-Rate-Limit", "user-hour-lim:3500;user-hour-rem:3400;")
 	switch {
 	case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/v1/apps/") && strings.HasSuffix(r.URL.Path, "/analyticsReportRequests"):
@@ -689,5 +695,34 @@ func TestAHeldCallHoldsOneAnswerAndOneOutcome(t *testing.T) {
 		if st.step == growth.StepFailed && st.rec.Failure == "" {
 			t.Errorf("a failure names no reason: %+v", st.rec)
 		}
+	}
+}
+
+// AN APPLY ENDS WITHIN ITS LEASE: everything an act does under its lease is
+// cut at its bound, which the engine's lease outlives, and a write cut there
+// is recorded as an unknown outcome, since Apple may have made it.
+//
+// Mutation: apply on the caller's context, or record a cut write as timed
+// out, and a write runs on after the lease could lapse or claims an outcome
+// nobody knows.
+func TestAnApplyEndsWithinItsLease(t *testing.T) {
+	t.Parallel()
+	s := &store{state: "PREPARE_FOR_SUBMISSION", hang: true}
+	p, a := product(t, s, "operate", false)
+	appstoreconnect.SetApplyBound(p, 50*time.Millisecond)
+	ctx := context.Background()
+	edit := growth.Call{ID: "c1", Handle: "growth", Tool: appstoreconnect.ToolOperate, Args: map[string]any{
+		"operation": "appStoreVersionLocalizations_updateInstance", "path": map[string]any{"id": "L1"},
+		"body": map[string]any{"data": map[string]any{"type": "appStoreVersionLocalizations", "id": "L1",
+			"attributes": map[string]any{"description": "New"}}}, "reason": "fix the description"}}
+	hold, err := p.Prepare(ctx, edit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Apply(ctx, edit, hold.Binding); err == nil {
+		t.Fatal("a write past the lease's bound answered no error")
+	}
+	if last := a.steps[len(a.steps)-1]; last.step != growth.StepFailed || last.rec.Failure != growth.FailureUnknownOutcome {
+		t.Errorf("the cut write is recorded as %+v", last)
 	}
 }

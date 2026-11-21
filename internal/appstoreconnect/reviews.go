@@ -327,25 +327,36 @@ func (p *Product) applyReplies(ctx context.Context, call growth.Call, approved s
 		p.note(ctx, growth.StepVoid, rec)
 		return nil, growth.ErrMoved
 	}
+	act, cancel := context.WithTimeout(ctx, p.applyBound)
+	defer cancel()
 	out := Posted{App: m.app}
-	failed := 0
+	failed, unknown := 0, false
 	for _, r := range rs {
 		body := map[string]any{"data": map[string]any{"type": "customerReviewResponses",
 			"attributes":    map[string]any{"responseBody": r.text},
 			"relationships": map[string]any{"review": map[string]any{"data": map[string]any{"type": "customerReviews", "id": r.review.ID}}}}}
-		_, err := m.team.client.Do(ctx, m.slot, Request{Method: "POST", Path: "/v1/customerReviewResponses", Body: body,
+		_, err := m.team.client.Do(act, m.slot, Request{Method: "POST", Path: "/v1/customerReviewResponses", Body: body,
 			Reserved: true})
 		pr := PostedReply{Review: r.review.ID, Status: "posted"}
-		if err != nil {
+		switch {
+		case writeFailure(err) == growth.FailureUnknownOutcome:
+			unknown = true
+			pr.Status, pr.Error = "unknown", "the reply was cut before Apple answered: read the review to see "+
+				"whether it was posted."
+		case err != nil:
 			failed++
 			pr.Status, pr.Error = "failed", said(err).Error()
 		}
 		out.Replies = append(out.Replies, pr)
 	}
-	if failed == len(rs) {
+	switch {
+	case unknown:
+		rec.Failure = growth.FailureUnknownOutcome
+		p.note(ctx, growth.StepFailed, rec)
+	case failed == len(rs):
 		rec.Failure = growth.FailureVendorRefused
 		p.note(ctx, growth.StepFailed, rec)
-	} else {
+	default:
 		p.note(ctx, growth.StepApplied, rec)
 	}
 	return out, nil

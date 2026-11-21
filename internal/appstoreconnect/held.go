@@ -257,7 +257,11 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 		return nil, p.failEarly(ctx, held, rec, err)
 	}
 	defer release()
-	b, err := p.beforeOf(ctx, m)
+	// EVERYTHING UNDER THE LEASE IS CUT AT ITS BOUND, so nothing acts once the
+	// lease could lapse; the records take the caller's context.
+	act, cancel := context.WithTimeout(ctx, p.applyBound)
+	defer cancel()
+	b, err := p.beforeOf(act, m)
 	if err != nil {
 		rec.Failure = failureOf(err)
 		p.note(ctx, growth.StepFailed, rec)
@@ -270,10 +274,10 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 		}
 		return nil, growth.ErrMoved
 	}
-	resp, err := m.team.client.Do(ctx, m.slot, Request{Method: m.op.Method, Path: m.path, Query: m.query,
+	resp, err := m.team.client.Do(act, m.slot, Request{Method: m.op.Method, Path: m.path, Query: m.query,
 		Body: m.body, Reserved: held})
 	if err != nil {
-		rec.Failure = failureOf(err)
+		rec.Failure = writeFailure(err)
 		p.note(ctx, growth.StepFailed, rec)
 		return nil, said(err)
 	}

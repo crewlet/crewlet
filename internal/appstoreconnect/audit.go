@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"regexp"
 	"strconv"
 	"sync"
@@ -90,6 +91,19 @@ func failureOf(err error) growth.Failure {
 		return growth.FailureEngineError
 	}
 	return growth.FailureUnknownOutcome
+}
+
+// writeFailure is why a write failed: one cut by its deadline or a timeout
+// may have reached Apple, so what it did is not known.
+func writeFailure(err error) growth.Failure {
+	var netErr net.Error
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return growth.FailureUnknownOutcome
+	}
+	return failureOf(err)
 }
 
 // argsDigest digests a call's arguments, for a step whose request cannot be
