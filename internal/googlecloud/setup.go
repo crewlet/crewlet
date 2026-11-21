@@ -2,6 +2,7 @@ package googlecloud
 
 import (
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -13,8 +14,11 @@ import (
 // federation key; the Cloud Shell block uploads the key's public half and
 // prints the provider; the provider is pasted and tested. So the provider is
 // required only once the key is held, and the key's row carries the block
-// ([CloudShellBlock]) from then on, rendered for company's issuer and subject.
-func Requirements(company string, in *config.GoogleCloud, resolve func(string) (string, bool)) []setup.Requirement {
+// ([CloudShellBlock]) from then on, rendered for company's issuer and subject
+// and the growth products the company turns on.
+func Requirements(
+	company string, in *config.GoogleCloud, growth []googleauth.Product, resolve func(string) (string, bool),
+) []setup.Requirement {
 	var provisioner, provider, key string
 	var enabled, atlas bool
 	if in != nil {
@@ -112,7 +116,8 @@ func Requirements(company string, in *config.GoogleCloud, resolve func(string) (
 		case "federation_key":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(key, resolve)
 			if keyHeld {
-				reqs[i].Public = cloudShellView(company, setup.Deref(provisioner, resolve), setup.Deref(key, resolve), atlas)
+				reqs[i].Public = cloudShellView(company, setup.Deref(provisioner, resolve), setup.Deref(key, resolve), atlas,
+					growth)
 			}
 		case "provider":
 			reqs[i].Present, reqs[i].Resolved, reqs[i].Stored = setup.Held(provider, resolve)
