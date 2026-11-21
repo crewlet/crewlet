@@ -99,6 +99,17 @@ const (
 	copilotContextLimit = "context_limit"
 )
 
+// copilotQuery is the errorType of a request Copilot refused before sending it,
+// and copilotPastBudget the opening of its words where the reason is the
+// conversation past the model's prompt budget: "Request exceeds the model's
+// prompt budget after reserving output (73601 tokens; limit 40000)" (measured on
+// 1.0.114, budget-refused). `query` names no reason of its own and the line no
+// other field, so the words tell this refusal from any other `query`.
+const (
+	copilotQuery      = "query"
+	copilotPastBudget = "Request exceeds the model's prompt budget"
+)
+
 // decodeCopilotEvent decodes one line, false where it is no JSON object of a
 // type.
 func decodeCopilotEvent(line []byte) (copilotEvent, bool) {
@@ -407,7 +418,8 @@ func (d *copilotEvents) Result() sandbox.Result {
 		res.Error = d.denied
 	case d.failure != "":
 		res.Error = d.failure
-		res.ContextExhausted = d.failureType == copilotContextLimit
+		res.ContextExhausted = d.failureType == copilotContextLimit ||
+			(d.failureType == copilotQuery && strings.HasPrefix(d.failure, copilotPastBudget))
 		res.Event = d.failureLine
 	case capped:
 		res.Error = d.capped

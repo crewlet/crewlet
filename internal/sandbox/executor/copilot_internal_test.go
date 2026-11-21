@@ -291,14 +291,27 @@ func TestACopilotRunWhoseSeatToolAHookRefusedFails(t *testing.T) {
 	}
 }
 
-// A conversation past its model's prompt reads as context exhausted.
+// A conversation past its model's prompt reads as context exhausted: the
+// provider's own refusal (refused-note, errorType context_limit), and
+// Copilot's refusal before it sends the request (budget-refused, errorType
+// query, past the prompt budget). Another `query` refusal is no such run.
 //
-// Mutation: map no errorType to ContextExhausted — the case fails.
+// Mutation: map no errorType to ContextExhausted, or read every `query` as
+// one — a case fails.
 func TestACopilotRunPastItsContextReadsAsExhausted(t *testing.T) {
+	for _, fixture := range []string{"refused-note.stream.jsonl", "budget-refused.stream.jsonl"} {
+		dec := &copilotEvents{}
+		_ = eachLine(bytes.NewReader(copilotFixture(t, fixture)), dec, maxLineBytes)
+		if res := dec.Result(); res.Success || !res.ContextExhausted {
+			t.Errorf("%s: result = %+v, want a run whose context was exhausted", fixture, res)
+		}
+	}
+	other := bytes.ReplaceAll(copilotFixture(t, "budget-refused.stream.jsonl"),
+		[]byte(copilotPastBudget), []byte("Request refused for another reason"))
 	dec := &copilotEvents{}
-	_ = eachLine(bytes.NewReader(copilotFixture(t, "refused-note.stream.jsonl")), dec, maxLineBytes)
-	if res := dec.Result(); res.Success || !res.ContextExhausted {
-		t.Fatalf("result = %+v, want a run whose context was exhausted", res)
+	_ = eachLine(bytes.NewReader(other), dec, maxLineBytes)
+	if res := dec.Result(); res.Success || res.ContextExhausted {
+		t.Fatalf("another query refusal: result = %+v, want a failure that is no exhausted context", res)
 	}
 }
 
@@ -317,6 +330,8 @@ func TestACopilotNoteIsHeldOnlyOnceARequestCarriedIt(t *testing.T) {
 		{"killed-in-gap.events.jsonl", false},
 		// The request the note rode refused before it was made.
 		{"refused-note.events.jsonl", false},
+		// The request the note rode refused by Copilot itself, past its budget.
+		{"budget-refused.events.jsonl", false},
 	}
 	for _, c := range cases {
 		t.Run(c.fixture, func(t *testing.T) {
