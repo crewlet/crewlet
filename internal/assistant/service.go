@@ -1138,33 +1138,30 @@ func (s *Service) closeInterrupted(ctx context.Context, owner uuid.UUID,
 		Message: wire.ErrorTurnInterrupted.Sentence()}, nil
 }
 
-// snapshot is the turn as the transcript holds it, numbered after seq after.
+// snapshot is the turn as the transcript holds it, numbered after seq after,
+// cut to one frame ([fitSnapshot]).
 func (s *Service) snapshot(ctx context.Context, owner uuid.UUID, row assistantdomain.Turn,
 	after uint64) (wire.Frame, error) {
 
-	transcript, err := s.transcripts.Transcript(ctx, owner, row.Conversation)
+	written, err := s.transcripts.TurnTranscript(ctx, owner, row.ID)
 	if err != nil {
 		return wire.Frame{}, s.readFailure(err)
 	}
-	snap := &wire.SnapshotEvent{Messages: []wire.Message{}, Steps: []wire.StepEvent{},
-		Cards: []wire.CardEvent{}}
-	for _, m := range transcript.Messages {
-		if m.Turn == row.ID {
-			snap.Messages = append(snap.Messages, m.Wire())
-		}
+	snap := &wire.SnapshotEvent{Messages: make([]wire.Message, 0, len(written.Messages)),
+		Steps: make([]wire.StepEvent, 0, len(written.Steps)),
+		Cards: make([]wire.CardEvent, 0, len(written.Cards))}
+	for _, m := range written.Messages {
+		snap.Messages = append(snap.Messages, m.Wire())
 	}
-	for _, st := range transcript.Steps {
-		if assistantdomain.StepID(row.ID, st.Index) == st.StepID {
-			st.TurnID = row.ID
-			snap.Steps = append(snap.Steps, st)
-		}
+	for _, st := range written.Steps {
+		st.TurnID = row.ID
+		snap.Steps = append(snap.Steps, st)
 	}
-	for _, c := range transcript.Cards {
-		if c.Turn == row.ID {
-			snap.Cards = append(snap.Cards, c.Event())
-		}
+	for _, c := range written.Cards {
+		snap.Cards = append(snap.Cards, c.Event())
 	}
-	return frameAt(row, after+1, s.now(), wire.Frame{Kind: wire.EventSnapshot, Snapshot: snap}), nil
+	return fitSnapshot(frameAt(row, after+1, s.now(), wire.Frame{Kind: wire.EventSnapshot,
+		Snapshot: snap}))
 }
 
 // frameAt stamps a frame's head for a stream no frame log numbers.
