@@ -493,7 +493,7 @@ type CoordinatorOptions struct {
 	// SteersConfirmed publishes, as delivered, every note and wake item a hook's
 	// serve to the run's job is recorded as having handed over ([readByServeOf]),
 	// the engine claiming each wake. Called on every Claude Code box read, asked
-	// or not ([Coordinator.settleHookReceipts]), so a verdict whose answer was
+	// or not ([Coordinator.settleReceipts]), so a verdict whose answer was
 	// lost is published by the next read. Ids derive from the turn and each note,
 	// so a repeat is the same records; nil publishes nothing.
 	SteersConfirmed func(ctx context.Context, run PendingRun, notes []RunNote)
@@ -2187,7 +2187,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 	// answer handing the read back box-answered ([boxAnsweredError]).
 	reading := c.readMainThread(ctx, run, box, runner, read, at, result)
 	result.ResumedCount, result.CountProvider, result.NextRequest = reading.Count, reading.Provider, reading.Next
-	if err := c.settleHookReceipts(ctx, run, reading.Receipts, read); err != nil {
+	if err := c.settleReceipts(ctx, run, reading.Receipts, read); err != nil {
 		return Result{}, false, &boxAnsweredError{err: err, end: at.harnessEnd()}
 	}
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
@@ -2221,7 +2221,7 @@ func (c *Coordinator) readBox(ctx context.Context, run PendingRun, read BoxRead)
 }
 
 // hookVerdictWait is the reason one verdict on a job's hooks' serves is given
-// ([Coordinator.settleHookReceipts]): a store's slow moment, ten seconds, as
+// ([Coordinator.settleReceipts]): a store's slow moment, ten seconds, as
 // every row write's reason; [Coordinator.rowContext] adds the row's crossing
 // ([BoxReadBudget] counts both for a read that asks receipts).
 const hookVerdictWait = 10 * time.Second
@@ -2231,15 +2231,15 @@ const hookVerdictWait = 10 * time.Second
 // read is handed back.
 const hookVerdictRetry = time.Second
 
-// settleHookReceipts settles run's job's hooks' serves by what the job's session
-// showed of them ([PendingStore.SettleHook]) and publishes every note and wake a
-// serve handed over ([CoordinatorOptions.SteersConfirmed]) on every read of a job
-// whose harness's hooks serve receipts ([ThreadTraits.HookReceipts]).
+// settleReceipts settles run's job's serves by what the job's record showed of
+// them ([PendingStore.SettleHook]) and publishes every note and wake a serve
+// handed over ([CoordinatorOptions.SteersConfirmed]) on every read of a job
+// whose runner confirms off that record ([ThreadTraits.Receipts]).
 // A verdict the store does not answer within its room is [ErrStoreSilent],
 // returned before the read's take; the package doc's "A HOOK'S NOTE" says why.
-func (c *Coordinator) settleHookReceipts(ctx context.Context, run PendingRun, receipts HookReceipts,
+func (c *Coordinator) settleReceipts(ctx context.Context, run PendingRun, receipts TakeReceipts,
 	read BoxRead) error {
-	if traits := c.threadTraits(run.Harness); !traits.Reads || !traits.HookReceipts {
+	if !c.threadTraits(run.Harness).Receipts {
 		return nil
 	}
 	notes, asked := run.Steer.Notes, askedTakes(run)
@@ -2280,7 +2280,7 @@ func (c *Coordinator) settleHookReceipts(ctx context.Context, run PendingRun, re
 // [Coordinator.verdictRetry] after each error, until its room (the reason and the
 // row's crossing, [Coordinator.rowContext]) is spent. Each attempt decides on the
 // record as it stands, so one finding an earlier write landed answers the same.
-func (c *Coordinator) settleVerdict(ctx context.Context, run PendingRun, receipts HookReceipts) ([]RunNote,
+func (c *Coordinator) settleVerdict(ctx context.Context, run PendingRun, receipts TakeReceipts) ([]RunNote,
 	error) {
 	row, cancel := c.rowContext(ctx, c.verdictWait)
 	defer cancel()

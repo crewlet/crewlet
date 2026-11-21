@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,8 +22,8 @@ func wakeMessage(token provenance.Boundary, words string) string {
 		At:    time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC), Text: words}, token, "chat:C1")
 }
 
-// THE STANDING INSTRUCTION QUOTES THE HEADING A WAKE OPENS WITH, in both
-// harnesses', as it quotes a note's: a model told what a message somebody
+// THE STANDING INSTRUCTION QUOTES THE HEADING A WAKE OPENS WITH, in every
+// registered runner's that reads notes, as it quotes a note's: a model told what a message somebody
 // wrote about its work looks like, and that its words are theirs, can tell it
 // from a person's note and from a tool's text imitating either. The heading is
 // the agent layer's to render (prompts.WakeMessage), which this package cannot
@@ -36,9 +37,14 @@ func TestTheStandingInstructionQuotesTheHeadingAWakeOpensWith(t *testing.T) {
 		t.Fatalf("the wake opens with %q, not its heading", heading)
 	}
 	quoted := `"` + prompts.WakeHeadOpen + "<name>" + prompts.WakeHeadClose + `"`
-	for _, instruction := range []string{executor.ClaudeCodeSteerInstruction, executor.OpenCodeSteerInstruction} {
-		if !strings.Contains(instruction, quoted) {
-			t.Errorf("the instruction does not quote the heading a wake opens with (%s):\n%s", quoted, instruction)
+	for _, h := range executor.Registered() {
+		reader, reads := h.(interface{ NoteInstruction() string })
+		if !reads {
+			continue
+		}
+		if instruction := reader.NoteInstruction(); !strings.Contains(instruction, quoted) {
+			t.Errorf("%s's instruction does not quote the heading a wake opens with (%s):\n%s", h.Name(), quoted,
+				instruction)
 		}
 	}
 }
@@ -64,20 +70,31 @@ func TestAWakeIsAnEntryOfItsOwnAndAHeadingInsideItsFenceHeadsNothing(t *testing.
 	})
 }
 
-// AN OPENCODE WAKE IS A WAKE, NOT A BRIEF: OpenCode's plugin admits it as a
-// person's message, which is the brief unless it opens with a heading.
+// A WAKE HANDED TO A RUN READS BACK AS A WAKE, on every registered runner that
+// reads notes: each harness records the wake its own way (a hook's context, a
+// person's message), and its session's reader tells it from a brief and a
+// note by its heading. A runner with no wake fixture fails the table.
 //
 // Mutation: tell a message opening with a note's or a late call's heading
-// alone from a brief, and the wake reads as a new brief.
-func TestAnOpenCodeWakeIsAWakeNotABrief(t *testing.T) {
+// alone from a brief, and OpenCode's wake reads as a new brief.
+func TestAWakeHandedToARunReadsBackAsAWake(t *testing.T) {
 	t.Parallel()
 	wake := wakeMessage(provenance.NewBoundary(), "use staging")
-	got := readOpenCode(t, openCodeCaptureOf(t, openCodeDoc(openCodeUser("Fix the flake."),
-		openCodeUser(wake))), executor.TranscriptReadBounds())
-	sameEntries(t, got.Entries, []shown{
-		{kind: executor.EntryBrief, text: "Fix the flake."},
-		{kind: executor.EntryWake, text: wake},
-	})
+	for _, h := range executor.Registered() {
+		fixture := noteFixtureOf(t, h)
+		if fixture.wakeRead == nil {
+			continue
+		}
+		t.Run(h.Name(), func(t *testing.T) {
+			t.Parallel()
+			got := fixture.wakeRead(t, wake)
+			if !slices.ContainsFunc(got, func(e executor.TranscriptEntry) bool {
+				return e.Kind == executor.EntryWake && e.Text == wake
+			}) {
+				t.Errorf("a session handed the wake reads as %+v, with no entry of the wake", got)
+			}
+		})
+	}
 }
 
 // A HOOK'S LINE NAMES THE WAKES IT HANDS OVER BY THEIR WRITERS, after the notes'

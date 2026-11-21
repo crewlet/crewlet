@@ -18,7 +18,7 @@ import (
 // count where one is asked, and records what it was asked.
 type receiptThread struct {
 	mu       sync.Mutex
-	receipts HookReceipts
+	receipts TakeReceipts
 	asked    []MainThreadAsk
 }
 
@@ -41,7 +41,7 @@ func (r *receiptThread) asks() []MainThreadAsk {
 
 // sessionShows is a thread whose session shows each named take taken.
 func sessionShows(takes ...string) *receiptThread {
-	return &receiptThread{receipts: HookReceipts{Held: takes}}
+	return &receiptThread{receipts: TakeReceipts{Held: takes}}
 }
 
 // confirmedSpy records every note a coordinator publishes as confirmed
@@ -303,7 +303,7 @@ func TestEveryEndingReadPublishesWhatItsJobsHooksRead(t *testing.T) {
 		item := served("item")
 		item.For = run.LaunchID
 		run.Steer.Notes = []RunNote{served("n1"), item}
-		if err := rig.coordinator.settleHookReceipts(t.Context(), run, HookReceipts{}, BoxReadCollect); err != nil {
+		if err := rig.coordinator.settleReceipts(t.Context(), run, TakeReceipts{}, BoxReadCollect); err != nil {
 			t.Fatalf("the publish: %v", err)
 		}
 		if got := spy.ids(); !slices.Equal(got, []string{"n1"}) {
@@ -320,7 +320,7 @@ func TestEveryEndingReadPublishesWhatItsJobsHooksRead(t *testing.T) {
 			Wake: &WakeItem{Wakes: []SealedWake{{ID: "w-1"}}}, Read: &NoteRead{Launch: run.LaunchID, Take: "take-wake"},
 			Serves: []HookServed{{Take: "take-wake", Launch: run.LaunchID,
 				Boundary: string(types.SteerBoundaryToolBatch)}}}}
-		if err := rig.coordinator.settleHookReceipts(t.Context(), run, HookReceipts{}, BoxReadCollect); err != nil {
+		if err := rig.coordinator.settleReceipts(t.Context(), run, TakeReceipts{}, BoxReadCollect); err != nil {
 			t.Fatalf("the publish: %v", err)
 		}
 		if got := spy.ids(); !slices.Equal(got, []string{"wake"}) {

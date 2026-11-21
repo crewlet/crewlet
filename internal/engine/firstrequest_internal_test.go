@@ -312,7 +312,7 @@ func TestTheFloorJudgesAMemberUnderTheWindowClaudeCodeHoldsItTo(t *testing.T) {
 // claudeWindowOf is the window Claude Code holds a run of model, signed in by its
 // plan, to, as its runner states it.
 func claudeWindowOf(model string) sandbox.ExecutorWindow {
-	w, _ := executor.Window(executor.ClaudeCodeName, executor.WindowAsk{Model: model, AuthMode: config.AuthSubscription})
+	w, _ := executor.Window(executor.ClaudeCodeName, executor.WindowAsk{Model: model, SignIn: executor.SignInFirstParty})
 	return w
 }
 
@@ -320,4 +320,29 @@ func claudeWindowOf(model string) sandbox.ExecutorWindow {
 // equally known: what a case states of a window, not its runner's headroom.
 func sameWindow(a, b sandbox.ExecutorWindow) bool {
 	return a.Tokens == b.Tokens && a.Standard == b.Standard && a.Known == b.Known
+}
+
+// AN ENTRY'S AUTH MODE IS READ AS THE SIGN-IN A WINDOW'S ROUTE IS JUDGED BY: a
+// login, a key and the host's own environment hand the harness first-party
+// credentials alone, an env-signed entry its own env, and a mode this build
+// does not know none, which the executor holds to the least window.
+//
+// Mutation: map inherit-env to the entry's own env, or an unknown mode to
+// first-party, and a case goes red.
+func TestAnEntrysAuthModeIsReadAsItsSignIn(t *testing.T) {
+	t.Parallel()
+	for mode, want := range map[config.HarnessAuthMode]executor.SignIn{
+		config.AuthSubscription: executor.SignInFirstParty, config.AuthAPIKey: executor.SignInFirstParty,
+		config.AuthInheritEnv: executor.SignInFirstParty, config.AuthEnv: executor.SignInOwnEnv,
+		config.HarnessAuthMode("a-later-builds-mode"): "",
+	} {
+		if got := signInOf(mode); got != want {
+			t.Errorf("an entry signed in by %q is read as %q, want %q", mode, got, want)
+		}
+	}
+	for _, mode := range config.HarnessAuthModes {
+		if !signInOf(mode).Valid() {
+			t.Errorf("config's auth mode %q has no sign-in the executor knows", mode)
+		}
+	}
 }

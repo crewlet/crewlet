@@ -2628,6 +2628,12 @@ type PendingStore interface {
 	// send back whose message no run took, never below none. No fence.
 	CountRunSend(ctx context.Context, turnID, job string, delta int) error
 
+	// ListActiveOn returns the unfinished runs of seats other than the one on
+	// excepts that are on its work: charged to an item it lists, or in its
+	// conversation, oldest first, at most [MaxRunsAround]; none for work that
+	// names nothing. One read, never one per seat.
+	ListActiveOn(ctx context.Context, on RunsOn) ([]PendingRun, error)
+
 	// AskFoldIn records fold-in f on the run's row for its job ([FoldIn]):
 	// only while the row holds that job in [ItemStatuses] and no ending is
 	// decided, else [ErrFoldInClosed]; once per job and wake, a repeat

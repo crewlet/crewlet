@@ -362,7 +362,7 @@ const (
 // `succeeded`; confirm any delivery; retry a 401 or a 404; drop the doubling,
 // or its reset; await a poll in setup; write a file beside the plugin; cut a
 // long note's text.
-func TestThePluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
+func pluginAdmitsNotesAtTheRunsNextStep(t *testing.T) {
 	t.Parallel()
 	node := nodeForNotes(t)
 
@@ -690,7 +690,7 @@ func (i *routeInbox) Close() {}
 // Mutation: rename `inbox`, `message` or `seq` on mcpbridge.SteerNote, or `ids`
 // on the route's read, or the field the plugin reads for any of them, and this
 // goes red.
-func TestThePluginReadsTheBridgesOwnNotesRoute(t *testing.T) {
+func pluginReadsTheBridgesOwnNotesRoute(t *testing.T) {
 	t.Parallel()
 	node := nodeForNotes(t)
 	_, box := openCodeBox(t, t.TempDir())

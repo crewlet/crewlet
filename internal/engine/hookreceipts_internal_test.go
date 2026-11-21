@@ -34,7 +34,7 @@ func showsEveryTake(_ context.Context, _ sandbox.Sandbox, ask sandbox.MainThread
 	for _, take := range ask.Takes {
 		held = append(held, take.Take)
 	}
-	return sandbox.MainThreadReading{Receipts: sandbox.HookReceipts{Held: held}}
+	return sandbox.MainThreadReading{Receipts: sandbox.TakeReceipts{Held: held}}
 }
 
 // deliveredAtTheBatch fails the case unless recs is the one record of note

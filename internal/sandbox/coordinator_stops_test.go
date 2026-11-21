@@ -1251,6 +1251,13 @@ func (s *refusingStore) CountRunSend(ctx context.Context, turnID, job string, de
 	return s.inner.CountRunSend(ctx, turnID, job, delta)
 }
 
+func (s *refusingStore) ListActiveOn(ctx context.Context, on RunsOn) ([]PendingRun, error) {
+	if s.called("ListActiveOn") {
+		return nil, errRefusedCall
+	}
+	return s.inner.ListActiveOn(ctx, on)
+}
+
 func (s *refusingStore) AskFoldIn(ctx context.Context, turnID string, f FoldIn) (FoldIn, error) {
 	if s.called("AskFoldIn") {
 		return FoldIn{}, errRefusedCall

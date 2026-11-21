@@ -745,6 +745,6 @@ func TestTheProviderRidesBesideTheCount(t *testing.T) {
 // testThreadTraits is what each harness's runner states its main-thread read
 // settles (internal/sandbox/executor's), for cases that name a harness.
 var testThreadTraits = map[string]ThreadTraits{
-	"claude-code": {Reads: true, CountsCutOff: true, HookReceipts: true, PlacesWithResumeRead: true},
+	"claude-code": {Reads: true, CountsCutOff: true, Receipts: true, PlacesWithResumeRead: true},
 	"opencode":    {Reads: true},
 }

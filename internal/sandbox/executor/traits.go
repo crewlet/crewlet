@@ -2,8 +2,8 @@ package executor
 
 import (
 	"context"
+	"slices"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -18,16 +18,19 @@ type threadHarness interface {
 }
 
 // ThreadTraits is what the runner's harness's main-thread read settles
-// ([sandbox.ThreadTraits]), zero for a harness that reads none.
+// ([sandbox.ThreadTraits]): zero for a harness that reads no thread, but
+// Receipts for one that confirms off its session record ([recordConfirmer]).
 func (r *Runner) ThreadTraits() sandbox.ThreadTraits {
-	if _, reads := r.harness.(mainThreadHarness); !reads {
-		return sandbox.ThreadTraits{}
-	}
 	traits := sandbox.ThreadTraits{}
-	if h, ok := r.harness.(threadHarness); ok {
-		traits = h.threadTraits()
+	if _, reads := r.harness.(mainThreadHarness); reads {
+		if h, ok := r.harness.(threadHarness); ok {
+			traits = h.threadTraits()
+		}
+		traits.Reads = true
 	}
-	traits.Reads = true
+	if _, records := r.harness.(recordConfirmer); records {
+		traits.Receipts = true
+	}
 	return traits
 }
 
@@ -44,13 +47,32 @@ func (r *Runner) NotesOffWhy() string {
 	return ""
 }
 
+// SignIn is how a member signs its harness in, as far as the route it reaches
+// its model by differs: harness-neutral, so the executor reads no config. The
+// zero value is a mode this build does not know, judged as the least window.
+type SignIn string
+
+const (
+	// SignInFirstParty: the entry hands the harness first-party credentials
+	// alone (a login, a key, or the host's own environment).
+	SignInFirstParty SignIn = "first-party"
+	// SignInOwnEnv: the entry signs the harness in by its own env.
+	SignInOwnEnv SignIn = "own-env"
+)
+
+// SignIns is every [SignIn] this build knows.
+var SignIns = []SignIn{SignInFirstParty, SignInOwnEnv}
+
+// Valid reports whether this build knows s.
+func (s SignIn) Valid() bool { return slices.Contains(SignIns, s) }
+
 // WindowAsk is what a launch knows of the member a window is asked for
 // ([Window]).
 type WindowAsk struct {
 	// Model is the model argument the member hands its harness.
 	Model string
-	// AuthMode is how the member signs its harness in.
-	AuthMode config.HarnessAuthMode
+	// SignIn is how the member signs its harness in.
+	SignIn SignIn
 	// Env is the member's own env, read only where Exact is set.
 	Env map[string]string
 	// Exact reads the member's platform off its env, as the launch floor
@@ -103,7 +125,7 @@ func SessionTraits(harness string) sandbox.SessionTraits {
 // harnessNamed is the harness named name, nil for one this build does not
 // drive.
 func harnessNamed(name string) Harness {
-	for _, h := range harnesses {
+	for _, h := range Registered() {
 		if h.Name() == name {
 			return h
 		}

@@ -9,7 +9,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/providers/llm"
-	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
 // stubModel is an llm.Provider that is never called: the registry below is
@@ -95,22 +94,18 @@ func TestTheExecutorChainIsTheOneALaunchWalks(t *testing.T) {
 	}
 }
 
-// THE RUNNERS CONFIG ADMITS ARE THE RUNNERS THAT EXIST.
+// EVERY HARNESS THAT CAN RUN AN EXECUTOR IS ONE AN ENTRY MAY NAME: the list is
+// the built-in profiles' runners, and the executor holds it to the runners
+// registered, in order (internal/sandbox/executor's
+// TestEveryListedRunnerIsRegisteredInProfileOrder).
 //
-// A seat's executor is its harness's own run, which only a harness with an
-// in-box runner has. A runner added there and not here refuses entries that
-// would run; one listed here with no runner admits chains every launch then
-// refuses.
-func TestTheExecutorHarnessesAreTheInBoxRunners(t *testing.T) {
+// Mutation: list a runner config does not know as a harness, and this goes red.
+func TestEveryExecutorHarnessIsAHarness(t *testing.T) {
 	t.Parallel()
-	var got []string
-	for _, harness := range ExecutorHarnesses {
-		got = append(got, string(harness))
+	if len(ExecutorHarnesses()) == 0 {
+		t.Fatal("no harness can run an executor")
 	}
-	if want := executor.Names(); !slices.Equal(slices.Sorted(slices.Values(got)), slices.Sorted(slices.Values(want))) {
-		t.Errorf("config.ExecutorHarnesses = %v, the in-box runners are %v", got, want)
-	}
-	for _, harness := range ExecutorHarnesses {
+	for _, harness := range ExecutorHarnesses() {
 		if !harness.Valid() {
 			t.Errorf("%q can run an executor but is not a harness an entry may name", harness)
 		}

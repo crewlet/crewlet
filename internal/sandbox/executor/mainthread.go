@@ -310,13 +310,18 @@ type mainThreadHarness interface {
 
 // ReadMainThread reads the main thread of the session a job's box ran, once
 // for every reading ask asks of it, through the runner's harness: zero for a
-// harness that reads none.
+// harness that reads none. A harness that confirms off its session record
+// ([recordConfirmer]) answers the takes asked from that record, through the
+// same receipts, whether or not it reads a whole thread.
 func (r *Runner) ReadMainThread(ctx context.Context, box sandbox.Sandbox,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
-	reads, ok := r.harness.(mainThreadHarness)
-	if !ok {
-		return sandbox.MainThreadReading{}
+	var reading sandbox.MainThreadReading
+	if reads, ok := r.harness.(mainThreadHarness); ok {
+		reading = reads.readMainThread(ctx, box, PathsFor(box), ask)
 	}
-	return reads.readMainThread(ctx, box, PathsFor(box), ask)
+	if records, ok := r.harness.(recordConfirmer); ok && len(ask.Takes) > 0 {
+		reading.Receipts = recordReceipts(ctx, records, box, ask)
+	}
+	return reading
 }

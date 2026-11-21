@@ -237,18 +237,18 @@ func (r *hookReading) end(torn bool, err error) { r.torn, r.err = torn, err }
 // chain under ctx: Held, Restarted, Absent, or none of these with Why (the
 // package doc's "A hook's note, confirmed off its job's main thread"). Its
 // caller walks for no take [unreadTakes] refuses.
-func (r *hookReading) receipts(ctx context.Context, ask sandbox.MainThreadAsk) sandbox.HookReceipts {
+func (r *hookReading) receipts(ctx context.Context, ask sandbox.MainThreadAsk) sandbox.TakeReceipts {
 	if r.askErr != nil {
-		return sandbox.HookReceipts{Why: fmt.Sprintf("the takes were not asked of the thread: %v", r.askErr)}
+		return sandbox.TakeReceipts{Why: fmt.Sprintf("the takes were not asked of the thread: %v", r.askErr)}
 	}
 	if r.err != nil {
-		return sandbox.HookReceipts{Why: fmt.Sprintf("the thread was not read to its end: %v", r.err)}
+		return sandbox.TakeReceipts{Why: fmt.Sprintf("the thread was not read to its end: %v", r.err)}
 	}
 	chain := r.chain.c
 	if err := chain.End(ctx); err != nil {
-		return sandbox.HookReceipts{Why: fmt.Sprintf("the resume's model of the thread was not decided: %v", err)}
+		return sandbox.TakeReceipts{Why: fmt.Sprintf("the resume's model of the thread was not decided: %v", err)}
 	}
-	var out sandbox.HookReceipts
+	var out sandbox.TakeReceipts
 	why := func(take, reason string) {
 		if out.Why == "" {
 			out.Why = "take " + take + ": " + reason

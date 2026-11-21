@@ -17,7 +17,7 @@ import (
 // ([Coordinator.readMainThread]), every reading sharing the read
 // ([MainThreadAsk]): the count and next request, written after the take in the
 // collection's one write of the job's end ([EndRead]), and a Claude Code
-// hook's serves' receipts ([HookReceipts]). A stop's and a loss's read ask
+// hook's serves' receipts ([TakeReceipts]). A stop's and a loss's read ask
 // receipts and no count: no relaunch carries their round on in place. A job
 // not over is counted unread, its receipts read.
 
@@ -76,11 +76,11 @@ type AskedTake struct {
 	Boundary types.SteerBoundary
 }
 
-// HookReceipts is what the job's session shows of the takes asked: each asked
+// TakeReceipts is what the job's session shows of the takes asked: each asked
 // take in one list at most, or in none where the read cannot decide it, Why
 // saying why where none is decided. A thread that compacted or rooted again
 // decides none (executor's package doc, "A hook's note").
-type HookReceipts struct {
+type TakeReceipts struct {
 	// Held are takes the session shows taken after its last restart.
 	Held []string
 	// Restarted are takes it shows taken only before its last restart.
@@ -92,7 +92,7 @@ type HookReceipts struct {
 }
 
 // decided reports whether the receipts settle any take.
-func (r HookReceipts) decided() bool {
+func (r TakeReceipts) decided() bool {
 	return len(r.Held) > 0 || len(r.Restarted) > 0 || len(r.Absent) > 0
 }
 
@@ -110,7 +110,7 @@ type MainThreadReading struct {
 	// it was asked; zero where it was not, and where the read made none.
 	Next NextRequest
 	// Receipts is what the session shows of the takes asked.
-	Receipts HookReceipts
+	Receipts TakeReceipts
 }
 
 // askedTakes is every hook's serve on run's copy whose receipt only its job's
@@ -167,7 +167,7 @@ func (c *Coordinator) readMainThread(ctx context.Context, run PendingRun, box Sa
 	counted := counts && at.final && (!uncounted || !at.cutOff)
 	ask := MainThreadAsk{Session: run.SessionRan(), Release: result.HarnessVersion, Count: counted,
 		Next: counted, Ended: !at.cutOff}
-	if asksHookReceipts(run, traits) {
+	if asksTakeReceipts(run, traits) {
 		ask.Takes = askedTakes(run)
 	}
 	var reading MainThreadReading
@@ -240,20 +240,20 @@ func unboundedBecause(mark CountMark) string {
 // asksMainThread reports whether read of run's box asks the job's main thread
 // anything, its runner's read settling traits: the collection of a job whose
 // runner reads its thread, and any read of a box whose copy holds a serve its
-// thread settles ([asksHookReceipts]). [BoxReadBudget] holds the read's wait
+// thread settles ([asksTakeReceipts]). [BoxReadBudget] holds the read's wait
 // for exactly these.
 func asksMainThread(run PendingRun, read BoxRead, traits ThreadTraits) bool {
 	collects := read == BoxReadCollect && traits.Reads
-	return collects || asksHookReceipts(run, traits)
+	return collects || asksTakeReceipts(run, traits)
 }
 
-// asksHookReceipts reports whether the read of run's box asks its job's
-// session for receipts: the copy of a job whose harness's hooks serve takes its
-// thread shows ([ThreadTraits.HookReceipts]) holding a serve to the job
+// asksTakeReceipts reports whether the read of run's box asks its job's
+// record for receipts: the copy of a job whose runner confirms off that record
+// ([ThreadTraits.Receipts]) holding a serve to the job
 // ([PendingRun.asksReceipts]). Any other job's read asks none, nor holds a
 // verdict's share ([BoxReadBudget]).
-func asksHookReceipts(run PendingRun, traits ThreadTraits) bool {
-	return traits.Reads && traits.HookReceipts && run.asksReceipts()
+func asksTakeReceipts(run PendingRun, traits ThreadTraits) bool {
+	return traits.Receipts && run.asksReceipts()
 }
 
 // threadTraits is what the runner c's manager holds for harness settles by

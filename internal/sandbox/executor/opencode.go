@@ -20,6 +20,8 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
+func init() { Register(OpenCode{}) }
+
 // OpenCodeName is this runner's config name.
 const OpenCodeName = "opencode"
 

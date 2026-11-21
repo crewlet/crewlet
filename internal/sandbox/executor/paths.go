@@ -9,11 +9,10 @@
 // plumbing so each runner supplies only what is its own: its invocation, its
 // config, where its output lands, and how its stream and result are read —
 // and how a person's notes to its run's turn reach it between its own steps
-// (steer.go: Claude Code's hooks, [ClaudeCode]; OpenCode's plugin,
-// opencode_steer.js, [OpenCode]), and how the skills a run is handed as its
-// own reach its harness and its loads reach the run's bridge (skills.go: a
-// plugin of the run's own on Claude Code; a skills directory and a second
-// plugin, opencode_skills.js, on OpenCode).
+// (ADR-0177; claudesteer.go's hooks, opencode_steer.js's plugin), and how the
+// skills a run is handed as its own reach its harness and its loads reach the
+// run's bridge (claudeskills.go's plugin; opencodeskills.go's skills directory
+// and opencode_skills.js).
 //
 // # A run's commits credit Crewlet, through git
 //
