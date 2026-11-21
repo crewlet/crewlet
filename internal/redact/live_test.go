@@ -14,13 +14,15 @@ import (
 )
 
 // liveRun is what a stream wrote for a text and answered, at each flush how
-// much it had written and how much of that it answered final, and how many
-// windows its keys' stage decided early.
+// much it had written and how much of that it answered final, how many
+// windows its keys' stage decided early, and where a live stream's ask of
+// Settled first answered otherwise than the loop ([redact.HeldToTheLoop]).
 type liveRun struct {
 	out     string
 	err     error
 	flushes [][2]int64
 	early   int
+	differ  string
 }
 
 // readLive is text written to a stream holding h, live where flush is not
@@ -31,6 +33,10 @@ func readLive(text string, h int, r *rand.Rand, most int, flush func() bool) liv
 	var out bytes.Buffer
 	s := redact.NewStreamHolding(&out, h, flush != nil)
 	redact.CountEarly(s, &run.early)
+	differ := func() string { return "" }
+	if flush != nil {
+		differ = redact.HeldToTheLoop(s)
+	}
 	for at := 0; at < len(text); {
 		n := min(len(text)-at, 1+r.IntN(most))
 		_, _ = s.Write([]byte(text[at : at+n]))
@@ -43,7 +49,7 @@ func readLive(text string, h int, r *rand.Rand, most int, flush func() bool) liv
 	run.err = s.Close()
 	final, _, _ := s.Flush()
 	run.flushes = append(run.flushes, [2]int64{int64(out.Len()), final})
-	run.out = out.String()
+	run.out, run.differ = out.String(), differ()
 	return run
 }
 
@@ -194,6 +200,9 @@ func TestALiveStreamWritesWhatTheWholeTextRedactsToHoweverItIsFlushed(t *testing
 					case got.err == nil && last[1] != int64(len(got.out)):
 						t.Errorf("%s: Close answered nil, and a flush after it answered %d of the %d bytes it wrote final", name, last[1], len(got.out))
 					}
+					if got.differ != "" {
+						t.Errorf("%s: a live stream's ask of Settled was held to the loop at %s", name, got.differ)
+					}
 					for _, f := range got.flushes {
 						if f[1] > 0 && (f[1] > f[0] || got.out[:f[1]] != want()[:min(int(f[1]), len(want()))]) {
 							t.Errorf("%s: a flush answered %d of %d bytes final, which are not Secrets' %s", name, f[1], f[0], streamParted(got.out[:min(f[1], int64(len(got.out)))], want()))
@@ -278,6 +287,7 @@ func TestALiveStreamSettlesPastALineOfAnyLengthAsTheWholeTextDoes(t *testing.T) 
 			text := filler + sh[0] + "\n" + sh[1] + strings.Repeat(sh[2], k) + "\nhunter2secretvalue9\n" + strings.Repeat("ok\n", 20)
 			var out bytes.Buffer
 			s := redact.NewLiveStream(&out)
+			differ := redact.HeldToTheLoop(s)
 			for at := 0; at < len(text); {
 				n := min(len(text)-at, 64<<10)
 				if i := strings.IndexByte(text[at:at+n], '\n'); i >= 0 {
@@ -290,6 +300,9 @@ func TestALiveStreamSettlesPastALineOfAnyLengthAsTheWholeTextDoes(t *testing.T) 
 			}
 			if err := s.Close(); err != nil || out.String() != redact.Secrets(text) {
 				t.Errorf("a line ending %q, then %q and %q x %d: Close answered %v, and the stream wrote another text than Secrets %s", sh[0], sh[1], sh[2], k, err, streamParted(out.String(), redact.Secrets(text)))
+			}
+			if d := differ(); d != "" {
+				t.Errorf("a line ending %q, then %q and %q x %d: an ask of Settled was held to the loop at %s", sh[0], sh[1], sh[2], k, d)
 			}
 		}
 	}
@@ -321,6 +334,9 @@ func TestALiveStreamFlushedAtEachLineWritesSecretsOfAKeysLineAboveABlock(t *test
 			if got.run.err != nil || got.run.out != want {
 				t.Errorf("text %d %q, %s: Close answered %v, and the stream wrote another text than Secrets %s", i, text, got.how, got.run.err, streamParted(got.run.out, want))
 			}
+			if got.run.differ != "" {
+				t.Errorf("text %d, %s: a live stream's ask of Settled was held to the loop at %s", i, got.how, got.run.differ)
+			}
 		}
 	}
 }
@@ -331,12 +347,13 @@ func readLines(text string) liveRun {
 	var run liveRun
 	var out bytes.Buffer
 	s := redact.NewLiveStream(&out)
+	differ := redact.HeldToTheLoop(s)
 	for line := range strings.SplitAfterSeq(text, "\n") {
 		_, _ = s.Write([]byte(line))
 		_, _, _ = s.Flush()
 	}
 	run.err = s.Close()
-	run.out = out.String()
+	run.out, run.differ = out.String(), differ()
 	return run
 }
 

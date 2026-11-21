@@ -30,7 +30,8 @@ var heldRunShapes = []string{"| Password: |", "**Password:**", "- **Password:**"
 // lines of password's keys ([redact.HeldTexts]), [blocksBeforeAKey]; and long
 // runs of holds, alone, after an armour, and a run of keys then blank lines.
 // Every other text a test asks Settled about is held to the loop where it
-// asks ([redact.SettledByBoth]).
+// asks ([redact.SettledByBoth]), and so is every ask a live stream makes in
+// the live tests ([redact.HeldToTheLoop]), the layouts it refuses among them.
 func heldTexts(r *rand.Rand) []heldText {
 	var texts []heldText
 	add := func(name, text string) {

@@ -6099,6 +6099,9 @@ func Settled(text string) int {
 type settling[T textual] struct {
 	text          T
 	scanned, asks int
+	// ask, where a test sets it, answers in settle's place, so the test
+	// holds the asks a stream makes to a second reading of their holds.
+	ask func(string) int
 }
 
 // next is how much more of the text is settled, the text left as it is.
@@ -6110,7 +6113,11 @@ func (s *settling[T]) next() int {
 		return 0
 	}
 	s.asks++
-	n, _ := settle(string(s.text[:from+i+1]))
+	text := string(s.text[:from+i+1])
+	if s.ask != nil {
+		return s.ask(text)
+	}
+	n, _ := settle(text)
 	return n
 }
 

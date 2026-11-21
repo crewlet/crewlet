@@ -3,6 +3,7 @@ package redact
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"runtime"
@@ -44,6 +45,21 @@ func NewStreamHolding(w io.Writer, h int, liveStream bool) *Stream {
 		s.live = &live{}
 	}
 	return s
+}
+
+// HeldToTheLoop holds every ask live stream s makes of Settled's readers to
+// the loop ([SettledTwoWays]), from one reading of its holds; differ is where
+// they first differed, or "".
+func HeldToTheLoop(s *Stream) (differ func() string) {
+	var first string
+	s.live.view.ask = func(text string) int {
+		swept, looped := SettledTwoWays(text)
+		if swept != looped && first == "" {
+			first = fmt.Sprintf("an ask of %d bytes: Settled settled %d, and a hold a pass %d; its end:\n%q", len(text), swept, looped, text[max(0, len(text)-2000):])
+		}
+		return swept
+	}
+	return func() string { return first }
 }
 
 // Settling is a [settling] for the package's external tests: Settle answers
