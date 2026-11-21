@@ -194,7 +194,8 @@ func (c *Coordinator) wroteCountLocked(w *countWrite, landed bool) func() {
 		}
 		if next.landed {
 			// WHERE THE WRITE PUT THE RUN, whatever the writes before it
-			// did: see "Where each write puts the run" above.
+			// did (the package doc, "Every write that moves a run between its
+			// seat's sets moves the count once").
 			writes.counted = countOf(next.to)
 		}
 	}

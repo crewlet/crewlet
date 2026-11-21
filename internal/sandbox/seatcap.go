@@ -16,7 +16,7 @@ import (
 // is the run's count once the write lands and given back when it does not
 // (countwrite.go). Every other write leaves [Holding] or moves within it, and a
 // takeover counts what the store holds, never refused: those runs exist. See
-// the package doc, "The seat's cap".
+// the package doc, "Seat counts".
 
 // SeatFull is what an owed answer's resume waits on while its seat holds as
 // many runs as its cap, and ConversationBusy what it waits on while another of
