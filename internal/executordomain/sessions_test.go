@@ -267,18 +267,23 @@ func TestTheSealedCapHoldsASessionAtItsBound(t *testing.T) {
 	}
 }
 
-// THE SEAT BUDGET'S FLOOR HOLDS ONE SESSION AT ITS BOUND: a budget Tier B
-// accepts never refuses outright a capture the session bound admits, and the
-// default is no smaller than the floor. internal/config cannot import this
-// package, so the two are held together here.
+// THE SEAT BUDGET'S FLOOR HOLDS ONE SESSION AT ITS BOUND, AND NO MORE: a budget
+// Tier B accepts never refuses outright a capture the session bound admits, a
+// budget that holds one is never refused at boot (the floor is that session
+// rounded up to a whole mebibyte), and the default is no smaller than the floor.
+// internal/config cannot import this package, so they are held together here.
 //
-// Mutation: raise SessionMaxBytes to 64 MiB without moving the config floor and
-// this fails.
+// Mutation: raise SessionMaxBytes to 64 MiB without moving the config floor, or
+// raise the floor to 64 MiB, and this fails.
 func TestTheSeatBudgetFloorHoldsOneSessionAtItsBound(t *testing.T) {
 	t.Parallel()
 	if config.SessionBytesPerSeatFloor < executorkeep.SealedMaxBytes {
 		t.Errorf("max_bytes_per_seat accepts %d bytes and one sealed session is up to %d",
 			config.SessionBytesPerSeatFloor, executorkeep.SealedMaxBytes)
+	}
+	if past := config.SessionBytesPerSeatFloor - executorkeep.SealedMaxBytes; past >= 1<<20 {
+		t.Errorf("max_bytes_per_seat's floor of %d bytes is %d past one sealed session at its bound, "+
+			"so it refuses budgets that hold one", config.SessionBytesPerSeatFloor, past)
 	}
 	if config.DefaultSessionBytesPerSeat < config.SessionBytesPerSeatFloor {
 		t.Errorf("the default budget of %d bytes is below the field's own floor of %d",
@@ -336,15 +341,15 @@ func TestASessionSealedToASpoolUploadsAsTheObjectItsSealMinted(t *testing.T) {
 	}
 }
 
-// A SPOOLED SESSION OPENS ONLY FOR THE ROW IT WAS FETCHED FOR: Fetch checks the
-// object against the row, and the spool opens under the row's own associated
-// data, so it is ErrUnreadable for another turn's, seat's or object's row,
-// whatever bytes it holds. A row naming an object the store no longer holds
-// fetches nothing and is ErrUnreadable at once.
+// A STORED SESSION OPENS ONLY FOR ITS OWN ROW: the object is checked against
+// the row by the object store and opened under the row's own associated data,
+// so it is ErrUnreadable for another turn's, seat's or object's row, whatever
+// bytes it holds. A row naming an object the store no longer holds is
+// ErrUnreadable at once.
 //
-// Mutation: open the spool under an associated data that leaves the turn or the
-// seat out, or skip the object store's check in Fetch, and a row goes red.
-func TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor(t *testing.T) {
+// Mutation: open the object under an associated data that leaves the turn or
+// the seat out, or skip the object store's check, and a row goes red.
+func TestAStoredSessionOpensOnlyForItsOwnRow(t *testing.T) {
 	t.Parallel()
 	store, _ := sessionStore(t, "k1")
 	turn := statelog.NewOpID(time.Now(), "")
@@ -354,39 +359,18 @@ func TestASpooledSessionOpensOnlyForTheRowItWasFetchedFor(t *testing.T) {
 		t.Fatalf("Put: %v", err)
 	}
 	own := executordomain.Session{Handle: "ana", Turn: turn, Object: put.Object}
-	var spool bytes.Buffer
-	if err := store.Fetch(t.Context(), own, &spool); err != nil {
-		t.Fatalf("Fetch: %v", err)
+	if got, err := readAll(t, store, own); err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("the session opened for its own row read (%d bytes, %v), want the archive", len(got), err)
 	}
-	if bytes.Contains(spool.Bytes(), []byte("transcript-marker:")) {
-		t.Fatal("the spool holds the archive in the clear")
-	}
-	open := func(row executordomain.Session) ([]byte, error) {
-		r, err := store.OpenSpooled(row, bytes.NewReader(spool.Bytes()))
-		if err != nil {
-			return nil, err
-		}
-		return io.ReadAll(r)
-	}
-	if got, err := open(own); err != nil || !bytes.Equal(got, plain) {
-		t.Fatalf("the spool opened for its own row read (%d bytes, %v), want the archive", len(got), err)
-	}
+	gone := objstore.Object{Key: objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)),
+		Hash: put.Object.Hash, Size: put.Object.Size}
 	for name, other := range map[string]executordomain.Session{
-		"another turn": {Handle: "ana", Turn: statelog.NewOpID(time.Now(), ""), Object: put.Object},
-		"another seat": {Handle: "ben", Turn: turn, Object: put.Object},
-		"another object": {Handle: "ana", Turn: turn, Object: objstore.Object{
-			Key: objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)), Hash: put.Object.Hash,
-			Size: put.Object.Size}},
+		"another turn":   {Handle: "ana", Turn: statelog.NewOpID(time.Now(), ""), Object: put.Object},
+		"another seat":   {Handle: "ben", Turn: turn, Object: put.Object},
+		"another object": {Handle: "ana", Turn: turn, Object: gone},
 	} {
-		if _, err := open(other); !errors.Is(err, executordomain.ErrUnreadable) {
-			t.Errorf("the spool opened for %s: %v, want ErrUnreadable", name, err)
+		if _, err := readAll(t, store, other); !errors.Is(err, executordomain.ErrUnreadable) {
+			t.Errorf("the session opened for %s: %v, want ErrUnreadable", name, err)
 		}
-	}
-	gone := executordomain.Session{Handle: "ana", Turn: turn, Object: objstore.Object{
-		Key: objstore.KeyAt(time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)), Hash: put.Object.Hash,
-		Size: put.Object.Size}}
-	var nothing bytes.Buffer
-	if err := store.Fetch(t.Context(), gone, &nothing); !errors.Is(err, executordomain.ErrUnreadable) {
-		t.Errorf("a row naming an object the store does not hold fetched: %v, want ErrUnreadable", err)
 	}
 }

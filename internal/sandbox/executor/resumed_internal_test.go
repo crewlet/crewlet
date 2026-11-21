@@ -12,7 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -1187,7 +1186,7 @@ func benchMeterAndScrub(b *testing.B, body []byte) {
 		for b.Loop() {
 			reopen := func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(archive)), nil }
 			if err := scrubArchive(archiveTar, bytes.NewReader(archive), reopen, io.Discard,
-				newScrubber([]string{"sk-ant-not-real-secret"}), boundsFor(executorkeep.SessionMaxBytes)); err != nil {
+				newScrubber([]string{"sk-ant-not-real-secret"}), plainBounds(scrubPlainMax)); err != nil {
 				b.Fatalf("scrubArchive: %v", err)
 			}
 		}

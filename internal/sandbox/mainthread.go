@@ -59,7 +59,7 @@ type MainThreadAsk struct {
 	// next request at.
 	Next bool
 	// Takes are the hooks' serves of a note to the job whose receipts are
-	// asked ([askedTakes]), at most [MaxNoteServes] for each of the job's
+	// asked ([askedTakes]), at most [RunNote.MaxServes] for each of the job's
 	// notes and items; none asks no receipt.
 	Takes []AskedTake
 	// Ended says the job's harness ended its own run ([capturePoint.cutOff]):

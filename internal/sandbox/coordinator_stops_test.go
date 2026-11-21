@@ -1213,6 +1213,13 @@ func (s *refusingStore) FileNote(ctx context.Context, turnID string, filing Note
 	return s.inner.FileNote(ctx, turnID, filing)
 }
 
+func (s *refusingStore) FileWake(ctx context.Context, turnID string, filing WakeFiling) (RunNote, error) {
+	if s.called("FileWake") {
+		return RunNote{}, errRefusedCall
+	}
+	return s.inner.FileWake(ctx, turnID, filing)
+}
+
 func (s *refusingStore) TakeNotes(ctx context.Context, turnID string, take NoteTake) ([]RunNote, error) {
 	if s.called("TakeNotes") {
 		return nil, errRefusedCall
