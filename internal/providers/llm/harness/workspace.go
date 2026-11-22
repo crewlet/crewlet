@@ -809,6 +809,13 @@ func (w *Workspace) seed(
 			}
 			continue
 		}
+		// A TOML LOGIN AS ITS OWN TABLES ALONE ([harnessprofile.Profile.KeepLoginTOML]):
+		// a hook or a setting the shared copy came to hold beside the login
+		// reaches no call. The digest is of what the home was given.
+		content, err = w.profile.KeepLoginTOML(name, content)
+		if err != nil {
+			return generation{}, fmt.Errorf("harness: reading the login's tables of %q: %w", rel, err)
+		}
 		if err := writePrivate(dst, content); err != nil {
 			return generation{}, err
 		}

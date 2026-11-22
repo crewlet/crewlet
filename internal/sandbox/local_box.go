@@ -584,9 +584,6 @@ func (b *directBox) resume() {
 	signalJob(b.layout, "continue", procgroup.Continue)
 }
 
-// ReseedLogin implements [LoginReseeder].
-func (b *directBox) ReseedLogin(context.Context) error { return reseedLogin(b.layout, b.credentials) }
-
 // Close kills the job's process group ([killJobGroup], which continues a
 // stopped tree first so it can handle SIGTERM), syncs credentials and removes
 // the box.
@@ -1260,12 +1257,6 @@ func (b *containerBox) unpause(ctx context.Context) {
 func (b *containerBox) paused(ctx context.Context) bool {
 	res, err := runHost(ctx, b.cli.command(0, "inspect", "--format", "{{.State.Paused}}", b.container))
 	return err == nil && res.ExitCode == 0 && strings.TrimSpace(res.Stdout) == "true"
-}
-
-// ReseedLogin implements [LoginReseeder]: the home is the host's directory the
-// container mounts, so the box's files are written as a direct box's are.
-func (b *containerBox) ReseedLogin(context.Context) error {
-	return reseedLogin(b.layout, b.credentials)
 }
 
 func (b *containerBox) Close(ctx context.Context) error {

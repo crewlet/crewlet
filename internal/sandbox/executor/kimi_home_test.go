@@ -14,10 +14,10 @@ import (
 // its model every skill under `~/.kimi-code/skills` and `~/.agents/skills`
 // and the personal AGENTS.md in the home and under `~/.agents`, runs the hooks
 // and adds the system prompt of every plugin installed in the home, and
-// starts a repository's MCP servers in a workspace whose trust was saved there,
-// and reads hooks from config.toml (measured); whatever an earlier run left in
-// those places is gone once the launch has cleared the box and written its
-// config, and its sessions and its login are where they were.
+// and starts a repository's MCP servers in a workspace whose trust was saved
+// there (measured); whatever an earlier run left in those places is gone once
+// the launch has cleared the box and written its config, and its sessions and
+// its login are where they were.
 //
 // Mutation: drop any place from Kimi's artifacts, and it survives the launch.
 func TestAKimiRunLoadsOnlyTheConfigItsLaunchWrites(t *testing.T) {
@@ -43,7 +43,6 @@ func TestAKimiRunLoadsOnlyTheConfigItsLaunchWrites(t *testing.T) {
 		"an earlier run's profile": p.KimiAgents() + "/crewlet/crewlet-0123456789ab.md",
 		"`~/.agents/AGENTS.md`":    p.KimiUserInstructions()[0],
 		"`~/.agents/agents.md`":    p.KimiUserInstructions()[1],
-		"config.toml, no login's":  p.KimiConfig(),
 	}
 	kept := map[string]string{
 		p.KimiHome() + "/credentials/kimi-code.json":          `{"access_token":"x"}`,
@@ -77,53 +76,53 @@ func TestAKimiRunLoadsOnlyTheConfigItsLaunchWrites(t *testing.T) {
 	}
 }
 
-// A KIMI CODE RUN IS HANDED ITS LOGIN'S CONFIG AND NOTHING A RUN WROTE INTO
-// IT: on a local box seeded with a login, a [[hooks]] table an earlier run
-// appended to config.toml is gone once the launch has started the next run,
-// and the login's own tables are there.
+// A KIMI CODE RUN IS HANDED ITS LOGIN'S CONFIG AND NOTHING ELSE OF IT: a
+// config.toml holding a [[hooks]] table, a plugin entry and a tool setting
+// beside the login, whether its seed held them or an earlier run wrote them,
+// is rewritten to the login's tables before the run, and a config.toml that
+// holds the login alone is left as it is.
 //
-// Mutation: drop the launch's reseed, or config.toml from Kimi's artifacts.
+// Mutation: drop the rewrite from WriteConfig, or keep a table the profile's
+// login_keys does not name.
 func TestAKimiRunIsHandedOnlyItsLoginsConfig(t *testing.T) {
 	t.Parallel()
-	shared := t.TempDir()
-	plantKimiFile(t, filepath.Join(shared, "config.toml"),
-		"default_model = \"managed:kimi-code/k\"\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\n")
-	plantKimiFile(t, filepath.Join(shared, "kimi-code.json"), `{"token":"t"}`)
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("NewLocal: %v", err)
 	}
-	box, err := local.Create(t.Context(), sandbox.Spec{
-		CredentialFiles: map[string]string{
-			".kimi-code/config.toml":                filepath.Join(shared, "config.toml"),
-			".kimi-code/credentials/kimi-code.json": filepath.Join(shared, "kimi-code.json"),
-		},
-		CredentialTables: map[string][]string{".kimi-code/config.toml": {"default_model", "providers"}},
-	})
+	box, err := local.Create(t.Context(), sandbox.Spec{})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	t.Cleanup(func() { box.Close(t.Context()) })
 	p := executor.PathsFor(box)
-	config, err := os.ReadFile(p.KimiConfig())
-	if err != nil {
-		t.Fatal(err)
+	login := "default_model = \"managed:kimi-code/k\"\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\n"
+	plantKimiFile(t, p.KimiConfig(), login+"\n[[hooks]]\nevent = \"SessionStart\"\ncommand = \"touch /tmp/planted\"\n"+
+		"\n[plugins.planted]\nenabled = true\n\n[tools]\ndisabled = [\"Bash\"]\n")
+	write := func() string {
+		t.Helper()
+		if _, err := (executor.Kimi{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "x"},
+			executor.Session{}, p); err != nil {
+			t.Fatalf("WriteConfig: %v", err)
+		}
+		got, err := os.ReadFile(p.KimiConfig())
+		if err != nil {
+			t.Fatalf("the run was handed no config.toml: %v", err)
+		}
+		return string(got)
 	}
-	plantKimiFile(t, p.KimiConfig(), string(config)+"\n[[hooks]]\nevent = \"SessionStart\"\ncommand = \"touch /tmp/planted\"\n")
-
-	runner := executor.NewKimi()
-	if err = runner.Install(t.Context(), box); err != nil {
-		t.Fatalf("Install: %v", err)
+	got := write()
+	for _, gone := range []string{"hooks", "touch /tmp/planted", "plugins", "tools"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("the run is handed %q in %q", gone, got)
+		}
 	}
-	if _, err = runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "x"}); err != nil {
-		t.Fatalf("Start: %v", err)
+	if !strings.Contains(got, "managed:kimi-code") {
+		t.Errorf("the run is handed %q, want the login's tables", got)
 	}
-	got, err := os.ReadFile(p.KimiConfig())
-	if err != nil {
-		t.Fatalf("the run was handed no config.toml: %v", err)
-	}
-	if strings.Contains(string(got), "hooks") || !strings.Contains(string(got), "managed:kimi-code") {
-		t.Errorf("the run was handed %q, want the login's tables alone", got)
+	plantKimiFile(t, p.KimiConfig(), login)
+	if got := write(); got != login {
+		t.Errorf("a config.toml holding the login alone was rewritten to %q", got)
 	}
 }
 
