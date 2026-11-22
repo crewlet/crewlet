@@ -666,6 +666,11 @@ type FakeRunner struct {
 	// steps. Set it before the first collection.
 	TakesNotes bool
 
+	// NotesOff is what [FakeRunner.NotesOffWhy] answers: what in a box can
+	// switch the reading of notes of the harness this fake stands in for off,
+	// "" where it says nothing. Set it before the first collection.
+	NotesOff string
+
 	// CallIDKey is what [FakeRunner.CallIDMeta] answers: the `_meta` key the
 	// harness this fake stands in for sends each call's id under, "" for
 	// none. Set it before the launch that should read it.
@@ -916,6 +921,10 @@ func (r *FakeRunner) Name() string { return r.name }
 // ReadsNotes answers [FakeRunner.TakesNotes]: the optional answer a runner
 // whose harness takes a person's notes between its steps gives the coordinator.
 func (r *FakeRunner) ReadsNotes() bool { return r.TakesNotes }
+
+// NotesOffWhy answers [FakeRunner.NotesOff]: the optional answer a runner gives
+// the warning a run that never asked for its notes gets ([notesOffExplainer]).
+func (r *FakeRunner) NotesOffWhy() string { return r.NotesOff }
 
 // CallIDMeta answers [FakeRunner.CallIDKey]: the optional answer a runner whose
 // harness names each of its calls gives the launch ([CallIdentifier]).
