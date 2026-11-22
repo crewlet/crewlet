@@ -1,15 +1,14 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -101,7 +100,7 @@ func (e *statusError) Error() string { return e.op + ": it answered " + e.status
 
 // skillSet is the run's skills as the runner installed them: the directory
 // they are written to, one directory per skill holding its SKILL.md, and the
-// SHA-256 of each SKILL.md as written, by name (-skills-digests). A load is
+// SHA-256 of each SKILL.md as written, by name (-skill-digest). A load is
 // judged against that digest, never against the file as it stands when the
 // model reads it, which the model may have rewritten ([appServer.completed]).
 type skillSet struct {
@@ -109,39 +108,28 @@ type skillSet struct {
 	digests map[string][sha256.Size]byte
 }
 
-// maxDigestLine bounds one line of -skills-digests: a digest, a space and a
-// skill's listed name, a few dozen bytes; a line past 4 KiB is no line the
-// runner wrote.
-const maxDigestLine = 4 << 10
+// digestFlag is -skill-digest, given once per skill: `name=hex`, the skill's
+// listed name and its SKILL.md's SHA-256 as the runner wrote it. On the
+// command line, which the runner fixes before the model runs: digests of the
+// skills' words, no secret, never a file in a directory the model can write.
+type digestFlag map[string][sha256.Size]byte
 
-// readDigests reads -skills-digests, written by the runner as it installed
-// the skills: one line per skill, its SKILL.md's SHA-256 in hex, a space, and
-// its name. A line of any other shape, or a name twice, refuses the file.
-func readDigests(path string) (map[string][sha256.Size]byte, error) {
-	f, err := os.Open(path) //nolint:gosec // the file the runner names
-	if err != nil {
-		return nil, usageError("reading the skill digests -skills-digests %s: %v", path, err)
+func (d digestFlag) String() string { return fmt.Sprintf("%d skills", len(d)) }
+
+// Set takes one `name=hex`: a name that is one plain path element, given once,
+// and a whole SHA-256 in hex.
+func (d digestFlag) Set(value string) error {
+	name, sum, ok := strings.Cut(value, "=")
+	var digest [sha256.Size]byte
+	if !ok || name == "" || strings.ContainsAny(name, "/ ") || len(sum) != hex.EncodedLen(sha256.Size) {
+		return fmt.Errorf("%q is not name=sha256-hex", value)
 	}
-	defer func() { _ = f.Close() }() // read only: nothing a failed close loses
-	out := map[string][sha256.Size]byte{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 256), maxDigestLine)
-	for sc.Scan() {
-		sum, name, ok := strings.Cut(sc.Text(), " ")
-		var digest [sha256.Size]byte
-		if !ok || len(sum) != hex.EncodedLen(sha256.Size) || name == "" || strings.ContainsAny(name, " /") {
-			return nil, usageError("-skills-digests %s holds a line that is no digest and skill name", path)
-		}
-		if _, bad := hex.Decode(digest[:], []byte(sum)); bad != nil {
-			return nil, usageError("-skills-digests %s holds a digest that is not hex: %v", path, bad)
-		}
-		if _, twice := out[name]; twice {
-			return nil, usageError("-skills-digests %s names skill %s twice", path, name)
-		}
-		out[name] = digest
+	if _, err := hex.Decode(digest[:], []byte(sum)); err != nil {
+		return fmt.Errorf("%q holds a digest that is not hex: %w", value, err)
 	}
-	if err = sc.Err(); err != nil {
-		return nil, usageError("reading the skill digests -skills-digests %s: %v", path, err)
+	if _, twice := d[name]; twice {
+		return fmt.Errorf("skill %s is named twice", name)
 	}
-	return out, nil
+	d[name] = digest
+	return nil
 }

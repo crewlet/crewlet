@@ -377,7 +377,7 @@ func (a *appServer) counted(params json.RawMessage) {
 // its output, so a load is a command that succeeded, whose one action is a
 // read of that file (named, resolved against the command's directory,
 // exactly), and whose output's SHA-256 is the one the runner recorded for that
-// skill (-skills-digests). Never the file as it stands now: a model that
+// skill (-skill-digest). Never the file as it stands now: a model that
 // rewrote it and read it back read no skill of the run's. Anything else (a
 // listing, a test, an echo, a failed or partial read, an output Codex cut
 // short, another skill's file, a script) is no load, and the bridge's guard

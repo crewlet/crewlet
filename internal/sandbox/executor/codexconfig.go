@@ -2,8 +2,6 @@ package executor
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -297,16 +295,14 @@ func writeCodexNoteHelper(ctx context.Context, box sandbox.Sandbox, paths Paths)
 // writeCodexSkills writes each of a run's skills as
 // `<skills>/<listed name>/SKILL.md` ([Paths.CodexSkills]), after removing
 // every skill an earlier run wrote there, so a reused box lists only this
-// run's, and the digest of each as written ([Paths.CodexSkillDigests]). The
-// note helper reports each load ([codexStartHelper]): Codex reads a skill's
-// file through its shell, which the helper sees off the app-server and holds
-// to that digest.
+// run's. The note helper reports each load ([codexStartHelper]): Codex reads
+// a skill's file through its shell, which the helper sees off the app-server
+// and holds to the digest of the file as written ([codexSkillDigests]).
 func writeCodexSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.Skill, paths Paths) error {
 	if _, err := box.Exec(ctx, "rm -rf "+sandbox.ShellQuote(paths.CodexSkills())+"/"+
 		sandbox.ShellQuote(sandbox.SkillNamespace+":")+"*", sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: removing an earlier run's Codex skills: %w", err)
 	}
-	var digests strings.Builder
 	for _, s := range skills {
 		file, err := skillFile(s.Listed(), s.Description, s.Body)
 		if err != nil {
@@ -315,14 +311,6 @@ func writeCodexSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox
 		if err = box.WriteFile(ctx, paths.CodexSkills()+"/"+s.Listed()+"/SKILL.md", file); err != nil {
 			return fmt.Errorf("executor: writing the run's skill %q: %w", s.Listed(), err)
 		}
-		sum := sha256.Sum256(file)
-		digests.WriteString(hex.EncodeToString(sum[:]) + " " + s.Listed() + "\n")
-	}
-	if len(skills) == 0 {
-		return nil
-	}
-	if err := box.WriteFile(ctx, paths.CodexSkillDigests(), []byte(digests.String())); err != nil {
-		return fmt.Errorf("executor: writing the digests of the run's skills: %w", err)
 	}
 	return nil
 }
