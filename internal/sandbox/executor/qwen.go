@@ -99,6 +99,14 @@ func qwenScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	// Code telemetry on, so it starts without them. Its key is in its settings,
 	// never the environment ([QwenCode.Output]).
 	line(otelExportUnset)
+	// AND THE SIGN-IN'S NAMES ([sandbox.RunRequest.SignInEnv]): Qwen Code reads
+	// none of them in a run, its key being in its settings and a subscription
+	// in its login file, and offers no way to keep a name from its tools
+	// alone, so the helper, and with it Qwen Code, starts without them.
+	// WriteConfig has refused a name no shell can unset ([toolEnvOmitted]).
+	if names, err := toolEnvOmitted(req.SignInEnv); err == nil && len(names) > 0 {
+		line("unset " + strings.Join(names, " "))
+	}
 	b.WriteString(launchHarness("node "+q(paths.QwenHelper())+" run "+q(paths.QwenHelperConfig())+` "$s" "$m"`, paths))
 	line(qwenLocate(paths))
 	b.WriteString(chatPack(paths, packAt{staged: paths.SessionStaging(), dest: paths.SessionCapture()}, paths.QwenDir()))
@@ -162,6 +170,9 @@ func (QwenCode) artifacts(p Paths) (files, dirs []string) {
 // home, and the helper hands it no MCP servers of its own.
 func (q QwenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
+	if _, err := toolEnvOmitted(req.SignInEnv); err != nil {
+		return "", err
+	}
 	system := req.System
 	if req.Steer.Set() {
 		system = withNoteInstruction(system, q.NoteInstruction())

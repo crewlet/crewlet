@@ -289,3 +289,45 @@ echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
 		}
 	}
 }
+
+// A QWEN RUN STARTS ITS HARNESS WITHOUT ITS SIGN-IN. Qwen Code reads none of
+// the names it signs in by in a run (its key is in its settings, a
+// subscription in its login file) and offers no way to keep a name from its
+// tools alone, so the run's script starts the helper, and with it Qwen Code,
+// without every name the run's sign-in is ([sandbox.RunRequest.SignInEnv]),
+// an entry's own credential-named variable included. What is no sign-in
+// stays: the endpoints Qwen Code reads and the Gitlet names.
+//
+// Mutation, red: leave the sign-in's names in the environment.
+func TestAQwenRunStartsItsHarnessWithoutItsSignIn(t *testing.T) {
+	t.Parallel()
+	runner, b := qwenBox(t, `env > "$HOME/helper-env"
+echo '{"type":"crewlet_qwen_end","stop_reason":"end_turn"}'
+`)
+	_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin",
+		SignInEnv: []string{"OPENAI_API_KEY", "DASHSCOPE_API_KEY", "CODING_PLAN_TOKEN"},
+		Env: map[string]string{
+			"OPENAI_API_KEY":             "key-placeholder",
+			"DASHSCOPE_API_KEY":          "entry-key-placeholder",
+			"CODING_PLAN_TOKEN":          "entry-token-placeholder",
+			"OPENAI_BASE_URL":            "https://gateway.example.com/v1",
+			"QWEN_SUBSCRIPTION_BASE_URL": "https://subscription.example.com",
+			sandbox.GitURLVar:            "https://git.example.com/box/git",
+			sandbox.GitAccessFileVar:     "/home/box/.crewlet/git-access",
+		}})
+	if !res.Success {
+		t.Fatalf("the run failed: %q / %q", res.Error, res.Transcript)
+	}
+	env := "\n" + boxFile(t, b, b.Home()+"/helper-env")
+	for _, name := range []string{"OPENAI_API_KEY", "DASHSCOPE_API_KEY", "CODING_PLAN_TOKEN"} {
+		if strings.Contains(env, "\n"+name+"=") {
+			t.Errorf("Qwen Code starts with %s, a name the run signs in by", name)
+		}
+	}
+	for _, kept := range []string{"OPENAI_BASE_URL", "QWEN_SUBSCRIPTION_BASE_URL", sandbox.GitURLVar,
+		sandbox.GitAccessFileVar} {
+		if !strings.Contains(env, "\n"+kept+"=") {
+			t.Errorf("Qwen Code starts without %s, which is no sign-in", kept)
+		}
+	}
+}
