@@ -72,9 +72,14 @@
 // everything that happened to one that ran is a result its caller classifies
 // (exec.go).
 //
-// A call handed a key runs in a key home never seeded with the login and never
-// carried back from: a harness may keep the key in its login file (see
+// A call handed a key runs in a key home of its seat AND entry, never seeded
+// with the login and never carried back from: a harness may keep the key in its
+// login file, where another entry's call would sign in with it (see
 // [Workspace.AcquireForKey]).
+//
+// A harness that keeps a daemon for its home's calls
+// ([harnessprofile.HomeDaemon]) runs one call per home, and its daemon ends with
+// the call that started it ([Workspace.stopDaemon]).
 //
 // A bench is never shared with the fleet: each peer learns a spent plan from
 // its own calls once per window, and a coordination read in front of every
@@ -451,7 +456,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 
 	var checkout *Checkout
 	if p.signsInWithKey() {
-		checkout, err = p.ws.AcquireForKey(ctx, seat, callID)
+		checkout, err = p.ws.AcquireForKey(ctx, seat, p.key, callID, p)
 	} else {
 		checkout, err = p.ws.Acquire(ctx, seat, callID, p)
 	}
@@ -892,7 +897,7 @@ func (p *Provider) completion(
 	//
 	// NOT FOR A RUN THE HARNESS SAID FAILED, which is refused below and charged
 	// nothing. A vendor's report of a failed run may hold no counts by design
-	// (Hermes writes null for a refused key or a spent plan, on 0.21.5), and
+	// (Hermes 0.23.3 writes 0 and null for a refused key or a spent plan), and
 	// warning of drift then names the profile as broken exactly when the
 	// operator is reading the log for the refusal.
 	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() && !failed {
