@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -107,25 +106,47 @@ func (Muse) hookAnswer(event, take string, notes []HookNote) string {
 	for i, n := range notes {
 		messages[i] = n.Message
 	}
-	text := strings.Join(messages, claudeNoteSeparator)
-	answer := map[string]any{museTakeField: claudeTakeToken(take)}
+	text := museJSONString(strings.Join(messages, claudeNoteSeparator))
+	token := museJSONString(claudeTakeToken(take))
 	switch event {
 	case claudeEventToolBatch:
-		answer["hookSpecificOutput"] = map[string]string{"hookEventName": "PostToolUse", "additionalContext": text}
+		return `{"` + museTakeField + `":` + token +
+			`,"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":` + text + `}}`
 	case claudeEventFinish:
-		answer["decision"], answer["reason"] = "block", text
-	default:
-		return ""
+		return `{"` + museTakeField + `":` + token + `,"decision":"block","reason":` + text + `}`
 	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	// RAW UTF-8: a person's "<" or "&" reaches the model as itself, and a
-	// character escaped would cost the ceiling six bytes.
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(answer); err != nil {
-		return ""
+	return ""
+}
+
+// museJSONString is s as a JSON string escaping only what JSON requires (the
+// quote, the backslash and U+0000-U+001F), every other character raw UTF-8,
+// which [museItemUnits] counts at three bytes a unit at most: encoding/json
+// escapes `<`, `>` and `&` unless told not to, and U+2028 and U+2029 always,
+// six bytes each. A byte that is not UTF-8 is written as U+FFFD, as
+// encoding/json writes it.
+func museJSONString(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	for _, r := range s {
+		switch {
+		case r == '"' || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r < 0x20:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			b.WriteRune(r)
+		}
 	}
-	return strings.TrimSuffix(buf.String(), "\n")
+	b.WriteByte('"')
+	return b.String()
 }
 
 // museTake is the note helper's take config ([Paths.MuseTakeConfig]): the

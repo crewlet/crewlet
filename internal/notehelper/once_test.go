@@ -152,6 +152,25 @@ func TestAMuseFiringHandsTheAnswerOnStdoutAndTheTokenOnStderr(t *testing.T) {
 	}
 }
 
+// THE WIDEST ITEM PASSES THROUGH AS ITS RAW BYTES: an answer whose text is
+// 4,505 units of U+2028, written raw by the engine, reaches stdout raw and
+// within Muse Code's 16,384 bytes, never re-escaped at six bytes a unit as
+// encoding/json writes U+2028 in a string it encodes.
+//
+// Mutation: decode the answer's text and encode it again.
+func TestAMuseFiringKeepsTheWidestItemRaw(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("\u2028", 4505)
+	m := newFakeMCP(t, `{"crewlet_take":"[crewlet take t-1]",`+
+		`"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"`+text+`"}}`)
+	_, stdout, stderr := fire(t, []string{"-adapter", "muse-hook", "-config", takeConfigFile(t, m), "-slot", "1"},
+		`{"hook_event_name":"PostToolUse","tool_name":"bash"}`, museEnv)
+	if stderr != "[crewlet take t-1]\n" || !strings.Contains(stdout, text) || len(stdout) > museAnswerBytes {
+		t.Errorf("stdout is %d bytes (raw %v), stderr %q: want the text raw within %d", len(stdout),
+			strings.Contains(stdout, text), stderr, museAnswerBytes)
+	}
+}
+
 // A SUBAGENT'S FIRING TAKES NOTHING: a note handed to it would bind one
 // delegated piece of work and be lost with it.
 //
