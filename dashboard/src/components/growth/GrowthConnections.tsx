@@ -11,6 +11,7 @@
 import { useId, type ReactNode } from "react";
 import { Tag, Text } from "@crewlethq/ui";
 import { AccountList } from "./AccountList.tsx";
+import { reachWords } from "./words.ts";
 import type { GrowthAccountState, GrowthConnection, GrowthRoleOffer } from "~/contract/growth.ts";
 import "~/styles/growth.css";
 
@@ -40,10 +41,13 @@ export function breakable(identifier: string): ReactNode[] {
 }
 
 export function GrowthConnections({
+  kind,
   product,
   connections,
   roles,
 }: {
+  /** The product's kind, whose words name what a connection reaches. */
+  kind: string;
   product: string;
   connections: readonly GrowthConnection[];
   /** The product's roles, to name the ones each connection holds. */
@@ -53,6 +57,7 @@ export function GrowthConnections({
   if (connections.length === 0) {
     return <Text as="p">{product} has no connection yet.</Text>;
   }
+  const reach = reachWords(kind);
   const roleName = (id: string) => roles.find((role) => role.id === id)?.name ?? id;
   // A CONNECTION'S ID IS THE DOCUMENT'S, any text: the page's own ids are made here.
   const named = (index: number) => `${base}-${index}`;
@@ -89,13 +94,15 @@ export function GrowthConnections({
               ))
             )}
           </div>
+          {/* AN OPEN CONNECTION NOT READ YET reaches what its credentials
+              reach, which is not nothing. */}
           {connection.accounts.length === 0 ? (
             <Text as="p" tone="secondary">
-              Reaches no account yet.
+              {connection.open ? reach.every : reach.none}
             </Text>
           ) : (
             <AccountList
-              label={`Accounts reached through ${nameOf(connection)}`}
+              label={`${reach.noun} reached through ${nameOf(connection)}`}
               rows={connection.accounts.map((account) => ({
                 key: account.account,
                 name: account.account_name,
@@ -103,11 +110,17 @@ export function GrowthConnections({
                 facts: [
                   account.currency,
                   account.time_zone,
-                  accountStateWords(account.state),
+                  account.detail,
+                  account.state ? accountStateWords(account.state) : undefined,
                 ].filter((fact): fact is string => Boolean(fact)),
               }))}
             />
           )}
+          {connection.unread ? (
+            <Text as="p" variant="caption" tone="secondary">
+              {connection.unread}
+            </Text>
+          ) : null}
         </section>
       ))}
     </div>
