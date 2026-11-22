@@ -840,6 +840,20 @@ type LogView struct {
 // written, so the call is not run and is answered as unrecorded.
 var ErrCallsInFlight = errors.New("sandbox: the run's log holds as many calls in flight as it keeps")
 
+// ErrSessionBindRefused is a minting job's reported session the record will not
+// bind ([PendingStore.BindSession]): the run fails closed, its session no id the
+// engine can trust.
+var ErrSessionBindRefused = errors.New("sandbox: the session the job reported is refused")
+
+// SessionBind is a minting job's report to bind ([PendingStore.BindSession]): the
+// job, the id its box reported, and whether its box continued the session its
+// launch named (the box's record of its session) rather than starting its own.
+type SessionBind struct {
+	Launch    string
+	ID        string
+	Continued bool
+}
+
 // ErrJobReplaced is what [PendingStore.AppendBridgeCall] answers BESIDE TRUE for
 // an append of a job a relaunch replaced while carrying its round on: its calls
 // are in the round's log (marked late, [BridgeCall.Late]) and what they cost is
@@ -2733,6 +2747,17 @@ type PendingStore interface {
 	// [SessionStart.Valid] is an error.
 	MarkSessionStart(ctx context.Context, turnID, launch string, start SessionStart) (bool, error)
 
+	// BindSession binds the session a minting harness's job reported to the job's record
+	// ([LaunchRecord.Minted]) and answers the record holding it. ONCE PER JOB: the same id
+	// again answers as bound; another, a job that continued its session reporting any id
+	// but that one, one that started its own reporting the one it was asked to continue,
+	// another job's record, a gone one, and an id another live run claims are
+	// [ErrSessionBindRefused]. The claim, fleet-wide, is taken before the record is
+	// written and goes with the record, a relaunch's job taking its turn's over. NO
+	// FENCE: a fact about the job, as a settle is. Whether any turn's row names the id is
+	// the caller's to ask first ([Coordinator.bindMinted]).
+	BindSession(ctx context.Context, turnID string, bind SessionBind) (PendingRun, error)
+
 	// MarkEndedAtDeadline records that the collection of the job named saw it still
 	// working past its turn's wall-clock cap and is ending it
 	// ([LaunchRecord.EndedAtDeadline]), reporting whether this call recorded it. ONCE
@@ -3441,6 +3466,12 @@ type LaunchRecord struct {
 	// box ran ([PendingRun.SessionRan]).
 	SessionStart SessionStart `json:"session_start,omitempty"`
 
+	// Minted is the session a minting harness's job reported and the coordinator bound to it
+	// ([PendingStore.BindSession]): once, a fresh id or the one its launch continued; the
+	// job's session wherever it is read ([PendingRun.SessionRan]). Empty until a report is
+	// bound, and for a harness that names its session as its run starts.
+	Minted string `json:"minted,omitempty"`
+
 	// ResumeCarry is what the turn resuming from this job's collection does with its round,
 	// said as that turn began ([PendingStore.MarkResumeBegun], [ResumeRequest.Begin]):
 	// collects it, or carries it on. The claim's own: cleared by the release handing the
@@ -3717,8 +3748,11 @@ func (l LaunchRecord) readBriefs(brief, fresh []int) []int {
 // a session of its own, since continuing in place would hand the guard skill loads made
 // perhaps in the other session. THIS IS THE IN-PLACE RELAUNCH'S WORD ALONE: a kept capture
 // names its session from the box's own record ([SessionCapture.SessionID]) and continues
-// it in whichever box it gets.
+// it in whichever box it gets. A minting harness's job ran the one bound ([LaunchRecord.Minted]).
 func (r PendingRun) SessionRan() string {
+	if r.Launch.Minted != "" {
+		return r.Launch.Minted
+	}
 	switch r.Launch.SessionStart {
 	case SessionStartFresh:
 		return r.Launch.FreshSessionID

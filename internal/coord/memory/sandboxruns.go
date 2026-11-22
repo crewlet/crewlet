@@ -122,6 +122,12 @@ func (f *Fleet) applyRunChange(turnID string, read coord.Record, change coord.Sa
 		// ITS PARTS GO WITH IT, under the same lock: this twin removes
 		// them at once, where the KV removes the record and then each part.
 		delete(f.runs, turnID)
+		// AND ITS SESSION CLAIMS, which carry the record's lifetime.
+		for id, claim := range f.sessionClaims {
+			if claim.Turn == turnID {
+				delete(f.sessionClaims, id)
+			}
+		}
 		for _, part := range coord.RunParts() {
 			key := runPartKey{turnID, part}
 			if _, held := f.runParts[key]; held {
