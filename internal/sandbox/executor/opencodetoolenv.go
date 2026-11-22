@@ -10,8 +10,12 @@ import _ "embed"
 //go:embed opencode_toolenv.js
 var openCodeToolEnvPlugin []byte
 
-// openCodeServerEnv is the variables the script hands an OpenCode run's server
-// alone ([openCodeScript]): the run's configuration and the session its notes
-// plugin admits to. Its tools' commands are started without them
-// ([toolEnvOmitted]).
-var openCodeServerEnv = []string{"OPENCODE_CONFIG_CONTENT", "CREWLET_STEER_SESSION"}
+// openCodeHarnessEnv is the variables an OpenCode run's harness alone reads,
+// beside its sign-in, which its tools' commands start without
+// ([toolEnvOmitted]): what the script hands its server alone ([openCodeScript]),
+// the run's configuration and the session its notes plugin admits to, and the
+// run's telemetry export, its endpoint carrying the run's token
+// ([sandbox.OtelReceiver.RunEnv]). Measured on 2.3.0, OpenCode hands its
+// commands all four otherwise.
+var openCodeHarnessEnv = []string{"OPENCODE_CONFIG_CONTENT", "CREWLET_STEER_SESSION",
+	"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS"}

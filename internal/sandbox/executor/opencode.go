@@ -1061,9 +1061,9 @@ func jsonStringify(s string) string {
 // without it.
 func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
 	// THE COMMANDS ITS MODEL RUNS START WITHOUT WHAT THE HARNESS ALONE READS:
-	// the names it signs in by and the server's own variables, on every run
+	// the names it signs in by and its own variables, on every run
 	// (opencode_toolenv.js).
-	omitted, refused := toolEnvOmitted(req.SignInEnv, openCodeServerEnv...)
+	omitted, refused := toolEnvOmitted(req.SignInEnv, openCodeHarnessEnv...)
 	if refused != nil {
 		return "", refused
 	}
