@@ -166,7 +166,7 @@ func TestAMintingRunIsCollectedInTheSessionItReported(t *testing.T) {
 			if res.SessionID != c.want {
 				t.Errorf("the run was collected in session %q, want %q", res.SessionID, c.want)
 			}
-			if refused := !res.Success && strings.Contains(res.Error, "the session the run reported is refused"); refused != c.refused {
+			if refused := !res.Success && strings.Contains(res.Error, "the session the job reported is refused"); refused != c.refused {
 				t.Errorf("the run failed closed on its report: %v, want %v (success %v, %q)", refused, c.refused,
 					res.Success, res.Error)
 			}

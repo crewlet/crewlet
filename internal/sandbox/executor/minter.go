@@ -41,8 +41,9 @@ func reportSession(paths Paths, idVar string) string {
 // ErrSessionReport is a minting run's report of its session refused: not one
 // id a harness names, or, on a run that continued its session, any id but the
 // continued one. The run fails closed on it: its session is no id the engine
-// can trust, so nothing is collected, carried or bound under it.
-var ErrSessionReport = errors.New("executor: the session the run reported is refused")
+// can trust, so nothing is collected, carried or bound under it. It is the
+// bind's refusal ([sandbox.ErrSessionBindRefused]), whichever reads it first.
+var ErrSessionReport = fmt.Errorf("executor: the run's session report: %w", sandbox.ErrSessionBindRefused)
 
 // MintsSession reports whether the runner's harness mints its session's id as
 // it starts ([sessionMinter]): its run's start names "" for a fresh session

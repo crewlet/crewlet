@@ -1075,11 +1075,11 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	// run did not report, so it collects no session and no capture, and the run
 	// fails closed.
 	if r.MintsSession() {
-		minted, err := r.reportedSession(ctx, box, paths, handle, rec)
-		if errors.Is(err, ErrSessionReport) {
-			refused, minted = append(refused, err.Error()), ""
-		} else if err != nil {
-			return sandbox.Result{}, err
+		minted, mintErr := r.reportedSession(ctx, box, paths, handle, rec)
+		if errors.Is(mintErr, ErrSessionReport) {
+			refused, minted = append(refused, mintErr.Error()), ""
+		} else if mintErr != nil {
+			return sandbox.Result{}, mintErr
 		}
 		result.SessionID, rec.id = minted, minted
 	}
