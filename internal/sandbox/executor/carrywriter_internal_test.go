@@ -44,7 +44,7 @@ func TestEveryCarrierRefusesABoxThatNamedNoReleaseAndJudgesAWriterAlone(t *testi
 	}
 }
 
-// AN UNREAD WRITER CONTINUES IN NO BOX, for every carrier (Kimi Code's too): a
+// AN UNREAD WRITER CONTINUES IN NO BOX, for every carrier (all five): a
 // session whose writer named no release this build reads (a pre-release, a
 // snapshot, none, which releaseOf reads as "") is refused alone and beside a
 // box of every release, saying why; read as current, it would be carried into
@@ -64,6 +64,7 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 		{"claude-code", ClaudeCode{}, []string{"2.1.310", "2.1.322", "9.0.0"}},
 		{"opencode", OpenCode{}, []string{"2.0.32", "2.2.7", "9.0.0"}},
 		{"codex", Codex{}, []string{codexCarryRelease}},
+		{"copilot", Copilot{}, []string{copilotFloor}},
 		{"kimi-code", Kimi{}, []string{kimiSupported}},
 	} {
 		if ok, why := c.carrier.ContinuesWriter(""); ok || why == "" {
