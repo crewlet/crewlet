@@ -84,8 +84,8 @@ func TestTwoMuseHooksFiringInOneStepAreEachConfirmed(t *testing.T) {
 //
 // Mutation: hold a token off any run of the plugin's hooks.
 func TestAMuseHookKilledMidTakeLeavesItsTakeUnconfirmed(t *testing.T) {
-	record := strings.Replace(string(museFixture(t, "hooks.session.jsonl")),
-		`"status":"timed_out","stderr":""`, `"status":"timed_out","stderr":"`+museToken("2")+`\n"`, -1)
+	record := strings.ReplaceAll(string(museFixture(t, "hooks.session.jsonl")),
+		`"status":"timed_out","stderr":""`, `"status":"timed_out","stderr":"`+museToken("2")+`\n"`)
 	if !strings.Contains(record, museToken("2")) {
 		t.Fatal("the fixture's timed-out run was not found")
 	}
@@ -128,7 +128,9 @@ func TestACompactionBeforeTheNextMuseRequestLeavesTheTakeUnconfirmed(t *testing.
 // Mutation: keep a finish's pending take across a session's start.
 func TestAMuseFinishTakeIsNotConfirmedAcrossARestart(t *testing.T) {
 	restart := []byte(`{"payload_type":"session.started","payload":{}}` + "\n")
-	record := insertAfter(t, museLines(t, "hooks.session.jsonl"), "plugin:crewlet-notes:stop", restart)
+	// After the Stop hook's end, which alone records it `blocked`: its take
+	// is pending there, and the restart comes before the next request.
+	record := insertAfter(t, museLines(t, "hooks.session.jsonl"), `"status":"blocked"`, restart)
 	if held := museHeldOf(t, record); held[museToken("9")] || !held[museToken("1")] {
 		t.Fatalf("held %v: want the finish's take unconfirmed, the batch's held", held)
 	}
@@ -178,18 +180,20 @@ func TestAMuseHookAnswerCarriesOneItemWithinItsCeiling(t *testing.T) {
 	for _, unit := range []string{"<", "\u2028", "中"} {
 		widest := strings.Repeat(unit, 4505)
 		for _, event := range []string{claudeEventToolBatch, claudeEventFinish} {
-			answer := (Muse{}).hookAnswer(event, "11111111-1111-4111-8111-111111111111",
-				[]HookNote{{Message: widest}})
-			var fields map[string]json.RawMessage
-			if err := json.Unmarshal([]byte(answer), &fields); err != nil {
-				t.Fatalf("%q %s: %v", unit, event, err)
+			const take = "11111111-1111-4111-8111-111111111111"
+			answer := (Muse{}).hookAnswer(event, take, []HookNote{{Message: widest}})
+			if !json.Valid([]byte(answer)) {
+				t.Fatalf("%q %s: the answer is no JSON", unit, event)
 			}
-			delete(fields, museTakeField)
-			var buf bytes.Buffer
-			enc := json.NewEncoder(&buf)
-			enc.SetEscapeHTML(false)
-			_ = enc.Encode(fields)
-			handed := strings.TrimSuffix(buf.String(), "\n")
+			// THE NOTE HELPER'S CUT: the token's field out, every other byte
+			// as it stands (internal/notehelper's splitTake), so the same
+			// length whatever order its fields come in.
+			field := `"` + museTakeField + `":` + museJSONString(claudeTakeToken(take)) + `,`
+			handed, cut := strings.CutPrefix(answer, "{"+field)
+			if !cut {
+				t.Fatalf("%q %s: the answer does not open with the token's field: %.80s", unit, event, answer)
+			}
+			handed = "{" + handed
 			if len(handed) > museHookAnswerBytes || strings.Contains(handed, `\u`) {
 				t.Errorf("%q %s: the answer Muse is handed is %d bytes (escaped %v), past %d", unit, event,
 					len(handed), strings.Contains(handed, `\u`), museHookAnswerBytes)

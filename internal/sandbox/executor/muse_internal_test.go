@@ -480,10 +480,11 @@ func TestAMuseBoxsReleaseDecidesTheRun(t *testing.T) {
 			museSessionGate(Session{ID: id, Continues: true, Fresh: "fresh-id"}, p, false) +
 			`printf '%s %s\n' "$k" "$w"`
 		out := strings.TrimSpace(string(runSh(t, script)))
+		k, _, _ := strings.Cut(out, " ")
 		switch {
 		case c.refused && out != "refused":
 			t.Errorf("%s: the script said %q, want it refused", c.version, out)
-		case !c.refused && !strings.HasPrefix(out, c.k+" "):
+		case !c.refused && k != c.k:
 			t.Errorf("%s: the script said %q, want continued %s", c.version, out, c.k)
 		case c.k == "no" && !strings.Contains(out, "1.4.30"):
 			t.Errorf("%s: a newer release's fresh start says %q, naming no release", c.version, out)
