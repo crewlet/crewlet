@@ -66,7 +66,8 @@
 // between.
 //
 // A row the engine itself replaces, such as an MCP server's OAuth grant
-// (`mcp/<server>/refresh`, rotated at each renewal), is read with its version
+// (`mcp/<server>/refresh`, rotated at each renewal) or an integration's
+// consent grant (`integration/<kind>/refresh`), is read with its version
 // ([Estate.Held]) and rewritten only at it ([Estate.Swap]); only the engine's
 // view deletes it ([Estate.Delete]).
 package fleetsecrets
