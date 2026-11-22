@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/googlegrowth"
 )
 
 // The two kinds of Site Verification resource, as its API types them.
@@ -138,9 +139,8 @@ func resourceOf(site string) (kind, identifier, id string) {
 
 // bodySite is the property a Site Verification body's `site` names.
 func bodySite(body map[string]any) (string, bool) {
-	s, _ := body["site"].(map[string]any)
-	kind, _ := s["type"].(string)
-	identifier, _ := s["identifier"].(string)
+	kind, _ := googlegrowth.Lookup(body, "site.type").(string)
+	identifier, _ := googlegrowth.Lookup(body, "site.identifier").(string)
 	return verifiedSite(kind, identifier)
 }
 

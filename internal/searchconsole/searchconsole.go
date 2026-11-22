@@ -33,7 +33,9 @@
 // is held to one of them before Google is reached: a site in its path or body,
 // a page a URL prefix starts or a domain's host holds, or a Site Verification
 // resource read back as the property it verifies (dns://example.com is
-// sc-domain:example.com). A listing is cut to the seat's sites.
+// sc-domain:example.com). A body's field is read in either spelling Google
+// takes (siteUrl, site_url), and one named in both with two values names no
+// site, so it is refused. A listing is cut to the seat's sites.
 //
 // # A write, under its site's lease
 //

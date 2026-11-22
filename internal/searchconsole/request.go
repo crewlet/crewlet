@@ -60,7 +60,9 @@ func newRequest(sites []string, op growth.Operation, path, query map[string]stri
 	return req, nil
 }
 
-// siteOf is the site req acts in, "" for none.
+// siteOf is the site req acts in, "" for none. A body's field is read in
+// either spelling Google takes, and one named in both with two values names
+// no site (googlegrowth's Request.Field).
 func siteOf(sites []string, req googlegrowth.Request) (string, error) {
 	invalid := func(format string, args ...any) error {
 		return refusal(growth.RefusedInvalid, fmt.Sprintf(format, args...)+" No vendor was reached.")
@@ -74,15 +76,15 @@ func siteOf(sites []string, req googlegrowth.Request) (string, error) {
 		}
 		return site, nil
 	case "searchconsole.urlInspection.index.inspect":
-		site, _ := req.Body["siteUrl"].(string)
-		page, _ := req.Body["inspectionUrl"].(string)
+		site, _ := req.Field("siteUrl").(string)
+		page, _ := req.Field("inspectionUrl").(string)
 		if !config.SearchConsoleSite(site) || !covers(site, page) {
 			return "", invalid("URL inspection names the property as body.siteUrl and a page under it as "+
 				"body.inspectionUrl; %q is not a page of %q.", page, site)
 		}
 		return site, nil
 	case "indexing.urlNotifications.publish", "indexing.urlNotifications.getMetadata":
-		page, _ := req.Body["url"].(string)
+		page, _ := req.Field("url").(string)
 		if req.Op.Method == "GET" {
 			page = req.Query.Get("url")
 		}
@@ -95,7 +97,7 @@ func siteOf(sites []string, req googlegrowth.Request) (string, error) {
 	}
 	if id, ok := req.Params["id"]; ok {
 		site, _ := resourceSite(id)
-		if named, given := req.Body["site"]; given && named != nil {
+		if named := req.Field("site"); named != nil {
 			if other, ok := bodySite(req.Body); !ok || other != site {
 				return "", invalid("body.site names %q, but the resource %s verifies %q.", other, id, site)
 			}
