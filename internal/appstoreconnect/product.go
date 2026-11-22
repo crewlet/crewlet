@@ -87,8 +87,9 @@ type team struct {
 	appsAt time.Time
 	// unread is why the last read of apps failed, "" where it did not.
 	unread string
-	// listed counts the reads that listed the apps.
-	listed int
+	// started counts the reads begun, and listed is the count of the last
+	// one that listed the apps, so a caller knows a read began after it asked.
+	started, listed int
 	// reading admits one read of the team's apps at a time: a caller that
 	// waits for it gives up when its context ends.
 	reading chan struct{}
@@ -209,11 +210,12 @@ func (p *Product) appsOf(ctx context.Context, t *team) ([]appInfo, error) {
 
 // readApps is [Product.appsOf], read again where fresh; a failed read is
 // recorded on t for [Product.HeldReach] and keeps the list read before. One
-// read of a team runs at a time, and one that ends while a caller waited for
-// it answers that caller.
+// read of a team runs at a time. A read that ends while a caller waited
+// answers it, a fresh caller only by one that began after it asked, so an app
+// added just before Check now is in the answer.
 func (p *Product) readApps(ctx context.Context, t *team, fresh bool) ([]appInfo, error) {
 	t.mu.Lock()
-	seen := t.listed
+	asked := t.started
 	if !fresh && t.current(p.deps.Now()) {
 		defer t.mu.Unlock()
 		return t.apps, nil
@@ -226,10 +228,12 @@ func (p *Product) readApps(ctx context.Context, t *team, fresh bool) ([]appInfo,
 	}
 	defer func() { <-t.reading }()
 	t.mu.Lock()
-	if t.listed != seen || (!fresh && t.current(p.deps.Now())) {
+	if t.answers(fresh, asked, p.deps.Now()) {
 		defer t.mu.Unlock()
 		return t.apps, nil
 	}
+	t.started++
+	read := t.started
 	t.mu.Unlock()
 	apps, err := p.listApps(ctx, t)
 	t.mu.Lock()
@@ -242,9 +246,19 @@ func (p *Product) readApps(ctx context.Context, t *team, fresh bool) ([]appInfo,
 		}
 		return nil, err
 	}
-	t.apps, t.appsAt, t.unread = apps, p.deps.Now(), ""
-	t.listed++
+	t.apps, t.appsAt, t.unread, t.listed = apps, p.deps.Now(), "", read
 	return apps, nil
+}
+
+// answers reports t's held list as the answer for a caller who asked when
+// asked reads had begun: a fresh caller's where a read that began after it
+// asked listed the apps, any other caller's where the list is current; t.mu
+// is held.
+func (t *team) answers(fresh bool, asked int, now time.Time) bool {
+	if fresh {
+		return t.listed > asked
+	}
+	return t.current(now)
 }
 
 // current reports t's list read within reachTTL of now; t.mu is held.
