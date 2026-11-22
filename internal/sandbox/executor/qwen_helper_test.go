@@ -277,10 +277,9 @@ func qwenHelperConfirmsEachNoteByItsRecord(t *testing.T) {
 	}
 }
 
-// A NOTE QWEN CODE NEVER RECORDED IS SERVED AGAIN, NEVER LOST. Qwen Code
-// 0.28.3 records a drained note after the fact; one whose harness died
-// between the drain and the record is never confirmed, so the engine serves
-// it again, and the next run hands and confirms it.
+// A NOTE QWEN CODE NEVER RECORDED IS SERVED AGAIN, NEVER LOST. One whose
+// harness died between the drain and the record is never confirmed, so the
+// engine serves it again, and the next run hands and confirms it.
 //
 // Mutations, each red: confirm a note as it is handed (the first run
 // confirms what no session holds); confirm what was handed at the end
@@ -307,6 +306,38 @@ func TestANoteQwenNeverRecordedIsServedAgainNeverLost(t *testing.T) {
 	}
 }
 
+// A NOTE WHOSE REQUEST FAILED IS SERVED AGAIN, NEVER LOST. Qwen Code 0.28.3
+// records a drained note before the request carrying it goes out; when that
+// request fails (a 429 past its retries, a context overflow, a cancel), no
+// reply follows the record and the model never read the note. Qwen Code never
+// continues a session, so the helper confirms nothing of it, the engine
+// serves it again, and the next run hands and confirms it.
+//
+// Mutations, each red: confirm a match at stop whatever followed it; confirm
+// a note at its record, before the reply after it.
+func TestAQwenNoteWhoseRequestFailedIsServedAgain(t *testing.T) {
+	t.Parallel()
+	note := qwenNote{Seq: 1, ID: "n-1", Inbox: "qwen_1", Message: "## A note from eve, sent while this turn was running\nx"}
+	bridge := newQwenBridge(t, note)
+	first := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", nil, "QWEN_FAKE_AWAIT_NOTES=1",
+		"QWEN_FAKE_FAIL_AFTER_NOTE=1")
+	lines, code := first.finish(t)
+	if code == 0 || len(typed(lines, "crewlet_qwen_note")) != 1 {
+		t.Fatalf("the first run exited %d having handed %v, want a failure after handing the note",
+			code, typed(lines, "crewlet_qwen_note"))
+	}
+	if got := bridge.read(); len(got) != 0 {
+		t.Fatalf("a note whose request failed was confirmed read: %v", got)
+	}
+	second := startQwenHelper(t, bridge.steer(), "acp-note.jsonl", nil, "QWEN_FAKE_AWAIT_NOTES=1")
+	if _, code := second.finish(t); code != 0 {
+		t.Fatalf("the second run exited %d", code)
+	}
+	if got := bridge.read(); !slices.Equal(got, []string{"n-1"}) {
+		t.Errorf("after the second run the reads are %v, want n-1 once", got)
+	}
+}
+
 // A NOTE A COMPACTION KEEPS ONLY IN ITS SUMMARY IS NOT CONFIRMED (ADR-0177).
 // The stand-in records the note, then Qwen Code 0.28.3's own chat_compression
 // record of a note drained at the compaction point (chat-compact.jsonl), its
@@ -314,9 +345,11 @@ func TestANoteQwenNeverRecordedIsServedAgainNeverLost(t *testing.T) {
 // the summary prefix, the note is confirmed; moved from that tail into the
 // summary entry, a part of its own, it is not, and the engine serves it again.
 //
+// Kept only in a model entry of the tail, it is not either.
+//
 // Mutations, each red: pass compaction records over (the summarized note is
 // confirmed); count the summary entry as kept (the tail read from 0); confirm
-// a note at its record, before the response after it.
+// a note at its record, before the response after it; count a model entry.
 func TestAQwenNoteACompactionOnlySummarizedIsNotConfirmed(t *testing.T) {
 	t.Parallel()
 	const marker = "MARK-CN-START note at the compaction point MARK-CN-END"
@@ -335,12 +368,18 @@ func TestAQwenNoteACompactionOnlySummarizedIsNotConfirmed(t *testing.T) {
 	quoted := strings.Trim(string(mustJSON(t, note.Message)), `"`)
 	summarized := strings.Replace(strings.Replace(compaction, tail, "", 1),
 		summary, `"parts":[{"text":"`+marker+`"},{"text":"<state_snapshot>`, 1)
+	modelTail := strings.Replace(compaction, `{"role":"user","parts":[{"functionResponse"`,
+		`{"role":"model","parts":[{"functionResponse"`, 1)
+	if modelTail == compaction {
+		t.Fatal("the capture's tail holds no user entry for the note")
+	}
 	for name, tc := range map[string]struct {
 		record string
 		want   []string
 	}{
 		"kept plain past the summary":  {compaction, []string{"n-1"}},
 		"kept only inside the summary": {summarized, nil},
+		"kept in a model entry":        {modelTail, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

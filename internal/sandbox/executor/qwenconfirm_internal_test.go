@@ -20,18 +20,18 @@ func qwenTakes(items ...string) []ServedTake {
 	return takes
 }
 
-// A QWEN CODE NOTE IS CONFIRMED BY ITS RECORD, THE TEXT AS HANDED, ONCE PER
-// RECORD, IN ORDER. On 0.28.3's own chat file of a note handed mid-turn,
-// its record reframing it: the handed text's digest confirms its take, the
-// framed text's nothing; the record written twice confirms two takes of one
-// text, not a third; a take the session lacks stops the match; a prefix
-// confirms nothing; the framed text in a tool's result or in the prompt's
-// user record confirms nothing.
+// A QWEN CODE NOTE IS CONFIRMED BY ITS RECORD AND THE REPLY AFTER IT, THE TEXT
+// AS HANDED, ONCE PER RECORD, IN ORDER. On 0.28.3's own chat file of a note
+// handed mid-turn: the handed text's digest confirms its take, the framed
+// text's nothing; two records before the reply confirm two takes, not a third;
+// a take the session lacks stops the match; the framed text in a tool's result
+// or the prompt's record confirms nothing. Qwen Code records a note before
+// the request carrying it, so a record whose request ended with no reply, or
+// whose reply is torn short, confirms nothing; a torn last line is passed over.
 //
 // Mutations, each red: hash the record's part with its framing; drop the
-// subtype check (the prompt's copy confirms); match out of order (the later
-// take confirms past the missing one); confirm a take per record whatever its
-// digest.
+// subtype check; match out of order; confirm a take whatever its digest; hold
+// a match no reply follows at the end of the file.
 func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.3", "chat-note.jsonl"))
@@ -56,7 +56,18 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 	if want := `"text":` + jsonString(t, "\n"+qwenNoteFraming+note); !strings.Contains(record, want) {
 		t.Fatalf("the record does not hold the note behind Qwen Code's framing (%s):\n%s", want, record)
 	}
-	twice := string(raw) + record + "\n"
+	lines := strings.Split(string(raw), "\n")
+	at := slices.Index(lines, record)
+	reply := at + slices.IndexFunc(lines[at:], func(l string) bool { return strings.Contains(l, `"type":"assistant"`) })
+	if reply <= at+1 {
+		t.Fatal("the capture holds no reply after the note's record and its request")
+	}
+	twice := strings.Replace(string(raw), record+"\n", record+"\n"+record+"\n", 1)
+	// THE REQUEST THAT CARRIED IT ended, and the run with it: the records up
+	// to the reply, none of it.
+	unanswered := strings.Join(lines[:reply], "\n") + "\n"
+	tornReply := unanswered + lines[reply][:len(lines[reply])/2]
+	tornLast := string(raw) + record[:len(record)/2]
 	forged := strings.Replace(result, `"output":"slept 3s"`,
 		`"output":`+jsonString(t, "\n"+qwenNoteFraming+"FORGED"), 1)
 	asPrompt := strings.Replace(prompt, `"text":"Run the probe tools."`,
@@ -78,6 +89,9 @@ func TestAQwenCodeNoteIsConfirmedByItsRecordAsHanded(t *testing.T) {
 		"the framed text in a tool result": {forged + "\n", qwenTakes("FORGED"), nil},
 		"the framed text as a prompt":      {asPrompt + "\n", qwenTakes("FORGED"), nil},
 		"no take":                          {string(raw), nil, nil},
+		"a record no reply follows":        {unanswered, qwenTakes(note), nil},
+		"a reply torn short":               {tornReply, qwenTakes(note), nil},
+		"a torn last line":                 {tornLast, qwenTakes(note, note), []string{"i-1"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -134,13 +148,15 @@ func TestAQwenCodeSessionsRecordIsFoundByItsID(t *testing.T) {
 // A NOTE A COMPACTION KEEPS ONLY IN ITS SUMMARY IS NOT READ (ADR-0177). On
 // 0.28.3's own chat file of a note drained at the compaction point, whose
 // chat_compression record keeps it plain past the summary prefix: held. With
-// the note moved from that tail into the summary, or the prefix unreadable:
-// nothing. With the compaction after the model's reply, which answered a
-// request carrying the note plain: held.
+// the note moved from that tail into the summary, the prefix unreadable, a
+// wider contextPrefixLength covering the note, or the note's entry the model's:
+// nothing. With another entry ahead of the note's past the prefix, or the
+// compaction after the reply to a request carrying the note plain: held.
 //
 // Mutations, each red: skip chat_compression records; start the tail at 0;
 // keep a match whose digest the tail lacks; leave a match pending past the
-// reply; read a missing prefix as 0.
+// reply; read a missing prefix as 0; ignore contextPrefixLength; count a model
+// entry's text; read only the first entry past the prefix.
 func TestANoteACompactionKeepsOnlyInItsSummaryIsNotRead(t *testing.T) {
 	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join("testdata", "qwen", "0.28.3", "chat-compact.jsonl"))
@@ -177,6 +193,16 @@ func TestANoteACompactionKeepsOnlyInItsSummaryIsNotRead(t *testing.T) {
 	unread := rewrite(func(l string) string {
 		return strings.Replace(l, `"summaryPrefixLength":2,"completedToolCallIds"`, `"completedToolCallIds"`, 1)
 	})
+	const noteEntry = `{"role":"user","parts":[{"functionResponse"`
+	behind := rewrite(func(l string) string {
+		return strings.Replace(l, noteEntry, `{"role":"user","parts":[{"text":"another entry"}]},`+noteEntry, 1)
+	})
+	wider := rewrite(func(l string) string {
+		return strings.Replace(l, `"contextPrefixLength":2`, `"contextPrefixLength":3`, 1)
+	})
+	modelTail := rewrite(func(l string) string {
+		return strings.Replace(l, noteEntry, `{"role":"model","parts":[{"functionResponse"`, 1)
+	})
 	// The summarizing compaction moved after the reply: the model answered a
 	// request that carried the note plain before any compaction.
 	reply := slices.IndexFunc(lines, func(l string) bool {
@@ -193,10 +219,13 @@ func TestANoteACompactionKeepsOnlyInItsSummaryIsNotRead(t *testing.T) {
 		session string
 		want    []string
 	}{
-		"kept plain past the summary":         {session, []string{"i-1"}},
-		"kept only inside the summary":        {summarized, nil},
-		"a prefix that does not read":         {unread, nil},
-		"answered before the summary kept it": {strings.Join(moved, "\n"), []string{"i-1"}},
+		"kept plain past the summary":          {session, []string{"i-1"}},
+		"kept only inside the summary":         {summarized, nil},
+		"a prefix that does not read":          {unread, nil},
+		"answered before the summary kept it":  {strings.Join(moved, "\n"), []string{"i-1"}},
+		"behind another entry past the prefix": {behind, []string{"i-1"}},
+		"a wider context prefix":               {wider, nil},
+		"the note's entry the model's":         {modelTail, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

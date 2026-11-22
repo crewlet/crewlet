@@ -45,11 +45,12 @@ func (QwenCode) inboxID(launch, noteID string) string {
 
 // pluginConfirms reports that a Qwen Code run's helper confirms each note
 // itself ([pluginConfirmer]): on the notes route, within a second of the
-// session's chat file recording it (qwen_helper.mjs), so a note reads as read
-// while the run works, as the poll channel's own confirm. The engine's read of
-// the record ([QwenCode.notesHeld]) settles what the helper could not post: a
-// note recorded as the run was killed, or a post the bridge turned away at the
-// run's end. Neither alone covers both.
+// session's chat file recording it and the reply after it (qwen_helper.mjs),
+// so a note reads as read while the run works, as the poll channel's own
+// confirm. The engine's read of the records ([QwenCode.notesHeld]) settles
+// what the helper could not post: a note the model replied to as the run was
+// killed, or a post the bridge turned away at the run's end. Neither alone
+// covers both. A note recorded with no reply after it is read by neither.
 func (QwenCode) pluginConfirms() bool { return true }
 
 // qwenPollCeiling is the most UTF-16 units one message the helper hands can
