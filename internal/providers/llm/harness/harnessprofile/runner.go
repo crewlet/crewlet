@@ -4,10 +4,15 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Executor is a built-in profile's `executor` block: present only on a harness
@@ -25,7 +30,8 @@ type Executor struct {
 	RefusesRoot string `yaml:"refuses_root,omitempty"`
 	// E2BTemplate is E2B's prebuilt image holding the harness, which a
 	// company naming no template of its own gets; "" for a harness E2B
-	// prebuilds none of, whose e2b box needs the company's own template.
+	// prebuilds none of, whose e2b box needs the company's own template
+	// (config refuses one without).
 	E2BTemplate string `yaml:"e2b_template,omitempty"`
 	// TempEnv is the variable the harness roots its own temporary directory
 	// at beside the standard ones, pointed at a host box's own; "" for none.
@@ -51,42 +57,88 @@ type executorEntry struct {
 
 // executors is the built-in table's executor blocks IN THE FILE'S ORDER, the
 // one order every list of the runners follows ([ExecutorRunners]).
-var executors = sync.OnceValue(func() []executorEntry {
-	entries, err := decodeExecutors(profilesYAML)
+var executors = sync.OnceValue(func() []executorEntry { return mustExecutors(profilesYAML) })
+
+// mustExecutors is raw's executor blocks, panicking on a fault: the table is
+// embedded from this repository, so a fault is a build that shipped it.
+func mustExecutors(raw []byte) []executorEntry {
+	entries, err := decodeExecutors(raw)
 	if err != nil {
-		panic(fmt.Sprintf("harnessprofile: profiles.yaml: %v", err))
+		panic(fmt.Sprintf("harnessprofile: %v", err))
 	}
 	return entries
-})
+}
 
-// decodeExecutors reads raw's executor blocks in its order, refusing a block
-// that does not say it is a runner.
+// decodeExecutors reads raw's executor blocks in its order, each fault named
+// by its profile and its field (`profile "x": executor.runner: ...`): a field
+// the block has no such field of, a value of the wrong kind, or a block that
+// does not say it is a runner.
 func decodeExecutors(raw []byte) ([]executorEntry, error) {
 	var doc yaml.Node
 	if err := yaml.NewDecoder(bytes.NewReader(raw)).Decode(&doc); err != nil {
-		return nil, fmt.Errorf("does not decode: %w", err)
+		return nil, fmt.Errorf("profiles.yaml does not decode: %w", err)
 	}
 	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
-		return nil, errors.New("is not a mapping of profiles")
+		return nil, errors.New("profiles.yaml is not a mapping of profiles")
 	}
 	table := doc.Content[0].Content
 	var out []executorEntry
 	for i := 0; i+1 < len(table); i += 2 {
-		var entry struct {
-			Executor *Executor `yaml:"executor"`
-		}
-		if err := table[i+1].Decode(&entry); err != nil {
-			return nil, fmt.Errorf("%s: executor: %w", table[i].Value, err)
-		}
-		switch e := entry.Executor; {
-		case e == nil:
+		block := mappingValue(table[i+1], "executor")
+		if block == nil {
 			continue
-		case !e.Runner:
-			return nil, fmt.Errorf("%s: executor: runner must be true where the block is set", table[i].Value)
 		}
-		out = append(out, executorEntry{name: table[i].Value, block: *entry.Executor})
+		e, err := decodeExecutor(block)
+		if err != nil {
+			return nil, fmt.Errorf("profile %q: %w", table[i].Value, err)
+		}
+		out = append(out, executorEntry{name: table[i].Value, block: e})
 	}
 	return out, nil
+}
+
+// decodeExecutor is one executor block, field by field under the yaml names
+// [Executor] declares, so a fault names its field: yaml.v3 names only a line.
+func decodeExecutor(block *yaml.Node) (Executor, error) {
+	var e Executor
+	if block.Kind != yaml.MappingNode {
+		return e, errors.New("executor: is not a mapping of the block's fields")
+	}
+	fields := map[string]reflect.Value{}
+	v := reflect.ValueOf(&e).Elem()
+	for i := range v.NumField() {
+		name, _, _ := strings.Cut(v.Type().Field(i).Tag.Get("yaml"), ",")
+		fields[name] = v.Field(i)
+	}
+	for j := 0; j+1 < len(block.Content); j += 2 {
+		key := block.Content[j].Value
+		field, ok := fields[key]
+		if !ok {
+			return e, fmt.Errorf("executor.%s: is no field of the block: use %s", key,
+				words.Or(slices.Sorted(maps.Keys(fields))))
+		}
+		if err := block.Content[j+1].Decode(field.Addr().Interface()); err != nil {
+			return e, fmt.Errorf("executor.%s: %w", key, err)
+		}
+	}
+	if !e.Runner {
+		return e, errors.New("executor.runner: must be true where the block is set")
+	}
+	return e, nil
+}
+
+// mappingValue is the value node of key in mapping node m, nil where m is no
+// mapping or has no such key.
+func mappingValue(m *yaml.Node, key string) *yaml.Node {
+	if m.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			return m.Content[i+1]
+		}
+	}
+	return nil
 }
 
 // ExecutorRunners is every harness this build runs a seat's executor on, in

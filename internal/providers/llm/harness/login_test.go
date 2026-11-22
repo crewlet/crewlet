@@ -711,13 +711,14 @@ func TestACredentialLoginRefusalFollowsTheEntrysAuthMode(t *testing.T) {
 }
 
 // A HARNESS THAT KEEPS NO LOGIN IS SENT TO ITS KEY, not to a login on the host:
-// Qwen Code keeps none — both measured builds refuse the OAuth login it once
-// kept — so `-from-host` would find nothing to adopt.
+// one keeping none (Qwen Code with its paid login taken out) leaves
+// `-from-host` nothing to adopt.
 func TestBrokeringALoginForAHarnessThatKeepsNoneNamesItsKey(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	t.Cleanup(func() { forgetWorkspace(dir) })
-	p, err := New(Config{Key: "qwen", Harness: "qwen-code", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1})
+	p, err := New(Config{Key: "qwen", Harness: "qwen-code", StateDir: dir, Timeout: time.Second, MaxConcurrent: 1,
+		Overrides: map[string]any{"credential_paths": []any{}, "subscription_args": []any{}}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

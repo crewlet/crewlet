@@ -612,7 +612,8 @@ type copilotSettings struct {
 // and its MCP servers, returning the file `--additional-mcp-config` names, with
 // a fresh session's copies beside them ([sandbox.RunRequest.FreshWiring]).
 // What an earlier run wrote there the clear removes first ([Copilot.artifacts]).
-func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
 	settings := copilotSettings{Experimental: true}
 	names, err := copilotToolEnvOmitted(req)
 	if err != nil {

@@ -414,3 +414,28 @@ func TestTheSessionsARunRanOutInAreBounded(t *testing.T) {
 		t.Errorf("a second ask changed the record to %q", again)
 	}
 }
+
+// A LAUNCH ON A HARNESS THAT CONTINUES NO SESSION STARTS ONE OF ITS OWN, handed
+// the fresh brief, whatever session its box or its turn keeps: handed one to
+// continue, its runner would refuse the run (Gemini CLI's, until it carries
+// its sessions).
+//
+// Mutations, each red: drop the check from continueSession (the box's copy is
+// continued); read StartsFresh as false for every runner.
+func TestALaunchOnAHarnessThatContinuesNoSessionStartsItsOwn(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	runner := NewFakeRunner("gemini-cli")
+	runner.Fresh = true
+	req := launchReq("t1")
+	req.Brief = "the fresh brief"
+	req.Continue = &Continuation{SessionID: "sess-own", Brief: "carry on in the box you left"}
+	opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2}
+	got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"), runner, true, false,
+		RunSources{})
+	t.Cleanup(got.release)
+	if got.kind != BriefFresh || got.session != "" || got.brief != "the fresh brief" {
+		t.Fatalf("the launch hands %s on session %q with %q, want the fresh brief on a session of its own",
+			got.kind, got.session, got.brief)
+	}
+}
