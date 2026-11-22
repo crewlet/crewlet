@@ -444,6 +444,29 @@ describe("Edit Home", () => {
     expect(posted.filter((p) => p.tool === "save_home_board")).toHaveLength(1);
   });
 
+  test("another tab's newer save kept in this browser is read again, never written over", async () => {
+    engine = { seat: "jane", board: { widgets: [] }, revision: 5 };
+    mount();
+    await settle();
+    const key = `${STORAGE_KEYS.homeBoard}${reader}`;
+    // ANOTHER TAB SAVES revision 6 and keeps it here; this tab still draws 5.
+    const newer = JSON.stringify({
+      kind: "cache",
+      v: 1,
+      seat: "jane",
+      revision: 6,
+      board: { widgets: [] },
+    });
+    engine = { ...engine, revision: 6 };
+    localStorage.setItem(key, newer);
+    await act(async () => {
+      window.dispatchEvent(new StorageEvent("storage", { key, newValue: newer }));
+    });
+    await settle();
+    await settle();
+    expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({ revision: 6 });
+  });
+
   test("the engine's board wins over one this browser kept alone, which is dropped", async () => {
     engine = { seat: "jane", board: { widgets: [] }, revision: 5 };
     const mine = {

@@ -234,6 +234,8 @@ export function Home() {
   }, [fresh]);
 
   const start = () => {
+    // A save still in flight would leave editing on a revision its own save moves.
+    if (home.saving) return;
     base.current = home.revision;
     setDraft(saved);
     setPast([]);
