@@ -207,11 +207,8 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 		t.Fatal("no built-in muse-code profile")
 	}
 	joined := strings.Join(p.CompleteArgs, " ")
-	// --json is load-bearing for CLASSIFICATION, not for the answer: this
-	// harness prints no failure cause on stderr ("run ended with Failed" and
-	// nothing else), so without the event stream a spent plan and a dead
-	// login reach this backend as a bare exit 1, no marker fires, and the
-	// seat's fallback chain never moves onto a metered key.
+	// --json is the stream the answer, the counts and each request are read
+	// from, and the failure event a spent plan is read from by field.
 	for _, want := range []string{"exec", "--json", "--disable-approval", "--disable-shell", "--disable-write"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("complete_args = %v lacks %q", p.CompleteArgs, want)
@@ -226,13 +223,19 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 		t.Errorf("complete_args = %v keeps the session log, so one turn's "+
 			"conversation reaches the next", p.CompleteArgs)
 	}
-	// --yolo would disable the sandbox AND trust the workspace, which is
-	// what loads a checkout's AGENTS.md, rules and skills.
-	if strings.Contains(joined, "--yolo") || strings.Contains(joined, "--trust-workspace") {
-		t.Errorf("complete_args = %v trusts the workspace", p.CompleteArgs)
+	// --trust-workspace is what starts the crewlet server: 1.4.25 withholds
+	// every MCP server from an untrusted workspace and the run then fails on
+	// the toolset's unknown tool. The workspace it trusts is the call's own
+	// directory, bounded by the engine's .git marker. --yolo would disable
+	// the sandbox and approval besides.
+	if !slices.Contains(p.CompleteArgs, "--trust-workspace") {
+		t.Errorf("complete_args = %v lacks --trust-workspace, so no MCP server starts", p.CompleteArgs)
+	}
+	if strings.Contains(joined, "--yolo") {
+		t.Errorf("complete_args = %v disables the sandbox and approval", p.CompleteArgs)
 	}
 	// --no-foreign-personal-context keeps other harnesses' personal rules and
-	// skills out of the call: measured on 1.0.3 and 1.4.13, a CLAUDE.md and
+	// skills out of the call: measured on 1.0.3 to 1.4.25, a CLAUDE.md and
 	// a skill under the seat home's .claude reached the developer message
 	// without it. --disable-reminders keeps the harness's reminder observers —
 	// each a model request of its own re-sending the call's prompt — from
@@ -273,8 +276,8 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 	if doc.SchemaVersion != 1 {
 		t.Errorf("settings.json schema_version = %d, want 1", doc.SchemaVersion)
 	}
-	// An ALLOWLIST of the harness's own web tools, exactly: on 1.4.13 these two
-	// are the whole tool array (web_fetch is gated off on 1.0.3, where
+	// An ALLOWLIST of the harness's own web tools, exactly: on 1.4.25 these two
+	// are the whole of its own namespace (web_fetch is gated off on 1.0.3, where
 	// naming it admits nothing), and a seat on a subscription must not have
 	// less reach than the same harness at a terminal.
 	if want := []string{"web_search", "web_fetch"}; !slices.Equal(doc.Run.Toolset, want) {
@@ -308,7 +311,7 @@ func TestTheMuseProfileDeniesItsToolsAndReadsItsFailures(t *testing.T) {
 // AND AN OPERATOR CAN SAY NO.
 //
 // The channel is TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE, naming a file whose text the harness
-// appends to its instructions (measured on 1.0.3 and 1.4.13); a path, so the text never
+// appends to its instructions (measured on 1.0.3 to 1.4.25); a path, so the text never
 // reaches argv. There is no per-call replace channel, so a side pass takes it too. The
 // variable is undocumented, so switching it off is one override away and hands the text
 // back to the transcript rather than to nowhere.
@@ -396,7 +399,7 @@ func TestTheMuseProfileReadsOneAnswerOutOfItsEventStream(t *testing.T) {
 
 	// A FAILED run resolves no text — which is what leaves the whole of
 	// stdout as the haystack the limit and auth sentinels are matched
-	// against, and the failure reason is only ever in there.
+	// against: the reason is in there (1.4.13 wrote it nowhere else).
 	failed := `{"schema_version":1,"sequence":1,"record_type":"event","payload_type":"run.terminal.failed",` +
 		`"payload":{"kind":"run_terminal","terminal":"failed",` +
 		`"reason":"API error 429 [request_id=x]: Rate limit exceeded. (rate_limit_error) (after 10 provider attempts)"}}`
@@ -404,7 +407,7 @@ func TestTheMuseProfileReadsOneAnswerOutOfItsEventStream(t *testing.T) {
 		t.Errorf("a failed run resolved a text path (%q), which would hide the "+
 			"reason from the markers", out.text)
 	}
-	// The run EXITS 1 — "run ended with Failed" on stderr — so it is a failed
+	// The run EXITS 1 ("run ended with Failed: <reason>" on stderr), so it is a failed
 	// run, where a sentinel counts anywhere in what was said.
 	hit, matched := classifyMarkers(p, harnessOutput{said: failed, stdout: failed, failed: true})
 	if !matched || hit.Kind != llm.KindRateLimit {
