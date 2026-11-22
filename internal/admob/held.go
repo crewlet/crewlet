@@ -138,6 +138,8 @@ func classOf(req googlegrowth.Request, before []byte) growth.Class {
 	var current map[string]any
 	_ = json.Unmarshal(before, &current)
 	changes := req.Changes(current)
+	op := req.Op
+	op.Fields = slices.Clone(op.Fields)
 	for i := range changes {
 		changes[i].Field = canonical(changes[i].Field)
 		for _, r := range req.Op.Fields {
@@ -147,8 +149,14 @@ func classOf(req googlegrowth.Request, before []byte) growth.Class {
 				changes[i].Field = r.Field
 			}
 		}
+		// A FIELD NO RULE NAMES IS THE OPERATION'S OWN CLASS, never its
+		// highest rule's: each is named as Google's mask writes it, and only
+		// what cannot be undone is admin.
+		if !slices.ContainsFunc(op.Fields, func(r growth.FieldRule) bool { return r.Field == changes[i].Field }) {
+			op.Fields = append(op.Fields, growth.FieldRule{Field: changes[i].Field, Class: op.Class})
+		}
 	}
-	return growth.Classify(req.Op, changes)
+	return growth.Classify(op, changes)
 }
 
 // mapKey is a map entry's key in a field's name, as a mask writes it.
