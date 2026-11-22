@@ -2774,7 +2774,9 @@ An append is one compare-and-set of the log, taken on the job whose calls it tak
 
 That is decided by the round the record names, written by the launch's own write. If opening the log failed or the node stopped first, the log stays on an earlier job of the same round, and the relaunch carrying the round on still keeps its calls and takes the cut the answer owed. A launch whose record was removed before it opens the log (its job was stopped) is refused, not recorded again. The run's end removes the record, then the log; the store writes a log only beside a record, so a call landing as the run ends leaves nothing, and a log left between the two removals is taken by the [marker sweep](coordination.md#removal-markers-are-swept).
 
-Every flip of the run is a compare-and-set of the record **whole**, and every listing reads every record whole: the completion poll, each seat's busy check and recovery, the pause reaper, the live panel's reconcile, Live › Executors, every git request a coding box makes (read first) and every ref answer past the box's floor (which writes it). None moves the log, the sealed secrets or the leads.
+Every flip of the run is a compare-and-set of the record **whole**, and every listing of the fleet's runs reads every record whole: the completion poll, the pause reaper, the live panel's reconcile, Live › Executors, every git request a coding box makes (read first) and every ref answer past the box's floor (which writes it). None moves the log, the sealed secrets or the leads.
+
+Every write of the record also states its **standing** in the same message: the run's seat, its handle's SHA-256 and the lease epoch stamped on it. The boot's epoch floor and the executor sessions' retention, which asks only which turns still have a record, read the standing alone, and a seat's busy check, its recovery and a mailbox retirement read it and then only that seat's records whole, so a node across a leaf's link boots beside runs at their bound by moving a few hundred bytes a run, not megabytes. A record that states none, written by an older version during a rolling upgrade, is read whole and judged on what it holds until a newer node writes it.
 
 Measured on three members, every bucket at three replicas, from a member not leading the runs' bucket, for a job parked with a 32 KiB frozen context and a full log, its launch numbered on the record and no capture stamped yet:
 
@@ -2784,15 +2786,15 @@ Measured on three members, every bucket at three replicas, from a member not lea
 - With the log on the record it was 516 173 bytes, 5.8 ms and 11.1 ms (7.9 and 26.0), for every one of those requests ([Gitlet → Coding boxes](gitlet.md#coding-boxes)).
 ### What a run's record and its log keep
 
-A run's record and its tool log are each **one value** in the coordination store, read and written whole by every write that touches it, and the store holds one key to **6,290,542 bytes** (`coord.MaxValueBytes`): the largest value whose read a node without `data` takes back across its leaf link, where the stream leader's reply carries it base64-encoded, a third larger, under the transport's 8 MiB. The store refuses a write past it before sending anything. So each is held to that byte budget (`sandbox.RowBytes`), and every field it carries has a share of it, counted in the bytes the store's JSON encoder writes, escapes included (a `<` is six bytes, a control byte six, a quote two):
+A run's record and its tool log are each **one value** in the coordination store, read and written whole by every write that touches it, and the store holds one key to **6,290,346 bytes** (`coord.MaxValueBytes`): the largest value whose read a node without `data` takes back across its leaf link, where the stream leader's reply carries it base64-encoded, a third larger, under the transport's 8 MiB. The store refuses a write past it before sending anything. So each is held to that byte budget (`sandbox.RowBytes`), and every field it carries has a share of it, counted in the bytes the store's JSON encoder writes, escapes included (a `<` is six bytes, a control byte six, a quote two):
 
 | Value | Share | Bytes | Held by |
 |---|---|---|---|
 | The tool log | Its calls: `calls`, `elided`, `elided_calls`, `absorbed_calls` | 3,473,408 (3.3125 MiB) | each call's own share, two hundred calls, and the identities of the calls the log counts without listing them |
 | The tool log | Its calls in flight: `in_flight` | 1,048,576 (1 MiB) | 256 entries, each its call's identity and the id its harness gave it, at most 4 KiB |
-| The tool log | Everything else: the tool names of the turn's earlier rounds, the records the run wrote (128 at most), the log's own fields, and room for what a later version adds | 1,768,558 (1.69 MiB) | each field's own bound |
+| The tool log | Everything else: the tool names of the turn's earlier rounds, the records the run wrote (128 at most), the log's own fields, and room for what a later version adds | 1,768,362 (1.69 MiB) | each field's own bound |
 | The record | The parked turn's state (`execute_state`) | 2,097,152 (2 MiB) | the park, which condenses it to fit and refuses it past that |
-| The record | Everything else, the turn's wake items within 100 KiB, and 156 KiB for fields a later version adds | 4,193,390 (4 MiB less 914 bytes) | each field's own bound, held by the write that puts it on the record |
+| The record | Everything else, the turn's wake items within 100 KiB, and 156 KiB for fields a later version adds | 4,193,194 (4 MiB less 1,110 bytes) | each field's own bound, held by the write that puts it on the record |
 
 The sealed set of secrets beside them is the third value, a fraction of the same budget: at most 64 KiB before sealing. The turn's leads beside them are the fourth: at most 512 KiB of them and at most 2,048, the oldest dropped first and counted, beside a few fields of their own, within the same budget.
 

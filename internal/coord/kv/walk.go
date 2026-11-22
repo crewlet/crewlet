@@ -61,15 +61,30 @@ func eachEntryUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.Ke
 	if err != nil {
 		return fmt.Errorf("coord/kv: read %s: %w", what, err)
 	}
-	return listUnder(ctx, js, read, kv, keys, what, visit)
+	return listUnder(ctx, js, read, kv, keys, what, false, visit)
+}
+
+// listHeadersUnder is [eachEntryUnder] over a pass delivering each key's
+// headers alone ([beginPass]): what a key's writer stated of it, never its
+// value. A key the pass missed is still read WHOLE by [certify], value and
+// headers, from the leader.
+func listHeadersUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
+	keys, what string, visit func(jetstream.KeyValueEntry) error) error {
+
+	read, err := newLeaderReader(js, kv)
+	if err != nil {
+		return fmt.Errorf("coord/kv: read %s: %w", what, err)
+	}
+	return listUnder(ctx, js, read, kv, keys, what, true, visit)
 }
 
 // listUnder is [eachEntryUnder] with its certifying reads handed in, so a
-// test can point them somewhere the index read does not go.
+// test can point them somewhere the index read does not go; headers passes
+// over the keys' headers alone ([listHeadersUnder]).
 func listUnder(ctx context.Context, js jetstream.JetStream, read *leaderReader, kv jetstream.KeyValue,
-	keys, what string, visit func(jetstream.KeyValueEntry) error) error {
+	keys, what string, headers bool, visit func(jetstream.KeyValueEntry) error) error {
 
-	p, err := beginPass(ctx, js, kv, keys, what)
+	p, err := beginPass(ctx, js, kv, keys, what, headers)
 	if err != nil {
 		return err
 	}
@@ -106,7 +121,7 @@ func watchUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyVal
 	if err != nil {
 		return nil, nil, fmt.Errorf("coord/kv: read %s: %w", what, err)
 	}
-	p, err := beginPass(ctx, js, kv, keys, what)
+	p, err := beginPass(ctx, js, kv, keys, what, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -131,27 +146,44 @@ type pass struct {
 }
 
 // beginPass reads the key index under keys, then opens the watcher the pass
-// reads: an index taken before the reads that act on it is valid.
+// reads: an index taken before the reads that act on it is valid. headers
+// watches each key's headers alone, through a bucket settled where it was
+// opened ([headerWatcher]); any other is refused, as [watchWalk] refuses it.
 //
 // THE INDEX FIRST, never beside the consumer: across a link its reply crosses
 // behind whatever the consumer is already delivering, so asked once a run's
 // value had started crossing it waited the minutes that value takes and was
 // re-asked every second until the lookup ceiling failed the listing.
 func beginPass(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
-	keys, what string) (*pass, error) {
+	keys, what string, headers bool) (*pass, error) {
 
+	h, ok := kv.(headerWatcher)
+	if headers && !ok {
+		return nil, fmt.Errorf("coord/kv: read %s: %s is not a bucket settled where it was opened, "+
+			"so nothing watches its headers alone", what, kv.Bucket())
+	}
 	names, err := keysUnder(ctx, js, kv, keys)
 	if err != nil {
 		return nil, unavailable("read "+what, fmt.Errorf("read its key index to certify the pass: %w", err))
 	}
+	// EITHER PASS KEEPS THE KEYS' QUIET, its consumer beating at it: a headers
+	// pass shares its connection, so its next delivery can wait behind another
+	// read's run at its bound, and ended then it would read every record left
+	// whole ([certify]).
+	quiet := passQuiet(kv, keys)
 	// Watch rather than WatchAll, so the filter narrows server-side too. NOT
 	// IgnoreDeletes: a key removed mid-pass arrives as its value then its
 	// marker, and dropping the marker would list the value it replaced.
-	w, err := kv.Watch(ctx, keys)
+	var w jetstream.KeyWatcher
+	if headers {
+		w, err = h.watchHeaders(ctx, keys, quiet)
+	} else {
+		w, err = kv.Watch(ctx, keys)
+	}
 	if err != nil {
 		return nil, unavailable("read "+what, err)
 	}
-	return &pass{w: w, index: names, quiet: passQuiet(kv, keys)}, nil
+	return &pass{w: w, index: names, quiet: quiet}, nil
 }
 
 // walk runs the pass to its end; [passOver] gives both of its ends.
@@ -175,7 +207,7 @@ func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (m
 			"so nothing watches its headers alone", what, kv.Bucket())
 	}
 	// Markers included, for [beginPass]'s reasons: the sweep is after them.
-	w, err := h.watchHeaders(ctx, keys)
+	w, err := h.watchHeaders(ctx, keys, passIdle)
 	if err != nil {
 		return nil, unavailable("read "+what, err)
 	}
@@ -466,13 +498,13 @@ func (r *leaderReader) at(ctx context.Context, key string, revision uint64) (jet
 // entry is a message the leader answered, as the KV entry the client's own
 // Get would have decoded it to.
 func (r *leaderReader) entry(key string, msg jsapi.Message) (jetstream.KeyValueEntry, error) {
-	op, err := operationOf(msg.Header)
+	op, header, err := operationOf(msg.Header)
 	if err != nil {
 		return nil, err
 	}
 	return leaderEntry{
 		bucket: r.bucket, key: key, value: msg.Data,
-		revision: msg.Sequence, created: msg.Time, op: op,
+		revision: msg.Sequence, created: msg.Time, op: op, header: header,
 	}, nil
 }
 
@@ -533,18 +565,19 @@ func sizedReader(js jetstream.JetStream, kv jetstream.KeyValue, valueBytes int) 
 }
 
 // operationOf reads what a stored KV message IS from its headers by the
-// client's own rule (nats.go jetstream/kv.go get): decoded differently from the
-// pass, it would list a key the pass dropped or drop one it listed. Headers
-// that do not decode are [errUndecodableHeaders].
-func operationOf(raw []byte) (jetstream.KeyValueOp, error) {
+// client's own rule (nats.go jetstream/kv.go get), beside the headers it
+// decoded (none for none): decoded differently from the pass, it would list a
+// key the pass dropped or drop one it listed. Headers that do not decode are
+// [errUndecodableHeaders].
+func operationOf(raw []byte) (jetstream.KeyValueOp, nats.Header, error) {
 	if len(raw) == 0 {
-		return jetstream.KeyValuePut, nil
+		return jetstream.KeyValuePut, nil, nil
 	}
 	hdr, err := nats.DecodeHeadersMsg(raw)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %w", errUndecodableHeaders, err)
+		return 0, nil, fmt.Errorf("%w: %w", errUndecodableHeaders, err)
 	}
-	return operationOfHeader(hdr), nil
+	return operationOfHeader(hdr), hdr, nil
 }
 
 // operationOfHeader is [operationOf] of headers already decoded, as a watch
@@ -580,6 +613,7 @@ type leaderEntry struct {
 	revision    uint64
 	created     time.Time
 	op          jetstream.KeyValueOp
+	header      nats.Header // the message's headers as stored, which the client's entry drops
 }
 
 func (e leaderEntry) Bucket() string                  { return e.bucket }
@@ -589,6 +623,18 @@ func (e leaderEntry) Revision() uint64                { return e.revision }
 func (e leaderEntry) Created() time.Time              { return e.created }
 func (e leaderEntry) Delta() uint64                   { return 0 }
 func (e leaderEntry) Operation() jetstream.KeyValueOp { return e.op }
+
+// headers is the message's headers as stored ([headersOf]).
+func (e leaderEntry) headers() nats.Header { return e.header }
+
+// headersOf is the headers an entry this package decoded carries, and none for
+// an entry of the client's own watch, which drops them.
+func headersOf(kve jetstream.KeyValueEntry) nats.Header {
+	if h, ok := kve.(interface{ headers() nats.Header }); ok {
+		return h.headers()
+	}
+	return nil
+}
 
 // visitLive hands each live key to visit, once, in key order: a map iterates
 // differently every time, and an unstable listing turns a downstream ordering
@@ -618,3 +664,38 @@ func visitLive(latest map[string]jetstream.KeyValueEntry,
 func bucketStream(kv jetstream.KeyValue) string { return "KV_" + kv.Bucket() }
 
 func bucketSubjects(kv jetstream.KeyValue) string { return "$KV." + kv.Bucket() + "." }
+
+// putSubject is the subject a write of key to b is published on, by the
+// client's own rule (nats.go jetstream/kv.go updateRevision, and :1605 where a
+// handle is opened): the key's subject under the bucket, behind the client's
+// API prefix where it is not the account's own, so a leaf's domain client
+// reaches the fleet's stream. No bucket here mirrors, so the client's mirror
+// prefix never applies.
+func putSubject(b settledBucket, key string) (string, error) {
+	api, err := jsapi.Of(b.js)
+	if err != nil {
+		return "", fmt.Errorf("coord/kv: write %q in %s: %w", key, b.Bucket(), err)
+	}
+	if domain := api.Domain(); domain != "" {
+		return "$JS." + domain + ".API." + bucketSubjects(b) + key, nil
+	}
+	return bucketSubjects(b) + key, nil
+}
+
+// validKey is the client's rule for a key it writes (nats.go jetstream/kv.go
+// keyValid), which a publish of this package's own must keep: a key the
+// client refuses would otherwise publish to a subject no stream holds.
+func validKey(key string) bool {
+	if key == "" || key[0] == '.' || key[len(key)-1] == '.' || strings.Contains(key, "..") {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		switch c := key[i]; {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '-', c == '/', c == '_', c == '=', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
+}

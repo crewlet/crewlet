@@ -210,7 +210,7 @@ func TestACreateOverAMarkerTheSweepRemovesMidWayStillCreates(t *testing.T) {
 		return err
 	}}
 
-	revision, err := createKey(ctx, f.js, racing, key, []byte(`{"status":"running"}`))
+	revision, err := createKey(ctx, f.js, racing, key, []byte(`{"status":"running"}`), nil)
 	if err != nil {
 		t.Fatalf("a create over a marker swept between its read and its write = %v, "+
 			"want it created: the key holds nothing at all", err)
@@ -266,11 +266,11 @@ func TestACreateAsksTheLeaderWhatTheKeyHolds(t *testing.T) {
 	}
 
 	wire := countWireReads(t, nc, f.runs)
-	_, err := createKey(ctx, f.js, f.runs, encodeKey("live"), []byte(`{"again":true}`))
+	_, err := createKey(ctx, f.js, f.runs, encodeKey("live"), []byte(`{"again":true}`), nil)
 	if !errors.Is(err, jetstream.ErrKeyExists) {
 		t.Fatalf("a create over a live value = %v, want ErrKeyExists", err)
 	}
-	if _, err := createKey(ctx, f.js, f.runs, encodeKey("removed"), []byte(`{"again":true}`)); err != nil {
+	if _, err := createKey(ctx, f.js, f.runs, encodeKey("removed"), []byte(`{"again":true}`), nil); err != nil {
 		t.Fatalf("a create over a marker = %v, want it created", err)
 	}
 	if n := wire.leaderReads(t); n != 2 {
