@@ -52,8 +52,9 @@ type skewMeasure struct {
 // present; the window also keeps a leader change from mixing two members'
 // clocks except where they agree within it, seconds beside the hour.
 //
-// Equal to donorRowFresh by that one reason, not by reference: the join judges
-// a donor's row by the writer's stamp, and this by the store's instants.
+// Equal to donorRowFresh by that one reason, not by reference: the join reads
+// one row's stored instant on its own clock, within twice the skew more
+// ([donorRowWithin]); this compares two stored instants of one reading.
 const skewRowFresh = 4 * statelog.PositionHeartbeat
 
 // skewMissesDropped is how many beats in a row may fail to measure before the

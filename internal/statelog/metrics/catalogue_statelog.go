@@ -426,8 +426,8 @@ func statelogInstruments() []Instrument {
 			Shows: "Trim holds in the register: a backup copying the log, or " +
 				"a joining node fetching a snapshot and replaying its tail. A " +
 				"holder renews its pin every fifteen seconds and removes it " +
-				"when it is done, and the trim ignores one nobody has renewed " +
-				"for a minute; nothing else removes it, so a count that does " +
+				"when it is done, and the trim ignores one it has watched go a " +
+				"minute unrenewed; nothing else removes it, so a count that does " +
 				"not return to zero is a holder that crashed — a backup " +
 				"mid-copy, or a join before its node published a position.",
 		},
