@@ -31,8 +31,9 @@ func kimiFixture(t *testing.T, release, name string) []byte {
 	return raw
 }
 
-// kimiReleases is every release the runner was measured on.
-var kimiReleases = []string{"2.7.0", "2.7.2"}
+// kimiReleases is every release the runner was measured on: the one Crewlet
+// supports.
+var kimiReleases = []string{kimiSupported}
 
 // kimiRead decodes a whole fixture stream.
 func kimiRead(t *testing.T, release, name string) (sandbox.Result, *kimiEvents) {
@@ -352,13 +353,14 @@ func TestAKimiNoteIsConfirmedOffTheBoxsRecord(t *testing.T) {
 	}
 }
 
-// A KIMI RUN IS STARTED ONLY ON ITS FLOOR, ON NODE, AND ITS SCRIPT IS SHELL: a
-// box whose release is older is refused naming it, and the script parses.
+// A KIMI RUN IS STARTED ONLY ON THE SUPPORTED RELEASE OR A NEWER ONE, ON NODE,
+// AND ITS SCRIPT IS SHELL: a box whose release is older is refused naming
+// 2.7.2, and the script parses.
 //
 // Mutation: lower the floor, or drop the node check — the case fails.
 func TestAKimiRunIsStartedOnlyOnItsFloor(t *testing.T) {
 	script := kimiScript(sandbox.RunRequest{}, Session{}, PathsFor(sandbox.NewFakeSandbox("b")), "/s.json", sandbox.JobStopGrace)
-	for _, want := range []string{"if ! at 2 7 0; then", "older than 2.7.0", "command -v node"} {
+	for _, want := range []string{"if ! at 2 7 2; then", "older than 2.7.2, the release Crewlet supports", "command -v node"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("the script lacks %q", want)
 		}
@@ -370,9 +372,9 @@ func TestAKimiRunIsStartedOnlyOnItsFloor(t *testing.T) {
 	for _, tc := range []struct {
 		printed string
 		starts  bool
-	}{{"2.6.9", false}, {"2.7.0", true}, {"2.7.2", true}, {"3.0.0-canary.1", true}, {"", true}} {
+	}{{"2.7.0", false}, {"2.7.1", false}, {"2.7.2", true}, {"3.0.0-canary.1", true}, {"", true}} {
 		check := strings.Replace(kimiRelease, "$(kimi --version < /dev/null 2> /dev/null | head -n 1)",
-			sandbox.ShellQuote(tc.printed), 1) + "at " + floorArgs(kimiFloor)
+			sandbox.ShellQuote(tc.printed), 1) + "at " + floorArgs(kimiSupported)
 		err := exec.Command(sh, "-c", check).Run()
 		if starts := err == nil; starts != tc.starts {
 			t.Errorf("release %q: starts %v, want %v", tc.printed, starts, tc.starts)

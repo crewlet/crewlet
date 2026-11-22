@@ -20,7 +20,7 @@ func init() { Register(Kimi{}) }
 const KimiName = "kimi-code"
 
 // Kimi drives Moonshot's Kimi Code CLI headless through its own server (`kimi
-// web --port 0 --json` and its API, KAP), measured on 2.7.0 and 2.7.2: the
+// web --port 0 --json` and its API, KAP), measured on 2.7.2: the
 // run's script starts a driver (kimi_driver.js) that creates one session,
 // reports its id, posts the brief, hands the run its notes and streams the
 // session's events ([kimiScript]). Its model is a metered key's env model
@@ -59,11 +59,13 @@ func (Kimi) mintsSession() bool { return true }
 // a person's notes into the run's session (kimi_driver.js).
 func (Kimi) NoteInstruction() string { return KimiSteerInstruction }
 
-// kimiFloor is the oldest Kimi Code release a run is started on: 2.7.0, the
-// first with `kimi web` and KAP, without which a run takes no note (print mode
-// drops a Stop hook's continuation and discards PostToolUse's output, measured
-// on 2.7.2). Every behaviour here was measured on 2.7.0 and 2.7.2.
-const kimiFloor = "2.7.0"
+// kimiSupported is the one Kimi Code release Crewlet supports, every behaviour
+// here measured on it: a box below it is refused at the start, a newer one runs
+// sessions of its own alone, and a session is continued only on it
+// ([Kimi.Continues], [kimiSessionGate]). Print mode takes no note (it drops a
+// Stop hook's continuation and discards PostToolUse's output), so the run is
+// `kimi web` and its API.
+const kimiSupported = "2.7.2"
 
 // Session is the session a Kimi run works in ([Harness.Session]): the one it
 // continues, or a fresh one with no id, which Kimi mints and the run's driver
@@ -82,7 +84,8 @@ func (Kimi) Command(req sandbox.RunRequest, session Session, paths Paths, config
 }
 
 // kimiScript is a Kimi run's script, giving its driver stop to go once asked to
-// end: the end protocol (end.go); the release read and held to [kimiFloor];
+// end: the end protocol (end.go); the release read, and one older than
+// [kimiSupported] refused;
 // node required, which the driver runs on; the routing variables the entry did
 // not set removed ([kimiRoutingOff]); the session settled and recorded
 // ([kimiSessionGate], [Paths.SessionRecord]); the driver run under the end
@@ -97,8 +100,8 @@ func kimiScript(req sandbox.RunRequest, session Session, paths Paths, settings s
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
 	b.WriteString(kimiRelease)
-	line(`if ! at %s; then printf 'crewlet: this box runs Kimi Code %%s, older than %s, the oldest a run is started on\n' "$n" >&2; exit 1; fi`,
-		floorArgs(kimiFloor), kimiFloor)
+	line(`if ! at %s; then printf 'crewlet: this box runs Kimi Code %%s, older than %s, the release Crewlet supports\n' "$n" >&2; exit 1; fi`,
+		floorArgs(kimiSupported), kimiSupported)
 	line(`command -v node > /dev/null 2>&1 || { echo 'crewlet: this box has no node on PATH, which Kimi Code and its run'"'"'s driver run on' >&2; exit 1; }`)
 	if off := kimiRoutingOff(req); len(off) > 0 {
 		line(`unset %s`, strings.Join(off, " "))
@@ -369,7 +372,7 @@ func writeJSON(ctx context.Context, box sandbox.Sandbox, file string, v any) err
 }
 
 // kimiDefaultTools is every tool Kimi Code offers a session by default, as
-// 2.7.0 and 2.7.2 list them (`tool_select.initialized`), less AskUserQuestion
+// 2.7.2 lists them (`tool_select.initialized`), less AskUserQuestion
 // (a headless run has nobody to answer; ask_and_wait is on the bridge) and
 // ExitPlanMode (it asks for a plan's approval the same way), with WebSearch,
 // which a login's search service registers. An allowlist, so a tool a later
@@ -469,8 +472,8 @@ func (Kimi) artifacts(p Paths) (files, dirs []string) {
 }
 
 // notesOffWhy is what switches Kimi's reading of notes off: a release before
-// [kimiFloor], which the script refuses, or a driver that could not reach the
-// notes route, which its error stream names.
+// [kimiSupported], which the script refuses, or a driver that could not reach
+// the notes route, which its error stream names.
 func (Kimi) notesOffWhy() string {
 	return "a driver that could not reach the run's notes route, which the run's error stream names"
 }

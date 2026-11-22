@@ -7,7 +7,7 @@ import (
 )
 
 // KimiSteerInstruction is the standing instruction about notes a Kimi Code run
-// is given; where a note lands is Kimi's, measured on 2.7.0 and 2.7.2: a steer
+// is given; where a note lands is Kimi's, measured on 2.7.2: a steer
 // opens a turn of its own after the result of the tool that was running, and a
 // request it arrives during is cut short and asked again with it.
 const KimiSteerInstruction = steerInstructionHead +
@@ -25,14 +25,6 @@ var kimiDriverSource string
 // (kimi_driver.js's notePrefix), which Kimi keeps as the note's message id, so
 // the confirm reader takes no other message for a note ([kimiNotesHeld]).
 const kimiNotePrefix = "crewlet-note-"
-
-// kimiSupersedes heads the standing instructions a continued session is handed
-// in its brief on a release whose bound profile is not renewed
-// ([kimiRenewsBind]; kimi_driver.js's supersedes): Kimi binds them into the
-// session as it creates it, so a resume would otherwise run on the first
-// run's.
-const kimiSupersedes = "## Your standing instructions for this run\n\n" +
-	"They replace the standing instructions this session was started with.\n\n"
 
 // KimiNoteID is the message id the note admitted under inbox carries in the
 // session's record: the prompt_id the driver steered it under.
