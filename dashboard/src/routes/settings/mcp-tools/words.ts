@@ -393,17 +393,17 @@ export const GATE: Record<BuiltinGate, { label: string; detail: string }> = {
   // THE GROWTH LEVELS BY WHAT THEY LET AN AGENT DO, under the Growth group's heading.
   growth_read: {
     label: "View",
-    detail: "Agents on the tool's marketing or growth product at read or above: reads only.",
+    detail: "Agents on the tool's growth product at View or above: reads only.",
   },
   growth_operate: {
     label: "Manage",
     detail:
-      "Agents on the product at operate or above: reversible changes, recorded, and spend or publishing an admin approves first.",
+      "Agents on the product at Manage or above: reversible changes, recorded, and spend or publishing an admin approves first.",
   },
   growth_administer: {
     label: "Administer",
     detail:
-      "Agents on the product at administer: account, access and irreversible changes, each one an admin approves first.",
+      "Agents on the product at Administer: account, access and irreversible changes, each one an admin approves first.",
   },
 };
 

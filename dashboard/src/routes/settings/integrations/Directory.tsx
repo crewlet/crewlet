@@ -88,7 +88,6 @@ function selects(line: Line, kind: string | undefined): boolean {
   return line.key === "jira" && (kind === "atlassian" || kind === "forge");
 }
 
-/** The intents an arrival may ask an app's page to open its form for: the home's fixes. */
 /**
  * The directory's groups as the list draws them: each line's mark, its name
  * (and its maker's, for a product), its state, and whether it is the one open.
@@ -148,6 +147,7 @@ export function directoryGroups(
   }));
 }
 
+/** The intents an arrival may ask an app's page to open its form for: the home's fixes. */
 const ARRIVALS: readonly Intent[] = ["connect", "continue", "rotate", "settings", "agents"];
 
 export function Integrations({ kind }: { kind?: string }) {

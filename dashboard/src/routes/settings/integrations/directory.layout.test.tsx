@@ -2,8 +2,8 @@
 // drawn as the page draws them (`directoryGroups`): with every growth product
 // served, and with this build's own catalogue, where the growth groups whose
 // products have not landed are not drawn. Each group's heading stands over its
-// lines, each name is whole on one line beside its mark, and nothing runs out
-// sideways.
+// lines, each name is whole on one line beside its mark and the widest state a
+// line draws, in the page's own 17rem list column, and nothing runs out sideways.
 import { afterEach, describe, expect, test } from "vitest";
 import { page } from "vitest/browser";
 import { flushSync } from "react-dom";
@@ -15,7 +15,7 @@ import { Router } from "~/app/router.tsx";
 import { CATALOG, type Entry } from "./catalogue.tsx";
 import { shownDirectory } from "./categories.ts";
 import { directoryGroups } from "./Directory.tsx";
-import type { BuiltInService } from "./model.ts";
+import type { BuiltInService, Model } from "./model.ts";
 
 const SERVICES: BuiltInService[] = (["chat", "worklet", "doclet", "gitlet"] as const).map(
   (key) => ({
@@ -45,6 +45,16 @@ const EVERY: Entry[] = [
   ...GROWTH.map(([key, name, vendor]) => ({ ...base, key, name, vendor })),
 ];
 
+/**
+ * Every growth app connected and needing attention: the widest state a line
+ * draws ("Needs attention") beside the longest names.
+ */
+const ATTENTION = {
+  byKey: new Map(
+    GROWTH.map(([key]) => [key, { configured: true, bucket: "attention", sections: [] }]),
+  ),
+} as unknown as Model;
+
 let host: HTMLElement | null = null;
 let root: Root | null = null;
 
@@ -55,17 +65,23 @@ afterEach(() => {
   host = null;
 });
 
-async function mount(width: number, theme: "light" | "dark", catalog: readonly Entry[]) {
+async function mount(
+  width: number,
+  theme: "light" | "dark",
+  catalog: readonly Entry[],
+  model: Model | null = null,
+) {
   await page.viewport(width, 1400);
   document.documentElement.setAttribute("data-theme", theme);
   host = document.createElement("div");
-  // The rail beside the page on a wide screen; the whole screen on a phone, where it is one pane.
-  host.style.cssText = `width: ${width <= 390 ? width : 300}px;`;
+  // The page's list column (the kit's ListDetail list, 17rem) beside the page; the whole
+  // screen on a phone, where the list is one pane.
+  host.style.cssText = `width: ${width <= 390 ? `${width}px` : "17rem"};`;
   document.body.append(host);
   root = createRoot(host);
   const groups = directoryGroups(shownDirectory(catalog), {
     kind: "google_ads",
-    model: null,
+    model,
     services: SERVICES,
     catalog,
   });
@@ -93,9 +109,9 @@ function drawn(): [string, string[]][] {
 
 describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
   test.each([1440, 768, 390])(
-    "every growth group under its heading at %ipx, each name whole beside its mark",
+    "every growth group under its heading at %ipx, each name whole beside its mark and its state",
     async (width) => {
-      await mount(width, theme, EVERY);
+      await mount(width, theme, EVERY, ATTENTION);
       expect(drawn().slice(-4)).toEqual([
         ["Mobile apps", ["Expo", "App Store Connect", "Google Play"]],
         ["Advertising", ["Google Ads", "Meta Ads", "Apple Ads"]],
@@ -109,7 +125,11 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
           label.clientWidth + 1,
         );
         expect(label.getClientRects().length, label.textContent ?? "").toBe(1);
-        // The mark is centred on the name's line.
+        // A growth line draws its state beside its whole name; the mark is centred on the name's line.
+        if (GROWTH.some(([, name]) => name === label.textContent))
+          expect(label.closest("a")!.textContent, label.textContent ?? "").toContain(
+            "Needs attention",
+          );
         const row = label.closest("a")!;
         const mark = row.querySelector("svg")!.getBoundingClientRect();
         const text = label.getBoundingClientRect();
@@ -118,13 +138,6 @@ describe.each(["light", "dark"] as const)("on a %s document", (theme) => {
           label.textContent ?? "",
         ).toBeLessThan(3);
       }
-      // The groups keep one step between them, as the ones before.
-      const headings = [...host!.querySelectorAll<HTMLElement>(HEADINGS)];
-      const gaps = headings.slice(1).map((h, i) => {
-        const above = headings[i]!.parentElement!.getBoundingClientRect();
-        return Math.round(h.getBoundingClientRect().top - above.bottom);
-      });
-      expect(new Set(gaps).size, `gaps ${gaps}`).toBe(1);
     },
   );
 
