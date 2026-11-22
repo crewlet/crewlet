@@ -70,9 +70,9 @@ func (c *countedHolds) ReleaseHold(ctx context.Context, owner string) error {
 	return c.HoldRegister.ReleaseHold(ctx, owner)
 }
 
-// pinAt takes a pin at seq on generation 1 of heldStream, renewed every beat
-// against clock, and releases it when the case ends.
-func pinAt(ctx context.Context, t *testing.T, register statelog.HoldWriter, clock *stepClock,
+// pinAt takes a pin at seq on generation 1 of heldStream, renewed every beat,
+// and releases it when the case ends.
+func pinAt(ctx context.Context, t *testing.T, register statelog.HoldWriter,
 	beat time.Duration, seq uint64, logger *slog.Logger) *statelog.TailPin {
 
 	t.Helper()
@@ -82,7 +82,7 @@ func pinAt(ctx context.Context, t *testing.T, register statelog.HoldWriter, cloc
 			heldStream: {Stream: heldStream, Generation: 1, Seq: seq},
 		},
 		Reason: "a case is pinning the tail",
-		Every:  beat, Now: clock.Now, Logger: logger,
+		Every:  beat, Logger: logger,
 	})
 	if err != nil {
 		t.Fatalf("HoldTail: %v", err)
@@ -140,9 +140,8 @@ func renewedPast(t *testing.T, register coord.HoldRegister, revision uint64) coo
 // outliving the release would put it back for a whole stale window.
 func TestATailPinRenewsItselfUntilReleased(t *testing.T) {
 	t.Parallel()
-	clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
 	register := &countedHolds{HoldRegister: memory.NewFleet()}
-	pin := pinAt(t.Context(), t, register, clock, time.Millisecond, 4_000, nil)
+	pin := pinAt(t.Context(), t, register, time.Millisecond, 4_000, nil)
 
 	held := renewedPast(t, register, heldRevision(t, register)).Streams[heldStream]
 	if held.Seq != 4_000 || held.Generation != 1 {
@@ -169,10 +168,9 @@ func TestATailPinRenewsItselfUntilReleased(t *testing.T) {
 // call may act.
 func TestATailPinIsReleasedOnceWhateverItsContextSays(t *testing.T) {
 	t.Parallel()
-	clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
 	register := &countedHolds{HoldRegister: memory.NewFleet()}
 	ctx, cancel := context.WithCancel(t.Context())
-	pin := pinAt(ctx, t, register, clock, time.Millisecond, 4_000, nil)
+	pin := pinAt(ctx, t, register, time.Millisecond, 4_000, nil)
 	cancel()
 
 	pin.Release()
@@ -193,11 +191,10 @@ func TestATailPinIsReleasedOnceWhateverItsContextSays(t *testing.T) {
 // logs it and its next renewal lands. A holder that cannot pin at all is told.
 func TestATailPinSaysAMissedRenewalAndKeepsRenewing(t *testing.T) {
 	t.Parallel()
-	clock := &stepClock{now: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
 	register := &countedHolds{HoldRegister: memory.NewFleet()}
 	logs := &lockedBuffer{}
 	logger := slog.New(slog.NewJSONHandler(logs, nil))
-	pinAt(t.Context(), t, register, clock, time.Millisecond, 4_000, logger)
+	pinAt(t.Context(), t, register, time.Millisecond, 4_000, logger)
 
 	register.refuse.Store(true)
 	deadline := time.Now().Add(10 * time.Second)

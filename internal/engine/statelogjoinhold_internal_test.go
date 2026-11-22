@@ -358,7 +358,7 @@ func TestATrimTickSeesAJoinsPinOrTheRowThatReplacedIt(t *testing.T) {
 		t.Fatalf("publish the donor's row: %v", err)
 	}
 	owner := coord.HoldOwner("node-join", joinHoldPurpose)
-	if err := register.PutHold(ctx, coord.TrimHold{Owner: owner, At: time.Now().UTC(),
+	if err := register.PutHold(ctx, coord.TrimHold{Owner: owner,
 		Streams: map[string]coord.Position{stream: {Stream: stream, Generation: 1, Seq: 100}},
 	}); err != nil {
 		t.Fatalf("pin the joiner's tail: %v", err)
