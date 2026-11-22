@@ -73,10 +73,12 @@ const museHookAnswerBytes = 16384
 var museHookFraming = len(`{"hookSpecificOutput":{"additionalContext":"","hookEventName":"PostToolUse"}}`)
 
 // museItemUnits is the most UTF-16 units one Muse Code hook answer carries:
-// the ceiling less the framing, at three bytes a unit, the most any UTF-16
-// unit of text written raw takes. It holds the engine's widest item (4,505
-// units), ONE ITEM AN ANSWER: a second message goes to the next hook's
-// answer, three a step (ADR-0177's bounds stay as they are).
+// the ceiling less the framing, at three bytes a unit, the most any unit of
+// an item takes: the engine draws every control but tab and newline as
+// U+FFFD as it renders an item (internal/agent/prompts), so JSON escapes no
+// unit past two bytes. It holds the engine's widest item (4,505 units), ONE
+// ITEM AN ANSWER: a second message goes to the next hook's answer, three a
+// step (ADR-0177's bounds stay as they are).
 var museItemUnits = (museHookAnswerBytes - museHookFraming) / 3
 
 var _ hookDelivery = Muse{}
