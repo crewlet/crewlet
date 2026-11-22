@@ -66,8 +66,8 @@ func (p *Profile) FileRule(name string) FileRule {
 func (r FileRule) Mixed() bool { return len(r.LoginKeys) > 0 }
 
 // Seed is what a home is handed of shared, the shared copy: a login file
-// whole, a mixed one only its login's fields, so no setting in the shared copy
-// rides along. A mixed file that does not read in its format is refused: none
+// whole, a mixed one only its login's fields (shared as it stands where it
+// holds nothing else), so no setting in the shared copy rides along. A mixed file that does not read in its format is refused: none
 // of it can be told apart.
 func (r FileRule) Seed(shared []byte) ([]byte, error) {
 	if !r.Mixed() {
@@ -83,6 +83,10 @@ func (r FileRule) Seed(shared []byte) ([]byte, error) {
 		if v, held := lookupKey(doc, path); held {
 			setKey(login, path, v)
 		}
+	}
+	if reflect.DeepEqual(login, doc) {
+		// THE LOGIN ALONE, byte for byte, so its seed's digest is the shared one's.
+		return shared, nil
 	}
 	return r.encode(login, nil)
 }
