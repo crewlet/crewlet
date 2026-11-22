@@ -89,7 +89,7 @@ func changes(s step) []growth.Change {
 // record is a's ask as the access log keeps it: the act's binding as its
 // operation, every step's changes, free words as their digest and length.
 func (p *Product) record(call growth.Call, a act) growth.Record {
-	r := p.client.Record(call, a.steps[0].req, a.class, nil)
+	r := p.client.Record(call, a.steps[0].req, a.class)
 	r.Account, r.Operation = a.app, binding(a)
 	if a.edit {
 		r.Target = "applications/" + a.app + "/edits"
@@ -192,7 +192,7 @@ func (p *Product) Apply(ctx context.Context, call growth.Call, approved string) 
 			"administrator allows one. Nothing was sent.", call.Tool, tool.Class))
 	}
 	a, err := p.build(ctx, call)
-	rec := p.client.Record(call, googlegrowth.Request{Op: growth.Operation{ID: call.Tool}}, tool.Class, nil)
+	rec := p.client.Record(call, googlegrowth.Request{Op: growth.Operation{ID: call.Tool}}, tool.Class)
 	if err == nil {
 		rec = p.record(call, a)
 		// THE ANSWER AND EVERY OUTCOME NAME THE OPERATION THE ASK BOUND.
@@ -324,7 +324,7 @@ func (p *Product) outcome(ctx context.Context, held bool, rec growth.Record, out
 	any, error) {
 	switch {
 	case err != nil:
-		rec.Failure = googlegrowth.FailureOf(err)
+		rec.Failure = googlegrowth.StepFailure(err)
 		p.client.Note(ctx, growth.StepFailed, rec)
 		return nil, err
 	case held:
@@ -339,7 +339,7 @@ func (p *Product) outcome(ctx context.Context, held bool, rec growth.Record, out
 // anything was sent, and answers err.
 func (p *Product) failEarly(ctx context.Context, held bool, rec growth.Record, err error) error {
 	if held {
-		rec.Failure = googlegrowth.EarlyFailure(err)
+		rec.Failure = googlegrowth.StepFailure(err)
 		p.client.Note(ctx, growth.StepFailed, rec)
 	}
 	return err
@@ -363,7 +363,7 @@ func (p *Product) hold(ctx context.Context, resource string) (func(), error) {
 // lapsed unanswered.
 func (p *Product) Denied(ctx context.Context, call growth.Call) error {
 	tool, _ := p.Catalog().Tool(call.Tool)
-	rec := p.client.Record(call, googlegrowth.Request{Op: growth.Operation{ID: call.Tool}}, tool.Class, nil)
+	rec := p.client.Record(call, googlegrowth.Request{Op: growth.Operation{ID: call.Tool}}, tool.Class)
 	if call.Tool == toolReply {
 		if m, err := p.replies(ctx, call); err == nil {
 			rec = p.replyRecord(call, m)

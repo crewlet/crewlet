@@ -227,7 +227,7 @@ func replyBinding(m replyBatch) string {
 func (p *Product) replyRecord(call growth.Call, m replyBatch) growth.Record {
 	op, _ := p.Catalog().Operation(opReviewsReply)
 	r := p.client.Record(call, googlegrowth.Request{Op: op, Account: m.app,
-		Address: publisherAPI + "/androidpublisher/v3/applications/" + m.app + "/reviews"}, growth.ClassPublic, nil)
+		Address: publisherAPI + "/androidpublisher/v3/applications/" + m.app + "/reviews"}, growth.ClassPublic)
 	r.Operation = replyBinding(m)
 	for _, rp := range m.replies {
 		r.Changes = append(r.Changes, googlegrowth.RecordChange(growth.Change{Field: "replyText",
@@ -348,7 +348,7 @@ func (p *Product) applyReplies(ctx context.Context, call growth.Call, approved s
 		}
 		pr := PostedReply{Review: r.review.ReviewID, Status: "posted"}
 		switch {
-		case err != nil && googlegrowth.FailureOf(err) == growth.FailureTimedOut:
+		case err != nil && googlegrowth.StepFailure(err) == growth.FailureUnknownOutcome:
 			unknown = true
 			pr.Status, pr.Error = "unknown", "the reply was cut before Google answered: read the review to see "+
 				"whether it was posted."

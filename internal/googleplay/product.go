@@ -45,7 +45,6 @@ type File struct {
 // Audit is the access log's record of each step of an act, its answer too.
 type Audit interface {
 	googlegrowth.Audit
-	googlegrowth.Verdicts
 }
 
 // Deps are what the product acts through; Reader and Media may be nil, which
@@ -77,7 +76,7 @@ func New(d Deps) *Product {
 	}
 	return &Product{deps: d, client: &googlegrowth.Client{
 		Kind: string(Kind), Name: "Google Play", Company: d.Company, Env: d.Env, Tokens: d.Tokens,
-		Audit: d.Audit, Verdicts: d.Audit, HTTP: d.HTTP, Refused: vendorRefusal,
+		Audit: d.Audit, HTTP: d.HTTP, Refused: vendorRefusal,
 	}}
 }
 
