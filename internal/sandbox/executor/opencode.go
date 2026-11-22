@@ -234,9 +234,10 @@ func (OpenCode) Session(req sandbox.RunRequest) Session {
 
 // openCodeRelease is the one OpenCode release this runner supports, its
 // newest: a box on an older one is refused at the run's start, naming its
-// release ([openCodeScript]); one on a newer runs, its sessions fresh; and a
-// carried session continues only where the box and the writer are both
-// exactly it ([OpenCode.Continues]).
+// release ([openCodeScript]); one on a newer runs, a session carried in from
+// another box starting fresh there while the box's own copy continues in
+// place; and a carried session continues only where the box and the writer
+// are both exactly it ([OpenCode.Continues]).
 const openCodeRelease = "2.3.2"
 
 // openCodeArchiveFormat is the layout an OpenCode run packs its session in: the
