@@ -73,6 +73,10 @@ type Fleet struct {
 	conversationHoldRevision uint64
 	seen                     map[string]seenMark
 	seenRevision             uint64
+	// sessionClaims is each minted session's claim, by session id, and the
+	// counter its revisions are drawn from.
+	sessionClaims        map[string]coord.SessionClaim
+	sessionClaimRevision uint64
 	// boxReadings is each seat's box readings, by seat and cell.
 	boxReadings map[boxReadingKey]coord.BoxReading
 	mailboxes   map[uuid.UUID]coord.MailboxRecord
@@ -150,10 +154,9 @@ type Fleet struct {
 	// their whole key.
 	accepted entryRecords[coord.MCPAcceptedTool, coord.MCPAcceptedUpdate]
 
-	// grants and mcpSignIns are each MCP server's OAuth grant and its
-	// sign-in in progress, by the server's name.
-	grants     entryRecords[coord.MCPGrant, coord.MCPGrantUpdate]
-	mcpSignIns entryRecords[coord.MCPSignIn, coord.MCPSignIn]
+	// oauth are each family's OAuth grants and sign-ins in progress, by
+	// the grant's name.
+	oauth map[coord.GrantFamily]*grantFamilyRecords
 
 	// googleIdentities are each seat's Google growth identity, by handle.
 	googleIdentities entryRecords[coord.GoogleIdentity, coord.GoogleIdentity]
@@ -231,6 +234,7 @@ func NewFleet() *Fleet {
 		accessReviews:     map[string]accessReview{},
 		atlasWakes:        map[string]coord.AtlasWake{},
 		conversationHolds: map[uuid.UUID]map[string]coord.ConversationHold{},
+		sessionClaims:     map[string]coord.SessionClaim{},
 		seen:              map[string]seenMark{},
 		boxReadings:       map[boxReadingKey]coord.BoxReading{},
 		mailboxes:         map[uuid.UUID]coord.MailboxRecord{},
@@ -247,8 +251,7 @@ func NewFleet() *Fleet {
 		sshTests:          newSSHTestRecords(),
 		issueReports:      newIssueReportRecords(),
 		insightRecords:    newInsightRecords(),
-		grants:            newGrantRecords(),
-		mcpSignIns:        newMCPSignInRecords(),
+		oauth:             newGrantFamilies(),
 		googleIdentities:  newGoogleIdentityRecords(),
 		accepted:          newAcceptedRecords(),
 		bodies:            map[string]storedBody{},

@@ -41,8 +41,9 @@ func reportSession(paths Paths, idVar string) string {
 // ErrSessionReport is a minting run's report of its session refused: not one
 // id a harness names, or, on a run that continued its session, any id but the
 // continued one. The run fails closed on it: its session is no id the engine
-// can trust, so nothing is collected, carried or bound under it.
-var ErrSessionReport = errors.New("executor: the session the run reported is refused")
+// can trust, so nothing is collected, carried or bound under it. It is the
+// bind's refusal ([sandbox.ErrSessionBindRefused]), whichever reads it first.
+var ErrSessionReport = fmt.Errorf("executor: the run's session report: %w", sandbox.ErrSessionBindRefused)
 
 // MintsSession reports whether the runner's harness mints its session's id as
 // it starts ([sessionMinter]): its run's start names "" for a fresh session
@@ -66,7 +67,7 @@ func (r *Runner) ReportedSession(ctx context.Context, box sandbox.Sandbox, handl
 			r.harness.Name())
 	}
 	paths := PathsFor(box)
-	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
+	rec, refusal, err := readRecordedSession(ctx, box, paths)
 	if err != nil {
 		return "", fmt.Errorf("executor: reading which session the run worked in: %w", err)
 	}
@@ -109,4 +110,26 @@ func (r *Runner) reportedSession(ctx context.Context, box sandbox.Sandbox, paths
 			"was asked to continue, %q", ErrSessionReport, id)
 	}
 	return id, nil
+}
+
+// mintedRecord is rec with its id the session a minting run reported, for a
+// reader with no run handle (carry, take, a save): the record says whether the
+// run continued, so a resume that reported nothing keeps the id it continued.
+// A refused report names no session, so nothing is packed or carried under it.
+func (r *Runner) mintedRecord(ctx context.Context, box sandbox.Sandbox, paths Paths,
+	rec sessionRecord) (sessionRecord, string, error) {
+
+	var asked sandbox.RunHandle
+	if rec.continued {
+		asked.SessionID = rec.id
+	}
+	id, err := r.reportedSession(ctx, box, paths, asked, rec)
+	switch {
+	case errors.Is(err, ErrSessionReport):
+		return sessionRecord{}, err.Error(), nil
+	case err != nil:
+		return sessionRecord{}, "", err
+	}
+	rec.id = id
+	return rec, "", nil
 }

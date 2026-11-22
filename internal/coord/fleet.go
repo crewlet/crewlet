@@ -1187,6 +1187,11 @@ type SandboxRuns interface {
 	MutateSandboxRunPart(ctx context.Context, turnID string, part RunPart,
 		decide func(current Record, found bool) ([]byte, error)) (Record, bool, error)
 
+	// SessionClaims are the runs the minted session ids are bound to
+	// ([SessionClaim]), kept beside the runs' records and carrying their
+	// lifetime.
+	SessionClaims
+
 	// ValueCrossing is how long a change of a run's value at what one key
 	// holds ([MaxValueBytes]) takes to cross this store's connection, for the
 	// read its decision is taken on and every send of the write:
@@ -1628,8 +1633,8 @@ type Fleet interface {
 	SSHTests
 	IssueReports
 	InsightRecords
-	MCPGrants
-	MCPSignIns
+	OAuthGrants
+	OAuthSignIns
 	GoogleIdentities
 	MCPAccepted
 	PositionRegister

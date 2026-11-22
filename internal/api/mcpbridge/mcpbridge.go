@@ -420,26 +420,6 @@ type Session struct {
 	// not in (see started.go). Nil tells nobody, which a test's session has.
 	Started func(ctx context.Context, fellBack bool)
 
-	// Mints says the box's harness mints its session's id as it starts and
-	// its script reports it (internal/sandbox/executor's sessionMinter): the
-	// session is keyed by the launch until [Bridge.Bind] binds the reported id,
-	// once (minted.go). False for a harness that names its session at start.
-	Mints bool
-
-	// Continues is the session a minting run's launch continues, "" for a
-	// fresh launch: a box that took it up binds it alone ([Bridge.Bind]).
-	Continues string
-
-	// Foreign reports whether id is already bound to another run, turn or seat
-	// (the executor log, the coordinator records), or that it could not tell:
-	// a minted session binds only a fresh id. Nil refuses every fresh id.
-	Foreign func(ctx context.Context, id string) (bool, error)
-
-	// Bound is told the id [Bridge.Bind] bound, once, before any later request
-	// is served: the run's skill guard and record move from the launch to it.
-	// Nil tells nobody.
-	Bound func(ctx context.Context, id string)
-
 	mu sync.Mutex
 	// live is the session's current opening; nil until opened.
 	live *binding
@@ -1454,9 +1434,6 @@ type binding struct {
 	startMu      sync.Mutex
 	started      bool
 	startedFresh bool
-	// bound is the session id [Bridge.Bind] bound a minted session to, under
-	// startMu; "" until then (minted.go).
-	bound string
 }
 
 var _ toolsession.Dispatcher = (*binding)(nil)

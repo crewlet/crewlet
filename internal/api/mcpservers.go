@@ -107,14 +107,14 @@ func (m mcpSignIns) SignOut(ctx context.Context, server string, by iam.Actor) (m
 
 // signInAnswer is a sign-in's record as the routes answer it: never its sealed
 // half.
-func signInAnswer(s coord.MCPSignIn) mcpapi.SignInAnswer {
-	return mcpapi.SignInAnswer{ID: s.ID, Server: s.Server, Status: string(s.Status), Detail: s.Detail,
+func signInAnswer(s coord.OAuthSignIn) mcpapi.SignInAnswer {
+	return mcpapi.SignInAnswer{ID: s.ID, Server: s.Name, Status: string(s.Status), Detail: s.Detail,
 		StartedAt: s.StartedAt, ExpiresAt: s.ExpiresAt}
 }
 
 // signInErr is an engine refusal of a sign-in gesture as the route answers it.
 func signInErr(err error) error {
-	var refused *engine.MCPSignInRefusal
+	var refused *engine.SignInRefusal
 	if errors.As(err, &refused) {
 		return &mcpapi.SignInRefusal{Status: refused.Status, Detail: refused.Reason + ". " + refused.Remedy}
 	}
@@ -122,7 +122,7 @@ func signInErr(err error) error {
 		engine.ErrNoMCPServer:        mcpapi.ErrNoSuchServer,
 		engine.ErrMCPNoOAuth:         mcpapi.ErrNoOAuth,
 		engine.ErrNoCallbackAddress:  mcpapi.ErrNoCallback,
-		engine.ErrNoMCPSignIn:        mcpapi.ErrNoSignIn,
+		engine.ErrNoSignIn:           mcpapi.ErrNoSignIn,
 		engine.ErrMCPNotSignedIn:     mcpapi.ErrNotSignedIn,
 		engine.ErrMCPServiceIdentity: mcpapi.ErrServiceIdentity,
 	} {
@@ -133,18 +133,20 @@ func signInErr(err error) error {
 	return err
 }
 
-// mcpLanding is the engine as the sign-in callback finishes a sign-in through.
-type mcpLanding struct{ e *engine.Engine }
+// oauthLanding is the engine as the sign-in callback finishes a sign-in of any
+// family through.
+type oauthLanding struct{ e *engine.Engine }
 
-func (m mcpLanding) CompleteSignIn(ctx context.Context, l webhooks.MCPLanding) (string, error) {
-	server, err := m.e.CompleteMCPSignIn(ctx, engine.MCPSignInLanding{State: l.State, Code: l.Code,
+func (m oauthLanding) CompleteSignIn(ctx context.Context, l webhooks.Landing) (webhooks.Landed, error) {
+	landed, err := m.e.CompleteSignIn(ctx, engine.SignInLanding{State: l.State, Code: l.Code,
 		Issuer: l.Issuer, Error: l.Error, Description: l.Description})
-	var refused *engine.MCPSignInRefusal
+	out := webhooks.Landed{Name: landed.Name, Title: landed.Title, Integration: landed.Integration}
+	var refused *engine.SignInRefusal
 	if errors.As(err, &refused) {
-		return server, &webhooks.MCPSignInRefusal{Status: refused.Status, Reason: refused.Reason,
+		return out, &webhooks.SignInRefusal{Status: refused.Status, Reason: refused.Reason,
 			Remedy: refused.Remedy}
 	}
-	return server, err
+	return out, err
 }
 
-func (m mcpLanding) ClientMetadata() (oauth.Metadata, bool) { return m.e.ClientMetadata() }
+func (m oauthLanding) ClientMetadata() (oauth.Metadata, bool) { return m.e.ClientMetadata() }

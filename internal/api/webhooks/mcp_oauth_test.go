@@ -18,20 +18,23 @@ import (
 // other, recording what it was handed.
 type scriptedSignIns struct {
 	mu     sync.Mutex
-	landed []webhooks.MCPLanding
+	landed []webhooks.Landing
 	noDoc  bool
 }
 
-func (s *scriptedSignIns) CompleteSignIn(_ context.Context, l webhooks.MCPLanding) (string, error) {
+func (s *scriptedSignIns) CompleteSignIn(_ context.Context, l webhooks.Landing) (webhooks.Landed, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.landed = append(s.landed, l)
+	if l.State == "integration" {
+		return webhooks.Landed{Name: "adsense", Title: "AdSense", Integration: true}, nil
+	}
 	if l.State != "good" {
-		return "", &webhooks.MCPSignInRefusal{Status: http.StatusBadRequest,
+		return webhooks.Landed{}, &webhooks.SignInRefusal{Status: http.StatusBadRequest,
 			Reason: "this sign-in link is not one this engine issued, has expired, or was already used",
 			Remedy: "Start the sign-in again from the server's page"}
 	}
-	return "linear", nil
+	return webhooks.Landed{Name: "linear", Title: "linear"}, nil
 }
 
 func (s *scriptedSignIns) ClientMetadata() (oauth.Metadata, bool) {
@@ -42,10 +45,10 @@ func (s *scriptedSignIns) ClientMetadata() (oauth.Metadata, bool) {
 		"https://crewlet.example.com", "https://crewlet.example.com/webhooks/mcp-oauth"), true
 }
 
-func (s *scriptedSignIns) seen() []webhooks.MCPLanding {
+func (s *scriptedSignIns) seen() []webhooks.Landing {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]webhooks.MCPLanding(nil), s.landed...)
+	return append([]webhooks.Landing(nil), s.landed...)
 }
 
 func mcpLanding(t *testing.T, e *edge, query string) *httptest.ResponseRecorder {
@@ -67,15 +70,22 @@ func mcpLanding(t *testing.T, e *edge, query string) *httptest.ResponseRecorder 
 func TestTheSignInCallbackShowsNothingItWasSent(t *testing.T) {
 	t.Parallel()
 	signIns := &scriptedSignIns{}
-	e := newEdge(t, func(o *webhooks.Options) { o.MCPSignIns = signIns })
+	e := newEdge(t, func(o *webhooks.Options) { o.OAuthSignIns = signIns })
 
 	res := mcpLanding(t, e, "code=the-secret-code-0123456789&state=good&iss=https%3A%2F%2Fauth.example.com")
 	page := html.UnescapeString(res.Body.String())
 	if res.Code != http.StatusOK || !strings.Contains(page, "Signed in to linear") {
 		t.Fatalf("a finished sign-in = %d:\n%s", res.Code, page)
 	}
+	// AN INTEGRATION'S SIGN-IN LANDS ON THE SAME ADDRESS, and its page names
+	// the integration and where to go back to.
+	if res := mcpLanding(t, e, "code=abc&state=integration"); res.Code != http.StatusOK ||
+		!strings.Contains(res.Body.String(), "Signed in to AdSense") ||
+		!strings.Contains(res.Body.String(), "Settings, Integrations") {
+		t.Fatalf("an integration's finished sign-in = %d:\n%s", res.Code, res.Body.String())
+	}
 	got := signIns.seen()
-	if len(got) != 1 || got[0].Code != "the-secret-code-0123456789" || got[0].Issuer != "https://auth.example.com" {
+	if len(got) != 2 || got[0].Code != "the-secret-code-0123456789" || got[0].Issuer != "https://auth.example.com" {
 		t.Fatalf("the engine was handed %+v", got)
 	}
 
@@ -104,7 +114,7 @@ func TestTheSignInCallbackShowsNothingItWasSent(t *testing.T) {
 func TestALandingNoSignInReturnsToIsNeverHandedOn(t *testing.T) {
 	t.Parallel()
 	signIns := &scriptedSignIns{}
-	e := newEdge(t, func(o *webhooks.Options) { o.MCPSignIns = signIns })
+	e := newEdge(t, func(o *webhooks.Options) { o.OAuthSignIns = signIns })
 	for _, query := range []string{
 		"code=abc",
 		"code=abc&state=" + strings.Repeat("s", 2<<10),
@@ -130,7 +140,7 @@ func TestALandingNoSignInReturnsToIsNeverHandedOn(t *testing.T) {
 func TestTheClientMetadataDocumentNamesTheCallbackAlone(t *testing.T) {
 	t.Parallel()
 	signIns := &scriptedSignIns{}
-	e := newEdge(t, func(o *webhooks.Options) { o.MCPSignIns = signIns })
+	e := newEdge(t, func(o *webhooks.Options) { o.OAuthSignIns = signIns })
 	req := httptest.NewRequest(http.MethodGet, "/webhooks/mcp-oauth/client-metadata.json", nil)
 	res := httptest.NewRecorder()
 	e.mux.ServeHTTP(res, req)

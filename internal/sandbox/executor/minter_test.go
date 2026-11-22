@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -127,5 +128,70 @@ func TestAMintingScriptStagesItsReportThenRenamesIt(t *testing.T) {
 	if !strings.HasPrefix(script, `printf '%s\n' "$id" > `+staged+" && ") ||
 		!strings.HasSuffix(script, "mv -f "+staged+" "+report) {
 		t.Fatalf("the report is not staged and renamed into place:\n%s", script)
+	}
+}
+
+// A MINTING RUN IS COLLECTED IN THE SESSION ITS SCRIPT REPORTED, never one its
+// harness printed or its record names, and a report the engine cannot trust
+// collects no session at all: the run fails closed, saying why.
+//
+// Mutation: collect the record's id beside a refused report, read the record
+// where the report names another, or leave a refused report's run a success,
+// and a case goes red.
+func TestAMintingRunIsCollectedInTheSessionItReported(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		resume, record, report, want string
+		refused                      bool
+	}{
+		"a fresh run's report":              {record: "id " + mintedOther + "\ncontinued no\n", report: minted + "\n", want: minted},
+		"a run killed before its report":    {record: "id " + mintedOther + "\ncontinued no\n"},
+		"a resume reporting nothing":        {resume: minted, record: "id " + minted + "\ncontinued yes\n", want: minted},
+		"a resume reporting another":        {resume: minted, record: "continued yes\n", report: mintedOther + "\n", refused: true},
+		"a report of no id a harness names": {record: "continued no\n", report: "../x\n", refused: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			runner := executor.New(executor.Minter{})
+			b := box(t, runner)
+			handle := mintingStart(t, b, runner, sandbox.RunRequest{Brief: "begin", Resume: c.resume}, c.record,
+				c.report)
+			p := paths(b)
+			b.Put(p.Findings(), "Outcome: succeeded")
+			b.Put(p.ExitCode(), "0")
+			res, err := runner.Collect(t.Context(), b, handle, queue.NewAnswerBudget(nil))
+			if err != nil {
+				t.Fatalf("Collect: %v", err)
+			}
+			if res.SessionID != c.want {
+				t.Errorf("the run was collected in session %q, want %q", res.SessionID, c.want)
+			}
+			if refused := !res.Success && strings.Contains(res.Error, "the session the job reported is refused"); refused != c.refused {
+				t.Errorf("the run failed closed on its report: %v, want %v (success %v, %q)", refused, c.refused,
+					res.Success, res.Error)
+			}
+		})
+	}
+}
+
+// A REUSED BOX KEEPS NO REPORT OF ITS LAST RUN, staged or in place: a report
+// left would be read as the next run's, which the bind would refuse as an id
+// bound elsewhere, failing a run that did nothing wrong.
+//
+// Mutation: leave either path out of ClearArtifacts, and this goes red.
+func TestAReusedBoxKeepsNoSessionReport(t *testing.T) {
+	t.Parallel()
+	runner := executor.New(executor.Minter{})
+	b := box(t, runner)
+	if err := runner.ClearArtifacts(t.Context(), b); err != nil {
+		t.Fatalf("ClearArtifacts: %v", err)
+	}
+	p := paths(b)
+	execs := b.Execs()
+	clear := execs[len(execs)-1].Command
+	for _, path := range []string{p.SessionReport(), executor.SessionReportStaging(p)} {
+		if !strings.Contains(clear, sandbox.ShellQuote(path)+" ") {
+			t.Errorf("the clear leaves %s:\n%s", path, clear)
+		}
 	}
 }
