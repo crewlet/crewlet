@@ -26,8 +26,8 @@ import (
 // AN INTEGRATION'S CONSENT GRANT (ADR-0178): the integration family of the
 // company's grants (oauthgrant.go), one per kind, for a Google product that
 // refuses service accounts (googleauth.Consent). It signs in at Google's fixed
-// endpoints as the company's own OAuth client, asks for exactly one scope and
-// keeps the grant only if Google granted exactly that. Signing in again never
+// endpoints as the company's own OAuth client, asks for the scopes its seats'
+// levels need and keeps the grant only if Google granted exactly those. Signing in again never
 // revokes the grant it replaces, and giving one up revokes at Google only
 // when no other live grant of the company has a client in the same project.
 
@@ -96,12 +96,9 @@ func (consentGrants) keepFresh(ctx context.Context, e *Engine, kind, clientID st
 	return ""
 }
 
-// accept keeps the grant only where Google granted exactly the one scope asked.
+// accept keeps the grant only where Google granted exactly the scopes asked.
 func (consentGrants) accept(tokens oauth.Tokens, asked []string) ([]string, error) {
-	if len(asked) != 1 {
-		return nil, googleauth.ErrScopeNotGranted
-	}
-	if err := googleauth.CheckConsentScope(asked[0], tokens.Scopes); err != nil {
+	if err := googleauth.CheckConsentScope(asked, tokens.Scopes); err != nil {
 		return nil, err
 	}
 	return slices.Clone(tokens.Scopes), nil
@@ -188,7 +185,8 @@ func (e *Engine) consentEndpoints() *mcp.OAuthEndpoints {
 }
 
 // StartIntegrationSignIn begins kind's consent sign-in as by: the company's
-// own client, Google's endpoints, and exactly the product's one scope.
+// own client, Google's endpoints, and exactly the scopes the product's seats
+// need now.
 func (e *Engine) StartIntegrationSignIn(ctx context.Context, kind integration.Kind, by iam.Actor) (SignInStarted, error) {
 	p, client, needed := e.consentConfigured(string(kind))
 	switch {
@@ -209,8 +207,12 @@ func (e *Engine) StartIntegrationSignIn(ctx context.Context, kind integration.Ki
 		return SignInStarted{}, &SignInRefusal{Status: http.StatusConflict, Reason: err.Error(),
 			Remedy: "Set it in Settings, Secrets, then sign in"}
 	}
+	scopes, err := googleauth.ConsentScopes(p, e.Company().Config)
+	if err != nil {
+		return SignInStarted{}, err
+	}
 	return e.startSignIn(ctx, signInStart{kind: consentGrants{}, name: string(kind), ep: e.consentEndpoints(),
-		client: grantClient{Kind: catalogue.ClientOwn, ID: client.ID}, scopes: []string{p.Scope},
+		client: grantClient{Kind: catalogue.ClientOwn, ID: client.ID}, scopes: scopes,
 		redirect: redirect, extra: googleauth.ConsentParams()}, by)
 }
 

@@ -1286,6 +1286,13 @@ func (s *refusingStore) ServeNotes(ctx context.Context, turnID string, serve Not
 	return s.inner.ServeNotes(ctx, turnID, serve)
 }
 
+func (s *refusingStore) AgainNotes(ctx context.Context, turnID string, ask NoteAgain) ([]string, []string, error) {
+	if s.called("AgainNotes") {
+		return nil, nil, errRefusedCall
+	}
+	return s.inner.AgainNotes(ctx, turnID, ask)
+}
+
 func (s *refusingStore) SettleTake(ctx context.Context, turnID string, settle NoteSettle) ([]RunNote, error) {
 	if s.called("SettleTake") {
 		return nil, errRefusedCall
@@ -1326,6 +1333,13 @@ func (s *refusingStore) BindSession(ctx context.Context, turnID string, bind Ses
 		return PendingRun{}, errRefusedCall
 	}
 	return s.inner.BindSession(ctx, turnID, bind)
+}
+
+func (s *refusingStore) ReleaseSessionClaim(ctx context.Context, turnID, sessionID string) error {
+	if s.called("ReleaseSessionClaim") {
+		return errRefusedCall
+	}
+	return s.inner.ReleaseSessionClaim(ctx, turnID, sessionID)
 }
 
 func (s *refusingStore) OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal,

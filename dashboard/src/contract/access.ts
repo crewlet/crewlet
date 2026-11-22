@@ -49,7 +49,11 @@ export type AccessLaneKey =
   | "aws"
   | "google_cloud"
   | "ssh"
-  | "app_store_connect";
+  | "meta_ads"
+  | "app_store_connect"
+  | "apple_ads"
+  | "google_analytics"
+  | "admob";
 
 /** "external" on a lane the engine does not provision for the company. */
 type AccessManaged = "external";

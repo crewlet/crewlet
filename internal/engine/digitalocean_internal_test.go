@@ -183,6 +183,9 @@ func TestASeatsToolCredentialInTheBoxNeverSignsOpenCodeIn(t *testing.T) {
 		if _, present := executor.signIn[tc.env]; present {
 			t.Errorf("%s: the agent's tool token is judged as part of the run's sign-in", tc.name)
 		}
+		if slices.Contains(executor.signInNames, tc.env) {
+			t.Errorf("%s: the agent's tool token is named among the run's sign-in, kept from its tools", tc.name)
+		}
 		if err := sandboxCredentials(agent, member.Key, "sre", sandbox.E2B, executor.env); err != nil {
 			t.Fatalf("%s: the token is not credential-named, so this case tests nothing: %v", tc.name, err)
 		}
