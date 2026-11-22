@@ -46,13 +46,12 @@ func TestAnExecutorBlockSaysItIsARunnerAndNamesATemplate(t *testing.T) {
 	if !slices.Equal(names, []string{"zed", "alpha"}) || got[1].block.TempEnv != "A_TMP" {
 		t.Errorf("the runners read as %+v, want zed then alpha, alpha's temp variable kept", got)
 	}
-	for name, table := range map[string]string{
-		"runner unset": "x:\n  executor: {e2b_template: x}\n",
-		"no template":  "x:\n  executor: {runner: true}\n",
-	} {
-		if _, err := decodeExecutors([]byte(table)); err == nil {
-			t.Errorf("%s: the block was taken", name)
-		}
+	if _, err := decodeExecutors([]byte("x:\n  executor: {e2b_template: x}\n")); err == nil {
+		t.Error("a block with runner unset was taken")
+	}
+	if got, err := decodeExecutors([]byte("x:\n  executor: {runner: true}\n")); err != nil ||
+		len(got) != 1 || got[0].block.E2BTemplate != "" {
+		t.Errorf("a runner with no template reads as %+v, %v; want it, naming none", got, err)
 	}
 	if runners := ExecutorRunners(); !slices.Contains(runners, "claude-code") || !slices.Contains(runners, "opencode") {
 		t.Errorf("the built-in runners are %v", runners)
