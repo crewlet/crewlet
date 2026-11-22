@@ -1112,3 +1112,18 @@ func TestARotationOfAManagedDocumentIsNotAsked(t *testing.T) {
 		t.Errorf("a rotation asked Authorize about %v; it changes nothing in the document", rec.asked)
 	}
 }
+
+// A CONSENT REQUIREMENT TAKES NO VALUE: it is a sign-in a person makes at the
+// vendor, so a value submitted for one is refused rather than written into the
+// document, and the refusal says to sign in.
+//
+// Mutation: drop the consent arm of ValueProblem, and the value is taken.
+func TestAConsentRequirementTakesNoValue(t *testing.T) {
+	t.Parallel()
+	r := setup.Requirement{Field: "google_sign_in", Label: "Google sign-in", Kind: setup.KindConsent}
+	for _, value := range []string{"anything", "${GOOGLE_REFRESH_TOKEN}"} {
+		if refused := r.Refusal(value); refused == nil || !strings.Contains(refused.Problem, "Sign in") {
+			t.Errorf("a consent requirement took %q (%v)", value, refused)
+		}
+	}
+}
