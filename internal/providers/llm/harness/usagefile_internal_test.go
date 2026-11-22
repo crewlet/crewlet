@@ -285,8 +285,7 @@ func TestTheHermesProfileDeniesItsToolsAndReadsItsRealTokens(t *testing.T) {
 //   - auxiliary.title_generation.enabled false: no billed request for a title.
 //   - memory.memory_enabled and memory.user_profile_enabled false: else MEMORY.md
 //     and USER.md are read into every prompt.
-//   - gateway.unmanaged_idle_exit_seconds 5: else a gateway a dead engine left
-//     holds that call's environment for 600 s.
+//   - gateway.unmanaged_idle_exit_seconds 5: a dead engine's gateway ends soon.
 //
 // NO `model` SECTION (a login's provider lives in auth.json, which travels) and
 // no toolsets (`--toolsets web` on argv is the denial). Mutation: drop a
