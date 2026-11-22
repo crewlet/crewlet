@@ -1562,11 +1562,7 @@ func readValueAs[T textual](whole T, start, end int, prior [][2]int, pick int) (
 // word after it that is a value ([ownMarkup]) and that key's label: the label's
 // words are the key's (`*** Retype password:`), no value.
 func keyLineValue[T textual](whole, text T, from int) int {
-	keyBefore := func(w int) bool {
-		k := keyFrom(text, from, w+MaxReach)
-		return k >= 0 && labelStart(text, from, k) < w
-	}
-	return valueEnd(whole, ownMarkup(text, from, len(text), keyBefore))
+	return valueEnd(whole, ownMarkup(text, from, len(text), keyBefore(text, from)))
 }
 
 // restValue is the value on the rest of a line an escaped break left, from
@@ -1576,11 +1572,7 @@ func keyLineValue[T textual](whole, text T, from int) int {
 // key's (`- Confirm password:`), and markup with no value before it is read
 // as it was.
 func restValue[T textual](whole, text T, rest int) (aValue, bool) {
-	keyBefore := func(w int) bool {
-		k := keyFrom(text, rest, w+MaxReach)
-		return k >= 0 && labelStart(text, rest, k) < w
-	}
-	at := ownMarkup(text, rest, len(text), keyBefore)
+	at := ownMarkup(text, rest, len(text), keyBefore(text, rest))
 	return aValue{from: rest, to: valueEnd(whole, at)}, at > rest
 }
 
@@ -1631,11 +1623,27 @@ func ownMarkup[T textual](text T, from, end int, keyBefore func(w int) bool) int
 	return from
 }
 
+// keyBefore is [ownMarkup]'s keyBefore for a value read from from: whether
+// the first password's key at or past from, read no further than [MaxReach]
+// past the word ending at w, has a label beginning before w. Only a key
+// beginning by [labelEnd] can, so none past it is read (its first rune read
+// whole: a word opening there is found).
+func keyBefore[T textual](text T, from int) func(w int) bool {
+	return func(w int) bool {
+		k := keyFrom(text, from, labelEnd(text, w, w+MaxReach)+utf8.UTFMax, w+MaxReach)
+		return k >= 0 && labelStart(text, from, k) < w
+	}
+}
+
 // keyFrom is where the first password's key at or past from begins, read no
-// further than bound, or -1.
-func keyFrom[T textual](text T, from, bound int) int {
-	if k := keyedIndex(passwordRule(), text[from:min(len(text), bound)]); k >= 0 {
-		return from + k
+// further than bound, or -1, or -1 too where that key begins at by or past it.
+func keyFrom[T textual](text T, from, by, bound int) int {
+	k, text := passwordRule(), text[from:min(len(text), bound)]
+	by = min(by-from, len(text))
+	for i := keyedBeginsBefore(k, text, 0, by); i >= 0; i = keyedBeginsBefore(k, text, beyond(text, i), by) {
+		if keyedMatchesAt(k, text, i) {
+			return from + i
+		}
 	}
 	return -1
 }
@@ -1811,7 +1819,7 @@ func labelStart[T textual](text T, floor, start int) int {
 		}
 		r, size := tDecodeLastRune(text[floor:j])
 		switch {
-		case r == ' ' || r == '\t' || unicode.IsLetter(r) || unicode.IsDigit(r) || tContainsRune("-'.()/", r):
+		case labelRune(r):
 		case r == '_' && wordRune(tDecodeLastRune(text[floor:j-size])) && wordRune(tDecodeRune(text[j:])):
 		default:
 			return j
@@ -1819,6 +1827,39 @@ func labelStart[T textual](text T, floor, start int) int {
 		j -= size
 	}
 	return j
+}
+
+// labelRune reports whether r is one a label is written in ([labelStart]).
+func labelRune(r rune) bool {
+	return r == ' ' || r == '\t' || unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("-'.()/", r)
+}
+
+// labelEnd is the first place at or past w, where a word ends and never inside
+// a rune, short of bound, where a label read back to before w would stop
+// ([labelStart]): a rune no label is written in, outside a key's marker. A key
+// further on has a label beginning at w or past it, so a search for a key
+// whose label begins before w ends there ([keyBefore]) and costs the label's
+// run, not [MaxReach] of the text.
+func labelEnd[T textual](text T, w, bound int) int {
+	bound = min(bound, len(text))
+	for s := max(0, w-len(keyMarker)+1); s < w; s++ {
+		if tHasPrefix(text[s:], keyMarker) {
+			w = s + len(keyMarker)
+			break
+		}
+	}
+	for w < bound {
+		if tHasPrefix(text[w:], keyMarker) {
+			w += len(keyMarker)
+			continue
+		}
+		r, size := tDecodeRune(text[w:])
+		if r != '_' && !labelRune(r) {
+			return w
+		}
+		w += size
+	}
+	return min(w, bound)
 }
 
 // aValue is where the value a [passwordRule] match names begins and ends — or
@@ -2115,8 +2156,8 @@ func (r *valueRead[T]) lines(pos int, escaped bool) aValue {
 			from := at + len(content) - len(rest)
 			to, ran := from, false
 			if !blank {
-				keyBefore := func(w int) bool { return key >= 0 && pos+key < w }
-				to, ran = valueEnd(r.whole, ownMarkup(r.text, from, at+len(content), keyBefore)), true
+				keyAt := func(w int) bool { return key >= 0 && pos+key < w }
+				to, ran = valueEnd(r.whole, ownMarkup(r.text, from, at+len(content), keyAt)), true
 			}
 			if suffixed && to >= at+len(content) {
 				to, ran = at+len(content), false
@@ -3135,8 +3176,14 @@ func (k *keyed) valued(with string, value *valueFunc) rule {
 func (k *keyed) begins(text string, from int) int { return keyedBegins(k, text, from) }
 
 func keyedBegins[T textual](k *keyed, text T, from int) int {
-	for from < len(text) {
-		i := tIndexAny(text[from:], k.firsts)
+	return keyedBeginsBefore(k, text, from, len(text))
+}
+
+// keyedBeginsBefore is [keyedBegins] for a word opening before by alone: it
+// scans no further.
+func keyedBeginsBefore[T textual](k *keyed, text T, from, by int) int {
+	for from < by {
+		i := tIndexAny(text[from:by], k.firsts)
 		if i < 0 {
 			return -1
 		}
