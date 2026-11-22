@@ -9,17 +9,18 @@ import (
 	"time"
 )
 
-// A RELEASE IS READ BY ITS LAST THREE NUMBERS, as the run's script reads it:
-// a vendor's prefix is passed over, and a version naming no three numbers is
-// taken for a current release, never refused.
+// A RELEASE IS READ AS A BARE MAJOR.MINOR.PATCH, as the run's script reads
+// it: a vendor's prefix is passed over, and a pre-release or a version naming
+// no release meets no floor, since the script refuses it.
 //
-// Mutation: compare the numbers as text, or refuse an unread version, and a
-// case goes red.
+// Mutation: compare the numbers as text, read the last run of digits and dots,
+// or take an unread version for a current one, and a case goes red.
 func TestAReleaseIsHeldToAFloorByItsNumbers(t *testing.T) {
 	t.Parallel()
 	for version, want := range map[string]bool{
 		"codex-cli 0.171.0": true, "codex-cli 0.172.3": true, "1.0.0": true, "codex-cli 0.170.99": false,
-		"0.99.0": false, "codex-cli dev": true, "": true,
+		"0.99.0": false, "codex-cli dev": false, "": false, "codex-cli 0.150.0-alpha.1": false,
+		"codex-cli 0.172.0-rc.1": false, "codex-cli 0.172.0 (extra)": true,
 	} {
 		if got := releaseAtLeast(version, "0.171.0"); got != want {
 			t.Errorf("releaseAtLeast(%q, 0.171.0) = %v, want %v", version, got, want)
@@ -47,12 +48,13 @@ func codexEntry(t *testing.T, probe int) *Provider {
 }
 
 // A DIRECT BOX'S CODEX IS HELD TO ITS RUNNER'S FLOOR AND PROBE, since a direct
-// box runs this host's own; a box in another cell runs its image's, which its
-// run's script holds to the floor, so there it is a line and no problem. A
-// harness whose runner states neither reports nothing here.
+// box runs this host's own, and one naming no release (a pre-release) is
+// refused as its run's script refuses it; a box in another cell runs its
+// image's, which its run's script holds to the floor, so there it is a line
+// and no problem. A harness whose runner states neither reports nothing here.
 //
-// Mutation: drop the floor's or the probe's check, or raise either for a
-// remote cell, and a case goes red.
+// Mutation: drop the floor's or the probe's check, take a pre-release for a
+// release, or raise either for a remote cell, and a case goes red.
 func TestADirectBoxsCodexIsHeldToItsRunnersFloorAndProbe(t *testing.T) {
 	t.Parallel()
 	direct := DiagnoseOptions{ExecutorSeats: []string{"swe"}, ExecutorHarnesses: []string{"codex"}, Cell: directCell}
@@ -65,6 +67,7 @@ func TestADirectBoxsCodexIsHeldToItsRunnersFloorAndProbe(t *testing.T) {
 		"at the floor, with an app-server": {0, "codex-cli 0.171.0", direct, ""},
 		"newer, fresh sessions only":       {0, "codex-cli 0.172.0", direct, ""},
 		"below the floor":                  {0, "codex-cli 0.170.2", direct, "drives 0.171.0 or later"},
+		"a pre-release":                    {0, "codex-cli 0.172.0-alpha.1", direct, "names no release"},
 		"no app-server":                    {1, "codex-cli 0.171.0", direct, "app-server --help` exited 1"},
 		"a remote cell": {1, "codex-cli 0.150.0", DiagnoseOptions{ExecutorSeats: []string{"swe"},
 			ExecutorHarnesses: []string{"codex"}, Cell: "e2b"}, ""},
