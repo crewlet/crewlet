@@ -1132,11 +1132,17 @@ gemini-cli:
   # and system prompt file), an .mcp.json, and a .gemini/ with settings (hooks,
   # an MCP server, a tool list), skills, agents, commands, an extension and a
   # policy allowing the shell. None of it reached a request or ran, no request
-  # went to the other base URL, and the key each call sent was its own. A
-  # server the seat home's own extensions declare is another matter: see `mcp`
-  # below. Everything that keeps it so is a file or a variable below; the argv
-  # is the output format, the approval mode and the model.
-  complete_args: ["--output-format", "json", "--approval-mode", "default"]
+  # went to the other base URL, and the key each call sent was its own.
+  # Everything that keeps it so is a file or a variable below; the argv is the
+  # output format, the approval mode, the one MCP server a call may start, and
+  # the model.
+  #
+  # --allowed-mcp-server-names crewlet is on every call, so no MCP server but
+  # the engine's starts: without it, a call with no tools (each of doctor's
+  # probes) started the server an extension in the seat's home declares; with
+  # it, a call with no crewlet server started none and answered (measured on
+  # 0.70.0).
+  complete_args: ["--output-format", "json", "--approval-mode", "default", "--allowed-mcp-server-names", "crewlet"]
   # Denied by the policy file below: the harness's file, shell, sub-agent, plan and
   # skill tools are not offered at all.
   local_tools: denied
@@ -1307,16 +1313,15 @@ gemini-cli:
   # rule).
   failure_markers: ["Policy file error"]
   # THE SEAT'S TOOLS: one stdio server in the call's own workspace settings —
-  # trusted, by GEMINI_CLI_TRUST_WORKSPACE — and --allowed-mcp-server-names
-  # admitting it alone. Measured on 0.70.0 through the engine's own code path,
-  # the state directory inside a checkout holding a .gemini/settings.json, an
-  # .mcp.json and an extension, each with a server, at each level above the
-  # call, and an extension with a server of its own in the seat's home: the
-  # model was offered the seat's tools, web_fetch and google_web_search, and no
-  # other server started. Without the flag, the home's extension started its
-  # server: so it did on each of doctor's tool-less probes, which carry no
-  # `mcp` arguments. The home's settings.json is the profile's own seed,
-  # rewritten every generation.
+  # trusted, by GEMINI_CLI_TRUST_WORKSPACE — and complete_args'
+  # --allowed-mcp-server-names admitting it alone. Measured on 0.70.0 through
+  # the engine's own code path, the state directory inside a checkout holding
+  # a .gemini/settings.json, an .mcp.json and an extension, each with a
+  # server, at each level above the call, and an extension with a server of
+  # its own in the seat's home: the model was offered the seat's tools,
+  # web_fetch and google_web_search, and no server but the engine's started,
+  # on any call. The home's settings.json is the profile's own seed, rewritten
+  # every generation.
   #
   # The server's `timeout` is the harness's per-call timeout, in milliseconds
   # (600,000 by default; 4,000 gave a slow call up at 4.1s). It re-reads the
@@ -1329,7 +1334,6 @@ gemini-cli:
       - path: .gemini/settings.json
         in: work
         content: '{"mcpServers":{"crewlet":{"command":{relay_command_json},"args":{relay_args_json},"timeout":{tool_timeout_ms}}}}'
-    args: ["--allowed-mcp-server-names", "crewlet"]
     tool_timeout_seconds: 600
     relists: true
     concurrency: at_once

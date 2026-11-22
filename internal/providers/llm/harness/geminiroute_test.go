@@ -269,7 +269,4 @@ func TestGeminisSeatAllowIsAPolicyFileBesideTheDenial(t *testing.T) {
 	if !deny || !allow {
 		t.Errorf("the home's policies hold the deny-all %v and the seat's allow %v, want both, each its own file", deny, allow)
 	}
-	if !slices.Contains(p.MCP.Args, "--allowed-mcp-server-names") {
-		t.Errorf("a run admits every MCP server it finds (%q): a home extension's started beside the seat's", p.MCP.Args)
-	}
 }

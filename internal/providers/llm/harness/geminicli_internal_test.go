@@ -32,6 +32,37 @@ func geminiCLI(t *testing.T) harnessprofile.Profile {
 	return p
 }
 
+// NO MCP SERVER BUT THE ENGINE'S STARTS, ON ANY CALL. Gemini CLI starts every
+// server it finds, an extension's in the seat's home among them, unless
+// --allowed-mcp-server-names names the ones it may: measured on 0.70.0, a call
+// with no tools (each of doctor's probes) started the home extension's server,
+// and a call with the flag and no crewlet server started none and answered.
+// So the flag is in complete_args, on every call, and a run with tools adds it
+// no second time.
+//
+// Mutations, each red: move the flag back to mcp.args (a tool-less call lacks
+// it); keep it in both (a run with tools names it twice).
+func TestGeminiStartsNoMCPServerButTheEnginesOnAnyCall(t *testing.T) {
+	t.Parallel()
+	admits := func(args []string) int {
+		n := 0
+		for i := range len(args) - 1 {
+			if args[i] == "--allowed-mcp-server-names" && args[i+1] == "crewlet" {
+				n++
+			}
+		}
+		return n
+	}
+	p := geminiCLI(t)
+	prov := &Provider{profile: p, model: "gemini-2.5-pro", now: time.Now}
+	if got := prov.argv(false); admits(got) != 1 {
+		t.Errorf("a call with no tools runs %q: it admits every MCP server it finds, a home extension's among them", got)
+	}
+	if got := slices.Concat(prov.argv(true), p.MCP.Args, p.MCP.AllowArgs); admits(got) != 1 {
+		t.Errorf("a run with tools runs %q, want --allowed-mcp-server-names crewlet once", got)
+	}
+}
+
 // geminiSeed returns the shipped profile's seed at path, failing when there is
 // none.
 func geminiSeed(t *testing.T, path string) harnessprofile.SeedFile {
