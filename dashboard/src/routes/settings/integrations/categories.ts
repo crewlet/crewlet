@@ -74,7 +74,10 @@ export const DIRECTORY: { key: string; label: string; lines: Line[] }[] = [
   {
     key: "growth",
     label: "Marketing and growth",
-    lines: [{ kind: "app", key: "google_analytics" }],
+    lines: [
+      { kind: "app", key: "google_analytics" },
+      { kind: "app", key: "admob" },
+    ],
   },
 ];
 

@@ -770,6 +770,7 @@ export const ATLAS_FACT_SPECS = {
       "app_delivery",
       "identity",
       "analytics",
+      "monetization",
     ],
     kinds: ["vendor_account"],
   },
