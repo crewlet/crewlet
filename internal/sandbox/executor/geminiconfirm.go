@@ -35,7 +35,7 @@ func geminiConfirmed(r io.Reader, takes []string, bound int) ([]bool, error) {
 			Patch   json.RawMessage `json:"$patch"`
 			Rewind  json.RawMessage `json:"$rewindTo"`
 		}
-		if next == len(takes) || json.Unmarshal(line, &entry) != nil {
+		if next == len(takes) || !decodes(json.Unmarshal, line, &entry) {
 			return nil
 		}
 		if geminiSyncEnds(entry.Patch, entry.Rewind) {
