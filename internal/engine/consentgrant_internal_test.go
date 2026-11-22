@@ -37,6 +37,9 @@ const (
 	consentSecretValue = "placeholder-client-secret"
 )
 
+// consentScopes is the test product's one scope, whatever the company.
+func consentScopes(*config.Company) []string { return []string{consentScope} }
+
 // consentRegistered keeps each test kind registered once per test binary.
 var consentRegistered sync.Map
 
@@ -48,7 +51,7 @@ func consentProduct(t *testing.T, kind, id string, on *atomic.Bool) integration.
 		t.Fatalf("consent kind %s registered twice", kind)
 	}
 	googleauth.RegisterConsent(googleauth.Consent{Kind: integration.Kind(kind), Name: "Consent " + kind,
-		Scope: consentScope, Client: func(*config.Company) (googleauth.ConsentClient, bool) {
+		Scopes: consentScopes, Client: func(*config.Company) (googleauth.ConsentClient, bool) {
 			return googleauth.ConsentClient{ID: id, Secret: "${" + consentSecretVar + "}"}, on == nil || on.Load()
 		}})
 	return integration.Kind(kind)
@@ -670,7 +673,7 @@ func TestAConsentGrantGoesOnlyWithTheClientItWasMadeAs(t *testing.T) {
 	if _, again := consentRegistered.LoadOrStore(kind, true); again {
 		t.Fatal("registered twice")
 	}
-	googleauth.RegisterConsent(googleauth.Consent{Kind: kind, Name: "Moved", Scope: consentScope,
+	googleauth.RegisterConsent(googleauth.Consent{Kind: kind, Name: "Moved", Scopes: consentScopes,
 		Client: func(*config.Company) (googleauth.ConsentClient, bool) {
 			return googleauth.ConsentClient{ID: *id.Load(), Secret: "${" + consentSecretVar + "}"}, true
 		}})
