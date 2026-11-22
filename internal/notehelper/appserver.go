@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,15 +28,22 @@ import (
 
 // openAppServer waits for the run's thread file, dials the app-server's socket
 // and joins the thread: initialize, initialized, thread/resume, then
-// thread/turns/list for the turn in flight.
-func openAppServer(ctx context.Context, f flags, p pacing) (harness, error) {
+// thread/turns/list for the turn in flight. -interrupt-once looks for the
+// thread file once: the helper it stands in for has already ended.
+func openAppServer(ctx context.Context, f flags, p pacing, ev events) (harness, error) {
 	switch {
 	case f.socket == "":
 		return nil, usageError("-socket is required for -adapter codex-app-server: the app-server's unix socket")
 	case f.threadFile == "":
 		return nil, usageError("-thread-file is required for -adapter codex-app-server: the file holding the run's thread id")
 	}
-	thread, err := waitThread(ctx, f.threadFile, os.ReadFile, p)
+	var thread string
+	var err error
+	if f.interruptOnce {
+		thread, err = readThread(f.threadFile)
+	} else {
+		thread, err = waitThread(ctx, f.threadFile, os.ReadFile, p)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +51,7 @@ func openAppServer(ctx context.Context, f flags, p pacing) (harness, error) {
 	if err != nil {
 		return nil, err
 	}
-	a, err := joinAppServer(ctx, conn, thread, p)
+	a, err := joinAppServer(ctx, conn, thread, p, ev, f.skillsDir)
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -69,6 +77,18 @@ func waitThread(ctx context.Context, path string, read func(string) ([]byte, err
 			return "", ctx.Err()
 		}
 	}
+}
+
+// readThread is the thread id in path, which must already hold one.
+func readThread(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("reading the thread file -thread-file %s: %w", path, err)
+	case len(bytes.TrimSpace(data)) == 0:
+		return "", fmt.Errorf("the thread file -thread-file %s holds no thread id", path)
+	}
+	return string(bytes.TrimSpace(data)), nil
 }
 
 // dialSocket dials the app-server's unix socket, again while it does not
@@ -97,6 +117,13 @@ type appServer struct {
 	bound  time.Duration
 	ids    atomic.Int64
 	done   chan struct{}
+	ev     events
+	// skillsDir is the directory the run's skills are written to, one
+	// directory per skill holding its SKILL.md ([appServer.completed]).
+	skillsDir string
+	// tokens is the thread's total tokens as last reported, read only by
+	// the reader ([appServer.tokens]).
+	tokens int64
 
 	mu      sync.Mutex
 	pending map[int64]chan rpcAnswer
@@ -131,8 +158,9 @@ type wire struct {
 	Error  *rpcError       `json:"error"`
 }
 
-// joinAppServer runs the WebSocket handshake over conn and joins thread.
-func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing) (*appServer, error) {
+// joinAppServer runs the WebSocket handshake over conn and joins thread,
+// reporting ev of it.
+func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing, ev events, skillsDir string) (*appServer, error) {
 	// THE HANDSHAKE IS BOUNDED as a call is: x/net's NewClient takes no context.
 	_ = conn.SetDeadline(time.Now().Add(p.callBound))
 	cfg, err := websocket.NewConfig("ws://localhost/", "http://localhost/")
@@ -145,7 +173,7 @@ func joinAppServer(ctx context.Context, conn net.Conn, thread string, p pacing) 
 	}
 	_ = conn.SetDeadline(time.Time{})
 	a := &appServer{
-		ws: ws, thread: thread, bound: p.callBound, done: make(chan struct{}),
+		ws: ws, thread: thread, bound: p.callBound, done: make(chan struct{}), ev: ev, skillsDir: skillsDir,
 		pending: map[int64]chan rpcAnswer{}, finished: map[string]bool{}, changed: make(chan struct{}),
 	}
 	go a.read()
@@ -250,7 +278,105 @@ func (a *appServer) notice(method string, params json.RawMessage) {
 		a.begin(p.Turn.ID)
 	case "turn/completed":
 		a.stop(p.Turn.ID)
+	case "thread/tokenUsage/updated":
+		a.counted(params)
+	case "item/completed":
+		a.completed(params)
 	}
+}
+
+// counted reports a model response of the turn in flight to the step cap:
+// Codex updates the thread's token usage as each response completes, and
+// repeats an update unchanged (as a steer is taken), so a response is an
+// update whose total rose. Measured on 0.171.0: one rise per model request,
+// a compaction's request among them. A turn joined in flight counts from the
+// join, as excludeTurns replays no update.
+func (a *appServer) counted(params json.RawMessage) {
+	var p struct {
+		TurnID     string `json:"turnId"`
+		TokenUsage struct {
+			Total struct {
+				TotalTokens int64 `json:"totalTokens"`
+			} `json:"total"`
+		} `json:"tokenUsage"`
+	}
+	if json.Unmarshal(params, &p) != nil || p.TokenUsage.Total.TotalTokens <= a.tokens {
+		return
+	}
+	a.tokens = p.TokenUsage.Total.TotalTokens
+	a.mu.Lock()
+	inFlight := p.TurnID != "" && p.TurnID == a.active
+	a.mu.Unlock()
+	if inFlight && a.ev.step != nil {
+		a.ev.step(p.TurnID)
+	}
+}
+
+// completed reports a load of one of the run's skills: a command that read
+// <skillsDir>/<name>/SKILL.md whole. Codex records each command it ran as a
+// commandExecution item with its parsed actions and its output, so a load
+// is a command that succeeded, whose one action is a read of that file
+// (named, resolved against the command's directory, exactly), and whose
+// output is that file's bytes exactly, as the helper reads them from disk;
+// the file a regular one, never a link. Anything else (a listing, a test, an
+// echo, a failed or partial read, another skill's file, a script) is no
+// load, and the bridge's guard fails closed on it.
+func (a *appServer) completed(params json.RawMessage) {
+	if a.ev.skill == nil || a.skillsDir == "" {
+		return
+	}
+	var p struct {
+		Item struct {
+			Type     string `json:"type"`
+			Status   string `json:"status"`
+			Cwd      string `json:"cwd"`
+			ExitCode *int   `json:"exitCode"`
+			Output   string `json:"aggregatedOutput"`
+			Actions  []struct {
+				Type string `json:"type"`
+				Path string `json:"path"`
+			} `json:"commandActions"`
+		} `json:"item"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return
+	}
+	it := p.Item
+	if it.Type != "commandExecution" || it.Status != "completed" || it.ExitCode == nil || *it.ExitCode != 0 ||
+		len(it.Actions) != 1 || it.Actions[0].Type != "read" || it.Actions[0].Path == "" {
+		return
+	}
+	path := it.Actions[0].Path
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(it.Cwd, path)
+	}
+	name, ok := skillOf(a.skillsDir, filepath.Clean(path))
+	if !ok {
+		return
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return
+	}
+	body, err := os.ReadFile(path)
+	if err != nil || len(body) == 0 || it.Output != string(body) {
+		return
+	}
+	a.ev.skill(name)
+}
+
+// skillOf is the skill whose SKILL.md path is, where path is one: exactly
+// <dir>/<name>/SKILL.md, name one plain path element.
+func skillOf(dir, path string) (string, bool) {
+	rel, err := filepath.Rel(filepath.Clean(dir), path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", false
+	}
+	name, file, ok := strings.Cut(filepath.ToSlash(rel), "/")
+	if !ok || file != "SKILL.md" || name == "" || name == "." || name == ".." {
+		return "", false
+	}
+	return name, true
 }
 
 // stop marks turn over: never the turn in flight again.
@@ -399,6 +525,29 @@ func foundTurn(msg string) (named, found string, ok bool) {
 type wrongTurn string
 
 func (w wrongTurn) Error() string { return "the turn in flight is " + string(w) }
+
+// interrupt sends turn/interrupt, which both of its params require
+// (CODEX-MEASURE §17.1): {} once Codex ends the turn, -32600 "no active turn
+// to interrupt" where none runs.
+func (a *appServer) interrupt(ctx context.Context, turn string) error {
+	if turn == "" {
+		a.mu.Lock()
+		turn = a.active
+		a.mu.Unlock()
+	}
+	if turn == "" {
+		return errNotNow
+	}
+	_, err := a.call(ctx, "turn/interrupt", map[string]any{"threadId": a.thread, "turnId": turn})
+	var refused *rpcError
+	if errors.As(err, &refused) && refused.Code == codeInvalidRequest && refused.Message == "no active turn to interrupt" {
+		return errNotNow
+	}
+	if err != nil {
+		return fmt.Errorf("turn/interrupt of turn %s: %w", turn, err)
+	}
+	return nil
+}
 
 func (a *appServer) gone() <-chan struct{} { return a.done }
 
