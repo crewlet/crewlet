@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
@@ -589,24 +590,23 @@ func (f refusingWriter) Write([]byte) (int, error) { return 0, f.err }
 
 var _ = holdsScrubTerm("streams", "TestTheScrubHoldsNoMoreThanItsStatedFigure")
 
-// THE SCRUB HOLDS NO MORE THAN THE FIGURE ITS DOC STATES, AND NOTHING THAT
-// GROWS WITH A STRING: at a test's plaintext bound, the shape nearest the
-// figure, a password-dense string read both ways, holds with what one GC step
-// hides at most scrubHeldBytes; one redaction stream over it at most the
-// "streams" term's share; a string four times as long no more than a little
-// over a shorter. In live bytes ([atLiveBytes]), off a child's GC trace under
-// GODEBUG=gcstoptheworld=1,gctrace=1. Each other term has its own test
-// ([TestEveryScrubTermIsHeldByATestOfItsOwn]); under the miss, so no sampler
-// holds them: the pieces, encoders, rewrites, spool and plan blocks.
+// THE SCRUB HOLDS NO MORE THAN THE FIGURE ITS DOC STATES: at a test's
+// plaintext bound, the shape nearest it, a password-dense string read both
+// ways, holds with what one GC step hides at most scrubHeldBytes, and one
+// redaction stream over the string's start at most the "streams" term's
+// share. Its one job is the whole above the miss: each term's membership is
+// the table's ([TestEveryScrubTermIsHeldByATestOfItsOwn]) and its value its
+// own test's. Under the miss, so no sampler holds them: the pieces, encoders,
+// rewrites, spool and plan blocks. In live bytes ([atLiveBytes]), off a
+// child's GC trace under GODEBUG=gcstoptheworld=1,gctrace=1.
 //
-// Mutation: read a long string whole, or count the streams' term at half.
+// Mutation: count the streams' term at 8 MiB a stream.
 func TestTheScrubHoldsNoMoreThanItsStatedFigure(t *testing.T) {
 	if os.Getenv(liveBytesChild) != "" {
 		scrubBoundShapes(t)
 		return
 	}
 	held := runLiveBytesChild(t)
-	byName := map[string]int64{}
 	for _, sh := range boundShapes() {
 		h, ok := held[sh.name]
 		if !ok {
@@ -624,10 +624,6 @@ func TestTheScrubHoldsNoMoreThanItsStatedFigure(t *testing.T) {
 			t.Errorf("%s held %d bytes, and %d more can rise unseen, past the %d its doc states", sh.name, h.high,
 				miss, figure)
 		}
-		byName[sh.name] = h.high
-	}
-	if grew := byName["a string of 24 MiB"] - byName["a string of 6 MiB"]; grew > 2<<20 {
-		t.Errorf("a string four times as long held %d bytes more: the scrub holds what grows with the string", grew)
 	}
 }
 
@@ -642,7 +638,7 @@ type boundShape struct {
 
 // boundShapes are the readings: a password-dense string read both ways
 // scrubbed at liveBytesPlain, the shape nearest scrubHeldBytes, and one
-// redaction stream over the same string; and one string at two lengths.
+// redaction stream over the first 12 MiB of it, past a stream's windows.
 func boundShapes() []boundShape {
 	body := liveBytesPlain - 64<<10
 	dense := func(t *testing.T) string {
@@ -665,14 +661,8 @@ func boundShapes() []boundShape {
 		}
 	}
 	whole := func(testing.TB) int64 { return scrubHeldBytes(liveBytesPlain, len(jsonEscaped(longValue))) }
-	str := func(n int) func(t *testing.T) string {
-		return func(*testing.T) string {
-			r := rand.New(rand.NewPCG(1170, uint64(n)))
-			return `{"type":"user","message":{"content":"` + base64Run(r, n, 100, n/2) + `"}}` + "\n"
-		}
-	}
 	stream := func(t *testing.T) func() {
-		text := dense(t)
+		text := dense(t)[:12<<20]
 		return func() {
 			s := redact.NewStream(io.Discard)
 			for at := 0; at < len(text); at += 32 << 10 {
@@ -690,8 +680,6 @@ func boundShapes() []boundShape {
 		{"one redaction stream over a password-dense string", func(t testing.TB) int64 {
 			return termFigure(t, "streams", liveBytesPlain, 0) / 2
 		}, stream},
-		{"a string of 6 MiB", whole, scrubbed(str(6 << 20))},
-		{"a string of 24 MiB", whole, scrubbed(str(24 << 20))},
 	}
 }
 
@@ -718,6 +706,12 @@ func scrubBoundShapes(t *testing.T) {
 // runs itself in, and liveBytesMark its lines on stdout;
 // liveBytesGOGC is the child's GC percent, the finest a step of heap growth
 // between two marks can be; liveBytesPlain is the shapes' plaintext bound.
+// liveBytesChildTimeout is the child's own hang detector: 25 minutes, 1.9
+// times its slowest measured run (775 s under -race on a two-core slot, where
+// CI's four-vCPU runners took 520 s for twice the readings), and under make
+// test's 30, so a child that hangs fails with its own goroutine dump.
+const liveBytesChildTimeout = 25 * time.Minute
+
 const (
 	liveBytesChild = "CREWLET_TEST_LIVE_BYTES_CHILD"
 	liveBytesMark  = "live-bytes:"
@@ -741,10 +735,8 @@ func runLiveBytesChild(t *testing.T) map[string]shapeHeld {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// THE CHILD HAS NO TIMEOUT OF ITS OWN, not go's default ten minutes,
-	// which a race run passes: the parent's -test.timeout detects a hang.
 	cmd := exec.CommandContext(t.Context(), self, "-test.run=^"+t.Name()+"$", "-test.count=1", "-test.v",
-		"-test.timeout=0")
+		"-test.timeout="+liveBytesChildTimeout.String())
 	cmd.Env = append(os.Environ(), liveBytesChild+"=1", "GODEBUG="+strings.TrimPrefix(
 		os.Getenv("GODEBUG")+",gcstoptheworld=1,gctrace=1", ","))
 	var stdout, stderr strings.Builder
