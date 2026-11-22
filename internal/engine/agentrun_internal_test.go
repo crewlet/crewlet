@@ -36,10 +36,12 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	seatpkg "github.com/crewlet/crewlet/internal/seat"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // chainMember is one entry of a fixture's executor chain: its key, its harness, the
@@ -540,7 +542,7 @@ func TestAChainWithNoRunnerMemberIsRefusedNamingIt(t *testing.T) {
 	l := launcherOn(e, c, seat, "t1")
 	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
 	if err == nil || !strings.Contains(err.Error(), `("codex" and "gemini")`) ||
-		!strings.Contains(err.Error(), `"claude-code" or "opencode"`) {
+		!strings.Contains(err.Error(), words.Or(executor.Names())) {
 		t.Fatalf("LaunchExecutor = %v, want a refusal naming the chain and the runners", err)
 	}
 	// CLASSED AS THE CONFIGURATION IT IS, which whoever is told the run did

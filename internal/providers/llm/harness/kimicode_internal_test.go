@@ -10,8 +10,8 @@ import (
 )
 
 // The invariants the built-in kimi-code profile keeps, each measured against
-// Kimi Code 0.42.0 and 2.3.1 through this package's own Complete (see the
-// profile's comments): every call hands the harness an agent file it accepts, a
+// Kimi Code through this package's own code path (see the profile's comments,
+// which say on which release): every call hands the harness an agent file it accepts, a
 // seat's text comes before anything per call, and nothing a call writes about
 // itself outlives the calls that share the seat's home.
 
@@ -38,18 +38,17 @@ func fakeChannel(ch harnessprofile.Channel) map[string]any {
 	}
 }
 
-// EVERY CALL HANDS THE HARNESS AN AGENT FILE WITH A BODY, and a seat's text opens it.
+// EVERY CALL HANDS THE HARNESS AN AGENT FILE WITH A BODY, and a seat's text
+// opens it. Kimi Code refuses a body that trims to nothing ("Missing prompt
+// body", exit 1, measured on 2.7.2). The replacing body is the engine's text
+// alone, empty for a call with no system prompt, which therefore takes the
+// appending one: driven through Complete with the shipped channels, for each
+// kind of call with and without a system prompt. Where there is text, NOTHING
+// comes before it: the vendor's default carries the call's directory, its
+// listing and the AGENTS.md chain, so it follows the engine's text.
 //
-// Kimi Code trims the body and refuses one that trims to nothing ("Missing
-// prompt body", exit 1, on both builds measured) — so a call whose file came
-// out empty fails whatever it asked. The replacing body is the engine's text
-// alone and is empty for a call with no system prompt, which therefore has to
-// take the appending one: driven through Complete with the shipped channels,
-// for each kind of call with and without a system prompt.
-//
-// And where there is text, NOTHING comes before it: the vendor's default
-// carries the call's directory, its listing and the AGENTS.md chain, so it
-// follows the engine's text rather than leading it.
+// Mutation: send a call with no system prompt down its own kind's route in
+// routeFor, and a side pass with none hands the harness an empty body.
 func TestKimiCodeNeverHandsItsHarnessAnAgentFileWithNoBody(t *testing.T) {
 	t.Parallel()
 	kimi := kimiCode(t)
@@ -100,13 +99,16 @@ func TestKimiCodeNeverHandsItsHarnessAnAgentFileWithNoBody(t *testing.T) {
 	}
 }
 
-// NOTHING A CALL WRITES ABOUT ITSELF OUTLIVES IT. Measured on both builds,
-// every call left in the seat's home its session (whose wire log carries the
-// prompts and tool results), an entry in the session index, its logs, an entry
-// in `workspaces.json` naming its directory — never removed by the harness, so the
-// registry grew by one per call — and, with the vendor's telemetry on, a
-// `telemetry` queue of events kept for the next start to send. Telemetry is
-// off, so the queue is never made, and every one of them is pruned.
+// NOTHING A CALL WRITES ABOUT ITSELF OUTLIVES IT. Measured on 2.7.2, every
+// call left in the seat's home its session (whose wire log carries the prompts
+// and tool results), an entry in the session index, its logs, an entry in
+// `projects.json` naming its directory (never removed by the harness, so the
+// registry grew by one per call) and the registry's lock file, and, with the
+// vendor's telemetry on, a `telemetry` directory for the events kept for the
+// next start. Telemetry is off, so it is never made, and every one is pruned.
+//
+// Mutation: drop projects.json from volatile_paths, and every call's
+// directory stays named in the seat's home.
 func TestKimiCodeKeepsNothingOfACallInItsHome(t *testing.T) {
 	t.Parallel()
 	p := kimiCode(t)
@@ -114,7 +116,8 @@ func TestKimiCodeKeepsNothingOfACallInItsHome(t *testing.T) {
 		".kimi-code/sessions",
 		".kimi-code/session_index.jsonl",
 		".kimi-code/logs",
-		".kimi-code/workspaces.json",
+		".kimi-code/projects.json",
+		".kimi-code/.projects-write-lock",
 		".kimi-code/telemetry",
 	} {
 		if !slices.Contains(p.VolatilePaths, want) {
