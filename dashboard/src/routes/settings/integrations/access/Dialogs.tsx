@@ -682,7 +682,9 @@ export function ScopeDialog({
   const choices = scopeChoices(lane, held);
   const find = term.trim().toLowerCase();
   const shown = find
-    ? choices.filter((c) => `${c.label} ${c.value}`.toLowerCase().includes(find))
+    ? choices.filter((c) =>
+        `${c.label} ${c.value} ${c.description ?? ""}`.toLowerCase().includes(find),
+      )
     : choices;
   const typed =
     lane.scope_open && find && !choices.some((c) => c.value.toLowerCase() === find)
