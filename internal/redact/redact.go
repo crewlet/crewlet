@@ -297,11 +297,11 @@
 // # What a password's rule still publishes
 //
 // A password's value is read on its key's line, or on a later one where the
-// wrapping every line shares puts it ([readValue]). There, markup the line
-// opens with that the key's line does not — a table's `|`, a list's `-`, a
-// quote's `>` — is read past to the value and replaced with it ([ownMarkup]):
-// THE RULE LEANS TO HIDE, since markup replaced costs a line its formatting,
-// and markup taken for the value shows the password. What neither finds is
+// wrapping every line shares puts it ([readValue]). Markup the line opens
+// with that the key's line does not (`|`, `-`, `>`) is read past to the value
+// and replaced with it ([ownMarkup]); a JSON string escaped in layers is read
+// decoded too ([decodedReading]). THE RULE LEANS TO HIDE: replaced markup
+// costs formatting, markup taken for a value shows it. What neither finds is
 // published:
 //
 //   - a value under a quoted key whose name is more than a name — letters,
@@ -1349,14 +1349,30 @@ func passwordValue[T textual](text T, start, end int, prior [][2]int) (int, int)
 
 // readValue is the value a [passwordRule] match names, from start to end, prior
 // being every value the rule replaced before it, in order ([aValue]): the
-// reading of [readValueAs], and where the key's line opens a string after a
-// quote, which the text does not say is the one the escaped breaks belong to,
-// the readings from the string's quote and from the line's start as well. A reading on a later piece that the first overlaps joins it; one that
-// does not is [aValue]'s also, the second range, held to [MaxReach] past the
-// key and not to its line, since a reading can join two later pieces. Read one
-// way alone, a value the other way names was published, and a second pass
-// read the line the first wrote otherwise.
+// text's own reading ([readValuePlain]) and, where the key stands in a logged
+// JSON string escaped in layers, the string's decoded ([decodedReading]).
 func readValue[T textual](whole T, start, end int, prior [][2]int) aValue {
+	v := readValuePlain(whole, start, end, prior)
+	if o, ok := decodedReading(whole, start, end, prior); ok && (o.to > o.from || o.also[1] > o.also[0]) {
+		// A LOGGED STRING IS READ AS IT IS AND DECODED: every range either
+		// reading names is hidden, so it only hides more than the text's own
+		// reading. One that names nothing adds nothing: it decides inside
+		// the key's raw line, where no hold stands ([valueHolds]).
+		v = unionReading(v, o)
+	}
+	return v
+}
+
+// readValuePlain is [readValue] of the text as it is written: the reading of
+// [readValueAs], and where the key's line opens a string after a quote, which
+// the text does not say is the one the escaped breaks belong to, the readings
+// from the string's quote and from the line's start as well. A reading on a
+// later piece that the first overlaps joins it; one that does not is
+// [aValue]'s also, the second range, held to [MaxReach] past the key and not
+// to its line, since a reading can join two later pieces. Read one way alone,
+// a value the other way names was published, and a second pass read the line
+// the first wrote otherwise.
+func readValuePlain[T textual](whole T, start, end int, prior [][2]int) aValue {
 	v := readValueAs(whole, start, end, prior, 0)
 	if !v.firstQuote {
 		return v
