@@ -171,9 +171,9 @@ func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) erro
 
 // copilotNotesHeld is the inbox ids of takes, in serve order and once each,
 // whose note a session's events.jsonl shows reached the model as a current
-// message: its `user.message` under its clientTurnId ([CopilotClientTurnID]),
-// `steering` or `queued`, then a `session.usage_record` with no compaction
-// between, since a queued note's line precedes its turn's compaction, which
+// message: the main agent's `user.message` under its clientTurnId
+// ([CopilotClientTurnID]), `steering` or `queued`, then the record of a main
+// agent's request ([copilotMainRequest]) with no compaction between, since a queued note's line precedes its turn's compaction, which
 // can leave it only in the summary (ADR-0177; measured on 1.0.114,
 // compacted-queued). The line alone is no proof (ruling 1 of #1818's design):
 // a kill or a refusal can follow it before any request. A last line with no
@@ -201,10 +201,13 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 		switch ev.Type {
 		case "user.message":
 			inbox, ours := asked[ev.Data.ClientTurnID]
-			if ours && (ev.Data.Delivery == "steering" || ev.Data.Delivery == "queued") {
+			if ours && ev.AgentID == "" && (ev.Data.Delivery == "steering" || ev.Data.Delivery == "queued") {
 				pending[inbox] = true
 			}
 		case "session.usage_record":
+			if ev.AgentID != "" || ev.Data.Usage.InteractionType != copilotMainRequest {
+				return nil
+			}
 			for inbox := range pending {
 				if !held[inbox] {
 					held[inbox] = true
@@ -243,18 +246,30 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 // field of the line can lose them, as a field of another type loses the whole
 // of [decodeCopilotEvent]'s.
 type copilotNoteLine struct {
-	Type string `json:"type"`
-	Data struct {
+	Type    string `json:"type"`
+	AgentID string `json:"agentId"`
+	Data    struct {
 		ClientTurnID string          `json:"clientTurnId"`
 		Delivery     string          `json:"delivery"`
 		Success      json.RawMessage `json:"success"`
+		Usage        struct {
+			InteractionType string `json:"interactionType"`
+		} `json:"usage"`
 	} `json:"data"`
 }
 
+// copilotMainRequest is the `interactionType` of a main agent's own model
+// request, on its `session.usage_record`: a subagent's is
+// `conversation-subagent` (and its record names its agent), and the session's
+// sampling, background and compaction calls have kinds of their own
+// (session-events.d.ts on 1.0.114; measured, subagent-note). Only such a
+// request carries the main conversation a note was sent into.
+const copilotMainRequest = "conversation-agent"
+
 // decodeCopilotNoteLine decodes one line for [copilotNotesHeld], false where
 // it is no JSON object of a type. A line whose own fields are of another type
-// is read for its type alone: a note line is then no note's, and a compaction
-// one that applied.
+// is read for its type alone: a note line is then no note's, a usage record no
+// main request's, and a compaction one that applied.
 func decodeCopilotNoteLine(line []byte) (copilotNoteLine, bool) {
 	var ev copilotNoteLine
 	if err := json.Unmarshal(line, &ev); err != nil {

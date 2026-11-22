@@ -406,6 +406,60 @@ func served(inboxes ...string) []ServedTake {
 	return out
 }
 
+// copilotLines is a fixture's lines, numbered from 1 as an editor shows them.
+func copilotLines(t *testing.T, fixture string) [][]byte {
+	t.Helper()
+	lines := [][]byte{nil}
+	for l := range bytes.Lines(copilotFixture(t, fixture)) {
+		lines = append(lines, l)
+	}
+	return lines
+}
+
+// Only the main agent's own request holds a note: a subagent's, or a call of
+// another kind, never carried the main conversation the note was sent into;
+// and a subagent's line under the note's id is no note sent. subagent-note
+// (1.0.114, a note served while a task subagent ran): the note's line is 43,
+// the main agent's next request's record 44, and the subagent's later
+// request's record 58 (`conversation-subagent`, its agent on the envelope).
+// Each case is that run cut and set as named.
+//
+// Mutation: hold on any usage record — the subagent's record holds the note;
+// drop the interactionType check — the sampling call's does; take a
+// subagent's line — the subagent's own line is held.
+func TestACopilotNoteIsHeldOnlyByTheMainAgentsRequest(t *testing.T) {
+	lines := copilotLines(t, "subagent-note.events.jsonl")
+	if !bytes.Contains(lines[43], []byte(`"clientTurnId":"crewlet-note:msg_inbox1"`)) ||
+		!bytes.Contains(lines[44], []byte(`"interactionType":"conversation-agent"`)) ||
+		!bytes.Contains(lines[58], []byte(`"interactionType":"conversation-subagent"`)) {
+		t.Fatal("subagent-note's lines 43, 44 and 58 are not the note, the main request and the subagent's")
+	}
+	through := func(n int, more ...[]byte) []byte {
+		return append(bytes.Join(lines[1:n+1], nil), bytes.Join(more, nil)...)
+	}
+	sampling := bytes.Replace(lines[44], []byte(`"conversation-agent"`), []byte(`"conversation-sampling"`), 1)
+	subLine := bytes.Replace(lines[43], []byte(`{"type":"user.message",`),
+		[]byte(`{"type":"user.message","agentId":"716fbfd1-ea35-4e3d-bd51-33d8863b10de",`), 1)
+	cases := []struct {
+		name   string
+		events []byte
+		held   bool
+	}{
+		{"the main agent's request", through(44), true},
+		{"the subagent's request", through(43, lines[58]), false},
+		{"a sampling call", through(43, sampling), false},
+		{"the subagent's line", through(42, subLine, lines[44]), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"))
+			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
+				t.Fatalf("held = %v (%v), want the note held %v", held, err, c.held)
+			}
+		})
+	}
+}
+
 // The ids held come back in serve order, each once, whatever the record's
 // order and however often a take was served. (steered, with a second note's
 // line copied in before its own, under another id.)
