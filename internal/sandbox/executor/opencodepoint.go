@@ -391,8 +391,92 @@ func openCodeBoxBytes(sources sandbox.RunSources, listing pointListing, paths Pa
 				openCodeEscapedLen(said)
 		}
 	}
+	if len(sources.Catalogs) > 0 {
+		total += openCodeListHeader
+		for server, tools := range sources.Catalogs {
+			total += openCodeCatalogServer + openCodeEscapedLen(server)
+			for _, tool := range tools {
+				total += openCodeCatalogTool + openCodeEscapedLen(server) + openCodeEscapedLen(tool.Name) +
+					openCodeEscapedLen(tool.Description) + openCodeSchemaBytes(tool.Schema, 0)
+			}
+		}
+	}
 	return total + openCodeDateBytes + openCodeEnvironmentBytes + 2*int64(len(listing.cwd)) +
 		int64(len(paths.Home))
+}
+
+// THE CODE MODE CATALOG. A server new to a session is listed in its update
+// as a line naming it and one TypeScript signature per tool, `tools.<server>.
+// <tool>(<schema>): Promise&lt;unknown&gt; // <description>`, escaped as every
+// entry is. Its bytes are bounded, not re-rendered: each schema node at most
+// its own keywords as JSON, escaped, plus [openCodeCatalogNode] and three
+// lines of its depth's indentation; children walked. Measured on 2.3.2 over
+// nested, enum, array, union and escaped schemas, the bound was 2 to 3.5
+// times the render, and it grows faster than the render with depth.
+const (
+	openCodeCatalogServer = 32
+	openCodeCatalogTool   = 48
+	openCodeCatalogNode   = 32
+)
+
+// openCodeSchemaOne, openCodeSchemaMap and openCodeSchemaList are the keywords
+// whose values are schemas (one, a map of them by name, a list), each walked
+// as a node of its own.
+var (
+	openCodeSchemaOne  = []string{"items", "additionalProperties", "not", "if", "then", "else", "contains"}
+	openCodeSchemaMap  = []string{"properties", "patternProperties", "$defs", "definitions"}
+	openCodeSchemaList = []string{"anyOf", "oneOf", "allOf", "prefixItems"}
+)
+
+// openCodeSchemaBytes bounds what OpenCode renders of the schema node at
+// depth, its children included ([openCodeCatalogNode]).
+func openCodeSchemaBytes(node map[string]any, depth int64) int64 {
+	own := make(map[string]any, len(node))
+	var total int64
+	for key, value := range node {
+		switch v := value.(type) {
+		case map[string]any:
+			switch {
+			case slices.Contains(openCodeSchemaOne, key):
+				total += openCodeSchemaBytes(v, depth+1)
+				continue
+			case slices.Contains(openCodeSchemaMap, key):
+				for name, child := range v {
+					if c, ok := child.(map[string]any); ok {
+						total += openCodeEscapedLen(name) + openCodeSchemaBytes(c, depth+1)
+					} else {
+						total += openCodeEscapedLen(name) + openCodeJSONBytes(child)
+					}
+				}
+				continue
+			}
+		case []any:
+			if slices.Contains(openCodeSchemaList, key) {
+				for _, child := range v {
+					if c, ok := child.(map[string]any); ok {
+						total += openCodeSchemaBytes(c, depth+1)
+					} else {
+						total += openCodeJSONBytes(child)
+					}
+				}
+				continue
+			}
+		}
+		own[key] = value
+	}
+	return total + openCodeJSONBytes(own) + openCodeCatalogNode + 6*(depth+1)
+}
+
+// openCodeJSONBytes is value as JSON, `<`, `>` and `&` left as they are, then
+// escaped as an update escapes them ([openCodeEscapedLen]).
+func openCodeJSONBytes(value any) int64 {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(value); err != nil {
+		return openCodeEscapedLen(fmt.Sprint(value))
+	}
+	return openCodeEscapedLen(b.String())
 }
 
 // openCodeEscapedLen is the bytes text renders to inside an entry of a

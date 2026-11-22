@@ -446,6 +446,133 @@ func TestEachSourceIsChargedAtLeastItsRender(t *testing.T) {
 	}
 }
 
+// A CODE MODE CATALOG IS CHARGED AT LEAST ITS RENDER. A server new to a session
+// in the box that holds its copy is listed in OpenCode's update with a
+// signature per tool, escaped; the charge of each tool is at least what
+// 2.3.2 rendered of it, measured ([openCodeCatalogRendered]): a flat schema,
+// one with an enum, an array, bounds and escaped descriptions, a union, and
+// one nested eight levels.
+//
+// Mutation: drop the catalog's charge, or charge a tool by its name and
+// description alone, and a case goes red.
+func TestACodeModeCatalogIsChargedAtLeastItsRender(t *testing.T) {
+	t.Parallel()
+	models := modelsAnswer(pointModel{provider: "stub", model: "m", context: 200000})
+	config := configAnswer(stated(200000))
+	charge := func(catalogs map[string][]sandbox.CatalogTool) int64 {
+		t.Helper()
+		got := readPoint("2.3.2", models, config, listingOf("walk /w", "walk /"),
+			&sandbox.RunSources{Catalogs: catalogs})
+		if got.Mark != "" {
+			t.Fatalf("in its own box the point reads %+v, want one", got)
+		}
+		return got.BoxBytes
+	}
+	base := []sandbox.CatalogTool{{Name: "ping", Description: "Ping.", Schema: map[string]any{"type": "object"}}}
+	for name, tool := range openCodeCatalogTools() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			render := openCodeCatalogRendered[name]
+			got := charge(map[string][]sandbox.CatalogTool{"base": base, "acme": {tool}}) -
+				charge(map[string][]sandbox.CatalogTool{"base": base})
+			if want := int64(len("- acme (1 tool)\n") + len(render)); got < want {
+				t.Errorf("a tool whose catalog entry renders %d bytes is charged %d", want, got)
+			}
+		})
+	}
+}
+
+// openCodeCatalogTools are the probe's tools, as its MCP server declared them.
+func openCodeCatalogTools() map[string]sandbox.CatalogTool {
+	var deep func(n int) map[string]any
+	deep = func(n int) map[string]any {
+		if n == 0 {
+			return map[string]any{"type": "string", "description": "leaf <0> & end"}
+		}
+		return map[string]any{"type": "object", "description": fmt.Sprintf("level %d", n), "required": []any{"next"},
+			"properties": map[string]any{"next": deep(n - 1), "flag": map[string]any{"type": "boolean"}}}
+	}
+	return map[string]sandbox.CatalogTool{
+		"echo": {Name: "echo", Description: "Echo a tag back (C10 probe).", Schema: map[string]any{
+			"type": "object", "required": []any{"tag"},
+			"properties": map[string]any{"tag": map[string]any{"type": "string"}}}},
+		"search_issues": {Name: "search_issues", Description: "Search issues where <label> & state match.",
+			Schema: map[string]any{"type": "object", "required": []any{"query"}, "properties": map[string]any{
+				"query":  map[string]any{"type": "string", "description": "The query, e.g. a <b> & c"},
+				"state":  map[string]any{"type": "string", "enum": []any{"open", "closed", "all"}},
+				"labels": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Labels"},
+				"limit":  map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+				"sort": map[string]any{"type": "object", "properties": map[string]any{
+					"field": map[string]any{"type": "string"}, "desc": map[string]any{"type": "boolean"}}}}}},
+		"union_tool": {Name: "union_tool", Description: "One of two shapes.", Schema: map[string]any{
+			"type": "object", "properties": map[string]any{
+				"v": map[string]any{"anyOf": []any{map[string]any{"type": "string"}, map[string]any{"type": "number"},
+					map[string]any{"type": "object", "properties": map[string]any{"a": map[string]any{"type": "string"}}}}},
+				"n": map[string]any{"type": []any{"string", "null"}}}}},
+		"deep_tool": {Name: "deep_tool", Description: "Nested eight levels.", Schema: deep(8)},
+	}
+}
+
+// openCodeCatalogRendered is what OpenCode 2.3.2 rendered of each probe tool
+// in a continued session's update, byte for byte.
+var openCodeCatalogRendered = map[string]string{
+	"echo": "  - tools.acme.echo({\n" +
+		"  tag: string,\n" +
+		"}): Promise&lt;unknown&gt; // Echo a tag back (C10 probe).\n",
+	"search_issues": "  - tools.acme.search_issues({\n" +
+		"  /** The query, e.g. a &lt;b&gt; &amp; c */\n" +
+		"  query: string,\n" +
+		"  state?: \"open\" | \"closed\" | \"all\",\n" +
+		"  /** Labels */\n" +
+		"  labels?: Array&lt;string&gt;,\n" +
+		"  /** @integer @minimum 1 @maximum 100 */\n" +
+		"  limit?: number,\n" +
+		"  sort?: {\n" +
+		"    field?: string,\n" +
+		"    desc?: boolean,\n" +
+		"  },\n" +
+		"}): Promise&lt;unknown&gt; // Search issues where &lt;label&gt; &amp; state match.\n",
+	"union_tool": "  - tools.acme.union_tool({\n" +
+		"  v?: string | number | {\n" +
+		"      a?: string,\n" +
+		"    },\n" +
+		"  n?: string | null,\n" +
+		"}): Promise&lt;unknown&gt; // One of two shapes.\n",
+	"deep_tool": "  - tools.acme.deep_tool({\n" +
+		"  /** level 7 */\n" +
+		"  next: {\n" +
+		"    /** level 6 */\n" +
+		"    next: {\n" +
+		"      /** level 5 */\n" +
+		"      next: {\n" +
+		"        /** level 4 */\n" +
+		"        next: {\n" +
+		"          /** level 3 */\n" +
+		"          next: {\n" +
+		"            /** level 2 */\n" +
+		"            next: {\n" +
+		"              /** level 1 */\n" +
+		"              next: {\n" +
+		"                /** leaf &lt;0&gt; &amp; end */\n" +
+		"                next: string,\n" +
+		"                flag?: boolean,\n" +
+		"              },\n" +
+		"              flag?: boolean,\n" +
+		"            },\n" +
+		"            flag?: boolean,\n" +
+		"          },\n" +
+		"          flag?: boolean,\n" +
+		"        },\n" +
+		"        flag?: boolean,\n" +
+		"      },\n" +
+		"      flag?: boolean,\n" +
+		"    },\n" +
+		"    flag?: boolean,\n" +
+		"  },\n" +
+		"  flag?: boolean,\n" +
+		"}): Promise&lt;unknown&gt; // Nested eight levels.\n",
+}
+
 // openCodeRendered is how OpenCode 2.3.2 renders a skill entry, a server's
 // entry, the day and the environment in a continued session's update, as a
 // probe's request carried them, the day at its longest. The catalog of a
