@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -227,7 +228,7 @@ func TestAMuseRunIsStartedOnItsPosture(t *testing.T) {
 	for _, want := range []string{"muse exec --json --yolo", `--session-id "$s"`, "--disable-reminders",
 		"--no-foreign-personal-context", "--disable-request-user-input", "--allow-workspace-switch",
 		"--model '\\''muse-1'\\''", "--reasoning-effort '\\''high'\\''", "--max-model-steps 7",
-		`--prompt-file "$p"`, "at 1 4 25", museCapMark} {
+		`--prompt-file "$p" $kf`, "at 1 4 25", museCapMark, "--api-key-stdin"} {
 		if !strings.Contains(cmd, want) {
 			t.Errorf("the command lacks %q:\n%s", want, cmd)
 		}
@@ -240,13 +241,15 @@ func TestAMuseRunIsStartedOnItsPosture(t *testing.T) {
 	}
 }
 
-// MUSE'S SETTINGS ARE WRITTEN WHOLE: telemetry off, the standing instructions
-// appended, every engine server required (one that cannot be reached fails
-// the run) with the engine's call wait in whole seconds rounded up, a command
-// server as `stdio`; and a run handed no system text writes no `run` block.
+// MUSE'S SETTINGS ARE WRITTEN WHOLE, telemetry off and the standing
+// instructions appended, and EACH SERVER APART, for the script to add after
+// the notes plugin's approval: every one required (one that cannot be reached
+// fails the run) with the engine's call wait in whole seconds rounded up, a
+// command server as `stdio`; a run handed no system text writes no `run`.
 //
-// Mutation: drop `required`, or round the wait down.
-func TestMuseWriteConfigWritesItsSettingsWhole(t *testing.T) {
+// Mutation: drop `required`, round the wait down, or write the servers into
+// the settings, whose approval drops both.
+func TestMuseWriteConfigWritesItsSettingsAndServers(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	p := PathsFor(box)
 	req := sandbox.RunRequest{Brief: "fix it", System: "SEAT", MCPServers: map[string]sandbox.MCPServer{
@@ -258,24 +261,25 @@ func TestMuseWriteConfigWritesItsSettingsWhole(t *testing.T) {
 	if err != nil || config != p.MuseSettings() {
 		t.Fatalf("WriteConfig = %q, %v", config, err)
 	}
-	raw, _ := box.ReadFile(t.Context(), p.MuseSettings())
-	var got map[string]any
-	if err := json.Unmarshal(raw, &got); err != nil {
-		t.Fatal(err)
+	read := func(path string) map[string]any {
+		raw, _ := box.ReadFile(t.Context(), path)
+		var got map[string]any
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("%s: %v\n%s", path, err, raw)
+		}
+		return got
 	}
-	want := map[string]any{
-		"schema_version": 1.0,
-		"telemetry":      map[string]any{"enabled": false},
-		"run":            map[string]any{"system_prompt_append": "SEAT"},
-		"mcpServers": map[string]any{
-			"crewlet": map[string]any{"url": "http://e/mcp", "headers": map[string]any{"Authorization": "Bearer t"},
-				"required": true, "tool_timeout_sec": 361.0},
-			"local": map[string]any{"type": "stdio", "command": "srv", "args": []any{"-x"},
-				"env": map[string]any{"K": "v"}, "required": true},
-		},
+	if got := read(p.MuseSettings()); !jsonEqual(got, map[string]any{"schema_version": 1.0,
+		"telemetry": map[string]any{"enabled": false}, "run": map[string]any{"system_prompt_append": "SEAT"}}) {
+		t.Errorf("settings = %v", got)
 	}
-	if !jsonEqual(got, want) {
-		t.Fatalf("settings = %s", raw)
+	if got := read(p.MuseServers() + "/crewlet.json"); !jsonEqual(got, map[string]any{"url": "http://e/mcp",
+		"headers": map[string]any{"Authorization": "Bearer t"}, "required": true, "tool_timeout_sec": 361.0}) {
+		t.Errorf("crewlet = %v", got)
+	}
+	if got := read(p.MuseServers() + "/local.json"); !jsonEqual(got, map[string]any{"type": "stdio",
+		"command": "srv", "args": []any{"-x"}, "env": map[string]any{"K": "v"}, "required": true}) {
+		t.Errorf("local = %v", got)
 	}
 	if brief, _ := box.ReadFile(t.Context(), p.Brief()); string(brief) != "fix it" {
 		t.Errorf("the brief file holds %q", brief)
@@ -283,9 +287,12 @@ func TestMuseWriteConfigWritesItsSettingsWhole(t *testing.T) {
 	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{}, p); err != nil {
 		t.Fatal(err)
 	}
-	raw, _ = box.ReadFile(t.Context(), p.MuseSettings())
-	if strings.Contains(string(raw), `"run"`) || strings.Contains(string(raw), "mcpServers") {
-		t.Errorf("a run with no system text and no servers wrote %s", raw)
+	if raw, _ := box.ReadFile(t.Context(), p.MuseSettings()); strings.Contains(string(raw), `"run"`) {
+		t.Errorf("a run with no system text wrote %s", raw)
+	}
+	if _, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{MCPServers: map[string]sandbox.MCPServer{
+		"a b": {Transport: sandbox.TransportHTTP, URL: "http://e"}}}, p); err == nil {
+		t.Error("a server name no file and shell word carries was taken")
 	}
 }
 
@@ -313,11 +320,11 @@ func TestAMuseRunPastItsSystemLimitIsRefused(t *testing.T) {
 	}
 }
 
-// A CONTINUING RUN WRITES A SECOND SETTINGS FILE for the session its script may
-// start instead, wired to the job's other token, and the brief that session is
-// handed.
+// A CONTINUING RUN WRITES A SECOND WIRING for the session its script may
+// start instead, its servers wired to the job's other token, and the brief
+// that session is handed.
 //
-// Mutation: write the fresh settings from the continued wiring.
+// Mutation: write the fresh servers from the continued wiring.
 func TestAContinuingMuseRunWritesTheFreshSessionsWiring(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	p := PathsFor(box)
@@ -330,10 +337,10 @@ func TestAContinuingMuseRunWritesTheFreshSessionsWiring(t *testing.T) {
 	if _, err := (Muse{}).WriteConfig(t.Context(), box, req, p); err != nil {
 		t.Fatal(err)
 	}
-	fresh, _ := box.ReadFile(t.Context(), p.MuseSettingsFresh())
-	settings, _ := box.ReadFile(t.Context(), p.MuseSettings())
-	if !strings.Contains(string(fresh), "Bearer fresh") || !strings.Contains(string(settings), "Bearer continued") {
-		t.Fatalf("settings %s, fresh %s", settings, fresh)
+	fresh, _ := box.ReadFile(t.Context(), p.MuseServersFresh()+"/crewlet.json")
+	continued, _ := box.ReadFile(t.Context(), p.MuseServers()+"/crewlet.json")
+	if !strings.Contains(string(fresh), "Bearer fresh") || !strings.Contains(string(continued), "Bearer continued") {
+		t.Fatalf("servers %s, fresh %s", continued, fresh)
 	}
 	if brief, _ := box.ReadFile(t.Context(), p.FreshBrief()); string(brief) != "start over" {
 		t.Errorf("the fresh brief holds %q", brief)
@@ -375,7 +382,8 @@ func TestAMuseSessionPacksAndRestoresUnderItsDay(t *testing.T) {
 	if err := os.WriteFile(to.SessionCarried(), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	gate := museSessionGate(Session{ID: id, Continues: true, Replaces: true, Fresh: "fresh"}, to, false) +
+	gate := "n=" + museSupported + "\n" +
+		museSessionGate(Session{ID: id, Continues: true, Replaces: true, Fresh: "fresh"}, to, false) +
 		`printf '%s\n' "$s" "$k" "$w"`
 	if got := string(runSh(t, gate)); got != id+"\nyes\n\n" {
 		t.Fatalf("the gate said %q, want the carried session continued", got)
@@ -411,24 +419,72 @@ func tarFiles(t *testing.T, raw []byte) []string {
 	}
 }
 
-// A CONTINUED MUSE SESSION RESTORES ONLY ON ITS FLOOR, and never in a box older
-// than its writer, each release as `muse --version` prints it.
+// A MUSE SESSION CONTINUES ONLY BETWEEN TWO BOXES ON EXACTLY 1.4.25, each
+// release as `muse --version` prints it: any other pair, a newer release
+// included, starts a session of its own, naming both.
 //
-// Mutation: drop the writer's floor.
-func TestAMuseSessionContinuesOnlyOnItsFloor(t *testing.T) {
+// Mutation: compare by a floor, or drop the writer's release.
+func TestAMuseSessionContinuesOnlyBetweenBoxesOnTheSupportedRelease(t *testing.T) {
+	const supported, newer, older = "Muse Code 1.4.25 (1.4.25-R9361.1)", "Muse Code 1.4.30 (1.4.30-R1.1)",
+		"Muse Code 1.4.13 (1.4.13-R6996.1)"
 	cases := []struct {
 		box, writer string
 		ok          bool
 	}{
-		{"Muse Code 1.4.25 (1.4.25-R9361.1)", "Muse Code 1.4.25 (1.4.25-R9361.1)", true},
-		{"Muse Code 1.4.30 (1.4.30-R1.1)", "Muse Code 1.4.25 (1.4.25-R9361.1)", true},
-		{"Muse Code 1.4.13 (1.4.13-R6996.1)", "Muse Code 1.4.25 (1.4.25-R9361.1)", false},
-		{"Muse Code 1.4.25 (1.4.25-R9361.1)", "Muse Code 1.4.13 (1.4.13-R6996.1)", false},
-		{"Muse Code 1.4.25 (1.4.25-R9361.1)", "Muse Code 1.4.30 (1.4.30-R1.1)", false},
+		{supported, supported, true},
+		{newer, supported, false},
+		{supported, newer, false},
+		{older, supported, false},
+		{supported, older, false},
+		{supported, "", false},
 	}
 	for _, c := range cases {
-		if ok, why := (Muse{}).Continues(c.box, c.writer); ok != c.ok {
-			t.Errorf("Continues(%s, %s) = %v (%s), want %v", c.box, c.writer, ok, why, c.ok)
+		ok, why := (Muse{}).Continues(c.box, c.writer)
+		if ok != c.ok {
+			t.Errorf("Continues(%q, %q) = %v (%s), want %v", c.box, c.writer, ok, why, c.ok)
+		}
+		if !ok && (!strings.Contains(why, museVersionWords(c.box)) || !strings.Contains(why, museVersionWords(c.writer))) {
+			t.Errorf("Continues(%q, %q) says %q, naming neither release", c.box, c.writer, why)
+		}
+	}
+}
+
+// A BOX'S RELEASE DECIDES THE RUN: an older one is refused before anything
+// runs, a newer one starts a session of its own where a session was to be
+// continued, and only 1.4.25 continues it (the script as a box runs it, its
+// `muse --version` a stand-in's).
+//
+// Mutation: let a newer release continue, or start an older one.
+func TestAMuseBoxsReleaseDecidesTheRun(t *testing.T) {
+	const id = "0b5e0000-0000-4000-8000-0000000000c9"
+	for _, c := range []struct {
+		version string
+		refused bool
+		k       string
+	}{
+		{"Muse Code 1.4.13 (1.4.13-R6996.1)", true, ""},
+		{"Muse Code 1.4.30 (1.4.30-R1.1)", false, "no"},
+		{"Muse Code 1.4.25 (1.4.25-R9361.1)", false, "yes"},
+	} {
+		p := museScriptHome(t, map[string]string{
+			"/.local/share/muse/sessions/2026/11/22/" + id + "/session.jsonl": "{}\n",
+		})
+		bin := t.TempDir()
+		if err := os.WriteFile(filepath.Join(bin, "muse"), []byte("#!/bin/sh\necho '"+c.version+"'\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		script := "PATH=" + bin + ":$PATH\n" + museRelease +
+			fmt.Sprintf(`if ! at %s; then echo refused; exit 0; fi`+"\n", floorArgs(museSupported)) +
+			museSessionGate(Session{ID: id, Continues: true, Fresh: "fresh-id"}, p, false) +
+			`printf '%s %s\n' "$k" "$w"`
+		out := strings.TrimSpace(string(runSh(t, script)))
+		switch {
+		case c.refused && out != "refused":
+			t.Errorf("%s: the script said %q, want it refused", c.version, out)
+		case !c.refused && !strings.HasPrefix(out, c.k+" "):
+			t.Errorf("%s: the script said %q, want continued %s", c.version, out, c.k)
+		case c.k == "no" && !strings.Contains(out, "1.4.30"):
+			t.Errorf("%s: a newer release's fresh start says %q, naming no release", c.version, out)
 		}
 	}
 }
@@ -501,13 +557,15 @@ func TestAMuseArchiveReadsAsTheSessionsTranscript(t *testing.T) {
 }
 
 // A MUSE RUN'S ARTEFACTS ARE ITS OWN FILES, never its settings (written whole
-// every run, beside the login) or its sessions.
+// every run, beside the login), its skills (rewritten by every run) or its
+// sessions.
 //
 // Mutation: list the settings or the sessions directory.
 func TestAMuseRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	p := Paths{Home: "/h"}
 	files, dirs := (Muse{}).artifacts(p)
-	if !slices.Equal(files, []string{p.MuseSettingsFresh(), p.MuseChildLines()}) || len(dirs) != 0 {
+	if !slices.Equal(files, []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper()}) ||
+		!slices.Equal(dirs, []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
 	}
 }
