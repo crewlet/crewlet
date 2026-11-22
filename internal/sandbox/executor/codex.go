@@ -93,9 +93,13 @@ const codexReleaseRead = "v=$(codex --version < /dev/null 2> /dev/null)\n"
 // codexReleaseParse reads v as [releaseOf] does ([bareReleaseShell]): n is
 // the bare release, "" for a pre-release or none; its numbers are a, b and c;
 // and `at`, [claudeRelease]'s, is false for a release that does not read.
-var codexReleaseParse = bareReleaseShell("n") + `a=${n%%.*}; r=${n#*.}; b=${r%%.*}; c=${r##*.}
+// Built when a script is, never at init: the hook init budget counts what
+// the package allocates before main.
+func codexReleaseParse() string {
+	return bareReleaseShell("n") + `a=${n%%.*}; r=${n#*.}; b=${r%%.*}; c=${r##*.}
 at() { [ -n "$n" ] && { [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "$2" ] || { [ "$b" -eq "$2" ] && [ "$c" -ge "$3" ]; }; }; }; }; }
 `
+}
 
 // codexReleaseRefusal ends the run before anything starts on a box whose
 // Codex names no release ([codexReleaseParse]) or one below [codexFloor],
@@ -134,7 +138,7 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	b.WriteString(endHarness(""))
 	line(`command -v codex > /dev/null || { echo 'crewlet: no codex on the box PATH' >&2; exit 127; }`)
 	b.WriteString(codexReleaseRead)
-	b.WriteString(codexReleaseParse)
+	b.WriteString(codexReleaseParse())
 	b.WriteString(codexReleaseRefusal())
 	line(`mkdir -p %s %s && chmod 700 %s || exit 1`, q(paths.CodexHome()), q(paths.CodexSessions()),
 		q(paths.CodexHome()))
