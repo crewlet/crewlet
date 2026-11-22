@@ -35,6 +35,7 @@ const answer = (...keys: string[]): ModelEntriesAnswer =>
     node: "node-0",
     nodes: [{ id: "node-0", reported: true }],
     alarms: [],
+    executor_harnesses: ["claude-code", "opencode"],
     entries: keys.map((key) => modelEntry({ key, model: key === "spare" ? "haiku" : "opus" })),
   }) as unknown as ModelEntriesAnswer;
 
