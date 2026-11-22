@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"runtime/metrics"
 	"slices"
 	"strings"
@@ -1420,10 +1421,12 @@ func BenchmarkATakeAtItsLargeTier(b *testing.B) {
 // The base tier counts a take at this and [BenchmarkAMeterAtItsBase] summed:
 // the meter's worst line is past the scrub's base, so the two never meet on
 // one line, but the scrub may read on at its base while the meter is still on
-// that line. Read off its held-MiB, which the pool is sized by:
+// that line. Read off its held-MiB, in live bytes ([atLiveBytes]), which the
+// pool is sized by:
 //
-//	GOGC=10 go test -run '^$' -bench '^BenchmarkATakeAtItsBase$' -benchtime 1x -benchmem
+//	GODEBUG=gcstoptheworld=1 go test -run '^$' -bench '^BenchmarkATakeAtItsBase$' -benchtime 1x -benchmem
 func BenchmarkATakeAtItsBase(b *testing.B) {
+	atLiveBytes(b)
 	benchmarkATake(b, takeOfPieces(b, scrubPieceBaseBytes))
 }
 
@@ -1432,8 +1435,9 @@ func BenchmarkATakeAtItsBase(b *testing.B) {
 // figure is the meter's, not the scrub's hold of that line past its own base,
 // which the large tier counts. Read off its held-MiB, as that is:
 //
-//	GOGC=10 go test -run '^$' -bench '^BenchmarkAMeterAtItsBase$' -benchtime 1x -benchmem
+//	GODEBUG=gcstoptheworld=1 go test -run '^$' -bench '^BenchmarkAMeterAtItsBase$' -benchtime 1x -benchmem
 func BenchmarkAMeterAtItsBase(b *testing.B) {
+	atLiveBytes(b)
 	archive := takeOfPieces(b, 1<<10, meterAtItsBase(b))
 	var kept bytes.Buffer
 	if err := scrubArchive(archiveTar, bytes.NewReader(archive), reopenOf(archive), &kept, newScrubber(nil),
@@ -1498,6 +1502,22 @@ func benchmarkATake(b *testing.B, archive []byte) {
 		}
 	})
 	b.ReportMetric(float64(kept.n.Load())/float64(b.N)/(1<<20), "kept-MiB")
+}
+
+// atLiveBytes has b read what a take holds in live bytes: each GC stops the
+// world to mark, so nothing allocated meanwhile is counted live, and runs at
+// every 1% the heap grows (GOGC=1), so a buffer a call allocates and drops
+// inside one read is caught within 1% of the heap. A concurrent mark counts
+// what is allocated during it as live: on a slot where a mark ran long, main's
+// take read 13.85 MiB in 6 runs of 30, against at most 8.02 here. GODEBUG is
+// read as the process starts, so b refuses to run without gcstoptheworld=1.
+func atLiveBytes(b *testing.B) {
+	b.Helper()
+	if !strings.Contains(os.Getenv("GODEBUG"), "gcstoptheworld=1") {
+		b.Fatal("a take's base is read in live bytes: run it with GODEBUG=gcstoptheworld=1")
+	}
+	gogc := debug.SetGCPercent(1)
+	b.Cleanup(func() { debug.SetGCPercent(gogc) })
 }
 
 // takeWindow runs op b.N times between the markers a take's GC trace is read
