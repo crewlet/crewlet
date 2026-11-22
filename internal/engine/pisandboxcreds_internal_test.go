@@ -15,7 +15,7 @@ import (
 // environment signs it in on every cell.
 //
 // Mutation: drop the pi profile's env_sign_in, or let a login-only entry reach
-// e2b — this goes red.
+// e2b: this goes red.
 func TestAPiExecutorsLoginStaysLocalAndItsKeyTravels(t *testing.T) {
 	t.Parallel()
 	c, seat := creditedCompany(t, "pi")

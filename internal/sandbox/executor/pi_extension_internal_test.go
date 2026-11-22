@@ -225,7 +225,7 @@ func piNoteAnswer(seq int, inbox, message string) string {
 // the note waits for the next.
 //
 // Mutation: hand notes over at every turn_end whatever its outcome, drop the
-// inbox from the details, or answer continue unconditionally — this goes red.
+// inbox from the details, or answer continue unconditionally: this goes red.
 func TestThePiExtensionHandsANoteOverAtTheNextCompletedTurn(t *testing.T) {
 	t.Parallel()
 	route := newPiRoute(t)
@@ -261,7 +261,7 @@ func TestThePiExtensionHandsANoteOverAtTheNextCompletedTurn(t *testing.T) {
 // A NOTE ADMITTED AS THE RUN FINISHES IS HANDED OVER AT agent_before_settle,
 // so the run goes on to answer it rather than leave it for its review.
 //
-// Mutation: drop the agent_before_settle handler — this goes red.
+// Mutation: drop the agent_before_settle handler: this goes red.
 func TestThePiExtensionHandsANoteOverAsTheRunFinishes(t *testing.T) {
 	t.Parallel()
 	route := newPiRoute(t)
@@ -283,7 +283,7 @@ func TestThePiExtensionHandsANoteOverAsTheRunFinishes(t *testing.T) {
 // more.
 //
 // Mutation: abort at the cap-th turn, count from one too late, or hand a note
-// over at a spent cap — this goes red.
+// over at a spent cap: this goes red.
 func TestThePiExtensionStopsTheRunPastItsCap(t *testing.T) {
 	t.Parallel()
 	p := startPiProbe(t, piExtensionSettings{Cap: 2})
@@ -305,7 +305,7 @@ func TestThePiExtensionStopsTheRunPastItsCap(t *testing.T) {
 // A server that offers its tools passes, and so does one not required.
 //
 // Mutation: skip the check, or check at before_agent_start (before pi has
-// connected), or accept another server's tools — this goes red.
+// connected), or accept another server's tools: this goes red.
 func TestThePiExtensionFailsARunWhoseBridgeOffersNoTool(t *testing.T) {
 	t.Parallel()
 	settings := piExtensionSettings{Required: []string{"crewlet"}, Servers: []piServer{
@@ -340,7 +340,7 @@ func TestThePiExtensionFailsARunWhoseBridgeOffersNoTool(t *testing.T) {
 // a trusted repository's APPEND_SYSTEM.md (measured on 1.6.0); and the
 // extension records that it ran, once.
 //
-// Mutation: drop the section, or record the extension's word on every start —
+// Mutation: drop the section, or record the extension's word on every start:
 // this goes red.
 func TestThePiExtensionAddsTheSeatsSectionAndSaysItRan(t *testing.T) {
 	t.Parallel()
@@ -372,7 +372,7 @@ func TestThePiExtensionAddsTheSeatsSectionAndSaysItRan(t *testing.T) {
 // awaited), a relative path read against the run's working directory; a read
 // of any other file is reported nothing.
 //
-// Mutation: report every read, or match the path as written — this goes red.
+// Mutation: report every read, or match the path as written: this goes red.
 func TestThePiExtensionReportsASkillLoad(t *testing.T) {
 	t.Parallel()
 	route := newPiRoute(t)

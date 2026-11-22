@@ -17,7 +17,7 @@ const piRateLimited = `429 {"type":"error","error":{"type":"rate_limit_error","m
 // answered, which are the model's, bench nothing.
 //
 // Mutation: drop the pi profile's rate_limit_error sentinel, or match its
-// markers against a run's answer — this goes red.
+// markers against a run's answer: this goes red.
 func TestAPiRunThatFailedOnARateLimitSitsItsEntryOut(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

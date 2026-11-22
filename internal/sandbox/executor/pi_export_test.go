@@ -14,7 +14,7 @@ import (
 // answers a take asked from the session's own record, its traits stating the
 // receipts it settles.
 //
-// Mutation: drop notesHeld (no recordConfirmer) — the run confirms nothing and
+// Mutation: drop notesHeld (no recordConfirmer): the run confirms nothing and
 // its traits state no receipts.
 func PiConfirmsATake(t *testing.T) {
 	if !confirms(Pi{}) || !NewPi().ThreadTraits().Receipts {
