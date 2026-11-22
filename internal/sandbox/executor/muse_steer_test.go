@@ -43,7 +43,7 @@ func museReachesTheBridgesTool(t *testing.T) {
 	endpoint := probeBridge(t, inbox, &probeLedger{})
 	box := sandbox.NewFakeSandbox("b")
 	box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
-		if cmd == "uname -m" {
+		if strings.HasPrefix(cmd, "uname -m;") {
 			return sandbox.ExecResult{Stdout: "x86_64\n"}, nil
 		}
 		return sandbox.ExecResult{}, nil
@@ -75,13 +75,13 @@ func museReachesTheBridgesTool(t *testing.T) {
 	if err := json.Unmarshal(raw, &take); err != nil || take.Endpoint != endpoint || take.Tool != mcpbridge.SteerTool {
 		t.Fatalf("the take config %s (%v): want the run's endpoint and steer_take", raw, err)
 	}
-	if helper, _ := box.ReadFile(t.Context(), p.MuseNoteHelper()); len(helper) == 0 {
+	if helper, _ := box.ReadFile(t.Context(), p.NoteHelper()); len(helper) == 0 {
 		t.Error("the run was written no note helper")
 	}
 	events := map[string]int{}
 	for _, h := range manifest.Capabilities.Hooks {
 		events[h.Event]++
-		if len(h.Command) < 5 || h.Command[0] != p.MuseNoteHelper() || !slices.Equal(h.Command[1:5],
+		if len(h.Command) < 5 || h.Command[0] != p.NoteHelper() || !slices.Equal(h.Command[1:5],
 			[]string{"-adapter", "muse-hook", "-config", p.MuseTakeConfig()}) {
 			t.Errorf("hook %s runs %q, want the run's note helper on its take config", h.ID, h.Command)
 		}

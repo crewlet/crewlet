@@ -1,7 +1,9 @@
-// Command notehelper hands a person's notes to a harness that has neither a
-// hook route nor a plugin to take them: a small static program the engine
-// writes into the box beside the harness at each launch, and the run's script
-// starts before the harness and stops with it.
+// Command notehelper is the engine's program in a box, beside the harness: a
+// small static build the engine writes into the box (executor's
+// writeNoteHelper, kept while it is the engine's own build). It hands a
+// person's notes to a harness that has neither a hook route nor a plugin to
+// take them, which the run's script starts before the harness and stops with
+// it:
 //
 //	notehelper -adapter codex-app-server -socket $RUN/codex.sock \
 //	    -thread-file $RUN/thread.id -notes-env CREWLET_NOTES_URL
@@ -9,6 +11,11 @@
 // or, for a harness whose hook runs it once per firing (once.go):
 //
 //	notehelper -adapter muse-hook -config $RUN/muse-take.json -slot 1
+//
+// And it hands Claude Code the instructions a native session loads as it works
+// under a directory, once per file tool call ("Nested instructions" below):
+//
+//	notehelper -adapter claude-nested -config $RUN/claude-repo/roots
 //
 // # What it does
 //
@@ -55,6 +62,29 @@
 // steer_take, as a hook that calls an MCP tool would, hands the answer over
 // through the adapter, and exits 0 whatever happened, so a firing never stops
 // the harness; a take the harness never got is told again.
+//
+// # Nested instructions
+//
+// A Claude Code run reads no settings source, and so loads none of what a
+// native session loads lazily (measured on 2.1.330); the launch hands each
+// root's own CLAUDE.md family with `--add-dir`, and the run's PostToolUse hook
+// on Read, Edit, Write, MultiEdit and NotebookEdit runs claude-nested
+// (claudenested.go) for the rest. -config is the run's index of its roots (the
+// working directory and each repository checked out under it), and the claims
+// directory beside it, `seen`, is the run's own. For each directory from the
+// outermost root holding the touched file down to the file's own, it hands:
+//   - a root's rules (.claude/rules, recursively) whose `paths` match the file;
+//   - any other directory's CLAUDE.md, .claude/CLAUDE.md and CLAUDE.local.md,
+//     each followed by its imports, and its rules, unscoped or matching;
+//
+// each as "Contents of <path>:" and its text, the frontmatter and block-level
+// HTML comments cut, as native shows a nested file. Imports are native's:
+// `@path` at a line's start or after a space, outside code and comments, five
+// deep, to a text file. Only a file lying under a root, its links resolved, is
+// handed, and each once a run: the first firing to create its claim hands it.
+// `paths` match as native matches them (rulepaths.go): split at commas, braces
+// expanded, then gitignore patterns, case-insensitive, relative to the
+// directory holding the rule's `.claude`. A failure hands nothing and exits 0.
 //
 // # Exit
 //
@@ -118,7 +148,7 @@ var adapters = map[string]func(ctx context.Context, f flags, p pacing) (harness,
 type flags struct {
 	adapter, socket, threadFile, notesEnv string
 
-	// A one-shot adapter's (once.go): the take config's file, whether the
+	// A one-shot adapter's (once.go): the file of the run's wiring, whether the
 	// hook reports skill loads and whether it takes no notes, and the hook's
 	// place among the run's hooks, which keeps each hook's command its own.
 	config                string

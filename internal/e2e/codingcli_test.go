@@ -874,7 +874,7 @@ func readCodingHooks(path string) (codingHooks, error) {
 	for event, matchers := range doc.Hooks {
 		for _, matcher := range matchers {
 			for _, hook := range matcher.Hooks {
-				// THE NESTED HOOK of the repositories' instructions, a script
+				// THE NESTED HOOK of the repositories' instructions, the note helper
 				// in the box this stand-in, which reads no file, has no use for.
 				if hook.Type == "command" && event == "PostToolUse" {
 					continue

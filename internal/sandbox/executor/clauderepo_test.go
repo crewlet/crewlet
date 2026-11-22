@@ -131,11 +131,12 @@ func TestAClaudeCodeOlderThanItsRepositoryFloorStartsWithoutThem(t *testing.T) {
 // with its imports, and each rule whose `paths` globs match the file, as the
 // hook's additional context; never the root's own (loaded at the start), a
 // rule without `paths` or one that does not match, and nothing a second time
-// or for a file outside every root. Played with the script the launch writes,
-// on a box's own directories.
+// or for a file outside every root. Played on a real box with the command the
+// run's settings name, which runs the note helper the launch wrote
+// (internal/notehelper's claude-nested holds the rest).
 //
-// Mutation: drop the claim, the glob's `**/`, or the walk's stop at the root,
-// and a call hands too much or too little.
+// Mutation: name another adapter or index in the settings, or write no
+// helper, and a call hands nothing.
 func TestTheNestedHookHandsBackWhatANativeSessionLoadsOnARead(t *testing.T) {
 	t.Parallel()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
@@ -151,6 +152,19 @@ func TestTheNestedHookHandsBackWhatANativeSessionLoadsOnARead(t *testing.T) {
 	if _, err = claude().WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "x"}, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
+	var settings struct {
+		Hooks map[string][]struct {
+			Matcher string `json:"matcher"`
+			Hooks   []struct {
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"hooks"`
+	}
+	if err = json.Unmarshal([]byte(boxFile(t, box, p.ClaudeRepoSettings())), &settings); err != nil ||
+		len(settings.Hooks["PostToolUse"]) != 1 || len(settings.Hooks["PostToolUse"][0].Hooks) != 1 {
+		t.Fatalf("the run's settings hold no one nested hook (%v):\n%s", err, boxFile(t, box, p.ClaudeRepoSettings()))
+	}
+	command := settings.Hooks["PostToolUse"][0].Hooks[0].Command
 	root := filepath.Join(box.Home(), sandbox.WorkspaceSubdir, "app")
 	for file, body := range map[string]string{
 		"CLAUDE.md":                  "ROOT-ITSELF\n",
@@ -167,16 +181,15 @@ func TestTheNestedHookHandsBackWhatANativeSessionLoadsOnARead(t *testing.T) {
 	} {
 		plantFile(t, filepath.Join(root, file), body)
 	}
-	rr := p.ClaudeRepoPlugins()
-	plantFile(t, rr+"/roots", root+"\n")
-	if err = os.MkdirAll(rr+"/seen", 0o700); err != nil {
+	plantFile(t, p.ClaudeRepoRoots(), root+"\x00")
+	if err = os.MkdirAll(filepath.Dir(p.ClaudeRepoRoots())+"/seen", 0o700); err != nil {
 		t.Fatal(err)
 	}
 	hook := func(file string) string {
 		t.Helper()
-		in := `{"session_id":"s","tool_name":"Read","tool_input":{"file_path":"` + file + `"},` +
-			`"tool_response":{"content":"\"file_path\":\"/elsewhere\""}}`
-		cmd := exec.Command("sh", p.ClaudeNestedHook(), rr) //nolint:gosec // the case's own box
+		in := `{"session_id":"s","hook_event_name":"PostToolUse","tool_name":"Read","tool_input":{"file_path":"` +
+			file + `"},"tool_response":{"content":"\"file_path\":\"/elsewhere\""}}`
+		cmd := exec.Command("sh", "-c", command) //nolint:gosec // the run's own hook, in the case's own box
 		cmd.Stdin = strings.NewReader(in)
 		out, err := cmd.Output()
 		if err != nil {
@@ -202,7 +215,7 @@ func TestTheNestedHookHandsBackWhatANativeSessionLoadsOnARead(t *testing.T) {
 			t.Errorf("the first read was handed %s %d times, want once:\n%s", word, strings.Count(got, word), got)
 		}
 	}
-	for _, word := range []string{"ROOT-ITSELF", "NESTED-OTHER", "RULE-ALWAYS", "RULE-DOCS", "RULE-ONE-LEVEL"} {
+	for _, word := range []string{"ROOT-ITSELF", "NESTED-OTHER", "RULE-ALWAYS", "RULE-DOCS", "RULE-ONE-LEVEL", "paths:"} {
 		if strings.Contains(got, word) {
 			t.Errorf("the first read was handed %s:\n%s", word, got)
 		}
@@ -220,4 +233,42 @@ func TestTheNestedHookHandsBackWhatANativeSessionLoadsOnARead(t *testing.T) {
 	if outside := hook(box.Home() + "/elsewhere/CLAUDE.md"); outside != "" {
 		t.Errorf("a read outside every root was handed:\n%s", outside)
 	}
+}
+
+// A BOX WHOSE MACHINE HAS NO NOTE HELPER BUILD STARTS WITHOUT THE NESTED HOOK,
+// SAYING SO: neither settings file names it, no helper is written, and the
+// run's error stream says the run is not handed a nested CLAUDE.md or a
+// path-scoped rule, naming the machine.
+//
+// Mutation: keep the hook on a machine with no build, or drop the gate's
+// line, and this goes red.
+func TestABoxWithNoNoteHelperBuildStartsWithoutTheNestedHook(t *testing.T) {
+	t.Parallel()
+	b := onMachine(sandbox.NewFakeSandbox("box-1"), "riscv64")
+	p := executor.Paths{Home: t.TempDir()}
+	if _, err := claude().WriteConfig(t.Context(), b, sandbox.RunRequest{Brief: "x", Steer: steerWiring},
+		executor.Session{}, p); err != nil {
+		t.Fatalf("WriteConfig: %v", err)
+	}
+	for _, file := range []string{p.ClaudeRepoSettings(), p.ClaudeNotesSettings()} {
+		if raw, _ := b.ReadFile(t.Context(), file); !strings.Contains(string(raw), "cleanupPeriodDays") ||
+			strings.Contains(string(raw), "PostToolUse") {
+			t.Errorf("%s names the nested hook, or is not written:\n%s", file, raw)
+		}
+	}
+	if raw, _ := b.ReadFile(t.Context(), p.NoteHelper()); len(raw) > 0 {
+		t.Error("a box of a machine with no build was written a note helper")
+	}
+	off, _ := b.ReadFile(t.Context(), p.ClaudeNestedOff())
+	if !strings.Contains(string(off), `"riscv64"`) {
+		t.Fatalf("the reason names no machine: %q", off)
+	}
+	plantFile(t, p.ClaudeNestedOff(), string(off))
+	script := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "x"}, p, ""))
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		_, stderr := scriptArgv(t, sh, script, "2.1.330 (Claude Code)")
+		if !strings.Contains(stderr, "not handed a nested CLAUDE.md or a path-scoped rule") {
+			t.Errorf("the error stream does not say the run has no nested hook:\n%s", stderr)
+		}
+	})
 }

@@ -63,5 +63,12 @@ func (p Paths) ClaudeRepoPlugins() string { return p.WorkDir() + "/claude-repo" 
 // release that takes them ([claudeRepoGate]).
 func (p Paths) ClaudeRepoSettings() string { return p.WorkDir() + "/claude-settings-repo.json" }
 
-// ClaudeNestedHook is the script of the run's nested hook ([claudeNestedHook]).
-func (p Paths) ClaudeNestedHook() string { return p.WorkDir() + "/claude-nested.sh" }
+// ClaudeRepoRoots is the run's index of its roots, NUL-separated, which the
+// script writes ([claudeRepoGate]) and the nested hook reads
+// ([claudeNestedHooks]), its claims in `seen` beside it.
+func (p Paths) ClaudeRepoRoots() string { return p.ClaudeRepoPlugins() + "/roots" }
+
+// ClaudeNestedOff holds why a Claude Code run has no nested hook, for its
+// script to tell its error stream ([writeClaudeNested]); written only then, and
+// cleared before every run ([ClaudeCode.artifacts]).
+func (p Paths) ClaudeNestedOff() string { return p.WorkDir() + "/claude-nested-off" }

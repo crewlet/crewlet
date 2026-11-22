@@ -27,7 +27,8 @@ import (
 // oneShots is every adapter the helper runs once per firing, by -adapter.
 var oneShots = map[string]func(ctx context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer,
 	getenv func(string) string) int{
-	"muse-hook": runMuseHook,
+	"muse-hook":     runMuseHook,
+	"claude-nested": runClaudeNested,
 }
 
 // runOnce runs args as a one-shot adapter's firing, and is its exit status
@@ -52,8 +53,8 @@ func runOnce(ctx context.Context, args []string, getenv func(string) string, std
 		return 0, false
 	}
 	if set.NArg() > 0 || f.config == "" {
-		fmt.Fprintln(stderr, "notehelper: a one-shot adapter takes -config, the take config's file, and no "+
-			"other arguments")
+		fmt.Fprintln(stderr, "notehelper: a one-shot adapter takes -config, the file it reads the run's "+
+			"wiring from, and no other arguments")
 		return exitUsage, true
 	}
 	return once(ctx, f, stdin, stdout, stderr, getenv), true

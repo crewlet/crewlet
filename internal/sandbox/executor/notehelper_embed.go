@@ -3,9 +3,12 @@ package executor
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"sync"
 )
 
 // The note helper's builds, one per box arch (internal/notehelper): committed
@@ -20,8 +23,8 @@ var (
 )
 
 // noteHelperBinary is the note helper's executable for a linux box of arch,
-// by GOARCH's names ("amd64", "arm64"), gunzipped: written into the box at
-// each launch, since gunzip is not certain to be in a box.
+// by GOARCH's names ("amd64", "arm64"), gunzipped: written into the box as it
+// is ([writeNoteHelper]), since gunzip is not certain to be in a box.
 func noteHelperBinary(arch string) ([]byte, error) {
 	var gz []byte
 	switch arch {
@@ -41,4 +44,31 @@ func noteHelperBinary(arch string) ([]byte, error) {
 		return nil, fmt.Errorf("executor: the embedded note helper for %s does not gunzip: %w", arch, err)
 	}
 	return out, nil
+}
+
+// noteHelperSums are the builds' SHA-256s as `sha256sum` prints them, each
+// gunzipped once a process.
+var noteHelperSums = map[string]func() (string, error){
+	"amd64": sync.OnceValues(func() (string, error) { return noteHelperSumOf("amd64") }),
+	"arm64": sync.OnceValues(func() (string, error) { return noteHelperSumOf("arm64") }),
+}
+
+// noteHelperSum is the SHA-256 of the build for arch, in lowercase hex.
+func noteHelperSum(arch string) (string, error) {
+	sum, ok := noteHelperSums[arch]
+	if !ok {
+		_, err := noteHelperBinary(arch)
+		return "", err
+	}
+	return sum()
+}
+
+// noteHelperSumOf hashes the build for arch.
+func noteHelperSumOf(arch string) (string, error) {
+	bin, err := noteHelperBinary(arch)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(bin)
+	return hex.EncodeToString(sum[:]), nil
 }

@@ -73,7 +73,3 @@ func (p Paths) MuseNotesPlugin() string { return p.WorkDir() + "/muse-notes-plug
 // every run of the plugin's hooks records as its `source_digest`: the confirm
 // counts no other hook's ([museInstalledDigest]).
 func (p Paths) MuseNotesInstall() string { return p.WorkDir() + "/muse-notes-install.json" }
-
-// MuseNoteHelper is the note helper's build for the box (internal/notehelper),
-// written at each launch of a run wired to its notes or skills.
-func (p Paths) MuseNoteHelper() string { return p.WorkDir() + "/muse-notehelper" }

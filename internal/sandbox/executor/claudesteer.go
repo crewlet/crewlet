@@ -101,9 +101,9 @@ type claudeHookInput struct {
 }
 
 // claudeSteerSettings is the settings of a run whose notes are reached through
-// w: one hook at each event calling w's tool, beside the nested hook of its
-// repositories' instructions ([claudeNestedHooks]).
-func claudeSteerSettings(w sandbox.SteerWiring, paths Paths) claudeNotesSettings {
+// w: one hook at each event calling w's tool, beside nested, the nested hook
+// of its repositories' instructions where the box runs it ([writeClaudeNested]).
+func claudeSteerSettings(w sandbox.SteerWiring, nested []claudeHookMatcher) claudeNotesSettings {
 	hook := []claudeHookMatcher{{Hooks: []claudeHook{{
 		Type: "mcp_tool", Server: w.Server, Tool: w.Tool,
 		Input:   claudeHookInput{Event: "${hook_event_name}", Agent: "${agent_id}"},
@@ -111,8 +111,8 @@ func claudeSteerSettings(w sandbox.SteerWiring, paths Paths) claudeNotesSettings
 	}}}}
 	return claudeNotesSettings{
 		claudeSettings: newClaudeSettings(),
-		Hooks: map[string][]claudeHookMatcher{claudeEventToolBatch: hook, claudeEventFinish: hook,
-			claudeEventToolUsed: claudeNestedHooks(paths)},
+		Hooks: claudeToolUsed(map[string][]claudeHookMatcher{claudeEventToolBatch: hook, claudeEventFinish: hook},
+			nested),
 	}
 }
 

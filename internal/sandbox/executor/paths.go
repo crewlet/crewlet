@@ -1556,6 +1556,11 @@ func (p Paths) JobEnded() string { return p.WorkDir() + "/job-ended" }
 // boxes there would overwrite each other's tools.
 func (p Paths) BinDir() string { return p.WorkDir() + "/bin" }
 
+// NoteHelper is the note helper's build for the box (internal/notehelper),
+// which every harness that runs it shares ([writeNoteHelper]): kept across
+// runs while it is this engine's build, so no clear removes it.
+func (p Paths) NoteHelper() string { return p.WorkDir() + "/notehelper" }
+
 // MCPConfig is where the scoped MCP surface is rendered. Removed by the clear
 // before every run ([Runner.ClearArtifacts]), so each run's start writes its own
 // as a new file and a run with no servers keeps none naming a closed bridge session.

@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -44,8 +46,10 @@ fm { if (l ~ /^[^ \t#-][^:]*:/) { key = l; sub(/:.*/, "", key); keep = (key in o
 // from a directory of the run's own, added too. Its `.claude/skills`,
 // `commands` and `agents` are copied, links dropped, into a plugin of the run's
 // own named after it (never [sandbox.SkillNamespace]), their frontmatter cut
-// to [claudeRepoKeys]. The roots are listed for the nested hook
-// ([claudeNestedHook]), whose settings the run is handed.
+// to [claudeRepoKeys] by awk (a file whose cut fails is not copied; a box with
+// no awk copies none, and says so). The roots are listed, NUL-separated, for
+// the nested hook ([claudeNestedHooks]), whose settings the run is handed; a
+// box with no note helper says it runs without it ([writeClaudeNested]).
 func claudeRepoGate(paths Paths) string {
 	q := shellword.Quote
 	var b strings.Builder
@@ -53,10 +57,14 @@ func claudeRepoGate(paths Paths) string {
 	line(`if at %s; then`, floorArgs(claudeRepoFloor))
 	line(`  rr=%s; rm -rf "$rr"; mkdir -p "$rr/local" "$rr/seen"; ri=0; rs=" %s "; cs=%s`,
 		q(paths.ClaudeRepoPlugins()), sandbox.SkillNamespace, q(paths.ClaudeRepoSettings()))
+	line(`  [ ! -s %s ] || cat %s >&2`, q(paths.ClaudeNestedOff()), q(paths.ClaudeNestedOff()))
+	line(`  ra=1; command -v awk > /dev/null 2>&1 || { ra=; echo "crewlet: this box has no awk, so the run is ` +
+		`handed no repository's skills, commands or agents" >&2; }`)
 	line(`  for rd in "$PWD" "$PWD"/*/; do rd=${rd%%/}`)
 	line(`    [ "$rd" = "$PWD" ] || { [ -e "$rd/.git" ] && [ ! -L "$rd" ]; } || continue`)
-	line(`    set -- "$@" --add-dir "$rd"; printf '%%s\n' "$rd" >> "$rr/roots"`)
+	line(`    set -- "$@" --add-dir "$rd"; printf '%%s\000' "$rd" >> %s`, q(paths.ClaudeRepoRoots()))
 	line(`    [ ! -f "$rd/CLAUDE.local.md" ] || printf '@%%s\n' "$rd/CLAUDE.local.md" >> "$rr/local/CLAUDE.md"`)
+	line(`    [ -n "$ra" ] || continue`)
 	line(`    [ -d "$rd/.claude/skills" ] || [ -d "$rd/.claude/commands" ] || [ -d "$rd/.claude/agents" ] || continue`)
 	line(`    ri=$((ri + 1)); rp=$rr/$ri; rn=$(basename "$rd" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9\n' '-')`)
 	line(`    case "$rs" in *" $rn "*) rn=$rn-$ri;; esac; rs="$rs$rn "`)
@@ -64,7 +72,8 @@ func claudeRepoGate(paths Paths) string {
 	line(`    for rk in skills commands agents; do [ ! -d "$rd/.claude/$rk" ] || cp -R "$rd/.claude/$rk" "$rp/$rk"; done`)
 	line(`    find "$rp" -type l -exec rm -f {} +`)
 	line(`    find "$rp" -type f \( -path "$rp/skills/*/SKILL.md" -o -path "$rp/commands/*.md" -o -path "$rp/agents/*.md" \) |`)
-	line(`      while IFS= read -r rf; do awk -v keys=%s %s "$rf" > "$rf.crewlet" && mv -f "$rf.crewlet" "$rf"; done`,
+	line(`      while IFS= read -r rf; do awk -v keys=%s %s "$rf" > "$rf.crewlet" && mv -f "$rf.crewlet" "$rf" ||`+
+		` rm -f "$rf" "$rf.crewlet"; done`,
 		q(strings.Join(claudeRepoKeys, " ")), q(claudeRepoFrontmatter))
 	line(`    set -- "$@" --plugin-dir "$rp"`)
 	line(`  done`)
@@ -74,69 +83,59 @@ func claudeRepoGate(paths Paths) string {
 	return b.String()
 }
 
-// claudeNestedHook is the script the run's PostToolUse hook runs
-// ([claudeNestedHooks]) for each file the model reads or writes, its first
-// argument the run's repository directory ([Paths.ClaudeRepoPlugins]): what a
-// native session loads lazily, handed back as the hook's additional context,
-// which the harness puts before the model's next request (measured on
-// 2.1.330). For the root the file is under ([claudeRepoGate]'s `roots`), each
-// CLAUDE.md between the root and the file, outermost first, with its imports,
-// and each rule of the root's `.claude/rules` whose `paths` globs match the
-// file. Each once a run: the first hook to claim a file (`set -C`) hands it.
-const claudeNestedHook = `rr=$1; in=$rr/in.$$; out=$rr/out.$$; trap 'rm -f "$in" "$out"' EXIT; cat > "$in"; : > "$out"
-f=$(awk 'BEGIN { RS = "\001" } {
-	i = index($0, "\"tool_input\":{"); if (!i) exit; s = substr($0, i)
-	for (k = 1; k <= 2; k++) { key = k == 1 ? "\"file_path\":\"" : "\"notebook_path\":\""
-		j = index(s, key); if (j) { s = substr(s, j + length(key)); e = index(s, "\""); p = substr(s, 1, e - 1)
-			if (p !~ /\\/) print p; exit } } }' "$in")
-case $f in /*) ;; *) exit 0 ;; esac
-root=; while IFS= read -r r; do case $f in "$r"/*) [ ${#r} -gt ${#root} ] && root=$r ;; esac; done < "$rr/roots"
-[ -n "$root" ] || exit 0
-claim() { k=$(printf '%s' "$1" | cksum | cut -d' ' -f1); ( set -C; : > "$rr/seen/$k" ) 2> /dev/null; }
-add() { [ -f "$1" ] && claim "$1" && printf 'Contents of %s:\n\n%s\n\n' "$1" "$(cat "$1")" >> "$out"; }
-d=${f%/*}; dirs=; while [ "$d" != "$root" ] && [ ${#d} -gt ${#root} ]; do dirs="$d
-$dirs"; d=${d%/*}; done
-printf '%s' "$dirs" | while IFS= read -r d; do [ -n "$d" ] || continue
-	add "$d/CLAUDE.md" && sed -n 's/^@//p' "$d/CLAUDE.md" | while IFS= read -r i; do
-		case $i in /*) add "$i" ;; *) add "$d/$i" ;; esac; done; done
-rel=${f#"$root"/}
-[ ! -d "$root/.claude/rules" ] || find "$root/.claude/rules" -type f -name '*.md' | while IFS= read -r rule; do
-	awk -v rel="$rel" '
-	function re(g,   o, c, i, b) { o = ""; b = 0
-		for (i = 1; i <= length(g); i++) { c = substr(g, i, 1)
-			if (substr(g, i, 3) == "**/") { o = o "(.*/)?"; i += 2 } else if (substr(g, i, 2) == "**") { o = o ".*"; i++ }
-			else if (c == "*") o = o "[^/]*"; else if (c == "?") o = o "[^/]"
-			else if (c == "{") { o = o "("; b++ } else if (c == "}" && b) { o = o ")"; b-- } else if (c == "," && b) o = o "|"
-			else if (index(".+()|^$[]\\", c)) o = o "\\" c; else o = o c }
-		return "^" o "$" }
-	function try(v) { gsub(/^[ \t"'"'"']+|[ \t"'"'"']+$/, "", v); if (v != "" && rel ~ re(v)) hit = 1 }
-	NR == 1 { if ($0 != "---") exit; fm = 1; next }
-	fm && $0 == "---" { exit }
-	fm && /^[^ \t-]/ { inp = 0 }
-	fm && /^paths:/ { inp = 1; v = $0; sub(/^paths:[ \t]*/, "", v); gsub(/[][]/, "", v); n = split(v, a, ","); for (x = 1; x <= n; x++) try(a[x]); next }
-	fm && inp && /^[ \t]*-/ { v = $0; sub(/^[ \t]*-[ \t]*/, "", v); try(v) }
-	END { exit hit ? 0 : 1 }' "$rule" && add "$rule"; done
-[ -s "$out" ] || exit 0
-awk 'BEGIN { RS = "\001"; printf "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"" }
-{ gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t"); gsub(/\r/, "\\r"); gsub(/\n/, "\\n"); gsub(/[\001-\037]/, ""); printf "%s", $0 }
-END { printf "\"}}" }' "$out"
-`
-
 // claudeNestedTools are the tools whose file the nested hook reads by.
 const claudeNestedTools = "Read|Edit|Write|MultiEdit|NotebookEdit"
 
-// claudeNestedHooks is the settings `hooks` entry that runs [claudeNestedHook]
-// after each of [claudeNestedTools], under a ten-second timeout.
+// claudeNestedHooks is the settings `hooks` entry that runs the note helper's
+// claude-nested adapter (internal/notehelper's "Nested instructions") on the
+// gate's index of the run's roots ([claudeRepoGate]) after each of
+// [claudeNestedTools], under a ten-second timeout: what a native session loads
+// as it works under a directory. None where the box has no helper
+// ([writeClaudeNested]).
 func claudeNestedHooks(paths Paths) []claudeHookMatcher {
 	return []claudeHookMatcher{{Matcher: claudeNestedTools, Hooks: []claudeHook{{Type: "command",
-		Command: "sh " + shellword.Quote(paths.ClaudeNestedHook()) + " " + shellword.Quote(paths.ClaudeRepoPlugins()),
+		Command: shellword.Quote(paths.NoteHelper()) + " -adapter claude-nested -config " +
+			shellword.Quote(paths.ClaudeRepoRoots()),
 		Timeout: int(ClaudeHookTimeout / time.Second)}}}}
 }
 
+// writeClaudeNested writes the note helper the nested hook runs, and is the
+// hook's settings entry: none, with the reason written where the gate tells
+// the run's error stream ([Paths.ClaudeNestedOff]), on a machine the engine
+// carries no helper for.
+func writeClaudeNested(ctx context.Context, box sandbox.Sandbox, paths Paths) ([]claudeHookMatcher, error) {
+	err := writeNoteHelper(ctx, box, paths.NoteHelper())
+	if errors.Is(err, errNoNoteHelper) {
+		why := "crewlet: " + strings.TrimPrefix(err.Error(), "executor: ") + ", so the run is not handed a " +
+			"nested CLAUDE.md or a path-scoped rule as it works under one\n"
+		if err = box.WriteFile(ctx, paths.ClaudeNestedOff(), []byte(why)); err != nil {
+			return nil, fmt.Errorf("executor: writing why the run has no nested hook: %w", err)
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return claudeNestedHooks(paths), nil
+}
+
 // claudeRepoSettings is the settings of a run handed its repositories'
-// instructions ([Paths.ClaudeRepoSettings]): every run's and the nested hook.
+// instructions ([Paths.ClaudeRepoSettings]): every run's and the nested hook,
+// where the box runs it.
 type claudeRepoSettings struct {
 	claudeSettings
 
-	Hooks map[string][]claudeHookMatcher `json:"hooks"`
+	Hooks map[string][]claudeHookMatcher `json:"hooks,omitempty"`
+}
+
+// claudeToolUsed is a settings `hooks` map holding nested under
+// [claudeEventToolUsed] beside hooks, or hooks alone where nested is none.
+func claudeToolUsed(hooks map[string][]claudeHookMatcher, nested []claudeHookMatcher) map[string][]claudeHookMatcher {
+	if len(nested) > 0 {
+		if hooks == nil {
+			hooks = map[string][]claudeHookMatcher{}
+		}
+		hooks[claudeEventToolUsed] = nested
+	}
+	return hooks
 }

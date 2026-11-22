@@ -626,7 +626,7 @@ func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReq
 	if err = box.WriteFile(ctx, paths.MuseTakeConfig(), take); err != nil {
 		return fmt.Errorf("executor: writing the note helper's config: %w", err)
 	}
-	manifest, err := musePluginManifest(paths.MuseNoteHelper(), paths.MuseTakeConfig(), req.Steer.Set(),
+	manifest, err := musePluginManifest(paths.NoteHelper(), paths.MuseTakeConfig(), req.Steer.Set(),
 		req.SkillLoads.Set())
 	if err != nil {
 		return err
@@ -634,7 +634,7 @@ func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReq
 	if err = box.WriteFile(ctx, paths.MuseNotesPlugin()+"/.muse-plugin/plugin.json", manifest); err != nil {
 		return fmt.Errorf("executor: writing the run's notes plugin: %w", err)
 	}
-	return writeNoteHelper(ctx, box, paths.MuseNoteHelper())
+	return writeNoteHelper(ctx, box, paths.NoteHelper())
 }
 
 // museWiring is the part of a run's script that wires its settings before its
@@ -656,7 +656,6 @@ func museWiring(paths Paths) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	line(`if [ -f %s ]; then`, q(plugin+"/.muse-plugin/plugin.json"))
-	line(`  chmod 0755 %s 2> /dev/null`, q(paths.MuseNoteHelper()))
 	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > %s 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
 		q(plugin), installed, errs, museNotesPlugin, errs)
 	line(`    echo "crewlet: the run's notes plugin could not be installed, so the run takes no notes between its steps: $(head -c 400 %s 2> /dev/null)" >&2`, errs)
@@ -709,16 +708,16 @@ for o in $(env | sed -n 's/^\(` + museShellOff + `[A-Za-z0-9_]*\)=.*/\1/p'); do 
 
 // artifacts is what a Muse Code run leaves in its box of its own beside its
 // sessions, which a later run must not find: its MCP servers, a fresh
-// session's, the note helper, its config and plugin, and the count of its
-// subagents' lines its script kept. And everything in the box home Muse loads
+// session's, the note helper's config, its plugin, and the count of its
+// subagents' lines its script kept (the note helper is kept, [writeNoteHelper]). And everything in the box home Muse loads
 // as the user's own skills and instructions, whatever wrote it: the two skill
 // directories, the personal AGENTS.md and the installed plugins (measured on
 // 1.4.25), so a run loads only the skills and instructions its launch writes.
 // Its settings are written whole by every run, and its sessions and login are
 // kept.
 func (Muse) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
-			p.MuseNotesInstall(), p.MuseInstructions()},
+	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNotesInstall(),
+			p.MuseInstructions()},
 		[]string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin(), p.MuseSkills(), p.MuseConfigSkills(),
 			p.MusePlugins()}
 }

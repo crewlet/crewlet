@@ -47,7 +47,7 @@ func TestEveryArtefactPathIsUnderTheBoxsOwnHome(t *testing.T) {
 	p := executor.PathsFor(b)
 	for _, path := range []string{
 		p.WorkDir(), p.Result(), p.Stream(), p.Err(), p.Done(), p.ExitCode(), p.MemoryBefore(), p.MemoryAfter(),
-		p.MCPConfig(), p.Findings(), p.BinDir(),
+		p.MCPConfig(), p.Findings(), p.BinDir(), p.NoteHelper(),
 		p.Brief(), p.System(), p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
 		p.CommitAttribution(), p.AttributionHook(), p.GitHooks(),
 		p.SessionRecord(), p.SessionCapture(), p.SessionCarried(), p.SessionStaging(), p.SessionDigests(),
@@ -256,6 +256,11 @@ func TestStartClearsThePriorRunsArtefacts(t *testing.T) {
 	}
 	if strings.Contains(cleared, p.SessionDigests()) {
 		t.Fatalf("the clear removed the digests of the sessions the box holds: %s", cleared)
+	}
+	// Nor the note helper, which its writer keeps while it is this engine's
+	// build, so a reused box takes no upload of it per launch.
+	if strings.Contains(cleared, shellword.Quote(p.NoteHelper())) {
+		t.Fatalf("the clear removed the note helper: %s", cleared)
 	}
 }
 

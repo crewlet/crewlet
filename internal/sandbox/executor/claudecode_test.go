@@ -41,6 +41,19 @@ func realBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 	return runner, box
 }
 
+// onMachine is b answering the note helper's probe of its machine
+// ([executor.Muse.WriteConfig], [executor.ClaudeCode.WriteConfig]) with
+// machine, its copy of the helper unread, as a box with no `sha256sum`.
+func onMachine(b *sandbox.FakeSandbox, machine string) *sandbox.FakeSandbox {
+	b.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+		if strings.HasPrefix(cmd, "uname -m;") {
+			return sandbox.ExecResult{Stdout: machine + "\n"}, nil
+		}
+		return sandbox.ExecResult{}, nil
+	}
+	return b
+}
+
 // realBoxUnder is [realBox] whose runs' scripts run under sh ([runsUnder]).
 func realBoxUnder(t *testing.T, sh boxShell) (*executor.Runner, sandbox.Sandbox) {
 	t.Helper()
@@ -284,7 +297,7 @@ func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 	}
 	const every = `{"cleanupPeriodDays": 36500}`
 
-	b := sandbox.NewFakeSandbox("box-1")
+	b := onMachine(sandbox.NewFakeSandbox("box-1"), "x86_64")
 	p := executor.PathsFor(b)
 	if _, err := (executor.ClaudeCode{}).WriteConfig(t.Context(), b,
 		sandbox.RunRequest{Brief: "x", Steer: steerWiring, Skills: handedSkills(), SkillLoads: skillWiring()}, executor.Session{},
@@ -295,7 +308,8 @@ func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 	// The nested hook of the repositories' instructions, in the settings of a
 	// run handed them and in the notes'.
 	nested := `"PostToolUse": [{"matcher": "Read|Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command",
-		"command": "sh '` + p.ClaudeNestedHook() + `' '` + p.ClaudeRepoPlugins() + `'", "timeout": 10}]}]`
+		"command": "'` + p.NoteHelper() + `' -adapter claude-nested -config '` + p.ClaudeRepoRoots() + `'",
+		"timeout": 10}]}]`
 	shape(t, b, p.ClaudeRepoSettings(), `{"cleanupPeriodDays": 36500, "hooks": {`+nested+`}}`)
 	shape(t, b, p.ClaudeNotesSettings(), `{
 		"cleanupPeriodDays": 36500,
@@ -755,7 +769,7 @@ var claudeSettingsSince = map[string]string{
 // notes' floor below 2.1.118, and this goes red.
 func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T) {
 	t.Parallel()
-	b := &writesRecorded{FakeSandbox: sandbox.NewFakeSandbox("box-1")}
+	b := &writesRecorded{FakeSandbox: onMachine(sandbox.NewFakeSandbox("box-1"), "x86_64")}
 	p := executor.PathsFor(b)
 	if _, err := claude().WriteConfig(t.Context(), b, sandbox.RunRequest{Brief: "x", Steer: steerWiring,
 		Skills: handedSkills(), SkillLoads: skillWiring()}, executor.Session{}, p); err != nil {

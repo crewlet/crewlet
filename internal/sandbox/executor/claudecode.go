@@ -727,7 +727,9 @@ func floorArgs(version string) string {
 // what its notes need ([Paths.ClaudeNotesSystem], [Paths.ClaudeNotesSettings]);
 // the box picks by the harness's release ([claudeNotesGate]). A run handed SKILLS
 // ([sandbox.RunRequest.Skills]) has them as a plugin with a load-reporting hook
-// ([writeClaudeSkills], [claudeSkillsGate]).
+// ([writeClaudeSkills], [claudeSkillsGate]). Every run is written the note
+// helper its nested hook runs, where the box's machine has one
+// ([writeClaudeNested]).
 func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
 	paths Paths) (string, error) {
 	if req.System != "" {
@@ -741,33 +743,35 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 	if err := writeClaudeSettings(ctx, box, paths.ClaudeSettings(), newClaudeSettings()); err != nil {
 		return "", err
 	}
-	if err := writeClaudeSettings(ctx, box, paths.ClaudeRepoSettings(), claudeRepoSettings{
+	nested, err := writeClaudeNested(ctx, box, paths)
+	if err != nil {
+		return "", err
+	}
+	if err = writeClaudeSettings(ctx, box, paths.ClaudeRepoSettings(), claudeRepoSettings{
 		claudeSettings: newClaudeSettings(),
-		Hooks:          map[string][]claudeHookMatcher{claudeEventToolUsed: claudeNestedHooks(paths)},
+		Hooks:          claudeToolUsed(nil, nested),
 	}); err != nil {
 		return "", err
 	}
-	if err := box.WriteFile(ctx, paths.ClaudeNestedHook(), []byte(claudeNestedHook)); err != nil {
-		return "", fmt.Errorf("executor: writing the run's nested hook: %w", err)
-	}
 	if len(req.Skills) > 0 {
-		if err := writeClaudeSkills(ctx, box, req.Skills, req.SkillLoads, paths); err != nil {
+		if err = writeClaudeSkills(ctx, box, req.Skills, req.SkillLoads, paths); err != nil {
 			return "", err
 		}
 	}
 	if req.Steer.Set() {
-		if err := writeClaudeSettings(ctx, box, paths.ClaudeNotesSettings(), claudeSteerSettings(req.Steer, paths)); err != nil {
+		err = writeClaudeSettings(ctx, box, paths.ClaudeNotesSettings(), claudeSteerSettings(req.Steer, nested))
+		if err != nil {
 			return "", err
 		}
 		told := withNoteInstruction(req.System, c.NoteInstruction())
-		if err := box.WriteFile(ctx, paths.ClaudeNotesSystem(), []byte(told)); err != nil {
+		if err = box.WriteFile(ctx, paths.ClaudeNotesSystem(), []byte(told)); err != nil {
 			return "", fmt.Errorf("executor: writing the system prompt told of notes: %w", err)
 		}
 	}
 	if len(req.MCPServers) == 0 {
 		return "", nil
 	}
-	if err := writeClaudeMCP(ctx, box, paths.MCPConfig(), req.MCPServers); err != nil {
+	if err = writeClaudeMCP(ctx, box, paths.MCPConfig(), req.MCPServers); err != nil {
 		return "", err
 	}
 	// AND UNDER THE JOB'S OTHER BRIDGE TOKEN, for a session the run's script
@@ -777,7 +781,7 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 	// differs: the run's hooks name the bridge by its server's name, never its
 	// address.
 	if f := req.FreshWiring; f != nil {
-		if err := writeClaudeMCP(ctx, box, paths.MCPConfigFresh(), f.MCPServers); err != nil {
+		if err = writeClaudeMCP(ctx, box, paths.MCPConfigFresh(), f.MCPServers); err != nil {
 			return "", err
 		}
 	}
@@ -1689,7 +1693,7 @@ func (ClaudeCode) notesOffWhy() string {
 func (ClaudeCode) artifacts(p Paths) (files, dirs []string) {
 	cfg := p.ClaudeConfigDir()
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeRepoSettings(),
-			p.ClaudeNestedHook(), p.ClaudeToolEnv(), cfg + "/.claude.json", cfg + "/CLAUDE.md",
+			p.ClaudeNestedOff(), p.ClaudeToolEnv(), cfg + "/.claude.json", cfg + "/CLAUDE.md",
 			p.Home + "/CLAUDE.md", p.Home + "/CLAUDE.local.md", p.Home + "/AGENTS.md"},
 		[]string{p.ClaudeSkillsPlugin(), p.ClaudeRepoPlugins(), cfg + "/.claude.json.lock", cfg + "/backups",
 			cfg + "/rules"}
