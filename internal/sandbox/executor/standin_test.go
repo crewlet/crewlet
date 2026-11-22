@@ -6,12 +6,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // Stand-in harnesses a case writes and then runs.
@@ -50,15 +50,12 @@ func writeBoxStandIn(t *testing.T, box sandbox.Sandbox, path, script string) {
 	if err := box.WriteFile(t.Context(), source, []byte(script)); err != nil {
 		t.Fatalf("write the stand-in's source: %v", err)
 	}
-	install := "cp " + shQuote(source) + " " + shQuote(path) + " && chmod +x " + shQuote(path) + " && rm " + shQuote(source)
+	install := "cp " + shellword.Quote(source) + " " + shellword.Quote(path) + " && chmod +x " + shellword.Quote(path) + " && rm " + shellword.Quote(source)
 	res, err := box.Exec(t.Context(), install, sandbox.ExecOptions{})
 	if err != nil || res.ExitCode != 0 {
 		t.Fatalf("install the stand-in at %s: %v (exit %d) %s", path, err, res.ExitCode, res.Stderr)
 	}
 }
-
-// shQuote is s quoted for sh.
-func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // claim is shell that succeeds in the one process that first runs it on path
 // and fails in every other, then and after: a stand-in's turn ahead of calls
@@ -70,7 +67,7 @@ func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) 
 // checks then creates, and reports success when a racing create made the
 // directory, so two packs each took the first turn and waited on each other
 // to the pack's two-minute bound (#946).
-func claim(path string) string { return "( set -C; : > " + shQuote(path) + " ) 2> /dev/null" }
+func claim(path string) string { return "( set -C; : > " + shellword.Quote(path) + " ) 2> /dev/null" }
 
 // A STAND-IN RUNS THE MOMENT IT IS HANDED OVER, whatever this process is forking
 // meanwhile: the guard for [writeStandIn]. Eight goroutines fork beside 64
@@ -129,7 +126,7 @@ func TestAStandInsClaimIsTakenByOneProcess(t *testing.T) {
 	for round := range claimRounds {
 		name := filepath.Join(dir, "claimed."+strconv.Itoa(round))
 		start := filepath.Join(dir, "start."+strconv.Itoa(round))
-		script := "while [ ! -e " + shQuote(start) + " ]; do :; done; " + claim(name)
+		script := "while [ ! -e " + shellword.Quote(start) + " ]; do :; done; " + claim(name)
 		var shells [2]*exec.Cmd
 		for i := range shells {
 			shells[i] = exec.CommandContext(t.Context(), "/bin/sh", "-c", script)
