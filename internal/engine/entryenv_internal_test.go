@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -26,6 +27,14 @@ func gatewayEnv() map[string]string {
 // job was started with, and the cell its run was placed in.
 func launchedEnv(t *testing.T, c *Company, seat *org.Role) (map[string]string, sandbox.Placement) {
 	t.Helper()
+	run, placement := launchedRequest(t, c, seat)
+	return run.Env, placement
+}
+
+// launchedRequest launches c's seat's executor and answers the request its runner
+// was started with and the cell the launch picked.
+func launchedRequest(t *testing.T, c *Company, seat *org.Role) (sandbox.RunRequest, sandbox.Placement) {
+	t.Helper()
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
@@ -41,7 +50,47 @@ func launchedEnv(t *testing.T, c *Company, seat *org.Role) (map[string]string, s
 	if err != nil {
 		t.Fatalf("reading the run's row: %v", err)
 	}
-	return started[0].Env, sandbox.Placement(row.Placement)
+	return started[0], sandbox.Placement(row.Placement)
+}
+
+// A RUN'S SIGN-IN NAMES REACH ITS RUNNER, AND A TOOL'S CREDENTIAL IS NOT ONE.
+// The runner keeps them out of the commands its model runs, so they are the
+// profile's names (the token, the key, the gateway's token and the cloud
+// switches) and the entry's own credentials (a cloud sign-in's key), never a
+// seat's variable for a tool nor a region or address.
+//
+// Mutation: leave the entry's own variables out, and the cloud key is missing;
+// take the seat's credential-named variables too, and its tool token is named.
+func TestARunsSignInNamesReachItsRunnerAndAToolsCredentialIsNotOne(t *testing.T) {
+	t.Parallel()
+	env := gatewayEnv()
+	env["CLAUDE_CODE_USE_BEDROCK"] = "1"
+	env["AWS_BEARER_TOKEN_BEDROCK"] = "bedrock-company-key"
+	c, seat := chainCompany(t, chainMember{key: "api", agent: "claude-code", model: "sonnet",
+		runIn: config.PlacementE2B, env: env})
+	seat.Sandbox = &org.RoleSandbox{Env: map[string]string{"GITHUB_TOKEN": "ghp-the-seats-tool"}}
+	run, _ := launchedRequest(t, c, seat)
+	want := []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "AWS_BEARER_TOKEN_BEDROCK",
+		"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_VERTEX"}
+	if !slices.Equal(run.SignInEnv, want) {
+		t.Errorf("the run's sign-in names = %v, want %v", run.SignInEnv, want)
+	}
+	if run.Env["GITHUB_TOKEN"] != "ghp-the-seats-tool" {
+		t.Errorf("the seat's tool token did not reach the box: %v", run.Env)
+	}
+
+	// OPENCODE reads any provider's key by its own name: the entry's key is
+	// its sign-in, and a credential-named variable of the seat's own env is a
+	// tool's as likely, which its tools keep.
+	c, seat = chainCompany(t, chainMember{key: "oc", agent: "opencode", model: "anthropic/claude-sonnet-5",
+		runIn: config.PlacementE2B, env: map[string]string{"ANTHROPIC_API_KEY": "sk-ant-company"}})
+	seat.Sandbox = &org.RoleSandbox{Env: map[string]string{"GITLAB_TOKEN": "glpat-the-seats-tool"}}
+	if run, _ = launchedRequest(t, c, seat); !slices.Equal(run.SignInEnv, []string{"ANTHROPIC_API_KEY"}) {
+		t.Errorf("an OpenCode run's sign-in names = %v, want the entry's key alone", run.SignInEnv)
+	}
+	if run.Env["GITLAB_TOKEN"] != "glpat-the-seats-tool" {
+		t.Errorf("the seat's tool token did not reach the box: %v", run.Env)
+	}
 }
 
 // AN EXECUTOR'S BOX IS HANDED ITS ENTRY'S WHOLE ENV, IN EVERY CELL.
