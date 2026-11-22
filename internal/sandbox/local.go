@@ -248,15 +248,11 @@ const (
 // the box was given, "" for a file the shared login did not hold then.
 //
 // THE SEED IS WHAT A WRITE-BACK IS JUDGED AGAINST, not the shared login at
-// teardown: an idle box's copy differs from that once anybody else writes, and
-// putting a stale seed back over a login the host refreshed meanwhile, whose
-// refresh token the vendor had already rotated away, logs every seat out.
-//
-// AN ABSENT FILE IS RECORDED TOO (a file added since the seed is a newer login
-// as much as one changed), RUN KEYS ([Spec.CredentialRunKeys]) are written
-// back as the shared login holds them: a key minted in the run stays in the box,
-// and IDENTITY KEYS ([Spec.CredentialIdentityKeys]) must name the shared
-// login's account: a copy naming another is no refresh of this login.
+// teardown: putting a stale seed back over a login the host refreshed since,
+// its refresh token rotated away, logs every seat out. AN ABSENT FILE IS
+// RECORDED TOO (one added since is a newer login); RUN KEYS
+// ([Spec.CredentialRunKeys]) go back as the shared login holds them, and
+// IDENTITY KEYS ([Spec.CredentialIdentityKeys]) must name its account.
 type seededCredential struct {
 	Source       string   `json:"source"`
 	Seed         string   `json:"seed"`
