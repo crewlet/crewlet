@@ -153,6 +153,12 @@ type Spec struct {
 	// token the run env already exports.
 	CredentialFiles map[string]string
 
+	// CredentialRunKeys is, by a path of CredentialFiles, the keys (dotted,
+	// into a JSON object) its harness writes into that file during a run,
+	// which are not its login: a local box writing the file back keeps the
+	// shared login's value of each (harnessprofile.KeepLoginKeys).
+	CredentialRunKeys map[string][]string
+
 	// Repos are the repositories on Gitlet this run is
 	// given, each resolved at launch ([RunRepo]), at most [MaxRunRepos]. Empty
 	// for a run that clones nothing from Gitlet — a repository on
