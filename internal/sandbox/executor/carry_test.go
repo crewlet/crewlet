@@ -681,9 +681,9 @@ func versionBox(printed string, code int, errText string, asked *[]string) *sand
 // Code from 2.1.310 (a session 2.1.300 or later wrote), OpenCode from 2.0.32,
 // never older than the writer, an unreadable release counting as current;
 // Gemini CLI and Qwen Code only exactly on their one release (0.70.0, 0.28.3),
-// box and writer alike, a newer or unreadable one not at all. The printed
-// release is returned whatever the answer; a harness that does not answer is
-// no continuation, a box that cannot be asked an error. One login-shell exec.
+// box and writer alike, a newer, pre-release or unreadable one not at all.
+// The printed release is returned whatever the answer; a harness that does
+// not answer is no continuation, a box that cannot be asked an error.
 //
 // Mutation: compare against the writer's floor alone, let an older box take a
 // newer writer's session, read an unreadable Claude release as too old, or let
@@ -743,6 +743,8 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 		"qwen, newer to exact":                {executor.NewQwenCode(), "0.28.3\n", 0, qwenArchive("0.29.0"), false, "0.28.3", "the session was written by 0.29.0"},
 		"qwen, an older writer":               {executor.NewQwenCode(), "0.28.3\n", 0, qwenArchive("0.26.1"), false, "0.28.3", "written by 0.26.1"},
 		"qwen, an unreadable release":         {executor.NewQwenCode(), "qwen nightly\n", 0, qwenArchive("0.28.3"), false, "", `this box runs "qwen nightly"`},
+		"gemini, a pre-release box":           {executor.NewGeminiCLI(), "0.70.0-nightly\n", 0, geminiArchive("0.70.0"), false, "", `this box runs "0.70.0-nightly"`},
+		"qwen, a pre-release box":             {executor.NewQwenCode(), "0.28.3-preview.1\n", 0, qwenArchive("0.28.3"), false, "", `this box runs "0.28.3-preview.1"`},
 		"qwen, another harness's session":     {executor.NewQwenCode(), "0.28.3\n", 0, geminiArchive("0.70.0"), false, "0.28.3", "continued only by the harness that wrote it"},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -35,6 +35,10 @@ var (
 	_ saver   = QwenCode{}
 )
 
+// exactRelease says Qwen Code's `--version` prints its release alone
+// ([exactReleaser]).
+func (QwenCode) exactRelease() {}
+
 // Resumes says Qwen Code continues a session it reported (`session/load`).
 func (QwenCode) Resumes() bool { return true }
 

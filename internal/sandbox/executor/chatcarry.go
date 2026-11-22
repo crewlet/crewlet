@@ -81,10 +81,12 @@ func chatSessionGate(session Session, paths Paths, g chatGate) string {
 	} else {
 		line(`if [ -n "$h" ] && [ -n "$d" ] && ! grep -qxF "$s $d" %s 2> /dev/null; then h=; fi`, digests)
 	}
-	line(`if [ -z "$h" ]; then`)
-	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
-	line(`  elif [ "$v" != %s ]; then w=%s"$v"`, q(g.release),
+	// ONLY THE ONE RELEASE CONTINUES, its own copy as much as a carried one: a
+	// newer release runs on sessions of its own ([exactCarry]).
+	line(`if [ "$v" != %s ]; then w=%s"$v"`, q(g.release),
 		q("this build continues "+g.harness+" sessions only on "+g.release+", and this box runs "))
+	line(`elif [ -z "$h" ]; then`)
+	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
 	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)
 	line(`  elif ! { in=%s && rm -rf %s && mkdir -p "$in" && tar -xzf %s -C "$in" < /dev/null > /dev/null 2>&1 && %s; }; then w='its archive could not be restored'`,
 		q(staged+"/in"), q(staged), carried, g.restore)
@@ -224,10 +226,12 @@ func exactCarry(harness, supported, box, writer string) (bool, string) {
 // releaseGate is the shell a run's script starts with, once it has read the
 // box's release as v: a release older than supported ends the run before
 // anything else happens, saying so on the error stream, because this build
-// read none of an older release's output. One that does not read as
-// MAJOR.MINOR.PATCH (its first non-digit, non-dot character on cut off) is
-// refused too: it cannot be shown not to be older, and refusing is the reading
-// that fails closed. A newer one runs, on sessions of its own ([exactCarry]).
+// read none of an older release's output. One whose first non-digit, non-dot
+// character on cut off leaves no MAJOR.MINOR.PATCH is refused too: it cannot
+// be shown not to be older, and refusing fails closed. What follows the
+// numbers is a pre-release's suffix, which comes before its release: so a
+// suffixed supported release is older and refused, and a suffixed later one
+// is newer and runs, on sessions of its own like every newer one ([exactCarry]).
 func releaseGate(harness, supported string) string {
 	n, _ := releaseNumbers(supported)
 	say := sandbox.ShellQuote("crewlet: this box runs "+harness+" ") + `"${v:-that prints no release}"` +
@@ -237,6 +241,7 @@ func releaseGate(harness, supported string) string {
 		`case "$r" in *.*.*) ;; *) ro= ;; esac` + "\n" +
 		`for x in "$rM" "$rn" "$rp"; do case "$x" in ''|*[!0-9]*) ro= ;; esac; done` + "\n" +
 		fmt.Sprintf(`if [ -z "$ro" ] || [ "$rM" -lt %d ] || { [ "$rM" -eq %d ] && { [ "$rn" -lt %d ] || `+
-			`{ [ "$rn" -eq %d ] && [ "$rp" -lt %d ]; }; }; }; then printf '%%s\n' %s >&2; exit 1; fi`,
-			n[0], n[0], n[1], n[1], n[2], say)
+			`{ [ "$rn" -eq %d ] && { [ "$rp" -lt %d ] || { [ "$rp" -eq %d ] && [ "$v" != "$r" ]; }; }; }; }; }; `+
+			`then printf '%%s\n' %s >&2; exit 1; fi`,
+			n[0], n[0], n[1], n[1], n[2], n[2], say)
 }

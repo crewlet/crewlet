@@ -187,6 +187,27 @@ func releaseOf(printed string) string {
 	return ""
 }
 
+// exactReleaser is a harness whose `--version` prints its release and nothing
+// more, and which this build drives at one release ([exactCarry]): a line
+// holding anything beside MAJOR.MINOR.PATCH, a pre-release's suffix above
+// all, is no release it continues on, so it reads as none ([Runner.releaseOf])
+// rather than as the release its numbers name.
+type exactReleaser interface{ exactRelease() }
+
+// releaseOf is the release this runner's harness printed: [releaseOf]'s
+// reading, or for an [exactReleaser] the first line whole where it is
+// MAJOR.MINOR.PATCH alone, else "".
+func (r *Runner) releaseOf(printed string) string {
+	if _, ok := r.harness.(exactReleaser); !ok {
+		return releaseOf(printed)
+	}
+	line, _, _ := strings.Cut(printed, "\n")
+	if line = strings.TrimSpace(line); sandbox.ValidRelease(line) {
+		return line
+	}
+	return ""
+}
+
 // captured describes the session archive the box's last run packed
 // ([Paths.SessionCapture]), for the session rec names, or nil where there is
 // none ([Runner.archiveAt]).
@@ -222,7 +243,7 @@ func (r *Runner) archiveAt(ctx context.Context, box sandbox.Sandbox, path string
 	}
 	return &sandbox.SessionArchive{
 		Harness: r.harness.Name(), SessionID: rec.id, Format: carries.ArchiveFormat(),
-		Version: releaseOf(rec.release), Size: end.Size, Path: path,
+		Version: r.releaseOf(rec.release), Size: end.Size, Path: path,
 		RunStart: sandbox.RunStart{Began: rec.began, After: rec.from},
 	}, nil
 }
@@ -287,7 +308,7 @@ func (r *Runner) CheckCarry(ctx context.Context, box sandbox.Sandbox, archive sa
 		return sandbox.CarryCheck{Why: fmt.Sprintf("the box's %s did not say its release: `%s` exited %d: %s",
 			r.harness.Name(), carries.VersionCommand(), res.ExitCode, firstLine(res.Stderr, transcriptDetailLimit))}, nil
 	}
-	check := sandbox.CarryCheck{Version: releaseOf(res.Stdout)}
+	check := sandbox.CarryCheck{Version: r.releaseOf(res.Stdout)}
 	check.ResumeRead = r.resumeRead(check.Version)
 	if restores, why := r.Restores(archive); !restores {
 		check.Why = why

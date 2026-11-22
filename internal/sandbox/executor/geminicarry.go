@@ -38,6 +38,10 @@ var (
 	_ saver   = GeminiCLI{}
 )
 
+// exactRelease says Gemini CLI's `--version` prints its release alone
+// ([exactReleaser]).
+func (GeminiCLI) exactRelease() {}
+
 // Resumes says Gemini CLI continues a session it reported (`--resume`).
 func (GeminiCLI) Resumes() bool { return true }
 

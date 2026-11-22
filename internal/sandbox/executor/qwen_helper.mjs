@@ -452,6 +452,8 @@ class Inbox {
   constructor(config, out) {
     this.url = config.notes ?? ""
     this.out = out
+    // loaded says the run continues a session, whose chat file exists.
+    this.loaded = config.load === true
     this.cursor = 0
     // held is fetched and not yet handed; handed is handed and not yet
     // recorded, in the order handed; matched is recorded and not yet known
@@ -465,7 +467,8 @@ class Inbox {
     this.refused = false
     this.offset = 0
     this.partial = ""
-    // lost is set once the chat file reads shorter than what was read of it.
+    // lost is set once the chat file reads shorter than what was read of it,
+    // or a continued session's file cannot be measured as the turn begins.
     this.lost = false
   }
 
@@ -475,10 +478,14 @@ class Inbox {
     // FROM WHERE THE TURN BEGINS: a loaded session holds an earlier job's
     // records of notes, which a note of the same text this turn hands was
     // never delivered as.
+    // A NEW SESSION'S FILE does not exist yet and begins at 0; a CONTINUED
+    // one's that cannot be measured confirms nothing this turn, since from 0
+    // an earlier job's records would confirm a note of the same text.
     try {
       this.offset = fs.statSync(chat).size
     } catch {
       this.offset = 0
+      this.lost = this.loaded
     }
     this.polling = this.poll()
     this.confirming = this.confirmLoop()
