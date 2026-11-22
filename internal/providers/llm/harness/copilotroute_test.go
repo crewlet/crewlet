@@ -9,8 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/providers/llm"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 // Copilot, as the fake plays it: every server the home's mcp-config.json names
