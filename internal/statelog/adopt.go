@@ -59,8 +59,8 @@ type AdoptDeps struct {
 	StillUsable func(ctx context.Context, m Manifest) error
 
 	// Hold pins the replay tail for the whole transfer and returns the
-	// release; the pin must RENEW ITSELF ([HoldTail] does), as a transfer outlives
-	// [TrimHoldStale]. Unpinned, the trim can pass the artefact in flight and
+	// release; the pin must RENEW ITSELF ([HoldTail] does), as the trim ignores a
+	// pin it has watched go unrenewed past [TrimHoldStale]. Unpinned, the trim can pass the artefact in flight and
 	// the node installs a snapshot whose tail is gone. The adopter releases it
 	// only when nothing was installed; otherwise nothing in the fleet counts
 	// that tail yet (a boot has no presence or published position, a running

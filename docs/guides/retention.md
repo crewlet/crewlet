@@ -118,8 +118,8 @@ it publishes as its logs start, before it takes a presence lease; until then the
 position an earlier run left stands for it, or nothing if it never ran. A node
 **joining at boot** is in that interval for its whole transfer. Its own
 `min_hold` pin keeps the tail it will replay: renewed every fifteen seconds for
-the whole transfer (the trim ignores a pin nobody has renewed for a minute),
-and kept after the install until its published position counts that tail. A
+the whole transfer (the trim reads past a pin it has watched go a minute
+unrenewed, at its second look at it), and kept after the install until its published position counts that tail. A
 backup's pin is renewed the same way while the copy runs.
 
 **The estate's logs are trimmed by one node**: the holder of the trim duty,
