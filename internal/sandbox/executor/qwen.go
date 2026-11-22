@@ -310,8 +310,8 @@ func qwenHelperConfigOf(req sandbox.RunRequest, paths Paths) qwenHelperConfig {
 // Qwen Code's two sign-ins a run takes: its OpenAI-compatible one, the key
 // from the settings and the endpoint from OPENAI_BASE_URL, as the profile's
 // text phases sign in; and its paid login, read from the home's
-// subscription_credentials.json, its endpoint from QWEN_SUBSCRIPTION_BASE_URL
-// where set (0.28's own names, NOT MEASURED against Qwen's service).
+// subscription_credentials.json, its endpoint a constant of the bundle
+// (0.28.3's own names, NOT MEASURED against Qwen's service).
 const (
 	qwenAuthOpenAI       = "openai"
 	qwenAuthSubscription = "qwen-subscription"

@@ -97,6 +97,10 @@ var desiredKeys = map[seataccess.Lane][]string{
 	seataccess.LaneAppleAds:        {"enabled", "level", "ad_accounts"},
 	seataccess.LaneGoogleAnalytics: {"enabled", "level", "properties"},
 	seataccess.LaneAdMob:           {"enabled", "level", "accounts"},
+	seataccess.LaneAdSense:         {"enabled", "level", "accounts"},
+	seataccess.LaneGoogleAds:       {"enabled", "level", "customers"},
+	seataccess.LaneSearchConsole:   {"enabled", "level", "sites"},
+	seataccess.LaneGooglePlay:      {"enabled", "level", "apps"},
 }
 
 // position is one place a seat named its credential.
