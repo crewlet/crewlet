@@ -35,9 +35,9 @@
 // subjects into its own database before the seat is allowed to take work.
 //
 // A TABLE AT A TIME, in the registry's order. A compacted stream keeps no
-// order across subjects, and a skill's versions reference the skill: every
-// publish sends a seat's skills again and each version once, so the changelog
-// holds a skill's only copy after the versions published before it, and one
+// order across subjects, and a skill's versions reference the skill: a skill
+// is published again on each change and a version once, so the changelog can
+// hold a skill's only copy after the versions published before it, and one
 // replay in the changelog's order wrote those versions first and refused the
 // seat on any store without the skill (crewlet/crewlet#1051). Replayed table
 // by table, parents are written before children whatever order the changelog
@@ -77,6 +77,17 @@
 // (crewlet/crewlet#1052). A row larger than this node's pull is refused by
 // name, never read as a copy that stalled.
 //
+// EVERY ROW PAST A MARK. Each table's rows carry this node's change sequence,
+// stamped on every insert, on a vector set, and, in the three mutable tables
+// (counterparty profiles, skills, onboarding markers), on every update of a
+// carried column (node migrations 0041 and 0070). A publish reads each table
+// past the seat's mark and moves the mark past each acknowledged row, so a cut
+// publish keeps what it carried and the next resumes after it. Sent whole on
+// every publish, the mutable tables kept nothing of a cut one: a seat whose
+// profiles and skills outlast a publish never carried what followed them, and
+// a release flush cut inside them lost every change after the cut
+// (crewlet/crewlet#1040).
+//
 // WHAT A HOLDING WRITES GOES FIRST. A seat's marks live in memory, so every
 // acquisition and every restart leaves this node a backlog: everything its
 // store holds for the seat, the rows the hydration inserted and those it found
@@ -85,10 +96,10 @@
 // and a handoff or a crash before the backlog had drained lost it
 // (crewlet/crewlet#1039). So a hydration records the seat's BOUNDARY as it
 // completes, where this node's change sequence stood ([Syncer.Hydrate]), and
-// each table with a watermark has two marks per seat: one over the rows
-// stamped above the boundary, what the holding writes, its OWN, and one over
-// those at or below it, its BACKLOG. A publish is two calls: [Syncer.PublishOwn]
-// carries the seat's own rows and then the tables sent whole, and
+// each table has two marks per seat: one over the rows
+// stamped above the boundary, what the holding writes or changes, its OWN, and
+// one over those at or below it, its BACKLOG. A publish is two calls:
+// [Syncer.PublishOwn] carries the seat's own rows, and
 // [Syncer.PublishBacklog] the backlog, after it, in the engine's memory sync
 // cycle's turn the held seats' backlogs share, after their own passes, so
 // while those leave that turn the time to move a mark what a seat writes waits
@@ -294,7 +305,7 @@ type exported struct {
 	mark int64
 }
 
-// exportPage reads one page of a seat's rows of a watermark table: the rows
+// exportPage reads one page of a seat's rows of a table: the rows
 // strictly above after, in the watermark's order, until their carried values
 // hold exportPageBytes, and always at least one. It says whether the budget
 // stopped the page; one it did not stop is the table's last.
@@ -302,13 +313,13 @@ type exported struct {
 // A publish holds one page whatever lies behind it, and closing the statement
 // leaves the rest unread: the driver steps only as rows are asked for, and the
 // plan is a range seek with no sort (TestTheIncrementalExportIsARangeSeekNotASort).
-// [exportBacklogPage] and [exportWhole] are the other two readers, rather than
-// one taking bounds half the registry ignores.
+// [exportBacklogPage] is the other reader, rather than one taking a bound half
+// its callers ignore.
 func exportPage(ctx context.Context, db *sql.DB, t table, seat seatRef, after int64) ([]exported, bool, error) {
 	return readPage(ctx, db, t, pageStatement(t), seat.value(t), after)
 }
 
-// exportBacklogPage reads one page of a seat's backlog of a watermark table:
+// exportBacklogPage reads one page of a seat's backlog of a table:
 // the rows strictly above after and at or below through, the seat's boundary,
 // in the watermark's order, a page as [exportPage] reads one.
 func exportBacklogPage(ctx context.Context, db *sql.DB, t table, seat seatRef,
@@ -350,36 +361,13 @@ func readPage(ctx context.Context, db *sql.DB, t table, statement string,
 	return page, false, nil
 }
 
-// exportWhole reads every one of a seat's rows of a wholeEachCycle table,
-// which has no watermark to read above.
-func exportWhole(ctx context.Context, db *sql.DB, t table, seat seatRef) ([]Row, error) {
-	sqlRows, err := db.QueryContext(ctx, wholeStatement(t), seat.value(t))
-	if err != nil {
-		return nil, fmt.Errorf("memsync: read %s: %w", t.name, err)
-	}
-	defer func() { _ = sqlRows.Close() }()
-
-	var out []Row
-	for sqlRows.Next() {
-		values, _, err := scanRow(sqlRows, t)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, Row{Table: t.name, Values: values})
-	}
-	if err := sqlRows.Err(); err != nil {
-		return nil, fmt.Errorf("memsync: read %s: %w", t.name, err)
-	}
-	return out, nil
-}
-
 // pageStatement reads the seat's rows strictly above a mark, in the
 // watermark's order, the watermark first. A function of its own, so the plan
 // gate plans the text that runs.
 func pageStatement(t table) string {
-	return "SELECT " + t.watermark + ", " + strings.Join(t.columns, ", ") +
-		" FROM " + t.name + " WHERE " + t.seatCol + " = ? AND " + t.watermark + " > ?" +
-		" ORDER BY " + t.watermark
+	return "SELECT " + watermark + ", " + strings.Join(t.columns, ", ") +
+		" FROM " + t.name + " WHERE " + t.seatCol + " = ? AND " + watermark + " > ?" +
+		" ORDER BY " + watermark
 }
 
 // backlogStatement reads the seat's rows strictly above a mark and at or below
@@ -387,24 +375,17 @@ func pageStatement(t table) string {
 // own, so the plan gate plans the text that runs; the second bound is on the
 // same (seat, change_seq) index, so it only narrows the seek.
 func backlogStatement(t table) string {
-	return "SELECT " + t.watermark + ", " + strings.Join(t.columns, ", ") +
-		" FROM " + t.name + " WHERE " + t.seatCol + " = ? AND " + t.watermark + " > ? AND " +
-		t.watermark + " <= ? ORDER BY " + t.watermark
+	return "SELECT " + watermark + ", " + strings.Join(t.columns, ", ") +
+		" FROM " + t.name + " WHERE " + t.seatCol + " = ? AND " + watermark + " > ? AND " +
+		watermark + " <= ? ORDER BY " + watermark
 }
 
-// wholeStatement reads every one of the seat's rows of a wholeEachCycle table,
-// in the order they were written.
-func wholeStatement(t table) string {
-	return "SELECT " + strings.Join(t.columns, ", ") + " FROM " + t.name +
-		" WHERE " + t.seatCol + " = ? ORDER BY rowid"
-}
-
-// scanRow reads one row's carried columns, after lead's destinations, into
+// scanRow reads one row's watermark into mark and its carried columns into
 // wire values, and says how many bytes they hold ([carriedBytes]).
-func scanRow(rows *sql.Rows, t table, lead ...any) (map[string]any, int, error) {
+func scanRow(rows *sql.Rows, t table, mark *int64) (map[string]any, int, error) {
 	cells := make([]any, len(t.columns))
-	into := make([]any, 0, len(lead)+len(t.columns))
-	into = append(into, lead...)
+	into := make([]any, 0, 1+len(t.columns))
+	into = append(into, mark)
 	for i := range cells {
 		into = append(into, &cells[i])
 	}
@@ -517,9 +498,9 @@ func barrierSubject(seat string) string {
 // upsert writes one carried row into this node's store, on conflict over the
 // natural key, so hydrating a seat twice carries its memory once.
 //
-// The conflict follows table.wholeEachCycle. An append-only row is immutable,
+// The conflict follows table.mutable. An append-only row is immutable,
 // so DO NOTHING is exact, but for the vector a holder fills afterwards
-// ([table.fillVector]). A wholeEachCycle row's update IS its content, so DO
+// ([table.fillVector]). A mutable row's update IS its content, so DO
 // NOTHING would keep a returning node's stale copy, which it then republishes
 // over the peer's. Last writer wins is safe while one node publishes the seat
 // (package doc, "How it is fixed"); it still loses to the row
@@ -635,7 +616,7 @@ func decode(body []byte) (Row, error) {
 // the seat everywhere (TestARowCollidingOnAnUntargetedIndexIsSkippedNotRaised).
 func (t table) onConflict(carried []string) string {
 	skip := " ON CONFLICT DO NOTHING"
-	if !t.wholeEachCycle {
+	if !t.mutable {
 		return t.fillVector(carried) + skip
 	}
 	assignments := make([]string, 0, len(carried))

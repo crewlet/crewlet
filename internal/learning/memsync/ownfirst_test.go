@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -20,8 +21,7 @@ import (
 //
 // A hydration records the seat's boundary as it completes, and a publish is
 // two calls, each range with its own mark: the own pass (rows stamped above
-// the boundary, then the tables sent whole) and the backlog (rows at or below
-// it). Otherwise what the seat writes waits behind everything its store
+// the boundary) and the backlog (rows at or below it). Otherwise what the seat writes waits behind everything its store
 // already held, and a handoff or crash before that drains loses it. Cases
 // about a bound run on a bubble's clock; those hydrating from a real broker
 // do so outside it, then publish to a roundTripJS.
@@ -103,24 +103,32 @@ func sequenceAt(t *testing.T, db *store.DB) int64 {
 	return last
 }
 
-// stamped is the subjects of the seat's rows of a watermark table stamped in
+// stamped is the subjects of the seat's rows of a table stamped in
 // (after, through], in stamp order, which is the order a publish sends them.
 func stamped(t *testing.T, db *store.DB, spec table, after, through int64) []string {
 	t.Helper()
-	rows, err := db.SQL().QueryContext(t.Context(), "SELECT "+spec.key[0]+" FROM "+spec.name+
-		" WHERE "+spec.seatCol+" = ? AND "+spec.watermark+" > ? AND "+spec.watermark+" <= ?"+
-		" ORDER BY "+spec.watermark, seat.value(spec), after, through)
+	rows, err := db.SQL().QueryContext(t.Context(), "SELECT "+strings.Join(spec.key, ", ")+
+		" FROM "+spec.name+" WHERE "+spec.seatCol+" = ? AND "+watermark+" > ? AND "+
+		watermark+" <= ? ORDER BY "+watermark, seat.value(spec), after, through)
 	if err != nil {
 		t.Fatalf("read %s's stamps: %v", spec.name, err)
 	}
 	defer func() { _ = rows.Close() }()
 	var out []string
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		key := make([]string, len(spec.key))
+		into := make([]any, len(key))
+		for i := range key {
+			into[i] = &key[i]
+		}
+		if err := rows.Scan(into...); err != nil {
 			t.Fatalf("read %s's stamps: %v", spec.name, err)
 		}
-		out = append(out, subjectOf(spec, id))
+		values := map[string]any{}
+		for i, column := range spec.key {
+			values[column] = key[i]
+		}
+		out = append(out, spec.subject(seat.AgentID, values))
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatalf("read %s's stamps: %v", spec.name, err)
@@ -203,15 +211,14 @@ func (n names) said(acked []string) string {
 // WHAT A HOLDING WRITES GOES BEFORE WHAT ITS HYDRATION BROUGHT IN.
 //
 // A hydration onto a fresh store stamps every row it inserts, so the seat's
-// next writes sort behind them; by the boundary a turn still carries them, then
-// the tables sent whole (profiles, skills, marker), before any hydrated row. A
-// peer's 300 notes, 200 episodes, skill, version, profile and marker hydrate;
-// the seat writes a note, an episode, a version and the profile.
+// next writes sort behind them; by the boundary a turn still carries what the
+// seat wrote or changed before any hydrated row. A peer's 300 notes, 200
+// episodes, skill, version, profile and marker hydrate; the seat writes a
+// note, an episode and a version and rewrites the profile.
 //
 // Mutation: take the boundary as the hydration begins, read the own range from
-// the boundary's row (>= for >), share one mark between the ranges, carry the
-// own pass in the registry's order or with the tables sent whole first, or
-// swap the two calls' bodies, and this goes red.
+// the boundary's row (>= for >), share one mark between the ranges, carry a
+// mutable table whole, or swap the two calls' bodies, and this goes red.
 func TestWhatAHoldingWritesGoesBeforeWhatItsHydrationBroughtIn(t *testing.T) {
 	t.Parallel()
 	conn := broker(t)
@@ -222,7 +229,7 @@ func TestWhatAHoldingWritesGoesBeforeWhatItsHydrationBroughtIn(t *testing.T) {
 	if carried, err := syncerOn(t, peer, conn).PublishOwn(t.Context(), seat.Handle); err != nil ||
 		carried.Rows != 504 {
 		t.Fatalf("the peer's publish answered %+v (%v), want its 300 notes, 200 episodes, its "+
-			"skill's version and the 3 rows sent whole", carried, err)
+			"skill, its version, its profile and its marker", carried, err)
 	}
 
 	fresh := openStore(t)
@@ -250,12 +257,14 @@ func TestWhatAHoldingWritesGoesBeforeWhatItsHydrationBroughtIn(t *testing.T) {
 		"observer_handle": seat.Handle, "subject_handle": "pm", "subject_external_id": "U123",
 		"subject_platform": "slack"})
 	marker := subjectOf(registered(t, "agent_onboarding_markers"), seat.AgentID)
-	wantOwn := []string{subjectOf(diary, "N"), subjectOf(episodes, "E"), subjectOf(versions, "V"),
-		profile, subjectOf(skills, "s1"), marker}
-	// THE BACKLOG in stamp order, as a backlog sends it: notes, episodes, then
-	// the skill's version.
-	wantBacklog := slices.Concat(stamped(t, fresh, diary, 0, 1<<62),
-		stamped(t, fresh, episodes, 0, 1<<62), stamped(t, fresh, versions, 0, 1<<62))
+	wantOwn := []string{subjectOf(diary, "N"), subjectOf(episodes, "E"), profile,
+		subjectOf(versions, "V")}
+	// THE BACKLOG in the registry's order and each table's stamp order, as a
+	// backlog sends it: notes, episodes, the skill, its version, the marker.
+	var wantBacklog []string
+	for _, spec := range tables {
+		wantBacklog = append(wantBacklog, stamped(t, fresh, spec, 0, 1<<62)...)
+	}
 	wantBacklog = slices.DeleteFunc(wantBacklog, func(subject string) bool {
 		return slices.Contains(wantOwn, subject)
 	})
@@ -272,22 +281,22 @@ func TestWhatAHoldingWritesGoesBeforeWhatItsHydrationBroughtIn(t *testing.T) {
 	s.js = js
 	turn := turnOf(t, s, js)
 	if !slices.Equal(turn.own, wantOwn) || turn.ownErr != nil {
-		t.Errorf("the own pass had %s acknowledged (%v), want %s: what the seat wrote, then the "+
-			"tables sent whole, and nothing its hydration brought in", name.said(turn.own),
+		t.Errorf("the own pass had %s acknowledged (%v), want %s: what the seat wrote or "+
+			"changed, and nothing its hydration brought in", name.said(turn.own),
 			turn.ownErr, name.said(wantOwn))
 	}
-	if want := (Carried{Rows: 6, Marked: 3}); turn.ownCarried != want {
-		t.Errorf("the own pass answered %+v, want %+v: the 3 rows the seat wrote marked, and the 3 "+
-			"rows sent whole", turn.ownCarried, want)
+	if want := (Carried{Rows: 4}); turn.ownCarried != want {
+		t.Errorf("the own pass answered %+v, want %+v: the 4 rows the seat wrote or changed",
+			turn.ownCarried, want)
 	}
 	if !slices.Equal(turn.backlog, wantBacklog) || turn.backlogErr != nil {
 		t.Errorf("the backlog had %s acknowledged (%v), want the %d rows the hydration wrote, %s, "+
 			"each once and as the store stamped them", name.said(turn.backlog), turn.backlogErr,
 			len(wantBacklog), name.said(wantBacklog))
 	}
-	if want := (Carried{Rows: 501, Marked: 501}); turn.backlogCarried != want {
-		t.Errorf("the backlog answered %+v, want %+v: the 300 notes, the 200 episodes and the "+
-			"version, every one of them marked", turn.backlogCarried, want)
+	if want := (Carried{Rows: 503}); turn.backlogCarried != want {
+		t.Errorf("the backlog answered %+v, want %+v: the 300 notes, the 200 episodes, the "+
+			"skill, its version and the marker", turn.backlogCarried, want)
 	}
 }
 
@@ -416,14 +425,14 @@ func TestTheBacklogDrainsAcrossCyclesBehindWhatTheSeatWrites(t *testing.T) {
 			from, to int
 			carried  Carried
 		}{
-			{0, 328, Carried{Rows: 328, Marked: 328, StoppedIn: "agent_diary"}},
-			{328, 746, Carried{Rows: 418, Marked: 418, StoppedIn: "agent_diary"}},
-			{746, 1000, Carried{Rows: 254, Marked: 254}},
+			{0, 328, Carried{Rows: 328, StoppedIn: "agent_diary"}},
+			{328, 746, Carried{Rows: 418, StoppedIn: "agent_diary"}},
+			{746, 1000, Carried{Rows: 254}},
 		}
 		for i, turn := range turns {
 			own := notesOf(t, written[i])
 			if !slices.Equal(turn.own, own) || turn.ownErr != nil ||
-				turn.ownCarried != (Carried{Rows: len(own), Marked: len(own)}) {
+				turn.ownCarried != (Carried{Rows: len(own)}) {
 				t.Errorf("cycle %d's own pass had %s acknowledged and answered %+v (%v), want the %d "+
 					"notes the seat wrote since the cycle before, and nothing of the backlog",
 					i+1, name.said(turn.own), turn.ownCarried, turn.ownErr, len(own))
@@ -440,7 +449,7 @@ func TestTheBacklogDrainsAcrossCyclesBehindWhatTheSeatWrites(t *testing.T) {
 			}
 		}
 
-		for _, spec := range backlogPassOrder {
+		for _, spec := range tables {
 			if got := s.mark(seat.Handle, spec.name, backlogRange); got != boundary {
 				t.Errorf("%s's backlog mark is %d once the backlog drained, want the boundary %d: "+
 					"a range read to its end is read no more", spec.name, got, boundary)

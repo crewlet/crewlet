@@ -62,8 +62,8 @@ func storeHolds(t *testing.T, db *store.DB) int {
 // A SKILL REPUBLISHED AFTER ITS VERSION HYDRATES ONTO A STORE THAT NEVER HELD
 // THE SEAT.
 //
-// Every publish resends a seat's skills whole and a version once, so from the
-// second on the changelog (one message per subject) holds the skill's only copy
+// A skill is published again on each change and a version once, so once a
+// skill changes the changelog (one message per subject) holds its only copy
 // after its version, and a replay in the changelog's order has its foreign key
 // refuse the seat on any store lacking the skill. A table at a time in the
 // registry's order writes every skill before its versions: here a few rows
@@ -92,6 +92,8 @@ func TestASkillRepublishedAfterItsVersionHydratesOntoAStoreThatNeverHeldTheSeat(
 			if _, err := syncer.PublishOwn(t.Context(), seat.Handle); err != nil {
 				t.Fatalf("publish: %v", err)
 			}
+			// The skill changes, as a turn's offer of it counts a use.
+			exec(t, holder, "UPDATE synthesized_skills SET use_count = use_count + 1 WHERE id = 's1'")
 			var notes []string
 			if tc.between > 0 {
 				notes = writeNotes(t, holder, tc.between, 0)
@@ -104,8 +106,8 @@ func TestASkillRepublishedAfterItsVersionHydratesOntoAStoreThatNeverHeldTheSeat(
 			version := sequenceOf(t, conn, subjectOf(registered(t, "synthesized_skill_versions"), "v1"))
 			if skill <= version {
 				t.Fatalf("the changelog holds the skill at %d and its version at %d: this case "+
-					"needs the skill's only copy after its version, as every publish after the "+
-					"first leaves it", skill, version)
+					"needs the skill's only copy after its version, as a change to it after the "+
+					"first publish leaves it", skill, version)
 			}
 			if len(notes) > 0 {
 				diary := registered(t, "agent_diary")
