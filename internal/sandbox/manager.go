@@ -376,6 +376,7 @@ type SpecInput struct {
 	MaxTurns *int
 
 	Env             map[string]string
+	SignInEnv       []string
 	CredentialFiles map[string]string
 }
 
@@ -404,6 +405,7 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 		PauseTTLSec:     m.pauseTTL.Seconds(),
 		MaxTurns:        m.maxTurns,
 		Env:             maps.Clone(in.Env),
+		SignInEnv:       slices.Clone(in.SignInEnv),
 		CredentialFiles: maps.Clone(in.CredentialFiles),
 	}
 	if spec.Placement == "" {

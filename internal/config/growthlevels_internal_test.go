@@ -12,7 +12,9 @@ import (
 )
 
 func init() {
-	growth.Register(growth.Catalog{Kind: "seatads", API: "Seat Ads API", Version: "v1"})
+	growth.RegisterFunc("seatads", func() growth.Catalog {
+		return growth.Catalog{Kind: "seatads", API: "Seat Ads API", Version: "v1"}
+	})
 }
 
 // fakeSeat is a growth seat block as a product's would be, written under a
@@ -22,7 +24,12 @@ type fakeSeat struct {
 	Level string
 }
 
-func (f *fakeSeat) GrowthKind() string { return "seatads" }
+func (f *fakeSeat) GrowthKind() string              { return "seatads" }
+func (f *fakeSeat) SeatAccess() GrowthSeatAccess    { return GrowthSeatAccess{} }
+func (f *fakeSeat) SetSeatAccess(GrowthSeatAccess)  {}
+func (f *fakeSeat) seatScopeKey() string            { return "accounts" }
+func (f *fakeSeat) seatEnabled() **bool             { return nil }
+func (f *fakeSeat) check(*Company, *problems, Path) {}
 func (f *fakeSeat) GrowthSeatLevel() string {
 	if !f.On {
 		return ""

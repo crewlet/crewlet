@@ -29,27 +29,29 @@ const (
 
 func init() {
 	object := map[string]any{"type": "object"}
-	growth.Register(growth.Catalog{
-		Kind: "fakeads", API: "Fake Ads API", Version: "v1",
-		Roles: []growth.Role{{ID: "ADMIN", Name: "Admin", Note: "Manages the account."}},
-		Operations: []growth.Operation{
-			{ID: "campaigns.list", Method: "GET", Path: "/campaigns", Class: growth.ClassRead},
-			{ID: "campaign.update", Method: "POST", Path: "/campaigns/{id}", Class: growth.ClassOperate,
-				Fields: []growth.FieldRule{{Field: "status", Class: growth.ClassSpend, Pausing: []string{"PAUSED"}},
-					{Field: "daily_budget", Class: growth.ClassSpend, Lower: growth.ClassOperate},
-					{Field: "owner", Class: growth.ClassAdmin}}},
-			{ID: "users.create", Method: "POST", Path: "/users", Class: growth.ClassAdmin, Roles: []string{"ADMIN"}},
-		},
-		Tools: []growth.Tool{
-			{Name: growthReadTool, Class: growth.ClassRead, Operations: []string{"campaigns.list"},
-				Description: "List campaigns.", Parameters: object},
-			{Name: growthOperateTool, Class: growth.ClassOperate, Operations: []string{"campaign.update"},
-				Description: "Pause a campaign.", Parameters: object},
-			{Name: growthSpendTool, Class: growth.ClassSpend, Operations: []string{"campaign.update"},
-				Description: "Raise a campaign's budget.", Parameters: object},
-			{Name: growthAdminTool, Class: growth.ClassAdmin, Operations: []string{"users.create"},
-				Description: "Add a user to the account.", Parameters: object},
-		},
+	growth.RegisterFunc("fakeads", func() growth.Catalog {
+		return growth.Catalog{
+			Kind: "fakeads", API: "Fake Ads API", Version: "v1",
+			Roles: []growth.Role{{ID: "ADMIN", Name: "Admin", Note: "Manages the account."}},
+			Operations: []growth.Operation{
+				{ID: "campaigns.list", Method: "GET", Path: "/campaigns", Class: growth.ClassRead},
+				{ID: "campaign.update", Method: "POST", Path: "/campaigns/{id}", Class: growth.ClassOperate,
+					Fields: []growth.FieldRule{{Field: "status", Class: growth.ClassSpend, Pausing: []any{"PAUSED"}},
+						{Field: "daily_budget", Class: growth.ClassSpend, Lower: growth.ClassOperate},
+						{Field: "owner", Class: growth.ClassAdmin}}},
+				{ID: "users.create", Method: "POST", Path: "/users", Class: growth.ClassAdmin, Roles: []string{"ADMIN"}},
+			},
+			Tools: []growth.Tool{
+				{Name: growthReadTool, Class: growth.ClassRead, Operations: []string{"campaigns.list"},
+					Description: "List campaigns.", Parameters: object},
+				{Name: growthOperateTool, Class: growth.ClassOperate, Operations: []string{"campaign.update"},
+					Description: "Pause a campaign.", Parameters: object},
+				{Name: growthSpendTool, Class: growth.ClassSpend, Operations: []string{"campaign.update"},
+					Description: "Raise a campaign's budget.", Parameters: object},
+				{Name: growthAdminTool, Class: growth.ClassAdmin, Operations: []string{"users.create"},
+					Description: "Add a user to the account.", Parameters: object},
+			},
+		}
 	})
 }
 
@@ -100,7 +102,8 @@ func (f *fakeAds) Run(_ context.Context, call growth.Call) (any, error) {
 }
 
 // classOf classes call as a product does: its tool's operation over the
-// fields it changes, the budget as read now.
+// fields it changes, the budget as read now. The campaign names the target,
+// as a product's path would, and changes nothing.
 func (f *fakeAds) classOf(call growth.Call) growth.Class {
 	if f.class != "" {
 		return f.class
@@ -110,6 +113,9 @@ func (f *fakeAds) classOf(call growth.Call) growth.Class {
 	op, _ := c.Operation(def.Operations[0])
 	var changes []growth.Change
 	for _, field := range slices.Sorted(maps.Keys(call.Args)) {
+		if field == "campaign" {
+			continue
+		}
 		ch := growth.Change{Field: field, After: call.Args[field]}
 		if field == "daily_budget" {
 			ch.Before = f.budget
@@ -430,6 +436,32 @@ func TestAGrowthSpendOrAdminCallIsHeldForAnAdministrator(t *testing.T) {
 		Args: map[string]any{"campaign": "c1", "daily_budget": "900.00"}})
 	if isHeld || !got.Failed || !strings.Contains(got.Output, "over the daily cap") || len(desk.recorded) != 0 {
 		t.Errorf("a call the guard refuses was put to a person: %q", got.Output)
+	}
+}
+
+// A BRAKE SENT THROUGH A HELD TOOL IS MADE AT ONCE: a lower that comes to
+// operate as its target reads now is applied without a person or a hold, as
+// its own call; a raise through the same tool is still held.
+//
+// Mutation: hold every call of a held tool whatever its class, and a budget
+// cut waits a day on an administrator's step-up.
+func TestAHeldToolsBrakeIsMadeAtOnce(t *testing.T) {
+	t.Parallel()
+	ads := &fakeAds{levels: map[string]growth.Level{"sre": growth.LevelOperate}, budget: "50"}
+	_, reg := growthTools(t, ads)
+	desk := &askDesk{outcome: sandbox.AskRecorded}
+	hold := builtin.NewCallHold(desk, callSeal(t), nil, nil)
+	entry, _ := reg.Lookup(growthSpendTool)
+	ctx := turnctx.WithJob(asSeat("sre"), "launch-1")
+	got, isHeld := hold.Hold(ctx, growthTurn(t, "sre"), tools.HeldCall{Name: growthSpendTool, Entry: entry,
+		Args: map[string]any{"campaign": "c1", "daily_budget": "40.00"}})
+	if isHeld || got.Failed || len(desk.recorded) != 0 || !slices.Equal(ads.applied, []string{growthSpendTool}) {
+		t.Fatalf("a lower through the spend tool answered %q, held %v, asked %d, applied %v", got.Output, isHeld,
+			len(desk.recorded), ads.applied)
+	}
+	if _, isHeld = hold.Hold(ctx, growthTurn(t, "sre"), tools.HeldCall{Name: growthSpendTool, Entry: entry,
+		Args: map[string]any{"campaign": "c1", "daily_budget": "60.00"}}); !isHeld || len(ads.applied) != 1 {
+		t.Errorf("a raise through the spend tool was held %v and applied %v", isHeld, ads.applied)
 	}
 }
 
