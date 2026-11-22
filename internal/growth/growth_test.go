@@ -154,7 +154,7 @@ func TestAValueOrAStateClassesAWrite(t *testing.T) {
 	op := growth.Operation{ID: "ad.update", Method: "POST", Path: "/{ad}", Class: growth.ClassSpend,
 		States: []growth.StateRule{{When: "paused", Class: growth.ClassOperate}},
 		Fields: []growth.FieldRule{
-			{Field: "status", Class: growth.ClassSpend, Pausing: []string{"PAUSED"},
+			{Field: "status", Class: growth.ClassSpend, Pausing: []any{"PAUSED"},
 				Values: []growth.ValueRule{{Values: []string{"ARCHIVED", "DELETED"}, Class: growth.ClassAdmin}}},
 			{Field: "creative", Class: growth.ClassPublic, While: []growth.StateRule{{When: "inactive", Class: growth.ClassOperate}}},
 			{Field: "schedule", Class: growth.ClassPublic, Values: []growth.ValueRule{{Values: []string{""}, Class: growth.ClassOperate}}},
