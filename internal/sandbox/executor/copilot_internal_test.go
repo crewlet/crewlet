@@ -592,8 +592,8 @@ func TestACopilotNoteTheCompactionCarriedOverIsHeld(t *testing.T) {
 // 207, so the note is still pending, and with its start set to retain 1, the
 // note is never held.
 //
-// Mutation: drop the answered bound from copilotRetained — the cut run holds
-// the note past the compaction.
+// Mutation: count only user messages toward copilotRetained's window — the
+// cut run holds the note past the compaction.
 func TestACopilotNoteAnAnswerFollowedIsNotCarriedOver(t *testing.T) {
 	lines := copilotLines(t, "compacted-after-tools.events.jsonl")
 	if !bytes.Contains(lines[194], []byte(`"clientTurnId":"crewlet-note:msg_inbox1"`)) ||
@@ -627,6 +627,80 @@ func TestACopilotNoteAnAnswerFollowedIsNotCarriedOver(t *testing.T) {
 			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"))
 			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
 				t.Fatalf("held = %v (%v), want the note held %v", held, err, c.held)
+			}
+		})
+	}
+}
+
+// A compaction keeping one trailing message carries a note over whole only
+// where no line the model reads followed it: a main `system.notification`
+// (its text is the model's; subagent-note line 66), an answer or a tool's
+// result between the note and the compaction is that one message, and the note
+// is left only in the summary. compacted-queued keeps note 1 (line 241) over a
+// compaction retaining 1 (243); each case puts one such line between them.
+// The note is not held, and once served again a request after its new line
+// holds it.
+//
+// Mutation: count only user messages toward the window, or take any one of
+// the three kinds for bookkeeping in copilotMessage — its case holds note 1.
+func TestACopilotNoteAMessageFollowedIsNotCarriedOver(t *testing.T) {
+	lines := copilotLines(t, "compacted-queued.events.jsonl")
+	note, record := lines[241], lines[247]
+	if !bytes.Contains(note, []byte(`"clientTurnId":"crewlet-note:msg_inbox1"`)) ||
+		!bytes.HasPrefix(lines[243], []byte(`{"type":"session.compaction_start"`)) ||
+		!bytes.Contains(lines[243], []byte(`"retainedInputMessages":1`)) ||
+		!bytes.HasPrefix(record, []byte(`{"type":"session.usage_record"`)) {
+		t.Fatal("compacted-queued's lines 241, 243 and 247 are not note 1, a compaction retaining 1 and a request")
+	}
+	notification := copilotLines(t, "subagent-note.events.jsonl")[66]
+	result := copilotLines(t, "tool.events.jsonl")[10]
+	if !bytes.HasPrefix(notification, []byte(`{"type":"system.notification"`)) ||
+		!bytes.HasPrefix(result, []byte(`{"type":"tool.execution_complete"`)) ||
+		!bytes.HasPrefix(lines[248], []byte(`{"type":"assistant.message"`)) {
+		t.Fatal("the lines put between are not a notification, a tool's result and an answer")
+	}
+	stamp := func(l []byte, from, to string) []byte {
+		out := bytes.Replace(l, []byte(`"timestamp":"`+from+`"`), []byte(`"timestamp":"`+to+`"`), 1)
+		if bytes.Equal(out, l) {
+			t.Fatalf("the line holds no timestamp %s", from)
+		}
+		return out
+	}
+	// Served again before the session ends: its line, then a request begun
+	// after it (610 ms before 03:03:32.000).
+	again := [][]byte{stamp(note, "2026-11-22T03:03:28.715Z", "2026-11-22T03:03:31.300Z"),
+		stamp(record, "2026-11-22T03:03:30.246Z", "2026-11-22T03:03:32.000Z")}
+	for _, c := range []struct {
+		name string
+		line []byte
+	}{
+		{"a notification", notification},
+		{"an answer", lines[248]},
+		{"a tool's result", result},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var between, served2 []byte
+			for i, l := range lines[1:] {
+				between = append(between, l...)
+				if i+1 == 253 {
+					served2 = append(served2, between...)
+					served2 = append(served2, bytes.Join(again, nil)...)
+				}
+				if i+1 == 241 {
+					between = append(between, c.line...)
+				}
+			}
+			for _, l := range lines[254:] {
+				served2 = append(served2, l...)
+			}
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(between),
+				served("msg_inbox1", "msg_inbox2", "msg_inbox3"))
+			if err != nil || !slices.Equal(held, []string{"msg_inbox2", "msg_inbox3"}) {
+				t.Fatalf("held = %v (%v), want notes 2 and 3 only", held, err)
+			}
+			held, err = copilotNotesHeld(t.Context(), bytes.NewReader(served2), served("msg_inbox1"))
+			if err != nil || !slices.Equal(held, []string{"msg_inbox1"}) {
+				t.Fatalf("served again: held = %v (%v), want note 1", held, err)
 			}
 		})
 	}
