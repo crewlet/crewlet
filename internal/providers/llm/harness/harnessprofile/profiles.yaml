@@ -4201,7 +4201,7 @@ pi:
   # `@mariozechner` scope to Earendil Works, so the older package name is a
   # different, frozen thing.
   #
-  # MEASURED ON 0.85.1 AND 1.4.0, through the engine's own code path against a
+  # MEASURED ON 0.85.1, 1.4.0 AND 1.6.0, through the engine's own code path against a
   # stub HTTP endpoint standing in for the model, with the state directory
   # inside a git checkout whose every level above the call held an AGENTS.md,
   # an AGENTS.override.md, a CLAUDE.md, pi's own `.pi/SYSTEM.md`,
@@ -4210,7 +4210,7 @@ pi:
   # of them reached a request, no extension or MCP server ran, no tool was
   # offered, and the engine read each answer. The error format is off real 401
   # and 429 responses to 0.85.1.
-  written_for: "Pi Coding Agent 1.4.x, measured on 0.85.1 and 1.4.0 (`pi --version`)"
+  written_for: "Pi Coding Agent 1.6.x, measured on 0.85.1, 1.4.0 and 1.6.0 (`pi --version`)"
   version_args: ["--version"]
   # `-p` is print mode: answer and exit, no TUI. The rest is the isolation, and
   # this harness is unusually generous with it — every discovery path it has can be
@@ -4297,12 +4297,12 @@ pi:
   #                         call's working directory — a line "Current working
   #                         directory: <path>" on 0.85.1, a <cwd> block on
   #                         1.4.0 — and nothing else. For a side pass.
-  #   append_system_prompt  KEEPS pi's default under its identity line "You
-  #                         are an expert coding assistant operating inside
-  #                         pi, a harness harness." and puts the engine's
-  #                         text after it — bare on 0.85.1, inside an
-  #                         <addendum> block on 1.4.0 — with the working
-  #                         directory last. For a seat at work. The default
+  #   append_system_prompt  KEEPS pi's default under its identity line ("You
+  #                         are a coding assistant running inside pi, a
+  #                         coding agent harness." on 1.6.0) and puts the
+  #                         engine's text after it — bare on 0.85.1, inside an
+  #                         <addendum> block on 1.4.0 and 1.6.0 — with the
+  #                         working directory last. For a seat at work. The default
   #                         with no tools is about 1,810 characters on 0.85.1
   #                         and 1,950 on 1.4.0, a few hundred of them the
   #                         paths of pi's own documentation on the host, which
@@ -4385,7 +4385,7 @@ pi:
   # --approve, a server in .pi/mcp.json of the directory pi ran in started;
   # with the profile's --no-approve, none). The registration's `exposure:
   # direct` declares the tools to the model by name (`mcp__crewlet__<name>`);
-  # --tools keeps those and nothing else. Measured on 1.4.0 through the
+  # --tools keeps those and nothing else. Measured on 1.4.0 and 1.6.0 through the
   # engine's own code path against a local stand-in.
   #
   # The registration's `timeout` is the harness's per-call timeout, in seconds
@@ -4488,10 +4488,12 @@ pi:
     - ".pi/agent/npm"
     - ".pi/agent/git"
   host_credential_paths: [".pi/agent/auth.json"]
-  # THE TUI ITSELF, because `/login` is a SLASH COMMAND rather than a
-  # subcommand — this harness has no headless login of any kind. So the broker
-  # starts the interactive session in the credential home and the operator
-  # types `/login`, completes the browser flow, then `/exit`.
+  # THE TUI ITSELF, because `/login` there asks which provider. 1.6.0's own
+  # `pi auth login <provider>` (and `pi auth check`, `pi auth logout`) each
+  # need the provider's name, which an entry's model names and this profile
+  # cannot, and login refuses to run without a terminal (measured). So the
+  # broker starts the interactive session in the credential home and the
+  # operator types `/login`, completes the browser flow, then `/exit`.
   #
   # That is the shape the claude-code profile's note warns about, and the
   # difference is that there it was avoidable: `claude auth login` exists and
@@ -4500,8 +4502,8 @@ pi:
   # and telling the operator, wrongly, that the harness "authenticates on first
   # use". `--no-session` keeps the sign-in from leaving a session behind.
   #
-  # No logout_args and no status_args: `/logout` is a slash command too, and
-  # there is no status subcommand.
+  # No logout_args and no status_args: `pi auth logout` and `pi auth check`
+  # need a provider's name too, for the same reason.
   login_args: ["--no-session"]
   # `--api-key` exists as a flag but the environment variable is per provider
   # — ANTHROPIC_API_KEY, OPENAI_API_KEY, one for each of the twenty-odd — so
