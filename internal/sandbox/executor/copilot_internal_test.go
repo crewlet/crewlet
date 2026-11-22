@@ -460,6 +460,56 @@ func TestACopilotNoteIsHeldOnlyByTheMainAgentsRequest(t *testing.T) {
 	}
 }
 
+// Only a request begun after a note's line holds it: one already in flight
+// when the note was sent never carried it. 1.0.114 writes the line as the next
+// request is made (inflight-note: a note sent while the first request was
+// held four seconds lands as line 26, after that request's record, line 14,
+// and right before the request that carried it, 27; inflight-final: one sent
+// during the final answer lands queued after its record), so each holds the
+// note as written. The send-time cases set the note's line where and when the
+// extension sent it (04:50:52.951, its poll's answer): the record of the
+// request begun at 04:50:52.736 then holds nothing; the next one does.
+//
+// Mutation: hold by any later main request, whenever it began — the
+// send-time line is held by the request in flight.
+func TestACopilotNoteIsHeldOnlyByARequestBegunAfterIt(t *testing.T) {
+	lines := copilotLines(t, "inflight-note.events.jsonl")
+	if !bytes.Contains(lines[26], []byte(`"clientTurnId":"crewlet-note:msg_inbox1"`)) ||
+		!bytes.HasPrefix(lines[14], []byte(`{"type":"session.usage_record"`)) {
+		t.Fatal("inflight-note's lines 14 and 26 are not the first request's record and the note")
+	}
+	sent := bytes.Replace(lines[26], []byte(`"timestamp":"2026-11-22T04:50:56.810Z"`),
+		[]byte(`"timestamp":"2026-11-22T04:50:52.951Z"`), 1)
+	if bytes.Equal(sent, lines[26]) {
+		t.Fatal("the note's line holds no timestamp of 04:50:56.810")
+	}
+	join := func(parts ...[][]byte) []byte {
+		var out []byte
+		for _, p := range parts {
+			out = append(out, bytes.Join(p, nil)...)
+		}
+		return out
+	}
+	cases := []struct {
+		name   string
+		events []byte
+		held   bool
+	}{
+		{"inflight-note", copilotFixture(t, "inflight-note.events.jsonl"), true},
+		{"inflight-final", copilotFixture(t, "inflight-final.events.jsonl"), true},
+		{"sent in flight, the request in flight", join(lines[1:14], [][]byte{sent}, lines[14:15]), false},
+		{"sent in flight, the next request", join(lines[1:14], [][]byte{sent}, lines[14:26], lines[27:]), true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(c.events), served("msg_inbox1"))
+			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
+				t.Fatalf("held = %v (%v), want the note held %v", held, err, c.held)
+			}
+		})
+	}
+}
+
 // The ids held come back in serve order, each once, whatever the record's
 // order and however often a take was served. (steered, with a second note's
 // line copied in before its own, under another id.)
