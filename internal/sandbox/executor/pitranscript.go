@@ -165,9 +165,9 @@ type piNode struct {
 type piNodeKind uint8
 
 const (
-	piOther piNodeKind = iota
-	// piNote is a note the extension handed over, under its inbox id.
-	piNote
+	// piNote is a note the extension handed over, under its inbox id. The
+	// zero kind is an entry of no other kind.
+	piNote piNodeKind = iota + 1
 	// piAnswer is an assistant message that answered (`stop`, `toolUse`,
 	// `length`).
 	piAnswer
@@ -208,8 +208,8 @@ func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake) ([]string
 			leaf = held
 			held = ""
 		}
-		var e piEntry
-		if json.Unmarshal(line, &e) != nil || e.ID == "" || e.Type == "session" {
+		e, ok := piEntryOf(line)
+		if !ok || e.ID == "" || e.Type == "session" {
 			return nil
 		}
 		n := piNode{parent: e.ParentID}
@@ -275,6 +275,14 @@ func piNotesHeld(ctx context.Context, r io.Reader, takes []ServedTake) ([]string
 		}
 	}
 	return out, nil
+}
+
+// piEntryOf decodes one session line, false for a line that is no entry: one
+// the confirm reader skips, which can only cut the branch it walks short, so
+// it never holds a note it would not hold without it.
+func piEntryOf(line []byte) (piEntry, bool) {
+	var e piEntry
+	return e, json.Unmarshal(line, &e) == nil
 }
 
 // piTail is r, remembering the last byte it handed out.

@@ -91,6 +91,8 @@ type piProbe struct {
 	t       *testing.T
 	stdin   io.WriteCloser
 	reports chan piProbeReport
+	// dir is the probe's working directory, its ctx.cwd.
+	dir string
 }
 
 // startPiProbe renders the extension with settings and runs it.
@@ -112,7 +114,7 @@ func startPiProbe(t *testing.T, settings piExtensionSettings) *piProbe {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &piProbe{t: t, reports: make(chan piProbeReport, 256)}
+	p := &piProbe{t: t, reports: make(chan piProbeReport, 256), dir: dir}
 	cmd := exec.Command(node, probe, ext) //nolint:gosec // the suite's own probe
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "NODE_NO_WARNINGS=1")
@@ -378,18 +380,27 @@ func TestThePiExtensionAddsTheSeatsSectionAndSaysItRan(t *testing.T) {
 func TestThePiExtensionReportsASkillLoad(t *testing.T) {
 	t.Parallel()
 	route := newPiRoute(t)
-	dir := t.TempDir()
+	// The run's working directory as the process reads it (symlinks
+	// resolved), and the skill beside it.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	skill := filepath.Join(dir, "skills", "crewlet:deploy", "SKILL.md")
 	p := startPiProbe(t, piExtensionSettings{Skills: map[string]string{skill: "crewlet:deploy"},
 		SkillURL: route.url + "/skill"})
 	p.expect("loaded")
 	p.event("tool_result", map[string]any{"toolName": "read", "input": map[string]any{"path": "README.md"}})
 	p.expect("handled")
-	rel, err := filepath.Rel(dir, skill)
+	cwd, err := filepath.EvalSymlinks(p.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The probe's working directory is its extension's: dir.
+	rel, err := filepath.Rel(cwd, skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Relative to the run's working directory, the probe's.
 	p.event("tool_result", map[string]any{"toolName": "read", "input": map[string]any{"path": rel}})
 	call := route.next("POST skill", "report the skill's load")
 	if call.body != `{"skill":"crewlet:deploy"}` {

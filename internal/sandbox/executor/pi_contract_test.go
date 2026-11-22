@@ -99,6 +99,9 @@ func piReachesTheBridgesRoute(t *testing.T) {
 			return piRouteReport{}
 		}
 	}
+	// THE RUN'S BASH TOOL REGISTERED AGAIN FIRST: every run keeps the
+	// telemetry exporter's settings out of the model's shell.
+	expect("tool")
 	expect("loaded")
 	_, _ = io.WriteString(stdin, `{"op":"event","name":"agent_start"}`+"\n")
 	expect("handled")

@@ -626,18 +626,13 @@ func TestACarriedPiSessionReadsBackAsItsTranscript(t *testing.T) {
 	}
 }
 
-// A REAL PI 1.6.0 RUN'S SHELL RUNS WITHOUT ITS SIGN-IN OR ITS TELEMETRY
-// EXPORTER'S SETTINGS: in the capture of an untrusted run whose extension
-// withholds STUB_KEY, the name its model provider's key is under, and the
-// OTEL_EXPORTER_OTLP_ prefix, the model was reached with that key, and the
-// bash tool's command and a child of it saw neither the key nor the
-// exporter's endpoint and headers, while a seat's own credential
-// (OTHER_SECRET) and every other variable (OTEL_SERVICE_NAME) stayed.
-//
-// The extension as WriteConfig writes it for a run whose sign-in is STUB_KEY is
-// played the environment that run's pi had, under node against the stand-in
-// of pi's API: its spawn hook hands the command exactly what the capture's
-// command saw.
+// A PI RUN'S SHELL RUNS WITHOUT ITS SIGN-IN OR ITS TELEMETRY EXPORTER'S
+// SETTINGS: the extension as WriteConfig writes it for a run whose sign-in is
+// STUB_KEY, played under node the environment a real 1.6.0 run's pi had, hands
+// the command what the capture of that run shows its command saw: the model
+// reached with the key, and neither the key nor the exporter's endpoint and
+// headers in the shell, while a seat's own credential and every other
+// variable stayed.
 //
 // Mutation: drop SignInEnv from the extension's settings, or the prefixes, or
 // re-capture with the spawn hook removed: this goes red.
