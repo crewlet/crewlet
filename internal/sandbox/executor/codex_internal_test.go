@@ -59,6 +59,14 @@ func TestACodexRunsAnswerIsItsLastAgentMessageAndAnErrorItemNoFailure(t *testing
 			}
 		})
 	}
+	// TWO AGENT MESSAGES: the answer is the last, the first only said.
+	two := strings.Join([]string{`{"type":"thread.started","thread_id":"t-1"}`, `{"type":"turn.started"}`,
+		`{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"FIRST"}}`,
+		`{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"LAST"}}`,
+		`{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}`, ""}, "\n")
+	if res := (Codex{}).Parse([]byte(two)); !res.Success || res.Text != "LAST" {
+		t.Errorf("a run of two agent messages answers %q (success %v), want the last, LAST", res.Text, res.Success)
+	}
 }
 
 // A TURN THAT FAILED IS THE RUN'S FAILURE, in the words of turn.failed, not
@@ -77,6 +85,14 @@ func TestACodexTurnThatFailedIsTheRunsFailure(t *testing.T) {
 	}
 	if !strings.Contains(res.Transcript, "Reconnecting... 1/5") {
 		t.Errorf("the transcript drops the retry notices:\n%s", res.Transcript)
+	}
+	// TURN.FAILED'S OWN WORDS, where the last error event says something else.
+	apart := strings.Join([]string{`{"type":"thread.started","thread_id":"t-1"}`, `{"type":"turn.started"}`,
+		`{"type":"error","message":"an error event's words"}`,
+		`{"type":"turn.failed","error":{"message":"the turn's own words"}}`, ""}, "\n")
+	if res := (Codex{}).Parse([]byte(apart)); res.Success || res.Error != "the turn's own words" {
+		t.Errorf("a turn that failed in words of its own reads %q (success %v), want turn.failed's", res.Error,
+			res.Success)
 	}
 }
 
