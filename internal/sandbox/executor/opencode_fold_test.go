@@ -285,9 +285,13 @@ func TestThePluginConfirmsANoteOnlyOnceItsModelIsSentItPlain(t *testing.T) {
 			map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": first.Message}}})
 		route.none(300*time.Millisecond, "no message was either note's own admission")
 		pr.sees("a", steerSession, plainNote(first))
-		if read := route.next("POST read", "confirm the note its own message is"); read.body != `{"ids":["note-1"]}` {
+		read := route.next("POST read", "confirm the note its own message is")
+		if read.body != `{"ids":["note-1"]}` {
 			t.Errorf("the confirmation reads %s, want note-1 alone, never the note of the same words", read.body)
 		}
+		// ANSWERED, as the route answers: the plugin holds one confirmation in
+		// flight, so an unanswered one would hold the second until its abort.
+		read.reply(http.StatusNoContent, "")
 		pr.sees("a", steerSession, plainNote(first), plainNote(second))
 		if read := route.next("POST read", "confirm the second note off its own message"); read.body !=
 			`{"ids":["note-2"]}` {
