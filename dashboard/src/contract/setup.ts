@@ -54,7 +54,7 @@ export interface SetupSet {
   label: string;
   /** One entry in a sentence ("key"). */
   item: string;
-  /** The line under the label, on the form and in Have ready: what an entry holds, how many, which first. */
+  /** The line under the label, on the form and in Have ready: what an entry holds, how many. */
   hint: string;
   /** The control that adds an entry ("Add a key"). */
   add: string;
