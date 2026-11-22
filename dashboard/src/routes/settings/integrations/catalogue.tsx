@@ -182,6 +182,7 @@ const SURFACE_NAMES: Record<string, string> = {
   meta_ads: "Meta Ads Manager",
   app_store_connect: "App Store Connect",
   apple_ads: "Apple Ads",
+  google_analytics: "Google Analytics",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -326,6 +327,14 @@ export const CATALOG: Entry[] = [
     vendor: "ssh",
     surfaces: surfacesOf("ssh"),
     doc: "ssh",
+  },
+  {
+    key: "google_analytics",
+    name: "Google Analytics",
+    description: "Properties, traffic and conversion reports, and every setting.",
+    vendor: "google-analytics",
+    surfaces: surfacesOf("google_analytics"),
+    doc: "google-analytics",
   },
 ];
 

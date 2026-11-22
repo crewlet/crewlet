@@ -51,7 +51,8 @@ export type AccessLaneKey =
   | "ssh"
   | "meta_ads"
   | "app_store_connect"
-  | "apple_ads";
+  | "apple_ads"
+  | "google_analytics";
 
 /** "external" on a lane the engine does not provision for the company. */
 type AccessManaged = "external";

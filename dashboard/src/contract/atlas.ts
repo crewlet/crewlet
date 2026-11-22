@@ -771,6 +771,7 @@ export const ATLAS_FACT_SPECS = {
       "model_api",
       "app_delivery",
       "identity",
+      "analytics",
     ],
     kinds: ["vendor_account"],
   },

@@ -456,6 +456,30 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     tool: "apple_ads tools, built in",
     issued: "never: Crewlet makes every call",
   },
+  google_analytics: {
+    name: "Google Analytics",
+    access: "Level on its properties",
+    turnOn:
+      "Turning it on gives the agent its own Google identity, if it has none, and lets it reach the chosen properties at the chosen level. Add the identity's email to each property in Google Analytics at the role its level needs.",
+    off: "Crewlet stops minting the agent's tokens at once, and turns its Google identity off once no other Google growth product is on for it. Its roles in Google Analytics stay, so turning it back on restores them.",
+    remove:
+      "There is nothing to remove here: the agent's Google identity is kept off with its roles.",
+    rotate:
+      "Crewlet mints the agent's tokens for an hour at a time, so there is nothing to rotate.",
+    scope: {
+      noun: "Properties",
+      singular: "property",
+      empty: "No property",
+      none: "No properties are listed yet",
+      noneLink: {
+        label: "Connecting Crewlet",
+        doc: "google-analytics",
+        anchor: "connecting-crewlet",
+      },
+    },
+    tool: "google_analytics tools, built in",
+    issued: "an hour",
+  },
 };
 
 /** The line a read-only Agents tab shows when the Kubernetes operator manages access. */

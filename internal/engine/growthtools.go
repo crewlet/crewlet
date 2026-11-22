@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/googleanalytics"
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/metaads"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -39,6 +40,8 @@ const (
 	growthActPoll = 200 * time.Millisecond
 )
 
+var _ builtin.GrowthProduct = (*googleanalytics.Product)(nil)
+
 // GrowthToolDeps are the growth tools' dependencies on this node, or the zero
 // value (which registers none) without an engine.
 func GrowthToolDeps(e *Engine) builtin.GrowthDeps {
@@ -59,6 +62,7 @@ func (e *Engine) growthProducts() []builtin.GrowthProduct {
 				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
 			appleads.New(appleads.Deps{Company: e.runningConfig, Resolve: e.resolver().Value,
 				Audit: e.GrowthAudit(), Leases: growthLeases{engine: e}, Signals: e.GrowthSignals()}),
+			googleanalytics.New(e.runningConfig, e.resolver, e, e.GrowthAudit(), growthLeases{engine: e}, nil),
 		}
 	})
 	return e.growth
