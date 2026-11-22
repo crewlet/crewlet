@@ -327,12 +327,25 @@ func (r *Runner) Restores(archive sandbox.SessionArchive) (bool, string) {
 		return false, fmt.Sprintf("the session's archive is format %d, and this build restores %s's "+
 			"format %d alone", archive.Format, r.harness.Name(), carries.ArchiveFormat())
 	}
-	// THE WRITER'S FLOOR ALONE: a box release that cannot be read is taken
-	// for a current one, so an empty one asks nothing of the box.
-	return carries.Continues("", archive.Version)
+	return carries.ContinuesWriter(archive.Version)
 }
 
 var _ sandbox.SessionRestorer = (*Runner)(nil)
+
+// boxNamedNoRelease is why a box whose harness's `--version` printed no
+// release this build reads continues no carried session, for every harness:
+// a release no rule here was read for is never taken for a current one.
+func boxNamedNoRelease(harness string) string {
+	return fmt.Sprintf("this box's %s named no release this build reads, so it continues no session "+
+		"carried from another box", harness)
+}
+
+// releaseReads reports whether version, as a harness's `--version` printed it,
+// is a release this code reads ([releaseNumbers]).
+func releaseReads(version string) bool {
+	_, ok := releaseNumbers(version)
+	return ok
+}
 
 // carriedOlder is the reason a box's release cannot continue a session a newer
 // one wrote, shared by both harnesses: a release reads what it and those before it

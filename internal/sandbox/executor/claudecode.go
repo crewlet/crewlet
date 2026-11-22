@@ -1089,19 +1089,35 @@ func (ClaudeCode) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Claude Code release writer
 // can be continued in a box whose Claude Code is release box ([carrier]): the
-// box at or after [claudeCarryFloor], the writer at or after
-// [claudeCarriedWriterFloor], and never a box older than the release that wrote
-// the session, which reads only what it and the releases before it wrote.
-func (ClaudeCode) Continues(box, writer string) (bool, string) {
+// box's release read and at or after [claudeCarryFloor], the writer as
+// [ClaudeCode.ContinuesWriter] holds it, and never a box older than the
+// release that wrote the session, which reads only what it and the releases
+// before it wrote.
+func (c ClaudeCode) Continues(box, writer string) (bool, string) {
 	switch {
+	case !releaseReads(box):
+		return false, boxNamedNoRelease("Claude Code")
 	case !releaseAtLeast(box, claudeCarryFloor):
 		return false, fmt.Sprintf("this box runs Claude Code %s, older than %s, the oldest that "+
 			"continues a session carried from another box", box, claudeCarryFloor)
-	case !releaseAtLeast(writer, claudeCarriedWriterFloor):
+	}
+	if ok, why := c.ContinuesWriter(writer); !ok {
+		return false, why
+	}
+	if !releaseAtLeast(box, writer) {
+		return false, carriedOlder("Claude Code", box, writer)
+	}
+	return true, ""
+}
+
+// ContinuesWriter reports whether a session Claude Code release writer wrote
+// can be continued at all ([carrier]): the writer at or after
+// [claudeCarriedWriterFloor]. A writer that does not read is taken for a
+// current one, as the notes gate takes it ([claudeNotesGate]).
+func (ClaudeCode) ContinuesWriter(writer string) (bool, string) {
+	if !releaseAtLeast(writer, claudeCarriedWriterFloor) {
 		return false, fmt.Sprintf("the session was written by Claude Code %s, older than %s, the "+
 			"first whose compaction summaries survive a resume", writer, claudeCarriedWriterFloor)
-	case !releaseAtLeast(box, writer):
-		return false, carriedOlder("Claude Code", box, writer)
 	}
 	return true, ""
 }

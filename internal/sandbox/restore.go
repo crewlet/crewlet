@@ -1728,7 +1728,7 @@ func answeredRelease(check CarryCheck) string {
 // telling: [SessionContinuation.Exact]).
 //
 // EXACTLY THE RELEASE THE READING WAS READ FOR, and a release read: an unread
-// answer ("", which [CarryCheck.Version] takes for a current release) matches
+// answer ("", which continues no carried session: [CarryCheck.Version]) matches
 // nothing, since what a session holds is what the resuming release's resume
 // hands its model ([HoldingsAsk.Resumer]), and a box of another release may
 // hand it otherwise. Equality, harness-neutral, rather than the reader's set of
