@@ -1053,13 +1053,14 @@ const (
 	// the shell links: everything a reader downloads before the first screen
 	// can draw. It began at 300 KiB, under two seconds on a 1.5 Mbit/s link
 	// (the slow end of a phone tether), and has moved up with each kit release
-	// and frame feature; the last measure was 432.5 KiB, about 2.36 seconds.
+	// and frame feature; the last measure was 433.3 KiB, about 2.37 seconds,
+	// after kit 0.168.0 and the account row's build line.
 	// The one sheet carries every design-system rule by rule (see
 	// TestNoLazyStylesheetCarriesTheDesignSystem), so kit releases grow it even
 	// when no screen joins the entry. A raise names the measured size and its
 	// cause in its commit; a screen's module in the entry is the failure to fix
 	// rather than raise for.
-	initialBudget = 433 << 10
+	initialBudget = 434 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
