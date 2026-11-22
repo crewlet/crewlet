@@ -1032,6 +1032,15 @@ type Profile struct {
 	// login's value of each ([KeepLoginKeys]); a login command's takes all.
 	RunKeys map[string][]string `yaml:"run_keys,omitempty"`
 
+	// LoginTables names, by a TOML credential file's NAME, the top-level keys
+	// that are its login, for a file the harness also reads settings from that
+	// run commands or change what a run is told: Kimi Code reads hooks,
+	// permission rules and tool settings from the config.toml its login is
+	// written into. A box is handed only these tables of the shared copy, again
+	// before every run, and never writes the file back
+	// ([KeepLoginTables]; the box spec's CredentialTables).
+	LoginTables map[string][]string `yaml:"login_tables,omitempty"`
+
 	// VolatilePaths are sessions, transcripts, history and todo state,
 	// relative to the seat home, deleted before and after every call: a hidden
 	// harness memory would make turns non-reproducible and carry one task's
@@ -2241,6 +2250,18 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 				add("run_keys.%s[%d] %q is no key path — name the key, its parents' keys before "+
 					"it, each joined by a dot", name, i, key)
 			}
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.LoginTables)) {
+		switch {
+		case byName[name] == "":
+			add("login_tables names %q, which is the file name of no credential_paths entry — "+
+				"login tables say which top-level keys of a TOML credential file are its login", name)
+		case len(p.LoginTables[name]) == 0 || slices.ContainsFunc(p.LoginTables[name], func(k string) bool {
+			return strings.TrimSpace(k) == "" || strings.Contains(k, ".")
+		}):
+			add("login_tables.%s is empty or names a key that is not top-level — name the "+
+				"top-level keys the file holds its login under", name)
 		}
 	}
 	// A host file is adopted under its file name and a seat is seeded only with

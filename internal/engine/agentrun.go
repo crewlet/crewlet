@@ -378,6 +378,7 @@ func (l *agentLauncher) launch(ctx context.Context, req runner.AgentRunRequest) 
 		SignInEnv:         run.signInNames,
 		CredentialFiles:   run.files,
 		CredentialRunKeys: run.fileKeys,
+		CredentialTables:  run.fileTables,
 	})
 	// THE PICKED MEMBER'S LOGIN, the one the box will actually run under:
 	// a fallback launch on a later member is judged on that member's entry,

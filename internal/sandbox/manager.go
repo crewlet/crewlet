@@ -379,6 +379,7 @@ type SpecInput struct {
 	SignInEnv         []string
 	CredentialFiles   map[string]string
 	CredentialRunKeys map[string][]string
+	CredentialTables  map[string][]string
 }
 
 // CommitAttribution is the credit a run's own commits carry under this
@@ -409,6 +410,7 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 		SignInEnv:         slices.Clone(in.SignInEnv),
 		CredentialFiles:   maps.Clone(in.CredentialFiles),
 		CredentialRunKeys: maps.Clone(in.CredentialRunKeys),
+		CredentialTables:  maps.Clone(in.CredentialTables),
 	}
 	if spec.Placement == "" {
 		spec.Placement = m.placement
