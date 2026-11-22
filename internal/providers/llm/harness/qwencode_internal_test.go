@@ -15,7 +15,7 @@ import (
 )
 
 // The invariants the built-in qwen-code profile keeps, each measured against
-// Qwen Code 0.23.4 and 0.26.1 (see the profile's comments): a call offers the
+// Qwen Code 0.28.3 (see the profile's comments): a call offers the
 // web tools and nothing else, a seat's phases keep the harness's own system prompt
 // and a side pass replaces it, the answer and its token counts are read from
 // the result event, a key or the paid login signs the harness in, nothing above the call's
@@ -91,9 +91,8 @@ func qwenStrings(t *testing.T, doc map[string]any, path string) []string {
 // qwenWebTools are the harness's own web tools, the only ones a call keeps.
 var qwenWebTools = []string{"web_fetch", "web_search"}
 
-// qwenMeasuredTools is every tool name Qwen Code 0.23.4 and 0.26.1 register
-// (their ToolNames tables), the web tools included, and autofix_pr, which
-// 0.28.3 adds (its headless init lists it).
+// qwenMeasuredTools is every tool name Qwen Code 0.28.3 registers (its
+// ToolNames table), the web tools included.
 var qwenMeasuredTools = []string{
 	"advisor", "agent", "artifact", "ask_user_question", "autofix_pr", "create_sub_session",
 	"cron_create", "cron_delete", "cron_list", "display_image", "edit",
@@ -140,13 +139,13 @@ func TestQwenCodeOffersTheWebToolsAndNothingElse(t *testing.T) {
 	}
 }
 
-// NOTHING IS CARRIED FROM ONE CALL TO THE NEXT. Measured, both builds wrote the call's
-// transcript under `.qwen/projects/<slug>/chats` and ran a second, background request
-// after every call to extract memories into `.qwen/memories` and `.qwen/projects/*/memory`,
-// whose index the next call was handed. The switches stop each at the source (no
-// recording, extraction, consolidation or skill review) and the volatile paths prune what
-// a build ignoring a switch leaves, with the per-project scratch, the usage record both
-// write per call, and the global QWEN.md, AGENTS.md and rules both read into the system prompt.
+// NOTHING IS CARRIED FROM ONE CALL TO THE NEXT. Qwen Code records a call's transcript
+// under `.qwen/projects/<slug>/chats` and extracts memories, in requests of its own, into
+// `.qwen/memories` and `.qwen/projects/*/memory`. The switches stop each at the source (no
+// recording, extraction, consolidation or skill review; measured on 0.28.3, no projects
+// directory and no extra request) and the volatile paths prune what a build ignoring a
+// switch leaves, with the per-project scratch, the usage record 0.28.3 writes per call,
+// and the global QWEN.md, AGENTS.md and rules it reads into the system prompt.
 //
 // The request-log directory is pinned in the seat's home for the same reason: the
 // harness keys a housekeeping marker in the home by that directory, which otherwise lies
@@ -245,7 +244,7 @@ func TestQwenCodeIsConfiguredByTheCallAlone(t *testing.T) {
 
 	env := childEnv(qwenCode(t), &Checkout{Home: t.TempDir(), Cache: t.TempDir(), Work: t.TempDir()}, nil, Auth{})
 	if got := env["QWEN_CODE_MODELS_DEV"]; got != "off" {
-		t.Errorf("QWEN_CODE_MODELS_DEV = %q, want off: 0.26.1 fetched models.dev on every call", got)
+		t.Errorf("QWEN_CODE_MODELS_DEV = %q, want off: 0.28.3 refreshes the models.dev catalogue otherwise", got)
 	}
 
 	p, err := New(Config{
@@ -380,7 +379,7 @@ func TestQwenCodeSignsInByItsModeChosenOnArgv(t *testing.T) {
 	keyed := qwenProvider(t, map[string]string{"FAKE_REPORT_ENV": "OPENAI_API_KEY"},
 		qwenPlainOutput, Auth{Mode: AuthAPIKey, APIKey: "sk-test"})
 	if got, want := keyed.argv(false), []string{"--output-format", "stream-json", "--approval-mode", "default",
-		"--auth-type", "openai", "--model", "qwen3-coder-plus"}; !slices.Equal(got, want) {
+		"--allowed-mcp-server-names", "crewlet", "--auth-type", "openai", "--model", "qwen3-coder-plus"}; !slices.Equal(got, want) {
 		t.Errorf("a key's argv is %q, want %q", got, want)
 	}
 	comp, err := ask(t, keyed, llm.Request{})
@@ -398,7 +397,7 @@ func TestQwenCodeSignsInByItsModeChosenOnArgv(t *testing.T) {
 	sub := qwenProvider(t, map[string]string{"FAKE_READ_UNDER_ENV": "HOME:.qwen/subscription_credentials.json"},
 		qwenPlainOutput, Auth{Mode: AuthSubscription})
 	if got, want := sub.argv(false), []string{"--output-format", "stream-json", "--approval-mode", "default",
-		"--auth-type", "qwen-subscription", "--model", "qwen3-coder-plus"}; !slices.Equal(got, want) {
+		"--allowed-mcp-server-names", "crewlet", "--auth-type", "qwen-subscription", "--model", "qwen3-coder-plus"}; !slices.Equal(got, want) {
 		t.Errorf("a login's argv is %q, want %q", got, want)
 	}
 	shared := sub.Workspace().CredentialsDir()
@@ -417,15 +416,48 @@ func TestQwenCodeSignsInByItsModeChosenOnArgv(t *testing.T) {
 	}
 }
 
-// What Qwen Code 0.26.1 printed with --output-format stream-json for a call
-// that fetched a page and then answered, trimmed of fields nothing reads: its
-// init event, the turn that asked for the tool, the tool's result, the turn
-// that answered, and the result event with the call's totals.
-const qwenStream = `{"type":"system","subtype":"init","session_id":"s1","tools":["web_fetch"],"model":"qwen3-coder-plus","qwen_code_version":"0.26.1"}
-{"type":"assistant","session_id":"s1","parent_tool_use_id":null,"message":{"type":"message","role":"assistant","model":"qwen3-coder-plus","content":[{"type":"text","text":"Let me look."},{"type":"tool_use","id":"call_1","name":"web_fetch","input":{"url":"https://example.com/","prompt":"summarise"}}],"stop_reason":"tool_use","usage":{"input_tokens":1000,"output_tokens":20,"cache_read_input_tokens":600,"total_tokens":1020}}}
-{"type":"user","session_id":"s1","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","is_error":true,"content":"the fetched page"}]}}
-{"type":"assistant","session_id":"s1","parent_tool_use_id":null,"message":{"type":"message","role":"assistant","model":"qwen3-coder-plus","content":[{"type":"text","text":"The answer."}],"stop_reason":null,"usage":{"input_tokens":1234,"output_tokens":56,"cache_read_input_tokens":1000,"total_tokens":1290}}}
-{"type":"result","subtype":"success","session_id":"s1","is_error":false,"num_turns":2,"result":"The answer.","usage":{"input_tokens":2234,"output_tokens":76,"cache_read_input_tokens":1600,"total_tokens":2310},"permission_denials":[]}
+// NO MCP SERVER BUT THE ENGINE'S STARTS, ON ANY CALL. Qwen Code starts every
+// server it finds, an extension's in the seat's home among them, unless
+// --allowed-mcp-server-names names the ones it may: measured on 0.28.3, a call
+// with no tools (each of doctor's probes) started the home extension's server,
+// and a call with the flag and no crewlet server started none and ran. So the
+// flag is in complete_args, on every call, and a run with tools adds it no
+// second time.
+//
+// Mutations, each red: move the flag back to mcp.args (a tool-less call lacks
+// it); keep it in both (a run with tools names it twice).
+func TestQwenCodeStartsNoMCPServerButTheEnginesOnAnyCall(t *testing.T) {
+	t.Parallel()
+	admits := func(args []string) int {
+		n := 0
+		for i := range len(args) - 1 {
+			if args[i] == "--allowed-mcp-server-names" && args[i+1] == "crewlet" {
+				n++
+			}
+		}
+		return n
+	}
+	p := qwenProvider(t, nil, nil, Auth{Mode: AuthAPIKey, APIKey: "sk-test"})
+	if got := p.argv(false); admits(got) != 1 {
+		t.Errorf("a call with no tools runs %q: it admits every MCP server it finds, a home extension's among them", got)
+	}
+	route := qwenCode(t).MCP
+	if got := slices.Concat(p.argv(true), route.Args, route.AllowArgs); admits(got) != 1 {
+		t.Errorf("a run with tools runs %q, want --allowed-mcp-server-names crewlet once", got)
+	}
+}
+
+// What Qwen Code 0.28.3 printed with --output-format stream-json for a call
+// that fetched a page (refused, with no network) and then answered, trimmed of
+// fields nothing reads: its init event, the response's prose and its call as
+// two turns, the tool's result, the turn that answered, and the result event
+// with the call's totals.
+const qwenStream = `{"type":"system","subtype":"init","session_id":"s1","tools":["web_fetch"],"model":"qwen3-coder-plus","qwen_code_version":"0.28.3"}
+{"type":"assistant","session_id":"s1","parent_tool_use_id":null,"message":{"type":"message","role":"assistant","model":"qwen3-coder-plus","content":[{"type":"text","text":"Let me look."}],"stop_reason":null,"usage":{"input_tokens":0,"output_tokens":0}}}
+{"type":"assistant","session_id":"s1","parent_tool_use_id":null,"message":{"type":"message","role":"assistant","model":"qwen3-coder-plus","content":[{"type":"tool_use","id":"call_3","name":"web_fetch","input":{"url":"https://example.com/","prompt":"summarise"}}],"stop_reason":"tool_use","usage":{"input_tokens":1003,"output_tokens":50,"cache_read_input_tokens":600,"total_tokens":1053}}}
+{"type":"user","session_id":"s1","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_3","is_error":true,"content":"Error during fetch for https://example.com/: fetch failed (cause: getaddrinfo EAI_AGAIN example.com)"}]}}
+{"type":"assistant","session_id":"s1","parent_tool_use_id":null,"message":{"type":"message","role":"assistant","model":"qwen3-coder-plus","content":[{"type":"text","text":"The answer."}],"stop_reason":null,"usage":{"input_tokens":1004,"output_tokens":50,"cache_read_input_tokens":600,"total_tokens":1054}}}
+{"type":"result","subtype":"success","session_id":"s1","is_error":false,"num_turns":2,"result":"The answer.","usage":{"input_tokens":2007,"output_tokens":100,"cache_read_input_tokens":1200,"total_tokens":2107},"permission_denials":[]}
 `
 
 // THE ANSWER IS THE RESULT EVENT'S, AND SO ARE THE COUNTS. --output-format json
@@ -447,13 +479,13 @@ func TestQwenCodeReadsTheAnswerFromTheResultEvent(t *testing.T) {
 	if comp.Content != "The answer." {
 		t.Errorf("content = %q, want the result event's answer alone", comp.Content)
 	}
-	if comp.InputTokens != 2234 || comp.OutputTokens != 76 {
-		t.Errorf("tokens = %d in, %d out, want the call's totals 2234 and 76",
+	if comp.InputTokens != 2007 || comp.OutputTokens != 100 {
+		t.Errorf("tokens = %d in, %d out, want the call's totals 2007 and 100",
 			comp.InputTokens, comp.OutputTokens)
 	}
 }
 
-// A REFUSED REQUEST IS NAMED FOR WHAT IT IS. Measured on 0.23.4 and 0.26.1
+// A REFUSED REQUEST IS NAMED FOR WHAT IT IS. Measured on 0.28.3
 // against a stub answering every request with the status: the harness exits 1 and
 // its result event's error carries "[API Error: <status> <the provider's
 // message>]" — on a 429 within about a minute, because the profile turns the

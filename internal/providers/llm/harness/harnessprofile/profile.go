@@ -790,7 +790,7 @@ type Profile struct {
 	// respectively: the flag choosing the sign-in, for a harness that picks
 	// one on argv and runs another without it. Qwen Code's `--auth-type
 	// openai` and `--auth-type qwen-subscription`: its OpenAI sign-in otherwise
-	// needs OPENAI_MODEL set beside the key (0.26.1). Lists replace wholesale
+	// needs OPENAI_MODEL set beside the key (0.28.3). Lists replace wholesale
 	// on override, as CompleteArgs does.
 	KeyArgs          []string `yaml:"key_args,omitempty"`
 	SubscriptionArgs []string `yaml:"subscription_args,omitempty"`
@@ -940,7 +940,7 @@ type Profile struct {
 	// under api-key the same setting would overrule the key: Gemini CLI picks
 	// its sign-in from settings or environment (GOOGLE_GENAI_USE_GCA=true
 	// first, GEMINI_API_KEY after) and a copied login selects nothing
-	// (subscription calls exited 41, 0.58.0, 0.65.0). Never a credential, the
+	// (subscription calls exited 41, 0.70.0). Never a credential, the
 	// profile's token_env or api_key_env, a variable the engine sets to isolate
 	// the call or one env sets too, or empty.
 	SubscriptionEnv map[string]string `yaml:"subscription_env,omitempty"`
@@ -1160,7 +1160,7 @@ type Profile struct {
 	// before its environment: Gemini CLI takes an operator's
 	// GOOGLE_GEMINI_BASE_URL gateway as a sign-in it then refuses (exit 41)
 	// unless its settings name the key sign-in, and those settings in a login
-	// home would send subscription calls to a key it lacks (0.65.0). Key and
+	// home would send subscription calls to a key it lacks (0.70.0). Key and
 	// login homes are two directories ([Workspace.AcquireForKey]). Home only:
 	// a call's working directory knows nothing of how it signs in.
 	KeySeedFiles []SeedFile `yaml:"key_seed_files,omitempty"`
@@ -1182,7 +1182,7 @@ type Profile struct {
 	// it runs on vendor defaults. Matched as each stderr line arrives, on every
 	// call; the run is stopped at once and fails, since a harness with its tool
 	// policy unloaded must not use the tools that policy denies (Gemini CLI
-	// reports "Policy file error" and carries on, measured on 0.58.0).
+	// reports "Policy file error" and carries on, measured on 0.70.0).
 	FailureMarkers []string `yaml:"failure_markers,omitempty"`
 }
 
