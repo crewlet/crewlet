@@ -87,6 +87,17 @@ export function methodWords(harness: string, method: Method): { label: string; d
       detail:
         "Your Google Cloud project's Vertex AI, on its API key, under Google Cloud's agreement.",
     };
+  if (method === "host-login" && harness === "qwen-code")
+    return {
+      label: "Qwen subscription login",
+      detail: (
+        <>
+          You sign in to your Qwen Plus or Pro subscription with <span className="mono">qwen</span>{" "}
+          yourself on the engine host, and the model uses that login. Not measured against Qwen's
+          service.
+        </>
+      ),
+    };
   if (method === "host-login" && facts.login === "adopt")
     return {
       label: METHOD_WORDS["host-login"].label,

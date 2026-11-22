@@ -317,6 +317,16 @@ func GeminiConfirmsATake(t *testing.T) {
 	t.Run("a run's receipts are read off its takes and its session", geminiReceiptsAreReadOffItsTakesAndItsSession)
 }
 
+// ReadQwenSession is the transcript a Qwen Code chat file reads as
+// ([transcriptBuilder.qwenSession]), held to bounds.
+func ReadQwenSession(ctx context.Context, raw []byte, bounds TranscriptBounds) (Transcript, error) {
+	b := newTranscriptBuilder(0, bounds, TranscriptFilter{})
+	if err := b.qwenSession(ctx, bytes.NewReader(raw)); err != nil && !errors.Is(err, errTranscriptPage) {
+		return Transcript{}, err
+	}
+	return Transcript{Entries: b.entries, Places: b.places, From: b.from, Next: b.next, Cut: b.cut}, nil
+}
+
 // ReadGeminiSession is the transcript a Gemini CLI main session file reads as
 // ([transcriptBuilder.geminiSession]), held to bounds.
 func ReadGeminiSession(ctx context.Context, raw []byte, bounds TranscriptBounds) (Transcript, error) {
@@ -326,6 +336,3 @@ func ReadGeminiSession(ctx context.Context, raw []byte, bounds TranscriptBounds)
 	}
 	return Transcript{Entries: b.entries, Places: b.places, From: b.from, Next: b.next, Cut: b.cut}, nil
 }
-
-// GeminiTakesEnv names a Gemini CLI run's record of takes to its hook.
-const GeminiTakesEnv = geminiTakesEnv

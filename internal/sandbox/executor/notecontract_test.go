@@ -51,6 +51,14 @@ var noteFixtures = map[string]noteFixture{
 		confirms: executor.GeminiConfirmsATake,
 		reaches:  geminiTakeReachesTheBridgeTool,
 	},
+	executor.QwenCodeName: {
+		reads: true,
+		wakeRead: func(t *testing.T, wake string) []executor.TranscriptEntry {
+			return readQwen(t, qwenSessionWith(t, wake))
+		},
+		confirms: qwenHelperConfirmsEachNoteByItsRecord,
+		reaches:  qwenHelperReachesTheBridgesOwnNotesRoute,
+	},
 }
 
 // noteFixtureOf is h's fixture, failing the case where h supplies none.

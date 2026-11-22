@@ -784,6 +784,17 @@ type Profile struct {
 	// argvs element-wise yields a command line neither side wrote.
 	CompleteArgs []string `yaml:"complete_args,omitempty"`
 
+	// KeyArgs and SubscriptionArgs follow CompleteArgs on a call that signs
+	// in with a key (api-key, env, an inherit-env key: the seat's key home,
+	// [Profile.KeySeedFiles]'s) and on one that signs in with a login,
+	// respectively: the flag choosing the sign-in, for a harness that picks
+	// one on argv and runs another without it. Qwen Code's `--auth-type
+	// openai` and `--auth-type qwen-subscription`: its OpenAI sign-in otherwise
+	// needs OPENAI_MODEL set beside the key (0.26.1). Lists replace wholesale
+	// on override, as CompleteArgs does.
+	KeyArgs          []string `yaml:"key_args,omitempty"`
+	SubscriptionArgs []string `yaml:"subscription_args,omitempty"`
+
 	// ModelArgs carries the model, {model} substituted. None with {model}
 	// (empty included) means the harness takes no model, and an entry naming
 	// one is refused, not silently ignored ([Profile.TakesModel]). The
@@ -1700,6 +1711,7 @@ func (p *Profile) problems() []string {
 	p.validateLimitEvents(add)
 	p.validateEventReports(add)
 	p.validateAPIKeyModelEnv(add)
+	p.validateSignInArgs(add)
 	p.validateSignIn(add)
 	// An auth marker fires KindAuth, which exhausts the credential as a
 	// spent plan does, so an unusable sentinel costs the same as above.
@@ -2446,6 +2458,32 @@ func (p *Profile) validateLimitEvents(add func(string, ...any)) {
 // validateAPIKeyModelEnv holds [Profile.APIKeyModelEnv] to a key it goes beside
 // and a model it can carry: without api_key_env no mode puts it in place, and
 // one sharing a name with the key or the token would overwrite it.
+// validateSignInArgs holds [Profile.KeyArgs] and [Profile.SubscriptionArgs]
+// to a sign-in the profile has: args for a key on a harness no key signs in,
+// or for a login on one that keeps none and mints no token, would be passed
+// on no call, a claim nothing runs.
+func (p *Profile) validateSignInArgs(add func(string, ...any)) {
+	if len(p.KeyArgs) > 0 && p.APIKeyEnv == "" && !p.EnvSignIn {
+		add("key_args is set, but no key signs this harness in (no api_key_env, no env_sign_in), " +
+			"so no call would pass it: drop it, or name the key variable")
+	}
+	if len(p.SubscriptionArgs) > 0 && !p.KeepsLogin() && p.TokenEnv == "" {
+		add("subscription_args is set, but the harness keeps no login (no credential_paths, " +
+			"credential_store) and mints no token (no token_env), so no call would pass it: drop it, " +
+			"or name the login's files")
+	}
+	for _, list := range []struct {
+		field string
+		args  []string
+	}{{"key_args", p.KeyArgs}, {"subscription_args", p.SubscriptionArgs}} {
+		for i, arg := range list.args {
+			if strings.TrimSpace(arg) == "" {
+				add("%s[%d] is empty — an empty argument is one the harness reads as a value", list.field, i)
+			}
+		}
+	}
+}
+
 func (p *Profile) validateAPIKeyModelEnv(add func(string, ...any)) {
 	name := p.APIKeyModelEnv
 	switch {

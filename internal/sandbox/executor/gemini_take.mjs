@@ -28,8 +28,8 @@ const finishBoundary = "Stop"
 
 // takeField is the field of the engine's answer carrying the take's token
 // (geminiTakeField): recorded beside the digest of the answer's text in
-// the session's record the run names in CREWLET_GEMINI_TAKES, which its
-// receipts are read against, and dropped from
+// config.takes, the session's record its receipts are read against, and
+// dropped from
 // what Gemini CLI is handed, so it never reaches the model.
 const takeField = "crewlet_take"
 
@@ -63,9 +63,8 @@ function recorded(config, answer) {
   const parsed = JSON.parse(answer)
   const token = parsed[takeField]
   delete parsed[takeField]
-  const takes = process.env.CREWLET_GEMINI_TAKES
-  if (typeof token === "string" && token !== "" && takes && typeof parsed.reason === "string") {
-    fs.appendFileSync(takes, JSON.stringify({ take: token, digest: itemDigest(parsed.reason) }) + "\n")
+  if (typeof token === "string" && token !== "" && config.takes && typeof parsed.reason === "string") {
+    fs.appendFileSync(config.takes, JSON.stringify({ take: token, digest: itemDigest(parsed.reason) }) + "\n")
   }
   return JSON.stringify(parsed)
 }
