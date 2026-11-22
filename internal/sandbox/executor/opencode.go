@@ -1188,7 +1188,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		}
 	}
 	if stripped, changed := openCodeWithoutKeys(login); changed {
-		if err := box.WriteFile(ctx, paths.CredentialDocument(), stripped); err != nil {
+		if err = box.WriteFile(ctx, paths.CredentialDocument(), stripped); err != nil {
 			return "", fmt.Errorf("executor: writing the box's OpenCode login: %w", err)
 		}
 	}
@@ -1199,7 +1199,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 		return "", err
 	}
 	if keys != nil {
-		if err := box.WriteFile(ctx, paths.OpenCodeKeys(), keys); err != nil {
+		if err = box.WriteFile(ctx, paths.OpenCodeKeys(), keys); err != nil {
 			return "", fmt.Errorf("executor: writing the run's provider keys: %w", err)
 		}
 	}
@@ -1253,7 +1253,7 @@ func (o OpenCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sand
 	}
 	var plugins []any
 	if req.Steer.Set() {
-		if err := box.WriteFile(ctx, paths.OpenCodeSteerPlugin()+"/"+openCodeSteerEntry, openCodeSteerPlugin); err != nil {
+		if err = box.WriteFile(ctx, paths.OpenCodeSteerPlugin()+"/"+openCodeSteerEntry, openCodeSteerPlugin); err != nil {
 			return "", fmt.Errorf("executor: writing OpenCode's notes plugin: %w", err)
 		}
 		plugins = append(plugins, map[string]any{
