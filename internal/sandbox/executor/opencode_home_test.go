@@ -126,3 +126,21 @@ func TestAPackLoadsNoConfigurationARunLeft(t *testing.T) {
 		t.Errorf("the pack calls OpenCode before its configuration directory is set:\n%s", pack)
 	}
 }
+
+// THE RUN READS ITS CONFIGURATION ONCE: its server runs with OpenCode's file
+// watcher off, so an opencode.json written while it runs changes nothing it
+// resolves (measured on 2.3.2: with the watcher on, a header written mid-run
+// reached the server's providers; off, the server's providers stayed as
+// checked).
+//
+// Mutation: drop OPENCODE_FILEWATCHER_DISABLE from the script.
+func TestARunsServerNeverReloadsItsConfiguration(t *testing.T) {
+	t.Parallel()
+	run := runScript(t, scriptOpts{})
+	if run.code != 0 {
+		t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+	}
+	if off := readIn(t, run.dir, "serve-watcher-off"); off != "1" {
+		t.Errorf("the server ran with OPENCODE_FILEWATCHER_DISABLE=%q, want 1", off)
+	}
+}
