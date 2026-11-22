@@ -2365,7 +2365,7 @@ copilot:
     runner: true
     e2b_template: copilot
   binary: copilot
-  written_for: "GitHub Copilot CLI 1.0.x, measured on 1.0.103 (`copilot --version`)"
+  written_for: "GitHub Copilot CLI 1.0.x, measured on 1.0.103 and 1.0.114 (`copilot --version`)"
   version_args: ["--version"]
   # EVERY FLAG BELOW KEEPS THE HARNESS TO ITS CALL. Measured on 1.0.103 through
   # the engine's own code path, on a custom provider (COPILOT_PROVIDER_BASE_URL
