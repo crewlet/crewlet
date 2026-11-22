@@ -16,7 +16,7 @@ import (
 )
 
 // The invariants the built-in gemini-cli profile keeps, each measured against
-// Gemini CLI 0.58.0 and 0.65.0 (see the profile's comments): a call offers the
+// Gemini CLI 0.70.0 (see the profile's comments): a call offers the
 // two web tools and nothing else, trusts its own directory and reads no
 // environment file above it, sends nothing to the vendor but the call, and
 // every call — a seat's phase or a side pass — replaces the harness's prompt,
@@ -241,7 +241,7 @@ func TestGeminiSignsInWithWhatTheModeNames(t *testing.T) {
 // A KEY CALL BEHIND A GATEWAY STAYS ON ITS KEY, AND A LOGIN CALL ON ITS LOGIN.
 // Naming no sign-in in its settings, the harness takes one from its
 // environment, where GOOGLE_GEMINI_BASE_URL (an operator's gateway) outranks
-// GEMINI_API_KEY and selects a sign-in 0.65.0 refuses: exit 41, "Invalid auth
+// GEMINI_API_KEY and selects a sign-in 0.70.0 refuses: exit 41, "Invalid auth
 // method selected". Settings outrank the environment, so a key call's home
 // names the key sign-in, and a subscription call's names none, leaving
 // GOOGLE_GENAI_USE_GCA to pick the login; the key sign-in there would send it
@@ -379,41 +379,41 @@ func TestGeminiSeatsAndSidePassesReplaceTheHarnessPrompt(t *testing.T) {
 	}
 }
 
-// A real Gemini CLI answer, from a 0.65.0 call that fetched a page: the model
-// it was asked for answered twice, and web_fetch asked a second model on the
-// side, whose prompt carried the fetched page as the tool's own (`tool`).
-// Pinned verbatim from that run, trimmed to the fields the profile reads and
-// the per-role breakdown beside them, so the sum is over the models and never
-// over a model's roles as well.
-const geminiAnswer = `{"session_id":"3e6bd605-11d3-49d9-b990-66e67eab4716",
-"response":"STUB-ANSWER for probe-webfetch","stats":{"models":{
-"gemini-2.5-pro":{"api":{"totalRequests":2,"totalErrors":0,"totalLatencyMs":94,"errorsByType":{}},
-"tokens":{"input":1234,"prompt":2234,"candidates":76,"total":2317,"cached":1000,"thoughts":7,"tool":0},
-"roles":{"main":{"totalRequests":2,"totalErrors":0,"totalLatencyMs":94,
-"tokens":{"input":1234,"prompt":2234,"candidates":76,"total":2317,"cached":1000,"thoughts":7,"tool":0}}}},
-"gemini-3-flash-preview":{"api":{"totalRequests":1,"totalErrors":0,"totalLatencyMs":4,"errorsByType":{}},
+// A real Gemini CLI answer, from a 0.70.0 call that searched the web, against
+// a stand-in of the API: the model it was asked for answered twice, and
+// google_web_search asked a second model on the side, whose tool prompt the
+// API reported apart (`tool`). Pinned verbatim from that run, trimmed to the
+// fields the profile reads and the per-role breakdown beside them, so the sum
+// is over the models and never over a model's roles as well.
+const geminiAnswer = `{"session_id":"b5c31e19-2d2f-4893-86bc-3e6317403589",
+"response":"searched","stats":{"models":{
+"gemini-2.5-pro":{"api":{"totalRequests":2,"totalErrors":0,"totalLatencyMs":122,"errorsByType":{}},
+"tokens":{"input":1200,"prompt":2000,"candidates":100,"total":2160,"cached":800,"thoughts":60,"tool":0},
+"roles":{"main":{"totalRequests":2,"totalErrors":0,"totalLatencyMs":122,
+"tokens":{"input":1200,"prompt":2000,"candidates":100,"total":2160,"cached":800,"thoughts":60,"tool":0}}}},
+"gemini-3-flash-preview":{"api":{"totalRequests":1,"totalErrors":0,"totalLatencyMs":10,"errorsByType":{}},
 "tokens":{"input":100,"prompt":100,"candidates":10,"total":5110,"cached":0,"thoughts":0,"tool":5000},
-"roles":{"utility_tool":{"totalRequests":1,"totalErrors":0,"totalLatencyMs":4,
+"roles":{"utility_tool":{"totalRequests":1,"totalErrors":0,"totalLatencyMs":10,
 "tokens":{"input":100,"prompt":100,"candidates":10,"total":5110,"cached":0,"thoughts":0,"tool":5000}}}}}}}`
 
 // EVERY MODEL A CALL USED IS CHARGED, AND EVERY TOKEN THE VENDOR BILLS. The
 // counts are keyed by model, so each is summed over the models; the cached
 // part of the prompt and the reasoning are read apart, as the harness reports
-// them; and the page a web fetch put in front of the side model is input. The
-// whole call: 2,334 prompt tokens and 5,000 of the tool's, 86 answered and 7
+// them; and the tool prompt put in front of the side model is input. The
+// whole call: 2,100 prompt tokens and 5,000 of the tool's, 110 answered and 60
 // reasoned.
 func TestTheGeminiProfileChargesEveryModelACallUsed(t *testing.T) {
 	t.Parallel()
 	p := geminiCLI(t)
 	got := extract(p, geminiAnswer)
-	if got.text != "STUB-ANSWER for probe-webfetch" {
+	if got.text != "searched" {
 		t.Errorf("text = %q", got.text)
 	}
 	if !got.reported {
 		t.Fatal("usage went unread, so every call would be charged an estimate")
 	}
-	if got.input != 1334 || got.cacheRead != 1000 || got.output != 86 || got.reasoning != 7 || got.toolPrompt != 5000 {
-		t.Errorf("usage = in %d cached %d out %d reasoning %d tool %d, want 1334 1000 86 7 5000",
+	if got.input != 1300 || got.cacheRead != 800 || got.output != 110 || got.reasoning != 60 || got.toolPrompt != 5000 {
+		t.Errorf("usage = in %d cached %d out %d reasoning %d tool %d, want 1300 800 110 60 5000",
 			got.input, got.cacheRead, got.output, got.reasoning, got.toolPrompt)
 	}
 	prov := &Provider{profile: p, model: "gemini-2.5-pro", now: time.Now}
@@ -421,8 +421,8 @@ func TestTheGeminiProfileChargesEveryModelACallUsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("completion: %v", err)
 	}
-	if comp.InputTokens != 7334 || comp.OutputTokens != 93 || comp.CacheRead != 1000 {
-		t.Errorf("completion = in %d out %d cached %d, want 7334 93 1000",
+	if comp.InputTokens != 7100 || comp.OutputTokens != 170 || comp.CacheRead != 800 {
+		t.Errorf("completion = in %d out %d cached %d, want 7100 170 800",
 			comp.InputTokens, comp.OutputTokens, comp.CacheRead)
 	}
 }
@@ -441,7 +441,7 @@ func TestGeminiPrunesWhatEachCallLeaves(t *testing.T) {
 	}
 }
 
-// THE HARNESS'S OWN FAILURES ARE NAMED. Measured on both releases: a spent
+// THE HARNESS'S OWN FAILURES ARE NAMED. Measured on 0.70.0: a spent
 // daily quota prints a TerminalQuotaError, a limit; a per-minute limit is
 // retried, then printed as a RetryableQuotaError, transient, no limit; neither
 // carries the API's RESOURCE_EXHAUSTED. A refused login is the API's
@@ -494,7 +494,7 @@ func TestGeminiRecognisesItsOwnQuotaAndSignInFailures(t *testing.T) {
 
 // GEMINI CLI 0.70.0'S RECORD IS TOLD A REQUEST AT A TIME, ONCE, WITH ITS CALLS.
 // 0.70.0 writes a response's entry up to three times (its prose, its calls
-// scheduled, its calls run), where 0.65.0 wrote the calls once run. The shipped
+// scheduled, its calls run). The shipped
 // profile over 0.70.0's own record of a run that made two calls: a request is
 // told only once the next entry moves past it, though its calls showed
 // earlier; each of the three is told once, the first two with their call, and

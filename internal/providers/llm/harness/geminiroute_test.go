@@ -18,9 +18,9 @@ import (
 // Gemini CLI, as the fake plays it: the server from the call's workspace
 // settings, no id of its own with a call, and the record in the chat file under
 // the home's tmp directory — a `gemini` entry per response written as it
-// arrives and again, whole, with its calls once they have run, then a `user`
-// entry with their results — and the run's report on stdout as one document at
-// the end (measured on 0.65.0; see the profile).
+// arrives, again, whole, with its calls scheduled, and again once they have
+// run, then a `user` entry with their results — and the run's report on stdout
+// as one document at the end (measured on 0.70.0; see the profile).
 func init() {
 	fakeHarnesses["gemini-cli"] = fakeHarness{
 		server: func() (string, []string, error) {
@@ -82,28 +82,42 @@ func (g *geminiRecorder) begin(model string, _ []string) {
 	_ = g.chat.Encode(map[string]any{"id": "u0", "type": "user", "content": []any{map[string]any{"text": g.prompt}}})
 }
 
-func (g *geminiRecorder) asked(i int, r fakeResponse, _ []string) {
-	_ = g.chat.Encode(geminiEntry(fmt.Sprintf("g%d", i+1), r.Text, g.model, r.Usage, nil))
+func (g *geminiRecorder) asked(i int, r fakeResponse, ids []string) {
+	id := fmt.Sprintf("g%d", i+1)
+	_ = g.chat.Encode(geminiEntry(id, r.Text, g.model, r.Usage, nil))
+	if len(r.Calls) > 0 {
+		calls, _ := geminiCalls(r, ids, nil)
+		_ = g.chat.Encode(geminiEntry(id, r.Text, g.model, r.Usage, calls))
+	}
 }
 
 func (g *geminiRecorder) answered(i int, r fakeResponse, ids []string, results []string) {
 	if len(r.Calls) == 0 {
 		return
 	}
-	var calls, responses []any
+	calls, responses := geminiCalls(r, ids, results)
+	_ = g.chat.Encode(geminiEntry(fmt.Sprintf("g%d", i+1), r.Text, g.model, r.Usage, calls))
+	_ = g.chat.Encode(map[string]any{"id": fmt.Sprintf("u%d", i+1), "type": "user", "content": responses})
+}
+
+// geminiCalls is a response's calls as its entry records them: scheduled,
+// with no result, until results says how each ran.
+func geminiCalls(r fakeResponse, ids, results []string) (calls, responses []any) {
 	for j, c := range r.Calls {
 		name := "mcp_crewlet_" + c.Name
 		if c.Own {
 			name = c.Name
 		}
-		calls = append(calls, map[string]any{"id": ids[j], "name": name, "args": orEmpty(c.Args),
-			"status": "success", "result": []any{map[string]any{"functionResponse": map[string]any{
-				"id": ids[j], "name": name, "response": map[string]any{"output": results[j]}}}}})
-		responses = append(responses, map[string]any{"functionResponse": map[string]any{
-			"id": ids[j], "name": name, "response": map[string]any{"output": results[j]}}})
+		call := map[string]any{"id": ids[j], "name": name, "args": orEmpty(c.Args), "status": "scheduled"}
+		if results != nil {
+			response := map[string]any{"functionResponse": map[string]any{
+				"id": ids[j], "name": name, "response": map[string]any{"output": results[j]}}}
+			call["status"], call["result"] = "success", []any{response}
+			responses = append(responses, response)
+		}
+		calls = append(calls, call)
 	}
-	_ = g.chat.Encode(geminiEntry(fmt.Sprintf("g%d", i+1), r.Text, g.model, r.Usage, calls))
-	_ = g.chat.Encode(map[string]any{"id": fmt.Sprintf("u%d", i+1), "type": "user", "content": responses})
+	return calls, responses
 }
 
 func (g *geminiRecorder) end(script fakeScript, total fakeUsage, last string) int {
@@ -232,8 +246,8 @@ func TestAGeminiRunItsTurnLimitEndedStopsAtTheCap(t *testing.T) {
 // THE SEAT'S TOOLS ARE ALLOWED IN A POLICY FILE OF THEIR OWN, IN THE HOME, and
 // no run names a policy on argv: --policy replaces the home's policies rather
 // than adding to it, and a run handed the seat's allow that way lost the
-// deny-all of the harness's own tools (measured on 0.65.0: its file, plan,
-// sub-agent and topic tools offered beside the seat's).
+// deny-all of the harness's own tools (measured on 0.70.0: its file, plan,
+// sub-agent and topic tools offered).
 //
 // Mutation: hand the allow with --policy, or fold it into the deny-all's file
 // without its own, and this names it.
