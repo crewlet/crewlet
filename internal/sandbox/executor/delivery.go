@@ -104,6 +104,18 @@ func InboxID(harness, launch, noteID string) string {
 	return ""
 }
 
+// AgainID is the second id harness's plugin may admit noteID under for launch,
+// once, where a compaction folded its first admission ([InboxID]'s, which it
+// never equals): the same derivation over the note's id and a suffix no note
+// id carries, so it is the job's and the note's, and stable. "" for a harness
+// that polls for no notes.
+func AgainID(harness, launch, noteID string) string {
+	if h, ok := harnessNamed(harness).(inboxDelivery); ok {
+		return h.inboxID(launch, noteID+"\x00again")
+	}
+	return ""
+}
+
 // PollCeiling is the most UTF-16 units one message harness's plugin admits
 // can carry, false for a harness that polls for no notes.
 func PollCeiling(harness string) (int, bool) {
@@ -146,7 +158,7 @@ func confirms(h Harness) bool {
 }
 
 // pluginConfirmer is an [inboxDelivery] whose plugin confirms each note itself,
-// off the harness's own delivery event.
+// off the harness's own view of the model requests that carry it plain.
 type pluginConfirmer interface{ pluginConfirms() bool }
 
 // ItemDigest is the digest a poll's serve records of an item's text as the
