@@ -2803,36 +2803,39 @@ grok:
   # and they are different programs: this profile's `.grok/auth.json`,
   # `--sandbox` and `-p` are the official one's, and the npm build has none
   # of them. If `grok --version` prints a 0.0.x, that is the other one.
-  written_for: "Grok Build CLI 1.0.x, measured on 1.0.70 (`grok --version`) — xAI's OWN, from x.ai/cli"
+  written_for: "Grok Build CLI 1.0.x, measured on 1.0.92 (`grok --version`) — xAI's OWN, from x.ai/cli"
   version_args: ["--version"]
-  # THE WEB TOOLS AND NOTHING ELSE. Measured on 1.0.70 through the engine's
+  # THE WEB TOOLS AND NOTHING ELSE. Measured on 1.0.92 through the engine's
   # own code path, with the API base at a local stand-in and the state
   # directory inside a git checkout whose every level holds an AGENTS.md,
-  # CLAUDE.md, GROK.md, .grok/rules, .grok/settings.json with a hook, skills
-  # and MCP configurations: the request offered web_search and web_fetch and
-  # no other tool, none of those files reached it, and no hook or MCP server
-  # ran. Without --trust, which this profile does not pass, a headless run
-  # loads no project rules (the harness's user guide). It still reads the
-  # enclosing repository's .git/config and HEAD, past the engine's `.git`
-  # file, and nothing of them reached the request.
+  # CLAUDE.md, GROK.md, .grok/rules, .grok/config.toml and .grok/settings.json
+  # with hooks and a server, skills, agents, commands and MCP configurations:
+  # the request offered web_search and web_fetch and no other tool, a call
+  # the model made to the shell or `write` came back "Tool not found", none
+  # of those files reached it, and no hook or MCP server ran. Without
+  # --trust, which this profile does not pass, a headless run loads no
+  # project rules (the harness's user guide), and nothing of the enclosing
+  # repository's .git reached the request.
   #
-  #   --tools             the allowlist: the two web tools. It FAILS OPEN — a
-  #                       name that matches no tool makes the harness warn "other
-  #                       tools stay available" and apply none of the list
-  #                       (measured) — so it names only tools 1.0.70 knows.
+  #   --tools             the allowlist: the two web tools. A name that matches
+  #                       no tool makes the harness warn "names no tool, so
+  #                       other tools stay available" and apply none of the
+  #                       list (measured), so it names only tools 1.0.92 knows.
   #                       web_fetch is known whether or not it is enabled.
-  #   --disallowed-tools  every other built-in, which a name it does not know
-  #                       only skips; a denial wins over the allowlist. The
-  #                       deny list alone left twelve tools on offer: write,
-  #                       the four image and video tools, the MCP meta-tools
-  #                       search_tool and use_tool (on even under an
-  #                       allowlist), send_feedback, the plan-mode pair and
-  #                       ask_user_question beside the web tools. Together
-  #                       the two lists fail closed in either direction: a
-  #                       renamed web tool leaves the deny list in force, and
-  #                       a new tool is outside the allowlist.
+  #   --disallowed-tools  every other built-in by its 1.0.92 name. A name it
+  #                       does not know is skipped with a warning ("names no
+  #                       tool, so it removes nothing") and the rest apply; a
+  #                       denial wins over the allowlist. The list alone left
+  #                       the web tools and nothing else, with background
+  #                       workflows on or off (off offers update_goal in
+  #                       workflow's place). Removing read_file alone, or one
+  #                       of the plan-mode pair alone, fails the session's
+  #                       start, so each goes with its partner. Together the
+  #                       two lists fail closed in either direction: a renamed
+  #                       web tool leaves the deny list in force, and a new
+  #                       tool is outside the allowlist.
   #   --allow WebFetch    web_fetch has to be ALLOWED as well as offered: it
-  #                       asks first, a headless run cannot ask, and 1.0.70
+  #                       asks first, a headless run cannot ask, and 1.0.92
   #                       then CANCELS THE WHOLE RUN — the fetch "was not run,
   #                       as a headless run cannot ask for approval" on stderr,
   #                       an `end` of stopReason `cancelled`, exit 0 and nothing
@@ -2843,7 +2846,9 @@ grok:
   #                       read, which never gates delivery, and a seat that is
   #                       told it can fetch must be able to. --permission-mode
   #                       dontAsk does not take its place: under it the run was
-  #                       cancelled the same way (measured).
+  #                       cancelled the same way (measured). --allowed-tools is
+  #                       an alias of --allow, a permission rule: it narrows no
+  #                       offer.
   #
   # --sandbox is deliberately not used: it restricts the network along with
   # the filesystem, which would cut the web tools.
@@ -2851,13 +2856,14 @@ grok:
     - "--tools"
     - "web_search,web_fetch"
     - "--disallowed-tools"
-    - "run_terminal_cmd,bash,get_terminal_command_output,kill_terminal_command,read_file,search_replace,write,list_dir,grep,lsp,task,send_subagent_message,workflow,monitor,get_task_output,wait_tasks,kill_task,todo_write,scheduler_create,scheduler_delete,scheduler_list,image_gen,image_edit,image_to_video,reference_to_video,search_tool,use_tool,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
+    - "run_terminal_command,kill_command_or_subagent,get_command_or_subagent_output,read_file,search_replace,write,list_dir,grep,spawn_subagent,todo_write,scheduler_create,scheduler_delete,scheduler_list,monitor,update_goal,workflow,image_gen,image_edit,image_to_video,reference_to_video,search_tool,use_tool,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
     - "--allow"
     - "WebFetch"
   local_tools: denied
   web_tools_note: "no web denial: --disallowed-tools for its web tools would be one, but it has not been measured against a grok harness, so this profile cannot serve the assistant"
   model_args: ["--model", "{model}"]
-  # Read from 1.0.70: a level the model's menu lacks is refused by name.
+  # Measured on 1.0.92: a name that is no level is refused (exit 1, naming
+  # it); a level the model's menu lacks is ignored with a warning.
   effort:
     args: ["--reasoning-effort", "{effort}"]
     levels: [none, minimal, low, medium, high, xhigh, max]
@@ -2867,12 +2873,12 @@ grok:
   #
   #   system_prompt         REPLACES the harness's prompt: the request's system
   #                         message is the engine's text alone. The vendor's
-  #                         context moves into user messages ahead of the
-  #                         prompt: the working directory, the date and two
-  #                         built-in rules. For a side pass.
+  #                         context rides user messages ahead of the prompt
+  #                         under either flag: the working directory, the date
+  #                         and two built-in rules. For a side pass.
   #   append_system_prompt  KEEPS it: the text lands at the very end of the
   #                         system message, in a <human_rules> block after a
-  #                         static vendor prompt of about 4,150 characters
+  #                         static vendor prompt of 4,153 characters
   #                         that opens "You are Grok released by xAI. You are
   #                         an autonomous agent that completes software
   #                         engineering tasks. There is no human operator in
@@ -2905,10 +2911,10 @@ grok:
     # remote settings say (read from the harness's user guide; the measured runs
     # captured no memory either way).
     GROK_MEMORY: "0"
-  # One side request remains and no documented switch removes it on 1.0.70:
+  # One side request remains and no documented switch removes it on 1.0.92:
   # a session-title request to the session-summary model (grok-4.6 on the
   # Responses API) carrying the prompt, before the answer.
-  # THE HOME'S OWN MCP SERVERS, AND EVERY OTHER VENDOR'S, NEVER START. 1.0.70
+  # THE HOME'S OWN MCP SERVERS, AND EVERY OTHER VENDOR'S, NEVER START. 1.0.92
   # starts the servers ~/.grok/config.toml names, ~/.claude.json's and
   # ~/.cursor/mcp.json's beside them (its "compatibility" sources), and a
   # project's .grok/config.toml, .cursor/mcp.json and .mcp.json from the
@@ -2916,34 +2922,47 @@ grok:
   # with each of those planted in the seat's home and at every level of a
   # checkout above the call: with the two files below, none started, a run
   # with tools listed the seat's server alone and a text function none;
-  # without them, the three in the home started on every call (the project
-  # ones never did — the engine's `.git` file ends the walk at the call's
-  # directory, and the harness loads no project configuration it has not been
-  # told to trust).
+  # without them, a server config.toml names started on every call (the
+  # project ones never did — the engine's `.git` file ends the walk at the
+  # call's directory, and the harness loads no project configuration it has
+  # not been told to trust).
   #
   #   config.toml        the home's settings, rewritten every generation, so
   #                      no server written there survives into a call, and
-  #                      the Claude and Cursor sources (servers and hooks)
-  #                      are not scanned at all.
+  #                      the Claude and Cursor sources (servers, hooks,
+  #                      skills, rules and instruction files) are not scanned
+  #                      at all. Without the last three cells, ~/.claude's
+  #                      CLAUDE.md, rules and skills and ~/.cursor's skills
+  #                      reached every request (measured).
   #   requirements.toml  the harness's own MCP allowlist ("allowed_mcp_servers"),
   #                      which binds EVERY source — the home, a project, the
   #                      compatibility files, a plugin: one naming any other
   #                      server is dropped from the session. It only ever
-  #                      tightens, unsigned too (measured: it alone kept all
-  #                      three planted servers out). A deployment that syncs
-  #                      a signed one replaces it with the organisation's.
+  #                      tightens, unsigned too (measured: it alone kept a
+  #                      server config.toml names out). 1.0.92 deletes an
+  #                      unsigned one during the call that read it, so it
+  #                      binds the call that opens a
+  #                      generation; config.toml names no server for the
+  #                      generation's later calls. A deployment that syncs a
+  #                      signed one replaces it with the organisation's.
   seed_files:
     - path: .grok/config.toml
       content: |
         # Written by Crewlet every generation: no MCP server of the home's own,
-        # and no other vendor's servers or hooks.
+        # and no other vendor's servers, hooks, skills, rules or instructions.
         [compat.claude]
         mcps = false
         hooks = false
+        skills = false
+        rules = false
+        agents = false
 
         [compat.cursor]
         mcps = false
         hooks = false
+        skills = false
+        rules = false
+        agents = false
     - path: .grok/requirements.toml
       content: |
         # Written by Crewlet: the seat's own server is the one MCP server a call may start.
@@ -2951,10 +2970,11 @@ grok:
         server_name = "crewlet"
   # THE SEAT'S TOOLS: one stdio server, declared by an AGENT FILE in the call's
   # own directory (--agent), whose `mcpServers` the harness starts beside its
-  # default agent's prompt and tools — an agent file with no body adds nothing
-  # to the system prompt, and --rules still lands the seat's text at its end.
-  # Measured on 1.0.70 through the engine's own code path against a local
-  # stand-in for the API.
+  # default agent's tools — an agent file with no body adds nothing to the
+  # system prompt (1.0.92 leaves out the default agent's browser-verification
+  # block), and --rules still lands the seat's text at its end. Measured on
+  # 1.0.92 through the engine's own code path against a local stand-in for
+  # the API.
   #
   # THE MODEL REACHES THEM THROUGH TWO META-TOOLS, never by name: the request
   # offers search_tool (find a tool, get its schema) and use_tool (call it by
@@ -2978,7 +2998,8 @@ grok:
   #                         run that asks is cancelled whole (exit 0, nothing
   #                         on stdout); allowed, it is refused for not being
   #                         qualified and the model told so, and the run goes
-  #                         on (measured, for a listed and an unlisted name).
+  #                         on (measured). Without the rule, a qualified
+  #                         name is asked about too.
   #                         The allowlist above leaves the crewlet server the
   #                         only one whose tools it can match.
   #   --output-format streaming-json  the record (requests, below); a text
@@ -2988,17 +3009,16 @@ grok:
   # file declares: tool_timeout_sec, toolTimeoutMs and tool_timeout_ms in the
   # frontmatter, and a `[mcp_servers.crewlet]` timeout in the home's
   # config.toml, all left it at 6000 (its event log names the timeout each
-  # call runs under; a 10 s call ran out with a 4 s setting). The server's
+  # call runs under: 6000 with each set to 4 s, and a 10 s call finished). The server's
   # list is read once: a tool activated mid-run was "not found" for the rest
-  # of the run. One response's calls run at once (two 1.5 s calls
-  # overlapped).
+  # of the run. One response's calls run at once (two 2 s calls overlapped).
   mcp:
     output: jsonl
     complete_args:
       - "--tools"
       - "web_search,web_fetch"
       - "--disallowed-tools"
-      - "run_terminal_cmd,bash,get_terminal_command_output,kill_terminal_command,read_file,search_replace,write,list_dir,grep,lsp,task,send_subagent_message,workflow,monitor,get_task_output,wait_tasks,kill_task,todo_write,scheduler_create,scheduler_delete,scheduler_list,image_gen,image_edit,image_to_video,reference_to_video,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
+      - "run_terminal_command,kill_command_or_subagent,get_command_or_subagent_output,read_file,search_replace,write,list_dir,grep,spawn_subagent,todo_write,scheduler_create,scheduler_delete,scheduler_list,monitor,update_goal,workflow,image_gen,image_edit,image_to_video,reference_to_video,send_feedback,enter_plan_mode,exit_plan_mode,ask_user_question"
       - "--allow"
       - "WebFetch"
     seed:
@@ -3026,8 +3046,8 @@ grok:
   # use_tool, `crewlet__<name>`, and a name without the prefix is one the harness
   # refused. The counts are the request's own: `input_tokens` WITHOUT the cached
   # part, and `output_tokens` with the reasoning in it (measured with a stand-in
-  # reporting 40 cached and 7 reasoning tokens: 65 + 40 of a 105-token prompt,
-  # 12 out). The run's `end` event repeats their sum, and is not read. The
+  # reporting 400 cached and 20 reasoning tokens: 657 + 400 of a 1,057-token
+  # prompt, 50 out). The run's `end` event repeats their sum, and is not read. The
   # session-title request the harness makes first is in neither, and is not
   # charged.
   requests:
@@ -3061,7 +3081,7 @@ grok:
   cap:
     exit_code: 1
     match: [{path: ["type"], equals: "max_turns_reached"}]
-  # A RUN THAT WOULD ASK IS CANCELLED WHOLE: 1.0.70 cannot ask for an approval
+  # A RUN THAT WOULD ASK IS CANCELLED WHOLE: 1.0.92 cannot ask for an approval
   # headless, so it gives up the run — exit 0, an `end` of stopReason
   # cancelled, and nothing of the answer — and says so on stderr. Every tool
   # either kind of call is offered is allowed or refused by the flags above,
@@ -3070,21 +3090,39 @@ grok:
   # answer.
   failure_markers: ["a headless run cannot ask for approval"]
   credential_paths: [".grok/auth.json"]
-  # What a call leaves in the seat's home, measured on 1.0.70: a session
+  # What a call leaves in the seat's home, measured on 1.0.92: a session
   # directory per working directory holding the conversation, the rendered
   # system prompt and the prompt history, a session-search database, and a
-  # log that grows by about 28 KB a call.
-  volatile_paths: [".grok/sessions", ".grok/logs"]
+  # log that grows by about 30 KB a call.
+  #
+  # AND WHAT A CALL WOULD TAKE FROM IT: a call starts with no instructions,
+  # skills, commands or hooks in its home. 1.0.92 sends ~/.grok's AGENTS.md,
+  # rules, skills and commands with every request and runs ~/.grok/hooks'
+  # hooks.json (each measured, planted through the engine); the other two
+  # vendors' directories go too, beside the cells above. Measured not read
+  # under this profile: ~/.grok/GROK.md, agents (one named as the default
+  # agent too), the old ~/.grok/memory (with GROK_MEMORY on too), lsp.json, a
+  # plugin config.toml does not enable, managed_config.toml and a .env.
+  volatile_paths:
+    - ".grok/sessions"
+    - ".grok/logs"
+    - ".grok/AGENTS.md"
+    - ".grok/rules"
+    - ".grok/skills"
+    - ".grok/commands"
+    - ".grok/hooks"
+    - ".claude"
+    - ".cursor"
   host_credential_paths: [".grok/auth.json"]
   # THE HARNESS'S OWN WORD: signed out, it says "set the XAI_API_KEY environment
   # variable". GROK_API_KEY is the community npm build's variable and this
   # is not that program.
   api_key_env: "XAI_API_KEY"
-  # The harness's own framing of what the API refused, measured on 1.0.70 with
+  # The harness's own framing of what the API refused, measured on 1.0.92 with
   # the API at a local stand-in: a 402 reads "API error (status 402 Payment
-  # Required): …", while a 429 is relayed as the service's own message with
-  # nothing of the harness's around it, so the rest are its own sentences read
-  # from the 1.0.70 binary ("Rate limited", "You hit your free usage limit.",
+  # Required): …", while a 429 is relayed as the service's own code and message
+  # after one retry, so the rest are its own sentences read from the 1.0.92
+  # binary ("Rate limited", "You hit your free usage limit.",
   # "…out of credits or over your spending limit."). They are matched on
   # stderr, in a run the harness reported failed, or where one OPENS a clean
   # run's answer, never inside it (harnessprofile.MarkerScope).
@@ -3093,7 +3131,7 @@ grok:
     - sentinel: "Rate limited"
     - sentinel: "usage limit"
     - sentinel: "spending limit"
-  # Measured on 1.0.70: signed out, a call exits 1 on "Not signed in. To
+  # Measured on 1.0.92: signed out, a call exits 1 on "Not signed in. To
   # authenticate without a browser, run: grok login --device-code"; a key the
   # API refuses reads "Unauthorized (401) from <url>: …".
   auth_markers:
