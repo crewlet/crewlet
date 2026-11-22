@@ -458,6 +458,64 @@ func TestACopilotNoteIsNotHeldPastACompaction(t *testing.T) {
 	}
 }
 
+// copilotCompactedUnretained is compacted-queued with its compaction keeping
+// no input of its own (`retainedInputMessages` 0) and its completion's line
+// rewritten by edit: note 1's line then stands before a compaction that may
+// leave it only inside the summary.
+func copilotCompactedUnretained(t *testing.T, edit func(line []byte) []byte) []byte {
+	t.Helper()
+	var out []byte
+	edited := false
+	for l := range bytes.Lines(copilotFixture(t, "compacted-queued.events.jsonl")) {
+		l = bytes.Replace(l, []byte(`"retainedInputMessages":1`), []byte(`"retainedInputMessages":0`), 1)
+		if bytes.HasPrefix(l, []byte(`{"type":"session.compaction_complete"`)) {
+			l, edited = edit(l), true
+		}
+		out = append(out, l...)
+	}
+	if !edited {
+		t.Fatal("compacted-queued holds no compaction_complete line")
+	}
+	return out
+}
+
+// Only a compaction that says it failed keeps a note before it: one that
+// applied, one whose success is not stated and one with a field of a kind the
+// stream's own decode does not expect all leave it to be served again.
+//
+// Mutation: clear only where success reads true — the unstated case holds
+// note 1; clear on every completion — the failed case holds nothing; read the
+// line with decodeCopilotEvent — the case of another kind holds note 1.
+func TestOnlyAFailedCopilotCompactionKeepsTheNoteBeforeIt(t *testing.T) {
+	swap := func(from, to string) func([]byte) []byte {
+		return func(l []byte) []byte {
+			if !bytes.Contains(l, []byte(from)) {
+				t.Fatalf("the compaction's line holds no %s", from)
+			}
+			return bytes.Replace(l, []byte(from), []byte(to), 1)
+		}
+	}
+	cases := []struct {
+		name string
+		edit func([]byte) []byte
+		held bool
+	}{
+		{"applied", func(l []byte) []byte { return l }, false},
+		{"failed", swap(`"success":true`, `"success":false`), true},
+		{"success unstated", swap(`"success":true,`, ``), false},
+		{"a field of another kind", swap(`"data":{`, `"data":{"turns":"many",`), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			held, err := copilotNotesHeld(t.Context(), bytes.NewReader(copilotCompactedUnretained(t, c.edit)),
+				served("msg_inbox1"))
+			if err != nil || slices.Contains(held, "msg_inbox1") != c.held {
+				t.Fatalf("held = %v (%v), want note 1 held %v", held, err, c.held)
+			}
+		})
+	}
+}
+
 // A torn last line proves nothing: a usage record cut off mid-write, or one
 // written whole but for its newline, does not hold the note before it.
 // (steered: the note's line, then its request's usage record, then more.)

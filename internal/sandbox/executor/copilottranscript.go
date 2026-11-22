@@ -172,12 +172,12 @@ func (b *transcriptBuilder) copilotCalls(raw json.RawMessage, at time.Time) erro
 // copilotNotesHeld is the inbox ids of takes, in serve order and once each,
 // whose note a session's events.jsonl shows reached the model as a current
 // message: its `user.message` under its clientTurnId ([CopilotClientTurnID]),
-// `steering` or `queued`, then a `session.usage_record` with no applied
-// compaction between, since a queued note's line precedes its turn's
-// compaction, which can leave it only in the summary (ADR-0177; measured on
-// 1.0.114, compacted-queued). The line alone is no proof (ruling 1 of #1818's
-// design): a kill or a refusal can follow it before any request. A last line
-// with no newline is a write cut off; a line past the bound is no line.
+// `steering` or `queued`, then a `session.usage_record` with no compaction
+// between, since a queued note's line precedes its turn's compaction, which
+// can leave it only in the summary (ADR-0177; measured on 1.0.114,
+// compacted-queued). The line alone is no proof (ruling 1 of #1818's design):
+// a kill or a refusal can follow it before any request. A last line with no
+// newline is a write cut off; a line past the bound is no line.
 func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake) ([]string, error) {
 	asked := make(map[string]string, len(takes))
 	for _, take := range takes {
@@ -194,7 +194,7 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 			return err
 		}
 		moved = moved[:0]
-		ev, ok := decodeCopilotEvent(line)
+		ev, ok := decodeCopilotNoteLine(line)
 		if !ok {
 			return nil
 		}
@@ -213,9 +213,9 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 			}
 			clear(pending)
 		case "session.compaction_complete":
-			// Past an applied compaction, a request may carry the note only
-			// inside its summary.
-			if looseTrue(ev.Data.Success) {
+			// Past a compaction, a request may carry the note only inside
+			// its summary: only one that says it failed keeps the note.
+			if string(ev.Data.Success) != "false" {
 				clear(pending)
 			}
 		}
@@ -236,6 +236,37 @@ func copilotNotesHeld(ctx context.Context, events io.Reader, takes []ServedTake)
 		}
 	}
 	return out, nil
+}
+
+// copilotNoteLine is what [copilotNotesHeld] reads of one events.jsonl line:
+// its own few fields, raw where Copilot's kind could vary, so that no other
+// field of the line can lose them, as a field of another type loses the whole
+// of [decodeCopilotEvent]'s.
+type copilotNoteLine struct {
+	Type string `json:"type"`
+	Data struct {
+		ClientTurnID string          `json:"clientTurnId"`
+		Delivery     string          `json:"delivery"`
+		Success      json.RawMessage `json:"success"`
+	} `json:"data"`
+}
+
+// decodeCopilotNoteLine decodes one line for [copilotNotesHeld], false where
+// it is no JSON object of a type. A line whose own fields are of another type
+// is read for its type alone: a note line is then no note's, and a compaction
+// one that applied.
+func decodeCopilotNoteLine(line []byte) (copilotNoteLine, bool) {
+	var ev copilotNoteLine
+	if err := json.Unmarshal(line, &ev); err != nil {
+		var typed struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(line, &typed) != nil || typed.Type == "" {
+			return copilotNoteLine{}, false
+		}
+		return copilotNoteLine{Type: typed.Type}, true
+	}
+	return ev, ev.Type != ""
 }
 
 // lastByte is r, remembering the last byte it handed out.
