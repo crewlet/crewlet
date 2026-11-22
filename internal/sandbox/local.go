@@ -475,7 +475,7 @@ var supersededDetail = map[writeBack]string{
 	writeBackUnreadable: "the box's copy of this login could not be read, so nothing of it was " +
 		"written back, and the shared one was kept",
 	writeBackOtherAccount: "the box's copy of this login names another account than the shared " +
-		"one, so it is no refresh of it, and the shared one was kept",
+		"one in its account fields or ID token, so it was not written back, and the shared one was kept",
 	writeBackChanged: "the run refreshed this login, but the shared one changed after the box " +
 		"was seeded — another seat's refresh, or a new crewlet llm login — so the shared one " +
 		"was kept, being the newer",
@@ -620,12 +620,11 @@ func writeBackLogin(
 			return verdict(writeBackChanged), nil
 		}
 	}
-	// A COPY NAMING ANOTHER ACCOUNT IS NO REFRESH of this login
-	// ([harnessprofile.FileRule.SameAccount]): the whole login stays as it is.
-	// Asked of EVERY file of the box's copy, changed or not, against the login
-	// it was seeded with, which current is here: a token file swapped beside an
-	// untouched file naming the account is caught by the token's own subject,
-	// and a file naming the account that the box dropped names none.
+	// A COPY WHOSE ACCOUNT FIELDS OR ID TOKEN NAME ANOTHER ACCOUNT is not
+	// written back ([harnessprofile.FileRule.SameAccount]): the whole login
+	// stays as it is. Asked of EVERY file of the box's copy, changed or not,
+	// against the login it was seeded with, which current is here; a file
+	// holding them that the box dropped names none.
 	for _, relative := range slices.Sorted(maps.Keys(login.files)) {
 		rec := seeded[relative]
 		if rec.Seed == "" || len(rec.Rule.IdentityKeys) == 0 {

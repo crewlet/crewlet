@@ -1024,6 +1024,12 @@ type Profile struct {
 	// named is never seeded. A file not named here is a login file, whole.
 	LoginKeys map[string][]string `yaml:"login_keys,omitempty"`
 
+	// CommentLines names the JSON credential files the harness writes lines
+	// opening with `//` into, which are read with those lines set aside:
+	// Copilot CLI's config.json opens with two. Any other JSON file holding one
+	// does not read, so nothing is carried from it ([FileRule.Carry]).
+	CommentLines []string `yaml:"comment_lines,omitempty"`
+
 	// RefreshKeys names, by a credential file's NAME, the key paths (`*` for
 	// every key of an object or index of an array there) a refresh carries back
 	// from a seat's or a local box's copy: its tokens and their expiry. Every
@@ -2244,6 +2250,12 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 			}
 		}
 	}
+	for i, name := range p.CommentLines {
+		if byName[name] == "" {
+			add("comment_lines[%d] %q is the file name of no credential_paths entry — comment "+
+				"lines say which credential files the harness writes `//` lines into", i, name)
+		}
+	}
 	for _, name := range slices.Sorted(maps.Keys(p.RefreshKeys)) {
 		if byName[name] == "" {
 			add("refresh_keys names %q, which is the file name of no credential_paths entry — "+
@@ -2253,9 +2265,10 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 			add("refresh_keys.%s is empty — name the token fields a refresh carries back", name)
 		}
 		for i, key := range p.RefreshKeys[name] {
-			if parts := strings.Split(key, "."); slices.Contains(parts, "") || slices.Contains(parts, subjectPart) {
-				add("refresh_keys.%s[%d] %q is no key path — name the key, its parents' keys "+
-					"before it, each joined by a dot", name, i, key)
+			if parts := strings.Split(key, "."); slices.Contains(parts, "") || slices.Contains(parts, subjectPart) ||
+				parts[len(parts)-1] == "*" {
+				add("refresh_keys.%s[%d] %q is no key path to a token — name the key, its parents' keys "+
+					"before it, each joined by a dot, and a field last, never *", name, i, key)
 			}
 		}
 	}

@@ -21,6 +21,7 @@ type testLogin struct {
 	Other   map[string]string `json:"other"`
 	Swap    map[string]string `json:"swap"`
 	Planted map[string]string `json:"planted"`
+	Dropped map[string]string `json:"dropped"`
 	Broken  []struct {
 		Copy   map[string]string `json:"copy"`
 		Logged bool              `json:"logged"`
@@ -31,10 +32,10 @@ type testLogin struct {
 // WITH, for every harness: a home holds a mixed file's login fields alone; a
 // refresh writes exactly the shared login the fixture writes out; a setting
 // written beside an unchanged login, or a copy that does not read, leaves the
-// shared login as it was and reaches no later home; another account's
-// refresh, or a token file swapped alone, is refused and logged with
-// shared=other_account, never a value. A login command takes the whole login.
-// Not parallel: it captures the process-wide logger.
+// shared login as it was and reaches no later home; a copy whose account
+// fields or ID token name another account, or that dropped a file holding
+// them, is refused and logged with shared=other_account, never a value. A
+// login command takes the whole login. Not parallel: it captures the logger.
 //
 // Mutation: seed or carry a mixed file whole, judge a refresh on the whole
 // file, check the account on changed files alone, or apply it to a login
@@ -87,8 +88,11 @@ func TestASeatCarriesOnlyItsTokensAndOnlyItsAccount(t *testing.T) {
 			home, gen := seeded()
 			gen.Mode = mode
 			for _, rel := range profile.CredentialPaths {
+				// A FILE THE COPY LACKS IS ABSENT from the home, not as seeded.
 				if content, held := copied[filepath.Base(rel)]; held {
 					writeFile(t, filepath.Join(home, rel), content)
+				} else if err := os.Remove(filepath.Join(home, rel)); err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
 				}
 			}
 			before := len(logs.String())
@@ -100,7 +104,9 @@ func TestASeatCarriesOnlyItsTokensAndOnlyItsAccount(t *testing.T) {
 		if got, _ := carry(syncRefresh, login.Refresh); !maps.Equal(got, login.Carried) {
 			t.Errorf("%s: a refresh of the seeded account left the shared login %v, want %v", harness, got, login.Carried)
 		}
-		for what, copied := range map[string]map[string]string{"another account's refresh": login.Other, "a swapped token": login.Swap} {
+		for what, copied := range map[string]map[string]string{
+			"another account's refresh": login.Other, "a swapped token": login.Swap, "a dropped account file": login.Dropped,
+		} {
 			if copied == nil {
 				continue
 			}

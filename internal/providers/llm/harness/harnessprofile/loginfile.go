@@ -25,11 +25,15 @@ import (
 type FileRule struct {
 	// Name is the file's name in the shared directory, which says its format
 	// (TOML for a `.toml` name, a `.env` file's variables for a `.env` one, else
-	// JSON with every `//` line set aside) and
-	// whether it is a [CredentialStore]'s document ([CredentialStoreDocument]),
-	// which a refresh holds to the logins it was handed
-	// ([KeepHandedCredentials]).
+	// JSON) and whether it is a [CredentialStore]'s document
+	// ([CredentialStoreDocument]), which a refresh holds to the logins it was
+	// handed ([KeepHandedCredentials]).
 	Name string `json:"name"`
+
+	// CommentLines is whether the harness writes lines opening with `//` into
+	// this JSON file, which are then read set aside ([Profile.CommentLines]);
+	// in any other JSON file such a line does not read.
+	CommentLines bool `json:"comment_lines,omitempty"`
 
 	// LoginKeys are the key paths that are the login, for a mixed file
 	// ([Profile.LoginKeys]); none for a login file.
@@ -51,6 +55,7 @@ func (p *Profile) FileRule(name string) FileRule {
 		LoginKeys:    slices.Clone(p.LoginKeys[name]),
 		RefreshKeys:  slices.Clone(p.RefreshKeys[name]),
 		IdentityKeys: slices.Clone(p.IdentityKeys[name]),
+		CommentLines: slices.Contains(p.CommentLines, name),
 	}
 }
 
@@ -82,9 +87,10 @@ func (r FileRule) Seed(shared []byte) ([]byte, error) {
 // Carry is what a refresh writes of home, a home's copy, over shared, the
 // shared copy: shared with each of its refresh keys as home holds it, a key home
 // lacks left as shared holds it, and a store's document held to the logins
-// shared holds ([KeepHandedCredentials]). Where the result means what shared or
-// home does it is that copy, byte for byte. A copy either side cannot read
-// carries nothing: shared, and the reason.
+// shared holds ([KeepHandedCredentials]). Where the result means what shared
+// does it is shared, byte for byte; else it is written in shared's layout,
+// never as the home's bytes. A copy either side cannot read carries nothing:
+// shared, and the reason.
 func (r FileRule) Carry(home, shared []byte) ([]byte, error) {
 	if r.Name == CredentialStoreDocument {
 		return KeepHandedCredentials(home, shared), nil
@@ -104,13 +110,10 @@ func (r FileRule) Carry(home, shared []byte) ([]byte, error) {
 	for _, key := range r.RefreshKeys {
 		carryKey(s, h, strings.Split(key, "."))
 	}
-	switch {
-	case reflect.DeepEqual(s, was):
+	if reflect.DeepEqual(s, was) {
 		return shared, nil
-	case reflect.DeepEqual(s, h):
-		return home, nil
 	}
-	out, err := r.encode(s, commentHeader(shared))
+	out, err := r.encode(s, shared)
 	if err != nil {
 		return shared, err
 	}
@@ -173,31 +176,53 @@ func (r FileRule) decode(content []byte) (map[string]any, error) {
 		}
 		return doc, nil
 	}
-	body := withoutCommentLines(content)
+	body := content
+	if r.CommentLines {
+		body = withoutCommentLines(content)
+	}
 	if len(bytes.TrimSpace(body)) == 0 {
 		return map[string]any{}, nil
 	}
 	return jsonObject(body)
 }
 
-// encode writes doc in the file's format, header (a JSON file's leading `//`
-// lines) first.
-func (r FileRule) encode(doc map[string]any, header []byte) ([]byte, error) {
-	if r.dotenv() {
-		return encodeDotenv(doc), nil
-	}
-	if r.toml() {
-		var out bytes.Buffer
-		if err := toml.NewEncoder(&out).Encode(doc); err != nil {
+// encode writes doc in the file's format and in like's layout, like being the
+// copy it replaces (nil for none): a JSON file's `//` header where its rule has
+// one, indented unless like is one line, and a last newline only where like
+// ends in one.
+func (r FileRule) encode(doc map[string]any, like []byte) ([]byte, error) {
+	var out []byte
+	switch {
+	case r.dotenv():
+		out = encodeDotenv(doc)
+	case r.toml():
+		var buf bytes.Buffer
+		if err := toml.NewEncoder(&buf).Encode(doc); err != nil {
 			return nil, fmt.Errorf("writing %s: %w", r.Name, err)
 		}
-		return out.Bytes(), nil
+		out = buf.Bytes()
+	default:
+		var header []byte
+		body := like
+		if r.CommentLines {
+			header = commentHeader(like)
+			body = like[len(header):]
+		}
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		if like == nil || bytes.Contains(bytes.TrimSpace(body), []byte("\n")) {
+			enc.SetIndent("", "  ")
+		}
+		if err := enc.Encode(doc); err != nil {
+			return nil, fmt.Errorf("writing %s: %w", r.Name, err)
+		}
+		out = append(slices.Clone(header), buf.Bytes()...)
 	}
-	out, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("writing %s: %w", r.Name, err)
+	if like != nil && !bytes.HasSuffix(like, []byte("\n")) {
+		out = bytes.TrimRight(out, "\n")
 	}
-	return append(append(slices.Clone(header), out...), '\n'), nil
+	return out, nil
 }
 
 // commentHeader is content's leading lines that open with `//`.

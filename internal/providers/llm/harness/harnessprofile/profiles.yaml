@@ -2762,6 +2762,8 @@ copilot:
   credential_paths: [".copilot/config.json"]
   login_keys:
     config.json: ["copilotTokens", "authTokens", "lastLoggedInUser", "loggedInUsers"]
+  # The file opens with two `//` lines (measured on 1.0.114), read set aside.
+  comment_lines: ["config.json"]
   # What a call leaves in the seat's home, measured on 1.0.114: a session
   # directory holding the call's events, the session database every session
   # is indexed in (which the harness's own session_store_sql tool queries)
