@@ -74,8 +74,7 @@ func TestACodexRunReportsTheThreadItsHarnessMintedAndIsChargedItsRollout(t *test
 
 	server := recorded(t, record, "server-argv")
 	for _, want := range []string{"--listen", "unix://" + p.CodexSocket(), `sandbox_mode="danger-full-access"`,
-		`approval_policy="never"`, `shell_environment_policy.exclude=["CODEX_API_KEY", "CREWLET_NOTES_URL"]`,
-		`model="gpt-test"`,
+		`approval_policy="never"`, `shell_environment_policy.inherit="all"`, `model="gpt-test"`,
 		`model_reasoning_effort="high"`} {
 		if !slices.Contains(server, want) {
 			t.Errorf("the app-server's argv lacks %q: %q", want, server)
@@ -426,6 +425,16 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 		}
 	}
 	p := executor.PathsFor(box)
+	// AND THE MODEL'S SHELL IS HANDED NONE OF THEM: every credential name the
+	// codex profile signs in by, and both routes, are excluded from the
+	// environment Codex hands the commands it runs (its shell_environment_policy).
+	profile, _ := harnessprofile.Builtin(executor.CodexName)
+	excluded := codexShellExcluded(t, recorded(t, record, "server-argv"))
+	for _, name := range append(profile.CredentialEnvNames(nil), "CREWLET_NOTES_URL", "CREWLET_SKILLS_URL") {
+		if !slices.Contains(excluded, name) {
+			t.Errorf("the model's shell may be handed %s: the policy excludes %q", name, excluded)
+		}
+	}
 	if got := boxFile(t, box, p.CodexNotesURL()); got != codexBridgeURL+"/steer" {
 		t.Errorf("the helper's notes route file holds %q", got)
 	}
@@ -557,4 +566,21 @@ func killProcess(t *testing.T, prefix string) {
 		return
 	}
 	t.Fatalf("no process runs %s", prefix)
+}
+
+// codexShellExcluded is the names the app-server's argv excludes from the
+// environment of the model's shell commands (shell_environment_policy.exclude).
+func codexShellExcluded(t *testing.T, argv []string) []string {
+	t.Helper()
+	for _, arg := range argv {
+		if value, ok := strings.CutPrefix(arg, "shell_environment_policy.exclude="); ok {
+			var names []string
+			if err := json.Unmarshal([]byte(value), &names); err != nil {
+				t.Fatalf("the shell policy %q does not read as a list: %v", value, err)
+			}
+			return names
+		}
+	}
+	t.Fatalf("the app-server's argv sets no shell policy: %q", argv)
+	return nil
 }
