@@ -8,12 +8,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -403,8 +406,9 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 // four minutes at the slowest link pace, and none of its handling, which
 // would push a re-ask past a 5 s reason. A body's read is given its arrival;
 // the pointer and the claims keep the term. A pass delivering a run's value
-// raw is quiet 185 s across a link, 5 s in process. Every class is held to
-// what one key holds, and read at the term only if it crosses inside it.
+// raw is quiet 185 s across a link, 5 s in process. Every class an opened
+// bucket declares is held to what one key holds, and read at the term only if
+// it crosses inside it, save [undeclared] until #1814 declares every bucket's.
 //
 // Mutation: let leaderFor ignore the class, read bodies at the term, declare a
 // class past coord.MaxValueBytes, or let most drop rest, and a row goes red.
@@ -462,7 +466,7 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 			}
 		}
 	}
-	for _, h := range []holding{runsHolding, configHolding, undeclaredHolding} {
+	for _, h := range openedHoldings(t, nc) {
 		classes := []class{h.rest}
 		for _, k := range h.classes {
 			classes = append(classes, k.class)
@@ -472,12 +476,55 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 				t.Errorf("a class is held to %d bytes, want within 1..%d, what one key holds", c.bound,
 					coord.MaxValueBytes)
 			}
+			// undeclared is exempt by value: a class equal to it IS it.
 			if c.reply == replyTerm && c != undeclared && c.bound > coord.SmallValueBytes {
 				t.Errorf("a class of %d bytes is read at the term, past the %d that cross inside it",
 					c.bound, coord.SmallValueBytes)
 			}
 		}
 	}
+}
+
+// openedHoldings is the holding of every bucket a fleet store and a lease
+// store settle as they open, read off the handles themselves, so a bucket
+// opened with a holding of its own is held to the class rules unlisted.
+func openedHoldings(t *testing.T, nc *nats.Conn) []holding {
+	t.Helper()
+	store := openFleetForTest(t, nc, fmt.Sprintf("h%d", bucketSeq.Add(1)))
+	fields := reflect.ValueOf(store).Elem()
+	var found []holding
+	for i := range fields.NumField() {
+		if fields.Type().Field(i).Type != reflect.TypeFor[jetstream.KeyValue]() {
+			continue
+		}
+		// Read without Interface: reflection hands out no unexported value.
+		found = append(found, reflectedHolding(fields.Field(i).Elem().FieldByName("holding")))
+	}
+	leases := openStore(t, nc, time.Minute)
+	for _, kv := range []jetstream.KeyValue{leases.leases.kv, leases.duties.kv, leases.counter.kv} {
+		found = append(found, kv.(settledBucket).holding)
+	}
+	for _, want := range []holding{runsHolding, configHolding, undeclaredHolding} {
+		if !slices.ContainsFunc(found, want.same) {
+			t.Fatalf("premise: no opened bucket holds %+v, so the walk read the handles wrong", want)
+		}
+	}
+	return found
+}
+
+// reflectedHolding is the holding a settled handle's reflected field holds.
+func reflectedHolding(v reflect.Value) holding {
+	classOf := func(c reflect.Value) class {
+		return class{bound: int(c.FieldByName("bound").Int()), reply: reply(c.FieldByName("reply").Int())}
+	}
+	h := holding{rest: classOf(v.FieldByName("rest"))}
+	keys := v.FieldByName("classes")
+	for j := range keys.Len() {
+		k := keys.Index(j)
+		h.classes = append(h.classes, keyClass{keys: k.FieldByName("keys").String(),
+			class: classOf(k.FieldByName("class"))})
+	}
+	return h
 }
 
 // A SMALL CLASS'S REPLY CROSSES THE FLOOR INSIDE THE READ TERM: at
