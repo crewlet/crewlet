@@ -109,8 +109,11 @@ func FailureOf(err error) growth.Failure {
 		}
 		return growth.FailureVendorRefused
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
 		return growth.FailureTimedOut
+	case errors.Is(err, googleauth.ErrTooLarge):
+		return growth.FailureUnknownOutcome
 	}
 	return growth.FailureVendorUnavailable
 }
@@ -174,15 +177,28 @@ func sendOn(ctx context.Context, t *googleauth.Transport, req Request, bearer st
 	if req.Body != nil {
 		body = req.Body
 	}
-	var raw json.RawMessage
+	do := t.Do
 	if req.Reads() {
-		return raw, t.DoRead(ctx, req.Op.Method, req.URL(), bearer, body, &raw)
+		do = t.DoRead
 	}
-	return raw, t.Do(ctx, req.Op.Method, req.URL(), bearer, body, &raw)
+	if req.Raw {
+		var kept googleauth.Raw
+		if err := do(ctx, req.Op.Method, req.URL(), bearer, body, &kept); err != nil {
+			return nil, err
+		}
+		return json.Marshal(map[string]string{"contentType": kept.ContentType, "data": string(kept.Data)})
+	}
+	var raw json.RawMessage
+	return raw, do(ctx, req.Op.Method, req.URL(), bearer, body, &raw)
 }
 
-// refused is Google's refusal in the product's words, where it has any.
+// refused is Google's refusal in the product's words, where it has any, and
+// an answer too large to read as what to ask for instead.
 func (c *Client) refused(req Request, err error) error {
+	if errors.Is(err, googleauth.ErrTooLarge) {
+		return growth.Refuse(growth.RefusedInvalid, c.Name+" answered "+req.Op.ID+" with more than one call "+
+			"reads; narrow it: fewer days, dimensions or rows.")
+	}
 	if api, ok := errors.AsType[*googleauth.APIError](err); ok && c.Refused != nil {
 		if said := c.Refused(req, api); said != nil {
 			return said
