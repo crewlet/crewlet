@@ -41,8 +41,8 @@ func (Muse) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths
 	undecided := func(why string) sandbox.MainThreadReading {
 		return sandbox.MainThreadReading{Receipts: sandbox.TakeReceipts{Why: why}}
 	}
-	raw, err := box.ReadFile(ctx, paths.MuseNotesDigest())
-	digest := strings.TrimSpace(string(raw))
+	raw, err := box.ReadFile(ctx, paths.MuseNotesInstall())
+	digest := museInstalledDigest(raw)
 	if err != nil || digest == "" {
 		return undecided("the run's notes plugin left no digest of its installed package, so no hook's " +
 			"run can be told for the plugin's")
@@ -172,7 +172,7 @@ type museAnswered struct {
 }
 
 // museHeld is the take tokens r, a session's record, shows held, of the
-// plugin package whose digest is digest ([Paths.MuseNotesDigest]), as the
+// plugin package whose digest is digest ([museInstalledDigest]), as the
 // receipt above says. A line it cannot read with a later line after it is a
 // [museUnreadLine], and nothing is held.
 func museHeld(r io.Reader, digest string) (map[string]bool, error) {
@@ -190,17 +190,19 @@ func museHeld(r io.Reader, digest string) (map[string]bool, error) {
 		}
 		return nil
 	}
-	dropFinish := func() {
+	// A RESTART drops a finish's pending take, whose block a resumed session
+	// does not restore, and every run still awaiting its block, which the new
+	// session never commits; a committed PostToolUse block stays in its
+	// history (measured on 1.4.25).
+	restart := func() {
 		for token, finish := range pending {
 			if finish {
 				delete(pending, token)
 			}
 		}
-		for id, a := range awaiting {
-			if a.finish {
-				delete(awaiting, id)
-			}
-		}
+		clear(awaiting)
+		clear(answers)
+		call = ""
 	}
 	err := readLines(bufio.NewReaderSize(r, lineChunkBytes), maxLineBytes, func(line []byte) error {
 		if err := next(); err != nil {
@@ -213,7 +215,7 @@ func museHeld(r io.Reader, digest string) (map[string]bool, error) {
 		}
 		switch {
 		case l.payloadType == "session.started":
-			dropFinish()
+			restart()
 			stops = 0
 		case l.call != "":
 			call = l.call
@@ -277,6 +279,22 @@ func museHeld(r io.Reader, digest string) (map[string]bool, error) {
 		return nil, err
 	}
 	return held, nil
+}
+
+// museInstalledDigest is the digest of the package Muse Code installed, read
+// off its answer to `muse plugins install --json` ([Paths.MuseNotesInstall]):
+// `installed.package_sha256`, as JSON, however it is laid out; "" where the
+// answer holds none, the install having failed or never run.
+func museInstalledDigest(answer []byte) string {
+	var a struct {
+		Installed struct {
+			PackageSHA256 string `json:"package_sha256"`
+		} `json:"installed"`
+	}
+	if json.Unmarshal(answer, &a) != nil {
+		return ""
+	}
+	return a.Installed.PackageSHA256
 }
 
 // museNoteHookOf reports whether key names one of the plugin's note hooks, and

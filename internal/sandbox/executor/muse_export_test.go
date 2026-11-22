@@ -51,7 +51,7 @@ func MuseConfirmsATake(t *testing.T) {
 	box := sandbox.NewFakeSandbox("b")
 	path := PathsFor(box).MuseSessions() + "/2026/11/22/" + session + "/session.jsonl"
 	box.Put(path, string(museFixture(t, "hooks.session.jsonl")))
-	box.Put(PathsFor(box).MuseNotesDigest(), museHooksDigest+"\n")
+	box.Put(PathsFor(box).MuseNotesInstall(), museInstallAnswer(museHooksDigest))
 	box.ExecFunc = func(context.Context, string, sandbox.ExecOptions) (sandbox.ExecResult, error) {
 		return sandbox.ExecResult{Stdout: path + "\n"}, nil
 	}

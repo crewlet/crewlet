@@ -14,13 +14,19 @@ import (
 func museToken(n string) string { return claudeTakeToken("00000000-0000-4000-8000-00000000000" + n) }
 
 // The digests Muse Code gave the notes plugin's package in each fixture's
-// box, which its hooks' runs record ([Paths.MuseNotesDigest]).
+// box, which its hooks' runs record ([museInstalledDigest]).
 const (
 	museHooksDigest      = "sha256:b0a00512373d797fa5b05952efbd9042c9ad3db342cb8b263b6cbcde239a9d9c"
 	museLaunchedDigest   = "sha256:c84f032f91b068e193ec2f11ed87d845d3972d0a83cd0dcd83f4ed85336aea13"
 	museRepositoryDigest = "sha256:50bb3cd3349b897a8b1b1c5f894dee7222fa24b66cad50bdbc767e01e1cdd12d"
 	museFailedDigest     = "sha256:6b4afe21018a7cffb2a2fb25976e2bb2087f78619e713759b2a10e09ba1d1931"
 )
+
+// museInstallAnswer is Muse Code's answer to the plugin's install, as the
+// script keeps it ([Paths.MuseNotesInstall]), for the package digest names.
+func museInstallAnswer(digest string) string {
+	return `{"installed":{"id":"crewlet-notes","package_sha256":"` + digest + `"}}`
+}
 
 // museHeldOf is the tokens record shows held of the plugin package digest
 // names, the case failing on a read error.
@@ -117,31 +123,59 @@ func TestOnlyTheMusePluginsHooksGiveAReceipt(t *testing.T) {
 	}
 }
 
-// A COMPACTION BETWEEN A TAKE AND THE NEXT REQUEST LEAVES IT UNCONFIRMED: the
-// record names what a compaction kept only by its own sequence, so the note
-// is told again rather than counted off a summary.
+// A COMPACTION BETWEEN A TAKE AND THE NEXT REQUEST LEAVES IT UNCONFIRMED,
+// whether it comes before the run's block is committed or after: the record
+// names what a compaction kept only by its own sequence, so the note is told
+// again rather than counted off a summary.
 //
-// Mutation: drop the compaction's reset.
+// Mutation: drop the compaction's reset of the runs awaiting a block, or of
+// the takes awaiting a request.
 func TestACompactionBeforeTheNextMuseRequestLeavesTheTakeUnconfirmed(t *testing.T) {
 	compaction := museRecordLine(t, "runtime.session", map[string]any{"kind": "context_compaction_installed"})
-	record := insertAfter(t, museLines(t, "hooks.session.jsonl"), `"kind":"tool_result_batch_committed"`, compaction)
-	held := museHeldOf(t, record, museHooksDigest)
-	if held[museToken("1")] || held[museToken("3")] || !held[museToken("9")] {
-		t.Fatalf("held %v: want the batch's takes unconfirmed past the compaction, the finish's held", held)
+	for name, after := range map[string]string{
+		"before the blocks": `"kind":"tool_result_batch_committed"`,
+		"after the blocks":  `"id":"hook:post_tool_use:call_0032_1:1"`,
+	} {
+		record := insertAfter(t, museLines(t, "hooks.session.jsonl"), after, compaction)
+		held := museHeldOf(t, record, museHooksDigest)
+		if held[museToken("1")] || held[museToken("3")] || !held[museToken("9")] {
+			t.Errorf("%s: held %v, want the batch's takes unconfirmed past the compaction, the finish's held",
+				name, held)
+		}
 	}
 }
 
-// A FINISH'S TAKE IS NOT CONFIRMED ACROSS A RESTART: its block sits in the
-// leading developer instructions, which a resumed session does not restore.
+// A RESTART BEFORE THE NEXT REQUEST LEAVES A FINISH'S TAKE UNCONFIRMED, its
+// block sitting in the leading developer instructions, which a resumed
+// session does not restore, whether the block was committed yet or not; and a
+// step's take whose block the old session never committed, which the new one
+// never will. A step's committed block stays in the session's history.
 //
-// Mutation: keep a finish's pending take across a session's start.
+// Mutation: keep a finish's pending take, or a run awaiting its block, across
+// a session's start.
 func TestAMuseFinishTakeIsNotConfirmedAcrossARestart(t *testing.T) {
 	restart := []byte(`{"payload_type":"session.started","payload":{}}` + "\n")
-	// After the Stop hook's end, which alone records it `blocked`: its take
-	// is pending there, and the restart comes before the next request.
-	record := insertAfter(t, museLines(t, "hooks.session.jsonl"), `"status":"blocked"`, restart)
-	if held := museHeldOf(t, record, museHooksDigest); held[museToken("9")] || !held[museToken("1")] {
-		t.Fatalf("held %v: want the finish's take unconfirmed, the batch's held", held)
+	for name, c := range map[string]struct {
+		after   string
+		unheld  []string
+		stillOK []string
+	}{
+		// After the Stop hook's end, which alone records it `blocked`.
+		"after the finish's run":   {`"status":"blocked"`, []string{"9"}, []string{"1", "3"}},
+		"after the finish's block": {`"id":"hook:stop:stop:0"`, []string{"9"}, []string{"1", "3"}},
+		"before the step's blocks": {`"kind":"tool_result_batch_committed"`, []string{"1", "3"}, []string{"9"}},
+	} {
+		held := museHeldOf(t, insertAfter(t, museLines(t, "hooks.session.jsonl"), c.after, restart), museHooksDigest)
+		for _, n := range c.unheld {
+			if held[museToken(n)] {
+				t.Errorf("%s: take %s is held across the restart: %v", name, n, held)
+			}
+		}
+		for _, n := range c.stillOK {
+			if !held[museToken(n)] {
+				t.Errorf("%s: take %s is not held: %v", name, n, held)
+			}
+		}
 	}
 }
 
@@ -155,7 +189,7 @@ func TestAMuseMainThreadReadAnswersItsTakes(t *testing.T) {
 	p := PathsFor(box)
 	path := p.MuseSessions() + "/2026/11/22/" + session + "/session.jsonl"
 	box.Put(path, string(museFixture(t, "hooks.session.jsonl")))
-	box.Put(p.MuseNotesDigest(), museHooksDigest+"\n")
+	box.Put(p.MuseNotesInstall(), museInstallAnswer(museHooksDigest))
 	box.ExecFunc = func(_ context.Context, cmd string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
 		return sandbox.ExecResult{Stdout: path + "\n"}, nil
 	}
@@ -394,7 +428,7 @@ func TestAnUnreadableMuseRecordConfirmsNothing(t *testing.T) {
 		p := PathsFor(box)
 		path := p.MuseSessions() + "/2026/11/22/" + session + "/session.jsonl"
 		box.Put(path, string(record))
-		box.Put(p.MuseNotesDigest(), museHooksDigest+"\n")
+		box.Put(p.MuseNotesInstall(), museInstallAnswer(museHooksDigest))
 		box.ExecFunc = func(_ context.Context, _ string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
 			return sandbox.ExecResult{Stdout: path + "\n"}, nil
 		}
@@ -489,5 +523,59 @@ func TestAFailedMuseRequestAfterTheBlockConfirmsNothing(t *testing.T) {
 	}
 	if held := museHeldOf(t, bytes.Join(lines, nil), museFailedDigest); len(held) != 2 {
 		t.Errorf("held %v once the continued run's request completed, want both takes", held)
+	}
+}
+
+// THE PACKAGE'S DIGEST IS READ OFF THE INSTALL'S ANSWER HOWEVER IT IS LAID OUT:
+// a real 1.4.25 answer to `muse plugins install --json`, as Muse prints it
+// (indented) and compacted to one line, reads its `installed.package_sha256`;
+// a failed install's answer, or none, reads none.
+//
+// Mutation: read the digest by a pattern of the indented layout alone.
+func TestMuseReadsItsPackageDigestWhateverItsLayout(t *testing.T) {
+	const want = "sha256:bf6b9b8c173702da61ca05d5b607aec0e1946cc50e6ae1294c31fec64ca0574c"
+	pretty := museFixture(t, "plugin-install.json")
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, pretty); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Count(compact.Bytes(), []byte("\n")) > 0 || !bytes.Contains(pretty, []byte("\n  ")) {
+		t.Fatal("the two layouts are not one indented and one on a single line")
+	}
+	for name, answer := range map[string][]byte{"indented": pretty, "compact": compact.Bytes()} {
+		if got := museInstalledDigest(answer); got != want {
+			t.Errorf("%s: read %q, want %q", name, got, want)
+		}
+	}
+	for name, answer := range map[string]string{
+		"a failed install": `{"error":{"code":"invalid-plugin-package","message":"x"}}`,
+		"none":             "",
+	} {
+		if got := museInstalledDigest([]byte(answer)); got != "" {
+			t.Errorf("%s: read %q, want none", name, got)
+		}
+	}
+}
+
+// A RUN WHOSE INSTALL LEFT NO DIGEST CONFIRMS NOTHING AND DECIDES NOTHING: an
+// empty answer, its install never having printed one, reads undecided, saying
+// why, even once the job is over, rather than every take absent.
+//
+// Mutation: read a take held, or absent, with no digest to tell the plugin's
+// runs by.
+func TestAMuseRunWithNoPackageDigestIsUndecided(t *testing.T) {
+	const session = "0b5e0000-0000-4000-8000-0000000000f7"
+	box := sandbox.NewFakeSandbox("b")
+	p := PathsFor(box)
+	path := p.MuseSessions() + "/2026/11/22/" + session + "/session.jsonl"
+	box.Put(path, string(museFixture(t, "hooks.session.jsonl")))
+	box.Put(p.MuseNotesInstall(), "")
+	box.ExecFunc = func(_ context.Context, _ string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+		return sandbox.ExecResult{Stdout: path + "\n"}, nil
+	}
+	got := (Muse{}).readMainThread(t.Context(), box, p, sandbox.MainThreadAsk{Session: session, Ended: true,
+		Takes: []sandbox.AskedTake{{Take: "00000000-0000-4000-8000-000000000001"}}}).Receipts
+	if len(got.Held) != 0 || len(got.Absent) != 0 || !strings.Contains(got.Why, "digest") {
+		t.Fatalf("receipts %+v, want undecided, naming the missing digest", got)
 	}
 }
