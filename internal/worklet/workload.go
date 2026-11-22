@@ -112,7 +112,8 @@ func (c *FlowCounts) counter(state FlowState) *int {
 type WorkloadAnswer struct {
 	Rows []WorkloadRow `json:"rows"`
 
-	// Truncated says the answer stopped at [MaxWorkloadHandles].
+	// Truncated says the answer stopped at [MaxWorkloadHandles] or at its
+	// bytes ([statelog.RowsOf]).
 	Truncated bool `json:"truncated,omitempty"`
 
 	// FlowLive is [Answer.FlowLive] for every row's flow counts.
@@ -229,6 +230,7 @@ func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
 	defer func() { _ = rows.Close() }()
 
 	out.Rows = []WorkloadRow{}
+	held := statelog.RowsOf(ctx)
 	for rows.Next() {
 		var row WorkloadRow
 		targets := []any{&row.Handle, &row.Open, &row.Points,
@@ -243,6 +245,10 @@ func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
 			if state.Loads() {
 				row.Load += *row.Flow.counter(state)
 			}
+		}
+		if !held.TakeEncoded(row) {
+			out.Truncated = true
+			break
 		}
 		out.Rows = append(out.Rows, row)
 	}

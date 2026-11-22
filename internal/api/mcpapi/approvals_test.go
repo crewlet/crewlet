@@ -48,6 +48,7 @@ func (f *fakeApprovals) Deliver(_ context.Context, given types.ExecutorAnswerGiv
 func waitingRun() sandbox.PendingRun {
 	return sandbox.PendingRun{TurnID: "t1", LaunchID: "launch-1", AgentHandle: "swe",
 		AgentID: uuid.NewSHA1(uuid.NameSpaceOID, []byte("swe")).String(), Status: sandbox.StatusAwaiting,
+		Question: "May swe call tr_close_issue on the tracker MCP server?",
 		HeldCall: &sandbox.HeldCall{ID: heldID, LaunchID: "launch-1", Server: "tracker",
 			Tool: "tr_close_issue", Raw: "close_issue", Digest: "sha256:d1", HeldAt: time.Now().UTC()}}
 }

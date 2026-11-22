@@ -61,7 +61,7 @@ type ArtifactsSource struct {
 // CommentAnswers answers every thread on an artifact placed on one version, as
 // p reads it ([artifactsapi.Service.Comments]).
 type CommentAnswers interface {
-	Comments(ctx context.Context, p iam.Principal, id artifacts.ID, version int) (
+	Comments(ctx context.Context, p iam.Principal, id artifacts.ID, version int, cursor string) (
 		artifactsapi.CommentsAnswer, error)
 }
 
@@ -358,7 +358,7 @@ func (s artifactsAnswers) comments(ctx context.Context, p Params) (any, error) {
 	if s.Comments == nil {
 		return nil, fmt.Errorf("%w: this node answers no comment threads", ErrUnavailable)
 	}
-	answer, err := s.Comments.Comments(ctx, asking, id, version)
+	answer, err := s.Comments.Comments(ctx, asking, id, version, p.String("cursor"))
 	return answer, artifactFailure("artifact_comments", err)
 }
 

@@ -13,6 +13,7 @@ import { fmtDate } from "~/lib/format.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { Changes } from "./Changes.tsx";
 import { ATLAS_POLL_MS } from "./filters.ts";
+import { ACTIVITY_CUT } from "./words.ts";
 // THE ATLAS'S OWN SHEET, for a reader who opens this page first.
 import "~/styles/atlas.css";
 
@@ -47,6 +48,11 @@ export function ChangesPage() {
               reading={{ formatTime: (at) => fmtDate(new Date(at).toISOString()) }}
               emptyLabel="Nothing recorded in the window."
             />
+            {answer.truncated && (
+              <Text variant="caption" tone="secondary">
+                {ACTIVITY_CUT}
+              </Text>
+            )}
           </div>
         ) : activity.loading ? (
           <Skeleton variant="text" rows={2} label="Counting the atlas log" />

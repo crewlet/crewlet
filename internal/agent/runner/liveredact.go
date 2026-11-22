@@ -9,7 +9,6 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/textcut"
-	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // A live frame's words are REDACTED BEFORE THEIR END IS TAKEN, as a record's
@@ -109,11 +108,11 @@ type liveArgs struct {
 	was, shown map[string]any
 }
 
-// of is args redacted as values ([tools.RedactedArgs]), again only where args
+// of is args redacted as values ([redact.Args]), again only where args
 // is not the map it was.
 func (m *liveArgs) of(args map[string]any) map[string]any {
 	if !m.set || !sameArgs(m.was, args) {
-		*m = liveArgs{set: true, was: args, shown: tools.RedactedArgs(args)}
+		*m = liveArgs{set: true, was: args, shown: redact.Args(args)}
 	}
 	return m.shown
 }
@@ -205,7 +204,7 @@ func (w *liveWords) narration(narr []toolloop.Narration) []types.RoundNarration 
 }
 
 // runningCalls renders the calls in flight, their arguments redacted as values
-// ([tools.RedactedArgs]) and kept by call, or nil when none is, so the key is
+// ([redact.Args]) and kept by call, or nil when none is, so the key is
 // absent on every frame but those published while a call runs.
 func (w *liveWords) runningCalls(calls []toolloop.RunningCall) []types.RunningCall {
 	w.mu.Lock()
@@ -219,7 +218,7 @@ func (w *liveWords) runningCalls(calls []toolloop.RunningCall) []types.RunningCa
 	for i, c := range calls {
 		r, ok := w.running[c.ID]
 		if !ok || !sameArgs(r.was, c.Args) {
-			r = liveRunning{was: c.Args, arguments: encodeArgs(tools.RedactedArgs(c.Args))}
+			r = liveRunning{was: c.Args, arguments: encodeArgs(redact.Args(c.Args))}
 		}
 		out[i] = types.RunningCall{
 			ID: c.ID, Round: c.Round, Name: c.Name, Arguments: r.arguments, StartedAt: c.StartedAt.UTC(),

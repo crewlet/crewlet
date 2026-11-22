@@ -95,6 +95,10 @@ func TestAnIdentifierShapeHoldsAPasteAndRefusesAMint(t *testing.T) {
 		{setup.ShapeScalewayAccessKey, "SCWABCDEFGHIJ0123456", true},
 		{setup.ShapeScalewayAccessKey, "SCWABCDEFGHIJ012345", false},
 		{setup.ShapeScalewayAccessKey, "scwabcdefghij0123456", false},
+		{setup.ShapeAppleKeyID, "2X9R4HXF34", true},
+		{setup.ShapeAppleKeyID, "2x9r4hxf34", false},
+		{setup.ShapeAppleKeyID, "2X9R4HXF3", false},
+		{setup.ShapeAppleKey, "-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----", false},
 	} {
 		problem := tc.shape.Problem("access key", tc.value)
 		if (problem == "") != tc.ok {
@@ -104,7 +108,8 @@ func TestAnIdentifierShapeHoldsAPasteAndRefusesAMint(t *testing.T) {
 			t.Errorf("%s: the refusal quotes the value", tc.shape)
 		}
 	}
-	for _, shape := range []setup.Shape{setup.ShapeUUID, setup.ShapeScalewayAccessKey} {
+	for _, shape := range []setup.Shape{setup.ShapeUUID, setup.ShapeScalewayAccessKey, setup.ShapeAppleKey,
+		setup.ShapeAppleKeyID} {
 		if value, err := shape.Mint(func() string { return "minted" }); err == nil || value != "" {
 			t.Errorf("%s minted %q", shape, value)
 		}

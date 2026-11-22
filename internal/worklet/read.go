@@ -391,6 +391,9 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		}
 		// The list-ordered set in drawn order, kept for [readAround].
 		var listedRows []TaskRow
+		// A flat page's sort keys, one per row, and whether more follow.
+		var pageKeys [][]any
+		var pageMore bool
 		switch {
 		case q.GroupBy != "":
 			// A GROUPED ANSWER leaves the flat rows empty and mints
@@ -419,17 +422,27 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			}
 		default:
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-			rows, cursor, err := readPage(ctx, tx, set, resume, terms,
+			rows, keys, more, err := readRows(ctx, tx, set, resume, terms,
 				limit, at)
 			if err != nil {
 				return err
 			}
-			answer.Rows, answer.NextCursor = rows, cursor
+			answer.Rows, pageKeys, pageMore = rows, keys, more
 		}
 		// THE OPT-IN ROW FACTS ([RowField]), over every row the answer
 		// carries, in this transaction so they match the rows' snapshot.
 		if err = fillRowFields(ctx, tx, q, answerRows(&answer)); err != nil {
 			return err
+		}
+		// HELD TO THE ANSWER'S BYTES AFTER THE ROW FACTS, which grow every
+		// row ([statelog.RowBytes]). A list-ordered page is at most
+		// [MaxPriorities] rows, so it is left as [pageListed] cut it.
+		switch {
+		case q.GroupBy != "":
+			holdGroups(statelog.RowsOf(ctx), answer.Groups)
+		case !listed:
+			answer.Rows, answer.NextCursor = holdPage(statelog.RowsOf(ctx),
+				answer.Rows, pageKeys, pageMore, terms)
 		}
 
 		hint, capped, err := countHint(ctx, tx, set)
@@ -1632,6 +1645,25 @@ func readPage(ctx context.Context, tx *sql.Tx, set taskSet,
 	resume []keyset.Arm, terms []sortTerm, limit int,
 	at rowsAt) ([]TaskRow, string, error) {
 
+	out, keys, more, err := readRows(ctx, tx, set, resume, terms, limit, at)
+	if err != nil {
+		return nil, "", err
+	}
+	if !more {
+		return out, "", nil
+	}
+	// THE ORDER TRAVELS WITH THE KEYS — see [page].
+	return out, mintCursor(keys[len(out)-1], cursorOrder(terms)), nil
+}
+
+// readRows is [readPage]'s rows before a cursor is minted: each row's sort
+// keys beside it and whether the set holds more past the last, so a read that
+// ends its page earlier still mints the cursor after its own last row
+// ([holdPage]).
+func readRows(ctx context.Context, tx *sql.Tx, set taskSet,
+	resume []keyset.Arm, terms []sortTerm, limit int,
+	at rowsAt) ([]TaskRow, [][]any, bool, error) {
+
 	// ALLOCATED RATHER THAN NIL, a wire contract: a nil slice marshals to
 	// `null`, and a client's `rows.length` on an empty answer throws.
 	out := []TaskRow{}
@@ -1639,7 +1671,7 @@ func readPage(ctx context.Context, tx *sql.Tx, set taskSet,
 	for _, arm := range pageArmSets(set, resume, terms) {
 		rows, keys, err := scanTaskRows(ctx, tx, arm, terms, limit+1-len(out), at.flow)
 		if err != nil {
-			return nil, "", err
+			return nil, nil, false, err
 		}
 		out = append(out, rows...)
 		pageKeys = append(pageKeys, keys...)
@@ -1647,11 +1679,9 @@ func readPage(ctx context.Context, tx *sql.Tx, set taskSet,
 			break
 		}
 	}
-	cursor := ""
-	if len(out) > limit {
-		out = out[:limit]
-		// THE ORDER TRAVELS WITH THE KEYS — see [page].
-		cursor = mintCursor(pageKeys[limit-1], cursorOrder(terms))
+	more := len(out) > limit
+	if more {
+		out, pageKeys = out[:limit], pageKeys[:limit]
 	}
 	// THE OVERDUE FLAG IS DERIVED ONCE, here, against the QUERY's day
 	// boundary, never this process's clock, so it agrees with
@@ -1663,9 +1693,27 @@ func readPage(ctx context.Context, tx *sql.Tx, set taskSet,
 	// THE DEPENDENCY EDGES, in ONE statement over the page: a correlated
 	// subquery in the SELECT cannot return a collection.
 	if err := loadBlockers(ctx, tx, out); err != nil {
-		return nil, "", err
+		return nil, nil, false, err
 	}
-	return out, cursor, nil
+	return out, pageKeys, more, nil
+}
+
+// holdPage is a flat page held to the answer's bytes: it ends before the
+// first row past them, and its cursor resumes after the last row kept,
+// exactly as the limit's does, so the next page starts at the refused row.
+func holdPage(held *statelog.RowBytes, rows []TaskRow, keys [][]any,
+	more bool, terms []sortTerm) ([]TaskRow, string) {
+
+	for i := range rows {
+		if !held.TakeEncoded(rows[i]) {
+			rows, more = rows[:i], true
+			break
+		}
+	}
+	if !more || len(rows) == 0 {
+		return rows, ""
+	}
+	return rows, mintCursor(keys[len(rows)-1], cursorOrder(terms))
 }
 
 // scanTaskRows reads up to n rows of a set in an order, each with its value

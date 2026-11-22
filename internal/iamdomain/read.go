@@ -1273,6 +1273,24 @@ const (
 // removed, because the one caller rebuilds a registry whole ([Applier]'s
 // directory listener says why not a diff); one seat is [Reader.Requester]'s.
 func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
+	return r.seatHolders(ctx, nil)
+}
+
+// SeatHoldersHeld is [Reader.SeatHolders] as a node holding no data reads
+// it: in the same one snapshot, refused rather than answered past the bytes
+// the read carries ([statelog.RowsOf]), since a slice of the registry rebuilt
+// whole would hand the missing seats to the chart. Some fifty thousand
+// bindings fit.
+func (r *Reader) SeatHoldersHeld(ctx context.Context) ([]SeatHolder, error) {
+	return r.seatHolders(ctx, statelog.RowsOf(ctx))
+}
+
+// errHoldersPastAnswer refuses a registry past the bytes one read answers.
+var errHoldersPastAnswer = fmt.Errorf("iamdomain: the seat bindings pass the %d bytes one read answers",
+	statelog.AnswerBytes)
+
+// seatHolders reads the registry, held to held's bytes (whole for nil).
+func (r *Reader) seatHolders(ctx context.Context, held *statelog.RowBytes) ([]SeatHolder, error) {
 	var out []SeatHolder
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		out = out[:0]
@@ -1288,6 +1306,10 @@ func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 				return fmt.Errorf("iamdomain: read a seat binding: %w", err)
 			}
 			holder.Stage = iam.Stage(stage)
+			if held != nil && !held.TakeEncoded(holder) {
+				_ = rows.Close()
+				return errHoldersPastAnswer
+			}
 			out = append(out, holder)
 		}
 		if err = rows.Close(); err != nil {
@@ -1309,6 +1331,10 @@ func (r *Reader) SeatHolders(ctx context.Context) ([]SeatHolder, error) {
 			if err := removed.Scan(&holder.Seat, &holder.Person); err != nil {
 				_ = removed.Close()
 				return fmt.Errorf("iamdomain: read a removed seat holder: %w", err)
+			}
+			if held != nil && !held.TakeEncoded(holder) {
+				_ = removed.Close()
+				return errHoldersPastAnswer
 			}
 			out = append(out, holder)
 		}

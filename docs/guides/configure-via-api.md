@@ -295,6 +295,8 @@ Every `400` about the document carries `problems` (the failures located and clas
 | `400` | `invalid_patch` | A `PATCH` body that could not be merged, or that names a key the document does not have |
 | `400` | `validation_error` | The whole resulting document failed validation; `detail` carries the message and `problems` locates each failure |
 | `400` | `summary_required` | No `X-Summary` header and no top-level `_summary` key; asked after admission and document checks, so a write you may not make is refused for that first |
+| `400` | `summary_too_long` | The summary is past the 4,096 bytes the activation pointer carries, as the pointer encodes it (`summary_bytes`, `max_summary_bytes`); refused whole, never cut |
+| `400` | `origin_too_long` | The name the write was made under leaves the activation pointer past its 8 KiB (`pointer_bytes`, `max_pointer_bytes`); make it through a credential with a shorter name |
 | `400` | `invalid_query` | `dry_run` given as anything but `true` or `false` |
 | `400` | `conflicting_preconditions` | A write carrying both `If-None-Match` and `If-Match`, to `/config` or a per-entity `PUT`; send one |
 | `400` | `identity_mismatch` | A per-entity `PUT` whose body names another id than its path; never renames. A server or provider is renamed in the whole document, with everything that names it |

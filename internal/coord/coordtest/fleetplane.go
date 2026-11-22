@@ -2,6 +2,7 @@ package coordtest
 
 import (
 	"cmp"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -142,9 +143,8 @@ var planeCases = []fleetCase{{
 			h.t.Fatalf("Target = (%+v, %v, %v) after refused activations, want unset",
 				got, found, err)
 		}
-		if _, found, err := h.f.Payload(h.ctx, "rev-1"); err != nil || found {
-			h.t.Fatalf("Payload(rev-1) = (found=%v, %v): a refused activation left its body",
-				found, err)
+		if h.stored("{}") {
+			h.t.Fatal("a refused activation left its body")
 		}
 		// The author's LABEL alone may be empty: the kind still says what
 		// wrote it.
@@ -208,9 +208,11 @@ var planeCases = []fleetCase{{
 		if target.RevisionID != "rev-2" {
 			h.t.Fatalf("the fleet is on %s, want the write that won", target.RevisionID)
 		}
-		body, ok, err := h.f.Payload(h.ctx, "rev-2")
-		if err != nil || !ok || string(body) != `{"v":2}` {
-			h.t.Fatalf("payload = %q ok=%v err=%v, want the winner's", body, ok, err)
+		if _, body := h.current(); string(body) != `{"v":2}` {
+			h.t.Fatalf("body = %q, want the winner's", body)
+		}
+		if h.stored(`{"v":3}`) {
+			h.t.Fatal("the refused write left its body")
 		}
 	},
 }, {
@@ -252,8 +254,8 @@ var planeCases = []fleetCase{{
 		if target, found, err := h.f.Target(h.ctx); err != nil || found {
 			h.t.Fatalf("target = %+v found=%v err=%v, want no activation", target, found, err)
 		}
-		if _, ok, err := h.f.Payload(h.ctx, "rev-1"); err != nil || ok {
-			h.t.Fatalf("payload ok=%v err=%v, want the refused body unpublished", ok, err)
+		if h.stored("{}") {
+			h.t.Fatal("the refused body was published")
 		}
 	},
 }, {
@@ -368,9 +370,8 @@ var planeCases = []fleetCase{{
 		if got.Epoch == 0 || got.RevisionID != "rev-1" {
 			h.t.Fatalf("published %+v", got)
 		}
-		body, ok, err := h.f.Payload(h.ctx, "rev-1")
-		if err != nil || !ok || string(body) != `{"v":1}` {
-			h.t.Fatalf("payload = %q ok=%v err=%v, want the created revision's", body, ok, err)
+		if _, body := h.current(); string(body) != `{"v":1}` {
+			h.t.Fatalf("body = %q, want the created revision's", body)
 		}
 	},
 }, {
@@ -396,13 +397,12 @@ var planeCases = []fleetCase{{
 		// that has yet to apply it. A refusal that had already published
 		// the loser's body leaves the fleet pointed at a revision no peer
 		// can read.
-		target, found, err := h.f.Target(h.ctx)
-		if err != nil || !found || target.RevisionID != "the-fleets" {
-			h.t.Fatalf("target = %+v found=%v err=%v, want the fleet's own", target, found, err)
+		target, body := h.current()
+		if target.RevisionID != "the-fleets" || string(body) != `{"v":1}` {
+			h.t.Fatalf("the fleet is on %s with body %q, want the fleet's own", target.RevisionID, body)
 		}
-		body, ok, err := h.f.Payload(h.ctx, "the-fleets")
-		if err != nil || !ok || string(body) != `{"v":1}` {
-			h.t.Fatalf("payload = %q ok=%v err=%v, want the fleet's own", body, ok, err)
+		if h.stored(`{"v":2}`) {
+			h.t.Fatal("the refused write published its body")
 		}
 	},
 }, {
@@ -815,9 +815,9 @@ var payloadCases = []fleetCase{{
 		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
-		got, found, err := h.f.Payload(h.ctx, published.RevisionID)
+		got, found, err := h.f.Body(h.ctx, published)
 		if err != nil {
-			h.t.Fatalf("Payload: %v", err)
+			h.t.Fatalf("Body: %v", err)
 		}
 		if !found {
 			h.t.Fatal("the payload a peer activated is invisible — the node cannot converge")
@@ -829,35 +829,70 @@ var payloadCases = []fleetCase{{
 }, {
 	// A node converging on epoch N must not be handed epoch N+1's body.
 	// Applying whatever happened to be there would converge it on a
-	// revision the fleet is not pointed at, and report success.
-	name: "a superseded revision's payload is absent, not stale",
+	// revision the fleet is not pointed at, and report success. The body
+	// is read by the digest its activation names, so it is that
+	// activation's bytes or nothing.
+	name: "a superseded activation's body is its own or absent, never the current one",
 	fn: func(h *fleetHarness) {
-		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin}); err != nil {
+		first, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Summary: "first", Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin})
+		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
 		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-2", Summary: "second", Payload: []byte(`{"v":2}`), At: h.now(), Origin: anOrigin}); err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
-		if _, found, err := h.f.Payload(h.ctx, "rev-1"); err != nil || found {
-			h.t.Errorf("the superseded payload is still served (found=%v err=%v)", found, err)
+		if got, found, err := h.f.Body(h.ctx, first); err != nil || (found && string(got) != `{"v":1}`) {
+			h.t.Errorf("the superseded activation's body = %q (found=%v err=%v), want its own or none",
+				got, found, err)
 		}
-		got, found, err := h.f.Payload(h.ctx, "rev-2")
-		if err != nil || !found {
-			h.t.Fatalf("the current payload is missing (found=%v err=%v)", found, err)
-		}
-		if string(got) != `{"v":2}` {
-			h.t.Errorf("payload = %q, want the current revision's", got)
+		if target, got := h.current(); target.RevisionID != "rev-2" || string(got) != `{"v":2}` {
+			h.t.Errorf("the fleet is on %s with body %q, want rev-2's", target.RevisionID, got)
 		}
 	},
 }, {
-	name: "nothing activated means no payload, not an error",
+	name: "a body nothing wrote is absent, not an error",
 	fn: func(h *fleetHarness) {
-		got, found, err := h.f.Payload(h.ctx, "rev-1")
+		got, found, err := h.f.Body(h.ctx, coord.Activation{RevisionID: "rev-1",
+			Body: coord.BodyOf([]byte(`{"v":1}`))})
 		if err != nil {
-			h.t.Fatalf("Payload before any activation: %v", err)
+			h.t.Fatalf("Body before any activation: %v", err)
 		}
 		if found || got != nil {
-			h.t.Errorf("payload = %q found=%v, want nothing", got, found)
+			h.t.Errorf("body = %q found=%v, want nothing", got, found)
+		}
+	},
+}, {
+	// A POINTER THAT NAMES NO BODY IS A FAULT, NOT ABSENT. Only a build from
+	// before bodies had keys writes one; read as absent, a converging node
+	// would wait for a body never coming.
+	name: "an activation naming no body is refused as bodiless",
+	fn: func(h *fleetHarness) {
+		if _, _, err := h.f.Body(h.ctx, coord.Activation{RevisionID: "rev-1"}); !errors.Is(err, coord.ErrBodyless) ||
+			errors.Is(err, coord.ErrUnavailable) {
+			h.t.Errorf("Body of an activation naming no body = %v, want coord.ErrBodyless and no outage", err)
+		}
+	},
+}, {
+	// ONE DOCUMENT IS ONE BODY: two activations of the same bytes (a
+	// revert, a boot restore) name one key, and each reads it.
+	name: "two activations of one document share its body",
+	fn: func(h *fleetHarness) {
+		first, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1",
+			Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		again, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-2",
+			Payload: []byte(`{"v":1}`), At: h.now(), Expect: "rev-1", Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("Activate the same document again: %v", err)
+		}
+		if first.Body != again.Body || first.Body != coord.BodyOf([]byte(`{"v":1}`)) {
+			h.t.Errorf("the two activations name %+v and %+v, want the document's one body",
+				first.Body, again.Body)
+		}
+		if target, got := h.current(); target.Body != again.Body || string(got) != `{"v":1}` {
+			h.t.Errorf("the pointer names %+v with body %q, want the shared one", target.Body, got)
 		}
 	},
 }, {
@@ -871,13 +906,14 @@ var payloadCases = []fleetCase{{
 	name: "a sealed body round-trips byte for byte",
 	fn: func(h *fleetHarness) {
 		body := []byte(`{"__encrypted__":"enc:v1:2026-01:q8+/Zm9vYmFy==","note":"a<b && c>d"}`)
-		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
-			RevisionID: "rev-1", Payload: body, At: h.now(), Origin: anOrigin}); err != nil {
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+			RevisionID: "rev-1", Payload: body, At: h.now(), Origin: anOrigin})
+		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
-		got, found, err := h.f.Payload(h.ctx, "rev-1")
+		got, found, err := h.f.Body(h.ctx, published)
 		if err != nil || !found {
-			h.t.Fatalf("Payload: found=%v err=%v", found, err)
+			h.t.Fatalf("Body: found=%v err=%v", found, err)
 		}
 		if string(got) != string(body) {
 			h.t.Errorf("payload = %s, want the bytes activated, %s", got, body)
@@ -889,14 +925,15 @@ var payloadCases = []fleetCase{{
 	// certifies bytes the broker never hands back.
 	name: "a body is served in its compact form",
 	fn: func(h *fleetHarness) {
-		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{
 			RevisionID: "rev-1", Payload: []byte("  {\n  \"name\" : \"Acme\",\n  \"agents\": { }\n}\n"),
-			At: h.now(), Origin: anOrigin}); err != nil {
+			At: h.now(), Origin: anOrigin})
+		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
-		got, found, err := h.f.Payload(h.ctx, "rev-1")
+		got, found, err := h.f.Body(h.ctx, published)
 		if err != nil || !found {
-			h.t.Fatalf("Payload: found=%v err=%v", found, err)
+			h.t.Fatalf("Body: found=%v err=%v", found, err)
 		}
 		if want := `{"name":"Acme","agents":{}}`; string(got) != want {
 			h.t.Errorf("payload = %q, want %q", got, want)
@@ -935,10 +972,8 @@ var payloadCases = []fleetCase{{
 			h.t.Fatalf("a refused payload moved the pointer: %+v found=%v err=%v",
 				target, found, err)
 		}
-		if got, found, err := h.f.Payload(h.ctx, "rev-good"); err != nil || !found ||
-			string(got) != `{"v":1}` {
-			h.t.Errorf("a refused payload disturbed the body: %q found=%v err=%v",
-				got, found, err)
+		if _, got := h.current(); string(got) != `{"v":1}` {
+			h.t.Errorf("a refused payload disturbed the body: %q", got)
 		}
 	},
 }, {
@@ -946,16 +981,86 @@ var payloadCases = []fleetCase{{
 	// handed to a decoder that unseals in place on some paths.
 	name: "a caller mutating a payload cannot reach the store",
 	fn: func(h *fleetHarness) {
-		if _, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin}); err != nil {
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1", Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin})
+		if err != nil {
 			h.t.Fatalf("Activate: %v", err)
 		}
-		got, _, _ := h.f.Payload(h.ctx, "rev-1")
+		got, _, _ := h.f.Body(h.ctx, published)
 		for i := range got {
 			got[i] = 'x'
 		}
-		again, _, _ := h.f.Payload(h.ctx, "rev-1")
+		again, _, _ := h.f.Body(h.ctx, published)
 		if string(again) != `{"v":1}` {
 			h.t.Errorf("the store took a caller's mutation: %q", again)
+		}
+	},
+}}
+
+// bodySweepCases hold the body sweep to the activation's bodies: it removes
+// one no pointer names once it is past the cutoff, and nothing else.
+var bodySweepCases = []fleetCase{{
+	// A BODY IS SWEPT ONLY ONCE IT IS OLD AND UNNAMED. Young, a flip still in
+	// flight may name it; named, every peer still converging reads it.
+	//
+	// Mutation: skip the age check, and the young sweep removes rev-1's body;
+	// skip the pointer, or purge every body, and the late one removes rev-2's.
+	name: "the sweep removes a body no pointer names once it is past the cutoff",
+	fn: func(h *fleetHarness) {
+		first, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1",
+			Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		second, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-2",
+			Payload: []byte(`{"v":2}`), At: h.now(), Expect: "rev-1", Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		if _, err = h.f.SweepBodies(h.ctx, time.Now().Add(-time.Hour)); err != nil {
+			h.t.Fatalf("SweepBodies an hour back: %v", err)
+		}
+		if _, found, readErr := h.f.Body(h.ctx, first); readErr != nil || !found {
+			h.t.Errorf("rev-1's body after a sweep it is younger than: found=%v err=%v, want kept", found, readErr)
+		}
+		if _, err = h.f.SweepBodies(h.ctx, time.Now().Add(time.Hour)); err != nil {
+			h.t.Fatalf("SweepBodies an hour on: %v", err)
+		}
+		if _, found, readErr := h.f.Body(h.ctx, first); readErr != nil || found {
+			h.t.Errorf("rev-1's body after a sweep past it: found=%v err=%v, want removed", found, readErr)
+		}
+		if got, found, err := h.f.Body(h.ctx, second); err != nil || !found || string(got) != `{"v":2}` {
+			h.t.Errorf("the pointer's body after every sweep = %q found=%v err=%v, want kept", got, found, err)
+		}
+	},
+}, {
+	// A REFERENCE NO WRITE MAKES IS REFUSED BEFORE IT SIZES A READ. Any
+	// admitted connection can write the pointer, so its length and digest
+	// are held to their shape: a negative or oversized length would size the
+	// read and the posture's grace, and a digest that is no digest names no key.
+	//
+	// Mutation: drop coord.BodyRef.Check from Body, and the forged digests
+	// read as swept or as an outage, never as the corruption they are.
+	name: "a pointer naming a body no write makes is refused as corrupt",
+	fn: func(h *fleetHarness) {
+		published, err := h.f.Activate(h.ctx, coord.ActivationRequest{RevisionID: "rev-1",
+			Payload: []byte(`{"v":1}`), At: h.now(), Origin: anOrigin})
+		if err != nil {
+			h.t.Fatalf("Activate: %v", err)
+		}
+		digest := published.Body.SHA256
+		for _, forged := range []coord.BodyRef{
+			{Bytes: -1, SHA256: digest},
+			{Bytes: 0, SHA256: digest},
+			{Bytes: coord.MaxValueBytes + 1, SHA256: digest},
+			{Bytes: published.Body.Bytes, SHA256: strings.ToUpper(digest)},
+			{Bytes: published.Body.Bytes, SHA256: digest[:63]},
+			{Bytes: published.Body.Bytes, SHA256: "../" + digest[3:]},
+		} {
+			at := published
+			at.Body = forged
+			if _, found, err := h.f.Body(h.ctx, at); !errors.Is(err, coord.ErrBodyCorrupt) || found {
+				h.t.Errorf("the body of %+v: found=%v err=%v, want coord.ErrBodyCorrupt", forged, found, err)
+			}
 		}
 	},
 }}
@@ -1003,9 +1108,9 @@ var payloadRaceCases = []fleetCase{{
 			if err != nil || !found {
 				h.t.Fatalf("round %d: Target: %v found=%v", round, err, found)
 			}
-			body, found, err := h.f.Payload(h.ctx, target.RevisionID)
+			body, found, err := h.f.Body(h.ctx, target)
 			if err != nil {
-				h.t.Fatalf("round %d: Payload: %v", round, err)
+				h.t.Fatalf("round %d: Body: %v", round, err)
 			}
 			if !found {
 				h.t.Fatalf("round %d: the fleet points at %s and its body is "+
@@ -1026,3 +1131,30 @@ var payloadRaceCases = []fleetCase{{
 		}
 	},
 }}
+
+// current is the activation the pointer names and its body, read as a peer
+// reads them: the pointer, then the body it names. Either missing fails the
+// case.
+func (h *fleetHarness) current() (coord.Activation, json.RawMessage) {
+	h.t.Helper()
+	target, found, err := h.f.Target(h.ctx)
+	if err != nil || !found {
+		h.t.Fatalf("Target: found=%v err=%v", found, err)
+	}
+	body, found, err := h.f.Body(h.ctx, target)
+	if err != nil || !found {
+		h.t.Fatalf("Body of %s: found=%v err=%v", target.RevisionID, found, err)
+	}
+	return target, body
+}
+
+// stored reports whether the store holds payload as an activation's body: what
+// a refused activation must not have written.
+func (h *fleetHarness) stored(payload string) bool {
+	h.t.Helper()
+	_, found, err := h.f.Body(h.ctx, coord.Activation{RevisionID: "probe", Body: coord.BodyOf([]byte(payload))})
+	if err != nil {
+		h.t.Fatalf("Body of %s: %v", payload, err)
+	}
+	return found
+}

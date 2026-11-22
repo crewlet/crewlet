@@ -1857,7 +1857,7 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 	out := &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
-		Label: asked.Label, Withdrawn: asked.Withdrawn,
+		Label: asked.Label, Withdrawn: asked.Withdrawn, Waited: asked.Waited,
 	}
 	if refused := asked.Refused; refused != nil {
 		// A REFUSAL, NEVER AN EMPTY ANSWER: the run is told the reply did
@@ -1878,7 +1878,7 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 		// A FIXED CALL'S DENIAL IS RECORDED by its tool too, from the same
 		// arguments, so they are opened for a deny as well.
 		if (sandbox.HeldMakes(held.Choice) || call.Fixed) && !call.Calling() {
-			args, err := seal.OpenArguments(held.TurnID, call)
+			args, err := seal.OpenRawArguments(held.TurnID, call)
 			if err != nil {
 				// NEVER MADE WITH ARGUMENTS NOBODY APPROVED: a seal this
 				// node cannot open leaves the call unmade, and the run is
@@ -2814,7 +2814,7 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// works: this node after a restart, or the seat's next holder —
 		// see [sandbox.CoordinatorOptions.Recovered].
 		Recovered:   e.reopenAgentRun,
-		Unresumable: e.parkedRunUnresumable,
+		Unresumable: e.parkedRunRecovered,
 		// AND EVERY NOTE A PERSON SENT THE TURN THAT NO STEP REPORTED
 		// READING is recorded by the ending, as the run's record knows it
 		// (delivered where a later launch told it again, unconfirmed, missed
@@ -2849,10 +2849,12 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// FUNCTION FOR EVERY REASON, because to the indicator they are
 		// one fact — the frame that raised it has already returned. See
 		// [sandbox.CoordinatorOptions.Stopped].
-		Stopped: e.releaseWorkingStatus,
+		Stopped: e.runStopped,
 		// A HELD CALL PUT TO DELEGATES wakes them once it is parked, so
-		// each finds it waiting (ADR-0125). See delegated.go.
-		Parked: e.wakeDelegates,
+		// each finds it waiting (ADR-0125), and a run parked by
+		// `wait_for_run` is watched until its run leaves (ADR-0176). See
+		// delegated.go and runwaits.go.
+		Parked: e.runParked,
 		// A turn parked on a run a person stopped is closed on the record
 		// as stopped, and its end recorded on the executor log, by
 		// whichever node finishes the run's ending — see runstop.go.
@@ -3146,21 +3148,11 @@ func (e *Engine) sandboxSeatRuns(handle string) (atCap, awaitsAnswer bool) {
 	return count.AtCap(), count.Awaiting > 0
 }
 
-// sandboxConversationBusy is the dispatcher's [Dispatcher.ConversationBusy]:
-// whether one of the seat's runs works conversation, through the coordinator
-// current when the delivery arrives; none where there is no runtime.
-func (e *Engine) sandboxConversationBusy(ctx context.Context, handle, conversation string) (bool, error) {
-	rt := e.sandbox.Load()
-	if rt == nil {
-		return false, nil
-	}
-	return rt.coordinator.ConversationBusy(ctx, handle, conversation)
-}
-
-// holdSandboxConversation is the dispatcher's [Dispatcher.HoldConversation].
-func (e *Engine) holdSandboxConversation(ctx context.Context, handle, conversation string) {
+// holdAside is the dispatcher's [Dispatcher.HoldAside], through the
+// coordinator current when the delivery arrives.
+func (e *Engine) holdAside(ctx context.Context, handle string) {
 	if rt := e.sandbox.Load(); rt != nil {
-		rt.coordinator.HoldForConversation(ctx, handle, conversation)
+		rt.coordinator.HoldForAside(ctx, handle)
 	}
 }
 
@@ -3202,6 +3194,21 @@ func (h seatHold) Release(ctx context.Context, handle string, at queue.Attachmen
 		return err
 	}
 	return h.engine.backends.Queue.ResumeTopic(ctx, subject, group, at, string(inbox.HoldSandbox))
+}
+
+// Readmit hands back the seat's mail set aside under key, freed by turn's run
+// leaving it ([queue.EventQueue.Readmit]): seat_wake_readmitted names both.
+func (h seatHold) Readmit(ctx context.Context, handle, key, turn string) (int, error) {
+	subject, group, err := h.inboxOf(handle)
+	if err != nil {
+		return 0, err
+	}
+	n, err := h.engine.backends.Queue.Readmit(ctx, subject, group, key)
+	if n > 0 {
+		log.InfoContext(ctx, "seat_wake_readmitted", "seat", handle, "key", key, "turn_id", turn,
+			"deliveries", n, "detail", "the run they waited on left the seat; they run at the head of its inbox")
+	}
+	return n, err
 }
 
 // inboxOf is the inbox a hold on handle sits on, named by the seat's id — the

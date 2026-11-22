@@ -15,6 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 )
 
 type published struct {
@@ -797,4 +799,53 @@ func decodeAll[T events.Payload](t *testing.T, rec *recorder, wire string) []T {
 		out = append(out, payload)
 	}
 	return out
+}
+
+// A CHANNEL'S MESSAGES ARE RECORDED WITH NO SECRET THEY CARRIED, and handed on
+// as written: a brief and an answer holding credentials reach the recorded
+// message as markers, which people read afterwards, while the wake to the
+// target and the wake to the asker carry them as the seat wrote them.
+//
+// Mutation: record the content as written, and a credential reaches the
+// record; redact the wakes too, and a seat is handed a marker.
+func TestAChannelsMessagesAreRecordedWithNoSecretTheyCarried(t *testing.T) {
+	t.Parallel()
+	sample := map[string]string{}
+	for _, s := range redacttest.Shapes() {
+		sample[s.Name] = s.Sample
+	}
+	key, token, password := sample["anthropic-key"], sample["github-token"], sample["password"]
+	brief := "deploy with " + key + " and " + password
+	answer := "done, the token was " + token
+	svc, _, rec := service(t, dir{"bob": true, "alice": true})
+	ctx := context.Background()
+	id, err := svc.Open(ctx, a2a.Ask{Requester: "alice", Target: "bob", Brief: brief})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := svc.Reply(ctx, a2a.Answer{ChannelID: id, Sender: "bob", Content: answer, Question: brief}); err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+	sent := decodeAll[*types.A2AMessageSent](t, rec, "a2a_message_sent")
+	if len(sent) != 2 {
+		t.Fatalf("message records = %d, want the brief and the answer", len(sent))
+	}
+	for _, m := range sent {
+		for _, secret := range []string{key, password, token} {
+			if strings.Contains(m.Content, secret) {
+				t.Errorf("the message %s sent is recorded as %q, holding a credential", m.Sender, m.Content)
+			}
+		}
+		if !strings.Contains(m.Content, redact.Marker) {
+			t.Errorf("the message %s sent is recorded as %q, want the credentials as markers", m.Sender, m.Content)
+		}
+	}
+	ask, ok := events.DataAs[*types.A2ARequest](rec.onlyTo(inbox("bob"))[0])
+	if !ok || ask.Content != brief {
+		t.Errorf("the wake to the target carries %+v, want the brief as written", ask)
+	}
+	reply, ok := events.DataAs[*types.A2AMessage](rec.onlyTo(inbox("alice"))[0])
+	if !ok || reply.Content != answer || reply.Question != brief {
+		t.Errorf("the wake to the asker carries %+v, want the answer and the question as written", reply)
+	}
 }

@@ -55,7 +55,7 @@ func openHeld(t *testing.T) func(sandbox.PendingRun) (map[string]any, error) {
 	}
 	seal := sandbox.NewCallSeal(cipher)
 	return func(run sandbox.PendingRun) (map[string]any, error) {
-		return seal.OpenArguments(run.TurnID, *run.HeldCall)
+		return seal.OpenRawArguments(run.TurnID, *run.HeldCall)
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	sshint "github.com/crewlet/crewlet/internal/ssh"
 	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Approve once at the decision (ADR-0125): ask_to_operate puts one exact
@@ -135,12 +136,12 @@ func (t *askToOperate) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		fmt.Sprintf("May this agent run a command on %s as %s?", h.ID, h.Users.Operate))
 	var body strings.Builder
 	fmt.Fprintf(&body, "%s asks to run this command on the server `%s` (%s, port %d) as `%s`, once.\n\n"+
-		"**Command**\n\n%s", handle, h.ID, h.Address, h.PortOrDefault(), h.Users.Operate, codeBlock(a.command))
+		"**Command**\n\n%s", handle, h.ID, h.Address, h.PortOrDefault(), h.Users.Operate, words.CodeBlock(a.command))
 	if len(a.stdin) > 0 {
 		fmt.Fprintf(&body, "\n\n**Standard input**: %d bytes, SHA-256 `%s`\n\n%s", len(a.stdin),
-			stdinDigest(a.stdin), codeBlock(string(clipRune(a.stdin, sshStdinPreviewBytes))))
+			stdinDigest(a.stdin), words.CodeBlock(string(clipRune(a.stdin, sshStdinPreviewBytes))))
 	}
-	body.WriteString("\n\n**Reason given**\n\n" + inertMarkdown(redact.Secrets(a.reason)))
+	body.WriteString("\n\n**Reason given**\n\n" + words.Inert(redact.Secrets(a.reason)))
 	posted := map[string]any{
 		"item": argString(args, "item"), "body": body.String(), "ask": person, "asks": true,
 		"decision": map[string]any{

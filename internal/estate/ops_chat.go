@@ -34,7 +34,7 @@ var opChatChannels = define("chat.channels", opRead, chatDomain, false,
 			return chatlet.ChannelListing{}, errNoHalf
 		}
 		return b.Chat.Channels(ctx, a.Viewer, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type chatChannelArgs struct {
 	Viewer    string
@@ -48,7 +48,7 @@ var opChatChannel = define("chat.channel", opRead, chatDomain, false,
 			return chatlet.ChannelDetail{}, errNoHalf
 		}
 		return b.Chat.Channel(ctx, a.Viewer, a.ChannelID, a.Fresh)
-	})
+	}).oneAnswer()
 
 type chatChannelNamedArgs struct {
 	Viewer string
@@ -65,7 +65,7 @@ var opChatChannelNamed = define("chat.channel_named", opRead, chatDomain, false,
 			return chatlet.ChannelDetail{}, errNoHalf
 		}
 		return b.Chat.ChannelNamed(ctx, a.Viewer, a.Name, a.Fresh)
-	})
+	}).oneAnswer()
 
 type chatMessagesArgs struct {
 	Viewer string
@@ -79,7 +79,7 @@ var opChatMessages = define("chat.messages", opRead, chatDomain, false,
 			return chatlet.Transcript{}, errNoHalf
 		}
 		return b.Chat.Messages(ctx, a.Viewer, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type chatThreadArgs struct {
 	Viewer string
@@ -93,7 +93,7 @@ var opChatThread = define("chat.thread", opRead, chatDomain, false,
 			return chatlet.Thread{}, errNoHalf
 		}
 		return b.Chat.Thread(ctx, a.Viewer, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 // THE ENGINE'S TURN-START THREAD READ: chat.thread with whom each message was
 // written for ([chatlet.TurnThread]), which no reader is handed. Its own
@@ -107,7 +107,7 @@ var opChatTurnThread = define("chat.turn_thread", opRead, chatDomain, false,
 			return chatlet.TurnThread{}, errNoHalf
 		}
 		return b.Chat.TurnThread(ctx, a.Viewer, a.Query, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type chatRoomNamesArgs struct {
 	Viewer string
@@ -123,7 +123,7 @@ var opChatRoomNames = define("chat.room_names", opRead, chatDomain, false,
 			return chatlet.RoomNames{}, errNoHalf
 		}
 		return b.Chat.RoomNames(ctx, a.Viewer, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 // EVERY ROOM A VIEWER MAY BROWSE, resolved by the serving reader from the
 // viewer that crossed, for [opChatRoomNames]' reason. Its arguments are that
@@ -134,7 +134,7 @@ var opChatDirectory = define("chat.directory", opRead, chatDomain, false,
 			return chatlet.Directory{}, errNoHalf
 		}
 		return b.Chat.Directory(ctx, a.Viewer, a.Fresh)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 // ChatQuery is one ranked search of the company's chat, as it crosses: the
 // VIEWER whose rooms it searches, never the rooms. Unlike [search.ChatQuery],
@@ -248,7 +248,7 @@ var opChatSearch = define("chat.search", opRead, chatDomain, false,
 			out.Rooms[hit.ChannelID] = rooms[hit.ChannelID]
 		}
 		return out, nil
-	})
+	}).oneAnswer()
 
 // chatIndexReady is whether this node's chat index holds its whole transcript,
 // with a read that failed taken as not — see [opChatSearch] — and said in the
@@ -437,7 +437,7 @@ var opChatReach = define("chat.reach", opRead, chatDomain, false,
 			return chatlet.Draft{}, errNoHalf
 		}
 		return b.ChatWriter.Reach(ctx, a.Actor, a.ChannelID, a.ReplyTo, a.Message)
-	})
+	}).oneAnswer()
 
 type chatEditArgs struct {
 	Actor     chatlet.Actor
