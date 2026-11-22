@@ -295,7 +295,8 @@ func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
 	}
 	if len(req.Skills) > 0 {
 		env += fmt.Sprintf(`%s=$(cat %s) `, codexSkillsEnv, q(paths.CodexSkillsURL()))
-		flags += fmt.Sprintf(" -skills-env %s -skills-dir %s", codexSkillsEnv, q(paths.CodexSkills()))
+		flags += fmt.Sprintf(" -skills-env %s -skills-dir %s -skills-digests %s", codexSkillsEnv,
+			q(paths.CodexSkills()), q(paths.CodexSkillDigests()))
 	}
 	if limit := req.Limits.MaxTurns; limit > 0 {
 		flags += fmt.Sprintf(" -step-cap %d -cap-marker %s", limit, q(paths.CodexCapFired()))
@@ -353,10 +354,10 @@ func (Codex) Parse(stdout []byte) sandbox.Result { return decodeAll(&codexEvents
 
 // artifacts is what a Codex run leaves in its box beside the session it
 // continues: the configuration with its tokens, the socket, the thread, the
-// helper and its routes, the server's output.
+// helper, its routes and its skills' digests, the server's output.
 func (Codex) artifacts(p Paths) (files, dirs []string) {
 	return []string{p.CodexLiveConfig(), p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
-		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(),
+		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(), p.CodexSkillDigests(),
 		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
 		p.CodexNotesURLFresh(), p.WorkDir() + "/codex-server.log"}, nil
 }

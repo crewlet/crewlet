@@ -4,6 +4,8 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -433,8 +435,9 @@ func TestACodexRunStartsFromItsOwnConfigurationEveryRun(t *testing.T) {
 // routes reach the helper's environment alone, which the model's shell policy
 // excludes too.
 //
-// Mutation: put the MCP url or the notes route on a command line, or export
-// the route to Codex, and this goes red.
+// Mutation: put the MCP url or the notes route on a command line, export the
+// route to Codex, or record no digest of the skill as written, and this goes
+// red.
 func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 	t.Parallel()
 	const token = "run-token-placeholder"
@@ -473,9 +476,15 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 	if got := boxFile(t, box, p.CodexSkillsURL()); got != codexBridgeURL+"/skills" {
 		t.Errorf("the helper's skill route file holds %q", got)
 	}
-	// A REQUIRED SKILL IS HANDED, its loads the helper's to report.
-	if got := boxFile(t, box, p.CodexSkills()+"/crewlet:deploy/SKILL.md"); !strings.Contains(got, "Run make deploy.") {
-		t.Errorf("the run's skill was not written: %q", got)
+	// A REQUIRED SKILL IS HANDED, its loads the helper's to report against
+	// the digest of the file as written, which the runner records beside it.
+	skill := boxFile(t, box, p.CodexSkills()+"/crewlet:deploy/SKILL.md")
+	if !strings.Contains(skill, "Run make deploy.") {
+		t.Errorf("the run's skill was not written: %q", skill)
+	}
+	sum := sha256.Sum256([]byte(skill))
+	if got, want := boxFile(t, box, p.CodexSkillDigests()), hex.EncodeToString(sum[:])+" crewlet:deploy\n"; got != want {
+		t.Errorf("the skill digests hold %q, want %q", got, want)
 	}
 }
 
