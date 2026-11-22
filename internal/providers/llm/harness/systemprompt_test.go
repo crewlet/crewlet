@@ -153,7 +153,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 	// that fact rather than an omission.
 	want := map[string]string{
 		"claude-code": "{file}", // 2.1.303 and 2.1.310: --system-prompt-file
-		// 1.0.70, xAI's OWN HARNESS from x.ai/cli:
+		// 1.0.92, xAI's OWN HARNESS from x.ai/cli:
 		// --system-prompt-override, string only — a path there is sent as
 		// the text — and --rules the same on the appending channel. NOT
 		// the same-named community package on npm, which has no such

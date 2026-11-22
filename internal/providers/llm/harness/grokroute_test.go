@@ -21,7 +21,7 @@ import (
 // streaming-json stdout — a response's prose, its counts without the cached
 // part, then a tool_call per call (use_tool naming the server's tool, or one of
 // the harness's own), and a tool_call_update per result — ending in an `end` event
-// (measured on 1.0.70; see the profile).
+// (measured on 1.0.92; see the profile).
 func init() {
 	fakeHarnesses["grok"] = fakeHarness{
 		server: func() (string, []string, error) {
@@ -41,7 +41,7 @@ func init() {
 	}
 }
 
-// grokHomeServers is every server other than crewlet that 1.0.70 starts from
+// grokHomeServers is every server other than crewlet that 1.0.92 starts from
 // the home: the ones config.toml names, and ~/.claude.json's while the Claude
 // source is scanned — each unless a home allowlist leaves it out.
 func grokHomeServers() []string {
@@ -204,7 +204,7 @@ func TestAGrokRunItsTurnLimitEndedStopsAtTheCap(t *testing.T) {
 	}
 }
 
-// A GROK RUN THAT WOULD ASK IS A FAILURE, NEVER AN ANSWER. 1.0.70 cannot ask for
+// A GROK RUN THAT WOULD ASK IS A FAILURE, NEVER AN ANSWER. 1.0.92 cannot ask for
 // an approval headless: it cancels the whole run, exits 0 with nothing of the
 // answer, and says so on stderr. The profile allows or refuses everything a
 // call is offered, so a run that asks is one its flags no longer cover — stopped
@@ -259,7 +259,7 @@ func TestAFailedGrokRunIsNotJudgedByWhatItsToolsSaid(t *testing.T) {
 // search_tool with it); every MCP tool runs unasked, so a name the model wrote
 // without the server's prefix is refused for it rather than asked about, which
 // cancels a headless run; and the home is the profile's own, with an allowlist
-// naming the seat's server alone. All measured on 1.0.70.
+// naming the seat's server alone. All measured on 1.0.92.
 func TestGrokCallsReachOnlyTheSeatsTools(t *testing.T) {
 	t.Parallel()
 	p := grok(t)

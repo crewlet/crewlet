@@ -14,7 +14,7 @@ import (
 )
 
 // The invariants the built-in grok profile keeps, each measured against xAI's
-// Grok Build harness 1.0.70 (see the profile's comments): a call offers the web
+// Grok Build harness 1.0.92 (see the profile's comments): a call offers the web
 // tools and nothing else, a seat's phases keep the harness's own system prompt and
 // a side pass replaces it, the transcript reaches the harness in a file, the side
 // requests that can be switched off are, and nothing a call leaves in the
@@ -31,12 +31,14 @@ func grok(t *testing.T) harnessprofile.Profile {
 }
 
 // A CALL OFFERS THE WEB TOOLS AND NOTHING ELSE. The allowlist names the two web
-// tools and nothing it might not know — one unknown name and 1.0.70 drops the
-// whole list — and the deny list names every other built-in, which a denial
-// removes even where the allowlist was dropped: on the deny list alone, the
-// twelve listed last below were still offered beside the web tools. web_fetch
-// ships switched off, so the allowlist would name a tool that is not there
-// without the switch.
+// tools and nothing it might not know — one unknown name and 1.0.92 drops the
+// whole list — and the deny list names every other built-in by its 1.0.92
+// name, which a denial removes even where the allowlist was dropped: the list
+// alone left the web tools and nothing else. web_fetch ships switched off, so
+// the allowlist would name a tool that is not there without the switch.
+//
+// Mutations, each red: a 1.0.70 name (run_terminal_cmd) in place of the shell's;
+// update_goal dropped; web_fetch denied.
 func TestGrokOffersTheWebToolsAndNothingElse(t *testing.T) {
 	t.Parallel()
 	p := grok(t)
@@ -51,17 +53,24 @@ func TestGrokOffersTheWebToolsAndNothingElse(t *testing.T) {
 	if !ok {
 		t.Fatalf("complete_args = %q carries no --disallowed-tools", p.CompleteArgs)
 	}
+	// Every tool 1.0.92 offers with no flag, but the two web tools: with
+	// background workflows on (workflow) and off (update_goal in its place).
 	for _, name := range []string{
-		"run_terminal_cmd", "read_file", "search_replace", "list_dir", "grep", "task",
-		"workflow", "todo_write", "scheduler_create",
-		// Offered on 1.0.70 beside the web tools until denied by name.
-		"write", "image_gen", "image_edit", "image_to_video", "reference_to_video",
+		"run_terminal_command", "kill_command_or_subagent", "get_command_or_subagent_output",
+		"read_file", "search_replace", "write", "list_dir", "grep",
+		"spawn_subagent", "todo_write", "scheduler_create", "scheduler_delete", "scheduler_list",
+		"monitor", "update_goal", "workflow",
+		"image_gen", "image_edit", "image_to_video", "reference_to_video",
 		"search_tool", "use_tool", "send_feedback",
 		"enter_plan_mode", "exit_plan_mode", "ask_user_question",
 	} {
 		if !slices.Contains(denied, name) {
-			t.Errorf("--disallowed-tools lacks %s, which 1.0.70 offers otherwise", name)
+			t.Errorf("--disallowed-tools lacks %s, which 1.0.92 offers otherwise", name)
 		}
+	}
+	if len(denied) != 26 {
+		t.Errorf("--disallowed-tools names %d tools, want the 26 1.0.92 offers beside the web tools: %q",
+			len(denied), denied)
 	}
 	for _, web := range []string{"web_search", "web_fetch"} {
 		if slices.Contains(denied, web) {
@@ -74,7 +83,7 @@ func TestGrokOffersTheWebToolsAndNothingElse(t *testing.T) {
 }
 
 // THE FETCH A CALL IS OFFERED IS ALLOWED, NOT MERELY OFFERED. web_fetch asks
-// first, a headless run cannot ask, and 1.0.70 then cancels the WHOLE run — exit
+// first, a headless run cannot ask, and 1.0.92 then cancels the WHOLE run — exit
 // 0, nothing on stdout, "was not run, as a headless run cannot ask for approval"
 // on stderr — so a call that fetched a page failed (measured through the
 // engine). --permission-mode dontAsk did not change that; the allow rule did,
@@ -227,7 +236,7 @@ func TestGrokCallsCarryTheVendorsSwitches(t *testing.T) {
 // NOTHING A CALL LEAVES IN THE SEAT'S HOME OUTLIVES ITS GENERATION: the session
 // directory holding the conversation, the rendered system prompt and the
 // prompt history, the session-search database, and the log that grows on every
-// call — all measured on 1.0.70.
+// call — all measured on 1.0.92.
 func TestGrokPrunesWhatACallLeaves(t *testing.T) {
 	t.Parallel()
 	p := grok(t)
@@ -265,7 +274,73 @@ func TestGrokPrunesWhatACallLeaves(t *testing.T) {
 	}
 }
 
-// WHAT THE API REFUSED IS NAMED, in the harness's own words as 1.0.70 printed them:
+// A GROK CALL STARTS WITH NO INSTRUCTIONS, SKILLS, COMMANDS OR HOOKS IN ITS HOME.
+// Planted in a seat's home through the engine, 1.0.92 sent ~/.grok's AGENTS.md,
+// rules, skills and commands, ~/.claude's CLAUDE.md, rules and skills and
+// ~/.cursor's skills with every request, and ran ~/.grok/hooks/hooks.json. The
+// generation's prune takes each, the login stays, and the home's config.toml
+// turns the other vendors' skills, rules and instruction files off.
+//
+// Mutations, each red: drop .grok/hooks from volatile_paths; drop `skills =
+// false` from the Cursor cell; add .grok to volatile_paths (the login goes).
+func TestAGrokCallStartsWithNothingItsHomeHeld(t *testing.T) {
+	t.Parallel()
+	p := grok(t)
+	dir := t.TempDir()
+	t.Cleanup(func() { forgetWorkspace(dir) })
+	ws, err := Shared(dir, "grok", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	planted := []string{
+		".grok/AGENTS.md",
+		".grok/rules/r.md",
+		".grok/skills/s/SKILL.md",
+		".grok/commands/c.md",
+		".grok/hooks/hooks.json",
+		".claude/CLAUDE.md",
+		".claude/rules/r.md",
+		".claude/skills/s/SKILL.md",
+		".cursor/skills/s/SKILL.md",
+		".cursor/rules/r.mdc",
+	}
+	const login = ".grok/auth.json"
+	for _, rel := range append(slices.Clone(planted), login) {
+		path := filepath.Join(home, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ws.prune(home); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	for _, rel := range planted {
+		if _, err := os.Stat(filepath.Join(home, rel)); !os.IsNotExist(err) {
+			t.Errorf("%s outlived the prune (%v): the seat's next call would read it", rel, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, login)); err != nil {
+		t.Errorf("the prune took the login %s: %v", login, err)
+	}
+	var config string
+	for _, f := range p.SeedFiles {
+		if f.Path == ".grok/config.toml" {
+			config = f.Content
+		}
+	}
+	for _, vendor := range []string{"claude", "cursor"} {
+		cell := "[compat." + vendor + "]\nmcps = false\nhooks = false\nskills = false\nrules = false\nagents = false\n"
+		if !strings.Contains(config, cell) {
+			t.Errorf("the home's config.toml seed lacks %q:\n%s", cell, config)
+		}
+	}
+}
+
+// WHAT THE API REFUSED IS NAMED, in the harness's own words as 1.0.92 printed them:
 // signed out and a key the API refuses are the login, and a 402 is a spent
 // account, which sits the entry out rather than failing every seat on it as a
 // server error.
@@ -277,17 +352,18 @@ func TestGrokNamesWhatTheAPIRefused(t *testing.T) {
 		want   llm.ErrorKind
 	}{
 		"signed out": {
-			stderr: "Not signed in. To authenticate without a browser, run:\n  grok login --device-code\n",
-			want:   llm.KindAuth,
+			stderr: "Not signed in. To authenticate without a browser, run:\n  grok login --device-code\n\n" +
+				"Alternatively, set the XAI_API_KEY environment variable or run `grok login` on a machine with a browser.\n",
+			want: llm.KindAuth,
 		},
 		"a key the API refuses": {
-			stderr: "Internal error: {\n  \"message\": \"Unauthorized (401) from https://api.x.ai/v1/chat/completions: " +
-				"invalid_api_key\",\n  \"http_status\": 401\n}\n",
+			stderr: "Error: Internal error: {\n  \"message\": \"Unauthorized (401) from https://api.x.ai/v1/responses: " +
+				"Client specified an invalid argument: Incorrect API key provided.\",\n  \"http_status\": 401\n}\n",
 			want: llm.KindAuth,
 		},
 		"a spent account": {
-			stderr: "Internal error: {\n  \"message\": \"API error (status 402 Payment Required): " +
-				"out of credits\",\n  \"http_status\": 402\n}\n",
+			stderr: "Error: Internal error: {\n  \"message\": \"API error (status 402 Payment Required): " +
+				"Payment required: out of credits.\",\n  \"http_status\": 402\n}\n",
 			want: llm.KindRateLimit,
 		},
 	} {
