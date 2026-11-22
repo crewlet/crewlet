@@ -65,6 +65,8 @@ never skipped, since skipping it would hide a live run from a newer node's
 floor and recovery while builds are mixed. The handle rides as its SHA-256, because a handle has no
 bound and every header has a widest form, counted in the most header a write
 carries. No status rides: every status a record holds is one the listings keep.
+The executor sessions' retention, which asks only which turns still have a
+record, lists the same pass.
 
 ## Why the obvious alternatives are wrong
 
