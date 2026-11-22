@@ -1105,6 +1105,45 @@ func (r *Reader) Unended(ctx context.Context, before time.Time, limit int) ([]Ex
 	return out, nil
 }
 
+// sessionHeldStatement is whether any turn's row names a session id, by the
+// index over the id ([sessionIdx]).
+const sessionHeldStatement = `
+	SELECT 1 FROM executor_sessions INDEXED BY ` + sessionIdx + ` WHERE session_id = ? LIMIT 1`
+
+// SessionHeld reports whether any turn's row, of any seat, names the session
+// id, at the level fresh asks for: a session a harness mints is bound only
+// while it is fresh, and one a row names is another turn's, whose capture and
+// carry it would take over. One seek, whatever the table holds.
+//
+// An answer that may be missing a row is [ErrIncomplete], never false: an
+// undecodable record may be exactly the row naming the id.
+func (r *Reader) SessionHeld(ctx context.Context, sessionID string, fresh statelog.Freshness) (bool, error) {
+	if sessionID == "" {
+		return false, invalid("a session id is needed to ask whether a turn holds it")
+	}
+	held := false
+	answer, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		held = false
+		var one int
+		err := tx.QueryRowContext(ctx, sessionHeldStatement, sessionID).Scan(&one)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return err
+		}
+		held = true
+		return nil
+	})
+	switch {
+	case err != nil:
+		return false, fmt.Errorf("executordomain: whether a turn holds session %q: %w", sessionID, err)
+	case !held && !answer.Complete:
+		return false, fmt.Errorf("%w: whether a turn holds session %q", ErrIncomplete, sessionID)
+	}
+	return held, nil
+}
+
 // handlesStatement is every seat holding a row, in order.
 const handlesStatement = `
 	SELECT DISTINCT agent_handle FROM executor_sessions ORDER BY agent_handle`
