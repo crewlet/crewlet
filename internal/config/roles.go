@@ -315,8 +315,8 @@ func (p *RolePlacement) validate(path Path) error {
 // that entry's own harness — so neither the cell nor the runner is a seat's to
 // say. What is left is what differs from one seat's work to another's: its
 // own provisioning and environment, the tool servers its box is given, how
-// long a box blocked on a person stays paused, and how many rounds one run
-// may take.
+// long a box blocked on a person stays paused, how many rounds one run may
+// take and how many of its runs hold it at once.
 type RoleSandbox struct {
 	// PauseTTLSeconds bounds how long this seat's box, blocked on a person's
 	// answer, stays paused. UNSET inherits the provider default; an explicit 0
