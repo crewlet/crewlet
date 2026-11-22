@@ -2818,9 +2818,12 @@ func (s *CoordStore) BindSession(ctx context.Context, turnID string, bind Sessio
 		return PendingRun{}, fmt.Errorf("%w: %q is no session id a harness names, for job %q",
 			ErrSessionBindRefused, bind.ID, bind.Launch)
 	}
-	// THE RECORD'S RULES FIRST, so a report it refuses claims nothing; then THE
-	// CLAIM BEFORE THE RECORD, so no record binds an id its claim does not hold
-	// (one left by a write that did not follow goes with the record).
+	// THE RECORD'S RULES FIRST, so a report it refuses claims nothing; the same
+	// job again (a recovery, a reattach, a second save) is answered as bound,
+	// claiming nothing and asking nothing. Then THE CLAIM, THE FRESH CHECK AND
+	// THE RECORD, in that order, so no second job checks the log in the window
+	// before this one's claim; a claim this call took is released where the
+	// record does not follow. One a crash leaves goes with the record.
 	run, found, err := s.Get(ctx, turnID)
 	switch {
 	case err != nil:
@@ -2831,8 +2834,24 @@ func (s *CoordStore) BindSession(ctx context.Context, turnID string, bind Sessio
 	if refused := sessionBindRefusal(run, bind); refused != nil {
 		return PendingRun{}, refused
 	}
-	if err = s.claimSession(ctx, turnID, bind); err != nil {
+	if run.Launch.Minted == bind.ID {
+		// BOUND ALREADY, by a write whose answer may have been lost: its claim
+		// is made again where none stands, for the job the record binds.
+		if err = s.reclaimBound(ctx, turnID, bind); err != nil {
+			return PendingRun{}, err
+		}
+		return run, nil
+	}
+	took, err := s.claimSession(ctx, turnID, bind)
+	if err != nil {
 		return PendingRun{}, err
+	}
+	release := func() { s.undoClaim(context.WithoutCancel(ctx), turnID, bind, took) }
+	if bind.Fresh != nil {
+		if err = bind.Fresh(ctx, bind.ID); err != nil {
+			release()
+			return PendingRun{}, err
+		}
 	}
 	var (
 		refused error
@@ -2849,10 +2868,18 @@ func (s *CoordStore) BindSession(ctx context.Context, turnID string, bind Sessio
 	})
 	switch {
 	case err != nil:
+		// A WRITE THAT ERRED MAY HAVE LANDED: the claim stays where the record,
+		// read again, binds the id (or cannot be read to say).
+		if again, there, readErr := s.Get(context.WithoutCancel(ctx), turnID); readErr == nil &&
+			(!there || again.LaunchID != bind.Launch || again.Launch.Minted != bind.ID) {
+			release()
+		}
 		return PendingRun{}, err
 	case !found:
+		release()
 		return PendingRun{}, fmt.Errorf("%w: turn %s holds no record", ErrSessionBindRefused, turnID)
 	case refused != nil:
+		release()
 		return PendingRun{}, refused
 	}
 	return held, nil
@@ -2866,47 +2893,109 @@ const sessionClaimAttempts = 4
 // id nobody claims, one its own job holds, one its turn's earlier job holds (a
 // relaunch continuing it: the claim moves with the turn), and one a run with no
 // record holds (a claim carries its record's lifetime) are its job's; one
-// another live run holds is [ErrSessionBindRefused].
-func (s *CoordStore) claimSession(ctx context.Context, turnID string, bind SessionBind) error {
+// another live run holds is [ErrSessionBindRefused]. It reports what this call
+// took, so a bind whose record does not follow undoes only that
+// ([CoordStore.undoClaim]).
+func (s *CoordStore) claimSession(ctx context.Context, turnID string, bind SessionBind) (claimTaken, error) {
 	ours := coord.SessionClaim{Session: bind.ID, Turn: turnID, Launch: bind.Launch}
 	for range sessionClaimAttempts {
 		held, found, err := s.runs.SessionClaim(ctx, bind.ID)
 		if err != nil {
-			return fmt.Errorf("sandbox: reading the claim of session %q: %w", bind.ID, err)
+			return claimTaken{}, fmt.Errorf("sandbox: reading the claim of session %q: %w", bind.ID, err)
 		}
 		if !found {
 			created, createErr := s.runs.CreateSessionClaim(ctx, ours)
 			if createErr != nil || created {
-				return createErr
+				return claimTaken{created: created}, createErr
 			}
 			continue
 		}
 		if held.Turn == turnID && held.Launch == bind.Launch {
-			return nil
+			return claimTaken{}, nil
 		}
 		if held.Turn != turnID {
 			if _, live, readErr := s.runs.SandboxRun(ctx, held.Turn); readErr != nil {
-				return fmt.Errorf("sandbox: reading the run claiming session %q: %w", bind.ID, readErr)
+				return claimTaken{}, fmt.Errorf("sandbox: reading the run claiming session %q: %w", bind.ID,
+					readErr)
 			} else if live {
-				return fmt.Errorf("%w: session %q is bound to turn %s's job %s", ErrSessionBindRefused, bind.ID,
-					held.Turn, held.Launch)
+				return claimTaken{}, fmt.Errorf("%w: session %q is bound to turn %s's job %s",
+					ErrSessionBindRefused, bind.ID, held.Turn, held.Launch)
 			}
 		}
 		moved, err := s.runs.MoveSessionClaim(ctx, ours, held.Revision)
 		if err != nil || moved {
-			return err
+			taken := claimTaken{}
+			if moved {
+				taken.movedFrom = &held
+			}
+			return taken, err
 		}
 	}
-	return fmt.Errorf("sandbox: claiming session %q lost every race: %w", bind.ID, coord.ErrUnavailable)
+	return claimTaken{}, fmt.Errorf("sandbox: claiming session %q lost every race: %w", bind.ID,
+		coord.ErrUnavailable)
 }
 
-// dropSessionClaim removes turnID's claim of sessionID, as its record goes; one
-// it cannot remove goes with the store's sweep ([coord.SessionClaims]).
-func (s *CoordStore) dropSessionClaim(ctx context.Context, turnID, sessionID string) {
-	held, found, err := s.runs.SessionClaim(ctx, sessionID)
-	if err == nil && found && held.Turn == turnID {
-		_, _ = s.runs.DeleteSessionClaim(ctx, sessionID, held.Revision)
+// reclaimBound makes the claim of a session turnID's record binds already,
+// for the job it binds, where none stands; one standing is left as it is.
+func (s *CoordStore) reclaimBound(ctx context.Context, turnID string, bind SessionBind) error {
+	_, found, err := s.runs.SessionClaim(ctx, bind.ID)
+	if err == nil && !found {
+		_, err = s.runs.CreateSessionClaim(ctx, coord.SessionClaim{Session: bind.ID, Turn: turnID,
+			Launch: bind.Launch})
 	}
+	if err != nil {
+		return fmt.Errorf("sandbox: claiming bound session %q again: %w", bind.ID, err)
+	}
+	return nil
+}
+
+// claimTaken is what a bind's claim did ([CoordStore.claimSession]): made the
+// claim, or moved it from movedFrom (the turn's earlier job, or a run with no
+// record), or neither (its own job held it already).
+type claimTaken struct {
+	created   bool
+	movedFrom *coord.SessionClaim
+}
+
+// undoClaim undoes what a bind whose record did not follow took: a claim it
+// made is removed, and one it moved goes back to its earlier owner, so a
+// relaunch's failed bind never strips the session its turn continues of its
+// claim. A claim no longer the bind's is left alone.
+func (s *CoordStore) undoClaim(ctx context.Context, turnID string, bind SessionBind, taken claimTaken) {
+	if !taken.created && taken.movedFrom == nil {
+		return
+	}
+	held, found, err := s.runs.SessionClaim(ctx, bind.ID)
+	if err != nil || !found || held.Turn != turnID || held.Launch != bind.Launch {
+		return
+	}
+	if taken.created {
+		_, _ = s.runs.DeleteSessionClaim(ctx, bind.ID, held.Revision)
+		return
+	}
+	_, _ = s.runs.MoveSessionClaim(ctx, *taken.movedFrom, held.Revision)
+}
+
+// ReleaseSessionClaim removes turnID's claim of a session. See the contract on
+// [PendingStore].
+func (s *CoordStore) ReleaseSessionClaim(ctx context.Context, turnID, sessionID string) error {
+	return s.dropSessionClaim(ctx, turnID, sessionID)
+}
+
+// dropSessionClaim removes turnID's claim of sessionID, nil where turnID holds
+// none; one a failure leaves goes with the record ([coord.SessionClaims]).
+func (s *CoordStore) dropSessionClaim(ctx context.Context, turnID, sessionID string) error {
+	held, found, err := s.runs.SessionClaim(ctx, sessionID)
+	switch {
+	case err != nil:
+		return fmt.Errorf("sandbox: reading the claim of session %q: %w", sessionID, err)
+	case !found || held.Turn != turnID:
+		return nil
+	}
+	if _, err := s.runs.DeleteSessionClaim(ctx, sessionID, held.Revision); err != nil {
+		return fmt.Errorf("sandbox: releasing the claim of session %q: %w", sessionID, err)
+	}
+	return nil
 }
 
 // sessionBindRefusal is why run's record will not bind bind's report, nil where
@@ -3099,7 +3188,7 @@ func (s *CoordStore) Finish(ctx context.Context, turnID, ending string) (Pending
 		return PendingRun{}, false, nil
 	}
 	if id := run.Launch.Minted; id != "" {
-		s.dropSessionClaim(ctx, turnID, id)
+		_ = s.dropSessionClaim(ctx, turnID, id)
 	}
 	return run, true, nil
 }

@@ -200,7 +200,7 @@
 | `tracing` | OpenTelemetry wiring: one always-installed TracerProvider configured from `OTEL_*`, and the conversion between OTel spans and the event envelope's trace ids |
 | `notify` | The backend-neutral notification spine: conversation keys, digest coalescing, party resolution, the rate valve, wake-body fencing, and thread reads and status writes across chat surfaces. |
 | `backup` | A restorable copy of a node's store, streams and objects, taken from inside the engine because it alone reaches all three; the manifest, written last, is the claim. |
-| `maintenance` | The retention sweep for short-horizon tables, state-log operation ledgers, coordination removal markers, removed seats' chat read state and mailbox retirement; a fleet singleton, never a replicated row |
+| `maintenance` | The retention sweep for short-horizon tables, state-log operation ledgers, coordination removal markers, removed seats' chat read state and Home boards, and mailbox retirement; a fleet singleton, never a replicated row |
 | `mattermost`, `slack`, `gitlab`, `github`, `jira`, `confluence`, `datadog`, `cloudflare`, `expo`, `digitalocean`, `scaleway`, `googlecloud`, `atlassian`, `aws`, `ssh` | The vendor integrations: each vendor's client, inbound parsing, prompt, seat access and atlas read. |
 | `googleauth` | Every way the engine gets a Google token: the company's Google identity by federation, impersonation by scope, the token caches and the one call path to Google. |
 | `origin` | records where a failure left the engine's own code: a deferred stamp names the function a failure passed through. |

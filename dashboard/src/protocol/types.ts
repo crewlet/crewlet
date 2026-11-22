@@ -3682,6 +3682,19 @@ export interface WorkInboxEntry {
  *  `held` is false for somebody nobody has written yet, which is an EMPTY
  *  state rather than a missing one: every human starts with no inbox, no pins
  *  and no priorities, and the first write is what creates the record. */
+/**
+ * The reader's Home board, kept under the seat they hold
+ * (`internal/api/queries`, `home_board`).
+ */
+export interface HomeBoardAnswer {
+  /** The seat the board is kept under, or "" for a sign-in that holds none. */
+  seat: string;
+  /** The board as last saved, untrusted until validated; null when none is stored. */
+  board: unknown;
+  /** The stored record's revision, which a save names as `if_match`; 0 when none. */
+  revision: number;
+}
+
 export interface WorkPersonState {
   handle: string;
   /** EXCEPTIONS to `seen_through`: `unread` holds notices at or below it
@@ -8557,6 +8570,8 @@ export interface QueryMap {
   work_flow: WorkFlowAnswer;
   company_feed: CompanyFeedAnswer;
   decisions: DecisionsAnswer;
+  /** The reader's Home board as the engine keeps it under their seat. */
+  home_board: HomeBoardAnswer;
   /** The agents' growth acts, newest first (`internal/accessdomain`), an administrator's read. */
   growth_changes: GrowthChangesAnswer;
   answered_decisions: AnsweredDecisionsAnswer;
