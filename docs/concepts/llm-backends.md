@@ -938,7 +938,7 @@ Where the loop runs, what else it may touch and how long it lives are the
 | How it reaches the seat's tools | over HTTP, the [MCP bridge](#the-tool-bridge) | a stdio relay into a unix socket this process serves for the run alone ([below](#the-seats-tools-as-one-mcp-server)); no listener |
 | Who decides each call | the bridge: grant, skill guard, fence, order and the run's end, per call; the rounds are the harness's alone | the phase's tool loop: grant, skill guard, fence, budget, round cap, terminator, a person's note ([every gate](#every-call-passes-the-phases-gates)) |
 | Lifetime | **detached** — outlives the turn, resumes it later | the turn's own: the phase starts a run, ends it when needed, and starts the next |
-| Needs | a sign-in *plus* a harness runner for the harness (`claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code`), `providers.sandbox` and a bridge the box can reach | a sign-in on this host, and a tool route in the harness's profile (`mcp`) |
+| Needs | a sign-in *plus* a harness runner for the harness (`claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code`, `kimi-code` or `pi`), `providers.sandbox` and a bridge the box can reach | a sign-in on this host, and a tool route in the harness's profile (`mcp`) |
 
 **The executor is the vendor's whole harness**: a real shell, editor and
 checkout. **Every other phase is the turn's own**: every call passes the phase's
@@ -950,7 +950,7 @@ So one entry serves both: a seat whose `llm` names a `claude-code` entry runs
 its executor as Claude Code in a box and its reviewer, workers and side passes
 as Claude Code on this host. A harness with no harness runner serves the second
 column alone — a launch passes over it — and a seat whose executor chain holds
-no `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code` entry is refused on the write.
+no `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code`, `kimi-code` or `pi` entry is refused on the write.
 
 ### The executor's run in a box
 
@@ -3373,7 +3373,7 @@ skips all three and says so on each line.
   `crewlet llm doctor` checks all of it ([Operating it](#operating-it)).
 - **Code work is the executor's run.** A seat's [code sandbox](code-sandbox.md) work is its
   executor's own run, on the entry the launch picks from its `llm` chain, running *that entry's own
-  harness*, so only a `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code` entry can do it. On any backend including remote
+  harness*, so only a `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code`, `kimi-code` or `pi` entry can do it. On any backend including remote
   E2B, what travels into the box is the entry's `env` (a gateway's address, a cloud provider's
   switch, `opencode`'s [provider key](#6-a-provider-key-in-env-opencode-hermes-pi)) and what signs
   the harness in: a headless token (`crewlet llm login <key>
@@ -3386,8 +3386,8 @@ skips all three and says so on each line.
   [local cell](code-sandbox.md#local-sandboxes) (`providers.sandbox.local` plus `run_in: direct` or
   `container`), which is seeded with the login and, when the box closes, writes back one its run
   refreshed, only while the shared login still holds what the box was seeded with, by the same
-  compare-and-swap a seat's refresh takes. A seat's `llm` points at a `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code`
-  entry; any other harness (`hermes`, `pi`) serves its reviewer,
+  compare-and-swap a seat's refresh takes. A seat's `llm` points at a `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code`, `kimi-code` or `pi`
+  entry; any other harness (`hermes`, `grok`) serves its reviewer,
   workers and side passes; see [Code Sandbox](code-sandbox.md#failure-modes).
 - **No per-call sampling, effort or output cap.** Each is the harness's own configuration of its
   model ([What an entry does not set](#what-an-entry-does-not-set)).
