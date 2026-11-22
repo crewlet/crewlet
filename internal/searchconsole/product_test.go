@@ -257,12 +257,13 @@ func sitePages(w http.ResponseWriter, r *http.Request) {
 // world is a product on a company whose seat `growth-lead` is on at level with
 // two sites, a URL prefix and a domain.
 type world struct {
-	p      *searchconsole.Product
-	f      *fakeGoogle
-	tokens *fakeTokens
-	audit  *fakeAudit
-	self   string
-	held   int
+	p       *searchconsole.Product
+	f       *fakeGoogle
+	tokens  *fakeTokens
+	audit   *fakeAudit
+	self    string
+	held    int
+	company *config.Company
 }
 
 func newWorld(t *testing.T, level string) *world {
@@ -309,7 +310,7 @@ roles:
 		tokens, audit, &leases{f: f}, &http.Client{Transport: httpxtest.Rewrite(t, google)},
 		&http.Client{Transport: httpxtest.Rewrite(t, pages)})
 	self := googleauth.AccountEmail(googleauth.GrowthAccountID("Acme", "growth-lead"), "acme-crewlet-id")
-	return &world{p: p, f: f, tokens: tokens, audit: audit, self: self}
+	return &world{p: p, f: f, tokens: tokens, audit: audit, self: self, company: company}
 }
 
 // call makes tool's call as the framework does (internal/agent/builtin): a
@@ -741,5 +742,32 @@ func TestABodysSiteIsReadAsGoogleReadsIt(t *testing.T) {
 	}
 	if got := strings.Count(w.f.reached(), "POST /v1/urlInspection/index:inspect"); got != 1 {
 		t.Errorf("Google was asked %d inspections, want the one held to the seat's site", got)
+	}
+}
+
+// A SEAT'S SITES ARE HELD AGAIN UNDER THE LEASE: an approved verification of
+// a site taken off the seat since it was asked sends nothing, and fails as
+// the seat's access lowered.
+//
+// Mutation: hold the call to the seat's sites only when it is asked, and the
+// approval is made on a site the seat no longer reaches.
+func TestASeatsSitesAreHeldAgainWhenAnApprovalIsMade(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "administer")
+	call := growth.Call{Handle: "growth-lead", Turn: "turn-1", Tool: "search_console_verify_site",
+		Args: map[string]any{"site": siteDom, "method": "DNS_TXT"}}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.company.Roles[0].Integrations.SearchConsole.Sites = []string{siteWeb}
+	call.HeldCall, call.Approver = "held-1", "founder"
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); err == nil {
+		t.Fatal("an approval on a site the seat lost was made")
+	}
+	steps, records := w.audit.take()
+	if len(steps) != 2 || steps[1] != growth.StepFailed || records[1].Failure != growth.FailureAccessLowered ||
+		w.f.writeCount() != 0 {
+		t.Errorf("the apply recorded %v (%+v) after %d writes", steps, records, w.f.writeCount())
 	}
 }
