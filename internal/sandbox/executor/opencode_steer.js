@@ -34,9 +34,11 @@
 // `again` for a second id to admit it under, ONCE, which the engine grants
 // only within the note's serves and only for a person's note or a late call
 // (a wake is served once and never re-admitted), counting it as a serve then,
-// so a note that never folds spends nothing. A note the engine answers spent,
-// or one folded again, is given up: never confirmed, its id posted to the
-// route's `folded` so the engine says why it waits for the review. A failed
+// so a note that never folds spends nothing (an admission under it that
+// fails is made again, under the same id, while the execution runs). A note
+// the engine answers spent, one folded again, or one the execution settles on
+// before it is admitted again, is given up: never confirmed, its id posted to
+// the route's `folded` so the engine says why it waits for the review. A failed
 // compaction confirms and posts nothing. Measured on 2.3.2: the hook precedes
 // the delivered event, which precedes the compaction's start; a re-admitted
 // note lands plain one step later.
@@ -227,27 +229,43 @@ async function arm(ctx, url, session) {
         note.again = again
         note.readmitted = true
         admitted.set(again, note.id)
-        if (gate !== null && !stopping) quietly(readmit(note))
+        quietly(readmit(note))
       } else if (spent.includes(id)) giveUp(note)
       else held.delete(id)
     }
     return true
   }
 
+  // readmit admits a folded note again under its second id, made again after
+  // a pause while the session's execution runs: OpenCode answers a repeat
+  // admission under an id it holds with its first, before and after delivery
+  // (measured on 2.3.2), so a call that failed once OpenCode stored it costs
+  // nothing. The id stays mapped, so a message under it confirms the note
+  // however a call ended. A note the gate closes on first, or the cleanup, is
+  // given up: posted folded, never confirmed, waiting for the review.
   const readmit = async (note) => {
-    try {
-      await ctx.session.prompt({
-        sessionID: session,
-        id: note.again,
-        text: note.text,
-        delivery: "steer",
-        resume: false,
-      })
-    } catch {
-      // NOT ADMITTED AGAIN: the note waits on the record for its review, and
-      // no message under the second id confirms it, as none under a first
-      // id whose admission failed does.
-      admitted.delete(note.again)
+    let wait = 0
+    for (;;) {
+      if (held.get(note.id) !== note || note.plain) return
+      const gated = gate
+      if (gated === null || stopping || life.signal.aborted) {
+        giveUp(note)
+        return
+      }
+      try {
+        await ctx.session.prompt({
+          sessionID: session,
+          id: note.again,
+          text: note.text,
+          delivery: "steer",
+          resume: false,
+        })
+        return
+      } catch {
+        // Said above: made again after a pause.
+      }
+      wait = next(wait)
+      await sleep(wait, life.signal, gated.signal)
     }
   }
 
