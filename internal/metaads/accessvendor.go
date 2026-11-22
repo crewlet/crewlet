@@ -74,10 +74,10 @@ func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess
 
 type accessSession struct{ company *config.Company }
 
-// Options are the three levels and the ad accounts the company names.
+// Options are the three levels; the ad accounts are the document's
+// ([accessVendor.Reach]), which [seataccess.ReadOptions] applies.
 func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seataccess.Options, error) {
-	return seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane), Scoped: true, ScopeRequired: true,
-		Scope: s.company.Integrations.MetaAds.AdAccountIDs(), ScopeLive: true}, nil
+	return seataccess.Options{Lane: lane, Levels: accessVendor{}.FixedLevels(lane)}, nil
 }
 
 // Observe is each seat's setting in the document, which there is nothing

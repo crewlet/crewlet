@@ -565,20 +565,30 @@ func readJSON(t *testing.T, box sandbox.Sandbox, file string, v any) {
 	}
 }
 
-// A KIMI RUN'S ARTEFACTS ARE ITS OWN: its profile directory, so no earlier
+// A KIMI RUN'S ARTEFACTS ARE ITS OWN and the home's skills, personal
+// instructions, plugins and saved trust: its profile directory, so no earlier
 // run's profile is a later run's subagent, and its driver files, which hold
 // the notes route's token; never the home's sessions or login.
 //
-// Mutation: leave the profile directory, or clear the home — the case fails.
+// Mutation: leave the profile directory or any of the home's places, or clear
+// the home, its sessions or its login.
 func TestAKimiRunsArtifactsAreItsOwnFiles(t *testing.T) {
 	paths := PathsFor(sandbox.NewFakeSandbox("b"))
 	files, dirs := (Kimi{}).artifactFiles(paths), (Kimi{}).artifactDirs(paths)
-	if !slices.Equal(dirs, []string{paths.KimiAgents() + "/crewlet"}) ||
-		!slices.Contains(files, paths.KimiSettings()) || !slices.Contains(files, paths.KimiDriver()) {
+	if !slices.Equal(dirs, []string{paths.KimiAgents() + "/crewlet", paths.KimiSkills(), paths.KimiUserSkills(),
+		paths.KimiPlugins(), paths.KimiTrust()}) ||
+		!slices.Contains(files, paths.KimiSettings()) || !slices.Contains(files, paths.KimiDriver()) ||
+		!slices.Contains(files, paths.KimiInstructions()) {
 		t.Fatalf("artifacts = %v %v", files, dirs)
 	}
+	for _, name := range paths.KimiUserInstructions() {
+		if !slices.Contains(files, name) {
+			t.Errorf("the clear leaves %s", name)
+		}
+	}
 	for _, f := range append(files, dirs...) {
-		if f == paths.KimiHome() || f == paths.KimiSessions() {
+		if f == paths.KimiHome() || f == paths.KimiSessions() || f == paths.KimiHome()+"/credentials" ||
+			f == paths.KimiConfig() || strings.HasPrefix(paths.KimiHome()+"/credentials/kimi-code.json", f+"/") {
 			t.Errorf("the clear removes %s", f)
 		}
 	}

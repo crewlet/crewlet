@@ -171,7 +171,7 @@ func TestTheGrantCatalogueIsScalewaysLessTheNeverGranted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts, err := seataccess.ReadOptions(t.Context(), session, seataccess.LaneScaleway)
+	opts, err := seataccess.ReadOptions(t.Context(), w.vendor, session, w.open(), seataccess.LaneScaleway)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestABucketsSettingsAreGrantedForOneChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts, err := seataccess.ReadOptions(t.Context(), session, seataccess.LaneScaleway)
+	opts, err := seataccess.ReadOptions(t.Context(), w.vendor, session, w.open(), seataccess.LaneScaleway)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +322,7 @@ func TestEveryGrantTheCatalogueOffersCanBeAsked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opts, err := seataccess.ReadOptions(t.Context(), session, seataccess.LaneScaleway)
+	opts, err := seataccess.ReadOptions(t.Context(), w.vendor, session, w.open(), seataccess.LaneScaleway)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -42,6 +42,12 @@ export interface LaneWords {
     emptyOn?: string;
     none?: string;
     noneLink?: DocSection & { label: string };
+    /**
+     * The shape of an entry a person may type where the reach is open (an
+     * Apple ID's digits), so a search by name is never offered as an entry;
+     * absent where any text may be one.
+     */
+    typed?: RegExp;
   };
   /** The tool a seat uses its credential through, in a few words. */
   tool: string;
@@ -433,6 +439,7 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       empty: "No app",
       none: "No apps are reachable yet",
       noneLink: { label: "Connect a team", doc: "app-store-connect", anchor: "connect-a-team" },
+      typed: /^\d{1,20}$/,
     },
     tool: "app_store_connect tools, built in",
     issued: "never: Crewlet makes every call",
