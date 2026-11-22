@@ -2918,33 +2918,30 @@ grok:
   # starts the servers ~/.grok/config.toml names, ~/.claude.json's and
   # ~/.cursor/mcp.json's beside them (its "compatibility" sources), and a
   # project's .grok/config.toml, .cursor/mcp.json and .mcp.json from the
-  # working directory to the repository root. Measured through the engine,
-  # with each of those planted in the seat's home and at every level of a
-  # checkout above the call: with the two files below, none started, a run
-  # with tools listed the seat's server alone and a text function none;
-  # without them, a server config.toml names started on every call (the
-  # project ones never did — the engine's `.git` file ends the walk at the
-  # call's directory, and the harness loads no project configuration it has
-  # not been told to trust).
+  # working directory to the repository root. A call starts with the home's
+  # config.toml below and nothing else that names a server: measured with
+  # one planted in each of those places, in the call's own directory and at
+  # the top of a checkout above it, over two calls at once and a third in one
+  # generation, none started; the seat's server ran on each. The project
+  # ones never start — the engine's `.git` file ends the walk at the call's
+  # directory, and the harness loads no project configuration it has not
+  # been told to trust.
   #
-  #   config.toml        the home's settings, rewritten every generation, so
-  #                      no server written there survives into a call, and
+  #   config.toml        the home's settings, written whole every generation,
+  #                      so no server written there survives into a call, and
   #                      the Claude and Cursor sources (servers, hooks,
   #                      skills, rules and instruction files) are not scanned
   #                      at all. Without the last three cells, ~/.claude's
   #                      CLAUDE.md, rules and skills and ~/.cursor's skills
-  #                      reached every request (measured).
-  #   requirements.toml  the harness's own MCP allowlist ("allowed_mcp_servers"),
-  #                      which binds EVERY source — the home, a project, the
-  #                      compatibility files, a plugin: one naming any other
-  #                      server is dropped from the session. It only ever
-  #                      tightens, unsigned too (measured: it alone kept a
-  #                      server config.toml names out). 1.0.92 deletes an
-  #                      unsigned one during the call that read it, so it
-  #                      binds the call that opens a
-  #                      generation; config.toml names no server for the
-  #                      generation's later calls. A deployment that syncs a
-  #                      signed one replaces it with the organisation's.
+  #                      reached every request (measured). It carries the one
+  #                      key 1.0.92 adds on a home's first call, and with it
+  #                      no call rewrote the file (its digest unchanged over
+  #                      three calls); without it, the first call added that
+  #                      key and kept every other.
+  #
+  # ~/.grok/requirements.toml is pruned, never written: 1.0.92 deletes an
+  # unsigned one during the call that reads it, so nothing there binds a
+  # generation's later calls.
   seed_files:
     - path: .grok/config.toml
       content: |
@@ -2963,11 +2960,9 @@ grok:
         skills = false
         rules = false
         agents = false
-    - path: .grok/requirements.toml
-      content: |
-        # Written by Crewlet: the seat's own server is the one MCP server a call may start.
-        [[allowed_mcp_servers]]
-        server_name = "crewlet"
+
+        [marketplace]
+        default_skills_installs_purged = true
   # THE SEAT'S TOOLS: one stdio server, declared by an AGENT FILE in the call's
   # own directory (--agent), whose `mcpServers` the harness starts beside its
   # default agent's tools — an agent file with no body adds nothing to the
@@ -3000,8 +2995,8 @@ grok:
   #                         qualified and the model told so, and the run goes
   #                         on (measured). Without the rule, a qualified
   #                         name is asked about too.
-  #                         The allowlist above leaves the crewlet server the
-  #                         only one whose tools it can match.
+  #                         A call starts with the crewlet server alone
+  #                         (above), so its tools are the only ones it matches.
   #   --output-format streaming-json  the record (requests, below); a text
   #                         function keeps the plain answer (mcp.output).
   #
@@ -3111,6 +3106,7 @@ grok:
     - ".grok/skills"
     - ".grok/commands"
     - ".grok/hooks"
+    - ".grok/requirements.toml"
     - ".claude"
     - ".cursor"
   host_credential_paths: [".grok/auth.json"]
