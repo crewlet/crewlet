@@ -323,6 +323,12 @@ type CommentThread struct {
 	Position int64 `json:"position"`
 
 	Remarks []Remark `json:"remarks"`
+
+	// RemarksCut says a page of threads ended inside this thread's remarks
+	// ([Reader.ThreadsPage]): the next page starts with the same thread,
+	// Continued, carrying the rest.
+	RemarksCut bool `json:"remarks_cut,omitempty"`
+	Continued  bool `json:"continued,omitempty"`
 }
 
 // Remark is one remark of a thread. A removed remark keeps its place and
