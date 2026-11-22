@@ -85,3 +85,33 @@ func TestAnUnreadWriterContinuesInNoBox(t *testing.T) {
 		}
 	}
 }
+
+// KIMI CODE AND COPILOT JUDGE A WRITER ALONE AS THEY DO BESIDE A BOX: only a
+// session their one supported release wrote continues ([carrier]
+// ContinuesWriter, which the restorer asks with no box), any other writer
+// refused saying why, and Continues beside a supported box answers the same.
+//
+// Mutation: answer yes in either runner's ContinuesWriter, or judge a writer
+// otherwise than its Continues does, and its row goes red.
+func TestKimiAndCopilotContinueOnlyTheirOneReleasesWriter(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name      string
+		carrier   carrier
+		supported string
+	}{
+		{"kimi-code", Kimi{}, kimiSupported},
+		{"copilot", Copilot{}, copilotFloor()},
+	} {
+		for writer, want := range map[string]bool{c.supported: true, "9.9.9": false, "0.0.1": false, "": false} {
+			ok, why := c.carrier.ContinuesWriter(writer)
+			if ok != want || ok == (why != "") {
+				t.Errorf("%s: writer %q continues %v (%q), want %v", c.name, writer, ok, why, want)
+			}
+			if beside, _ := c.carrier.Continues(c.supported, writer); beside != ok {
+				t.Errorf("%s: writer %q continues %v beside box %s, and %v alone", c.name, writer, beside,
+					c.supported, ok)
+			}
+		}
+	}
+}

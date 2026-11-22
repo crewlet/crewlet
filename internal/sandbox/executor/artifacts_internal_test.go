@@ -49,3 +49,48 @@ func TestAReusedBoxKeepsNoHarnesssFilesOrDirectories(t *testing.T) {
 		t.Error("Codex names directories to clear, which its skills' shared root must never be")
 	}
 }
+
+// KIMI CODE'S AND COPILOT'S ARTIFACTS ARE CLEARED, each split as the contract
+// names them: their files one by one (Kimi's driver and settings, Copilot's
+// instructions and tool environment) and their directories whole (Kimi's
+// profile directory, Copilot's extension), whichever runner clears the box.
+// Named through the old (files, dirs) method, neither satisfied the contract
+// and the clear left both runners' files behind.
+//
+// Mutation: drop either runner's artifactFiles or artifactDirs, or name a
+// directory among its files, and its row goes red.
+func TestAReusedBoxKeepsNoKimiOrCopilotArtifacts(t *testing.T) {
+	t.Parallel()
+	box := sandbox.NewFakeSandbox("box-1")
+	p := PathsFor(box)
+	if err := NewClaudeCode().ClearArtifacts(t.Context(), box); err != nil {
+		t.Fatalf("ClearArtifacts: %v", err)
+	}
+	execs := box.Execs()
+	clear := execs[len(execs)-1].Command
+	files, rest, _ := strings.Cut(strings.TrimPrefix(clear, "rm -f "), "; rm -rf ")
+	dirs, _, _ := strings.Cut(rest, "; ")
+	removes := func(list, path string) bool { return slices.Contains(strings.Fields(list), sandbox.ShellQuote(path)) }
+	for _, c := range []struct {
+		name  string
+		files []string
+		dirs  []string
+	}{
+		{"kimi-code", (Kimi{}).artifactFiles(p), (Kimi{}).artifactDirs(p)},
+		{"copilot", (Copilot{}).artifactFiles(p), (Copilot{}).artifactDirs(p)},
+	} {
+		if len(c.files) == 0 || len(c.dirs) == 0 {
+			t.Errorf("%s names files %v and directories %v, want both", c.name, c.files, c.dirs)
+		}
+		for _, path := range c.files {
+			if !removes(files, path) {
+				t.Errorf("the clear leaves %s's file %s", c.name, path)
+			}
+		}
+		for _, path := range c.dirs {
+			if !removes(dirs, path) {
+				t.Errorf("the clear does not remove %s's directory %s whole", c.name, path)
+			}
+		}
+	}
+}
