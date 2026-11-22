@@ -414,12 +414,21 @@ func writeThread(t *testing.T, path, thread string) {
 type lockedBuffer struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
+	// writes is every write's length, for a case awaiting a line.
+	writes record[int]
 }
 
 func (b *lockedBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.buf.Write(p)
+	n, err := b.buf.Write(p)
+	b.mu.Unlock()
+	b.writes.add(n)
+	return n, err
+}
+
+// await blocks until holds is true of what was written, with no clock.
+func (b *lockedBuffer) await(holds func(string) bool) {
+	b.writes.await(func([]int) bool { return holds(b.String()) })
 }
 
 func (b *lockedBuffer) String() string {

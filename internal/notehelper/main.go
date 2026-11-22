@@ -54,15 +54,18 @@
 //
 // # The step cap
 //
-// -step-cap N ends a turn at its Nth model response, the unit of Claude
-// Code's --max-turns, which a context compaction's request is not: the
-// adapter counts the responses ([events]), and at N
-// the helper writes -cap-marker, by a rename, and then interrupts the turn
-// ([stepCap]), so the run's collection tells the helper's cap from any other
-// interrupt by the marker alone. An interrupt that fails is asked again at
-// the turn's next response. -interrupt-once stands in for a helper that ended
-// before its turn did: it joins, interrupts the turn in flight and exits, so
-// killing the helper never leaves a turn without its bound.
+// -step-cap N ends a turn at its Nth model response, counted per turn, the
+// unit of Claude Code's --max-turns, which a context compaction's request is
+// not: the adapter counts the responses ([events]), and at N the helper
+// writes -cap-marker, by a rename, and then interrupts the turn ([stepCap]).
+// The marker says the cap fired, never that a turn was cut short: a turn
+// whose Nth response was its final answer completes, and the run reads its
+// cap only where its record of the turn says the interrupt aborted it. An
+// interrupt that fails is asked again at the turn's next response.
+// -interrupt-once stands in for a helper that ended before its turn did: it
+// joins, interrupts the turn in flight and exits, saying whether it cut one
+// short, and the run's guard stops the harness where it did not, so killing
+// the helper never leaves a turn without its bound.
 //
 // # Skill loads
 //
@@ -76,12 +79,14 @@
 // # Exit
 //
 // 0 on SIGTERM or SIGINT, and once the harness's connection closes (the run
-// is over); 1 when the notes route refuses the helper (401 or 404: its token
-// no longer resolves, or the run has no notes route) or the harness cannot be
-// reached; 2 for a command line or environment it cannot run with.
-// -interrupt-once exits 0 once no turn runs (interrupted, or none was) and 1
-// where it cannot tell. Every error goes to stderr, which the run's script
-// sends to the run's error stream.
+// is over); 1 when the harness cannot be reached; 2 for a command line or
+// environment it cannot run with. A route that refuses the helper (401 or 404:
+// its token no longer resolves, or the run has no such route) ends only what
+// that route is for, logged: the notes route its polls, the skill route its
+// reports, the cap and the other route going on. -interrupt-once exits 0 once
+// it interrupted the turn in flight, 3 where no turn was in flight to
+// interrupt, and 1 where it cannot tell. Every error goes to stderr, which the
+// run's script sends to the run's error stream.
 //
 // # Its builds
 //
@@ -116,6 +121,9 @@ const (
 	exitDone  = 0
 	exitError = 1
 	exitUsage = 2
+	// exitNothing is -interrupt-once finding no turn in flight: nothing was
+	// cut short, so the next turn would start with no helper bounding it.
+	exitNothing = 3
 )
 
 func main() {
@@ -238,29 +246,34 @@ func run(ctx context.Context, args []string, getenv func(string) string, stderr 
 		stop()
 		wg.Wait()
 	}()
-	if poll == nil {
-		// No notes: the helper caps and reports until the run is over.
-		select {
-		case <-h.gone():
-		case <-ctx.Done():
+	if poll != nil {
+		err = (&loop{poll: poll, h: h, log: logger, pace: p}).run(ctx)
+		switch {
+		case ctx.Err() != nil, errors.Is(err, errGone):
+			return exitDone
+		case !errors.Is(err, errRefused):
+			logger.Print(err)
+			return exitError
 		}
-		return exitDone
-	}
-	err = (&loop{poll: poll, h: h, log: logger, pace: p}).run(ctx)
-	switch {
-	case ctx.Err() != nil, errors.Is(err, errGone):
-		return exitDone
-	default:
+		// THE NOTES ROUTE ALONE REFUSED THE HELPER: its polls end, and the cap
+		// and the skill reports go on, since a helper that ended would leave
+		// the turn unbounded (the run's guard would stop it).
 		logger.Print(err)
-		return exitError
 	}
+	// The helper caps and reports until the run is over.
+	select {
+	case <-h.gone():
+	case <-ctx.Done():
+	}
+	return exitDone
 }
 
 // interruptOnce is -interrupt-once: join, interrupt the turn in flight and
-// exit, 0 where no turn runs any more (interrupted, or none was), 1 where
-// that cannot be known. The run's script runs it once the long-running
-// helper has ended before the turn did, so the turn is never left without
-// its cap.
+// exit, 0 where it interrupted one, [exitNothing] where none was in flight,
+// 1 where that cannot be known. The run's script runs it once the
+// long-running helper has ended before the turn did, and stops the harness
+// on anything but 0: a turn not yet started when the helper ended would run
+// with no cap at all.
 func interruptOnce(ctx context.Context, f flags, p pacing,
 	open func(context.Context, flags, pacing, events) (harness, error), logger *log.Logger) int {
 	h, err := open(ctx, f, p, events{})
@@ -275,8 +288,11 @@ func interruptOnce(ctx context.Context, f flags, p pacing,
 	defer h.close()
 	err = h.interrupt(ctx, "")
 	switch {
-	case err == nil, errors.Is(err, errNotNow):
+	case err == nil:
 		return exitDone
+	case errors.Is(err, errNotNow):
+		logger.Print("no turn was in flight to interrupt")
+		return exitNothing
 	default:
 		logger.Print(err)
 		return exitError
