@@ -280,18 +280,20 @@ func TestTheMuseShellRunsWithOnlyWhatItNeeds(t *testing.T) {
 	}
 }
 
-// THE SCRIPT HANDS THE KEY ON STDIN AND KEEPS IT AND THE EXPORTER'S VARIABLES
-// OUT OF THE ENVIRONMENT IT LAUNCHES WITH: what follows its part runs without
-// any of them, reads the key on stdin, and no file keeps it.
+// THE SCRIPT HANDS THE KEY ON STDIN AND KEEPS IT, THE RUN'S OTHER SIGN-IN
+// VARIABLES AND THE EXPORTER'S OUT OF THE ENVIRONMENT IT LAUNCHES WITH: what
+// follows its part runs without any of them, reads the key on stdin, and no
+// file keeps it.
 //
-// Mutation: export the key, or leave its file behind.
+// Mutation: export the key, leave its file behind, or keep a sign-in name.
 func TestTheMuseScriptHandsTheKeyOnStdinAlone(t *testing.T) {
 	p := museScriptHome(t, nil)
-	script := "export META_API_KEY=sk-test-key OTEL_EXPORTER_OTLP_ENDPOINT=http://o OTEL_EXPORTER_OTLP_HEADERS=a=b\n" +
-		museShellEnvironment(p) + `env; echo "---$kf"; cat; echo; ls ` + p.WorkDir()
+	script := "export META_API_KEY=sk-test-key OTEL_EXPORTER_OTLP_ENDPOINT=http://o OTEL_EXPORTER_OTLP_HEADERS=a=b " +
+		"MUSE_TEAM_TOKEN=t\n" + museShellEnvironment(p, []string{"META_API_KEY", "MUSE_TEAM_TOKEN"}) +
+		`env; echo "---$kf"; cat; echo; ls ` + p.WorkDir()
 	out := string(runSh(t, script))
 	env, rest, _ := strings.Cut(out, "---")
-	for _, name := range museShellSecrets {
+	for _, name := range append(museShellSecrets, "MUSE_TEAM_TOKEN") {
 		if strings.Contains(env, name+"=") {
 			t.Errorf("the environment after the script's part holds %s", name)
 		}
@@ -351,5 +353,18 @@ func TestTheMuseScriptWiresItsPluginBeforeItsServers(t *testing.T) {
 			t.Fatalf("%q is not after the step before it in:\n%s", step, script)
 		}
 		last = at
+	}
+}
+
+// A SIGN-IN NAME NO SHELL CAN UNSET IS REFUSED before anything is written: the
+// script could not keep it out of the model's shell.
+//
+// Mutation: write the config without checking the names.
+func TestAMuseRunWithASignInNameNoShellCanUnsetIsRefused(t *testing.T) {
+	box := sandbox.NewFakeSandbox("b")
+	_, err := (Muse{}).WriteConfig(t.Context(), box, sandbox.RunRequest{Brief: "x",
+		SignInEnv: []string{"META_API_KEY", "BAD-NAME"}}, PathsFor(box))
+	if err == nil || !strings.Contains(err.Error(), "BAD-NAME") {
+		t.Fatalf("err = %v, want the name refused", err)
 	}
 }
