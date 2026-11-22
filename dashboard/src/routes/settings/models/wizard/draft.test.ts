@@ -33,16 +33,18 @@ import {
   modelId,
   nextDocument,
   stepOf,
+  stepsFor,
   suggestedVariable,
   withChoices,
   type Draft,
 } from "./draft.ts";
 import { credentialExample, modelExample } from "./examples.ts";
+import { EXECUTORS } from "../fixtures.ts";
 import { droppedWords } from "./steps/Review.tsx";
 import { fixable, hasSandbox } from "./draft.ts";
 
 const draft = (patch: Partial<Draft> = {}): Draft => ({
-  ...emptyDraft(),
+  ...emptyDraft(EXECUTORS),
   key: "sonnet-key",
   model: "sonnet",
   variable: "ANTHROPIC_API_KEY_SONNET_KEY",
@@ -97,7 +99,7 @@ describe("the entry", () => {
       auth: { mode: "api-key", api_key: "${OLD}", credential_bundle: "${BUNDLE}" },
     };
     const model = view({ raw });
-    const d = { ...draftOf(model), webDenied: false, timeout: "120" };
+    const d = { ...draftOf(model, EXECUTORS), webDenied: false, timeout: "120" };
     const entity = entityOf(d, baseOf(model));
     expect(entity.state_dir).toBe("/var/crewlet/sonnet");
     expect(entity.overrides).toEqual({ api_key_env: "MY_KEY" });
@@ -152,7 +154,7 @@ describe("the entry", () => {
         env: { OPENROUTER_API_KEY: "${OR_KEY}" },
       },
     });
-    const d = draftOf(model);
+    const d = draftOf(model, EXECUTORS);
     expect(d.method).toBe("api-key");
     expect(d.provider).toBe("openrouter");
     expect(d.model).toBe("qwen-coder");
@@ -273,6 +275,19 @@ describe("a changed choice", () => {
   });
 });
 
+// WHICH HARNESS RUNS CODING IS THE ENGINE'S ANSWER (`executor_harnesses`), never
+// a list compiled into the page: a runner a build adds is offered with no
+// dashboard rebuild. Mutation: read a compiled list and pi stays host-only.
+describe("the harnesses that run coding", () => {
+  test("are the ones the engine serves, whatever the page was built with", () => {
+    const pi = { ...draft({ harness: "pi" }) };
+    expect(stepsFor(pi)).not.toContain("runs");
+    const served = { ...pi, executors: [...EXECUTORS, "pi"] };
+    expect(stepsFor(served)).toContain("runs");
+    expect(stepsFor({ ...draft(), executors: [] })).not.toContain("runs");
+  });
+});
+
 describe("a model id on a harness that names its provider", () => {
   test("always names the chosen provider before the provider's own id, a slash or its name included", () => {
     const oc = { harness: "opencode", provider: "openrouter" };
@@ -299,7 +314,7 @@ describe("a model id on a harness that names its provider", () => {
       const variable = provider === "groq" ? "GROQ_API_KEY" : "OPENROUTER_API_KEY";
       const raw = { harness: "opencode", model: id, env: { [variable]: "${KEY}" } };
       const model = view({ key: "open", harness: "opencode", model: id, raw });
-      expect(entityOf(draftOf(model), baseOf(model)).model).toBe(id);
+      expect(entityOf(draftOf(model, EXECUTORS), baseOf(model)).model).toBe(id);
     },
   );
 });
@@ -307,7 +322,7 @@ describe("a model id on a harness that names its provider", () => {
 /** ONE TABLE FOR EVERY EXAMPLE: the placeholder, the key's prefix and the hint name one vendor. */
 describe("the examples", () => {
   const ex = (patch: Partial<Draft>) => {
-    const d = { ...emptyDraft(), ...patch };
+    const d = { ...emptyDraft(EXECUTORS), ...patch };
     return [modelExample(d).placeholder, modelExample(d).naming, credentialExample(d)];
   };
 
@@ -519,7 +534,7 @@ describe("every harness", () => {
       variable: "XAI_API_KEY",
     });
     const raw = entityOf(d);
-    const back = draftOf(view({ harness: "hermes", model: "m", raw }));
+    const back = draftOf(view({ harness: "hermes", model: "m", raw }), EXECUTORS);
     expect(methodOf(view({ harness: "hermes", model: "m", raw }))).toBe("api-key");
     expect(back.provider).toBe("xai");
   });
@@ -533,7 +548,7 @@ describe("every harness", () => {
     });
     const raw = entityOf(d);
     expect(raw.env).toEqual({ OPENAI_BASE_URL: "https://example.com/v1" });
-    expect(draftOf(view({ harness: "qwen-code", model: "m", raw })).endpoint).toBe(
+    expect(draftOf(view({ harness: "qwen-code", model: "m", raw }), EXECUTORS).endpoint).toBe(
       "https://example.com/v1",
     );
   });
