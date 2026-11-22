@@ -158,7 +158,7 @@ func TestTheRecordCarriesWhatTheBoundLeftOut(t *testing.T) {
 		t.Errorf("fitResult left %d lines / %d bytes out and kept %d bytes",
 			got.TranscriptElidedLines, got.TranscriptElidedBytes, len(got.Transcript))
 	}
-	rec := collectedRecord(PendingRun{}, LaunchRecord{}, got, time.Now())
+	rec := collectedRecord(PendingRun{}, LaunchRecord{}, got, 0, time.Now())
 	if rec.ActivityTranscriptElidedLines != got.TranscriptElidedLines ||
 		rec.ActivityTranscriptElidedBytes != got.TranscriptElidedBytes {
 		t.Errorf("the record carries %d/%d, the result %d/%d", rec.ActivityTranscriptElidedLines,

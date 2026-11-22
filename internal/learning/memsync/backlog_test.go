@@ -229,8 +229,8 @@ func publishFor(t *testing.T, s *Syncer, js *roundTripJS, bound time.Duration) (
 //
 // Mutation: move the mark back after the table, to the page's last row at its
 // first acknowledgement, or read a page from the mark's own row (>= for >);
-// read the page in key order; or count a cut table's marked rows only once it
-// completes, or call every table a cut stopped in a whole one: this goes red.
+// read the page in key order; or count a cut table's rows only once it
+// completes: this goes red.
 func TestABacklogLongerThanACycleIsCarriedAcrossCyclesNotRestarted(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -282,9 +282,9 @@ func TestABacklogLongerThanACycleIsCarriedAcrossCyclesNotRestarted(t *testing.T)
 		}
 		last := len(ids) - 2*perCycle
 		wants := []Carried{
-			{Rows: perCycle, Marked: perCycle, StoppedIn: "agent_diary"},
-			{Rows: perCycle, Marked: perCycle, StoppedIn: "agent_diary"},
-			{Rows: last, Marked: last},
+			{Rows: perCycle, StoppedIn: "agent_diary"},
+			{Rows: perCycle, StoppedIn: "agent_diary"},
+			{Rows: last},
 		}
 		if len(answered) != len(wants) {
 			t.Fatalf("the %d notes took %d cycles, want %d at %d a cycle", len(ids), len(answered),
@@ -582,27 +582,17 @@ func TestARowLargerThanAPageIsNeverLeftBehind(t *testing.T) {
 // A PUBLISH SAYS WHAT IT CARRIED AND WHERE IT STOPPED.
 //
 // The answer is how the memory sync tells a draining backlog from a sync that
-// keeps nothing: every row acknowledged, those that moved a mark, and, for a
-// publish that stopped short, the table it stopped in and whether that table
-// is carried whole (keeping nothing of a cut publish). With one row in each
-// table, the first publish carries six and marks the three watermark tables'
-// rows, the second carries only the whole tables, and the third, refused at
-// its first row, stops in the first whole table the registry lists.
+// moves nothing: every row acknowledged, each of which moved a mark, and, for
+// a publish that stopped short, the table it stopped in. With one row in each
+// table, the first publish carries six, the second nothing, and the third,
+// refused at the profile changed since, stops in the profiles.
 //
-// Mutation: count the whole tables' rows as marked, and this goes red.
+// Mutation: count a row before it is acknowledged, or name no table a refused
+// publish stopped in, and this goes red.
 func TestAPublishSaysWhatItCarriedAndWhereItStopped(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	seedMemory(t, db)
-	whole, firstWhole := 0, ""
-	for _, spec := range tables {
-		if spec.wholeEachCycle {
-			whole++
-			if firstWhole == "" {
-				firstWhole = spec.name
-			}
-		}
-	}
 	refused := errors.New("the broker refused the row")
 	refuse := false
 	js := &roundTripJS{trip: func(context.Context) error {
@@ -614,18 +604,20 @@ func TestAPublishSaysWhatItCarriedAndWhereItStopped(t *testing.T) {
 	s := syncerOver(db, js)
 
 	first, err := s.PublishOwn(t.Context(), seat.Handle)
-	if want := (Carried{Rows: len(tables), Marked: len(tables) - whole}); err != nil || first != want {
+	if want := (Carried{Rows: len(tables)}); err != nil || first != want {
 		t.Fatalf("the first publish answered %+v (%v), want %+v: the seed's row of every table "+
-			"acknowledged, and those of the watermark tables marked", first, err, want)
+			"acknowledged", first, err, want)
 	}
 	second, err := s.PublishOwn(t.Context(), seat.Handle)
-	if want := (Carried{Rows: whole}); err != nil || second != want {
-		t.Fatalf("the second publish answered %+v (%v), want %+v: the whole tables carried "+
-			"again, and nothing marked", second, err, want)
+	if err != nil || second != (Carried{}) {
+		t.Fatalf("the second publish answered %+v (%v), want nothing: nothing changed",
+			second, err)
 	}
+	exec(t, db, `UPDATE counterparty_profiles SET traits = '{"prefers":"a call"}'
+		WHERE observer_handle = ?`, seat.Handle)
 	refuse = true
 	third, err := s.PublishOwn(t.Context(), seat.Handle)
-	if want := (Carried{StoppedIn: firstWhole, Whole: true}); !errors.Is(err, refused) || third != want {
+	if want := (Carried{StoppedIn: "counterparty_profiles"}); !errors.Is(err, refused) || third != want {
 		t.Fatalf("the publish refused at its first row answered %+v (%v), want %+v and the "+
 			"refusal", third, err, want)
 	}

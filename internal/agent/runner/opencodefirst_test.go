@@ -20,7 +20,7 @@ import (
 // round's first call, counted as count on the stub provider's reply.
 func keptOpenCode(count *sandbox.ResumedCount, interrupted bool) runner.SessionBasis {
 	basis := keptClaude(count, interrupted)
-	basis.Harness, basis.CountProvider = sandbox.OpenCodeHarness, "stub"
+	basis.Harness, basis.CountProvider = "opencode", "stub"
 	return basis
 }
 
@@ -30,7 +30,7 @@ func keptOpenCode(count *sandbox.ResumedCount, interrupted bool) runner.SessionB
 func openCodeCopy(count *sandbox.ResumedCount) func(*runner.Resume) {
 	return func(r *runner.Resume) {
 		copyOf(sandbox.HarnessEndOwnRun, count)(r)
-		r.Run.Harness, r.CountProvider = sandbox.OpenCodeHarness, "stub"
+		r.Run.Harness, r.CountProvider = "opencode", "stub"
 	}
 }
 

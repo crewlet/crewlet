@@ -62,18 +62,14 @@ const (
 	openCodeEnvironmentBytes  = 1024
 )
 
-// ReadOpenCodePoint reads, in box, where its OpenCode compacts a continued
-// session's first request ([sandbox.PointReader]): the package doc's section on
+// readBoxPoint reads, in box, where its OpenCode compacts a continued
+// session's first request ([Runner.ReadBoxPoint]): the package doc's section on
 // the first request judged in its box says what it reads and why. Three
 // answers, as [Runner.CheckCarry]'s: a point, a mark, and an error where the
 // box could not be asked.
-func (r *Runner) ReadOpenCodePoint(ctx context.Context, box sandbox.Sandbox,
-	ask sandbox.PointAsk) (sandbox.OpenCodePoint, error) {
+func (OpenCode) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
+	ask sandbox.PointAsk) (sandbox.BoxPoint, error) {
 
-	if r.harness.Name() != OpenCodeName {
-		return sandbox.OpenCodePoint{Mark: sandbox.PointUnread,
-			Why: r.harness.Name() + " runs no OpenCode, so its box has no OpenCode point"}, nil
-	}
 	if provider, _ := sandbox.ModelProvider(ask.Model); provider == "" {
 		return pointMarked(sandbox.PointNoModel, fmt.Sprintf("the launch's model %q names no provider",
 			ask.Model)), nil
@@ -92,7 +88,7 @@ func (r *Runner) ReadOpenCodePoint(ctx context.Context, box sandbox.Sandbox,
 		sandbox.ExecOptions{Env: env, TimeoutSec: openCodePointWait.Seconds()})
 	defer clearPointAnswers(ctx, box, dir)
 	if err != nil {
-		return sandbox.OpenCodePoint{}, fmt.Errorf("executor: reading the box's OpenCode point: %w", err)
+		return sandbox.BoxPoint{}, fmt.Errorf("executor: reading the box's OpenCode point: %w", err)
 	}
 	if res.ExitCode != 0 {
 		return pointMarked(sandbox.PointUnread, fmt.Sprintf("the read of the box's OpenCode point exited %d",
@@ -118,9 +114,7 @@ func (r *Runner) ReadOpenCodePoint(ctx context.Context, box sandbox.Sandbox,
 	return openCodePointOf(ask, answers, paths), nil
 }
 
-var _ sandbox.PointReader = (*Runner)(nil)
-
-// openCodePointScript is the one exec the read runs ([Runner.ReadOpenCodePoint]):
+// openCodePointScript is the one exec the read runs ([Runner.ReadBoxPoint]):
 // the login imported where the box holds one, the release asked where the
 // launch has none, model.list and config.get each answered into a file (a
 // pipe cuts OpenCode's output at 64 KiB on 2.0.32 and 2.1.4), the plugin
@@ -197,14 +191,14 @@ type openCodeAnswers struct {
 }
 
 // pointMarked is no point, for mark, why redacted.
-func pointMarked(mark sandbox.PointMark, why string) sandbox.OpenCodePoint {
-	return sandbox.OpenCodePoint{Mark: mark, Why: redact.Secrets(why)}
+func pointMarked(mark sandbox.PointMark, why string) sandbox.BoxPoint {
+	return sandbox.BoxPoint{Mark: mark, Why: redact.Secrets(why)}
 }
 
 // releaseMarked is no point where release is outside the set this build read
 // or is not writer's, the release that wrote the session: a set, never a
 // range, and a pair only where it is one release ([openCodeCountRead]).
-func releaseMarked(release, writer string) (sandbox.OpenCodePoint, bool) {
+func releaseMarked(release, writer string) (sandbox.BoxPoint, bool) {
 	release, writer = strings.TrimSpace(release), strings.TrimSpace(writer)
 	switch {
 	case !openCodeCountRead(release):
@@ -214,7 +208,7 @@ func releaseMarked(release, writer string) (sandbox.OpenCodePoint, bool) {
 		return pointMarked(sandbox.PointPair, fmt.Sprintf("the box runs OpenCode %s and the session was "+
 			"written by %q: no pair of differing releases has been measured", release, writer)), true
 	}
-	return sandbox.OpenCodePoint{}, false
+	return sandbox.BoxPoint{}, false
 }
 
 // openCodePointOf decides the point from what the read brought back, for the
@@ -222,7 +216,7 @@ func releaseMarked(release, writer string) (sandbox.OpenCodePoint, bool) {
 // else the point by the box's release's rule, or Never where compaction is
 // off; and in the box that holds the session's copy what it hands over before
 // the brief ([openCodeBoxBytes]).
-func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandbox.OpenCodePoint {
+func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandbox.BoxPoint {
 	release := strings.TrimSpace(a.release)
 	if release == "" {
 		release = releaseOf(string(a.version))
@@ -252,7 +246,7 @@ func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandb
 			found[m] = why
 		}
 	}
-	point := sandbox.OpenCodePoint{Release: release}
+	point := sandbox.BoxPoint{Release: release}
 	point.Plugins = slices.Concat(docs.plugins, listing.plugins)
 	if len(point.Plugins) > 0 {
 		mark(sandbox.PointPlugin, "the box loads a plugin other than the engine's own, which can compact the "+

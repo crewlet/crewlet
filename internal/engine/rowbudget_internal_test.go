@@ -94,7 +94,7 @@ func TestTheEnginesWritesOfARunsRowAreGivenTheRowsCrossingBesideTheirReason(t *t
 			want: steerPublishBudget + crossing,
 			path: func(ctx context.Context, store sandbox.PendingStore) {
 				newRunSteers(steerSeals{}, store, nil).inbox(
-					runIdentity{turn: steer.Turn{TurnID: "t1", AgentHandle: "swe"}}, 1).recordPulled(ctx, "launch-1")
+					runIdentity{turn: steer.Turn{TurnID: "t1", AgentHandle: "swe"}}, 1, "").recordPulled(ctx, "launch-1")
 			},
 		},
 		{

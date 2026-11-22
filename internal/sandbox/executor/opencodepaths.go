@@ -1,0 +1,59 @@
+package executor
+
+// OpenCodeConfig is where an OpenCode run's own configuration is written
+// ([OpenCode.WriteConfig]), and read from by the run's script, which hands its
+// content to the run's server alone as OPENCODE_CONFIG_CONTENT
+// ([OpenCode.Command]).
+//
+// BESIDE the run's other artefacts, never in the checkout: the checkout is the
+// repository's, and an opencode.json written there would replace the
+// repository's own file, where content handed to the server ranks above it and
+// leaves it in place. Under WorkDir, so a `git clean` in the brief cannot
+// remove it from under the run.
+func (p Paths) OpenCodeConfig() string { return p.WorkDir() + "/opencode.json" }
+
+// OpenCodeValues is the directory holding the values an OpenCode run's MCP
+// servers are configured with — each server's url, each header value, each
+// environment value — one file apiece, which [Paths.OpenCodeConfig] names by a
+// `{file:<path>}` reference rather than carrying the value
+// ([openCodeValueFiles]). A directory of the run's own, removed whole before
+// every run ([Runner.ClearArtifacts]), so a run configured with fewer values
+// than the last keeps none of the last one's.
+func (p Paths) OpenCodeValues() string { return p.WorkDir() + "/opencode-values" }
+
+// OpenCodeValuesFresh is the directory holding an OpenCode run's values as they
+// are under the job's other bridge token, for a session its script starts of
+// its own in place of the one it continues ([sandbox.RunRequest.FreshWiring]):
+// the same files by the same names, so the configuration's references name
+// either set, which the script moves over [Paths.OpenCodeValues] where it
+// starts one and removes where it continues — before the run's server starts,
+// which is what reads them.
+func (p Paths) OpenCodeValuesFresh() string { return p.WorkDir() + "/opencode-values-fresh" }
+
+// OpenCodeSteerPlugin is the DIRECTORY an OpenCode run's notes plugin is written
+// into, as index.js ([OpenCode.WriteConfig]), and named by the run's
+// configuration — the plugin that admits a person's notes to the run's turn into
+// its session at its next step (opencode_steer.js).
+//
+// A DIRECTORY, because OpenCode 2 loads a configured local plugin only from one
+// — a file named there is skipped with a warning — trying its `server` module
+// and then its `index`. Under WorkDir, beside the configuration that names it,
+// never in the checkout or a `.opencode/plugins/` OpenCode would discover on its
+// own; and its own, removed whole before every run ([Runner.ClearArtifacts]):
+// OpenCode watches a configured plugin's directory and reloads the plugin on any
+// change inside it, so nothing is written there once the run's server starts —
+// the plugin itself writes nothing at all.
+func (p Paths) OpenCodeSteerPlugin() string { return p.WorkDir() + "/opencode-steer" }
+
+// OpenCodeSkills is the DIRECTORY an OpenCode run's own skills are written into
+// ([sandbox.RunRequest.Skills], [OpenCode.WriteConfig]), a directory per skill,
+// and named in the run's configuration's `skills`. Its own, under WorkDir, for
+// the reasons [Paths.ClaudeSkillsPlugin] gives; and written before the run's
+// server starts, which watches it.
+func (p Paths) OpenCodeSkills() string { return p.WorkDir() + "/opencode-skills" }
+
+// OpenCodeSkillsPlugin is the DIRECTORY of the plugin that reports each skill an
+// OpenCode run's model loads to the run's bridge (opencode_skills.js), written
+// and named as the notes plugin is ([Paths.OpenCodeSteerPlugin]), and for the
+// same reasons a directory of its own.
+func (p Paths) OpenCodeSkillsPlugin() string { return p.WorkDir() + "/opencode-skill-loads" }

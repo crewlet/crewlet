@@ -9,9 +9,10 @@ import { Table, Tag, Text } from "@crewlethq/ui";
 import type { GrowthLevel, GrowthRoleOffer } from "~/contract/growth.ts";
 import "~/styles/growth.css";
 
+/** The growth levels as a person reads them, by what they let an agent do (`growth.Level.Label`). */
 const LEVEL_WORDS: Readonly<Record<GrowthLevel, string>> = {
-  read: "Read",
-  operate: "Operate",
+  read: "View",
+  operate: "Manage",
   administer: "Administer, each act a decision",
 };
 

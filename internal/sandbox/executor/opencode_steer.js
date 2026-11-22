@@ -1,7 +1,7 @@
 // crewlet.steer — the plugin an OpenCode run's server loads to admit a person's
 // notes to the run's turn into the run's own session, at its next step.
 //
-// The engine embeds this file (steer.go) and writes it into the run's work
+// The engine embeds this file (opencodesteer.go) and writes it into the run's work
 // directory as index.js, a directory of its own that the run's configuration
 // names with the run's notes route as its one option — a {file:} reference,
 // so the configuration holds a path and never the route's token

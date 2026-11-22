@@ -493,7 +493,7 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	t.Parallel()
 	uncapped := PendingRun{TurnID: "t1"}
 	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing
-	if got, want := BoxReadBudget(uncapped, BoxReadCollect),
+	if got, want := BoxReadBudget(uncapped, BoxReadCollect, ThreadTraits{}),
 		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
 		t.Errorf("a collection's read of a turn with no cap waits %v, want the take alone, %v", got, want)
 	}
@@ -518,7 +518,7 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 		"a stop's, its turn capped":           {ahead, BoxReadStop, end},
 		"a loss's, its turn's cap passed":     {passed, BoxReadLoss, end},
 	} {
-		over := BoxReadBudget(ask.run, ask.read) - BoxReadBudget(uncapped, BoxReadCollect)
+		over := BoxReadBudget(ask.run, ask.read, ThreadTraits{}) - BoxReadBudget(uncapped, BoxReadCollect, ThreadTraits{})
 		if diff := over - ask.want; diff < -time.Nanosecond || diff > time.Nanosecond {
 			t.Errorf("%s read waits %v beyond an uncapped collection's, want %v at the host's share",
 				name, over, ask.want)
@@ -533,7 +533,7 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 			o.Pending = &crossingWrites{PendingStore: o.Pending, crossing: coord.MaxValueCrossing,
 				given: map[string][]handed{}}
 		})
-		share := time.Duration(float64(BoxReadBudget(passed, BoxReadCollect)) * BoxReadAnswerShare)
+		share := time.Duration(float64(BoxReadBudget(passed, BoxReadCollect, ThreadTraits{})) * BoxReadAnswerShare)
 		spent := JobEndBudget + discardGrace + coord.MaxValueCrossing +
 			time.Duration(float64(pollBound)*BoxReadAnswerShare)
 		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(share-spent))

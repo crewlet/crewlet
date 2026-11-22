@@ -78,14 +78,12 @@ func exportedIDs(t *testing.T, db *store.DB, spec table, after int64) ([]string,
 func TestNoAppendOnlyTableReusesItsWatermark(t *testing.T) {
 	t.Parallel()
 	for _, spec := range tables {
-		if spec.wholeEachCycle {
+		if spec.mutable {
+			// Its stamps: TestEveryCarriedColumnOfAMutableTableStampsItsUpdate.
 			continue
 		}
 		t.Run(spec.name, func(t *testing.T) {
 			t.Parallel()
-			if spec.watermark == "" {
-				t.Fatalf("%s is carried incrementally and names no watermark column", spec.name)
-			}
 			write, ok := appendOnlyRow[spec.name]
 			if !ok {
 				t.Fatalf("%s is an append-only memory table with no writer in "+
@@ -113,7 +111,7 @@ func TestNoAppendOnlyTableReusesItsWatermark(t *testing.T) {
 				t.Fatalf("after the newest row was deleted, the next one written "+
 					"carried as %v past the mark %d, want [c] — a %s watermark that "+
 					"is handed out again leaves it unpublished while this node "+
-					"holds the seat", again, mark, spec.watermark)
+					"holds the seat", again, mark, watermark)
 			}
 		})
 	}
@@ -169,8 +167,7 @@ func TestANoteWrittenOrFilledAfterTheNewestWasSweptIsStillCarried(t *testing.T) 
 		t.Fatalf("FillEmbeddings = %d, %v; want the one note", filled, err)
 	}
 
-	// The seat has no rows in the whole-each-cycle tables, so a second
-	// publish is exactly what changed since the first.
+	// A second publish is exactly what changed since the first.
 	again, err := syncer.PublishOwn(ctx, seat.Handle)
 	if err != nil {
 		t.Fatalf("second publish: %v", err)
@@ -198,34 +195,34 @@ func TestANoteWrittenOrFilledAfterTheNewestWasSweptIsStillCarried(t *testing.T) 
 	}
 }
 
-// changeIndexes names each watermark table's index on (seat, change_seq),
-// node migration 0041's, which a page of the table is read through. One per
-// table, so a table added to the registry without one fails below rather
+// changeIndexes names each table's index on (seat, change_seq), node
+// migrations 0041's and 0070's, which a page of the table is read through. One
+// per table, so a table added to the registry without one fails below rather
 // than going unchecked.
 var changeIndexes = map[string]string{
 	"agent_diary":                "agent_diary_agent_change_idx",
 	"episodes":                   "episodes_agent_change_idx",
+	"counterparty_profiles":      "counterparty_profiles_agent_change_idx",
+	"synthesized_skills":         "synthesized_skills_agent_change_idx",
 	"synthesized_skill_versions": "synthesized_skill_versions_agent_change_idx",
+	"agent_onboarding_markers":   "agent_onboarding_markers_agent_change_idx",
 }
 
 // THE INCREMENTAL EXPORT IS A RANGE SEEK, NOT A SORT.
 //
 // A page reads in watermark order until it holds its budget and stops, which
-// saves the rest only when the plan is a seek on node migration 0041's (seat,
-// change_seq) index, with no sort and no pass over the table: with a sort,
-// every page first reads and sorts every row above the mark. Planned as a
-// deployment plans it, over a store nothing has ANALYZEd, where episodes has
-// four other indexes leading on the seat, for both of a seat's ranges: its
-// own rows above a mark, and its backlog between a mark and its boundary.
+// saves the rest only when the plan is a seek on the (seat, change_seq) index,
+// with no sort and no pass over the table: with a sort, every page first
+// reads and sorts every row above the mark. Planned as a deployment plans it,
+// over a store nothing has ANALYZEd, where episodes has four other indexes
+// leading on the seat and a profile's key leads on it, for both of a seat's
+// ranges: its own rows above a mark, and its backlog up to its boundary.
 //
 // Mutation: read either range's page in key order, and this goes red.
 func TestTheIncrementalExportIsARangeSeekNotASort(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
 	for _, spec := range tables {
-		if spec.wholeEachCycle {
-			continue
-		}
 		index, ok := changeIndexes[spec.name]
 		if !ok {
 			t.Errorf("%s is carried a page at a time and changeIndexes names no index for "+
@@ -287,6 +284,38 @@ var writtenTogether = map[string]func(t *testing.T, db *store.DB){
 			       ('b', 's-wm', ?, 'ship-it', 'how', 'body', 2, 'seed', 0)`,
 			seat.Handle, seat.Handle)
 	},
+	"counterparty_profiles": func(t *testing.T, db *store.DB) {
+		t.Helper()
+		exec(t, db, `INSERT INTO counterparty_profiles (observer_handle, subject_handle,
+			first_seen_at, last_updated_at, last_corroborated_at)
+			VALUES (?, 'a', 7, 7, 7), (?, 'b', 7, 7, 7)`, seat.Handle, seat.Handle)
+	},
+	"synthesized_skills": func(t *testing.T, db *store.DB) {
+		t.Helper()
+		exec(t, db, `INSERT INTO synthesized_skills (id, agent_handle, name,
+			description, content, frontmatter, tool_sequence, source_episode_ids,
+			version, created_at, updated_at, state)
+			VALUES ('a', ?, 'a', 'how', 'body', '{}', '[]', '[]', 1, 7, 7, 'active'),
+			       ('b', ?, 'b', 'how', 'body', '{}', '[]', '[]', 1, 7, 7, 'active')`,
+			seat.Handle, seat.Handle)
+	},
+}
+
+// mutableRow writes one row of a mutable table for the seat under the given
+// id, for the row a hydration imports below; appendOnlyRow does the rest.
+var mutableRow = map[string]func(t *testing.T, db *store.DB, id string){
+	"counterparty_profiles": func(t *testing.T, db *store.DB, id string) {
+		t.Helper()
+		exec(t, db, `INSERT INTO counterparty_profiles (observer_handle, subject_handle,
+			first_seen_at, last_updated_at, last_corroborated_at)
+			VALUES (?, ?, 7, 7, 7)`, seat.Handle, id)
+	},
+	"synthesized_skills": func(t *testing.T, db *store.DB, id string) {
+		t.Helper()
+		exec(t, db, `INSERT INTO synthesized_skills (id, agent_handle, name,
+			description, content, version, created_at, updated_at, state)
+			VALUES (?, ?, ?, 'how', 'body', 1, 7, 7, 'active')`, id, seat.Handle, id)
+	},
 }
 
 // ROWS WRITTEN TOGETHER CARRY DISTINCT WATERMARKS.
@@ -301,16 +330,21 @@ var writtenTogether = map[string]func(t *testing.T, db *store.DB){
 func TestRowsWrittenTogetherCarryDistinctWatermarks(t *testing.T) {
 	t.Parallel()
 	for _, spec := range tables {
-		if spec.wholeEachCycle {
+		if len(spec.key) == 1 && spec.key[0] == spec.seatCol {
+			// Keyed on the seat: a seat holds one row, which shares with none.
 			continue
 		}
 		t.Run(spec.name, func(t *testing.T) {
 			t.Parallel()
 			write, ok := writtenTogether[spec.name]
-			if !ok {
-				t.Fatalf("%s is carried a page at a time and writtenTogether has no writer "+
-					"for it, so nothing here checks that its rows never share a watermark "+
-					"value: add one", spec.name)
+			one := appendOnlyRow[spec.name]
+			if spec.mutable {
+				one = mutableRow[spec.name]
+			}
+			if !ok || one == nil {
+				t.Fatalf("%s is carried a page at a time and writtenTogether, or "+
+					"appendOnlyRow or mutableRow, has no writer for it, so nothing here "+
+					"checks that its rows never share a watermark value: add one", spec.name)
 			}
 			db := openStore(t)
 			write(t, db)
@@ -319,11 +353,12 @@ func TestRowsWrittenTogetherCarryDistinctWatermarks(t *testing.T) {
 					"WHERE id = 'a'", []byte{1, 2, 3, 4})
 			}
 			peer := openStore(t)
-			appendOnlyRow[spec.name](t, peer, "c")
+			one(t, peer, "c")
 			carry(t, peer, db)
 
 			rows, err := db.SQL().QueryContext(t.Context(),
-				"SELECT id, "+spec.watermark+" FROM "+spec.name+" WHERE "+spec.seatCol+" = ?",
+				"SELECT "+strings.Join(spec.key, " || '/' || ")+", "+watermark+
+					" FROM "+spec.name+" WHERE "+spec.seatCol+" = ?",
 				seat.value(spec))
 			if err != nil {
 				t.Fatalf("read %s's watermarks: %v", spec.name, err)
@@ -340,7 +375,7 @@ func TestRowsWrittenTogetherCarryDistinctWatermarks(t *testing.T) {
 				read++
 				if other, shared := holder[value]; shared && value > 0 {
 					t.Errorf("%s's rows %s and %s share the %s value %d", spec.name, other, id,
-						spec.watermark, value)
+						watermark, value)
 				}
 				holder[value] = id
 			}

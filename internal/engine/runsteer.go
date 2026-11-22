@@ -1665,6 +1665,8 @@ type runInbox struct {
 	steers *runSteers
 	ident  runIdentity
 	round  int
+	// harness is the run's harness, whose delivery the inbox answers in.
+	harness string
 
 	mu     sync.Mutex
 	launch string
@@ -1793,18 +1795,19 @@ func kept[T any](list []T) []T {
 	return list
 }
 
-// inbox is the inbox of a run identified by ident, for the turn iteration round;
-// it serves nothing until it is bound to the run's job.
+// inbox is the inbox of a run identified by ident, on harness, for the turn
+// iteration round; it serves nothing until it is bound to the run's job.
 //
-// ONE INBOX WHATEVER THE RUN'S HARNESS: Claude Code's hooks take notes through
-// [runInbox.Take] and OpenCode's plugin through [runInbox.Wait] and
-// [runInbox.Read], and each reaches only the half its own harness calls, so the
-// inbox has nothing to tell apart.
-func (s *runSteers) inbox(ident runIdentity, round int) *runInbox {
+// ONE INBOX WHATEVER THE RUN'S HARNESS: a harness answered by hooks takes notes
+// through [runInbox.Take] and one whose plugin polls through [runInbox.Wait]
+// and [runInbox.Read], each reaching only the half its own harness calls; the
+// answer's shape and an admitted note's id are the harness's own
+// ([executor.HookAnswer], [executor.InboxID]).
+func (s *runSteers) inbox(ident runIdentity, round int, harness string) *runInbox {
 	if s == nil {
 		return nil
 	}
-	return &runInbox{steers: s, ident: ident, round: round}
+	return &runInbox{steers: s, ident: ident, round: round, harness: harness}
 }
 
 // Bind starts serving the inbox for the job launch, whose session fences its
@@ -1905,7 +1908,7 @@ func (i *runInbox) Take(ctx context.Context, event string, call *sandbox.NoteCal
 		}
 		messages = append(messages, hookMessage(c, notes, launch, unanswered, candidates))
 	}
-	fit := executor.ClaudeNotesThatFit(messages)
+	fit := executor.HookNotesThatFit(i.harness, messages)
 	candidates, messages = candidates[:fit], messages[:fit]
 	ids := make([]string, 0, len(candidates))
 	for _, c := range candidates {
@@ -1948,7 +1951,7 @@ func (i *runInbox) Take(ctx context.Context, event string, call *sandbox.NoteCal
 	if len(hook) == 0 {
 		return ""
 	}
-	return executor.ClaudeHookAnswer(event, take, hook)
+	return executor.HookAnswer(i.harness, event, take, hook)
 }
 
 // candidates is the boundary a hook at event answers, the record it chose on
@@ -2173,6 +2176,26 @@ func (i *runInbox) recordPulled(base context.Context, launch string) {
 	}
 }
 
+// inboxItems is how the run's harness admits each note of due not yet served
+// to launch, by note id, where its session record confirms a take
+// ([executor.ConfirmsByRecord]): the id it admits the note under and the
+// digest of messages' text for it, the very text the poll hands over, so the
+// serve recorded under them is one the job's receipts settle. Nil for a
+// harness confirmed otherwise.
+func (i *runInbox) inboxItems(launch string, due []openedNote, messages []string) map[string]sandbox.InboxItem {
+	if !executor.ConfirmsByRecord(i.harness) {
+		return nil
+	}
+	out := make(map[string]sandbox.InboxItem, len(due))
+	for k, o := range due {
+		if o.held.Served != launch {
+			out[o.held.ID] = sandbox.InboxItem{ID: executor.InboxID(i.harness, launch, o.held.ID),
+				Digest: executor.ItemDigest(messages[k])}
+		}
+	}
+	return out
+}
+
 // Wait is the waiting notes past the cursor after, each served to the job on
 // the record first — see [mcpbridge.SteerInbox].
 //
@@ -2194,6 +2217,7 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 		return nil, changed
 	}
 	var due []openedNote
+	var messages []string
 	var unserved []string
 	// THE JOB'S OWN ITEMS AND A PERSON'S NOTES ALONE: one for another job is
 	// never served to this one, so the cursor below would stop at it for good.
@@ -2202,6 +2226,7 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 			continue
 		}
 		due = append(due, o)
+		messages = append(messages, i.message(ctx, o))
 		if o.held.Served != launch {
 			unserved = append(unserved, o.held.ID)
 		}
@@ -2209,7 +2234,8 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 	served := map[string]bool{}
 	if len(unserved) > 0 {
 		marked, err := i.steers.store.ServeNotes(ctx, i.ident.turn.TurnID, sandbox.NoteServe{
-			IDs: unserved, Launch: launch, Statuses: steerTakeStatuses, Wakes: wakesHanded(due)})
+			IDs: unserved, Launch: launch, Statuses: steerTakeStatuses, Wakes: wakesHanded(due),
+			Inbox: i.inboxItems(launch, due, messages)})
 		if err != nil {
 			log.WarnContext(ctx, "steer_notes_unserved", "turn_id", i.ident.turn.TurnID, "error", err.Error(),
 				"detail", "the poll is answered without the notes the record could not mark served; they "+
@@ -2220,7 +2246,7 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 		}
 	}
 	var out []mcpbridge.SteerNote
-	for _, o := range due {
+	for k, o := range due {
 		// UP TO THE FIRST NOTE NOT MARKED, never past it: the poller's cursor
 		// moves past every note it is answered, and one past an unmarked note
 		// would never ask for that note again.
@@ -2228,8 +2254,8 @@ func (i *runInbox) Wait(ctx context.Context, after int) ([]mcpbridge.SteerNote, 
 			break
 		}
 		out = append(out, mcpbridge.SteerNote{
-			Seq: o.held.Seq, ID: o.held.ID, Inbox: executor.OpenCodeInboxID(launch, o.held.ID),
-			Message: i.message(ctx, o),
+			Seq: o.held.Seq, ID: o.held.ID, Inbox: executor.InboxID(i.harness, launch, o.held.ID),
+			Message: messages[k],
 		})
 	}
 	return out, changed

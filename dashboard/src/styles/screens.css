@@ -5951,11 +5951,11 @@ a.work-cal-chip {
   overflow-wrap: break-word;
 }
 
-/* AN ANSWER'S WORDS READ AT THE NARROW MEASURE, about 70 characters a line
-   (app/assistant/chunk/blocks.tsx), while a table or a code sample takes the
-   thread's width, where a row cut to a reading measure would scroll. */
+/* AN ANSWER'S WORDS READ AT THE READING MEASURE, the kit's Prose and reading
+   pane's (app/assistant/chunk/blocks.tsx), while a table or a code sample
+   takes the thread's width, where a row cut to a reading measure would scroll. */
 .prose.md.ask-answer > :is(p, ul, ol, blockquote, h2, h3, h4, h5, h6, .md-heading) {
-  max-width: var(--size-measure-narrow);
+  max-width: var(--size-measure);
 }
 
 /* EVERY ELEMENT'S OWN MARGIN IS ZEROED FIRST and the rhythm is one rule over
@@ -10631,8 +10631,9 @@ a.work-cal-chip {
 
 /* Ask Crewlet's page (app/assistant/chunk/AskPage.tsx): the reader's
    conversations, a column as wide as a roomy sidebar, beside the one open,
-   which runs edge to edge under its head as a chat room does. The list's
-   width is the kit's own variable; nothing here sizes the kit's boxes. */
+   which reads in one centred column under its head. The list's width and
+   the thread's column are the kit's own variables; nothing here sizes the
+   kit's boxes. */
 .ask-page {
   --ask-page-pad-x: var(--spacing-4);
   display: flex;
@@ -10688,7 +10689,13 @@ a.work-cal-chip {
   padding: var(--spacing-3) var(--ask-page-pad-x);
 }
 
+/* ONE COLUMN FOR THE WHOLE CONVERSATION: the thread holds its turns to it
+   (the kit's `column`), and the composer and a conversation being opened are
+   centred at the same width, so a question's bubble, the answer and the box
+   share both edges. The wide measure leaves an answer's words at the reading
+   measure and gives a table or code a little more. */
 .ask-page__open {
+  --crewlet-chat-thread-column: var(--size-measure-wide);
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -10744,7 +10751,8 @@ a.work-cal-chip {
 
 .ask-page__foot {
   flex: none;
-  padding: 0 var(--ask-page-pad-x) var(--spacing-3);
+  padding: 0 max(var(--ask-page-pad-x), (100% - var(--crewlet-chat-thread-column)) / 2)
+    var(--spacing-3);
 }
 
 /* A conversation on its way or not opened (Conversation.tsx's AskOpening): a
@@ -10759,6 +10767,10 @@ a.work-cal-chip {
 .ask-opening--reading {
   place-items: start stretch;
   padding: var(--spacing-4);
+}
+
+.ask-page__thread .ask-opening--reading {
+  padding-inline: max(var(--spacing-4), (100% - var(--crewlet-chat-thread-column)) / 2);
 }
 
 /* A helper's model in its page's head (components/HelperModel.tsx): the

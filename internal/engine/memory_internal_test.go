@@ -181,13 +181,13 @@ func (m *scriptedMemory) flush(t *testing.T, seat string) []reportLine {
 	return flushSeatMemory(ctx, m, seat)
 }
 
-// carriedWhole is what the publish of a seat that reached the end of every
+// carriedAll is what the publish of a seat that reached the end of every
 // table answers.
-var carriedWhole = memsync.Carried{Rows: 6, Marked: 3}
+var carriedAll = memsync.Carried{Rows: 6}
 
 // draining is what a call (own pass or backlog) the bound cut after its rows
 // moved marks answers: the rows the changelog acknowledged, each moving a mark.
-var draining = memsync.Carried{Rows: 428, Marked: 428, StoppedIn: "agent_diary"}
+var draining = memsync.Carried{Rows: 428, StoppedIn: "agent_diary"}
 
 // nothingAcknowledged is what a call the bound cut before the changelog
 // acknowledged any of its rows answers.
@@ -195,7 +195,7 @@ var nothingAcknowledged = memsync.Carried{StoppedIn: "agent_diary"}
 
 // movedMarks is what a backlog that carried all it held answers: the rows the
 // changelog acknowledged, each of which moved a mark.
-var movedMarks = memsync.Carried{Rows: 3, Marked: 3}
+var movedMarks = memsync.Carried{Rows: 3}
 
 // runsOut is the publish of a seat whose memory the cycle cannot carry: it
 // spends the cycle's bound and answers what the bound cut it at.
@@ -206,7 +206,7 @@ func runsOut(ctx context.Context, runOut func(), cut memsync.Carried) (memsync.C
 
 // completes is the own pass of a seat whose memory the cycle carries whole.
 func completes(context.Context, string, bool, func()) (memsync.Carried, error) {
-	return carriedWhole, nil
+	return carriedAll, nil
 }
 
 // heldReads is a seat host whose answer changes from one read to the next:
@@ -241,7 +241,7 @@ func TestACycleTheFirstSeatUsesUpCarriesTheNextSeatOnTheNext(t *testing.T) {
 		if seat == "a" {
 			return runsOut(ctx, runOut, draining)
 		}
-		return carriedWhole, nil
+		return carriedAll, nil
 	}}
 	loop := &memorySync{}
 
@@ -276,7 +276,7 @@ func TestASeatThatRanOutBehindAnotherGoesFirstNext(t *testing.T) {
 		runOut func(),
 	) (memsync.Carried, error) {
 		if first {
-			return carriedWhole, nil
+			return carriedAll, nil
 		}
 		return runsOut(ctx, runOut, draining)
 	}}
@@ -312,7 +312,7 @@ func TestACycleThatRanOutBetweenSeatsStartsAtTheFirstNotReached(t *testing.T) {
 		if seat == "a" {
 			runOut()
 		}
-		return carriedWhole, nil
+		return carriedAll, nil
 	}}
 	loop := &memorySync{}
 
@@ -369,7 +369,7 @@ func TestALoneSeatThatRunsEveryCycleOutIsCarriedEveryCycle(t *testing.T) {
 				if tc.own != nil {
 					return tc.own(ctx, runOut)
 				}
-				return carriedWhole, nil
+				return carriedAll, nil
 			}, playBacklog: func(ctx context.Context, _ string, runOut func()) (memsync.Carried, error) {
 				if tc.backlog != nil {
 					return tc.backlog(ctx, runOut)
@@ -404,7 +404,7 @@ func TestEverySeatIsCarriedWithinTwoCyclesForEachSeatThatRunsOut(t *testing.T) {
 		if seat == "a" || seat == "c" {
 			return runsOut(ctx, runOut, draining)
 		}
-		return carriedWhole, nil
+		return carriedAll, nil
 	}}
 	const cycles, round = 8, 4 // round is 2k, with k = 2 seats that run cycles out
 	loop := &memorySync{}
@@ -498,7 +498,7 @@ func TestNoSeatWaitsMoreThanTwoCyclesForEachTurnACycleRunsOutIn(t *testing.T) {
 			) (memsync.Carried, error) {
 				calls[seat]++
 				if !tc.outlasts(seat, calls[seat], first) {
-					return carriedWhole, nil
+					return carriedAll, nil
 				}
 				ranOut(seat)
 				return runsOut(ctx, runOut, draining)
@@ -562,7 +562,7 @@ func TestASeatWhosePublishFailsWithTimeLeftKeepsTheOrder(t *testing.T) {
 		if seat == "b" {
 			return memsync.Carried{StoppedIn: "agent_diary"}, refused
 		}
-		return carriedWhole, nil
+		return carriedAll, nil
 	}}
 	loop := &memorySync{}
 
@@ -586,14 +586,13 @@ func TestASeatWhosePublishFailsWithTimeLeftKeepsTheOrder(t *testing.T) {
 //
 // A run-out is one line ([syncReport.lines]) naming its pass, the turns not
 // reached and where the next cycle and backlogs' turn start: INFO if the cut
-// call moved a mark or the cycle ran out between calls, WARN if it moved none
-// or a whole-cycle seat was cut in a whole-each-cycle table whatever it marked
-// (a part-cycle seat gets a whole one next). A refusal with time left warns.
+// call moved a mark or the cycle ran out between calls, WARN if it moved none.
+// A refusal with time left warns.
 //
 // Mutation: say every run-out at one level, or every backlog's cut as a
-// warning, or warn for any whole-each-cycle cut whatever the seat's place,
-// drop the pass, the backlogs' turn or its next start from a line, judge a
-// cut backlogs' turn by its last call alone, or call a spent bound's backlog.
+// warning, drop the pass, the backlogs' turn or its next start from a line,
+// judge a cut backlogs' turn by its last call alone, or call a spent bound's
+// backlog.
 func TestACycleThatRanOutWithNothingMarkedIsAWarning(t *testing.T) {
 	t.Parallel()
 	type script = func(ctx context.Context, runOut func()) (memsync.Carried, error)
@@ -609,7 +608,6 @@ func TestACycleThatRanOutWithNothingMarkedIsAWarning(t *testing.T) {
 		}
 	}
 	movedAll := func(context.Context, func()) (memsync.Carried, error) { return movedMarks, nil }
-	whole := memsync.Carried{Rows: 40, Marked: 12, StoppedIn: "synthesized_skills", Whole: true}
 	for _, tc := range []struct {
 		name string
 		// own and backlog script a seat's own pass and its backlog by its
@@ -621,9 +619,8 @@ func TestACycleThatRanOutWithNothingMarkedIsAWarning(t *testing.T) {
 		own:  map[string]script{"a": cutAt(nothingAcknowledged)},
 		want: []string{"WARN seat_memory_not_carried seat=a pass=own next=b not_reached=b,c,(backlogs)"},
 	}, {
-		name: "a later seat cut with only its whole tables acknowledged",
-		own: map[string]script{"b": cutAt(memsync.Carried{Rows: 4,
-			StoppedIn: "counterparty_profiles", Whole: true})},
+		name: "a later seat cut with nothing acknowledged",
+		own:  map[string]script{"b": cutAt(nothingAcknowledged)},
 		want: []string{"WARN seat_memory_not_carried seat=b pass=own next=b not_reached=c,(backlogs)"},
 	}, {
 		name: "the first seat cut after moving marks",
@@ -634,20 +631,12 @@ func TestACycleThatRanOutWithNothingMarkedIsAWarning(t *testing.T) {
 		own:  map[string]script{"b": cutAt(draining)},
 		want: []string{"INFO memory_sync_ran_out seat=b pass=own next=b not_reached=c,(backlogs)"},
 	}, {
-		name: "the first seat cut inside a whole-each-cycle table after moving marks",
-		own:  map[string]script{"a": cutAt(whole)},
-		want: []string{"WARN seat_memory_not_carried seat=a pass=own next=b not_reached=b,c,(backlogs)"},
-	}, {
-		name: "a later seat cut inside a whole-each-cycle table after moving marks",
-		own:  map[string]script{"b": cutAt(whole)},
-		want: []string{"INFO memory_sync_ran_out seat=b pass=own next=b not_reached=c,(backlogs)"},
-	}, {
 		name: "the bound run out between two seats' own passes",
-		own:  map[string]script{"a": returnsAsItRunsOut(carriedWhole)},
+		own:  map[string]script{"a": returnsAsItRunsOut(carriedAll)},
 		want: []string{"INFO memory_sync_ran_out pass=own next=b not_reached=b,c,(backlogs)"},
 	}, {
 		name: "the bound run out just before the backlogs' turn",
-		own:  map[string]script{"c": returnsAsItRunsOut(carriedWhole)},
+		own:  map[string]script{"c": returnsAsItRunsOut(carriedAll)},
 		want: []string{"INFO memory_sync_ran_out pass=backlog next=(backlogs) not_reached=(backlogs)"},
 	}, {
 		name:    "the backlogs' first seat cut after moving marks",
@@ -705,7 +694,7 @@ func TestACycleThatRanOutWithNothingMarkedIsAWarning(t *testing.T) {
 				if play, ok := tc.own[seat]; ok {
 					return play(ctx, runOut)
 				}
-				return carriedWhole, nil
+				return carriedAll, nil
 			}, playBacklog: func(ctx context.Context, seat string, runOut func()) (memsync.Carried, error) {
 				if play, ok := tc.backlog[seat]; ok {
 					return play(ctx, runOut)
@@ -796,7 +785,7 @@ func refusedRow(context.Context, func()) (memsync.Carried, error) {
 // endsAsItReturns is a call that carried all it had just as the bound ran out.
 func endsAsItReturns(_ context.Context, runOut func()) (memsync.Carried, error) {
 	runOut()
-	return carriedWhole, nil
+	return carriedAll, nil
 }
 
 // cutAfterMarks is a call the bound cut after its rows moved marks.
@@ -806,8 +795,8 @@ func cutAfterMarks(ctx context.Context, runOut func()) (memsync.Carried, error) 
 
 // A RELEASE'S FLUSH CARRIES THE SEAT'S OWN PASS BEFORE ITS BACKLOG.
 //
-// A release flushes the seat's own pass (what it wrote while held here and its
-// whole tables), then, while the bound has time, its backlog: one publish in
+// A release flushes the seat's own pass (what it wrote while held here), then,
+// while the bound has time, its backlog: one publish in
 // stamp order would flush old rows and lose the new. Each call is said at the
 // level of what it lost: an own pass that errs warns, as does a backlog failed
 // with time left; one cut or never begun, the own rows gone, is INFO.
@@ -865,7 +854,7 @@ func TestAReleaseFlushCarriesTheSeatsOwnPassBeforeItsBacklog(t *testing.T) {
 				if tc.own != nil {
 					return tc.own(ctx, runOut)
 				}
-				return carriedWhole, nil
+				return carriedAll, nil
 			}, playBacklog: func(ctx context.Context, _ string, runOut func()) (memsync.Carried, error) {
 				if tc.backlog != nil {
 					return tc.backlog(ctx, runOut)
@@ -963,8 +952,8 @@ func TestEveryHeldSeatsOwnPassComesBeforeAnySeatsBacklog(t *testing.T) {
 
 // THE BACKLOGS HAVE THEIR TURN WHILE A SEAT'S OWN PASS RUNS EVERY CYCLE OUT.
 //
-// A seat's own pass can outlast a cycle while the seat keeps writing, or
-// while its profiles and skills, sent whole by every own pass, outlast one.
+// A seat's own pass can outlast a cycle while the seat keeps writing faster
+// than a cycle carries.
 // The backlogs' turn is a turn of the rotation, so the cycles that pass that
 // seat reach every backlog, its own included; begun only after every own pass
 // returned, or paired with each seat's own pass, they would never be reached.
@@ -979,7 +968,7 @@ func TestTheBacklogsHaveTheirTurnWhileASeatsOwnPassRunsEveryCycleOut(t *testing.
 		if seat == "a" {
 			return runsOut(ctx, runOut, draining)
 		}
-		return carriedWhole, nil
+		return carriedAll, nil
 	}}
 	loop := &memorySync{}
 	alone := []string{"own:a"}
@@ -1125,7 +1114,7 @@ func TestASeatThatRanOutBehindAnotherGoesFirstNextThoughTheBacklogsWereNotReache
 		runOut func(),
 	) (memsync.Carried, error) {
 		if first {
-			return carriedWhole, nil
+			return carriedAll, nil
 		}
 		return runsOut(ctx, runOut, draining)
 	}, playBacklog: func(context.Context, string, func()) (memsync.Carried, error) {

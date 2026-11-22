@@ -11,6 +11,7 @@
 
 import { afterEach, describe, expect, test } from "vitest";
 import { emit, on } from "./bus.ts";
+import { askVerbs, takeQueuedQuestion, type PanelHold } from "./control.ts";
 import { readTab, writeTab } from "./tab.ts";
 import { assistantModelFor, assistantUnavailableFor } from "./availability.ts";
 import { assistantModelNotice, assistantUnavailable } from "~/protocol/assistantWire.ts";
@@ -198,5 +199,69 @@ describe("the assistant's model", () => {
       const problem = assistantModelFor({ assistantModel: { code, message: "m" } });
       expect(problem?.short).not.toMatch(/[\u2013\u2014]/);
     }
+  });
+});
+
+// THE FRAME'S VERBS: a question about what a screen shows is queued for a new
+// conversation and the palette's for the open one; either opens a closed
+// panel, and only a question left in the box takes focus from the screen.
+// Mutation: queue askAbout as a plain question, drop its `send`, or focus the
+// box for a sent one, and a case goes red.
+describe("the frame's verbs", () => {
+  function hold(over: Partial<PanelHold> = {}) {
+    const did: string[] = [];
+    const verbs = askVerbs({
+      open: false,
+      here: false,
+      closed: false,
+      show: () => did.push("show"),
+      focusComposer: () => did.push("focus"),
+      ...over,
+    });
+    return { verbs, did };
+  }
+
+  afterEach(() => {
+    takeQueuedQuestion();
+  });
+
+  test("askAbout queues a new conversation's question and opens a closed panel", () => {
+    const { verbs, did } = hold();
+    verbs.askAbout("Help me with this message", { send: true });
+    expect(takeQueuedQuestion()).toEqual({
+      text: "Help me with this message",
+      send: true,
+      fresh: true,
+    });
+    expect(did).toEqual(["show"]);
+  });
+
+  test("a question left in an open panel's box takes focus; a sent one leaves it", () => {
+    const left = hold({ open: true });
+    left.verbs.askAbout("What does this finding rest on?", { send: false });
+    expect(takeQueuedQuestion()).toEqual({
+      text: "What does this finding rest on?",
+      send: false,
+      fresh: true,
+    });
+    expect(left.did).toEqual(["focus"]);
+    const sent = hold({ open: true });
+    sent.verbs.askAbout("Draft a message for me", { send: true });
+    expect(sent.did).toEqual([]);
+  });
+
+  test("the palette's question goes to the open conversation", () => {
+    const { verbs, did } = hold();
+    verbs.ask("Who spent most?");
+    expect(takeQueuedQuestion()).toEqual({ text: "Who spent most?", send: true, fresh: false });
+    expect(did).toEqual(["show"]);
+  });
+
+  test("nothing is queued where the reader may not ask", () => {
+    const { verbs, did } = hold({ closed: true });
+    verbs.askAbout("Help me", { send: true });
+    verbs.ask("Who spent most?");
+    expect(takeQueuedQuestion()).toBeNull();
+    expect(did).toEqual([]);
   });
 });

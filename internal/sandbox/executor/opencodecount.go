@@ -500,3 +500,47 @@ func expectKind(sc *jsonscan.Scanner, want jsonscan.Kind) error {
 	}
 	return nil
 }
+
+var _ mainThreadHarness = OpenCode{}
+
+// readMainThread is OpenCode's read of ask's session in box: the export the
+// job's script left as the job ended ([openCodeCapture], [Paths.SessionCapture]),
+// which is the copy the box holds once its harness ended its own run (the
+// collection asks nothing of a job whose harness did not), walked ONCE for the
+// count and the estimate ([meterExport]). In this order, cheapest first: a
+// release outside the set the count's rules were read in is
+// [sandbox.CountRelease] with no read ([openCodeCountRead]); an export the
+// script left none of, or one that does not open, is [sandbox.CountUnread];
+// and only then is the export streamed (through envd on e2b) and walked. A
+// count marked before the walk leaves the estimate none, as a Claude Code
+// thread's does.
+func (OpenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
+	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
+
+	if !ask.Count && !ask.Next {
+		return sandbox.MainThreadReading{}
+	}
+	marked := func(mark sandbox.CountMark) sandbox.MainThreadReading {
+		if !ask.Count {
+			return sandbox.MainThreadReading{}
+		}
+		return sandbox.MainThreadReading{Count: &sandbox.ResumedCount{Mark: mark}}
+	}
+	if !openCodeCountRead(ask.Release) {
+		return marked(sandbox.CountRelease)
+	}
+	body, err := box.OpenFile(ctx, paths.SessionCapture())
+	if err != nil {
+		return marked(sandbox.CountUnread)
+	}
+	defer func() { _ = body.Close() }()
+	read, _ := meterExport(ctx, body, ask.Release)
+	var reading sandbox.MainThreadReading
+	if ask.Count {
+		reading.Count, reading.Provider = read.count, read.provider
+	}
+	if ask.Next {
+		reading.Next = read.next
+	}
+	return reading
+}

@@ -20,8 +20,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
+func init() { Register(OpenCode{}) }
+
 // OpenCodeName is this runner's config name.
-const OpenCodeName = sandbox.OpenCodeHarness
+const OpenCodeName = "opencode"
 
 // transcriptDetailLimit caps one transcript line's echoed text: the grammar's
 // own preview bound.
@@ -940,7 +942,7 @@ func openCodeExporter(sync time.Duration, file string) string {
 // a note already waits on the run's record for the review or the next brief,
 // but the session's inbox is durable: left pending, OpenCode put it before a
 // continued run's next prompt too, and the model read it twice (2.1.4). Only
-// the plugin's own ids ([OpenCodeInboxID]) are read out of the listing, as
+// the plugin's own ids ([OpenCode.inboxID]) are read out of the listing, as
 // text (a note's quotes are escaped there), from the answer file, never a pipe
 // ([openCodeScript]). Each call is bounded ([openCodeCallWait]) and the
 // cancels share one bound more, so the tail spends two bounds at most
@@ -1971,3 +1973,34 @@ func firstNonBlank(values ...string) string {
 // firstLine is s's first line as a preview, redacted whole before it is cut
 // ([activityline.Preview]).
 func firstLine(s string, limit int) string { return activityline.Preview(s, limit) }
+
+// openCodeChargeBytes is the fewest bytes OpenCode's own estimate counts as a
+// token: round(UTF-16 length / 4) of any text, and a string's UTF-8 bytes are
+// never fewer than its UTF-16 units.
+const openCodeChargeBytes sandbox.Charge = 4
+
+// threadTraits is what OpenCode's main-thread read settles: its export, taken
+// as its script ends, may lack what a cut-off copy holds, so such a copy is
+// not counted; its plugin's serves confirm themselves, so it asks no receipts.
+func (OpenCode) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{} }
+
+// sessionTraits is how a relaunch judges an OpenCode session: at the point its
+// box says, its calls keyed by their place in the round's log, a brief at
+// [openCodeChargeBytes].
+func (OpenCode) sessionTraits() sandbox.SessionTraits {
+	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestBox, CallKeying: sandbox.CallKeyingByLogPlace,
+		Charge: openCodeChargeBytes}
+}
+
+// notesOffWhy is what switches OpenCode's reading of notes off.
+func (OpenCode) notesOffWhy() string {
+	return "a managed policy that denies the run's notes plugin (integration.use), or a plugin OpenCode " +
+		"failed to load, which its own log names"
+}
+
+// artifacts is what an OpenCode run leaves in its box of its own.
+func (OpenCode) artifacts(p Paths) (files, dirs []string) {
+	return []string{p.OpenCodeConfig()},
+		[]string{p.OpenCodeValues(), p.OpenCodeValuesFresh(), p.OpenCodeSteerPlugin(), p.OpenCodeSkills(),
+			p.OpenCodeSkillsPlugin()}
+}
