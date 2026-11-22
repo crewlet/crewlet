@@ -1452,8 +1452,7 @@ qwen-code:
   # .qwen/settings.json with hooks and an MCP server, an .mcp.json and an
   # .env: none of them reached a request, no hook or project MCP server ran,
   # the model was offered web_fetch alone (and the seat's tools), and the only
-  # host the harness looked up was its web tool's. A server the seat home's
-  # own extensions declare is another matter: see `mcp` below.
+  # host the harness looked up was its web tool's.
   #
   #   --output-format stream-json  one event a line, read below. `json` prints
   #                                the same events as one JSON ARRAY, which
@@ -1461,6 +1460,14 @@ qwen-code:
   #                                array came back as the seat's reply.
   #   --approval-mode default      a tool the settings below do not allow is
   #                                refused, since a headless run cannot ask.
+  #   --allowed-mcp-server-names crewlet
+  #                                no MCP server but the engine's starts, on
+  #                                any call. Without it, a call with no tools
+  #                                (each of doctor's probes) started the
+  #                                server an extension in the seat's home
+  #                                declares; with it, a call with no crewlet
+  #                                server started none and ran, its init
+  #                                naming mcp_servers [] (measured on 0.28.3).
   #
   # The sign-in follows, by mode (key_args, subscription_args below).
   complete_args:
@@ -1468,6 +1475,8 @@ qwen-code:
     - "stream-json"
     - "--approval-mode"
     - "default"
+    - "--allowed-mcp-server-names"
+    - "crewlet"
   local_tools: denied
   # The settings in the seat's home, each a switch 0.28.3 reads:
   #
@@ -1601,16 +1610,15 @@ qwen-code:
     input: [["usage", "input_tokens"]]
     output: [["usage", "output_tokens"]]
   # THE SEAT'S TOOLS: one stdio server in a configuration file in the call's
-  # own directory, named by --mcp-config, with --allowed-mcp-server-names
-  # admitting it alone and --allowed-tools letting its tools run unprompted
-  # (`mcp__crewlet` is every tool of the server). Measured on 0.28.3 through
-  # the engine's own code path, the state directory inside a checkout holding
-  # a .qwen/settings.json and an .mcp.json, each with a server, at each level
-  # above the call, and an extension with a server of its own in the seat's
-  # home: the model was offered the seat's tools and web_fetch, and no other
-  # server started. Without --allowed-mcp-server-names, the home's extension
-  # started its server: so it did on each of doctor's tool-less probes, which
-  # carry no `mcp` arguments.
+  # own directory, named by --mcp-config, with complete_args'
+  # --allowed-mcp-server-names admitting it alone and --allowed-tools letting
+  # its tools run unprompted (`mcp__crewlet` is every tool of the server).
+  # Measured on 0.28.3 through the engine's own code path, the state directory
+  # inside a checkout holding a .qwen/settings.json and an .mcp.json, each
+  # with a server, at each level above the call, and an extension with a
+  # server of its own in the seat's home: the model was offered the seat's
+  # tools and web_fetch, and no server but the engine's started, on any
+  # call.
   #
   # The server's `timeout` is the harness's per-call timeout, in milliseconds
   # (600,000 by default; 4,000 gave a slow call up at 4.1s, "Request timed
@@ -1627,7 +1635,7 @@ qwen-code:
       - path: crewlet-mcp.json
         in: work
         content: '{"mcpServers":{"crewlet":{"command":{relay_command_json},"args":{relay_args_json},"timeout":{tool_timeout_ms}}}}'
-    args: ["--mcp-config", "{work}/crewlet-mcp.json", "--allowed-mcp-server-names", "crewlet"]
+    args: ["--mcp-config", "{work}/crewlet-mcp.json"]
     allow_args: ["--allowed-tools", "mcp__crewlet"]
     tool_timeout_seconds: 600
     relists: false

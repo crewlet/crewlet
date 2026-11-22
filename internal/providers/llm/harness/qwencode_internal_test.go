@@ -379,7 +379,7 @@ func TestQwenCodeSignsInByItsModeChosenOnArgv(t *testing.T) {
 	keyed := qwenProvider(t, map[string]string{"FAKE_REPORT_ENV": "OPENAI_API_KEY"},
 		qwenPlainOutput, Auth{Mode: AuthAPIKey, APIKey: "sk-test"})
 	if got, want := keyed.argv(false), []string{"--output-format", "stream-json", "--approval-mode", "default",
-		"--auth-type", "openai", "--model", "qwen3-coder-plus"}; !slices.Equal(got, want) {
+		"--allowed-mcp-server-names", "crewlet", "--auth-type", "openai", "--model", "qwen3-coder-plus"}; !slices.Equal(got, want) {
 		t.Errorf("a key's argv is %q, want %q", got, want)
 	}
 	comp, err := ask(t, keyed, llm.Request{})
@@ -397,7 +397,7 @@ func TestQwenCodeSignsInByItsModeChosenOnArgv(t *testing.T) {
 	sub := qwenProvider(t, map[string]string{"FAKE_READ_UNDER_ENV": "HOME:.qwen/subscription_credentials.json"},
 		qwenPlainOutput, Auth{Mode: AuthSubscription})
 	if got, want := sub.argv(false), []string{"--output-format", "stream-json", "--approval-mode", "default",
-		"--auth-type", "qwen-subscription", "--model", "qwen3-coder-plus"}; !slices.Equal(got, want) {
+		"--allowed-mcp-server-names", "crewlet", "--auth-type", "qwen-subscription", "--model", "qwen3-coder-plus"}; !slices.Equal(got, want) {
 		t.Errorf("a login's argv is %q, want %q", got, want)
 	}
 	shared := sub.Workspace().CredentialsDir()
@@ -413,6 +413,37 @@ func TestQwenCodeSignsInByItsModeChosenOnArgv(t *testing.T) {
 	}
 	if want := ".qwen/subscription_credentials.json=" + base64.StdEncoding.EncodeToString(login); !strings.Contains(comp.Content, want) {
 		t.Errorf("the login's call found %q, want the adopted login copied whole", comp.Content)
+	}
+}
+
+// NO MCP SERVER BUT THE ENGINE'S STARTS, ON ANY CALL. Qwen Code starts every
+// server it finds, an extension's in the seat's home among them, unless
+// --allowed-mcp-server-names names the ones it may: measured on 0.28.3, a call
+// with no tools (each of doctor's probes) started the home extension's server,
+// and a call with the flag and no crewlet server started none and ran. So the
+// flag is in complete_args, on every call, and a run with tools adds it no
+// second time.
+//
+// Mutations, each red: move the flag back to mcp.args (a tool-less call lacks
+// it); keep it in both (a run with tools names it twice).
+func TestQwenCodeStartsNoMCPServerButTheEnginesOnAnyCall(t *testing.T) {
+	t.Parallel()
+	admits := func(args []string) int {
+		n := 0
+		for i := range len(args) - 1 {
+			if args[i] == "--allowed-mcp-server-names" && args[i+1] == "crewlet" {
+				n++
+			}
+		}
+		return n
+	}
+	p := qwenProvider(t, nil, nil, Auth{Mode: AuthAPIKey, APIKey: "sk-test"})
+	if got := p.argv(false); admits(got) != 1 {
+		t.Errorf("a call with no tools runs %q: it admits every MCP server it finds, a home extension's among them", got)
+	}
+	route := qwenCode(t).MCP
+	if got := slices.Concat(p.argv(true), route.Args, route.AllowArgs); admits(got) != 1 {
+		t.Errorf("a run with tools runs %q, want --allowed-mcp-server-names crewlet once", got)
 	}
 }
 
