@@ -62,15 +62,27 @@ func codexRolloutPath(p Paths, threadID string) string {
 		sandbox.ShellQuote("rollout-*-"+threadID+".jsonl") + ` 2>/dev/null | LC_ALL=C sort | head -n 1`
 }
 
+// codexCarriedStamp is the timestamp a carried rollout is named with. A resume
+// takes only `rollout-YYYY-MM-DDThh-mm-ss-<thread>.jsonl` at any depth under
+// sessions/, with any valid time, and refuses another name (measured on
+// 0.171.0: `rollout-carried-<id>.jsonl` was refused as no canonical rollout
+// filename). This one was measured to resume; the thread id alone tells
+// rollouts apart, and a restore removes the thread's others ([codexRestore]).
+const codexCarriedStamp = "2020-01-01T00-00-00"
+
+// codexCarriedName is the name a carried rollout of thread is restored under.
+func codexCarriedName(threadID string) string {
+	return "rollout-" + codexCarriedStamp + "-" + threadID + ".jsonl"
+}
+
 // codexRestoredRollout is where a carried rollout is restored in a box: the
-// sessions root, under a name of the shape a resume looks for. The date part
-// is ours (any `rollout-<x>-<id>.jsonl` resumes, measured), so a restored file
-// never collides with one Codex dated. "" for an id [codexRolloutPath] refuses.
+// sessions root, under [codexCarriedName]. "" for an id [codexRolloutPath]
+// refuses.
 func codexRestoredRollout(p Paths, threadID string) string {
 	if !sandbox.ValidSessionID(threadID) {
 		return ""
 	}
-	return p.CodexSessions() + "/rollout-carried-" + threadID + ".jsonl"
+	return p.CodexSessions() + "/" + codexCarriedName(threadID)
 }
 
 // codexRollout is what [readCodexRollout] read of one rollout.
@@ -176,11 +188,11 @@ func (r codexRollout) Usage() codexTokens {
 	return sum
 }
 
-// UserMessages is the text of every user message item the session recorded,
-// in order: each top-level response_item message whose role is `user`, its
-// input_text parts joined. A compaction's summary and the history it keeps are
-// written inside its own `compacted` line, never as such an item, so none of
-// it is here (ADR-0177: a note found only in a summary is never held).
+// UserMessages is the text of every message a person's words went in as, in
+// order: each top-level response_item that [codexPersonsMessage] reads as
+// one, its input_text parts joined. Never anything inside a `compacted` line
+// (ADR-0177: a note found only in a summary is never held), and never the
+// summary, which Codex writes as a user message of its own kind.
 func (r codexRollout) UserMessages() []string { return r.userMessages }
 
 // Torn reports that the rollout's last line had no newline: a line Codex was
@@ -209,6 +221,7 @@ type (
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
+		Meta codexItemMeta `json:"internal_chat_message_metadata_passthrough"`
 	}
 	codexUsageRecordWire struct {
 		TurnID string       `json:"turn_id"`
@@ -234,6 +247,44 @@ type (
 	}
 )
 
+// codexItemMeta is what Codex records beside a message of who wrote it: each
+// content part's kind (`user.text`, `compaction.summary`,
+// `environments.environment_context`) and provenance (`user`, `harness`).
+type codexItemMeta struct {
+	Kinds []string `json:"content_item_kinds"`
+	Parts []struct {
+		Provenance struct {
+			Type string `json:"type"`
+		} `json:"provenance"`
+	} `json:"content_item_metadata"`
+}
+
+// codexPersonsMessage is THE ONE RULE for a message whose words are a
+// person's (a brief or a steered note), as both [codexRollout.UserMessages]
+// and the transcript read it: role `user`, and every part's kind `user.text`;
+// where Codex records no kinds, no part's provenance `harness`. Codex writes
+// its compaction summary, its environment context and a hook's prompt as
+// user messages too, each marked as its own (measured on 0.171.0).
+func codexPersonsMessage(role string, meta codexItemMeta) bool {
+	if role != "user" {
+		return false
+	}
+	if len(meta.Kinds) > 0 {
+		for _, kind := range meta.Kinds {
+			if kind != "user.text" {
+				return false
+			}
+		}
+		return true
+	}
+	for _, part := range meta.Parts {
+		if part.Provenance.Type == "harness" {
+			return false
+		}
+	}
+	return true
+}
+
 // window is w as a [codexLimitWindow], nil for none.
 func (w *codexWindowWire) window() *codexLimitWindow {
 	if w == nil {
@@ -257,60 +308,69 @@ func (w codexItemWire) text() string {
 	return b.String()
 }
 
-// scanCodexRollout hands each whole line of the rollout r to each, in order,
-// decoded to its envelope, and reports whether the last line was torn. A line
-// that is no JSON object is skipped with the kinds no reader names; one past
-// [codexRolloutLineMaxBytes] fails the scan, as does an error from each.
-func scanCodexRollout(r io.Reader, each func(n int, line codexLine) error) (torn bool, err error) {
+// codexLines hands each whole line of the rollout r to each, in order, by its
+// number, trimmed and valid until the next line (a blank line is passed over);
+// and a line past [codexRolloutLineMaxBytes], read past and never held, to
+// long. It reports whether the last line was torn (no newline), which neither
+// is handed. An error from either ends the scan with it.
+func codexLines(r io.Reader, each func(n int, body []byte) error, long func(n int) error) (torn bool, err error) {
 	br := bufio.NewReaderSize(r, 64<<10)
 	for n := 1; ; n++ {
-		line, err := codexRolloutLine(br)
+		line, past, err := codexRolloutLine(br)
 		switch {
-		case errors.Is(err, errCodexRolloutLine):
-			return false, fmt.Errorf("%w: line %d is over %d bytes", err, n, codexRolloutLineMaxBytes)
 		case errors.Is(err, io.EOF):
-			return len(line) > 0, nil
+			return past || len(line) > 0, nil
 		case err != nil:
 			return false, fmt.Errorf("executor: reading codex rollout line %d: %w", n, err)
-		}
-		var env codexLine
-		if body := bytes.TrimSpace(line); len(body) > 0 && wireDecode(body, &env) == nil {
-			if err := each(n, env); err != nil {
-				return false, err
+		case past:
+			err = long(n)
+		default:
+			if body := bytes.TrimSpace(line); len(body) > 0 {
+				err = each(n, body)
 			}
+		}
+		if err != nil {
+			return false, err
 		}
 	}
 }
 
 // codexRolloutLine is br's next line with its newline, valid until the next
 // read; at the end, what is left with no newline and io.EOF. A line past
-// [codexRolloutLineMaxBytes] is [errCodexRolloutLine], never held whole.
-func codexRolloutLine(br *bufio.Reader) ([]byte, error) {
+// [codexRolloutLineMaxBytes] is read to its end and dropped, past true.
+func codexRolloutLine(br *bufio.Reader) (line []byte, past bool, err error) {
 	chunk, err := br.ReadSlice('\n')
 	if !errors.Is(err, bufio.ErrBufferFull) {
-		return chunk, err
+		return chunk, false, err
 	}
 	long := append([]byte(nil), chunk...)
-	for {
+	for errors.Is(err, bufio.ErrBufferFull) {
 		chunk, err = br.ReadSlice('\n')
-		if len(long)+len(chunk) > codexRolloutLineMaxBytes+1 {
-			return nil, errCodexRolloutLine
-		}
-		long = append(long, chunk...)
-		if !errors.Is(err, bufio.ErrBufferFull) {
-			return long, err
+		switch {
+		case past:
+		case len(long)+len(chunk) > codexRolloutLineMaxBytes+1:
+			past, long = true, nil
+		default:
+			long = append(long, chunk...)
 		}
 	}
+	return long, past, err
 }
 
-// readCodexRollout reads the rollout r ([scanCodexRollout]). A payload of a
-// shape the readers do not read is skipped as an unknown kind is.
+// readCodexRollout reads the rollout r ([codexLines]): a line that is no JSON
+// object, or a payload of a shape the readers do not read, is skipped as an
+// unknown kind is; a line past its bound fails the read ([errCodexRolloutLine]).
 func readCodexRollout(r io.Reader) (codexRollout, error) {
 	var out codexRollout
 	turnAt := map[string]int{}
-	torn, err := scanCodexRollout(r, func(_ int, line codexLine) error {
-		out.take(line, turnAt)
+	torn, err := codexLines(r, func(_ int, body []byte) error {
+		var env codexLine
+		if wireDecode(body, &env) == nil {
+			out.take(env, turnAt)
+		}
 		return nil
+	}, func(n int) error {
+		return fmt.Errorf("%w: line %d is over %d bytes", errCodexRolloutLine, n, codexRolloutLineMaxBytes)
 	})
 	if err != nil {
 		return codexRollout{}, err
@@ -334,7 +394,7 @@ func (r *codexRollout) take(line codexLine, turnAt map[string]int) {
 		}
 	case "response_item":
 		var item codexItemWire
-		if wireDecode(line.Payload, &item) == nil && item.Type == "message" && item.Role == "user" {
+		if wireDecode(line.Payload, &item) == nil && item.Type == "message" && codexPersonsMessage(item.Role, item.Meta) {
 			r.userMessages = append(r.userMessages, item.text())
 		}
 	case "token_usage_record":
