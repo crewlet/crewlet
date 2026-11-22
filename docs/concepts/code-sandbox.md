@@ -2548,7 +2548,8 @@ route and one confirmation.
 
 **The note helper** is a small static program the engine embeds
 (`internal/notehelper`, built for linux amd64 and arm64) and writes into the box
-at each launch, so an image needs nothing for it. The run's script starts it
+(`<home>/.crewlet/notehelper`, kept while the box's `sha256sum` reads it as this
+engine's build), so an image needs nothing for it. The run's script starts it
 beside the app-server and stops it with `exec`; its errors go to the run's error
 stream. The same helper holds a run to its round cap and reports its skill loads
 ([Codex](#codex)). It polls the run's notes route **outbound**, as OpenCode's plugin does

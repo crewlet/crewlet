@@ -23,7 +23,7 @@ const CodexName = "codex"
 // `codex exec --remote` against it with the brief ([Codex.Command]). Through
 // the server and not `exec` alone, because the server is what takes a note
 // into the running turn (`turn/steer`), which the note helper the script
-// starts beside it sends ([Paths.CodexNoteHelper]). Codex mints its own
+// starts beside it sends ([Paths.NoteHelper]). Codex mints its own
 // session id ([sessionMinter]), which the script reports as `exec --json`
 // prints it. docs/concepts/code-sandbox.md, "Codex", holds the measurements.
 type Codex struct{}
@@ -300,7 +300,7 @@ func codexHelped(req sandbox.RunRequest) bool {
 // token; the helper's errors are the run's.
 func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
 	q := shellword.Quote
-	helper, sock, thread := q(paths.CodexNoteHelper()), q(paths.CodexSocket()), q(paths.CodexThread())
+	helper, sock, thread := q(paths.NoteHelper()), q(paths.CodexSocket()), q(paths.CodexThread())
 	base := fmt.Sprintf(`%s -adapter codex-app-server -socket %s -thread-file %s`, helper, sock, thread)
 	env, flags := "", ""
 	if req.Steer.Set() {
@@ -397,12 +397,13 @@ func (Codex) Parse(stdout []byte) sandbox.Result { return decodeAll(&codexEvents
 
 // artifactFiles is what a Codex run leaves in its box beside the session it
 // continues: the configuration with its tokens, the socket, the thread, the
-// helper and its routes, the server's output. No
+// helper's routes (the helper is kept, [writeNoteHelper]), the server's
+// output. No
 // directory: its skills sit in CODEX_HOME's own skill root beside any the
 // image installed, and the next Codex run removes the run's ([writeCodexSkills]).
 func (Codex) artifactFiles(p Paths) []string {
 	return []string{p.CodexLiveConfig(), p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
 		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(),
-		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
+		p.CodexThread(), p.CodexThread() + ".next", p.CodexNotesURL(),
 		p.CodexNotesURLFresh(), p.WorkDir() + "/codex-server.log"}
 }

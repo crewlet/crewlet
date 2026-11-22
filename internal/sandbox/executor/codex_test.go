@@ -664,7 +664,7 @@ func TestACodexRunWhoseHelperEndsBeforeItsTurnStartsFailsAtOnce(t *testing.T) {
 	}
 	waitForFile(t, filepath.Join(record, "working"), "the stand-in to work")
 	waitForFile(t, p.CodexThread(), "the thread to be reported")
-	killProcess(t, p.CodexNoteHelper()+" -adapter")
+	killProcess(t, p.NoteHelper()+" -adapter")
 	awaitOver(t, runner, box, handle, 15*time.Second, "the helper was killed before its turn started")
 	res, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
 	if err != nil {
@@ -699,7 +699,7 @@ func TestACodexRunWhoseHelperEndsUnderItFails(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	waitForFile(t, filepath.Join(record, "working"), "the stand-in to work")
-	killProcess(t, p.CodexNoteHelper()+" -adapter")
+	killProcess(t, p.NoteHelper()+" -adapter")
 	awaitOver(t, runner, box, handle, 15*time.Second, "the helper was killed")
 	res, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
 	if err != nil {

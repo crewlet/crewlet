@@ -12,10 +12,6 @@ func (p Paths) CodexSocket() string { return p.WorkDir() + "/codex.sock" }
 // thread: one line, moved into place whole.
 func (p Paths) CodexThread() string { return p.WorkDir() + "/codex-thread" }
 
-// CodexNoteHelper is the note helper binary a Codex run wired to its notes
-// runs beside its harness (internal/notehelper), written at every launch.
-func (p Paths) CodexNoteHelper() string { return p.WorkDir() + "/notehelper" }
-
 // CodexNotesURL is the file holding the job's notes route for the note
 // helper, read into the helper's environment alone: the route carries the
 // job's token, so it never reaches argv or the harness's environment.
