@@ -21,6 +21,7 @@ import (
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/googleauth"
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/mcp/oauth"
@@ -290,7 +291,7 @@ func callAPI(t *testing.T, e *Engine, g *fakeGoogle, kind integration.Kind) (int
 			return nil, err
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
-		return http.DefaultClient.Do(req)
+		return httpxtest.Pool(t).Do(req)
 	})
 	if err != nil {
 		return 0, err
@@ -471,7 +472,7 @@ func TestAConsentRenewsOnceOnA401AndKeepsAReturnedRefreshToken(t *testing.T) {
 		g.mu.Unlock()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, g.srv.URL+"/api", nil)
 		req.Header.Set("Authorization", "Bearer "+token)
-		return http.DefaultClient.Do(req)
+		return httpxtest.Pool(t).Do(req)
 	})
 	if err != nil {
 		t.Fatal(err)
