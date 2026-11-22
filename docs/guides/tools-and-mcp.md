@@ -532,9 +532,11 @@ Sandbox](../concepts/code-sandbox.md#repositories-on-gitlet)).
 
 **Nor are the three tools for the runs around a run:** `list_runs`,
 `message_run` and `wait_for_run`, offered on an executor's run's surface beside
-`ask_and_wait` when its launch found other runs in flight around it, its seat's or other seats' on its work
+`ask_and_wait` when its launch found other runs in flight around it, its seat's or other seats' on its work,
+including work one of the two filed or wrote
 ([A seat's runs see each other](../concepts/code-sandbox.md#a-seats-runs-see-each-other)).
-`list_runs` takes nothing and answers each run's `turn_id`, `seat`, `this_seat`, `relation`, `stage`,
+`list_runs` takes nothing and answers each run's `turn_id`, `seat`, `this_seat`, `relation` (`same_item`,
+`same_conversation`, `linked_item`, `on_what_you_wrote` or `wrote_what_you_are_on`), `stage`,
 `work_item`, `same_requester` and `takes_messages`, and for a run working for
 the same requester its `conversation` kind, `this_conversation`, `branch`,
 `started` and `title`, the title fenced. `message_run` takes a `turn_id` and
