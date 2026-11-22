@@ -31,8 +31,9 @@
 // acts only on the act's one answer; then, under the account's apply lease
 // and within growth.ApplyBound, it reads the target again and sends nothing
 // where the digest moved or the product's last check refuses it (a spend's
-// caps), recording the outcome: applied, void, or failed with a closed reason. A write that went unanswered may have reached Google,
-// so its outcome is unknown, never "unavailable" ([FailureOf]).
+// caps), recording the outcome: applied, void, or failed with a closed
+// reason. A write that went unanswered may have reached Google, so its
+// outcome is unknown, never "unavailable" ([FailureOf]).
 //
 // # Every act on the access log
 //
