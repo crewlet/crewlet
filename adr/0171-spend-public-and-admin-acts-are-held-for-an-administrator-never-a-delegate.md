@@ -22,7 +22,8 @@ unanswered after a day, after which it takes Deny alone. Every write is
 classed against its target as it reads now before it is made or asked, and
 one coming to more than its tool's class is refused, so no lesser tool
 reaches a held act. Spend also passes `internal/spendguard` at the ask and
-again at the apply. Pausing and lowering are operate: made at once and
+again at the apply; a cost the vendor names no amount for, which no cap could
+hold (Google Analytics' BigQuery exports), is admin rather than spend. Pausing and lowering are operate: made at once and
 recorded, since a brake must not wait on a step-up and its undo is a decision.
 The access log records every step: an operate call made, and a held call's
 ask, its one answer and its one outcome.

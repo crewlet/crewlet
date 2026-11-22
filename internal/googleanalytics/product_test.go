@@ -460,7 +460,8 @@ func TestAReportFencesThePublicsWordsAndPassesGooglesFlags(t *testing.T) {
 // rename is operate; lifting a revenue restriction is admin however the mask
 // is spelled, refused on the operate tool and made on the held admin tool once
 // approved, unless the metric moved since. A BigQuery export turned off, or an
-// event excluded, is a brake made at once; the opposite is spend.
+// event excluded, is a brake made at once; the opposite is admin (it bills the
+// linked Cloud project, with no amount a cap could hold).
 //
 // Mutation: classify by the operation alone, read the mask by its camelCase
 // key and spelling only, or compare a switch's pause as a string, and the
@@ -494,9 +495,9 @@ func TestAWriteIsMadeAtTheClassOfWhatItChanges(t *testing.T) {
 		"a lift by replacement": {metric(map[string]any{"updateMask": "*"},
 			map[string]any{"displayName": "Revenue"}), growth.ClassAdmin},
 		"an export turned on": {link(map[string]any{"update_mask": "streaming_export_enabled"},
-			map[string]any{"streaming_export_enabled": true}), growth.ClassSpend},
+			map[string]any{"streaming_export_enabled": true}), growth.ClassAdmin},
 		"an excluded event exported": {link(map[string]any{"updateMask": "excludedEvents"},
-			map[string]any{"excludedEvents": []any{}}), growth.ClassSpend},
+			map[string]any{"excludedEvents": []any{}}), growth.ClassAdmin},
 	} {
 		if _, err := w.call(t, "google_analytics_operate", tc.args); !errors.As(err, new(*aboveTool)) ||
 			!strings.Contains(err.Error(), string(tc.want)) {
