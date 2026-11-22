@@ -136,6 +136,7 @@ var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, z
 	integration.KindAppStoreConnect: appStoreConnect,
 	integration.KindGoogleAnalytics: googleAnalytics,
 	integration.KindAdMob:           adMob,
+	integration.KindAdSense:         adSense,
 	integration.KindAtlassian:       atlassian,
 }
 
@@ -408,6 +409,24 @@ func adMob(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	for i, id := range a.Accounts {
 		b.account("integrations.admob.accounts["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "admob/"+id, id,
 			"AdMob", a.Enabled, atlas.CapabilityMonetization)
+	}
+}
+
+// adSense records each AdSense publisher account the company narrows agents
+// to, keyed by its ID, or the vendor alone where it names none.
+func adSense(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	a := c.Integrations.AdSense
+	if a == nil {
+		return
+	}
+	if len(a.Accounts) == 0 {
+		b.account("integrations.adsense", atlas.VendorGoogle, "adsense", "", "AdSense", a.Enabled,
+			atlas.CapabilityMonetization)
+		return
+	}
+	for i, id := range a.Accounts {
+		b.account("integrations.adsense.accounts["+strconv.Itoa(i)+"]", atlas.VendorGoogle, "adsense/"+id, id,
+			"AdSense", a.Enabled, atlas.CapabilityMonetization)
 	}
 }
 

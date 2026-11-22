@@ -217,6 +217,7 @@ export const INTEGRATION_TOOLS = {
   app_store_connect: ["app_store_connect"],
   google_analytics: ["google_analytics"],
   admob: ["admob"],
+  adsense: ["adsense"],
 } as const;
 
 /**
