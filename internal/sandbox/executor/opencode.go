@@ -404,19 +404,19 @@ func (OpenCode) ContinuesWriter(writer string) (bool, string) {
 }
 
 // openCodeOlderCheck is the script's refusal of a box whose OpenCode 2 is
-// older than [openCodeRelease], read off `opencode v<release>` in `$v`, each
-// number compared as a number.
+// older than [openCodeRelease], its release read off `$v` as [releaseOf]
+// reads one ([bareReleaseShell]: a pre-release reads as none, and is let
+// run), each number compared as a number.
 func openCodeOlderCheck() string {
 	var maj, mnr, pat int
 	if _, err := fmt.Sscanf(openCodeRelease, "%d.%d.%d", &maj, &mnr, &pat); err != nil {
 		panic("executor: openCodeRelease is no release: " + openCodeRelease)
 	}
-	return fmt.Sprintf(`older() { case "$1" in [0-9]*.[0-9]*.[0-9]*) ;; *) return 1;; esac; `+
-		`o=$IFS; IFS=.; set -- $1; IFS=$o; `+
-		`[ "$1" -lt %[1]d ] 2> /dev/null && return 0; [ "$1" -gt %[1]d ] 2> /dev/null && return 1; `+
-		`[ "$2" -lt %[2]d ] 2> /dev/null && return 0; [ "$2" -gt %[2]d ] 2> /dev/null && return 1; `+
-		`[ "$3" -lt %[3]d ] 2> /dev/null; }; `+
-		`r=${v#*v}; if older "$r"; then echo "crewlet: this box runs OpenCode $r; the opencode runner `+
+	return bareReleaseShell("r") + fmt.Sprintf(`older() { o=$IFS; IFS=.; set -- $1; IFS=$o; `+
+		`[ "$1" -lt %[1]d ] && return 0; [ "$1" -gt %[1]d ] && return 1; `+
+		`[ "$2" -lt %[2]d ] && return 0; [ "$2" -gt %[2]d ] && return 1; `+
+		`[ "$3" -lt %[3]d ]; }; `+
+		`if [ -n "$r" ] && older "$r"; then echo "crewlet: this box runs OpenCode $r; the opencode runner `+
 		`supports OpenCode %[4]s, its newest — install it in the box image" >&2; exit 1; fi`,
 		maj, mnr, pat, openCodeRelease)
 }
@@ -486,8 +486,8 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	line(`rm -f %s`, vrr)
 	line(`case "$v" in [0-9]*) echo "crewlet: this box runs OpenCode $v; the opencode runner drives OpenCode 2 (the @opencode/cli package) — install it in the box image" >&2; exit 1;; esac`)
 	// AN OLDER 2.x IS REFUSED BY NAME ([openCodeRelease]); a newer runs, and
-	// one whose release does not read as three numbers is let run, as a
-	// release the engine cannot read is taken for a current one.
+	// one whose release does not read (a pre-release among them) is let run,
+	// as a release the engine cannot read is taken for a current one.
 	line(`%s`, openCodeOlderCheck())
 	// THE RUN LOADS ONLY THE CONFIGURATION ITS LAUNCH WRITES, before any
 	// command that reads one: OpenCode's global directory is the run's own,
