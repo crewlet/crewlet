@@ -2820,10 +2820,11 @@ func (s *CoordStore) BindSession(ctx context.Context, turnID string, bind Sessio
 	}
 	// THE RECORD'S RULES FIRST, so a report it refuses claims nothing; the same
 	// job again (a recovery, a reattach, a second save) is answered as bound,
-	// claiming nothing and asking nothing. Then THE CLAIM, THE FRESH CHECK AND
-	// THE RECORD, in that order, so no second job checks the log in the window
-	// before this one's claim; a claim this call took is released where the
-	// record does not follow. One a crash leaves goes with the record.
+	// its claim made again where none stands, asking the log nothing. Then THE
+	// CLAIM, THE FRESH CHECK AND THE RECORD, in that order, so no second job
+	// checks the log in the window before this one's claim; a claim this call
+	// took is released where the record does not follow. One a crash leaves
+	// goes with the record.
 	run, found, err := s.Get(ctx, turnID)
 	switch {
 	case err != nil:
