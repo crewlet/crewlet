@@ -579,7 +579,7 @@ func TestTheCaptureCountsTheSessionItKeeps(t *testing.T) {
 	result := cntUser("u2", "u3", `[{"type":"tool_result","tool_use_id":"toolu_1","content":"ok"}]`)
 	archive := cntArchive(t, cntThread(cntUser("", "u1", `"the brief"`), cntAnchor("u1", "u2", "m1", 100, 0, 0, 50),
 		result))
-	meter := newContextMeter(t.Context(), archiveTar, ctSession, "2.1.322", new(passBudget))
+	meter := newContextMeter(t.Context(), ClaudeCode{}, ctSession, "2.1.322", new(passBudget))
 	_, _ = meter.Write(archive)
 	meter.finish(nil)
 	wantBound(t, meter.count(), 150+cntCharge(result))

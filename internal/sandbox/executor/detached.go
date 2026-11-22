@@ -223,6 +223,12 @@ type carrier interface {
 	// capture streams it through reads and writes it as ([scrubArchive]).
 	layout() archiveLayout
 
+	// meter reads an archive of ArchiveFormat, as kept, for what its
+	// session's last request carried, the harness's count of it and its
+	// estimate of the next request ([newContextMeter]), session's as release
+	// wrote it, within ctx and under large; err is the archive's own.
+	meter(ctx context.Context, r io.Reader, session, release string, large *passBudget) (meterReading, error)
+
 	// transcript reads an archive of ArchiveFormat, decompressed, as the
 	// session's transcript entries, handing each to b in recorded order until
 	// ctx is done ([ReadTranscript]); kept beside packing, as reading the
