@@ -301,7 +301,7 @@ func TestAnOpenCodeRunThatContinuesASessionIsConfiguredForEither(t *testing.T) {
 	p := executor.PathsFor(box)
 	req := sandbox.RunRequest{Resume: carriedOpenCode, MCPServers: bridgeAt("continued-token"),
 		FreshWiring: &sandbox.Wiring{MCPServers: bridgeAt("fresh-token")}}
-	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, p)
+	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, executor.Session{}, p)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestAnOpenCodeRunThatContinuesASessionIsConfiguredForEither(t *testing.T) {
 	} {
 		mismatched := req
 		mismatched.FreshWiring = other
-		if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), box, mismatched, p); err == nil ||
+		if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), box, mismatched, executor.Session{}, p); err == nil ||
 			!strings.Contains(err.Error(), "not the same configuration") {
 			t.Errorf("%s: WriteConfig = %v, want the two wirings refused", name, err)
 		}
@@ -780,7 +780,7 @@ func openCodeTaken(t *testing.T, messages string) int64 {
 	if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(messages), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true, MaxBytes: takeBound})
 	if err != nil || taken.Body == nil || taken.Context == nil {
 		t.Fatalf("TakeSession = %+v, %v", taken, err)
 	}
@@ -812,7 +812,7 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 		if _, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"}); res.Captured == nil {
 			t.Fatalf("the run's session was not captured:\n%s", boxFile(t, b, paths(b).Err()))
 		}
-		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: takeBound})
+		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 		if err != nil || taken.Body == nil || taken.Context == nil {
 			t.Fatalf("TakeSession = %+v, %v", taken, err)
 		}
@@ -911,7 +911,7 @@ func TestAContinuedOpenCodeRunIsConfiguredWithItsOwnInstructions(t *testing.T) {
 	p := executor.PathsFor(box)
 	configure := func(req sandbox.RunRequest) string {
 		t.Helper()
-		path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, p)
+		path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, req, executor.Session{}, p)
 		if err != nil {
 			t.Fatalf("WriteConfig: %v", err)
 		}

@@ -29,6 +29,7 @@ paths:
 - `golangci-lint run`, a prebuilt release: one built with a Go whose language version is older than `go.mod`'s refuses the module
 - `go build ./...`, and a cross-compile of every release target
 - the dashboard's `dashboard-lint` (`npm run format:check`), `dashboard-check` (rebuild and diff the committed bundle) and `dashboard-test` (`npm run typecheck && npm test && npm run test:layout`, the last in a headless browser)
+- `notehelper-check`: rebuild `internal/notehelper`'s committed builds (`make notehelper`) and diff them
 - `make git`, `make chromium`, `make node` and `make playwright-tree`: the pinned gits (built), Chromiums (fetched: the newest and the floor, `internal/browser.MinChromiumMajor`) and floor Node with its npm (fetched: the newest release of Node `internal/browser/boxhelper.MinNodeMajor`), once per machine, and the Playwright tree (installed with npm from `internal/browser/boxhelper/tree`'s lock, once per lock). Both test targets depend on them, so no gate runs the machine's own git or Chrome, nor hands the box helper's cases the newest Node alone
 - `make test`, then `make test-solo`
 
@@ -40,7 +41,7 @@ In CI, `test plan` deals each half into shards by measured duration, every packa
 
 **`internal/skipgate`** reads both test targets' `go test -json`. Each `allowed.go` entry has a reason and a `When`: `Always` (also reported once it stops firing) or `Environment`.
 
-`node` runs four suites: the dashboard's (through `npm`), `internal/e2e`'s client replay (in `make test-solo`), `internal/sandbox/executor`'s probes of the plugins and extensions the engine embeds (OpenCode's notes and skill-load plugins, Pi's extension), and `internal/browser/boxhelper`'s, which installs the Playwright tree with each Node's own npm (both in `make test`). `npm` also installs the suite's tree (`make playwright-tree`). A make target that runs one refuses to start without `node`, or without `npm` where it needs it. A passing `make check` prints what it does not cover (`make snapshot`).
+`node` runs four suites: the dashboard's (through `npm`), `internal/e2e`'s client replay (in `make test-solo`), `internal/sandbox/executor`'s probes of the plugins, helpers and extensions the engine embeds for its runners, and `internal/browser/boxhelper`'s, which installs the Playwright tree with each Node's own npm (both in `make test`). `npm` also installs the suite's tree (`make playwright-tree`). A make target that runs one refuses to start without `node`, or without `npm` where it needs it. A passing `make check` prints what it does not cover (`make snapshot`).
 
 ## Writing tests
 - Test files sit beside what they cover, non-Go ones too (the Vitest suites in `dashboard/src`, `internal/e2e/replay.mjs`, `internal/sandbox/executor/opencode_*_probe.mjs`). There is no top-level `tests/` tree

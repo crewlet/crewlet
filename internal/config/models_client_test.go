@@ -192,7 +192,9 @@ func TestTheModelsScreenKnowsEveryHarnessAsItsProfileReads(t *testing.T) {
 		if len(p.DeviceLoginArgs) > 0 {
 			signIns = append(signIns, "device")
 		}
-		if len(p.SignInEnv) > 0 {
+		// A CLOUD is a switch among the names the harness signs in by, never
+		// a token there: Copilot's GH_TOKEN signs it in as a key would.
+		if slices.ContainsFunc(p.SignInEnv, func(name string) bool { return !harnessprofile.IsCredentialName(name) }) {
 			signIns = append(signIns, "cloud")
 		}
 		listed, err := clientsource.Property(facts, "signIns")
@@ -277,7 +279,12 @@ func TestEverySignInTheModelsWizardOffersIsOneTheEngineTakes(t *testing.T) {
 		"token": func(string, harnessprofile.Profile) string {
 			return `auth: {mode: subscription, token: "${CLAUDE_CODE_OAUTH_TOKEN}"}`
 		},
-		"cloud": func(string, harnessprofile.Profile) string {
+		// Each harness's own cloud, as the wizard's cloudsOf offers it first.
+		"cloud": func(name string, _ harnessprofile.Profile) string {
+			if name == "gemini-cli" {
+				return "auth: {mode: env}\n      env: {GOOGLE_GENAI_USE_VERTEXAI: \"true\", " +
+					`GOOGLE_CLOUD_PROJECT: acme, GOOGLE_CLOUD_LOCATION: us-central1, GOOGLE_API_KEY: "${GOOGLE_API_KEY_M}"}`
+			}
 			return "auth: {mode: env}\n      env: {CLAUDE_CODE_USE_BEDROCK: \"1\", AWS_REGION: us-west-2, " +
 				`AWS_BEARER_TOKEN_BEDROCK: "${AWS_BEARER_TOKEN_BEDROCK_M}"}`
 		},

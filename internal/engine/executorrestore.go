@@ -57,6 +57,18 @@ func (r executorRestore) Session(ctx context.Context, handle, turn string) (exec
 	return restoreRow(read.Session, err)
 }
 
+var _ sandbox.SessionHolders = executorRestore{}
+
+// SessionHeld reads whether any turn's row names the session id through the
+// estate router's reads, at the level a bind asks ([executordomain.BindRead]):
+// what a minted session's bind asks of a fresh id (internal/sandbox, minted.go).
+func (r executorRestore) SessionHeld(ctx context.Context, sessionID string) (bool, error) {
+	if r.engine.router == nil {
+		return false, errors.New("this node has no estate router to read the executor log through")
+	}
+	return r.engine.router.ExecutorReads().SessionHeld(ctx, sessionID, executordomain.BindRead())
+}
+
 // restoreRow is a point read of a turn's row as the sandbox's restore takes it:
 // the row made its view ([executordomain.Session.Kept]), and the log's
 // not-found as [sandbox.ErrTurnRowNotFound] — IN THE SANDBOX'S WORDS, since it

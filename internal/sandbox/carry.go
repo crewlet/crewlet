@@ -290,6 +290,30 @@ type SessionTake struct {
 	// writes, so a box timing its takes learns nothing of another agent's
 	// texts. "" shares with every other take that names none.
 	Scope string
+
+	// Session is the session bound to a minting harness's job
+	// ([LaunchRecord.Minted]): the take names that one, and one whose box
+	// names another is refused, wrapping [ErrSessionBindRefused], so no
+	// capture is kept under an id never bound. Ignored for a harness that
+	// names its session as its run starts.
+	Session string
+
+	// Spool is where the take's scrub spools what its first reading of the
+	// archive wrote, for its second to copy, and the room it holds for that
+	// ([SessionSpool]). A take that names no directory is refused.
+	Spool SessionSpool
+}
+
+// SessionSpool is the room a take's scrub spools in ([SessionTake.Spool]): a
+// directory of the process's own, so the sweep that removes a crashed
+// process's spools removes the scrub's too; the bytes the spool may write
+// there, counted as written and refused past; and Held, told the bytes the
+// spool holds whenever that moves, none once it is removed, which it is
+// before the take's body ends.
+type SessionSpool struct {
+	Dir   string
+	Bytes int64
+	Held  func(bytes int64)
 }
 
 // TakenSession is a session archive on its way out of its box: described, and

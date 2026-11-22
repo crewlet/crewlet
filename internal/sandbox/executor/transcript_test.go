@@ -1461,20 +1461,29 @@ func TestTheTranscriptBoundsAreTheEnginesOwn(t *testing.T) {
 	}
 }
 
-// EVERY HARNESS THIS BUILD DRIVES CARRIES ITS SESSION, and the transcript is
-// read for each in the one format its runner packs: the harnesses whose
-// session is read are the harnesses [executor.Names] lists, from one list.
+// EVERY HARNESS THIS BUILD DRIVES THAT CONTINUES SESSIONS CARRIES THEM, and the
+// transcript is read for each in the one format its runner packs: the
+// harnesses whose session is read are the harnesses [executor.Names] lists,
+// from one list, but one whose every launch starts a session of its own
+// (Gemini CLI's), which keeps none to carry.
 //
-// Mutation: list a harness that carries no session, or read one in a format
-// its runner does not pack, and a row goes red.
+// Mutation: list a harness that continues sessions and carries none, or read
+// one in a format its runner does not pack, and a row goes red.
 func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
 	t.Parallel()
 	formats := map[string]int{
 		executor.ClaudeCodeName: executor.ClaudeArchiveFormat,
 		executor.OpenCodeName:   executor.OpenCodeArchiveFormat,
+		executor.CopilotName:    executor.CopilotArchiveFormat,
+		executor.KimiName:       executor.KimiArchiveFormat,
+		executor.MuseName:       executor.MuseArchiveFormat,
 		executor.PiName:         executor.PiArchiveFormat,
 	}
 	for _, name := range executor.Names() {
+		if executor.RunnerNamed(name).StartsFresh() {
+			// It keeps no session to carry: every launch starts one of its own.
+			continue
+		}
 		format, ok := formats[name]
 		if !ok {
 			t.Errorf("%s is a harness this build drives, and this case names no archive format of it", name)

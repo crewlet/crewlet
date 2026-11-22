@@ -134,6 +134,12 @@ type Spec struct {
 	// telemetry added at the job's start.
 	Env map[string]string
 
+	// SignInEnv is the names in Env that sign the run's harness in: its
+	// profile's token, key and sign-in variables, and the entry's credentials
+	// ([RunRequest.SignInEnv]). The harness reads them; the commands its model
+	// runs are started without them.
+	SignInEnv []string
+
 	// CredentialFiles is a subscription-harness login: a path relative to the
 	// box home mapped to an absolute path on the ENGINE HOST.
 	//
@@ -625,6 +631,13 @@ type Result struct {
 	// Limits is the run's last limit report line, verbatim, read by
 	// harness.Provider.RunEnded; empty past [MaxRunEventBytes] ([boundBox]).
 	Limits string
+
+	// NoLimitExit says the run's exit status is not the one its harness ends
+	// a run with on its vendor's limit, so its ending reads as no limit
+	// whatever its words say: a box file the model can write could spell one.
+	// Set by a runner that knows that status (Gemini CLI's 173), never by one
+	// that does not, whose endings read as they always have.
+	NoLimitExit bool
 
 	// Transcript is the agent's activity log — what it said, each tool it
 	// called and the first line of what it ran — rebuilt from its own
@@ -1123,7 +1136,14 @@ type RunRequest struct {
 	// where Resume is: a run that starts a session is handed Brief.
 	FreshBrief string
 
-	Env    map[string]string
+	Env map[string]string
+
+	// SignInEnv is the names in Env its harness signs in by ([Spec.SignInEnv]).
+	// The runner hands them to the harness and keeps them, with its own wiring's
+	// variables, out of the environment of the commands the model runs, through
+	// the harness's own mechanism for that environment.
+	SignInEnv []string
+
 	Limits Limits
 
 	// Model is the model the run works under, written in the grammar of the
@@ -1140,6 +1160,12 @@ type RunRequest struct {
 	// Effort is the entry's reasoning effort, in its harness's own levels, which
 	// the runner passes its harness its own way. Empty: the harness's default.
 	Effort string
+
+	// WebDenied is the entry's `web_tools: denied`: the runner hands its
+	// harness none of the harness's own web tools, as the entry's runs on the
+	// engine host have none. The run's shell, and any code it runs, reach
+	// only what the box cell's egress policy allows.
+	WebDenied bool
 
 	// MCPServers are the MCP servers the engine hands the run, keyed by
 	// server name: its tool bridge, and the seat's servers that run in its
@@ -1194,12 +1220,6 @@ type RunRequest struct {
 	// carries — see [CommitAttribution]. Nil credits nothing: the run's git
 	// is left exactly as the box and the repository configure it.
 	Attribution *CommitAttribution
-
-	// SignInEnv is the names of Env that sign the harness in: the entry's
-	// own credentials, which a runner keeps out of the model's shell where
-	// its harness offers a way, the harness itself still reading them. Nil
-	// names none.
-	SignInEnv []string
 }
 
 // SkillNamespace is what a run's harness lists every skill of

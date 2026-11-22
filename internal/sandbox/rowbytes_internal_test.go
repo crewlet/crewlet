@@ -631,7 +631,8 @@ func worstRow(t *testing.T) PendingRun {
 		told := read()
 		told.Retold = read()
 		notes[i] = RunNote{ID: uuid.NewString(), Seq: math.MaxInt - i, Sealed: []byte(plain(MaxNoteSealedBytes)),
-			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), Read: told}
+			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), Read: told,
+			PollServes: MaxNoteServes, Readmitted: uuid.NewString()}
 	}
 	// AND A JOB'S ITEMS, as many as the row holds ([MaxJobItems]): late-call
 	// items, the one kind the store files, each carrying its call at the
@@ -642,6 +643,7 @@ func worstRow(t *testing.T) PendingRun {
 		job := uuid.NewString()
 		notes = append(notes, RunNote{ID: lateItemID(job, math.MaxInt), Seq: math.MaxInt - len(notes),
 			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves(), For: job, Read: read(),
+			PollServes: MaxNoteServes, Readmitted: uuid.NewString(),
 			LateCall: &LateCall{Round: uuid.NewString(), Call: worstItemCall(t)}})
 	}
 	// AND THE TURN'S WAKE ITEMS, as many as the row holds ([MaxTurnWakes]): each
@@ -658,7 +660,7 @@ func worstRow(t *testing.T) PendingRun {
 		}
 		notes = append(notes, RunNote{ID: wakeItemID(job, plain(MaxWakeIDBytes)), Seq: math.MaxInt - len(notes),
 			At: worstAt, Served: uuid.NewString(), Place: math.MaxInt, Serves: serves()[:MaxWakeServes], For: job,
-			Read: read(), Wake: &WakeItem{Wakes: wakes}})
+			PollServes: MaxWakeServes, Read: read(), Wake: &WakeItem{Wakes: wakes}})
 	}
 	// AND THE TELLINGS, as many as the row holds ([MaxCallTellings]), each of
 	// a round and a job at their widest ids, every number at its widest, a
@@ -821,7 +823,7 @@ func worstRow(t *testing.T) PendingRun {
 	launch := LaunchRecord{StartedAt: worstAt, Started: true, Model: markup(256), ProviderKey: plain(64),
 		SignInID: uuid.NewString(), FollowUp: FollowUpReason(plain(32)), Brief: BriefKind(plain(32)),
 		BriefOmitted: omitted, FreshOmitted: omitted, BriefLateOmitted: lateOmitted, FreshLateOmitted: lateOmitted,
-		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)),
+		LeadMarks: marks, FreshSessionID: plain(128), SessionStart: SessionStart(plain(32)), Minted: plain(128),
 		ResumeCarry: ResumeCarry(plain(32)), Iteration: math.MaxInt, Published: true, CollectFailures: math.MaxInt,
 		CollectFailingSince: worstAt,
 		ResumeFailures:      math.MaxInt, ResumeFailingSince: worstAt, Collected: true, CollectedAt: worstAt,

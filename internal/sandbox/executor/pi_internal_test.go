@@ -468,7 +468,7 @@ func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 		SignInEnv:   []string{"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
 		Skills:      []sandbox.Skill{{Name: "deploy", Description: "Deploys.", Body: "Do it."}},
 		FreshWiring: &sandbox.Wiring{MCPServers: bridge("new"), Steer: steer("new"), SkillLoads: loads("new")}}
-	file, err := (Pi{}).WriteConfig(t.Context(), box, req, p)
+	file, err := (Pi{}).WriteConfig(t.Context(), box, req, Session{}, p)
 	if err != nil || file != p.PiExtension() {
 		t.Fatalf("WriteConfig = %q, %v", file, err)
 	}

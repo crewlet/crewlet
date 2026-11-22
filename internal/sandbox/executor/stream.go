@@ -384,3 +384,12 @@ func humanSize(n int64) string {
 		return fmt.Sprintf("%d bytes", n)
 	}
 }
+
+// boundedEvent is line as a result carries an event, or "" past
+// [sandbox.MaxRunEventBytes], which the record would drop.
+func boundedEvent(line []byte) string {
+	if len(line) > sandbox.MaxRunEventBytes {
+		return ""
+	}
+	return string(line)
+}

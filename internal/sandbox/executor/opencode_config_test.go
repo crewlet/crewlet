@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -210,7 +211,7 @@ func TestTheRunsConfigurationIsWrittenUnderItsWorkDirectory(t *testing.T) {
 	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{
 		System: "the seat's standing instructions", MCPServers: seatServers(),
 		Limits: sandbox.Limits{MaxTurns: 40},
-	}, p)
+	}, executor.Session{}, p)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -258,7 +259,7 @@ func TestEveryServerValueIsReadFromAFile(t *testing.T) {
 	servers := seatServers()
 	want := serverValues(servers)
 
-	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{MCPServers: servers}, p)
+	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{MCPServers: servers}, executor.Session{}, p)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -325,7 +326,7 @@ func TestTheEntriesTheRunOwnsStateDisabledFalse(t *testing.T) {
 	b := sandbox.NewFakeSandbox("box-1")
 	path, err := executor.OpenCode{}.WriteConfig(t.Context(), b, sandbox.RunRequest{
 		MCPServers: seatServers(), Limits: sandbox.Limits{MaxTurns: 40},
-	}, executor.PathsFor(b))
+	}, executor.Session{}, executor.PathsFor(b))
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -358,6 +359,69 @@ func TestTheEntriesTheRunOwnsStateDisabledFalse(t *testing.T) {
 	}
 }
 
+// A WEB-DENIED ENTRY'S OPENCODE RUN HAS NO WEB TOOL: the plugins of OpenCode's
+// webfetch and websearch taken out, which on 2.3.2 left neither registered for
+// the run or any subagent, a repository's agent allowing them included; and
+// both denied in the run's rules and its agent's, without which a repository's
+// agent rule let Code Mode's `execute` fetch. A run on an entry that keeps the
+// web does neither.
+//
+// Mutation: drop the plugin removals, the run's deny rules or its agent's, and
+// this fails.
+func TestAWebDeniedOpenCodeRunHasNoWebTool(t *testing.T) {
+	t.Parallel()
+	type rule struct{ Action, Resource, Effect string }
+	read := func(denied bool) (rules []rule, agent []rule, plugins []any, steps int) {
+		b := sandbox.NewFakeSandbox("box-1")
+		path, err := executor.OpenCode{}.WriteConfig(t.Context(), b, sandbox.RunRequest{
+			MCPServers: seatServers(), Limits: sandbox.Limits{MaxTurns: 40}, WebDenied: denied,
+		}, executor.Session{}, executor.PathsFor(b))
+		if err != nil {
+			t.Fatalf("WriteConfig: %v", err)
+		}
+		raw, _ := b.ReadFile(t.Context(), path)
+		var cfg struct {
+			Rules        []rule `json:"permissions"`
+			DefaultAgent string `json:"default_agent"`
+			Agents       map[string]struct {
+				Steps int    `json:"steps"`
+				Rules []rule `json:"permissions"`
+			} `json:"agents"`
+			Plugins []any `json:"plugins"`
+		}
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			t.Fatalf("unmarshal: %v\n%s", err, raw)
+		}
+		a := cfg.Agents[cfg.DefaultAgent]
+		return cfg.Rules, a.Rules, cfg.Plugins, a.Steps
+	}
+	deniesWeb := func(rules []rule) bool {
+		last := map[string]string{}
+		for _, r := range rules {
+			if r.Resource == "*" {
+				last[r.Action] = r.Effect
+			}
+		}
+		return last["webfetch"] == "deny" && last["websearch"] == "deny"
+	}
+	removes := func(plugins []any) bool {
+		return slices.Contains(plugins, any("-opencode.tool.webfetch")) &&
+			slices.Contains(plugins, any("-opencode.tool.websearch"))
+	}
+	rules, agent, plugins, steps := read(true)
+	if !deniesWeb(rules) || !deniesWeb(agent) || !removes(plugins) {
+		t.Errorf("the web-denied run: rules %+v, its agent's %+v, plugins %v; want the web tools' "+
+			"plugins out and both denied in each", rules, agent, plugins)
+	}
+	if steps != 40 {
+		t.Errorf("the web-denied run's agent has steps %d, want its turn cap 40 kept beside its rules", steps)
+	}
+	rules, agent, plugins, _ = read(false)
+	if deniesWeb(rules) || len(agent) > 0 || removes(plugins) {
+		t.Errorf("a run that keeps the web: rules %+v, its agent's %+v, plugins %v", rules, agent, plugins)
+	}
+}
+
 // THE NOTES PLUGIN IS WRITTEN FOR A RUN WIRED TO ITS NOTES, AND ITS ROUTE IS A
 // REFERENCE. The run's configuration names one plugin: the directory the
 // engine's plugin is written into as index.js, byte for byte the plugin this
@@ -376,7 +440,7 @@ func TestTheNotesPluginIsWrittenAndItsRouteReferenced(t *testing.T) {
 	path, err := executor.OpenCode{}.WriteConfig(t.Context(), box, sandbox.RunRequest{
 		MCPServers: seatServers(),
 		Steer:      sandbox.SteerWiring{Server: "crewlet", Tool: "steer_take", URL: route},
-	}, p)
+	}, executor.Session{}, p)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
@@ -413,16 +477,19 @@ func TestTheNotesPluginIsWrittenAndItsRouteReferenced(t *testing.T) {
 		t.Error("the plugin written into the box is not opencode_steer.js")
 	}
 
-	// A RUN WIRED TO NO NOTES: no plugin named, none written.
+	// A RUN WIRED TO NO NOTES: no notes plugin named, none written.
 	_, bare := openCodeBox(t, t.TempDir())
 	bp := executor.PathsFor(bare)
-	path, err = executor.OpenCode{}.WriteConfig(t.Context(), bare, sandbox.RunRequest{MCPServers: seatServers()}, bp)
+	path, err = executor.OpenCode{}.WriteConfig(t.Context(), bare, sandbox.RunRequest{MCPServers: seatServers()}, executor.Session{}, bp)
 	if err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	raw, _ = os.ReadFile(path) //nolint:gosec // the run's configuration, under the test's box
-	if strings.Contains(string(raw), `"plugins"`) {
-		t.Errorf("a run wired to no notes names a plugin:\n%s", raw)
+	var bareCfg struct {
+		Plugins []openCodePlugin `json:"plugins"`
+	}
+	if err = json.Unmarshal(raw, &bareCfg); err != nil || len(runPlugins(bareCfg.Plugins)) != 0 {
+		t.Errorf("a run wired to no notes names a plugin (%v):\n%s", err, raw)
 	}
 	if _, err := os.Stat(bp.OpenCodeSteerPlugin()); !os.IsNotExist(err) {
 		t.Errorf("a run wired to no notes has a plugin written (%v)", err)
@@ -463,7 +530,7 @@ func TestAHomeAReferenceCannotNameIsRefused(t *testing.T) {
 		} {
 			b := homed{FakeSandbox: sandbox.NewFakeSandbox("box-1"), home: home}
 			p := executor.PathsFor(b)
-			_, err := executor.OpenCode{}.WriteConfig(t.Context(), b, req, p)
+			_, err := executor.OpenCode{}.WriteConfig(t.Context(), b, req, executor.Session{}, p)
 			if err == nil || !strings.Contains(err.Error(), "providers.sandbox.local.state_dir") ||
 				!strings.Contains(err.Error(), fmt.Sprintf("%q", home)) {
 				t.Errorf("home %q, %s: WriteConfig = %v, want it refused naming the home and the setting", home, what, err)
@@ -475,7 +542,7 @@ func TestAHomeAReferenceCannotNameIsRefused(t *testing.T) {
 	}
 	b := homed{FakeSandbox: sandbox.NewFakeSandbox("box-1"), home: "/srv/r&d <boxes>/home"}
 	if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), b,
-		sandbox.RunRequest{MCPServers: seatServers()}, executor.PathsFor(b)); err != nil {
+		sandbox.RunRequest{MCPServers: seatServers()}, executor.Session{}, executor.PathsFor(b)); err != nil {
 		t.Errorf("a home holding & < > was refused: %v", err)
 	}
 }
@@ -493,7 +560,7 @@ func TestAReusedBoxKeepsNoEarlierRunsConfiguration(t *testing.T) {
 	runner, box := openCodeBox(t, t.TempDir())
 	p := executor.PathsFor(box)
 	if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), box,
-		sandbox.RunRequest{MCPServers: seatServers(), Steer: steerWiring}, p); err != nil {
+		sandbox.RunRequest{MCPServers: seatServers(), Steer: steerWiring}, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	if err := runner.ClearArtifacts(t.Context(), box); err != nil {
@@ -507,7 +574,7 @@ func TestAReusedBoxKeepsNoEarlierRunsConfiguration(t *testing.T) {
 
 	if _, err := (executor.OpenCode{}).WriteConfig(t.Context(), box, sandbox.RunRequest{
 		MCPServers: map[string]sandbox.MCPServer{"crewlet": seatServers()["crewlet"]},
-	}, p); err != nil {
+	}, executor.Session{}, p); err != nil {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	entries, err := os.ReadDir(p.OpenCodeValues())

@@ -39,20 +39,24 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 // SessionTakesAtOnce is how many takes this process scrubs at once, each
 // holding a slot of [sessionTakes] from before it asks its box for anything
 // to its scrub's and its meter's end. 29: a take at its base holds at most
-// 11.56 MiB, its scrub's 8.22 (BenchmarkATakeAtItsBase) and its meter's 3.34
-// (BenchmarkAMeterAtItsBase) at once, the most of nine runs each, one a
-// process, on a dedicated two-core slot, read in bytes; 29 times over is 335
-// MiB, within the base tier's 340.6 MiB (64 reads at [baseTierReadBytes], the
-// package doc's "A collection's read of a thread"): so the takes at their base
-// hold no more than every read of the tier does.
+// 11.64 MiB ([takeBaseHeldBytes]); 29 times over is 337.5 MiB, within the
+// base tier's 340.6 MiB (64 reads at [baseTierReadBytes], the package doc's
+// "A collection's read of a thread"): so the takes at their base hold no
+// more than every read of the tier does.
 const SessionTakesAtOnce = 29
 
 // takeBaseHeldBytes is what a take at its base holds at most, its scrub's and
-// its meter's at once: 11.56 MiB ([SessionTakesAtOnce]), the scrub's 8.22 and
-// the meter's 3.34, each to the KiB.
+// its meter's at once, 11.64 MiB: each part's live high-water, the scrub's
+// 8.00 MiB (BenchmarkATakeAtItsBase, its spool's gzip writer among it) and the
+// meter's 3.53 (BenchmarkAMeterAtItsBase), the most of 30 runs each, one a
+// process, on a two-core slot, live bytes under a stop-the-world GC at every
+// 1% of growth, to the KiB; and 1% of each beside it, what that sampling can
+// miss: a buffer allocated and dropped within 1% of the heap's growth.
 const (
-	scrubBaseHeldBytes = 8418 << 10
-	meterBaseHeldBytes = 3420 << 10
+	scrubBaseLiveBytes = 8189 << 10
+	meterBaseLiveBytes = 3610 << 10
+	scrubBaseHeldBytes = scrubBaseLiveBytes + scrubBaseLiveBytes/100
+	meterBaseHeldBytes = meterBaseLiveBytes + meterBaseLiveBytes/100
 	takeBaseHeldBytes  = scrubBaseHeldBytes + meterBaseHeldBytes
 )
 
@@ -124,6 +128,10 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, errors.New("executor: a take names no bound on the archive it keeps, " +
 			"and a session is never read out of a box unbounded")
 	}
+	if take.Spool.Dir == "" || take.Spool.Bytes <= 0 || take.Spool.Held == nil {
+		return sandbox.TakenSession{}, errors.New("executor: a take names no spool for its scrub, which " +
+			"spools on its process's own disk in the room the take holds")
+	}
 	// ONE OF [SessionTakesAtOnce], held by the scrub's goroutine to its end,
 	// and given back here where none starts.
 	freeSlot, slotErr := takeSessionSlot(ctx)
@@ -159,13 +167,13 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, errors.New("executor: a take of a save packs nothing: the save is " +
 			"packed to its taker's own path first, and the take reads it there")
 	case take.Save != "":
-		archive, body, release, err = r.openSave(ctx, box, take.Save)
+		archive, body, release, err = r.openSave(ctx, box, take.Save, take.Session)
 	default:
 		if !take.Pack {
-			archive, body, err = r.OpenCapture(ctx, box)
+			archive, body, err = r.openCapture(ctx, box, take.Session)
 		}
 		if err == nil && body == nil {
-			archive, body, release, err = r.PackCapture(ctx, box, take.Pack)
+			archive, body, release, err = r.packCapture(ctx, box, take.Pack, take.Session)
 		}
 	}
 	if err != nil || body == nil {
@@ -186,7 +194,8 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	scrubbing, stopScrub := context.WithCancel(ctx)
 	metering, stopMeter := context.WithCancel(ctx)
 	remembered := &memoUse{memo: r.memo, scope: take.Scope}
-	bounds := plainBounds(scrubPlainMax).gatedBy(scrubbing, large).remembering(remembered)
+	bounds := plainBounds(scrubPlainMax).gatedBy(scrubbing, large).remembering(remembered).
+		spooling(spoolPlace{dir: take.Spool.Dir, room: take.Spool.Bytes, held: take.Spool.Held})
 	scrub := newScrubber(take.Scrub)
 	archive.RunStart = keptRunStart(scrub, archive.RunStart)
 	read, write := io.Pipe()
@@ -257,7 +266,7 @@ func logMemoUse(ctx context.Context, use *memoUse) {
 	}
 	entries, evicted := use.memo.size()
 	log.InfoContext(ctx, "executor_session_scrub_memo", "hits", use.n.hits, "misses", use.n.misses,
-		"diverged", use.n.diverged, "checked", use.n.checked, "entries", entries, "evicted", evicted)
+		"diverged", use.n.diverged, "entries", entries, "evicted", evicted)
 }
 
 // scrubContained runs scrub, the take's scrub of a box's archive, a panic in it
@@ -414,6 +423,13 @@ func (t *takenBody) Close() error {
 // (carry.go).
 func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox,
 	working bool) (sandbox.SessionArchive, io.ReadCloser, func(context.Context), error) {
+	return r.packCapture(ctx, box, working, "")
+}
+
+// packCapture is [Runner.PackCapture] of a minting harness's job bound to
+// bound ([sandbox.SessionTake.Session]), which PackCapture names none of.
+func (r *Runner) packCapture(ctx context.Context, box sandbox.Sandbox, working bool,
+	bound string) (sandbox.SessionArchive, io.ReadCloser, func(context.Context), error) {
 
 	// Nothing to pack: a harness this runner carries none for, a record that
 	// names no session, or a harness that wrote no transcript.
@@ -445,7 +461,7 @@ func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox,
 	// harness outlived still writes. An OpenCode export leaves out the message
 	// still being written, either way. The pack runs in a login shell with the
 	// box's bin first on PATH, not the run's environment, which no row keeps.
-	rec, packed, err := r.packNow(ctx, box, func(paths Paths, rec sessionRecord) (string, error) {
+	rec, packed, err := r.packNow(ctx, box, bound, func(paths Paths, rec sessionRecord) (string, error) {
 		return carries.Pack(paths, rec.id, staged, dest, working), nil
 	})
 	if err != nil || !packed {
@@ -534,7 +550,8 @@ const packReleaseFloor = 5 * time.Second
 // says why it could not be made, wrapping [sandbox.ErrSaveNoRoom] where the box
 // lacks room ([packNoRoom]), or that taker names none. Packed first so what the take's scrub reads
 // (tokens renewed in the box) is read once the session is packed.
-func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string) (sandbox.SessionArchive, error) {
+func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker, session string) (sandbox.SessionArchive,
+	error) {
 	saves, ok := r.harness.(saver)
 	if !ok {
 		return sandbox.SessionArchive{}, nil
@@ -555,7 +572,7 @@ func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string
 	pack := uuid.NewString()
 	paths := PathsFor(box)
 	staged, dest := paths.SessionSaveStaging(taker, pack), paths.SessionSave(taker, pack)
-	rec, packed, err := r.packNow(ctx, box, func(paths Paths, rec sessionRecord) (string, error) {
+	rec, packed, err := r.packNow(ctx, box, session, func(paths Paths, rec sessionRecord) (string, error) {
 		return saves.PackSave(paths, rec, staged, dest)
 	})
 	if err != nil || !packed {
@@ -623,7 +640,7 @@ func (r *Runner) ReleaseSave(ctx context.Context, box sandbox.Sandbox, path stri
 // names no session, the save removed either way. A path that is no save of
 // the box's ([savePath]) is refused unread: a take of a save streams that save
 // and no other file of the box.
-func (r *Runner) openSave(ctx context.Context, box sandbox.Sandbox, path string) (sandbox.SessionArchive,
+func (r *Runner) openSave(ctx context.Context, box sandbox.Sandbox, path, bound string) (sandbox.SessionArchive,
 	io.ReadCloser, func(context.Context), error) {
 
 	paths := PathsFor(box)
@@ -632,7 +649,7 @@ func (r *Runner) openSave(ctx context.Context, box sandbox.Sandbox, path string)
 			"box, and a take of a save streams one and nothing else", path)
 	}
 	release := func(ctx context.Context) { r.dropPack(ctx, box, path) }
-	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
+	rec, refusal, err := r.readSessionRecord(ctx, box, paths, bound)
 	var described *sandbox.SessionArchive
 	if err == nil && refusal == "" {
 		described, err = r.archiveAt(ctx, box, path, rec)
@@ -675,11 +692,11 @@ func savePath(paths Paths, path string) bool {
 // refused the record before any script ran, saying why, where the pack failed,
 // with what it said ([packFailed]), or where a save's box lacked the room to
 // pack it, wrapping [sandbox.ErrSaveNoRoom] ([packNoRoom]).
-func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
+func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox, bound string,
 	pack func(paths Paths, rec sessionRecord) (string, error)) (sessionRecord, bool, error) {
 
 	paths := PathsFor(box)
-	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
+	rec, refusal, err := r.readSessionRecord(ctx, box, paths, bound)
 	if err != nil {
 		return sessionRecord{}, false, fmt.Errorf("executor: reading which session the run worked in: %w", err)
 	}
@@ -713,8 +730,22 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
 // readSessionRecord is the box's record of the session its run worked in
 // ([Paths.SessionRecord]), read and parsed — or why it could not be read, a
 // refusal of a path that holds no file the engine reads, which names no
-// session.
-func (r *Runner) readSessionRecord(ctx context.Context, box sandbox.Sandbox, paths Paths) (sessionRecord, string, error) {
+// session. A minting harness's session is the one bound to its job, bound,
+// held to what its box says ([Runner.boundRecord]).
+func (r *Runner) readSessionRecord(ctx context.Context, box sandbox.Sandbox, paths Paths,
+	bound string) (sessionRecord, string, error) {
+
+	rec, refusal, err := readRecordedSession(ctx, box, paths)
+	if err != nil || refusal != "" || !r.MintsSession() {
+		return rec, refusal, err
+	}
+	rec, err = r.boundRecord(ctx, box, paths, rec, bound)
+	return rec, "", err
+}
+
+// readRecordedSession is [Runner.readSessionRecord] as the box records it,
+// whoever's harness minted the id it names.
+func readRecordedSession(ctx context.Context, box sandbox.Sandbox, paths Paths) (sessionRecord, string, error) {
 	recorded, refusal, err := readWhole(ctx, box, paths.SessionRecord(), "the record of the session its harness ran in")
 	if err != nil || refusal != "" {
 		return sessionRecord{}, refusal, err
@@ -761,21 +792,21 @@ const (
 func packDigest(paths Paths, session, staged string) string {
 	q := sandbox.ShellQuote
 	return fmt.Sprintf(`{ d=$(cksum < %[1]s 2> /dev/null) && %[2]s || { printf '%%s\n' %[3]s > %[4]s 2> /dev/null; false; }; }`,
-		q(staged+"/capture"), recordDigest(paths, session, "d"), q(digestUnrecorded), q(staged+"/error"))
+		q(staged+"/capture"), recordDigest(paths, session), q(digestUnrecorded), q(staged+"/error"))
 }
 
 // recordDigest is the part of a box's script that records the line `<session>
-// <digest>` — the values of the shell variables session and digest name — in
-// the box's list of the archives its copy holds ([Paths.SessionDigests]) and
-// reads it back: true only where the digest is not empty and the line is
-// there after. READ BACK, never taken on the append's word: a write a full
+// <digest>` — the values of the shell variable session names and of d, which
+// every caller's cksum fills — in the box's list of the archives its copy
+// holds ([Paths.SessionDigests]) and reads it back: true only where the digest
+// is not empty and the line is there after. READ BACK, never taken on the append's word: a write a full
 // disk lost can be one its writer was told landed. What every pack records
 // before it moves its archive into place ([packDigest]), and every restore
 // before its run continues what it restored ([claudeSessionGate],
 // [openCodeSessionGate]).
-func recordDigest(paths Paths, session, digest string) string {
-	return fmt.Sprintf(`[ -n "$%[2]s" ] && { printf '%%s %%s\n' "$%[1]s" "$%[2]s" >> %[3]s; } 2> /dev/null && grep -qxF "$%[1]s $%[2]s" %[3]s 2> /dev/null`,
-		session, digest, sandbox.ShellQuote(paths.SessionDigests()))
+func recordDigest(paths Paths, session string) string {
+	return fmt.Sprintf(`[ -n "$d" ] && { printf '%%s %%s\n' "$%[1]s" "$d" >> %[2]s; } 2> /dev/null && grep -qxF "$%[1]s $d" %[2]s 2> /dev/null`,
+		session, sandbox.ShellQuote(paths.SessionDigests()))
 }
 
 // digestUnrecorded is why a pack whose digest the box did not record failed

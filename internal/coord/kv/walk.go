@@ -1,4 +1,4 @@
-// How this package reads a whole bucket: ONE ORDERED PASS over the client's key
+// How this package reads a whole bucket: ONE ORDERED PASS over the bucket's key
 // watcher, carrying each key with its value and filtered at the broker, then
 // CERTIFIED against the stream leader's per-subject key index. Never a key
 // listing plus a Get per key (a round trip per key on top of a consumer per
@@ -73,7 +73,6 @@ func listUnder(ctx context.Context, js jetstream.JetStream, read *leaderReader, 
 	if err != nil {
 		return err
 	}
-	defer p.close()
 	latest, err := p.walk(ctx, what)
 	// STOPPED THE MOMENT THE PASS ENDS, before certifying: later writes go into
 	// the client's blocking 256-entry handoff, which nothing reads, and would
@@ -82,7 +81,7 @@ func listUnder(ctx context.Context, js jetstream.JetStream, read *leaderReader, 
 	if err != nil {
 		return err
 	}
-	if err := p.certify(ctx, read, what, latest); err != nil {
+	if err := certify(ctx, read, what, latest, p.index); err != nil {
 		return err
 	}
 	return visitLive(latest, visit)
@@ -111,10 +110,9 @@ func watchUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyVal
 	if err != nil {
 		return nil, nil, err
 	}
-	defer p.close()
 	latest, err := p.walk(ctx, what)
 	if err == nil {
-		err = p.certify(ctx, read, what, latest)
+		err = certify(ctx, read, what, latest, p.index)
 	}
 	if err != nil {
 		p.stop()
@@ -123,177 +121,131 @@ func watchUnder(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyVal
 	return latest, p.w, nil
 }
 
-// keyIndex is what the certification's index read answered.
-type keyIndex struct {
-	names []string
-	err   error
-}
-
-// pass is one certified pass under way: the watcher it reads, and the key
-// index read running BESIDE it, started first so its round trips overlap the
-// consumer's creation (an index taken before the reads that act on it is
-// valid). [pass.close] cancels and joins the index goroutine on every return.
-// Stopping the watcher is the caller's: a listing stops it at the pass's end,
-// and a watch reads on.
+// pass is one certified pass under way: the key index it is certified
+// against, and the watcher it reads. Stopping the watcher is the caller's: a
+// listing stops it at the pass's end, and a watch reads on.
 type pass struct {
-	w       jetstream.KeyWatcher
-	indexed chan keyIndex
-	index   keyIndex
-	joined  bool // index holds the answer and indexed has been read
-	cancel  context.CancelFunc
+	w     jetstream.KeyWatcher
+	index []string      // the keys the leader's index named before the pass began
+	quiet time.Duration // how long it may go without a delivery ([passQuiet])
 }
 
-// beginPass starts the key index read under keys, then opens the watcher the
-// pass reads.
+// beginPass reads the key index under keys, then opens the watcher the pass
+// reads: an index taken before the reads that act on it is valid.
+//
+// THE INDEX FIRST, never beside the consumer: across a link its reply crosses
+// behind whatever the consumer is already delivering, so asked once a run's
+// value had started crossing it waited the minutes that value takes and was
+// re-asked every second until the lookup ceiling failed the listing.
 func beginPass(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
 	keys, what string) (*pass, error) {
 
-	indexCtx, cancel := context.WithCancel(ctx)
-	p := &pass{indexed: make(chan keyIndex, 1), cancel: cancel}
-	go func() {
-		names, err := keysUnder(indexCtx, js, kv, keys)
-		p.indexed <- keyIndex{names: names, err: err}
-	}()
+	names, err := keysUnder(ctx, js, kv, keys)
+	if err != nil {
+		return nil, unavailable("read "+what, fmt.Errorf("read its key index to certify the pass: %w", err))
+	}
 	// Watch rather than WatchAll, so the filter narrows server-side too. NOT
 	// IgnoreDeletes: a key removed mid-pass arrives as its value then its
 	// marker, and dropping the marker would list the value it replaced.
 	w, err := kv.Watch(ctx, keys)
 	if err != nil {
-		p.close()
 		return nil, unavailable("read "+what, err)
 	}
-	p.w = w
-	return p, nil
+	return &pass{w: w, index: names, quiet: passQuiet(kv, keys)}, nil
 }
 
-// walk runs the pass to its end — [passOver] gives both of its ends — keeping
-// the index when the pass received it.
+// walk runs the pass to its end; [passOver] gives both of its ends.
 func (p *pass) walk(ctx context.Context, what string) (map[string]jetstream.KeyValueEntry, error) {
-	latest, index, answered, err := passOver(ctx, p.w, what, p.indexed)
-	if answered {
-		p.index, p.joined = index, true
-	}
-	return latest, err
-}
-
-// certify waits for the index when the pass ended before it answered, and
-// certifies latest against it — see [certify].
-func (p *pass) certify(ctx context.Context, read *leaderReader, what string,
-	latest map[string]jetstream.KeyValueEntry) error {
-
-	if !p.joined {
-		p.index, p.joined = <-p.indexed, true
-	}
-	if p.index.err != nil {
-		return unavailable("read "+what, fmt.Errorf("read its key index to certify the pass: %w", p.index.err))
-	}
-	return certify(ctx, read, what, latest, p.index.names)
+	return passOver(ctx, p.w, what, p.quiet)
 }
 
 // stop ends the pass's consumer.
 func (p *pass) stop() { _ = p.w.Stop() }
 
-// close cancels the index read and waits for it.
-func (p *pass) close() {
-	p.cancel()
-	if !p.joined {
-		<-p.indexed
-		p.joined = true
-	}
-}
-
 // watchWalk is a pass NOTHING certifies — the marker sweep's — over a watcher
-// it opens and stops on every return, so no early return leaks one. [passOver]
-// says why its quiet counts from the start.
+// it opens and stops on every return, so no early return leaks one.
 //
-// METADATA ONLY: every sweep decides on a key's operation, revision and
-// instant, never its value, and a bucket of activation bodies or run logs
-// walked whole moves megabytes across a link for nothing.
+// HEADERS ONLY ([headerWatcher]): every sweep decides on a key's operation,
+// revision and instant, never its value, and a bucket of activation bodies or
+// run logs walked whole moves megabytes across a link for nothing.
 func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (map[string]jetstream.KeyValueEntry, error) {
-	// Watch, not IgnoreDeletes, for [beginPass]'s reasons: the sweep is after
-	// the markers.
-	w, err := kv.Watch(ctx, keys, jetstream.MetaOnly())
+	h, ok := kv.(headerWatcher)
+	if !ok {
+		return nil, fmt.Errorf("coord/kv: read %s: %s is not a bucket settled where it was opened, "+
+			"so nothing watches its headers alone", what, kv.Bucket())
+	}
+	// Markers included, for [beginPass]'s reasons: the sweep is after them.
+	w, err := h.watchHeaders(ctx, keys)
 	if err != nil {
 		return nil, unavailable("read "+what, err)
 	}
 	defer func() { _ = w.Stop() }()
-	latest, _, _, err := passOver(ctx, w, what, nil)
-	return latest, err
+	return passOver(ctx, w, what, passIdle)
 }
 
 // passOver is the PASS: one walk over an ordered ephemeral consumer, answering
 // the newest revision it saw of each key, markers included (a key deleted
 // mid-pass arrives as its value, then its marker; [certify] rereads markers).
 // A closed channel is a failure. The pass ENDS on the nil entry, or after
-// [passIdle] without a delivery once the index has answered (from the start
-// when indexed is nil: a marker the sweep misses goes next tick). The nil entry
-// NEVER comes for a pass whose pending messages were all removed (aged, purged,
-// swept) before it reached them, so waiting would hold a deadline-free caller
-// and a server-side consumer for ever; ending is safe because [certify] reads
-// every indexed key it lacks. It says whether it took the index, so the caller
-// reads the channel only when it did not. The watcher stays running: the
-// caller stops it ([listUnder]) or reads on ([watchUnder]).
+// quiet without a delivery: a listing's index answered before it began, and a
+// marker the sweep misses goes next tick. The nil entry NEVER comes for a pass
+// whose pending messages were all removed (aged, purged, swept) before it
+// reached them, so waiting would hold a deadline-free caller and a
+// server-side consumer for ever; ending is safe because [certify] reads every
+// indexed key it lacks. The watcher stays running: the caller stops it
+// ([listUnder]) or reads on ([watchUnder]).
 func passOver(ctx context.Context, w jetstream.KeyWatcher, what string,
-	indexed <-chan keyIndex) (map[string]jetstream.KeyValueEntry, keyIndex, bool, error) {
+	quiet time.Duration) (map[string]jetstream.KeyValueEntry, error) {
 
 	latest := map[string]jetstream.KeyValueEntry{}
-	var (
-		index    keyIndex
-		answered bool
-		// quiet is armed when the index answers (at the start without one) and
-		// re-armed by each later delivery; nil until then, so it never ends a
-		// pass before there is something to certify it against.
-		quiet *time.Timer
-		idle  <-chan time.Time
-	)
-	if indexed == nil {
-		quiet = time.NewTimer(passIdle)
-		idle = quiet.C
-	}
-	defer func() {
-		if quiet != nil {
-			quiet.Stop()
-		}
-	}()
+	// Re-armed by each delivery.
+	still := time.NewTimer(quiet)
+	defer still.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return nil, index, answered, unavailable("read "+what, ctx.Err())
-		case index = <-indexed:
-			// Read once: a nil channel is never ready again.
-			indexed, answered = nil, true
-			quiet = time.NewTimer(passIdle)
-			idle = quiet.C
-		case <-idle:
-			// QUIET for a whole passIdle: waiting on removed messages or a
+			return nil, unavailable("read "+what, ctx.Err())
+		case <-still.C:
+			// QUIET for a whole quiet: waiting on removed messages or a
 			// consumer that stopped delivering. certify reads what it lacks.
-			return latest, index, answered, nil
+			return latest, nil
 		case kve, ok := <-w.Updates():
 			if !ok {
-				return nil, index, answered, unavailable("read "+what, errors.New("listing ended early"))
+				return nil, unavailable("read "+what, errors.New("listing ended early"))
 			}
 			// nil marks the end of the initial values.
 			if kve == nil {
-				return latest, index, answered, nil
+				return latest, nil
 			}
 			keep(latest, kve)
-			if quiet != nil {
-				quiet.Reset(passIdle)
-			}
+			still.Reset(quiet)
 		}
 	}
 }
 
-// passIdle is how long a pass may go without a delivery, once the key index has
-// answered, before it is ended and [certify] reads what it lacks.
+// passIdle is how long a pass may go without a delivery in process before it
+// is ended and [certify] reads what it lacks; across a link it grows by the crossing of the largest value the
+// pass may deliver ([passQuiet]).
 //
-// Five seconds is the client's own idleness interval for this consumer (nats.go
-// js.go orderedHeartbeatsInterval), where the broker itself calls it idle. A
+// Five seconds is the client's own idleness interval for an ordered consumer
+// (nats.go js.go orderedHeartbeatsInterval), where the broker calls it idle. A
 // delivering pass re-arms it on every entry. Shorter, a busy server's pause
 // turns the rest of a large pass into a leader read per key; longer, a pass
 // that met removed messages holds its caller longer. A cost bound, never a
 // correctness one ([passOver]).
 const passIdle = 5 * time.Second
+
+// passQuiet is how long a pass over keys of kv may go without a delivery:
+// the bucket's quiet for the largest value under keys ([settledBucket.quiet]),
+// else [passIdle]. Across a link a run's value at its bound takes three
+// minutes to cross, so at passIdle a pass that met one ended before it
+// arrived and read every record after it again, one leader read each.
+func passQuiet(kv jetstream.KeyValue, keys string) time.Duration {
+	if b, ok := kv.(settledBucket); ok {
+		return b.quiet(keys)
+	}
+	return passIdle
+}
 
 // keep records kve unless the listing already holds a newer revision of its
 // key. A pass delivers in stream order, so its later delivery IS the newer one;
@@ -426,22 +378,54 @@ type leaderReader struct {
 	leader *jsapi.Leader
 	bucket string
 	pre    string // the subject prefix a key is written under
+
+	// holding and pace are the bucket's ([settledBucket]): each read waits
+	// as its key's class says ([leaderReader.leaderFor]). A bucket opened
+	// elsewhere declares none, and every read keeps the term.
+	holding holding
+	pace    time.Duration
+	// size is a value size the caller knows from a record naming it
+	// ([sizedReader]), in place of the class's bound; 0 reads by class.
+	size int
 }
 
 // newLeaderReader addresses the leader reads of kv's stream in the API js
-// speaks. For a bucket whose values are budgeted to what one key holds
-// ([holdingLarge]), a read waits as a writer's does (jsapi.Leader.Deciding) for
-// the largest message the stream holds, a value plus [kvHeaderBytes], to cross
-// at the bucket's pace: what [Reach.readCrossing] counts it at.
+// speaks, each given the time its key's class says ([leaderReader.leaderFor]).
 func newLeaderReader(js jetstream.JetStream, kv jetstream.KeyValue) (*leaderReader, error) {
 	leader, err := jsapi.NewLeader(js, bucketStream(kv))
 	if err != nil {
 		return nil, err
 	}
-	if b, ok := kv.(settledBucket); ok && b.carries > 0 {
-		leader = leader.Deciding(b.carries+kvHeaderBytes, b.pace)
+	r := &leaderReader{leader: leader, bucket: kv.Bucket(), pre: bucketSubjects(kv)}
+	if b, ok := kv.(settledBucket); ok {
+		r.holding, r.pace = b.holding, b.pace
 	}
-	return &leaderReader{leader: leader, bucket: kv.Bucket(), pre: bucketSubjects(kv)}, nil
+	return r, nil
+}
+
+// leaderFor is the leader a read of key asks: a reply as large as the value
+// the caller named ([sizedReader]) is given its arrival (jsapi's
+// Leader.Carrying); else key's class decides, at its bound plus
+// [kvHeaderBytes] and the bucket's pace: a deciding class its crossing alone
+// (Leader.Deciding, what [Reach.readCrossing] counts for a run's value), a
+// carrying class its arrival, a class read at the term nothing more.
+//
+// THE CROSSING ALONE for a deciding class, never the handling: a request a
+// member dropped across an election is asked again two seconds later, inside
+// the shortest caller budget (five seconds in process), which counting the
+// handling would push past (jsapi's Leader.Deciding).
+func (r *leaderReader) leaderFor(key string) *jsapi.Leader {
+	if r.size > 0 {
+		return r.leader.Carrying(r.size+kvHeaderBytes, r.pace)
+	}
+	c := r.holding.of(key)
+	switch c.reply {
+	case replyDeciding:
+		return r.leader.Deciding(c.bound+kvHeaderBytes, r.pace)
+	case replyCarrying:
+		return r.leader.Carrying(c.bound+kvHeaderBytes, r.pace)
+	}
+	return r.leader
 }
 
 // last answers the newest message on key's subject as the stream leader holds
@@ -449,7 +433,7 @@ func newLeaderReader(js jetstream.JetStream, kv jetstream.KeyValue) (*leaderRead
 // message at all is ErrKeyNotFound, and a delete or purge marker is an entry
 // whose Operation says so.
 func (r *leaderReader) last(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
-	msg, err := r.leader.Last(ctx, r.pre+key)
+	msg, err := r.leaderFor(key).Last(ctx, r.pre+key)
 	if errors.Is(err, jsapi.ErrNoMessage) {
 		return nil, jetstream.ErrKeyNotFound
 	}
@@ -465,7 +449,7 @@ func (r *leaderReader) last(ctx context.Context, key string) (jetstream.KeyValue
 // [jetstream.ErrKeyNotFound], as GetRevision says; a replica also says it of a
 // revision not applied YET, the answer this exists not to give.
 func (r *leaderReader) at(ctx context.Context, key string, revision uint64) (jetstream.KeyValueEntry, error) {
-	msg, err := r.leader.At(ctx, revision)
+	msg, err := r.leaderFor(key).At(ctx, revision)
 	switch {
 	case errors.Is(err, jsapi.ErrNoMessage):
 		return nil, jetstream.ErrKeyNotFound
@@ -526,8 +510,7 @@ func getLatest(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 // the pointer): its read is given the time that reply takes to arrive, its
 // handling and its crossing at the bucket's pace (jsapi's Leader.Carrying),
 // beyond the read term, so a reply of megabytes across a link is asked for
-// once and waited for whole. Never [holdingLarge]'s bound for the bucket: the
-// small records beside it keep the read term.
+// once and waited for whole, and no longer than its own size takes.
 func getSized(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue,
 	key string, valueBytes int) (jetstream.KeyValueEntry, error) {
 
@@ -538,25 +521,21 @@ func getSized(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValue
 	return read.live(ctx, key)
 }
 
-// sizedReader is the leader reader [getSized] reads through.
+// sizedReader is the leader reader [getSized] reads through: the bucket's,
+// each read sized by valueBytes in place of its class's bound.
 func sizedReader(js jetstream.JetStream, kv jetstream.KeyValue, valueBytes int) (*leaderReader, error) {
 	read, err := newLeaderReader(js, kv)
 	if err != nil {
 		return nil, err
 	}
-	var pace time.Duration
-	if b, ok := kv.(settledBucket); ok {
-		pace = b.pace
-	}
-	read.leader = read.leader.Carrying(valueBytes+kvHeaderBytes, pace)
+	read.size = valueBytes
 	return read, nil
 }
 
 // operationOf reads what a stored KV message IS from its headers by the
 // client's own rule (nats.go jetstream/kv.go get): decoded differently from the
-// pass, it would list a key the pass dropped or drop one it listed. The
-// KV-Operation values are the KV protocol's (ADR-8), which neither library
-// exports. Headers that do not decode are [errUndecodableHeaders].
+// pass, it would list a key the pass dropped or drop one it listed. Headers
+// that do not decode are [errUndecodableHeaders].
 func operationOf(raw []byte) (jetstream.KeyValueOp, error) {
 	if len(raw) == 0 {
 		return jetstream.KeyValuePut, nil
@@ -565,22 +544,29 @@ func operationOf(raw []byte) (jetstream.KeyValueOp, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%w: %w", errUndecodableHeaders, err)
 	}
+	return operationOfHeader(hdr), nil
+}
+
+// operationOfHeader is [operationOf] of headers already decoded, as a watch
+// delivers them ([settledBucket.watch]). The KV-Operation values are the KV
+// protocol's (ADR-8), which neither library exports.
+func operationOfHeader(hdr nats.Header) jetstream.KeyValueOp {
 	if op := hdr.Get(server.KVOperation); op != "" {
 		switch op {
 		case kvOperationDelete:
-			return jetstream.KeyValueDelete, nil
+			return jetstream.KeyValueDelete
 		case string(server.KVOperationValuePurge):
-			return jetstream.KeyValuePurge, nil
+			return jetstream.KeyValuePurge
 		}
-		return jetstream.KeyValuePut, nil
+		return jetstream.KeyValuePut
 	}
 	switch hdr.Get(jetstream.MarkerReasonHeader) {
 	case server.JSMarkerReasonMaxAge, server.JSMarkerReasonPurge:
-		return jetstream.KeyValuePurge, nil
+		return jetstream.KeyValuePurge
 	case server.JSMarkerReasonRemove:
-		return jetstream.KeyValueDelete, nil
+		return jetstream.KeyValueDelete
 	}
-	return jetstream.KeyValuePut, nil
+	return jetstream.KeyValuePut
 }
 
 // kvOperationDelete is the KV-Operation value of a delete marker.

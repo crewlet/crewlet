@@ -63,3 +63,36 @@ func TestATokenVerifiesUnderItsKeysPublicHalf(t *testing.T) {
 		}
 	}
 }
+
+func sec1Of(t *testing.T, key *ecdsa.PrivateKey) string {
+	t.Helper()
+	der, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}))
+}
+
+// An OpenSSL `EC PRIVATE KEY` (SEC 1), as Apple Ads asks a person to make,
+// reads as the same P-256 key its PKCS #8 form does; SEC 1 of another curve,
+// a SEC 1 body under the PKCS #8 label and two blocks are refused.
+//
+// Mutation: drop the SEC 1 case, and an Apple Ads key never reads; parse SEC 1
+// without the curve check, and a P-384 key is taken for one.
+func TestASEC1KeyReadsAsItsP256Key(t *testing.T) {
+	t.Parallel()
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := es256.ParseKey(sec1Of(t, priv))
+	if err != nil || !key.Equal(priv) {
+		t.Fatalf("a SEC 1 P-256 key read as %v (%v)", key, err)
+	}
+	p384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	der, _ := x509.MarshalECPrivateKey(priv)
+	mislabelled := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	for name, bad := range map[string]string{"SEC 1 P-384": sec1Of(t, p384), "SEC 1 under the PKCS #8 label": mislabelled,
+		"two SEC 1 keys": sec1Of(t, priv) + sec1Of(t, priv)} {
+		if _, err := es256.ParseKey(bad); err == nil {
+			t.Errorf("%s read as a P-256 key", name)
+		}
+	}
+}

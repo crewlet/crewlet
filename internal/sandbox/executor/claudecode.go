@@ -108,6 +108,17 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		// reach is its box's cell's to bound (`container` and `e2b` keep it off the
 		// engine host, `direct` does not) beside the run env's credentials.
 		"--permission-mode", "bypassPermissions",
+	}
+	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
+	// host have none: on 2.1.330, under bypassPermissions, both are refused as
+	// "disabled for this session, in subagents as well as here", and a
+	// repository's settings allowing them, or an agent of its own listing them,
+	// do not bring them back. Before "$@", whose first value is a flag, so the
+	// list takes these two alone.
+	if req.WebDenied {
+		parts = append(parts, "--disallowedTools", "WebFetch", "WebSearch")
+	}
+	parts = append(parts,
 		// WHAT THE SCRIPT DECIDED BY THE HARNESS'S RELEASE: the run's settings, and
 		// the session, NAMED ON EVERY RUN ([claudeSessionGate]): a new one under the
 		// minted id (`--session-id`), a continued one with `--resume` and never
@@ -116,7 +127,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		// reuses the prompt its first request recorded, so a later launch's
 		// standing instructions would never be read.
 		`"$@"`,
-	}
+	)
 	// THE SYSTEM TEXT IS APPENDED, NOT SUBSTITUTED (never argv, [Paths.System]):
 	// Claude Code's own prompt stays whole, being how to drive its tools. Passed
 	// only for a run that has system text.
@@ -198,6 +209,12 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		sandbox.ShellQuote(paths.SessionRecord()))
+	// THE SIGN-IN STAYS THE HARNESS'S: its own environment keeps it, and the
+	// file it runs ahead of every command its model runs takes it out of that
+	// command's ([claudeToolEnv]).
+	if len(req.SignInEnv) > 0 {
+		line(`export CLAUDE_ENV_FILE=%s`, sandbox.ShellQuote(paths.ClaudeToolEnv()))
+	}
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(claudeCapture(paths))
 	line(`exit "$code"`)
@@ -412,7 +429,7 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	// own instead, and the copy restored is never gone on past. Recorded
 	// before the restore, a restore that failed after the box's own copy
 	// went would leave the line naming a copy that does not hold it.
-	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s", "d"), q(restoreDigestUnrecorded))
+	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(staged))
 	line(`fi`)
@@ -739,11 +756,15 @@ func floorArgs(version string) string {
 // ([Paths.ClaudeSkillsSettings]). EVERY SETTINGS FILE HAS A PINNED COPY BESIDE IT
 // ([claudeSettingsPin]), handed in its place to a release that takes it
 // ([claudePinGate]).
-func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
+func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, _ Session,
+	paths Paths) (string, error) {
 	if req.System != "" {
 		if err := box.WriteFile(ctx, paths.System(), []byte(req.System)); err != nil {
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
+	}
+	if err := writeClaudeToolEnv(ctx, box, req, paths); err != nil {
+		return "", err
 	}
 	pin := claudeSettingsPin(claudeCodeWindow(req.Model))
 	if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSettings(), paths.ClaudeSettingsPinned(),
@@ -787,6 +808,32 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		}
 	}
 	return paths.MCPConfig(), nil
+}
+
+// writeClaudeToolEnv writes, for a run handed sign-in variables
+// ([sandbox.RunRequest.SignInEnv]), the file [Paths.ClaudeToolEnv] holding
+// [claudeToolEnv] of them.
+func writeClaudeToolEnv(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
+	if len(req.SignInEnv) == 0 {
+		return nil
+	}
+	names, err := toolEnvOmitted(req.SignInEnv)
+	if err != nil {
+		return err
+	}
+	if err = box.WriteFile(ctx, paths.ClaudeToolEnv(), claudeToolEnv(names)); err != nil {
+		return fmt.Errorf("executor: writing the run's tool environment file: %w", err)
+	}
+	return nil
+}
+
+// claudeToolEnv is the file CLAUDE_ENV_FILE names for a run whose sign-in is
+// names: one `unset` of them. Claude Code runs that file in the shell of each
+// command its model runs, ahead of the command, and reads its own sign-in from
+// its process environment, which the file never reaches (measured on 2.1.330:
+// the commands lacked every name, and every request carried the sign-in).
+func claudeToolEnv(names []string) []byte {
+	return []byte("unset " + strings.Join(names, " ") + "\n")
 }
 
 // writeClaudeSettingsPair writes one of a run's settings files twice: settings
@@ -1738,6 +1785,7 @@ func (ClaudeCode) notesOffWhy() string {
 // artifacts is what a Claude Code run leaves in its box of its own.
 func (ClaudeCode) artifacts(p Paths) (files, dirs []string) {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-			p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned()},
+			p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(),
+			p.ClaudeToolEnv()},
 		[]string{p.ClaudeSkillsPlugin()}
 }

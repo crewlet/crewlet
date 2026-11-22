@@ -154,7 +154,7 @@ func fakeRunners(play fakePlayer) map[string]sandbox.Runner {
 		// WHAT THE HARNESS'S RUNNER STATES, so a fake run is read as its harness's is.
 		runner.Thread = sandbox.ThreadTraitsOf(real[name])
 		if r, ok := real[name].(*executor.Runner); ok {
-			runner.Pin, runner.NotesOff = r.PinnedWindow, r.NotesOffWhy()
+			runner.Pin, runner.NotesOff, runner.Fresh = r.PinnedWindow, r.NotesOffWhy(), r.StartsFresh()
 		}
 		runners[name] = runner
 	}
@@ -2017,7 +2017,8 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 		return
 	}
 	if agent.RunEnded(ctx, harness.RunEnd{Answer: ended.Text, Error: ended.Error,
-		Failed: !ended.Success, Event: ended.Event, Limits: ended.Limits, At: ended.At}) {
+		Failed: !ended.Success, Event: ended.Event, Limits: ended.Limits, NoLimit: ended.NoLimitExit,
+		At: ended.At}) {
 		log.InfoContext(ctx, "executor_run_spent_its_entry",
 			"turn_id", run.TurnID, "seat", run.AgentHandle,
 			"provider_key", run.Launch.ProviderKey,
@@ -2879,6 +2880,8 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// gets, its row read through the same router's reads and its object
 		// fetched through the same store. See executorrestore.go.
 		Restore: executorRestore{engine: e},
+		// AND WHETHER A MINTED SESSION'S ID IS ANY TURN'S, through the same reads.
+		Holders: executorRestore{engine: e},
 		// A seat's inbox is held while one of its runs holds it or an
 		// answer's resume is owed, and a retried resume asks the seat's
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
@@ -4138,13 +4141,20 @@ type executorRun struct {
 	model string
 	// effort is the entry's reasoning effort, passed beside the model.
 	effort string
-	files  map[string]string
-	env    map[string]string
+	// webDenied is the entry's `web_tools: denied`, which its executor honours
+	// as its runs on the engine host do ([sandbox.RunRequest.WebDenied]).
+	webDenied bool
+	files     map[string]string
+	env       map[string]string
 
 	// signIn is env without the integrations' box defaults and the seat's
 	// own credentials for a tool: what the run's sign-in is judged on, since
 	// neither ever signs a harness in.
 	signIn map[string]string
+
+	// signInNames is the variables of env that sign the harness in
+	// ([signInNames], [sandbox.Spec.SignInEnv]).
+	signInNames []string
 
 	// homePaths is the variables naming the integrations' box files, each to
 	// its path under the box's home, which the launch joins onto the box's
@@ -4154,11 +4164,6 @@ type executorRun struct {
 	// withheld is the seat's integration credentials kept out of env because
 	// the harness signs in by their names, which the launch says.
 	withheld []string
-
-	// signInNames is the names of env that sign the harness in
-	// ([signInNames]), which its runner keeps out of the model's shell
-	// ([sandbox.RunRequest.SignInEnv]).
-	signInNames []string
 }
 
 // newExecutorRun is the [executorRun] of a box run on agent, the executor-chain
@@ -4196,20 +4201,22 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	credentials := integrationsOwn(agent, seat.credentials)
 	env := underlay(underlay(maps.Clone(seat.env), entry), integrationsOwn(agent, seat.defaults))
 	maps.Copy(env, credentials)
+	profile := agent.Profile()
 	run := executorRun{
-		model:     agent.ModelArgument(),
-		effort:    agent.Effort(),
-		env:       env,
-		signIn:    signIn,
-		files:     agent.SandboxCredentials(),
-		homePaths: integrationsOwn(agent, seat.homePaths),
+		model:       agent.ModelArgument(),
+		effort:      agent.Effort(),
+		webDenied:   profile.EffectiveWebTools() == harnessprofile.WebToolsDenied,
+		env:         env,
+		signIn:      signIn,
+		signInNames: signInNames(agent, entry),
+		files:       agent.SandboxCredentials(),
+		homePaths:   integrationsOwn(agent, seat.homePaths),
 	}
 	for _, name := range slices.Sorted(maps.Keys(seat.credentials)) {
 		if _, kept := credentials[name]; !kept {
 			run.withheld = append(run.withheld, name)
 		}
 	}
-	run.signInNames = signInNames(agent, entry, env)
 	// A LOGIN THE HARNESS KEEPS IN ITS OWN DATABASE travels as the document its
 	// export printed, mapped where the runner imports it from — the runner's
 	// path, not the profile's, because the runner is what reads it
@@ -4223,19 +4230,23 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	return run
 }
 
-// signInNames is the names of the run's env that sign agent's harness in: a
-// name its profile signs in by, and a credential the entry's own env sets
-// ([entrySignInName]). Never a seat's or an integration's credential of
-// another name, which is the seat's work's own.
-func signInNames(agent *harness.Provider, entry, env map[string]string) []string {
-	var out []string
-	for _, name := range slices.Sorted(maps.Keys(env)) {
-		_, entrys := entry[name]
-		if slices.Contains(agent.CredentialEnvNames(), name) || (entrys && entrySignInName(agent, name)) {
-			out = append(out, name)
+// signInNames is the variables that sign agent's harness in from a run's
+// environment ([sandbox.Spec.SignInEnv]): the profile's own names
+// ([harnessprofile.Profile.CredentialEnvNames]) and each of the entry's
+// variables that is part of its sign-in ([entrySignInName]), such as a cloud
+// sign-in's key. A credential-named variable of the seat's own env counts only
+// under a profile's name: for a harness reading any provider's key it is as
+// likely a tool's token (a role.sandbox.env GITLAB_TOKEN), which its tools keep.
+func signInNames(agent *harness.Provider, entry map[string]string) []string {
+	profile := agent.Profile()
+	names := profile.CredentialEnvNames(entry)
+	for name := range entry {
+		if entrySignInName(agent, name) && !slices.Contains(names, name) {
+			names = append(names, name)
 		}
 	}
-	return out
+	slices.Sort(names)
+	return names
 }
 
 // integrationsOwn is what of vars, variables an integration puts in a box, the

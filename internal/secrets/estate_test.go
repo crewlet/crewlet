@@ -34,6 +34,9 @@ func TestTheEnginesNamespaceAndTheOperatorsNeverOverlap(t *testing.T) {
 		{"integration/", true, false},
 		{"INTEGRATION_ADSENSE_TOKEN", false, false},
 		{"integrations/adsense/refresh", false, false},
+		// A GROWTH PRODUCT'S RENEWED TOKEN, under the engine's own owner.
+		{"growth/meta_ads/token/read", true, true},
+		{"growth/", true, false},
 		{"MCP_LINEAR_TOKEN", false, false},
 		// NEITHER: an operator's name, and a slash under nobody's owner.
 		{"GITLAB_TOKEN", false, false},

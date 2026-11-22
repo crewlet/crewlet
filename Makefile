@@ -108,22 +108,23 @@ BIN := crewlet
 # does not merely flap — it cannot pass on a machine that speed, and the
 # failure reads as a hung test rather than as a budget nobody set.
 #
-# Thirty minutes is a hang detector sized against the worst LEGITIMATE run,
-# not against the worst run ever seen. On CI's own four-vCPU runners
-# internal/e2e completed green in 426.6s on main and 561.9s on a pull request
-# (both 2026-10-07); the pathological 1684.497s that once came within 115s of
-# this wall was a run that lost nine cluster-start attempts to unanswered
-# broker metadata requests, which is a defect that has been fixed rather than
-# a duration to budget for (see internal/jsprovision's Ask). Against the slower
-# green figure this is 3.2x, which is room for a runner a third that speed.
+# Forty-five minutes is a hang detector sized against the worst LEGITIMATE
+# run, not against the worst run ever seen: internal/sandbox/executor, whose
+# scrub-bound check reads live bytes under a stop-the-world GC at every 1% of
+# growth, measured 1,918 s under -race on a two-core slot (1,164 s on CI's
+# four-vCPU runners). 45 minutes is 1.4 times that. internal/e2e completed
+# green in 426.6s on main and 561.9s on a pull request (both 2026-10-07); its
+# pathological 1684.497s lost nine cluster-start attempts to unanswered broker
+# metadata requests, a defect that has been fixed rather than a duration to
+# budget for (see internal/jsprovision's Ask).
 #
 # It applies to every package because the flag is per test BINARY: a unit
-# package that hangs dies in thirty minutes rather than go's default ten,
+# package that hangs dies in forty-five minutes rather than go's default ten,
 # which is the cost of having a gate that can pass at all.
 #
 # AND IT IS THE ONLY DEADLINE A HUNG TEST MEETS. ci.yml sets no
 # `timeout-minutes`, so the outer bound is GitHub's own per-job default of six
-# hours — this fires twelve times sooner, and it is the one that fires
+# hours — this fires eight times sooner, and it is the one that fires
 # usefully: `go test` hitting its own deadline prints a full goroutine dump
 # naming what is stuck, where a job killed by the runner prints nothing at all.
 # A ceiling in the workflow would have to sit ABOVE this one to keep that true,
@@ -134,7 +135,7 @@ BIN := crewlet
 # the flag was handed an EMPTY value and `go test` parsed the package list as
 # its argument — `invalid value "./..." for flag -timeout`. `make test` and
 # therefore `make check` could not run at all.
-TEST_TIMEOUT := 30m
+TEST_TIMEOUT := 45m
 
 # -vet=off, because the vet `go test` runs by default is a DUPLICATE here and
 # not a gate of its own. It is twelve analyzers (cmd/go's defaultVetFlags), and
@@ -265,7 +266,7 @@ COMPANY ?=
 .DEFAULT_GOAL := help
 
 .PHONY: help build crewlet install fmt tidy image-context schema metrics-doc alarms-doc derived gate-answer ssh-held-words objects-answer broker-answer assistant-fixtures retention-alarms \
-        dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint \
+        dashboard dashboard-check dashboard-dev dashboard-test dashboard-lint notehelper notehelper-check \
         check fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test playwright-tree-test vet lint test test-norace test-cross test-solo \
         require-npm bench git test-gitproc test-capture chromium node playwright-tree \
         mattermost-up mattermost-down \
@@ -419,6 +420,49 @@ dashboard-check: $(UI)/node_modules ## fail if static/dashboard, static/artifact
 	    git status --porcelain --untracked-files=all --ignored=matching \
 	      -- $(UI_OUT) | grep -v '^. '; \
 	    echo "run: make dashboard && git add -A -- $(UI_OUT)"; } >&2; \
+	  exit 1; \
+	fi
+
+##@ The note helper
+
+# internal/notehelper runs IN a box, so the engine embeds a build per box arch,
+# committed as static/dashboard is (`go build ./...` stays one command on a
+# clean checkout) and held to its source by `notehelper-check` and ci.yml's
+# build job, the same commands. Byte for byte reproducible, so the bytes
+# depend on the source and go.mod alone: go.mod's own toolchain (never a newer
+# one `auto` would keep), -trimpath, no VCS stamp (it would change with every
+# commit), an empty build id, and gzipbuild's compress/gzip in place of the
+# gzip program, whose output is its version's. x/net/websocket is its one
+# module beyond std, as only it saves hand-rolling RFC 6455, which #1818's
+# ruling forbids; its version is in the build info, so its bumps rebuild
+# (.github/workflows/dependabot-notehelper.yml). `go doc ./internal/notehelper`.
+NOTEHELPER_OUT := internal/sandbox/executor/notehelper
+NOTEHELPER_GO := go$(shell sed -n 's/^go //p' go.mod)
+
+notehelper: ## rebuild the note helper's embedded builds into internal/sandbox/executor/notehelper (commit the result)
+	@set -e; tmp="$$(mktemp -d)"; mkdir -p $(NOTEHELPER_OUT); \
+	GOTOOLCHAIN=$(NOTEHELPER_GO) $(GO) build -o "$$tmp/gzipbuild" ./internal/notehelper/gzipbuild; \
+	for arch in amd64 arm64; do \
+	  GOTOOLCHAIN=$(NOTEHELPER_GO) CGO_ENABLED=0 GOOS=linux GOARCH=$$arch GOAMD64=v1 GOARM64=v8.0 \
+	    $(GO) build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" \
+	    -o "$$tmp/notehelper" ./internal/notehelper; \
+	  "$$tmp/gzipbuild" "$$tmp/notehelper" "$(NOTEHELPER_OUT)/notehelper-linux-$$arch.gz"; \
+	  rm -f "$$tmp/notehelper"; \
+	done; \
+	rm -f "$$tmp/gzipbuild"; rmdir "$$tmp"
+
+# Rebuild, then judge against the index, as dashboard-check does and for its
+# reasons: a changed build and one no commit carries both fail. A pull request
+# moving go.mod's toolchain or x/net without the rebuild fails here too.
+notehelper-check: notehelper ## fail if internal/sandbox/executor/notehelper is not what internal/notehelper builds (ci: build + vet)
+	@untracked="$$(git ls-files --others -- $(NOTEHELPER_OUT))" || exit 1; \
+	if ! git diff --exit-code --stat -- $(NOTEHELPER_OUT) || [ -n "$$untracked" ]; then \
+	  { echo; \
+	    echo "$(NOTEHELPER_OUT) is not what internal/notehelper builds at go.mod's toolchain and modules."; \
+	    git status --porcelain --untracked-files=all --ignored=matching \
+	      -- $(NOTEHELPER_OUT) | grep -v '^. '; \
+	    echo "Fix: run 'make notehelper', then commit both builds:"; \
+	    echo "  git add $(NOTEHELPER_OUT)/notehelper-linux-amd64.gz $(NOTEHELPER_OUT)/notehelper-linux-arm64.gz"; } >&2; \
 	  exit 1; \
 	fi
 
@@ -648,7 +692,7 @@ SUITE_ENV = $(REQUIRED) $(GIT_ENV) $(CHROMIUM_ENV) $(NODE_FLOOR_ENV) $(PLAYWRIGH
 # environment and a sub-make inherits the parent's command line, so a value
 # exported in the shell or given to `make check` would run one shard of each
 # half and print that every gate passed.
-check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test playwright-tree-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test ## every gate CI runs on a PR
+check: fmt-check tidy-check signoff-check signoff-test git-test chromium-test node-test playwright-tree-test vet lint build test-cross dashboard-lint dashboard-check dashboard-test notehelper-check ## every gate CI runs on a PR
 	@status=0; \
 	$(MAKE) test TEST_SHARD= || status=1; \
 	$(MAKE) test-solo TEST_SHARD= || status=1; \
@@ -980,8 +1024,8 @@ require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCod
 	  echo "node is not on PATH, and three of the suite's gates need it."; \
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
 	  echo "  module over the frames a real engine produced,"; \
-	  echo "  internal/sandbox/executor runs the OpenCode plugins and the Pi"; \
-	  echo "  extension the engine embeds, and internal/browser/boxhelper installs a box's"; \
+	  echo "  internal/sandbox/executor runs the plugins, helpers and extensions"; \
+	  echo "  the engine embeds for its runners, and internal/browser/boxhelper installs a box's"; \
 	  echo "  Playwright tree with the npm node runs. Each FAILS without node"; \
 	  echo "  under the targets that run the suite"; \
 	  echo "  (CREWLET_REQUIRE_PREREQUISITES=1), but only after the whole"; \
