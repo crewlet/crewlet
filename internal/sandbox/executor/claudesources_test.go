@@ -16,9 +16,12 @@ import (
 // its CLAUDE.md, rules and the user-scope servers of its .claude.json; `project`
 // the working directory's .claude/settings.json, .mcp.json and the CLAUDE.md
 // family on the walk up to `/`; `local` .claude/settings.local.json and the
-// directory's servers in .claude.json. What `--settings`, `--plugin-dir` and
-// `--mcp-config` name is read whatever the list. Each file read is appended
-// whole to `$HOME/loaded`.
+// directory's servers in .claude.json. What `--settings` and `--mcp-config`
+// name is read whatever the list, and a `--plugin-dir`'s skills, commands and
+// agents (a skill's frontmatter `hooks` recorded as run); an `--add-dir`'s
+// CLAUDE.md, imports, .claude/CLAUDE.md and rules where
+// CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD is 1. Each file read is
+// appended whole to `$HOME/loaded`.
 func sourcesHarness(release string) string {
 	return `#!/bin/sh
 if [ "$1" = --version ]; then echo '` + release + ` (Claude Code)'; exit 0; fi
@@ -26,7 +29,13 @@ src=user,project,local s= prev=
 for a; do case "$prev" in --setting-sources) src=$a;; --session-id|--resume) s=$a;; esac; prev=$a; done
 out=$HOME/loaded; : > "$out"
 r() { for f; do [ -f "$f" ] && { echo "== $f"; cat "$f"; } >> "$out"; done; }
-prev=; for a; do case "$prev" in --settings|--mcp-config) r "$a";; --plugin-dir) r "$a"/.claude-plugin/plugin.json;; esac; prev=$a; done
+md() { r "$1"; [ -f "$1" ] && sed -n 's/^@//p' "$1" | while IFS= read -r i; do case "$i" in /*) r "$i";; *) r "$(dirname "$1")/$i";; esac; done; }
+prev=; for a; do case "$prev" in
+	--settings|--mcp-config) r "$a";;
+	--plugin-dir) r "$a"/.claude-plugin/plugin.json "$a"/skills/*/SKILL.md "$a"/commands/*.md "$a"/agents/*.md
+		for f in "$a"/skills/*/SKILL.md; do [ -f "$f" ] && sed -n '2,/^---/p' "$f" | grep -q '^hooks:' && echo "== HOOK $f" >> "$out"; done;;
+	--add-dir) [ "$CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD" = 1 ] && { md "$a/CLAUDE.md"; r "$a/.claude/CLAUDE.md" "$a"/.claude/rules/*; };;
+esac; prev=$a; done
 cfg=$CLAUDE_CONFIG_DIR
 case ",$src," in *,user,*) r "$cfg/settings.json" "$cfg/.claude.json" "$cfg/CLAUDE.md" "$cfg"/rules/*;; esac
 case ",$src," in *,project,*)

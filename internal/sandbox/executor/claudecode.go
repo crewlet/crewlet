@@ -113,9 +113,9 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		// so neither the box home nor the repository adds an `env`, a hook, a key
 		// helper, a plugin or an MCP server. Its `--settings`, `--plugin-dir` and
 		// `--mcp-config` still apply, as does a sign-in from the environment or
-		// the login file (measured on 2.1.330). It drops the repository's
-		// CLAUDE.md, rules, skills, commands and agents too, which the harness
-		// ties to its project source ([claudeSettingSourcesFloor]).
+		// the login file (measured on 2.1.330). The repository's CLAUDE.md,
+		// rules, skills, commands and agents, which the harness ties to its
+		// project source, are handed back apart ([claudeRepoGate]).
 		"--setting-sources", shellword.Quote(""),
 	}
 	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
@@ -198,6 +198,9 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		}
 		b.WriteString(claudeNotesGate(paths.ClaudeNotesSettings(), paths.ClaudeNotesSystem(), plain))
 	}
+	// THE REPOSITORIES' INSTRUCTIONS, SKILLS, COMMANDS AND AGENTS, without their
+	// settings, which the run reads no source of ([claudeRepoGate]).
+	b.WriteString(claudeRepoGate(paths))
 	line(`set -- "$@" --settings "$cs"`)
 	// THE ENTRY'S EFFORT, as its runs on the engine host pass it, on a release
 	// that takes the flag ([claudeEffortFloor]).
@@ -909,8 +912,9 @@ const claudeProjectDir = "crewlet"
 // `.claude/.credentials.json`, where a local box is seeded);
 // CLAUDE_CODE_PROJECT_DIR_NAME, [claudeProjectDir], so a transcript is
 // `<config>/projects/crewlet/<session>.jsonl` whatever the working directory
-// (2.1.234+); auto memory off; the compaction window; and DISABLE_AUTOUPDATER 1
-// (the package doc's "A box's release is pinned"). The transcript's trim is the
+// (2.1.234+); auto memory off; the compaction window; DISABLE_AUTOUPDATER 1
+// (the package doc's "A box's release is pinned"); and the repositories'
+// CLAUDE.md family read through `--add-dir`. The transcript's trim is the
 // script's, by release ([claudeLocalGCFloor]); the retention sweep is held off by
 // [claudeSettings], since no variable reaches it.
 func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
@@ -927,6 +931,9 @@ func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
 		// unset ([claudeCompactionOff]).
 		{Name: "CLAUDE_CODE_AUTO_COMPACT_WINDOW", Value: strconv.Itoa(window.Tokens)},
 		{Name: "DISABLE_AUTOUPDATER", Value: "1"},
+		// What has `--add-dir` load a directory's CLAUDE.md family
+		// ([claudeRepoGate]); an older release reads no such variable.
+		{Name: "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD", Value: "1"},
 	}
 }
 
@@ -1673,5 +1680,6 @@ func (ClaudeCode) artifacts(p Paths) (files, dirs []string) {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
 			p.ClaudeToolEnv(), cfg + "/.claude.json", cfg + "/CLAUDE.md",
 			p.Home + "/CLAUDE.md", p.Home + "/CLAUDE.local.md", p.Home + "/AGENTS.md"},
-		[]string{p.ClaudeSkillsPlugin(), cfg + "/.claude.json.lock", cfg + "/backups", cfg + "/rules"}
+		[]string{p.ClaudeSkillsPlugin(), p.ClaudeRepoPlugins(), cfg + "/.claude.json.lock", cfg + "/backups",
+			cfg + "/rules"}
 }

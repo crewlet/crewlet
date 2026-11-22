@@ -50,3 +50,9 @@ func (p Paths) ClaudeNotesSettings() string { return p.WorkDir() + "/claude-sett
 // them or the next run in the box would find them; and its own, removed whole
 // before every run ([Runner.ClearArtifacts]).
 func (p Paths) ClaudeSkillsPlugin() string { return p.WorkDir() + "/claude-skills" }
+
+// ClaudeRepoPlugins is the DIRECTORY a Claude Code run's script builds its
+// repositories' plugins in, one per repository holding skills, commands or
+// agents, and the directory importing their CLAUDE.local.md ([claudeRepoGate]).
+// Rebuilt by every run, and cleared before it ([ClaudeCode.artifacts]).
+func (p Paths) ClaudeRepoPlugins() string { return p.WorkDir() + "/claude-repo" }
