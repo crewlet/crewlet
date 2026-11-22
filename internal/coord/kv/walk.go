@@ -139,7 +139,8 @@ type pass struct {
 	w       jetstream.KeyWatcher
 	indexed chan keyIndex
 	index   keyIndex
-	joined  bool // index holds the answer and indexed has been read
+	joined  bool          // index holds the answer and indexed has been read
+	quiet   time.Duration // how long it may go without a delivery ([passQuiet])
 	cancel  context.CancelFunc
 }
 
@@ -149,7 +150,7 @@ func beginPass(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 	keys, what string) (*pass, error) {
 
 	indexCtx, cancel := context.WithCancel(ctx)
-	p := &pass{indexed: make(chan keyIndex, 1), cancel: cancel}
+	p := &pass{indexed: make(chan keyIndex, 1), quiet: passQuiet(kv, keys), cancel: cancel}
 	go func() {
 		names, err := keysUnder(indexCtx, js, kv, keys)
 		p.indexed <- keyIndex{names: names, err: err}
@@ -169,7 +170,7 @@ func beginPass(ctx context.Context, js jetstream.JetStream, kv jetstream.KeyValu
 // walk runs the pass to its end — [passOver] gives both of its ends — keeping
 // the index when the pass received it.
 func (p *pass) walk(ctx context.Context, what string) (map[string]jetstream.KeyValueEntry, error) {
-	latest, index, answered, err := passOver(ctx, p.w, what, p.indexed)
+	latest, index, answered, err := passOver(ctx, p.w, what, p.indexed, p.quiet)
 	if answered {
 		p.index, p.joined = index, true
 	}
@@ -217,7 +218,7 @@ func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (m
 		return nil, unavailable("read "+what, err)
 	}
 	defer func() { _ = w.Stop() }()
-	latest, _, _, err := passOver(ctx, w, what, nil)
+	latest, _, _, err := passOver(ctx, w, what, nil, passIdle)
 	return latest, err
 }
 
@@ -225,7 +226,7 @@ func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (m
 // the newest revision it saw of each key, markers included (a key deleted
 // mid-pass arrives as its value, then its marker; [certify] rereads markers).
 // A closed channel is a failure. The pass ENDS on the nil entry, or after
-// [passIdle] without a delivery once the index has answered (from the start
+// quiet without a delivery once the index has answered (from the start
 // when indexed is nil: a marker the sweep misses goes next tick). The nil entry
 // NEVER comes for a pass whose pending messages were all removed (aged, purged,
 // swept) before it reached them, so waiting would hold a deadline-free caller
@@ -234,25 +235,25 @@ func watchWalk(ctx context.Context, kv jetstream.KeyValue, keys, what string) (m
 // reads the channel only when it did not. The watcher stays running: the
 // caller stops it ([listUnder]) or reads on ([watchUnder]).
 func passOver(ctx context.Context, w jetstream.KeyWatcher, what string,
-	indexed <-chan keyIndex) (map[string]jetstream.KeyValueEntry, keyIndex, bool, error) {
+	indexed <-chan keyIndex, quiet time.Duration) (map[string]jetstream.KeyValueEntry, keyIndex, bool, error) {
 
 	latest := map[string]jetstream.KeyValueEntry{}
 	var (
 		index    keyIndex
 		answered bool
-		// quiet is armed when the index answers (at the start without one) and
-		// re-armed by each later delivery; nil until then, so it never ends a
-		// pass before there is something to certify it against.
-		quiet *time.Timer
+		// still is armed when the index answers (at the start without one)
+		// and re-armed by each later delivery; nil until then, so it never
+		// ends a pass before there is something to certify it against.
+		still *time.Timer
 		idle  <-chan time.Time
 	)
 	if indexed == nil {
-		quiet = time.NewTimer(passIdle)
-		idle = quiet.C
+		still = time.NewTimer(quiet)
+		idle = still.C
 	}
 	defer func() {
-		if quiet != nil {
-			quiet.Stop()
+		if still != nil {
+			still.Stop()
 		}
 	}()
 	for {
@@ -262,10 +263,10 @@ func passOver(ctx context.Context, w jetstream.KeyWatcher, what string,
 		case index = <-indexed:
 			// Read once: a nil channel is never ready again.
 			indexed, answered = nil, true
-			quiet = time.NewTimer(passIdle)
-			idle = quiet.C
+			still = time.NewTimer(quiet)
+			idle = still.C
 		case <-idle:
-			// QUIET for a whole passIdle: waiting on removed messages or a
+			// QUIET for a whole quiet: waiting on removed messages or a
 			// consumer that stopped delivering. certify reads what it lacks.
 			return latest, index, answered, nil
 		case kve, ok := <-w.Updates():
@@ -277,15 +278,17 @@ func passOver(ctx context.Context, w jetstream.KeyWatcher, what string,
 				return latest, index, answered, nil
 			}
 			keep(latest, kve)
-			if quiet != nil {
-				quiet.Reset(passIdle)
+			if still != nil {
+				still.Reset(quiet)
 			}
 		}
 	}
 }
 
-// passIdle is how long a pass may go without a delivery, once the key index has
-// answered, before it is ended and [certify] reads what it lacks.
+// passIdle is how long a pass may go without a delivery in process, once the
+// key index has answered, before it is ended and [certify] reads what it
+// lacks; across a link it grows by the crossing of the largest value the
+// pass may deliver ([passQuiet]).
 //
 // Five seconds is the client's own idleness interval for this consumer (nats.go
 // js.go orderedHeartbeatsInterval), where the broker itself calls it idle. A
@@ -294,6 +297,18 @@ func passOver(ctx context.Context, w jetstream.KeyWatcher, what string,
 // that met removed messages holds its caller longer. A cost bound, never a
 // correctness one ([passOver]).
 const passIdle = 5 * time.Second
+
+// passQuiet is how long a pass over keys of kv may go without a delivery:
+// the bucket's quiet for the largest value under keys ([settledBucket.quiet]),
+// else [passIdle]. Across a link a run's value at its bound takes three
+// minutes to cross, so at passIdle a pass that met one ended before it
+// arrived and read every record after it again, one leader read each.
+func passQuiet(kv jetstream.KeyValue, keys string) time.Duration {
+	if b, ok := kv.(settledBucket); ok {
+		return b.quiet(keys)
+	}
+	return passIdle
+}
 
 // keep records kve unless the listing already holds a newer revision of its
 // key. A pass delivers in stream order, so its later delivery IS the newer one;
