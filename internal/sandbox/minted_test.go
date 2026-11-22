@@ -111,6 +111,76 @@ func TestAMintingJobIsBoundAsItIsCollected(t *testing.T) {
 	}
 }
 
+// dropClaim deletes the claim of session id, which the case requires there.
+func dropClaim(t *testing.T, rig *coordRig, id string) {
+	t.Helper()
+	held, found, err := rig.pending.runs.SessionClaim(t.Context(), id)
+	if err != nil || !found {
+		t.Fatalf("the claim of %s: %v, found %v; want it held", id, err, found)
+	}
+	if dropped, err := rig.pending.runs.DeleteSessionClaim(t.Context(), id, held.Revision); err != nil || !dropped {
+		t.Fatalf("dropping the claim of %s: %v, dropped %v", id, err, dropped)
+	}
+}
+
+// A BOUND JOB'S LOST CLAIM IS BACK BY ITS NEXT COLLECTION OR SAVE, through
+// the coordinator's own path: the record names the session already, and the
+// read binds it again, which makes the claim again for the job the record
+// binds where none stands.
+//
+// Mutation: answer an id the record binds already without the store, and the
+// claim stays gone.
+func TestABoundJobsLostClaimIsBackByItsNextCollectionOrSave(t *testing.T) {
+	t.Parallel()
+	reclaimed := func(t *testing.T, rig *coordRig, how string) {
+		t.Helper()
+		claim, found, err := rig.pending.runs.SessionClaim(t.Context(), mintedSession)
+		if err != nil || !found || claim.Turn != "t1" || claim.Launch != rig.get("t1").LaunchID {
+			t.Errorf("after the %s the claim is %+v (found %v, %v), want it made again for the bound job",
+				how, claim, found, err)
+		}
+	}
+	t.Run("collection", func(t *testing.T) {
+		t.Parallel()
+		rig := newCoordRigWith(t, func(o *CoordinatorOptions) { o.Holders = heldSessions{} })
+		report := mintedSession
+		reporting(rig, &report)
+		launched := rig.launch("t1")
+		if _, err := rig.pending.BindSession(t.Context(), "t1", SessionBind{Launch: launched.LaunchID,
+			ID: mintedSession}); err != nil {
+			t.Fatalf("binding the report: %v", err)
+		}
+		dropClaim(t, rig, mintedSession)
+		collected := wholeAccount()
+		collected.SessionID = mintedSession
+		rig.runner.Finish(collected)
+		if _, _, err := rig.coordinator.readBox(t.Context(), rig.get("t1"), BoxReadCollect); err != nil {
+			t.Fatalf("the collection: %v", err)
+		}
+		reclaimed(t, rig, "collection")
+	})
+	t.Run("save", func(t *testing.T) {
+		t.Parallel()
+		inBubble(t, func(t *testing.T) {
+			rig, _, _ := keepingRigWith(t, func(o *CoordinatorOptions) {
+				taking(thisProcess, newTakerStore())(o)
+				o.Saves = memory.NewFleet()
+				o.Holders = heldSessions{}
+			})
+			rig.runner.SavesSessions = true
+			report := mintedSession
+			reporting(rig, &report)
+			rig.launchKept(t, "t1")
+			if out := saveOf(rig, "t1", nil); out.class != saveLanded {
+				t.Fatalf("the first save came to %+v, want it landed", out)
+			}
+			dropClaim(t, rig, mintedSession)
+			saveOf(rig, "t1", nil)
+			reclaimed(t, rig, "save")
+		})
+	})
+}
+
 // A MINTING JOB IS SAVED ONLY ONCE ITS REPORT IS BOUND: a save before the box
 // reports its session is skipped, saying no session was reported yet, and
 // packs nothing; the next save, after the report, binds it and is taken.
