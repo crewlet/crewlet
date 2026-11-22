@@ -97,9 +97,10 @@ func (Pi) Command(req sandbox.RunRequest, session Session, paths Paths, configPa
 const piExtensionMark = "crewlet.extension"
 
 // piScript is a Pi run's script, giving its harness stop to go once asked to
-// end: the end protocol (end.go); the release read, an older than [piSupported] refused; the
-// extension's mark ([piExtensionMark]); the session named, its file's header
-// written or its archive restored ([piSessionGate]), and recorded
+// end: the end protocol (end.go); the release read, a pre-release or one older
+// than [piSupported] refused; the extension's mark ([piExtensionMark]); the
+// session named, its file's header written or its archive restored
+// ([piSessionGate]), and recorded
 // ([Paths.SessionRecord]); the harness run under the end protocol
 // ([launchHarness]); and its session packed ([piCapture]), exiting with the
 // harness's status.
@@ -113,10 +114,16 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 	parts := []string{"pi", "--mode", "json", "-p",
 		// THE WORKING DIRECTORY UNTRUSTED: a repository's .pi settings, MCP
 		// servers, extensions, skills, prompts and system-prompt files do not
-		// load, so none stands in for the run's own (measured on 1.6.0); its
-		// AGENTS.md, which pi reads whatever trust says, still does.
-		// Pi creates the directory a repository's sessionDir setting names; it stays empty, and the run's session is its own file.
-		"--no-approve"}
+		// load (its compaction settings measured ignored on 1.6.0); its
+		// AGENTS.md, which pi reads whatever trust says, still does. Pi only
+		// creates the directory its sessionDir names, which stays empty: the
+		// run's session is its own file.
+		"--no-approve",
+		// AND NOTHING OF THE AGENT DIRECTORY'S BUT WHAT THE LAUNCH NAMES: its
+		// extensions, skills, prompts and themes are not discovered; the run's
+		// own extension and skills are named, with pi's MCP support, which
+		// --no-extensions turns off with the rest.
+		"--no-extensions", "-e", "builtin:mcp", "--no-skills", "--no-prompt-templates", "--no-themes"}
 	// VERBATIM, as the pi entry names it in pi's own terms (provider/id).
 	if req.Model != "" {
 		parts = append(parts, "--model", q(req.Model))
@@ -136,9 +143,9 @@ func piScript(req sandbox.RunRequest, session Session, paths Paths, extension st
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
 	b.WriteString(endPrologue(paths, stop))
 	b.WriteString(endHarness(""))
-	b.WriteString(piRelease)
-	line(`if ! at %s; then printf 'crewlet: this box runs Pi %%s, older than %s, the release this build supports\n' "$n" >&2; exit 1; fi`,
-		floorArgs(piSupported), piSupported)
+	b.WriteString(piReleaseRead)
+	b.WriteString(piReleaseParse())
+	b.WriteString(piReleaseRefusal())
 	if extension != "" {
 		line(`printf '%%s\n' %s`, q(piMarkLine(req.Limits.MaxTurns)))
 	}
@@ -158,15 +165,28 @@ func piMarkLine(turns int) string {
 	return fmt.Sprintf(`{"type":%q,"cap":%d}`, piExtensionMark, max(turns, 0))
 }
 
-// piRelease opens every Pi run's script, as [claudeRelease] opens Claude Code's:
-// `pi --version` read once as v (`1.6.0`), its numbers as n, and `at MAJOR
-// MINOR PATCH`. A VERSION IT CANNOT READ IS TAKEN FOR A CURRENT RELEASE, and a
-// missing harness fails at the run.
-const piRelease = `v=$(pi --version < /dev/null 2> /dev/null | head -n 1); n=${v#"${v%%[0-9]*}"}; n=${n%%[!0-9.]*}; n=${n%.}
-a=${n%%.*}; r=${n#*.}; b=${r%%.*}; c=${r#*.}; c=${c%%.*}
-case "$n" in [0-9]*.[0-9]*.[0-9]*) ;; *) a= ;; esac
-at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "$2" ] || { [ "$b" -eq "$2" ] && [ "$c" -ge "$3" ]; }; }; }; }
+// piReleaseRead reads the box's `pi --version` once, as v.
+const piReleaseRead = "v=$(pi --version < /dev/null 2> /dev/null)\n"
+
+// piReleaseParse reads v as [releaseOf] does ([bareReleaseShell]): n is the
+// bare release, "" for a pre-release or none; its numbers are a, b and c; and
+// `at`, [claudeRelease]'s, is false for a release that does not read. Built
+// when a script is, never at init.
+func piReleaseParse() string {
+	return bareReleaseShell("n") + `a=${n%%.*}; r=${n#*.}; b=${r%%.*}; c=${r##*.}
+at() { [ -n "$n" ] && { [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "$2" ] || { [ "$b" -eq "$2" ] && [ "$c" -ge "$3" ]; }; }; }; }; }
 `
+}
+
+// piReleaseRefusal ends the run before anything starts on a box whose Pi names
+// no release ([piReleaseParse]: a pre-release is never the supported one) or
+// one older than [piSupported], saying what it printed and which it needs. A
+// newer release runs, with a new session every time ([piSessionGate]).
+func piReleaseRefusal() string {
+	return fmt.Sprintf(`[ -n "$n" ] || { echo "crewlet: this box's pi --version printed '$v', which names no release the pi runner reads (a bare MAJOR.MINOR.PATCH, never a pre-release); it supports Pi %[1]s: install that release in the box image" >&2; exit 1; }
+at %[2]s || { echo "crewlet: this box runs Pi $n, older than %[1]s, the release this build supports: install %[1]s in the box image" >&2; exit 1; }
+`, piSupported, floorArgs(piSupported))
+}
 
 // piHeader defines the script's `piheader ID`, which prints the header line a
 // Pi session file opens with (session format version 3: type, version, id,
@@ -241,7 +261,7 @@ func piSessionGate(session Session, paths Paths, rewired bool) string {
 	// EXACTLY THE SUPPORTED RELEASE, the box's and the writer's of the copy
 	// it holds; a carried archive's writer was judged before the launch
 	// ([Pi.Continues]).
-	line(`[ "$n" = %s ] || w="this box runs Pi ${n:-of a release it did not say},"%s`, piSupported, q(supported))
+	line(`[ "$n" = %s ] || w="this box runs Pi ${n:-$v},"%s`, piSupported, q(supported))
 	line(`if [ -z "$w" ] && grep -qF %s "$f" 2> /dev/null; then h=1; x=$(cat "$f.release" 2> /dev/null) || x=; [ "$x" = %s ] || h=; fi`,
 		q(piConversation), piSupported)
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
@@ -402,6 +422,11 @@ func (Pi) Events() Decoder { return &piEvents{} }
 // result IS its stream.
 func (Pi) Parse(stdout []byte) sandbox.Result { return decodeAll(&piEvents{}, stdout) }
 
+// piHomeSettings is the agent directory's own settings, written whole by every
+// run: pi's defaults, so nothing an earlier command wrote there (a package to
+// install, a shell prefix, compaction) reaches the run.
+const piHomeSettings = `{}`
+
 // piHomeMCP is the agent directory's own MCP servers, written empty by every
 // run: a server there named like one the extension registers would replace it.
 const piHomeMCP = `{"mcpServers":{}}`
@@ -415,6 +440,9 @@ func (p Pi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.Ru
 	paths Paths) (string, error) {
 	if err := box.WriteFile(ctx, paths.PiAgentDir()+"/mcp.json", []byte(piHomeMCP)); err != nil {
 		return "", fmt.Errorf("executor: writing Pi's own MCP servers: %w", err)
+	}
+	if err := box.WriteFile(ctx, paths.PiAgentDir()+"/settings.json", []byte(piHomeSettings)); err != nil {
+		return "", fmt.Errorf("executor: writing Pi's own settings: %w", err)
 	}
 	skills := make(map[string]string, len(req.Skills))
 	for _, s := range req.Skills {
@@ -527,9 +555,22 @@ func piMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// artifacts is what a Pi run leaves in its box of its own: its extension and
-// skills, which a later run must not find. Its sessions are kept.
-func (Pi) artifacts(p Paths) (files, dirs []string) { return nil, []string{p.PiRun()} }
+// artifacts is what a Pi run leaves in its box of its own, removed before every
+// run: its extension and skills, and everything pi reads from its agent
+// directory that a command of an earlier run could have written there (its
+// system-prompt and context files, saved trust, its own provider definitions,
+// whose keys can be commands, the catalogue's cache, extensions, skills,
+// prompts, themes, installed packages and its own session store), all but the
+// login ([Paths.PiAgentDir]'s auth.json) and the files the run writes afresh
+// ([Pi.WriteConfig]). Its sessions are kept.
+func (Pi) artifacts(p Paths) (files, dirs []string) {
+	a := p.PiAgentDir() + "/"
+	files = []string{a + "SYSTEM.md", a + "APPEND_SYSTEM.md", a + "AGENTS.md", a + "AGENTS.override.md",
+		a + "CLAUDE.md", a + "trust.json", a + "models.json", a + "models-store.json", a + "keybindings.json"}
+	dirs = []string{p.PiRun(), a + "extensions", a + "skills", a + "prompts", a + "themes", a + "npm", a + "git",
+		a + "sessions"}
+	return files, dirs
+}
 
 // notesOffWhy is what switches a Pi run's reading of notes off: the extension
 // failing to load, which pi says on the run's error stream ("Extension error")
@@ -545,8 +586,8 @@ func (Pi) notesOffWhy() string {
 const piChargeBytes sandbox.Charge = 1
 
 // sessionTraits is how a relaunch judges a Pi session, each value the one that
-// never under-counts its next request, since pi compacts by settings an operator's
-// repository may change (compaction.reserveTokens):
+// never under-counts its next request, since pi compacts at a share of a model
+// window it reads from its own catalogue, which this build does not:
 //   - FirstRequestBox, with no point its box can say ([Runner.ReadBoxPoint]
 //     marks it unread): the relaunch hands the summarized telling;
 //   - CallKeyingNone: no reading of the session thins a telling;
