@@ -31,8 +31,8 @@ const copilotPastContext = `{"type":"session.error","data":{"errorType":"context
 // file in the box; a context failure is no limit.
 //
 // Mutation: drop the copilot profile's limit_events, or read an executor's
-// terminal lines as no record — the first case benches nothing; read the
-// record for a run that answered — the last case benches.
+// terminal lines as no record — the first case benches nothing; have
+// classifyEvents read the record for a run that answered — the last benches.
 func TestACopilotRunThatMetARateLimitSitsItsEntryOut(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
