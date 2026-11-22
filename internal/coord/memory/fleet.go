@@ -150,10 +150,9 @@ type Fleet struct {
 	// their whole key.
 	accepted entryRecords[coord.MCPAcceptedTool, coord.MCPAcceptedUpdate]
 
-	// grants and mcpSignIns are each MCP server's OAuth grant and its
-	// sign-in in progress, by the server's name.
-	grants     entryRecords[coord.MCPGrant, coord.MCPGrantUpdate]
-	mcpSignIns entryRecords[coord.MCPSignIn, coord.MCPSignIn]
+	// oauth are each family's OAuth grants and sign-ins in progress, by
+	// the grant's name.
+	oauth map[coord.GrantFamily]*grantFamilyRecords
 
 	// googleIdentities are each seat's Google growth identity, by handle.
 	googleIdentities entryRecords[coord.GoogleIdentity, coord.GoogleIdentity]
@@ -247,8 +246,7 @@ func NewFleet() *Fleet {
 		sshTests:          newSSHTestRecords(),
 		issueReports:      newIssueReportRecords(),
 		insightRecords:    newInsightRecords(),
-		grants:            newGrantRecords(),
-		mcpSignIns:        newMCPSignInRecords(),
+		oauth:             newGrantFamilies(),
 		googleIdentities:  newGoogleIdentityRecords(),
 		accepted:          newAcceptedRecords(),
 		bodies:            map[string]storedBody{},

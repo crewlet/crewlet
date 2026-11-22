@@ -57,11 +57,11 @@ mcp_servers:
 
 // grantsReader answers the grants a case wrote, or err.
 type grantsReader struct {
-	grants []coord.MCPGrant
+	grants []coord.OAuthGrant
 	err    error
 }
 
-func (g grantsReader) MCPGrants(context.Context) ([]coord.MCPGrant, error) { return g.grants, g.err }
+func (g grantsReader) MCPGrants(context.Context) ([]coord.OAuthGrant, error) { return g.grants, g.err }
 
 func (grantsReader) MCPSignInAddresses() (string, string) {
 	return "https://crewlet.example.com/webhooks/mcp-oauth",
@@ -87,8 +87,8 @@ func oauthSources(t *testing.T) queries.Sources {
 			Error: "moved is not started: its sign-in was made for another address"},
 	}})
 	week, failedAt, past := oauthNow.Add(7*24*time.Hour), oauthNow.Add(-time.Hour), oauthNow.Add(-time.Minute)
-	grant := func(server string) coord.MCPGrant {
-		return coord.MCPGrant{Server: server, Grant: uuid.New(), Client: "cimd",
+	grant := func(server string) coord.OAuthGrant {
+		return coord.OAuthGrant{Name: server, Grant: uuid.New(), Client: "cimd",
 			ClientID: "https://crewlet.example.com/webhooks/mcp-oauth/client-metadata.json",
 			Issuer:   "https://auth.example.com", Scopes: []string{"read", "offline_access"},
 			Resource: "https://mcp.example.com/mcp",
@@ -101,7 +101,7 @@ func oauthSources(t *testing.T) queries.Sources {
 	return queries.Sources{
 		Coord: backend, NodeStatuses: recordsOf(backend), Company: companySource(t, cfg),
 		Builtins:  catalogueOffer,
-		MCPGrants: grantsReader{grants: []coord.MCPGrant{linear, moved, notion, stripe}},
+		MCPGrants: grantsReader{grants: []coord.OAuthGrant{linear, moved, notion, stripe}},
 		Now:       func() time.Time { return oauthNow },
 	}
 }
