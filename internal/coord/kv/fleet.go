@@ -542,7 +542,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		jsprovision.Clustered(cfg.Clustered).SequenceBudget())
 	defer cancel()
 
-	open := func(suffix, describe string, ttl time.Duration) (jetstream.KeyValue, bucketFacts, error) {
+	open := func(suffix, describe string, ttl time.Duration, h holding) (jetstream.KeyValue, bucketFacts, error) {
 		name := cfg.BucketPrefix + suffix
 		bucket, facts, err := openBucket(ctx, js, cfg.Clustered, jetstream.KeyValueConfig{
 			Bucket: name, Description: describe, TTL: ttl, Replicas: cfg.Replicas,
@@ -556,7 +556,7 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		reportRetention(ctx, name, ttl, facts)
 		// EVERY CONDITIONAL WRITE TO IT IS DECIDED BY THE LEADER — see
 		// settle.go for the third answer a compare-and-set can get.
-		return settled(js, bucket, cfg.Reach), facts, nil
+		return settled(js, bucket, cfg.Reach, h), facts, nil
 	}
 
 	store := &FleetStore{
@@ -582,80 +582,75 @@ func OpenFleet(ctx context.Context, js jetstream.JetStream, cfg FleetConfig) (*F
 		suffix   string
 		describe string
 		ttl      time.Duration
+		// holding is the bucket's key classes ([holding]).
+		holding holding
 	}{
 		{&store.rate, rateSuffix,
 			"Crewlet notification-valve windows; the bucket TTL reaps a closed window",
-			cfg.MaxRateWindow * rateBucketFactor},
+			cfg.MaxRateWindow * rateBucketFactor, undeclaredHolding},
 		{&store.windows, windowsSuffix,
 			"Crewlet counter windows up to a day wide; the bucket TTL reaps a closed window",
-			coord.MaxCounterWindow * rateBucketFactor},
+			coord.MaxCounterWindow * rateBucketFactor, undeclaredHolding},
 		{&store.claims, claimsSuffix,
 			"Crewlet inbound-delivery claims; each record carries its own deadline, and the " +
 				"bucket age is the longest claim's",
-			cfg.MaxClaimTTL},
+			cfg.MaxClaimTTL, undeclaredHolding},
 		{&store.ledger, ledgerSuffix,
 			"Crewlet turn completions; the bucket TTL is the retention horizon",
-			cfg.LedgerRetention},
+			cfg.LedgerRetention, undeclaredHolding},
 		{&store.status, statusSuffix,
 			"Crewlet per-node config-apply status; a node that stops reporting ages out",
-			cfg.StatusFreshness},
+			cfg.StatusFreshness, undeclaredHolding},
 		{&store.nodeStatus, nodeStatusSuffix,
 			"Crewlet per-node status records (MCP, models, runners, infra); a node that stops writing ages out",
-			cfg.StatusFreshness},
+			cfg.StatusFreshness, undeclaredHolding},
 		{&store.config, configSuffix,
-			"Crewlet activation pointer and the bodies it names; NO TTL — the pointer's revision IS the epoch", 0},
+			"Crewlet activation pointer and the bodies it names; NO TTL — the pointer's revision IS the epoch", 0, configHolding},
 		{&store.budgets, budgetSuffix,
 			"Crewlet token counters, a slot per calendar window; the bucket TTL outlasts the longest window",
-			cfg.BudgetRetention},
+			cfg.BudgetRetention, undeclaredHolding},
 		{&store.channels, channelSuffix,
-			"Crewlet agent-to-agent channels; NO TTL — an open ask must outlive any clock", 0},
+			"Crewlet agent-to-agent channels; NO TTL — an open ask must outlive any clock", 0, undeclaredHolding},
 		{&store.follows, followsSuffix,
 			"Crewlet chat thread-follows; the bucket TTL is the last-activity horizon",
-			cfg.FollowRetention},
+			cfg.FollowRetention, undeclaredHolding},
 		{&store.chatReads, chatReadsSuffix,
 			"Crewlet per-person chat read state; NO TTL — an expired cursor marks a room unread",
-			0},
+			0, undeclaredHolding},
 		{&store.fires, firesSuffix,
 			"Crewlet scheduled-fire claims; the bucket TTL outlasts the catchup ceiling",
-			cfg.FireRetention},
+			cfg.FireRetention, undeclaredHolding},
 		{&store.rebases, rebasesSuffix,
 			"Crewlet operation-id rebases; the bucket TTL outlasts the horizon a rebase is inherited within",
-			cfg.RebaseRetention},
+			cfg.RebaseRetention, undeclaredHolding},
 		{&store.runs, runsSuffix,
-			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0},
+			"Crewlet detached sandbox runs; NO TTL — a parked run's box outlives any clock", 0, runsHolding},
 		{&store.secrets, secretsSuffix,
-			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0},
+			"Crewlet sealed credentials; NO TTL — an expiring secret is an outage on a timer", 0, undeclaredHolding},
 		{&store.integrations, integrationsSuffix,
-			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0},
+			"Crewlet integration reconcile status; NO TTL, standing state rather than a short horizon", 0, undeclaredHolding},
 		{&store.atlasSources, atlasSourcesSuffix,
-			"Crewlet atlas source standings; NO TTL, an expired one reads as a source never read", 0},
+			"Crewlet atlas source standings; NO TTL, an expired one reads as a source never read", 0, undeclaredHolding},
 		{&store.atlasCode, atlasCodeSuffix,
-			"Crewlet atlas code scan standings; NO TTL, an expired one reads as a repository never scanned", 0},
+			"Crewlet atlas code scan standings; NO TTL, an expired one reads as a repository never scanned", 0, undeclaredHolding},
 		{&store.atlasRefresh, atlasRefreshSuffix,
-			"Crewlet atlas source refresh asks; NO TTL, the collect duty drops one once it is honoured", 0},
+			"Crewlet atlas source refresh asks; NO TTL, the collect duty drops one once it is honoured", 0, undeclaredHolding},
 		{&store.mailboxes, mailboxesSuffix,
-			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0},
+			"Crewlet seat mailbox registry; NO TTL, a record's age cannot tell a present seat from a removed one", 0, undeclaredHolding},
 		{&store.objects, objectsSuffix,
-			"Crewlet object store backend; NO TTL — an expired record lets a node record another backend", 0},
+			"Crewlet object store backend; NO TTL — an expired record lets a node record another backend", 0, undeclaredHolding},
 		{&store.custody, custodySuffix,
 			"Crewlet stateless-node event custody; the bucket TTL outlasts the event log's retention",
-			cfg.CustodyRetention},
+			cfg.CustodyRetention, undeclaredHolding},
 		{&store.uploads, uploadsSuffix,
 			"Crewlet artifact upload reservations and seat save ledgers; the bucket TTL outlasts the longest hold either keeps",
-			cfg.UploadRetention},
+			cfg.UploadRetention, undeclaredHolding},
 		{&store.positions, positionsSuffix,
-			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0},
+			"Crewlet per-node state-log positions; NO TTL — an expired position reads as a node that applied nothing", 0, undeclaredHolding},
 	} {
-		got, facts, err := open(bucket.suffix, bucket.describe, bucket.ttl)
+		got, facts, err := open(bucket.suffix, bucket.describe, bucket.ttl, bucket.holding)
 		if err != nil {
 			return nil, err
-		}
-		if bucket.into == &store.runs {
-			// A RUN'S RECORD AND PARTS are budgeted to one key's limit
-			// (internal/sandbox's RowBytes), so reads get that reply's
-			// crossing ([holdingLarge]) — wrapped before the handle is kept
-			// anywhere, the marker sweep's list included.
-			got = holdingLarge(got)
 		}
 		*bucket.into = got
 		switch bucket.into {

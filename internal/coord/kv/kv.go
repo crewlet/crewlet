@@ -663,7 +663,7 @@ func bindHold(ctx context.Context, hold jetstream.JetStream, bucket jetstream.Ke
 	if err != nil {
 		return nil, nil, fmt.Errorf("coord/kv: look %s up over the hold client: %w", name, err)
 	}
-	kv = settled(hold, kv, reach)
+	kv = settled(hold, kv, reach, undeclaredHolding)
 	read, err := newLeaderReader(hold, kv)
 	if err != nil {
 		return nil, nil, fmt.Errorf("coord/kv: address %s's leader: %w", name, err)

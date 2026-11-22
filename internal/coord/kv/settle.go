@@ -8,8 +8,8 @@
 // [OpenEpochs]), never per call site, which no single in-process server would
 // show forgotten: its conditional writes go through [jsinflight.Decide], one
 // still undecided ends as [jsinflight.Undecided] (UNKNOWN, never a lost race),
-// and so [isWrongLastSequence] matches 10071 alone. Values are held to
-// [coord.MaxValueBytes] ([settledBucket.carriedBack]).
+// and so [isWrongLastSequence] matches 10071 alone. Every value is held to
+// the class its bucket declares for its key where it is opened ([holding]).
 
 package kv
 
@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
@@ -44,10 +45,128 @@ type settledBucket struct {
 	// process ([Reach]).
 	pace time.Duration
 
-	// carries is how large a value may be in a bucket [holdingLarge] marks, so
-	// each leader read is given that reply's crossing ([newLeaderReader]);
-	// none elsewhere, whose replies of a few KiB arrive inside the read term.
-	carries int
+	// holding is the bucket's key classes, declared where it is opened: what
+	// each key's value may be, and how its reads wait for it.
+	holding holding
+}
+
+// reply is how long a class's leader reads wait for a reply beyond the read
+// term (internal/jsapi's Leader).
+type reply int
+
+const (
+	// replyTerm is the read term alone: a reply of a few KiB crosses any
+	// link inside it ([coord.SmallValueBytes]).
+	replyTerm reply = iota
+	// replyDeciding adds the reply's crossing at the class's bound and none
+	// of its handling (jsapi's Leader.Deciding): the class's reads decide
+	// writes a caller waits on.
+	replyDeciding
+	// replyCarrying adds the reply's arrival, handling and crossing at the
+	// class's bound (jsapi's Leader.Carrying): no writer waits on its reads.
+	replyCarrying
+)
+
+// class is a kind of value a bucket holds: the most one may be and how its
+// reads wait.
+type class struct {
+	bound int
+	reply reply
+}
+
+// sized is the value size a read or a delivery of the class is given time
+// for beyond the term: none for [replyTerm], else its bound.
+func (c class) sized() int {
+	if c.reply == replyTerm {
+		return 0
+	}
+	return c.bound
+}
+
+// keyClass is one class and the keys it holds: a filter in the key's
+// vocabulary ("body.*"), never the bucket's subject.
+type keyClass struct {
+	keys  string
+	class class
+}
+
+// holding is a bucket's key classes, declared where it is opened: the first
+// whose keys match a key is its class, and rest is every other key's. It
+// bounds every write ([settledBucket.carriedBack]) and times every read
+// ([leaderReader.leaderFor]), pass and watch ([settledBucket.quiet]). Per
+// bucket, never per key name: one name means different things in different
+// buckets.
+type holding struct {
+	classes []keyClass
+	rest    class
+}
+
+// of is key's class.
+func (h holding) of(key string) class {
+	for _, k := range h.classes {
+		if server.SubjectMatchesFilter(key, k.keys) {
+			return k.class
+		}
+	}
+	return h.rest
+}
+
+// most is the largest class a key under the filter keys may hold: a literal
+// key's own, else the largest of rest and every class whose keys a key under
+// the filter could match.
+func (h holding) most(keys string) class {
+	if server.IsValidLiteralSubject(keys) {
+		return h.of(keys)
+	}
+	most := h.rest
+	for _, k := range h.classes {
+		if server.SubjectsCollide(keys, k.keys) && k.class.sized() > most.sized() {
+			most = k.class
+		}
+	}
+	return most
+}
+
+var (
+	// undeclared is a class with no bound of its own, held to
+	// [coord.MaxValueBytes]: records of a few KiB by their fields, read at
+	// the term.
+	undeclared = class{bound: coord.MaxValueBytes, reply: replyTerm}
+	// runValue is a sandbox run's record or part, budgeted to
+	// [coord.MaxValueBytes] (internal/sandbox's RowBytes), whose reads decide
+	// the run's changes.
+	runValue = class{bound: coord.MaxValueBytes, reply: replyDeciding}
+	// pointerClass is the activation pointer, held to [coord.MaxPointerBytes]
+	// so every probe's read of it keeps the term.
+	pointerClass = class{bound: coord.MaxPointerBytes, reply: replyTerm}
+	// bodyClass is the activation's body, the company document sealed, held
+	// to [coord.MaxValueBytes]; no writer waits on its reads.
+	bodyClass = class{bound: coord.MaxValueBytes, reply: replyCarrying}
+
+	// runsHolding is the runs bucket's: every key a run's value.
+	runsHolding = holding{rest: runValue}
+	// configHolding is the config bucket's: the pointer, and the bodies it
+	// names.
+	configHolding = holding{classes: []keyClass{
+		{keys: activationKey, class: pointerClass},
+		{keys: bodyPrefix + "*", class: bodyClass},
+	}, rest: undeclared}
+	// undeclaredHolding is every other bucket's.
+	undeclaredHolding = holding{rest: undeclared}
+)
+
+// quiet is how long a pass or a watch over keys may go without a delivery
+// before it is presumed stalled: [passIdle], and the RAW crossing of the
+// largest value a key under keys may hold at the bucket's pace (a delivery
+// carries a value as stored, never base64), behind the protocol line
+// [jsapi.Sending] counts. 185 s for a run's value across a link; 5 s in
+// process and for a class read at the term.
+func (b settledBucket) quiet(keys string) time.Duration {
+	sized := b.holding.most(keys).sized()
+	if sized == 0 {
+		return passIdle
+	}
+	return passIdle + jsapi.Sending(sized+kvHeaderBytes, b.pace)
 }
 
 // Reach is how a node's connection reaches the coordination buckets' streams,
@@ -99,7 +218,7 @@ func (r Reach) valueCrossing() time.Duration {
 // readCrossing is how long a leader's reply to a read of a value at
 // [coord.MaxValueBytes] takes to cross as r: the value and [kvHeaderBytes],
 // base64-encoded (internal/jsapi's Crossing), at r's pace, none in process.
-// It is exactly what such a read gets beyond the read term ([newLeaderReader]):
+// It is exactly what such a read gets beyond the read term ([leaderReader.leaderFor]):
 // the reply's handling is CPU the read term covers off the race detector
 // (internal/jsapi's Leader.Deciding).
 func (r Reach) readCrossing() time.Duration {
@@ -140,36 +259,19 @@ var kvHeaderBytes = (&nats.Msg{Header: nats.Header{
 }}).Size()
 
 // settled wraps a bucket this node has opened, its writes held to the pace
-// its connection reaches it at. A handle already settled is returned as it
-// is, so wrapping twice never doubles a retry.
-func settled(js jetstream.JetStream, kv jetstream.KeyValue, reach Reach) jetstream.KeyValue {
+// its connection reaches it at and to the classes h declares. A handle
+// already settled is returned as it is, so wrapping twice never doubles a
+// retry.
+func settled(js jetstream.JetStream, kv jetstream.KeyValue, reach Reach, h holding) jetstream.KeyValue {
 	if _, done := kv.(settledBucket); done {
 		return kv
 	}
-	return settledBucket{KeyValue: kv, js: js, pace: reach.pace()}
-}
-
-// holdingLarge marks kv, a bucket opened through [settled], as one whose values
-// are budgeted to [coord.MaxValueBytes] (a sandbox run's record and parts,
-// internal/sandbox's RowBytes): every leader read of its keys (a key's own, a
-// listing's certifying read, a create's read) is given the reply's crossing
-// ([newLeaderReader]) at the slowest pace a link is allowed, none in process.
-//
-// THE CROSSING ALONE, never the reply's handling: a request a member dropped
-// across an election is asked again two seconds later, inside the shortest
-// caller budget (five seconds in process), which counting the handling would
-// push past (internal/jsapi's Leader.Deciding). ONLY SUCH A BUCKET: a reply of
-// a few KiB crosses any link inside the read term. Declared where the bucket
-// is opened ([OpenFleet]), since its writers size its values.
-func holdingLarge(kv jetstream.KeyValue) jetstream.KeyValue {
-	b, ok := kv.(settledBucket)
-	if !ok {
-		// Every bucket is settled where it is opened; one that is not is
-		// a wiring mistake no read should paper over.
-		panic(fmt.Sprintf("coord/kv: holdingLarge is handed %T, not a bucket settled where it was opened", kv))
+	if h.rest.bound == 0 {
+		// Every bucket declares its classes where it is opened; one that
+		// does not is a wiring mistake no write or read should paper over.
+		panic(fmt.Sprintf("coord/kv: %s is settled with no holding declared", kv.Bucket()))
 	}
-	b.carries = coord.MaxValueBytes
-	return b
+	return settledBucket{KeyValue: kv, js: js, pace: reach.pace(), holding: h}
 }
 
 // budget is the budget of a write of key and value (none for a removal). A KV
@@ -188,15 +290,17 @@ func (b settledBucket) budget(key string, value []byte) *jsapi.Sends {
 	return jsapi.Budget(b.js, sendCrossing(len(key), len(value), b.pace))
 }
 
-// carriedBack refuses a value past [coord.MaxValueBytes], whose doc has why,
-// as [coord.ErrValueTooLarge]: a definite answer, never an outage, on every
-// node alike since a value a member wrote is one a leaf reads. Only a refusal
-// names the bucket, which a value that fits never asks the handle for.
+// carriedBack refuses a value past the bound of key's class
+// ([holding.of]) as [coord.ErrValueTooLarge]: a definite answer, never an
+// outage, on every node alike since a value a member wrote is one a leaf
+// reads, in the time its class gives. Only a refusal names the bucket, which
+// a value that fits never asks the handle for.
 func (b settledBucket) carriedBack(key string, value []byte) error {
-	if len(value) <= coord.MaxValueBytes {
+	bound := b.holding.of(key).bound
+	if len(value) <= bound {
 		return nil
 	}
-	return coord.HoldValue(b.Bucket()+"/"+key, len(value), coord.MaxValueBytes)
+	return coord.HoldValue(b.Bucket()+"/"+key, len(value), bound)
 }
 
 // Put writes a value whatever the key holds, held to what its leader's read
