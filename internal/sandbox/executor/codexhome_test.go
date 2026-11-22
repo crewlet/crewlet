@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -34,7 +35,8 @@ func TestACodexRunLoadsOnlyWhatItsLaunchWrites(t *testing.T) {
 	runner, box, _ := codexBox(t, "0.171.0")
 	above := fillHome(t, box, c)
 	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go",
-		Skills: []sandbox.Skill{{Name: "deploy", Description: "How we deploy.", Body: "Run make deploy."}}})
+		Skills:     []sandbox.Skill{{Name: "deploy", Description: "How we deploy.", Body: "Run make deploy."}},
+		SkillLoads: sandbox.SkillWiring{Server: "crewlet", Tool: mcpbridge.SkillTool, URL: codexBridgeURL + "/skills"}})
 	if !res.Success {
 		t.Fatalf("the run failed: %s", res.Error)
 	}
