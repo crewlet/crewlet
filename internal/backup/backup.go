@@ -1165,10 +1165,10 @@ func assertReplayable(m Manifest) error {
 				"and the captured log starts at %d: the records between them "+
 				"were trimmed while the copy ran, so a restore would apply a "+
 				"prefix with a hole in it and report nothing. The trim hold did "+
-				"not cover the copy; look for statelog_hold_not_renewed in this "+
-				"node's log (a hold that misses its renewals is read as "+
-				"abandoned), then take the backup again",
-				ErrLogGap, artifact.Name, at.Seq, first)
+				"not cover the copy; look for %s in this node's log (a hold "+
+				"the trim has watched go unrenewed is read as abandoned), then "+
+				"take the backup again",
+				ErrLogGap, artifact.Name, at.Seq, first, statelog.HoldNotRenewedEvent)
 		}
 	}
 	return nil

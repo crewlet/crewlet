@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api"
@@ -176,13 +177,15 @@ func TestUnreachableObjectsAreTheFleetsStateNotTheNodes(t *testing.T) {
 // each a state with a remedy the engine knows — another node, or this one
 // later, takes the backup — so each is a code and a fixed hint rather than a
 // 500 that sends an operator to a node with nothing wrong on it. And the
-// error's own text, which names positions and files, stays in the log.
+// error's own text, which names positions and files, stays in the log. A gap's
+// hint names the line that says why the trim passed the copy.
 func TestABackupTheFleetsStateRefusesSaysWhatToDo(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		err    error
 		status int
 		code   string
+		names  string // a log line the hint must send the operator to
 	}{
 		{fmt.Errorf("backup: the record at CREWLET_TRACKER_LOG sequence 9: %w: version 2",
 			objstore.ErrRecordUnreadable), http.StatusConflict, "record_unreadable"},
@@ -191,7 +194,7 @@ func TestABackupTheFleetsStateRefusesSaysWhatToDo(t *testing.T) {
 		{fmt.Errorf("backup: the copy's checkpoint on CREWLET_TRACKER_LOG: %w",
 			statelog.ErrStreamRecreated), http.StatusConflict, "log_recreated"},
 		{fmt.Errorf("%w: CREWLET_TRACKER_LOG holds no record 5", backup.ErrLogGap),
-			http.StatusServiceUnavailable, "log_gap"},
+			http.StatusServiceUnavailable, "log_gap", statelog.HoldNotRenewedEvent},
 	} {
 		t.Run(c.code, func(t *testing.T) {
 			t.Parallel()
@@ -203,8 +206,12 @@ func TestABackupTheFleetsStateRefusesSaysWhatToDo(t *testing.T) {
 			if body["error"] != c.code {
 				t.Errorf("error = %v, want %s", body["error"], c.code)
 			}
-			if hint, _ := body["hint"].(string); hint == "" {
+			hint, _ := body["hint"].(string)
+			if hint == "" {
 				t.Error("the caller was not told what to do about it")
+			}
+			if !strings.Contains(hint, c.names) {
+				t.Errorf("hint %q does not name %s, the line that says why", hint, c.names)
 			}
 			if body["detail"] != nil {
 				t.Errorf("the error's own text reached the caller: %v", body["detail"])

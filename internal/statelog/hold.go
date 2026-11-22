@@ -53,6 +53,10 @@ type TailPin struct {
 	once sync.Once
 }
 
+// HoldNotRenewedEvent is the warning a pin logs for a refused renewal, the
+// line a backup refused for a gap in its log sends an operator to.
+const HoldNotRenewedEvent = "statelog_hold_not_renewed"
+
 // HoldTail writes a pin on the replay tail and renews it every spec.Every
 // until [TailPin.Release].
 //
@@ -98,7 +102,7 @@ func HoldTail(ctx context.Context, spec TailHold) (*TailPin, error) {
 				return
 			case <-ticker.C:
 				if err := put(beat); err != nil && beat.Err() == nil {
-					pin.log.WarnContext(beat, "statelog_hold_not_renewed",
+					pin.log.WarnContext(beat, HoldNotRenewedEvent,
 						"owner", spec.Owner, "error", err.Error(),
 						"detail", "the trim ignores a pin it has watched go unrenewed past "+
 							TrimHoldStale.String()+", so a pin that misses three "+
