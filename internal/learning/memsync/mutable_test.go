@@ -98,11 +98,13 @@ func stampOf(t *testing.T, db *store.DB, spec table) int64 {
 // An update the stamp missed is a change no publish carries while this node
 // holds the seat, and the next holder hydrates the older copy. Each column is
 // set to itself, which fires a trigger naming it, and must leave the row a
-// fresh stamp from the node's counter. The version goes first, so the skill's
-// id is set to itself with no child to check.
+// fresh stamp from the node's counter, as must a hydration's carried copy over
+// it. The version goes first, so the skill's id is set to itself with no child
+// to check.
 //
 // Mutation: drop a column from one of node migration 0070's update triggers,
-// or a table's update trigger, and this goes red.
+// or a table's update trigger, or have the import keep a stored mutable row,
+// and this goes red.
 func TestEveryCarriedColumnOfAMutableTableStampsItsUpdate(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)
@@ -126,6 +128,14 @@ func TestEveryCarriedColumnOfAMutableTableStampsItsUpdate(t *testing.T) {
 					"at %d), want a fresh stamp: a change no publish carries", spec.name, column,
 					after, before, at)
 			}
+		}
+		before := stampOf(t, db, spec)
+		copies, _ := exportAll(t, db, spec, 0)
+		carryRows(t, db, spec, copies)
+		if after, at := stampOf(t, db, spec), sequenceAt(t, db); after <= before || after != at {
+			t.Errorf("a hydration's copy of the seat's %s row over the stored one left it "+
+				"stamped %d (it was %d, the counter is at %d), want a fresh stamp",
+				spec.name, after, before, at)
 		}
 	}
 	if want := []string{"counterparty_profiles", "synthesized_skills",

@@ -284,6 +284,38 @@ var writtenTogether = map[string]func(t *testing.T, db *store.DB){
 			       ('b', 's-wm', ?, 'ship-it', 'how', 'body', 2, 'seed', 0)`,
 			seat.Handle, seat.Handle)
 	},
+	"counterparty_profiles": func(t *testing.T, db *store.DB) {
+		t.Helper()
+		exec(t, db, `INSERT INTO counterparty_profiles (observer_handle, subject_handle,
+			first_seen_at, last_updated_at, last_corroborated_at)
+			VALUES (?, 'a', 7, 7, 7), (?, 'b', 7, 7, 7)`, seat.Handle, seat.Handle)
+	},
+	"synthesized_skills": func(t *testing.T, db *store.DB) {
+		t.Helper()
+		exec(t, db, `INSERT INTO synthesized_skills (id, agent_handle, name,
+			description, content, frontmatter, tool_sequence, source_episode_ids,
+			version, created_at, updated_at, state)
+			VALUES ('a', ?, 'a', 'how', 'body', '{}', '[]', '[]', 1, 7, 7, 'active'),
+			       ('b', ?, 'b', 'how', 'body', '{}', '[]', '[]', 1, 7, 7, 'active')`,
+			seat.Handle, seat.Handle)
+	},
+}
+
+// mutableRow writes one row of a mutable table for the seat under the given
+// id, for the row a hydration imports below; appendOnlyRow does the rest.
+var mutableRow = map[string]func(t *testing.T, db *store.DB, id string){
+	"counterparty_profiles": func(t *testing.T, db *store.DB, id string) {
+		t.Helper()
+		exec(t, db, `INSERT INTO counterparty_profiles (observer_handle, subject_handle,
+			first_seen_at, last_updated_at, last_corroborated_at)
+			VALUES (?, ?, 7, 7, 7)`, seat.Handle, id)
+	},
+	"synthesized_skills": func(t *testing.T, db *store.DB, id string) {
+		t.Helper()
+		exec(t, db, `INSERT INTO synthesized_skills (id, agent_handle, name,
+			description, content, version, created_at, updated_at, state)
+			VALUES (?, ?, ?, 'how', 'body', 1, 7, 7, 'active')`, id, seat.Handle, id)
+	},
 }
 
 // ROWS WRITTEN TOGETHER CARRY DISTINCT WATERMARKS.
@@ -298,18 +330,21 @@ var writtenTogether = map[string]func(t *testing.T, db *store.DB){
 func TestRowsWrittenTogetherCarryDistinctWatermarks(t *testing.T) {
 	t.Parallel()
 	for _, spec := range tables {
-		if spec.mutable {
-			// Each update takes its own stamp:
-			// TestEveryCarriedColumnOfAMutableTableStampsItsUpdate.
+		if len(spec.key) == 1 && spec.key[0] == spec.seatCol {
+			// Keyed on the seat: a seat holds one row, which shares with none.
 			continue
 		}
 		t.Run(spec.name, func(t *testing.T) {
 			t.Parallel()
 			write, ok := writtenTogether[spec.name]
-			if !ok {
-				t.Fatalf("%s is carried a page at a time and writtenTogether has no writer "+
-					"for it, so nothing here checks that its rows never share a watermark "+
-					"value: add one", spec.name)
+			one := appendOnlyRow[spec.name]
+			if spec.mutable {
+				one = mutableRow[spec.name]
+			}
+			if !ok || one == nil {
+				t.Fatalf("%s is carried a page at a time and writtenTogether, or "+
+					"appendOnlyRow or mutableRow, has no writer for it, so nothing here "+
+					"checks that its rows never share a watermark value: add one", spec.name)
 			}
 			db := openStore(t)
 			write(t, db)
@@ -318,11 +353,12 @@ func TestRowsWrittenTogetherCarryDistinctWatermarks(t *testing.T) {
 					"WHERE id = 'a'", []byte{1, 2, 3, 4})
 			}
 			peer := openStore(t)
-			appendOnlyRow[spec.name](t, peer, "c")
+			one(t, peer, "c")
 			carry(t, peer, db)
 
 			rows, err := db.SQL().QueryContext(t.Context(),
-				"SELECT id, "+watermark+" FROM "+spec.name+" WHERE "+spec.seatCol+" = ?",
+				"SELECT "+strings.Join(spec.key, " || '/' || ")+", "+watermark+
+					" FROM "+spec.name+" WHERE "+spec.seatCol+" = ?",
 				seat.value(spec))
 			if err != nil {
 				t.Fatalf("read %s's watermarks: %v", spec.name, err)
