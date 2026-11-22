@@ -119,8 +119,8 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		// The session stays in the box: synced, it would sit on the
 		// account's history too.
 		"--sync-session=off",
-		// Copilot's own list of what its tools are not handed ([copilotSignIn]).
-		"--secret-env-vars=" + strings.Join(copilotSignInNames, ","),
+		// Copilot's own list of what its tools are not handed ([copilotSecretEnv]).
+		"--secret-env-vars=" + strings.Join(copilotSecretEnv(), ","),
 	}
 	if configPath != "" {
 		parts = append(parts, "--additional-mcp-config", q("@"+configPath))
@@ -215,14 +215,25 @@ var copilotSignInNames = []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TO
 // it sets itself and no entry is given.
 var copilotHeldToken = []string{"GITHUB_COPILOT_GITHUB_TOKEN", "GITHUB_COPILOT_AGENT_GITHUB_TOKEN"}
 
+// copilotTelemetryNames is every variable Copilot's own OTLP export reads its
+// endpoint or headers from (1.0.114): the run's endpoint carries its export
+// token ([sandbox.OtelReceiver]).
+var copilotTelemetryNames = []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS",
+	"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+	"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_HEADERS"}
+
+// copilotSecretEnv is what a run names in `--secret-env-vars`, which Copilot
+// keeps from its tools whatever set it while it reads them itself: its sign-in
+// ([copilotSignIn]) and its export's endpoint and headers, so the run's tools
+// are handed only the variables they need (measured on 1.0.114). Only those: a
+// listed name's value is masked wherever the stream holds it, so a short
+// provider key (`ollama`) would break the stream's JSON (measured).
+func copilotSecretEnv() []string { return slices.Concat(copilotSignInNames, copilotTelemetryNames) }
+
 // copilotSignIn is the part of a run's script that hands Copilot its GitHub
 // sign-in under COPILOT_GITHUB_TOKEN alone: the first of [copilotSignInNames]
 // set, in Copilot's own order, so the same token signs it in, with the other
-// two and [copilotHeldToken] unset. With every sign-in name in
-// `--secret-env-vars`, whatever set it, the run's tools are handed only the
-// variables they need (measured on 1.0.114). Only those names: a listed name's
-// value is masked wherever the stream holds it, so a short provider key
-// (`ollama`) would break the stream's JSON (measured).
+// two and [copilotHeldToken] unset ([copilotSecretEnv]).
 func copilotSignIn() string {
 	return "gt=${COPILOT_GITHUB_TOKEN:-${GH_TOKEN:-$GITHUB_TOKEN}}\n" +
 		"unset " + strings.Join(slices.Concat(copilotSignInNames[1:], copilotHeldToken), " ") + "\n" +
