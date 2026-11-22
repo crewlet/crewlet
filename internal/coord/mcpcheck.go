@@ -22,9 +22,8 @@ import (
 // replaces it, and the apply that removes the server deletes it. The writer
 // bounds it to [MaxMCPCheckNodes] nodes, [MaxMCPErrorBytes] a sentence and
 // [MaxMCPCheckBytes] whole ([MCPCheck.Validate] refuses one it did not); what
-// a test listed is the
-// asker's answer, never stored. Of two tests at once the LATER stamp wins
-// ([MCPChecks.PutMCPCheck]): the question is how the server is now.
+// a test listed is the asker's answer, never stored. Of two tests at once the
+// LATER stamp wins ([MCPChecks.PutMCPCheck]): how the server is now.
 
 // MCPCheck is one server's latest test, as the coordination store holds it.
 type MCPCheck struct {
