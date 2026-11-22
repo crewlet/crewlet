@@ -31,13 +31,21 @@ func (p Paths) CodexNotesURLFresh() string { return p.WorkDir() + "/codex-notes-
 // ([sandbox.Skill.Listed]).
 func (p Paths) CodexSkills() string { return p.CodexHome() + "/skills" }
 
-// CodexExecPID is where a run held to a round cap records the pid of its
-// `codex exec`, for the watcher that ends it at the cap ([codexCapWatch]).
-func (p Paths) CodexExecPID() string { return p.WorkDir() + "/codex-exec-pid" }
+// CodexCapFired is the marker the note helper writes, before it interrupts the
+// turn, where the run's round cap ended it (internal/notehelper's -cap-marker).
+func (p Paths) CodexCapFired() string { return p.WorkDir() + "/codex-cap-fired" }
 
-// CodexCapped is the mark the cap's watcher leaves where it ended the run at
-// its round cap ([codexCapWatch]).
-func (p Paths) CodexCapped() string { return p.WorkDir() + "/codex-capped" }
+// CodexHelperLost is the mark the run's guard leaves where the note helper
+// ended while Codex still worked ([codexStartHelper]).
+func (p Paths) CodexHelperLost() string { return p.WorkDir() + "/codex-helper-lost" }
+
+// CodexSkillsURL is the file holding the job's skill-load route for the note
+// helper, read into its environment alone, as [Paths.CodexNotesURL] is.
+func (p Paths) CodexSkillsURL() string { return p.WorkDir() + "/codex-skills-url" }
+
+// CodexSkillsURLFresh is [Paths.CodexSkillsURL] under the job's other bridge
+// token, for a session the run's script starts of its own.
+func (p Paths) CodexSkillsURLFresh() string { return p.WorkDir() + "/codex-skills-url-fresh" }
 
 // maxCodexSocketPath is the longest [Paths.CodexSocket] a box can listen on:
 // a Linux sockaddr_un holds 108 bytes, its terminating NUL among them.

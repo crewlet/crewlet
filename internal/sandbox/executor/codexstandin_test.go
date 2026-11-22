@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -20,18 +22,18 @@ import (
 
 // The stand-in app-server: this test binary, run by a box's stand-in `codex
 // app-server` with codexStandInSocket set, listens on that socket as Codex's
-// does and answers the note helper's JSON-RPC over WebSocket, recording each
-// turn/steer to codexStandInSteers. A process of its own, because the run's
-// script waits for a socket its server made and stops that server with it.
+// does and answers the note helper's JSON-RPC over WebSocket, recording what
+// it was sent in the case's record directory (codexStandInRecord). A process
+// of its own, because the run's script waits for a socket its server made and
+// stops that server with it.
 const (
 	codexStandInSocket = "CREWLET_TEST_CODEX_SOCKET"
-	codexStandInSteers = "CREWLET_TEST_CODEX_STEERS"
-	codexStandInOrder  = "CREWLET_TEST_CODEX_ORDER"
+	codexStandInRecord = "CREWLET_TEST_CODEX_RECORD"
 )
 
 func TestMain(m *testing.M) {
 	if socket := os.Getenv(codexStandInSocket); socket != "" {
-		os.Exit(serveCodexStandIn(socket, os.Getenv(codexStandInSteers), os.Getenv(codexStandInOrder)))
+		os.Exit(serveCodexStandIn(socket, os.Getenv(codexStandInRecord)))
 	}
 	os.Exit(m.Run())
 }
@@ -39,10 +41,19 @@ func TestMain(m *testing.M) {
 // codexStandInTurn is the turn the stand-in says is in flight.
 const codexStandInTurn = "turn-standin"
 
+// standInNote appends line to the record's file name.
+func standInNote(record, name string, line []byte) {
+	f, err := os.OpenFile(filepath.Join(record, name), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // the case's own file
+	if err == nil {
+		_, _ = f.Write(append(line, '\n'))
+		_ = f.Close()
+	}
+}
+
 // serveCodexStandIn serves socket until a SECOND SIGTERM, as Codex's
 // app-server finishes the turn in flight on the first (measured on 0.171.0),
-// then records `server` in order and ends with 0.
-func serveCodexStandIn(socket, steers, order string) int {
+// then records `server` in record/order and ends with 0.
+func serveCodexStandIn(socket, record string) int {
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "stand-in app-server:", err)
@@ -53,22 +64,22 @@ func serveCodexStandIn(socket, steers, order string) int {
 	go func() {
 		<-stop
 		<-stop
-		if f, err := os.OpenFile(order, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil { //nolint:gosec // the case's own file
-			_, _ = f.WriteString("server\n")
-			_ = f.Close()
-		}
+		standInNote(record, "order", []byte("server"))
 		_ = ln.Close()
 	}()
 	server := &http.Server{ReadHeaderTimeout: time.Minute,
-		Handler: websocket.Handler(func(ws *websocket.Conn) { answerCodexStandIn(ws, steers) })}
+		Handler: websocket.Handler(func(ws *websocket.Conn) { answerCodexStandIn(ws, record) })}
 	_ = server.Serve(ln)
 	return 0
 }
 
-// answerCodexStandIn answers one client: initialize, thread/resume with a turn
-// in flight, and turn/steer, each recorded where steers names a file.
-func answerCodexStandIn(ws *websocket.Conn, steers string) {
+// answerCodexStandIn answers one client: initialize, thread/resume and
+// thread/turns/list with a turn in flight, then as many token-usage updates
+// as record/steps says (each a model response); turn/steer, recorded to
+// record/steers; and turn/interrupt, recorded to record/interrupted.
+func answerCodexStandIn(ws *websocket.Conn, record string) {
 	dec := json.NewDecoder(ws)
+	thread := ""
 	for {
 		var call struct {
 			ID     json.RawMessage `json:"id"`
@@ -82,23 +93,49 @@ func answerCodexStandIn(ws *websocket.Conn, steers string) {
 			continue
 		}
 		var result any = map[string]any{}
+		turns := []map[string]string{{"id": codexStandInTurn, "status": "inProgress"}}
 		switch call.Method {
 		case "thread/resume":
-			result = map[string]any{"thread": map[string]any{
-				"turns": []map[string]string{{"id": codexStandInTurn, "status": "inProgress"}}}}
+			var p struct {
+				ThreadID string `json:"threadId"`
+			}
+			_ = json.Unmarshal(call.Params, &p)
+			thread = p.ThreadID
+			result = map[string]any{"thread": map[string]any{"turns": turns}}
+		case "thread/turns/list":
+			result = map[string]any{"data": turns}
 		case "turn/steer":
 			result = map[string]string{"turnId": codexStandInTurn}
-			if steers != "" {
-				f, err := os.OpenFile(steers, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // the case's own file
-				if err == nil {
-					_, _ = f.Write(append(call.Params, '\n'))
-					_ = f.Close()
-				}
-			}
+			standInNote(record, "steers", call.Params)
+		case "turn/interrupt":
+			standInNote(record, "interrupted", call.Params)
 		}
 		answer, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": call.ID, "result": result})
 		if _, err := ws.Write(answer); err != nil {
 			return
+		}
+		if call.Method != "thread/turns/list" {
+			continue
+		}
+		raw, _ := os.ReadFile(filepath.Join(record, "steps")) //nolint:gosec // the case's own file
+		steps, _ := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if steps == 0 {
+			continue
+		}
+		// THE TURN STARTED FIRST, as Codex notifies a subscribed client, so
+		// the updates after it read in order are of the turn in flight.
+		started, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "turn/started",
+			"params": map[string]any{"threadId": thread, "turn": map[string]string{"id": codexStandInTurn}}})
+		if _, err := ws.Write(started); err != nil {
+			return
+		}
+		for i := 1; i <= steps; i++ {
+			update, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "thread/tokenUsage/updated",
+				"params": map[string]any{"threadId": thread, "turnId": codexStandInTurn,
+					"tokenUsage": map[string]any{"total": map[string]int{"totalTokens": 100 * i}}}})
+			if _, err := ws.Write(update); err != nil {
+				return
+			}
 		}
 	}
 }
@@ -114,8 +151,8 @@ const codexStandInThread = "019a1f62-fbda-7aa2-af57-6c0abeb8e50b"
 // [codexStandInThread], appends its rollout lines (one turn of 300 input, 200
 // cached, 40 out, a window of 258400 and two plan windows) to the thread's
 // rollout, and, where record/wait-steer exists, first waits for a steer; where
-// record/block exists, it then works until SIGTERM, recording `exec` in
-// record/order as it goes.
+// record/block exists, it then works until its turn is interrupted (exit 1,
+// the rollout's turn_aborted written) or SIGTERM (`exec` in record/order).
 func codexStandIn(t *testing.T, box sandbox.Sandbox, release, record string) {
 	t.Helper()
 	bin, err := os.Executable()
@@ -135,7 +172,7 @@ case "$1" in
 app-server)
   printf '%%s\n' "$@" > "$rec/server-argv"
   for a; do case "$a" in unix://*) s=${a#unix://};; esac; done
-  %[3]s="$s" %[4]s="$rec/steers" %[8]s="$rec/order" exec %[5]s;;
+  %[3]s="$s" %[4]s="$rec" exec %[5]s;;
 exec)
   printf '%%s\n' "$@" > "$rec/exec-argv"; env > "$rec/env"; cat > "$rec/stdin"
   tid=%[6]s; [ "$5" != resume ] || tid=$6
@@ -146,13 +183,12 @@ exec)
   cat >> "$f" <<'EOF'
 %[7]s
 EOF
-  if [ -e "$rec/block" ]; then trap 'echo exec >> "$rec/order"; exit 143' TERM; : > "$rec/working"; while :; do sleep 0.05; done; fi
+  if [ -e "$rec/block" ]; then trap 'echo exec >> "$rec/order"; exit 143' TERM; : > "$rec/working"; until [ -s "$rec/interrupted" ]; do sleep 0.05; done; printf '%%s\n' '{"timestamp":"2026-11-22T09:00:03.000Z","ordinal":93,"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t9","reason":"interrupted"}}' >> "$f"; exit 1; fi
   printf '%%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}' '{"type":"turn.completed","usage":{"input_tokens":9999,"cached_input_tokens":0,"output_tokens":9999}}'
   exit 0;;
 esac
 exit 2
-`, shQuote(record), release, codexStandInSocket, codexStandInSteers, shQuote(bin), codexStandInThread, rollout,
-		codexStandInOrder)
+`, shQuote(record), release, codexStandInSocket, codexStandInRecord, shQuote(bin), codexStandInThread, rollout)
 	writeBoxStandIn(t, box, p.BinDir()+"/codex", script)
 }
 

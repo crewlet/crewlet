@@ -237,15 +237,34 @@ default_tools_approval_mode = "approve"
 	}
 }
 
-// A RUN ITS SCRIPT ENDED AT ITS ROUND CAP READS AS CAPPED, never as a success,
-// whatever answer it gave before the cap.
+// A RUN READS AS CAPPED ONLY WHERE THE HELPER MARKED ITS CAP AND THE ROLLOUT
+// RECORDS THE TURN INTERRUPTED: an interrupt with no mark keeps its own cause,
+// and a mark with no interrupt ended nothing. A run whose helper ended under it
+// fails, never capped.
 //
-// Mutation: drop the cap event's reading, and this goes red.
-func TestACodexRunEndedAtItsCapReadsAsCapped(t *testing.T) {
+// Mutation: read the mark alone, or the interrupt alone, as the cap, or drop
+// the helper-lost reading, and a case goes red.
+func TestACodexRunReadsAsCappedOnlyOnTheHelpersMarkAndAnInterrupt(t *testing.T) {
 	t.Parallel()
-	stream := string(codexStream(t, "stream-mcp.jsonl")) + `{"type":"` + codexCappedEvent + `","rounds":3}` + "\n"
-	res := Codex{}.Parse([]byte(stream))
-	if res.Success || !res.RoundCapped || !strings.Contains(res.Error, "round cap of 3") {
-		t.Errorf("a capped run reads success %v, capped %v, %q", res.Success, res.RoundCapped, res.Error)
+	capped := `{"type":"` + codexCappedEvent + `","rounds":3}` + "\n"
+	aborted := `{"type":"` + codexRolloutEvent + `","line":{"type":"event_msg","payload":{"type":"turn_aborted",` +
+		`"turn_id":"t9","reason":"interrupted"}}}` + "\n"
+	lost := `{"type":"` + codexHelperLostEvent + `"}` + "\n"
+	failed := string(codexStream(t, "stream-failed.jsonl"))
+	for name, tc := range map[string]struct {
+		stream       string
+		roundCapped  bool
+		errorHolding string
+	}{
+		"the mark and the interrupt": {failed + capped + aborted, true, "round cap of 3"},
+		"an interrupt, no mark":      {failed + aborted, false, "stream disconnected"},
+		"a mark, no interrupt":       {failed + capped, false, "stream disconnected"},
+		"the helper lost":            {"{\"type\":\"thread.started\",\"thread_id\":\"x\"}\n" + lost + aborted, false, "note helper ended"},
+	} {
+		res := Codex{}.Parse([]byte(tc.stream))
+		if res.Success || res.RoundCapped != tc.roundCapped || !strings.Contains(res.Error, tc.errorHolding) {
+			t.Errorf("%s: success %v, capped %v, %q; want capped %v, an error holding %q", name, res.Success,
+				res.RoundCapped, res.Error, tc.roundCapped, tc.errorHolding)
+		}
 	}
 }

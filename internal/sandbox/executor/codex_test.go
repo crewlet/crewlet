@@ -10,11 +10,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
@@ -393,8 +395,9 @@ func TestACodexRunStartsFromItsOwnConfigurationEveryRun(t *testing.T) {
 
 // NO COMMAND LINE AND NO MODEL SHELL CARRIES THE BRIDGE'S TOKEN, which is in
 // the path of every bridge URL: the run's script, the app-server's and exec's
-// argv, and the helper's command line name files, and the route reaches the
-// helper's environment alone, which the model's shell policy excludes too.
+// argv, and the helper's command line name files, and the notes and skill
+// routes reach the helper's environment alone, which the model's shell policy
+// excludes too.
 //
 // Mutation: put the MCP url or the notes route on a command line, or export
 // the route to Codex, and this goes red.
@@ -403,7 +406,9 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 	const token = "run-token-placeholder"
 	req := sandbox.RunRequest{Brief: "go", MCPServers: map[string]sandbox.MCPServer{
 		"crewlet": {Transport: sandbox.TransportHTTP, URL: codexBridgeURL, AlwaysLoaded: true}},
-		Steer: sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool, URL: codexBridgeURL + "/steer"}}
+		Steer:      sandbox.SteerWiring{Server: "crewlet", Tool: mcpbridge.SteerTool, URL: codexBridgeURL + "/steer"},
+		Skills:     []sandbox.Skill{{Name: "deploy", Description: "How we deploy.", Body: "Run make deploy.", Required: true}},
+		SkillLoads: sandbox.SkillWiring{Server: "crewlet", Tool: mcpbridge.SkillTool, URL: codexBridgeURL + "/skills"}}
 	if script := (executor.Codex{}).Command(req, executor.Session{}, executor.Paths{Home: "/home/box"}, ""); strings.Contains(script, token) {
 		t.Errorf("the run's script carries the token:\n%s", script)
 	}
@@ -411,12 +416,20 @@ func TestNoCodexCommandLineCarriesTheBridgesToken(t *testing.T) {
 	runToEnd(t, runner, box, req)
 	for _, file := range []string{"server-argv", "exec-argv", "env"} {
 		if got := strings.Join(recorded(t, record, file), "\n"); strings.Contains(got, token) ||
-			strings.Contains(got, "CREWLET_NOTES_URL") {
+			strings.Contains(got, "CREWLET_NOTES_URL") || strings.Contains(got, "CREWLET_SKILLS_URL") {
 			t.Errorf("%s carries the bridge's route:\n%s", file, got)
 		}
 	}
-	if got := boxFile(t, box, executor.PathsFor(box).CodexNotesURL()); got != codexBridgeURL+"/steer" {
-		t.Errorf("the helper's route file holds %q", got)
+	p := executor.PathsFor(box)
+	if got := boxFile(t, box, p.CodexNotesURL()); got != codexBridgeURL+"/steer" {
+		t.Errorf("the helper's notes route file holds %q", got)
+	}
+	if got := boxFile(t, box, p.CodexSkillsURL()); got != codexBridgeURL+"/skills" {
+		t.Errorf("the helper's skill route file holds %q", got)
+	}
+	// A REQUIRED SKILL IS HANDED, its loads the helper's to report.
+	if got := boxFile(t, box, p.CodexSkills()+"/crewlet:deploy/SKILL.md"); !strings.Contains(got, "Run make deploy.") {
+		t.Errorf("the run's skill was not written: %q", got)
 	}
 }
 
@@ -450,25 +463,93 @@ func TestACodexRunTornDownEndsInOrderAndPacksItsSession(t *testing.T) {
 	}
 }
 
-// A CODEX RUN ENDS AT ITS ROUND CAP, role.sandbox.max_turns, as Claude Code's
-// --max-turns ends one: Codex has no setting for it, so the script counts the
-// model responses the run's rollout records and ends Codex at the cap, and the
-// run reads as capped, never as a success or an end on request.
+// A CODEX RUN ENDS AT ITS ROUND CAP, role.sandbox.max_turns, counted in model
+// responses as Claude Code's --max-turns counts them: Codex has no cap of its
+// own, so the note helper counts the turn's responses off the app-server,
+// marks the cap and interrupts the turn, and the run reads as capped. A later
+// run continues the session.
 //
-// Mutation: drop the watcher, count the session's earlier rounds, or read the
-// mark as an end on request, and this goes red.
-func TestACodexRunEndsAtItsRoundCap(t *testing.T) {
+// Mutation: start no helper for a capped run, drop -step-cap, or read the cap
+// without the helper's marker, and this goes red.
+func TestACodexRunEndsAtItsRoundCapAndItsSessionGoesOn(t *testing.T) {
+	t.Parallel()
+	runner, box, record := codexBox(t, "0.171.0")
+	for name, body := range map[string]string{"block": "", "steps": "3"} {
+		if err := os.WriteFile(filepath.Join(record, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("arm the stand-in: %v", err)
+		}
+	}
+	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go", Limits: sandbox.Limits{MaxTurns: 2}})
+	if res.Success || !res.RoundCapped {
+		t.Fatalf("a run past its cap collects success %v, capped %v (%q):\n%s", res.Success, res.RoundCapped,
+			res.Error, boxFile(t, box, executor.PathsFor(box).Err()))
+	}
+	if len(recorded(t, record, "interrupted")) != 1 {
+		t.Error("the turn was not interrupted once at its cap")
+	}
+	for _, name := range []string{"block", "steps"} {
+		if err := os.Remove(filepath.Join(record, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, again := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go on", Resume: res.SessionID})
+	if exec := recorded(t, record, "exec-argv"); !slices.Contains(exec, "resume") || !again.Success {
+		t.Errorf("the capped session was not continued: %q, success %v (%q)", exec, again.Success, again.Error)
+	}
+}
+
+// A CODEX RUN WHOSE HELPER ENDS UNDER IT FAILS CLOSED: its guard interrupts the
+// turn in flight and the run fails, never going on past a cap no helper holds,
+// and never reads as capped.
+//
+// Mutation: drop the guard, or read its interrupt as the cap, and this goes red.
+func TestACodexRunWhoseHelperEndsUnderItFails(t *testing.T) {
 	t.Parallel()
 	runner, box, record := codexBox(t, "0.171.0")
 	if err := os.WriteFile(filepath.Join(record, "block"), nil, 0o600); err != nil {
 		t.Fatalf("arm the stand-in: %v", err)
 	}
-	_, res := runToEnd(t, runner, box, sandbox.RunRequest{Brief: "go",
-		Limits: sandbox.Limits{MaxTurns: 1}})
-	if res.Success || !res.RoundCapped {
-		t.Errorf("a run past its cap collects success %v, capped %v (%q)", res.Success, res.RoundCapped, res.Error)
+	p := executor.PathsFor(box)
+	handle, err := runner.Start(t.Context(), box, sandbox.RunRequest{Brief: "go", Limits: sandbox.Limits{MaxTurns: 50}})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
 	}
-	if order := recorded(t, record, "order"); !slices.Equal(order, []string{"exec", "server"}) {
-		t.Errorf("the cap stopped %q, want Codex, then its server", order)
+	waitForFile(t, filepath.Join(record, "working"), "the stand-in to work")
+	killProcess(t, p.CodexNoteHelper()+" -adapter")
+	awaitOver(t, runner, box, handle, 15*time.Second, "the helper was killed")
+	res, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
 	}
+	if res.Success || res.RoundCapped || !strings.Contains(res.Error, "note helper ended") {
+		t.Errorf("a run whose helper ended collects success %v, capped %v, %q", res.Success, res.RoundCapped, res.Error)
+	}
+	if len(recorded(t, record, "interrupted")) != 1 {
+		t.Error("the guard did not interrupt the turn")
+	}
+}
+
+// killProcess sends SIGKILL to the one process whose command line begins with
+// prefix, failing the case where there is none.
+func killProcess(t *testing.T, prefix string) {
+	t.Helper()
+	dirs, err := os.ReadDir("/proc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range dirs {
+		pid, err := strconv.Atoi(d.Name())
+		if err != nil {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join("/proc", d.Name(), "cmdline")) //nolint:gosec // a process's own record
+		if err != nil || !strings.HasPrefix(strings.ReplaceAll(string(raw), "\x00", " "), prefix) {
+			continue
+		}
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
+			t.Fatalf("killing %d: %v", pid, err)
+		}
+		return
+	}
+	t.Fatalf("no process runs %s", prefix)
 }

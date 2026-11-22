@@ -97,7 +97,7 @@ at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "
 
 // codexScript is a Codex run's script ([Codex.Command]): the end protocol
 // (end.go); the release, refused below [codexFloor]; the session settled and
-// its configuration installed ([codexSessionGate], [codexFreshRoute]), and
+// its configuration installed ([codexSessionGate], [codexFreshRoutes]), and
 // recorded; the app-server started on [Paths.CodexSocket], its
 // output kept off the stream; the note helper beside it where the run is wired
 // to its notes; a watcher writing the thread `exec --json` reports to
@@ -113,7 +113,7 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	thread := q(paths.CodexThread())
 	threadNext := q(paths.CodexThread() + ".next")
 	serverLog := q(paths.WorkDir() + "/codex-server.log")
-	steered := req.Steer.Set()
+	helped := codexHelped(req)
 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -126,11 +126,11 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 		floorArgs(codexFloor()), codexFloor())
 	line(`mkdir -p %s %s && chmod 700 %s || exit 1`, q(paths.CodexHome()), q(paths.CodexSessions()),
 		q(paths.CodexHome()))
-	line(`apid= hpid= tpid= cpid= tid= before=0 r=`)
+	line(`apid= hpid= tpid= gpid= tid= before=0 r=`)
 	// stop: the watcher, the helper, then the app-server, TERM again on each
 	// probe: on TERM it finishes the running turn first, and a second TERM
 	// ends it at once (measured on 0.171.0), all within the job's grace.
-	line(`stop() { end "$tpid"; end "$cpid"; end "$hpid"; end "$apid" again; tpid= cpid= hpid= apid=; rm -f %s; }`, sock)
+	line(`stop() { end "$tpid"; end "$gpid"; end "$hpid"; end "$apid" again; tpid= gpid= hpid= apid=; rm -f %s; }`, sock)
 	// THE THREAD, off the stream's first line, the one `exec --json` prints as
 	// the server starts the thread, before its turn: written for the helper
 	// and reported for collection. Whole lines only: the pattern ends the line.
@@ -143,8 +143,8 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	line(`trap 'stop' EXIT`)
 	line(`trap 'quit 143' TERM; trap 'quit 130' INT; trap 'quit 129' HUP`)
 	b.WriteString(codexSessionGate(session, paths, req.FreshWiring != nil))
-	if session.Continues && req.FreshWiring != nil && req.Steer.Set() {
-		b.WriteString(codexFreshRoute(paths))
+	if session.Continues && req.FreshWiring != nil {
+		b.WriteString(codexFreshRoutes(req, paths))
 	}
 	line(`chmod 600 %s || exit 1`, q(paths.CodexLiveConfig()))
 	// THE RECORD, before the server and the run: the session continued, else
@@ -178,13 +178,8 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	line(`( while kill -0 $$ 2> /dev/null; do thread && exit 0; sleep 0.1; done ) &`)
 	line(`tpid=$!`)
 
-	if steered {
-		// THE ROUTE IN THE HELPER'S ENVIRONMENT ALONE, never argv nor
-		// Codex's: it carries the job's token. Its errors are the run's.
-		line(`chmod 700 %s && %s=$(cat %s) %s -adapter codex-app-server -socket %s -thread-file %s -notes-env %s < /dev/null > /dev/null &`,
-			q(paths.CodexNoteHelper()), codexNotesEnv, q(paths.CodexNotesURL()), q(paths.CodexNoteHelper()), sock, thread,
-			codexNotesEnv)
-		line(`hpid=$!`)
+	if helped {
+		b.WriteString(codexStartHelper(req, paths))
 	}
 
 	if session.Continues {
@@ -193,15 +188,16 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 		line(`set --`)
 	}
 	// THE BRIEF ON STDIN (`-`), as `exec --remote` reads it (measured on 0.171.0).
-	harness := fmt.Sprintf(`codex exec --json --remote %s "$@" -`, q("unix://"+paths.CodexSocket()))
-	if limit := req.Limits.MaxTurns; limit > 0 {
-		harness = codexRoundCap(paths, harness)
-		b.WriteString(codexCapWatch(paths, limit))
+	b.WriteString(launchHarness(fmt.Sprintf(`codex exec --json --remote %s "$@" -`,
+		q("unix://"+paths.CodexSocket())), paths))
+	if helped {
+		// The guard first, so a helper stopped below is never taken for lost.
+		line(`end "$gpid"; gpid=`)
+		line(`if [ -e %s ]; then printf '{"type":"%s"}\n'; code=1; fi`, q(paths.CodexHelperLost()), codexHelperLostEvent)
 	}
-	b.WriteString(launchHarness(harness, paths))
-	if req.Limits.MaxTurns > 0 {
-		line(`if [ -e %s ]; then printf '{"type":"%s","rounds":%d}\n'; code=1; fi`,
-			q(paths.CodexCapped()), codexCappedEvent, req.Limits.MaxTurns)
+	if limit := req.Limits.MaxTurns; limit > 0 {
+		line(`if [ -s %s ]; then printf '{"type":"%s","rounds":%d}\n'; code=1; fi`,
+			q(paths.CodexCapFired()), codexCappedEvent, limit)
 	}
 	// The watcher stopped before the last read, so no two writers race on the
 	// report's staging file.
@@ -215,9 +211,13 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	return b.String()
 }
 
-// codexNotesEnv is the variable the note helper reads the notes route from,
-// set in its environment alone (internal/notehelper's -notes-env).
-const codexNotesEnv = "CREWLET_NOTES_URL"
+// codexNotesEnv and codexSkillsEnv are the variables the note helper reads the
+// notes and skill-load routes from, set in its environment alone
+// (internal/notehelper's -notes-env, -skills-env).
+const (
+	codexNotesEnv  = "CREWLET_NOTES_URL"
+	codexSkillsEnv = "CREWLET_SKILLS_URL"
+)
 
 // codexServerLogShown is how much of the app-server's own output, from its
 // end, a failed run's error stream is given: 4 KiB, a few of its lines, since
@@ -225,50 +225,80 @@ const codexNotesEnv = "CREWLET_NOTES_URL"
 // [sandbox.MaxFailureBytes] beside exec's own words.
 const codexServerLogShown = 4 << 10
 
-// codexFreshRoute hands the note helper of a continued run that started a
-// session of its own (k=no) the notes route under the job's other token, as
-// the gate hands Codex that token's configuration ([codexSessionGate]), and
-// removes the other route otherwise: the one place a run's notes route is
-// chosen.
-func codexFreshRoute(paths Paths) string {
+// codexFreshRoutes hands the note helper of a continued run that started a
+// session of its own (k=no) the notes and skill-load routes under the job's
+// other token, as the gate hands Codex that token's configuration
+// ([codexSessionGate]), and removes the other routes otherwise: the one place
+// a run's helper routes are chosen.
+func codexFreshRoutes(req sandbox.RunRequest, paths Paths) string {
 	q := sandbox.ShellQuote
-	url, fresh := q(paths.CodexNotesURL()), q(paths.CodexNotesURLFresh())
-	return fmt.Sprintf("if [ \"$k\" = no ]; then mv -f %s %s || { echo 'crewlet: the new session could not be wired to its notes, so the run does not start' >&2; exit 1; }; else rm -f %s; fi\n",
-		fresh, url, fresh)
+	var b strings.Builder
+	route := func(url, fresh string) {
+		fmt.Fprintf(&b, "if [ \"$k\" = no ]; then mv -f %s %s || { echo 'crewlet: the new session could not be wired to its seat, so the run does not start' >&2; exit 1; }; else rm -f %s; fi\n",
+			q(fresh), q(url), q(fresh))
+	}
+	if req.Steer.Set() {
+		route(paths.CodexNotesURL(), paths.CodexNotesURLFresh())
+	}
+	if len(req.Skills) > 0 {
+		route(paths.CodexSkillsURL(), paths.CodexSkillsURLFresh())
+	}
+	return b.String()
 }
 
-// codexCappedEvent is the line a run's script adds to its stream where it
-// ended its run at the round cap ([codexCapWatch]), read as
-// [sandbox.Result.RoundCapped].
+// codexCappedEvent is the line a run's script adds to its stream where the
+// note helper marked the turn it interrupted at the run's round cap
+// ([Paths.CodexCapFired]): read as [sandbox.Result.RoundCapped] only beside the
+// rollout's turn_aborted with reason interrupted, so no other interrupt is
+// taken for the cap.
 const codexCappedEvent = "crewlet.round_cap"
 
-// codexCapPoll is how often a capped run's watcher counts its rounds: half a
-// second, a few of a model's shortest responses, so a run overshoots its cap
-// by the round already in flight at most.
-const codexCapPoll = "0.5"
+// codexHelperLostEvent is the line a run's script adds to its stream where
+// the note helper ended while Codex still worked ([codexStartHelper]): the run
+// fails, never goes on past a cap or a skill guard no helper holds.
+const codexHelperLostEvent = "crewlet.helper_lost"
 
-// codexRoundCap is harness run so its pid is recorded ([Paths.CodexExecPID]),
-// the shell exec'ing Codex in its own place, so the recorded pid is Codex's,
-// and the one the end protocol holds too. The file is an argument, never
-// spliced into the quoted command.
-func codexRoundCap(paths Paths, harness string) string {
-	return `sh -c 'printf "%s\n" "$$" > "$1" && shift && exec "$@"' codex-exec ` +
-		sandbox.ShellQuote(paths.CodexExecPID()) + " " + harness
+// codexHelped reports whether req's run needs the note helper beside Codex:
+// wired to its notes, held to a round cap (Codex has none of its own,
+// CODEX-MEASURE §17.1), or handed skills whose loads only it reports.
+func codexHelped(req sandbox.RunRequest) bool {
+	return req.Steer.Set() || req.Limits.MaxTurns > 0 || len(req.Skills) > 0
 }
 
-// codexCapWatch starts the watcher that holds a run to its round cap,
-// role.sandbox.max_turns: Codex has no setting for one (0.171.0), so the
-// watcher counts the rounds the run's rollout records past where it began
-// (one token_usage_record a model response), and at limit marks the run
-// capped and ends Codex with SIGTERM, as a run ended on request is ended.
-// The script reads the mark after Codex exits.
-func codexCapWatch(paths Paths, limit int) string {
+// codexStartHelper starts the note helper (internal/notehelper) for req's
+// run, and the guard that fails the run closed where the helper ends while
+// Codex still works: the guard marks it lost ([Paths.CodexHelperLost]) and
+// interrupts the turn in flight with the helper's -interrupt-once. Every route
+// reaches the helper's environment alone, never argv nor Codex's, since each
+// carries the job's token; the helper's errors are the run's.
+func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
 	q := sandbox.ShellQuote
-	return fmt.Sprintf(`( while kill -0 $$ 2> /dev/null; do t=$(cat %[1]s 2> /dev/null); f=; [ -z "$t" ] || f=$(find %[2]s -type f -name "rollout-*-$t.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); if [ -n "$f" ] && [ "$(tail -n +$((before + 1)) "$f" | grep -c '"type": *"token_usage_record"')" -ge %[3]d ] && [ -s %[4]s ]; then : > %[5]s; kill -TERM "$(cat %[4]s)" 2> /dev/null; exit 0; fi; sleep %[6]s; done ) &
-cpid=$!
-`, q(paths.CodexThread()), q(paths.CodexSessions()), limit, q(paths.CodexExecPID()), q(paths.CodexCapped()),
-		codexCapPoll)
+	helper, sock, thread := q(paths.CodexNoteHelper()), q(paths.CodexSocket()), q(paths.CodexThread())
+	base := fmt.Sprintf(`%s -adapter codex-app-server -socket %s -thread-file %s`, helper, sock, thread)
+	env, flags := "", ""
+	if req.Steer.Set() {
+		env += fmt.Sprintf(`%s=$(cat %s) `, codexNotesEnv, q(paths.CodexNotesURL()))
+		flags += " -notes-env " + codexNotesEnv
+	}
+	if len(req.Skills) > 0 {
+		env += fmt.Sprintf(`%s=$(cat %s) `, codexSkillsEnv, q(paths.CodexSkillsURL()))
+		flags += fmt.Sprintf(" -skills-env %s -skills-dir %s", codexSkillsEnv, q(paths.CodexSkills()))
+	}
+	if limit := req.Limits.MaxTurns; limit > 0 {
+		flags += fmt.Sprintf(" -step-cap %d -cap-marker %s", limit, q(paths.CodexCapFired()))
+	}
+	return fmt.Sprintf(`chmod 700 %[1]s || exit 1
+%[2]s%[3]s%[4]s < /dev/null > /dev/null &
+hpid=$!
+( while kill -0 $$ 2> /dev/null && kill -0 "$hpid" 2> /dev/null; do sleep %[5]s; done; kill -0 $$ 2> /dev/null || exit 0; : > %[6]s; %[3]s -interrupt-once < /dev/null > /dev/null ) &
+gpid=$!
+`, helper, env, base, flags, codexGuardPoll, q(paths.CodexHelperLost()))
 }
+
+// codexGuardPoll is how often the guard looks for the helper: half a second,
+// a few of a model's shortest responses, so a run outlives its helper by at
+// most that before its turn is interrupted.
+const codexGuardPoll = "0.5"
 
 // codexFinish defines the script's `finish`, run once Codex and everything
 // beside it have stopped, on the run's own end and a teardown's alike: the
@@ -282,7 +312,7 @@ func codexFinish(paths Paths) string {
 	b.WriteString(`[ -z "$tid" ] || sid=$tid` + "\n")
 	fmt.Fprintf(&b, `r=; [ -z "$sid" ] || r=$(find %s -type f -name "rollout-*-$sid.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1)`+"\n",
 		sandbox.ShellQuote(paths.CodexSessions()))
-	fmt.Fprintf(&b, `[ -z "$r" ] || tail -n +$((before + 1)) "$r" | grep -E '"type": *"(turn_context|token_usage_record|token_count)"' | sed 's/^/{"type":"%s","line":/; s/$/}/'`+"\n",
+	fmt.Fprintf(&b, `[ -z "$r" ] || tail -n +$((before + 1)) "$r" | grep -E '"type": *"(turn_context|token_usage_record|token_count|turn_aborted)"' | sed 's/^/{"type":"%s","line":/; s/$/}/'`+"\n",
 		codexRolloutEvent)
 	b.WriteString(codexCapture(paths))
 	b.WriteString("}\n")
@@ -313,7 +343,7 @@ func (Codex) Parse(stdout []byte) sandbox.Result { return decodeAll(&codexEvents
 // helper and its routes, the server's output.
 func (Codex) artifacts(p Paths) (files, dirs []string) {
 	return []string{p.CodexLiveConfig(), p.CodexConfig(), p.CodexConfigFresh(), p.CodexSocket(),
-		p.CodexExecPID(), p.CodexCapped(),
+		p.CodexCapFired(), p.CodexHelperLost(), p.CodexSkillsURL(), p.CodexSkillsURLFresh(),
 		p.CodexThread(), p.CodexThread() + ".next", p.CodexNoteHelper(), p.CodexNotesURL(),
 		p.CodexNotesURLFresh(), p.WorkDir() + "/codex-server.log"}, nil
 }

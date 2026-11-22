@@ -84,9 +84,13 @@ type codexEvents struct {
 	lastError     string
 	sawLine       bool
 	following     bool
-	// capped is the round cap the script ended the run at, 0 where none
-	// ([codexCappedEvent]).
-	capped int
+	// capped is the round cap the helper marked a turn interrupted at, 0
+	// where none ([codexCappedEvent]); interrupted says the run's rollout lines
+	// record a turn aborted as interrupted; helperLost, that the helper ended
+	// while Codex worked ([codexHelperLostEvent]).
+	capped      int
+	interrupted bool
+	helperLost  bool
 	// rollout is the rollout lines the script appended, each with its line
 	// break, held to [codexEvents.bound]; rolloutDropped counts what was not.
 	rollout        bytes.Buffer
@@ -153,7 +157,9 @@ func (d *codexEvents) Line(line []byte) {
 		d.keepRollout(ev.Line)
 	case codexCappedEvent:
 		d.capped = max(ev.Rounds, 1)
-		d.transcript.add(activityline.Words(activityline.TagError, d.cappedWords()))
+	case codexHelperLostEvent:
+		d.helperLost = true
+		d.transcript.add(activityline.Words(activityline.TagError, codexHelperLostWords))
 	}
 }
 
@@ -281,6 +287,17 @@ func (d *codexEvents) keepRollout(line json.RawMessage) {
 	if d.following || len(line) == 0 {
 		return
 	}
+	var aborted struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Type   string `json:"type"`
+			Reason string `json:"reason"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(line, &aborted) == nil && aborted.Type == "event_msg" &&
+		aborted.Payload.Type == "turn_aborted" && aborted.Payload.Reason == "interrupted" {
+		d.interrupted = true
+	}
 	if d.rolloutDropped > 0 || d.rollout.Len()+len(line)+1 > d.bound() {
 		d.rolloutDropped += len(line) + 1
 		return
@@ -390,16 +407,28 @@ func (d *codexEvents) Result() sandbox.Result {
 		res.Text = withNote(res.Text, fmt.Sprintf("(%s more of the answer not kept: past the %s a run's "+
 			"answer is read to)", humanSize(int64(d.answerDropped)), humanSize(int64(d.bound()))))
 	}
-	res.Success = d.completed && d.failure == "" && d.answer != "" && d.capped == 0
+	res.Success = d.completed && d.failure == "" && d.answer != "" && !d.roundCapped() && !d.helperLost
 	res.Transcript, res.TranscriptElidedLines, res.TranscriptElidedBytes = d.transcript.result()
 	if !res.Success {
 		res.Error = firstNonBlank(d.failure, d.lastError, "the harness produced no answer")
-		if d.capped > 0 {
+		switch {
+		case d.roundCapped():
 			res.Error, res.RoundCapped = d.cappedWords(), true
+		case d.helperLost && d.failure == "":
+			res.Error = codexHelperLostWords
 		}
 	}
 	return res
 }
+
+// codexHelperLostWords is what a run whose helper ended under it says.
+const codexHelperLostWords = "the note helper ended while Codex worked, so the run's turn was interrupted " +
+	"rather than left without its round cap, notes or skill loads"
+
+// roundCapped reports that the run ended on its round cap: the helper marked
+// it, and the rollout records the turn interrupted. An interrupt with no mark
+// keeps its own cause.
+func (d *codexEvents) roundCapped() bool { return d.capped > 0 && d.interrupted }
 
 // cappedWords is what a run ended at its round cap says of its end.
 func (d *codexEvents) cappedWords() string {

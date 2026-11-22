@@ -88,7 +88,7 @@ func waitSeconds(d time.Duration) int {
 // (with all three off a run dials only its model and servers, measured); no
 // request_user_input (a question parks through ask_and_wait); and the model's
 // shell inherits the run's environment less the harness's own sign-in and the
-// notes route ([codexNotesEnv]), which Codex otherwise hands every command
+// helper's routes ([codexNotesEnv]), which Codex otherwise hands every command
 // (measured), keeping PATH, HOME, GIT_CONFIG_* and the seat's tool credentials.
 func codexPosture(req sandbox.RunRequest) []string {
 	profile, _ := harnessprofile.Builtin(CodexName)
@@ -101,7 +101,7 @@ func codexPosture(req sandbox.RunRequest) []string {
 		`skills.bundled.enabled=false`,
 		`tools.experimental_request_user_input.enabled=false`,
 		`shell_environment_policy.inherit="all"`,
-		`shell_environment_policy.exclude=` + tomlArray(append(profile.CredentialEnvNames(nil), codexNotesEnv)),
+		`shell_environment_policy.exclude=` + tomlArray(append(profile.CredentialEnvNames(nil), codexNotesEnv, codexSkillsEnv)),
 	}
 	// THE ENTRY'S MODEL AND EFFORT AS WRITTEN, as its runs on the engine host
 	// hand them (the codex profile's model_args and effort).
@@ -204,32 +204,49 @@ func (c Codex) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox
 		return "", fmt.Errorf("executor: writing Codex's configuration: %w", err)
 	}
 	if f := req.FreshWiring; f != nil {
-		if f.Steer.Set() != req.Steer.Set() {
+		if f.Steer.Set() != req.Steer.Set() || (len(req.Skills) > 0 && !f.SkillLoads.Set()) {
 			return "", errors.New("executor: the run's two wirings, for the session it continues and for " +
-				"one of its own, do not both take notes, so the run cannot be wired to whichever session " +
-				"its box starts")
+				"one of its own, do not reach the same routes, so the run cannot be wired to whichever " +
+				"session its box starts")
 		}
 		if err := box.WriteFile(ctx, paths.CodexConfigFresh(), []byte(codexConfigTOML(f.MCPServers, system, req.Model))); err != nil {
 			return "", fmt.Errorf("executor: writing Codex's configuration for a session of the run's own: %w", err)
 		}
-		if f.Steer.Set() {
-			if err := box.WriteFile(ctx, paths.CodexNotesURLFresh(), []byte(f.Steer.URL)); err != nil {
-				return "", fmt.Errorf("executor: writing the notes route of a session of the run's own: %w", err)
-			}
+		if err := writeCodexRoutes(ctx, box, req, *f, paths.CodexNotesURLFresh(), paths.CodexSkillsURLFresh()); err != nil {
+			return "", err
 		}
 	}
-	if req.Steer.Set() {
+	if codexHelped(req) {
 		if err := writeCodexNoteHelper(ctx, box, paths); err != nil {
 			return "", err
 		}
-		if err := box.WriteFile(ctx, paths.CodexNotesURL(), []byte(req.Steer.URL)); err != nil {
-			return "", fmt.Errorf("executor: writing the run's notes route: %w", err)
+		wired := sandbox.Wiring{Steer: req.Steer, SkillLoads: req.SkillLoads}
+		if err := writeCodexRoutes(ctx, box, req, wired, paths.CodexNotesURL(), paths.CodexSkillsURL()); err != nil {
+			return "", err
 		}
 	}
 	if err := writeCodexSkills(ctx, box, req.Skills, paths); err != nil {
 		return "", err
 	}
 	return "", nil
+}
+
+// writeCodexRoutes writes the routes w gives the note helper of req's run to
+// notes and skills, each a file of its own read into the helper's environment
+// alone ([codexStartHelper]).
+func writeCodexRoutes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, w sandbox.Wiring,
+	notes, skills string) error {
+	if req.Steer.Set() {
+		if err := box.WriteFile(ctx, notes, []byte(w.Steer.URL)); err != nil {
+			return fmt.Errorf("executor: writing the run's notes route: %w", err)
+		}
+	}
+	if len(req.Skills) > 0 {
+		if err := box.WriteFile(ctx, skills, []byte(w.SkillLoads.URL)); err != nil {
+			return fmt.Errorf("executor: writing the run's skill-load route: %w", err)
+		}
+	}
+	return nil
 }
 
 // writeCodexNoteHelper writes the note helper's build for the box's machine
@@ -257,17 +274,9 @@ func writeCodexNoteHelper(ctx context.Context, box sandbox.Sandbox, paths Paths)
 // writeCodexSkills writes each of a run's skills as
 // `<skills>/<listed name>/SKILL.md` ([Paths.CodexSkills]), after removing
 // every skill an earlier run wrote there, so a reused box lists only this
-// run's. A REQUIRED SKILL IS REFUSED: Codex reads a skill's file through its
-// shell, which reports no load to the run's bridge, so the tools the skill
-// covers would stay refused for the whole run.
+// run's. The note helper reports each load ([codexStartHelper]): Codex reads a
+// skill's file through its shell, which the helper sees off the app-server.
 func writeCodexSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.Skill, paths Paths) error {
-	for _, s := range skills {
-		if s.Required {
-			return fmt.Errorf("executor: the run's skill %q is required, and Codex reports no skill it "+
-				"loads, so the tools it covers would stay refused; run the seat on claude-code or opencode, "+
-				"or make the skill optional", s.Listed())
-		}
-	}
 	if _, err := box.Exec(ctx, "rm -rf "+sandbox.ShellQuote(paths.CodexSkills())+"/"+
 		sandbox.ShellQuote(sandbox.SkillNamespace+":")+"*", sandbox.ExecOptions{}); err != nil {
 		return fmt.Errorf("executor: removing an earlier run's Codex skills: %w", err)
