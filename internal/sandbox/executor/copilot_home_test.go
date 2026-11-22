@@ -9,18 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A COPILOT RUN LOADS ONLY THE CONFIGURATION ITS LAUNCH WRITES. Copilot
-// 1.0.114 in prompt mode loads, from its home, every user extension, hook file,
-// MCP server, installed plugin, skill (its own and the home's `.agents/skills`),
-// custom agent and instruction file (measured), and its help names the
-// language servers and saved model providers there too. Whatever an earlier
-// run or the image left in each is gone once the launch has cleared the box
-// and written its config, one case per place; the login, the sessions and the
-// run's own notes extension are where they are.
+// A COPILOT RUN LOADS ONLY WHAT ITS LAUNCH WRITES. Copilot 1.0.114 in prompt
+// mode loads, from its home, every user extension, hook file, MCP server,
+// installed plugin, skill (its own and the home's `.agents/skills`), custom
+// agent and instruction file, and runs the package and rg in its cache
+// (measured); its help names the language servers and saved model providers
+// too. Whatever an earlier run or the image left in each is gone once the
+// launch has cleared the box and written its config, one case per place; the
+// login, the sessions and the run's own notes extension are where they are.
 //
 // Mutation: drop any place from Paths.CopilotLoaded, or the whole extensions
 // directory for crewlet-notes alone, and its case fails.
-func TestACopilotRunLoadsOnlyTheConfigItsLaunchWrites(t *testing.T) {
+func TestACopilotRunLoadsOnlyWhatItsLaunchWrites(t *testing.T) {
 	t.Parallel()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
 	if err != nil {
@@ -46,6 +46,8 @@ func TestACopilotRunLoadsOnlyTheConfigItsLaunchWrites(t *testing.T) {
 		"an instruction file":  h + "/instructions/left.instructions.md",
 		"a language server":    h + "/lsp-config.json",
 		"a model provider":     h + "/providers.json",
+		"its cached package":   p.CopilotCache() + "/pkg/linux-x64/1.0.114/index.js",
+		"its cached rg":        p.CopilotCache() + "/pkg/linux-x64/1.0.114/ripgrep/bin/linux-x64/rg",
 	}
 	kept := map[string]string{
 		h + "/config.json": `{"copilotTokens":{"https://github.com:u":"gho_placeholder"}}`,

@@ -1188,18 +1188,20 @@ func TestAWebDeniedCopilotRunHasNoWebTool(t *testing.T) {
 	}
 }
 
-// The run is pinned to its own home and trusted by COPILOT_ALLOW_ALL=true
-// (route (a), measured to widen nothing beyond --yolo); the switches that open
-// what a repository loads in prompt mode are unset.
+// The run is pinned to its own home and cache and trusted by
+// COPILOT_ALLOW_ALL=true (route (a), measured to widen nothing beyond --yolo);
+// the switches that open what a repository loads in prompt mode are unset.
 //
-// Mutation: leave COPILOT_ALLOW_ALL out of the pins — the case fails.
+// Mutation: leave COPILOT_ALLOW_ALL or COPILOT_CACHE_HOME out of the pins — the
+// case fails.
 func TestACopilotRunIsPinnedToItsHomeAndTrust(t *testing.T) {
 	paths := Paths{Home: "/box"}
 	pins := map[string]string{}
 	for _, p := range (Copilot{}).Pins(t.Context(), sandbox.RunRequest{}, paths) {
 		pins[p.Name] = p.Value
 	}
-	want := map[string]string{"COPILOT_HOME": "/box/.copilot", "COPILOT_AUTO_UPDATE": "false",
+	want := map[string]string{"COPILOT_HOME": "/box/.copilot", "COPILOT_CACHE_HOME": "/box/.cache/copilot",
+		"COPILOT_AUTO_UPDATE":        "false",
 		"COPILOT_TELEMETRY_DISABLED": "true", "COPILOT_MCP_TOOL_CACHE": "false", "COPILOT_ALLOW_ALL": "true"}
 	for k, v := range want {
 		if pins[k] != v {
