@@ -536,9 +536,12 @@ function NoModel({ unavailable }: { unavailable: AssistantUnavailable }) {
 /** The conversation: the home until a question is asked, then its turns; or why the reader may not ask. */
 export function AskThread({
   label = "Conversation",
+  column = false,
   onNew,
 }: {
   label?: string;
+  /** Hold the turns to one centred column: a page of its own, much wider than a line of an answer. */
+  column?: boolean;
   /** Leave for a new conversation, as the holder's own New conversation does. */
   onNew: () => void;
 }) {
@@ -556,7 +559,7 @@ export function AskThread({
   }
   if (a.view.opening !== null) return <AskOpening opening={a.view.opening} onNew={onNew} />;
   return (
-    <ChatThread ref={a.thread} label={label} busy={openTurn(a.view) !== null}>
+    <ChatThread ref={a.thread} label={label} busy={openTurn(a.view) !== null} column={column}>
       {a.deleteFailed !== null ? (
         <Callout variant="warning" role="alert">
           {a.deleteFailed}
