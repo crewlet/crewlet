@@ -702,6 +702,11 @@ func openCodeSessionGate(session Session, paths Paths, rewired bool) string {
 	}
 	line(`if [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no export of it was carried here'`, carried)
+	// A BOX RELEASE THAT DOES NOT READ continues nothing carried, as the
+	// engine's check holds it ([boxNamedNoRelease]): no MAJOR.MINOR.PATCH in
+	// what `--version` printed, as [releaseOf] finds one.
+	line(`  elif ! { case "$v" in *[0-9].[0-9]*.[0-9]*) true;; *) false;; esac; }; then w=%s`,
+		q(boxNamedNoRelease("OpenCode")))
 	line(`  elif ! command -v gzip > /dev/null 2>&1; then w='this box has no gzip to unpack its export with'`)
 	line(`  else`)
 	line(`    rm -rf %s`, q(staged))

@@ -400,6 +400,10 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	}
 	line(`if [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
+	// A BOX RELEASE THAT DOES NOT READ continues nothing carried, as the
+	// engine's check holds it ([boxNamedNoRelease]); `at` alone takes one for
+	// a current release, which every other gate wants ([claudeRelease]).
+	line(`  elif [ -z "$a" ]; then w=%s`, q(boxNamedNoRelease("Claude Code")))
 	line(`  elif ! at %s; then w="this box runs Claude Code $n, older than %s, the oldest that continues a session carried from another box"`,
 		floorArgs(claudeCarryFloor), claudeCarryFloor)
 	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)

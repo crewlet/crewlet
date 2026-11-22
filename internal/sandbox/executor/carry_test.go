@@ -570,12 +570,14 @@ func TestABoxWhoseCopyDoesNotHoldTheCarriedArchiveHasItReplaced(t *testing.T) {
 }
 
 // A CARRIED SESSION THE BOX CANNOT RESTORE IS NEVER RESUMED. A box whose harness
-// is below the carry floor, and an archive holding no transcript, each start the
-// session minted for the run instead, say why on the error stream and in the
-// report, and report that the run did not continue.
+// is below the carry floor or names no release this build reads, and an archive
+// holding no transcript, each start the session minted for the run instead, say
+// why on the error stream and in the report, and report that the run did not
+// continue.
 //
-// Mutation: resume whatever the restore did, and the harness fails the run on a
-// session it does not hold; record no reason, and the report says nothing of why.
+// Mutation: resume whatever the restore did, or take an unreadable release for a
+// current one, and the run continues a session no rule was read for; record no
+// reason, and the report says nothing of why.
 func TestACarriedSessionTheBoxCannotRestoreStartsANewOne(t *testing.T) {
 	t.Parallel()
 	first, a := sessionBox(t, "2.1.310")
@@ -596,6 +598,8 @@ func TestACarriedSessionTheBoxCannotRestoreStartsANewOne(t *testing.T) {
 		release, archive, why string
 	}{
 		"a box older than the floor": {release: "2.1.309", archive: capture, why: "older than 2.1.310"},
+		"a box whose release does not read": {release: "nightly", archive: capture,
+			why: "named no release this build reads"},
 		"an archive with no transcript": {release: "2.1.310", archive: empty.String(),
 			why: "could not be restored"},
 		"an archive that is no archive": {release: "2.1.310", archive: "not a tar", why: "could not be restored"},
