@@ -106,8 +106,9 @@ func pausedSeats(ev Evidence) []Finding {
 			Class: f.class, Severity: SeverityBlocks, Actor: ActorOwner, Source: SourceEvidence,
 			Area: AreaSetup, Subject: subject,
 			Title: fmt.Sprintf("Paused because %s.", f.because),
-			Why: "The engine pauses an agent after the same failure twice in a row, since another " +
-				"try would fail the same way. Work sent to it waits and nothing is dropped.",
+			Why: "Work sent to a paused agent waits until it resumes; nothing is dropped. The engine " +
+				"pauses an agent after the same failure twice in a row, since another try would fail " +
+				"the same way.",
 			Names:    names,
 			Evidence: []Fact{{Key: "agents", Value: int64(len(seats))}},
 			Fix:      fix,

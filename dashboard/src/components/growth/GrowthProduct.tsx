@@ -18,6 +18,7 @@ import type {
 import type { IntegrationRow } from "~/contract/integrations.ts";
 import { SPEND_PRODUCTS } from "./words.ts";
 import { GrowthConnections } from "./GrowthConnections.tsx";
+import { AnalyticsAttribution } from "./AnalyticsAttribution.tsx";
 import { useViewer } from "~/lib/viewer.ts";
 import { GrowthRoles } from "./GrowthRoles.tsx";
 import { RecentChanges } from "./RecentChanges.tsx";
@@ -111,6 +112,8 @@ export function GrowthProductSection({
           Connections
         </Text>
         <GrowthConnections product={product} connections={connections} roles={roles} />
+        {/* THE GOOGLE ANALYTICS LOGO BESIDE ITS DATA, as Google's policy asks, once there is some. */}
+        {kind === "google_analytics" && connections.length > 0 ? <AnalyticsAttribution /> : null}
       </section>
       {roles.length === 0 ? null : (
         <section aria-labelledby={`${kind}-roles`}>
