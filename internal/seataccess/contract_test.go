@@ -319,3 +319,45 @@ func TestTwoNodesShareTheLedger(t *testing.T) {
 		t.Fatalf("the serving node read %+v, want the row the syncing node wrote", got["sre"])
 	}
 }
+
+// EVERY GROWTH SEAT READS AND WRITES THROUGH ITS PRODUCT'S ONE PATH: each
+// growth seat key the document declares is a lane, and its block round-trips
+// through DesiredOf and SetDesired exactly as config's growth seat access
+// reads it, App Store Connect's team_resources left as it was.
+//
+// Mutation: break a growth block's SeatAccess or SetSeatAccess (drop its
+// scope), or leave a growth key out of Lanes, and the sweep names the lane; a
+// hand-written lane case here would hide the first.
+func TestEveryGrowthSeatRoundTripsThroughItsOnePath(t *testing.T) {
+	t.Parallel()
+	growthLanes := 0
+	for _, key := range config.SeatAccessLanes() {
+		if !(&config.Role{}).SetGrowthSeatAccess(key, config.GrowthSeatAccess{}) {
+			continue
+		}
+		growthLanes++
+		lane := seataccess.Lane(key)
+		if !lane.Valid() {
+			t.Errorf("growth seat %s is no lane seat access manages", key)
+			continue
+		}
+		want := seataccess.Desired{Enabled: true, Level: "operate", Scope: []string{"123", "456"}}
+		role := &config.Role{Handle: "growth", Integrations: config.RoleIntegrations{
+			AppStoreConnect: &config.RoleAppStoreConnect{TeamResources: true}}}
+		if err := seataccess.SetDesired(role, lane, want); err != nil {
+			t.Fatalf("%s: SetDesired: %v", lane, err)
+		}
+		got, present := seataccess.DesiredOf(role, lane)
+		generic, ok := role.GrowthSeatAccess(key)
+		if !present || !ok || !got.SameAccess(want) || got.Enabled != want.Enabled ||
+			generic.Level != got.Level || !config.SeatAccessOn(generic.On) {
+			t.Errorf("%s: read back %+v (present %v), config reads %+v, want %+v", lane, got, present, generic, want)
+		}
+		if !role.Integrations.AppStoreConnect.TeamResources {
+			t.Errorf("%s: writing the seat lost App Store Connect's team_resources", lane)
+		}
+	}
+	if growthLanes < 2 {
+		t.Errorf("the sweep found %d growth seats, want App Store Connect's and Google Analytics' at least", growthLanes)
+	}
+}

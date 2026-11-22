@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -149,12 +148,6 @@ func DesiredOf(role *config.Role, lane Lane) (Desired, bool) {
 			return Desired{}, false
 		}
 		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: b.LevelOrDefault()}
-	case LaneAppStoreConnect:
-		b := in.AppStoreConnect
-		if b == nil {
-			return Desired{}, false
-		}
-		d = Desired{Enabled: config.SeatAccessOn(b.Enabled), Level: string(growth.LevelOf(b.Level)), Scope: b.Apps}
 	case LaneGitHub:
 		b := in.GitHub
 		if b == nil {
@@ -266,11 +259,6 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 			in.SSH = &config.RoleSSH{}
 		}
 		in.SSH.Enabled, in.SSH.Level, in.SSH.Hosts = &on, d.Level, d.Scope
-	case LaneAppStoreConnect:
-		if in.AppStoreConnect == nil {
-			in.AppStoreConnect = &config.RoleAppStoreConnect{}
-		}
-		in.AppStoreConnect.Enabled, in.AppStoreConnect.Level, in.AppStoreConnect.Apps = &on, d.Level, d.Scope
 	case LaneGitHub:
 		if in.GitHub == nil {
 			in.GitHub = &config.RoleGitHub{}
