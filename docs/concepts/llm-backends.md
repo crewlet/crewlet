@@ -1355,7 +1355,7 @@ from a file a *variable* names, a channel `--help` never shows.
 | `muse-code` | 1.0.3, 1.4.13 | — none per call | variable, file: `TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE`, undocumented | none |
 | `kimi-code` | 0.42.0, 2.3.1 | flag, agent file: `--agent-file`, body `{system}` | flag, agent file: `--agent-file`, body `{system}` then `${base_prompt}` | none — the vendor's per-call text follows the engine's |
 | `hermes` | 0.21.5 | — | — | — |
-| `pi` | 0.85.1, 1.4.0, 1.6.0 | flag, file: `--system-prompt` | flag, file: `--append-system-prompt` | none; the working directory follows the engine's text, in the same block |
+| `pi` | 1.6.0 | flag, file: `--system-prompt` | flag, file: `--append-system-prompt` | none; the working directory follows the engine's text, in the same block |
 
 Where a harness has one channel, both kinds of call take it: `gemini-cli`
 replaces its prompt for a seat too, `copilot` and `muse-code` keep theirs for a
@@ -1780,7 +1780,7 @@ The switch is `OPENCODE_CONFIG_PROJECT_DISABLE` because OpenCode 2 reads `OPENCO
 | `claude-code` | `WebFetch` and `WebSearch` move from `--allowedTools` to `--disallowedTools` | refused on 2.1.310 |
 | `codex` | `-c web_search="disabled"` in place of `"live"`; the read-only sandbox already cuts the shell's network | refused on 0.150.1 |
 | `opencode` | the seeded policy keeps its deny-all rule and drops the two allow rules | not measured; derived from the 2.0 permissions format |
-| `pi` | nothing changes: `--no-tools` already sends no tools | measured on 0.85.1 (no web tool exists) |
+| `pi` | nothing changes: `--no-tools` already sends no tools | measured on 1.6.0 (no web tool exists) |
 
 Every other profile has no `web_denial`, says why in `web_tools_note`, and refuses `web_tools: denied`, so it cannot serve Ask Crewlet until one is measured and added (an operator may supply their own `web_denial` in `overrides` and owns that claim). `crewlet llm doctor` runs its web probe on a denied entry and on the helper's run of an assigned entry, and reports a fetch that succeeded as a problem, as it does a shell that ran on a profile denying local tools.
 
@@ -1789,7 +1789,7 @@ Every other profile has no `web_denial`, says why in `web_tools_note`, and refus
 | Profile | No tool by construction | Ask Crewlet |
 |---|---|---|
 | `claude-code` | `--tools ""` (an empty allow list) in the denied argv, `--strict-mcp-config` with no server but `crewlet`, and `mcp__crewlet__*` the only allowed tools | eligible, measured on 2.1.310 |
-| `pi` | `--no-tools` sends no tool, `--no-extensions` loads none | eligible, measured on 0.85.1 |
+| `pi` | `--no-tools` sends no tool, `--no-extensions` loads none | eligible, measured on 1.6.0 |
 | `codex` | none: its shell is switched off, but `apply_patch` has no switch, and its patch check answers whether a file outside the call holds given lines | refused |
 | `opencode` | none measured: the seats' policy offers only the web tools (measured on 2.0.32 and 2.1.4), but the denial's deny-all has not been measured to offer nothing | refused until measured |
 

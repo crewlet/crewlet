@@ -107,7 +107,7 @@ func TestThePiProfileAdmitsNothingFromTheHost(t *testing.T) {
 		"-p":                    "print mode: answer and exit rather than opening the TUI",
 		"--no-tools":            "the tool denial itself",
 		"--no-context-files":    "the AGENTS.md / CLAUDE.md walk up to /, which the engine's .git file does not end",
-		"--no-extensions":       "extension discovery — an extension executes, and on 1.4.0 so would an mcp.json server",
+		"--no-extensions":       "extension discovery: an extension executes, and so would an mcp.json server",
 		"--no-skills":           "skill discovery",
 		"--no-prompt-templates": "prompt-template discovery",
 		"--no-themes":           "theme discovery",
