@@ -79,6 +79,7 @@ serve)
   printf '%s' "${OPENCODE_CONFIG_CONTENT-}" > "$d/serve-config"
   printf '%s' "${OPENCODE_CONFIG_DIR-}" > "$d/serve-config-dir"
   printf '%s' "${OPENCODE_FILEWATCHER_DISABLE-}" > "$d/serve-watcher-off"
+  env | sed -n 's/^\([A-Z_]*_API_KEY\)=.*/\1/p' | sort > "$d/serve-keys"
   ls -A "${OPENCODE_CONFIG_DIR:-$d/none}" > "$d/serve-config-dir-held" 2> /dev/null
   (cd "$HOME" && find . -path ./.crewlet -prune -o -type f -print) > "$d/serve-home" 2> /dev/null
   if [ -n "${FAKE_VALUES:-}" ]; then
@@ -103,9 +104,11 @@ serve)
 api)
   if [ "$2" = --standalone ]; then shift 2; else authed; shift 3; hangs "$1"; fi
   case "$1" in
-  model.list)
-    if [ -n "${OPENCODE_CONFIG_PROJECT_DISABLE-}" ]; then which=clean m=${FAKE_MODELS_CLEAN-}; else which=loaded m=${FAKE_MODELS_LOADED-}; fi
-    echo "$which" >> "$d/model-lists"; [ -n "$m" ] || m='{"data":[]}'; printf '%s\n' "$m" ;;
+  model.list | provider.list)
+    list=models; [ "$1" = model.list ] || list=providers
+    case " $* " in *"location[directory]=/"*) which=clean;; *) which=loaded;; esac
+    m=; eval "m=\${FAKE_$(echo "$list" | tr a-z A-Z)_$(echo "$which" | tr a-z A-Z)-}"
+    echo "$list $which" >> "$d/lists"; [ -n "$m" ] || m='{"data":[]}'; printf '%s\n' "$m" ;;
   credential.list)
     [ -e "$d/creds" ] || for id in ${FAKE_CREDS-}; do echo "$id"; done > "$d/creds"
     printf '{"data":[' ; sep=

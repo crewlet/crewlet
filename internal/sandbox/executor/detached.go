@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"net/url"
 	"regexp"
@@ -705,7 +706,8 @@ func (r *Runner) Start(ctx context.Context, box sandbox.Sandbox, req sandbox.Run
 	// is on PATH only after a profile a login shell sources. So PATH inside is
 	// the profile's, which is why the box's bin directory is prepended inside
 	// the script ([withBoxBin]): an export around it would be replaced.
-	pid, err := box.StartBackground(ctx, "sh -lc "+shellword.Quote(script), sandbox.ExecOptions{Env: req.Env})
+	pid, err := box.StartBackground(ctx, "sh -lc "+shellword.Quote(script),
+		sandbox.ExecOptions{Env: withoutNames(req.Env, r.StoreSignIn(req.SignInEnv))})
 	if err != nil {
 		return sandbox.RunHandle{}, fmt.Errorf("executor: starting %s: %w", r.harness.Name(), err)
 	}
@@ -1659,3 +1661,36 @@ func memoryKills(records [2]*piece, result sandbox.Result, refused []string,
 
 // harnessKilled is the status a shell gives a child SIGKILL ended: 128 + 9.
 const harnessKilled = "137"
+
+// storeSignedIn is a harness that signs a run in by some of its variables from
+// its own credential store, which its runner writes from them, rather than
+// from its environment ([OpenCode.storeSignIn]).
+type storeSignedIn interface {
+	storeSignIn(names []string) []string
+}
+
+// StoreSignIn is the variables of names, a run's sign-in, that the runner's
+// harness signs in by from its own credential store, so neither the box nor
+// the run's job is given them ([sandbox.Manager] makes the box without them).
+// Nil for a harness signing in from its environment alone.
+func (r *Runner) StoreSignIn(names []string) []string {
+	if h, ok := r.harness.(storeSignedIn); ok {
+		return h.storeSignIn(names)
+	}
+	return nil
+}
+
+// withoutNames is env without names, env itself where it holds none of them.
+func withoutNames(env map[string]string, names []string) map[string]string {
+	out := env
+	for _, name := range names {
+		if _, held := env[name]; !held {
+			continue
+		}
+		if len(out) == len(env) {
+			out = maps.Clone(env)
+		}
+		delete(out, name)
+	}
+	return out
+}
