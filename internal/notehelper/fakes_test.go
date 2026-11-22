@@ -219,6 +219,15 @@ type fakeAppServer struct {
 	listed string
 	// marker is the cap marker each interrupt looks for as it arrives.
 	marker string
+	// interruptFails answers every interrupt with an internal error.
+	interruptFails bool
+}
+
+// failInterrupts makes every interrupt fail, the turn left running.
+func (s *fakeAppServer) failInterrupts() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.interruptFails = true
 }
 
 // set sets the fake's listed turn and the marker it looks for.
@@ -310,7 +319,7 @@ func (s *fakeAppServer) serve(ws *websocket.Conn) {
 			var p interruptCall
 			_ = json.Unmarshal(m.Params, &p)
 			s.mu.Lock()
-			marker := s.marker
+			marker, fails := s.marker, s.interruptFails
 			s.mu.Unlock()
 			if marker != "" {
 				_, err := os.Stat(marker)
@@ -319,11 +328,14 @@ func (s *fakeAppServer) serve(ws *websocket.Conn) {
 			s.interrupts.add(p)
 			s.mu.Lock()
 			turn := s.turn
-			if turn != "" && p.TurnID == turn {
+			if turn != "" && p.TurnID == turn && !fails {
 				s.turn = ""
 			}
 			s.mu.Unlock()
 			switch {
+			case fails:
+				delete(answer, "result")
+				answer["error"] = map[string]any{"code": -32603, "message": "internal error"}
 			case p.TurnID == "":
 				delete(answer, "result")
 				answer["error"] = map[string]any{"code": -32600, "message": "Invalid request: missing field `turnId`"}
