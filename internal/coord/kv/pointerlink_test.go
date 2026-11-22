@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,8 +36,8 @@ var pointerOrigin = coord.RevisionOrigin{Author: "maya", AuthorKind: iam.ActorOp
 	Source: "api", CreatedAt: time.Date(2026, 9, 2, 7, 0, 0, 0, time.UTC)}
 
 // overASlowLeaf is one company's fleet store as a member reaches it in its
-// own process and a leaf across a link slow both ways ([pointerLinkRate]).
-func overASlowLeaf(t *testing.T) (member, leaf *FleetStore) {
+// own process and a leaf across a link carrying rate bytes a second each way.
+func overASlowLeaf(t *testing.T, rate int64) (member, leaf *FleetStore, link *linktest.Link) {
 	t.Helper()
 	// A MEMBER THAT SERVES LEAVES PERSISTS, or it is refused.
 	srv, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
@@ -46,7 +47,7 @@ func overASlowLeaf(t *testing.T) (member, leaf *FleetStore) {
 		t.Fatalf("start a member serving leaves: %v", err)
 	}
 	t.Cleanup(srv.Shutdown)
-	link := linktest.SlowEachWay(t, fmt.Sprintf("127.0.0.1:%d", srv.LeafPort()), pointerLinkRate)
+	link = linktest.SlowEachWay(t, fmt.Sprintf("127.0.0.1:%d", srv.LeafPort()), rate)
 	nc, err := srv.Conn()
 	if err != nil {
 		t.Fatalf("connect to the member: %v", err)
@@ -60,7 +61,7 @@ func overASlowLeaf(t *testing.T) (member, leaf *FleetStore) {
 	prefix := fmt.Sprintf("x%d", bucketSeq.Add(1))
 	member = openFleetVia(t, client, InProcess, prefix)
 	leaf = openFleetVia(t, leafClientAt(t, link.Addr(), "leaf"), AcrossLink, prefix)
-	return member, leaf
+	return member, leaf, link
 }
 
 // activateAtTheBound activates, through store, a body of exactly what one key
@@ -95,7 +96,7 @@ func activateAtTheBound(t *testing.T, store *FleetStore) coord.Activation {
 // probe's budget.
 func TestAPointerReadAcrossALeafsLinkCarriesNoBody(t *testing.T) {
 	t.Parallel()
-	member, leaf := overASlowLeaf(t)
+	member, leaf, _ := overASlowLeaf(t, pointerLinkRate)
 	published := activateAtTheBound(t, member)
 	ctx, cancel := context.WithTimeout(t.Context(), probeBudget)
 	defer cancel()
@@ -119,7 +120,7 @@ func TestAPointerReadAcrossALeafsLinkCarriesNoBody(t *testing.T) {
 // is cut before its reply arrives.
 func TestABodyAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *testing.T) {
 	t.Parallel()
-	member, leaf := overASlowLeaf(t)
+	member, leaf, _ := overASlowLeaf(t, pointerLinkRate)
 	published := activateAtTheBound(t, member)
 	target, found, err := leaf.Target(t.Context())
 	if err != nil || !found {
@@ -141,8 +142,8 @@ func TestABodyAtItsBoundIsReadAcrossALeafsLinkAtItsFirstAsk(t *testing.T) {
 // A BODY'S READ IS GIVEN THE ARRIVAL OF ITS RECORDED SIZE, AND THE POINTER'S
 // THE READ TERM. The size is the one the pointer records, so the read is asked
 // once and waited for whole however large the body; the pointer beside it is
-// small, so the bucket is not declared large ([holdingLarge]) and its reads
-// keep the read term. BodyCrossing is the crossing alone, none in process.
+// small, so its class keeps the read term ([configHolding]) while the bodies
+// beside it are read by theirs. BodyCrossing is the crossing alone, none in process.
 // Exact, from the store's own rules.
 //
 // Mutation: read the body without its size, or at the pointer's, and its row
@@ -156,7 +157,7 @@ func TestABodysReadIsGivenTheArrivalOfItsRecordedSize(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, want := body.leader.Term(), jsprovision.ReadTerm+
+		if got, want := body.leaderFor(bodyKey(coord.BodyRef{SHA256: strings.Repeat("0", 64)})).Term(), jsprovision.ReadTerm+
 			jsapi.Arrival(coord.MaxValueBytes+kvHeaderBytes, reach.pace()); got != want {
 			t.Errorf("a body at its bound %s is read at a term of %v, want %v", reach, got, want)
 		}
@@ -164,7 +165,7 @@ func TestABodysReadIsGivenTheArrivalOfItsRecordedSize(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := pointer.leader.Term(); got != jsprovision.ReadTerm {
+		if got := pointer.leaderFor(activationKey).Term(); got != jsprovision.ReadTerm {
 			t.Errorf("the pointer %s is read at a term of %v, want the read term %v", reach, got,
 				jsprovision.ReadTerm)
 		}

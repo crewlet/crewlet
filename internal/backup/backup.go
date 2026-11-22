@@ -1059,9 +1059,8 @@ func storeBytes(m Manifest) int64 {
 
 // hold pins the trim at this node's current positions and returns the release.
 //
-// RENEWED WHILE THE COPY RUNS, because the trim ignores a hold older than its
-// stale bound — a pin that stopped being renewed would be treated as a crashed
-// holder, which is exactly right for a crashed holder and exactly wrong for a
+// RENEWED WHILE THE COPY RUNS, because the trim ignores a hold it has watched
+// go unrenewed past its stale bound: right for a crashed holder, wrong for a
 // 40-minute copy of a large store. The pin is [statelog.HoldTail]'s, the one
 // implementation every holder of the tail shares, renewed on
 // [statelog.TrimHoldHeartbeat].
@@ -1086,7 +1085,6 @@ func (s *Service) hold(ctx context.Context, replicated *store.DB) (func(), error
 		Streams:  live,
 		Reason:   "a backup is copying this node's store",
 		Every:    statelog.TrimHoldHeartbeat,
-		Now:      s.now,
 		Logger:   log,
 	})
 	if err != nil {
@@ -1166,10 +1164,10 @@ func assertReplayable(m Manifest) error {
 				"and the captured log starts at %d: the records between them "+
 				"were trimmed while the copy ran, so a restore would apply a "+
 				"prefix with a hole in it and report nothing. The trim hold did "+
-				"not cover the copy; look for statelog_hold_not_renewed in this "+
-				"node's log (a hold that misses its renewals is read as "+
-				"abandoned), then take the backup again",
-				ErrLogGap, artifact.Name, at.Seq, first)
+				"not cover the copy; look for %s in this node's log (a hold "+
+				"the trim has watched go unrenewed is read as abandoned), then "+
+				"take the backup again",
+				ErrLogGap, artifact.Name, at.Seq, first, statelog.HoldNotRenewedEvent)
 		}
 	}
 	return nil

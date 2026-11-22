@@ -90,3 +90,53 @@ assistant:
 		}
 	}
 }
+
+// A HELPER'S MODEL FOLLOWS THE REVISION THE NODE RUNS, never the one it booted
+// on: each applied revision assigns or unassigns both helpers with no restart.
+// Mutation: resolve a helper once and keep it, and later epochs read the first.
+func TestAHelpersModelFollowsTheRevisionTheNodeRuns(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	epoch := func(helpers string) *Company {
+		t.Helper()
+		c, err := NewCompany(parseCompany(t, fmt.Sprintf(`name: Acme
+providers:
+  llm:
+    sonnet:
+      harness: claude-code
+      model: sonnet
+      state_dir: %s/sonnet
+%s`, dir, helpers)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	e := &Engine{}
+	assigned := func() (string, bool) {
+		t.Helper()
+		_, key, _, err := assistantModels{e: e}.entry()
+		if err != nil {
+			key = ""
+		}
+		return key, AdvisorModels(e).Assigned()
+	}
+	install := func(c *Company) { e.epoch.current.Store(c) }
+
+	install(epoch(""))
+	if ask, advisor := assigned(); ask != "" || advisor {
+		t.Fatalf("booted with no helper model: Ask Crewlet on %q, Advisor assigned %v", ask, advisor)
+	}
+	install(epoch("assistant: {model: sonnet}\nadvisor: {model: sonnet}\n"))
+	if ask, advisor := assigned(); ask != "sonnet" || !advisor {
+		t.Errorf("after the revision assigning both: Ask Crewlet on %q, Advisor assigned %v", ask, advisor)
+	}
+	deps, err := AdvisorModels(e).Deps(t.Context(), nil)
+	if err != nil || deps.ProviderKey != "sonnet" {
+		t.Errorf("the Advisor's model pass runs on %q (%v), want sonnet", deps.ProviderKey, err)
+	}
+	install(epoch(""))
+	if ask, advisor := assigned(); ask != "" || advisor {
+		t.Errorf("after the revision assigning none: Ask Crewlet on %q, Advisor assigned %v", ask, advisor)
+	}
+}

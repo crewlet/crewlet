@@ -2,6 +2,7 @@ package harnessprofile
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,12 +28,14 @@ func TestAnOverrideCannotSetTheExecutorBlock(t *testing.T) {
 	}
 }
 
-// AN EXECUTOR BLOCK SAYS IT IS A RUNNER AND NAMES A TEMPLATE, and the blocks
-// are read in the table's order, whatever its names sort to.
+// AN EXECUTOR BLOCK SAYS IT IS A RUNNER, and the blocks are read in the
+// table's order, whatever its names sort to. A block may name no E2B template
+// (a harness E2B prebuilds none of; config holds its e2b box to the company's
+// own template).
 //
-// Mutation: read the blocks in sorted order, or take a block with runner unset
-// or no template, and a case goes red.
-func TestAnExecutorBlockSaysItIsARunnerAndNamesATemplate(t *testing.T) {
+// Mutation: read the blocks in sorted order, take a block with runner unset,
+// or refuse one with no template, and a case goes red.
+func TestAnExecutorBlockSaysItIsARunner(t *testing.T) {
 	t.Parallel()
 	got, err := decodeExecutors([]byte("zed:\n  executor: {runner: true, e2b_template: z}\nplain:\n  binary: p\n" +
 		"alpha:\n  executor: {runner: true, e2b_template: a, temp_env: A_TMP}\n"))
@@ -46,17 +49,52 @@ func TestAnExecutorBlockSaysItIsARunnerAndNamesATemplate(t *testing.T) {
 	if !slices.Equal(names, []string{"zed", "alpha"}) || got[1].block.TempEnv != "A_TMP" {
 		t.Errorf("the runners read as %+v, want zed then alpha, alpha's temp variable kept", got)
 	}
-	for name, table := range map[string]string{
-		"runner unset": "x:\n  executor: {e2b_template: x}\n",
-		"no template":  "x:\n  executor: {runner: true}\n",
-	} {
-		if _, err := decodeExecutors([]byte(table)); err == nil {
-			t.Errorf("%s: the block was taken", name)
+	if _, err := decodeExecutors([]byte("x:\n  executor: {e2b_template: x}\n")); err == nil {
+		t.Error("a block with runner unset was taken")
+	}
+	if got, err := decodeExecutors([]byte("x:\n  executor: {runner: true}\n")); err != nil ||
+		len(got) != 1 || got[0].block.E2BTemplate != "" {
+		t.Errorf("a runner with no template reads as %+v, %v; want it, naming none", got, err)
+	}
+	for _, name := range []string{"claude-code", "codex", "opencode"} {
+		if runners := ExecutorRunners(); !slices.Contains(runners, name) {
+			t.Errorf("the built-in runners are %v, without %s", runners, name)
 		}
 	}
-	if runners := ExecutorRunners(); !slices.Contains(runners, "claude-code") || !slices.Contains(runners, "opencode") {
-		t.Errorf("the built-in runners are %v", runners)
+}
+
+// AN EXECUTOR BLOCK'S FAULT NAMES ITS PROFILE AND ITS FIELD, whatever reads
+// the table first: the block's one reader names both, and the profiles'
+// decode passes the block by rather than refuse it with a line number alone.
+//
+// Mutations, each red: decode the block whole (the field goes unnamed); drop
+// the profile from the error; decode the block in the profiles' decode (its
+// fault is refused there, unnamed).
+func TestAnExecutorBlocksFaultNamesItsProfileAndField(t *testing.T) {
+	t.Parallel()
+	for block, want := range map[string]string{
+		"{e2b_template: t}":             `profile "x": executor.runner: must be true where the block is set`,
+		"{runner: 3}":                   `profile "x": executor.runner: yaml: unmarshal errors`,
+		"{runner: true, temp_env: [a]}": `profile "x": executor.temp_env: yaml: unmarshal errors`,
+		"{runner: true, template: t}": `profile "x": executor.template: is no field of the block: use "e2b_template", ` +
+			`"floor", "probe_args", "refuses_root", "runner" or "temp_env"`,
+		"true": `profile "x": executor: is not a mapping of the block's fields`,
+	} {
+		raw := []byte("x:\n  binary: x\n  executor: " + block + "\n")
+		if _, err := decodeExecutors(raw); err == nil || !strings.HasPrefix(err.Error(), want) {
+			t.Errorf("the block %s is refused with %v, want %q", block, err, want)
+		}
+		if _, err := decodeTable(raw, "linux"); err != nil {
+			t.Errorf("the profiles' decode refused the block %s itself: %v", block, err)
+		}
 	}
+	defer func() {
+		const want = `harnessprofile: profile "x": executor.runner: must be true where the block is set`
+		if got := fmt.Sprint(recover()); got != want {
+			t.Errorf("the built-in table's fault panics with %q, want %q", got, want)
+		}
+	}()
+	mustExecutors([]byte("x:\n  executor: {temp_env: T}\n"))
 }
 
 // THE DOCS SAY WHICH HARNESSES RUN A SEAT'S EXECUTOR, as the profiles list
@@ -92,5 +130,29 @@ func TestTheDocsSayWhichHarnessesRunASeatsExecutor(t *testing.T) {
 	}
 	if !slices.Equal(yes, ExecutorRunners()) {
 		t.Errorf("the docs say %v run a seat's executor, the profiles list %v", yes, ExecutorRunners())
+	}
+}
+
+// A RELEASE IS A BARE MAJOR.MINOR.PATCH, read off what `--version` printed:
+// the first word starting with a digit, less a "v" and one closing ".", is
+// one only where it is exactly three runs of digits. A pre-release or build
+// whose third part runs on past its digits ("0.172.0-rc", "0.172.0+b"), a
+// part that is no number ("1.2.x"), a fourth part or a doubled dot names
+// none, as the run's script reads it.
+//
+// Mutation: hold the word to three dot-separated parts without checking that
+// each is digits alone, or read the first three numbers of it, and a row goes
+// red.
+func TestAReleaseIsABareMajorMinorPatch(t *testing.T) {
+	t.Parallel()
+	for printed, want := range map[string]string{
+		"codex-cli 0.171.0": "0.171.0", "2.1.310 (Claude Code)": "2.1.310", "opencode v2.3.2": "2.3.2",
+		"GitHub Copilot CLI 1.0.114.": "1.0.114", "Muse Code 1.4.25 (1.4.25-R9361.1)": "1.4.25",
+		"0.172.0-rc": "", "0.172.0+b": "", "1.2.x": "", "codex-cli 0.172.0-rc": "", "1.4.25.1": "",
+		"0.171.0..": "", "1.2": "", "codex-cli dev": "", "": "",
+	} {
+		if got := Release(printed); got != want {
+			t.Errorf("Release(%q) = %q, want %q", printed, got, want)
+		}
 	}
 }

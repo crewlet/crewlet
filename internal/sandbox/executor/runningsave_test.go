@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // What a runner offers the saving of a session its run still works in: whether
@@ -35,11 +36,11 @@ func TestASaveNotTakenIsRemovedFromItsBox(t *testing.T) {
 	runner, b := sessionBox(t, "2.1.310")
 	runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 	p := paths(b)
-	saved, err := runner.PackSave(t.Context(), b, takerA)
+	saved, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil || saved.Path == "" {
 		t.Fatalf("PackSave = %+v, %v", saved, err)
 	}
-	other, err := runner.PackSave(t.Context(), b, takerB)
+	other, err := runner.PackSave(t.Context(), b, takerB, "")
 	if err != nil || other.Path == "" {
 		t.Fatalf("PackSave for the second taker = %+v, %v", other, err)
 	}
@@ -53,7 +54,7 @@ func TestASaveNotTakenIsRemovedFromItsBox(t *testing.T) {
 	if !boxHas(t, b, other.Path) {
 		t.Errorf("the release of one save removed another taker's, at %s", other.Path)
 	}
-	if taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: saved.Path,
+	if taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: saved.Path,
 		MaxBytes: takeBound}); err != nil || taken.Body != nil {
 		t.Errorf("a take of a released save = %+v, %v; want nothing", taken, err)
 	}
@@ -176,7 +177,7 @@ func fileMeasuredSession(t *testing.T, b sandbox.Sandbox, session string) (threa
 	t.Helper()
 	cfg := paths(b).ClaudeConfigDir()
 	sidecar := cfg + "/projects/" + executor.ClaudeProjectDir + "/" + session
-	if res, err := b.Exec(t.Context(), "rm -rf "+shQuote(sidecar), sandbox.ExecOptions{}); err != nil ||
+	if res, err := b.Exec(t.Context(), "rm -rf "+shellword.Quote(sidecar), sandbox.ExecOptions{}); err != nil ||
 		res.ExitCode != 0 {
 		t.Fatalf("clearing the stand-in's sidecar directory: %v (exit %d) %s", err, res.ExitCode, res.Stderr)
 	}
@@ -213,7 +214,7 @@ func takenWhole(t *testing.T, runner *executor.Runner, b sandbox.Sandbox, path s
 	scrub ...string) (sandbox.SessionArchive, []byte) {
 
 	t.Helper()
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: path, Scrub: scrub,
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: path, Scrub: scrub,
 		MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("the take of the save at %s = %+v, %v", path, taken, err)
@@ -267,13 +268,13 @@ func TestASaveDuringASubagentIsTakenAndToldWhatTheSubagentDid(t *testing.T) {
 	}
 	// THE THREAD'S LAST LINE BREAK LANDS once the first save's tar has read it,
 	// and never again.
-	landed := shQuote(b.Home() + "/line-break-landed")
+	landed := shellword.Quote(b.Home() + "/line-break-landed")
 	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, afterTar(`[ -e `+landed+` ] || { printf '\n' >> `+
-		shQuote(thread)+` && : > `+landed+`; }`)))
+		shellword.Quote(thread)+` && : > `+landed+`; }`)))
 	threadMember := strings.TrimPrefix(thread, p.ClaudeConfigDir()+"/")
 	spilledMember := strings.TrimPrefix(spilled, p.ClaudeConfigDir()+"/")
 
-	saved, err := runner.PackSave(t.Context(), b, takerA)
+	saved, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the save made as a subagent's thread grew was refused: %v", err)
 	}
@@ -307,7 +308,7 @@ func TestASaveDuringASubagentIsTakenAndToldWhatTheSubagentDid(t *testing.T) {
 	}
 
 	// SAVED AGAIN once the line has landed, both calls are held.
-	again, err := runner.PackSave(t.Context(), b, takerA)
+	again, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the save made once the subagent's line landed was refused: %v", err)
 	}

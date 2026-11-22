@@ -108,11 +108,11 @@ func TestAHarnessCredentialWithNowhereToGoIsRefused(t *testing.T) {
 			says: "a token is read only under auth.mode subscription",
 		},
 		{
-			// Qwen Code keeps no login of its own and mints no token: under
-			// subscription, the mode that removes its key variable, nothing
-			// signs it in.
+			// A harness that keeps no login and mints no token (Qwen Code with
+			// its paid login taken out): under subscription, the mode that
+			// removes its key variable, nothing signs it in.
 			name:  "subscription on a harness that signs in only with its key",
-			lines: []string{"harness: qwen-code"},
+			lines: []string{"harness: qwen-code", "overrides: {credential_paths: [], subscription_args: []}"},
 			path:  "providers.llm.sub.auth.mode", kind: ErrConflict,
 			says: "set auth.mode: api-key and give the key as auth.api_key (the harness reads it from OPENAI_API_KEY)",
 		},
@@ -371,7 +371,7 @@ func TestASharedKeyVariableIsNeverAnEntrysFallback(t *testing.T) {
 
 // A KIMI CODE ENTRY SIGNS IN WITH A KEY UNDER API-KEY: the harness reads its
 // metered key beside a model of its own, which the engine sets from the entry
-// (measured on 2.3.1 and 2.7.2), so an api-key entry is admitted, as a login
+// (measured on 2.7.2), so an api-key entry is admitted, as a login
 // entry is.
 //
 // Mutation: drop kimi-code's api_key_env, and the api-key entry is refused as

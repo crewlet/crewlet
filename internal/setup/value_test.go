@@ -1,6 +1,11 @@
 package setup_test
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"strings"
 	"testing"
@@ -95,10 +100,18 @@ func TestAnIdentifierShapeHoldsAPasteAndRefusesAMint(t *testing.T) {
 		{setup.ShapeScalewayAccessKey, "SCWABCDEFGHIJ0123456", true},
 		{setup.ShapeScalewayAccessKey, "SCWABCDEFGHIJ012345", false},
 		{setup.ShapeScalewayAccessKey, "scwabcdefghij0123456", false},
+		{setup.ShapeMetaToken, "EAAGm0PX4ZCpsBA" + strings.Repeat("Zx9", 12), true},
+		{setup.ShapeMetaToken, "EAAGm0PX4Z", false},
+		{setup.ShapeMetaToken, "eaaGm0PX4ZCpsBA" + strings.Repeat("Zx9", 12), false},
+		{setup.ShapeMetaToken, "EAAGm0PX4ZCpsBA" + strings.Repeat("Zx-", 12), false},
 		{setup.ShapeAppleKeyID, "2X9R4HXF34", true},
 		{setup.ShapeAppleKeyID, "2x9r4hxf34", false},
 		{setup.ShapeAppleKeyID, "2X9R4HXF3", false},
 		{setup.ShapeAppleKey, "-----BEGIN PRIVATE KEY-----\nnot a key\n-----END PRIVATE KEY-----", false},
+		{setup.ShapeAppleAdsKey, sec1Key(t), true},
+		{setup.ShapeAppleAdsKey, "-----BEGIN EC PRIVATE KEY-----\nnot a key\n-----END EC PRIVATE KEY-----", false},
+		{setup.ShapeAppleAdsID, "SEARCHADS.aeb3ef5f-0c5a-4f2a-99c8-fca83f25a9e1", true},
+		{setup.ShapeAppleAdsID, "aeb3ef5f-0c5a-4f2a-99c8-fca83f25a9e1", false},
 	} {
 		problem := tc.shape.Problem("access key", tc.value)
 		if (problem == "") != tc.ok {
@@ -109,10 +122,13 @@ func TestAnIdentifierShapeHoldsAPasteAndRefusesAMint(t *testing.T) {
 		}
 	}
 	for _, shape := range []setup.Shape{setup.ShapeUUID, setup.ShapeScalewayAccessKey, setup.ShapeAppleKey,
-		setup.ShapeAppleKeyID} {
+		setup.ShapeAppleKeyID, setup.ShapeAppleAdsKey, setup.ShapeAppleAdsID} {
 		if value, err := shape.Mint(func() string { return "minted" }); err == nil || value != "" {
 			t.Errorf("%s minted %q", shape, value)
 		}
+	}
+	if value, err := setup.ShapeMetaToken.Mint(func() string { return "minted" }); err == nil || value != "" {
+		t.Errorf("a Meta token was minted: %q", value)
 	}
 }
 
@@ -145,6 +161,64 @@ func TestAGoogleIdentifierIsHeldToItsShapeAndNeverMinted(t *testing.T) {
 	for _, shape := range []setup.Shape{setup.ShapeGoogleServiceAccount, setup.ShapeGoogleProvider} {
 		if value, err := shape.Mint(func() string { return "minted" }); err == nil || value != "" {
 			t.Errorf("%s minted %q", shape, value)
+		}
+	}
+}
+
+// sec1Key is a fresh P-256 key as `openssl ecparam -genkey` writes it.
+func sec1Key(t *testing.T) string {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}))
+}
+
+// appleKey is App Store Connect's .p8 field.
+var appleKey = setup.Requirement{
+	Field: "main_admin_private_key", Label: "Admin key (.p8)", Kind: setup.KindSecret,
+	ConfigPath: "integrations.app_store_connect.connections.main.keys.admin.private_key",
+	SecretName: "APP_STORE_CONNECT_MAIN_ADMIN_KEY", Shape: setup.ShapeAppleKey,
+}
+
+// A .P8 PASTED INTO A ONE-LINE BOX IS STILL THE KEY. The browser drops every
+// line break from a paste into a password input, so the key reached the
+// engine as one line, was refused as "not a .p8 key", and nothing the operator
+// could do in that box would ever pass. It is taken and sealed as Apple wrote
+// it; anything that is not one PKCS#8 P-256 key is still refused.
+//
+// Mutation: drop Shape.Canonical from normalise, and the flattened key is
+// refused or sealed on one line.
+func TestAnAppleKeyPastedOnOneLineIsSealedWithItsLineBreaks(t *testing.T) {
+	t.Parallel()
+	priv, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	der, _ := x509.MarshalPKCS8PrivateKey(priv)
+	whole := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	for name, pasted := range map[string]string{
+		"one line": strings.ReplaceAll(whole, "\n", ""),
+		"spaces":   strings.Join(strings.Fields(whole), " "),
+	} {
+		rec := &recorder{}
+		_, err := writer(rec).Write(t.Context(), []setup.Requirement{appleKey}, setup.Submission{
+			Kind: integration.KindAppStoreConnect, Values: map[string]string{appleKey.Field: pasted},
+			Summary: "connect app store connect", By: founder,
+		})
+		if err != nil {
+			t.Fatalf("%s: Write = %v", name, err)
+		}
+		if got := rec.secrets[appleKey.SecretName]; strings.TrimSpace(got) != strings.TrimSpace(whole) {
+			t.Errorf("%s: sealed %q, want the key as Apple wrote it", name, got)
+		}
+	}
+	rsaLike := strings.ReplaceAll(whole, "PRIVATE KEY", "RSA PRIVATE KEY")
+	for _, bad := range []string{strings.ReplaceAll(rsaLike, "\n", ""), "MIGTAgEAMBMG", "BEGIN PRIVATE KEY"} {
+		if appleKey.ValueProblem(bad) == "" {
+			t.Errorf("%.30q was taken for a .p8 key", bad)
 		}
 	}
 }

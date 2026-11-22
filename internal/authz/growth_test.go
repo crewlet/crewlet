@@ -10,27 +10,29 @@ import (
 
 func init() {
 	object := map[string]any{"type": "object"}
-	growth.Register(growth.Catalog{
-		Kind: "testgrowth", API: "Test Growth API", Version: "v1",
-		Operations: []growth.Operation{
-			{ID: "report", Method: "GET", Path: "/report", Class: growth.ClassRead},
-			{ID: "pause", Method: "POST", Path: "/pause", Class: growth.ClassOperate},
-			{ID: "ads.publish", Method: "POST", Path: "/ads:publish", Class: growth.ClassPublic},
-			{ID: "budget.raise", Method: "POST", Path: "/budget:raise", Class: growth.ClassSpend},
-			{ID: "users.create", Method: "POST", Path: "/users", Class: growth.ClassAdmin},
-		},
-		Tools: []growth.Tool{
-			{Name: "testgrowth_report", Class: growth.ClassRead, Operations: []string{"report"},
-				Description: "Read a report.", Parameters: object},
-			{Name: "testgrowth_pause", Class: growth.ClassOperate, Operations: []string{"pause"},
-				Description: "Pause.", Parameters: object},
-			{Name: "testgrowth_publish", Class: growth.ClassPublic, Operations: []string{"ads.publish"},
-				Description: "Publish an ad.", Parameters: object},
-			{Name: "testgrowth_raise_budget", Class: growth.ClassSpend, Operations: []string{"budget.raise"},
-				Description: "Raise a budget.", Parameters: object},
-			{Name: "testgrowth_add_user", Class: growth.ClassAdmin, Operations: []string{"users.create"},
-				Description: "Add a user.", Parameters: object},
-		},
+	growth.RegisterFunc("testgrowth", func() growth.Catalog {
+		return growth.Catalog{
+			Kind: "testgrowth", API: "Test Growth API", Version: "v1",
+			Operations: []growth.Operation{
+				{ID: "report", Method: "GET", Path: "/report", Class: growth.ClassRead},
+				{ID: "pause", Method: "POST", Path: "/pause", Class: growth.ClassOperate},
+				{ID: "ads.publish", Method: "POST", Path: "/ads:publish", Class: growth.ClassPublic},
+				{ID: "budget.raise", Method: "POST", Path: "/budget:raise", Class: growth.ClassSpend},
+				{ID: "users.create", Method: "POST", Path: "/users", Class: growth.ClassAdmin},
+			},
+			Tools: []growth.Tool{
+				{Name: "testgrowth_report", Class: growth.ClassRead, Operations: []string{"report"},
+					Description: "Read a report.", Parameters: object},
+				{Name: "testgrowth_pause", Class: growth.ClassOperate, Operations: []string{"pause"},
+					Description: "Pause.", Parameters: object},
+				{Name: "testgrowth_publish", Class: growth.ClassPublic, Operations: []string{"ads.publish"},
+					Description: "Publish an ad.", Parameters: object},
+				{Name: "testgrowth_raise_budget", Class: growth.ClassSpend, Operations: []string{"budget.raise"},
+					Description: "Raise a budget.", Parameters: object},
+				{Name: "testgrowth_add_user", Class: growth.ClassAdmin, Operations: []string{"users.create"},
+					Description: "Add a user.", Parameters: object},
+			},
+		}
 	})
 }
 

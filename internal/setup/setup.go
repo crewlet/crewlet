@@ -68,6 +68,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
@@ -122,6 +123,11 @@ const (
 	// surface rejects on every submission.
 	KindToggle Kind = "toggle"
 
+	// KindAddIdentity is a step a person takes at the vendor, never a value
+	// the document holds: adding an identity Crewlet made, by its email, at a
+	// role ([Requirement.Identity]). Nothing is submitted for it.
+	KindAddIdentity Kind = "add_identity"
+
 	// KindConsent is a sign-in a person makes at the vendor, never a value
 	// the document holds: its control starts the integration's consent
 	// sign-in (`POST /setup/integrations/{kind}/consent`, ADR-0178), and the
@@ -131,7 +137,36 @@ const (
 
 // Kinds is every kind, in no significant order.
 var Kinds = []Kind{
-	KindSecret, KindURL, KindID, KindChoice, KindText, KindHandle, KindEmail, KindToggle, KindConsent,
+	KindSecret, KindURL, KindID, KindChoice, KindText, KindHandle, KindEmail, KindToggle, KindAddIdentity, KindConsent,
+}
+
+// IdentityStep is a [KindAddIdentity] requirement's step: the email a person
+// adds at the vendor, the role it needs, and where.
+type IdentityStep struct {
+	Email string `json:"email"`
+	// Role is the vendor's own role ID and its name.
+	Role IdentityRole `json:"role"`
+	// Where is the vendor's page for it, and the words of how to reach it.
+	Where IdentityWhere `json:"where"`
+	// Level is "company" for the company's own identity, "seat" for one
+	// seat's, which Seat then names.
+	Level string `json:"level"`
+	Seat  string `json:"seat,omitempty"`
+	// State is "present" where the engine saw the identity hold the role,
+	// "missing" where it saw it not, and "unknown" before it has looked.
+	State string `json:"state"`
+}
+
+// IdentityRole is a vendor role an identity is added at.
+type IdentityRole struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// IdentityWhere is where at the vendor a person adds an identity.
+type IdentityWhere struct {
+	URL   string `json:"url"`
+	Words string `json:"words"`
 }
 
 // Valid reports whether k is a kind this build knows.
@@ -187,6 +222,11 @@ type Requirement struct {
 	//
 	// Nil is the ordinary requirement, answering to [Required] alone.
 	RequiredWhen *Gate `json:"required_when,omitempty"`
+
+	// Set is the list this requirement is one entry's field of, nil for a
+	// field on its own. A member is required once its entry is started, and
+	// the set by its Min, never by Required ([Set]).
+	Set *Set `json:"set,omitempty"`
 
 	// Required reports whether the integration can work without this.
 	// A false one is still worth showing: it is usually the difference
@@ -258,6 +298,10 @@ type Requirement struct {
 	// itself or a private key, which [Requirement.MarshalJSON] refuses to
 	// send. Nil where there is nothing to show.
 	Public *PublicView `json:"public,omitempty"`
+
+	// Identity is a [KindAddIdentity] requirement's step, nil for any other
+	// kind.
+	Identity *IdentityStep `json:"identity,omitempty"`
 
 	// Checkable reports that this credential can be checked at the vendor
 	// before it is stored, with a read-only call, so a form offers a Test
@@ -438,7 +482,11 @@ func (r Requirement) MarshalJSON() ([]byte, error) {
 	out := struct {
 		wire
 		Value string `json:"value,omitempty"`
-	}{wire: wire(r)}
+		// Multiline and Accept are the Shape's, for a form that draws a box
+		// keeping line breaks and offers a file of these types.
+		Multiline bool   `json:"multiline,omitempty"`
+		Accept    string `json:"accept,omitempty"`
+	}{wire: wire(r), Multiline: r.Shape.Multiline(), Accept: r.Shape.Accept()}
 	switch {
 	case r.Kind != KindSecret:
 		out.Value = r.Stored
@@ -481,11 +529,21 @@ func (r Requirement) Satisfied() bool {
 
 // Outstanding returns the requirements that are required and not satisfied,
 // in the order they were declared.
+//
+// A SET BELOW ITS Min is outstanding as its first field: the entry a form
+// offers first, and a name a client can place the set's refusal by.
 func Outstanding(reqs []Requirement) []Requirement {
 	out := []Requirement{}
 	for _, r := range reqs {
 		if r.Needed(reqs) && !r.Satisfied() {
 			out = append(out, r)
+		}
+	}
+	if short := CheckSets(reqs, nil); short != nil {
+		for _, r := range reqs {
+			if r.Field == short.Field && !slices.ContainsFunc(out, func(o Requirement) bool { return o.Field == r.Field }) {
+				out = append(out, r)
+			}
 		}
 	}
 	return out
@@ -511,7 +569,11 @@ type Gate struct {
 //
 // A gate naming a field not in the list is CLOSED: reading a typo as "always
 // required" would turn a vendor's mistake into every company's blocked connect.
+// A set's field is needed once its entry is started ([Set]).
 func (r Requirement) Needed(among []Requirement) bool {
+	if r.Set != nil {
+		return started(r, among, stored)
+	}
 	if r.RequiredWhen == nil {
 		return r.Required
 	}

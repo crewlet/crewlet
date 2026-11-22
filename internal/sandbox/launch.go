@@ -219,6 +219,10 @@ type LaunchRequest struct {
 	// Effort is the reasoning effort the run works at ([RunRequest.Effort]).
 	Effort string
 
+	// WebDenied is whether the run's harness is handed its own web tools
+	// ([RunRequest.WebDenied]).
+	WebDenied bool
+
 	// ProviderKey is the providers.llm entry the run was launched on: the
 	// member of the seat's executor chain that took it, which is not always
 	// the chain's head. Written onto the job's record ([LaunchRecord]) so
@@ -380,16 +384,15 @@ type LaunchRequest struct {
 	// a turn that works for its own seat. Set only where Spec.Repos is.
 	CodeWorkingFor *types.WorkingFor
 
-	// RunEnv is the engine's environment for THIS LAUNCH: what a box needs
-	// that is minted for the job itself, such as its access to
-	// Gitlet (ADR-0093). Asked ONCE, AFTER the store has minted the
-	// launch id the job's credentials name and before any box exists,
-	// because a credential minted before the store names the job could only
-	// name a job the row does not hold. Its variables win over every other
-	// source of the run
+	// RunEnv is the engine's addition for THIS LAUNCH: what a box needs
+	// that is minted for the job itself, such as its access to Gitlet
+	// (ADR-0093). Asked ONCE, AFTER the store has minted the launch id the
+	// job's credentials name and before any box exists, because a credential
+	// minted before the store names the job could only name a job the row
+	// does not hold. Its variables win over every other source of the run
 	// environment for the names they set, and an error abandons the launch
 	// like every failure past the row. Nil adds nothing.
-	RunEnv func(launchID string) (map[string]string, error)
+	RunEnv func(launchID string) (LaunchEnv, error)
 
 	// HomePaths is each variable the job is handed a path in its box under,
 	// to that path relative to the box's home: a file a CLI is pointed at by
@@ -946,12 +949,24 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// once a checkout answers need the job's credential; and it lives in this frame alone: the spec
 	// is never persisted, and a job that continues the run hours later is
 	// launched anew, with credentials of its own.
-	env, err := launchEnv(req, opened.LaunchID)
+	env, gitAccess, err := launchEnv(req, opened.LaunchID)
 	if err != nil {
 		c.abandon(ctx, m, req, fence, "")
 		return LaunchResult{}, fmt.Errorf("sandbox: the run's environment: %w", err)
 	}
 	req.Spec.Env = env
+	if gitAccess != "" {
+		// THE CREDENTIAL'S FILE, named to the job by its path in the box once the
+		// box is known, and the credential kept for the session's scrub: in no
+		// variable, it is in nothing else a scrub reads.
+		paths := maps.Clone(req.HomePaths)
+		if paths == nil {
+			paths = map[string]string{}
+		}
+		paths[GitAccessFileVar] = GitAccessFile
+		req.HomePaths = paths
+		req.Secrets = append(slices.Clone(req.Secrets), gitAccess)
+	}
 	// THE BOX IS MADE FOR THIS TURN, which a local box records so its host
 	// can tell when no run names it any more ([Spec.TurnID]).
 	req.Spec.TurnID = req.Turn.TurnID
@@ -973,6 +988,15 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: attaching the box: %w", err)
+	}
+	// THE JOB'S OWN CREDENTIAL, over whatever an earlier job of a kept box
+	// left there, before the job starts: a fresh box's setup ran without it,
+	// as no step at launch clones from Gitlet ([SetupStep]).
+	if gitAccess != "" {
+		if err = ApplySetup(ctx, box, []SetupStep{GitAccessStep(gitAccess)}, nil); err != nil {
+			c.abandon(ctx, m, req, fence, box.ID())
+			return LaunchResult{}, fmt.Errorf("sandbox: writing the run's Gitlet credential into its box: %w", err)
+		}
 	}
 	var read *BoxFacts
 	if !reused && req.ReadBox {
@@ -1045,6 +1069,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Resume:      continued.session,
 		Carried:     continued.carried,
 		Env:         jobEnv,
+		SignInEnv:   req.Spec.SignInEnv,
 		// FROM THE SPEC, which is where the provider default and the
 		// seat's override have already been reconciled. A Limits the
 		// caller passed alongside would be a second answer to the same
@@ -1053,6 +1078,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		Limits:     Limits{MaxTurns: req.Spec.MaxTurns},
 		Model:      req.Model,
 		Effort:     req.Effort,
+		WebDenied:  req.WebDenied,
 		MCPServers: req.MCPServers,
 		// WHERE THE JOB'S HARNESS ASKS FOR ITS TURN'S NOTES, as the job's own
 		// opening answered it — see [Opening.Steer].
@@ -1277,6 +1303,18 @@ func checkRepos(req LaunchRequest) (err error) {
 	return nil
 }
 
+// LaunchEnv is what [LaunchRequest.RunEnv] adds to one launch.
+type LaunchEnv struct {
+	// Env is variables of the run environment, winning over every other
+	// source for the names it sets.
+	Env map[string]string
+	// GitAccess is the run's Gitlet credential, written into the box at
+	// [GitAccessFile] once it is made or reattached and named to the job by
+	// [GitAccessFileVar], never put in any environment, and kept for the
+	// session's scrub; "" for none.
+	GitAccess string
+}
+
 // launchEnv is the environment of THIS LAUNCH's box: the spec's run
 // environment, and then the engine's own variables for the job
 // ([LaunchRequest.RunEnv]), which win over every other source for the names
@@ -1289,19 +1327,19 @@ func checkRepos(req LaunchRequest) (err error) {
 // A COPY, never the spec's own map, which the caller's [Spec] goes on holding:
 // what a box, its setup or its runner does with the map it is handed never
 // reaches the configuration the next launch is built from.
-func launchEnv(req LaunchRequest, launchID string) (_ map[string]string, err error) {
+func launchEnv(req LaunchRequest, launchID string) (_ map[string]string, gitAccess string, err error) {
 	defer origin.Stamp(&err)
-	var added map[string]string
+	var added LaunchEnv
 	if req.RunEnv != nil {
 		var err error
 		if added, err = req.RunEnv(launchID); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
-	out := make(map[string]string, len(req.Spec.Env)+len(added))
+	out := make(map[string]string, len(req.Spec.Env)+len(added.Env))
 	maps.Copy(out, req.Spec.Env)
-	maps.Copy(out, added)
-	return out, nil
+	maps.Copy(out, added.Env)
+	return out, added.GitAccess, nil
 }
 
 // hostsPrior reports whether this node can reach the turn's previous box: one

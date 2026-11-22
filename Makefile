@@ -108,22 +108,23 @@ BIN := crewlet
 # does not merely flap — it cannot pass on a machine that speed, and the
 # failure reads as a hung test rather than as a budget nobody set.
 #
-# Thirty minutes is a hang detector sized against the worst LEGITIMATE run,
-# not against the worst run ever seen. On CI's own four-vCPU runners
-# internal/e2e completed green in 426.6s on main and 561.9s on a pull request
-# (both 2026-10-07); the pathological 1684.497s that once came within 115s of
-# this wall was a run that lost nine cluster-start attempts to unanswered
-# broker metadata requests, which is a defect that has been fixed rather than
-# a duration to budget for (see internal/jsprovision's Ask). Against the slower
-# green figure this is 3.2x, which is room for a runner a third that speed.
+# Forty-five minutes is a hang detector sized against the worst LEGITIMATE
+# run, not against the worst run ever seen: internal/sandbox/executor, whose
+# scrub-bound check reads live bytes under a stop-the-world GC at every 1% of
+# growth, measured 1,918 s under -race on a two-core slot (1,164 s on CI's
+# four-vCPU runners). 45 minutes is 1.4 times that. internal/e2e completed
+# green in 426.6s on main and 561.9s on a pull request (both 2026-10-07); its
+# pathological 1684.497s lost nine cluster-start attempts to unanswered broker
+# metadata requests, a defect that has been fixed rather than a duration to
+# budget for (see internal/jsprovision's Ask).
 #
 # It applies to every package because the flag is per test BINARY: a unit
-# package that hangs dies in thirty minutes rather than go's default ten,
+# package that hangs dies in forty-five minutes rather than go's default ten,
 # which is the cost of having a gate that can pass at all.
 #
 # AND IT IS THE ONLY DEADLINE A HUNG TEST MEETS. ci.yml sets no
 # `timeout-minutes`, so the outer bound is GitHub's own per-job default of six
-# hours — this fires twelve times sooner, and it is the one that fires
+# hours — this fires eight times sooner, and it is the one that fires
 # usefully: `go test` hitting its own deadline prints a full goroutine dump
 # naming what is stuck, where a job killed by the runner prints nothing at all.
 # A ceiling in the workflow would have to sit ABOVE this one to keep that true,
@@ -134,7 +135,7 @@ BIN := crewlet
 # the flag was handed an EMPTY value and `go test` parsed the package list as
 # its argument — `invalid value "./..." for flag -timeout`. `make test` and
 # therefore `make check` could not run at all.
-TEST_TIMEOUT := 30m
+TEST_TIMEOUT := 45m
 
 # -vet=off, because the vet `go test` runs by default is a DUPLICATE here and
 # not a gate of its own. It is twelve analyzers (cmd/go's defaultVetFlags), and
@@ -801,13 +802,13 @@ node-test: ## run the floor Node's recipe's and the pin check's own suite (ci: b
 # The OWN SUITE of the Playwright tree's recipe (scripts/playwright-tree.sh),
 # for git-test's reasons: shell no Go test reaches, failing silently where it
 # matters — a recipe that installs over a tree another checkout's suite is
-# reading, hands back a tree npm installed nothing into, lets a developer's npm
-# setting change what is installed, waits on an npm that never ends, leaves one
-# running once interrupted, or prints something above the path a make target
-# exports as the suite's tree. It runs the real recipe against a stand-in
-# registry on 127.0.0.1, every other address sent to a refused proxy, so it
-# reads no network, then runs itself once more, by a relative path, under a
-# developer's most hostile environment: about a minute, half of it that second
+# reading, hands back a tree npm installed nothing into or left short, lets a
+# developer's npm setting change what is installed, waits on an npm that never
+# ends, leaves one running once interrupted, or prints something above the path
+# a make target exports as the suite's tree. It runs the real recipe against a
+# stand-in registry on 127.0.0.1, every other address sent to a refused proxy,
+# so it reads no network, then runs itself once more, by a relative path, under
+# a developer's most hostile environment: about a minute, half of it that second
 # run. It needs node, an npm of boxhelper's MinNPMMajor or newer, tar and
 # sha256sum (or shasum).
 playwright-tree-test: ## run the Playwright tree's recipe's own suite (ci: build + vet)
@@ -867,12 +868,15 @@ lint: ## run golangci-lint (ci: golangci-lint)
 	golangci-lint run
 
 # require-node, because this half runs packages that drive `node`:
-# internal/sandbox/executor's probes of the two OpenCode plugins the engine
-# embeds — the notes plugin (opencode_steer_test.go), run under node against a
-# stand-in of the bridge's notes route and a real bridge's, and the skill-load
-# plugin (opencode_skills_test.go), against a stand-in of its skill route — and
-# internal/browser/boxhelper, which installs the Playwright tree with the
-# machine's npm under its node. Without node those cases fail under REQUIRED
+# internal/sandbox/executor's probes of the three OpenCode plugins the engine
+# embeds — notes (opencode_steer_test.go), run under node against a stand-in of
+# the bridge's notes route and a real bridge's, skill-load
+# (opencode_skills_test.go), against a stand-in of its skill route, and tool
+# environment (toolenv_test.go) — and of its Kimi Code driver
+# (kimi_driver_internal_test.go), against a stand-in of Kimi Code's server — and
+# internal/browser/boxhelper, which runs the box helper under this node and the
+# floor's, each box installing the Playwright tree with that Node's own npm,
+# offline. Without node those cases fail under REQUIRED
 # (internal/prereqtest's one rule), once the whole half has run; the
 # prerequisite says it before anything runs. ci.yml's `test (race)` installs
 # node for the same reason. (internal/e2e's dashboard replay is node's other
@@ -1016,14 +1020,16 @@ require-npm: ## fail unless npm is on PATH (every dashboard target and the suite
 	  exit 1; \
 	} >&2
 
-require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCode plugin probes and the box helper's cases need it)
+require-node: ## fail unless node is on PATH (the e2e client replay, the OpenCode plugin and Kimi Code driver probes, and the box helper's cases need it)
 	@command -v node >/dev/null 2>&1 || { \
 	  echo "node is not on PATH, and three of the suite's gates need it."; \
 	  echo "  internal/e2e's client replay runs the dashboard's own protocol"; \
 	  echo "  module over the frames a real engine produced,"; \
-	  echo "  internal/sandbox/executor runs the two OpenCode plugins the"; \
-	  echo "  engine embeds, and internal/browser/boxhelper installs a box's"; \
-	  echo "  Playwright tree with the npm node runs. Each FAILS without node"; \
+	  echo "  internal/sandbox/executor runs the three OpenCode plugins and"; \
+	  echo "  the Kimi Code driver the engine embeds, and"; \
+	  echo "  internal/browser/boxhelper runs the box"; \
+	  echo "  helper's modules under node, each box installing its Playwright"; \
+	  echo "  tree with that node's npm. Each FAILS without node"; \
 	  echo "  under the targets that run the suite"; \
 	  echo "  (CREWLET_REQUIRE_PREREQUISITES=1), but only after the whole"; \
 	  echo "  suite has run, so this says so first."; \

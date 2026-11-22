@@ -35,8 +35,30 @@ type Connection struct {
 	subject     string
 	key         *ecdsa.PrivateKey
 	kid         string
-	http        *http.Client
-	clock       Clock
+	Transport
+}
+
+// Transport is the one way a request reaches Google ([Transport.Do]): a
+// connection's, and a consent product's, which sends a person's grant's token
+// on it with no Google identity behind it.
+type Transport struct {
+	http  *http.Client
+	clock Clock
+}
+
+// Raw is an answer kept as Google sent it: a method answering
+// google.api.HttpBody (a CSV report) sends bytes of their own type, not JSON.
+type Raw struct {
+	ContentType string
+	Data        []byte
+}
+
+// NewTransport is Google's call path on hc, nil for the engine's own.
+func NewTransport(hc *http.Client) *Transport {
+	if hc == nil {
+		hc = httpx.Client(ClientTimeout)
+	}
+	return &Transport{http: hc, clock: WallClock()}
 }
 
 // Options builds a connection.
@@ -86,14 +108,10 @@ func New(opts Options) (*Connection, error) {
 	if err != nil {
 		return nil, &ConfigError{Sentence: "integrations.google_cloud.provisioning.federation_key: " + err.Error()}
 	}
-	hc := opts.HTTP
-	if hc == nil {
-		hc = httpx.Client(ClientTimeout)
-	}
 	return &Connection{
 		provisioner: email, identity: identity, provider: provider,
 		issuer: Issuer(opts.Company), subject: Subject(opts.Company),
-		key: key, kid: kid, http: hc, clock: WallClock(),
+		key: key, kid: kid, Transport: *NewTransport(opts.HTTP),
 	}, nil
 }
 
@@ -350,11 +368,34 @@ func (c *Connection) CallAs(ctx context.Context, account, method, address string
 // read as Google asks. A write's 429 is handed back as it came: a create
 // Google refuses for a quota answers the same status, and a wait clears no
 // quota.
-func (c *Connection) Do(ctx context.Context, method, address, bearer string, body, out any) error {
+func (c *Transport) Do(ctx context.Context, method, address, bearer string, body, out any) error {
+	return c.Send(ctx, Call{Method: method, Address: address, Bearer: bearer, Body: body,
+		Reads: method == http.MethodGet}, out)
+}
+
+// Call is one request to Google: its method, address, bearer (none for ""),
+// the headers its API asks beyond the engine's own (Google Ads' manager), its
+// body, and whether it changes nothing, which waits out a short 429.
+type Call struct {
+	Method, Address, Bearer string
+	Header                  http.Header
+	Body                    any
+	Reads                   bool
+}
+
+// Bytes is a call's body sent as it is, such as a file an upload sends. An
+// answer read into an io.Writer is streamed to it as it came (a download).
+type Bytes struct {
+	ContentType string
+	Data        []byte
+}
+
+// Send makes call, waiting out a short 429 where it reads.
+func (c *Transport) Send(ctx context.Context, call Call, out any) error {
 	for attempt := 0; ; attempt++ {
-		err := c.once(ctx, method, address, bearer, body, out)
+		err := c.once(ctx, call, out)
 		api, ok := errors.AsType[*APIError](err)
-		if !ok || api.Status != http.StatusTooManyRequests || method != http.MethodGet {
+		if !ok || api.Status != http.StatusTooManyRequests || !call.Reads {
 			return err
 		}
 		limit := httpx.VendorRateLimit()
@@ -368,13 +409,25 @@ func (c *Connection) Do(ctx context.Context, method, address, bearer string, bod
 	}
 }
 
-// once sends one request and decodes its answer into out. It is the only
-// place a request to Google is built.
-func (c *Connection) once(ctx context.Context, method, address, bearer string, body, out any) error {
+// DoRead is [Transport.Do] for a call that changes nothing whatever its
+// method (a report or a query taken in a POST body): its 429 is waited out
+// as a GET's is.
+func (c *Transport) DoRead(ctx context.Context, method, address, bearer string, body, out any) error {
+	return c.Send(ctx, Call{Method: method, Address: address, Bearer: bearer, Body: body, Reads: true}, out)
+}
+
+// once sends one request and decodes its answer into out, or keeps it as
+// sent where out is a [*Raw]. It is the only place a request to Google is
+// built; the engine's own headers are set last, so no API's header stands in
+// for them.
+func (c *Transport) once(ctx context.Context, call Call, out any) error {
+	method, address, bearer, body := call.Method, call.Address, call.Bearer, call.Body
 	var reader io.Reader
 	contentType := ""
 	switch b := body.(type) {
 	case nil:
+	case Bytes:
+		reader, contentType = bytes.NewReader(b.Data), b.ContentType
 	case url.Values:
 		reader, contentType = strings.NewReader(b.Encode()), "application/x-www-form-urlencoded"
 	default:
@@ -386,9 +439,17 @@ func (c *Connection) once(ctx context.Context, method, address, bearer string, b
 	}
 	req, err := http.NewRequestWithContext(ctx, method, address, reader)
 	if err != nil {
-		return fmt.Errorf("googleauth: build %s %s: %w", method, PathOf(address), err)
+		return fmt.Errorf("googleauth: build %s %s: %w", method, PathOf(address), pathOnly(err, address))
+	}
+	raw, bytesAnswer := out.(*Raw)
+	for name, values := range call.Header {
+		req.Header[http.CanonicalHeaderKey(name)] = values
 	}
 	req.Header.Set("Accept", "application/json")
+	if bytesAnswer {
+		req.Header.Set("Accept", "*/*")
+	}
+	req.Header.Del("Authorization")
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -397,13 +458,17 @@ func (c *Connection) once(ctx context.Context, method, address, bearer string, b
 	}
 	res, err := c.http.Do(req)
 	if err != nil {
-		// THE TRANSPORT'S TEXT, REDACTED, never its error: it can quote what
-		// was sent.
-		return fmt.Errorf("googleauth: %s %s: %w: %s", method, PathOf(address), ErrUnreached,
-			redact.Secrets(err.Error()))
+		return fmt.Errorf("googleauth: %s %s: %w: %w", method, PathOf(address), ErrUnreached, pathOnly(err, address))
 	}
 	defer func() { _ = res.Body.Close() }()
-	payload, err := io.ReadAll(io.LimitReader(res.Body, maxResponse))
+	if w, ok := out.(io.Writer); ok && res.StatusCode < http.StatusMultipleChoices {
+		// A FILE IS STREAMED to its writer, which bounds what it keeps.
+		if _, copyErr := io.Copy(w, res.Body); copyErr != nil {
+			return fmt.Errorf("googleauth: read %s %s: %w", method, PathOf(address), copyErr)
+		}
+		return nil
+	}
+	payload, err := io.ReadAll(io.LimitReader(res.Body, maxResponse+1))
 	if err != nil {
 		return fmt.Errorf("googleauth: read %s %s: %w", method, PathOf(address), err)
 	}
@@ -419,12 +484,38 @@ func (c *Connection) once(ctx context.Context, method, address, bearer string, b
 		}
 		return api
 	}
+	if len(payload) > maxResponse {
+		// A CUT ANSWER IS NO ANSWER: cut bytes would read as a whole report,
+		// and cut JSON as Google's broken answer.
+		return fmt.Errorf("googleauth: %s %s: %w", method, PathOf(address), ErrTooLarge)
+	}
+	if bytesAnswer {
+		raw.ContentType, raw.Data = res.Header.Get("Content-Type"), payload
+		return nil
+	}
 	if out != nil && len(bytes.TrimSpace(payload)) > 0 {
 		if err := json.Unmarshal(payload, out); err != nil {
 			return fmt.Errorf("googleauth: decode %s %s: %w", method, PathOf(address), err)
 		}
 	}
 	return nil
+}
+
+// transportError is a failure to send a request as an error may carry it on:
+// its text redacted, and its cause kept, so a deadline or a timeout is told.
+type transportError struct{ err error }
+
+func (e transportError) Error() string { return redact.Secrets(e.err.Error()) }
+func (e transportError) Unwrap() error { return e.err }
+
+// pathOnly is err, a request's failure, naming address's host and path alone:
+// a *url.Error quotes the whole address, whose query can hold a credential (a
+// Measurement Protocol secret), and no redaction knows every such name.
+func pathOnly(err error, address string) error {
+	if u, ok := errors.AsType[*url.Error](err); ok {
+		return transportError{&url.Error{Op: u.Op, URL: PathOf(address), Err: u.Err}}
+	}
+	return transportError{err}
 }
 
 // PathOf is an address's host and path, which is all an error names.

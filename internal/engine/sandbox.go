@@ -154,7 +154,7 @@ func fakeRunners(play fakePlayer) map[string]sandbox.Runner {
 		// WHAT THE HARNESS'S RUNNER STATES, so a fake run is read as its harness's is.
 		runner.Thread = sandbox.ThreadTraitsOf(real[name])
 		if r, ok := real[name].(*executor.Runner); ok {
-			runner.Pin, runner.NotesOff = r.PinnedWindow, r.NotesOffWhy()
+			runner.Pin, runner.NotesOff, runner.Fresh = r.PinnedWindow, r.NotesOffWhy(), r.StartsFresh()
 		}
 		runners[name] = runner
 	}
@@ -2017,7 +2017,8 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 		return
 	}
 	if agent.RunEnded(ctx, harness.RunEnd{Answer: ended.Text, Error: ended.Error,
-		Failed: !ended.Success, Event: ended.Event, Limits: ended.Limits, At: ended.At}) {
+		Failed: !ended.Success, Event: ended.Event, Limits: ended.Limits, NoLimit: ended.NoLimitExit,
+		At: ended.At}) {
 		log.InfoContext(ctx, "executor_run_spent_its_entry",
 			"turn_id", run.TurnID, "seat", run.AgentHandle,
 			"provider_key", run.Launch.ProviderKey,
@@ -4140,13 +4141,24 @@ type executorRun struct {
 	model string
 	// effort is the entry's reasoning effort, passed beside the model.
 	effort string
-	files  map[string]string
-	env    map[string]string
+	// webDenied is the entry's `web_tools: denied`, which its executor honours
+	// as its runs on the engine host do ([sandbox.RunRequest.WebDenied]).
+	webDenied bool
+	files     map[string]string
+	env       map[string]string
+
+	// fileKeys is, by a path of files, the keys its harness writes into that
+	// file during a run ([sandbox.Spec.CredentialRunKeys]).
+	fileKeys map[string][]string
 
 	// signIn is env without the integrations' box defaults and the seat's
 	// own credentials for a tool: what the run's sign-in is judged on, since
 	// neither ever signs a harness in.
 	signIn map[string]string
+
+	// signInNames is the variables of env that sign the harness in
+	// ([signInNames], [sandbox.Spec.SignInEnv]).
+	signInNames []string
 
 	// homePaths is the variables naming the integrations' box files, each to
 	// its path under the box's home, which the launch joins onto the box's
@@ -4193,13 +4205,17 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	credentials := integrationsOwn(agent, seat.credentials)
 	env := underlay(underlay(maps.Clone(seat.env), entry), integrationsOwn(agent, seat.defaults))
 	maps.Copy(env, credentials)
+	profile := agent.Profile()
 	run := executorRun{
-		model:     agent.ModelArgument(),
-		effort:    agent.Effort(),
-		env:       env,
-		signIn:    signIn,
-		files:     agent.SandboxCredentials(),
-		homePaths: integrationsOwn(agent, seat.homePaths),
+		model:       agent.ModelArgument(),
+		effort:      agent.Effort(),
+		webDenied:   profile.EffectiveWebTools() == harnessprofile.WebToolsDenied,
+		env:         env,
+		signIn:      signIn,
+		signInNames: signInNames(agent, entry),
+		files:       agent.SandboxCredentials(),
+		fileKeys:    agent.SandboxCredentialRunKeys(),
+		homePaths:   integrationsOwn(agent, seat.homePaths),
 	}
 	for _, name := range slices.Sorted(maps.Keys(seat.credentials)) {
 		if _, kept := credentials[name]; !kept {
@@ -4217,6 +4233,25 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 		run.files[executor.CredentialDocument] = doc
 	}
 	return run
+}
+
+// signInNames is the variables that sign agent's harness in from a run's
+// environment ([sandbox.Spec.SignInEnv]): the profile's own names
+// ([harnessprofile.Profile.CredentialEnvNames]) and each of the entry's
+// variables that is part of its sign-in ([entrySignInName]), such as a cloud
+// sign-in's key. A credential-named variable of the seat's own env counts only
+// under a profile's name: for a harness reading any provider's key it is as
+// likely a tool's token (a role.sandbox.env GITLAB_TOKEN), which its tools keep.
+func signInNames(agent *harness.Provider, entry map[string]string) []string {
+	profile := agent.Profile()
+	names := profile.CredentialEnvNames(entry)
+	for name := range entry {
+		if entrySignInName(agent, name) && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 // integrationsOwn is what of vars, variables an integration puts in a box, the

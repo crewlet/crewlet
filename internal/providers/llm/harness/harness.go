@@ -72,9 +72,14 @@
 // everything that happened to one that ran is a result its caller classifies
 // (exec.go).
 //
-// A call handed a key runs in a key home never seeded with the login and never
-// carried back from: a harness may keep the key in its login file (see
+// A call handed a key runs in a key home of its seat AND entry, never seeded
+// with the login and never carried back from: a harness may keep the key in its
+// login file, where another entry's call would sign in with it (see
 // [Workspace.AcquireForKey]).
+//
+// A harness that keeps a daemon for its home's calls
+// ([harnessprofile.HomeDaemon]) runs one call per home, and its daemon ends with
+// the call that started it ([Workspace.stopDaemon]).
 //
 // A bench is never shared with the fleet: each peer learns a spent plan from
 // its own calls once per window, and a coordination read in front of every
@@ -361,7 +366,7 @@ func (p *Provider) String() string {
 // whose file carries policy is passed on every call
 // ([harnessprofile.SystemPromptFile]), and its replacing form would render an
 // EMPTY system prompt, which Kimi Code refuses ("Missing prompt body", exit 1,
-// on 0.42.0 and 2.3.1). Every caller sends one today; this holds the next
+// on 2.7.2). Every caller sends one today; this holds the next
 // that does not.
 func (p *Provider) routeFor(req llm.Request) harnessprofile.Route {
 	if system, _ := SplitSystem(req); system == "" {
@@ -451,7 +456,7 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 
 	var checkout *Checkout
 	if p.signsInWithKey() {
-		checkout, err = p.ws.AcquireForKey(ctx, seat, callID)
+		checkout, err = p.ws.AcquireForKey(ctx, seat, p.key, callID, p)
 	} else {
 		checkout, err = p.ws.Acquire(ctx, seat, callID, p)
 	}
@@ -782,14 +787,22 @@ func newSessionID() string {
 }
 
 // argv is the invocation's arguments: the profile's completion argv (its tool
-// route's for a run with tools, rendered by [Provider.serveTools]), then the
-// model and its effort, then in argv mode the prompt, which the caller appends.
+// route's for a run with tools, rendered by [Provider.serveTools]), its
+// sign-in's flag, then the model and its effort, then in argv mode the prompt,
+// which the caller appends.
 func (p *Provider) argv(tools bool) []string {
 	complete := p.profile.CompleteArgs
 	if m := p.profile.MCP; tools && m != nil && len(m.CompleteArgs) > 0 {
 		complete = m.CompleteArgs
 	}
 	args := append([]string(nil), complete...)
+	// THE SIGN-IN'S OWN FLAG, where the profile names one: read off the home
+	// the call runs in, the key home or the login's ([Provider.signsInWithKey]).
+	if p.signsInWithKey() {
+		args = append(args, p.profile.KeyArgs...)
+	} else {
+		args = append(args, p.profile.SubscriptionArgs...)
+	}
 	if p.model != "" && !p.modelInEnv() {
 		model := p.profile.EffortModel(p.model, p.effort)
 		for _, arg := range p.profile.ModelArgs {
@@ -884,7 +897,7 @@ func (p *Provider) completion(
 	//
 	// NOT FOR A RUN THE HARNESS SAID FAILED, which is refused below and charged
 	// nothing. A vendor's report of a failed run may hold no counts by design
-	// (Hermes writes null for a refused key or a spent plan, on 0.21.5), and
+	// (Hermes 0.23.3 writes 0 and null for a refused key or a spent plan), and
 	// warning of drift then names the profile as broken exactly when the
 	// operator is reading the log for the refusal.
 	if outcome := out.applyUsageReport(p.profile, usageDoc); outcome.unreadable() && !failed {

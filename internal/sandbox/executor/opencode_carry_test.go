@@ -177,18 +177,18 @@ func TestAnOpenCodeSessionCarriedIntoABoxIsImportedBeforeTheRun(t *testing.T) {
 	})
 }
 
-// AN IMPORT THAT DID NOT HAPPEN IS NO CONTINUATION. OpenCode answers an id its
-// database already holds with "Session already exists" and success, an import
-// can say nothing at all, and `run --session` on an id it does not hold makes
-// an empty session the brief would be answered in as if it remembered. So the
-// import must say it imported THAT session; where it did not, where the box's
-// copy the export replaces could not be deleted, or where nothing was carried
-// and the box holds none, the run starts its minted session instead, says why
-// on its error stream and in its record, prints no report before it, and
-// records that it did not continue.
+// AN IMPORT THAT DID NOT HAPPEN IS NO CONTINUATION. OpenCode answers an id it
+// holds with "Session already exists" and success, an import can say nothing,
+// and `run --session` on an id it lacks makes an empty session. So the import
+// must say it imported THAT session; where it did not, the box's copy would not
+// go, nothing was carried, or the box's OpenCode names no release this build
+// reads, the run starts its minted session, says why on its error stream and in
+// its record, prints no report before it, and records it did not continue.
 //
 // Mutation: take the import's success as the session's, run the asked session
-// after a failed one, or record no reason, and a row goes red.
+// after a failed one, import into a box whose release does not read (a
+// pre-release, as releaseOf reads one), or record no reason, and a row goes
+// red.
 func TestAnOpenCodeImportThatDidNotHappenIsNoContinuation(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
@@ -206,6 +206,10 @@ func TestAnOpenCodeImportThatDidNotHappenIsNoContinuation(t *testing.T) {
 				held: []string{carriedOpenCode}, carried: openCodeExport(carriedOpenCode),
 				said: "OpenCode did not delete the box's own copy"},
 			"nothing carried": {said: "it is not in this box"},
+			"a box whose release does not read": {env: []string{"FAKE_VERSION=opencode dev"},
+				carried: openCodeExport(carriedOpenCode), said: "named no release this build reads"},
+			"a box on a pre-release": {env: []string{"FAKE_VERSION=opencode v2.0.40-beta.1"},
+				carried: openCodeExport(carriedOpenCode), said: "named no release this build reads"},
 		} {
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()

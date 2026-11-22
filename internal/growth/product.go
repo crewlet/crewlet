@@ -21,6 +21,19 @@ type Call struct {
 	HeldCall, Approver     string
 }
 
+// EngineActor is who the engine's own answer to a held call names: its lapse
+// (internal/engine's sweep), which is no administrator's.
+const EngineActor = "engine"
+
+// Denial is the step a denied held call records and who answered it: an
+// administrator's deny, or the engine's lapse, which names nobody.
+func (c Call) Denial() (Step, string) {
+	if c.Approver == "" || c.Approver == EngineActor {
+		return StepLapsed, ""
+	}
+	return StepDenied, c.Approver
+}
+
 // Hold is a write as its product prepared it: the class it comes to against
 // its target as read now ([Classify]), the digest of the exact vendor
 // operations and the target's before-state it binds to, and for a held call

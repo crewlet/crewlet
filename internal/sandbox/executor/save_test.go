@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // Saves, and every pack beside a working harness, made on a real box by the
@@ -35,7 +36,7 @@ const (
 func forgetCapture(t *testing.T, box sandbox.Sandbox) {
 	t.Helper()
 	p := paths(box)
-	if _, err := box.Exec(t.Context(), "rm -f "+shQuote(p.SessionCapture())+" "+shQuote(p.SessionDigests()),
+	if _, err := box.Exec(t.Context(), "rm -f "+shellword.Quote(p.SessionCapture())+" "+shellword.Quote(p.SessionDigests()),
 		sandbox.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +46,7 @@ func forgetCapture(t *testing.T, box sandbox.Sandbox) {
 // by pattern: each is named for its save (executor.Paths.SessionSaveStaging).
 func saveStagingLeft(t *testing.T, box sandbox.Sandbox, taker string) []string {
 	t.Helper()
-	res, err := box.Exec(t.Context(), "for d in "+shQuote(paths(box).SessionSaveStaging(taker, ""))+"*; do "+
+	res, err := box.Exec(t.Context(), "for d in "+shellword.Quote(paths(box).SessionSaveStaging(taker, ""))+"*; do "+
 		`if [ -e "$d" ] || [ -L "$d" ]; then printf '%s\n' "$d"; fi; done`, sandbox.ExecOptions{})
 	if err != nil {
 		t.Fatalf("asking the box for its saves' staging directories: %v", err)
@@ -57,7 +58,7 @@ func saveStagingLeft(t *testing.T, box sandbox.Sandbox, taker string) []string {
 // named for its save (executor.Paths.SessionSave).
 func savesLeft(t *testing.T, box sandbox.Sandbox, taker string) []string {
 	t.Helper()
-	res, err := box.Exec(t.Context(), "for d in "+shQuote(paths(box).SessionSave(taker, ""))+"*; do "+
+	res, err := box.Exec(t.Context(), "for d in "+shellword.Quote(paths(box).SessionSave(taker, ""))+"*; do "+
 		`if [ -e "$d" ] || [ -L "$d" ]; then printf '%s\n' "$d"; fi; done`, sandbox.ExecOptions{})
 	if err != nil {
 		t.Fatalf("asking the box for its saves: %v", err)
@@ -90,7 +91,7 @@ func rewritingTar(t *testing.T, pack string) string { return tarStandIn(t, pack,
 // through.
 func tarStandIn(t *testing.T, pack, others string) string {
 	t.Helper()
-	return "#!/bin/sh\ntar=" + shQuote(hostTool(t, "tar")) + "\n" + others + "\n" +
+	return "#!/bin/sh\ntar=" + shellword.Quote(hostTool(t, "tar")) + "\n" + others + "\n" +
 		`if [ "$1" != -czf ]; then exec "$tar" "$@"; fi` + "\nshift\n" + pack
 }
 
@@ -104,7 +105,7 @@ func afterTar(change string) string {
 // on past its old size, as Claude Code withdrawing a message rewrites a
 // transcript.
 func grownBack(file string) string {
-	f := shQuote(file)
+	f := shellword.Quote(file)
 	return `cp ` + f + ` ` + f + `.was && { head -c "$h" ` + f + `.was; printf '%s\n' ` +
 		`'{"type":"user","grown":"back past its old size"}' '{"type":"user","after":"it shrank"}'; } > ` + f +
 		` && rm -f ` + f + `.was`
@@ -115,7 +116,7 @@ func grownBack(file string) string {
 // machine's find.
 func neverNewerFind(t *testing.T) string {
 	t.Helper()
-	return "#!/bin/sh\nfor a; do [ \"$a\" != -newer ] || exit 0; done\nexec " + shQuote(hostTool(t, "find")) +
+	return "#!/bin/sh\nfor a; do [ \"$a\" != -newer ] || exit 0; done\nexec " + shellword.Quote(hostTool(t, "find")) +
 		` "$@"` + "\n"
 }
 
@@ -127,11 +128,11 @@ func neverNewerFind(t *testing.T) string {
 // before the pack's first sleep) rather than racing the wall clock's second.
 func coarseClock(t *testing.T, b sandbox.Sandbox) {
 	t.Helper()
-	slept := shQuote(b.Home() + "/coarse-clock-slept")
+	slept := shellword.Quote(b.Home() + "/coarse-clock-slept")
 	writeBoxStandIn(t, b, paths(b).BinDir()+"/find", "#!/bin/sh\nif [ ! -e "+slept+" ]; then "+
-		`for a; do [ "$a" != -newer ] || exit 0; done; fi`+"\nexec "+shQuote(hostTool(t, "find"))+` "$@"`+"\n")
+		`for a; do [ "$a" != -newer ] || exit 0; done; fi`+"\nexec "+shellword.Quote(hostTool(t, "find"))+` "$@"`+"\n")
 	writeBoxStandIn(t, b, paths(b).BinDir()+"/sleep", "#!/bin/sh\n: > "+slept+"\nexec "+
-		shQuote(hostTool(t, "sleep"))+` "$@"`+"\n")
+		shellword.Quote(hostTool(t, "sleep"))+` "$@"`+"\n")
 }
 
 // sessionFiles are the files of session s a case changes under a pack, named
@@ -172,7 +173,7 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 		}
 	}
 
-	saved, err := runner.PackSave(t.Context(), b, takerA)
+	saved, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("PackSave: %v", err)
 	}
@@ -203,7 +204,7 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 	}
 
 	// ANOTHER TAKER'S SAVE of the same box is a file of its own.
-	other, err := runner.PackSave(t.Context(), b, takerB)
+	other, err := runner.PackSave(t.Context(), b, takerB, "")
 	if err != nil {
 		t.Fatalf("PackSave for the second taker: %v", err)
 	}
@@ -218,7 +219,7 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 	// A TAKE OF A SAVE reads that save alone, packs nothing and removes it
 	// once read: no capture of the job's appears, and no digest is added.
 	digests = boxFile(t, b, p.SessionDigests())
-	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: saved.Path, MaxBytes: takeBound})
+	taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: saved.Path, MaxBytes: takeBound})
 	if err != nil || taken.Body == nil {
 		t.Fatalf("the take of the first taker's save = %+v, %v", taken, err)
 	}
@@ -237,11 +238,11 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 		t.Errorf("the take of one save removed another, at %s", other.Path)
 	}
 	unsaved := p.SessionSave("node-c:0f1e2d3c-4b5a-4968-8776-655443322110", "0f1e2d3c-4b5a-4968-8776-655443322110")
-	none, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: unsaved, MaxBytes: takeBound})
+	none, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: unsaved, MaxBytes: takeBound})
 	if err != nil || none.Body != nil {
 		t.Errorf("the take of a save no taker made = %+v, %v; want nothing", none, err)
 	}
-	if notSave, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: p.SessionRecord(),
+	if notSave, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: p.SessionRecord(),
 		MaxBytes: takeBound}); err == nil {
 		if notSave.Body != nil {
 			_ = notSave.Body.Close()
@@ -254,11 +255,11 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 	if got := boxFile(t, b, p.SessionDigests()); got != digests {
 		t.Errorf("a take of a save added a digest, so it packed: %q, was %q", got, digests)
 	}
-	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Save: other.Path, Pack: true,
+	if _, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Save: other.Path, Pack: true,
 		MaxBytes: takeBound}); err == nil {
 		t.Error("a take of a save that asks to pack was made")
 	}
-	if _, err := runner.PackSave(t.Context(), b, ""); err == nil {
+	if _, err := runner.PackSave(t.Context(), b, "", ""); err == nil {
 		t.Error("a save naming no taker was packed")
 	}
 
@@ -270,7 +271,7 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 		}
 		t.Fatalf("the read of the job's final archive found %+v, %v: a save read as the job's last", described, err)
 	}
-	final, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: takeBound})
+	final, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 	if err != nil || final.Body == nil {
 		t.Fatalf("the final take = %+v, %v", final, err)
 	}
@@ -310,7 +311,7 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 	}{
 		{name: "its transcript replaced, as a trim renames a new file over it",
 			pack: func(f sessionFiles) string {
-				tr := shQuote(f.transcript)
+				tr := shellword.Quote(f.transcript)
 				return afterTar(`cp ` + tr + ` ` + tr + `.new && printf '%s\n' '{"type":"user","trimmed":true}' >> ` +
 					tr + `.new && mv -f ` + tr + `.new ` + tr)
 			},
@@ -319,25 +320,25 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 			}},
 		{name: "a subagent's thread cut in place",
 			pack: func(f sessionFiles) string {
-				a := shQuote(f.thread)
+				a := shellword.Quote(f.thread)
 				return afterTar(`head -c 4 ` + a + ` > ` + a + `.cut && cat ` + a + `.cut > ` + a + ` && rm -f ` + a +
 					`.cut`)
 			},
 			check: func(f sessionFiles) string { return "a file shrank while the session was packed: " + f.thread }},
 		{name: "a task file touched",
-			pack: func(f sessionFiles) string { return afterTar(`touch ` + shQuote(f.task)) },
+			pack: func(f sessionFiles) string { return afterTar(`touch ` + shellword.Quote(f.task)) },
 			check: func(f sessionFiles) string {
 				return "a file was written while the session was packed: " + f.task
 			}},
 		{name: "a task file touched, to a find of a coarse grain as busybox's is",
-			pack: func(f sessionFiles) string { return afterTar(`touch ` + shQuote(f.task)) },
+			pack: func(f sessionFiles) string { return afterTar(`touch ` + shellword.Quote(f.task)) },
 			check: func(f sessionFiles) string {
 				return "a file was written while the session was packed: " + f.task
 			},
 			coarse: true},
 		{name: "its transcript rewritten in place and grown back, as a withdrawn message rewrites it",
 			pack: func(f sessionFiles) string {
-				tr := shQuote(f.transcript)
+				tr := shellword.Quote(f.transcript)
 				return afterTar(`cp ` + tr + ` ` + tr + `.was && { printf '%s\n' ` +
 					`'{"type":"user","withdrawn":"and written again"}'; cat ` + tr + `.was; } > ` + tr + ` && rm -f ` +
 					tr + `.was`)
@@ -345,7 +346,7 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 			check: rewrittenInPlace},
 		{name: "a subagent's thread rewritten in place once tar read it, no start of the live file",
 			pack: func(f sessionFiles) string {
-				a := shQuote(f.thread)
+				a := shellword.Quote(f.thread)
 				return afterTar(`cp ` + a + ` ` + a + `.was && { printf '%s\n' ` +
 					`'{"type":"user","withdrawn":"and written again"}'; cat ` + a + `.was; } > ` + a + ` && rm -f ` +
 					a + `.was`)
@@ -356,7 +357,7 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 			}},
 		{name: "its transcript shrunk and grown back as tar read it, as GNU tar packs that",
 			pack: func(f sessionFiles) string {
-				tr := shQuote(f.transcript)
+				tr := shellword.Quote(f.transcript)
 				// GNU'S MEMBER: what tar read before the file shrank, padded with
 				// NULs to the size it first saw, packed from a copy of the files
 				// as they were — while the live transcript is cut and grown back.
@@ -371,7 +372,7 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 			check: rewrittenInPlace},
 		{name: "its transcript shrunk and grown back as tar read it, as busybox's tar packs that",
 			pack: func(f sessionFiles) string {
-				tr := shQuote(f.transcript)
+				tr := shellword.Quote(f.transcript)
 				// BUSYBOX'S ARCHIVE: a whole gzip whose tar is cut part way into
 				// the shrinking member (the transcript, first, behind its 512-byte
 				// header). Listed through gunzip, as the pack lists it, the cut is
@@ -385,7 +386,7 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 			check: func(sessionFiles) string { return "the archive the pack made could not be read back" }},
 		{name: "a transcript grown as tar read it whose read back fails part way, past a listing that held",
 			pack: func(f sessionFiles) string {
-				return afterTar(`printf '%s\n' '{"type":"user","grew":"after tar read it"}' >> ` + shQuote(f.transcript))
+				return afterTar(`printf '%s\n' '{"type":"user","grew":"after tar read it"}' >> ` + shellword.Quote(f.transcript))
 			},
 			// THE READ BACK YIELDS THE MEMBER'S FIRST BYTES AND FAILS, as an
 			// extraction that dies in the archive does: those bytes are the
@@ -411,26 +412,26 @@ func TestASaveOfAMemberRewrittenWhileItWasPackedFails(t *testing.T) {
 			},
 			check: func(sessionFiles) string { return "the archive the pack made holds no file" }},
 		{name: "a spilled result removed, as the harness's own sweep removes one",
-			pack: func(f sessionFiles) string { return afterTar(`rm -f ` + shQuote(f.spilled)) },
+			pack: func(f sessionFiles) string { return afterTar(`rm -f ` + shellword.Quote(f.spilled)) },
 			check: func(f sessionFiles) string {
 				return "a file was removed while the session was packed: " + f.spilled
 			}},
 		{name: "a file made and removed as tar read the session, which no manifest listed",
 			pack: func(f sessionFiles) string {
-				made := shQuote(madeAndRemoved(f))
+				made := shellword.Quote(madeAndRemoved(f))
 				return `echo spilling > ` + made + "\n" + afterTar(`rm -f `+made)
 			},
 			check: func(f sessionFiles) string {
 				return "a file was removed while the session was packed: " + madeAndRemoved(f)
 			}},
 		{name: "a task file written under the tar and removed before what was written was looked for",
-			pack: func(f sessionFiles) string { return afterTar(`touch ` + shQuote(f.task)) },
+			pack: func(f sessionFiles) string { return afterTar(`touch ` + shellword.Quote(f.task)) },
 			// THE WRITER AT THE CHECK OF WHAT WAS WRITTEN: the task file goes
 			// just before the one find asking for non-transcripts (`! -name`),
 			// never the walk before the marker (`! -type`).
 			find: func(t *testing.T, f sessionFiles) string {
-				return "#!/bin/sh\ncase \" $* \" in *\" ! -name \"*) rm -f " + shQuote(f.task) + ";; esac\nexec " +
-					shQuote(hostTool(t, "find")) + ` "$@"` + "\n"
+				return "#!/bin/sh\ncase \" $* \" in *\" ! -name \"*) rm -f " + shellword.Quote(f.task) + ";; esac\nexec " +
+					shellword.Quote(hostTool(t, "find")) + ` "$@"` + "\n"
 			},
 			check: func(f sessionFiles) string {
 				return "a file was removed while the session was packed: " + f.task
@@ -494,14 +495,14 @@ var heldPacks = []struct {
 }{
 	{name: "a save",
 		make: func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error {
-			_, err := runner.PackSave(t.Context(), b, takerA)
+			_, err := runner.PackSave(t.Context(), b, takerA, "")
 			return err
 		},
 		dest:   func(t *testing.T, b sandbox.Sandbox) []string { return savesLeft(t, b, takerA) },
 		staged: func(t *testing.T, b sandbox.Sandbox) []string { return saveStagingLeft(t, b, takerA) }},
 	{name: "a take of a job still working",
 		make: func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error {
-			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
+			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true, MaxBytes: takeBound})
 			if taken.Body != nil {
 				_ = taken.Body.Close()
 			}
@@ -537,10 +538,10 @@ func TestAPackProvesTheSessionsOwnTranscriptWhateverItsFindReads(t *testing.T) {
 			p := paths(b)
 			forgetCapture(t, b)
 			f := filesOf(ran.SessionID)
-			tr := shQuote(f.transcript)
+			tr := shellword.Quote(f.transcript)
 			// A FIND THAT NEVER LISTS THE TRANSCRIPT AS NEWER, as under a clock
 			// stepped back mid-pack; every other call is this machine's find.
-			find := shQuote(hostTool(t, "find"))
+			find := shellword.Quote(hostTool(t, "find"))
 			writeBoxStandIn(t, b, p.BinDir()+"/find", "#!/bin/sh\ncase \" $* \" in *\" -newer \"*) "+find+
 				` "$@" | grep -vxF `+tr+"; exit 0;; esac\nexec "+find+` "$@"`+"\n")
 			writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, afterTar(`cp `+tr+` `+tr+`.was && { printf `+
@@ -580,7 +581,7 @@ func TestAHeldPackWhoseChecksCannotBeMadeIsRefused(t *testing.T) {
 	// grew appends to a subagent's thread once tar has read the session, so the
 	// pack has a transcript besides its own to read back.
 	grew := func(f sessionFiles) string {
-		return `printf '%s\n' '{"type":"user","more":1}' >> ` + shQuote(f.thread)
+		return `printf '%s\n' '{"type":"user","more":1}' >> ` + shellword.Quote(f.thread)
 	}
 	cases := []struct {
 		name string
@@ -650,20 +651,20 @@ func TestAHeldPackWhoseChecksCannotBeMadeIsRefused(t *testing.T) {
 			check: "the pack could not compare the transcripts it reads back with what its archive holds"},
 		{name: "what was written since its marker lost as the shell wrote its list, beside a task file touched",
 			tar: func(f sessionFiles) string {
-				return `touch ` + shQuote(f.task) + ` && ln -s /dev/null "$(dirname "$1")/written"`
+				return `touch ` + shellword.Quote(f.task) + ` && ln -s /dev/null "$(dirname "$1")/written"`
 			},
 			check: "the pack could not list the files written since its marker"},
 		{name: "the sizes found differing lost as the shell wrote them, beside a subagent's thread cut",
 			tar: func(f sessionFiles) string {
-				a := shQuote(f.thread)
+				a := shellword.Quote(f.thread)
 				return `head -c 4 ` + a + ` > ` + a + `.cut && cat ` + a + `.cut > ` + a + ` && rm -f ` + a +
 					`.cut && ln -s /dev/null "$(dirname "$1")/resized"`
 			},
 			check: "the pack could not compare the files' sizes before and after tar"},
 		{name: "a list read back holding half of what was written to it",
 			cksum: func(t *testing.T, _ string) string {
-				cksum := shQuote(hostTool(t, "cksum"))
-				return "#!/bin/sh\nif [ -f /dev/stdin ]; then " + shQuote(hostTool(t, "head")) + " -n 1 | " + cksum +
+				cksum := shellword.Quote(hostTool(t, "cksum"))
+				return "#!/bin/sh\nif [ -f /dev/stdin ]; then " + shellword.Quote(hostTool(t, "head")) + " -n 1 | " + cksum +
 					"; exit; fi\nexec " + cksum + ` "$@"` + "\n"
 			},
 			check: "the files of the session could not be listed"},
@@ -711,7 +712,7 @@ func TestAHeldPackWhoseChecksCannotBeMadeIsRefused(t *testing.T) {
 // other call goes to this machine's find.
 func faultyFind(t *testing.T, pattern string) string {
 	t.Helper()
-	find := shQuote(hostTool(t, "find"))
+	find := shellword.Quote(hostTool(t, "find"))
 	return "#!/bin/sh\ncase \" $* \" in " + pattern + ") " + find + ` "$@"; exit 1;; esac` + "\nexec " + find +
 		` "$@"` + "\n"
 }
@@ -723,7 +724,7 @@ func faultyFind(t *testing.T, pattern string) string {
 // the words of the refusal before the tar.
 func faultyFindFirst(t *testing.T, home, pattern string) string {
 	t.Helper()
-	find := shQuote(hostTool(t, "find"))
+	find := shellword.Quote(hostTool(t, "find"))
 	failed := filepath.Join(home, "find-failed-once")
 	return "#!/bin/sh\ncase \" $* \" in " + pattern + ") if " + claim(failed) + "; then " + find +
 		` "$@"; exit 1; fi;; esac` + "\nexec " + find + ` "$@"` + "\n"
@@ -734,8 +735,8 @@ func faultyFindFirst(t *testing.T, home, pattern string) string {
 // before and after its tar fails after.
 func faultyFindAgain(t *testing.T, home, pattern string) string {
 	t.Helper()
-	find := shQuote(hostTool(t, "find"))
-	seen := shQuote(filepath.Join(home, "find-matched-once"))
+	find := shellword.Quote(hostTool(t, "find"))
+	seen := shellword.Quote(filepath.Join(home, "find-matched-once"))
 	return "#!/bin/sh\ncase \" $* \" in " + pattern + ") if [ -e " + seen + " ]; then " + find +
 		` "$@"; exit 1; fi; : > ` + seen + ";; esac\nexec " + find + ` "$@"` + "\n"
 }
@@ -747,7 +748,7 @@ func faultyFindAgain(t *testing.T, home, pattern string) string {
 func faultyGrep(t *testing.T, patterns, input, answer string) string {
 	t.Helper()
 	return "#!/bin/sh\ncase \" $* \" in *\"/" + patterns + " \"*\"/" + input + " \"*) " + answer + ";; esac\nexec " +
-		shQuote(hostTool(t, "grep")) + ` "$@"` + "\n"
+		shellword.Quote(hostTool(t, "grep")) + ` "$@"` + "\n"
 }
 
 // stampedEntry is a file or directory of a session a case stamps, named
@@ -955,7 +956,7 @@ func TestAFileFromItsBoxsFutureRewrittenAsItIsPackedIsStillRefused(t *testing.T)
 				t.Fatal(err)
 			}
 			writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t,
-				afterTar(`printf '%s\n' '{"id":"1","status":"completed"}' > `+shQuote(f.task))))
+				afterTar(`printf '%s\n' '{"id":"1","status":"completed"}' > `+shellword.Quote(f.task))))
 			err := pack.make(t, runner, b)
 			if want := "a file was written while the session was packed: " + f.task; err == nil ||
 				!strings.Contains(err.Error(), want) {
@@ -1008,8 +1009,8 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 	picked := heldFifo(t, flags, "picked")
 	heldFifo(t, flags, "rewritten")
 	heldFifo(t, flags, "set")
-	at := func(name string) string { return shQuote(filepath.Join(flags, name)) }
-	touch := shQuote(hostTool(t, "touch"))
+	at := func(name string) string { return shellword.Quote(filepath.Join(flags, name)) }
+	touch := shellword.Quote(hostTool(t, "touch"))
 	// THE FIRST TOUCH OF A WALK IS B'S — the walk's alone passes -c, the
 	// clock's does not — and it says B has picked the task file, then holds
 	// until A's tar has had it rewritten; every other touch is this machine's.
@@ -1021,13 +1022,13 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 	// A'S TAR rewrites the task file in place once it has read the session,
 	// and hands A's checks the session only once B has set it.
 	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `case "$1" in `+
-		shQuote(p.SessionSaveStaging(takerA, ""))+`*) "$tar" -czf "$@"; st=$?; printf '%s\n' `+
-		`'{"id":"1","status":"completed"}' > `+shQuote(task)+`; : > `+at("a-rewrote")+`; printf 'rewritten\n' > `+
+		shellword.Quote(p.SessionSaveStaging(takerA, ""))+`*) "$tar" -czf "$@"; st=$?; printf '%s\n' `+
+		`'{"id":"1","status":"completed"}' > `+shellword.Quote(task)+`; : > `+at("a-rewrote")+`; printf 'rewritten\n' > `+
 		at("rewritten")+`; read said < `+at("set")+`; [ "$said" = set ] || exit 2; exit "$st";; esac`+"\n"+
 		`exec "$tar" -czf "$@"`+"\n"))
 	packedB := make(chan error, 1)
 	go func() {
-		_, err := runner.PackSave(t.Context(), b, takerB)
+		_, err := runner.PackSave(t.Context(), b, takerB, "")
 		wordInFifo(flags, "picked", "ended")
 		wordInFifo(flags, "set", "ended")
 		packedB <- err
@@ -1038,7 +1039,7 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 		t.Fatalf("pack B's walk never picked the task file stamped in the box's future: it said %q (%v)",
 			word[:n], err)
 	}
-	_, errA := runner.PackSave(t.Context(), b, takerA)
+	_, errA := runner.PackSave(t.Context(), b, takerA, "")
 	wordInFifo(flags, "rewritten", "ended")
 	errB := <-packedB
 	for _, flag := range []string{"a-rewrote", "b-set"} {
@@ -1087,14 +1088,14 @@ func TestTwoPacksOnDemandOfOneBoxAtOnceBothHold(t *testing.T) {
 	// THE SECOND PACK'S WORD that its tar has packed, which the first pack's
 	// tar waits on; a pack that ends says so in its stead (wordInFifo).
 	heldFifo(t, flags, "second")
-	at := func(name string) string { return shQuote(filepath.Join(flags, name)) }
+	at := func(name string) string { return shellword.Quote(filepath.Join(flags, name)) }
 	// THE HARNESS WRITES once a pack's tar has read the session: a line
 	// appended to its transcript and to a subagent's thread, the one change a
 	// pack beside a working harness takes; a write that fails fails the tar.
 	writes := func(pack string) string {
-		line := shQuote(`{"type":"user","written":"beside the ` + pack + ` pack"}`)
-		return `printf '%s\n' ` + line + ` >> ` + shQuote(transcript) + ` && printf '%s\n' ` + line + ` >> ` +
-			shQuote(thread) + ` || exit 4`
+		line := shellword.Quote(`{"type":"user","written":"beside the ` + pack + ` pack"}`)
+		return `printf '%s\n' ` + line + ` >> ` + shellword.Quote(transcript) + ` && printf '%s\n' ` + line + ` >> ` +
+			shellword.Quote(thread) + ` || exit 4`
 	}
 	// THE FIRST TAR TO CLAIM IS THE FIRST PACK'S: it packs, the harness
 	// writes, and it holds until the second pack's tar has packed and the
@@ -1186,18 +1187,18 @@ func TestASaveOfASessionThatOnlyGrewAsItWasPackedHolds(t *testing.T) {
 			born, meta, spilt := project+"/subagents/workflow/agent-9.jsonl",
 				project+"/subagents/workflow/agent-9.meta.json", project+"/tool-results/new.txt"
 			writeBoxStandIn(t, b, p.BinDir()+"/tar", tarStandIn(t, `"$tar" -czf "$@" || exit 2`+"\n"+
-				`grown=`+shQuote(f.transcript)+"\n"+
+				`grown=`+shellword.Quote(f.transcript)+"\n"+
 				`printf '%s\n%s' '{"type":"user","grew":"after tar read it"}' '{"type":"assist' >> "$grown"`+"\n"+
-				`echo '{"type":"user","more":1}' >> `+shQuote(f.thread)+"\n"+
-				`mkdir -p "$(dirname `+shQuote(born)+`)" && echo '{"type":"user"}' > `+shQuote(born)+"\n"+
-				`echo '{"agentType":"workflow"}' > `+shQuote(meta)+"\n"+
-				`echo spilled > `+shQuote(spilt)+"\n"+
+				`echo '{"type":"user","more":1}' >> `+shellword.Quote(f.thread)+"\n"+
+				`mkdir -p "$(dirname `+shellword.Quote(born)+`)" && echo '{"type":"user"}' > `+shellword.Quote(born)+"\n"+
+				`echo '{"agentType":"workflow"}' > `+shellword.Quote(meta)+"\n"+
+				`echo spilled > `+shellword.Quote(spilt)+"\n"+
 				tc.said+"\n", tc.others))
 			if tc.coarse {
 				coarseClock(t, b)
 			}
 			before := boxFile(t, b, transcriptOf(b, ran.SessionID))
-			saved, err := runner.PackSave(t.Context(), b, takerA)
+			saved, err := runner.PackSave(t.Context(), b, takerA, "")
 			if err != nil {
 				t.Fatalf("the save of a session that only grew as it was packed was refused: %v", err)
 			}
@@ -1235,7 +1236,7 @@ func TestAPackMadeOnceItsHarnessIsGoneKeepsTheEndsRule(t *testing.T) {
 		p := paths(b)
 		// WHICHEVER SESSION THE RUN FILES: the runner names it as the run starts.
 		writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t,
-			afterTar(`for f in `+shQuote(p.ClaudeConfigDir()+"/tasks")+`/*/1.json; do touch "$f"; done`)))
+			afterTar(`for f in `+shellword.Quote(p.ClaudeConfigDir()+"/tasks")+`/*/1.json; do touch "$f"; done`)))
 		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 		if ran.Captured == nil || !boxHas(t, b, p.SessionCapture()) {
 			t.Fatalf("the run's own end packed no session beside a file written as it packed:\n%s",
@@ -1249,8 +1250,8 @@ func TestAPackMadeOnceItsHarnessIsGoneKeepsTheEndsRule(t *testing.T) {
 		p := paths(b)
 		forgetCapture(t, b)
 		writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t,
-			afterTar(`touch `+shQuote(p.ClaudeConfigDir()+"/"+filesOf(ran.SessionID).task))))
-		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: takeBound})
+			afterTar(`touch `+shellword.Quote(p.ClaudeConfigDir()+"/"+filesOf(ran.SessionID).task))))
+		taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), MaxBytes: takeBound})
 		if err != nil || taken.Body == nil {
 			t.Fatalf("the take of a job that is over = %+v, %v; want its session packed as its own end packs it",
 				taken, err)
@@ -1282,9 +1283,9 @@ func TestAPackWhoseBoxClockNeverMovesIsRefused(t *testing.T) {
 	writeBoxStandIn(t, b, p.BinDir()+"/find", neverNewerFind(t))
 	writeBoxStandIn(t, b, p.BinDir()+"/sleep", "#!/bin/sh\nexit 0\n")
 	asked := b.Home() + "/tar-asked"
-	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `echo "$@" >> `+shQuote(asked)+"\n"+
+	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `echo "$@" >> `+shellword.Quote(asked)+"\n"+
 		`exec "$tar" -czf "$@"`+"\n"))
-	_, err := runner.PackSave(t.Context(), b, takerA)
+	_, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err == nil || !strings.Contains(err.Error(), "the box's clock did not move") {
 		t.Fatalf("the save in a box whose clock never moves answered %v, want it refused saying so", err)
 	}
@@ -1314,9 +1315,9 @@ func TestAPackOnABoxWhoseSleepTakesNoTenthIsRefused(t *testing.T) {
 	writeBoxStandIn(t, b, p.BinDir()+"/find", neverNewerFind(t))
 	writeBoxStandIn(t, b, p.BinDir()+"/sleep", "#!/bin/sh\ncase $1 in *.*) exit 1;; esac\nexit 0\n")
 	asked := b.Home() + "/tar-asked"
-	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `echo "$@" >> `+shQuote(asked)+"\n"+
+	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `echo "$@" >> `+shellword.Quote(asked)+"\n"+
 		`exec "$tar" -czf "$@"`+"\n"))
-	_, err := runner.PackSave(t.Context(), b, takerA)
+	_, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err == nil || !strings.Contains(err.Error(), "this box's sleep takes no tenth of a second") {
 		t.Fatalf("the save in a box whose sleep takes no tenth answered %v, want it refused saying so", err)
 	}
@@ -1406,7 +1407,7 @@ func TestAFailedSaveLeavesTheLastOneStanding(t *testing.T) {
 	runner, b := sessionBox(t, "2.1.310")
 	_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 	p := paths(b)
-	saved, err := runner.PackSave(t.Context(), b, takerA)
+	saved, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the first save: %v", err)
 	}
@@ -1419,8 +1420,8 @@ func TestAFailedSaveLeavesTheLastOneStanding(t *testing.T) {
 	if err := b.WriteFile(t.Context(), transcript, []byte(grown)); err != nil {
 		t.Fatal(err)
 	}
-	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, afterTar(`touch `+shQuote(files.task))))
-	if _, err := runner.PackSave(t.Context(), b, takerA); err == nil {
+	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, afterTar(`touch `+shellword.Quote(files.task))))
+	if _, err := runner.PackSave(t.Context(), b, takerA, ""); err == nil {
 		t.Fatal("a save of a task file written while it was packed was made")
 	}
 	if got := boxFile(t, b, saved.Path); got != last {
@@ -1436,10 +1437,10 @@ func TestAFailedSaveLeavesTheLastOneStanding(t *testing.T) {
 		t.Errorf("the refused save left its staging directory behind: %s", strings.Join(left, ", "))
 	}
 
-	if _, err := b.Exec(t.Context(), "rm -f "+shQuote(p.BinDir()+"/tar"), sandbox.ExecOptions{}); err != nil {
+	if _, err := b.Exec(t.Context(), "rm -f "+shellword.Quote(p.BinDir()+"/tar"), sandbox.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	again, err := runner.PackSave(t.Context(), b, takerA)
+	again, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the save after it: %v", err)
 	}
@@ -1474,9 +1475,9 @@ func TestASaveIsNotPackedPastWhatTheScrubWouldRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	asked := b.Home() + "/tar-asked"
-	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `echo "$@" >> `+shQuote(asked)+"\n"+
+	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `echo "$@" >> `+shellword.Quote(asked)+"\n"+
 		`exec "$tar" -czf "$@"`+"\n"))
-	_, err := runner.PackSave(t.Context(), b, takerA)
+	_, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err == nil || !strings.Contains(err.Error(), "a kept session's scrub reads, so it would be refused once packed") {
 		t.Fatalf("the save of a session past the scrub's bound answered %v, want it refused saying so", err)
 	}
@@ -1487,10 +1488,10 @@ func TestASaveIsNotPackedPastWhatTheScrubWouldRead(t *testing.T) {
 		t.Errorf("the refused save left an archive at %s", strings.Join(left, ", "))
 	}
 
-	if _, err := b.Exec(t.Context(), "rm -f "+shQuote(big), sandbox.ExecOptions{}); err != nil {
+	if _, err := b.Exec(t.Context(), "rm -f "+shellword.Quote(big), sandbox.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.PackSave(t.Context(), b, takerA); err != nil {
+	if _, err := runner.PackSave(t.Context(), b, takerA, ""); err != nil {
 		t.Fatalf("the session within the bound was not saved: %v", err)
 	}
 }
@@ -1580,7 +1581,7 @@ func TestTwoSavesOfOneTakerAtOnceBothHold(t *testing.T) {
 	// THE SECOND SAVE'S WORD that its tar has packed, which the first save's
 	// tar waits on; a save that ends says so in its stead (wordInFifo).
 	heldFifo(t, flags, "second")
-	at := func(name string) string { return shQuote(filepath.Join(flags, name)) }
+	at := func(name string) string { return shellword.Quote(filepath.Join(flags, name)) }
 	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `if `+claim(filepath.Join(flags, "claimed"))+
 		`; then "$tar" -czf "$@"; st=$?; : > `+at("first-packed")+`; read said < `+at("second")+
 		`; [ "$said" = packed ] || exit 3; exit "$st"; fi`+"\n"+
@@ -1593,7 +1594,7 @@ func TestTwoSavesOfOneTakerAtOnceBothHold(t *testing.T) {
 	saved := make(chan savedAs, 2)
 	for range 2 {
 		go func() {
-			archive, err := runner.PackSave(t.Context(), b, takerA)
+			archive, err := runner.PackSave(t.Context(), b, takerA, "")
 			wordInFifo(flags, "second", "ended")
 			saved <- savedAs{archive: archive, err: err}
 		}()
@@ -1638,8 +1639,8 @@ func wordInFifo(dir, name, word string) {
 
 // takeSave takes the save at path of b's job, as a take of a save does, and
 // reads it to its end.
-func takeSave(ctx context.Context, runner *executor.Runner, b sandbox.Sandbox, path string) readBack {
-	taken, err := runner.TakeSession(ctx, b, sandbox.SessionTake{Save: path, MaxBytes: takeBound})
+func takeSave(ctx context.Context, t testing.TB, runner *executor.Runner, b sandbox.Sandbox, path string) readBack {
+	taken, err := runner.TakeSession(ctx, b, sandbox.SessionTake{Spool: testSpool(t), Save: path, MaxBytes: takeBound})
 	switch {
 	case err != nil:
 		return readBack{err: err}
@@ -1667,24 +1668,24 @@ func TestATakeOfASaveStreamsItsOwnWhateverAnotherSaveOfItsTakerLands(t *testing.
 	runner, b := sessionBox(t, "2.1.310")
 	_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 	forgetCapture(t, b)
-	first, err := runner.PackSave(t.Context(), b, takerA)
+	first, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the first save: %v", err)
 	}
 	held := newHeldTake(b, false, 2)
 	read := make(chan readBack, 1)
-	go func() { read <- takeSave(t.Context(), runner, held, first.Path) }()
+	go func() { read <- takeSave(t.Context(), t, runner, held, first.Path) }()
 	select {
 	case <-held.held:
 	case got := <-read:
 		t.Fatalf("the first save's take ended before its second pass: %q, %v", got.archive, got.err)
 	}
-	line := shQuote(`{"type":"user","text":"` + wentOnMark + `"}`)
-	if _, err := b.Exec(t.Context(), "printf '%s\\n' "+line+" >> "+shQuote(transcriptOf(b, ran.SessionID)),
+	line := shellword.Quote(`{"type":"user","text":"` + wentOnMark + `"}`)
+	if _, err := b.Exec(t.Context(), "printf '%s\\n' "+line+" >> "+shellword.Quote(transcriptOf(b, ran.SessionID)),
 		sandbox.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	second, err := runner.PackSave(t.Context(), b, takerA)
+	second, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the second save: %v", err)
 	}
@@ -1694,7 +1695,7 @@ func TestATakeOfASaveStreamsItsOwnWhateverAnotherSaveOfItsTakerLands(t *testing.
 		which  string
 		got    readBack
 		wentOn bool
-	}{{"the first save's take", firstGot, false}, {"the second save's take", takeSave(t.Context(), runner, b,
+	}{{"the first save's take", firstGot, false}, {"the second save's take", takeSave(t.Context(), t, runner, b,
 		second.Path), true}} {
 		if r.got.err != nil {
 			t.Errorf("%s was refused: %v", r.which, r.got.err)
@@ -1758,7 +1759,7 @@ func TestATakeOfAJobStillWorkingNeverMovesItsArchiveOverTheJobsCapture(t *testin
 				runner, b := openCodeBox(t, t.TempDir())
 				dir := t.TempDir()
 				writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-					strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+					strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir), 1))
 				const session = "ses_0123456789abcdef0123456789"
 				if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
 					[]byte("id "+session+"\nrelease 2.3.2\n")); err != nil {
@@ -1787,13 +1788,13 @@ func TestATakeOfAJobStillWorkingNeverMovesItsArchiveOverTheJobsCapture(t *testin
 			p := paths(b)
 			// THE JOB'S OWN END PACK LANDS as the take's pack has written its
 			// archive and has yet to move it.
-			own := shQuote(hostTool(t, h.packer))
+			own := shellword.Quote(hostTool(t, h.packer))
 			writeBoxStandIn(t, b, p.BinDir()+"/"+h.packer, "#!/bin/sh\n"+
-				`if [ "$1" != `+shQuote(h.word)+` ]; then exec `+own+` "$@"; fi`+"\n"+
+				`if [ "$1" != `+shellword.Quote(h.word)+` ]; then exec `+own+` "$@"; fi`+"\n"+
 				own+` "$@"; st=$?`+"\n"+
-				`printf '%s' `+shQuote(final)+` > `+shQuote(p.SessionCapture())+` || exit 5`+"\n"+
+				`printf '%s' `+shellword.Quote(final)+` > `+shellword.Quote(p.SessionCapture())+` || exit 5`+"\n"+
 				`exit "$st"`+"\n")
-			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, MaxBytes: takeBound})
+			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true, MaxBytes: takeBound})
 			if err != nil || taken.Body == nil {
 				t.Fatalf("the take of a job still working = %+v, %v; want its session packed as it stands", taken, err)
 			}

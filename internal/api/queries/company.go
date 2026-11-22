@@ -8,12 +8,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/appleads"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
+	"github.com/crewlet/crewlet/internal/metaads"
 
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/learning"
@@ -393,6 +396,19 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		// and the row says how many there are.
 		add("ssh", in.SSH.Enabled, nil, map[string]any{"hosts": len(in.SSH.Hosts)})
 	}
+	if m := in.MetaAds; m != nil {
+		// THE APP AND THE TOKEN SLOTS FILLED, never a token: what each
+		// permission a token may hold allows.
+		var tokens []string
+		for _, t := range []struct{ name, ref string }{{"read", m.ReadToken}, {"operate", m.OperateToken},
+			{"admin", m.AdminToken}} {
+			if t.ref != "" {
+				tokens = append(tokens, t.name)
+			}
+		}
+		add("meta_ads", m.Enabled, nil, map[string]any{"app_id": m.AppID, "business_id": m.BusinessID,
+			"tokens": tokens, "ad_accounts": len(m.AdAccounts), "permissions": metaads.Catalog().Permissions})
+	}
 	if a := in.AppStoreConnect; a != nil {
 		// THE TEAMS AND THE ROLES, never a key: each connection's issuer and
 		// the slots it fills, and what each Apple role allows.
@@ -406,6 +422,71 @@ func (s Sources) integrations(ctx context.Context, _ Params) (any, error) {
 		}
 		add("app_store_connect", a.Enabled, nil, map[string]any{"connections": teams,
 			"roles": appstoreconnect.Catalog().RoleOffers()})
+	}
+	if a := in.AppleAds; a != nil {
+		// THE API USERS AND THE ROLES, never a key: each connection's client ID
+		// and organization, and what each Apple Ads role allows.
+		var users []map[string]any
+		for _, id := range a.ConnectionIDs() {
+			c := a.Connections[id]
+			users = append(users, map[string]any{"id": id, "identity": c.ClientID, "org_id": c.OrgID})
+		}
+		add("apple_ads", a.Enabled, nil, map[string]any{"connections": users, "ad_accounts": len(a.AdAccounts),
+			"roles": appleads.Catalog().RoleOffers()})
+	}
+	if in.GoogleAnalytics != nil {
+		// NO SECRET: the properties the company narrows agents to, and its
+		// catalog's roles with what each allows.
+		add("google_analytics", in.GoogleAnalytics.Enabled, nil, map[string]any{
+			"properties": in.GoogleAnalytics.Properties, "roles": growthRoles("google_analytics")})
+	}
+	if in.AdMob != nil {
+		// NO SECRET: the OAuth client's public ID, the accounts the company
+		// narrows agents to, and its catalog's roles with what each allows.
+		var client string
+		if in.AdMob.OAuth != nil {
+			client = in.AdMob.OAuth.ClientID
+		}
+		add("admob", in.AdMob.Enabled, nil, map[string]any{"client_id": client, "accounts": in.AdMob.Accounts,
+			"roles": growthRoles("admob")})
+	}
+	if in.AdSense != nil {
+		// AdMob's shape: the client's public ID, the accounts, and the roles.
+		var client string
+		if in.AdSense.OAuth != nil {
+			client = in.AdSense.OAuth.ClientID
+		}
+		add("adsense", in.AdSense.Enabled, nil, map[string]any{"client_id": client,
+			"accounts": in.AdSense.Accounts, "roles": growthRoles("adsense")})
+	}
+	if in.GoogleAds != nil {
+		// NO SECRET: the accounts agents may be given, which carry caps, and
+		// its catalog's access levels with what each allows.
+		capped := []string{}
+		if in.GoogleAds.Spend != nil {
+			for _, c := range in.GoogleAds.Spend.Accounts {
+				capped = append(capped, c.Account)
+			}
+		}
+		customers := []string{}
+		for _, c := range in.GoogleAds.Customers {
+			customers = append(customers, c.ID)
+		}
+		add("google_ads", in.GoogleAds.Enabled, nil, map[string]any{
+			"customers": customers, "capped": capped, "roles": growthRoles("google_ads")})
+	}
+	if in.SearchConsole != nil {
+		// NO SECRET: the sites the company narrows agents to, and its
+		// catalog's roles with what each allows.
+		add("search_console", in.SearchConsole.Enabled, nil, map[string]any{
+			"sites": in.SearchConsole.Sites, "roles": growthRoles("search_console")})
+	}
+	if in.GooglePlay != nil {
+		// NO SECRET: the apps, developer accounts and reports buckets the
+		// company names, and its catalog's permissions with what each allows.
+		add("google_play", in.GooglePlay.Enabled, nil, map[string]any{
+			"apps": nonNil(in.GooglePlay.Apps), "developer_accounts": nonNil(in.GooglePlay.DeveloperAccounts),
+			"reports_buckets": nonNil(in.GooglePlay.ReportsBuckets), "roles": growthRoles("google_play")})
 	}
 	if in.Atlassian != nil {
 		// THE ORGANIZATION, not a third product: where the account itself is
@@ -1091,4 +1172,14 @@ func instantOrNil(at time.Time) any {
 		return nil
 	}
 	return at.UTC().Format(time.RFC3339)
+}
+
+// growthRoles is kind's catalog's roles, each with what it allows, for the
+// setup card ([growth.Catalog.RoleOffers]); nil for a kind with no catalog.
+func growthRoles(kind string) []growth.RoleOffer {
+	c, ok := growth.CatalogOf(kind)
+	if !ok {
+		return nil
+	}
+	return c.RoleOffers()
 }

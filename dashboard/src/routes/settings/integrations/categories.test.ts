@@ -33,12 +33,16 @@ test("with every growth product served, each sits in the group of what it does",
 });
 
 test("a line whose app is not served is drawn nowhere, and a group left empty is not drawn", () => {
-  const shown = keysOf(shownDirectory(serving("google_analytics")));
+  const unserved = ["google_ads", "meta_ads", "apple_ads", "google_play"];
+  const shown = keysOf(shownDirectory(CATALOG.filter((e) => !unserved.includes(e.key))));
   const labels = shown.map(([label]) => label);
   expect(labels).toContain("Analytics");
   expect(labels).not.toContain("Advertising");
-  expect(labels).not.toContain("Ad revenue");
-  expect(shown.find(([label]) => label === "Analytics")![1]).toEqual(["google_analytics"]);
+  expect(shown.find(([label]) => label === "Analytics")![1]).toEqual([
+    "google_analytics",
+    "search_console",
+  ]);
+  expect(shown.find(([label]) => label === "Ad revenue")![1]).toEqual(["adsense", "admob"]);
   expect(shown.find(([label]) => label === "Mobile apps")![1]).not.toContain("google_play");
 });
 

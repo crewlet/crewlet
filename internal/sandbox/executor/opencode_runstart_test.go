@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // Where an OpenCode run began in the session it continues, recorded by its
@@ -303,7 +304,7 @@ func TestTheTakeSpellsTheRunsStartAsItsScrubSpellsTheExport(t *testing.T) {
 			runner, b := openCodeBox(t, t.TempDir())
 			dir := t.TempDir()
 			writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-				strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+				strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir), 1))
 			record := "id " + session + "\ncontinued yes\nwhy \nfrom " + startCursor(start, "desc", "next") +
 				"\nrelease opencode v2.3.2\n"
 			if err := b.WriteFile(t.Context(), paths(b).SessionRecord(), []byte(record)); err != nil {
@@ -320,7 +321,7 @@ func TestTheTakeSpellsTheRunsStartAsItsScrubSpellsTheExport(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "export-messages"), []byte(messages), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Pack: true, Scrub: tc.scrub,
+			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{Spool: testSpool(t), Pack: true, Scrub: tc.scrub,
 				MaxBytes: takeBound})
 			if err != nil || taken.Body == nil {
 				t.Fatalf("TakeSession = %+v, %v; want the session taken whatever its start", taken, err)

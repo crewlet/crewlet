@@ -131,9 +131,45 @@ const (
 	// company's servers with and ingests nothing.
 	KindSSH Kind = "ssh"
 
+	// KindMetaAds reaches the company's Meta ad accounts for the agents
+	// through the engine's own tools and ingests nothing.
+	KindMetaAds Kind = "meta_ads"
+
 	// KindAppStoreConnect reaches the company's App Store Connect teams for
 	// the agents through the engine's own tools and ingests nothing.
 	KindAppStoreConnect Kind = "app_store_connect"
+
+	// KindAppleAds reaches the company's Apple Ads organizations for the
+	// agents through the engine's own tools and ingests nothing.
+	KindAppleAds Kind = "apple_ads"
+
+	// KindGoogleAnalytics is Google Analytics 4: agents read and manage
+	// properties as their Google growth identity, through engine tools. It
+	// ingests nothing.
+	KindGoogleAnalytics Kind = "google_analytics"
+
+	// KindAdMob is AdMob: agents read and change app monetization through
+	// engine tools, as the company's consent grant. It ingests nothing.
+	KindAdMob Kind = "admob"
+
+	// KindAdSense is AdSense: agents read and change website monetization
+	// through engine tools, as the company's consent grant. It ingests nothing.
+	KindAdSense Kind = "adsense"
+
+	// KindGoogleAds is Google Ads: agents read and manage accounts as their
+	// Google growth identity, through engine tools, spend held to the company's
+	// caps. It ingests nothing.
+	KindGoogleAds Kind = "google_ads"
+
+	// KindSearchConsole is Google Search Console, with Site Verification and
+	// the Indexing API: agents read and manage properties as their Google
+	// growth identity, through engine tools. It ingests nothing.
+	KindSearchConsole Kind = "search_console"
+
+	// KindGooglePlay is Google Play: agents read and manage apps as their
+	// Google growth identity, through engine tools, publishing held for an
+	// administrator. It ingests nothing.
+	KindGooglePlay Kind = "google_play"
 
 	// KindAtlassian is the ORGANIZATION, not a third product. Jira and
 	// Confluence are sites this engine reads and writes as an account; this
@@ -150,7 +186,8 @@ const (
 var Kinds = []Kind{
 	KindSlack, KindMattermost, KindJira, KindConfluence,
 	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
-	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAppStoreConnect, KindAtlassian,
+	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindMetaAds, KindAppStoreConnect, KindAppleAds, KindAtlassian,
+	KindGoogleAnalytics, KindAdMob, KindAdSense, KindGoogleAds, KindSearchConsole, KindGooglePlay,
 }
 
 // ConvergeOrder is the order the reconcile loop VISITS surfaces in, which is
@@ -170,7 +207,10 @@ var ConvergeOrder = []Kind{
 	KindAtlassian, KindJira, KindConfluence,
 	KindSlack, KindMattermost,
 	KindGitHub, KindGitLab, KindDatadog, KindCloudflare, KindExpo, KindDigitalOcean,
-	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindAppStoreConnect,
+	KindScaleway, KindAWS, KindGoogleCloud, KindSSH, KindMetaAds, KindAppStoreConnect, KindAppleAds, KindAdMob, KindAdSense,
+	// THE GOOGLE GROWTH PRODUCTS AFTER GOOGLE CLOUD, whose company pass makes
+	// the growth identities they sign in as (internal/googleauth).
+	KindGoogleAnalytics, KindGoogleAds, KindSearchConsole, KindGooglePlay,
 }
 
 // Valid reports whether k is a surface this build knows.
@@ -248,10 +288,12 @@ func (k Kind) Ingress() Ingress {
 // then receives everything said in its team; Atlassian only CREATES accounts
 // (Jira and Confluence have their own webhook and parser). So "no parser turns
 // deliveries into work" warns about Mattermost and means nothing for Atlassian.
-// Cloudflare, Expo, DigitalOcean, Scaleway, AWS, Google Cloud, SSH and App
-// Store Connect are likewise: credentials there are minted, pasted or issued,
+// Cloudflare, Expo, DigitalOcean, Scaleway, AWS, Google Cloud, SSH and the
+// growth products are likewise: credentials there are minted, pasted or issued,
 // and nothing they send is routed to a seat.
 func (k Kind) Ingests() bool {
 	return k != KindAtlassian && k != KindCloudflare && k != KindExpo && k != KindDigitalOcean &&
-		k != KindScaleway && k != KindAWS && k != KindGoogleCloud && k != KindSSH && k != KindAppStoreConnect
+		k != KindScaleway && k != KindAWS && k != KindGoogleCloud && k != KindSSH && k != KindMetaAds &&
+		k != KindAppStoreConnect && k != KindAppleAds && k != KindGoogleAnalytics && k != KindAdMob &&
+		k != KindAdSense && k != KindGoogleAds && k != KindSearchConsole && k != KindGooglePlay
 }

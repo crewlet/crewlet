@@ -12,6 +12,13 @@ package executor
 // remove it from under the run.
 func (p Paths) OpenCodeConfig() string { return p.WorkDir() + "/opencode.json" }
 
+// OpenCodeConfigDir is an OpenCode run's OPENCODE_CONFIG_DIR, which replaces
+// OpenCode's global configuration directory (~/.config/opencode): made empty
+// by the run's script before any command that reads configuration, and
+// removed whole before every run ([Runner.ClearArtifacts]), so nothing written
+// there loads in a later run.
+func (p Paths) OpenCodeConfigDir() string { return p.WorkDir() + "/opencode-config" }
+
 // OpenCodeValues is the directory holding the values an OpenCode run's MCP
 // servers are configured with — each server's url, each header value, each
 // environment value — one file apiece, which [Paths.OpenCodeConfig] names by a
@@ -44,6 +51,12 @@ func (p Paths) OpenCodeValuesFresh() string { return p.WorkDir() + "/opencode-va
 // change inside it, so nothing is written there once the run's server starts —
 // the plugin itself writes nothing at all.
 func (p Paths) OpenCodeSteerPlugin() string { return p.WorkDir() + "/opencode-steer" }
+
+// OpenCodeToolEnvPlugin is the DIRECTORY of the plugin that keeps the variables
+// the harness alone reads out of the commands an OpenCode run's model runs
+// (opencode_toolenv.js), written and named as the notes plugin is
+// ([Paths.OpenCodeSteerPlugin]), and for the same reasons a directory of its own.
+func (p Paths) OpenCodeToolEnvPlugin() string { return p.WorkDir() + "/opencode-tool-env" }
 
 // OpenCodeSkills is the DIRECTORY an OpenCode run's own skills are written into
 // ([sandbox.RunRequest.Skills], [OpenCode.WriteConfig]), a directory per skill,

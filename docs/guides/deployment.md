@@ -160,7 +160,7 @@ hours of each other:
   and any other node reads it as still being kept until its life and two
   hours have passed by its own clock, about three hours and twenty minutes; a
   read standing by beside it is read as standing until its window and two
-  hours have passed, about four hours and fifty and a half minutes.
+  hours have passed, about four hours and forty-nine and a half minutes.
   Neither wait holds that long on that reading alone: a turn's end holds each
   capture for its life, and each standby for its window and its takeover's
   life, from the moment it first sees it, on its own clock. A reader whose
@@ -187,11 +187,32 @@ hours of each other:
   timeout has passed in real time, so a node whose clock runs further ahead of
   the decider's than that gives a host up early, and writes off the stopped
   run's spend while the host may still be restarting.
+- A [joining node](retention.md#the-join-runbook) waits on every node whose
+  positions-register row names an artefact and was taken by the coordination
+  store within the last forty seconds and two hours, by the joining node's
+  clock, which nothing has measured yet at boot. A joiner whose clock runs
+  further ahead of the store's than the two hours can leave a draining donor
+  unnamed and drop its offer; a stopped node named this way costs the join its
+  five seconds of collecting offers.
+- The trim and its report age other machines' instants by the clock of the
+  node reading them, each the edge of a policy or an alarm, moved by up to the
+  two hours rather than a margin: an [eviction's](retention.md#eviction) fence
+  window, from the broker's instant on the eviction; the
+  [`min_age` floor](retention.md#the-six-terms), from the broker's instant on
+  each record; the newest backup's age, stamped by the node that took it,
+  against [`backup_max_age`](retention.md#a-company-that-never-backs-up-never-trims),
+  which near its one-hour floor can refuse a fresh backup or accept one three
+  hours old; [`trim_blocked`](../reference/alarms.md#every-alarm) across a move
+  of the trim duty, from the previous holder's instant; and
+  [`maintenance_open`](../reference/alarms.md#every-alarm), from the instant
+  the entering node stamped, which can be raised at once or two hours late.
 
 Who holds a seat, a duty or a node's presence is not among them, nor how long
 its lease has left on Settings › Nodes and in `fleet_health`: a lease is judged,
 and its time left read, on the coordination store's clock alone, and every node
 takes the store's word for it ([Coordination](../concepts/coordination.md#the-three-valued-answer)).
+Nor is whether the trim honours a backup's or a join's pin: the node holding
+the trim duty judges it on its own clock, from the moment it first sees it.
 
 NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
@@ -896,6 +917,17 @@ no room stop the node. Whether that volume should outlive the engine's
 container depends on what a run's working tree is worth across a deploy
 ([below](#a-restart-and-the-executors-on-its-host)).
 
+**Give each engine process 481.17 MiB free in its temporary directory.** A
+node that runs seats spools each executor session it keeps or saves, sealed,
+beside its scrub's spool, until its upload ends, in a directory of each engine
+process's own under the process's temporary directory (`$TMPDIR`, else
+`/tmp`). Every spool of one process shares one fixed room of 481.17 MiB, so
+two engines on one host need it twice, beside what their runs and tool servers
+write there. Nothing checks the room at boot: a take whose spool finds the disk
+full keeps nothing, and the turn's next launch continues the newest kept
+session ([A session's spools on its
+node](../concepts/code-sandbox.md#a-sessions-spools-on-its-node)).
+
 **The box root bounds where a box's files land, not what a `direct` run may
 write.** A `direct` run is a process of the engine's own user with no mount
 around it, so a command naming `/tmp`, the engine's home or a path on the
@@ -1291,7 +1323,10 @@ draining, and rolling upgrades. The two things that bite hardest:
 executors' records (the boot's epoch floor, which raises each seat's fencing epoch above the highest its records carry before a node claims it; each seat's recovery; the completion poll; the reply-to-parked-executor lookup; a seat's retirement; the dashboard) skips a
 record that does not decode and logs it at error as
 `sandbox_run_undecodable` with its key; every readable record is worked
-as usual, so the node starts and its seats are prepared. Its seat, status and
+as usual, so the node starts and its seats are prepared. The epoch floor reads a
+record whole only where it states no standing (one an older version wrote), so
+it skips only such a record and floors any other by the standing its last write
+stated. Its seat, status and
 owner cannot be known, so nothing polls, resumes, ends, deletes or rewrites it: a retirement ends the seat's readable records and leaves
 it as it is. A listing that fails as a whole still stops the boot,
 naming the bucket. Remove the record once you know its executor is over (its box,
@@ -1816,7 +1851,7 @@ Every figure above is of the memory the executor's pools, the answers in flight,
 [page cache](#the-page-cache) and the read lane leave: a Gitlet node keeps them first and sizes
 Gitlet by what is left
 ([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 97 MiB for the
-transcript reads its API answers and 1 796 MiB where it runs seats too, 284 MiB for the answers in flight, a
+transcript reads its API answers and 1 805 MiB where it runs seats too, 284 MiB for the answers in flight, a
 sixteenth of its memory for the page cache and 128 MiB a core for git's reads, so give it that much more. They are the executor's in-process pools alone: a node
 running seats also holds its harness calls and boxes
 ([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's pools

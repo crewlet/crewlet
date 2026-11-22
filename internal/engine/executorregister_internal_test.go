@@ -170,17 +170,28 @@ func TestTheExecutorSourceNominatesNothingWithoutTheRuns(t *testing.T) {
 	}
 }
 
-// fakeRuns is the fleet's run records as the live-turn read reaches them.
+// fakeRuns is the fleet's run records as the live-turn read reaches them: their
+// standing, never their values.
 type fakeRuns struct{ records []coord.Record }
 
-func (f fakeRuns) SandboxRuns(context.Context) ([]coord.Record, error) { return f.records, nil }
+func (f fakeRuns) SandboxRunStandings(context.Context) ([]coord.StoodRun, error) {
+	out := make([]coord.StoodRun, 0, len(f.records))
+	for _, r := range f.records {
+		seat := coord.StandingOf(uuid.New(), "ana", 1)
+		out = append(out, coord.StoodRun{TurnID: r.Key, Version: r.Version, Standing: &seat})
+	}
+	// One an older build wrote, stating none.
+	out[len(out)-1].Standing = nil
+	return out, nil
+}
 
-// EVERY RUN RECORD IS A LIVE TURN, WHATEVER IT HOLDS: a record this build cannot
-// decode and one of a status it does not know are runs nobody has finished as
-// much as any other, since a finished run's record is deleted — and the
-// sandbox's own listings skip both, which is why the retention reads the keys.
+// EVERY RUN RECORD IS A LIVE TURN, WHATEVER IT HOLDS OR STATES: a record this
+// build cannot decode, one of a status it does not know and one stating no
+// standing are runs nobody has finished as much as any other, since a finished
+// run's record is deleted. The sandbox's own listings skip the first two, and
+// the records cross a leaf's link whole, so the retention reads the standing.
 //
-// Mutation: read the live turns through sandbox's ListActive and the garbled
+// Mutation: read the live turns through sandbox's ListActive, and the garbled
 // record and the newer build's are aged out under their runs.
 func TestEveryRunRecordIsALiveTurn(t *testing.T) {
 	t.Parallel()
@@ -195,7 +206,7 @@ func TestEveryRunRecordIsALiveTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, turn := range map[string]string{"a running run": running,
-		"a record this build cannot decode": garbled, "a newer build's status": newer} {
+		"a record this build cannot decode": garbled, "a newer build's status, stating no standing": newer} {
 		if !live[turn] {
 			t.Errorf("%s is not live, so its session could be aged out under it", name)
 		}

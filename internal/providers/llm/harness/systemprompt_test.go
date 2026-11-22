@@ -153,7 +153,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 	// that fact rather than an omission.
 	want := map[string]string{
 		"claude-code": "{file}", // 2.1.303 and 2.1.310: --system-prompt-file
-		// 1.0.70, xAI's OWN HARNESS from x.ai/cli:
+		// 1.0.92, xAI's OWN HARNESS from x.ai/cli:
 		// --system-prompt-override, string only — a path there is sent as
 		// the text — and --rules the same on the appending channel. NOT
 		// the same-named community package on npm, which has no such
@@ -166,11 +166,11 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// because only their flags had been read.
 		"gemini-cli": envChannel,
 		"qwen-code":  envChannel,
-		// 0.153.4 and 0.164.0: no flag, but a CONFIG KEY naming a file,
+		// 0.171.0: no flag, but a CONFIG KEY naming a file,
 		// `-c model_instructions_file=<path>`, which replaces the base
 		// instructions outright.
 		"codex": "{file}",
-		// 1.0.103: no replacing channel; it keeps its own prompt and adds
+		// 1.0.114: no replacing channel; it keeps its own prompt and adds
 		// the engine's from an AGENTS.md in the call's directory
 		// (append_system_prompt).
 		"copilot": "",
@@ -191,7 +191,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// names (TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE), which a side pass
 		// takes too.
 		"muse-code": "",
-		// 0.42.0 and 2.3.1, MoonshotAI's OWN HARNESS from
+		// 2.7.2, MoonshotAI's OWN HARNESS from
 		// @moonshot-ai/kimi-code: --agent-file, a path — but an AGENT
 		// FILE rather than a bare prompt, which is what a channel's file
 		// spec exists for, and the appending channel is the same file
@@ -199,8 +199,8 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// unscoped `kimi-code` package on npm, which is a Claude Code
 		// wrapper and has none of this.
 		"kimi-code": "{file}",
-		// No channel, measured on 0.21.5. Its identity slot, SOUL.md,
-		// lives in the harness's home, which a seat's concurrent calls share,
+		// No channel, measured on 0.23.3. Its identity slot, SOUL.md,
+		// lives in the harness's home, which is the seat's,
 		// and a .hermes.md in the call's directory — the one per-call file
 		// it reads — is replaced whole by a "[BLOCKED: …]" line, silently,
 		// when ordinary company prose matches its scan. `-p` on this harness

@@ -133,9 +133,11 @@ func (u UsagePaths) PromptTokens(input, cacheRead, cacheWrite int) int {
 // OpenCode 2.0 keeps logins in the same SQLite file as every session, so
 // copying it would carry one seat's conversations to every other seat and
 // pruning it would delete the login. The document is the login of record
-// ([CredentialStoreDocument]); each generation imports it into an empty
-// database and exports at its end, carried back only as a compare-and-swap
-// against the seed under hostbox.LockCredentials (Workspace.syncCredentialsOut).
+// ([CredentialStoreDocument]): a JSON array of credentials, each an object
+// with a string id. Each generation imports it into an empty database and
+// exports at its end, carried back only as a compare-and-swap against the seed
+// under hostbox.LockCredentials (Workspace.syncCredentialsOut), holding the
+// handed logins alone ([KeepHandedCredentials]).
 type CredentialStore struct {
 	// ExportArgs print every login the harness holds as one document on stdout.
 	ExportArgs []string `yaml:"export_args,omitempty"`
@@ -290,9 +292,9 @@ const (
 	// sat the entry out. A sentinel that is not words ("429") still false-positives.
 	MarkerScopeAnswerAndStderr MarkerScope = "answer-and-stderr"
 	// MarkerScopeStderr searches stderr only, for a harness whose failures
-	// never reach the answer (kimi-code, pi; measured). Narrow only where the
+	// never reach the answer (pi; measured). Narrow only where the
 	// answer is an impossible place for the report: hermes prints a refused
-	// key on stdout with exit 2 (0.21.5).
+	// key on stdout with exit 2 (0.23.3).
 	MarkerScopeStderr MarkerScope = "stderr"
 	// MarkerScopeEvents matches STRUCTURE, not text, for a harness reporting a
 	// failure as its own event in a JSON stream (OpenCode 2's `provider.quota`).
@@ -506,6 +508,25 @@ type SeedFile struct {
 	In SeedScope `yaml:"in,omitempty"`
 	// Content is the file's bytes.
 	Content string `yaml:"content,omitempty"`
+}
+
+// HomeDaemon is a process the harness starts for a call and keeps running in the
+// background to serve the home's later calls, with the environment of the call
+// that started it: Hermes Agent 0.23.3's `-z` runs its turn in a gateway it
+// starts per HERMES_HOME in a session of its own, which outlives the call's
+// process group and serves the next call with the first one's variables.
+//
+// Declared, a home runs one call at a time, and the engine runs StopArgs in it
+// whenever PIDFile is there as a call releases the home and before a call
+// opens it (one an engine that ended mid-call left behind), so every call
+// starts its own daemon and none outlives the call that started it.
+type HomeDaemon struct {
+	// PIDFile is the file, relative to the seat home, the harness keeps while
+	// its daemon runs and removes when it stops.
+	PIDFile string `yaml:"pid_file,omitempty"`
+	// StopArgs is the harness's own command that stops the daemon of the home
+	// it runs in, and exits 0 when there is none.
+	StopArgs []string `yaml:"stop_args,omitempty"`
 }
 
 // staysInside is the load-time half of [UnderRoot] ([filepath.IsLocal]), for a
@@ -784,6 +805,17 @@ type Profile struct {
 	// argvs element-wise yields a command line neither side wrote.
 	CompleteArgs []string `yaml:"complete_args,omitempty"`
 
+	// KeyArgs and SubscriptionArgs follow CompleteArgs on a call that signs
+	// in with a key (api-key, env, an inherit-env key: the seat's key home,
+	// [Profile.KeySeedFiles]'s) and on one that signs in with a login,
+	// respectively: the flag choosing the sign-in, for a harness that picks
+	// one on argv and runs another without it. Qwen Code's `--auth-type
+	// openai` and `--auth-type qwen-subscription`: its OpenAI sign-in otherwise
+	// needs OPENAI_MODEL set beside the key (0.28.4). Lists replace wholesale
+	// on override, as CompleteArgs does.
+	KeyArgs          []string `yaml:"key_args,omitempty"`
+	SubscriptionArgs []string `yaml:"subscription_args,omitempty"`
+
 	// ModelArgs carries the model, {model} substituted. None with {model}
 	// (empty included) means the harness takes no model, and an entry naming
 	// one is refused, not silently ignored ([Profile.TakesModel]). The
@@ -929,7 +961,7 @@ type Profile struct {
 	// under api-key the same setting would overrule the key: Gemini CLI picks
 	// its sign-in from settings or environment (GOOGLE_GENAI_USE_GCA=true
 	// first, GEMINI_API_KEY after) and a copied login selects nothing
-	// (subscription calls exited 41, 0.58.0, 0.65.0). Never a credential, the
+	// (subscription calls exited 41, 0.70.0). Never a credential, the
 	// profile's token_env or api_key_env, a variable the engine sets to isolate
 	// the call or one env sets too, or empty.
 	SubscriptionEnv map[string]string `yaml:"subscription_env,omitempty"`
@@ -962,7 +994,7 @@ type Profile struct {
 	// key variable signs it in, for a harness whose metered key is part of a
 	// model of its own: Kimi Code's KIMI_MODEL_NAME, beside KIMI_MODEL_API_KEY,
 	// adds a provider that becomes its default and refuses a --model naming
-	// any other (2.3.1, 2.7.2). Under auth.mode api-key the entry's model goes
+	// any other (2.7.2). Under auth.mode api-key the entry's model goes
 	// here and model_args is not passed; under any other mode it is removed.
 	// The engine owns it, as it does api_key_env: an entry's env may not set it.
 	APIKeyModelEnv string `yaml:"api_key_model_env,omitempty"`
@@ -983,20 +1015,33 @@ type Profile struct {
 	// in the home is conversation state.
 	CredentialPaths []string `yaml:"credential_paths,omitempty"`
 
-	// LoginKeys names, by a credential file's NAME, the top-level key that file
-	// holds only once signed in, for a file that also keeps state: Copilot CLI
-	// writes `firstLaunchAt` into config.json and Cursor Agent settings into
+	// LoginKeys names, by a credential file's NAME, the top-level keys that file
+	// holds a login under, for a file that also keeps state: Copilot CLI writes
+	// `firstLaunchAt` into config.json and Cursor Agent settings into
 	// cli-config.json signed in or not, which made the doctor report a sign-in
-	// nobody made. Without its key such a file is not a login
+	// nobody made. Holding none of its keys such a file is not a login
 	// ([Profile.HoldsLogin]); a credential file not named here is one whenever
-	// it exists.
-	LoginKeys map[string]string `yaml:"login_keys,omitempty"`
+	// it exists. Every key the harness signs in from: one it reads that is not
+	// named leaves a login the engine takes for none.
+	LoginKeys map[string][]string `yaml:"login_keys,omitempty"`
+
+	// RunKeys names, by a credential file's NAME, the keys (dotted, into a
+	// JSON object) the harness writes into that file during a run, which are
+	// not the login its sign-in made: Muse Code mints an API key as each run
+	// starts and writes it there. A run's login carried out keeps the shared
+	// login's value of each ([KeepLoginKeys]); a login command's takes all.
+	RunKeys map[string][]string `yaml:"run_keys,omitempty"`
 
 	// VolatilePaths are sessions, transcripts, history and todo state,
 	// relative to the seat home, deleted before and after every call: a hidden
 	// harness memory would make turns non-reproducible and carry one task's
 	// context into the next.
 	VolatilePaths []string `yaml:"volatile_paths,omitempty"`
+
+	// HomeDaemon is the background process the harness keeps for a home's
+	// calls, or nil for a harness whose calls end with their process group
+	// ([HomeDaemon]).
+	HomeDaemon *HomeDaemon `yaml:"home_daemon,omitempty"`
 
 	// LoginArgs brokers the vendor's own interactive login.
 	LoginArgs []string `yaml:"login_args,omitempty"`
@@ -1149,7 +1194,7 @@ type Profile struct {
 	// before its environment: Gemini CLI takes an operator's
 	// GOOGLE_GEMINI_BASE_URL gateway as a sign-in it then refuses (exit 41)
 	// unless its settings name the key sign-in, and those settings in a login
-	// home would send subscription calls to a key it lacks (0.65.0). Key and
+	// home would send subscription calls to a key it lacks (0.70.0). Key and
 	// login homes are two directories ([Workspace.AcquireForKey]). Home only:
 	// a call's working directory knows nothing of how it signs in.
 	KeySeedFiles []SeedFile `yaml:"key_seed_files,omitempty"`
@@ -1171,7 +1216,7 @@ type Profile struct {
 	// it runs on vendor defaults. Matched as each stderr line arrives, on every
 	// call; the run is stopped at once and fails, since a harness with its tool
 	// policy unloaded must not use the tools that policy denies (Gemini CLI
-	// reports "Policy file error" and carries on, measured on 0.58.0).
+	// reports "Policy file error" and carries on, measured on 0.70.0).
 	FailureMarkers []string `yaml:"failure_markers,omitempty"`
 }
 
@@ -1511,6 +1556,9 @@ func (p *Profile) kept(scope SeedScope) []keptPath {
 		for i, rel := range p.VolatilePaths {
 			add("volatile_paths", fmt.Sprintf("volatile_paths[%d]", i), rel)
 		}
+		if p.HomeDaemon != nil {
+			add("home_daemon", "home_daemon.pid_file", p.HomeDaemon.PIDFile)
+		}
 	}
 	for i, f := range p.SeedFiles {
 		if f.Scope() == scope {
@@ -1700,6 +1748,7 @@ func (p *Profile) problems() []string {
 	p.validateLimitEvents(add)
 	p.validateEventReports(add)
 	p.validateAPIKeyModelEnv(add)
+	p.validateSignInArgs(add)
 	p.validateSignIn(add)
 	// An auth marker fires KindAuth, which exhausts the credential as a
 	// spent plan does, so an unusable sentinel costs the same as above.
@@ -2175,9 +2224,23 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 			add("login_keys names %q, which is the file name of no credential_paths entry — "+
 				"a login key says which of the credential files holds a login only once it "+
 				"carries that key", name)
-		case strings.TrimSpace(p.LoginKeys[name]) == "":
-			add("login_keys.%s is empty — name the top-level key the file holds once the "+
-				"harness has signed in", name)
+		case len(p.LoginKeys[name]) == 0 || slices.ContainsFunc(p.LoginKeys[name], func(k string) bool {
+			return strings.TrimSpace(k) == ""
+		}):
+			add("login_keys.%s is empty or names an empty key — name the top-level keys the "+
+				"file holds a login under", name)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(p.RunKeys)) {
+		if byName[name] == "" {
+			add("run_keys names %q, which is the file name of no credential_paths entry — "+
+				"run keys say which keys of a credential file its harness writes during a run", name)
+		}
+		for i, key := range p.RunKeys[name] {
+			if slices.Contains(strings.Split(key, "."), "") {
+				add("run_keys.%s[%d] %q is no key path — name the key, its parents' keys before "+
+					"it, each joined by a dot", name, i, key)
+			}
 		}
 	}
 	// A host file is adopted under its file name and a seat is seeded only with
@@ -2196,6 +2259,15 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 	for i, rel := range p.VolatilePaths {
 		if !staysInside(rel) {
 			add("volatile_paths[%d] %q must be relative and stay inside the seat home", i, rel)
+		}
+	}
+	if d := p.HomeDaemon; d != nil {
+		if !staysInside(d.PIDFile) || !namesAFile(d.PIDFile) {
+			add("home_daemon.pid_file %q must name a file inside the seat home", d.PIDFile)
+		}
+		if len(d.StopArgs) == 0 {
+			add("home_daemon.stop_args is empty: name the harness's own command that stops " +
+				"the daemon of the home it runs in")
 		}
 	}
 }
@@ -2446,6 +2518,32 @@ func (p *Profile) validateLimitEvents(add func(string, ...any)) {
 // validateAPIKeyModelEnv holds [Profile.APIKeyModelEnv] to a key it goes beside
 // and a model it can carry: without api_key_env no mode puts it in place, and
 // one sharing a name with the key or the token would overwrite it.
+// validateSignInArgs holds [Profile.KeyArgs] and [Profile.SubscriptionArgs]
+// to a sign-in the profile has: args for a key on a harness no key signs in,
+// or for a login on one that keeps none and mints no token, would be passed
+// on no call, a claim nothing runs.
+func (p *Profile) validateSignInArgs(add func(string, ...any)) {
+	if len(p.KeyArgs) > 0 && p.APIKeyEnv == "" && !p.EnvSignIn {
+		add("key_args is set, but no key signs this harness in (no api_key_env, no env_sign_in), " +
+			"so no call would pass it: drop it, or name the key variable")
+	}
+	if len(p.SubscriptionArgs) > 0 && !p.KeepsLogin() && p.TokenEnv == "" {
+		add("subscription_args is set, but the harness keeps no login (no credential_paths, " +
+			"credential_store) and mints no token (no token_env), so no call would pass it: drop it, " +
+			"or name the login's files")
+	}
+	for _, list := range []struct {
+		field string
+		args  []string
+	}{{"key_args", p.KeyArgs}, {"subscription_args", p.SubscriptionArgs}} {
+		for i, arg := range list.args {
+			if strings.TrimSpace(arg) == "" {
+				add("%s[%d] is empty — an empty argument is one the harness reads as a value", list.field, i)
+			}
+		}
+	}
+}
+
 func (p *Profile) validateAPIKeyModelEnv(add func(string, ...any)) {
 	name := p.APIKeyModelEnv
 	switch {
@@ -2690,16 +2788,16 @@ func (p *Profile) ValidateCredentials(name string) error {
 }
 
 // HoldsLogin reports whether the credential file named name, holding content,
-// is a login: one [Profile.LoginKeys] does not name, or one whose top-level
-// key it names is set to something other than null or an empty string, object
-// or array.
+// is a login: one [Profile.LoginKeys] does not name, or one any of whose
+// top-level keys it names is set to something other than null or an empty
+// string, object or array.
 //
 // Read as JSON with every `//` line set aside, since Copilot CLI's plaintext
 // login file opens with two. A file that does not read that way IS taken for a
 // login: guessing harder means parsing a vendor's format, and the opposite
 // wrong guess is a login the engine would not carry, export or keep.
 func (p *Profile) HoldsLogin(name string, content []byte) bool {
-	key, named := p.LoginKeys[name]
+	keys, named := p.LoginKeys[name]
 	if !named {
 		return true
 	}
@@ -2713,8 +2811,19 @@ func (p *Profile) HoldsLogin(name string, content []byte) bool {
 	if err := json.Unmarshal([]byte(strings.Join(lines, "")), &doc); err != nil {
 		return true
 	}
+	for _, key := range keys {
+		if heldValue(doc[key]) {
+			return true
+		}
+	}
+	return false
+}
+
+// heldValue reports whether raw, one top-level value of a login file, holds
+// something: not absent, null, or an empty string, object or array.
+func heldValue(raw json.RawMessage) bool {
 	var value any
-	if err := json.Unmarshal(doc[key], &value); err != nil {
+	if err := json.Unmarshal(raw, &value); err != nil {
 		return false
 	}
 	switch v := value.(type) {

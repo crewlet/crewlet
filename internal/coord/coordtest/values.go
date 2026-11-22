@@ -18,7 +18,7 @@ import (
 var valueCases = []fleetCase{
 	{"a value past what a key holds is refused as too large, never as an outage, and nothing is written", func(h *fleetHarness) {
 		past := make([]byte, coord.MaxValueBytes+1)
-		created, err := h.f.CreateSandboxRun(h.ctx, "turn-too-large", past)
+		created, err := h.f.CreateSandboxRun(h.ctx, "turn-too-large", past, nil)
 		h.tooLarge("a run's create", err)
 		if created {
 			h.t.Error("a run whose value is past what a key holds reads as created")

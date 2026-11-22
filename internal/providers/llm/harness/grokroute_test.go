@@ -16,12 +16,11 @@ import (
 )
 
 // Grok Build, as the fake plays it: the server from the agent file --agent
-// names, every MCP server its home names started beside it unless the home's
-// allowlist keeps it out, no id of its own with a call, and the record its
+// names, every MCP server its home names started beside it, no id of its own with a call, and the record its
 // streaming-json stdout — a response's prose, its counts without the cached
 // part, then a tool_call per call (use_tool naming the server's tool, or one of
 // the harness's own), and a tool_call_update per result — ending in an `end` event
-// (measured on 1.0.70; see the profile).
+// (measured on 1.0.92; see the profile).
 func init() {
 	fakeHarnesses["grok"] = fakeHarness{
 		server: func() (string, []string, error) {
@@ -41,19 +40,12 @@ func init() {
 	}
 }
 
-// grokHomeServers is every server other than crewlet that 1.0.70 starts from
+// grokHomeServers is every server other than crewlet that 1.0.92 starts from
 // the home: the ones config.toml names, and ~/.claude.json's while the Claude
-// source is scanned — each unless a home allowlist leaves it out.
+// source is scanned.
 func grokHomeServers() []string {
 	home := os.Getenv("HOME")
-	config, _ := os.ReadFile(filepath.Join(home, ".grok", "config.toml"))       //nolint:gosec // the fake's home
-	policy, _ := os.ReadFile(filepath.Join(home, ".grok", "requirements.toml")) //nolint:gosec // the fake's home
-	allowed := func(name string) bool {
-		if !strings.Contains(string(policy), "[[allowed_mcp_servers]]") {
-			return true
-		}
-		return strings.Contains(string(policy), `server_name = "`+name+`"`)
-	}
+	config, _ := os.ReadFile(filepath.Join(home, ".grok", "config.toml")) //nolint:gosec // the fake's home
 	var names []string
 	for _, m := range regexp.MustCompile(`\[mcp_servers\.([A-Za-z0-9_-]+)\]`).FindAllStringSubmatch(string(config), -1) {
 		names = append(names, m[1])
@@ -71,7 +63,7 @@ func grokHomeServers() []string {
 	}
 	var started []string
 	for _, name := range names {
-		if name != "crewlet" && allowed(name) {
+		if name != "crewlet" {
 			started = append(started, name)
 		}
 	}
@@ -167,15 +159,15 @@ func (g *grokRecorder) end(script fakeScript, total fakeUsage, _ string) int {
 // results end it. Calls carry no id, so one is joined by name and arguments;
 // the host is told the harness waits 6000 seconds, re-reads no list, and
 // makes a response's calls at once. A server planted in the home's config.toml
-// or ~/.claude.json does not start: the profile's allowlist names the seat's.
+// or ~/.claude.json does not start: the home's config.toml is written whole.
 //
 // Mutation: drop the profile's mcp.output, and stdout is read as the plain
-// answer; drop both home seeds, and the planted servers start; read the
+// answer; drop the home's config.toml seed, and the planted servers start; read the
 // record's input as the whole prompt, and 100 tokens go uncharged.
 func TestGrokRunIsReadFromItsStream(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "grok", routeCase, nil)
-	home := filepath.Join(p.Workspace().KeySeatDir(llm.SeatOf(t.Context())), "home")
+	home := filepath.Join(p.Workspace().KeySeatDir(llm.SeatOf(t.Context()), p.Key()), "home")
 	for path, content := range map[string]string{
 		".grok/config.toml": "[mcp_servers.planted]\ncommand = \"sh\"\n",
 		".claude.json":      `{"mcpServers":{"planted_claude":{"command":"sh"}}}`,
@@ -204,7 +196,7 @@ func TestAGrokRunItsTurnLimitEndedStopsAtTheCap(t *testing.T) {
 	}
 }
 
-// A GROK RUN THAT WOULD ASK IS A FAILURE, NEVER AN ANSWER. 1.0.70 cannot ask for
+// A GROK RUN THAT WOULD ASK IS A FAILURE, NEVER AN ANSWER. 1.0.92 cannot ask for
 // an approval headless: it cancels the whole run, exits 0 with nothing of the
 // answer, and says so on stderr. The profile allows or refuses everything a
 // call is offered, so a run that asks is one its flags no longer cover — stopped
@@ -258,8 +250,10 @@ func TestAFailedGrokRunIsNotJudgedByWhatItsToolsSaid(t *testing.T) {
 // names, which a Read rule on every path refuses (a bare Read denial takes
 // search_tool with it); every MCP tool runs unasked, so a name the model wrote
 // without the server's prefix is refused for it rather than asked about, which
-// cancels a headless run; and the home is the profile's own, with an allowlist
-// naming the seat's server alone. All measured on 1.0.70.
+// cancels a headless run; and the home is the profile's own: its config.toml
+// names no server and turns the other vendors' sources off, and no
+// requirements.toml is written, since 1.0.92 deletes one as it reads it. All
+// measured on 1.0.92.
 func TestGrokCallsReachOnlyTheSeatsTools(t *testing.T) {
 	t.Parallel()
 	p := grok(t)
@@ -291,7 +285,10 @@ func TestGrokCallsReachOnlyTheSeatsTools(t *testing.T) {
 		!strings.Contains(config, "[compat.claude]\nmcps = false") || !strings.Contains(config, "[compat.cursor]\nmcps = false") {
 		t.Errorf("the home's config.toml seed is %q, want no server and the other vendors' servers unread", config)
 	}
-	if policy := seeds[".grok/requirements.toml"]; !strings.Contains(policy, "[[allowed_mcp_servers]]\nserver_name = \"crewlet\"") {
-		t.Errorf("the home's requirements.toml seed is %q, want an allowlist naming the seat's server alone", policy)
+	if _, seeded := seeds[".grok/requirements.toml"]; seeded {
+		t.Error("the profile seeds a requirements.toml: 1.0.92 deletes an unsigned one as it reads it, so it binds no later call")
+	}
+	if !slices.Contains(p.VolatilePaths, ".grok/requirements.toml") {
+		t.Errorf("volatile_paths = %q leave a planted requirements.toml in the home", p.VolatilePaths)
 	}
 }

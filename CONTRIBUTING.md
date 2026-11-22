@@ -161,12 +161,25 @@ runs the whole suite depends on `make playwright-tree`, which installs it with
 `MinNPMMajor` or newer and the SHA-256 tool; about 4 MB of download from the
 registry or mirror your npm configuration names, 23 MB kept, in
 `~/.cache/crewlet/playwright-tree`, which `CREWLET_PLAYWRIGHT_TREE_CACHE`
-moves), once per lock, and names it in `CREWLET_TEST_PLAYWRIGHT_TREE` (the
-Makefile's `PLAYWRIGHT_TREE_ENV`). A
-one-package loop names it and the floor Node by hand, as three statements:
-`tree=$(scripts/playwright-tree.sh) && floor=$(scripts/node.sh floor) && CREWLET_TEST_PLAYWRIGHT_TREE="$tree" CREWLET_TEST_NODE_FLOOR="$floor" go test ./internal/browser/boxhelper/...`
+moves), once per lock, publishing it only once it passes the box helper's own
+check of a box's install (npm's record is the lock, nothing is a link, and the
+files' digest is `tree/installed.sha256`), and names it in
+`CREWLET_TEST_PLAYWRIGHT_TREE` (the Makefile's `PLAYWRIGHT_TREE_ENV`). A
+one-package loop of the box helper names it, the floor Node and both pinned
+Chromiums by hand, as five statements:
+`tree=$(scripts/playwright-tree.sh) && floor=$(scripts/node.sh floor) && newest=$(scripts/chromium.sh newest) && cfloor=$(scripts/chromium.sh floor) && CREWLET_TEST_PLAYWRIGHT_TREE="$tree" CREWLET_TEST_NODE_FLOOR="$floor" CREWLET_TEST_CHROMIUM="$newest" CREWLET_TEST_CHROMIUM_FLOOR="$cfloor" go test ./internal/browser/boxhelper/...`
 A bare `go test` without them skips those cases, saying so, and runs the rest.
 `make check`'s `playwright-tree-test` is the recipe's own suite.
+
+**Chromium's own sandbox.** A box helper case whose cell requires Chromium's
+own sandbox proves the browser runs with it only on a host where an
+unprivileged process may make a user namespace, which Ubuntu restricts from
+23.10 (AppArmor's `kernel.apparmor_restrict_unprivileged_userns`). Where it
+cannot, the case proves the browser is withheld instead
+(`chromium_sandbox_unavailable`), so either passes: CI's race shards lift the
+restriction, so the gate proves the sandbox runs, and
+`sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0` does the same
+on your machine until it next boots.
 
 **A current Node** (npm ships with it) for the dashboard and the suite. The
 dashboard's build output is committed, so building and running the ENGINE needs
@@ -516,19 +529,33 @@ The prerequisites that legitimately vary by machine:
   a relative value is read against the repository (the nearest directory above
   the script holding a `go.mod`), not the working directory.
 
-  `node` also runs the **two OpenCode plugins** the engine embeds
-  (`internal/sandbox/executor/opencode_steer.js` and `opencode_skills.js`).
+  `node` also runs the **three OpenCode plugins** the engine embeds
+  (`internal/sandbox/executor/opencode_steer.js`, `opencode_skills.js` and
+  `opencode_toolenv.js`) and its **Kimi Code driver** (`kimi_driver.js`).
   `opencode_steer_test.go` drives the notes plugin, as the engine writes it into
   a real box, through `opencode_steer_probe.mjs` against a stand-in of the
   bridge's notes route and a real bridge's; `opencode_skills_test.go` drives the
   skill-load plugin through `opencode_skills_probe.mjs` against a stand-in of
-  the bridge's skill route. That package is in the parallel half, so `make test`
-  requires node and CI's race shards install it; the probes find node by the
-  same rule as the replay. The plugins import nothing, so no npm.
+  the bridge's skill route; `toolenv_test.go` drives the tool-environment plugin
+  through `opencode_toolenv_probe.mjs`; and `kimi_driver_internal_test.go` runs
+  the driver against a stand-in of Kimi Code's server. That package is in the
+  parallel half, so `make test` requires node and CI's race shards install it;
+  the probes find node by the same rule as the replay. The plugins and the
+  driver import nothing outside Node itself, so no npm.
 
-  `node` also runs the npm with which `internal/browser/boxhelper`'s
-  `TestTheLockInstallsWithEachNodesOwnNpm` installs the Playwright tree from
-  the suite's npm cache: the machine's npm, and the floor Node's own under it.
+  `node` also runs the **box helper** the engine writes into a seat's box
+  (`internal/browser/boxhelper`'s `js/` modules): its Go suite lays a box out
+  on disk as the engine writes one, runs its ensure and the supervisor that
+  holds a pinned Chromium through Playwright as a box would, and drives the
+  helper's modules from it through `boxhelper_probe.mjs` beside its tests. A
+  case runs at each end of what a box may bring (`boxhelpertest.Each`: your
+  node and npm with the newest Chromium pin, the floor Node and its npm with
+  the floor's; *The floor Node*, above), on each Node alone where it drives no
+  browser (`EachNode`), or the newest pair alone where its doc says why the
+  floor adds nothing (`Newest`). Each box installs the Playwright tree with
+  that Node's own npm, offline, from the suite tree's npm cache or a stand-in
+  registry on 127.0.0.1, as `TestTheLockInstallsWithEachNodesOwnNpm` installs
+  it with each.
 
 - **`npm`** builds and tests the dashboard. Vitest runs its assertions (the
   wire protocol, the router's history rules, the ordering comparators, the
@@ -681,7 +708,7 @@ The prerequisites that legitimately vary by machine:
   `build` job. The last must always answer this the same way as `dashboard
   gates`, because it rebuilds the bundle that job diffs. The two sets of Go
   shards need not match: what they run under plain node is a committed file
-  (the plugin, the built bundle), not a fresh build.
+  (a plugin, the box helper's modules, the built bundle), not a fresh build.
 
   **Nothing in this repository names the node you install**, by decision:
   nothing would maintain a pin. Dependabot moves the versions in
@@ -778,9 +805,12 @@ file that is not Go included: the dashboard's Vitest suites sit beside their
 modules in `dashboard/src`, `internal/e2e`'s client replay is
 `internal/e2e/replay.mjs` beside the `golden_test.go` that runs it, and the
 OpenCode plugins' probes are
-`internal/sandbox/executor/opencode_steer_probe.mjs` and
-`opencode_skills_probe.mjs` beside the `opencode_steer_test.go` and
-`opencode_skills_test.go` that run them. There is no top-level `tests/` tree.
+`internal/sandbox/executor/opencode_steer_probe.mjs`,
+`opencode_skills_probe.mjs` and `opencode_toolenv_probe.mjs` beside the
+`opencode_steer_test.go`, `opencode_skills_test.go` and `toolenv_test.go` that
+run them, and the box helper's probe is
+`internal/browser/boxhelper/boxhelper_probe.mjs`, beside the tests that drive
+it. There is no top-level `tests/` tree.
 
 A test that opens a store on a fresh path opens it through
 `storetest.OpenNode` or `storetest.OpenEstate`, and one that boots an engine on
@@ -1180,7 +1210,7 @@ names in `with:`, which Dependabot never bumps, each for the reason at its line
 The configuration is [`.github/dependabot.yml`](.github/dependabot.yml): one
 entry per surface on a weekly schedule, with the commit prefix its bumps carry,
 plus three grouping rules on the dashboard's npm entry. CI runs on each pull
-request and decides whether it lands. Eleven things to know:
+request and decides whether it lands. Twelve things to know:
 
 - **The React family is grouped.** `react`, `react-dom`, `@types/react` and
   `@types/react-dom` arrive in one pull request, because **react-dom checks at
@@ -1240,7 +1270,8 @@ request and decides whether it lands. Eleven things to know:
 - **A Playwright MCP bump waits for a person.** The tree a seat's box installs
   (`internal/browser/boxhelper/tree/`) has an npm entry and no group; its pull
   request never merges itself, and stays red until `internal/browser`'s release
-  constants name what it moved: see [A Playwright MCP bump is read before it
+  constants and `tree/installed.sha256` name what it moved: see [A Playwright
+  MCP bump is read before it
   lands](#a-playwright-mcp-bump-is-read-before-it-lands).
 - **A Compose image can be held back on purpose**, with the reason in a comment
   beside the pin: `mattermost-db` holds its Postgres major because an existing
@@ -1483,8 +1514,10 @@ The Playwright MCP a seat's box installs is a manifest and a lock in
 [`internal/browser/boxhelper/tree/`](internal/browser/boxhelper/tree), which npm
 in the box installs with `npm ci`, and Dependabot proposes each release of it.
 Its pull request stays red: `internal/browser`'s release constants name the
-release somebody read, and boxhelper's tests hold the lock to them (boxhelper's
-package doc says why). Nor does it merge itself: `dependabot-merge.yml` neither
+release somebody read, boxhelper's tests hold the lock to them, and the suite's
+recipe and those tests hold the files it installs to `tree/installed.sha256`
+(boxhelper's package doc says why). Nor does it merge itself:
+`dependabot-merge.yml` neither
 approves nor queues a pull request that changes only this directory (see [A
 bump merges itself](#a-bump-merges-itself)). Land the bump from a branch of
 your own, not Dependabot's, which stops rebasing once it holds a commit of
@@ -1494,7 +1527,10 @@ yours and carries a title of about 90 characters, where a subject takes 72:
    --ignore-scripts --save-exact --registry=https://registry.npmjs.org/
    @playwright/mcp@<b>`. Never behind a mirror, whose host the lock would then
    name.
-2. `tree=$(scripts/playwright-tree.sh) && (cd "$tree" && npm audit signatures
+2. `scripts/playwright-tree.sh` refuses the new lock's tree, naming the digest
+   of the files it installed: write that digest, which every box holds its
+   install to, into `internal/browser/boxhelper/tree/installed.sha256`. Then
+   `tree=$(scripts/playwright-tree.sh) && (cd "$tree" && npm audit signatures
    --registry=https://registry.npmjs.org/)`: the recipe installs the new lock's
    tree and prints its path, and every package in it must show a verified
    registry signature and a verified attestation, read from npm's registry
@@ -1506,6 +1542,12 @@ yours and carries a title of about 90 characters, where a subject takes 72:
    `$tree/node_modules/playwright-core/browsers.json`;
    `TestTheLockIsTheReleaseSomebodyRead` and
    `TestTheLockedCoreExpectsTheChromiumSomebodyRead` name what they found.
+   Read again, too, what the box helper relies on that no test names whole:
+   createConnection's context getter, which is undocumented (boxhelper's
+   package doc, "Why Playwright MCP is embedded, not run"). The switches it
+   launches Chromium with and the tools it shows the model are held to lists,
+   by `TestChromiumRunsWithTheListedCommandLine` and
+   `TestTheModelSeesOnlyTheAllowedTools`, which name what changed.
 4. `make check`, and title the pull request `build(deps): bump playwright mcp
    from <a> to <b>`. Dependabot closes its own once `main` carries the release.
 
@@ -1896,6 +1938,8 @@ older build:
     base version waits on that census before publishing one, and an envelope
     never refuses what a newer build may add to it;
   - a parked run's unknown keys ride `PendingRun.Extra`;
+  - a run's standing this build cannot read (an older build wrote the record
+    without its headers) is judged on its record, read whole, never skipped;
   - a data node refuses an estate request whose arguments or actor hold a key
     its build does not declare, rather than run it without the key (the router
     leaves every input field at its zero off the wire, so only a request that
@@ -2232,13 +2276,10 @@ readers see in the release notes. See below.
    changed for someone running Crewlet), not a commit log. Labels group it:
    Dependabot's `dependencies` label sorts bumps last (`.github/release.yml`).
 
-**A pull request's CI run stops at its first failed job.** Every job of
-`ci.yml` must pass before a merge, so one red job already means another push,
-which cancels the run. So [`ci-cancel.yml`](.github/workflows/ci-cancel.yml)
-cancels the rest as soon as a job fails, freeing runners other pull requests
-wait for; the run shows the first failure, not every one. **Re-run failed
-jobs** re-runs the cancelled jobs too, so a flaky failure costs the whole run
-again. A run on `main` is never cancelled.
+**A pull request's CI run finishes every job**, even after one fails, so it
+shows every failure at once and one push can fix them all. **Re-run failed
+jobs** re-runs only the failed ones. A new push to the pull request cancels
+its previous run.
 
 Small, focused PRs are easier to review. For a substantial change (a new
 subsystem, a reshaped config format) open an issue first to discuss the

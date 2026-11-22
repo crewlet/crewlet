@@ -677,6 +677,11 @@ type FakeRunner struct {
 	// is unset: the window the harness this fake stands in for pins a run to.
 	Pin func(model string) int
 
+	// Fresh is what [FakeRunner.StartsFresh] answers: the harness this fake
+	// stands in for continues no earlier session. Set it before the first
+	// launch.
+	Fresh bool
+
 	// TakesNotes is what [FakeRunner.ReadsNotes] answers: whether the
 	// harness this fake stands in for takes a person's notes between its own
 	// steps. Set it before the first collection.
@@ -755,6 +760,10 @@ type FakeRunner struct {
 	// resume this build did not read ([CarryCheck.ResumeRead]); unset, it
 	// answers one it did. Set it before the launch that asks.
 	CarryResumeUnread bool
+	// InPlaceWhy, set, is why every box's harness continues no copy of a
+	// session the box itself holds ([FakeRunner.CheckInPlace]); unset, each
+	// continues its own. Set it before the launch that asks.
+	InPlaceWhy string
 	// carried is every archive a job was started with, read whole as a
 	// runner writes it into its box.
 	carried []FakeCarried
@@ -1322,6 +1331,18 @@ func (r *FakeRunner) TakeSession(ctx context.Context, box Sandbox, take SessionT
 	if session.TakeErr != nil {
 		return TakenSession{}, session.TakeErr
 	}
+	// ITS SCRUB SPOOLS NOTHING, so its spool holds nothing.
+	if take.Spool.Held != nil {
+		take.Spool.Held(0)
+	}
+	// A MINTING FAKE'S SESSION IS THE ONE BOUND TO ITS JOB, as a real runner
+	// names it ([SessionTake.Session]); one with none bound takes nothing.
+	if r.MintsSession() {
+		if take.Session == "" {
+			return TakenSession{}, fmt.Errorf("fake: %w: no session is bound to the job", ErrSessionBindRefused)
+		}
+		archive.SessionID = take.Session
+	}
 	if session.Taking != nil {
 		session.Taking(ctx)
 	}
@@ -1442,7 +1463,7 @@ func (r *FakeRunner) StreamedReads() int {
 // no sessions, or holds none), and an error for a taker that names nobody or
 // a box that is paused or reclaimed. [FakeRunner.Packing] runs first, and
 // [FakeRunner.PackSaveErr] fails it.
-func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (SessionArchive, error) {
+func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker, session string) (SessionArchive, error) {
 	r.mu.Lock()
 	saves, packing, failed := r.SavesSessions, r.Packing, r.PackSaveErr
 	r.mu.Unlock()
@@ -1451,6 +1472,8 @@ func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (S
 		return SessionArchive{}, nil
 	case taker == "":
 		return SessionArchive{}, errors.New("fake: a save names no taker")
+	case r.MintsSession() && session == "":
+		return SessionArchive{}, fmt.Errorf("fake: %w: no session is bound to the job", ErrSessionBindRefused)
 	}
 	if fake, ok := box.(*FakeSandbox); ok && fake.unreadable() {
 		return SessionArchive{}, fmt.Errorf("fake: box %s is paused or reclaimed, and its session cannot be "+
@@ -1473,6 +1496,9 @@ func (r *FakeRunner) PackSave(ctx context.Context, box Sandbox, taker string) (S
 	r.packs++
 	archive := r.Session.Archive
 	archive.Path = path.Join(box.Home(), "session-save."+taker+"."+strconv.Itoa(r.packs))
+	if r.MintsSession() {
+		archive.SessionID = session
+	}
 	r.saves[archive.Path] = fakeSave{box: box.ID(), archive: archive, body: bytes.Clone(r.Session.Body)}
 	r.packedIn[archive.Path] = box.ID()
 	return archive, nil
@@ -1587,6 +1613,16 @@ func (r *FakeRunner) CheckCarry(_ context.Context, _ Sandbox, archive SessionArc
 	return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Continues: true}, nil
 }
 
+// CheckInPlace answers [FakeRunner.InPlaceWhy], with the release that harness
+// answered ([FakeRunner.CarryVersion]), as a real runner reads it before it
+// decides.
+func (r *FakeRunner) CheckInPlace(context.Context, Sandbox) (CarryCheck, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return CarryCheck{Version: r.CarryVersion, ResumeRead: !r.CarryResumeUnread, Continues: r.InPlaceWhy == "",
+		Why: r.InPlaceWhy}, nil
+}
+
 var _ HoldingsReader = (*FakeRunner)(nil)
 
 // ReadHoldings records ask, reads what open streams to its end and closes it,
@@ -1673,6 +1709,13 @@ func (r *FakeRunner) ThreadTraits() ThreadTraits {
 }
 
 var _ windowPinner = (*FakeRunner)(nil)
+
+// StartsFresh is [FakeRunner.Fresh] ([freshStarter]).
+func (r *FakeRunner) StartsFresh() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.Fresh
+}
 
 // PinnedWindow answers [FakeRunner.Pin] of model, 0 where it is unset.
 func (r *FakeRunner) PinnedWindow(model string) int {

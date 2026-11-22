@@ -156,6 +156,49 @@
   gap: var(--spacing-5);
 }
 
+/* The Google Analytics logo under its data: at the policy's 50px floor, one file per ground (AnalyticsAttribution.tsx). */
+.growth-attribution {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+  margin: var(--spacing-3) 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.growth-attribution__link {
+  display: inline-flex;
+  flex: none;
+  border-radius: var(--radius-sm);
+}
+
+.growth-attribution__logo {
+  display: block;
+  width: auto;
+  height: 50px;
+}
+
+/* The file for the ground, chosen as the tokens choose the theme: dark unless the document or the system asks for light. */
+.growth-attribution__logo--light,
+:root[data-theme="light"] .growth-attribution__logo--dark {
+  display: none;
+}
+
+:root[data-theme="light"] .growth-attribution__logo--light {
+  display: block;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) .growth-attribution__logo--dark {
+    display: none;
+  }
+
+  :root:not([data-theme="dark"]) .growth-attribution__logo--light {
+    display: block;
+  }
+}
+
 .growth-accounts {
   display: grid;
   margin: 0;
@@ -286,4 +329,46 @@
   padding-inline-start: var(--spacing-5);
   font-size: var(--font-size-xs);
   overflow-wrap: anywhere;
+}
+
+/*
+ * The setup steps. An identity's email is never cut:
+ * it is what a person copies to the vendor.
+ */
+
+.growth-step {
+  display: grid;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding: var(--spacing-3);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+
+.growth-step__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.growth-step__facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: var(--spacing-1) var(--spacing-3);
+  margin: 0;
+}
+
+.growth-step__facts dt {
+  color: var(--color-text-tertiary);
+}
+
+.growth-step__facts dd {
+  margin: 0;
+  overflow-wrap: break-word;
+}
+
+.growth-step__role {
+  font-weight: var(--font-weight-medium);
 }

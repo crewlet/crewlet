@@ -41,6 +41,16 @@ func (s Sources) WeekOf(ctx context.Context, from, to time.Time) ([]advisor.Metr
 	return advisorObserver{s: s}.Week(ctx, from, to)
 }
 
+// AdvisorReadParams is the parameters the deep run's read list gives name.
+func AdvisorReadParams(name string) string {
+	for _, q := range advisorReads {
+		if q.Name == name {
+			return q.Params
+		}
+	}
+	return ""
+}
+
 // AdvisorReadNames is every question the deep run may ask, by name.
 func AdvisorReadNames() []string {
 	out := make([]string, len(advisorReads))

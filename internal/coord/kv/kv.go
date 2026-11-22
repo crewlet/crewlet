@@ -187,9 +187,9 @@
 //
 // # A pass cannot tell that it is complete, so it is certified
 //
-// The pass is the client's key watcher, which GUESSES where the initial values
-// end (nats.go jetstream/kv.go WatchFiltered: `received >= initPending ||
-// delta == 0`), and neither count is exact on a bucket keeping one revision
+// The pass is a key watcher which, as the client's, GUESSES where the initial
+// values end (nats.go jetstream/kv.go WatchFiltered: `received >= initPending
+// || delta == 0`), and neither count is exact on a bucket keeping one revision
 // per key: an overwrite of a key the pass has not reached REMOVES the revision
 // ahead of the cursor and appends one at the tail, and the server's pending
 // count lags the write, so a delivery can report 0 pending while a live key is
@@ -663,7 +663,7 @@ func bindHold(ctx context.Context, hold jetstream.JetStream, bucket jetstream.Ke
 	if err != nil {
 		return nil, nil, fmt.Errorf("coord/kv: look %s up over the hold client: %w", name, err)
 	}
-	kv = settled(hold, kv, reach)
+	kv = settled(hold, kv, reach, undeclaredHolding)
 	read, err := newLeaderReader(hold, kv)
 	if err != nil {
 		return nil, nil, fmt.Errorf("coord/kv: address %s's leader: %w", name, err)
@@ -794,7 +794,7 @@ func (s *Store) each(ctx context.Context, kv jetstream.KeyValue,
 // create writes a key that must not hold a live value through [createKey];
 // markers.go says why not the bucket handle's own.
 func (s *Store) create(ctx context.Context, kv jetstream.KeyValue, key string, value []byte) (uint64, error) {
-	return createKey(ctx, s.js, kv, key, value)
+	return createKey(ctx, s.js, kv, key, value, nil)
 }
 
 // eachUnder is [Store.each] over one resource class, narrowed at the broker —

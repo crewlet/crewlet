@@ -142,7 +142,7 @@ func (e *Epochs) Floor(ctx context.Context, resource string, floor int64) (bool,
 			if err != nil {
 				return false, err
 			}
-			if _, err := createKey(ctx, e.js, e.kv, key, data); err != nil {
+			if _, err := createKey(ctx, e.js, e.kv, key, data, nil); err != nil {
 				if errors.Is(err, jetstream.ErrKeyExists) {
 					continue
 				}
@@ -198,7 +198,7 @@ func (e *Epochs) advance(ctx context.Context, resource, preferred string) (int64
 			if err != nil {
 				return 0, "", err
 			}
-			if _, err := createKey(ctx, e.js, e.kv, key, data); err != nil {
+			if _, err := createKey(ctx, e.js, e.kv, key, data, nil); err != nil {
 				if errors.Is(err, jetstream.ErrKeyExists) {
 					continue
 				}

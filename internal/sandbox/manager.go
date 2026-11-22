@@ -375,8 +375,10 @@ type SpecInput struct {
 	// pointer as PauseTTL is).
 	MaxTurns *int
 
-	Env             map[string]string
-	CredentialFiles map[string]string
+	Env               map[string]string
+	SignInEnv         []string
+	CredentialFiles   map[string]string
+	CredentialRunKeys map[string][]string
 }
 
 // CommitAttribution is the credit a run's own commits carry under this
@@ -398,13 +400,15 @@ func (m *Manager) CommitAttribution(a CommitAttribution) *CommitAttribution {
 // BuildSpec overlays per-role inputs onto the provider defaults.
 func (m *Manager) BuildSpec(in SpecInput) Spec {
 	spec := Spec{
-		Placement:       in.Placement,
-		Harness:         in.Harness,
-		TimeoutSec:      m.timeout.Seconds(),
-		PauseTTLSec:     m.pauseTTL.Seconds(),
-		MaxTurns:        m.maxTurns,
-		Env:             maps.Clone(in.Env),
-		CredentialFiles: maps.Clone(in.CredentialFiles),
+		Placement:         in.Placement,
+		Harness:           in.Harness,
+		TimeoutSec:        m.timeout.Seconds(),
+		PauseTTLSec:       m.pauseTTL.Seconds(),
+		MaxTurns:          m.maxTurns,
+		Env:               maps.Clone(in.Env),
+		SignInEnv:         slices.Clone(in.SignInEnv),
+		CredentialFiles:   maps.Clone(in.CredentialFiles),
+		CredentialRunKeys: maps.Clone(in.CredentialRunKeys),
 	}
 	if spec.Placement == "" {
 		spec.Placement = m.placement
