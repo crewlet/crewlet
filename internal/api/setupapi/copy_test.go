@@ -251,8 +251,8 @@ func checkField(t *testing.T, tool string, r setup.Requirement, linked map[strin
 }
 
 // checkSet holds a set's words to the rules: a heading, a control, an item
-// noun and a hint under the word cap. A set left short is said by its control
-// on the form, so its refusal sentence is not on the listing.
+// noun and a hint under the word cap. A set left short is refused in its
+// control's words and its hint, so those two are all it says.
 func checkSet(t *testing.T, label string, set setup.Set) {
 	t.Helper()
 	for what, text := range map[string]string{"label": set.Label, "add": set.Add, "pick": set.Pick,

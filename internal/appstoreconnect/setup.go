@@ -36,9 +36,8 @@ func keySet(connection, slot string) *setup.Set {
 	words := slotWords[slot]
 	return &setup.Set{
 		ID: connection + "_keys", Label: "API keys", Item: "key", Add: "Add a key", Pick: "Role", Min: 1,
-		Hint:    "A key ID and .p8 file per Apple role: at least one, " + slotWords[firstSlot][0] + " first.",
-		Missing: "Add at least one API key: its role, key ID and .p8 file.",
-		Entry:   setup.Choice{Value: slot, Label: words[0], Hint: words[1]},
+		Hint:  "A key ID and .p8 file per Apple role: at least one, " + slotWords[firstSlot][0] + " first.",
+		Entry: setup.Choice{Value: slot, Label: words[0], Hint: words[1]},
 	}
 }
 
