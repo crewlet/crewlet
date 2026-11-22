@@ -27,16 +27,17 @@ type settledAt struct {
 	at map[int]int
 }
 
-// whole is Settled of tx's text up to at, read whole ([redact.SettledWhole]),
-// asked once per line end however many tests and writes ask it: Settled reads
-// nothing past the last line break ([TestAnUnfinishedLineChangesNothingSettled]).
-func (tx settlingText) whole(at int) int {
+// whole is Settled of tx's text up to at, read whole and held to the loop
+// ([redact.SettledByBoth]), asked once per line end however many tests and
+// writes ask it: Settled reads nothing past the last line break
+// ([TestAnUnfinishedLineChangesNothingSettled]).
+func (tx settlingText) whole(t testing.TB, at int) int {
 	end := strings.LastIndexByte(tx.text[:at], '\n') + 1
 	tx.asked.mu.Lock()
 	defer tx.asked.mu.Unlock()
 	n, ok := tx.asked.at[end]
 	if !ok {
-		n = redact.SettledWhole(tx.text[:end])
+		n = redact.SettledByBoth(t, tx.text[:end])
 		tx.asked.at[end] = n
 	}
 	return n
@@ -56,6 +57,9 @@ var (
 	settlingWraps = []string{"password: ", "password:", `"password": "`, `{"password": "`, "- **Password:**", "| Password: |", "pwd=", "passwd ", "7→pwd: ", "   32\tpassword: ", "a.pem-3-password: ", `\"password\": \"`, "Password: |", "password: >"}
 	settlingSeps  = []string{"\n", "\n\n", "\n-\n", `\n` + "\n", "\n  \n"}
 )
+
+// settlingToks are what [settlingTexts]' random short shapes are made of.
+var settlingToks = []string{"password: ", "pwd: ", "x ", "passwd ", `"password": "`, "-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----" + `\n`, "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun", `\n`, "7→", " ", ":", `"`, "|", "pwd=", "-----END RSA PRIVATE KEY-----", "**Password:**", "| Password: |", "- "}
 
 // counterexample is a line too long for a window ending in a password's key
 // that awaits its separator, a key pending or a quoted key, then a line of k
@@ -133,12 +137,11 @@ func settlingTexts(r *rand.Rand) []settlingText {
 			add(fmt.Sprintf("a line of %q x %d", w, k), "x "+strings.Repeat(w+" ", k)+"\nhunter2secretvalue9\n"+strings.Repeat(w+"\n", 5)+"ok\n", false)
 		}
 	}
-	toks := []string{"password: ", "pwd: ", "x ", "passwd ", `"password": "`, "-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----" + `\n`, "MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun", `\n`, "7→", " ", ":", `"`, "|", "pwd=", "-----END RSA PRIVATE KEY-----", "**Password:**", "| Password: |", "- "}
 	for i := range 1000 {
 		var b strings.Builder
 		for range 1 + r.IntN(6) {
 			for range 1 + r.IntN(5) {
-				b.WriteString(toks[r.IntN(len(toks))])
+				b.WriteString(settlingToks[r.IntN(len(settlingToks))])
 			}
 			b.WriteString([]string{"\n", "\n", "\n\n", `\n` + "\n"}[r.IntN(4)])
 		}
@@ -301,11 +304,11 @@ func TestSettledChainsAtItsOwnPointAndNeverFalls(t *testing.T) {
 			if !tx.sampled(r, i, len(ends), 10) {
 				continue
 			}
-			got := tx.whole(c)
+			got := tx.whole(t, c)
 			if got < prev {
 				t.Fatalf("%s, at %d: Settled fell to %d from %d", tx.name, c, got, prev)
 			}
-			if chained := prev + redact.SettledWhole(tx.text[prev:c]); got != chained {
+			if chained := prev + redact.SettledByBoth(t, tx.text[prev:c]); got != chained {
 				t.Fatalf("%s, at %d: Settled answered %d, and %d chained from %d", tx.name, c, got, chained, prev)
 			}
 			prev = got
@@ -335,7 +338,7 @@ func TestATextReadInPiecesSettlesAsItSettlesWhole(t *testing.T) {
 				if !tx.sampled(r, i, len(plan), 5) {
 					continue
 				}
-				if want := tx.whole(at); settled != want || s.Held() != at-settled {
+				if want := tx.whole(t, at); settled != want || s.Held() != at-settled {
 					t.Fatalf("%s, plan %d, after %d bytes: settled %d and held %d; Settled of the text so far is %d", tx.name, p, at, settled, s.Held(), want)
 				}
 			}
