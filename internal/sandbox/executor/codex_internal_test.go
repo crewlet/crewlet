@@ -268,3 +268,25 @@ func TestACodexRunReadsAsCappedOnlyOnTheHelpersMarkAndAnInterrupt(t *testing.T) 
 		}
 	}
 }
+
+// A REFUSED KEY IS READ OFF THE TURN'S FINAL WORD, never a retry: Codex
+// retries a 401 five times, each retry repeating the cause, and names no status
+// field anywhere, so the failure is turn.failed's message (or the last error
+// that is no retry), which the codex profile's "401 Unauthorized" auth marker
+// reads (recorded on 0.171.0).
+//
+// Mutation: read a "Reconnecting..." line as the failure, and this goes red.
+func TestACodexRunRefusedItsKeyReadsTheTurnsFinalWord(t *testing.T) {
+	t.Parallel()
+	full := codexStream(t, "stream-401.jsonl")
+	res := Codex{}.Parse(full)
+	if res.Success || !strings.HasPrefix(res.Error, "unexpected status 401 Unauthorized") {
+		t.Errorf("a refused key reads success %v, %q; want turn.failed's words", res.Success, res.Error)
+	}
+	// CUT OFF MID-RETRY, the run states no cause off a retry line.
+	lines := strings.Split(strings.TrimSpace(string(full)), "\n")
+	retried := Codex{}.Parse([]byte(strings.Join(lines[:5], "\n") + "\n"))
+	if strings.HasPrefix(retried.Error, codexRetryNotice) {
+		t.Errorf("a run cut off mid-retry reads its failure off a retry: %q", retried.Error)
+	}
+}
