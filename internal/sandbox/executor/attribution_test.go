@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // credit and runCredit are the trailers a run named turn-7 credits Crewlet
@@ -292,7 +293,7 @@ git commit -qm "OK now"`,
 				t.Run(what, func(t *testing.T) {
 					t.Parallel()
 					runner, b := boxed(t)
-					prelude := "export CREWLET_GIT=" + shQuote(git) + "\nPATH=" + shQuote(filepath.Dir(git)) + ":$PATH\n"
+					prelude := "export CREWLET_GIT=" + shellword.Quote(git) + "\nPATH=" + shellword.Quote(filepath.Dir(git)) + ":$PATH\n"
 					if err := b.WriteFile(t.Context(), b.Home()+"/scenario.sh",
 						[]byte(prelude+scenarioPrelude+tc.script+scenarioEnd)); err != nil {
 						t.Fatalf("write the scenario: %v", err)
@@ -328,7 +329,7 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 	},
 	executor.OpenCodeName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 		runner, b := openCodeBox(t, t.TempDir())
-		standIn := strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(t.TempDir()), 1)
+		standIn := strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(t.TempDir()), 1)
 		standIn = strings.Replace(standIn, "run)\n  authed\n",
 			"run)\n  sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n  authed\n", 1)
 		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/opencode", standIn)
@@ -413,7 +414,7 @@ func geminiBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
 	}
 	// NODE ON THE BOX'S OWN PATH, as an image that runs Gemini CLI has it: a
 	// login shell's profile may reset PATH to the system's.
-	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\nexec "+shQuote(geminiNode(t))+` "$@"`+"\n")
+	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\nexec "+shellword.Quote(geminiNode(t))+` "$@"`+"\n")
 	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/gemini",
 		"#!/bin/sh\nif [ -n \"${GEMINI_WRITE_SYSTEM_MD:-}\" ]; then echo prompt > \"$GEMINI_WRITE_SYSTEM_MD\"; exit 42; fi\n"+run)
 	return runner, b

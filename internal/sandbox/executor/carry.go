@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A run's harness session, carried between boxes: see the package doc's
@@ -375,9 +376,9 @@ const copyWriterUnknown = "the box cannot say which release wrote its copy of th
 // wrapper puts it ([withBoxBin]), as [releaseOf] reads it; why it said none
 // where the command failed; and an error where the box could not be asked.
 func (r *Runner) boxRelease(ctx context.Context, box sandbox.Sandbox, carries carrier) (release, silent string, err error) {
-	ask := "PATH=" + sandbox.ShellQuote(PathsFor(box).BinDir()) + `:"$PATH"; export PATH; exec ` +
+	ask := "PATH=" + shellword.Quote(PathsFor(box).BinDir()) + `:"$PATH"; export PATH; exec ` +
 		carries.VersionCommand() + " < /dev/null"
-	res, err := box.Exec(ctx, "sh -lc "+sandbox.ShellQuote(ask), sandbox.ExecOptions{TimeoutSec: harnessVersionWait.Seconds()})
+	res, err := box.Exec(ctx, "sh -lc "+shellword.Quote(ask), sandbox.ExecOptions{TimeoutSec: harnessVersionWait.Seconds()})
 	if err != nil {
 		return "", "", fmt.Errorf("executor: asking the box's %s for its release: %w", r.harness.Name(), err)
 	}

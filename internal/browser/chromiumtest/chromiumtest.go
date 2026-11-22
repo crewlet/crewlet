@@ -19,6 +19,12 @@
 // in the floor's place is a floor nobody is testing — by what it answers to
 // --version.
 //
+// A case whose browser something else launches — the box helper's Playwright,
+// which finds a build in a browsers directory of its own layout — reads a
+// pin's build through [Unpacked], the directory its zip unpacked it into, and
+// [Version], the four numbers it answered to --version, and hands that browser
+// [LoopbackOnly], the rules every launch here resolves hosts by.
+//
 // # How a launch runs
 //
 // [LaunchPort] opens a DevTools port on loopback, which the artifact render's
@@ -156,6 +162,50 @@ func Each(t *testing.T, f func(t *testing.T, chrome string)) {
 	t.Run("floor", func(t *testing.T) { f(t, Floor(t)) })
 }
 
+// Version is the four numbers chrome, a pin's build as [Newest] or [Floor]
+// handed it back, answered to --version: the answer they held it to, asked
+// once a test binary, so no case reads a build's version a second way.
+func Version(t testing.TB, chrome string) string {
+	t.Helper()
+	for _, pin := range []struct{ env, name string }{{newestEnv, "newest"}, {floorEnv, "floor"}} {
+		if chrome != "" && os.Getenv(pin.env) == chrome {
+			return versionOf(t, pin.env, pin.name, chrome).version
+		}
+	}
+	t.Fatalf("%s is neither pin's build (%s, %s): Version reads the answer a pin's build gave", chrome, newestEnv,
+		floorEnv)
+	return ""
+}
+
+// builds is where a Chrome for Testing build keeps its executable inside the
+// directory its zip unpacks into, by platform: chromium.sh's layout, which
+// Playwright's browsers directory repeats.
+var builds = map[string]struct{ dir, exe string }{
+	"linux/amd64":  {"chrome-linux64", "chrome"},
+	"linux/arm64":  {"chrome-linux-arm64", "chrome"},
+	"darwin/amd64": {"chrome-mac-x64", "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"},
+	"darwin/arm64": {"chrome-mac-arm64", "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"},
+}
+
+// Unpacked is the directory chrome's build was unpacked into,
+// chrome-<platform> as its zip names it, read from the executable's path. A
+// case laying a browsers directory out links it there: never a copy of a few
+// hundred megabytes, and never a link to the whole build, beside which a
+// launch may write (Playwright marks a directory it validated), while
+// scripts/chromium.sh promises an intact build is never written into.
+func Unpacked(t testing.TB, chrome string) string {
+	t.Helper()
+	b, ok := builds[runtime.GOOS+"/"+runtime.GOARCH]
+	if !ok {
+		t.Fatalf("Chrome for Testing publishes no build for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+	dir := strings.TrimSuffix(chrome, string(filepath.Separator)+filepath.FromSlash(b.exe))
+	if !filepath.IsAbs(chrome) || dir == chrome || filepath.Base(dir) != b.dir {
+		t.Fatalf("%s is not where a Chrome for Testing build keeps its executable, /…/%s/%s", chrome, b.dir, b.exe)
+	}
+	return dir
+}
+
 // version is what a build said to --version.
 type version struct {
 	version string
@@ -231,10 +281,10 @@ func cannotStart(chrome string, err error) error {
 	return err
 }
 
-// loopbackOnly is the host resolver's rules for every launch: every host — a
+// LoopbackOnly is the host resolver's rules for every launch: every host — a
 // name, and an address written as one, which the rules read too — resolves
 // to nothing but localhost and 127.0.0.1, which resolve as they always do.
-const loopbackOnly = "MAP * ~NOTFOUND , EXCLUDE localhost , EXCLUDE 127.0.0.1"
+const LoopbackOnly = "MAP * ~NOTFOUND , EXCLUDE localhost , EXCLUDE 127.0.0.1"
 
 // flags is what every launch runs Chromium with, each flag's reason in the
 // package doc; profile is the case's own directory.
@@ -244,7 +294,7 @@ func flags(profile string) []string {
 		"--no-sandbox",
 		"--no-first-run",
 		"--no-default-browser-check",
-		"--host-resolver-rules=" + loopbackOnly,
+		"--host-resolver-rules=" + LoopbackOnly,
 		"--disable-background-networking",
 		"--disable-component-update",
 		"--disable-sync",

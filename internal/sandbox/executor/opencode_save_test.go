@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // ocSaveSession is the session an OpenCode save case's run worked in: the one
@@ -31,7 +32,7 @@ func openCodeSaving(t *testing.T, release, vars string) (*executor.Runner, sandb
 	runner, b := openCodeBox(t, t.TempDir())
 	dir := t.TempDir()
 	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir)+vars, 1))
+		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir)+vars, 1))
 	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
 		[]byte("id "+ocSaveSession+"\ncontinued no\nrelease "+release+"\n")); err != nil {
 		t.Fatal(err)
@@ -172,7 +173,7 @@ func TestAnOpenCodeSaveSaysNothingOnlyOnOpenCodesOwnWord(t *testing.T) {
 			dir string) {
 			broken := strings.Replace(fakeOpenCode, answers, `echo "Error: database is locked" >&2; exit 1`, 1)
 			writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-				strings.Replace(broken, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+				strings.Replace(broken, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir), 1))
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {

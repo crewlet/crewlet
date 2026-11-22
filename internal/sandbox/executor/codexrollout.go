@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A CODEX SESSION IS ITS ROLLOUT: one append-only JSONL file per thread,
@@ -58,8 +59,8 @@ func codexRolloutPath(p Paths, threadID string) string {
 	if !sandbox.ValidSessionID(threadID) {
 		return ""
 	}
-	return `find ` + sandbox.ShellQuote(p.CodexSessions()) + ` -type f -name ` +
-		sandbox.ShellQuote("rollout-*-"+threadID+".jsonl") + ` 2>/dev/null | LC_ALL=C sort | head -n 1`
+	return `find ` + shellword.Quote(p.CodexSessions()) + ` -type f -name ` +
+		shellword.Quote("rollout-*-"+threadID+".jsonl") + ` 2>/dev/null | LC_ALL=C sort | head -n 1`
 }
 
 // codexCarriedStamp is the timestamp a carried rollout is named with. A resume

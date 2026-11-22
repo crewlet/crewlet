@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 func init() { Register(Codex{}) }
@@ -84,7 +85,7 @@ func codexRunTimes() codexTimes {
 // Command is the run's script ([codexScript]), run under sh as every runner's
 // is, so the wrapper's redirections reach every step.
 func (Codex) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
-	return "sh -c " + sandbox.ShellQuote(codexScript(req, session, paths, codexRunTimes()))
+	return "sh -c " + shellword.Quote(codexScript(req, session, paths, codexRunTimes()))
 }
 
 // codexReleaseRead reads the box's `codex --version` once, as v.
@@ -123,7 +124,7 @@ at %[2]s || { echo "crewlet: this box runs Codex $v; the codex runner drives %[1
 // ([codexRolloutEvent]), and the session packed ([codexCapture]). Codex is the
 // script's child, never PID 1 (a container's is its `--init`): no reaper.
 func codexScript(req sandbox.RunRequest, session Session, paths Paths, times codexTimes) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	stream := q(paths.Result())
 	sock := q(paths.CodexSocket())
 	thread := q(paths.CodexThread())
@@ -253,7 +254,7 @@ const codexServerLogShown = 4 << 10
 // ([codexSessionGate]), and removes the other routes otherwise: the one place
 // a run's helper routes are chosen.
 func codexFreshRoutes(req sandbox.RunRequest, paths Paths) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	var b strings.Builder
 	route := func(url, fresh string) {
 		fmt.Fprintf(&b, "if [ \"$k\" = no ]; then mv -f %s %s || { echo 'crewlet: the new session could not be wired to its seat, so the run does not start' >&2; exit 1; }; else rm -f %s; fi\n",
@@ -298,7 +299,7 @@ func codexHelped(req sandbox.RunRequest) bool {
 // environment alone, never argv nor Codex's, since each carries the job's
 // token; the helper's errors are the run's.
 func codexStartHelper(req sandbox.RunRequest, paths Paths) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	helper, sock, thread := q(paths.CodexNoteHelper()), q(paths.CodexSocket()), q(paths.CodexThread())
 	base := fmt.Sprintf(`%s -adapter codex-app-server -socket %s -thread-file %s`, helper, sock, thread)
 	env, flags := "", ""
@@ -353,7 +354,7 @@ const codexGuardPoll = "0.5"
 // ([codexEvents.keepRollout]).
 func codexAborted(paths Paths) string {
 	return fmt.Sprintf(`aborted() { as=${tid:-$sid}; [ -n "$as" ] || return 1; af=$(find %s -type f -name "rollout-*-$as.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1); [ -n "$af" ] && tail -n +$((before + 1)) "$af" | grep -E '"type": *"turn_aborted"' | grep -qE '"reason": *"interrupted"'; }`+"\n",
-		sandbox.ShellQuote(paths.CodexSessions()))
+		shellword.Quote(paths.CodexSessions()))
 }
 
 // codexFinish defines the script's `finish`, run once Codex and everything
@@ -367,7 +368,7 @@ func codexFinish(paths Paths) string {
 	b.WriteString("finish() {\n")
 	b.WriteString(`[ -z "$tid" ] || sid=$tid` + "\n")
 	fmt.Fprintf(&b, `r=; [ -z "$sid" ] || r=$(find %s -type f -name "rollout-*-$sid.jsonl" 2> /dev/null | LC_ALL=C sort | head -n 1)`+"\n",
-		sandbox.ShellQuote(paths.CodexSessions()))
+		shellword.Quote(paths.CodexSessions()))
 	fmt.Fprintf(&b, `[ -z "$r" ] || tail -n +$((before + 1)) "$r" | grep -E '"type": *"(turn_context|token_usage_record|token_count|turn_aborted)"' | sed 's/^/{"type":"%s","line":/; s/$/}/'`+"\n",
 		codexRolloutEvent)
 	b.WriteString(codexCapture(paths))

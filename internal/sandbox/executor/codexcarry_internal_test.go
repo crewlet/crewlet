@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // codexThread is the thread of the rollout fixture ([codexRolloutFixture]).
@@ -90,7 +90,7 @@ func codexGateOn(t *testing.T, p Paths, dir string, session Session, rewired boo
 // codexPrinted is the script's reading of a box whose `codex --version`
 // printed version ([codexReleaseParse]).
 func codexPrinted(version string) string {
-	return "v=" + sandbox.ShellQuote(version) + "\n" + codexReleaseParse()
+	return "v=" + shellword.Quote(version) + "\n" + codexReleaseParse()
 }
 
 // codexMembers is every member of a gzipped tar and its content, by name.
