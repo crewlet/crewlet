@@ -17,11 +17,11 @@
 // # A run's commits credit Crewlet, through git
 //
 // A run whose request asks for it ([sandbox.RunRequest.Attribution]) has every
-// commit it authors as itself carry `Co-authored-by: Crewlet
-// <noreply@crewlet.ai>` and the Crewlet trailers naming its seat, its run and
-// its work item, added by a git hook the runner installs in the box and the wrapper points git at through the
-// run's environment — the same for every harness, and whether or not the model
-// remembered anything (attribution.go, attribution_hook.sh).
+// commit it authors as itself carry a `Co-authored-by` crediting [CoAuthor] and
+// the Crewlet trailers naming its seat, its run and its work item, added by a
+// git hook the runner installs in the box and the wrapper points git at through
+// the run's environment — the same for every harness, and whether or not the
+// model remembered anything (attribution.go, attribution_hook.sh).
 //
 // # A run's output is read as a stream
 //
@@ -613,7 +613,7 @@
 // starts its own, saying why, where it can do neither. Whether a
 // box can continue a carried session is its harness's release, asked of the
 // box ([Runner.CheckCarry]). What each archive holds is its harness's: see
-// carry.go and each harness's carry.
+// carry.go and each runner's own carry.
 //
 // A SESSION ITS HARNESS IS STILL WORKING IN is packed by the engine, beside
 // it, by the pack the run's own end makes held to a stricter rule — every file

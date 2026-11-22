@@ -195,7 +195,18 @@ func (p Profile) Clone() Profile {
 	out.IsolationEnv = cloneMap(p.IsolationEnv)
 	out.Env = cloneMap(p.Env)
 	out.SubscriptionEnv = cloneMap(p.SubscriptionEnv)
-	out.LoginKeys = cloneMap(p.LoginKeys)
+	if p.LoginKeys != nil {
+		out.LoginKeys = make(map[string][]string, len(p.LoginKeys))
+		for name, keys := range p.LoginKeys {
+			out.LoginKeys[name] = slices.Clone(keys)
+		}
+	}
+	if p.RunKeys != nil {
+		out.RunKeys = make(map[string][]string, len(p.RunKeys))
+		for name, keys := range p.RunKeys {
+			out.RunKeys[name] = slices.Clone(keys)
+		}
+	}
 	if p.StdinLogin != nil {
 		login := *p.StdinLogin
 		login.Args = append([]string(nil), p.StdinLogin.Args...)
@@ -235,6 +246,10 @@ func (p Profile) Clone() Profile {
 		}
 		out.ToolsOff = &ToolsOff{Args: args, Refuses: append([]string(nil), p.ToolsOff.Refuses...),
 			Note: p.ToolsOff.Note}
+	}
+	if p.HomeDaemon != nil {
+		out.HomeDaemon = &HomeDaemon{PIDFile: p.HomeDaemon.PIDFile,
+			StopArgs: slices.Clone(p.HomeDaemon.StopArgs)}
 	}
 	if p.CredentialStore != nil {
 		out.CredentialStore = &CredentialStore{

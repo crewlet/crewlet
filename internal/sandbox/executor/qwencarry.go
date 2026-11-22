@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A QWEN CODE SESSION CARRIED BETWEEN BOXES is its one chat file
@@ -35,10 +36,6 @@ var (
 	_ saver   = QwenCode{}
 )
 
-// exactRelease says Qwen Code's `--version` prints its release alone
-// ([exactReleaser]).
-func (QwenCode) exactRelease() {}
-
 // Resumes says Qwen Code continues a session it reported (`session/load`).
 func (QwenCode) Resumes() bool { return true }
 
@@ -53,6 +50,27 @@ func (QwenCode) VersionCommand() string { return "qwen --version" }
 // [exactCarry]).
 func (QwenCode) Continues(box, writer string) (bool, string) {
 	return exactCarry("Qwen Code", qwenRelease, box, writer)
+}
+
+// ContinuesWriter is [QwenCode.Continues] judged of the writer alone
+// ([carrier]): only a session [qwenRelease] wrote.
+func (QwenCode) ContinuesWriter(writer string) (bool, string) {
+	return exactWriter("Qwen Code", qwenRelease, writer)
+}
+
+// meter is the take's meter of a Qwen Code archive ([carrier.meter]): no
+// figure. This build reads no count or estimate of a Qwen Code session's next
+// request off its archive. The archive is left to the caller, which drains
+// it ([startMeter]).
+func (QwenCode) meter(context.Context, io.Reader, string, string, *passBudget) (meterReading, error) {
+	return meterReading{}, nil
+}
+
+// continuesInPlace reports whether a box whose Qwen Code is release box
+// continues a session at all, the copy it holds as much as one carried to it
+// ([inPlaceGate]): only on [qwenRelease].
+func (QwenCode) continuesInPlace(box string) (bool, string) {
+	return exactInPlace("Qwen Code", qwenRelease, box)
 }
 
 // Pack packs session now, as a run's script packs it once the harness exits
@@ -92,7 +110,7 @@ func qwenChatMember(name string) bool {
 // key, since a pack made outside the run's script knows no working directory,
 // and a session's id is a uuid no other session takes.
 func qwenLocate(paths Paths) string {
-	dir := sandbox.ShellQuote(paths.QwenDir())
+	dir := shellword.Quote(paths.QwenDir())
 	return `cf= cm=; for f in ` + dir + `/projects/*/chats/"$s".jsonl; do if [ -s "$f" ] && [ ! -L "$f" ]; ` +
 		`then cf=$f cm=${f#` + dir + `/}; fi; done`
 }
@@ -101,14 +119,14 @@ func qwenLocate(paths Paths) string {
 // that a run in this working directory resumes, "" for none: under the
 // directory's own key, as Qwen Code keys it by the realpath.
 func qwenHeld(paths Paths) string {
-	return `cf=` + sandbox.ShellQuote(paths.QwenDir()) + `/projects/"$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"/chats/"$s".jsonl; ` +
+	return `cf=` + shellword.Quote(paths.QwenDir()) + `/projects/"$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"/chats/"$s".jsonl; ` +
 		`if [ ! -s "$cf" ] || [ -L "$cf" ]; then cf=; fi`
 }
 
 // qwenGate is a Qwen Code run's part of the session gate ([chatSessionGate]),
 // its other wiring's copies fresh where the run was handed one.
 func qwenGate(paths Paths, fresh []freshCopy) chatGate {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	restore := strings.Join([]string{
 		`rf=`,
 		`for f in "$in"/projects/*/chats/"$s".jsonl; do if [ -z "$rf" ] && [ -f "$f" ] && [ ! -L "$f" ]; then rf=$f; fi; done`,

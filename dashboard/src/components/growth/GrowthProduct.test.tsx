@@ -119,3 +119,42 @@ test("an administrator reads the product's recent agent changes there; nobody el
   // For this product, with each reported account's currency.
   expect(changes.textContent).toContain("changes of google_analytics in EUR,");
 });
+
+test("Google Analytics' page shows the Google Analytics logo under its connections, linked into Google Analytics", () => {
+  render(<GrowthProductSection kind="google_analytics" product="Google Analytics" row={ROW} />);
+  const connections = screen.getByRole("region", { name: "Connections" });
+  const link = screen.getByRole("link", { name: "Google Analytics (opens in a new tab)" });
+  expect(connections.contains(link)).toBe(true);
+  expect(link.getAttribute("href")).toBe("https://analytics.google.com/");
+  // One file per ground, each at the policy's 50px height.
+  const logos = [...link.querySelectorAll("img")];
+  expect(logos.map((img) => img.getAttribute("src"))).toEqual([
+    expect.stringContaining("lockup_ic_Analytics_horiz_272px_clr"),
+    expect.stringContaining("lockup_ic_Analytics_horiz_272px_wht"),
+  ]);
+  expect(logos.map((img) => [img.getAttribute("width"), img.getAttribute("height")])).toEqual([
+    ["189", "50"],
+    ["189", "50"],
+  ]);
+});
+
+test("the logo waits for data, and no other product shows it", () => {
+  const { unmount } = render(
+    <GrowthProductSection
+      kind="google_analytics"
+      product="Google Analytics"
+      row={{ ...ROW, connections: [] } as IntegrationRow}
+    />,
+  );
+  expect(screen.queryByRole("link", { name: /Google Analytics/ })).toBeNull();
+  unmount();
+  render(
+    <GrowthProductSection
+      kind="search_console"
+      product="Search Console"
+      row={{ ...ROW, key: "search_console" } as IntegrationRow}
+    />,
+  );
+  expect(screen.queryByRole("link", { name: /Google Analytics/ })).toBeNull();
+  expect(document.querySelector("img")).toBeNull();
+});

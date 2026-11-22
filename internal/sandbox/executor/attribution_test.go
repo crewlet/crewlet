@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // credit and runCredit are the trailers a run named turn-7 credits Crewlet
@@ -292,7 +293,7 @@ git commit -qm "OK now"`,
 				t.Run(what, func(t *testing.T) {
 					t.Parallel()
 					runner, b := boxed(t)
-					prelude := "export CREWLET_GIT=" + shQuote(git) + "\nPATH=" + shQuote(filepath.Dir(git)) + ":$PATH\n"
+					prelude := "export CREWLET_GIT=" + shellword.Quote(git) + "\nPATH=" + shellword.Quote(filepath.Dir(git)) + ":$PATH\n"
 					if err := b.WriteFile(t.Context(), b.Home()+"/scenario.sh",
 						[]byte(prelude+scenarioPrelude+tc.script+scenarioEnd)); err != nil {
 						t.Fatalf("write the scenario: %v", err)
@@ -319,6 +320,19 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 				"sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n")
 		return runner, b
 	},
+	// The app-server's stand-in runs the scenario before it serves: the
+	// model's shell commands run under the app-server's environment, which
+	// the wrapper gave it ([codexStandIn] answers `codex-cli 0.171.0`).
+	executor.CodexName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		runner, b, _ := codexBox(t, "0.171.0")
+		path := executor.PathsFor(b).BinDir() + "/codex"
+		standIn, err := b.ReadFile(t.Context(), path)
+		if err != nil || !strings.Contains(string(standIn), "\napp-server)\n") {
+			t.Fatalf("the codex stand-in has no app-server branch (%v)", err)
+		}
+		writeBoxStandIn(t, b, path, strings.Replace(string(standIn), "\napp-server)\n", "\napp-server)\n  "+scenarioRun, 1))
+		return runner, b
+	},
 	executor.GeminiCLIName: geminiCreditBox,
 	// Its helper's stand-in runs the scenario: Qwen Code and its shell run
 	// under the helper's environment, which the wrapper gave it.
@@ -328,7 +342,7 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 	},
 	executor.OpenCodeName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 		runner, b := openCodeBox(t, t.TempDir())
-		standIn := strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(t.TempDir()), 1)
+		standIn := strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(t.TempDir()), 1)
 		standIn = strings.Replace(standIn, "run)\n  authed\n",
 			"run)\n  sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n  authed\n", 1)
 		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/opencode", standIn)
@@ -395,7 +409,8 @@ func geminiCreditBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 
 // geminiBox is a real box with a Gemini CLI runner's plumbing and a stand-in
 // `gemini` that prints its release when asked, writes a prompt when asked to
-// export one, and otherwise runs run.
+// export one (`false` and `0` ask for none, as Gemini CLI reads them), and
+// otherwise runs run.
 func geminiBox(t *testing.T, run string) (*executor.Runner, sandbox.Sandbox) {
 	t.Helper()
 	return geminiBoxAt(t, geminiCapturedRelease, run)
@@ -424,10 +439,10 @@ func geminiBoxAt(t *testing.T, release, run string) (*executor.Runner, sandbox.S
 	}
 	// NODE ON THE BOX'S OWN PATH, as an image that runs Gemini CLI has it: a
 	// login shell's profile may reset PATH to the system's.
-	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\nexec "+shQuote(geminiNode(t))+` "$@"`+"\n")
+	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/node", "#!/bin/sh\nexec "+shellword.Quote(geminiNode(t))+` "$@"`+"\n")
 	writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/gemini",
-		"#!/bin/sh\ncase \"$1\" in --version) echo "+shQuote(release)+"; exit 0;; esac\n"+
-			"if [ -n \"${GEMINI_WRITE_SYSTEM_MD:-}\" ]; then echo prompt > \"$GEMINI_WRITE_SYSTEM_MD\"; exit 42; fi\n"+run)
+		"#!/bin/sh\ncase \"$1\" in --version) echo "+shellword.Quote(release)+"; exit 0;; esac\n"+
+			"case ${GEMINI_WRITE_SYSTEM_MD:-false} in false|0) ;; *) echo prompt > \"$GEMINI_WRITE_SYSTEM_MD\"; exit 42;; esac\n"+run)
 	return runner, b
 }
 

@@ -31,6 +31,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/memobj"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
@@ -1482,7 +1483,7 @@ func TestTheHookAsksTheProtectionsOnlyWhatForcedChanges(t *testing.T) {
 func TestAPushsUploadOverlapsItsListing(t *testing.T) {
 	release := filepath.Join(t.TempDir(), "release")
 	fake := gittest.Wrap(t, `case " $* " in
-" rev-list "*" --alternate-refs "*) while [ ! -e `+shellWord(release)+` ]; do sleep 0.02; done ;;
+" rev-list "*" --alternate-refs "*) while [ ! -e `+shellword.Quote(release)+` ]; do sleep 0.02; done ;;
 esac`)
 	c := newCase(t, gitlettest.SoloOptions{GitPath: fake}, gitlettest.Settings())
 	p := gitlettest.NewPerson(t, c.Fleet, "ceo")
@@ -1613,9 +1614,6 @@ func TestAnOldCommitInADamagedPackIsNoStaleUpdate(t *testing.T) {
 
 // oidN is a distinct object id for n.
 func oidN(n int) string { return fmt.Sprintf("%040x", n+1) }
-
-// shellWord is s as one POSIX shell word.
-func shellWord(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // A PROTECTED BRANCH IS NOT FORCED THROUGH A DAMAGED GRAPH. git answers the
 // force check's ancestry from the commit-graph unchecked, so a graph a

@@ -90,7 +90,7 @@ type Spec struct {
 	// name the same cell.
 	Placement Placement
 
-	// Harness names the runner: "claude-code", "opencode", …
+	// Harness names the runner: "claude-code", "codex", "opencode".
 	Harness string
 
 	// TurnID is the turn whose run the box is made for. A box on the
@@ -153,6 +153,12 @@ type Spec struct {
 	// token the run env already exports.
 	CredentialFiles map[string]string
 
+	// CredentialRunKeys is, by a path of CredentialFiles, the keys (dotted,
+	// into a JSON object) its harness writes into that file during a run,
+	// which are not its login: a local box writing the file back keeps the
+	// shared login's value of each (harnessprofile.KeepLoginKeys).
+	CredentialRunKeys map[string][]string
+
 	// Repos are the repositories on Gitlet this run is
 	// given, each resolved at launch ([RunRepo]), at most [MaxRunRepos]. Empty
 	// for a run that clones nothing from Gitlet — a repository on
@@ -192,7 +198,7 @@ const MaxConePaths = 64
 // shell argument, and Linux refuses one past 128 KiB (MAX_ARG_STRLEN) before
 // the shell starts, with a failure naming nothing the run asked for.
 // [MaxConePaths] paths quoted at their worst (all single quotes: four times
-// the length, plus two quotes and a space, per [ShellQuote]) are at most
+// the length, plus two quotes and a space, per `shellword.Quote`) are at most
 // 64 × 1 023 = 65 472 bytes; TestTheWorstCloneStepIsOneShellArgument holds the
 // step under the limit. It also bounds what grants add to a run's row, which
 // every node's completion poll reads whole: about 128 KiB at most.
@@ -1164,7 +1170,9 @@ type RunRequest struct {
 	// WebDenied is the entry's `web_tools: denied`: the runner hands its
 	// harness none of the harness's own web tools, as the entry's runs on the
 	// engine host have none. The run's shell, and any code it runs, reach
-	// only what the box cell's egress policy allows.
+	// only what the box cell's egress policy allows. Muse Code's profile has
+	// no measured web denial, so config refuses the setting on a `muse-code`
+	// entry and it never reaches Muse Code's runner.
 	WebDenied bool
 
 	// MCPServers are the MCP servers the engine hands the run, keyed by
@@ -1315,7 +1323,7 @@ type SkillWiring struct {
 func (w SkillWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL != "" }
 
 // CommitAttribution asks a run's runner to credit Crewlet on every commit the
-// run authors as itself: `Co-authored-by: Crewlet <noreply@crewlet.ai>`; where
+// run authors as itself: `Co-authored-by: Crewlet <noreply@crewlet.com>`; where
 // Seat is set, the seat and work item charged; where Run is set, the run.
 //
 // GIT ADDS IT, NOT THE MODEL: a hook the runner installs in the box

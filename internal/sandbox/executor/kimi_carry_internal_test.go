@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // A KIMI SESSION IS CONTINUED ONLY FROM 2.7.2 TO 2.7.2, the release Crewlet
@@ -138,13 +139,15 @@ func kimiSessionFiles(session, dir string) map[string]string {
 	}
 }
 
-// kimiGate runs the session gate in box, its release n, and returns s, k, w and
-// the driver's arguments as the gate left them.
-func kimiGate(t *testing.T, paths Paths, work, n string, session Session) []string {
+// kimiGate runs the session gate in box, its `kimi --version` having printed
+// printed, which the gate reads as the run's script hands it (v), and returns
+// s, k, w and the driver's arguments as the gate left them.
+func kimiGate(t *testing.T, paths Paths, work, printed string, session Session) []string {
 	t.Helper()
 	sh := prereqtest.OnPath(t, "sh", "the case runs the box's script", "install a POSIX shell")
 	prereqtest.OnPath(t, "node", "the gate files a session through the run's driver", "install any current node")
-	script := "n=" + n + "\nset --\n" + kimiSessionGate(session, paths, false) + `printf '%s|%s|%s|%s' "$s" "$k" "$w" "$*"`
+	script := "v=" + shellword.Quote(printed) + "\nset --\n" + kimiSessionGate(session, paths, false) +
+		`printf '%s|%s|%s|%s' "$s" "$k" "$w" "$*"`
 	cmd := exec.Command(sh, "-c", script)
 	cmd.Dir = work
 	cmd.Env = append(os.Environ(), "KIMI_CODE_HOME="+paths.KimiHome())
@@ -161,8 +164,9 @@ func kimiGate(t *testing.T, paths Paths, work, n string, session Session) []stri
 // held nor carried, one that cannot be filed, or a box on another release or
 // one it cannot read, is not continued, and the run says why.
 //
-// Mutation: skip the rekey, leave the cwd, continue on a release but 2.7.2, or
-// continue a session the box does not hold — a row goes red.
+// Mutation: skip the rekey, leave the cwd, continue on a release but 2.7.2
+// (a pre-release or build of it read loosely included), or continue a session
+// the box does not hold — a row goes red.
 func TestAKimiSessionIsContinuedFiledUnderTheRunsDirectory(t *testing.T) {
 	const session = "session_11111111-1111-4111-8111-111111111111"
 	continues := Session{ID: session, Continues: true}
@@ -185,7 +189,7 @@ func TestAKimiSessionIsContinuedFiledUnderTheRunsDirectory(t *testing.T) {
 		if json.Unmarshal(raw, &s) != nil || s.Cwd != work {
 			t.Errorf("state.json = %s, want its cwd the run's", raw)
 		}
-		for _, release := range []string{"2.7.3", "2.7.1", ""} {
+		for _, release := range []string{"2.7.3", "2.7.1", "", "2.7.2-rc.1", "2.7.2+x", "2.7.2.."} {
 			got := kimiGate(t, paths, work, release, continues)
 			if got[1] != "no" || got[3] != "" || !strings.Contains(got[2], "continued only on 2.7.2") {
 				t.Errorf("release %q's gate = %q, want a session of the run's own, naming 2.7.2", release, got)
@@ -349,7 +353,7 @@ func TestAContinuedKimiRunIsChargedItsOwnRecordsAlone(t *testing.T) {
 	}
 	kimiWrite(t, wire, record("1"))
 	script := "s=" + session + "\n" + kimiLinesBefore(paths) + "printf '%s' '" + record("2") + "' >> " +
-		sandbox.ShellQuote(wire) + "\n" + kimiUsage(paths)
+		shellword.Quote(wire) + "\n" + kimiUsage(paths)
 	out, err := exec.Command(sh, "-c", script).Output()
 	if err != nil {
 		t.Fatal(err)

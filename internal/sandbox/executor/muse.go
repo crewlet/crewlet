@@ -5,13 +5,17 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 func init() { Register(Muse{}) }
@@ -33,11 +37,13 @@ const MuseName = "muse-code"
 type Muse struct{}
 
 var (
-	_ Harness        = Muse{}
-	_ carrier        = Muse{}
-	_ saver          = Muse{}
-	_ artifactHolder = Muse{}
-	_ sessionJudge   = Muse{}
+	_ Harness           = Muse{}
+	_ carrier           = Muse{}
+	_ saver             = Muse{}
+	_ artifactHolder    = Muse{}
+	_ artifactDirHolder = Muse{}
+	_ inPlaceGate       = Muse{}
+	_ sessionJudge      = Muse{}
 )
 
 // NewMuse returns the runner.
@@ -51,11 +57,15 @@ func (Muse) Name() string { return MuseName }
 func (Muse) Resumes() bool { return true }
 
 // museSupported is the one Muse Code release this runner is written for, every
-// behaviour here measured on it. An older box is refused before anything
-// runs; a newer one runs a session of its own and never continues one; and a
-// session continues only where its writer and the box both run it exactly
-// ([Muse.Continues], [museSessionGate]).
-const museSupported = "1.4.25"
+// behaviour here measured on it: the release the profile's written_for names
+// ([harnessprofile.Release]), so the profile and the runner never name two. An
+// older box is refused before anything runs; a newer one runs a session of its
+// own and never continues one; and a session continues only where its writer
+// and the box both run it exactly ([Muse.Continues], [museSessionGate]).
+var museSupported = sync.OnceValue(func() string {
+	p, _ := harnessprofile.Builtin(MuseName)
+	return harnessprofile.Release(p.WrittenFor)
+})
 
 // museSystemMax is the most bytes of standing instructions Muse Code takes in
 // `run.system_prompt_append`: past it, 1.4.25 refuses the run before its model
@@ -79,7 +89,7 @@ func (Muse) Session(req sandbox.RunRequest) Session {
 // Command is the run as ONE SCRIPT ([museScript]), so the wrapper's
 // redirections (the stream, the error file) reach each step.
 func (Muse) Command(req sandbox.RunRequest, session Session, paths Paths, _ string) string {
-	return "sh -c " + sandbox.ShellQuote(museScript(req, session, paths, sandbox.JobStopGrace))
+	return "sh -c " + shellword.Quote(museScript(req, session, paths, sandbox.JobStopGrace))
 }
 
 // museScript is a Muse Code run's script, giving its harness stop to go once
@@ -93,7 +103,7 @@ func (Muse) Command(req sandbox.RunRequest, session Session, paths Paths, _ stri
 // THE BRIEF IS A FILE: `--prompt-file` reads it byte for byte, and stdin is
 // not read beside it (measured on 1.4.25).
 func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.Duration) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	parts := []string{
 		"muse", "exec", "--json",
 		// Approvals and the OS sandbox off, the workspace trusted for this
@@ -138,7 +148,7 @@ func museScript(req sandbox.RunRequest, session Session, paths Paths, stop time.
 	b.WriteString(endHarness(""))
 	b.WriteString(museRelease)
 	line(`if ! at %s; then printf 'crewlet: this box runs Muse Code %%s, older than %s, the release this runner is written for\n' "$n" >&2; exit 1; fi`,
-		floorArgs(museSupported), museSupported)
+		floorArgs(museSupported()), museSupported())
 	line(`p=%s`, q(paths.Brief()))
 	// THE CAP NAMED IN THE STREAM, for the decoder to hold the exec's runs
 	// to ([museCapMark]).
@@ -175,9 +185,9 @@ at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "
 // is filed under, and e to that directory from the sessions directory down;
 // both to nothing where the box holds none with a record.
 func museFind(paths Paths) string {
-	sessions := sandbox.ShellQuote(paths.MuseSessions())
+	sessions := shellword.Quote(paths.MuseSessions())
 	return `x= e=; for y in ` + sessions + `/*/*/*/"$s"; do [ -s "$y/session.jsonl" ] && [ ! -L "$y" ] && x=$y; done
-[ -z "$x" ] || e=${x#` + sandbox.ShellQuote(paths.MuseSessions()+"/") + `}
+[ -z "$x" ] || e=${x#` + shellword.Quote(paths.MuseSessions()+"/") + `}
 `
 }
 
@@ -196,7 +206,7 @@ func museFind(paths Paths) string {
 func museSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	if !session.Continues {
 		line(`s=%s k=no w=`, q(session.ID))
 		return b.String()
@@ -222,10 +232,11 @@ func museSessionGate(session Session, paths Paths, rewired bool) string {
 	line(`s=%s k=yes w= h= d=`, q(session.ID))
 	b.WriteString(museFind(paths))
 	line(`[ -n "$x" ] && h=1`)
-	// A SESSION CONTINUES ON THE SUPPORTED RELEASE ALONE: a newer one, or
-	// one whose version could not be read, starts a session of its own.
-	line(`if [ "$n" != %s ]; then w="this box runs Muse Code ${n:-of a version it could not read}, and a session continues only on %s, the release this runner is written for"; fi`,
-		q(museSupported), museSupported)
+	// A SESSION CONTINUES ON THE SUPPORTED RELEASE ALONE, read bare as the
+	// engine reads it ([releaseOf]): any other, or none that reads, starts a
+	// session of its own.
+	line(`%s[ "$rv" = %s ] || w="this box runs Muse Code ${rv:-a release it could not read}, and a session continues only on %s, the release this runner is written for"`,
+		bareReleaseShell("rv"), q(museSupported()), museSupported())
 	line(`if [ -s %s ]; then d=$(cksum < %s 2> /dev/null) || d=; fi`, carried, carried)
 	if session.Replaces {
 		line(`if [ -n "$h" ] && [ -s %s ]; then h=; fi`, carried)
@@ -276,7 +287,7 @@ func museSessionGate(session Session, paths Paths, rewired bool) string {
 // thread alone and its stream carries nothing of a child (measured on 1.4.25),
 // so these are the rest of the run's spend ([museEvents.runSpend]).
 func museChildUsage(paths Paths) (before, after string) {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	lines := q(paths.MuseChildLines())
 	before = ": > " + lines + "\n" + museFind(paths) +
 		`if [ -n "$x" ] && [ -d "$x/subagent" ]; then find "$x/subagent" -type f -name session.jsonl -exec wc -l {} + > ` +
@@ -309,44 +320,58 @@ func (Muse) VersionCommand() string { return "muse --version" }
 func (Muse) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Muse Code release writer can
-// be continued in a box whose Muse Code is release box ([carrier]): only
-// where both are exactly [museSupported], as `muse --version` prints it; any
-// other pair starts a session of its own, naming both.
-func (Muse) Continues(box, writer string) (bool, string) {
-	have, writ := museNumbers(box), museNumbers(writer)
-	if museExactly(have) && museExactly(writ) {
+// be continued in a box whose Muse Code is release box ([carrier]): only where
+// the box continues any session ([Muse.continuesInPlace]) and the writer is
+// as [Muse.ContinuesWriter] holds it. Any other pair starts a session of its
+// own, saying which release it found.
+func (m Muse) Continues(box, writer string) (bool, string) {
+	if ok, why := m.continuesInPlace(box); !ok {
+		return false, why
+	}
+	return m.ContinuesWriter(writer)
+}
+
+// continuesInPlace reports whether a box whose Muse Code is release box
+// continues a session at all, the copy it holds as much as one carried to it
+// ([inPlaceGate]): only on [museSupported], as the run's own gate holds it
+// ([museSessionGate]), so the engine asks before a relaunch hands the brief
+// that continues the box's copy.
+func (Muse) continuesInPlace(box string) (bool, string) {
+	if box == museSupported() {
 		return true, ""
 	}
-	return false, fmt.Sprintf("the session was written by Muse Code %s and this box runs Muse Code %s, and a "+
-		"session continues only between two boxes on %s, the release this runner is written for",
-		museVersionWords(writer), museVersionWords(box), museSupported)
-}
-
-// museExactly reports whether numbers, a release from its first digit, is
-// [museSupported] exactly.
-func museExactly(numbers string) bool {
-	v, ok := releaseNumbers(numbers)
-	want, _ := releaseNumbers(museSupported)
-	return ok && v == want
-}
-
-// museVersionWords is a release as a person reads it: as printed, or a word
-// for one that printed nothing.
-func museVersionWords(version string) string {
-	if v := strings.TrimSpace(version); v != "" {
-		return v
+	if box == "" {
+		box = "a release it could not read"
 	}
-	return "of a version it did not print"
+	return false, fmt.Sprintf(museBoxRefused, box, museSupported())
 }
 
-// museNumbers is a release as `muse --version` prints it (`Muse Code 1.4.25
-// (1.4.25-R9361.1)`) from its first digit, which [releaseAtLeast] reads; the
-// version as it is where it holds no digit.
-func museNumbers(version string) string {
-	if at := strings.IndexAny(version, "0123456789"); at > 0 {
-		return version[at:]
+// museBoxRefused is why a box whose Muse Code is not [museSupported]
+// continues no session, its own copy nor a carried one: the engine's check
+// and the run's gate say it alike.
+const museBoxRefused = "this box runs Muse Code %.64s, and a session continues only on %s, the release this " +
+	"runner is written for"
+
+// ContinuesWriter is [Muse.Continues] judged of the writer alone ([carrier]):
+// only a session [museSupported] wrote; one written by any other release, or
+// by one that named no release this build reads, is refused, saying so.
+func (Muse) ContinuesWriter(writer string) (bool, string) {
+	switch writer {
+	case museSupported():
+		return true, ""
+	case "":
+		return false, writerNamedNoRelease("Muse Code")
 	}
-	return version
+	return false, fmt.Sprintf("the session was written by Muse Code %.64s, and only a session %s wrote "+
+		"continues, the release this runner is written for", writer, museSupported())
+}
+
+// meter is the take's meter of a Muse Code archive ([carrier.meter]): no
+// figure. This build reads no count or estimate of a Muse session's next
+// request off its archive ([Muse.sessionTraits]). The archive is left to the
+// caller, which drains it ([startMeter]).
+func (Muse) meter(context.Context, io.Reader, string, string, *passBudget) (meterReading, error) {
+	return meterReading{}, nil
 }
 
 // museCapture is the part of a run's script that packs its session once its
@@ -363,7 +388,7 @@ func museCapture(paths Paths) string {
 func musePack(paths Paths, at packAt) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	sessions := paths.MuseSessions()
 	b.WriteString(museFind(paths))
 	line(`if [ -n "$x" ]; then`)
@@ -405,7 +430,7 @@ func (Muse) PackSave(paths Paths, rec sessionRecord, staged, dest string) (strin
 // museOnDemand is a pack the engine makes of session outside the run's own
 // script, at at.
 func museOnDemand(paths Paths, session string, at packAt) string {
-	return "s=" + sandbox.ShellQuote(session) + " packed=\n" + musePack(paths, at) +
+	return "s=" + shellword.Quote(session) + " packed=\n" + musePack(paths, at) +
 		fmt.Sprintf("[ -n \"$x\" ] || exit %d\n[ -n \"$packed\" ] || exit %d\n", packNothing, packFailed)
 }
 
@@ -494,13 +519,14 @@ func museMCP(s sandbox.MCPServer) museMCPServer {
 	return out
 }
 
-// museNonce is a run's own suffix to its servers' names: twelve hex digits
-// from the system's random source, new every run, so the run's servers are
-// under names no file of the repository's can declare beforehand (a trusted
-// run loads the repository's `.mcp.json` beside them). A variable so a case
-// can name the files it reads.
+// museNonce is a run's own suffix to its servers' names: six hex digits (24
+// bits) from the system's random source, new every run, so the run's servers
+// are under names no file of the repository's can declare beforehand (a
+// trusted run loads the repository's `.mcp.json` beside them), and a name of
+// up to 19 characters stays whole ([museServerNameShown]). A variable so a
+// case can name the files it reads.
 var museNonce = func() string {
-	var b [6]byte
+	var b [3]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
@@ -513,21 +539,29 @@ func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, serv
 	nonce string) error {
 
 	for name, s := range servers {
-		if !museServerName(name) {
+		full := name + "-" + nonce
+		if !museServerName(full) {
 			return fmt.Errorf("executor: the MCP server %q is not named as Muse Code reads a server's name: "+
-				"letters, digits, '-' and '_', at most 50", name)
+				"letters, digits, '-' and '_' (rename it in the seat's MCP servers)", name)
 		}
-		if err := writeJSON(ctx, box, dir+"/"+name+"-"+nonce+".json", museMCP(s)); err != nil {
+		if err := writeJSON(ctx, box, dir+"/"+full+".json", museMCP(s)); err != nil {
 			return fmt.Errorf("executor: writing the MCP server %q for Muse Code: %w", name, err)
 		}
 	}
 	return nil
 }
 
-// museServerName reports whether name is a server's name a file and a shell
-// word can carry as it is.
+// museServerNameShown is the longest server name Muse Code shows the model
+// as it is: a server's tools come under one entry, `mcp__<name>`, of at most
+// 31 characters, and a longer name is shown as a hash of it, which runs all
+// the same (measured on 1.4.25, names of up to 70 characters).
+const museServerNameShown = 26
+
+// museServerName reports whether name, a server's name with the run's suffix,
+// is one a file and a shell word carry as it is: its file, `<name>.json`,
+// within the 255 bytes a file's name takes.
 func museServerName(name string) bool {
-	if name == "" || len(name) > 50 {
+	if name == "" || len(name)+len(".json") > 255 {
 		return false
 	}
 	for _, r := range name {
@@ -628,25 +662,29 @@ func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReq
 }
 
 // museWiring is the part of a run's script that wires its settings before its
-// harness starts: the notes plugin of an earlier run removed, this run's
-// installed and approved where it has one; then each MCP server added
+// harness starts: the run's notes plugin installed and approved where it has
+// one, among no other, since the clear removed every installed plugin
+// ([Paths.MusePlugins]); then each MCP server added
 // whole. AN APPROVAL REWRITES THE SETTINGS, dropping every server's
 // `required` and `tool_timeout_sec`, while `muse mcp add-json` keeps both
 // (measured on 1.4.25), so the servers come after it. A plugin Muse would not
 // take leaves the run without its notes, as its error stream says; a server
-// it would not take fails the run, which would have no tools.
+// it would not take fails the run, which would have no tools. The install's
+// answer is kept whole ([Paths.MuseNotesInstall]) for the confirm to read the
+// package's digest from, and removed where the approval failed.
 func museWiring(paths Paths) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	plugin := paths.MuseNotesPlugin()
 	errs := q(paths.WorkDir() + "/muse-wiring-error")
+	installed := q(paths.MuseNotesInstall())
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	line(`muse plugins remove %s --json < /dev/null > /dev/null 2>&1`, museNotesPlugin)
 	line(`if [ -f %s ]; then`, q(plugin+"/.muse-plugin/plugin.json"))
 	line(`  chmod 0755 %s 2> /dev/null`, q(paths.MuseNoteHelper()))
-	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > /dev/null 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
-		q(plugin), errs, museNotesPlugin, errs)
+	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > %s 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
+		q(plugin), installed, errs, museNotesPlugin, errs)
 	line(`    echo "crewlet: the run's notes plugin could not be installed, so the run takes no notes between its steps: $(head -c 400 %s 2> /dev/null)" >&2`, errs)
+	line(`    rm -f %s`, installed)
 	line(`  fi`)
 	line(`fi`)
 	line(`for f in %s/*.json; do`, q(paths.MuseServers()))
@@ -676,7 +714,7 @@ const museShellOff = "OTEL_EXPORTER_OTLP_"
 // which Muse never reads, and every OTEL_EXPORTER_OTLP_* variable unset.
 // A sign-in name no shell can unset is refused by [Muse.WriteConfig].
 func museShellEnvironment(paths Paths, signIn []string) string {
-	key := sandbox.ShellQuote(paths.WorkDir() + "/muse-key")
+	key := shellword.Quote(paths.WorkDir() + "/muse-key")
 	unset := "unset META_API_KEY"
 	if names, err := toolEnvOmitted(signIn); err == nil {
 		for _, name := range names {
@@ -693,14 +731,26 @@ for o in $(env | sed -n 's/^\(` + museShellOff + `[A-Za-z0-9_]*\)=.*/\1/p'); do 
 `
 }
 
-// artifacts is what a Muse Code run leaves in its box of its own beside its
-// sessions, which a later run must not find: its MCP servers, a fresh
-// session's, the note helper, its config and plugin, and the count of its
-// subagents' lines its script kept. Its settings are written whole by every
-// run, and its sessions are kept.
-func (Muse) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper()},
-		[]string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin()}
+// artifactFiles is the files a Muse Code run leaves in its box of its own
+// beside its sessions, which a later run must not find ([artifactHolder]):
+// the note helper, its take configs, its answer to the notes plugin's install
+// and the count of its subagents' lines its script kept, and the personal
+// AGENTS.md Muse loads as the user's own instructions, whatever wrote it
+// (measured on 1.4.25). Its settings are written whole by every run, and its
+// sessions and login are kept.
+func (Muse) artifactFiles(p Paths) []string {
+	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
+		p.MuseNotesInstall(), p.MuseInstructions()}
+}
+
+// artifactDirs is the directories a Muse Code run leaves of its own
+// ([artifactDirHolder]): its MCP servers, a fresh session's, and its plugin;
+// and the two skill directories and the installed plugins Muse loads as the
+// user's own, whatever wrote them (measured on 1.4.25), so a run loads only
+// the skills its launch writes.
+func (Muse) artifactDirs(p Paths) []string {
+	return []string{p.MuseServers(), p.MuseServersFresh(), p.MuseNotesPlugin(), p.MuseSkills(), p.MuseConfigSkills(),
+		p.MusePlugins()}
 }
 
 // museChargeBytes is the fewest bytes a Muse Code session's brief is counted

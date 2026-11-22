@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"01a20286-faf2-7490-a21d-7f1215273287"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `gpt-test` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"Reconnecting... 1/5 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-.... You can find your API key at https://platform.openai.com/account/api-keys., url: http://127.0.0.1:8080/v1/responses)"}
+{"type":"error","message":"Reconnecting... 2/5 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-.... You can find your API key at https://platform.openai.com/account/api-keys., url: http://127.0.0.1:8080/v1/responses)"}
+{"type":"error","message":"Reconnecting... 3/5 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-.... You can find your API key at https://platform.openai.com/account/api-keys., url: http://127.0.0.1:8080/v1/responses)"}
+{"type":"error","message":"Reconnecting... 4/5 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-.... You can find your API key at https://platform.openai.com/account/api-keys., url: http://127.0.0.1:8080/v1/responses)"}
+{"type":"error","message":"Reconnecting... 5/5 (unexpected status 401 Unauthorized: Incorrect API key provided: sk-.... You can find your API key at https://platform.openai.com/account/api-keys., url: http://127.0.0.1:8080/v1/responses)"}
+{"type":"error","message":"unexpected status 401 Unauthorized: Incorrect API key provided: sk-.... You can find your API key at https://platform.openai.com/account/api-keys., url: http://127.0.0.1:8080/v1/responses"}
+{"type":"turn.failed","error":{"message":"unexpected status 401 Unauthorized: Incorrect API key provided: sk-.... You can find your API key at https://platform.openai.com/account/api-keys., url: http://127.0.0.1:8080/v1/responses"}}

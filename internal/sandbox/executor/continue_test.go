@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // Continuing a turn's session, on a real box under the run's own script: the
@@ -174,7 +175,7 @@ type strippedBox struct {
 }
 
 func (b strippedBox) StartBackground(ctx context.Context, cmd string, opts sandbox.ExecOptions) (string, error) {
-	if _, err := b.Exec(ctx, "rm -f "+shQuote(b.path), sandbox.ExecOptions{}); err != nil {
+	if _, err := b.Exec(ctx, "rm -f "+shellword.Quote(b.path), sandbox.ExecOptions{}); err != nil {
 		return "", err
 	}
 	return b.Sandbox.StartBackground(ctx, cmd, opts)
@@ -461,7 +462,7 @@ const tornWhole = `{"type":"user","n":1}` + "\n" + `{"type":"assistant","n":2}` 
 func tornThreadsHarness(release string) string {
 	var b strings.Builder
 	for name, thread := range tornThreads {
-		b.WriteString(`mkdir -p "$(dirname "$p/$s/` + name + `")" && printf '%s' ` + shQuote(thread.left) +
+		b.WriteString(`mkdir -p "$(dirname "$p/$s/` + name + `")" && printf '%s' ` + shellword.Quote(thread.left) +
 			` > "$p/$s/` + name + `"` + "\n")
 	}
 	return strings.Replace(sessionHarness(release), `printf '{"type":"result"`, b.String()+`printf '{"type":"result"`, 1)
@@ -543,7 +544,7 @@ func threadsResumed(t *testing.T, b sandbox.Sandbox) {
 // link.
 func boxHas(t *testing.T, box sandbox.Sandbox, path string) bool {
 	t.Helper()
-	res, err := box.Exec(t.Context(), "[ -e "+shQuote(path)+" ] || [ -L "+shQuote(path)+" ]", sandbox.ExecOptions{})
+	res, err := box.Exec(t.Context(), "[ -e "+shellword.Quote(path)+" ] || [ -L "+shellword.Quote(path)+" ]", sandbox.ExecOptions{})
 	if err != nil {
 		t.Fatalf("asking the box for %s: %v", path, err)
 	}
@@ -765,7 +766,7 @@ func openCodeTaken(t *testing.T, messages string) int64 {
 	runner, b := openCodeBox(t, t.TempDir())
 	dir := t.TempDir()
 	writeBoxStandIn(t, b, paths(b).BinDir()+"/opencode",
-		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
+		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shellword.Quote(dir), 1))
 	const session = "ses_0123456789abcdef0123456789"
 	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
 		[]byte("id "+session+"\nrelease 2.0.32\n")); err != nil {
@@ -862,11 +863,14 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 // A RUNNER RESTORES ONLY WHAT IT COULD CONTINUE, decided without a box: a
 // session its own harness wrote, in the one format it packs, by a release whose
 // sessions another box continues: what every reader of whether a session
-// continues asks before the box's own release is asked.
+// continues asks before the box's own release is asked. A runner of one
+// release (Kimi Code, Copilot, Muse Code) restores a session that release
+// wrote: judged of the writer alone, never refused for want of a box.
 //
 // Mutation: drop the writer's floor or the one release Gemini CLI and Qwen
-// Code continue on, or answer for another harness's session, and a row goes
-// red.
+// Code continue on, answer for another harness's session, or judge a
+// one-release runner's writer beside no box ([carrier.Continues] of ""), and
+// a row goes red.
 func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -885,6 +889,14 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 			Format: executor.OpenCodeArchiveFormat, Version: "2.2.5"}, true, ""},
 		"opencode, another format": {executor.NewOpenCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
 			Format: executor.OpenCodeArchiveFormat + 1, Version: "2.2.5"}, false, "format"},
+		"kimi's own": {executor.NewKimi(), sandbox.SessionArchive{Harness: executor.KimiName,
+			Format: executor.KimiArchiveFormat, Version: "2.7.2"}, true, ""},
+		"copilot's own": {executor.NewCopilot(), sandbox.SessionArchive{Harness: executor.CopilotName,
+			Format: executor.CopilotArchiveFormat, Version: "1.0.114"}, true, ""},
+		"muse's own": {executor.NewMuse(), sandbox.SessionArchive{Harness: executor.MuseName,
+			Format: executor.MuseArchiveFormat, Version: "1.4.25"}, true, ""},
+		"muse, another release's writer": {executor.NewMuse(), sandbox.SessionArchive{Harness: executor.MuseName,
+			Format: executor.MuseArchiveFormat, Version: "1.4.26"}, false, "only a session 1.4.25 wrote"},
 		"gemini's own": {executor.NewGeminiCLI(), sandbox.SessionArchive{Harness: executor.GeminiCLIName,
 			Format: executor.GeminiArchiveFormat, Version: "0.70.0"}, true, ""},
 		"gemini, a newer writer": {executor.NewGeminiCLI(), sandbox.SessionArchive{Harness: executor.GeminiCLIName,
@@ -892,13 +904,13 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 		"gemini, an older writer": {executor.NewGeminiCLI(), sandbox.SessionArchive{Harness: executor.GeminiCLIName,
 			Format: executor.GeminiArchiveFormat, Version: "0.65.0"}, false, "written by 0.65.0"},
 		"gemini, an unrecorded writer": {executor.NewGeminiCLI(), sandbox.SessionArchive{Harness: executor.GeminiCLIName,
-			Format: executor.GeminiArchiveFormat}, false, "a release it did not record"},
+			Format: executor.GeminiArchiveFormat}, false, "named no release"},
 		"qwen's own": {executor.NewQwenCode(), sandbox.SessionArchive{Harness: executor.QwenCodeName,
-			Format: executor.QwenArchiveFormat, Version: "0.28.3"}, true, ""},
+			Format: executor.QwenArchiveFormat, Version: "0.28.4"}, true, ""},
 		"qwen, another format": {executor.NewQwenCode(), sandbox.SessionArchive{Harness: executor.QwenCodeName,
-			Format: executor.QwenArchiveFormat + 1, Version: "0.28.3"}, false, "format"},
+			Format: executor.QwenArchiveFormat + 1, Version: "0.28.4"}, false, "format"},
 		"qwen, an older writer": {executor.NewQwenCode(), sandbox.SessionArchive{Harness: executor.QwenCodeName,
-			Format: executor.QwenArchiveFormat, Version: "0.26.1"}, false, "only on 0.28.3, and the session was written by 0.26.1"},
+			Format: executor.QwenArchiveFormat, Version: "0.26.1"}, false, "only on 0.28.4, and the session was written by 0.26.1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

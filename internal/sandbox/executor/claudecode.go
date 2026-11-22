@@ -12,8 +12,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 func init() { Register(ClaudeCode{}) }
@@ -83,7 +85,7 @@ func (ClaudeCode) Session(req sandbox.RunRequest) Session {
 // exiting with the harness's status. Pure and deterministic, so a test can pin
 // the flags; [claudeScript] explains them.
 func (ClaudeCode) Command(req sandbox.RunRequest, session Session, paths Paths, configPath string) string {
-	return "sh -c " + sandbox.ShellQuote(claudeScript(req, session, paths, configPath, sandbox.JobStopGrace))
+	return "sh -c " + shellword.Quote(claudeScript(req, session, paths, configPath, sandbox.JobStopGrace))
 }
 
 // claudeScript is a Claude Code run's script ([ClaudeCode.Command]), giving its
@@ -132,20 +134,20 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// Claude Code's own prompt stays whole, being how to drive its tools. Passed
 	// only for a run that has system text.
 	if req.System != "" && !req.Steer.Set() {
-		parts = append(parts, "--append-system-prompt-file", sandbox.ShellQuote(paths.System()))
+		parts = append(parts, "--append-system-prompt-file", shellword.Quote(paths.System()))
 	}
 	// VERBATIM, because the only entry that reaches this runner is a
 	// claude-code one, which already names the model in Claude Code's own
 	// terms — its alias or id exactly as its runs on the engine host pass
 	// it. A launch passes over every other harness's entry, so none reaches here.
 	if req.Model != "" {
-		parts = append(parts, "--model", sandbox.ShellQuote(req.Model))
+		parts = append(parts, "--model", shellword.Quote(req.Model))
 	}
 	if req.Limits.MaxTurns > 0 {
 		parts = append(parts, "--max-turns", strconv.Itoa(req.Limits.MaxTurns))
 	}
 	if configPath != "" {
-		parts = append(parts, "--mcp-config", sandbox.ShellQuote(configPath))
+		parts = append(parts, "--mcp-config", shellword.Quote(configPath))
 	}
 	// NO --strict-mcp-config: beside the engine's servers the run starts what
 	// Claude Code starts for a person, the box's, the repository's .mcp.json, a
@@ -168,7 +170,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// gate below starts a hook of the engine's, in which case the file that
 	// holds the same settings with hooks switched on ([claudeHooksOnSettings])
 	// — and the notes' hooks besides, where they are the hooks it starts.
-	line(`set --; cs=%s`, sandbox.ShellQuote(paths.ClaudeSettings()))
+	line(`set --; cs=%s`, shellword.Quote(paths.ClaudeSettings()))
 	// THE RUN'S OWN SKILLS, and the hook that reports each load, in the
 	// plugin [ClaudeCode.WriteConfig] wrote — on a release that runs the hook
 	// ([claudeSkillsGate]), which names the settings that keep the hook on.
@@ -200,7 +202,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// THE ENTRY'S EFFORT, as its runs on the engine host pass it, on a release
 	// that takes the flag ([claudeEffortFloor]).
 	if req.Effort != "" {
-		line(`if at %s; then set -- "$@" --effort %s; fi`, floorArgs(claudeEffortFloor), sandbox.ShellQuote(req.Effort))
+		line(`if at %s; then set -- "$@" --effort %s; fi`, floorArgs(claudeEffortFloor), shellword.Quote(req.Effort))
 	}
 	b.WriteString(claudeSessionGate(session, paths, req.FreshWiring != nil && configPath != ""))
 	// THE RECORD, before the harness starts, so a run killed before it reported
@@ -208,12 +210,12 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// where it did. The release last, as the harness printed it
 	// ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
-		sandbox.ShellQuote(paths.SessionRecord()))
+		shellword.Quote(paths.SessionRecord()))
 	// THE SIGN-IN STAYS THE HARNESS'S: its own environment keeps it, and the
 	// file it runs ahead of every command its model runs takes it out of that
 	// command's ([claudeToolEnv]).
 	if len(req.SignInEnv) > 0 {
-		line(`export CLAUDE_ENV_FILE=%s`, sandbox.ShellQuote(paths.ClaudeToolEnv()))
+		line(`export CLAUDE_ENV_FILE=%s`, shellword.Quote(paths.ClaudeToolEnv()))
 	}
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(claudeCapture(paths))
@@ -326,7 +328,7 @@ func claudePinGate(paths Paths, skills, notes bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "if at %s; then case $cs in\n", floorArgs(claudeSettingsPinFloor))
 	for _, file := range files {
-		fmt.Fprintf(&b, "  %s) cs=%s ;;\n", sandbox.ShellQuote(file[0]), sandbox.ShellQuote(file[1]))
+		fmt.Fprintf(&b, "  %s) cs=%s ;;\n", shellword.Quote(file[0]), shellword.Quote(file[1]))
 	}
 	b.WriteString("esac; fi\n")
 	return b.String()
@@ -346,10 +348,10 @@ func claudePinGate(paths Paths, skills, notes bool) string {
 func claudeNotesGate(hooked, notes, plain string) string {
 	older := ""
 	if plain != "" {
-		older = `set -- "$@" --append-system-prompt-file ` + sandbox.ShellQuote(plain) + "; "
+		older = `set -- "$@" --append-system-prompt-file ` + shellword.Quote(plain) + "; "
 	}
-	return "if at " + floorArgs(claudeNotesFloor) + "; then cs=" + sandbox.ShellQuote(hooked) +
-		`; set -- "$@" --append-system-prompt-file ` + sandbox.ShellQuote(notes) + "; else " + older +
+	return "if at " + floorArgs(claudeNotesFloor) + "; then cs=" + shellword.Quote(hooked) +
+		`; set -- "$@" --append-system-prompt-file ` + shellword.Quote(notes) + "; else " + older +
 		`echo "crewlet: this box runs Claude Code $n, older than ` + claudeNotesFloor + `, the oldest ` +
 		`that reads a note at the run's finish; the run starts without the hooks that read its notes, ` +
 		`is not told of them, and they wait for its review" >&2; fi` + "\n"
@@ -370,7 +372,7 @@ func claudeNotesGate(hooked, notes, plain string) string {
 func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	if !session.Continues {
 		line(`s=%s k=no w=`, q(session.ID))
 		line(`set -- "$@" --session-id %s`, q(session.ID))
@@ -417,6 +419,11 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	}
 	line(`if [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
+	// A BOX RELEASE THAT DOES NOT READ continues nothing carried, as the
+	// engine's check holds it ([boxNamedNoRelease]): no bare MAJOR.MINOR.PATCH,
+	// as [releaseOf] reads one; `at` alone takes one for a current release,
+	// which every other gate wants ([claudeRelease]).
+	line(`  elif ! { %s[ -n "$rv" ]; }; then w=%s`, bareReleaseShell("rv"), q(boxNamedNoRelease("Claude Code")))
 	line(`  elif ! at %s; then w="this box runs Claude Code $n, older than %s, the oldest that continues a session carried from another box"`,
 		floorArgs(claudeCarryFloor), claudeCarryFloor)
 	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)
@@ -533,7 +540,7 @@ type packAt struct {
 func claudePack(paths Paths, at packAt) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	cfg := paths.ClaudeConfigDir()
 	project := "projects/" + claudeProjectDir
 	line(`if [ -s %s/"$s".jsonl ]; then`, q(cfg+"/"+project))
@@ -574,7 +581,7 @@ func claudePack(paths Paths, at packAt) string {
 // Only a `.jsonl` that grew is taken, its last line torn ([claudeSessionGate]).
 // Reading only newer files rests on the box's clock not stepping back mid-pack.
 func claudeHeldTar(cfg, staged string) string {
-	q := sandbox.ShellQuote
+	q := shellword.Quote
 	plain := strconv.FormatInt(heldPlainMax, 10)
 	return strings.Join([]string{
 		`( st=` + q(staged),
@@ -1124,8 +1131,8 @@ func (ClaudeCode) PackSave(paths Paths, rec sessionRecord, staged, dest string) 
 // [packFailed] where no archive was made.
 func claudeOnDemand(paths Paths, session string, at packAt) string {
 	transcript := paths.ClaudeConfigDir() + "/projects/" + claudeProjectDir + "/" + session + ".jsonl"
-	return "s=" + sandbox.ShellQuote(session) + " packed=\n" +
-		fmt.Sprintf("[ -s %s ] || exit %d\n", sandbox.ShellQuote(transcript), packNothing) +
+	return "s=" + shellword.Quote(session) + " packed=\n" +
+		fmt.Sprintf("[ -s %s ] || exit %d\n", shellword.Quote(transcript), packNothing) +
 		claudePack(paths, at) +
 		fmt.Sprintf("[ -n \"$packed\" ] || exit %d\n", packFailed)
 }
@@ -1136,19 +1143,38 @@ func (ClaudeCode) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Claude Code release writer
 // can be continued in a box whose Claude Code is release box ([carrier]): the
-// box at or after [claudeCarryFloor], the writer at or after
-// [claudeCarriedWriterFloor], and never a box older than the release that wrote
-// the session, which reads only what it and the releases before it wrote.
-func (ClaudeCode) Continues(box, writer string) (bool, string) {
+// box's release read and at or after [claudeCarryFloor], the writer as
+// [ClaudeCode.ContinuesWriter] holds it, and never a box older than the
+// release that wrote the session, which reads only what it and the releases
+// before it wrote.
+func (c ClaudeCode) Continues(box, writer string) (bool, string) {
 	switch {
+	case !releaseReads(box):
+		return false, boxNamedNoRelease("Claude Code")
 	case !releaseAtLeast(box, claudeCarryFloor):
 		return false, fmt.Sprintf("this box runs Claude Code %s, older than %s, the oldest that "+
 			"continues a session carried from another box", box, claudeCarryFloor)
-	case !releaseAtLeast(writer, claudeCarriedWriterFloor):
+	}
+	if ok, why := c.ContinuesWriter(writer); !ok {
+		return false, why
+	}
+	if !releaseAtLeast(box, writer) {
+		return false, carriedOlder("Claude Code", box, writer)
+	}
+	return true, ""
+}
+
+// ContinuesWriter reports whether a session Claude Code release writer wrote
+// can be continued at all ([carrier]): the writer read and at or after
+// [claudeCarriedWriterFloor]. A writer that does not read continues nowhere
+// ([writerNamedNoRelease]).
+func (ClaudeCode) ContinuesWriter(writer string) (bool, string) {
+	if !releaseReads(writer) {
+		return false, writerNamedNoRelease("Claude Code")
+	}
+	if !releaseAtLeast(writer, claudeCarriedWriterFloor) {
 		return false, fmt.Sprintf("the session was written by Claude Code %s, older than %s, the "+
 			"first whose compaction summaries survive a resume", writer, claudeCarriedWriterFloor)
-	case !releaseAtLeast(box, writer):
-		return false, carriedOlder("Claude Code", box, writer)
 	}
 	return true, ""
 }
@@ -1557,23 +1583,20 @@ func releaseAtLeast(version, floor string) bool {
 	return true
 }
 
-// releaseNumbers is the three numbers of version, as a harness's `--version`
-// printed it, read once its spaces are trimmed, up to the first character
-// that is neither a digit nor a dot. False for a version this code cannot
-// read: one with fewer than three numbers, or one of a number past what an
-// int holds.
+// releaseNumbers is the three numbers of the bare release version names, as
+// a harness's `--version` printed it, read as [harnessprofile.Release] reads
+// it, the one reading the runners, the sandbox and the doctor share: a
+// pre-release, a fourth number (`1.4.25.1`) or anything but three runs of
+// digits names none. False for a version that names none, or one of a number
+// past what an int holds.
 func releaseNumbers(version string) ([3]int, bool) {
-	v := strings.TrimSpace(version)
-	if cut := strings.IndexFunc(v, func(r rune) bool { return (r < '0' || r > '9') && r != '.' }); cut >= 0 {
-		v = v[:cut]
-	}
-	fields := strings.Split(v, ".")
 	var out [3]int
-	if len(fields) < 3 {
+	release := harnessprofile.Release(version)
+	if release == "" {
 		return out, false
 	}
-	for i := range 3 {
-		n, err := strconv.Atoi(fields[i])
+	for i, field := range strings.SplitN(release, ".", 3) {
+		n, err := strconv.Atoi(field)
 		if err != nil {
 			return out, false
 		}
@@ -1782,10 +1805,12 @@ func (ClaudeCode) notesOffWhy() string {
 		"hooks and whose error stream says so"
 }
 
-// artifacts is what a Claude Code run leaves in its box of its own.
-func (ClaudeCode) artifacts(p Paths) (files, dirs []string) {
+// artifactFiles is the files a Claude Code run leaves in its box of its own.
+func (ClaudeCode) artifactFiles(p Paths) []string {
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
-			p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(),
-			p.ClaudeToolEnv()},
-		[]string{p.ClaudeSkillsPlugin()}
+		p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(), p.ClaudeToolEnv()}
 }
+
+// artifactDirs is the directories a Claude Code run leaves in its box of its
+// own.
+func (ClaudeCode) artifactDirs(p Paths) []string { return []string{p.ClaudeSkillsPlugin()} }

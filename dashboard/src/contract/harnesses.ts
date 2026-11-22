@@ -63,7 +63,7 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
     signIns: ["api-key", "device", "host-login"],
     keyEnv: "CODEX_API_KEY",
     login: "command",
-    efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"],
   },
   opencode: {
     binary: "opencode",
@@ -135,7 +135,7 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
     signIns: ["api-key", "host-login"],
     providerKeys: true,
     login: "command",
-    efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
   },
   pi: {
     binary: "pi",

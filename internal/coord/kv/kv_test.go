@@ -195,7 +195,7 @@ func TestKeyMappingRoundTrips(t *testing.T) {
 	seen := map[string]string{}
 	for _, r := range resources {
 		key := encodeResource(r)
-		if !validKeyForNATS(key) {
+		if !validKey(key) {
 			t.Fatalf("encodeResource(%q) = %q, which NATS KV will not accept", r, key)
 		}
 		back, ok := decodeResource(key)
@@ -210,23 +210,6 @@ func TestKeyMappingRoundTrips(t *testing.T) {
 		}
 		seen[key] = r
 	}
-}
-
-// validKeyForNATS mirrors nats.go's own key rule (jetstream/kv.go validKeyRe).
-func validKeyForNATS(key string) bool {
-	if key == "" {
-		return false
-	}
-	for i := 0; i < len(key); i++ {
-		c := key[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		case c == '-', c == '/', c == '_', c == '=', c == '.':
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 func TestDecodeKeyRejectsWhatItDidNotWrite(t *testing.T) {

@@ -130,7 +130,8 @@ func TestAQwenRunsSettingsAreTheMeasuredShapesAndFollowItsWiring(t *testing.T) {
 //
 // Mutations, each red: start the helper outside launchHarness (no end
 // protocol); leave the session or its mode off its command line; name a
-// session the gate did not; pin QWEN_SYSTEM_MD.
+// session the gate did not; pin QWEN_SYSTEM_MD to a file, which replaces the
+// prompt the identity file keeps.
 func TestAQwenRunIsItsHelperUnderTheEndProtocol(t *testing.T) {
 	t.Parallel()
 	q := executor.QwenCode{}
@@ -150,7 +151,7 @@ func TestAQwenRunIsItsHelperUnderTheEndProtocol(t *testing.T) {
 		pins[pin.Name] = pin.Value
 	}
 	if pins["QWEN_SYSTEM_IDENTITY_MD"] != p.System() || pins["QWEN_CODE_MODELS_DEV"] != "off" ||
-		pins["OPENAI_MODEL"] != "qwen3-coder-plus" || pins["QWEN_SYSTEM_MD"] != "" {
+		pins["OPENAI_MODEL"] != "qwen3-coder-plus" || pins["QWEN_SYSTEM_MD"] != "false" {
 		t.Errorf("the run pins %v", pins)
 	}
 	if again := q.Session(req); again.ID == session.ID {
