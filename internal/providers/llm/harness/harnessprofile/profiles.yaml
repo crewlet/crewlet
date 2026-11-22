@@ -3654,20 +3654,27 @@ kimi-code:
     relists: false
     concurrency: in_turn
   # EACH REQUEST, FROM THE WIRE LOG the harness keeps for the run in the seat's
-  # home — sessions/wd_<directory>_<digest>/session_<id>/agents/main/wire.jsonl,
+  # home: sessions/wd_<directory>_<digest>/session_<id>/agents/main/wire.jsonl,
   # named after the call's working directory and a session id it mints, so the
   # run's own is told from every other call's of the seat by its profile.bind
-  # event, which names the directory a few lines in, after the tools the run
-  # was offered. A step is a request: step.begin opens it, the llm.request
-  # names the model, usage.record gives its counts as soon as the response is
-  # in — `inputOther` WITHOUT the cached part and `output` with the reasoning
-  # in it (measured with a stand-in reporting 40 cached and 7 reasoning tokens
-  # of a 101-token prompt: 61 + 40, 12 out) — its prose and calls follow under
-  # its id, the calls' results, and step.end with why it stopped and the same
-  # counts again. The harness sends no id with a call, so a call is joined by name
-  # and arguments; each was in the log within 0.01 s of reaching the server
-  # (measured on 2.7.2). Its stdout is the assistant's messages, and a failed
-  # run's class is in this log alone (see limit_events).
+  # event, which names the directory a few lines in, after the MCP tools it
+  # discovered. Measured on 2.7.2: a step is a request. step.begin opens it;
+  # llm.tools_snapshot lists the tools offered (written again only when they
+  # change; tool_select.initialized lists every tool the harness has, the
+  # allowlist's leavings included, and is no offer); usage.record gives its
+  # counts as soon as the response is in, `inputOther` WITHOUT the cached part
+  # and `output` with the reasoning in it (a stand-in reporting 40 cached and 7
+  # reasoning tokens of a 101-token prompt: 61 + 40, 12 out); its prose
+  # (content.part of type `text`; thinking is a part of type `think`) and calls
+  # follow under its id, then the calls' results, and step.end with why it
+  # stopped and the same counts again. NO MODEL IS READ: 2.7.2 writes no
+  # `llm.request` line, and the record names the model only by its alias
+  # (`modelAlias` on profile.bind, `model` on usage.record), which under an
+  # api-key entry is the placeholder `__kimi_env_model__`; the model's own id
+  # is only in the session's text log. The harness sends no id with a call, so
+  # a call is joined by name and arguments; each was in the log within 0.01 s
+  # of reaching the server. Its stdout is the assistant's messages, and a
+  # failed run's class is in this log alone (see limit_events).
   requests:
     source: file
     in: home
@@ -3684,8 +3691,6 @@ kimi-code:
       - match: [{path: ["type"], equals: "context.append_loop_event"}, {path: ["event", "type"], equals: "step.begin"}]
         opens: true
         id: ["event", "uuid"]
-      - match: [{path: ["type"], equals: "llm.request"}, {path: ["kind"], equals: "loop"}]
-        model: ["model"]
       - match: [{path: ["type"], equals: "usage.record"}, {path: ["usageScope"], equals: "turn"}]
         usage:
           input: [["usage", "inputOther"]]
