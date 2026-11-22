@@ -85,6 +85,20 @@
 //   {"op":"stopped"}                       answer once it has
 //   {"op":"events"}                        the supervisor's state and events
 //   {"op":"reject"}                        raise a rejection nobody handles
+//   {"op":"fence","boundary":B,"text":T}   T fenced as a page's words under B
+//   {"op":"edit","from":F,"message":M,"boundary":B}
+//                                          what one model connection's edits
+//                                          make of M from F ("model" or
+//                                          "server"): the lines toward the
+//                                          model, the messages toward the
+//                                          server, a refusal, and its table
+//                                          of tools/call in flight after it;
+//                                          the connection is the probe's one,
+//                                          drawn at its first edit with B
+//   {"op":"edit_closed"}                   that connection closed: its table
+//   {"op":"tools","launch":L}              the tools the pinned server lists
+//                                          under launch.json L's config, no
+//                                          edit between
 // A fault X is {method, errno, after, times, kill, uid, kill_holder,
 // kill_reading, hold}: every call of the file system's method after the first
 // `after`, or with times only that many, throws the error Node gives for
@@ -114,6 +128,8 @@ const tree = await module("tree.mjs")
 const chromium = await module("chromium.mjs")
 const { holdFolder, takeLock } = await module("ensure.mjs")
 const { supervise } = await module("supervise.mjs")
+const { fence } = await module("fence.mjs")
+const { Edits, mcpConfig } = await module("serve.mjs")
 
 const answer = (fields) => process.stdout.write(JSON.stringify(fields) + "\n")
 
@@ -254,9 +270,34 @@ const files = (texts = {}) => async (file) => (Object.hasOwn(texts, file) ? Stri
 const refused = (err) => ({ reason: err.reason, cause: err.cause, detail: err.detail })
 
 let supervisor
+let edits
 const events = []
 const reports = []
 const logged = new Set() // each called with every event as it is logged
+
+// listed is a server's answer to tools/list under config, over a transport of
+// the probe's own, with nothing between them: no browser, which tools/list
+// never reaches.
+async function listed(createConnection, config) {
+  const server = await createConnection(config)
+  const answers = new Map()
+  const transport = {
+    start: async () => {},
+    send: async (m) => answers.get(m.id)?.(m),
+    close: async () => {},
+  }
+  const ask = (id, method, params) =>
+    new Promise((resolve) => {
+      answers.set(id, resolve)
+      transport.onmessage({ jsonrpc: "2.0", id, method, params })
+    })
+  await server.connect(transport)
+  await ask(1, "initialize", { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } })
+  transport.onmessage({ jsonrpc: "2.0", method: "notifications/initialized" })
+  const answer = await ask(2, "tools/list", {})
+  await server.close()
+  return answer.result.tools
+}
 
 // settled answers once the supervisor's state is one of states.
 function settled(states) {
@@ -506,6 +547,23 @@ const commands = {
   reject() {
     Promise.reject(new Error("a rejection nobody handles, raised between jobs"))
     return {}
+  },
+  fence({ boundary, text }) {
+    return { fenced: fence(boundary, text) }
+  },
+  edit({ from, message, boundary }) {
+    edits ??= new Edits({ boundary, log: (kind, fields = {}) => events.push({ kind, ...fields }) })
+    const out = from === "model" ? edits.fromModel(message) : edits.fromServer(message)
+    return { ...out, in_flight: edits.inFlight, events }
+  },
+  edit_closed() {
+    edits.closed()
+    return { in_flight: edits.inFlight }
+  },
+  async tools({ launch }) {
+    const l = JSON.parse(await fsp.readFile(launch, "utf8"))
+    const { mcp } = tree.load(l.tree)
+    return { tools: (await listed(mcp.createConnection, mcpConfig(l))).map((tool) => tool.name) }
   },
 }
 

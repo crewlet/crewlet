@@ -122,8 +122,8 @@ type Box struct {
 	// empty, so the machine's own never reaches the box: where a case writes
 	// what an image's global npmrc would say.
 	GlobalNPMRC string
-	// Workspace is the job's working directory in it, the root its hello
-	// names, as a harness runs there.
+	// Workspace is the job's working directory in it, the root its shim names,
+	// as a harness runs there.
 	Workspace string
 
 	env  Env
@@ -485,6 +485,28 @@ func (b *Box) Stop(t testing.TB) {
 	}
 	if s.Chromium != nil && s.Chromium.PID > 0 && !procgrouptest.AwaitGone(t, s.Chromium.PID, goneWithin) {
 		t.Errorf("the box's Chromium, pid %d, outlived its supervisor by %s", s.Chromium.PID, goneWithin)
+	}
+}
+
+// pollEvery paces a wait on what a box's supervisor records, which nothing
+// announces to a reader that is not its parent: it writes supervisor.json at
+// every change, and a case waits on the change, never on the time.
+const pollEvery = 20 * time.Millisecond
+
+// AwaitSupervisor waits for the box's supervisor.json to record what want
+// says, and answers the record, failing the case on none within goneWithin.
+func (b *Box) AwaitSupervisor(t testing.TB, what string, want func(Supervisor) bool) Supervisor {
+	t.Helper()
+	deadline := time.Now().Add(goneWithin)
+	for {
+		s, ok := b.supervisor(t)
+		if ok && want(s) {
+			return s
+		}
+		if time.Now().After(deadline) { //fixedwait:measure a poll's own deadline: the case fails on it
+			t.Fatalf("the box's supervisor.json records %+v, and not %s, %s on", s, what, goneWithin)
+		}
+		time.Sleep(pollEvery) //fixedwait:liveness
 	}
 }
 

@@ -1,8 +1,9 @@
 // helper.mjs: the box helper's entry, `node helper.mjs <subcommand>`, run
 // from the helper's folder in a box. ensure prints its one line; supervise
-// runs the box's supervisor from the launch ensure wrote. An unknown
-// subcommand or flag exits 64 with one line on stderr.
-// internal/browser/boxhelper's package doc carries the argument.
+// runs the box's supervisor from the launch ensure wrote; mcp is the shim, a
+// job's browser server on stdio. An unknown subcommand or flag exits 64 with
+// one line on stderr. internal/browser/boxhelper's package doc carries the
+// argument.
 
 import path from "node:path"
 
@@ -40,6 +41,22 @@ switch (subcommand) {
     await run(flags[1])
     break
   }
+  case "mcp": {
+    const job = flags[1]
+    const root = flags[3]
+    if (
+      flags.length !== 4 ||
+      flags[0] !== "--job" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(job) ||
+      flags[2] !== "--root" ||
+      !path.isAbsolute(root)
+    ) {
+      usage(`mcp takes --job and the launch's id, then --root and the workspace's absolute path, and was given ${JSON.stringify(flags)}`)
+    }
+    const { shim } = await import("./shim.mjs")
+    await shim(folder, job, root)
+    break
+  }
   default:
-    usage(`unknown subcommand ${JSON.stringify(subcommand)}: ensure or supervise`)
+    usage(`unknown subcommand ${JSON.stringify(subcommand)}: ensure, supervise or mcp`)
 }

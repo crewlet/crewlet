@@ -3,27 +3,30 @@
 // for it: @playwright/mcp at an exact release, locked in tree/ with the two
 // packages it pins, which the box's own npm installs. Its ensure leaves one
 // supervisor in the box, holding Chromium through Playwright for the box's
-// life. The helper runs under the box's Node, of [MinNodeMajor] or newer with
-// an npm of [MinNPMMajor] or newer; the engine links none of Playwright's code.
+// life and serving it to the model through Playwright MCP, embedded in it,
+// behind the shim, the harness's stdio browser server ([ShimArgs]). The
+// helper runs under the box's Node, of [MinNodeMajor] or newer with an npm of
+// [MinNPMMajor] or newer; the engine links none of Playwright's code.
 //
 // # The helper's files
 //
 // ECMAScript modules, js/*.mjs, on Node's built-ins and the installed tree
 // alone, embedded ([Files]) as the OpenCode plugins are, so a box runs the
 // helper this build's suite ran: helper.mjs, the entry, whose subcommands are
-// ensure (ensure.mjs) and supervise (supervise.mjs; serve.mjs, its socket),
-// beside chromium.mjs, tree.mjs and common.mjs. No build step stands between
-// them and the binary: [Write] puts each into the box's [Folder] whole, after
-// every module it imports; then the lock's two files, as tree-package.json and
-// tree-package-lock.json, names neither npm nor Node takes as the folder's
-// own; then config.json, the one document the engine and the helper agree
-// through, rendered from this build's constants and a launch's [Settings]: the
-// helper's [Version], over every module's name, length and bytes; the pin and
-// both digests; the floors; the Chromium to look for; the cell's sandbox; the
-// switches; the supervisor's environment by name; and every bound, which a
-// case whose subject is a bound shortens in its own config. config.json goes
-// last, so it never names a file not yet beside it, and the next launch's
-// write repairs a box whose files disagree with it. Modes are the box's.
+// ensure (ensure.mjs), supervise (supervise.mjs; serve.mjs, its socket;
+// fence.mjs) and mcp (shim.mjs), beside chromium.mjs, tree.mjs and common.mjs.
+// No build step stands between them and the binary: [Write] puts each into
+// the box's [Folder] whole, after every module it imports; then the lock's two
+// files, as tree-package.json and tree-package-lock.json, names neither npm
+// nor Node takes as the folder's own; then config.json, the one document the
+// engine and the helper agree through, rendered from this build's constants
+// and a launch's [Settings]: the helper's [Version], over every module's name,
+// length and bytes; the hello's protocol; the pin and both digests; the
+// floors; the Chromium to look for; the cell's sandbox; the switches; the
+// supervisor's environment by name; and every bound, which a case whose
+// subject is a bound shortens in its own config. config.json goes last, so it
+// never names a file not yet beside it, and the next launch's write repairs a
+// box whose files disagree with it. Modes are the box's.
 //
 // # Ensure
 //
@@ -174,14 +177,72 @@
 // over. The order is data, so the suite searches a box's own layout and PATH
 // alone.
 //
+// # Serving the browser
+//
+// browser.sock is a filesystem socket in the folder, at 0600, never abstract. A
+// connection says its hello within hello_ms (its helper's version, job and
+// root) or is refused: helper_mismatch, bad_hello, or not_ready before the
+// first launch is served; one during a relaunch is accepted, as ensure answers
+// found then; one that closes before a byte is ensure looking. An accepted one
+// is the box's one model connection (a box runs one job at a time), closing the
+// one before, whose Playwright MCP disposes only what it isolated, so the
+// browser and its tabs stay. It is handed to createConnection over
+// newline-delimited JSON of at most 32 MiB a line, what came with the hello
+// read first, the context through the getter, which awaits a launch under way
+// and refuses a crashed-out browser. The config turns WebMCP off, on by default
+// on this path; shares the context, so browser_close refuses; bounds the
+// outputs a model leaves unnamed at 256 MiB; and states the pin's call bounds.
+//
+// Every message passes the edits. The model is shown, and may call, only the
+// allowed tools: the pin's core tools less browser_run_code_unsafe, which runs
+// code in the supervisor's own process. A list of what may pass, as the server
+// also serves the tools a page registers, and a later pin may add more; a call
+// off it is answered -32602, its name neutralised, never forwarded. Each text
+// item of an answer is fenced, an image kept, anything else and
+// structuredContent dropped; a server's error keeps its words, neutralised, and
+// loses its data; a request of the server's but roots/list and ping is answered
+// -32601 in the model's place; progress loses its words; any other notification
+// but cancelled and list_changed is dropped; an answer past 32 MiB becomes an
+// error naming its size. A call loses arguments._meta, the Playwright CLI
+// daemon's channel into a call, whose cwd would re-base the files a model
+// names. A line that is no JSON-RPC message or runs past the bound, or an id
+// reused in flight, ends the connection. A table of the calls in flight and the
+// one place a call is answered in the server's place are the hooks a person's
+// hold builds on.
+//
+// # The fence
+//
+// fence.mjs ports internal/provenance's Fence, Neutralise and NewBoundary: each
+// text item is one fence of the connection's own boundary, a page in a seat's
+// own browser (browser_page), at external trust, no author named. The box runs
+// no Go, so a case holds the port to provenance.Fence byte for byte. What the
+// server writes to files (snapshots and console entries in the output
+// directory, downloads, files the model names) the model opens with its own
+// tools, past every fence.
+//
+// # The shim
+//
+// The harness's browser server is `helper.mjs mcp --job <launch> --root
+// <workspace>` ([ShimArgs]): no token, so every session's configuration holds
+// the same entry, and no variable read. It says its job's hello, then relays
+// newline-delimited JSON byte for byte but for two messages: an initialize
+// declaring no roots gains them, and the server's roots/list it answers itself
+// with the job's root. The pin takes the first root as its working folder, so a
+// relative file name the model gives lands in the job's workspace; an absolute
+// one is taken as given; either is admitted only there or in the output
+// directory. It exits 0 when stdin or the socket closes, 69 where no browser
+// listens or the hello is refused.
+//
 // # The box's claim, not a boundary
 //
 // The model holds a fully permissioned shell in its box, as the box's user, so
 // it can read and write all of this, run any npm, edit the tree, and be the
-// supervisor itself. The one supervisor, its allowlisted environment, npm's
-// command line and the check of what it installed hold the box's own
-// configuration to the lock and coordinate a cooperating model; none is a
-// boundary, and the engine decides nothing from what the box says.
+// shim or the supervisor itself. The one supervisor, its allowlisted
+// environment, npm's command line and the check of what it installed hold the
+// box's own configuration to the lock; the edits, the fence, the one
+// connection and the tools held back label a page's words and coordinate a
+// cooperating model. None is a boundary, and the engine decides nothing from
+// what the box says.
 //
 // # The lock is the release somebody read
 //

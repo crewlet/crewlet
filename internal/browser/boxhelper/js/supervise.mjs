@@ -15,7 +15,7 @@ import path from "node:path"
 
 import { DIR_MODE, Withheld, carries, gone, realClock, running, signal, writeWhole } from "./common.mjs"
 import { launchFailure } from "./chromium.mjs"
-import { serve } from "./serve.mjs"
+import { mcpConfig, serve } from "./serve.mjs"
 import { load } from "./tree.mjs"
 
 // LOG_MAX is supervisor.log's bound, with one rotation beside it, and
@@ -136,15 +136,7 @@ export class Supervisor {
       state: () => this.state,
       createConnection: mcp.createConnection,
       context: () => this.context(),
-      config: {
-        browser: { browserName: "chromium", isolated: false },
-        capabilities: [],
-        webmcp: false,
-        sharedBrowserContext: true,
-        outputDir: launch.output,
-        outputMaxSize: launch.mcp.output_max_bytes,
-        timeouts: { action: launch.mcp.action_ms, navigation: launch.mcp.navigation_ms },
-      },
+      config: mcpConfig(launch),
     })
     await this.setState("ready")
     this.io.report(`ready ${this.current.version}`)

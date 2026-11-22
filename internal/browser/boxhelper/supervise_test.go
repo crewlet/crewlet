@@ -3,6 +3,7 @@ package boxhelper_test
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -421,8 +422,19 @@ func (d *dialed) answer(t *testing.T, id any) map[string]any {
 	}
 }
 
-// helloOf is the hello a job's browser server says to box's supervisor for
-// job.
+// ended fails t unless the connection ends with nothing more coming back.
+func (d *dialed) ended(t *testing.T) {
+	t.Helper()
+	line, err := d.lines.ReadBytes('\n')
+	switch {
+	case err == nil:
+		t.Fatalf("the connection carried %q, and was to end", line)
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		t.Fatalf("the connection is still open %s on", goneWithin)
+	}
+}
+
+// helloOf is the hello a shim of box's helper says for job.
 func helloOf(t *testing.T, box *boxhelpertest.Box, job string) map[string]any {
 	t.Helper()
 	config := box.Config(t)
@@ -451,7 +463,7 @@ func tabs(id int) map[string]any {
 // helper_mismatch, and one off the hello's shape as bad_hello, each closed;
 // one naming this helper is answered ok and served Playwright MCP over the
 // box's own browser, whose tab it lists, on each Node's own sockets and each
-// pin's browser.
+// pin's browser; the shim's side is its own.
 //
 // Mutation: accept any helper's hello.
 func TestTheSupervisorServesItsBrowserToAConnectionThatSaysItsHello(t *testing.T) {

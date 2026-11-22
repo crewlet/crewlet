@@ -1,11 +1,11 @@
 // common.mjs: what the box helper's modules share. config.json, the document
 // the engine writes beside them; the modes the helper writes at; what the
 // helper prints, the answer a failed check gives and the line that says it;
-// the cause a failed write stands for; the clock every timer runs on, and a
-// version asked on it; canonical JSON; and what the kernel says of a process,
-// and which pid may be signalled. Node's built-ins alone, in the oldest Node
-// the helper supports. internal/browser/boxhelper's package doc carries the
-// argument.
+// the longest line the shim and the supervisor pass; the cause a failed write
+// stands for; the clock every timer runs on, and a version asked on it;
+// canonical JSON; and what the kernel says of a process, and which pid may be
+// signalled. Node's built-ins alone, in the oldest Node the helper supports.
+// internal/browser/boxhelper's package doc carries the argument.
 
 import { execFile, spawn } from "node:child_process"
 import { createHash } from "node:crypto"
@@ -23,6 +23,12 @@ export const DIR_MODE = 0o700
 
 // LINE_PREFIX starts ensure's one line, the engine's to parse.
 export const LINE_PREFIX = "crewlet-browser-ensure/1"
+
+// LINE_MAX is the longest line the shim and the supervisor pass each other,
+// in bytes, its newline aside: MCP's stdio framing, newline-delimited JSON,
+// bounded where a full-page screenshot's answer, a few MB of base64, fits
+// many times over.
+export const LINE_MAX = 32 << 20
 
 // VERSION_PROBE_MS bounds one --version the helper asks a program: a build or
 // an npm answers in well under a second (npm in 0.13-0.18 s), so one silent

@@ -28,9 +28,9 @@ const configFile = "config.json"
 // (common.mjs, CONFIG_VERSION), and both move together.
 const configVersion = 1
 
-// protocol is the version of the hello on the box's sockets, which the
-// supervisor and a job's browser server agree on; it moves only for a change
-// an older peer cannot read.
+// protocol is the version of the hello on the box's sockets, which the shim
+// and the supervisor agree on; it moves only for a change an older peer
+// cannot read.
 const protocol = 1
 
 // The bounds of a box's install of the tree, config.json's install block. A
@@ -93,8 +93,9 @@ const (
 	// fetch, is killed by the same grace, the suite's recipe's.
 	stopGraceMS = 5_000
 	// helloMS is how long a connection to the supervisor has to say its
-	// hello, which a peer writes first, at once: two seconds cover a loaded
-	// box's scheduling, and a longer silence is ensure's look or a stray.
+	// hello, which a peer writes first (the shim at once): two seconds cover a
+	// loaded box's scheduling, and a longer silence is ensure's look or a
+	// stray.
 	helloMS = 2_000
 )
 

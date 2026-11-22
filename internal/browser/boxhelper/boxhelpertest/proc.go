@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/prereqtest"
 )
 
@@ -151,4 +152,31 @@ func SandboxRuns(t testing.TB) bool {
 	ctx, cancel := context.WithTimeout(t.Context(), psTimeout)
 	defer cancel()
 	return exec.CommandContext(ctx, unshare, "--user", "--map-root-user", "true").Run() == nil
+}
+
+// SandboxCause is the first cause this host shows for a sandbox that
+// [SandboxRuns] says cannot start, read here from what the kernel says, so a
+// case holds the cause the helper names to it: root; Ubuntu's AppArmor
+// restriction on unprivileged user namespaces; user namespaces turned off; a
+// seccomp filter on this process, which a box's processes inherit; else
+// unknown.
+func SandboxCause() browser.EnsureCause {
+	read := func(file string) string {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(raw))
+	}
+	switch {
+	case os.Getuid() == 0:
+		return browser.CauseRoot
+	case read("/proc/sys/kernel/apparmor_restrict_unprivileged_userns") == "1":
+		return browser.CauseAppArmor
+	case read("/proc/sys/user/max_user_namespaces") == "0" || read("/proc/sys/kernel/unprivileged_userns_clone") == "0":
+		return browser.CauseUserns
+	case slices.Contains(strings.Split(read("/proc/self/status"), "\n"), "Seccomp:\t2"):
+		return browser.CauseSeccomp
+	}
+	return browser.CauseUnknown
 }

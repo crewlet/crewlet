@@ -19,7 +19,8 @@ var js embed.FS
 // modules is every module of the helper, in the one order [Write] writes
 // them and [Version] reads them: each after every module it imports.
 var modules = []string{
-	"common.mjs", "tree.mjs", "chromium.mjs", "serve.mjs", "ensure.mjs", "supervise.mjs", "helper.mjs",
+	"common.mjs", "tree.mjs", "chromium.mjs", "fence.mjs", "serve.mjs", "ensure.mjs", "supervise.mjs", "shim.mjs",
+	"helper.mjs",
 }
 
 // File is one module of the helper.

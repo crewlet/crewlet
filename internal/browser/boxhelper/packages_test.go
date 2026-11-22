@@ -140,7 +140,7 @@ type moduleLine struct{ module, line string }
 // action or a navigation under way, so the bound is its own timer.
 var handedPlaywright = []moduleLine{
 	{"supervise.mjs", "timeout: launch.launch_timeout_ms,"},
-	{"supervise.mjs", "timeouts: { action: launch.mcp.action_ms, navigation: launch.mcp.navigation_ms },"},
+	{"serve.mjs", "timeouts: { action: launch.mcp.action_ms, navigation: launch.mcp.navigation_ms },"},
 }
 
 // THE HELPER'S TIMERS ARE ITS CLOCK'S: every module reads time and sets

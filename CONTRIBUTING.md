@@ -1504,6 +1504,12 @@ yours and carries a title of about 90 characters, where a subject takes 72:
    `$tree/node_modules/playwright-core/browsers.json`;
    `TestTheLockIsTheReleaseSomebodyRead` and
    `TestTheLockedCoreExpectsTheChromiumSomebodyRead` name what they found.
+   Read again, too, what the box helper relies on that no test names whole:
+   createConnection's context getter, which is undocumented (boxhelper's
+   package doc, "Why Playwright MCP is embedded, not run"). The switches it
+   launches Chromium with and the tools it shows the model are held to lists,
+   by `TestChromiumRunsWithTheListedCommandLine` and
+   `TestTheModelSeesOnlyTheAllowedTools`, which name what changed.
 4. `make check`, and title the pull request `build(deps): bump playwright mcp
    from <a> to <b>`. Dependabot closes its own once `main` carries the release.
 

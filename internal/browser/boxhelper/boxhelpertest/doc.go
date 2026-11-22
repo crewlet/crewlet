@@ -3,8 +3,9 @@
 // directory, npm cache and npm settings of the box's own and a pinned
 // Chromium laid out for ensure to find ([Start]); ensure run as the engine
 // runs it and read with the engine's parser ([Box.Ensure]), its supervisor
-// real and stopped at the case's end; the helper's modules driven under the
-// box's Node through the probe beside boxhelper's tests ([Box.Probe]); a
+// real and stopped at the case's end; the browser reached as a harness
+// reaches it, through the shim ([Box.MCP]); the helper's modules driven under
+// the box's Node through the probe beside boxhelper's tests ([Box.Probe]); a
 // stand-in registry ([Registry]) and a stand-in npm ([Box.StandInNPM]) for
 // what a box's npm meets; and the Playwright tree the suite installs from the
 // committed lock ([Tree]). A case runs at each end of what a box may bring
@@ -18,8 +19,8 @@
 // pinned.
 //
 // Test support (the name ends in `test`), so internal/fixedwait reads it as
-// test code: no wait in it decides a claim, and every bound in it only ends a
-// wait.
+// test code: no wait in it decides a claim, every bound in it only ends a
+// wait, and its one poll, on what a supervisor records, is paced as liveness.
 //
 // # Where each comes from
 //
@@ -107,7 +108,21 @@
 // would otherwise write back. Whether Chromium's own sandbox can start is the
 // host's, told by [SandboxRuns], an oracle beside the helper: whether an
 // unprivileged process may make a user namespace and map itself root in it, as
-// Chromium's namespace sandbox does.
+// Chromium's namespace sandbox does; and where it cannot, the cause the host
+// shows, by [SandboxCause], from the kernel's own files.
+//
+// # The model's side
+//
+// A case reaches the box's browser as a harness does: [Box.MCP] starts the
+// shim from boxhelper.ShimArgs, on stdio, the box's workspace its root and
+// working directory, and hands its pipes to [MCPOver], a raw JSON-RPC client
+// with no MCP SDK on either end, which fails the case on a line the server's
+// side writes that is no JSON-RPC message. It takes pipes rather than starting
+// a shim, so a case of another cell drives one it started in a container, over
+// `docker exec -i`, with the same client; [Box.Shim] hands a case whose
+// subject is the bytes the shim's stdio itself. A case waits on what the box's
+// supervisor records ([Box.AwaitSupervisor]), never on the time, and reads
+// what still runs on a box's profile ([Box.Browsers]).
 //
 // # What a dead test binary leaves
 //
