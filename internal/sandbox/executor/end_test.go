@@ -533,6 +533,8 @@ func TestACollectionSaysItsJobWasEnded(t *testing.T) {
 			b.Put(p.Done(), tc.code)
 			b.Put(p.ExitCode(), tc.code)
 			b.Put(p.Findings(), "fixed the flake")
+			// The harness's own end, beside which the report is a success.
+			b.Put(p.Result(), `{"type":"result","subtype":"success","result":"done"}`)
 			b.Put(p.JobEnded(), tc.ended)
 			res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{CommandID: "1"}, queue.NewAnswerBudget(nil))
 			if err != nil {

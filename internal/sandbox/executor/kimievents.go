@@ -370,6 +370,10 @@ func (d *kimiEvents) limitReport() string { return d.limit }
 // model alias's maxContextSize.
 func (d *kimiEvents) reportedWindow() int64 { return d.window }
 
+// Ended implements [Decoder]: a turn Kimi said ended, and the driver's
+// `crewlet.end`, printed once the session it drives went idle.
+func (d *kimiEvents) Ended() bool { return d.ended && d.turns > 0 }
+
 // Result implements [Decoder]: the answer, and how the run ended, off its last
 // turn and the driver's end.
 func (d *kimiEvents) Result() sandbox.Result {
