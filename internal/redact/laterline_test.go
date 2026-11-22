@@ -137,7 +137,7 @@ func TestAKeyWhoseValueALaterLineGivesHoldsThatLineAsItSettles(t *testing.T) {
 	for i, text := range laterLineTexts(3000) {
 		want := redact.Secrets(text)
 		for _, sizes := range [][]int{{1}, {1 + r.IntN(40), 1 + r.IntN(200)}} {
-			if got, _ := settle(text, sizes); got != want {
+			if got, _ := settle(t, text, sizes); got != want {
 				t.Fatalf("text %d, in pieces of %v:\ntext %q\n got %q\nwant %q", i, sizes, text, got, want)
 			}
 		}
@@ -154,7 +154,7 @@ func TestALiveStreamWritesAValueALaterLineGivesAsTheWholeTextDoes(t *testing.T) 
 	t.Parallel()
 	for i, text := range laterLineTexts(3000) {
 		var out bytes.Buffer
-		s := redact.NewLiveStream(&out)
+		s := redact.HeldToTheLoop(t, redact.NewLiveStream(&out))
 		for line := range strings.SplitAfterSeq(text, "\n") {
 			_, _ = s.Write([]byte(line))
 			if _, _, err := s.Flush(); err != nil {
@@ -188,7 +188,7 @@ func TestWhatSettledSettlesIsTheWholeRedactionsStart(t *testing.T) {
 			} else {
 				c = len(text)
 			}
-			s := redact.Settled(text[:c])
+			s := redact.SettledByBoth(t, text[:c])
 			if head := redact.Secrets(text[:s]); !strings.HasPrefix(want, head) {
 				t.Fatalf("text %d, settled %d of %d:\ntext %q\nhead %q\nwant %q", i, s, c, text, head, want)
 			}
@@ -218,13 +218,13 @@ func TestSettledStillReachesTheEndOfATextWhoseKeysAreDecided(t *testing.T) {
 		`echo "Password: hunter2x9" >> k` + "\n" + ok,
 		`{"log": "Password: hunter2x9"}` + "\r\n" + ok,
 	} {
-		if got := redact.Settled(text); got != len(text) {
+		if got := redact.SettledByBoth(t, text); got != len(text) {
 			t.Errorf("Settled %d of %d:\n%q", got, len(text), text[:min(len(text), 120)])
 		}
 	}
 	past := strings.Repeat("build step ok\n", redact.MaxReach/14+64)
 	text := `{"log": "Password:\n"}` + "\n" + past
-	if got := redact.Settled(text); got != len(text) {
+	if got := redact.SettledByBoth(t, text); got != len(text) {
 		t.Errorf("a key whose readings find nothing below: Settled %d of %d", got, len(text))
 	}
 }
