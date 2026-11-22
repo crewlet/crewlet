@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -109,4 +110,39 @@ func ExecutorOf(name string) (Executor, bool) {
 		}
 	}
 	return Executor{}, false
+}
+
+// Release is the release a harness's `--version` printed, as a bare
+// MAJOR.MINOR.PATCH, or "" where it printed none: the first word that starts
+// with a digit (after an optional "v", `opencode v2.0.32`) must be three runs
+// of digits joined by dots and nothing else. A pre-release
+// (`codex-cli 0.171.0-alpha.1`) names no release, so a floor or an exact
+// release is never met by a build cut before it; words around the release
+// (`2.1.310 (Claude Code)`) are passed over. The one reading the runners, the
+// sandbox and the doctor share.
+func Release(printed string) string {
+	for _, word := range strings.Fields(printed) {
+		word = strings.TrimPrefix(word, "v")
+		if word == "" || word[0] < '0' || word[0] > '9' {
+			continue
+		}
+		if !bareRelease(word) {
+			return ""
+		}
+		return word
+	}
+	return ""
+}
+
+// bareRelease reports whether word is exactly three non-empty runs of digits
+// joined by dots.
+func bareRelease(word string) bool {
+	parts := 0
+	for part := range strings.SplitSeq(word, ".") {
+		parts++
+		if part == "" || strings.ContainsFunc(part, func(r rune) bool { return r < '0' || r > '9' }) {
+			return false
+		}
+	}
+	return parts == 3
 }

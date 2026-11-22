@@ -75,7 +75,7 @@ func codexGate(t *testing.T, p Paths, dir string, session Session, rewired bool)
 func codexGateOn(t *testing.T, p Paths, dir string, session Session, rewired bool,
 	version string) (s, k, w, stderr string) {
 	t.Helper()
-	out, errText, code := codexShell(t, dir, "v="+sandbox.ShellQuote(version)+"\n"+
+	out, errText, code := codexShell(t, dir, codexPrinted(version)+
 		codexSessionGate(session, p, rewired)+`printf '%s\n%s\n%s\n' "$sid" "$k" "$w"`)
 	if code != 0 {
 		t.Fatalf("the gate exited %d: %s", code, errText)
@@ -85,6 +85,12 @@ func codexGateOn(t *testing.T, p Paths, dir string, session Session, rewired boo
 		t.Fatalf("the gate printed %q", out)
 	}
 	return lines[0], lines[1], strings.TrimSuffix(lines[2], "\n"), errText
+}
+
+// codexPrinted is the script's reading of a box whose `codex --version`
+// printed version ([codexReleaseParse]).
+func codexPrinted(version string) string {
+	return "v=" + sandbox.ShellQuote(version) + "\n" + codexReleaseParse
 }
 
 // codexMembers is every member of a gzipped tar and its content, by name.
@@ -407,7 +413,8 @@ func TestACodexRunStartsOnTheConfigurationOfTheSessionItStarts(t *testing.T) {
 // starts a new session, saying why in the engine's own words.
 //
 // Mutation: drop either check, read the release otherwise than releaseOf
-// does, or word the reason otherwise than Codex.Continues, and a row fails.
+// does (a pre-release as its numbers), or word the reason otherwise than
+// Codex.Continues, and a row fails.
 func TestACodexBoxRestoresACarriedSessionOnlyOnTheOneSupportedRelease(t *testing.T) {
 	t.Parallel()
 	packed := codexBox(t, codexRolloutFixture(t))
@@ -423,6 +430,7 @@ func TestACodexBoxRestoresACarriedSessionOnlyOnTheOneSupportedRelease(t *testing
 		{"codex-cli 0.172.0", "no", engine},
 		{"codex-cli 0.170.9", "no", "this box runs Codex 0.170.9, and only Codex 0.171.0"},
 		{"codex-cli dev", "no", boxNamedNoRelease("Codex")},
+		{"codex-cli 0.171.0-alpha.1", "no", boxNamedNoRelease("Codex")},
 		{"", "no", boxNamedNoRelease("Codex")},
 	} {
 		p := codexBox(t, nil)
@@ -435,6 +443,49 @@ func TestACodexBoxRestoresACarriedSessionOnlyOnTheOneSupportedRelease(t *testing
 		}
 		if _, err := os.Stat(codexRestoredRollout(p, codexThread)); (c.k == "yes") != (err == nil) {
 			t.Errorf("%q: restored %v, want %v", c.version, err == nil, c.k == "yes")
+		}
+	}
+}
+
+// A CODEX RELEASE IS READ AS A BARE MAJOR.MINOR.PATCH ALONE, by the run's
+// script and by releaseOf alike: the first word starting with a digit must be
+// one, so a pre-release, garbage or nothing names no release, which the script
+// refuses at start, and words around one are passed over. A release below the
+// floor is refused, one at or past it starts.
+//
+// Mutation: read the last run of digits and dots, take a pre-release for its
+// numbers, start on an unreadable release, or let releaseOf and the script
+// disagree, and a row fails.
+func TestACodexReleaseIsReadAsABareMajorMinorPatch(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		printed, release string
+		starts           bool
+	}{
+		{"codex-cli 0.171.0", "0.171.0", true},
+		{"codex-cli 0.172.3\n", "0.172.3", true},
+		{"codex-cli 0.171.0 (extra words)", "0.171.0", true},
+		{"codex-cli 0.170.9", "0.170.9", false},
+		{"codex-cli 0.150.0-alpha.1", "", false},
+		{"codex-cli 0.171.0-alpha.1", "", false},
+		{"codex-cli 0.172.0-rc.2", "", false},
+		{"codex-cli 0.171.0+build.7", "", false},
+		{"codex-cli 0.171", "", false},
+		{"codex-cli 0.171.0.1", "", false},
+		{"codex-cli dev", "", false},
+		{"Usage: codex [OPTIONS] *", "", false},
+		{"", "", false},
+	} {
+		if got := releaseOf(c.printed); got != c.release {
+			t.Errorf("releaseOf(%q) = %q, want %q", c.printed, got, c.release)
+		}
+		out, errText, code := codexShell(t, t.TempDir(), codexPrinted(c.printed)+codexReleaseRefusal()+`printf '%s' "$n"`)
+		if starts := code == 0; starts != c.starts || (c.starts && out != c.release) {
+			t.Errorf("%q: the script exited %d reading %q (%s), want it starting %v on %q", c.printed, code, out,
+				errText, c.starts, c.release)
+		}
+		if !c.starts && !strings.Contains(errText, codexFloor()+" or later") {
+			t.Errorf("%q: the refusal %q names no floor", c.printed, errText)
 		}
 	}
 }

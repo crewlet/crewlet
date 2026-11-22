@@ -85,15 +85,29 @@ func (Codex) Command(req sandbox.RunRequest, session Session, paths Paths, _ str
 	return "sh -c " + sandbox.ShellQuote(codexScript(req, session, paths, codexRunTimes()))
 }
 
-// codexRelease reads the box's `codex --version` once, as v, its numbers as
-// n, and defines [claudeRelease]'s `at`. Codex prints `codex-cli X.Y.Z`, so the
-// numbers are the version's last run of digits and dots; anything else is taken
-// for a current release, as Claude Code's unreadable version is.
-const codexRelease = `v=$(codex --version < /dev/null 2> /dev/null); n=${v##*[!0-9.]}
-a=${n%%.*}; r=${n#*.}; b=${r%%.*}; c=${r#*.}; c=${c%%.*}
-case "$n" in [0-9]*.[0-9]*.[0-9]*) ;; *) a= ;; esac
-at() { [ -z "$a" ] || [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "$2" ] || { [ "$b" -eq "$2" ] && [ "$c" -ge "$3" ]; }; }; }; }
+// codexReleaseRead reads the box's `codex --version` once, as v.
+const codexReleaseRead = "v=$(codex --version < /dev/null 2> /dev/null)\n"
+
+// codexReleaseParse reads v as [releaseOf] does, a bare MAJOR.MINOR.PATCH
+// alone: n is the first word starting with a digit (after an optional v)
+// where it is one, else "", so a pre-release reads as none; its numbers are
+// a, b and c; and `at`, [claudeRelease]'s, is false for a release that does
+// not read. Globbing is off while v is split: it is the box's own words.
+const codexReleaseParse = `n=; set -f; for rw in $v; do rw=${rw#v}; case "$rw" in [0-9]*) n=$rw; break;; esac; done; set +f
+case "$n" in *[!0-9.]*|.*|*.|*..*|*.*.*.*) n= ;; *.*.*) ;; *) n= ;; esac
+a=${n%%.*}; r=${n#*.}; b=${r%%.*}; c=${r##*.}
+at() { [ -n "$n" ] && { [ "$a" -gt "$1" ] || { [ "$a" -eq "$1" ] && { [ "$b" -gt "$2" ] || { [ "$b" -eq "$2" ] && [ "$c" -ge "$3" ]; }; }; }; }; }
 `
+
+// codexReleaseRefusal ends the run before anything starts on a box whose
+// Codex names no release ([codexReleaseParse]) or one below [codexFloor],
+// saying which it printed and which it needs.
+func codexReleaseRefusal() string {
+	floor := codexFloor()
+	return fmt.Sprintf(`[ -n "$n" ] || { echo "crewlet: this box's codex --version printed '$v', which names no release the codex runner reads (a bare MAJOR.MINOR.PATCH, never a pre-release); it drives %[1]s or later — install a release of it in the box image" >&2; exit 1; }
+at %[2]s || { echo "crewlet: this box runs Codex $v; the codex runner drives %[1]s or later — install it in the box image" >&2; exit 1; }
+`, floor, floorArgs(floor))
+}
 
 // codexScript is a Codex run's script ([Codex.Command]): the end protocol
 // (end.go); the release, refused below [codexFloor]; the session settled and
@@ -121,9 +135,9 @@ func codexScript(req sandbox.RunRequest, session Session, paths Paths, times cod
 	b.WriteString(endPrologue(paths, times.stop))
 	b.WriteString(endHarness(""))
 	line(`command -v codex > /dev/null || { echo 'crewlet: no codex on the box PATH' >&2; exit 127; }`)
-	b.WriteString(codexRelease)
-	line(`at %s || { echo "crewlet: this box runs Codex $v; the codex runner drives %s or later — install it in the box image" >&2; exit 1; }`,
-		floorArgs(codexFloor()), codexFloor())
+	b.WriteString(codexReleaseRead)
+	b.WriteString(codexReleaseParse)
+	b.WriteString(codexReleaseRefusal())
 	line(`mkdir -p %s %s && chmod 700 %s || exit 1`, q(paths.CodexHome()), q(paths.CodexSessions()),
 		q(paths.CodexHome()))
 	line(`apid= hpid= tpid= gpid= tid= before=0 r=`)
