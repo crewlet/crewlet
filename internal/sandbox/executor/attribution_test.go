@@ -334,6 +334,47 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/opencode", standIn)
 		return runner, b
 	},
+	// One `copilot` process is the run; its stand-in answers the release check
+	// every run's script asks first, then runs the scenario.
+	executor.CopilotName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewCopilot(), map[string]string{"copilot": "#!/bin/sh\n" +
+			"case \"$1\" in --version) echo 'GitHub Copilot CLI 1.0.114.'; exit 0;; esac\n" + scenarioRun})
+	},
+	// Kimi Code and its shell run under the driver's environment, which the
+	// wrapper gave it (the driver starts `kimi web` with its own), so the
+	// driver's `node` stand-in runs the scenario.
+	executor.KimiName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		return standInBox(t, executor.NewKimi(), map[string]string{
+			"kimi": "#!/bin/sh\ncase \"$1\" in --version) echo 2.7.2; exit 0;; esac\nexit 1\n",
+			"node": "#!/bin/sh\n" + scenarioRun,
+		})
+	},
+}
+
+// scenarioRun is a stand-in's line running $HOME/scenario.sh as its harness's
+// model would, its output where [runScenario] reads it.
+const scenarioRun = "sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n"
+
+// standInBox is a real box with runner's plumbing installed and each stand-in
+// on the box's own PATH under its name.
+func standInBox(t *testing.T, runner *executor.Runner, standIns map[string]string) (*executor.Runner, sandbox.Sandbox) {
+	t.Helper()
+	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	b, err := local.Create(t.Context(), sandbox.Spec{})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { b.Close(t.Context()) })
+	if err = runner.Install(t.Context(), b); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	for name, script := range standIns {
+		writeBoxStandIn(t, b, executor.PathsFor(b).BinDir()+"/"+name, script)
+	}
+	return runner, b
 }
 
 // geminiCreditBox is creditBoxes' Gemini CLI box ([geminiBox]): its stand-in
