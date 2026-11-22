@@ -887,7 +887,10 @@ gateway), runs **one call per home at a time**: a second call for the same seat
 and home waits for the first to release it. The engine runs the harness's own
 stop command as each call releases the home, and before a call opens one an
 engine that ended mid-call left a daemon in, so every call starts a daemon of
-its own and none outlives it.
+its own and none outlives it. One call at a time is per home: a call signed in
+with a key runs in a home of its seat and entry, so the seat's other entries'
+calls still run beside it, while the calls a seat signs in with the login share
+the seat's one login home and run in turn.
 
 ```mermaid
 sequenceDiagram
