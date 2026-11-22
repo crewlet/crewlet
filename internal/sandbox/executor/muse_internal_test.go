@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/prereqtest"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -384,7 +385,7 @@ func TestAMuseSessionPacksAndRestoresUnderItsDay(t *testing.T) {
 	if err := os.WriteFile(to.SessionCarried(), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	gate := "v=" + sandbox.ShellQuote("Muse Code "+museSupported) + "\n" +
+	gate := "v=" + sandbox.ShellQuote("Muse Code "+museSupported()) + "\n" +
 		museSessionGate(Session{ID: id, Continues: true, Replaces: true, Fresh: "fresh"}, to, false) +
 		`printf '%s\n' "$s" "$k" "$w"`
 	if got := string(runSh(t, gate)); got != id+"\nyes\n\n" {
@@ -481,7 +482,7 @@ func TestAMuseBoxsReleaseDecidesTheRun(t *testing.T) {
 			t.Fatal(err)
 		}
 		script := "PATH=" + bin + ":$PATH\n" + museRelease +
-			fmt.Sprintf(`if ! at %s; then echo refused; exit 0; fi`+"\n", floorArgs(museSupported)) +
+			fmt.Sprintf(`if ! at %s; then echo refused; exit 0; fi`+"\n", floorArgs(museSupported())) +
 			museSessionGate(Session{ID: id, Continues: true, Fresh: "fresh-id"}, p, false) +
 			`printf '%s %s\n' "$k" "$w"`
 		out := strings.TrimSpace(string(runSh(t, script)))
@@ -621,5 +622,23 @@ func TestEveryMuseRunNamesItsServersAfresh(t *testing.T) {
 			t.Fatalf("suffix %q: want twelve hex digits, new each run", n)
 		}
 		seen[n] = true
+	}
+}
+
+// MUSE'S ONE RELEASE IS THE ONE ITS PROFILE'S written_for NAMES, read bare
+// as every release here is: never none, so a box or writer whose release
+// does not read ("") never equals it and continues nothing.
+//
+// Mutation: read the release from a written_for that names none, or take it
+// from a literal the profile does not hold, and a check goes red.
+func TestMuseIsWrittenForTheReleaseItsProfileNames(t *testing.T) {
+	t.Parallel()
+	p, _ := harnessprofile.Builtin(MuseName)
+	if museSupported() == "" || museSupported() != harnessprofile.Release(p.WrittenFor) {
+		t.Fatalf("the runner is written for %q, and the profile's written_for (%q) names %q", museSupported(),
+			p.WrittenFor, harnessprofile.Release(p.WrittenFor))
+	}
+	if ok, _ := (Muse{}).Continues("", ""); ok {
+		t.Error("an unread box continues an unread writer's session")
 	}
 }
