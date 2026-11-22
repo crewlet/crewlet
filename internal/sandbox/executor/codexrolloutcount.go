@@ -29,7 +29,7 @@ const codexChargeBytes sandbox.Charge = 4
 
 // codexCountRead reports whether release is one whose count rule this build
 // read: a SET, never a range, as each harness's is ([openCodeCountRead]).
-func codexCountRead(release string) bool { return release == codexCarryFloor }
+func codexCountRead(release string) bool { return release == codexCarryRelease }
 
 // codexCounting is one walk's account of a rollout for the count, the meter's
 // figure and the window ([codexCounting.line]).
