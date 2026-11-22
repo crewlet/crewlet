@@ -108,9 +108,9 @@ func TestACodexRunsFiguresAreItsRolloutLines(t *testing.T) {
 	if got := d.reportedWindow(); got != 272000 {
 		t.Errorf("the reported window is %d, want the raw 272000 behind the reported 258400", got)
 	}
-	want := `{"type":"crewlet.codex_rate_limits","state":"reached","window":"10080","resets_at":1795372440,` +
-		`"windows":{"10080":` +
-		`{"used":1,"resets_at":1795372440},"300":{"used":0.375,"resets_at":1795287240}}}`
+	want := `{"item":{"type":"crewlet.codex_rate_limits","state":"reached","window":"10080",` +
+		`"resets_at":1795372440,"windows":{"10080":` +
+		`{"used":1,"resets_at":1795372440},"300":{"used":0.375,"resets_at":1795287240}}}}`
 	if got := d.limitReport(); got != want {
 		t.Errorf("the limit report is\n%s\nwant\n%s", got, want)
 	}
