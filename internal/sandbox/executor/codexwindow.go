@@ -1,36 +1,44 @@
 package executor
 
-import "github.com/crewlet/crewlet/internal/sandbox"
+import (
+	"strings"
+
+	"github.com/crewlet/crewlet/internal/sandbox"
+)
 
 var _ windowHarness = Codex{}
 
-// codexWindowTokens is the window a Codex run is pinned to, raw (the units
-// carry's count reads, [codexRawWindow]): 272,000, the window Codex holds a model
-// with no catalog entry to (measured on 0.171.0, CODEX-MEASURE §16.4). Every
-// model is held to it, since the runner pins the compaction point below it
-// ([codexCompactLimit]); a model whose own window is larger compacts earlier
-// than it could, never later. That every model Codex drives has at least this
-// window is inferred from its catalogue (gpt-6.2-sol reports 475,000 at 95%),
-// not measured model by model.
-const codexWindowTokens = 272_000
+// codexWindows is the raw window (the units carry's count reads,
+// [codexRawWindow]) of each public model in Codex 0.171.0's bundled catalogue,
+// none of which sets its own compaction limit (CODEX-MEASURE §17.2). A
+// ChatGPT-login run may fetch a catalogue that differs: the limit the runner
+// pins governs the run, and carry's count reads the window the run's rollout
+// states at collection ([sandbox.Result.ReportedWindow], the least window).
+var codexWindows = map[string]int{
+	"gpt-6.2-sol": 500_000, "gpt-6.1-sol": 500_000, "gpt-6.1-terra": 500_000,
+	"gpt-6.2-astra": 272_000, "gpt-6-sol": 272_000, "gpt-6-astra": 272_000, "gpt-6-luna": 272_000,
+	"gpt-5.6-sol": 272_000, "gpt-5.6-terra": 272_000, "gpt-5.6-luna": 272_000, "gpt-5.5": 272_000,
+}
 
-// codexReplyReserve is the share of the window Codex keeps back from a request:
-// 5%, so the rollout's model_context_window reads 95% of the raw window
-// (258,400 of 272,000; measured, §16.4).
-const codexReplyReserve = codexWindowTokens / 20
-
-// codexCompactBuffer is the room between Codex's compaction point and the
-// window less [codexReplyReserve]: another 5%, so the point is 90% of the raw
-// window, 244,800, where Codex compacts by default (measured, §16.4).
-const codexCompactBuffer = codexWindowTokens / 20
+// codexFallbackWindow is the raw window of a model the table does not list,
+// and of a run naming no model (Codex's default may move): 272,000, the window
+// Codex holds a model with no catalogue entry to (measured, §16.4).
+const codexFallbackWindow = 272_000
 
 // codexWindow is the window a Codex run on model is pinned to and held to
-// ([sandbox.ExecutorWindow]): the same for every model ([codexWindowTokens]).
-// SendsWhole adds the brief's charge, where Codex's own check before a turn
-// counts only the newest request's total (§16.4): stricter, so it errs safe.
-func codexWindow(string) sandbox.ExecutorWindow {
-	return sandbox.ExecutorWindow{Tokens: codexWindowTokens, Standard: codexWindowTokens, Known: true,
-		Reserve: codexReplyReserve, Buffer: codexCompactBuffer, Charge: codexChargeBytes}
+// ([sandbox.ExecutorWindow]): its raw window less 5% Codex keeps back from a
+// request (its model_context_window reads 95%) and 5% more to the compaction
+// point, 90% of the window, where Codex compacts by default (§16.4). Known for
+// a listed model alone. SendsWhole adds the brief's charge, where Codex's own
+// check before a turn counts only the newest request's total: stricter, so it
+// errs safe.
+func codexWindow(model string) sandbox.ExecutorWindow {
+	tokens, known := codexWindows[strings.ToLower(strings.TrimSpace(model))]
+	if !known {
+		tokens = codexFallbackWindow
+	}
+	return sandbox.ExecutorWindow{Tokens: tokens, Standard: tokens, Known: known,
+		Reserve: tokens / 20, Buffer: tokens / 20, Charge: codexChargeBytes}
 }
 
 // codexCompactLimit is the count a Codex run on model compacts at, pinned in

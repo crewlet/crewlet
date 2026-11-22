@@ -154,24 +154,41 @@ func TestEveryCodexConfigValueIsATOMLStringThatReadsBack(t *testing.T) {
 	}
 }
 
-// A CODEX RUN COMPACTS WHERE THE ENGINE JUDGES A CONTINUATION: the limit its
-// configuration pins is the point of the window the engine holds it to, 90% of
-// the raw 272,000 (§16.4), and a request carries at most the 95% Codex reports
-// as its model_context_window.
+// A CODEX RUN COMPACTS WHERE THE ENGINE JUDGES A CONTINUATION: each model is
+// held to its own raw window from Codex's catalogue (§17.2), an unlisted one to
+// the 272,000 Codex falls back to (§16.4) and unknown; the limit its
+// configuration pins is the point of that window, 90%, and a request carries
+// at most the 95% Codex reports as its model_context_window.
 //
-// Mutation: pin another limit, or change the reserve or buffer, and this goes red.
+// Mutation: hold every model to one window, pin another limit, or change the
+// reserve or buffer, and a case goes red.
 func TestACodexRunCompactsWhereTheEngineJudgesIt(t *testing.T) {
 	t.Parallel()
-	w := Codex{}.Window(WindowAsk{Model: "gpt-test"})
-	if got := w.Point(int64(w.Tokens)); got != 244_800 || codexCompactLimit("gpt-test") != got {
-		t.Errorf("the engine judges compaction at %d and the run pins %d, want both 244800", got,
-			codexCompactLimit("gpt-test"))
-	}
-	if !w.Carries(258_400, 0) || w.Carries(258_401, 0) {
-		t.Error("the window carries other than the 258,400 Codex reports it holds a request to")
-	}
-	if got := (Codex{}).PinnedWindow("gpt-test"); got != 272_000 {
-		t.Errorf("the pinned window is %d, want the raw 272000", got)
+	for model, tc := range map[string]struct {
+		window int
+		limit  int64
+		known  bool
+	}{
+		"gpt-6.2-sol": {500_000, 450_000, true},
+		"GPT-5.5":     {272_000, 244_800, true},
+		"gpt-test":    {272_000, 244_800, false},
+		"":            {272_000, 244_800, false},
+	} {
+		w := Codex{}.Window(WindowAsk{Model: model})
+		if w.Tokens != tc.window || w.Standard != tc.window || w.Known != tc.known {
+			t.Errorf("%q is held to %d (standard %d, known %v), want %d (known %v)", model, w.Tokens,
+				w.Standard, w.Known, tc.window, tc.known)
+		}
+		if got := w.Point(int64(w.Tokens)); got != tc.limit || codexCompactLimit(model) != got {
+			t.Errorf("%q: the engine judges compaction at %d and the run pins %d, want both %d", model, got,
+				codexCompactLimit(model), tc.limit)
+		}
+		if shown := int64(tc.window) * 19 / 20; !w.Carries(shown, 0) || w.Carries(shown+1, 0) {
+			t.Errorf("%q carries other than the %d Codex reports it holds a request to", model, shown)
+		}
+		if got := (Codex{}).PinnedWindow(model); got != tc.window {
+			t.Errorf("%q is pinned to %d, want %d", model, got, tc.window)
+		}
 	}
 }
 
