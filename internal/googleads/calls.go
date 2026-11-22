@@ -41,7 +41,7 @@ func (p *Product) Run(ctx context.Context, call growth.Call) (any, error) {
 		return nil, refusal(growth.RefusedInvalid, call.Tool+" changes Google Ads, so it is prepared and applied, "+
 			"never run as a read. No vendor was reached.")
 	}
-	if err = p.inScope(call.Handle, req, nil); err != nil {
+	if err = p.inScope(call.Handle, req); err != nil {
 		return nil, err
 	}
 	out, err := p.client.SendAndRead(ctx, call.Handle, req, p.cut(call.Handle, req))

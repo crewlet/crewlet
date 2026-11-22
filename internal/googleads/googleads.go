@@ -33,12 +33,20 @@
 // links, users and billing are admin. A rule that cannot read what it compares
 // classes the change as the highest it allows.
 //
+// # An approval binds what the rules read
+//
+// What an approval binds is the live state its rules read (googlegrowth's
+// Client.BeforeRead), so the class and the binding are on one reading; a
+// batch job's run binds the job's operation count and the class its staging
+// came to.
+//
 // # Spend is held to the company's caps
 //
 // A spend call is checked against the account's caps before a person is asked
-// and again when it is applied, under the account's lease (internal/spendguard):
-// capacity.go reads the account's daily capacity live with GAQL and what an
-// operation adds to it.
+// and again when it is applied, inside the one write lease googlegrowth holds
+// on the account for every write, by spendguard's Recheck, so no act holds two
+// leases: capacity.go reads the account's daily capacity live with GAQL and
+// what an operation adds to it.
 //
 // # Somebody else's words
 //

@@ -26,10 +26,16 @@
 //
 // # Scope
 //
-// A seat names its properties. A call naming a property outside them is
-// refused before Google is reached; an account-level call is made only for an
-// account whose every property the seat may reach, since it changes or reads
-// all of them; and a listing is cut to the seat's properties.
+// A seat names its properties. A call is held to them by where its path's
+// template says it acts and, for an operation whose body names more (the
+// account a property is created in, a roll-up's sources), by those body
+// fields, in either spelling Google takes (request.go's bodyScopes): one
+// naming a property outside them is refused before Google is reached; an
+// account-level call is made only for an account whose every property the
+// seat may reach, since it changes or reads all of them; a write naming
+// nothing the scope can hold is refused, but opening a new account; and a
+// listing is cut to the seat's properties. A Measurement Protocol call acts
+// in its stream secret's property.
 //
 // # Somebody else's words
 //

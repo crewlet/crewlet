@@ -59,7 +59,9 @@ func (g *GoogleAnalytics) GrowthEnabled() bool { return g != nil && g.Enabled }
 // GrowthApprovers are the people its held acts are routed to first.
 func (g *GoogleAnalytics) GrowthApprovers() []string { return g.Approvers }
 
-// GrowthSpend is nil: nothing in Google Analytics spends money.
+// GrowthSpend is nil: nothing in Google Analytics is spend. A BigQuery export
+// bills the linked Google Cloud project with no amount a cap could hold, so
+// turning one on is an admin act, held at a fresh step-up.
 func (g *GoogleAnalytics) GrowthSpend() *GrowthSpend { return nil }
 
 // Reaches reports whether the company lets agents be given property id.

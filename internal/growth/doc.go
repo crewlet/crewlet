@@ -25,9 +25,12 @@
 // once or Deny. None is ever delegated ([delegated.NeverDelegated]). A raise
 // and an enable are spend; a pause and a lower are operate, because a brake
 // must not wait on a step-up and its undo is a decision. [Classify] applies
-// that rule to a generic update field by field. Every write is classed by its
-// product against its target as read now ([Hold.Class]) before it is made or
-// asked, and the engine refuses one above its tool's class.
+// that rule to a generic update field by field: a switch turned off and an
+// exclusion added are brakes too, and a field no rule names takes the
+// operation's highest class, so a field the vendor adds never lowers a write.
+// Every write is classed by its product against its target as read now
+// ([Hold.Class]) before it is made or asked, and the engine refuses one above
+// its tool's class.
 //
 // A seat's [Level] bounds what its agent may call or ask: read; operate,
 // which also asks public and spend; administer, which also asks admin.
