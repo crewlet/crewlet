@@ -89,7 +89,9 @@
 // firing instead (once.go): it takes the run's notes over the bridge's
 // steer_take, as a hook that calls an MCP tool would, hands the answer over
 // through the adapter, and exits 0 whatever happened, so a firing never stops
-// the harness; a take the harness never got is told again.
+// the harness; a take the harness never got is told again. A Codex run's own
+// PostToolUse hook runs it as codex-nested (codexnested.go), which hands each
+// repository checked out since the run began its root instructions, once.
 //
 // # Exit
 //

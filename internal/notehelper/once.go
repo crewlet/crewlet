@@ -27,7 +27,8 @@ import (
 // oneShots is every adapter the helper runs once per firing, by -adapter.
 var oneShots = map[string]func(ctx context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer,
 	getenv func(string) string) int{
-	"muse-hook": runMuseHook,
+	"muse-hook":    runMuseHook,
+	"codex-nested": runCodexNested,
 }
 
 // runOnce runs args as a one-shot adapter's firing, and is its exit status
