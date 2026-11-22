@@ -690,14 +690,15 @@ func TestAPiRunsShellRunsWithoutItsSignIn(t *testing.T) {
 
 // A PI RUN'S AGENT DIRECTORY HOLDS ONLY THE LOGIN AND WHAT THE RUN WRITES: in a
 // reused box, an extension, a skill, a prompt, system-prompt and context files,
-// provider definitions and settings an earlier command planted there are gone
-// before the next run, its settings and server list written afresh, and the
-// login kept. With the launch's --no-* switches (measured on 1.6.0: a planted
-// extension and skill no longer load, and the files pi reads whatever the
-// switches say no longer exist), nothing there stands in for the run's own.
+// provider definitions, settings and programs in `bin` an earlier command
+// planted there are gone before the next run, its settings and server list
+// written afresh, and the login kept. With the launch's --no-* switches
+// (measured on 1.6.0: a planted extension and skill no longer load, and the
+// files pi reads whatever the switches say no longer exist), nothing there
+// stands in for the run's own, a planted `rg` for the shell's included.
 //
-// Mutation: drop a path from Pi's artifacts, or stop writing settings.json:
-// this goes red.
+// Mutation: drop a path from Pi's artifactFiles or artifactDirs, or stop
+// writing settings.json: this goes red.
 func TestAPiRunsAgentDirectoryHoldsOnlyTheLoginAndWhatTheRunWrites(t *testing.T) {
 	t.Parallel()
 	local, err := sandbox.NewLocal(sandbox.LocalOptions{Placement: sandbox.Direct, StateDir: t.TempDir()})
@@ -711,7 +712,7 @@ func TestAPiRunsAgentDirectoryHoldsOnlyTheLoginAndWhatTheRunWrites(t *testing.T)
 	t.Cleanup(func() { b.Close(t.Context()) })
 	a := PathsFor(b).PiAgentDir() + "/"
 	planted := []string{"extensions/plant.js", "skills/plant/SKILL.md", "prompts/p.md", "themes/t.json", "SYSTEM.md",
-		"APPEND_SYSTEM.md", "AGENTS.md", "models.json", "trust.json", "npm/x", "git/x"}
+		"APPEND_SYSTEM.md", "AGENTS.md", "models.json", "trust.json", "npm/x", "git/x", "bin/rg", "bin/fd"}
 	for _, name := range append(planted, "settings.json", "auth.json") {
 		if err := b.WriteFile(t.Context(), a+name, []byte("planted")); err != nil {
 			t.Fatal(err)
