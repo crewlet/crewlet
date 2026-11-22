@@ -15,6 +15,7 @@ An older UNRELEASED build gets no compatibility (`CLAUDE.md`, "Breaking Changes 
 - The event envelope evolves additive-only; an unknown type round-trips losslessly.
 - A state-log record this build cannot read is deferred, never dropped. Every record is stamped with the lowest version that reads it; a gate record stamped above the version a node reads stops that node's applier, so its writer first waits on `statelog.Readers`.
 - A parked run's unknown keys ride `PendingRun.Extra`.
+- A run's standing this build cannot read (an older build wrote the record without its headers) is judged on its record, read whole, never skipped.
 - `internal/estate`'s wire rule: a data node refuses a routed request whose arguments or actor hold a key its build does not declare, rather than run it short. The router leaves every input field at its zero off the wire, so only a request that sets a newer field is refused. A read carrying a newer argument is refused the same way, never answered with the argument ignored. An answer a caller carries into another request is read whole or refused.
 - An apply refuses only a revision that cannot run.
 - A `coord.ProtocolVersion` bump makes the newer node refuse to claim beside a live lower lease.
