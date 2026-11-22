@@ -433,10 +433,11 @@ func TestKimisScriptAddsTheReportedSessionsRecords(t *testing.T) {
 // A KIMI RUN IS PINNED TO ITS HOME AND POSTURE, AND KEEPS ONLY ITS ENTRY'S
 // ROUTE: home, no update, no telemetry, three attempts a request, the cap a
 // turn's steps; a key-signed run's model as its env model's name; and every
-// routing variable the entry did not set unset, never a pinned one.
+// routing variable the entry did not set unset, never a pinned one; the box's
+// telemetry export variables removed, as Kimi exports none.
 //
-// Mutation: drop the cap's pin, pin the model without a key, or unset the
-// entry's own base URL — the case fails.
+// Mutation: drop the cap's pin, pin the model without a key, unset the entry's
+// own base URL, or keep the telemetry export variables — the case fails.
 func TestAKimiRunIsPinnedToItsHomeAndItsEntrysRoute(t *testing.T) {
 	paths := PathsFor(sandbox.NewFakeSandbox("b"))
 	keyed := sandbox.RunRequest{Model: "kimi-k3", Limits: sandbox.Limits{MaxTurns: 7},
@@ -471,7 +472,8 @@ func TestAKimiRunIsPinnedToItsHomeAndItsEntrysRoute(t *testing.T) {
 	if !slices.Contains(kimiRoutingOff(login), kimiModelEnv) {
 		t.Error("a login's run keeps an env model the image set")
 	}
-	for _, name := range []string{"KIMI_CODE_TRUST_WORKSPACE", "KIMI_LOOP_MAX_STEPS_PER_TURN"} {
+	for _, name := range []string{"KIMI_CODE_TRUST_WORKSPACE", "KIMI_LOOP_MAX_STEPS_PER_TURN",
+		sandbox.OtelUpstreamEndpointVar, sandbox.OtelUpstreamHeadersVar, "OTEL_EXPORTER_OTLP_PROTOCOL"} {
 		if !slices.Contains((Kimi{}).Output(paths).Unset, name) {
 			t.Errorf("%s is not removed whatever set it", name)
 		}

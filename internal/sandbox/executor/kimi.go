@@ -177,6 +177,13 @@ var kimiRouting = []string{
 	"KIMI_CODE_CUSTOM_HEADERS",
 }
 
+// kimiNoTelemetry is the box's telemetry export variables, which the wrapper
+// removes ([Output.Unset]): Kimi Code exports no OTLP (2.7.2's bundle reads
+// none of them), so the run and its tools are handed only what they need.
+var kimiNoTelemetry = []string{
+	sandbox.OtelUpstreamEndpointVar, sandbox.OtelUpstreamHeadersVar, "OTEL_EXPORTER_OTLP_PROTOCOL",
+}
+
 // kimiRoutingOff is every routing variable ([kimiRouting]) neither the run's own
 // environment (env, the entry's) sets nor [Kimi.Pins] pins, which the script
 // unsets: one from the image or a login profile would send the seat's model
@@ -248,7 +255,7 @@ var kimiSwitchesOff = []string{
 // followed ([kimiEvents]), with the lines the script adds after it
 // ([kimiUsage]). The brief on stdin, which the driver posts.
 func (Kimi) Output(paths Paths) Output {
-	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true, Unset: kimiSwitchesOff}
+	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true, Unset: slices.Concat(kimiSwitchesOff, kimiNoTelemetry)}
 }
 
 // Pins is the run's home and posture, over whatever the seat's env, the image
