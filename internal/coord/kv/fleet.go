@@ -1389,14 +1389,14 @@ func (f *FleetStore) Activate(ctx context.Context, req coord.ActivationRequest) 
 	if err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/kv: %w", err)
 	}
-	if err = coord.HoldValue("the activation's body", len(payload)); err != nil {
+	if err = coord.HoldValue("the activation's body", len(payload), coord.MaxValueBytes); err != nil {
 		return coord.Activation{}, err
 	}
 	size, err := coord.ActivationBytes(req)
 	if err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/kv: %w", err)
 	}
-	if err = coord.HoldPointer(size); err != nil {
+	if err = coord.HoldValue("the activation pointer", size, coord.MaxPointerBytes); err != nil {
 		return coord.Activation{}, err
 	}
 	seq, previous, err := f.expectedSeq(ctx, req)
