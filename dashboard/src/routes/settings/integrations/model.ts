@@ -239,6 +239,17 @@ export const STORIES: Record<string, ToolStory> = {
     byHand:
       "Connect Google Cloud first and run its setup block again, which turns on the Analytics APIs, then add each agent's email in Admin, Property access management.",
   },
+  admob: {
+    does: [
+      "Read network, mediation and campaign reports for the publisher accounts you choose",
+      "Create apps, ad units and mappings, and tune mediation groups and A/B experiments where you allow operate",
+      "Ask you before linking an app to its store or removing a mediation line, every time",
+    ],
+    identity:
+      "A person who manages your AdMob account signs in with Google once, as your own OAuth client; every agent reaches AdMob through that sign-in, which never leaves Crewlet.",
+    byHand:
+      "Make an OAuth client (Web application) in a Google Cloud project you control, turn on the AdMob API there, add Crewlet's callback address and publish its consent screen, then sign in with Google here.",
+  },
 };
 
 /** Where a tool stands, in the four words a person sorts by. */

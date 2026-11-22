@@ -119,6 +119,58 @@
         "null"
       ]
     },
+    "AdMob": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "description": "Publisher IDs agents may be given (pub- and 16 digits), at most 50. Absent: every AdMob account the person who signs in reaches. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "approvers": {
+          "description": "Handles of human seats an agent's admin acts are routed to first. Only an administrator answers one, at a fresh step-up; without approvers every administrator is asked. Optional.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Turn the integration on. Needs oauth, the company's own OAuth client, and a person's Google sign-in on the integration's page.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "oauth": {
+          "$ref": "#/$defs/GoogleOAuthClient",
+          "description": "The company's own OAuth client (a Web application, in a Google Cloud project it controls), which the sign-in is made as. Required when enabled."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "Advisor": {
       "additionalProperties": false,
       "properties": {
@@ -2913,6 +2965,10 @@
     "Integrations": {
       "additionalProperties": false,
       "properties": {
+        "admob": {
+          "$ref": "#/$defs/AdMob",
+          "description": "AdMob: agents read and change app monetization through one Google sign-in by a person who manages the account, made as the company's own OAuth client. Absent = disabled."
+        },
         "app_store_connect": {
           "$ref": "#/$defs/AppStoreConnect",
           "description": "App Store Connect teams and their API keys, one per Apple role, through which the engine makes every call for the agents. Absent = disabled."
@@ -4781,6 +4837,49 @@
         "null"
       ]
     },
+    "RoleAdMob": {
+      "additionalProperties": false,
+      "properties": {
+        "accounts": {
+          "description": "Publisher IDs this agent may reach, within integrations.admob.accounts when that is set. Required when the agent is on.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent may reach AdMob.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "description": "read (the default): accounts, apps, ad units, mediation and reports. operate: also creates apps, ad units and mappings, and changes mediation groups and A/B experiments, at once. administer: also asks an administrator to approve what cannot be undone: linking an app to its store listing, removing a mediation line.",
+          "enum": [
+            "read",
+            "operate",
+            "administer",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleAppStoreConnect": {
       "additionalProperties": false,
       "properties": {
@@ -5371,6 +5470,10 @@
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
+        "admob": {
+          "$ref": "#/$defs/RoleAdMob",
+          "description": "This seat's AdMob access: whether it is on, its level and its publisher accounts."
+        },
         "app_store_connect": {
           "$ref": "#/$defs/RoleAppStoreConnect",
           "description": "This seat's App Store Connect access: whether it is on, its level and its apps."

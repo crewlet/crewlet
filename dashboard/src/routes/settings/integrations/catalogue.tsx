@@ -183,6 +183,7 @@ const SURFACE_NAMES: Record<string, string> = {
   app_store_connect: "App Store Connect",
   apple_ads: "Apple Ads",
   google_analytics: "Google Analytics",
+  admob: "AdMob",
 };
 
 /** One tool's surfaces, in the engine's grouping, named for this screen. */
@@ -335,6 +336,14 @@ export const CATALOG: Entry[] = [
     vendor: "google-analytics",
     surfaces: surfacesOf("google_analytics"),
     doc: "google-analytics",
+  },
+  {
+    key: "admob",
+    name: "AdMob",
+    description: "App earnings, ad units and mediation, and every setting the API offers.",
+    vendor: "google-admob",
+    surfaces: surfacesOf("admob"),
+    doc: "admob",
   },
 ];
 

@@ -20,7 +20,7 @@ import (
 // request that could not be built is named by its call's arguments.
 func (c *Client) Record(call growth.Call, req Request, class growth.Class) growth.Record {
 	r := growth.Record{
-		Product: c.Kind, Connection: Connection, Account: req.AccountOrTarget(), Target: req.Target(),
+		Product: c.Kind, Connection: c.connection(), Account: req.AccountOrTarget(), Target: req.Target(),
 		Tool: call.Tool, Class: class, Handle: call.Handle, Turn: call.Turn, Call: call.ID,
 		HeldCall: call.HeldCall, Operation: req.Digest(nil),
 	}
@@ -56,7 +56,10 @@ func (h Held) record(c *Client, call growth.Call, class growth.Class) growth.Rec
 	}
 	changes := make([]growth.RecordChange, 0, len(h.changes()))
 	for _, ch := range h.changes() {
-		changes = append(changes, RecordChange(ch))
+		rc := RecordChange(ch)
+		field := ch.Field[strings.LastIndex(ch.Field, ".")+1:]
+		rc.Text = rc.Text || (slices.Contains(c.Texts, field) && rc.Before+rc.After != "")
+		changes = append(changes, rc)
 	}
 	r.Changes = accessdomain.RecordableGrowthChanges(changes)
 	return r
