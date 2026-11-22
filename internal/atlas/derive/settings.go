@@ -1,6 +1,8 @@
 package derive
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/url"
 	"path"
@@ -412,11 +414,13 @@ func googleAds(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	}
 }
 
-// searchConsole records each Search Console site the company names, keyed by
-// what the site is, or the vendor alone where it names none: a domain
-// property as Search Console writes it (sc-domain:example.com), a URL prefix
-// by its host, since a key holds no scheme's `//`. URL prefixes on one host
-// are one account, which the company holds at Search Console as one site.
+// searchConsole records each Search Console site the company names as an
+// account, or the vendor alone where it names none: a domain property keyed
+// as Search Console writes it (sc-domain:example.com), and a URL prefix by its
+// host and a short digest of the site, with the site as its site fact. A key
+// holds no scheme's `//`, and one host holds several properties (a path, http
+// beside https), each its own account; the digest also keeps its account
+// reference from joining another Google account named by the host.
 func searchConsole(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	g := c.Integrations.SearchConsole
 	if g == nil {
@@ -428,14 +432,24 @@ func searchConsole(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 		return
 	}
 	for i, site := range g.Sites {
-		id := site
-		if !strings.HasPrefix(site, "sc-domain:") {
-			id = hostOf(site)
+		where := "integrations.search_console.sites[" + strconv.Itoa(i) + "]"
+		if strings.HasPrefix(site, "sc-domain:") {
+			b.account(where, atlas.VendorGoogle, "search-console/"+site, site, "Search Console", g.Enabled,
+				atlas.CapabilityAnalytics)
+			continue
 		}
-		b.account("integrations.search_console.sites["+strconv.Itoa(i)+"]", atlas.VendorGoogle,
-			"search-console/"+id, id, "Search Console", g.Enabled, atlas.CapabilityAnalytics)
+		sum := sha256.Sum256([]byte(site))
+		id := hostOf(site) + "/" + hex.EncodeToString(sum[:siteDigestBytes])
+		if r, ok := b.account(where, atlas.VendorGoogle, "search-console/"+id, id, "Search Console", g.Enabled,
+			atlas.CapabilityAnalytics); ok {
+			b.says(where, r, atlas.FactSite, site)
+		}
 	}
 }
+
+// siteDigestBytes is how much of a site's SHA-256 its account's key holds:
+// 48 bits tell apart the at most 1000 properties a company names.
+const siteDigestBytes = 6
 
 func digitalocean(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 	d := c.Integrations.DigitalOcean
