@@ -59,11 +59,9 @@ func (Copilot) Resumes() bool { return true }
 // which [Copilot.WriteConfig] writes where the run is wired to them.
 func (Copilot) NoteInstruction() string { return CopilotSteerInstruction }
 
-// copilotFloor is the oldest Copilot release a run is started on, and the
-// oldest whose session another box continues: 1.0.114, the release every
-// behaviour here was measured on. 1.0.103 loads an extension only under
-// `--experimental`, which persists into the user's settings, and from another
-// import, so the notes and the turn cap would silently not run there.
+// copilotFloor is the one Copilot release supported, the newest measured:
+// every behaviour here was measured on 1.0.114. A run is started on no older
+// one, and a carried session continues only between boxes on exactly it.
 const copilotFloor = "1.0.114"
 
 // copilotSessionState is the directory under the run's home that Copilot files
@@ -333,20 +331,26 @@ func (Copilot) VersionCommand() string { return "copilot --version" }
 func (Copilot) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Copilot release writer can be
-// continued in a box whose Copilot is release box ([carrier]): both at or after
-// [copilotFloor], and never a box older than the writer.
+// continued in a box whose Copilot is release box ([carrier]): only where both
+// are [copilotFloor], the one release supported. Any other pair, a release
+// that cannot be read included, starts the session fresh.
 func (Copilot) Continues(box, writer string) (bool, string) {
 	switch {
-	case !releaseAtLeast(box, copilotFloor):
-		return false, fmt.Sprintf("this box runs GitHub Copilot CLI %s, older than %s, the oldest that "+
-			"continues a session carried from another box", box, copilotFloor)
-	case !releaseAtLeast(writer, copilotFloor):
-		return false, fmt.Sprintf("the session was written by GitHub Copilot CLI %s, older than %s, the "+
-			"oldest whose session another box continues", writer, copilotFloor)
-	case !releaseAtLeast(box, writer):
-		return false, carriedOlder("GitHub Copilot CLI", box, writer)
+	case !sameRelease(box, copilotFloor):
+		return false, fmt.Sprintf("this box runs GitHub Copilot CLI %q, and a session carried from another "+
+			"box continues only on %s, the release supported", box, copilotFloor)
+	case !sameRelease(writer, copilotFloor):
+		return false, fmt.Sprintf("the session was written by GitHub Copilot CLI %q, and only a session "+
+			"%s wrote continues, the release supported", writer, copilotFloor)
 	}
 	return true, ""
+}
+
+// sameRelease reports whether version is release, false where it cannot be read.
+func sameRelease(version, release string) bool {
+	have, ok := releaseNumbers(version)
+	want, _ := releaseNumbers(release)
+	return ok && have == want
 }
 
 // copilotCapture is the part of a run's script that packs its session once its

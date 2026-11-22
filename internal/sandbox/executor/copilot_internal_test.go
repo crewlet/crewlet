@@ -1143,20 +1143,23 @@ func TestTheCopilotExtensionHoldsItsPlaceholderOnce(t *testing.T) {
 	}
 }
 
-// A session carried from another box continues only on and from 1.0.114 or
-// later, and never on a box older than its writer.
+// A session carried from another box continues only between boxes on the one
+// release supported, 1.0.114: a newer or older box or writer, or a release
+// that cannot be read, starts it fresh.
 //
-// Mutation: drop the box-older-than-writer arm — the last case fails.
-func TestACopilotSessionContinuesOnlyOnItsFloor(t *testing.T) {
+// Mutation: take the floor as a minimum, as a run's start does — the newer
+// cases continue; read an unreadable release as matching — its case does.
+func TestACopilotSessionContinuesOnlyOnTheReleaseSupported(t *testing.T) {
 	cases := []struct {
 		box, writer string
 		ok          bool
 	}{
 		{"1.0.114", "1.0.114", true},
-		{"1.0.120", "1.0.114", true},
+		{"1.0.120", "1.0.114", false},
+		{"1.0.114", "1.0.120", false},
 		{"1.0.103", "1.0.114", false},
 		{"1.0.114", "1.0.103", false},
-		{"1.0.114", "1.0.120", false},
+		{"", "1.0.114", false},
 	}
 	for _, c := range cases {
 		if ok, why := (Copilot{}).Continues(c.box, c.writer); ok != c.ok {
