@@ -208,6 +208,41 @@ func TestACreateNamingNoBoxIsTheProviders(t *testing.T) {
 	}
 }
 
+// A CREATE WHOSE BOX IS NOT PRIVATE IS CONFIGURATION: a 201 naming a box and no
+// traffic token comes from an API that ignored the request to make it private.
+// No wait upgrades a cluster; a person does. On E2B's cloud no setting mends
+// it, but no wait the engine can see does either, and a class that waits would
+// mint and kill a billed box on every retry, so a person decides there too.
+//
+// Mutation: class either deployment's provider_unavailable, the reading "E2B
+// answered wrong, wait", and this goes red.
+func TestACreateWhoseBoxIsNotPrivateIsConfiguration(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"sandboxID": "sbx1", "clientID": "cl1", "envdAccessToken": "e"}`))
+	}))
+	t.Cleanup(server.Close)
+	for deployment, domain := range map[string]string{"a self-hosted cluster": "test.invalid", "E2B's cloud": ""} {
+		provider, err := sandbox.NewE2B(sandbox.E2BOptions{
+			APIKey: "k", Domain: domain,
+			HTTP: &http.Client{Transport: httpxtest.Rewrite(t, server)},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = provider.Create(context.Background(), sandbox.Spec{})
+		if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+			t.Errorf("on %s, a create whose box is not private is classed %q (%v), want %q: %v",
+				deployment, why, ok, sandbox.WhyConfiguration, err)
+		}
+	}
+}
+
 // A BOX'S OWN AGENT IS CLASSED AS THE PROVIDER IS, except where it refuses the
 // box's own access token: the engine was handed it at create, so no person's
 // key is wrong, and the caller reads it as the fault it is.
