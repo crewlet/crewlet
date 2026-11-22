@@ -109,7 +109,7 @@ var prPattern = regexp.MustCompile(
 // shared: a runner that could override it would be a second implementation of
 // the completion protocol.
 type Harness interface {
-	// Name is the harness's config name: "claude-code", "opencode".
+	// Name is the harness's config name: "claude-code", "codex", "opencode".
 	Name() string
 
 	// Session is the session req's run works in ([Session]), its ids in the

@@ -43,6 +43,12 @@ var noteFixtures = map[string]noteFixture{
 		confirms: pluginAdmitsNotesAtTheRunsNextStep,
 		reaches:  pluginReadsTheBridgesOwnNotesRoute,
 	},
+	executor.CodexName: {
+		reads:    true,
+		wakeRead: codexWakeRead,
+		confirms: codexConfirmsATake,
+		reaches:  codexRealBoxsNotesReachTheBridgesRoute,
+	},
 }
 
 // noteFixtureOf is h's fixture, failing the case where h supplies none.

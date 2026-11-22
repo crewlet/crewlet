@@ -436,7 +436,7 @@ func TestALaunchRunsOnItsMembersOwnHarness(t *testing.T) {
 func TestALaunchPassesOverAMemberWithNoRunnerAndAnnouncesNothing(t *testing.T) {
 	t.Parallel()
 	c, seat := chainCompany(t,
-		chainMember{key: "codex", agent: "codex", model: "gpt-golden"},
+		chainMember{key: "grok", agent: "grok", model: "grok-golden"},
 		chainMember{key: "api", agent: "claude-code", model: "claude-golden"},
 	)
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
@@ -495,15 +495,15 @@ func TestALaunchWithEveryRunnerSittingOutIsAnExhaustedChain(t *testing.T) {
 // this goes red.
 func TestAChainWithNoRunnerMemberIsRefusedNamingIt(t *testing.T) {
 	t.Parallel()
-	c, seat := chainCompany(t, chainMember{key: "codex", agent: "codex", model: "gpt-golden"},
+	c, seat := chainCompany(t, chainMember{key: "grok", agent: "grok", model: "grok-golden"},
 		chainMember{key: "gemini", agent: "gemini-cli", model: "gemini-golden"})
 	e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	l := launcherOn(e, c, seat, "t1")
 	_, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil))
-	if err == nil || !strings.Contains(err.Error(), `("codex" and "gemini")`) ||
-		!strings.Contains(err.Error(), `"claude-code" or "opencode"`) {
+	if err == nil || !strings.Contains(err.Error(), `("grok" and "gemini")`) ||
+		!strings.Contains(err.Error(), `"claude-code", "codex" or "opencode"`) {
 		t.Fatalf("LaunchExecutor = %v, want a refusal naming the chain and the runners", err)
 	}
 	// CLASSED AS THE CONFIGURATION IT IS, which whoever is told the run did

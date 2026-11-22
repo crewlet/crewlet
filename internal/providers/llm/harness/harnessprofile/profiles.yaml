@@ -618,6 +618,16 @@ claude-code:
   models_docs: "https://code.claude.com/docs/en/model-config"
 
 codex:
+  executor:
+    runner: true
+    e2b_template: codex
+    # The oldest release the runner drives (the app-server's unix socket,
+    # `turn/steer`, `exec --remote`, measured on 0.171.0), and the command
+    # whose success shows a release has the app-server it starts: what
+    # `crewlet llm doctor` holds a direct cell's codex to, and the run's
+    # script refuses below.
+    floor: "0.171.0"
+    probe_args: ["app-server", "--help"]
   binary: codex
   written_for: "Codex CLI 0.164.x (`codex --version`); measured on 0.150.1: `exec --json` writes no rate-limit event (`rate_limits` is in the session rollout only, which a plain call's --ephemeral never writes) and its 401 error event names no status field, so a limit's reset is read from its sentence, which 0.150.1 writes as `try again at` and a time of day (`%-I:%M %p`) or a date (`%b %-d<st|nd|rd|th>, %Y %-I:%M %p`) in the CLI's local zone; `login --device-auth` prints the address, a code such as `ABCD-EFGH1` and `(expires in 15 minutes)`"
   version_args: ["--version"]
@@ -1111,6 +1121,27 @@ codex:
     - sentinel: "Please log out and sign in again"
     - sentinel: "Not logged in"
     - sentinel: "run `codex login`"
+  # AN EXECUTOR RUN'S PLAN LIMITS, which its runner composes from the
+  # rollout's newest token_count.rate_limits (`exec --json` carries none):
+  # each window keyed by its length in minutes, its use a fraction, and
+  # `reached` naming the window used up. A ChatGPT plan measured on 0.171.0
+  # had one weekly window (10080) and no secondary; 300 is the five-hour one
+  # the vendor's headers name.
+  limit_reports:
+    - match: [{path: ["type"], equals: "crewlet.codex_rate_limits"}]
+      state:
+        path: ["state"]
+        map: {ok: ok, reached: reached}
+      window:
+        path: ["window"]
+        map:
+          "300": {window: session, hours: 5}
+          "10080": {window: weekly, hours: 168}
+      resets_at: {path: ["resets_at"], unit: epoch}
+      windows:
+        path: ["windows"]
+        used: ["used"]
+        resets_at: {path: ["resets_at"], unit: epoch}
 
 gemini-cli:
   binary: gemini

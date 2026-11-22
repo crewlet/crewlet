@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
 // capturedLimitEvent is Claude Code 2.1.325's rate-limit event from a real
@@ -168,5 +169,34 @@ func TestAnExecutorRunsLimitReportReachesItsSignIn(t *testing.T) {
 	if len(got) != 2 || got[0].Window != llm.LimitSession || got[1].Window != llm.LimitWeekly ||
 		!got[0].Seen.Equal(reportedAt) {
 		t.Errorf("limits %+v, want the 5-hour and weekly windows seen at %v", got, reportedAt)
+	}
+}
+
+// codexRunLimits is the limit report a Codex executor run's result carries,
+// as its runner composes it from the rollout's rate_limits (executor's
+// codexLimitsLine): a five-hour window at 37.5% and a weekly one used up.
+const codexRunLimits = `{"type":"crewlet.codex_rate_limits","state":"reached","window":"10080",` +
+	`"resets_at":1795372440,"windows":` +
+	`{"10080":{"used":1,"resets_at":1795372440},"300":{"used":0.375,"resets_at":1795287240}}}`
+
+// A CODEX RUN'S PLAN WINDOWS ARE READ BY THEIR LENGTH, the one used up as
+// reached, so a spent plan sits its entry out: Codex names its windows by
+// position, which says nothing of which window is which.
+//
+// Mutation: drop the codex profile's limit_reports, or map a window by
+// position, and this goes red.
+func TestACodexRunsPlanWindowsAreReadByTheirLength(t *testing.T) {
+	t.Parallel()
+	p, ok := harnessprofile.Builtin("codex")
+	if !ok {
+		t.Fatal("no built-in codex profile")
+	}
+	got, reached := readLimitReports(p, codexRunLimits)
+	sameReadings(t, "a codex run's report", got, []reading{
+		{llm.LimitSession, 5, "", llm.LimitOK, 0.375, 1795287240},
+		{llm.LimitWeekly, 168, "", llm.LimitReached, 1, 1795372440},
+	})
+	if reached == nil || reached.Window != llm.LimitWeekly {
+		t.Errorf("the report reached %+v, want the weekly window", reached)
 	}
 }

@@ -54,8 +54,10 @@ func TestAnExecutorBlockSaysItIsARunnerAndNamesATemplate(t *testing.T) {
 			t.Errorf("%s: the block was taken", name)
 		}
 	}
-	if runners := ExecutorRunners(); !slices.Contains(runners, "claude-code") || !slices.Contains(runners, "opencode") {
-		t.Errorf("the built-in runners are %v", runners)
+	for _, name := range []string{"claude-code", "codex", "opencode"} {
+		if runners := ExecutorRunners(); !slices.Contains(runners, name) {
+			t.Errorf("the built-in runners are %v, without %s", runners, name)
+		}
 	}
 }
 

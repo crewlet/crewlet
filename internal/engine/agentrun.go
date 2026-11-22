@@ -1137,9 +1137,9 @@ func (l *agentLauncher) member(ctx context.Context, manager *sandbox.Manager,
 // member whose cell a run of the seat can land in.
 //
 // Refused when there is none. Config refuses this chain on every write ("needs
-// a claude-code or opencode member"), so reaching it is a company built by hand
-// or a catalogue built without the runners: either way the operator's to fix,
-// and a retry changes nothing, which is the class it carries
+// a claude-code, codex or opencode member"), so reaching it is a company built
+// by hand or a catalogue built without the runners: either way the operator's
+// to fix, and a retry changes nothing, which is the class it carries
 // ([sandbox.WhyConfiguration]). So does a company with no providers.llm entry
 // at all, though no launch meets it, since such a company builds no launcher
 // ([Engine.agentRunFor]): what clears it is a person's edit too.
