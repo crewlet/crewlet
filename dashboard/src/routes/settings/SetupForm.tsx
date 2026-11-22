@@ -306,6 +306,36 @@ export function setsIn(reqs: SetupRequirement[]): { set: SetupSet; entries: SetE
   return out;
 }
 
+/** One thing a form asks for: a field, or a set whole. See [asksIn]. */
+export type Ask =
+  { kind: "field"; r: SetupRequirement } | { kind: "set"; set: SetupSet; entries: SetEntry[] };
+
+/**
+ * A requirement list as the form draws it: each set once, where its first
+ * member stands. The form, Have ready and the Settings summary all read it,
+ * so none lists a set's fields one by one.
+ */
+export function asksIn(reqs: SetupRequirement[]): Ask[] {
+  const sets = setsIn(reqs);
+  const out: Ask[] = [];
+  for (const r of reqs) {
+    if (!r.set) {
+      out.push({ kind: "field", r });
+      continue;
+    }
+    const id = r.set.id;
+    if (out.some((a) => a.kind === "set" && a.set.id === id)) continue;
+    const group = sets.find((g) => g.set.id === id);
+    if (group) out.push({ kind: "set", ...group });
+  }
+  return out;
+}
+
+/** What a set below its minimum says on the form, as an empty field says [NEEDED]. */
+function setShort(set: SetupSet): string {
+  return `${set.add} to continue.`;
+}
+
 /** The root font size in px, which the layout's rem split is read in. */
 function remPx(): number {
   return Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
@@ -884,6 +914,8 @@ export function SetupForm({
   // WHAT THE APP SAID about the value in each credential box, by value key.
   const [verdicts, setVerdicts] = useState<Record<string, SetupVerdict | "checking">>({});
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  // Whether the banner counts the unanswered fields a submit marked. See [bannerText].
+  const [counting, setCounting] = useState(false);
 
   /**
    * Open whatever a refusal NAMES, so an error is never hidden behind a fold.
@@ -976,6 +1008,22 @@ export function SetupForm({
   }
 
   /**
+   * The banner: a refusal, or the count of marked answers still on the form.
+   * Answered, removed with its entry or gated away, an answer is off it.
+   */
+  function bannerText(): string {
+    if (error || !counting) return error;
+    const drawn = new Set(onForm().map(({ key }) => key));
+    for (const section of sections) {
+      for (const { set } of setsIn(shownBy.get(sectionKey(section)) ?? []))
+        drawn.add(setKey(section, set));
+    }
+    const n = Object.keys(fieldErrors).filter((k) => drawn.has(k)).length;
+    if (n === 0) return "";
+    return n === 1 ? "One answer is not filled in yet." : `${n} answers are not filled in yet.`;
+  }
+
+  /**
    * The needed answers still empty in the surfaces about to be written, by
    * value key. FROM WHAT EACH SECTION OWNS, so a shared answer drawn in one
    * section counts for every section that writes it.
@@ -993,10 +1041,10 @@ export function SetupForm({
         if ((values[key] ?? "").trim() !== "" || r.present) continue;
         out[key] = r.required_when ? "Needed by the answer above." : NEEDED;
       }
-      // A SET BELOW ITS MINIMUM says so at the set, in its own words.
+      // A SET BELOW ITS MINIMUM says so at the set; its hint already says what it needs.
       for (const { set } of setsIn(own)) {
         if ((added[setKey(section, set)] ?? []).length < set.min)
-          out[setKey(section, set)] = set.missing;
+          out[setKey(section, set)] = setShort(set);
       }
     }
     return out;
@@ -1046,7 +1094,7 @@ export function SetupForm({
       if (!hit) {
         const atSet = named.map((p) => setNamedBy(p)).find((x) => x !== undefined);
         if (atSet) {
-          fields[setKey(atSet.section, atSet.set)] = atSet.set.missing;
+          fields[setKey(atSet.section, atSet.set)] = setShort(atSet.set);
           continue;
         }
         rest.push(line);
@@ -1116,6 +1164,7 @@ export function SetupForm({
     setBusy(true);
     setError("");
     setFieldErrors({});
+    setCounting(false);
 
     // A GATED FIELD ITS ANSWER NEEDS, CAUGHT HERE RATHER THAN AT THE ROUTE.
     //
@@ -1154,10 +1203,7 @@ export function SetupForm({
     if (Object.keys(unanswered).length > 0) {
       setFieldErrors(unanswered);
       revealFields(Object.keys(unanswered));
-      const n = Object.keys(unanswered).length;
-      setError(
-        n === 1 ? "One answer is not filled in yet." : `${n} answers are not filled in yet.`,
-      );
+      setCounting(true);
       setBusy(false);
       return;
     }
@@ -1220,7 +1266,7 @@ export function SetupForm({
           // field that is not rendered, the refusal was invisible.
           // A FIELD OF AN ENTRY NOBODY ADDED is answered at its set.
           if (target.set && !entryOn(found.section, target)) {
-            setFieldErrors({ [setKey(found.section, target.set)]: said });
+            setFieldErrors({ [setKey(found.section, target.set)]: setShort(target.set) });
             return;
           }
           if (!editable(found.section, target)) {
@@ -1261,6 +1307,7 @@ export function SetupForm({
     }
   }
 
+  const banner = bannerText();
   return (
     // IN PLACE, in the tool's own pane: the directory stays beside it, and the
     // header above it already names the tool, so the form's heading names
@@ -1520,11 +1567,11 @@ export function SetupForm({
             )}
           </div>
 
-          {error && (
+          {banner && (
             // The kit's banner around [Problems], which lays a refusal's several
             // problems out one per line rather than as one run.
             <Callout variant="danger" role="alert">
-              <Problems detail={error} />
+              <Problems detail={banner} />
             </Callout>
           )}
         </div>
@@ -1614,23 +1661,17 @@ export function SetupForm({
     return undefined;
   }
 
-  /**
-   * A section's fields in order, a set drawn whole where its first member
-   * stands: one list of entries in place of every entry's fields.
-   */
+  /** A section's fields in order, each set drawn whole ([asksIn]). */
   function renderList(section: SetupSection, list: SetupRequirement[]) {
-    const drawnSets = new Set<string>();
-    return list.map((r) => {
-      if (!r.set) return <Fragment key={valueKey(section, r)}>{renderField(section, r)}</Fragment>;
-      if (drawnSets.has(r.set.id)) return null;
-      drawnSets.add(r.set.id);
-      const group = setsIn(list).find((g) => g.set.id === r.set?.id);
-      return group ? (
-        <Fragment key={setKey(section, group.set)}>
-          {renderSet(section, group.set, group.entries)}
+    return asksIn(list).map((ask) =>
+      ask.kind === "field" ? (
+        <Fragment key={valueKey(section, ask.r)}>{renderField(section, ask.r)}</Fragment>
+      ) : (
+        <Fragment key={setKey(section, ask.set)}>
+          {renderSet(section, ask.set, ask.entries)}
         </Fragment>
-      ) : null;
-    });
+      ),
+    );
   }
 
   /**
@@ -1658,6 +1699,11 @@ export function SetupForm({
     const remove = (entry: SetEntry) => {
       setAdded((was) => ({ ...was, [key]: (was[key] ?? []).filter((v) => v !== entry.value) }));
       setValues((was) => {
+        const next = { ...was };
+        for (const r of entry.fields) delete next[valueKey(section, r)];
+        return next;
+      });
+      setFieldErrors((was) => {
         const next = { ...was };
         for (const r of entry.fields) delete next[valueKey(section, r)];
         return next;
@@ -1767,6 +1813,13 @@ export function SetupForm({
             value={values[key] ?? ""}
             onChange={(v) => {
               setValues((c) => ({ ...c, [key]: v }));
+              // AN ERROR IS ABOUT THE VALUE IT JUDGED, as a set's clears once an entry is added.
+              setFieldErrors((was) => {
+                if (!(key in was)) return was;
+                const next = { ...was };
+                delete next[key];
+                return next;
+              });
               // A VERDICT IS ABOUT THE VALUES IT CHECKED: typing over one
               // makes it a verdict about something no longer in the box,
               // whether this field's own or a check this field is part of.

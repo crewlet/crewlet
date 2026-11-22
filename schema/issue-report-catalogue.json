@@ -19,7 +19,8 @@
       "opencode",
       "copilot",
       "muse-code",
-      "kimi-code"
+      "kimi-code",
+      "pi"
     ],
     "topology.coordination": [
       "local",
