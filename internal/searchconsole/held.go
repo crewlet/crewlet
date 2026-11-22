@@ -37,8 +37,8 @@ func (p *Product) checked(ctx context.Context, handle string, req googlegrowth.R
 	if req.Op.ID != "indexing.urlNotifications.publish" {
 		return nil
 	}
-	page, _ := req.Body["url"].(string)
-	kind, _ := req.Body["type"].(string)
+	page, _ := req.Field("url").(string)
+	kind, _ := req.Field("type").(string)
 	if kind != notifyUpdated && kind != notifyDeleted {
 		return refusal(growth.RefusedInvalid, "an Indexing API notification's type is URL_UPDATED or "+
 			"URL_DELETED. No vendor was reached.")

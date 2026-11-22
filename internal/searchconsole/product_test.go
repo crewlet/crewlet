@@ -717,3 +717,29 @@ func TestEveryWriteHoldsItsSitesLease(t *testing.T) {
 		}
 	}
 }
+
+// A BODY'S SITE IS READ AS GOOGLE READS IT: a URL inspection naming its site
+// and page in snake_case is held to them, and one naming each in both
+// spellings with two values names no site and reaches no vendor.
+//
+// Mutation: read the lowerCamel keys alone, and the snake_case inspection is
+// refused while the decoy inspects another property's page.
+func TestABodysSiteIsReadAsGoogleReadsIt(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "read")
+	inspect := func(body map[string]any) error {
+		_, err := w.call(t, "search_console_read", map[string]any{"operation": "searchconsole.urlInspection.index.inspect",
+			"body": body})
+		return err
+	}
+	if err := inspect(map[string]any{"site_url": siteWeb, "inspection_url": siteWeb + "a"}); err != nil {
+		t.Errorf("an inspection in snake_case answered %v", err)
+	}
+	if err := inspect(map[string]any{"siteUrl": siteWeb, "inspectionUrl": siteWeb + "a",
+		"site_url": siteOther, "inspection_url": siteOther + "b"}); !refused(err, "") {
+		t.Errorf("an inspection naming two sites answered %v", err)
+	}
+	if got := strings.Count(w.f.reached(), "POST /v1/urlInspection/index:inspect"); got != 1 {
+		t.Errorf("Google was asked %d inspections, want the one held to the seat's site", got)
+	}
+}

@@ -50,6 +50,7 @@ A call on the wrong tool for its method's class is refused with the tool that ma
 **What a call may reach:**
 - A site is written as Search Console writes it: a URL prefix with its scheme and trailing slash (`https://www.example.com/`) or a domain (`sc-domain:example.com`).
 - A site outside the agent's list is refused before Google is asked, and so is a page no site of its list holds: a page a URL prefix starts, or one whose host is a domain or below it.
+- A body's site or page is read in either spelling Google takes (`siteUrl` or `site_url`); a body naming one both ways with two values is refused.
 - A Site Verification resource is held to the property it verifies: `dns://example.com` is `sc-domain:example.com`, a site's URL its URL prefix. An Android app has no property here, so its verification is refused.
 - A listing is cut to the agent's sites.
 
