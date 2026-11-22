@@ -16,7 +16,7 @@
 // before any box exists, cannot read; so where the session's count has a
 // bound it hands the launch both tellings, the held one picked and the
 // summarized one beside it, and the launch hands the held one only where the
-// box's point proves it whole (internal/sandbox's OpenCodePoint.SendsWhole).
+// box's point proves it whole (internal/sandbox's BoxPoint.SendsWhole).
 // A brief told by a reading of what the session holds is judged on its own
 // brief on either harness, never by the held one's verdict: it drops held
 // calls and may add sections of its own, so it is ordered against neither

@@ -6,7 +6,7 @@ import "slices"
 // ([ResumedCount]). Before every request, a resumed run's first included,
 // Claude Code compares its count with its window less its reply reserve and a
 // 13,000-token buffer, and there COMPACTS the session to a summary (read in
-// 2.1.310 and 2.1.322); OpenCode compacts by a rule of its own (opencodefirst.go).
+// 2.1.310 and 2.1.322); OpenCode compacts by a rule of its own (boxpoint.go).
 // The engine's floor continues a session whose next request and brief fit the
 // window less 20,000 tokens, so in that band what it counts as held may be
 // gone. So the count is bounded FROM ABOVE wherever a copy is read whole

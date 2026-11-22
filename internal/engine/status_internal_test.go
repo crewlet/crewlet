@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/slack"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -233,6 +234,15 @@ func indicating(t *testing.T, mode notify.StatusMode) (*Engine, *workspace) {
 // has to let a turn run its phases.
 func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*Engine, *workspace) {
 	t.Helper()
+	return indicatingOn(t, mode, prov, executor.ClaudeCodeName)
+}
+
+// indicatingOn is [indicatingWith] with the seat's executor launching on the
+// harness named ([runnableOn]).
+func indicatingOn(t *testing.T, mode notify.StatusMode, prov llm.Provider,
+	runnerHarness string) (*Engine, *workspace) {
+
+	t.Helper()
 	ws := newWorkspace(t)
 	transport, err := slack.NewTransport(slack.TransportOptions{
 		Config: slack.Config{
@@ -251,7 +261,7 @@ func indicatingWith(t *testing.T, mode notify.StatusMode, prov llm.Provider) (*E
 
 	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe", LLM: org.ProviderKeys{"only"}}
 	organization := &org.Organization{Name: "Acme", Roles: []*org.Role{seat}}
-	models := runnable(t, []phase.Entry{{Key: "only", Provider: prov}}, seat)
+	models := runnableOn(t, runnerHarness, []phase.Entry{{Key: "only", Provider: prov}}, seat)
 	q := memory.New()
 	if err := q.Start(t.Context()); err != nil {
 		t.Fatalf("queue.Start: %v", err)

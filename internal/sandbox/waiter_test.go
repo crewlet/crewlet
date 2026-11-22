@@ -116,6 +116,7 @@ func newWaiterRigIn(t *testing.T, cell Placement) *waiterRig {
 		runner:   NewFakeRunner("claude-code"),
 		now:      time.Date(2026, 8, 23, 12, 0, 0, 0, time.UTC),
 	}
+	rig.runner.Thread = testThreadTraits["claude-code"]
 	// ONE CLOCK FOR THE WHOLE WORLD, the store's included. The row's own
 	// last write dates a pause nothing stamped ([PendingRun.HeldSince]), so
 	// a store left on the wall clock would date it years after the instant

@@ -206,6 +206,10 @@ export function product(harness: string): string {
   return HARNESS_PRODUCTS[harness] ?? harness;
 }
 
+/** "A or B", "A, B or C". */
+export const either = (parts: readonly string[]) =>
+  parts.length < 3 ? parts.join(" or ") : `${parts.slice(0, -1).join(", ")} or ${parts.at(-1)}`;
+
 /** Where a model's executors run, as the wizard's choice and the model's page both name it. */
 export const RUN_IN: Record<RunnerCellName, string> = {
   direct: "On this engine's host",

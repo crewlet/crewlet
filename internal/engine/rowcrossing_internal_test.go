@@ -86,7 +86,7 @@ func TestTheEnginesWritesOfARunsRowAreGivenItsCrossing(t *testing.T) {
 			name: "a job's first pull of its notes", mark: "MarkPulled", reason: steerPublishBudget,
 			write: func(ctx context.Context, store sandbox.PendingStore) {
 				inbox := newRunSteers(steerSeals{}, store, nil).inbox(
-					runIdentity{turn: steer.Turn{TurnID: "t-pull-mark", AgentHandle: "swe"}}, 1)
+					runIdentity{turn: steer.Turn{TurnID: "t-pull-mark", AgentHandle: "swe"}}, 1, "")
 				inbox.recordPulled(ctx, "launch-1")
 			},
 		},

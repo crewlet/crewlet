@@ -576,16 +576,22 @@ type SessionBasis struct {
 	Count         *sandbox.ResumedCount
 	CountProvider string
 
-	// Window is what the seat's executor chain may hold a Claude Code run to:
-	// the least standard window over its Claude Code members, on each one's
-	// route (sandbox.ClaudeCodeWindowOn), since the launch picks its member
-	// only as it launches; Known only where every one is known. What every
-	// path's first request is judged under ([firstRequest]), lowered where
-	// the copy's run reported a smaller window. Set on every basis the
-	// launcher answers, whether or not it names a session; zero, not Known,
-	// for a launcher that cannot say, which reads as a session that may
-	// compact.
+	// Window is what the seat's executor chain may hold a run to:
+	// the least standard window over its members whose harness compacts by
+	// its window, on each one's route, since the launch picks its member
+	// only as it launches; Known only where every one is known
+	// ([sandbox.ExecutorWindow.Least]). What every path's first request is
+	// judged under ([firstRequest]), lowered where the copy's run reported a
+	// smaller window. Set on every basis the launcher answers, whether or not
+	// it names a session; zero, not Known, for a launcher that cannot say,
+	// which reads as a session that may compact.
 	Window sandbox.ExecutorWindow
+
+	// Traits is what the relaunch reads of each harness a session it may
+	// continue was written by ([sandbox.SessionTraits]), by name: the kept
+	// session's, and the job's whose copy it continues in place. Set on every
+	// basis the launcher answers; a harness it lacks is judged as none.
+	Traits map[string]sandbox.SessionTraits
 
 	// Base is the session the conversation's last turn left, which the launch
 	// continues where it names no kept capture of the turn's own: on a

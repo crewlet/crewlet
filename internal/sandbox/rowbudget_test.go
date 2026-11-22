@@ -555,7 +555,7 @@ func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 	const crossing = 7 * time.Minute
 	run := PendingRun{TurnID: "t1"}
 	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + 4*coord.MaxValueCrossing
-	if got, want := BoxReadBudget(run, BoxReadCollect),
+	if got, want := BoxReadBudget(run, BoxReadCollect, ThreadTraits{}),
 		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
 		t.Errorf("a collection of a turn with no cap waits %v, want the poll's bound and, at the host's "+
 			"share, the take, its reservation's reason, three graces and four changes of the row at the "+
@@ -568,7 +568,7 @@ func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 		})
 		// THE HOST'S SHARE OF WHAT THE ASKER WAITS: the take is given its own
 		// budget and its reservation's room beside it, whole.
-		share := time.Duration(float64(BoxReadBudget(run, BoxReadCollect)) * BoxReadAnswerShare)
+		share := time.Duration(float64(BoxReadBudget(run, BoxReadCollect, ThreadTraits{})) * BoxReadAnswerShare)
 		read, cancel := context.WithDeadline(t.Context(), time.Now().Add(share))
 		defer cancel()
 		take, cancelTake, _ := rig.coordinator.takeContext(read)

@@ -18,7 +18,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { EXECUTOR_HARNESSES } from "~/contract/models.ts";
+import { EXECUTOR_HARNESSES } from "./executors.ts";
 import { indexOrg, type Seat } from "~/lib/seats.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
@@ -167,7 +167,7 @@ export function modelViews(
       harness: entry.harness,
       model: entry.model,
       modelName: names.get(nameKey(entry.harness, entry.model)) ?? entry.model,
-      executor: (EXECUTOR_HARNESSES as readonly string[]).includes(entry.harness),
+      executor: EXECUTOR_HARNESSES.includes(entry.harness),
       entry,
       admin: answer?.reading === "admin" ? (entry as ModelEntry) : null,
       uses: usesOf(entry.used_by),

@@ -292,3 +292,11 @@ const (
 	OpenCodeContextBytes = openCodeContextBytes
 	OpenCodeContextEvent = openCodeContextEvent
 )
+
+// ClaudeConfirmsATake is Claude Code's case of the note contract's confirm path
+// (TestANoteServedIsConfirmedOffItsJobsOwnRecord): its hooks' records name the
+// takes asked, each event held to its type.
+func ClaudeConfirmsATake(t *testing.T) {
+	t.Run("a hook record names only the takes it was asked", hookRecordNamesOnlyTheTakesItWasAsked)
+	t.Run("a hook's event is held to its type", hooksEventIsHeldToItsType)
+}
