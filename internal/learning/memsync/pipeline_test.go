@@ -122,6 +122,20 @@ func heldOver(db *store.DB, js jetstream.JetStream) *Syncer {
 	return heldFromEmpty(newSyncer(db, js, func(string) string { return seat.AgentID }), seat.Handle)
 }
 
+// gatedJS is a pacedJS that answers no row until opened is called, or until
+// the row's context ends.
+func gatedJS() (js *pacedJS, opened func()) {
+	gate := make(chan struct{})
+	return &pacedJS{answer: func(ctx context.Context, _ string) error {
+		select {
+		case <-gate:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}}, sync.OnceFunc(func() { close(gate) })
+}
+
 // sortedNumbers is the notes acked names, by number, sorted: the rows a
 // publish has out at once are answered in any order.
 func sortedNumbers(t *testing.T, acked []string, numbers map[string]int) []int {
@@ -286,17 +300,8 @@ func TestAFlushStartsOnceEveryRowTheCycleHadOutIsAnswered(t *testing.T) {
 	ids := writeNotes(t, db, 300, 0)
 	numbers := noteNumbers(t, ids)
 	synctest.Test(t, func(t *testing.T) {
-		open := make(chan struct{})
-		opened := sync.OnceFunc(func() { close(open) })
+		js, opened := gatedJS()
 		defer opened()
-		js := &pacedJS{answer: func(ctx context.Context, _ string) error {
-			select {
-			case <-open:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}}
 		s := heldOver(db, js)
 		var cycle, flush Carried
 		var cycleErr, flushErr error
@@ -400,4 +405,187 @@ func TestARowSentInsideTheBoundIsCarriedWholeNotCutAndSentAgain(t *testing.T) {
 			t.Errorf("the two calls sent %d rows, want each note once", len(asked))
 		}
 	})
+}
+
+// A CYCLE'S ROW WAITING FOR THE LINK'S WINDOW IS SENT BY NOBODY ONCE THE
+// RELEASE BEGINS.
+//
+// Across a link a cycle's next row can wait for the window behind the rows it
+// has out. The release wakes it, refused, rather than leave it there until the
+// cycle's bound; the flush waits for the row the cycle has out, then sends the
+// rest itself, each once. Here each note is larger than the window, so the
+// cycle's second waits for its first.
+//
+// Mutation: leave the cycle's row waiting for the window as the release
+// begins, or start the flush before the cycle's row is answered, and this goes
+// red.
+func TestACyclesRowWaitingForTheLinksWindowIsSentByNobodyOnceTheReleaseBegins(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	notes := wideNotes(t, db)
+	synctest.Test(t, func(t *testing.T) {
+		js, opened := gatedJS()
+		defer opened()
+		s := heldFromEmpty(newSyncerAcross(db, js, func(string) string { return seat.AgentID }),
+			seat.Handle)
+		var cycle, flush Carried
+		var cycleErr, flushErr error
+		cycled, flushed := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(cycled)
+			cycle, cycleErr = s.PublishOwn(t.Context(), seat.Handle)
+		}()
+		synctest.Wait()
+		if _, waiting := s.window.Held(); waiting != 1 || !slices.Equal(js.askedNow(), notes[:1]) {
+			t.Fatalf("the premise: the cycle sent %d notes with %d takes waiting for the window, "+
+				"want its first out and its second waiting", len(js.askedNow()), waiting)
+		}
+		if !s.Releasing(seat.Handle) {
+			t.Fatal("the premise: Releasing found no live holding to turn")
+		}
+		go func() {
+			defer close(flushed)
+			flush, flushErr = s.FlushOwn(t.Context(), seat.Handle)
+		}()
+		synctest.Wait()
+		if _, waiting := s.window.Held(); waiting != 0 {
+			t.Errorf("after the release began %d takes still wait for the window, want the "+
+				"cycle's row woken and refused", waiting)
+		}
+		if asked := js.askedNow(); !slices.Equal(asked, notes[:1]) {
+			t.Errorf("with the cycle's first note out, %d notes were sent, want that one alone: "+
+				"the flush waits for it", len(asked))
+		}
+		opened()
+		<-cycled
+		<-flushed
+
+		if want := (Carried{Rows: 1, StoppedIn: "agent_diary"}); !errors.Is(cycleErr, ErrNotHeld) ||
+			cycle != want {
+			t.Errorf("the cycle answered %+v (%v), want %+v and ErrNotHeld", cycle, cycleErr, want)
+		}
+		if flushErr != nil || flush != (Carried{Rows: 2}) {
+			t.Errorf("the flush answered %+v (%v), want the two notes past the cycle's", flush,
+				flushErr)
+		}
+		if asked := js.askedNow(); !slices.Equal(asked, notes) {
+			t.Errorf("%d notes were sent, want each of the %d once, in order", len(asked),
+				len(notes))
+		}
+		if held, waiting := s.window.Held(); held != 0 || waiting != 0 {
+			t.Errorf("the window holds %d bytes with %d takes waiting, want every row's bytes "+
+				"given back", held, waiting)
+		}
+	})
+}
+
+// A ROW LET OUT OF THE LINK'S WINDOW IS SENT ONLY UNDER THE HOLDING IT WAS
+// READ UNDER.
+//
+// A row waits for the window as long as the rows ahead of it take to cross, so
+// whether the holding still lets it be sent is asked again once the window
+// lets it out. Here the seat is forgotten, as a new hydration of it begins,
+// while the cycle's second note waits: it is refused and its bytes given back.
+//
+// Mutation: send a row the window let out without asking again, or keep the
+// bytes of one refused there, and this goes red.
+func TestARowLetOutOfTheLinksWindowIsSentOnlyUnderTheHoldingItWasReadUnder(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	notes := wideNotes(t, db)
+	synctest.Test(t, func(t *testing.T) {
+		js, opened := gatedJS()
+		defer opened()
+		s := heldFromEmpty(newSyncerAcross(db, js, func(string) string { return seat.AgentID }),
+			seat.Handle)
+		var cycle Carried
+		var cycleErr error
+		cycled := make(chan struct{})
+		go func() {
+			defer close(cycled)
+			cycle, cycleErr = s.PublishOwn(t.Context(), seat.Handle)
+		}()
+		synctest.Wait()
+		if _, waiting := s.window.Held(); waiting != 1 {
+			t.Fatalf("the premise: %d takes wait for the window, want the cycle's second note's",
+				waiting)
+		}
+		s.Forget(seat.Handle)
+		opened()
+		<-cycled
+
+		if want := (Carried{Rows: 1, StoppedIn: "agent_diary"}); !errors.Is(cycleErr, ErrNotHeld) ||
+			cycle != want {
+			t.Errorf("the cycle answered %+v (%v), want %+v and ErrNotHeld", cycle, cycleErr, want)
+		}
+		if asked := js.askedNow(); !slices.Equal(asked, notes[:1]) {
+			t.Errorf("%d notes were sent, want the first alone: the seat was forgotten while the "+
+				"second waited for the window", len(asked))
+		}
+		if held, waiting := s.window.Held(); held != 0 || waiting != 0 {
+			t.Errorf("the window holds %d bytes with %d takes waiting, want every row's bytes "+
+				"given back", held, waiting)
+		}
+	})
+}
+
+// A FLUSH WHOSE BOUND ENDS BEFORE THE CYCLE'S ROWS ARE ANSWERED SENDS NOTHING.
+//
+// The flush waits for the rows the cycle had out inside its own bound, so a
+// cycle's row still crossing a slow link spends it. Here a note of a mebibyte,
+// thirty seconds at the floor, is out as the release begins: the five-second
+// flush answers its bound at five seconds, carrying nothing, and the note lands
+// under its own budget.
+//
+// Mutation: wait for the cycle's rows past the flush's bound, and this goes red.
+func TestAFlushWhoseBoundEndsBeforeTheCyclesRowsAreAnsweredSendsNothing(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	writeNotesOfSize(t, db, 2, 1<<20)
+	first := subjectOf(registered(t, "agent_diary"), "p0000")
+	synctest.Test(t, func(t *testing.T) {
+		js := &pacedJS{trip: publishTrip, pace: objstore.MiBPace}
+		s := heldFromEmpty(newSyncerAcross(db, js, func(string) string { return seat.AgentID }),
+			seat.Handle)
+		var cycle Carried
+		var cycleErr error
+		cycled := make(chan struct{})
+		go func() {
+			defer close(cycled)
+			cycle, cycleErr = s.PublishOwn(t.Context(), seat.Handle)
+		}()
+		synctest.Wait()
+		if !s.Releasing(seat.Handle) {
+			t.Fatal("the premise: Releasing found no live holding to turn")
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), flushBound)
+		defer cancel()
+		start := time.Now()
+		flush, err := s.FlushOwn(ctx, seat.Handle)
+		if took := time.Since(start); !errors.Is(err, context.DeadlineExceeded) ||
+			flush != (Carried{}) || took != flushBound {
+			t.Errorf("the flush answered %+v (%v) after %s, want nothing carried and its bound "+
+				"at %s", flush, err, took, flushBound)
+		}
+		<-cycled
+
+		if want := (Carried{Rows: 1, StoppedIn: "agent_diary"}); !errors.Is(cycleErr, ErrNotHeld) ||
+			cycle != want {
+			t.Errorf("the cycle answered %+v (%v), want %+v and ErrNotHeld", cycle, cycleErr, want)
+		}
+		if asked := js.askedNow(); !slices.Equal(asked, []string{first}) {
+			t.Errorf("%d notes were sent, want the cycle's first alone", len(asked))
+		}
+	})
+}
+
+// wideNotes writes three diary notes for the seat, each larger than a link's
+// window, and answers their subjects in stamp order: across a link each row
+// crosses alone, so a cycle's second waits for its first.
+func wideNotes(t *testing.T, db *store.DB) []string {
+	t.Helper()
+	writeNotesOfSize(t, db, 3, jsapi.LinkWindow)
+	diary := registered(t, "agent_diary")
+	return []string{subjectOf(diary, "p0000"), subjectOf(diary, "p0001"),
+		subjectOf(diary, "p0002")}
 }
