@@ -152,11 +152,16 @@ func TestAPassHasOneWriterOfASeatsCredential(t *testing.T) {
 // second writer nobody refuses.
 func TestEveryAccessPassRunsThroughTheSeatAccessWrapper(t *testing.T) {
 	t.Parallel()
-	want := map[string]integration.Kind{}
+	// BY KIND: one pass type serves every Google growth product, each its own kind.
+	want := map[integration.Kind]string{}
 	for _, pass := range (&Engine{}).setupPasses() {
 		if _, ok := seataccess.Lookup(pass.Kind()); ok {
-			want[reflect.TypeOf(pass).Elem().Name()] = pass.Kind()
+			want[pass.Kind()] = reflect.TypeOf(pass).Elem().Name()
 		}
+	}
+	types := map[string]bool{}
+	for _, name := range want {
+		types[name] = true
 	}
 	if len(want) < len(seataccess.Kinds()) {
 		t.Fatalf("passes for %v, fewer than the %d access kinds", want, len(seataccess.Kinds()))
@@ -188,7 +193,7 @@ func TestEveryAccessPassRunsThroughTheSeatAccessWrapper(t *testing.T) {
 			if !ok {
 				continue
 			}
-			if _, access := want[recv.Name]; !access {
+			if !types[recv.Name] {
 				continue
 			}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -200,7 +205,7 @@ func TestEveryAccessPassRunsThroughTheSeatAccessWrapper(t *testing.T) {
 			})
 		}
 	}
-	for pass, kind := range want {
+	for kind, pass := range want {
 		if !wrapped[pass] {
 			t.Errorf("%s (%s) has per-seat access and its Run does not go through "+
 				"withSeatAccess or withSeatAccessReads, so its company half writes unguarded", pass, kind)

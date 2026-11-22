@@ -235,6 +235,15 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 	if err := head.Validate(); err != nil {
 		t.Errorf("a HEAD was refused as read: %v", err)
 	}
+	// A WRITE A PRODUCT CLASSES PER CALL names the classes below its own it can
+	// come to, and a tool of one of them may list it.
+	mutate := validCatalog()
+	mutate.Operations = append(mutate.Operations, growth.Operation{ID: "batch.mutate", Method: "POST",
+		Path: "/batch:mutate", Class: growth.ClassAdmin, Classes: []growth.Class{growth.ClassOperate, growth.ClassSpend}})
+	mutate.Tools[1].Operations = append(mutate.Tools[1].Operations, "batch.mutate")
+	if err := mutate.Validate(); err != nil {
+		t.Errorf("an operate tool listing a write that can come to operate was refused: %v", err)
+	}
 	for name, breakIt := range map[string]func(*growth.Catalog){
 		"no kind":              func(c *growth.Catalog) { c.Kind = "" },
 		"a never without why":  func(c *growth.Catalog) { c.Operations[3].Reason = "" },
@@ -280,6 +289,15 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 		},
 		"a head classed spend": func(c *growth.Catalog) {
 			c.Operations[0].Method, c.Operations[0].Class = "HEAD", growth.ClassSpend
+		},
+		"a further class at its own": func(c *growth.Catalog) {
+			c.Operations[2].Classes = []growth.Class{growth.ClassAdmin}
+		},
+		"a further class above it": func(c *growth.Catalog) {
+			c.Operations[0].Classes = []growth.Class{growth.ClassOperate}
+		},
+		"a further class never": func(c *growth.Catalog) {
+			c.Operations[2].Classes = []growth.Class{growth.ClassNever}
 		},
 	} {
 		c := validCatalog()
