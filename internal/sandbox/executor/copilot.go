@@ -90,7 +90,8 @@ func (Copilot) Command(req sandbox.RunRequest, session Session, paths Paths, con
 // copilotScript is a Copilot run's script, giving its harness stop to go once
 // asked to end: the end protocol (end.go); the release read and held to
 // [copilotFloor]; the provider variables the entry did not set removed
-// ([copilotProviderOff]); the session named and recorded ([copilotSessionGate],
+// ([copilotProviderOff]); its GitHub sign-in handed under one name
+// ([copilotSignIn]); the session named and recorded ([copilotSessionGate],
 // [Paths.SessionRecord]); the harness run under the end protocol
 // ([launchHarness]); the run's own usage records added to the stream
 // ([copilotUsage]); and its session packed ([copilotCapture]), exiting with the
@@ -118,6 +119,8 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		// The session stays in the box: synced, it would sit on the
 		// account's history too.
 		"--sync-session=off",
+		// Copilot's own list of what its tools are not handed ([copilotSignIn]).
+		"--secret-env-vars=" + strings.Join(copilotSignInNames, ","),
 	}
 	if configPath != "" {
 		parts = append(parts, "--additional-mcp-config", q("@"+configPath))
@@ -147,6 +150,7 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 	if off := copilotProviderOff(req.Env); len(off) > 0 {
 		line(`unset %s`, strings.Join(off, " "))
 	}
+	b.WriteString(copilotSignIn())
 	// THE CAP NAMED IN THE STREAM, for the decoder to fail a run whose
 	// extension, which enforces it, never ran ([copilotEvents]).
 	if req.Limits.MaxTurns > 0 {
@@ -201,6 +205,28 @@ func copilotProviderOff(env map[string]string) []string {
 		}
 	}
 	return off
+}
+
+// copilotSignInNames is every variable Copilot signs in to GitHub by, in the
+// order it takes them (`copilot help environment`, 1.0.114).
+var copilotSignInNames = []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}
+
+// copilotHeldToken is Copilot's own names for the GitHub token it holds, which
+// it sets itself and no entry is given.
+var copilotHeldToken = []string{"GITHUB_COPILOT_GITHUB_TOKEN", "GITHUB_COPILOT_AGENT_GITHUB_TOKEN"}
+
+// copilotSignIn is the part of a run's script that hands Copilot its GitHub
+// sign-in under COPILOT_GITHUB_TOKEN alone: the first of [copilotSignInNames]
+// set, in Copilot's own order, so the same token signs it in, with the other
+// two and [copilotHeldToken] unset. With every sign-in name in
+// `--secret-env-vars`, whatever set it, the run's tools are handed only the
+// variables they need (measured on 1.0.114). Only those names: a listed name's
+// value is masked wherever the stream holds it, so a short provider key
+// (`ollama`) would break the stream's JSON (measured).
+func copilotSignIn() string {
+	return "gt=${COPILOT_GITHUB_TOKEN:-${GH_TOKEN:-$GITHUB_TOKEN}}\n" +
+		"unset " + strings.Join(slices.Concat(copilotSignInNames[1:], copilotHeldToken), " ") + "\n" +
+		`if [ -n "$gt" ]; then COPILOT_GITHUB_TOKEN=$gt; export COPILOT_GITHUB_TOKEN; fi; unset gt` + "\n"
 }
 
 // copilotSessionGate is the part of a run's script that names the session its
