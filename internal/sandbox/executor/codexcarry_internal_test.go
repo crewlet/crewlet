@@ -357,7 +357,8 @@ func TestACodexSessionContinuesOnlyOnTheOneSupportedRelease(t *testing.T) {
 // configuration cannot be installed never starts.
 //
 // Mutation: install the continued configuration on a fall-back, leave the
-// other wiring beside it, skip the fresh brief, or go on past a failed move,
+// other wiring beside it, skip the fresh brief, append to the configuration
+// a box already holds rather than replace it, or go on past a failed move,
 // and a row below fails.
 func TestACodexRunStartsOnTheConfigurationOfTheSessionItStarts(t *testing.T) {
 	t.Parallel()
@@ -377,6 +378,13 @@ func TestACodexRunStartsOnTheConfigurationOfTheSessionItStarts(t *testing.T) {
 	} {
 		p := codexBox(t, c.rollout)
 		if err := os.WriteFile(p.FreshBrief(), []byte("the fresh brief"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// A CONFIGURATION ALREADY THERE, which the install replaces whole.
+		if err := os.MkdirAll(p.CodexHome(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p.CodexLiveConfig(), []byte("stale\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		out, errText, code := codexShell(t, p.Home, codexPrinted("codex-cli "+codexCarryRelease)+

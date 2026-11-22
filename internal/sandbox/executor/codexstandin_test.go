@@ -176,8 +176,11 @@ const codexStandInThread = "019a1f62-fbda-7aa2-af57-6c0abeb8e50b"
 // where record/final exists for an interrupt the app-server refused, the
 // turn's last response its answer; where record/block exists, it then works
 // until its turn is interrupted (exit 1, the rollout's turn_aborted written),
-// its app-server stops (exit 1, as exec does when its server goes) or SIGTERM
-// (`exec` in record/order).
+// its app-server stops (exit 1, as exec does when its server goes) or it is
+// sent as many SIGTERMs as record/exec-terms says, one where it is absent
+// (`exec` in record/order). Two tell the script's signal from a teardown's:
+// the group's first reaches it with the script's, and only the script's
+// `end` sends a second.
 func codexStandIn(t *testing.T, box sandbox.Sandbox, release, record string) {
 	t.Helper()
 	bin, err := os.Executable()
@@ -209,7 +212,7 @@ exec)
   cat >> "$f" <<'EOF'
 %[7]s
 EOF
-  if [ -e "$rec/block" ]; then trap 'echo exec >> "$rec/order"; exit 143' TERM; : > "$rec/working"; until [ -s "$rec/interrupted" ] || grep -qx server "$rec/order" 2> /dev/null; do sleep 0.05; done; [ ! -s "$rec/interrupted" ] || printf '%%s\n' '{"timestamp":"2026-11-22T09:00:03.000Z","ordinal":93,"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t9","reason":"interrupted"}}' >> "$f"; exit 1; fi
+  if [ -e "$rec/block" ]; then need=$(cat "$rec/exec-terms" 2> /dev/null || echo 1); got=0; trap 'got=$((got+1)); if [ "$got" -ge "$need" ]; then echo exec >> "$rec/order"; exit 143; fi' TERM; : > "$rec/working"; until [ -s "$rec/interrupted" ] || grep -qx server "$rec/order" 2> /dev/null; do sleep 0.05; done; [ ! -s "$rec/interrupted" ] || printf '%%s\n' '{"timestamp":"2026-11-22T09:00:03.000Z","ordinal":93,"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t9","reason":"interrupted"}}' >> "$f"; exit 1; fi
   printf '%%s\n' '{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}' '{"type":"turn.completed","usage":{"input_tokens":9999,"cached_input_tokens":0,"output_tokens":9999}}'
   exit 0;;
 esac
