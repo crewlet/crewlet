@@ -83,6 +83,8 @@ type team struct {
 	mu     sync.Mutex
 	apps   []appInfo
 	appsAt time.Time
+	// unread is why the last read of apps failed, "" where it did not.
+	unread string
 }
 
 // appInfo is one app a team reaches.
@@ -194,17 +196,35 @@ const reachTTL = 10 * time.Minute
 
 // appsOf are the apps t reaches, read with its least-privileged key.
 func (p *Product) appsOf(ctx context.Context, t *team) ([]appInfo, error) {
+	return p.readApps(ctx, t, false)
+}
+
+// readApps is [Product.appsOf], read again where fresh; a failed read is
+// recorded on t for [Product.HeldReach] and keeps the list read before.
+func (p *Product) readApps(ctx context.Context, t *team, fresh bool) ([]appInfo, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.apps != nil && p.deps.Now().Sub(t.appsAt) < reachTTL {
+	if !fresh && !t.appsAt.IsZero() && p.deps.Now().Sub(t.appsAt) < reachTTL {
 		return t.apps, nil
 	}
+	apps, err := p.listApps(ctx, t)
+	if err != nil {
+		t.unread = unreadWords(err)
+		return nil, err
+	}
+	t.apps, t.appsAt, t.unread = apps, p.deps.Now(), ""
+	return apps, nil
+}
+
+// listApps reads every app t reaches from Apple, through the least-privileged
+// key that may list them, never the Admin key.
+func (p *Product) listApps(ctx context.Context, t *team) ([]appInfo, error) {
 	op, _ := Catalog().Operation("apps_getCollection")
 	slot, ok := keyFor(op, t.slots, false)
 	if !ok {
 		return nil, fmt.Errorf("%w: listing apps", ErrNoKey)
 	}
-	var apps []appInfo
+	apps := []appInfo{}
 	cursor := ""
 	for range maxAppPages {
 		q := url.Values{"limit": {"200"}, "fields[apps]": {"name,bundleId,sku"}}
@@ -236,7 +256,6 @@ func (p *Product) appsOf(ctx context.Context, t *team) ([]appInfo, error) {
 			break
 		}
 	}
-	t.apps, t.appsAt = apps, p.deps.Now()
 	return apps, nil
 }
 
