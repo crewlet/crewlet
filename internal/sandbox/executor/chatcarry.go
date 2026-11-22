@@ -92,7 +92,7 @@ func chatSessionGate(session Session, paths Paths, g chatGate) string {
 		q(staged+"/in"), q(staged), carried, g.restore)
 	// A RESTORE IS CONTINUED ONLY ONCE ITS DIGEST IS RECORDED, and read back
 	// ([recordDigest]), for the reason Claude Code's gate gives.
-	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s", "d"), q(restoreDigestUnrecorded))
+	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(staged))
 	line(`fi`)
