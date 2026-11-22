@@ -16,6 +16,7 @@
       "gemini-cli",
       "qwen-code",
       "opencode",
+      "copilot",
       "kimi-code"
     ],
     "topology.coordination": [
