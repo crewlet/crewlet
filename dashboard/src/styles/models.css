@@ -163,18 +163,23 @@
 .models-runs__list {
   display: flex;
   flex-direction: column;
-  gap: var(--spacing-1);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* A hairline between rows, as every list draws, so the eye keeps a row across to its picker. */
 .models-run {
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--models-run-model, 22rem) 2rem;
   align-items: center;
   gap: var(--spacing-1) var(--spacing-3);
   min-block-size: 2.25rem;
+  padding-block: var(--spacing-1);
+}
+
+.models-run + .models-run {
+  border-block-start: 1px solid var(--color-border-default);
 }
 
 .models-run__who,
@@ -276,6 +281,35 @@
   .models-run__label {
     padding-inline-start: 0;
   }
+}
+
+/* The first-run card's picture: every harness a model can run on, six to a row. */
+.models-first-run__marks {
+  display: grid;
+  grid-template-columns: repeat(6, auto);
+  justify-content: center;
+  gap: var(--spacing-2);
+}
+
+.models-first-run__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+/* Who waits for a model: their faces, then the sentence naming them. */
+.models-first-run__waiting {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* The faces' cut-out takes the card's ground, not the page's. */
+.models-first-run__waiting > .crewlet-avatar-stack {
+  --crewlet-avatar-stack-ground: var(--color-surface-subtle);
 }
 
 /* A model's harness mark before its key, in a picker, an option or a menu item. */
