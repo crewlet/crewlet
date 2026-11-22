@@ -178,8 +178,8 @@ function TurnOn({
 }
 
 /**
- * The connected keys, each removed in one action
- * (`DELETE /setup/integrations/app_store_connect/keys/{connection}/{slot}`):
+ * The connected keys, the Settings summary's API keys row, each removed in one
+ * action (`DELETE /setup/integrations/app_store_connect/keys/{connection}/{slot}`):
  * Crewlet stops using it on the next call and deletes its sealed copy. A
  * connection's last key stays until another is added.
  */
@@ -209,36 +209,33 @@ export function AppStoreKeys({ keys }: { keys: readonly ConnectedKey[] }) {
     }
   }
   return (
-    <Section title="App Store Connect keys">
-      <Stack gap={2}>
+    <>
+      {/* ROWS OF THEIR OWN, not a List: a list row's inset would set the names off the column. */}
+      <div className="col">
         {said && <Callout variant="success">{said}</Callout>}
-        <List>
-          {keys.map((k) => (
-            <ListItem
-              key={`${k.connection}:${k.slot}`}
-              action={
-                <Button
-                  size="small"
-                  variant="secondary"
-                  disabledReason={
-                    !access.can
-                      ? access.reason
-                      : last(k)
-                        ? "A connection keeps at least one key: add another first."
-                        : undefined
-                  }
-                  onClick={() => setRemoving(k)}
-                >
-                  Remove
-                </Button>
-              }
-            >
+        {keys.map((k) => (
+          <span key={`${k.connection}:${k.slot}`} className="row gap-3">
+            <span>
               {k.label}
               {keys.some((o) => o.connection !== k.connection) ? ` (${k.connection})` : ""}
-            </ListItem>
-          ))}
-        </List>
-      </Stack>
+            </span>
+            <Button
+              size="small"
+              variant="secondary"
+              disabledReason={
+                !access.can
+                  ? access.reason
+                  : last(k)
+                    ? "A connection keeps at least one key: add another first."
+                    : undefined
+              }
+              onClick={() => setRemoving(k)}
+            >
+              Remove
+            </Button>
+          </span>
+        ))}
+      </div>
       {removing && (
         <ConfirmModal
           open
@@ -256,6 +253,6 @@ export function AppStoreKeys({ keys }: { keys: readonly ConnectedKey[] }) {
           {error && <Callout variant="danger">{error}</Callout>}
         </ConfirmModal>
       )}
-    </Section>
+    </>
   );
 }

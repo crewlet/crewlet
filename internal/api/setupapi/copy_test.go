@@ -241,8 +241,8 @@ func checkField(t *testing.T, tool string, r setup.Requirement, linked map[strin
 }
 
 // checkSet holds a set's words to the rules: a heading, a control, an item
-// noun, a hint under the word cap, and a sentence for a set left short that
-// says what to add.
+// noun and a hint under the word cap. A set left short is said by its control
+// on the form, so its refusal sentence is not on the listing.
 func checkSet(t *testing.T, label string, set setup.Set) {
 	t.Helper()
 	for what, text := range map[string]string{"label": set.Label, "add": set.Add, "pick": set.Pick,
@@ -254,10 +254,6 @@ func checkSet(t *testing.T, label string, set setup.Set) {
 	line(t, label+" set hint", set.Hint, ".")
 	if n := setuptest.Words(set.Hint, ""); n > setuptest.MaxHintWords {
 		t.Errorf("%s: the set's hint runs to %d words, past %d: %q", label, n, setuptest.MaxHintWords, set.Hint)
-	}
-	line(t, label+" set missing", set.Missing, ".")
-	if !strings.HasPrefix(set.Missing, "Add ") {
-		t.Errorf("%s: a set left short says %q, which does not say what to add", label, set.Missing)
 	}
 	if set.Entry.Hint != "" {
 		line(t, label+" entry "+set.Entry.Value, set.Entry.Hint, ".")

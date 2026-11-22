@@ -385,7 +385,17 @@ export function AppPane({
         )}
         {tab === "settings" && (
           <div className="int-tab">
-            <SettingsSummary tool={tool} />
+            <SettingsSummary
+              tool={tool}
+              // APP STORE CONNECT'S KEYS, each with its Remove, are the API keys row itself.
+              drawSet={
+                tool.entry.key === "app_store_connect"
+                  ? (_set, held) => (
+                      <AppStoreKeys keys={connectedKeys(held.flatMap((e) => e.fields))} />
+                    )
+                  : undefined
+              }
+            />
             {/* THE SERVERS, and each one's Atlas inventory: SSH's own answer. */}
             {tool.entry.key === "ssh" && <SshServers managed={model.managed} />}
             {/* A GROWTH PRODUCT'S connections, the vendor's roles, and a spending product's caps. */}
@@ -398,12 +408,9 @@ export function AppPane({
             )}
             {/* APP STORE ANALYTICS, turned on with an Admin key pasted once. */}
             {tool.entry.key === "app_store_connect" && (
-              <>
-                <AppStoreKeys keys={connectedKeys(tool.sections.map((s) => s.tool))} />
-                <AppStoreAnalytics
-                  connections={analyticsConnections(tool.sections.map((s) => s.tool))}
-                />
-              </>
+              <AppStoreAnalytics
+                connections={analyticsConnections(tool.sections.map((s) => s.tool))}
+              />
             )}
             <Button
               size="small"
