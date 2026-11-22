@@ -1045,8 +1045,16 @@ func LaneName(lane Lane) string {
 		return "Google Cloud"
 	case LaneSSH:
 		return "SSH"
+	case LaneMetaAds:
+		return "Meta Ads Manager"
 	case LaneAppStoreConnect:
 		return "App Store Connect"
+	case LaneAppleAds:
+		return "Apple Ads"
+	case LaneGoogleAnalytics:
+		return "Google Analytics"
+	case LaneAdMob:
+		return "AdMob"
 	default:
 		return string(lane)
 	}

@@ -331,16 +331,17 @@ func (o Object) Validate() error {
 const RecordWithin = 12 * time.Hour
 
 // AssumedClockSkew is the most any node's clock (or that of the broker member
-// leading the position register) may stand from the fleet's, the median of
-// the data nodes' clocks: what the `clock_skew` alarm raises past, and the
-// bound under every rule judging an instant one machine stamped by another's
-// clock (collect.PendingGrace against [RecordWithin], gitlet's RetireGrace,
+// leading the position register) may stand from the fleet's, the median of the
+// data nodes' clocks: what the `clock_skew` alarm raises past, and the bound
+// under every rule judging an instant one machine stamped by another's clock
+// (collect.PendingGrace against [RecordWithin], gitlet's RetireGrace,
 // PruneGrace, PushDaysKept and hold thresholds, sandbox's capture, standby,
-// box-read and ledger rules), each argued at its rule. Any TWO held machines
-// differ by up to TWICE it, so each margin takes twice it. Nodes without the
-// data role and external NATS servers are unmeasured: run NTP on every one
-// (docs/guides/deployment.md). AN HOUR: further off means no NTP at all, and
-// the doubled hour still fits every margin.
+// box-read and ledger rules, the engine's join donors, statelog's ages of
+// another machine's instant), each argued at its rule or in
+// docs/guides/deployment.md. Any TWO held machines differ by up to TWICE it, so
+// each margin takes twice it. Nodes without the data role and external NATS
+// servers are unmeasured: run NTP on every one. AN HOUR: further off means no
+// NTP at all, and the doubled hour still fits every margin.
 const AssumedClockSkew = time.Hour
 
 // identifier is what a declared table or column may be spelled as, since each

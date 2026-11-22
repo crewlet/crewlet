@@ -24,6 +24,11 @@ func ScopeKey(lane Lane, entry string) string {
 		return config.ConfluenceSpaceKey(entry)
 	case LaneScaleway:
 		return config.ScalewayID(entry)
+	case LaneMetaAds:
+		if id := config.MetaAdAccountID(entry); id != "" {
+			return id
+		}
+		return strings.TrimSpace(entry)
 	default:
 		return strings.TrimSpace(entry)
 	}
