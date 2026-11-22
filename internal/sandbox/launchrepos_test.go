@@ -187,15 +187,16 @@ func (r LaunchRequest) withFloor(floor string) LaunchRequest {
 }
 
 // THE LAUNCH'S OWN ENVIRONMENT REACHES EVERY SETUP STEP AND THE RUN.
-// [LaunchRequest.RunEnv], the job's own clone credential, is asked once with
-// the row's launch id, and its variables reach the operator's setup and the
-// harness, winning over an operator's value of the same name. Telemetry is
-// minted at the job's start and reaches the run alone. The caller's spec keeps
-// its own map. A launch runs only the operator's steps (the run clones a
-// grant) and its environment block names no checkout.
+// [LaunchRequest.RunEnv] is asked once with the row's launch id; its
+// variables reach the operator's setup and the harness over an operator's
+// value; its Gitlet credential is written into the box, named to the run by
+// its path there and in no variable. Telemetry reaches the run alone. The
+// caller's spec keeps its own map. A launch runs only the operator's steps
+// (the run clones a grant) and its environment block names no checkout.
 //
-// Mutation: provision with req.Spec rather than the launch's — the setup
-// commands' environment lacks the token, red.
+// Mutations, each red: provision with req.Spec rather than the launch's (the
+// setup commands lack the launch's variable); put the credential in the
+// environment; write no file, or name none to the run.
 func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 	t.Parallel()
 	rig := newWaiterRig(t)
@@ -210,13 +211,14 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 	}
 	req := withRepos(t, launchReq("t1"), granted("web", webRepoID))
 	req.Spec.TimeoutSec = 900
-	req.Spec.Env = map[string]string{"OPERATOR": "op", "CREWLET_GIT_TOKEN": "the operator's"}
+	req.Spec.Env = map[string]string{"OPERATOR": "op", GitURLVar: "the operator's"}
 	specEnv := maps.Clone(req.Spec.Env)
 	req.Setup = []SetupStep{{Name: "operator", Commands: []string{"echo provisioned"}, Brief: "Provisioned."}}
 	var asked []string
-	req.RunEnv = func(launchID string) (map[string]string, error) {
+	req.RunEnv = func(launchID string) (LaunchEnv, error) {
 		asked = append(asked, launchID)
-		return map[string]string{"CREWLET_GIT_TOKEN": "token-for-" + launchID}, nil
+		return LaunchEnv{Env: map[string]string{GitURLVar: "base-for-" + launchID},
+			GitAccess: "token-for-" + launchID}, nil
 	}
 
 	res, err := rig.launchVia(t.Context(), manager, req)
@@ -227,7 +229,7 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 	if !slices.Equal(asked, []string{launch}) {
 		t.Fatalf("RunEnv was asked for %v, want once, for the row's job %q", asked, launch)
 	}
-	token := "token-for-" + launch
+	token, base := "token-for-"+launch, "base-for-"+launch
 
 	execs := rig.provider.Box(res.SandboxID).Execs()
 	var ran []string
@@ -240,9 +242,14 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 			continue
 		}
 		ran = append(ran, firstLine(e.Command))
-		if got := e.Env["CREWLET_GIT_TOKEN"]; got != token {
-			t.Errorf("setup command %q ran with CREWLET_GIT_TOKEN=%q, want the job's %q", firstLine(e.Command),
-				got, token)
+		if got := e.Env[GitURLVar]; got != base {
+			t.Errorf("setup command %q ran with %s=%q, want the job's %q", firstLine(e.Command), GitURLVar,
+				got, base)
+		}
+		for name, value := range e.Env {
+			if strings.Contains(value, token) {
+				t.Errorf("setup command %q ran with the credential in %s", firstLine(e.Command), name)
+			}
 		}
 		if e.Env["OPERATOR"] != "op" {
 			t.Errorf("setup command %q lost the operator's environment: %v", firstLine(e.Command), e.Env)
@@ -261,9 +268,21 @@ func TestTheLaunchEnvironmentReachesSetupAndTheRun(t *testing.T) {
 		t.Fatalf("started %d runs, want 1", len(started))
 	}
 	run := started[0]
-	if run.Env["CREWLET_GIT_TOKEN"] != token || run.Env["OPERATOR"] != "op" {
-		t.Errorf("the run's environment is %v, want the job's token and the operator's variable", run.Env)
+	box := rig.provider.Box(res.SandboxID)
+	if run.Env[GitURLVar] != base || run.Env["OPERATOR"] != "op" ||
+		run.Env[GitAccessFileVar] != box.Home()+"/"+GitAccessFile {
+		t.Errorf("the run's environment is %v, want the job's base, the operator's variable and the "+
+			"credential's file", run.Env)
 	}
+	for name, value := range run.Env {
+		if strings.Contains(value, token) {
+			t.Errorf("the run's variable %s holds its credential, which only its file holds", name)
+		}
+	}
+	if got, err := box.ReadFile(t.Context(), GitAccessFile); err != nil || string(got) != token {
+		t.Errorf("the box's credential file holds %q (%v), want the job's %q", got, err, token)
+	}
+
 	if !strings.HasPrefix(run.Env["OTEL_EXPORTER_OTLP_ENDPOINT"], "https://engine.internal/otlp/") {
 		t.Errorf("the run was not handed its telemetry endpoint: %v", run.Env)
 	}
@@ -308,7 +327,7 @@ func TestALaunchWhoseEnvironmentFailsIsAbandoned(t *testing.T) {
 	rig := newWaiterRig(t)
 	req := withRepos(t, launchReq("t1"), granted("web", webRepoID))
 	refused := errors.New("the keyring cannot sign")
-	req.RunEnv = func(string) (map[string]string, error) { return nil, refused }
+	req.RunEnv = func(string) (LaunchEnv, error) { return LaunchEnv{}, refused }
 	_, err := rig.launchVia(t.Context(), rig.manager, req)
 	if !errors.Is(err, refused) {
 		t.Fatalf("Launch = %v, want the environment's failure", err)
