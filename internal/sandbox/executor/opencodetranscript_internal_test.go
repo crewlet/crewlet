@@ -18,7 +18,7 @@ import (
 // nothing, or as one that ended without its failure.
 func TestAnOpenCodeMessageReadsWhatItsStepMeasuredAndTheFailureItEndedOn(t *testing.T) {
 	t.Parallel()
-	for _, version := range []string{"2.3.0"} {
+	for _, version := range []string{"2.3.2"} {
 		raw, err := os.ReadFile(filepath.Join("testdata", "opencode", version, "export.json"))
 		if err != nil {
 			t.Fatalf("read the fixture: %v", err)

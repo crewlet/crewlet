@@ -26,7 +26,7 @@ import (
 // open and the kernel closes as it exits ([serverPipe]), never its pid, which
 // kill -0 finds until reaped (#1164); `up` reads the pid's state, since sh
 // cannot ask a pipe without blocking. FAKE_PIPE_CUT stops an answer into a pipe
-// after n bytes with success, as earlier OpenCode 2 releases stop past a 64 KiB multiple;
+// after n bytes with success, as an OpenCode cutting at a 64 KiB multiple would;
 // pages print byte for byte (`answerfile`), as the budget cases measure them.
 // FAKE_RUN_SLEEP alone `exec`s the sleep: dash holds a SIGINT landing as it
 // forks a foreground command, so a shell in front could miss a group SIGINT.
@@ -65,7 +65,7 @@ answerfile() {
 case "$1" in
 --version)
   [ -z "${FAKE_VERSION_FAIL:-}" ] || { echo "$FAKE_VERSION_FAIL" >&2; exit 3; }
-  echo "${FAKE_VERSION:-opencode v2.3.0}" ;;
+  echo "${FAKE_VERSION:-opencode v2.3.2}" ;;
 auth)
   case "$2" in
   import) cat > "$d/imported"; cp "$d/imported" "$d/db" ;;
@@ -222,7 +222,7 @@ type scriptOpts struct {
 }
 
 // pipeCut is where a case's OpenCode cuts an answer into a pipe (FAKE_PIPE_CUT):
-// 64 KiB, the multiple earlier OpenCode 2 releases stop at.
+// 64 KiB, the multiple such a cut would stop at.
 const pipeCut = 64 << 10
 
 // longMessages is a session's messages, one whose text alone passes n bytes.
@@ -958,8 +958,8 @@ func TestARunCancelsTheNotesItsSessionNeverDelivered(t *testing.T) {
 }
 
 // A NOTE LISTED PAST WHAT A PIPE HOLDS IS CANCELLED TOO: the listing carries
-// each item's whole text, and earlier OpenCode 2 releases stop an answer into a pipe after
-// a 64 KiB multiple and exit 0, so the script reads it from a file. Every sh.
+// each item's whole text, and a pipe's cut would exit 0 unseen, so the script
+// reads it from a file. Every sh.
 //
 // Mutation: read the listing through a pipe again, and the note past the cut
 // is left pending.
@@ -1132,8 +1132,8 @@ func TestOpenCodeServersThatShadowTheEnginesToolsAreRefused(t *testing.T) {
 
 // A SERVER LISTED PAST WHAT A PIPE HOLDS IS STILL SEEN. `mcp.list` lists every
 // server the image and repository declare, a failed one with its error, and
-// earlier OpenCode 2 releases stop an answer into a pipe after a 64 KiB multiple and exit
-// 0; read from a file, a server listed after a long error is seen: a declared
+// a pipe's cut would exit 0 unseen; read from a file, a server listed after a
+// long error is seen: a declared
 // one, settled, starts the run, and a shadowing one refuses it. The stand-in
 // cuts at 4 KiB rather than [pipeCut]: the cut's place is the release's, and
 // the shadow check's `${r#*…}` is slow far into an answer (five seconds at
@@ -1855,17 +1855,19 @@ func TestAnOpenCodeThatFailsIsToldFromOneThatIsMissing(t *testing.T) {
 func TestAnOpenCodeOlderThanTheReleaseSupportedIsRefusedByName(t *testing.T) {
 	t.Parallel()
 	forEachShell(t, func(t *testing.T, sh boxShell) {
-		for _, older := range []string{"opencode v2.2.99", "opencode v1.99.0", "opencode v2.0.0"} {
+		for _, older := range []string{"opencode v2.3.1", "opencode v2.3.0", "opencode v2.2.99", "opencode v1.99.0",
+			"opencode v2.0.0"} {
 			run := runScript(t, scriptOpts{shell: sh, env: []string{"FAKE_VERSION=" + older}})
 			if run.code == 0 || !strings.Contains(run.stderr, "OpenCode "+strings.TrimPrefix(older, "opencode v")) ||
-				!strings.Contains(run.stderr, "OpenCode 2.3.0") {
+				!strings.Contains(run.stderr, "supports OpenCode 2.3.2, its newest") {
 				t.Errorf("a box printing %q ran (exit %d) or was not told the release:\n%s", older, run.code, run.stderr)
 			}
 			if run.callIndex("serve ") >= 0 || run.callIndex("run ") >= 0 {
 				t.Errorf("a box printing %q was driven anyway:\n%s", older, strings.Join(run.calls, "\n"))
 			}
 		}
-		for _, runs := range []string{"opencode v2.3.0", "opencode v2.10.0", "opencode v3.0.0", "opencode nightly"} {
+		for _, runs := range []string{"opencode v2.3.2", "opencode v2.3.3", "opencode v2.10.0", "opencode v3.0.0",
+			"opencode nightly"} {
 			run := runScript(t, scriptOpts{shell: sh, env: []string{"FAKE_VERSION=" + runs}})
 			if strings.Contains(run.stderr, "supports OpenCode") || run.callIndex("serve ") < 0 {
 				t.Errorf("a box printing %q was refused or not driven:\n%s", runs, run.stderr)

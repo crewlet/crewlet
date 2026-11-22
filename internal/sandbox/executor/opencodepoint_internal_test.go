@@ -101,7 +101,7 @@ func TestADefaultedLimitIsNoPoint(t *testing.T) {
 			if tc.document != "" {
 				docs = append(docs, tc.document)
 			}
-			got := readPoint("2.3.0", modelsAnswer(pointModel{provider: "stub", model: "m", context: 200000,
+			got := readPoint("2.3.2", modelsAnswer(pointModel{provider: "stub", model: "m", context: 200000,
 				released: tc.released}), configAnswer(docs...), listingOf(), nil)
 			if got.Mark != tc.want || (tc.want == "" && got.Tokens != 170000) {
 				t.Errorf("the point is %+v, want mark %q (and 170,000 where none)", got, tc.want)
@@ -119,12 +119,12 @@ func TestADefaultedLimitIsNoPoint(t *testing.T) {
 func TestAZeroLimitIsNoPointWhereCompactionIsOn(t *testing.T) {
 	t.Parallel()
 	models := modelsAnswer(pointModel{provider: "stub", model: "m", released: 1793923200000})
-	if got := readPoint("2.3.0", models, configAnswer(), listingOf(), nil); got.Mark != sandbox.PointNoLimit ||
+	if got := readPoint("2.3.2", models, configAnswer(), listingOf(), nil); got.Mark != sandbox.PointNoLimit ||
 		got.Never {
 		t.Errorf("a zero limit with compaction on reads %+v, want %q", got, sandbox.PointNoLimit)
 	}
 	off := configAnswer(`{"compaction":{"auto":false}}`)
-	if got := readPoint("2.3.0", models, off, listingOf(), nil); got.Mark != "" || !got.Never {
+	if got := readPoint("2.3.2", models, off, listingOf(), nil); got.Mark != "" || !got.Never {
 		t.Errorf("a zero limit with compaction off reads %+v, want never compacted", got)
 	}
 }
@@ -139,13 +139,13 @@ func TestAZeroLimitIsNoPointWhereCompactionIsOn(t *testing.T) {
 func TestCompactionOffSendsWholeWhateverTheCount(t *testing.T) {
 	t.Parallel()
 	models := modelsAnswer(pointModel{provider: "stub", model: "m", context: 200000})
-	off := readPoint("2.3.0", models, configAnswer(stated(200000), `{"compaction":{"auto":false}}`),
+	off := readPoint("2.3.2", models, configAnswer(stated(200000), `{"compaction":{"auto":false}}`),
 		listingOf(), nil)
 	if off.Mark != "" || !off.Never || !off.SendsWhole(&sandbox.ResumedCount{Tokens: 900000}, "stub", "stub",
 		"brief") {
 		t.Errorf("compaction off reads %+v, want a session sent whole whatever its count", off)
 	}
-	on := readPoint("2.3.0", models, configAnswer(`{"compaction":{"auto":false}}`, stated(200000),
+	on := readPoint("2.3.2", models, configAnswer(`{"compaction":{"auto":false}}`, stated(200000),
 		`{"compaction":{"auto":true}}`), listingOf(), nil)
 	if on.Never || on.Tokens != 170000 {
 		t.Errorf("compaction turned on by the highest document reads %+v, want 170,000", on)
@@ -158,7 +158,7 @@ func TestCompactionOffSendsWholeWhateverTheCount(t *testing.T) {
 // the limit leaves the share.
 //
 // Mutation: take the lowest document's buffer, or apply a buffer past the
-// limit on 2.3.0, and a case goes red.
+// limit, and a case goes red.
 func TestTheHighestDocumentsBufferMovesThePoint(t *testing.T) {
 	t.Parallel()
 	models := modelsAnswer(pointModel{provider: "stub", model: "m", context: 200000})
@@ -168,15 +168,15 @@ func TestTheHighestDocumentsBufferMovesThePoint(t *testing.T) {
 		want          int64
 		mark          sandbox.PointMark
 	}{
-		{name: "the highest of two", release: "2.3.0", want: 170000,
+		{name: "the highest of two", release: "2.3.2", want: 170000,
 			documents: []string{`{"compaction":{"buffer":40000}}`, `{"compaction":{"buffer":30000}}`}},
-		{name: "a share on 2.3.0", release: "2.3.0", want: 175000,
+		{name: "a share on 2.3.2", release: "2.3.2", want: 175000,
 			documents: []string{`{"compaction":{"buffer":"12.5%"}}`}},
-		{name: "a share rounded half up", release: "2.3.0", want: 200000 - 25001,
+		{name: "a share rounded half up", release: "2.3.2", want: 200000 - 25001,
 			documents: []string{`{"compaction":{"buffer":"12.5005%"}}`}},
-		{name: "a share that is no number", release: "2.3.0", mark: sandbox.PointUnread,
+		{name: "a share that is no number", release: "2.3.2", mark: sandbox.PointUnread,
 			documents: []string{`{"compaction":{"buffer":"ten%"}}`}},
-		{name: "past the limit on 2.3.0", release: "2.3.0", want: 170000,
+		{name: "past the limit on 2.3.2", release: "2.3.2", want: 170000,
 			documents: []string{`{"compaction":{"buffer":250000}}`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -192,7 +192,8 @@ func TestTheHighestDocumentsBufferMovesThePoint(t *testing.T) {
 
 // THE SHARE. With no buffer, OpenCode holds back the larger of fifteen
 // hundredths of the limit and 16,000 tokens once the limit is twice that
-// (measured at its boundaries on 2.3.0); a limit under 32,000 holds back the
+// (read in 2.3.2's bundle, measured at its default limit's boundary); a
+// limit under 32,000 holds back the
 // share alone.
 //
 // Mutation: take a tenth, or hold back 16,000 under 32,000, and a case goes
@@ -204,8 +205,8 @@ func TestTheShareHoldsBackFifteenHundredths(t *testing.T) {
 		limit   int64
 		want    int64
 	}{
-		{"2.3.0", 200000, 170000}, {"2.3.0", 300000, 255000}, {"2.3.0", 100000, 84000},
-		{"2.3.0", 20000, 17000},
+		{"2.3.2", 200000, 170000}, {"2.3.2", 300000, 255000}, {"2.3.2", 100000, 84000},
+		{"2.3.2", 20000, 17000},
 	} {
 		models := modelsAnswer(pointModel{provider: "stub", model: "m", context: tc.limit})
 		got := readPoint(tc.release, models, configAnswer(stated(tc.limit)), listingOf(), nil)
@@ -222,9 +223,9 @@ func TestTheShareHoldsBackFifteenHundredths(t *testing.T) {
 func TestTheLimitIsTheSmallerOfInputAndContext(t *testing.T) {
 	t.Parallel()
 	models := modelsAnswer(pointModel{provider: "stub", model: "m", context: 200000, input: 300000})
-	got := readPoint("2.3.0", models, configAnswer(stated(200000)), listingOf(), nil)
+	got := readPoint("2.3.2", models, configAnswer(stated(200000)), listingOf(), nil)
 	if got.Mark != "" || got.Tokens != 170000 {
-		t.Errorf("OpenCode 2.3.0 with input 300,000 and context 200,000 reads %+v, want 170,000", got)
+		t.Errorf("OpenCode 2.3.2 with input 300,000 and context 200,000 reads %+v, want 170,000", got)
 	}
 }
 
@@ -260,7 +261,7 @@ func TestANativeCompactionOrContextManagementIsNoPoint(t *testing.T) {
 			if tc.document != "" {
 				docs = append(docs, tc.document)
 			}
-			if got := readPoint("2.3.0", modelsAnswer(m), configAnswer(docs...), listingOf(), nil); got.Mark != tc.want {
+			if got := readPoint("2.3.2", modelsAnswer(m), configAnswer(docs...), listingOf(), nil); got.Mark != tc.want {
 				t.Errorf("the point is %+v, want mark %q", got, tc.want)
 			}
 		})
@@ -308,7 +309,7 @@ func TestAPluginOtherThanTheEnginesIsNoPoint(t *testing.T) {
 			if listing == "" {
 				listing = listingOf()
 			}
-			if got := readPoint("2.3.0", models, config, listing, nil); got.Mark != tc.want {
+			if got := readPoint("2.3.2", models, config, listing, nil); got.Mark != tc.want {
 				t.Errorf("the point is %+v, want mark %q", got, tc.want)
 			}
 		})
@@ -328,7 +329,7 @@ func TestABoxOfAnotherReleaseThanTheWritersIsNoPoint(t *testing.T) {
 		box, writer string
 		want        sandbox.PointMark
 	}{
-		{"2.3.0", "2.3.0", ""}, {"2.3.0", "2.4.0", sandbox.PointPair}, {"2.3.0", "", sandbox.PointPair},
+		{"2.3.2", "2.3.2", ""}, {"2.3.2", "2.4.0", sandbox.PointPair}, {"2.3.2", "", sandbox.PointPair},
 		{"2.4.0", "2.4.0", sandbox.PointRelease},
 	} {
 		ask := sandbox.PointAsk{Model: "stub/m", Release: tc.box, Writer: tc.writer}
@@ -359,11 +360,11 @@ func TestTheBoxsSourcesAreSizedOnlyInItsOwnBox(t *testing.T) {
 	sources := &sandbox.RunSources{System: "the run's own instructions",
 		Skills:   []sandbox.Skill{{Name: "deploy", Description: "how to deploy"}},
 		Guidance: map[string]string{"tracker": "the tracker's\ninstructions"}}
-	bare := readPoint("2.3.0", models, config, listingOf("walk /w", "walk /"), sources)
+	bare := readPoint("2.3.2", models, config, listingOf("walk /w", "walk /"), sources)
 	if bare.Mark != "" || bare.BoxBytes <= int64(len("the run's own instructions")) {
 		t.Fatalf("in its own box the point reads %+v, want the run's sources sized", bare)
 	}
-	found := readPoint("2.3.0", models, config, listingOf("walk /w", "walk /", "instr  5000 /w/AGENTS.md"),
+	found := readPoint("2.3.2", models, config, listingOf("walk /w", "walk /", "instr  5000 /w/AGENTS.md"),
 		sources)
 	if found.BoxBytes < bare.BoxBytes+5000 {
 		t.Errorf("an AGENTS.md of 5,000 bytes moves the charge from %d to %d, want at least its bytes more",
@@ -373,31 +374,31 @@ func TestTheBoxsSourcesAreSizedOnlyInItsOwnBox(t *testing.T) {
 		"its servers' guidance": {System: sources.System, Skills: sources.Skills},
 		"its skills":            {System: sources.System, Guidance: sources.Guidance},
 	} {
-		less := readPoint("2.3.0", models, config, listingOf("walk /w", "walk /"), &without)
+		less := readPoint("2.3.2", models, config, listingOf("walk /w", "walk /"), &without)
 		if bare.BoxBytes <= less.BoxBytes {
 			t.Errorf("the run's sources charge %d bytes with %s and %d without, want more with them", bare.BoxBytes,
 				name, less.BoxBytes)
 		}
 	}
-	if imported := readPoint("2.3.0", models, config, listingOf("walk /w"), nil); imported.BoxBytes != 0 {
+	if imported := readPoint("2.3.2", models, config, listingOf("walk /w"), nil); imported.BoxBytes != 0 {
 		t.Errorf("after an import the point charges %d bytes, want none", imported.BoxBytes)
 	}
 	mcp := configAnswer(stated(200000), `{"mcp":{"servers":{"x":{"type":"local"}}}}`)
-	if got := readPoint("2.3.0", models, mcp, listingOf(), sources); got.Mark != sandbox.PointBoxSources {
+	if got := readPoint("2.3.2", models, mcp, listingOf(), sources); got.Mark != sandbox.PointBoxSources {
 		t.Errorf("a document's MCP servers in the box's own copy read %+v, want %q", got, sandbox.PointBoxSources)
 	}
-	if got := readPoint("2.3.0", models, mcp, listingOf(), nil); got.Mark != "" {
+	if got := readPoint("2.3.2", models, mcp, listingOf(), nil); got.Mark != "" {
 		t.Errorf("a document's MCP servers after an import read %+v, want a point", got)
 	}
 	dialed := *sources
 	dialed.Unsized = []string{"github"}
-	if got := readPoint("2.3.0", models, config, listingOf(), &dialed); got.Mark != sandbox.PointBoxSources {
+	if got := readPoint("2.3.2", models, config, listingOf(), &dialed); got.Mark != sandbox.PointBoxSources {
 		t.Errorf("a server the box dials itself reads %+v, want %q", got, sandbox.PointBoxSources)
 	}
 }
 
 // EACH SOURCE IS CHARGED AT LEAST ITS RENDER. In the box that holds the copy,
-// OpenCode 2.3.0 hands a changed skill list an entry per skill whose id and
+// OpenCode hands a changed skill list (untested on 2.3.2) an entry per skill whose id and
 // name are both its listed name ([sandbox.Skill.Listed]), and a changed day
 // and environment their lines, the working directory twice and the box's
 // temporary folder once ([openCodeRendered]); the charge of each is at least
@@ -412,7 +413,7 @@ func TestEachSourceIsChargedAtLeastItsRender(t *testing.T) {
 	paths := Paths{Home: "/box"}
 	charge := func(sources sandbox.RunSources) int64 {
 		t.Helper()
-		got := readPoint("2.3.0", models, config, listingOf("walk /w", "walk /"), &sources)
+		got := readPoint("2.3.2", models, config, listingOf("walk /w", "walk /"), &sources)
 		if got.Mark != "" {
 			t.Fatalf("in its own box the point reads %+v, want one", got)
 		}
@@ -435,7 +436,7 @@ func TestEachSourceIsChargedAtLeastItsRender(t *testing.T) {
 	}
 }
 
-// openCodeRendered is how OpenCode 2.3.0 renders a skill entry, the day and
+// openCodeRendered is how OpenCode renders a skill entry (untested on 2.3.2), the day and
 // the environment, as a probe's request carries them in its system message,
 // the day at its longest, each change after the line its code opens one with
 // (`Today's date is now:`, `The environment you are running in is now:`).
@@ -466,7 +467,7 @@ func TestTheReadKeepsNoValueItWasHanded(t *testing.T) {
 	config := configAnswer(stated(200000),
 		`{"providers":{"stub":{"settings":{"apiKey":"`+secret+`"}}},`+
 			`"plugins":[{"package":"@acme/compactor","options":{"token":"`+secret+`"}}]}`)
-	got := readPoint("2.3.0", models, config, listingOf(), nil)
+	got := readPoint("2.3.2", models, config, listingOf(), nil)
 	if got.Mark != sandbox.PointPlugin || len(got.Plugins) != 1 || got.Plugins[0] != "@acme/compactor" {
 		t.Fatalf("the point is %+v, want the plugin named by its package", got)
 	}

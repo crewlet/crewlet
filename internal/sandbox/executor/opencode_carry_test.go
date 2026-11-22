@@ -361,9 +361,8 @@ func TestAnOpenCodeRunsSessionIsExportedBeforeItsServerStops(t *testing.T) {
 }
 
 // A SESSION IS CAPTURED WHOLE BY AN OPENCODE THAT CUTS WHAT IT WRITES INTO A
-// PIPE. Into a pipe, earlier OpenCode 2 releases stop writing a large answer
-// after a 64 KiB multiple and exit 0, so an export piped into gzip is a cut
-// archive the take's scrub refuses. The export is written to a file and
+// PIPE. A cut into a pipe exits 0 (2.3.2 cut none to 1 MiB, measured), and an
+// export piped into gzip and cut is an archive the take's scrub refuses. The export is written to a file and
 // gzipped from there, so the capture of an export past the cut gunzips to all
 // of it, and the box keeps that whole archive's digest, under every sh a box
 // may run the script with.

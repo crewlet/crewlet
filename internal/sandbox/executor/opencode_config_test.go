@@ -106,7 +106,7 @@ func referencedPath(ref string) (string, bool) {
 }
 
 // fileReference is how OpenCode 2 finds a reference in a configuration's text
-// (core/src/config/variable.ts, the same in earlier OpenCode 2 releases).
+// (core/src/config/variable.ts; read in 2.3.2's bundle).
 var fileReference = regexp.MustCompile(`\{file:[^}]+\}`)
 
 // asOpenCodeReadsIt is a configuration's text with every `{file:<path>}`

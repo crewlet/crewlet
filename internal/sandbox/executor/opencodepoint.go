@@ -39,14 +39,14 @@ const openCodePointCleanupWait = 10 * time.Second
 
 // The share of a model's limit OpenCode holds back below its point where no
 // buffer is set, and the floor it holds back at least once the limit is twice
-// it (read in 2.3.0's point function, measured at its boundaries).
+// it (read in 2.3.2's bundle, measured at its default limit's boundary).
 const (
 	openCodeShare      = 0.15
 	openCodeShareFloor = 16000
 )
 
 // The bytes of OpenCode's renders the read charges beside what each renders
-// whole (read in 2.3.0's: the headers of a changed, added or removed
+// whole (untested on 2.3.2: the headers of a changed, added or removed
 // instruction, a list's preamble and its replacement sentence, a skill's entry
 // tags beside its listed name twice, a server's entry beside its name twice in
 // its Code Mode line, the date's line, the environment block beside its

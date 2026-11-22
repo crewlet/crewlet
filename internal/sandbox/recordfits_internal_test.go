@@ -176,7 +176,7 @@ func TestTheRecordNamesASessionAndAReleaseOfTheirShapesAlone(t *testing.T) {
 	widestRelease := strings.Repeat("1", executorkeep.HarnessVersionMaxBytes-len(".0.0")) + ".0.0"
 	for _, tc := range []struct{ session, release, wantSession, wantRelease string }{
 		{uuid, "2.1.310", uuid, "2.1.310"},
-		{"ses_01J9ZQ3W7K", "2.3.0", "ses_01J9ZQ3W7K", "2.3.0"},
+		{"ses_01J9ZQ3W7K", "2.3.2", "ses_01J9ZQ3W7K", "2.3.2"},
 		{widestID, widestRelease, widestID, widestRelease},
 		{widestID + "s", "1" + widestRelease, "", ""},
 		{"../../.credentials.json", "2.1.310 (Claude Code)", "", ""},

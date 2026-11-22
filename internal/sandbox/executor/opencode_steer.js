@@ -24,7 +24,7 @@
 // "context" hook, which OpenCode runs on every model request before sending
 // it, and only where a user message of that request IS the note: the message
 // OpenCode made of the plugin's own admission, named by the id the note was
-// admitted under (2.3.0 hands the hook each message's id), holding one text
+// admitted under (2.3.2 hands the hook each message's id), holding one text
 // part equal to the note's text. So one message confirms one note, a note of
 // the same words, an earlier run's or a checkpoint quoting it never does, and a
 // message of any other shape confirms nothing. Between a compaction's start
@@ -37,7 +37,7 @@
 // so a note that never folds spends nothing. A note the engine answers spent,
 // or one folded again, is given up: never confirmed, its id posted to the
 // route's `folded` so the engine says why it waits for the review. A failed
-// compaction confirms and posts nothing. Measured on 2.3.0: the hook precedes
+// compaction confirms and posts nothing. Measured on 2.3.2: the hook precedes
 // the delivered event, which precedes the compaction's start; a re-admitted
 // note lands plain one step later.
 
@@ -45,7 +45,7 @@
 // between the run's session's `session.execution.started` (or any step of it
 // starting) and its `succeeded`, `failed` or `interrupted`, and each with
 // `resume: false`: a steer admitted once an execution has settled starts
-// nothing — measured on an earlier OpenCode 2 release (not on 2.3.0) — where one that resumed the session would start
+// nothing — measured on 2.3.2 — where one that resumed the session would start
 // an execution `opencode run` no longer watches, whose answer nobody reads and
 // whose server the run's script then stops. So a note sent after the run's
 // last step waits on the run's record for its review. One whose admission
@@ -89,7 +89,7 @@ const readAbortMs = 10_000
 // endWaitMs bounds how long the cleanup waits for the confirmations, asks and
 // folds in flight before it ends them. OpenCode awaits a plugin's cleanup when its
 // server is stopped, and exited within 0.2 s of one ending (measured on
-// 2.3.0); the run's script kills the server five seconds after asking
+// 2.3.2); the run's script kills the server five seconds after asking
 // it to stop (internal/sandbox's JobStopGrace), so four leaves it that second.
 // A post the end cuts costs a duplicate, never a lost note: the note waits on
 // the record, served, for the review.
@@ -166,7 +166,7 @@ async function arm(ctx, url, session) {
 
   // see is the session's "context" hook: the request about to go to the model.
   // No I/O and no await, since OpenCode holds the request on it. Fails closed
-  // while the session compacts: its summary runs no context hook on 2.3.0
+  // while the session compacts: its summary runs no context hook on 2.3.2
   // (measured), and a request then is none a note may be confirmed off.
   const see = (input) => {
     if (compacting || input?.sessionID !== session || !Array.isArray(input.messages)) return

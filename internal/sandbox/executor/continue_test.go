@@ -768,7 +768,7 @@ func openCodeTaken(t *testing.T, messages string) int64 {
 		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
 	const session = "ses_0123456789abcdef0123456789"
 	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
-		[]byte("id "+session+"\nrelease 2.3.0\n")); err != nil {
+		[]byte("id "+session+"\nrelease 2.3.2\n")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {
@@ -879,11 +879,11 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 		"claude, a writer too old": {executor.NewClaudeCode(), sandbox.SessionArchive{Harness: executor.ClaudeCodeName,
 			Format: executor.ClaudeArchiveFormat, Version: "2.1.299"}, false, "older than 2.1.300"},
 		"claude, opencode's session": {executor.NewClaudeCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
-			Format: executor.OpenCodeArchiveFormat, Version: "2.3.0"}, false, "continued only by the harness that wrote it"},
+			Format: executor.OpenCodeArchiveFormat, Version: "2.3.2"}, false, "continued only by the harness that wrote it"},
 		"opencode's own": {executor.NewOpenCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
-			Format: executor.OpenCodeArchiveFormat, Version: "2.3.0"}, true, ""},
+			Format: executor.OpenCodeArchiveFormat, Version: "2.3.2"}, true, ""},
 		"opencode, another format": {executor.NewOpenCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
-			Format: executor.OpenCodeArchiveFormat + 1, Version: "2.3.0"}, false, "format"},
+			Format: executor.OpenCodeArchiveFormat + 1, Version: "2.3.2"}, false, "format"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -920,7 +920,7 @@ func TestAContinuedOpenCodeRunIsConfiguredWithItsOwnInstructions(t *testing.T) {
 	fresh := configure(sandbox.RunRequest{System: "the first launch's instructions"})
 	continued := configure(sandbox.RunRequest{System: "this launch's instructions", Resume: carriedOpenCode,
 		Carried: &sandbox.CarriedSession{Archive: sandbox.SessionArchive{Harness: executor.OpenCodeName,
-			SessionID: carriedOpenCode, Format: executor.OpenCodeArchiveFormat, Version: "2.3.0"},
+			SessionID: carriedOpenCode, Format: executor.OpenCodeArchiveFormat, Version: "2.3.2"},
 			Body: strings.NewReader(openCodeExport(carriedOpenCode))}})
 	if continued != fresh || !strings.Contains(continued, `"instructions"`) || !strings.Contains(continued, p.System()) {
 		t.Errorf("the continued run is configured\n%s\nwant the fresh run's configuration, naming %s:\n%s",

@@ -79,10 +79,10 @@ func ocFixture(t *testing.T, path ...string) []byte {
 // AN OPENCODE EXPORT IS COUNTED AS OPENCODE COUNTS IT, from above: the last
 // counted reply's input, cache reads and writes, OUTPUT and REASONING, and
 // every message after it at a quarter of its bytes, the reply's own tool
-// results among them at the spans of their answers. Over the exports 2.3.0
+// results among them at the spans of their answers. Over the exports 2.3.2
 // wrote in the probe of its boundaries (a step answered with text, and a step
 // whose tool answered 40,000 characters, which OpenCode counted at 10,000
-// tokens, then an interrupted step), the real export of 2.3.0 this package
+// tokens, then an interrupted step), the real export of 2.3.2 this package
 // keeps, and a reply that reports reasoning: each figure is the one an
 // independent reading of the same rule over the file's spans finds. The
 // floor's last-request figure, read in the same walk, is unchanged. Mutation:
@@ -97,14 +97,14 @@ func TestAnOpenCodeExportIsCountedAsOpenCodeCountsIt(t *testing.T) {
 		bound, figure  int64
 		restart, owner string
 	}{
-		"a step answered with text": {doc: ocFixture(t, "2.3.0", "text.json"), release: "2.3.0",
+		"a step answered with text": {doc: ocFixture(t, "2.3.2", "text.json"), release: "2.3.2",
 			bound: 1272, figure: 1201, owner: "stub"},
-		"a step whose tool answered 40,000 characters": {doc: ocFixture(t, "2.3.0", "tool.json"),
-			release: "2.3.0", bound: 11412, figure: 1202, owner: "stub"},
-		"the real export of 2.3.0": {doc: ocFixture(t, "2.3.0", "export.json"), release: "2.3.0",
-			bound: 2808, figure: 1217, restart: "msg_20296d33d001DUiVaybRFx66zd", owner: "stub"},
+		"a step whose tool answered 40,000 characters": {doc: ocFixture(t, "2.3.2", "tool.json"),
+			release: "2.3.2", bound: 11412, figure: 1202, owner: "stub"},
+		"the real export of 2.3.2": {doc: ocFixture(t, "2.3.2", "export.json"), release: "2.3.2",
+			bound: 2808, figure: 1217, restart: "msg_202bccee7001dpOFLBiNqIkIeY", owner: "stub"},
 		"a reply that reports reasoning": {doc: ocDoc(t, ocUser("msg_u", "go", "[]"), reasoned, ocIdle),
-			release: "2.3.0", bound: 160 + ocCharge(ocIdle), figure: 123, owner: "stub"},
+			release: "2.3.2", bound: 160 + ocCharge(ocIdle), figure: 123, owner: "stub"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -139,11 +139,11 @@ func TestAnOpenCodeCountRestartsAtACompletedCompaction(t *testing.T) {
 	first := ocReply("msg_a", `"stub"`, `[]`, 1000, 0, 0, 30, 0)
 	second := ocReply("msg_b", `"stub"`, `[]`, 2000, 0, 0, 40, 0)
 	failed := ocCompaction("msg_c", "failed")
-	read := ocRead(t, ocDoc(t, ocUser("msg_u", "go", "[]"), first, ocCompaction("msg_c", "completed"), second), "2.3.0")
+	read := ocRead(t, ocDoc(t, ocUser("msg_u", "go", "[]"), first, ocCompaction("msg_c", "completed"), second), "2.3.2")
 	wantBound(t, read.count, 2040)
-	read = ocRead(t, ocDoc(t, ocUser("msg_u", "go", "[]"), first, failed), "2.3.0")
+	read = ocRead(t, ocDoc(t, ocUser("msg_u", "go", "[]"), first, failed), "2.3.2")
 	wantBound(t, read.count, 1030+ocCharge(failed))
-	read = ocRead(t, ocDoc(t, ocUser("msg_u", "go", "[]"), first, ocCompaction("msg_c", "completed")), "2.3.0")
+	read = ocRead(t, ocDoc(t, ocUser("msg_u", "go", "[]"), first, ocCompaction("msg_c", "completed")), "2.3.2")
 	if read.count.Mark != sandbox.CountUnanchored {
 		t.Errorf("a session that ends at its completed compaction counts %+v, want it unanchored", read.count)
 	}
@@ -171,7 +171,7 @@ func TestAnOpenCodeRestartIsAnyCompaction(t *testing.T) {
 			ocCompaction("msg_failed", "failed")}, want: "msg_failed"},
 		"none": {msgs: []string{reply}, want: ""},
 	} {
-		read := ocRead(t, ocDoc(t, tc.msgs...), "2.3.0")
+		read := ocRead(t, ocDoc(t, tc.msgs...), "2.3.2")
 		if got, ok := read.count.Restarted(); !ok || got != tc.want {
 			t.Errorf("%s: the count restarts at %q (known %v), want %q", name, got, ok, tc.want)
 		}
@@ -198,7 +198,7 @@ func TestAnOpenCodeSessionWithNoReplySinceItsCompactionIsUnanchored(t *testing.T
 		"no reply since its compaction": {msgs: []string{ocReply("msg_a", `"stub"`, `[]`, 1000, 0, 0, 30, 0),
 			ocCompaction("msg_c", "completed"), long}, restart: "msg_c"},
 	} {
-		read := ocRead(t, ocDoc(t, tc.msgs...), "2.3.0")
+		read := ocRead(t, ocDoc(t, tc.msgs...), "2.3.2")
 		wantMark(t, read.count, sandbox.CountUnanchored)
 		if got, ok := read.count.Restarted(); !ok || got != tc.restart {
 			t.Errorf("%s: the count restarts at %q (known %v), want %q", name, got, ok, tc.restart)
@@ -241,7 +241,7 @@ func TestAFileAfterTheReplyMarksTheCount(t *testing.T) {
 		"a person's PDF before the reply":  {msgs: []string{ocUser("msg_u", "read", pdf), reply(`[]`)}},
 		"a person's message with no files": {msgs: []string{reply(`[]`), ocUser("msg_u", "go", `[]`)}},
 	} {
-		read := ocRead(t, ocDoc(t, tc.msgs...), "2.3.0")
+		read := ocRead(t, ocDoc(t, tc.msgs...), "2.3.2")
 		switch {
 		case tc.mark != "":
 			if read.count.Mark != tc.mark {
@@ -266,7 +266,7 @@ func TestAFileAfterTheReplyMarksTheCount(t *testing.T) {
 // carry, and a case goes red.
 func TestAnOpenCodeCountNamesItsReplysProvider(t *testing.T) {
 	t.Parallel()
-	read := ocRead(t, ocDoc(t, ocReply("msg_a", `"openrouter"`, `[]`, 1000, 0, 0, 30, 0)), "2.3.0")
+	read := ocRead(t, ocDoc(t, ocReply("msg_a", `"openrouter"`, `[]`, 1000, 0, 0, 30, 0)), "2.3.2")
 	if read.provider != "openrouter" {
 		t.Errorf("the count names the provider %q, want openrouter", read.provider)
 	}
@@ -277,7 +277,7 @@ func TestAnOpenCodeCountNamesItsReplysProvider(t *testing.T) {
 		"past its bound":          fmt.Sprintf("%q", strings.Repeat("p", sandbox.MaxCountProviderBytes+1)),
 		"a byte a record escapes": `"a\"b"`,
 	} {
-		read := ocRead(t, ocDoc(t, ocReply("msg_a", provider, `[]`, 1000, 0, 0, 30, 0)), "2.3.0")
+		read := ocRead(t, ocDoc(t, ocReply("msg_a", provider, `[]`, 1000, 0, 0, 30, 0)), "2.3.2")
 		wantMark(t, read.count, sandbox.CountUnread)
 		if read.provider != "" || read.next != (sandbox.NextRequest{}) {
 			t.Errorf("%s: the reading names %q and estimates %+v, want neither", name, read.provider, read.next)
@@ -285,7 +285,7 @@ func TestAnOpenCodeCountNamesItsReplysProvider(t *testing.T) {
 		// A LATER REPLY THAT NAMES ITS PROVIDER is the anchor, and the one
 		// before it, whatever it named, counts nothing.
 		read = ocRead(t, ocDoc(t, ocReply("msg_a", provider, `[]`, 1000, 0, 0, 30, 0),
-			ocReply("msg_b", `"stub"`, `[]`, 2000, 0, 0, 40, 0)), "2.3.0")
+			ocReply("msg_b", `"stub"`, `[]`, 2000, 0, 0, 40, 0)), "2.3.2")
 		wantBound(t, read.count, 2040)
 	}
 }
@@ -299,8 +299,8 @@ func TestAnOpenCodeCountNamesItsReplysProvider(t *testing.T) {
 // Mutation: read the set as a range, and a case goes red.
 func TestAReleaseOutsideTheSetIsNoCount(t *testing.T) {
 	t.Parallel()
-	doc := ocFixture(t, "2.3.0", "text.json")
-	for _, release := range []string{"2.2.0", "2.3.1", "2.0.31", ""} {
+	doc := ocFixture(t, "2.3.2", "text.json")
+	for _, release := range []string{"2.2.0", "2.3.0", "2.3.1", "2.3.3", "2.0.31", ""} {
 		read := ocRead(t, doc, release)
 		wantMark(t, read.count, sandbox.CountRelease)
 		if read.provider != "" || read.next != (sandbox.NextRequest{}) || read.figure != 1201 {
@@ -310,14 +310,14 @@ func TestAReleaseOutsideTheSetIsNoCount(t *testing.T) {
 	}
 }
 
-// THE OPENCODE SET IS THE RELEASE PROBED: exactly 2.3.0, whose rules were read
-// in its shipped code and measured at their boundaries, read as the box names
+// THE OPENCODE SET IS THE RELEASE PROBED: exactly 2.3.2, whose point was read
+// in its shipped code and measured at its default limit's boundary, read as the box names
 // it, blanks trimmed, and no release beside it.
 //
 // Mutation: add a second release, and this goes red.
 func TestTheOpenCodeSetIsTheReleasesProbed(t *testing.T) {
 	t.Parallel()
-	probed := []string{"2.3.0"}
+	probed := []string{"2.3.2"}
 	if !slices.Equal(openCodeCountReleases, probed) {
 		t.Errorf("the set is %s, want the releases probed, %s", strings.Join(openCodeCountReleases, ", "),
 			strings.Join(probed, ", "))
@@ -345,7 +345,7 @@ func TestTheOpenCodeCountHoldsNoStringOfAnExport(t *testing.T) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	read, err := meterExport(t.Context(), bytes.NewReader(doc), "2.3.0")
+	read, err := meterExport(t.Context(), bytes.NewReader(doc), "2.3.2")
 	runtime.ReadMemStats(&after)
 	if err != nil {
 		t.Fatalf("the export does not read: %v", err)
@@ -368,8 +368,8 @@ func TestTheOpenCodeCountHoldsNoStringOfAnExport(t *testing.T) {
 // or the estimate out of the reading, and a case goes red.
 func TestAnOpenCodeCopyIsReadOffTheExportItsJobLeft(t *testing.T) {
 	t.Parallel()
-	doc := ocFixture(t, "2.3.0", "text.json")
-	ask := sandbox.MainThreadAsk{Session: "ses_count", Release: "2.3.0", Count: true, Next: true}
+	doc := ocFixture(t, "2.3.2", "text.json")
+	ask := sandbox.MainThreadAsk{Session: "ses_count", Release: "2.3.2", Count: true, Next: true}
 	box := sandbox.NewFakeSandbox("box-opencode")
 	paths := PathsFor(box)
 	box.Put(paths.SessionCapture(), string(doc))

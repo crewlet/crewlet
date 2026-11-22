@@ -10,15 +10,15 @@ import (
 
 // pointStandIn is a stand-in `opencode` for the read of a box's point: it
 // logs each call's arguments in order, keeps the environment and working
-// directory config.get was asked in, answers `--version` as 2.3.0, and
+// directory config.get was asked in, answers `--version` as 2.3.2, and
 // answers model.list and config.get with the files the case wrote into the
-// box's home, but cut short where its output is a pipe, as earlier OpenCode 2
-// releases cut theirs at 64 KiB.
+// box's home, but cut short at 64 KiB where its output is a pipe, as a
+// pipe-cutting OpenCode would.
 const pointStandIn = `#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/opencode-calls"
 answer() { if [ -p /dev/stdout ]; then printf '{"cut'; else cat "$HOME/$1"; fi; }
 case "$*" in
---version) echo 'opencode v2.3.0' ;;
+--version) echo 'opencode v2.3.2' ;;
 'auth import --standalone') cat > /dev/null ;;
 'api --standalone model.list') answer models.json ;;
 'api --standalone config.get') env > "$HOME/opencode-env"; pwd > "$HOME/opencode-cwd"; answer config.json ;;
@@ -73,12 +73,12 @@ func pointBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 func TestThePointIsReadInTheContinuationsBox(t *testing.T) {
 	t.Parallel()
 	runner, box := pointBox(t)
-	point, err := runner.ReadBoxPoint(t.Context(), box, sandbox.PointAsk{Model: "stub/m", Writer: "2.3.0"})
+	point, err := runner.ReadBoxPoint(t.Context(), box, sandbox.PointAsk{Model: "stub/m", Writer: "2.3.2"})
 	if err != nil {
 		t.Fatalf("ReadBoxPoint: %v", err)
 	}
-	if point.Mark != "" || point.Release != "2.3.0" || point.Tokens != 210000 {
-		t.Fatalf("the box's point reads %+v, want 210,000 on 2.3.0", point)
+	if point.Mark != "" || point.Release != "2.3.2" || point.Tokens != 210000 {
+		t.Fatalf("the box's point reads %+v, want 210,000 on 2.3.2", point)
 	}
 	calls := strings.Split(strings.TrimSpace(boxFile(t, box, box.Home()+"/opencode-calls")), "\n")
 	want := []string{"auth import --standalone", "--version", "api --standalone model.list",
@@ -105,8 +105,8 @@ func TestThePointIsReadInTheContinuationsBox(t *testing.T) {
 func TestTheReadSeesTheBoxsDocumentsNotTheImages(t *testing.T) {
 	t.Parallel()
 	runner, box := pointBox(t)
-	_, err := runner.ReadBoxPoint(t.Context(), box, sandbox.PointAsk{Model: "stub/m", Release: "2.3.0",
-		Writer: "2.3.0", Env: map[string]string{"OPENCODE_CONFIG_CONTENT": `{"image":true}`,
+	_, err := runner.ReadBoxPoint(t.Context(), box, sandbox.PointAsk{Model: "stub/m", Release: "2.3.2",
+		Writer: "2.3.2", Env: map[string]string{"OPENCODE_CONFIG_CONTENT": `{"image":true}`,
 			"STUB_API_KEY": "the run's key"}})
 	if err != nil {
 		t.Fatalf("ReadBoxPoint: %v", err)

@@ -999,7 +999,7 @@ func testAHarnessEndWritesTheCountsProvider(t *testing.T, s sandbox.PendingStore
 	launch := mustLaunched(t, s, run(turn))
 	mustClaim(t, s, turn)
 	count := &sandbox.ResumedCount{Tokens: 42_000, Restart: new("msg_c")}
-	for _, said := range []struct{ provider, release string }{{"stub", "2.3.0"}, {"openrouter", "2.3.0"},
+	for _, said := range []struct{ provider, release string }{{"stub", "2.3.2"}, {"openrouter", "2.3.2"},
 		{"openrouter", "2.4.0"}} {
 		read := sandbox.EndRead{End: sandbox.HarnessEndOwnRun, Count: count, CountProvider: said.provider,
 			CountRelease: said.release}
@@ -1031,14 +1031,14 @@ func testTheCopysWriterIsHandedToTheRelaunchAndNeverCarried(t *testing.T, s sand
 	claimed := mustClaim(t, s, turn)
 	count := &sandbox.ResumedCount{Tokens: 42_000, Restart: new("msg_c")}
 	for _, read := range []sandbox.EndRead{
-		{End: sandbox.HarnessEndOwnRun, Count: count, CountProvider: "stub", CountRelease: "2.3.0"},
+		{End: sandbox.HarnessEndOwnRun, Count: count, CountProvider: "stub", CountRelease: "2.3.2"},
 		{End: sandbox.HarnessEndOwnRun},
 	} {
 		if _, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil {
 			t.Fatalf("MarkHarnessEnd: %v", err)
 		}
-		if got := mustGet(t, s, turn).Launch.CountRelease; got != "2.3.0" {
-			t.Errorf("after a read bringing %+v the job's record names the writer %q, want 2.3.0", read, got)
+		if got := mustGet(t, s, turn).Launch.CountRelease; got != "2.3.2" {
+			t.Errorf("after a read bringing %+v the job's record names the writer %q, want 2.3.2", read, got)
 		}
 	}
 	mustRelease(t, s, claimed)
@@ -1047,8 +1047,8 @@ func testTheCopysWriterIsHandedToTheRelaunchAndNeverCarried(t *testing.T, s sand
 	if err != nil {
 		t.Fatalf("relaunch: %v", err)
 	}
-	if opened.Prior.Writer != "2.3.0" {
-		t.Errorf("the relaunch was handed the writer %q, want 2.3.0", opened.Prior.Writer)
+	if opened.Prior.Writer != "2.3.2" {
+		t.Errorf("the relaunch was handed the writer %q, want 2.3.2", opened.Prior.Writer)
 	}
 	if got := mustGet(t, s, turn).Launch.CountRelease; got != "" {
 		t.Errorf("the relaunch's own record names the writer %q, want none", got)

@@ -75,8 +75,8 @@ type JobEnder interface {
 // exit handlers, and Claude Code and OpenCode measured well inside it. A
 // process past it is wedged, and a run's done marker waits on its script, so
 // one ignoring SIGTERM would hold the run open for ever. OpenCode's run client
-// on 2.3.0 never finishes its SIGTERM shutdown, so every end of such
-// a run spends the whole grace and is recorded as killed.
+// on 2.3.2 is gone within 0.2 s of its SIGTERM, before or after its session
+// is interrupted (measured).
 const JobStopGrace = 5 * time.Second
 
 // JobKillWait is the most [Sandbox.KillJob] waits for a job to be gone: SIGTERM
