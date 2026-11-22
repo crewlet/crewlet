@@ -15,9 +15,9 @@ import (
 // It is HEARTBEATED, and that is the whole safety property: a pin outliving
 // its owner would stop the trim until the log hit its ceiling and refused
 // appends. So the trim ignores a hold it has watched go unrenewed past its
-// stale bound, and the normal path releases it. One key per owner, a node and a purpose
-// (`node-a/backup`), so a second backup replaces its node's hold and a crash
-// leaves at most one key per owner.
+// stale bound, and the normal path releases it. One key per owner, a node and
+// a purpose (`node-a/backup`), so a second backup replaces its node's hold and
+// a crash leaves at most one key per owner.
 
 // TrimHold is one live pin, as the register holds it.
 type TrimHold struct {

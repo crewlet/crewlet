@@ -1060,8 +1060,7 @@ func storeBytes(m Manifest) int64 {
 // hold pins the trim at this node's current positions and returns the release.
 //
 // RENEWED WHILE THE COPY RUNS, because the trim ignores a hold it has watched
-// go unrenewed past its stale bound — a pin that stopped being renewed would be
-// treated as a crashed holder, which is exactly right for a crashed holder and exactly wrong for a
+// go unrenewed past its stale bound: right for a crashed holder, wrong for a
 // 40-minute copy of a large store. The pin is [statelog.HoldTail]'s, the one
 // implementation every holder of the tail shares, renewed on
 // [statelog.TrimHoldHeartbeat].
