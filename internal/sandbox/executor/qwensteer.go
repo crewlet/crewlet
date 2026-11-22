@@ -16,14 +16,14 @@ import (
 
 // QwenCodeSteerInstruction is the standing instruction about notes a Qwen Code
 // run is given, saying where its harness puts one: a message from the user
-// after a step's tool results (measured under ACP on 0.28.3).
+// after a step's tool results (measured under ACP on 0.28.4).
 const QwenCodeSteerInstruction = steerInstructionHead +
 	"Qwen Code adds it to the conversation as a message from the user once the " +
 	"tool calls of a step have returned, after the words \"" + qwenNoteFraming + "\". " +
 	steerInstructionTail
 
 // qwenNoteFraming is what Qwen Code puts before a drained message on its line,
-// in the request and in its record (measured on 0.28.3; the
+// in the request and in its record (measured on 0.28.4; the
 // helper's `framing`). The transcript reader knows it ([headingFraming]).
 const qwenNoteFraming = "[User message received during tool execution]: "
 
@@ -56,7 +56,7 @@ func (QwenCode) pluginConfirms() bool { return true }
 // qwenPollCeiling is the most UTF-16 units one message the helper hands can
 // carry: 4,505, the engine's item bound (internal/engine's maxLateItemUnits),
 // the least the note contract admits and the most any item is. Measured on
-// 0.28.3: a drained note of 4,683 units reached the next request whole, framed
+// 0.28.4: a drained note of 4,683 units reached the next request whole, framed
 // and nothing cut, and its record held it whole.
 const qwenPollCeiling = 4505
 

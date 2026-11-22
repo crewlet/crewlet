@@ -856,9 +856,9 @@ func TestAPIKeyModeDeliversTheKey(t *testing.T) {
 // home, a login command in the login home, the version probe in the probe home.
 //
 // A program finds its TMPDIR rather than making it — mktemp fails on one that
-// names nothing — and a TMPDIR named and never made failed every codex call
-// from 0.164 on, whose sandbox helper resolves it before reading the call's
-// AGENTS.md. Asked of the child, before it writes anything.
+// names nothing — so a TMPDIR named and never made would fail any program a
+// call runs that writes a temporary file. Asked of the child, before it writes
+// anything.
 func TestEveryCommandFindsTheTemporaryDirectoryItIsHanded(t *testing.T) {
 	t.Parallel()
 	fake := []any{"-test.run=TestFakeHarness"}

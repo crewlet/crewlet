@@ -120,15 +120,15 @@ func executorCompany(llmEntries, roles string) string {
 }
 
 const (
-	ccEntry    = "    cc:\n      model: sonnet\n"
-	ocEntry    = "    oc:\n      model: anthropic/claude-sonnet-5\n      harness: opencode\n"
-	codexEntry = "    codex:\n      model: gpt-5\n      harness: codex\n"
+	ccEntry   = "    cc:\n      model: sonnet\n"
+	ocEntry   = "    oc:\n      model: anthropic/claude-sonnet-5\n      harness: opencode\n"
+	grokEntry = "    grok:\n      model: grok-4\n      harness: grok\n"
 )
 
 // A SEAT WHOSE EXECUTOR CHAIN HAS NO MEMBER THAT CAN RUN IS REFUSED, where the
 // remedy is written, and a chain that holds one is not.
 //
-// Every executor is its harness's own run, which only claude-code and
+// Every executor is its harness's own run, which only claude-code, codex and
 // opencode have: a launch skips any other member, so a chain of nothing else
 // never launches — the seat takes its work and fails every turn. RUNNABLE,
 // because no turn of that seat runs. A seat's own `llm` is refused at that
@@ -144,48 +144,48 @@ func TestAnExecutorChainWithNoRunnerIsRefused(t *testing.T) {
 	}{
 		{
 			name: "a seat's own chain of another harness",
-			llm:  ccEntry + codexEntry, roles: "  - name: SWE\n    llm: codex\n",
+			llm:  ccEntry + grokEntry, roles: "  - name: SWE\n    llm: grok\n",
 			path: "roles[0].llm",
-			says: []string{"providers.llm.codex (codex)", "only " + words.And(ExecutorHarnesses()) + " have",
+			says: []string{"providers.llm.grok (grok)", "only " + words.And(ExecutorHarnesses()) + " have",
 				"llm_review", "move one of them"},
 		},
 		{
 			name: "a unit's seat, at its own path",
-			llm:  ccEntry + codexEntry,
+			llm:  ccEntry + grokEntry,
 			roles: "  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n" +
-				"units:\n  - name: Platform\n    roles:\n      - name: SWE\n        llm: codex\n",
+				"units:\n  - name: Platform\n    roles:\n      - name: SWE\n        llm: grok\n",
 			path: "units[0].roles[0].llm",
 		},
 		{
 			name: "silent seats falling to a default of another harness",
-			llm:  "    default:\n      model: gpt-5\n      harness: codex\n" + ccEntry,
+			llm:  "    default:\n      model: grok-4\n      harness: grok\n" + ccEntry,
 			roles: "  - name: CEO\n  - name: PM\n  - name: Ops\n" +
 				"  - name: SWE\n    llm: cc\n",
 			path: "providers.llm.default.harness",
-			says: []string{`the one called "default"`, "codex", "only " + words.And(ExecutorHarnesses()) + " have",
+			says: []string{`the one called "default"`, "grok", "only " + words.And(ExecutorHarnesses()) + " have",
 				`seat "ceo"`, "2 more seats", "point those seats' `llm`"},
 		},
 		{
 			name: "a silent seat falling to the first declared entry",
-			llm:  codexEntry + ccEntry, roles: "  - name: CEO\n",
-			path: "providers.llm.codex.harness",
+			llm:  grokEntry + ccEntry, roles: "  - name: CEO\n",
+			path: "providers.llm.grok.harness",
 			says: []string{"the first one declared", `seat "ceo"`},
 		},
 		{
 			name: "a chain that holds a runner beside another harness",
-			llm:  ccEntry + codexEntry, roles: "  - name: SWE\n    llm: [codex, cc]\n",
+			llm:  ccEntry + grokEntry, roles: "  - name: SWE\n    llm: [grok, cc]\n",
 		},
 		{
 			name: "another harness on a text phase only",
-			llm:  ccEntry + codexEntry, roles: "  - name: SWE\n    llm: cc\n    llm_review: codex\n",
+			llm:  ccEntry + grokEntry, roles: "  - name: SWE\n    llm: cc\n    llm_review: grok\n",
 		},
 		{
 			name: "opencode runs an executor too",
-			llm:  ocEntry + codexEntry, roles: "  - name: SWE\n    llm: oc\n",
+			llm:  ocEntry + grokEntry, roles: "  - name: SWE\n    llm: oc\n",
 		},
 		{
 			name: "a person reaches no executor at all",
-			llm:  codexEntry, roles: "  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n",
+			llm:  grokEntry, roles: "  - name: Founder\n    kind: human\n    contact: {slack_user_id: U0FOUNDER}\n",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -223,18 +223,18 @@ func TestAnExecutorChainWithNoRunnerIsRefused(t *testing.T) {
 // the author to an entry the seat never asked for.
 func TestASeatNamingOnlyUnknownKeysIsNotCountedAsNamingNone(t *testing.T) {
 	t.Parallel()
-	err := rejects(t, executorCompany(codexEntry, "  - name: SWE\n    llm: nowhere\n"),
+	err := rejects(t, executorCompany(grokEntry, "  - name: SWE\n    llm: nowhere\n"),
 		"roles[0].llm")
 	if !errors.Is(err, ErrUnknownValue) {
 		t.Errorf("want ErrUnknownValue, got %v", err)
 	}
-	if strings.Contains(err.Error(), "providers.llm.codex.harness") ||
+	if strings.Contains(err.Error(), "providers.llm.grok.harness") ||
 		strings.Contains(err.Error(), "names no `llm`") {
 		t.Errorf("the seat that named a missing key is also counted as naming none:\n%v", err)
 	}
 	// AND A SEAT THAT NAMED NOTHING STILL IS, beside it.
-	err = rejects(t, executorCompany(codexEntry,
-		"  - name: SWE\n    llm: nowhere\n  - name: CEO\n"), "providers.llm.codex.harness")
+	err = rejects(t, executorCompany(grokEntry,
+		"  - name: SWE\n    llm: nowhere\n  - name: CEO\n"), "providers.llm.grok.harness")
 	if !strings.Contains(err.Error(), `seat "ceo" names no `+"`llm`") ||
 		strings.Contains(err.Error(), "1 more seat") {
 		t.Errorf("the fallback refusal does not count the silent seat alone:\n%v", err)
@@ -245,16 +245,16 @@ func TestASeatNamingOnlyUnknownKeysIsNotCountedAsNamingNone(t *testing.T) {
 // SEAT'S `llm`, naming the member a launch skips and the one it runs on.
 //
 // Valid, because the member still serves every text phase that falls back to
-// `llm`; worth saying, because a chain written as "Claude, then Codex once
+// `llm`; worth saying, because a chain written as "Claude, then Grok once
 // Claude's plan is spent" falls back to nothing at all for the executor. A
 // chain of runners only, and one whose other harness sits on a text phase's own
 // field, are said nothing about.
 func TestAMixedExecutorChainIsAdvisedAbout(t *testing.T) {
 	t.Parallel()
-	cfg := mustCompany(t, executorCompany(ccEntry+ocEntry+codexEntry,
-		"  - name: Mixed\n    llm: [cc, codex, oc]\n"+
+	cfg := mustCompany(t, executorCompany(ccEntry+ocEntry+grokEntry,
+		"  - name: Mixed\n    llm: [cc, grok, oc]\n"+
 			"  - name: Runners\n    llm: [cc, oc]\n"+
-			"  - name: Reviewer\n    llm: cc\n    llm_review: codex\n"))
+			"  - name: Reviewer\n    llm: cc\n    llm_review: grok\n"))
 	var found []Warning
 	for _, w := range cfg.AdvisoryWarnings() {
 		if strings.HasSuffix(w.Path, ".llm") {
@@ -268,7 +268,7 @@ func TestAMixedExecutorChainIsAdvisedAbout(t *testing.T) {
 	if w.Path != "roles[0].llm" || w.Seat != "mixed" || w.Kind != WarningAdvisory {
 		t.Errorf("advisory = %+v, want one at roles[0].llm for seat mixed", w)
 	}
-	for _, said := range []string{"providers.llm.codex (codex)", "which only " + words.And(ExecutorHarnesses()) + " have",
+	for _, said := range []string{"providers.llm.grok (grok)", "which only " + words.And(ExecutorHarnesses()) + " have",
 		"providers.llm.cc (claude-code), providers.llm.oc (opencode)"} {
 		if !strings.Contains(w.Message, said) {
 			t.Errorf("the advisory does not say %q: %s", said, w.Message)
@@ -388,12 +388,12 @@ func TestEveryEntryALaunchCanLandOnIsPlaced(t *testing.T) {
 	})
 	t.Run("a member no launch can pick reaches nothing", func(t *testing.T) {
 		t.Parallel()
-		// The codex member names no cell of its own — it may not (see
+		// The grok member names no cell of its own — it may not (see
 		// TestARunInOnAHarnessThatLaunchesNoRunIsRefused) — so counted it would
 		// open a box in the catalogue's default beside the head's.
 		cfg := mustCompany(t, company("    local: {}\n    default_run_in: direct\n",
-			entry("head", "")+"    codex:\n      model: gpt-5\n      harness: codex\n",
-			"  - name: SWE\n    llm: [head, codex]\n"))
+			entry("head", "")+"    grok:\n      model: grok-4\n      harness: grok\n",
+			"  - name: SWE\n    llm: [head, grok]\n"))
 		for box := range cfg.SeatBoxes() {
 			if box.Executor != "head" {
 				t.Errorf("a box opens for %s, a member a launch skips", box.Executor)

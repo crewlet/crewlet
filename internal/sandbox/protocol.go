@@ -91,7 +91,7 @@ type Spec struct {
 	// name the same cell.
 	Placement Placement
 
-	// Harness names the runner: "claude-code", "opencode", …
+	// Harness names the runner: "claude-code", "codex", "opencode".
 	Harness string
 
 	// TurnID is the turn whose run the box is made for. A box on the
@@ -1325,7 +1325,7 @@ type SkillWiring struct {
 func (w SkillWiring) Set() bool { return w.Server != "" && w.Tool != "" && w.URL != "" }
 
 // CommitAttribution asks a run's runner to credit Crewlet on every commit the
-// run authors as itself: `Co-authored-by: Crewlet <noreply@crewlet.ai>`; where
+// run authors as itself: `Co-authored-by: Crewlet <noreply@crewlet.com>`; where
 // Seat is set, the seat and work item charged; where Run is set, the run.
 //
 // GIT ADDS IT, NOT THE MODEL: a hook the runner installs in the box

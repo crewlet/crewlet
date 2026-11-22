@@ -56,8 +56,10 @@ func TestAnExecutorBlockSaysItIsARunner(t *testing.T) {
 		len(got) != 1 || got[0].block.E2BTemplate != "" {
 		t.Errorf("a runner with no template reads as %+v, %v; want it, naming none", got, err)
 	}
-	if runners := ExecutorRunners(); !slices.Contains(runners, "claude-code") || !slices.Contains(runners, "opencode") {
-		t.Errorf("the built-in runners are %v", runners)
+	for _, name := range []string{"claude-code", "codex", "opencode"} {
+		if runners := ExecutorRunners(); !slices.Contains(runners, name) {
+			t.Errorf("the built-in runners are %v, without %s", runners, name)
+		}
 	}
 }
 
@@ -75,7 +77,7 @@ func TestAnExecutorBlocksFaultNamesItsProfileAndField(t *testing.T) {
 		"{runner: 3}":                   `profile "x": executor.runner: yaml: unmarshal errors`,
 		"{runner: true, temp_env: [a]}": `profile "x": executor.temp_env: yaml: unmarshal errors`,
 		"{runner: true, template: t}": `profile "x": executor.template: is no field of the block: use "e2b_template", ` +
-			`"refuses_root", "runner" or "temp_env"`,
+			`"floor", "probe_args", "refuses_root", "runner" or "temp_env"`,
 		"true": `profile "x": executor: is not a mapping of the block's fields`,
 	} {
 		raw := []byte("x:\n  binary: x\n  executor: " + block + "\n")
@@ -128,5 +130,29 @@ func TestTheDocsSayWhichHarnessesRunASeatsExecutor(t *testing.T) {
 	}
 	if !slices.Equal(yes, ExecutorRunners()) {
 		t.Errorf("the docs say %v run a seat's executor, the profiles list %v", yes, ExecutorRunners())
+	}
+}
+
+// A RELEASE IS A BARE MAJOR.MINOR.PATCH, read off what `--version` printed:
+// the first word starting with a digit, less a "v" and one closing ".", is
+// one only where it is exactly three runs of digits. A pre-release or build
+// whose third part runs on past its digits ("0.172.0-rc", "0.172.0+b"), a
+// part that is no number ("1.2.x"), a fourth part or a doubled dot names
+// none, as the run's script reads it.
+//
+// Mutation: hold the word to three dot-separated parts without checking that
+// each is digits alone, or read the first three numbers of it, and a row goes
+// red.
+func TestAReleaseIsABareMajorMinorPatch(t *testing.T) {
+	t.Parallel()
+	for printed, want := range map[string]string{
+		"codex-cli 0.171.0": "0.171.0", "2.1.310 (Claude Code)": "2.1.310", "opencode v2.1.4": "2.1.4",
+		"GitHub Copilot CLI 1.0.114.": "1.0.114", "Muse Code 1.4.25 (1.4.25-R9361.1)": "1.4.25",
+		"0.172.0-rc": "", "0.172.0+b": "", "1.2.x": "", "codex-cli 0.172.0-rc": "", "1.4.25.1": "",
+		"0.171.0..": "", "1.2": "", "codex-cli dev": "", "": "",
+	} {
+		if got := Release(printed); got != want {
+			t.Errorf("Release(%q) = %q, want %q", printed, got, want)
+		}
 	}
 }
