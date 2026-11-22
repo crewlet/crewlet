@@ -89,6 +89,13 @@ async function arm({ url, cap }) {
   // two asks that overlap (the loop's and the stop's) send one note once, and
   // the second moves past it only once the first's send has gone.
   const admitted = new Map()
+  // admitted and turns are IN MEMORY ALONE, which holds because this process
+  // lives exactly as long as the run's (measured on 1.0.114): prompt mode
+  // offers the agent no extensions_reload or extensions_manage tool, a note
+  // reading `/clear` is sent as words, and an extension that exits is marked
+  // `failed` and never started again. A second one would send every note
+  // again — Copilot keeps both messages of a clientTurnId sent twice — and
+  // count the cap from nothing.
   let turns = 0
   let aborting = false
 
