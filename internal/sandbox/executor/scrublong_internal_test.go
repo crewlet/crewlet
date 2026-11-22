@@ -10,9 +10,16 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"os"
+	"os/exec"
+	"regexp"
 	"runtime"
+	"runtime/debug"
+	"runtime/metrics"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
@@ -290,13 +297,13 @@ func (c *cutReader) Read(p []byte) (int, error) {
 // value (cut short past the rewrite's buffer, so its JSON is read a long way
 // before its grammar fails, a line of two values, a line of blanks) is
 // written exactly as the whole-text scrub of its text writes it, never its
-// JSON prefix respelled; the plan keeps a bit for each line of two bytes or
-// more, set for one written as text, and none for a shorter one; and what the
-// first reading counts is what the second writes ([keptLines]).
+// JSON prefix respelled, whether the reading reads it as JSON alone first and
+// again as text ([keptLines]) or both ways at once; and what the first reading
+// counts is what the second writes.
 //
-// Mutation: write a torn line's prefix as its rewrite did, count a line known
-// to be text as its JSON, give a short line a bit, or read a line of blanks
-// as an empty JSON line, and a check goes red.
+// Mutation: spool a torn line's prefix as its rewrite did, count a line known
+// to be text as its JSON, or read a line of blanks as an empty JSON line, and a
+// check goes red.
 func TestATornLineIsWrittenAsItsText(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1170, 6))
@@ -305,26 +312,24 @@ func TestATornLineIsWrittenAsItsText(t *testing.T) {
 	torn := `{"text":"respelled A ` + long
 	lines := []string{`{"a":"b"}`, torn, "", `{"x":1} {"y":2}`, "5", " \t ", `{"b":"c"}`}
 	text := strings.Join(lines, "\n") + "\n"
-	plan := &tarPlan{bothFrom: 1}
-	if _, err := measureLines(strings.NewReader(text), s, plan); err != nil {
+	plan := spooledPlan(t)
+	plan.bothFrom = 1
+	size, err := measureLines(strings.NewReader(text), s, plan)
+	if err != nil {
 		t.Fatal(err)
 	}
-	var bits []bool
-	for i := range plan.lines.count() {
-		bits = append(bits, plan.lines.list.get(i))
-	}
-	if want := []bool{false, true, true, true, false}; !slicesEqual(bits, want) {
-		t.Errorf("the plan's bits are %v, want %v: a bit for each line of two bytes or more, set for text", bits, want)
-	}
-	got := strings.Split(keptLines(t, text, s), "\n")
-	for i, want := range []string{`{"a":"b"}`, keptText(s, torn), "", keptText(s, `{"x":1} {"y":2}`), "5", " \t ",
-		`{"b":"c"}`} {
-		if got[i] != want {
-			t.Errorf("line %d was kept as %.80q, want %.80q", i, got[i], want)
+	both := copiedSpool(t, plan, size)
+	for reading, kept := range map[string]string{"as JSON alone first": keptLines(t, text, s), "both ways": both} {
+		got := strings.Split(kept, "\n")
+		for i, want := range []string{`{"a":"b"}`, keptText(s, torn), "", keptText(s, `{"x":1} {"y":2}`), "5",
+			" \t ", `{"b":"c"}`} {
+			if got[i] != want {
+				t.Errorf("read %s, line %d was kept as %.80q, want %.80q", reading, i, got[i], want)
+			}
 		}
-	}
-	if !strings.Contains(got[1], `A`) || strings.Contains(got[1], longValue) {
-		t.Errorf("the torn line was not kept as its scrubbed text: %.120q", got[1])
+		if !strings.Contains(got[1], `A`) || strings.Contains(got[1], longValue) {
+			t.Errorf("read %s, the torn line was not kept as its scrubbed text: %.120q", reading, got[1])
+		}
 	}
 }
 
@@ -342,15 +347,16 @@ func slicesEqual(a, b []bool) bool {
 }
 
 // THE FIRST READING DECIDES A LINE'S CUT, AND THE SECOND APPLIES IT: the plan
-// names the line that loses a loaded tool definition, by how many lines with
-// a bit lie before it, the list it loses it from as the line's containers
-// count it, how many elements that list holds and a bit for each, set for one
-// cut, of the list JSON.parse reads; and the second reading writes the line
-// less the cut ones and their commas, the size the first counted.
+// names the line that loses a loaded tool definition, by where the spool holds
+// it past the edit before, the list it loses it from as the line's containers
+// count it, how many elements that list holds, the bytes the cut takes and a
+// bit for each element, set for one cut, of the list JSON.parse reads; and the
+// second reading copies the line less the cut ones and their commas, the size
+// the first counted.
 //
 // Mutation: keep a bit for the list read past, count the cut's commas
-// wrongly, or count a cut's line from the transcript's start rather than from
-// the cut before it, and the plan or the size is otherwise.
+// wrongly, or place a cut's line from the spool's start rather than from the
+// edit before it, and the plan or the size is otherwise.
 func TestTheFirstReadingDecidesALinesCutAndTheSecondAppliesIt(t *testing.T) {
 	t.Parallel()
 	s := newScrubber([]string{ltServer})
@@ -358,38 +364,43 @@ func TestTheFirstReadingDecidesALinesCutAndTheSecondAppliesIt(t *testing.T) {
 	record := ltRecord("2.1.310", "", ltEcho, ltRenamed, ltSend, ltRenamed)
 	twice := strings.Replace(record, `"entries":[`, `"entries":[`+ltRenamed+`],"entries":[`, 1)
 	text := first + "\n" + twice + "\n" + first + "\n" + twice + "\n"
-	plan := &tarPlan{}
-	if _, err := measureLines(strings.NewReader(text), s, plan); err != nil {
+	plan := spooledPlan(t)
+	size, err := measureLines(strings.NewReader(text), s, plan)
+	if err != nil {
 		t.Fatal(err)
 	}
-	// Two cuts, of lines 1 and 3: each a line after the one before it.
-	// The line's containers: the line, the attachment, the list read past
-	// and the definition in it, four of its own, and then the list JSON.parse
-	// reads, the eighth.
-	for i, wantGap := range []uint64{1, 1} {
-		gap, _ := plan.cuts.takeNumber()
-		list, _ := plan.cuts.takeNumber()
-		n, ok := plan.cuts.takeNumber()
-		if !ok || gap != wantGap || list != 8 || n != 4 {
-			t.Fatalf("cut %d: %d lines after the last, container %d, %d elements; want %d, 8 and 4", i, gap,
-				list, n, wantGap)
+	wantTwice := strings.Replace(ltRecord("2.1.310", "", ltEcho, ltSend), `"entries":[`,
+		`"entries":[`+ltRenamed+`],"entries":[`, 1)
+	spooled := strings.ReplaceAll(twice, ltServer, scrubMarker)
+	keptTwice := strings.ReplaceAll(wantTwice, ltServer, scrubMarker)
+	// Two cuts, of lines 1 and 3: the first past the first line, the second
+	// past the line it cut and the first line again. The line's containers:
+	// the line, the attachment, the list read past and the definition in it,
+	// four of its own, and then the list JSON.parse reads, the eighth.
+	for i, wantGap := range []uint64{uint64(len(first) + 1), uint64(len(spooled) + 1 + len(first) + 1)} {
+		gap, _ := plan.edits.takeNumber()
+		list, _ := plan.edits.takeNumber()
+		n, _ := plan.edits.takeNumber()
+		taken, ok := plan.edits.takeNumber()
+		if !ok || gap != wantGap || list != 8 || n != 4 || taken != uint64(len(spooled)-len(keptTwice)) {
+			t.Fatalf("cut %d: %d bytes past the cut before, container %d, %d elements, %d bytes taken; want "+
+				"%d bytes past, 8, 4 and %d", i, gap, list, n, taken, wantGap, len(spooled)-len(keptTwice))
 		}
 		var bits []bool
 		for range n {
-			bit, _ := plan.cuts.take()
+			bit, _ := plan.edits.take()
 			bits = append(bits, bit)
 		}
 		if want := []bool{false, true, false, true}; !slicesEqual(bits, want) {
 			t.Errorf("cut %d's bits are %v, want %v", i, bits, want)
 		}
 	}
-	if !plan.cuts.done() {
-		t.Errorf("the plan holds %d bits past its two cuts", plan.cuts.count()-plan.cuts.read)
+	if !plan.edits.done() {
+		t.Errorf("the plan holds %d bits past its two cuts", plan.edits.count()-plan.edits.read)
 	}
-	wantTwice := strings.Replace(ltRecord("2.1.310", "", ltEcho, ltSend), `"entries":[`,
-		`"entries":[`+ltRenamed+`],"entries":[`, 1)
-	kept := first + "\n" + strings.ReplaceAll(wantTwice, ltServer, scrubMarker) + "\n"
-	if got, want := keptLines(t, text, s), kept+kept; got != want {
+	plan.edits.read = 0
+	kept := first + "\n" + keptTwice + "\n"
+	if got, want := copiedSpool(t, plan, size), kept+kept; got != want {
 		t.Errorf("kept\n%s\nwant\n%s", got, want)
 	}
 }
@@ -423,14 +434,14 @@ func TestACredentialsValueIsItsMarkerHoweverItsKeyAndValueAreCut(t *testing.T) {
 	}
 }
 
-// AN EXPORT'S FIRST READING WRITES NOTHING: an export the scrub refuses (torn,
-// past the plaintext's bound, two documents) reaches nothing the take writes
-// to, the pipe, the checksum, the uploader or the meter, with not a byte, and
-// is never opened again; one read whole is opened a second time and written;
-// and an export that changed between the readings is refused.
+// AN EXPORT'S FIRST READING WRITES NOTHING THE TAKE WRITES TO: an export the
+// scrub refuses (torn, past the plaintext's bound, two documents) reaches
+// nothing the take writes to, the pipe, the checksum, the uploader or the
+// meter, with not a byte, and is never opened again; one read whole is written
+// from its spool, never opened again either.
 //
-// Mutation: write the first reading, or write the second without holding it
-// to the first's length, and a case goes red.
+// Mutation: write the first reading onto the take's writer, or read the box
+// again for the second, and a case goes red.
 func TestAnExportsFirstReadingWritesNothing(t *testing.T) {
 	t.Parallel()
 	s := newScrubber(nil)
@@ -461,14 +472,9 @@ func TestAnExportsFirstReadingWritesNothing(t *testing.T) {
 		return io.NopCloser(bytes.NewReader(archive)), nil
 	}
 	var out bytes.Buffer
-	if err := scrubDocument(bytes.NewReader(archive), reopen, &out, s, testBounds); err != nil || opened != 1 ||
+	if err := scrubDocument(bytes.NewReader(archive), reopen, &out, s, testBounds); err != nil || opened != 0 ||
 		out.Len() == 0 {
 		t.Errorf("a sound export: %v, opened again %d times, %d bytes written", err, opened, out.Len())
-	}
-	changed := gzipOf(t, strings.Replace(sound, `"ses_1"`, `"ses_12"`, 1))
-	if err := scrubDocument(bytes.NewReader(archive), reopenOf(changed), io.Discard, s,
-		testBounds); err == nil || !strings.Contains(err.Error(), "changed") {
-		t.Errorf("an export that changed between the readings: %v, want it refused as changed", err)
 	}
 }
 
@@ -582,50 +588,222 @@ type refusingWriter struct{ err error }
 
 func (f refusingWriter) Write([]byte) (int, error) { return 0, f.err }
 
-// THE SCRUB HOLDS NO MORE THAN THE FIGURE ITS DOC STATES, AND NOTHING THAT
-// GROWS WITH A STRING: a session of one string near a test's plaintext bound
-// of 32 MiB, scrubbed both readings, holds at most scrubHeldBytes's figure
-// between two reads of its archive, and one four times as long no more than a
-// little over that. Read off the heap in use after a collection at every
-// sixty-fourth read against the heap before the scrub; not in parallel, since
-// another case's heap would be read as the scrub's. The real bound is
-// BenchmarkTheScrubAtThePlaintextBound's.
+var _ = holdsScrubTerm("streams", "TestTheScrubHoldsNoMoreThanItsStatedFigure")
+
+// THE SCRUB HOLDS NO MORE THAN THE FIGURE ITS DOC STATES: at a test's
+// plaintext bound, the shape nearest it, a password-dense string read both
+// ways, holds with what one GC step hides at most scrubHeldBytes, and one
+// redaction stream over the string's start at most the "streams" term's
+// share. Its one job is the whole above the miss: each term's membership is
+// the table's ([TestEveryScrubTermIsHeldByATestOfItsOwn]) and its value its
+// own test's. Under the miss, so no sampler holds them: the pieces, encoders,
+// rewrites, spool and plan blocks. In live bytes ([atLiveBytes]), off a
+// child's GC trace under GODEBUG=gcstoptheworld=1,gctrace=1.
 //
-// Mutation: read a long string whole rather than through the streams, or hold
-// a transcript's line to learn what it is, and the longer string holds it.
+// Mutation: count the streams' term at 8 MiB a stream.
 func TestTheScrubHoldsNoMoreThanItsStatedFigure(t *testing.T) {
-	const plain = 32 << 20
-	s := newScrubber([]string{longValue})
-	held := func(n int) int64 {
-		archive := func() []byte {
-			r := rand.New(rand.NewPCG(1170, uint64(n)))
-			line := `{"type":"user","message":{"content":"` + base64Run(r, n, 100, n/2) + `"}}` + "\n"
-			return tarOf(t, map[string]string{"projects/p/s.jsonl": line})
-		}()
-		var most uint64
-		reopen := func() (io.ReadCloser, error) { return io.NopCloser(&heapSampler{b: archive, most: &most}), nil }
-		defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-		runtime.GC()
-		var before runtime.MemStats
-		runtime.ReadMemStats(&before)
-		most = before.HeapAlloc
-		first := &heapSampler{b: archive, most: &most}
-		if err := scrubTar(first, reopen, io.Discard, s, scrubBounds{plain: plain}); err != nil {
-			t.Fatalf("a session of one string of %d bytes was refused: %v", n, err)
+	if os.Getenv(liveBytesChild) != "" {
+		scrubBoundShapes(t)
+		return
+	}
+	held := runLiveBytesChild(t)
+	for _, sh := range boundShapes() {
+		h, ok := held[sh.name]
+		if !ok {
+			t.Fatalf("the child read no live heap for %s", sh.name)
 		}
-		return int64(most) - int64(before.HeapAlloc)
+		figure := sh.figure(t)
+		// THE MISS: between two marks the heap grows by at most liveBytesGOGC
+		// percent of what the last one found, at most the heap before and the
+		// figure on it; a peak that rises and falls inside that step is never
+		// marked.
+		miss := (h.before + figure) * liveBytesGOGC / 100
+		t.Logf("%s held %d KiB, %d KiB unseen at most, of a figure of %d KiB", sh.name, h.high>>10, miss>>10,
+			figure>>10)
+		if h.high+miss > figure {
+			t.Errorf("%s held %d bytes, and %d more can rise unseen, past the %d its doc states", sh.name, h.high,
+				miss, figure)
+		}
 	}
-	small, large := held(6<<20), held(24<<20)
-	figure := scrubHeldBytes(plain, len(jsonEscaped(longValue)))
-	t.Logf("held %d KiB for a string of 6 MiB, %d KiB for one of 24 MiB; the figure at a %d MiB reading is %d KiB",
-		small>>10, large>>10, plain>>20, figure>>10)
-	if large > figure {
-		t.Errorf("the scrub held %d bytes, past the %d its doc states at this bound", large, figure)
+}
+
+// boundShape is a reading [TestTheScrubHoldsNoMoreThanItsStatedFigure] takes
+// in its child, and the figure it is held to: input builds what the reading
+// reads, outside it, and hands back the reading.
+type boundShape struct {
+	name   string
+	figure func(t testing.TB) int64
+	input  func(t *testing.T) func()
+}
+
+// boundShapes are the readings: a password-dense string read both ways
+// scrubbed at liveBytesPlain, the shape nearest scrubHeldBytes, and one
+// redaction stream over the first 12 MiB of it, past a stream's windows.
+func boundShapes() []boundShape {
+	body := liveBytesPlain - 64<<10
+	dense := func(t *testing.T) string {
+		var b strings.Builder
+		b.WriteString("a line of text\n")
+		if err := benchOneString(&b, body-64, "pwd=x "); err != nil {
+			t.Fatal(err)
+		}
+		return b.String()
 	}
-	if large-small > 2<<20 {
-		t.Errorf("a string four times as long held %d bytes more: the scrub holds what grows with the string",
-			large-small)
+	scrubbed := func(text func(t *testing.T) string) func(t *testing.T) func() {
+		return func(t *testing.T) func() {
+			archive := tarOf(t, map[string]string{benchTranscript: text(t)})
+			return func() {
+				if err := scrubTar(bytes.NewReader(archive), reopenOf(archive), io.Discard,
+					newScrubber([]string{longValue}), scrubBounds{plain: liveBytesPlain}); err != nil {
+					t.Fatalf("the scrub refused the session: %v", err)
+				}
+			}
+		}
 	}
+	whole := func(testing.TB) int64 { return scrubHeldBytes(liveBytesPlain, len(jsonEscaped(longValue))) }
+	stream := func(t *testing.T) func() {
+		text := dense(t)[:12<<20]
+		return func() {
+			s := redact.NewStream(io.Discard)
+			for at := 0; at < len(text); at += 32 << 10 {
+				if _, err := io.WriteString(s, text[at:min(len(text), at+32<<10)]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return []boundShape{
+		{"a line of text, then a password-dense string both ways", whole, scrubbed(dense)},
+		{"one redaction stream over a password-dense string", func(t testing.TB) int64 {
+			return termFigure(t, "streams", liveBytesPlain, 0) / 2
+		}, stream},
+	}
+}
+
+// scrubBoundShapes scrubs each of [boundShapes] in the child, marking on
+// stdout, apart from the GC trace on stderr, the live heap before each and
+// the GC cycles it began and ended after.
+func scrubBoundShapes(t *testing.T) {
+	for _, want := range []string{"gcstoptheworld=1", "gctrace=1"} {
+		if !strings.Contains(os.Getenv("GODEBUG"), want) {
+			t.Fatalf("the child reads live bytes only under GODEBUG naming %s, which its env does not", want)
+		}
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(liveBytesGOGC))
+	for _, sh := range boundShapes() {
+		reading := sh.input(t)
+		before := liveNow()
+		fmt.Printf("%s %d %d %s\n", liveBytesMark, before, gcCycles(), sh.name)
+		reading()
+		fmt.Printf("%s %d\n", liveBytesMark, gcCycles())
+	}
+}
+
+// liveBytesChild marks the child [TestTheScrubHoldsNoMoreThanItsStatedFigure]
+// runs itself in, and liveBytesMark its lines on stdout;
+// liveBytesGOGC is the child's GC percent, the finest a step of heap growth
+// between two marks can be; liveBytesPlain is the shapes' plaintext bound.
+// liveBytesChildTimeout is the child's own hang detector: 25 minutes, 1.9
+// times its slowest measured run (775 s under -race on a two-core slot, where
+// CI's four-vCPU runners took 520 s for twice the readings), and under make
+// test's 45, so a child that hangs fails with its own goroutine dump.
+const liveBytesChildTimeout = 25 * time.Minute
+
+const (
+	liveBytesChild = "CREWLET_TEST_LIVE_BYTES_CHILD"
+	liveBytesMark  = "live-bytes:"
+	liveBytesGOGC  = 1
+	liveBytesPlain = 32 << 20
+)
+
+// gcTraceLive is a GC trace line's cycle and live heap after its mark, in MiB.
+var gcTraceLive = regexp.MustCompile(`^gc (\d+) @.*, \d+->\d+->(\d+) MB, `)
+
+// shapeHeld is what a shape held at most over the live heap before it, and
+// that heap.
+type shapeHeld struct{ high, before int64 }
+
+// runLiveBytesChild runs t's test again in a child of this binary under
+// GODEBUG=gcstoptheworld=1,gctrace=1 and reads each shape's live high-water off
+// its trace, failing t where the child fails or never ran it.
+func runLiveBytesChild(t *testing.T) map[string]shapeHeld {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.CommandContext(t.Context(), self, "-test.run=^"+t.Name()+"$", "-test.count=1", "-test.v",
+		"-test.timeout="+liveBytesChildTimeout.String())
+	cmd.Env = append(os.Environ(), liveBytesChild+"=1", "GODEBUG="+strings.TrimPrefix(
+		os.Getenv("GODEBUG")+",gcstoptheworld=1,gctrace=1", ","))
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err = cmd.Run(); err != nil || !strings.Contains(stdout.String(), "--- PASS: "+t.Name()) {
+		t.Fatalf("the child reading live bytes did not pass (%v):\n%s", err, stdout.String())
+	}
+	// EACH CYCLE'S LIVE HEAP, by its number, off the trace the runtime
+	// writes whole to stderr, which nothing of the child's interleaves.
+	live := map[int64]int64{}
+	for line := range strings.Lines(stderr.String()) {
+		if m := gcTraceLive.FindStringSubmatch(line); m != nil {
+			cycle, cycleErr := strconv.ParseInt(m[1], 10, 64)
+			mib, mibErr := strconv.ParseInt(m[2], 10, 64)
+			if cycleErr != nil || mibErr != nil {
+				t.Fatalf("the child's GC trace line %q", line)
+			}
+			live[cycle] = mib
+		}
+	}
+	held := map[string]shapeHeld{}
+	var name string
+	var shape shapeHeld
+	var from int64
+	for line := range strings.Lines(stdout.String()) {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), liveBytesMark+" ")
+		if !ok {
+			continue
+		}
+		var before, cycles int64
+		if name == "" {
+			if _, scanErr := fmt.Sscanf(rest, "%d %d", &before, &cycles); scanErr != nil {
+				t.Fatalf("the child's mark %q: %v", line, scanErr)
+			}
+			name, from = strings.SplitN(rest, " ", 3)[2], cycles
+			shape = shapeHeld{before: before}
+			continue
+		}
+		if _, scanErr := fmt.Sscanf(rest, "%d", &cycles); scanErr != nil {
+			t.Fatalf("the child's mark %q: %v", line, scanErr)
+		}
+		for c := from + 1; c <= cycles; c++ {
+			mib, traced := live[c]
+			if !traced {
+				t.Fatalf("%s: the child's GC trace has no line for cycle %d", name, c)
+			}
+			// THE TRACE'S MIB ARE CUT DOWN, so each is read one up.
+			shape.high = max(shape.high, (mib+1)<<20-shape.before)
+		}
+		held[name], name = shape, ""
+	}
+	return held
+}
+
+// gcCycles is how many GC cycles this process has completed.
+func gcCycles() uint64 {
+	s := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
+	metrics.Read(s)
+	return s[0].Value.Uint64()
+}
+
+// liveNow is the live heap after a forced collection.
+func liveNow() uint64 {
+	runtime.GC()
+	s := []metrics.Sample{{Name: "/gc/heap/live:bytes"}}
+	metrics.Read(s)
+	return s[0].Value.Uint64()
 }
 
 // heapSampler hands b over in reads, and reads the heap in use after a
@@ -694,23 +872,31 @@ func TestAKeptLineIsJSONWhereItWasAndItsTextWhereItWasNot(t *testing.T) {
 	}
 }
 
+var (
+	_ = holdsScrubTerm("plan", "TestThePlanHoldsAtMostASixteenthOfThePlaintext")
+	_ = holdsScrubTerm("plan blocks", "TestThePlanHoldsAtMostASixteenthOfThePlaintext")
+)
+
 // THE PLAN HOLDS AT MOST A SIXTEENTH OF THE PLAINTEXT, HOWEVER THE BOX SHAPES
 // ITS SESSION: a bit for every two bytes beside the blocks its streams are
 // filling ([planBlockBytes]), never a block or a record for each cut line or
-// transcript, over a transcript of short lines each losing its one definition
-// and a tar of many small transcripts. Read off the heap after a collection
-// as the second reading opens the archive; not in parallel, since another
-// case's heap would be read as the scrub's.
+// transcript, over a transcript of short lines each losing its one definition,
+// one of a few, and a tar of many small transcripts. Read off the plan's own
+// blocks as its first readings hand it on, which a reading of the heap varied
+// by a spool's buffers across runs.
 //
 // Mutation: keep a block of bits for each cut line, or a plan of its own for
-// each transcript, and the plan holds kibibytes a line or a member, far past
-// the figure.
+// each transcript, or count the "plan" term at a quarter or its blocks at
+// none, and the plan holds past the figure.
 func TestThePlanHoldsAtMostASixteenthOfThePlaintext(t *testing.T) {
+	t.Parallel()
 	s := newScrubber([]string{longValue})
 	cut := `{"attachment":{"type":"deferred_tools_record","entries":[1]},"m":"[REDACTED:x]"}` + "\n"
 	for name, members := range map[string][]tarMember{
 		"a transcript of 20,000 lines that each lose a definition": {{h: tar.Header{
 			Name: "projects/p/s.jsonl", Typeflag: tar.TypeReg, Mode: 0o600}, body: strings.Repeat(cut, 20_000)}},
+		"one transcript of a few lines, its blocks past a sixteenth": {{h: tar.Header{
+			Name: "projects/p/s.jsonl", Typeflag: tar.TypeReg, Mode: 0o600}, body: strings.Repeat(cut, 3)}},
 		"20,000 transcripts of one short line": func() []tarMember {
 			var m []tarMember
 			for i := range 20_000 {
@@ -722,37 +908,32 @@ func TestThePlanHoldsAtMostASixteenthOfThePlaintext(t *testing.T) {
 	} {
 		archive := tarOfMembers(t, members)
 		plain := plainOf(t, archive)
-		held := heldBetweenReadings(t, archive, s)
-		figure := plain/16 + planBlockBytes
+		held := planHeld(t, archive, s)
+		figure := termFigure(t, "plan", plain, 0) + termFigure(t, "plan blocks", plain, 0)
 		t.Logf("%s: %d KiB of plaintext from a %d KiB archive; the plan held %d KiB, its figure %d KiB", name,
 			plain>>10, len(archive)>>10, held>>10, figure>>10)
-		// A little room for the runtime's own allocations between two
-		// readings of the heap, far under a kibibyte a line or a member.
-		if held > figure+64<<10 {
-			t.Errorf("%s: the plan held %d bytes between the readings, past the %d a sixteenth of the "+
-				"plaintext and its blocks come to", name, held, figure)
+		if held > figure {
+			t.Errorf("%s: the plan held %d bytes as the first readings handed it on, past the %d a sixteenth "+
+				"of the plaintext and its blocks come to", name, held, figure)
 		}
 	}
 }
 
-// heldBetweenReadings scrubs archive and answers the heap in use, after a
-// collection, at the moment the second reading opens the archive, less the
-// heap in use before the scrub began: what the first reading hands the second.
-func heldBetweenReadings(t *testing.T, archive []byte, s scrubber) int64 {
+// planHeld is the bytes of the blocks the plan of archive's first readings
+// holds as they hand it on to the second.
+func planHeld(t *testing.T, archive []byte, s scrubber) int64 {
 	t.Helper()
-	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
-	var before, at runtime.MemStats
-	reopen := func() (io.ReadCloser, error) {
-		runtime.GC()
-		runtime.ReadMemStats(&at)
-		return io.NopCloser(bytes.NewReader(archive)), nil
+	spool, err := newUnitSpool(spoolPlace{dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
 	}
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	if err := scrubTar(bytes.NewReader(archive), reopen, io.Discard, s, testBounds); err != nil {
+	defer spool.remove()
+	plan, err := firstTarReadings(bytes.NewReader(archive), reopenOf(archive), s, testBounds, spool)
+	defer plan.letGo()
+	if err != nil {
 		t.Fatalf("the session was refused: %v", err)
 	}
-	return int64(at.HeapAlloc) - int64(before.HeapAlloc)
+	return int64(len(plan.members.list.blocks)+len(plan.edits.list.blocks)) * bitBlockWords * 8
 }
 
 // plainOf is how many bytes of plaintext a gzipped archive holds.
@@ -1005,7 +1186,7 @@ func TestAFirstReadingReadsAJSONUnitAsJSONAlone(t *testing.T) {
 			return err
 		}},
 		"a `.json` file that is JSON": {read: func(s scrubber, plan *tarPlan) error {
-			_, _, err := measureFile("tasks/s/1.json", strings.NewReader(long), s, plan)
+			_, err := measureFile("tasks/s/1.json", strings.NewReader(long), s, plan)
 			return err
 		}},
 		"a line read both ways": {text: true, read: func(s scrubber, plan *tarPlan) error {
@@ -1015,8 +1196,8 @@ func TestAFirstReadingReadsAJSONUnitAsJSONAlone(t *testing.T) {
 		}},
 	} {
 		pieces := newFirstPieces(nil)
-		plan := &tarPlan{}
-		if err := tc.read(s.firstReading(pieces, plan), plan); err != nil {
+		plan := spooledPlan(t)
+		if err := tc.read(s.firstReading(pieces), plan); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		if opened := pieces.ways[textWay].buf != nil; opened != tc.text {
@@ -1025,13 +1206,13 @@ func TestAFirstReadingReadsAJSONUnitAsJSONAlone(t *testing.T) {
 	}
 }
 
-// A UNIT THAT IS NO JSON ENDS THE FIRST READING, AND THE NEXT READS IT BOTH
-// WAYS: a session whose lines and `.json` files are all JSON is read once
-// before it is written; one holding a torn line, a `.json` file that is no
-// JSON, or both, once more, from the first such unit both ways. Each is kept
-// as the scrub of its text, every other as JSON.
+// A UNIT THAT IS NO JSON ENDS THE FIRST READING, AND THE NEXT READS IT AS TEXT
+// AND EVERY ONE AFTER IT BOTH WAYS: a session whose lines and `.json` files are
+// all JSON is read once; one holding a torn line, a `.json` file that is no
+// JSON, or both, once more, from the first such unit. Each is kept as the
+// scrub of its text, every other as JSON.
 //
-// Mutation: plan a unit read as JSON alone as text without reading again, or
+// Mutation: keep a unit read as JSON alone as text without reading again, or
 // read again as JSON alone, and a case keeps other bytes or never ends.
 func TestAUnitThatIsNoJSONEndsTheFirstReadingAndTheNextReadsItBothWays(t *testing.T) {
 	t.Parallel()
@@ -1060,8 +1241,8 @@ func TestAUnitThatIsNoJSONEndsTheFirstReadingAndTheNextReadsItBothWays(t *testin
 		if err := scrubTar(bytes.NewReader(archive), reopen, &out, s, testBounds); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if opened != tc.readings {
-			t.Errorf("%s: the archive was opened again %d times, want %d", name, opened, tc.readings)
+		if read := opened + 1; read != tc.readings {
+			t.Errorf("%s: the archive was read %d times, want %d", name, read, tc.readings)
 		}
 		kept := untarOf(t, out.Bytes())
 		if file := kept["tasks/s/1.json"]; json.Valid([]byte(tc.file)) != json.Valid([]byte(file)) ||
@@ -1080,70 +1261,34 @@ func TestAUnitThatIsNoJSONEndsTheFirstReadingAndTheNextReadsItBothWays(t *testin
 	}
 }
 
-// WHAT A READING READ PAST IS HELD TO THE ARCHIVE BY THE SECOND READING: the
-// reading that goes on from the first unit that is no JSON reads nothing
-// before it, so a box that changed a line or a `.json` file there between
-// the readings has the take refused where the second reading writes it; from
-// that unit on, the reading decides each itself.
-//
-// Mutation: plan the member's line bits from where the reading went on rather
-// than from the member's start, and a case is refused that was not.
-func TestWhatAReadingReadPastIsHeldToTheArchiveByTheSecondReading(t *testing.T) {
-	t.Parallel()
-	s := newScrubber([]string{longValue})
-	transcript := func(lines ...string) []byte {
-		return tarOf(t, map[string]string{"projects/p/s.jsonl": strings.Join(lines, "\n") + "\n"})
-	}
-	files := func(first, second string) []byte {
-		return tarOf(t, map[string]string{"tasks/s/1.json": first, "tasks/s/2.json": second})
-	}
-	named := `{"a":"` + longValue + `"}`
-	other := `{"a":"` + strings.Repeat("y", len(longValue)) + `"}`
-	for name, tc := range map[string]struct {
-		first, again []byte
-		refused      bool
-	}{
-		"a JSON line torn again":           {transcript(`{"a":1}`, `{"b":`), transcript(`{"a":`, `{"b":`), true},
-		"a JSON line kept otherwise again": {transcript(named, `{"b":`), transcript(other, `{"b":`), true},
-		"a `.json` file torn again":        {files(`{"k":1}`, `{"k":`), files(`{"k":`, `{"k":`), true},
-		"the torn line JSON again":         {transcript(`{"a":1}`, `{"b":`), transcript(`{"a":1}`, `{"b":2}`), false},
-	} {
-		err := scrubTar(bytes.NewReader(tc.first), reopenOf(tc.again), io.Discard, s, testBounds)
-		if (err != nil) != tc.refused {
-			t.Errorf("%s: the take ended %v; want it refused: %v", name, err, tc.refused)
-		}
-	}
-}
-
 // A READING GOES ON FROM WHERE THE FIRST ENDED: a session torn at a line, as
 // a take landing mid-write finds it, or ended at a `.json` file that is no
-// JSON, has each text before that unit read once, the plan of the first
-// reading kept to it (a line after it, read both ways, is one text more: its
-// line as text), and is kept as each of its lines and files is kept on its
-// own, each of its texts after that unit too written as planned.
+// JSON, has each text before that unit read once, the plan and the spool of
+// the first reading kept to it (a line after it, read both ways, is one text
+// more: its line as text), and is kept as each of its lines and files is kept
+// on its own.
 //
 // Mutation: read the archive again from its start, or from its member's
-// start, keep the plan's bits past the mark, or count its units from the
-// start, and a case reads a text twice, plans one elsewhere or keeps other
-// bytes.
+// start, keep the spool past the mark, or count its units from the start, and
+// a case reads a text twice or keeps other bytes.
 func TestAReadingGoesOnFromWhereTheFirstEnded(t *testing.T) {
 	t.Parallel()
 	s := newScrubber([]string{longValue})
 	pdf := pdfLine(14, 300<<10)
 	torn := `{"text":"` + longValue + ` ` + randomBase64(15, 1<<10)
 	for name, tc := range map[string]struct {
-		files         map[string]string
-		read, planned int
+		files map[string]string
+		read  int
 	}{
 		"a transcript torn at its last line": {map[string]string{
 			"projects/p/a.jsonl": pdf + "\n",
 			"projects/p/s.jsonl": `{"a":"` + longValue + `"}` + "\n" + pdf + "\n" + torn + "\n",
 			"projects/p/z.jsonl": pdf + "\n",
-		}, 7, 6},
+		}, 7},
 		"a `.json` file that is no JSON": {map[string]string{
 			"projects/p/s.jsonl": pdf + "\n",
 			"tasks/s/1.json":     `{"k":"` + longValue + `"`,
-		}, 2, 2},
+		}, 2},
 	} {
 		archive := tarOf(t, tc.files)
 		use := &memoUse{memo: newScrubMemo(), scope: "agent-a"}
@@ -1151,10 +1296,8 @@ func TestAReadingGoesOnFromWhereTheFirstEnded(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if read := use.n.hits + use.n.misses; opened != 2 || read != tc.read || use.n.checked != tc.planned ||
-			use.n.diverged != 0 {
-			t.Errorf("%s: %+v, reopened %d times; want %d texts read, %d written as planned, one reading on",
-				name, use.n, opened, tc.read, tc.planned)
+		if read := use.n.hits + use.n.misses; opened != 2 || read != tc.read || use.n.diverged != 0 {
+			t.Errorf("%s: %+v, read %d times; want %d texts read, one reading on", name, use.n, opened, tc.read)
 		}
 		got := untarOf(t, kept)
 		for file, body := range tc.files {

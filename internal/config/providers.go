@@ -1159,10 +1159,9 @@ func (l *LLMProvider) validateEnvSignIn(path Path, profile harnessprofile.Profil
 			p.add(at(path, "env"), ErrMissing,
 				"auth.mode env signs the harness in with the entry's env, and env sets none of the "+
 					"names the %q harness signs in by (%s), so the entry would sign in to nothing: set "+
-					"the one your cloud provider or gateway uses, its credentials as ${VAR}s, "+
-					"e.g. CLAUDE_CODE_USE_BEDROCK: \"1\" with AWS_REGION, or "+
-					"ANTHROPIC_AUTH_TOKEN: \"${GATEWAY_TOKEN}\" with ANTHROPIC_BASE_URL",
-				harness, strings.Join(profile.SignInEnv, ", "))
+					"the one your cloud provider, gateway or account uses, any credential as a ${VAR}, "+
+					"e.g. %s: \"${TOKEN}\"",
+				harness, strings.Join(profile.SignInEnv, ", "), profile.SignInEnv[0])
 		}
 	case profile.EnvSignIn:
 		signed := slices.ContainsFunc(slices.Collect(maps.Keys(l.Env)), func(name string) bool {
