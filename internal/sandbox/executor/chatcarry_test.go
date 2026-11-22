@@ -150,10 +150,11 @@ func TestANewerGeminiReleaseRunsOnASessionOfItsOwn(t *testing.T) {
 // run, carried or not: the script ends before the harness starts, and the run
 // fails saying the release it found and the one it needs. One that does not
 // read as a release, or prints none, is refused too, since it cannot be shown
-// not to be older.
+// not to be older, and so is a pre-release of the supported one, which comes
+// before it.
 //
 // Mutations, each red: drop the start gate; compare only the major and minor;
-// let a release that does not read run.
+// let a release that does not read run; cut a pre-release's suffix off.
 func TestAReleaseOlderThanTheOneThisBuildDrivesIsRefusedAtTheStart(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -179,6 +180,12 @@ func TestAReleaseOlderThanTheOneThisBuildDrivesIsRefusedAtTheStart(t *testing.T)
 		"qwen, a release that does not read": {func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 			return qwenBoxAt(t, "0.28", qwenCarryStandIn(t))
 		}, "mode", "this box runs Qwen Code 0.28,"},
+		"gemini, a pre-release of its release": {func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+			return geminiBoxAt(t, "0.70.0-nightly", geminiCarryStandIn(t))
+		}, "argv", "this box runs Gemini CLI 0.70.0-nightly, and this build runs Gemini CLI 0.70.0 or newer"},
+		"qwen, a pre-release of its release": {func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+			return qwenBoxAt(t, "0.28.3-preview.1", qwenCarryStandIn(t))
+		}, "mode", "this box runs Qwen Code 0.28.3-preview.1, and this build runs Qwen Code 0.28.3 or newer"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -373,5 +380,73 @@ func TestAContinuedGeminiRunIsChargedItsOwnRequestsThroughItsScript(t *testing.T
 					tc.input, tc.output, tc.note)
 			}
 		})
+	}
+}
+
+// A NEWER RELEASE RUNS ITS BOX'S OWN COPY OF A SESSION FRESH, as it runs a
+// carried one: a box on Gemini CLI 0.71.0 or Qwen Code 0.29.0 that holds the
+// session it is asked to continue, its own run's, starts the session minted
+// for it instead and says why, naming the one release a session continues on.
+//
+// Mutation, red: hold only a carried archive to the release, so the box's own
+// copy is resumed (`--resume`, `load`).
+func TestANewerReleaseRunsItsBoxsOwnCopyOfASessionFresh(t *testing.T) {
+	t.Parallel()
+	t.Run("gemini", func(t *testing.T) {
+		t.Parallel()
+		runner, b := geminiBoxAt(t, "0.71.0", geminiCarryStandIn(t))
+		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin"})
+		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID})
+		argv := argvOf(t, b)
+		fresh := after(argv, "--session-id")
+		const why = "this build continues Gemini CLI sessions only on 0.70.0, and this box runs 0.71.0"
+		if fresh == "" || fresh == ran.SessionID || slices.Contains(argv, "--resume") || res.Continued ||
+			res.FellBack != why {
+			t.Errorf("the second run ran %q, continued %v because %q; want a session of its own because %q",
+				argv, res.Continued, res.FellBack, why)
+		}
+	})
+	t.Run("qwen", func(t *testing.T) {
+		t.Parallel()
+		runner, b := qwenBoxAt(t, "0.29.0", qwenCarryStandIn(t))
+		_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "begin"})
+		_, res := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "carry on", Resume: ran.SessionID})
+		mode := strings.TrimSpace(boxFile(t, b, b.Home()+"/mode"))
+		const why = "this build continues Qwen Code sessions only on 0.28.3, and this box runs 0.29.0"
+		if mode != "new" || res.Continued || res.SessionID == ran.SessionID || res.FellBack != why {
+			t.Errorf("the second run was told %q, continued %v in %q because %q; want a session of its own "+
+				"because %q", mode, res.Continued, res.SessionID, res.FellBack, why)
+		}
+	})
+}
+
+// A SESSION A PRE-RELEASE WROTE IS NEVER CONTINUED. Its record names the
+// release as the box printed it, 0.70.0-nightly, whose numbers are the
+// supported release's but which comes before it: its capture is described as
+// written by no release, and no box restores it.
+//
+// Mutation, red: read the release's numbers off the record, as Claude Code's
+// is read, so the archive is 0.70.0's.
+func TestASessionAPreReleaseWroteIsNeverContinued(t *testing.T) {
+	t.Parallel()
+	runner, a := geminiBoxAt(t, geminiCapturedRelease, geminiCarryStandIn(t))
+	runToEnd(t, runner, a, sandbox.RunRequest{Brief: "begin"})
+	record := boxFile(t, a, paths(a).SessionRecord())
+	nightly := strings.Replace(record, "release "+geminiCapturedRelease+"\n", "release 0.70.0-nightly\n", 1)
+	if nightly == record {
+		t.Fatalf("the run's record names no release %s:\n%s", geminiCapturedRelease, record)
+	}
+	if err := a.WriteFile(t.Context(), paths(a).SessionRecord(), []byte(nightly)); err != nil {
+		t.Fatal(err)
+	}
+	described, body, err := runner.OpenCapture(t.Context(), a)
+	if err != nil || body == nil {
+		t.Fatalf("OpenCapture = %v, %v", body, err)
+	}
+	_ = body.Close()
+	restores, why := runner.Restores(described)
+	if described.Version != "" || restores || !strings.Contains(why, "a release it did not record") {
+		t.Errorf("a 0.70.0-nightly session is described at %q and restores %v (%q); want no release and "+
+			"refused", described.Version, restores, why)
 	}
 }

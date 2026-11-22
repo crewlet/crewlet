@@ -1098,7 +1098,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		}
 		result.SessionID, rec.id = minted, minted
 	}
-	result.Continued, result.HarnessVersion = rec.continued, releaseOf(rec.release)
+	result.Continued, result.HarnessVersion = rec.continued, r.releaseOf(rec.release)
 	result.FellBack = sandbox.BoundFellBack(rec.why)
 	if result.Captured, err = r.captured(ctx, box, paths, rec); err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading the session the box packed: %w", err)

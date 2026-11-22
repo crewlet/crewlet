@@ -881,3 +881,27 @@ func TestAQwenChatFileThatShrankConfirmsNothingMore(t *testing.T) {
 		t.Errorf("a shrunk chat file confirmed %v by the earlier job's record", got)
 	}
 }
+
+// A CONTINUED QWEN SESSION WHOSE CHAT FILE CANNOT BE MEASURED CONFIRMS NOTHING.
+// The run loads a session whose chat file is not where the helper reads it as
+// the turn begins; the turn goes on, Qwen Code records the note it is handed
+// and the reply after it, and the helper confirms none of it: from the file's
+// start, an earlier job's record of the same text would confirm a note this
+// run lost, so the take stays undecided rather than read from 0.
+//
+// Mutation, red: begin a continued session's read at 0 where it cannot be
+// measured, as a new session's.
+func TestAContinuedQwenSessionItCannotMeasureConfirmsNothing(t *testing.T) {
+	t.Parallel()
+	bridge := newQwenBridge(t, qwenNote{Seq: 1, ID: "n-1", Inbox: "qwen_1",
+		Message: "## A note from eve, sent while this turn was running\nx"})
+	run := startQwenHelperAs(t, "load", nil, bridge.steer(), "acp-note.jsonl", nil, "QWEN_FAKE_AWAIT_NOTES=1")
+	lines, code := run.finish(t)
+	if code != 0 || len(typed(lines, "crewlet_qwen_note")) != 1 {
+		t.Fatalf("the run exited %d having handed %v, want the note handed once", code,
+			typed(lines, "crewlet_qwen_note"))
+	}
+	if got := bridge.read(); len(got) != 0 {
+		t.Errorf("a continued session read from its start confirmed %v", got)
+	}
+}
