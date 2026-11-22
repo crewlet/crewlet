@@ -1399,15 +1399,11 @@ func seatsBesideGitlet(t *testing.T) []string {
 			}
 		}
 	}
-	if cost := readsCost(t, true); cost != 0 {
-		t.Errorf("the transcript reads' pool costs a node running seats up to %d transfers at %s a core, and "+
-			"the page states its cost for a node without seats alone", cost, amount(t, gitproc.CoreMemory))
-	}
 	turnMiB := float64(turn) / (1 << 20)
 	return append(want,
-		fmt.Sprintf("so every Gitlet node keeps the transcript reads' pool, with seats or without; on a node "+
-			"without seats of %s of memory a core in all, that costs it %s", amount(t, gitproc.CoreMemory),
-			transfersCost(t, readsCost(t, false))),
+		fmt.Sprintf("so every Gitlet node keeps the transcript reads' pool, with seats or without; on a node of "+
+			"%s of memory a core in all, that costs it %s without seats and %s with them",
+			amount(t, gitproc.CoreMemory), transfersCost(t, readsCost(t, false)), transfersCost(t, readsCost(t, true))),
 		fmt.Sprintf("logs `code_cache_memory_short` once at boot with the figures; at the default "+
 			"`node.max_concurrent`, give a node running seats beside Gitlet %s of memory or more in all",
 			amount(t, seatsFloor(t))),

@@ -157,7 +157,7 @@ func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	// TO THE JOB BEFORE THE BRIDGE FILES THE SESSION ([Engine.openBridge]): the
 	// box reaches the opening the moment it is filed, with the token it holds,
 	// and never finds the inbox serving no job.
-	inbox := e.runSteers.inbox(identityOfRun(run), state.Round)
+	inbox := e.runSteers.inbox(identityOfRun(run), state.Round, run.Harness)
 	if inbox != nil {
 		session.Steer = inbox
 	}

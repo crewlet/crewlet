@@ -407,3 +407,22 @@ func TestALazyCatalogIsBuiltOnceAtFirstUseAndValidated(t *testing.T) {
 		t.Errorf("a second read built it again: %d", builds)
 	}
 }
+
+// A GROWTH LEVEL READS BY WHAT IT LETS AN AGENT DO, one name each, the same on
+// every product: View, Manage and Administer, least access first, and a level
+// this build does not know as written.
+//
+// Mutation: name operate "Operate", or two levels alike, and this is red.
+func TestEachGrowthLevelHasOneNameForPeople(t *testing.T) {
+	t.Parallel()
+	var got []string
+	for _, l := range growth.Levels() {
+		got = append(got, l.Label())
+	}
+	if want := []string{"View", "Manage", "Administer"}; !slices.Equal(got, want) {
+		t.Errorf("levels read %v, want %v", got, want)
+	}
+	if got := growth.Level("supervise").Label(); got != "supervise" {
+		t.Errorf("an unknown level reads %q, want it as written", got)
+	}
+}

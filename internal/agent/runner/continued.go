@@ -431,10 +431,10 @@ func (k *keptBrief) led(lead string, own []sandbox.Lead) *SessionContinuation {
 
 // heldReading is a reading of what a cut-off kept session holds
 // ([HoldingsAsker]), as a telling is told by it ([Runner.calledAfter]): the
-// session's harness (whose key names a call, [callKey]), the reading, and each
+// key the session's harness names a call by ([callKey]), the reading, and each
 // asked call's outcome as the ask carried it, by that key.
 type heldReading struct {
-	harness  string
+	keying   sandbox.CallKeying
 	holdings sandbox.SessionHoldings
 	asked    map[string]sandbox.LoggedCall
 }
@@ -449,7 +449,7 @@ func (read *heldReading) holds(call BridgedCall) (held bool, under string) {
 	if read == nil {
 		return false, ""
 	}
-	key, ok := callKey(read.harness, call)
+	key, ok := callKey(read.keying, call)
 	logged, asked := read.asked[key]
 	if !ok || !asked {
 		return false, ""
@@ -471,19 +471,18 @@ func (read *heldReading) thins() bool {
 
 // callKey is the key a reading of a session harness names call by, and whether
 // call carries one this build asks by: THE ONE PLACE a call's key and validity
-// are decided per harness, read by the ask and the telling's lookup
-// ([Runner.holdingsAsk], [heldReading]). Claude Code's is the call's id
-// ([BridgedCall.CallID]), valid where the log keeps it (sandbox.ValidCallID).
-// OpenCode's calls carry no id: it is the call's place in its round's log
+// are decided per keying ([sandbox.CallKeying]), read by the ask and the
+// telling's lookup ([Runner.holdingsAsk], [heldReading]). By call id: the
+// call's id ([BridgedCall.CallID]), valid where the log keeps it
+// (sandbox.ValidCallID). By log place: the call's place in its round's log
 // ([BridgedCall.Appended]) in decimal, valid beside an admission place
 // ([BridgedCall.Seq]) and never for a call a person's approval held, which the
-// reader refuses and whose part answers with the held answer (the executor's
-// openCodeHoldingsRead). Every other harness: none.
-func callKey(harness string, call BridgedCall) (string, bool) {
-	switch harness {
-	case sandbox.ClaudeCodeHarness:
+// reader refuses and whose part answers with the held answer. Any other: none.
+func callKey(keying sandbox.CallKeying, call BridgedCall) (string, bool) {
+	switch keying {
+	case sandbox.CallKeyingByCallID:
 		return call.CallID, sandbox.ValidCallID(call.CallID)
-	case sandbox.OpenCodeHarness:
+	case sandbox.CallKeyingByLogPlace:
 		return strconv.Itoa(call.Appended), call.Appended > 0 && call.Seq > 0 && !call.Held
 	}
 	return "", false
@@ -495,18 +494,18 @@ func callKey(harness string, call BridgedCall) (string, bool) {
 // call by its key ([callKey]). Its calls are every listed call but those a
 // person approved (made on the engine host, held by no session), by key,
 // outcome, place, tool, digest, a held call marked, and for OpenCode alone the
-// arguments' key ([openCodeArgsKey]); its Unlisted the in-flight calls and the
+// arguments' key where calls are keyed by log place ([argsKey]); its Unlisted the in-flight calls and the
 // log's dropped tally, never the late dropped count, which that tally holds. A
 // call is asked where its telling would list it and the reader can name it:
 // none a skipped meta-tool's, held at the point ([heldAt]), or late or
 // abandoned ([heldByTelling]); its key valid and carried by no other call of
 // round.
-func (r *Runner) holdingsAsk(harness string, round roundCalls, from *int, owed []int,
+func (r *Runner) holdingsAsk(keying sandbox.CallKeying, round roundCalls, from *int, owed []int,
 	release string) (sandbox.HoldingsAsk, map[string]sandbox.LoggedCall) {
 
 	carried := map[string]int{}
 	for _, call := range slices.Concat(round.bridged, round.unfinished) {
-		if key, ok := callKey(harness, call); ok {
+		if key, ok := callKey(keying, call); ok {
 			carried[key]++
 		}
 	}
@@ -515,12 +514,12 @@ func (r *Runner) holdingsAsk(harness string, round roundCalls, from *int, owed [
 		if call.Approved {
 			continue
 		}
-		key, valid := callKey(harness, call)
+		key, valid := callKey(keying, call)
 		logged := sandbox.LoggedCall{ID: key, Failed: call.Failed, Output: call.Result,
 			OutputBytes: call.OutputBytes, Appended: call.Appended, Seq: call.Seq, Name: call.Name,
 			Digest: call.Digest, Held: call.Held}
-		if harness == sandbox.OpenCodeHarness {
-			logged.Args = openCodeArgsKey(call)
+		if keying == sandbox.CallKeyingByLogPlace {
+			logged.Args = argsKey(call)
 		}
 		logged.Asked = !slices.Contains(r.cfg.SkipNames, call.Name) && !heldAt(call, from, owed) &&
 			!call.Late && !call.Abandoned && valid && carried[key] == 1
@@ -540,12 +539,12 @@ func (r *Runner) holdingsAsk(harness string, round roundCalls, from *int, owed [
 	return ask, asked
 }
 
-// openCodeArgsKey is call's arguments' key from its logged text
+// argsKey is call's arguments' key from its logged text
 // ([BridgedCall.ArgsText]), Whole only where that text states them: kept whole,
 // not withheld, read by the bridge, decoding as toolargs.Key does, and not ""
 // unless the call carries a digest ("" is the empty object only for an admitted
 // call).
-func openCodeArgsKey(call BridgedCall) sandbox.ArgsKey {
+func argsKey(call BridgedCall) sandbox.ArgsKey {
 	if call.ArgsBytes != 0 || call.Withheld || call.ArgsUnread || call.ArgsText == "" && call.Digest == "" {
 		return sandbox.ArgsKey{}
 	}
@@ -572,11 +571,11 @@ func (r *Runner) heldReading(ctx context.Context, basis SessionBasis, round roun
 		return nil
 	}
 	from, owed, _ := holds.keptCalls(basis)
-	ask, asked := r.holdingsAsk(basis.Harness, round, from, owed, basis.Release)
+	ask, asked := r.holdingsAsk(basis.Traits[basis.Harness].CallKeying, round, from, owed, basis.Release)
 	if len(asked) == 0 {
 		return nil
 	}
-	read := &heldReading{harness: basis.Harness, holdings: asker.SessionHoldings(ctx, basis, ask), asked: asked}
+	read := &heldReading{keying: basis.Traits[basis.Harness].CallKeying, holdings: asker.SessionHoldings(ctx, basis, ask), asked: asked}
 	if !read.thins() {
 		return nil
 	}

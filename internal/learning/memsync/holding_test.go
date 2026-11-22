@@ -50,7 +50,7 @@ func (s *Syncer) boundary(handle string) int64 {
 func backlogRows(t *testing.T, db *store.DB, through int64) int {
 	t.Helper()
 	n := 0
-	for _, spec := range backlogPassOrder {
+	for _, spec := range tables {
 		n += len(stamped(t, db, spec, 0, through))
 	}
 	return n
@@ -214,7 +214,7 @@ func TestAPublishThatStartsAfterForgetCarriesNothing(t *testing.T) {
 	written := writeNotesUnder(t, db, "a", 10, 0)
 	name := names{}.noted(t, held).noted(t, written)
 	var wroteRows, heldRows int
-	for _, spec := range backlogPassOrder {
+	for _, spec := range tables {
 		wroteRows += len(stamped(t, db, spec, boundary, sequenceAt(t, db)))
 		heldRows += len(stamped(t, db, spec, 0, boundary))
 	}
@@ -225,10 +225,10 @@ func TestAPublishThatStartsAfterForgetCarriesNothing(t *testing.T) {
 	}
 	own, ownErr := s.FlushOwn(t.Context(), seat.Handle)
 	backlog, backlogErr := s.FlushBacklog(t.Context(), seat.Handle)
-	if ownErr != nil || backlogErr != nil || own.Marked != wroteRows ||
-		backlog.Marked != heldRows {
+	if ownErr != nil || backlogErr != nil || own.Rows != wroteRows ||
+		backlog.Rows != heldRows {
 		t.Fatalf("the release's flush answered %+v (%v) and %+v (%v), want the %d rows the "+
-			"holding wrote with its tables sent whole, and the %d it held", own, ownErr,
+			"holding wrote, and the %d it held", own, ownErr,
 			backlog, backlogErr, wroteRows, heldRows)
 	}
 	s.Forget(seat.Handle)
@@ -396,7 +396,7 @@ func TestACyclePartWayThroughASeatAtItsReleasePublishesNothingAfterTheFlushBegin
 	}
 	if after := js.acked[to:]; len(after) > 0 {
 		t.Errorf("the cycle had %d rows acknowledged after the flush began, want none: its "+
-			"copies of the seat's whole tables land after the flush's and replace them",
+			"copies of the seat's rows land after the flush's and replace them",
 			len(after))
 	}
 	if own.Rows != 100 || !errors.Is(ownErr, ErrNotHeld) {
@@ -480,10 +480,11 @@ func TestASeatWhoseHydrationFailedFlushesNothingOnItsRelease(t *testing.T) {
 			if !s.Releasing(seat.Handle) {
 				t.Error("the control's Releasing found no live holding to turn")
 			}
-			if carried, err := s.FlushOwn(t.Context(), seat.Handle); err != nil ||
-				carried.Rows == 0 {
-				t.Errorf("the control's flush answered %+v (%v), want the seat's tables sent "+
-					"whole", carried, err)
+			own, ownErr = s.FlushOwn(t.Context(), seat.Handle)
+			backlog, backlogErr = s.FlushBacklog(t.Context(), seat.Handle)
+			if ownErr != nil || backlogErr != nil || backlog.Rows == 0 {
+				t.Errorf("the control's flush answered %+v (%v) and %+v (%v), want the rows its "+
+					"hydration left carried", own, ownErr, backlog, backlogErr)
 			}
 		})
 	}

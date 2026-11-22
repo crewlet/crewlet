@@ -870,7 +870,7 @@ and has a **gate**, which its authority row decides:
 | Health | `health` | `fleet_health` and `code_status` ([The deployment's health](#the-deployments-health)) |
 | Atlas | `atlas` | `atlas_search`, `atlas_get` and `atlas_trace` ([The company's atlas](#the-companys-atlas)) |
 | Servers | `servers` | The company's servers over SSH: `ssh_read`, `ssh_operate` and `ask_to_operate` ([SSH](../integrations/ssh.md#the-agents-tools)) |
-| Marketing and growth | `growth` | Each growth product's tools, filed from its catalog: reads, recorded changes, and spend, publishing and account changes an administrator approves first ([The sixteen rules](../concepts/identity-and-access.md#the-sixteen-rules)) |
+| Growth | `growth` | Each growth product's tools, filed from its catalog: reads, recorded changes, and spend, publishing and account changes an administrator approves first ([The sixteen rules](../concepts/identity-and-access.md#the-sixteen-rules)) |
 | Colleagues | `colleagues` | Finding a colleague, asking another agent a question |
 | Memory and skills | `memory` | The agent's own notes, past turns, sessions and skills |
 | MCP discovery | `discovery` | `list_mcp_server_tools` and `activate_tool`, handed to the onboarding pass and a worker so it can reach its MCP servers' tools (an executor holds every tool its seat does from launch, and its harness defers a server's tools itself) |

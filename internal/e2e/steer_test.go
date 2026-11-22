@@ -72,7 +72,7 @@ func TestAPersonSteersALiveExecutor(t *testing.T) {
 	}
 	system := valueOf(args, "--append-system-prompt-file")
 	if text, err := os.ReadFile(system); err != nil || //nolint:gosec // the run's own box, under the case's state dir
-		!strings.Contains(string(text), executor.ClaudeCodeSteerInstruction) {
+		!strings.Contains(string(text), executor.ClaudeCode{}.NoteInstruction()) {
 		t.Errorf("the run's standing instructions are not told of notes (%v):\n%s", err, text)
 	}
 
@@ -218,7 +218,7 @@ func TestAClaudeCodeOlderThanItsNoteFloorLeavesANoteToTheReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read the run's system text: %v", err)
 	}
-	if strings.Contains(string(text), executor.ClaudeCodeSteerInstruction) {
+	if strings.Contains(string(text), executor.ClaudeCode{}.NoteInstruction()) {
 		t.Errorf("a run started without its hooks was told of notes:\n%s", text)
 	}
 	said, err := os.ReadFile(filepath.Join(filepath.Dir(system), "err.log")) //nolint:gosec // as above

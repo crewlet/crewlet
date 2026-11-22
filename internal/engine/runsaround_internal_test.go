@@ -226,7 +226,7 @@ func TestAnotherRunsMessageIsReadFencedAtTheNextStepAsInformation(t *testing.T) 
 		t.Fatalf("the message is held as %+v, want an item naming its sender", held)
 	}
 	token := provenance.NewBoundary()
-	box := r.steers.inbox(identityOfRun(row), 1)
+	box := r.steers.inbox(identityOfRun(row), 1, row.Harness)
 	box.Bind(ctx, launch, token)
 	t.Cleanup(box.Close)
 	viewHolds(t, box, 1)

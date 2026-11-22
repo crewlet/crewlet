@@ -1,38 +1,8 @@
 package sandbox
 
-import "testing"
-
-// THE WINDOW IS THE MODEL'S OWN, read through a platform's decorations on its
-// id, with the fallback for a model this build does not know. Never a pin below
-// a current model's window: the harness clamps a pin to the model's own, so
-// overstating costs nothing and understating starves the run.
-// [ExecutorWindow.Standard] is the least window Claude Code holds the model to
-// on Anthropic's API: no model (the account's default) may be held to 200,000.
-//
-// Mutation: return a fixed window, drop a decoration, mark a fallback known, or
-// take the pin for the standard window, and a row goes red.
-func TestTheWindowIsTheModelsOwn(t *testing.T) {
-	t.Parallel()
-	for model, want := range map[string]ExecutorWindow{
-		"claude-opus-5-5":           {Tokens: 1_000_000, Standard: 1_000_000, Known: true},
-		"Claude-Sonnet-5-5":         {Tokens: 1_000_000, Standard: 1_000_000, Known: true},
-		"opus":                      {Tokens: 1_000_000, Standard: 1_000_000, Known: true},
-		"":                          {Tokens: 1_000_000, Standard: 200_000, Known: true},
-		"claude-haiku-4-5-20251001": {Tokens: 200_000, Standard: 200_000, Known: true},
-		"claude-opus-4-5@20251101":  {Tokens: 200_000, Standard: 200_000, Known: true},
-		"us.anthropic.claude-sonnet-4-5-20250929-v1:0": {Tokens: 200_000, Standard: 200_000, Known: true},
-		"anthropic.claude-opus-5-5":                    {Tokens: 1_000_000, Standard: 1_000_000, Known: true},
-		"claude-sonnet-4-5[1m]":                        {Tokens: 1_000_000, Standard: 1_000_000, Known: true},
-		"opus[1M]":                                     {Tokens: 1_000_000, Standard: 1_000_000, Known: true},
-		"claude-next-preview":                          {Tokens: FallbackExecutorWindow, Standard: FallbackExecutorWindow},
-		"arn:aws:bedrock:us-east-1:111122223333:application-inference-profile/abc": {
-			Tokens: FallbackExecutorWindow, Standard: FallbackExecutorWindow},
-	} {
-		if got := ClaudeCodeWindow(model); got != want {
-			t.Errorf("ClaudeCodeWindow(%q) = %+v, want %+v", model, got, want)
-		}
-	}
-}
+import (
+	"testing"
+)
 
 // A WINDOW CARRIES A SESSION WHOSE FIRST REQUEST (its context plus the brief
 // continuing it) FITS BENEATH ITS REPLY RESERVE.
@@ -41,7 +11,7 @@ func TestTheWindowIsTheModelsOwn(t *testing.T) {
 // goes red.
 func TestAWindowCarriesWhatFitsBeneathItsReplyReserve(t *testing.T) {
 	t.Parallel()
-	w := ExecutorWindow{Tokens: 200_000, Known: true}
+	w := ExecutorWindow{Tokens: 200_000, Known: true, Reserve: 20_000}
 	for name, c := range map[string]struct {
 		context int64
 		brief   int
@@ -54,6 +24,46 @@ func TestAWindowCarriesWhatFitsBeneathItsReplyReserve(t *testing.T) {
 	} {
 		if got := w.Carries(c.context, c.brief); got != c.carries {
 			t.Errorf("%s: Carries(%d, %d) = %v, want %v", name, c.context, c.brief, got, c.carries)
+		}
+	}
+}
+
+// THE LEAST OF TWO WINDOWS TELLS MORE: the lower standard window, Known only
+// where both are, the larger headroom and the heavier charge, and an unknown
+// window's fallback standard never lowers a known one's.
+//
+// Mutation: take the larger standard window, keep Known from either, or take
+// the lighter charge, and a case goes red.
+func TestTheLeastOfTwoWindowsTellsMore(t *testing.T) {
+	t.Parallel()
+	wide := ExecutorWindow{Tokens: 1_000_000, Standard: 1_000_000, Known: true, Reserve: 20_000, Buffer: 13_000,
+		Attachments: 20_000, Charge: 4}
+	narrow := ExecutorWindow{Tokens: 1_000_000, Standard: 200_000, Known: true, Reserve: 30_000, Buffer: 10_000,
+		Attachments: 5_000, Charge: 2}
+	got := wide.Least(narrow)
+	want := ExecutorWindow{Tokens: 1_000_000, Standard: 200_000, Known: true, Reserve: 30_000, Buffer: 13_000,
+		Attachments: 20_000, Charge: 2}
+	if got != want {
+		t.Errorf("the least of %+v and %+v is %+v, want %+v", wide, narrow, got, want)
+	}
+	unknown := ExecutorWindow{Tokens: 200_000, Standard: 100_000}
+	if got := wide.Least(unknown); got.Known || got.Standard != wide.Standard {
+		t.Errorf("an unknown window lowered the standard or kept Known: %+v", got)
+	}
+}
+
+// A CHARGE ROUNDS UP and counts nothing of nothing.
+//
+// Mutation: round down, or charge a negative size, and a case goes red.
+func TestAChargeRoundsUp(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		charge Charge
+		n      int64
+		want   int64
+	}{{2, 10, 5}, {2, 11, 6}, {4, 1, 1}, {4, 0, 0}, {4, -3, 0}, {0, 10, 0}} {
+		if got := c.charge.Tokens(c.n); got != c.want {
+			t.Errorf("%d bytes at %d a token is %d, want %d", c.n, c.charge, got, c.want)
 		}
 	}
 }

@@ -101,6 +101,14 @@ export function isLater(next: LogPosition, held: LogPosition): boolean {
 export const EVERY_QUESTION = "*";
 
 /**
+ * What a revision this node applied moved: every read that asks again on a
+ * reconnect (`refetchOnReconnect`), since a config write answers before the
+ * node applies it and many answers are read from what it applied. A read that
+ * opted out of reconnects (a transcript, a code search) is not moved by one.
+ */
+export const APPLIED_REVISION = "*applied";
+
+/**
  * Two positions on ONE log in log order: negative when `a` is earlier, zero
  * when they are the same point, positive when `a` is later.
  *

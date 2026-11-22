@@ -212,7 +212,7 @@ func parkedOnAHeldCall(t *testing.T, store sandbox.PendingStore, turnID, launch 
 func relaunchedInPlace(t *testing.T, b bridgedRun, resume *runner.Resume) string {
 	t.Helper()
 	recorder := &probingRecorder{basis: runner.SessionBasis{Why: "the turn keeps no session",
-		Window: sandbox.ClaudeCodeWindow("claude-sonnet-4-5")}}
+		Window: claudeWindowOf("claude-sonnet-4-5")}}
 	r, err := b.launcher.company.RunnerFor(t.Context(), b.handle, tools.NewRegistry(), RunnerInput{
 		Task: "fix the failing test", Reply: turn.ToolReply(""), Launcher: recorder,
 		Sessions: testSessions(t), Resume: resume,

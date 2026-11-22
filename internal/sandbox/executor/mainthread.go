@@ -312,157 +312,18 @@ type mainThreadHarness interface {
 
 // ReadMainThread reads the main thread of the session a job's box ran, once
 // for every reading ask asks of it, through the runner's harness: zero for a
-// harness that reads none.
+// harness that reads none. A harness that confirms off its session record
+// ([recordConfirmer]) answers the takes asked from that record, through the
+// same receipts, whether or not it reads a whole thread.
 func (r *Runner) ReadMainThread(ctx context.Context, box sandbox.Sandbox,
 	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
 
-	reads, ok := r.harness.(mainThreadHarness)
-	if !ok {
-		return sandbox.MainThreadReading{}
-	}
-	return reads.readMainThread(ctx, box, PathsFor(box), ask)
-}
-
-var (
-	_ mainThreadHarness = ClaudeCode{}
-	_ mainThreadHarness = OpenCode{}
-)
-
-// readMainThread is Claude Code's read of the main thread of ask's session in
-// box, in the order the file comment states. The release and the saved
-// compaction mark the count alone: takes asked are read in the walk all the
-// same, the chain first on each line, unless no walk could decide one
-// ([unreadTakes]). A count marked before the walk leaves no estimate of the
-// next request, so the floor reads the copy's last request's input.
-func (ClaudeCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
-	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
-
 	var reading sandbox.MainThreadReading
-	takes := ask.Takes
-	if why := unreadTakes(ask); why != "" {
-		reading.Receipts, takes = sandbox.HookReceipts{Why: why}, nil
+	if reads, ok := r.harness.(mainThreadHarness); ok {
+		reading = reads.readMainThread(ctx, box, PathsFor(box), ask)
 	}
-	if !ask.Count && !ask.Next && len(takes) == 0 {
-		return reading
-	}
-	early := false
-	marked := func(mark sandbox.CountMark) {
-		early = true
-		if ask.Count && reading.Count == nil {
-			reading.Count = &sandbox.ResumedCount{Mark: mark}
-		}
-	}
-	unread := func(why string) sandbox.MainThreadReading {
-		marked(sandbox.CountUnread)
-		if len(takes) > 0 {
-			reading.Receipts = sandbox.HookReceipts{Why: why}
-		}
-		return reading
-	}
-	thread, ok := claudeMainThread(ask.Session)
-	if !ok {
-		return unread("no session names the job's main thread")
-	}
-	if ask.Release == "" || !releaseAtLeast(ask.Release, claudeCountFloor) {
-		marked(sandbox.CountRelease)
-	}
-	saved, _ := claudePrecompact(ask.Session)
-	for _, name := range saved {
-		if early {
-			break
-		}
-		// Its size, never its body: an empty file is one the harness cannot
-		// read, so it holds no saved compaction.
-		tail, err := box.ReadTail(ctx, paths.ClaudeConfigDir()+"/"+name, 0)
-		switch {
-		case err != nil:
-			marked(sandbox.CountUnread)
-		case tail.Size > 0:
-			marked(sandbox.CountPrecompact)
-		}
-	}
-	counts, nexts := ask.Count && !early, ask.Next && !early
-	if !counts && !nexts && len(takes) == 0 {
-		return reading
-	}
-	body, err := box.OpenFile(ctx, paths.ClaudeConfigDir()+"/"+thread)
-	if err != nil {
-		return unread("the thread did not open")
-	}
-	defer func() { _ = body.Close() }()
-	var large passBudget
-	defer large.release()
-	var (
-		readings []threadReading
-		count    resumedReading
-		next     nextReading
-		hooks    *hookReading
-	)
-	if len(takes) > 0 {
-		chain := &chainReading{c: newThreadChain("")}
-		hooks = newHookReading(chain, takes)
-		readings = append(readings, chain)
-	}
-	if counts {
-		readings = append(readings, &count)
-	}
-	if nexts {
-		readings = append(readings, &next)
-	}
-	if hooks != nil {
-		readings = append(readings, hooks)
-	}
-	walkThread(ctx, body, threadPlainMax, &large, readings...)
-	if counts {
-		reading.Count = count.count(0)
-	}
-	if nexts {
-		reading.Next = next.next()
-	}
-	if hooks != nil {
-		reading.Receipts = hooks.receipts(ctx, ask)
-	}
-	return reading
-}
-
-// readMainThread is OpenCode's read of ask's session in box: the export the
-// job's script left as the job ended ([openCodeCapture], [Paths.SessionCapture]),
-// which is the copy the box holds once its harness ended its own run (the
-// collection asks nothing of a job whose harness did not), walked ONCE for the
-// count and the estimate ([meterExport]). In this order, cheapest first: a
-// release outside the set the count's rules were read in is
-// [sandbox.CountRelease] with no read ([openCodeCountRead]); an export the
-// script left none of, or one that does not open, is [sandbox.CountUnread];
-// and only then is the export streamed (through envd on e2b) and walked. A
-// count marked before the walk leaves the estimate none, as a Claude Code
-// thread's does.
-func (OpenCode) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Paths,
-	ask sandbox.MainThreadAsk) sandbox.MainThreadReading {
-
-	if !ask.Count && !ask.Next {
-		return sandbox.MainThreadReading{}
-	}
-	marked := func(mark sandbox.CountMark) sandbox.MainThreadReading {
-		if !ask.Count {
-			return sandbox.MainThreadReading{}
-		}
-		return sandbox.MainThreadReading{Count: &sandbox.ResumedCount{Mark: mark}}
-	}
-	if !openCodeCountRead(ask.Release) {
-		return marked(sandbox.CountRelease)
-	}
-	body, err := box.OpenFile(ctx, paths.SessionCapture())
-	if err != nil {
-		return marked(sandbox.CountUnread)
-	}
-	defer func() { _ = body.Close() }()
-	read, _ := meterExport(ctx, body, ask.Release)
-	var reading sandbox.MainThreadReading
-	if ask.Count {
-		reading.Count, reading.Provider = read.count, read.provider
-	}
-	if ask.Next {
-		reading.Next = read.next
+	if records, ok := r.harness.(recordConfirmer); ok && len(ask.Takes) > 0 {
+		reading.Receipts = recordReceipts(ctx, records, box, ask)
 	}
 	return reading
 }

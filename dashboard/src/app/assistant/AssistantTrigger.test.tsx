@@ -21,7 +21,7 @@ const ready: AssistantControl = {
   unavailable: null,
   toggle: () => {},
   ask: () => {},
-  draft: () => {},
+  askAbout: () => {},
 };
 
 /** The words the kit's tooltip shows once the button takes keyboard focus. */
