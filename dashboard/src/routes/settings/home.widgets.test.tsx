@@ -190,6 +190,7 @@ describe("the Models widget", () => {
         node: "n0",
         nodes: [],
         alarms: null,
+        executor_harnesses: ["claude-code", "opencode"],
         entries: [
           model("fine", "ready", true),
           model("idle", "ready", false),
@@ -215,6 +216,7 @@ describe("the Models widget", () => {
         node: "n0",
         nodes: [],
         alarms: null,
+        executor_harnesses: ["claude-code", "opencode"],
         entries: [model("fine", "ready", true)],
       },
     });
