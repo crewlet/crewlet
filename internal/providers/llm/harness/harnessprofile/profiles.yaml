@@ -850,7 +850,7 @@ codex:
   # lacks.
   effort:
     args: ["-c", 'model_reasoning_effort="{effort}"']
-    levels: [none, minimal, low, medium, high, xhigh, max]
+    levels: [none, minimal, low, medium, high, xhigh, max, ultra, persistent]
   # A SIDE PASS REPLACES CODEX'S PROMPT: model_instructions_file takes the
   # place of the base instructions outright — the first developer message,
   # exactly the file's text, measured on 0.171.0 — and the two
