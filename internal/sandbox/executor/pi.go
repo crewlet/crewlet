@@ -101,15 +101,13 @@ const piExtensionMark = "crewlet.extension"
 // end: the end protocol (end.go); the release read, a pre-release or one older
 // than [piSupported] refused; the extension's mark ([piExtensionMark]); the
 // session named, its file's header written or its archive restored
-// ([piSessionGate]), and recorded
-// ([Paths.SessionRecord]); the harness run under the end protocol
-// ([launchHarness]); and its session packed ([piCapture]), exiting with the
-// harness's status.
+// ([piSessionGate]), and recorded ([Paths.SessionRecord]); the harness run
+// under the end protocol ([launchHarness]); and its session packed
+// ([piCapture]), exiting with the harness's status.
 //
 // THE BRIEF IS NOT ON ITS COMMAND LINE: print mode with no message reads stdin,
 // which the wrapper points at the brief's file. THE SYSTEM TEXT IS NOT EITHER:
-// the extension adds it as a prompt section of its own, on every run, so a
-// continued run is told by its own launch.
+// the extension adds it as a prompt section of its own, on every run.
 func piScript(req sandbox.RunRequest, session Session, paths Paths, extension string, stop time.Duration) string {
 	q := shellword.Quote
 	parts := []string{"pi", "--mode", "json", "-p",
