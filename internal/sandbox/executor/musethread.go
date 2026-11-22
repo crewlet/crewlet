@@ -164,6 +164,14 @@ type museBlock struct {
 	Source string `json:"source"`
 }
 
+// decodeMuseEvent is event, a runtime record's, as the T its kind names; ok
+// false where it is not that object, which museHeld reads as a
+// [museUnreadLine].
+func decodeMuseEvent[T any](event json.RawMessage) (T, bool) {
+	var v T
+	return v, json.Unmarshal(event, &v) == nil
+}
+
 // museAnswered is the take tokens of one hook run whose answer Muse took, and
 // whether the run was the finish's.
 type museAnswered struct {
@@ -220,8 +228,8 @@ func museHeld(r io.Reader, digest string) (map[string]bool, error) {
 		case l.call != "":
 			call = l.call
 		case l.kind == "hook_run_terminal":
-			var h museHookRun
-			if json.Unmarshal(l.event, &h) != nil {
+			h, read := decodeMuseEvent[museHookRun](l.event)
+			if !read {
 				unread = &museUnreadLine{at: n, why: "is a hook run's end Muse Code does not write"}
 				return nil
 			}
@@ -246,8 +254,8 @@ func museHeld(r io.Reader, digest string) (map[string]bool, error) {
 			}
 			awaiting[id] = museAnswered{tokens: tokens, finish: finish}
 		case l.kind == "context_block_updated":
-			var b museBlock
-			if json.Unmarshal(l.event, &b) != nil {
+			b, read := decodeMuseEvent[museBlock](l.event)
+			if !read {
 				unread = &museUnreadLine{at: n, why: "is a context block Muse Code does not write"}
 				return nil
 			}
