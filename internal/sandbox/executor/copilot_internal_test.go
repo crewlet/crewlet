@@ -108,8 +108,8 @@ func TestALaunchedCopilotRunReadsAsItsAnswerSpendAndNote(t *testing.T) {
 	if !res.Success || res.Text != "ANSWER saw note" {
 		t.Fatalf("result = %+v, want the answer to the note", res)
 	}
-	if res.InputTokens != 2049 || res.CacheReadTokens != 1000 || res.CacheWriteTokens != 14 || res.OutputTokens != 69 {
-		t.Errorf("charged in %d (cache %d/%d), out %d; want 2049 (1000/14), 69", res.InputTokens,
+	if res.InputTokens != 2005 || res.CacheReadTokens != 1000 || res.CacheWriteTokens != 14 || res.OutputTokens != 25 {
+		t.Errorf("charged in %d (cache %d/%d), out %d; want 2005 (1000/14), 25", res.InputTokens,
 			res.CacheReadTokens, res.CacheWriteTokens, res.OutputTokens)
 	}
 	if !strings.Contains(res.Transcript, "[steer]") {
@@ -193,7 +193,10 @@ func TestACopilotRateLimitIsReportedAsALimit(t *testing.T) {
 // Mutation: read a cap off the abort without the line — the second half
 // fails; drop the line's arm — the first does.
 func TestACopilotRunStoppedAtItsCapReadsAsCapped(t *testing.T) {
-	stream := copilotFixture(t, "capped.stream.jsonl")
+	stream := copilotFixture(t, "capped.result.jsonl")
+	if !bytes.Contains(stream, []byte(copilotCapLine(3))) || !bytes.Contains(stream, []byte(copilotArmedMessage)) {
+		t.Fatal("the capped run's result holds no cap line or no extension line")
+	}
 	dec := &copilotEvents{}
 	_ = eachLine(bytes.NewReader(stream), dec, maxLineBytes)
 	res := dec.Result()
@@ -227,10 +230,18 @@ func TestACopilotCapLineWithoutAnAbortedExitIsIgnored(t *testing.T) {
 	}
 }
 
-// copilotArmed is the line the extension logs once it runs, in the shape a
-// `session.log` notification takes on 1.0.114 (measured with a probe line).
-const copilotArmed = `{"type":"session.info","data":{"infoType":"notification","message":"` +
-	copilotArmedMessage + `"},"id":"x","timestamp":"2026-11-21T20:41:45.195Z"}` + "\n"
+// copilotArmedLine is the line the extension logged once it ran, as the
+// launched run's stream holds it.
+func copilotArmedLine(t *testing.T) string {
+	t.Helper()
+	for l := range bytes.Lines(copilotFixture(t, "launched.result.jsonl")) {
+		if bytes.Contains(l, []byte(copilotArmedMessage)) {
+			return string(l)
+		}
+	}
+	t.Fatal("the launched run's stream holds no extension line")
+	return ""
+}
 
 // A run with a turn cap whose extension never ran (a managed policy that
 // allows only managed hooks, a failed load) FAILS, saying so, whatever it
@@ -249,7 +260,7 @@ func TestACopilotRunWithACapItsExtensionNeverRanFails(t *testing.T) {
 		t.Fatalf("result = %+v, want a failure saying the cap of 3 was not enforced", res)
 	}
 	dec = &copilotEvents{}
-	_ = eachLine(bytes.NewReader(append([]byte(capped+copilotArmed), stream...)), dec, maxLineBytes)
+	_ = eachLine(bytes.NewReader(append([]byte(capped+copilotArmedLine(t)), stream...)), dec, maxLineBytes)
 	if res := dec.Result(); !res.Success || res.Text != "ANSWER after tool" {
 		t.Fatalf("with the extension running, result = %+v, want the answer", res)
 	}
@@ -263,7 +274,7 @@ func TestACopilotRunWithACapItsExtensionNeverRanFails(t *testing.T) {
 // it (>=) — the cap of 1 succeeds, or the cap of 2 fails.
 func TestACopilotRunPastItsCapFailsWhateverItsExtensionSaid(t *testing.T) {
 	run := func(turns int) sandbox.Result {
-		stream := append([]byte(copilotCapLine(turns)+"\n"+copilotArmed),
+		stream := append([]byte(copilotCapLine(turns)+"\n"+copilotArmedLine(t)),
 			copilotCollected(t, "tool.stream.jsonl", "tool.events.jsonl", 0)...)
 		dec := &copilotEvents{}
 		_ = eachLine(bytes.NewReader(stream), dec, maxLineBytes)
