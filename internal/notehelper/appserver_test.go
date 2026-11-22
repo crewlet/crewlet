@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -308,6 +309,53 @@ func TestACompactionsRiseIsNoStep(t *testing.T) {
 	tokens(t, app, "thread-A", "turn-1", 800)
 	if got := stepsUpTo(t, app, &steps); got != 2 {
 		t.Errorf("turn-1 took %d steps, want two, for 100 and 800, none for the compaction's 700", got)
+	}
+}
+
+// A COMPACTION LEFT OPEN STOPS THE COUNT NO LONGER THAN THE TURN'S WORK: a
+// contextCompaction item that never completes ends with its turn, or with an
+// error Codex does not retry, and the responses after it count; an error Codex
+// retries leaves the window open, its retry being the compaction's.
+//
+// Mutation: drop the reset at turn/completed or at the error, or reset on an
+// error Codex retries, and a case goes red.
+func TestACompactionLeftOpenStopsTheCountNoLongerThanTheTurnsWork(t *testing.T) {
+	t.Parallel()
+	failed := func(retry bool) func(*testing.T, *fakeAppServer) {
+		return func(t *testing.T, app *fakeAppServer) {
+			app.notify(t, "error", map[string]any{"threadId": "thread-A", "turnId": "turn-1", "willRetry": retry,
+				"error": map[string]any{"message": "the compaction failed"}})
+			tokens(t, app, "thread-A", "turn-1", 200)
+		}
+	}
+	for name, c := range map[string]struct {
+		end  func(*testing.T, *fakeAppServer)
+		want []string
+	}{
+		"its turn completed": {end: func(t *testing.T, app *fakeAppServer) {
+			app.completeTurn(t, "thread-A", "turn-1")
+			app.startTurn(t, "thread-A", "turn-2")
+			tokens(t, app, "thread-A", "turn-2", 200)
+		}, want: []string{"turn-2"}},
+		"an error Codex does not retry": {end: failed(false), want: []string{"turn-1"}},
+		"an error Codex retries":        {end: failed(true)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			app := newFakeAppServer(t, "turn-1", 0)
+			var steps record[string]
+			a := joinedWith(t, app, events{step: func(turn string) { steps.add(turn) }}, "")
+			app.notify(t, "item/started", map[string]any{"threadId": "thread-A", "turnId": "turn-1",
+				"item": map[string]any{"type": "contextCompaction", "id": "c-1"}})
+			tokens(t, app, "thread-A", "turn-1", 100)
+			c.end(t, app)
+			// Read in order: turn-3 in flight is behind every notice before it.
+			app.startTurn(t, "thread-A", "turn-3")
+			awaitTurn(a, "turn-3")
+			if got := steps.all(); !slices.Equal(got, c.want) {
+				t.Errorf("steps %v, want %v", got, c.want)
+			}
+		})
 	}
 }
 

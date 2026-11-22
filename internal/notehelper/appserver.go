@@ -279,7 +279,12 @@ func (a *appServer) notice(method string, params json.RawMessage) {
 	case "turn/started":
 		a.begin(p.Turn.ID)
 	case "turn/completed":
+		// A COMPACTION ENDS WITH ITS TURN, whether or not its item completed:
+		// one left open would keep every later response from the count.
+		a.compacting = false
 		a.stop(p.Turn.ID)
+	case "error":
+		a.failed(params)
 	case "thread/tokenUsage/updated":
 		a.counted(params)
 	case "item/started":
@@ -300,6 +305,20 @@ func (a *appServer) compaction(params json.RawMessage, started bool) {
 	}
 	if json.Unmarshal(params, &p) == nil && p.Item.Type == "contextCompaction" {
 		a.compacting = started
+	}
+}
+
+// failed ends a compaction's window on an error Codex does not retry (the
+// app-server's `error` notification, willRetry false): the turn's work, the
+// compaction among it, stopped there, and a compaction whose item never
+// completes would otherwise stop the count for the rest of the run. One
+// Codex retries leaves the window open, as the retry is the compaction's.
+func (a *appServer) failed(params json.RawMessage) {
+	var p struct {
+		WillRetry bool `json:"willRetry"`
+	}
+	if json.Unmarshal(params, &p) == nil && !p.WillRetry {
+		a.compacting = false
 	}
 }
 
