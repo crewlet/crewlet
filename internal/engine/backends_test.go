@@ -693,7 +693,7 @@ func TestTheFleetStoreSurvivesARestartOnLocalCoordination(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("OpenChannel: %v", err)
 	}
-	if _, err := first.Fleet.CreateSandboxRun(t.Context(), "turn-1", []byte(`{"status":"running"}`)); err != nil {
+	if _, err := first.Fleet.CreateSandboxRun(t.Context(), "turn-1", []byte(`{"status":"running"}`), nil); err != nil {
 		t.Fatalf("CreateSandboxRun: %v", err)
 	}
 	first.Close(t.Context())

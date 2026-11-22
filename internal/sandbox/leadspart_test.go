@@ -84,7 +84,7 @@ func TestTheRunIsNamedForItsLeadsByItsCreateAndKeptByEveryReset(t *testing.T) {
 	}
 	// A ROW AN OLDER BUILD CREATED, which names no run for its leads.
 	if made, err := runs.CreateSandboxRun(ctx, "t2",
-		[]byte(`{"turn_id":"t2","agent_handle":"swe","status":"running","launch_id":"an-older-job","launch_seq":1}`)); err != nil || !made {
+		[]byte(`{"turn_id":"t2","agent_handle":"swe","status":"running","launch_id":"an-older-job","launch_seq":1}`), nil); err != nil || !made {
 		t.Fatalf("creating an older build's row: %v, %v", made, err)
 	}
 	named, err := store.BeginLaunch(ctx, PendingRun{TurnID: "t2", AgentHandle: "swe", Continues: true}, Fence{})

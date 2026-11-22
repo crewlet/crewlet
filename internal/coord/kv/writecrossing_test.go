@@ -115,7 +115,8 @@ func listingNearTheBound(t *testing.T) coord.MCPListing {
 
 // deadlined is a bucket's client handle that records the deadline of the
 // context each write it is handed waits in, beside the instant it was handed
-// it, and answers every write as written.
+// it, and answers every write as written; a conditional write reaches it as
+// its client's publish ([deadlined.publish]).
 //
 // EMBEDS THE INTERFACE: the four writes are four of dozens of methods.
 type deadlined struct {
@@ -140,9 +141,9 @@ func (d *deadlined) Put(ctx context.Context, _ string, _ []byte) (uint64, error)
 	return 1, nil
 }
 
-func (d *deadlined) Update(ctx context.Context, _ string, _ []byte, _ uint64) (uint64, error) {
+func (d *deadlined) publish(ctx context.Context, _ *nats.Msg, _ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 	d.note(ctx, "update")
-	return 2, nil
+	return &jetstream.PubAck{Sequence: 2}, nil
 }
 
 func (d *deadlined) Delete(ctx context.Context, _ string, _ ...jetstream.KVDeleteOpt) error {
@@ -191,7 +192,8 @@ func TestACoordinationWriteIsGivenItsBytesCrossingOnlyAcrossALink(t *testing.T) 
 				}
 
 				d := &deadlined{}
-				b := settled(termed{term: jsapi.RequestTerm}, d, c.reach, undeclaredHolding)
+				b := settled(termed{term: jsapi.RequestTerm, publish: d.publish},
+					named{KeyValue: d, bucket: "crossing"}, c.reach, undeclaredHolding)
 				write := func(ctx context.Context) {
 					t.Helper()
 					if _, err := b.Put(ctx, key, value); err != nil {
@@ -245,12 +247,12 @@ type refusingInFlight struct {
 // errPast is what refusingInFlight answers an attempt waiting past its bound.
 var errPast = errors.New("an attempt waited past the write's bound")
 
-func (r *refusingInFlight) Update(ctx context.Context, _ string, _ []byte, _ uint64) (uint64, error) {
+func (r *refusingInFlight) publish(ctx context.Context, _ *nats.Msg, _ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 	r.note(ctx, "update")
 	if deadline, _ := ctx.Deadline(); deadline.After(r.past) { //fixedwait:stated the deadline an attempt was handed against the bound its write began with, both on the case's bubble clock
-		return 0, errPast
+		return nil, errPast
 	}
-	return 0, refusedAs(jetstream.JSErrCodeStreamWrongLastSequenceConstant)
+	return nil, leaderRefusal(jetstream.JSErrCodeStreamWrongLastSequenceConstant)
 }
 
 func (r *refusingInFlight) Bucket() string { return "refusing" }
@@ -276,7 +278,7 @@ func TestASettledWriteMetByInFlightAnswersForeverEndsUndecidedAtItsBound(t *test
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
 		r := &refusingInFlight{past: start.Add(bound)}
-		b := settled(termed{term: jsapi.RequestTerm}, r, AcrossLink, undeclaredHolding)
+		b := settled(termed{term: jsapi.RequestTerm, publish: r.publish}, r, AcrossLink, undeclaredHolding)
 		_, err := b.Update(context.Background(), key, value, 1)
 		var undecided *jsinflight.Undecided
 		if !errors.As(err, &undecided) || !errors.Is(err, context.DeadlineExceeded) {
@@ -403,14 +405,14 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 // WATCH THE RAW CROSSING OF THE LARGEST VALUE UNDER ITS FILTER.
 //
 // A run's change starts with the leader's read, its reply 8 MiB at the bound:
-// four minutes at the slowest link pace, and none of its handling, which would
-// push a re-ask past a 5 s reason. A body's read gets its arrival; the pointer
-// and the claims keep the term. A pass over a run's value is quiet 185 s across
-// a link, 5 s in process. Every opened bucket's class is held to what one key
-// holds, read at the term only if it crosses inside it, save [undeclared].
+// four minutes at the slowest link pace, none of its handling, which would push a
+// re-ask past a 5 s reason. A body's read gets its arrival; the pointer and
+// claims keep the term. A pass over a run's value is quiet 185 s across a link,
+// 5 s in process or over headers. Each bucket's class is held to one key, read
+// at the term only if it crosses inside it ([undeclared] aside).
 //
 // Mutation: let leaderFor ignore the class, read bodies at the term, declare a
-// class past coord.MaxValueBytes, or let most drop rest, and a row goes red.
+// class past one key, let most drop rest, or quiet a headers pass as values.
 func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 	t.Parallel()
 	// THE FIGURES STATED, not derived again: a full value with the most header,
@@ -463,6 +465,11 @@ func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 				t.Errorf("a pass over %s's %q %s is quiet after %v, want %v", c.bucket.Bucket(), c.keys,
 					reach, got, c.idle)
 			}
+		}
+		// THE RUNS' STANDING CROSSES AS HEADERS ALONE, in milliseconds on
+		// any link: its pass keeps passIdle, never the records' quiet.
+		if got := passQuiet(store.runs, runRecordKeys, true); got != passIdle {
+			t.Errorf("a pass of the runs' standing %s is quiet after %v, want %v", reach, got, passIdle)
 		}
 	}
 	for _, h := range openedHoldings(t, nc) {
@@ -527,14 +534,14 @@ func reflectedHolding(v reflect.Value) holding {
 }
 
 // A SMALL CLASS'S REPLY CROSSES THE FLOOR INSIDE THE READ TERM: at
-// coord.SmallValueBytes it is 23,064 bytes, 0.66 s at the slowest pace a link
+// coord.SmallValueBytes it is 23,328 bytes, 0.67 s at the slowest pace a link
 // is allowed. Held here, since internal/coord cannot import the pace.
 //
 // Mutation: raise coord.SmallValueBytes to 32 KiB (1.32 s), and it is red.
 func TestASmallClassCrossesTheFloorInsideTheReadTerm(t *testing.T) {
 	t.Parallel()
-	if reply := jsapi.ReplyBytes(coord.SmallValueBytes + kvHeaderBytes); reply != 23_064 {
-		t.Errorf("the reply to a read of a small value at its bound is %d bytes, want 23,064", reply)
+	if reply := jsapi.ReplyBytes(coord.SmallValueBytes + kvHeaderBytes); reply != 23_328 {
+		t.Errorf("the reply to a read of a small value at its bound is %d bytes, want 23,328", reply)
 	}
 	if crossing := jsapi.Crossing(coord.SmallValueBytes+kvHeaderBytes, objstore.MiBPace); crossing >= jsprovision.ReadTerm {
 		t.Errorf("a small value's reply crosses a link at the floor in %v, not inside the read term %v",

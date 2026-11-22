@@ -161,7 +161,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 		return PendingRun{}, err
 	}
 	for range launchRounds {
-		made, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw)
+		made, err := s.runs.CreateSandboxRun(ctx, run.TurnID, raw, nil)
 		if err != nil {
 			// A CREATE THE STORE DID NOT ANSWER may have landed, naming the job.
 			return PendingRun{}, unopened(run.LaunchID,

@@ -2710,15 +2710,15 @@ Measured on three members, every bucket at three replicas, from a member not lea
 - With the log on the record it was 516 173 bytes, 5.8 ms and 11.1 ms (7.9 and 26.0), for every one of those requests ([Gitlet → Coding boxes](gitlet.md#coding-boxes)).
 ### What a run's record and its log keep
 
-A run's record and its tool log are each **one value** in the coordination store, read and written whole by every write that touches it, and the store holds one key to **6,290,542 bytes** (`coord.MaxValueBytes`): the largest value whose read a node without `data` takes back across its leaf link, where the stream leader's reply carries it base64-encoded, a third larger, under the transport's 8 MiB. The store refuses a write past it before sending anything. So each is held to that byte budget (`sandbox.RowBytes`), and every field it carries has a share of it, counted in the bytes the store's JSON encoder writes, escapes included (a `<` is six bytes, a control byte six, a quote two):
+A run's record and its tool log are each **one value** in the coordination store, read and written whole by every write that touches it, and the store holds one key to **6,290,346 bytes** (`coord.MaxValueBytes`): the largest value whose read a node without `data` takes back across its leaf link, where the stream leader's reply carries it base64-encoded, a third larger, under the transport's 8 MiB. The store refuses a write past it before sending anything. So each is held to that byte budget (`sandbox.RowBytes`), and every field it carries has a share of it, counted in the bytes the store's JSON encoder writes, escapes included (a `<` is six bytes, a control byte six, a quote two):
 
 | Value | Share | Bytes | Held by |
 |---|---|---|---|
 | The tool log | Its calls: `calls`, `elided`, `elided_calls`, `absorbed_calls` | 3,473,408 (3.3125 MiB) | each call's own share, two hundred calls, and the identities of the calls the log counts without listing them |
 | The tool log | Its calls in flight: `in_flight` | 1,048,576 (1 MiB) | 256 entries, each its call's identity and the id its harness gave it, at most 4 KiB |
-| The tool log | Everything else: the tool names of the turn's earlier rounds, the records the run wrote (128 at most), the log's own fields, and room for what a later version adds | 1,768,558 (1.69 MiB) | each field's own bound |
+| The tool log | Everything else: the tool names of the turn's earlier rounds, the records the run wrote (128 at most), the log's own fields, and room for what a later version adds | 1,768,362 (1.69 MiB) | each field's own bound |
 | The record | The parked turn's state (`execute_state`) | 2,097,152 (2 MiB) | the park, which condenses it to fit and refuses it past that |
-| The record | Everything else, the turn's wake items within 100 KiB, and 156 KiB for fields a later version adds | 4,193,390 (4 MiB less 914 bytes) | each field's own bound, held by the write that puts it on the record |
+| The record | Everything else, the turn's wake items within 100 KiB, and 156 KiB for fields a later version adds | 4,193,194 (4 MiB less 1,110 bytes) | each field's own bound, held by the write that puts it on the record |
 
 The sealed set of secrets beside them is the third value, a fraction of the same budget: at most 64 KiB before sealing. The turn's leads beside them are the fourth: at most 512 KiB of them and at most 2,048, the oldest dropped first and counted, beside a few fields of their own, within the same budget.
 
