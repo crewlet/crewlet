@@ -25,11 +25,13 @@ type Product struct {
 // access log and apply leases; hc is nil in production.
 func New(company func() *config.Company, env func() *config.Resolver, tokens googlegrowth.Tokens,
 	audit googlegrowth.Audit, leases googlegrowth.Leaser, hc *http.Client) *Product {
-	return &Product{company: company, client: &googlegrowth.Client{
+	p := &Product{company: company, client: &googlegrowth.Client{
 		Kind: string(Kind), Name: "Google Analytics", Company: company, Env: env, Tokens: tokens,
 		Audit: audit, Leases: leases, HTTP: hc, Secrets: []string{"secretValue", "channelToken"},
 		Refused: vendorRefusal, ReadScopes: readScope,
 	}}
+	p.client.BeforeRead = p.beforeRead
+	return p
 }
 
 // Catalog is the product's catalog.
