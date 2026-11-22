@@ -4196,7 +4196,8 @@ hermes:
     - sentinel: "resolved without credentials"
 
 pi:
-  # The in-box runner (internal/sandbox/executor's pi.go), on 1.6.0 or later.
+  # The in-box runner (internal/sandbox/executor's pi.go), on 1.6.0, the one
+  # release it supports.
   # No refuses_root: 1.6.0 ran as uid 0 and ran its tools (measured in a
   # node:24-bookworm container). No e2b_template: E2B prebuilds no image
   # holding pi, so an e2b box runs the company's own template.
@@ -4207,28 +4208,29 @@ pi:
   # `@mariozechner` scope to Earendil Works, so the older package name is a
   # different, frozen thing.
   #
-  # MEASURED ON 0.85.1, 1.4.0 AND 1.6.0, through the engine's own code path against a
+  # MEASURED ON 1.6.0, through the engine's own code path against a
   # stub HTTP endpoint standing in for the model, with the state directory
   # inside a git checkout whose every level above the call held an AGENTS.md,
   # an AGENTS.override.md, a CLAUDE.md, pi's own `.pi/SYSTEM.md`,
   # `.pi/APPEND_SYSTEM.md`, prompts, skills and an extension, an MCP config and
   # a .env, and with a trust default of `always` in the seat's settings: none
   # of them reached a request, no extension or MCP server ran, no tool was
-  # offered, and the engine read each answer. The error format is off real 401
-  # and 429 responses to 0.85.1.
-  written_for: "Pi Coding Agent 1.6.x, measured on 0.85.1, 1.4.0 and 1.6.0 (`pi --version`)"
+  # offered, and the engine read each answer. The error format is off the
+  # stand-in's 401 and 429 responses, in the providers' own shapes.
+  written_for: "Pi Coding Agent 1.6.0, measured on 1.6.0 (`pi --version`)"
   version_args: ["--version"]
   # `-p` is print mode: answer and exit, no TUI. The rest is the isolation, and
   # this harness is unusually generous with it — every discovery path it has can be
   # switched off by name. Three of them are what keeps the call to itself, each
-  # measured on both builds by taking it away:
+  # measured by taking it away:
   #
   #   --no-context-files  the AGENTS.md / CLAUDE.md walk, which goes from the
   #                       working directory up to `/`, one file per directory,
   #                       whatever trust says. The engine's `.git` file does
   #                       NOT end it: this walk ignores `.git`. Without the
-  #                       flag, five files from the checkout above the state
-  #                       directory reached the system prompt.
+  #                       flag, the AGENTS.md of the checkout's root and of
+  #                       the directory between it and the call reached the
+  #                       system prompt.
   #   --no-approve        project trust pinned to none for the run. Print mode
   #                       never asks, and falls back to `defaultProjectTrust`
   #                       in settings.json in the agent directory — the seat's
@@ -4240,12 +4242,11 @@ pi:
   #                       prompt of its own (either flag skips that file),
   #                       and with tools on so did the project's skills; with
   #                       the flag, neither.
-  #   --no-extensions     extensions EXECUTE. On 1.4.0 the flag also stops
-  #                       an `mcp.json` server being started — with --no-tools
-  #                       alone, one was, and the system prompt grew an MCP
-  #                       section. 1.4.0's own `--no-mcp` adds nothing to
-  #                       this, and 0.85.1 does not have it, so it is not
-  #                       passed.
+  #   --no-extensions     extensions EXECUTE. The flag also stops an
+  #                       `mcp.json` server being started: with --no-tools
+  #                       alone, a server planted in the agent directory's
+  #                       started. `--no-mcp` adds nothing to this, so it is
+  #                       not passed.
   #
   # And the rest:
   #
@@ -4274,14 +4275,14 @@ pi:
   local_tools: denied
   tools_off:
     args: [["--no-tools"], ["--no-extensions"]]
-    note: "--no-tools sent the request's tool array empty and --no-extensions loads no extension, which could register tools; measured on 0.85.1 by the profile's author"
+    note: "--no-tools sent the request's tool array empty and --no-extensions loads no extension, which could register tools; measured on 1.6.0"
   # WEB OFF CHANGES NOTHING HERE, because there is no web tool to turn off:
   # `--no-tools` already sends the tool array empty (measured above). The
   # denial therefore names the same argv, by reference so the two cannot
   # drift, and an entry may say `web_tools: denied` truthfully.
-  web_tools_note: "no web tool in this harness's built-in set; --no-tools sends the tool array empty (measured on 0.85.1)"
+  web_tools_note: "no web tool in this harness's built-in set; --no-tools sends the tool array empty (measured on 1.6.0)"
   model_args: ["--model", "{model}"]
-  # `--thinking`, read from 1.4.0 (dist/cli/args.js): an unknown level is
+  # `--thinking`, read from 1.6.0 (dist/cli/args.js): an unknown level is
   # warned of and dropped, and a level the model lacks is clamped.
   effort:
     args: ["--thinking", "{effort}"]
@@ -4297,31 +4298,28 @@ pi:
   # starts and hands over its absolute path, so pi always finds it; an
   # override that names `{system}` instead puts the text on argv.
   #
-  # Measured on both builds, in one cached block with the Anthropic API:
+  # Measured on 1.6.0, in one cached block with the Anthropic API:
   #
   #   system_prompt         REPLACES pi's default: the engine's text, then the
-  #                         call's working directory — a line "Current working
-  #                         directory: <path>" on 0.85.1, a <cwd> block on
-  #                         1.4.0 — and nothing else. For a side pass.
+  #                         call's working directory in a <cwd> block, and
+  #                         nothing else. For a side pass.
   #   append_system_prompt  KEEPS pi's default under its identity line ("You
   #                         are a coding assistant running inside pi, a
-  #                         coding agent harness." on 1.6.0) and puts the
-  #                         engine's text after it — bare on 0.85.1, inside an
-  #                         <addendum> block on 1.4.0 and 1.6.0 — with the
-  #                         working directory last. For a seat at work. The default
-  #                         with no tools is about 1,810 characters on 0.85.1
-  #                         and 1,950 on 1.4.0, a few hundred of them the
-  #                         paths of pi's own documentation on the host, which
-  #                         change with where pi is installed and never per
-  #                         call.
+  #                         coding agent harness.") and puts the engine's text
+  #                         after it in an <addendum> block, with the working
+  #                         directory last. For a seat at work. The default
+  #                         with no tools is 1,496 characters, a few hundred of
+  #                         them the paths of pi's own documentation on the
+  #                         host, which change with where pi is installed and
+  #                         never per call.
   #
   # Nothing per call comes before the engine's text: two calls sent system
   # prompts identical up to the working directory, which follows it. That
   # directory is in the same block, though, so the block as a whole differs
-  # per call. On a Claude subscription login pi adds Claude Code's identity
-  # line, "You are Claude Code, Anthropic's official harness for Claude.", as a
-  # block of its own ahead of either channel's text, and sends the request as
-  # that harness; no flag removes it.
+  # per call. On a Claude subscription login (an OAuth token) pi adds Claude
+  # Code's identity line as a block of its own ahead of either channel's text,
+  # and sends the request as that harness; no flag removes it (read from
+  # 1.6.0's bundle, pi-ai's anthropic-messages.js).
   #
   # `SYSTEM.md` and `APPEND_SYSTEM.md` are pi's file channels of its own: the
   # working directory's `.pi/` copy when the project is trusted, which
@@ -4336,8 +4334,8 @@ pi:
   # THE TRANSCRIPT ON STDIN, which print mode reads to its end as the message
   # when stdin is not a terminal. On argv it was readable by every account on
   # the machine, as the system prompt was, and bounded by ARG_MAX. Measured on
-  # both builds: the request is the one an argv prompt sends, less the
-  # transcript's trailing newline, which pi trims.
+  # 1.6.0: the request is the one an argv prompt sends, less the transcript's
+  # trailing newline, which pi trims.
   prompt_mode: stdin
   # PLAIN TEXT, deliberately, although this harness has a richer channel.
   # `--mode json` streams every session event and would carry real token
@@ -4371,12 +4369,12 @@ pi:
     # config root is ~/.pi/agent rather than ~/.pi, so the seat home's copy is
     # .pi/agent and every path below is relative to that.
     PI_CODING_AGENT_DIR: ".pi/agent"
-  # THE HOME'S OWN MCP SERVERS NEVER START. 1.4.0 starts every server the
-  # agent directory's mcp.json names whenever its MCP support is on, which a
-  # run with tools turns on; the file is the profile's own, empty, rewritten
-  # every generation (measured: a server planted there started on a run with
-  # tools without it, and not with it). A text function, with --no-extensions,
-  # starts none either way.
+  # THE HOME'S OWN MCP SERVERS NEVER START. Pi starts every server the agent
+  # directory's mcp.json names whenever its MCP support is on, which a run with
+  # tools turns on; the file is the profile's own, empty, rewritten every
+  # generation (measured: a server planted there started on a run with tools
+  # without it, its tools held back by --tools, and not with it). A text
+  # function, with --no-extensions, starts none either way.
   seed_files:
     - path: .pi/agent/mcp.json
       content: '{"mcpServers":{}}'
@@ -4391,11 +4389,11 @@ pi:
   # --approve, a server in .pi/mcp.json of the directory pi ran in started;
   # with the profile's --no-approve, none). The registration's `exposure:
   # direct` declares the tools to the model by name (`mcp__crewlet__<name>`);
-  # --tools keeps those and nothing else. Measured on 1.4.0 and 1.6.0 through the
+  # --tools keeps those and nothing else. Measured on 1.6.0 through the
   # engine's own code path against a local stand-in.
   #
   # The registration's `timeout` is the harness's per-call timeout, in seconds
-  # (60 by default; 4 gave a 10 s call up at 4.0 s). It re-reads the server's
+  # (60 by default; 2 gave a 5 s call up at 2,000 ms). It re-reads the server's
   # list when told it changed — a tool activated mid-run was offered from the
   # request after the one the activation's result went back in — and makes
   # one response's calls at once. A call with malformed arguments is refused
@@ -4446,10 +4444,10 @@ pi:
   # each message completes: an assistant message is a response — its id, its
   # model, its prose and calls as content blocks, why it stopped, and its
   # counts, `input` WITHOUT the cached part and `output` with the reasoning in
-  # it (measured with a stand-in reporting 40 cached and 7 reasoning tokens:
-  # 61 + 40 of a 101-token prompt, 12 out). The harness sends no id with a call, so
-  # a call is joined by name and arguments; each was in the file within 0.1 s
-  # of reaching the server. The harness has no turn cap of its own: a run's rounds
+  # it (measured with a stand-in reporting 40 cached of a 106-token prompt: 61
+  # in, 40 cache read, 5 cache write, 12 out). The harness sends no id with a
+  # call, so a call is joined by name and arguments; each was in the file
+  # 7 ms before it reached the server. The harness has no turn cap of its own: a run's rounds
   # are bounded by the phase's.
   requests:
     source: file
@@ -4520,10 +4518,12 @@ pi:
   #
   # THE SENTINELS ARE THE UPSTREAM VENDOR'S, not this harness's, and a
   # measurement is what settles that rather than a guess: a failing call
-  # writes `<status>: <the provider's error JSON, verbatim>` to stderr, e.g.
+  # writes `<status> <the provider's error JSON, verbatim>` to stderr, e.g.
   #
-  #   429: {"message":"…","type":"rate_limit_error","code":"rate_limit_exceeded"}
+  #   429 {"type":"error","error":{"type":"rate_limit_error","message":"…"}}
   #
+  # and an executor run's last assistant message carries the same words as
+  # its `errorMessage`, which the run's collection hands back as its error.
   # So the only stable tokens are the provider's own `type` and `code`, which
   # is what these are. The status prefix is deliberately NOT one: this file
   # dropped a bare "429" sentinel once already, because three digits match
@@ -4532,8 +4532,8 @@ pi:
   # differs, override overrides.limit_markers.
   #
   # FAILURES REACH THIS BACKEND ON STDERR AND NOWHERE ELSE, measured: a failed
-  # call left stdout EMPTY and wrote `<status>: <the provider's error JSON>`
-  # to stderr. Matching stderr alone is what stops a model that mentions an
+  # call exited 1, left stdout EMPTY and wrote `<status> <the provider's error
+  # JSON>` to stderr. Matching stderr alone is what stops a model that mentions an
   # error code in prose from benching the seat's credential — and here the
   # exposure would be total, since on a `text` profile the whole of stdout IS
   # the answer. See [MarkerScope].

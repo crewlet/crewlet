@@ -206,7 +206,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// when ordinary company prose matches its scan. `-p` on this harness
 		// selects a PROFILE, not a prompt.
 		"hermes": "",
-		// 0.85.1 and 1.4.0: --system-prompt, which reads its value as a
+		// 1.6.0: --system-prompt, which reads its value as a
 		// path when a file exists there — and sends the value itself as
 		// the prompt when none does, silently, so the file has to be
 		// written before the harness starts. --append-system-prompt reads it
