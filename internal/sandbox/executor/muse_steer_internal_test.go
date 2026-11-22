@@ -368,3 +368,41 @@ func TestAMuseRunWithASignInNameNoShellCanUnsetIsRefused(t *testing.T) {
 		t.Fatalf("err = %v, want the name refused", err)
 	}
 }
+
+// AN UNREADABLE LINE WITH A LATER LINE AFTER IT CONFIRMS NOTHING: a line that
+// is no JSON, or a runtime record whose event is no object, may be the
+// compaction or the restart that leaves a take unconfirmed, so the read is
+// undecided, saying which line, and holds no take, nor answers one absent once
+// the job is over. The same line last is one Muse is still writing: the takes
+// before it hold.
+//
+// Mutation: skip an unreadable line, or hold the takes read before it.
+func TestAnUnreadableMuseRecordConfirmsNothing(t *testing.T) {
+	const session = "0b5e0000-0000-4000-8000-0000000000f7"
+	torn := []byte(`{"payload_type":"runtime.session","payload":{"ev` + "\n")
+	for name, bad := range map[string][]byte{
+		"no JSON":         torn,
+		"event no object": []byte(`{"payload_type":"runtime.session","payload":{"event":"compacted"}}` + "\n"),
+	} {
+		record := insertAfter(t, museLines(t, "hooks.session.jsonl"), "plugin:crewlet-notes:posttooluse-1", bad)
+		if held, err := museHeld(bytes.NewReader(record)); err == nil || len(held) != 0 {
+			t.Errorf("%s: held %v, err %v; want none held and the line named", name, held, err)
+		}
+		box := sandbox.NewFakeSandbox("b")
+		p := PathsFor(box)
+		path := p.MuseSessions() + "/2026/11/22/" + session + "/session.jsonl"
+		box.Put(path, string(record))
+		box.ExecFunc = func(_ context.Context, _ string, _ sandbox.ExecOptions) (sandbox.ExecResult, error) {
+			return sandbox.ExecResult{Stdout: path + "\n"}, nil
+		}
+		got := (Muse{}).readMainThread(t.Context(), box, p, sandbox.MainThreadAsk{Session: session, Ended: true,
+			Takes: []sandbox.AskedTake{{Take: "00000000-0000-4000-8000-000000000001"}}}).Receipts
+		if len(got.Held) != 0 || len(got.Absent) != 0 || !strings.Contains(got.Why, "line") {
+			t.Errorf("%s: receipts %+v, want undecided with the line named", name, got)
+		}
+	}
+	tail := append(museFixture(t, "hooks.session.jsonl"), torn[:len(torn)-1]...)
+	if held := museHeldOf(t, tail); !held[museToken("1")] || !held[museToken("9")] {
+		t.Errorf("held %v with a torn last line: want the takes before it", held)
+	}
+}
