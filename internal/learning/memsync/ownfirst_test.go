@@ -307,8 +307,8 @@ func TestWhatAHoldingWritesGoesBeforeWhatItsHydrationBroughtIn(t *testing.T) {
 // live in memory, so after a restart every kept row is backlog; the flush
 // still carries the seat's own rows first. A kept store holds 200 notes and 50
 // episodes, all on the changelog; a new syncer hydrates, the seat writes one
-// episode and is released: the flush, cut by its bound after 71 rows, carries
-// the episode and then the 70 oldest notes.
+// episode and is released: the flush, which sends 72 rows inside its bound,
+// carries the episode and then the 71 oldest notes.
 //
 // Mutation: swap the two calls' bodies, and this goes red.
 func TestARestartsFlushCarriesWhatTheSeatWroteBeforeWhatTheStoreKept(t *testing.T) {
@@ -369,7 +369,7 @@ func TestARestartsFlushCarriesWhatTheSeatWroteBeforeWhatTheStoreKept(t *testing.
 // rest of its bound. Each range has its own mark, no page boundary takes a row
 // twice, the boundary's row is the backlog's, and a drained one is not read.
 // With 1 000 held notes, 100 written, then 10 before each later cycle, at
-// publishTrip a row: 100 then 328 of the backlog, 10 then 418, 10 then 254.
+// publishTrip a row: 100 then 329 of the backlog, 10 then 419, 10 then 252.
 //
 // Mutation: read either range from its mark's own row (>= for >), share one
 // mark between the ranges, read the backlog past the boundary or short of it,
@@ -426,9 +426,9 @@ func TestTheBacklogDrainsAcrossCyclesBehindWhatTheSeatWrites(t *testing.T) {
 			from, to int
 			carried  Carried
 		}{
-			{0, 328, Carried{Rows: 328, StoppedIn: "agent_diary"}},
-			{328, 746, Carried{Rows: 418, StoppedIn: "agent_diary"}},
-			{746, 1000, Carried{Rows: 254}},
+			{0, 329, Carried{Rows: 329, StoppedIn: "agent_diary"}},
+			{329, 748, Carried{Rows: 419, StoppedIn: "agent_diary"}},
+			{748, 1000, Carried{Rows: 252}},
 		}
 		for i, turn := range turns {
 			own := notesOf(t, written[i])

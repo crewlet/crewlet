@@ -29,7 +29,8 @@ import (
 
 // publishTrip is one row's broker round trip on a bubble's clock: a leaf link
 // across regions, and a value dividing neither bound, so no row lands on one.
-// A cycle then acknowledges 428 rows (the 429th lands at 30.03 s), a flush 71.
+// A row at a time, a cycle then sends 429 rows, the last at 29.96 s, which its
+// own budget lets land at 30.03 s; a flush sends 72.
 const publishTrip = 70 * time.Millisecond
 
 const (
@@ -40,9 +41,10 @@ const (
 	flushBound = 5 * time.Second
 
 	// perCycle and perFlush are the rows one cycle and one flush have
-	// acknowledged at publishTrip a row.
-	perCycle = int(cycleBound / publishTrip)
-	perFlush = int(flushBound / publishTrip)
+	// acknowledged at publishTrip a row: every row sent inside the bound, the
+	// last landing past it (crewlet/crewlet#1075).
+	perCycle = int(cycleBound/publishTrip) + 1
+	perFlush = int(flushBound/publishTrip) + 1
 )
 
 // noteWidth is a vector's width in float32s: text-embedding-3-small's 1 536,

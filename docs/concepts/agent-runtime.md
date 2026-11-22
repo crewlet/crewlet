@@ -630,7 +630,7 @@ Also off the allowance, because they carry records rather than give a lease back
 
 **A member that has lost both stores can take about 136 s after the drain.** A lone member of an embedded fleet whose peers have gone loses the event stream and the coordination buckets together, so it spends the whole allowance and, wherever nothing overlaps them, every bound above:
 - the leases' share of the allowance (10 s at the shipped TTL), spent by the presence give-back in step 2 when the stores were already gone, or by the seats' give-backs in step 6, each after its 5 s last event, when they went during the drain;
-- each seat's last event beside its last memory publish (5 s);
+- each seat's last event beside its last memory publish (5 s; the publish sends no row after that, and a row it sent just before the stream stopped answering is waited for up to five seconds more);
 - the ledgers' flush (5 s, the two at once);
 - the usage publisher's last flush when its day moved since its last tick (5 s);
 - the admission's share (5 s);

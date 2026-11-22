@@ -575,11 +575,19 @@ func (s *Syncer) takeWindow(ctx context.Context, held *seatHolding, under holdin
 }
 
 // publishRow puts one row's body on its subject and waits for the changelog to
-// acknowledge it.
+// acknowledge it within the write's own budget at this node's pace
+// ([jsapi.Budget]: the request term and the body's crossing for each send the
+// client makes), on a context ctx's deadline and cancellation do not reach. The
+// call's bound decides only whether a row is sent ([Syncer.sendRow]): a row it
+// cut while its bytes still crossed was sent again whole by the next publish,
+// and cut again, every row after it waiting (crewlet/crewlet#1075).
 func (s *Syncer) publishRow(ctx context.Context, handle string, spec table, subject string,
 	body []byte) error {
 
-	if _, err := s.js.Publish(ctx, subject, body); err != nil {
+	budget := jsapi.Budget(s.js, jsapi.Sending(len(body), s.pace))
+	send, done := budget.Whole(context.WithoutCancel(ctx))
+	defer done()
+	if _, err := s.js.Publish(send, subject, body); err != nil {
 		return fmt.Errorf("memsync: publish a %s row for %s: %w", spec.name, handle, err)
 	}
 	return nil

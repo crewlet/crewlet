@@ -27,16 +27,16 @@ const memorySyncInterval = 30 * time.Second
 
 // memoryFlushTimeout bounds the last publish a released seat gets: five
 // seconds, the bound of the seat's last lifecycle event beside it
-// ([lifecyclePublishBudget]), so a stream that stopped acknowledging costs a
-// release one bound, not two, and a drain (seat.Host.ReleaseAll) the five
-// seconds docs/concepts/agent-runtime.md counts. No test pins it. Rows go out
-// memsync's 64 at once, so it carries a few thousand small rows across 100 ms,
-// in a cycle's order ([publishTurn]); what it misses of the seat's own pass is
-// lost as a crash loses it, which can exceed the last cycle's writes (a larger
-// burst, crewlet/crewlet#349), and what it misses of the backlog stays in this
-// node's store. What it carries can still be overwritten by an older copy,
-// from a cycle's row whose answer never came inside its bound or from a node
-// whose lease lapsed under it (crewlet/crewlet#511).
+// ([lifecyclePublishBudget]), and of a drain (seat.Host.ReleaseAll) in
+// docs/concepts/agent-runtime.md. No test pins it. It decides which rows are
+// sent; one sent is waited for within its own budget, at most five seconds
+// more on a member (crewlet/crewlet#1075). Rows go out memsync's 64 at once,
+// a few thousand small ones across 100 ms, in a cycle's order ([publishTurn]);
+// what it misses of the seat's own pass is lost as a crash loses it, and of
+// the backlog stays in this node's store. What it carries can still be
+// overwritten by an older copy, from a cycle's row whose answer never came
+// inside its budget or from a node whose lease lapsed under it
+// (crewlet/crewlet#511).
 const memoryFlushTimeout = 5 * time.Second
 
 // memoryAgentID is the id a seat's memory changelog is addressed by: the
@@ -117,7 +117,7 @@ func (e *Engine) startMemorySync(ctx context.Context) {
 // it turns an orderly shutdown into a logged failure. Called after the drain;
 // a cycle begun before a release sends no more of that seat's rows
 // (memsync.ErrNotHeld), so this waits for its other seats and the rows it has
-// out, for up to the cycle's bound.
+// out, for up to the cycle's bound and the budget of the last rows it sent.
 func (e *Engine) stopMemorySync() {
 	if e.memorySync == nil {
 		return
@@ -131,7 +131,8 @@ func (e *Engine) stopMemorySync() {
 // ([memorySync.cycle]), bounded by the interval: the loop's context is
 // detached, so an unanswering broker would otherwise block the cycle, and
 // stopMemorySync with it, for ever, and a cycle still running when the next is
-// due has fallen behind whatever it does.
+// due has fallen behind whatever it does. The bound decides which rows are
+// sent; each row sent has its own budget (memsync's publishRow).
 func (e *Engine) syncSeatMemory(ctx context.Context, loop *memorySync) {
 	node := e.node
 	if node == nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -28,8 +29,8 @@ import (
 // crossing at pace, have passed on the case's clock and answer, when set, lets
 // it through; or with the row's context's error once that ends first. It
 // counts the rows out at once and their bytes as a link's window counts them
-// (jsapi.RequestBytes), and records each row acknowledged, in the order
-// acknowledged. Every field it counts is under mu, so it carries any number of
+// (jsapi.RequestBytes), and records each row asked and each acknowledged, in
+// the order asked and acknowledged. Every field it counts is under mu, so it carries any number of
 // rows at once.
 type pacedJS struct {
 	jetstream.JetStream
@@ -40,7 +41,7 @@ type pacedJS struct {
 	mu                    sync.Mutex
 	out, outBytes         int
 	mostOut, mostOutBytes int
-	landed                []string
+	asked, landed         []string
 }
 
 func (j *pacedJS) Options() jetstream.JetStreamOptions {
@@ -52,6 +53,7 @@ func (j *pacedJS) Publish(ctx context.Context, subject string, data []byte,
 
 	bytes := jsapi.RequestBytes(len(data))
 	j.mu.Lock()
+	j.asked = append(j.asked, subject)
 	j.out++
 	j.outBytes += bytes
 	j.mostOut, j.mostOutBytes = max(j.mostOut, j.out), max(j.mostOutBytes, j.outBytes)
@@ -99,6 +101,13 @@ func (j *pacedJS) landedNow() []string {
 	return slices.Clone(j.landed)
 }
 
+// askedNow is every row asked so far, in the order asked.
+func (j *pacedJS) askedNow() []string {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return slices.Clone(j.asked)
+}
+
 // most is the most rows, and the most bytes, that were ever out at once.
 func (j *pacedJS) most() (rows, bytes int) {
 	j.mu.Lock()
@@ -122,7 +131,7 @@ func sortedNumbers(t *testing.T, acked []string, numbers map[string]int) []int {
 
 // A FLUSH CARRIES ROWS AS FAST AS THE LINK DOES, NOT ONE A ROUND TRIP.
 //
-// One row a round trip carried a flush's five seconds 71 rows at publishTrip,
+// One row a round trip carried a flush's five seconds some seventy rows at publishTrip,
 // whatever the link's rate, so a burst the seat wrote just before a release,
 // larger than that, was lost to its next holder (crewlet/crewlet#1041). With
 // rowsInFlight out at once, 1 000 notes are carried well inside the bound, and
@@ -145,7 +154,7 @@ func TestAFlushCarriesRowsAsFastAsTheLinkNotOneARoundTrip(t *testing.T) {
 		carried, err := s.FlushOwn(ctx, seat.Handle)
 		if err != nil || carried.Rows != len(ids) {
 			t.Fatalf("the flush answered %+v (%v), want all %d notes inside its %s: at %s a round "+
-				"trip, one row at a time carries %d", carried, err, len(ids), flushBound,
+				"trip, one row at a time carries about %d", carried, err, len(ids), flushBound,
 				publishTrip, int(flushBound/publishTrip))
 		}
 		if rows, _ := js.most(); rows != rowsInFlight {
@@ -341,6 +350,54 @@ func TestAFlushStartsOnceEveryRowTheCycleHadOutIsAnswered(t *testing.T) {
 			span(rowsInFlight+1, len(ids))) {
 			t.Errorf("after the cycle's rows the flush landed notes %s, want %s", runsOf(got),
 				runsOf(span(rowsInFlight+1, len(ids))))
+		}
+	})
+}
+
+// A ROW SENT INSIDE THE BOUND IS CARRIED WHOLE, NOT CUT AND SENT AGAIN.
+//
+// A row was published under its call's bound, so one a slow link carries in
+// longer than the bound left was cut while still crossing, sent again whole by
+// the next call, and cut again, every row after it waiting
+// (crewlet/crewlet#1075). Here two notes of a mebibyte across a link at its
+// floor, thirty seconds each, and a cycle that reaches the seat with five
+// seconds left: it sends the first, which lands under its own budget, and
+// nothing after it; the next call carries the second, not the first again.
+//
+// Mutation: publish a row under its call's context, or send a row once the
+// call's bound has run out, and this goes red.
+func TestARowSentInsideTheBoundIsCarriedWholeNotCutAndSentAgain(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	writeNotesOfSize(t, db, 2, 1<<20)
+	diary := registered(t, "agent_diary")
+	first, second := subjectOf(diary, "p0000"), subjectOf(diary, "p0001")
+	stamps := stampsOf(t, db)
+	synctest.Test(t, func(t *testing.T) {
+		js := &pacedJS{trip: publishTrip, pace: objstore.MiBPace}
+		s := heldFromEmpty(newSyncerAcross(db, js, func(string) string { return seat.AgentID }),
+			seat.Handle)
+		late, cancel := context.WithTimeout(t.Context(), flushBound)
+		defer cancel()
+		carried, err := s.PublishOwn(late, seat.Handle)
+		if want := (Carried{Rows: 1, StoppedIn: "agent_diary"}); err == nil || carried != want {
+			t.Errorf("the cycle answered %+v (%v), want %+v and its bound: the first note "+
+				"carried, nothing sent after its bound", carried, err, want)
+		}
+		if asked := js.askedNow(); !slices.Equal(asked, []string{first}) {
+			t.Errorf("the cycle sent %d rows, want the first note alone", len(asked))
+		}
+		if got, want := s.mark(seat.Handle, "agent_diary", ownRange), stamps[first]; got != want {
+			t.Fatalf("the diary's mark is %d after the cycle, want %d, the first note's: a row "+
+				"that crosses in thirty seconds lands though five were left", got, want)
+		}
+
+		carried, err = s.PublishOwn(t.Context(), seat.Handle)
+		if err != nil || carried != (Carried{Rows: 1}) {
+			t.Errorf("the next call answered %+v (%v), want the second note", carried, err)
+		}
+		if asked := js.askedNow(); !slices.Equal(asked, []string{first, second}) {
+			t.Errorf("the two calls sent %d rows, want each note once", len(asked))
 		}
 	})
 }

@@ -100,6 +100,14 @@
 // with the coordination store, and with no timeout set there an unanswered one
 // is held for the process's life, where a request per row ends with its bound.
 //
+// A ROW SENT IS CARRIED WHOLE. A call's context (a cycle's thirty seconds, a
+// flush's five) decides only whether a row is sent. Each row is waited for
+// within the budget internal/jsapi gives any acknowledged write: the request
+// term and its bytes' crossing at the link's floor for each send, so a row a
+// slow link carries in minutes lands rather than being cut and sent again
+// whole every cycle (crewlet/crewlet#1075). A call ends that much after its
+// context at most.
+//
 // WHAT A HOLDING WRITES GOES FIRST. A seat's marks live in memory, so every
 // acquisition and every restart leaves this node a backlog: everything its
 // store holds for the seat, the rows the hydration inserted and those it found
