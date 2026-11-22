@@ -20,7 +20,7 @@ import (
 const GeminiCLIName = "gemini-cli"
 
 // GeminiCLI drives Gemini CLI (`gemini`) headless, its event stream on stdout
-// (measured on 0.70.0 and 0.65.0 against a stub of the Gemini API;
+// (measured on 0.70.0 against a stub of the Gemini API;
 // docs/concepts/code-sandbox.md, "Gemini CLI", says what a run does).
 type GeminiCLI struct{}
 
@@ -69,7 +69,7 @@ func (GeminiCLI) Command(req sandbox.RunRequest, session Session, paths Paths, _
 
 // geminiExportExit is what `gemini` exits with once GEMINI_WRITE_SYSTEM_MD
 // has written its default prompt: it writes the file and stops before any
-// model request (measured on 0.70.0 and 0.65.0, zero requests at the stub).
+// model request (measured on 0.70.0, zero requests at the stub).
 const geminiExportExit = 42
 
 // geminiRelease is the Gemini CLI release this build drives: the newest, whose

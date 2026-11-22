@@ -16,14 +16,14 @@ import (
 
 // QwenCodeSteerInstruction is the standing instruction about notes a Qwen Code
 // run is given, saying where its harness puts one: a message from the user
-// after a step's tool results (measured under ACP on 0.28.3 and 0.26.1).
+// after a step's tool results (measured under ACP on 0.28.3).
 const QwenCodeSteerInstruction = steerInstructionHead +
 	"Qwen Code adds it to the conversation as a message from the user once the " +
 	"tool calls of a step have returned, after the words \"" + qwenNoteFraming + "\". " +
 	steerInstructionTail
 
 // qwenNoteFraming is what Qwen Code puts before a drained message on its line,
-// in the request and in its record (measured on 0.28.3 and 0.26.1; the
+// in the request and in its record (measured on 0.28.3; the
 // helper's `framing`). The transcript reader knows it ([headingFraming]).
 const qwenNoteFraming = "[User message received during tool execution]: "
 
@@ -39,7 +39,7 @@ func (QwenCode) HandsSkills() bool { return true }
 // and stable, as the route requires ([inboxDelivery]). The helper hands a
 // note by its text, never by this id: Qwen Code admits no id of a caller's.
 func (QwenCode) inboxID(launch, noteID string) string {
-	sum := sha256.Sum256([]byte("crewlet.steer.qwen\x00" + launch + "\x00" + noteID))
+	sum := sha256.Sum256([]byte("qwen steer\x00" + launch + "\x00" + noteID))
 	return "qwen_" + hex.EncodeToString(sum[:])[:32]
 }
 
