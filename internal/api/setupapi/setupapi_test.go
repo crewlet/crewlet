@@ -3058,6 +3058,10 @@ func (noGrants) RevokeMCPServerGrant(context.Context, *config.MCPServer) (string
 	return "", "", false, nil
 }
 
+func (noGrants) GiveUpIntegrationGrant(context.Context, *config.Company, string) (string, string, bool, error) {
+	return "", "", false, nil
+}
+
 // A VALUE ITS FIELD REFUSES IS THE CALLER'S, AT THE FIELD: a pasted credential
 // with a space inside, and an address with one, each answer 400 invalid_input
 // naming the field and where it lands, never 500, and never echo a credential.

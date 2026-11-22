@@ -2107,7 +2107,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	if seatsOff == nil {
 		seatsOff = []string{}
 	}
-	httpjson.Write(w, http.StatusOK, map[string]any{
+	answer := map[string]any{
 		"key": kind, "removed": true,
 		"revision_id": applied.RevisionID, "epoch": applied.Epoch,
 		// The agents this revision turned off, by handle; each keeps what it
@@ -2115,7 +2115,12 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		"seats_off": seatsOff,
 		// Named, not deleted (`crewlet secrets unset`).
 		"orphaned_secrets": orphaned,
-	})
+	}
+	// A consent grant given up with the block, and what Google was asked.
+	if applied.Consent != nil {
+		answer["oauth"] = applied.Consent
+	}
+	httpjson.Write(w, http.StatusOK, answer)
 }
 
 // refuse maps a write failure onto this surface's answers.
