@@ -519,13 +519,14 @@ func museMCP(s sandbox.MCPServer) museMCPServer {
 	return out
 }
 
-// museNonce is a run's own suffix to its servers' names: twelve hex digits
-// from the system's random source, new every run, so the run's servers are
-// under names no file of the repository's can declare beforehand (a trusted
-// run loads the repository's `.mcp.json` beside them). A variable so a case
-// can name the files it reads.
+// museNonce is a run's own suffix to its servers' names: six hex digits (24
+// bits) from the system's random source, new every run, so the run's servers
+// are under names no file of the repository's can declare beforehand (a
+// trusted run loads the repository's `.mcp.json` beside them), and a name of
+// up to 19 characters stays whole ([museServerNameShown]). A variable so a
+// case can name the files it reads.
 var museNonce = func() string {
-	var b [6]byte
+	var b [3]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
@@ -538,21 +539,29 @@ func writeMuseServers(ctx context.Context, box sandbox.Sandbox, dir string, serv
 	nonce string) error {
 
 	for name, s := range servers {
-		if !museServerName(name) {
+		full := name + "-" + nonce
+		if !museServerName(full) {
 			return fmt.Errorf("executor: the MCP server %q is not named as Muse Code reads a server's name: "+
-				"letters, digits, '-' and '_', at most 50", name)
+				"letters, digits, '-' and '_' (rename it in the seat's MCP servers)", name)
 		}
-		if err := writeJSON(ctx, box, dir+"/"+name+"-"+nonce+".json", museMCP(s)); err != nil {
+		if err := writeJSON(ctx, box, dir+"/"+full+".json", museMCP(s)); err != nil {
 			return fmt.Errorf("executor: writing the MCP server %q for Muse Code: %w", name, err)
 		}
 	}
 	return nil
 }
 
-// museServerName reports whether name is a server's name a file and a shell
-// word can carry as it is.
+// museServerNameShown is the longest server name Muse Code shows the model
+// as it is: a server's tools come under one entry, `mcp__<name>`, of at most
+// 31 characters, and a longer name is shown as a hash of it, which runs all
+// the same (measured on 1.4.25, names of up to 70 characters).
+const museServerNameShown = 26
+
+// museServerName reports whether name, a server's name with the run's suffix,
+// is one a file and a shell word carry as it is: its file, `<name>.json`,
+// within the 255 bytes a file's name takes.
 func museServerName(name string) bool {
-	if name == "" || len(name) > 50 {
+	if name == "" || len(name)+len(".json") > 255 {
 		return false
 	}
 	for _, r := range name {
@@ -659,19 +668,23 @@ func writeMuseNotes(ctx context.Context, box sandbox.Sandbox, req sandbox.RunReq
 // `required` and `tool_timeout_sec`, while `muse mcp add-json` keeps both
 // (measured on 1.4.25), so the servers come after it. A plugin Muse would not
 // take leaves the run without its notes, as its error stream says; a server
-// it would not take fails the run, which would have no tools.
+// it would not take fails the run, which would have no tools. The install's
+// answer is kept whole ([Paths.MuseNotesInstall]) for the confirm to read the
+// package's digest from, and removed where the approval failed.
 func museWiring(paths Paths) string {
 	q := shellword.Quote
 	plugin := paths.MuseNotesPlugin()
 	errs := q(paths.WorkDir() + "/muse-wiring-error")
+	installed := q(paths.MuseNotesInstall())
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
-	line(`muse plugins remove %s --json < /dev/null > /dev/null 2>&1`, museNotesPlugin)
+	line(`muse plugins remove %s --json < /dev/null > /dev/null 2>&1; rm -f %s`, museNotesPlugin, installed)
 	line(`if [ -f %s ]; then`, q(plugin+"/.muse-plugin/plugin.json"))
 	line(`  chmod 0755 %s 2> /dev/null`, q(paths.MuseNoteHelper()))
-	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > /dev/null 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
-		q(plugin), errs, museNotesPlugin, errs)
+	line(`  if ! { muse plugins install %s --scope user --json < /dev/null > %s 2> %s && muse plugins approve %s --json < /dev/null > /dev/null 2>> %s; }; then`,
+		q(plugin), installed, errs, museNotesPlugin, errs)
 	line(`    echo "crewlet: the run's notes plugin could not be installed, so the run takes no notes between its steps: $(head -c 400 %s 2> /dev/null)" >&2`, errs)
+	line(`    rm -f %s`, installed)
 	line(`  fi`)
 	line(`fi`)
 	line(`for f in %s/*.json; do`, q(paths.MuseServers()))
@@ -720,11 +733,12 @@ for o in $(env | sed -n 's/^\(` + museShellOff + `[A-Za-z0-9_]*\)=.*/\1/p'); do 
 
 // artifactFiles is the files a Muse Code run leaves in its box of its own
 // beside its sessions, which a later run must not find ([artifactHolder]):
-// the note helper, its take configs and the count of its subagents' lines
-// its script kept. Its settings are written whole by every run, and its
-// sessions are kept.
+// the note helper, its take configs, its answer to the notes plugin's install
+// and the count of its subagents' lines its script kept. Its settings are
+// written whole by every run, and its sessions are kept.
 func (Muse) artifactFiles(p Paths) []string {
-	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper()}
+	return []string{p.MuseChildLines(), p.MuseTakeConfig(), p.MuseTakeConfigFresh(), p.MuseNoteHelper(),
+		p.MuseNotesInstall()}
 }
 
 // artifactDirs is the directories a Muse Code run leaves of its own

@@ -201,6 +201,12 @@ func (p Profile) Clone() Profile {
 			out.LoginKeys[name] = slices.Clone(keys)
 		}
 	}
+	if p.RunKeys != nil {
+		out.RunKeys = make(map[string][]string, len(p.RunKeys))
+		for name, keys := range p.RunKeys {
+			out.RunKeys[name] = slices.Clone(keys)
+		}
+	}
 	if p.StdinLogin != nil {
 		login := *p.StdinLogin
 		login.Args = append([]string(nil), p.StdinLogin.Args...)

@@ -153,6 +153,12 @@ type Spec struct {
 	// token the run env already exports.
 	CredentialFiles map[string]string
 
+	// CredentialRunKeys is, by a path of CredentialFiles, the keys (dotted,
+	// into a JSON object) its harness writes into that file during a run,
+	// which are not its login: a local box writing the file back keeps the
+	// shared login's value of each (harnessprofile.KeepLoginKeys).
+	CredentialRunKeys map[string][]string
+
 	// Repos are the repositories on Gitlet this run is
 	// given, each resolved at launch ([RunRepo]), at most [MaxRunRepos]. Empty
 	// for a run that clones nothing from Gitlet — a repository on
@@ -1164,7 +1170,9 @@ type RunRequest struct {
 	// WebDenied is the entry's `web_tools: denied`: the runner hands its
 	// harness none of the harness's own web tools, as the entry's runs on the
 	// engine host have none. The run's shell, and any code it runs, reach
-	// only what the box cell's egress policy allows.
+	// only what the box cell's egress policy allows. Muse Code's profile has
+	// no measured web denial, so config refuses the setting on a `muse-code`
+	// entry and it never reaches Muse Code's runner.
 	WebDenied bool
 
 	// MCPServers are the MCP servers the engine hands the run, keyed by
