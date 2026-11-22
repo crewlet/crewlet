@@ -108,6 +108,17 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		// reach is its box's cell's to bound (`container` and `e2b` keep it off the
 		// engine host, `direct` does not) beside the run env's credentials.
 		"--permission-mode", "bypassPermissions",
+	}
+	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
+	// host have none: on 2.1.330, under bypassPermissions, both are refused as
+	// "disabled for this session, in subagents as well as here", and a
+	// repository's settings allowing them, or an agent of its own listing them,
+	// do not bring them back. Before "$@", whose first value is a flag, so the
+	// list takes these two alone.
+	if req.WebDenied {
+		parts = append(parts, "--disallowedTools", "WebFetch", "WebSearch")
+	}
+	parts = append(parts,
 		// WHAT THE SCRIPT DECIDED BY THE HARNESS'S RELEASE: the run's settings, and
 		// the session, NAMED ON EVERY RUN ([claudeSessionGate]): a new one under the
 		// minted id (`--session-id`), a continued one with `--resume` and never
@@ -116,7 +127,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		// reuses the prompt its first request recorded, so a later launch's
 		// standing instructions would never be read.
 		`"$@"`,
-	}
+	)
 	// THE SYSTEM TEXT IS APPENDED, NOT SUBSTITUTED (never argv, [Paths.System]):
 	// Claude Code's own prompt stays whole, being how to drive its tools. Passed
 	// only for a run that has system text.

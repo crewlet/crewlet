@@ -55,6 +55,8 @@ type chainMember struct {
 	spent bool
 	// env is the entry's env, as resolved.
 	env map[string]string
+	// webDenied is the entry's `overrides: {web_tools: denied}`.
+	webDenied bool
 }
 
 // harnessProvider is a REAL harness provider for m: the question every case here
@@ -87,6 +89,9 @@ func harnessProvider(t *testing.T, m chainMember) *harness.Provider {
 			"limit_reports": nil, "auth_events": nil,
 			"mcp": map[string]any{"failure_events": []any{}},
 		}
+	}
+	if m.webDenied {
+		overrides["web_tools"] = "denied"
 	}
 	provider, err := harness.New(harness.Config{
 		Key: m.key, Harness: m.agent, Model: m.model, StateDir: t.TempDir(),
@@ -340,6 +345,38 @@ func TestALaunchPlacesTheRunInItsMembersCell(t *testing.T) {
 				t.Fatalf("the run is placed in %q (err %v), want %q", row.Placement, err, tc.want)
 			}
 		})
+	}
+}
+
+// AN ENTRY'S WEB DENIAL REACHES ITS EXECUTOR: a run launched on an entry with
+// `web_tools: denied` is handed to its runner as one whose harness gets no web
+// tool of its own, as the entry's runs on the engine host get none, and a run
+// on an entry that keeps the web is not.
+//
+// Mutation: leave webDenied unset in newExecutorRun, or off the launch request,
+// and the denied entry's run goes out with its web tools.
+func TestAnEntrysWebDenialReachesItsExecutor(t *testing.T) {
+	t.Parallel()
+	for _, agent := range []string{"claude-code", "opencode"} {
+		for _, denied := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s denied %v", agent, denied), func(t *testing.T) {
+				t.Parallel()
+				c, seat := chainCompany(t, chainMember{key: "api", agent: agent,
+					model: "anthropic/claude-golden", webDenied: denied})
+				e, runners := launchRigRunners(t, c, bridgeFor(t, mcpbridge.Options{
+					Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
+				}))
+				l := launcherOn(e, c, seat, "t1")
+				if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
+					t.Fatalf("LaunchExecutor: %v", err)
+				}
+				started := runners[agent].Started()
+				if len(started) != 1 || started[0].WebDenied != denied {
+					t.Fatalf("started %d runs, the first web denied %v; want one, web denied %v",
+						len(started), len(started) > 0 && started[0].WebDenied, denied)
+				}
+			})
+		}
 	}
 }
 
