@@ -1,8 +1,10 @@
 package admob
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -44,8 +46,9 @@ const accountLife = time.Hour
 
 func newAccountCache() *accountCache { return &accountCache{byID: map[string]cachedAccount{}} }
 
-// accountOf is id's account, read through handle's call where the cache holds
-// none fresh.
+// accountOf is id's account, read where the cache holds none fresh. The read
+// is the engine's own, never its call's record: the log keeps one outcome per
+// call, the call's own.
 func (p *Product) accountOf(ctx context.Context, call growth.Call, id string) (account, error) {
 	p.accounts.mu.Lock()
 	cached, ok := p.accounts.byID[id]
@@ -66,7 +69,6 @@ func (p *Product) accountOf(ctx context.Context, call growth.Call, id string) (a
 				Err: fmt.Errorf("admob: decode account %s: %w", id, derr)}
 		}
 	}
-	p.client.MadeOrFailed(ctx, call, req, growth.ClassRead, err)
 	if err != nil {
 		return account{}, err
 	}
@@ -97,13 +99,27 @@ func (p *Product) listAccounts(ctx context.Context, call growth.Call) (accountsA
 		return accountsAnswer{}, refusal(growth.RefusedForbidden, "this agent is off at AdMob. No vendor was reached.")
 	}
 	out := accountsAnswer{Accounts: []accountRow{}}
+	var failed error
+	reached := 0
 	for _, id := range p.accountsOf(call.Handle) {
 		a, err := p.accountOf(ctx, call, id)
 		if err != nil {
+			failed = cmp.Or(failed, err)
 			out.Accounts = append(out.Accounts, accountRow{Account: id, Unreached: err.Error()})
 			continue
 		}
+		reached++
 		out.Accounts = append(out.Accounts, accountRow{Account: id, Currency: a.Currency, TimeZone: a.TimeZone})
+	}
+	// ONE OUTCOME FOR THE CALL, on the account listing it stands for: made
+	// where any account was read, failed with the first refusal where none was.
+	if len(out.Accounts) > 0 {
+		if reached > 0 {
+			failed = nil
+		}
+		op, _ := p.Catalog().Operation("admob.accounts.list")
+		req, _ := newRequest(op, nil, nil, nil)
+		p.client.MadeOrFailed(ctx, call, req, growth.ClassRead, failed)
 	}
 	return out, nil
 }
@@ -201,6 +217,13 @@ func (p *Product) report(ctx context.Context, call growth.Call) (reportAnswer, e
 	if len(metrics) == 0 {
 		return reportAnswer{}, refusal(growth.RefusedInvalid, "name at least one metric. No vendor was reached.")
 	}
+	closed := reportLists[id]
+	if err = within("dimensions", stringsOf(dims), closed[0]); err != nil {
+		return reportAnswer{}, err
+	}
+	if err = within("metrics", stringsOf(metrics), closed[1]); err != nil {
+		return reportAnswer{}, err
+	}
 	spec := map[string]any{"dateRange": map[string]any{"startDate": date(days.Start), "endDate": date(days.End)},
 		"dimensions": dims, "metrics": metrics}
 	if id == campaignReportOp {
@@ -217,6 +240,13 @@ func (p *Product) report(ctx context.Context, call growth.Call) (reportAnswer, e
 		return reportAnswer{}, err
 	}
 	raw, err := p.client.Send(ctx, call.Handle, req)
+	var syntax *json.SyntaxError
+	if id == campaignReportOp && errors.As(err, &syntax) {
+		// THE ONE REPORT GOOGLE CAPS AT NO ROW COUNT: an answer past the most
+		// one call reads is cut, and reads as broken JSON.
+		err = &googlegrowth.CallError{Failure: growth.FailureVendorRefused, Err: refusal(growth.RefusedInvalid,
+			"the campaign report is larger than one answer holds; narrow its dates or dimensions.")}
+	}
 	var messages []googleReport
 	if err == nil {
 		err = decodeReport(id, raw, &messages)
@@ -286,6 +316,24 @@ func (p *Product) days(args map[string]any, zone *time.Location, campaign bool) 
 			"No vendor was reached.", maxCampaignDays))
 	}
 	return days, nil
+}
+
+// reportLists are each report's closed dimensions and metrics.
+var reportLists = map[string][2][]string{
+	networkReportOp:   {networkDimensions, networkMetrics},
+	mediationReportOp: {mediationDimensions, mediationMetrics},
+	campaignReportOp:  {campaignDimensions, campaignMetrics},
+}
+
+// within refuses values not in allowed, naming them all.
+func within(arg string, values, allowed []string) error {
+	for _, v := range values {
+		if !slices.Contains(allowed, v) {
+			return refusal(growth.RefusedInvalid, fmt.Sprintf("%s takes %s, not %q. No vendor was reached.", arg,
+				strings.Join(allowed, ", "), v))
+		}
+	}
+	return nil
 }
 
 // date is a YYYY-MM-DD day as Google's Date.
@@ -417,11 +465,10 @@ func shape(messages []googleReport, dims, metrics []string, limit int) reportAns
 		}
 		r.Columns = append(r.Columns, growth.Column{Name: m, Type: typ})
 	}
+	// CUT ONLY ON A ROW PAST THE LIMIT: Google says its matching count may be
+	// off, so it is passed on as an estimate and decides nothing.
 	if len(rows) > limit {
 		rows, r.Truncated = rows[:limit], true
-	}
-	if r.TotalRowsEstimate != nil && *r.TotalRowsEstimate > int64(len(rows)) {
-		r.Truncated = true
 	}
 	r.Rows = make([][]any, 0, len(rows))
 	for _, row := range rows {

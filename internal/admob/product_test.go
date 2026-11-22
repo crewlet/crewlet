@@ -342,6 +342,11 @@ func TestOnlyWhatCannotBeUndoneIsAdmin(t *testing.T) {
 			"query": map[string]any{"updateMask": mask}, "body": group}
 	}
 	lines := func(l map[string]any) map[string]any { return map[string]any{"mediationGroupLines": l} }
+	stop := func(choice string) map[string]any {
+		return map[string]any{"operation": "admob.accounts.mediationGroups.mediationAbExperiments.stop",
+			"path": map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
+			"body": map[string]any{"variantChoice": choice}}
+	}
 	for _, tc := range []struct {
 		name string
 		args map[string]any
@@ -367,6 +372,12 @@ func TestOnlyWhatCannotBeUndoneIsAdmin(t *testing.T) {
 			lines(map[string]any{"1": map[string]any{"state": "ARCHIVED"}})), growth.ClassAdmin},
 		{"the group's ad units", patch(`targeting.ad_unit_ids`, map[string]any{"targeting": map[string]any{
 			"adUnitIds": []any{"ca-app-pub-1111111111111111/2"}}}), growth.ClassOperate},
+		{"a line the mask names and the body leaves out", patch(`mediation_group_lines["2"]`,
+			lines(map[string]any{})), growth.ClassAdmin},
+		{"a whole line leaving its state out", patch(`mediation_group_lines["1"]`,
+			lines(map[string]any{"1": map[string]any{"displayName": "Renamed"}})), growth.ClassAdmin},
+		{"an experiment stopped keeping the control", stop("VARIANT_CHOICE_A"), growth.ClassOperate},
+		{"an experiment stopped keeping the treatment", stop("VARIANT_CHOICE_B"), growth.ClassAdmin},
 	} {
 		if got := classOf(t, h, "admob_admin", tc.args); got != tc.want {
 			t.Errorf("%s classes as %s, want %s", tc.name, got, tc.want)
@@ -401,16 +412,50 @@ func TestAProtoNamedFieldOrAStrayParameterNeverReachesGoogle(t *testing.T) {
 	}
 }
 
-// AN UPDATE MASK THE ENGINE CANNOT READ IS REFUSED BEFORE GOOGLE: a path it
-// misreads could remove a line under an operate class.
-func TestAnUnreadableUpdateMaskNeverReachesGoogle(t *testing.T) {
+// A PATCH WHOSE MASK THE ENGINE DOES NOT READ AS GOOGLE WOULD NEVER REACHES
+// GOOGLE: no mask (Google then replaces every field the body sets, the whole
+// line map), a mask of blanks, one in another spelling, a map key of another
+// shape, or the mask passed as update_mask, which Google reads and the engine
+// would not; each could remove a line under an operate class.
+//
+// Mutation: drop the empty-mask, query-key or map-key refusal, and Google is
+// called.
+func TestAPatchWhoseMaskTheEngineCannotReadNeverReachesGoogle(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, "operate")
+	removal := map[string]any{"mediationGroupLines": map[string]any{"1": map[string]any{"state": "REMOVED"}}}
+	for name, args := range map[string]map[string]any{
+		"no mask": {"operation": "admob.accounts.mediationGroups.patch",
+			"path": map[string]any{"accountsId": mine, "mediationGroupsId": "77"}, "body": removal},
+		"the mask as update_mask": {"operation": "admob.accounts.mediationGroups.patch",
+			"path":  map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
+			"query": map[string]any{"update_mask": `mediation_group_lines["1"].state`}, "body": removal},
+		"update_mask beside a mask the engine reads": {"operation": "admob.accounts.mediationGroups.patch",
+			"path": map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
+			"query": map[string]any{"updateMask": "targeting.ad_unit_ids",
+				"update_mask": `mediation_group_lines["1"].state`}, "body": removal},
+		"a mask in capitals": {"operation": "admob.accounts.mediationGroups.patch",
+			"path":  map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
+			"query": map[string]any{"updateMask": `MEDIATION_GROUP_LINES["1"].STATE`}, "body": removal},
+		"a line key of another shape": {"operation": "admob.accounts.mediationGroups.patch",
+			"path":  map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
+			"query": map[string]any{"updateMask": `mediation_group_lines["\\x31"].state`}, "body": removal},
+	} {
+		if _, err := h.p.Prepare(context.Background(), h.call("admob_operate", args)); !refusedAs(err, growth.RefusedInvalid) {
+			t.Errorf("%s answered %v, want invalid", name, err)
+		}
+	}
+	if _, err := h.p.Run(context.Background(), h.call("admob_read", map[string]any{"operation": "admob.accounts.apps.list",
+		"path": map[string]any{"accountsId": mine}, "query": map[string]any{"access_token": "x"}})); !refusedAs(err, growth.RefusedInvalid) {
+		t.Errorf("a listing with a query key it does not take answered %v, want invalid", err)
+	}
 	_, err := h.p.Prepare(context.Background(), h.call("admob_mediation_group_upsert", map[string]any{
-		"account": mine, "mediation_group_id": "77", "update_mask": `MEDIATION_GROUP_LINES["1"].STATE`,
-		"mediation_group": map[string]any{}}))
-	if !refusedAs(err, growth.RefusedInvalid) || len(h.calls()) != 0 {
-		t.Errorf("an unreadable mask answered %v after %v, want invalid with no call", err, h.calls())
+		"account": mine, "mediation_group_id": "77", "update_mask": " , ", "mediation_group": removal}))
+	if !refusedAs(err, growth.RefusedInvalid) {
+		t.Errorf("a mask of blanks answered %v, want invalid", err)
+	}
+	if got := h.calls(); len(got) != 0 {
+		t.Errorf("Google was called: %v", got)
 	}
 }
 
@@ -540,6 +585,17 @@ func TestANetworkReportReadsTheStreamHonestly(t *testing.T) {
 	if spec["maxReportRows"] != float64(3) {
 		t.Errorf("Google was asked for %v rows, want the limit and one more", spec["maxReportRows"])
 	}
+	// GOOGLE'S COUNT DECIDES NOTHING: all rows within the limit are no cut,
+	// whatever its estimate says.
+	out, err = h.p.Run(context.Background(), h.call("admob_network_report", map[string]any{"account": mine,
+		"start_date": "2026-11-01", "end_date": "2026-11-03", "metrics": []any{"IMPRESSIONS"}, "limit": float64(5)}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded, _ = json.Marshal(out); !strings.Contains(string(encoded), `"truncated":false`) ||
+		!strings.Contains(string(encoded), `"total_rows_estimate":9`) {
+		t.Errorf("three rows under a limit of five read %s, want no cut and the estimate passed on", encoded)
+	}
 	// A ROW PAST THE LIMIT FLAGS THE CUT where Google gives no count.
 	h.vend.mu.Lock()
 	h.vend.uncounted = true
@@ -646,5 +702,98 @@ func TestThePassNamesWhatTheSignInLacks(t *testing.T) {
 	}
 	if got := admob.GrantScopes(nil); !slices.Equal(got, admob.ReadScopes()) {
 		t.Errorf("a company with no seat asks for %v, want the read scopes", got)
+	}
+	if got := admob.GrantScopes(h.company); !slices.Equal(got, admob.OperateScopes()) {
+		t.Errorf("a company with a seat at operate asks for %v, want the write scope too", got)
+	}
+	h.company.Roles[0].Integrations.AdMob.Level = "read"
+	if got := admob.GrantScopes(h.company); !slices.Equal(got, admob.ReadScopes()) {
+		t.Errorf("a company whose seats all read asks for %v, want the read scopes", got)
+	}
+}
+
+// EACH CALL HAS ONE OUTCOME ON THE ACCESS LOG, ITS OWN: a report records the
+// report, never the account lookup it made first, and the account listing
+// records one outcome for every account it read.
+//
+// Mutation: record the account lookup under the call, and the report's
+// record is the lookup's.
+func TestEachCallHasOneOutcomeOnTheLogItsOwn(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, "read")
+	ctx := context.Background()
+	if _, err := h.p.Run(ctx, h.call("admob_network_report", map[string]any{"account": mine,
+		"metrics": []any{"IMPRESSIONS"}})); err != nil {
+		t.Fatal(err)
+	}
+	steps, records := h.audit.take()
+	if len(steps) != 1 || !strings.HasSuffix(records[0].Target, "networkReport:generate") {
+		t.Errorf("the report recorded %v %+v, want one outcome on the report", steps, records)
+	}
+	if _, err := h.p.Run(ctx, h.call("admob_accounts_list", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if steps, _ = h.audit.take(); len(steps) != 1 || steps[0] != growth.StepMade {
+		t.Errorf("the account listing recorded %v, want one made", steps)
+	}
+}
+
+// A CLOSED LIST IS HELD IN CODE, NOT ONLY IN THE TOOL'S SCHEMA: a dimension a
+// report does not take, or an ad format AdMob does not offer, is refused with
+// the values it takes.
+func TestAClosedListIsHeldInCode(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, "operate")
+	ctx := context.Background()
+	if _, err := h.p.Run(ctx, h.call("admob_network_report", map[string]any{"account": mine,
+		"dimensions": []any{"AD_SOURCE"}, "metrics": []any{"IMPRESSIONS"}})); !refusedAs(err, growth.RefusedInvalid) ||
+		!strings.Contains(err.Error(), "COUNTRY") {
+		t.Errorf("a mediation dimension on a network report answered %v, want the dimensions it takes", err)
+	}
+	if _, err := h.p.Prepare(ctx, h.call("admob_ad_unit_create", map[string]any{"account": mine,
+		"app_id": "ca-app-pub-1111111111111111~1", "display_name": "B", "ad_format": "BANNER_INTERSTITIAL"})); !refusedAs(err, growth.RefusedInvalid) {
+		t.Errorf("a format AdMob no longer creates answered %v, want invalid", err)
+	}
+}
+
+// A NAME IS KEPT AS ITS DIGEST WHATEVER IT LOOKS LIKE: a one-word app name
+// reads as an identifier, and is still somebody's words.
+func TestANameIsKeptAsItsDigest(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, "operate")
+	hold, err := h.p.Prepare(context.Background(), h.call("admob_app_create", map[string]any{"account": mine,
+		"platform": "IOS", "display_name": "Game"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range hold.Ask.Changes {
+		if c.Field == "manualAppInfo.displayName" && !c.Text {
+			t.Errorf("the app's name is recorded as %+v, want it kept as words", c)
+		}
+	}
+}
+
+// A LINE A CHANGE REMOVES IS SHOWN REMOVED: a line the body leaves out under
+// a mask naming it, or one a replaced line map leaves out, is what the person
+// reads and the log keeps as set to REMOVED, never as fields cleared.
+//
+// Mutation: drop either left-out arm, and the change reads as cleared fields.
+func TestALineAChangeRemovesIsShownRemoved(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, "administer")
+	for mask, body := range map[string]map[string]any{
+		`mediation_group_lines["2"]`: {"mediationGroupLines": map[string]any{}},
+		`mediation_group_lines`:      {"mediationGroupLines": map[string]any{"1": line("1", "ENABLED")}},
+	} {
+		hold, err := h.p.Prepare(context.Background(), h.call("admob_admin", map[string]any{
+			"operation": "admob.accounts.mediationGroups.patch",
+			"path":      map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
+			"query":     map[string]any{"updateMask": mask}, "body": body}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := `mediationGroupLines["2"].state: ENABLED to REMOVED`; !strings.Contains(hold.Context, want) {
+			t.Errorf("mask %s reads %q, want %q", mask, hold.Context, want)
+		}
 	}
 }

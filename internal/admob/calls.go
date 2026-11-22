@@ -149,7 +149,13 @@ func (p *Product) appCreate(call growth.Call) (googlegrowth.Request, error) {
 		return googlegrowth.Request{}, refusal(growth.RefusedInvalid, "name the app. No vendor was reached.")
 	}
 	platform := argString(call.Args, "platform")
+	if err := within("platform", []string{platform}, []string{"IOS", "ANDROID"}); err != nil {
+		return googlegrowth.Request{}, err
+	}
 	body := map[string]any{"platform": platform, "manualAppInfo": map[string]any{"displayName": name}}
+	if err := within("android_app_stores", stringsOf(names(call.Args["android_app_stores"])), appStores); err != nil {
+		return googlegrowth.Request{}, err
+	}
 	if stores := names(call.Args["android_app_stores"]); len(stores) > 0 {
 		if platform != "ANDROID" {
 			return googlegrowth.Request{}, refusal(growth.RefusedInvalid, "android_app_stores is for an ANDROID "+
@@ -165,6 +171,12 @@ func (p *Product) adUnitCreate(call growth.Call) (googlegrowth.Request, error) {
 	op, _ := p.Catalog().Operation("admob.accounts.adUnits.create")
 	body := map[string]any{"appId": argString(call.Args, "app_id"),
 		"displayName": argString(call.Args, "display_name"), "adFormat": argString(call.Args, "ad_format")}
+	if err := within("ad_format", []string{argString(call.Args, "ad_format")}, adFormats); err != nil {
+		return googlegrowth.Request{}, err
+	}
+	if err := within("ad_types", stringsOf(names(call.Args["ad_types"])), []string{"RICH_MEDIA", "VIDEO"}); err != nil {
+		return googlegrowth.Request{}, err
+	}
 	if types := names(call.Args["ad_types"]); len(types) > 0 {
 		body["adTypes"] = types
 	}
@@ -221,10 +233,6 @@ func (p *Product) groupUpsert(call growth.Call) (googlegrowth.Request, error) {
 		return newRequest(op, map[string]string{"accountsId": account}, nil, body)
 	}
 	mask := argString(call.Args, "update_mask")
-	if mask == "" {
-		return googlegrowth.Request{}, refusal(growth.RefusedInvalid, "a change names its update_mask: Google "+
-			"replaces each field it names, and only those. No vendor was reached.")
-	}
 	op, _ := p.Catalog().Operation("admob.accounts.mediationGroups.patch")
 	return newRequest(op, map[string]string{"accountsId": account, "mediationGroupsId": group},
 		map[string]string{"updateMask": mask}, body)
@@ -243,9 +251,8 @@ func (p *Product) abExperiment(call growth.Call) (googlegrowth.Request, error) {
 		return newRequest(op, path, nil, body)
 	case "stop":
 		choice := argString(call.Args, "variant_choice")
-		if choice == "" {
-			return googlegrowth.Request{}, refusal(growth.RefusedInvalid, "stopping an experiment names the "+
-				"variant_choice to keep. No vendor was reached.")
+		if err := within("variant_choice", []string{choice}, []string{variantA, variantB}); err != nil {
+			return googlegrowth.Request{}, err
 		}
 		op, _ := p.Catalog().Operation("admob.accounts.mediationGroups.mediationAbExperiments.stop")
 		return newRequest(op, path, nil, map[string]any{"variantChoice": choice})
