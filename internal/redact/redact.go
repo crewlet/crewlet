@@ -1635,12 +1635,20 @@ func keyBefore[T textual](text T, from int) func(w int) bool {
 	}
 }
 
+// keyTried, where an in-package test sets it, is called at each place keyFrom
+// tries the pattern, so a test counts the tries a read costs, which a clock
+// on a loaded runner cannot pin; nil otherwise.
+var keyTried func()
+
 // keyFrom is where the first password's key at or past from begins, read no
 // further than bound, or -1, or -1 too where that key begins at by or past it.
 func keyFrom[T textual](text T, from, by, bound int) int {
 	k, text := passwordRule(), text[from:min(len(text), bound)]
 	by = min(by-from, len(text))
 	for i := keyedBeginsBefore(k, text, 0, by); i >= 0; i = keyedBeginsBefore(k, text, beyond(text, i), by) {
+		if keyTried != nil {
+			keyTried()
+		}
 		if keyedMatchesAt(k, text, i) {
 			return from + i
 		}
