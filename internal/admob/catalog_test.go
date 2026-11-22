@@ -11,9 +11,9 @@ import (
 // the catalog validates, it lists the coverage matrix's 19 methods, 11 read
 // and 8 operate, nothing in AdMob is public, spend or never (AdMob pays the
 // publisher, and no method is refused), and admin is reached by exactly the
-// two irreversible changes, each a field rule of an operate method.
+// three irreversible changes, each a field rule of an operate method.
 //
-// Mutation: drop a method, class a write read, or give a third method an
+// Mutation: drop a method, class a write read, or give a fourth method an
 // admin rule, and this test goes red.
 func TestTheCatalogListsEveryMethodInExactlyOneClass(t *testing.T) {
 	t.Parallel()
@@ -37,7 +37,8 @@ func TestTheCatalogListsEveryMethodInExactlyOneClass(t *testing.T) {
 	if len(c.Operations) != 19 || counts[growth.ClassRead] != 11 || counts[growth.ClassOperate] != 8 {
 		t.Errorf("%d operations by class %v, want 19: 11 read and 8 operate", len(c.Operations), counts)
 	}
-	if want := []string{"admob.accounts.apps.create", "admob.accounts.mediationGroups.patch"}; !slices.Equal(admin, want) {
+	if want := []string{"admob.accounts.apps.create", "admob.accounts.mediationGroups.patch",
+		"admob.accounts.mediationGroups.mediationAbExperiments.stop"}; !slices.Equal(admin, want) {
 		t.Errorf("admin is reached by %v, want %v", admin, want)
 	}
 	limited := 0
