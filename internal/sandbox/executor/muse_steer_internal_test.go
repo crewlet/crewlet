@@ -161,35 +161,67 @@ func TestAMuseMainThreadReadAnswersItsTakes(t *testing.T) {
 }
 
 // ONE ITEM AN ANSWER, WITHIN 16,384 BYTES OF RAW UTF-8: the engine's widest
-// item (4,505 UTF-16 units, here of 3-byte characters) with the answer's
-// framing fits Muse Code's ceiling once the note helper takes the token out,
-// and a second item goes to the next hook's answer.
+// item (4,505 UTF-16 units) with the answer's framing fits Muse Code's
+// ceiling once the note helper takes the token out, whether it is all `<`
+// (which encoding/json escapes unless told not to), all U+2028 (which it
+// escapes always) or all 3-byte characters, and a second item goes to the
+// next hook's answer.
 //
-// Mutation: carry two items in one answer, or escape the text.
+// Mutation: carry two items in one answer, or write it with encoding/json.
 func TestAMuseHookAnswerCarriesOneItemWithinItsCeiling(t *testing.T) {
-	widest := strings.Repeat("中", 4505)
 	if museItemUnits < 4505 {
 		t.Fatalf("one answer carries %d units, under the engine's widest item", museItemUnits)
 	}
 	if got := (Muse{}).notesThatFit([]string{"a", "b", "c"}); got != 1 {
 		t.Errorf("one answer carries %d messages, want one", got)
 	}
-	for _, event := range []string{claudeEventToolBatch, claudeEventFinish} {
-		answer := (Muse{}).hookAnswer(event, "11111111-1111-4111-8111-111111111111", []HookNote{{Message: widest}})
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(answer), &fields); err != nil {
-			t.Fatalf("%s: %v", event, err)
+	for _, unit := range []string{"<", "\u2028", "中"} {
+		widest := strings.Repeat(unit, 4505)
+		for _, event := range []string{claudeEventToolBatch, claudeEventFinish} {
+			answer := (Muse{}).hookAnswer(event, "11111111-1111-4111-8111-111111111111",
+				[]HookNote{{Message: widest}})
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(answer), &fields); err != nil {
+				t.Fatalf("%q %s: %v", unit, event, err)
+			}
+			delete(fields, museTakeField)
+			var buf bytes.Buffer
+			enc := json.NewEncoder(&buf)
+			enc.SetEscapeHTML(false)
+			_ = enc.Encode(fields)
+			handed := strings.TrimSuffix(buf.String(), "\n")
+			if len(handed) > museHookAnswerBytes || strings.Contains(handed, `\u`) {
+				t.Errorf("%q %s: the answer Muse is handed is %d bytes (escaped %v), past %d", unit, event,
+					len(handed), strings.Contains(handed, `\u`), museHookAnswerBytes)
+			}
 		}
-		delete(fields, museTakeField)
-		var buf bytes.Buffer
-		enc := json.NewEncoder(&buf)
-		enc.SetEscapeHTML(false)
-		_ = enc.Encode(fields)
-		handed := strings.TrimSuffix(buf.String(), "\n")
-		if len(handed) > museHookAnswerBytes || strings.Contains(handed, `\u`) {
-			t.Errorf("%s: the answer Muse is handed is %d bytes (escaped %v), past %d", event, len(handed),
-				strings.Contains(handed, `\u`), museHookAnswerBytes)
-		}
+	}
+}
+
+// A HOOK ANSWER'S TEXT READS BACK AS IT WAS WRITTEN, whatever it holds: the
+// quote, the backslash, every control character, U+2028 and characters past
+// the basic plane, as JSON's own reader decodes them.
+//
+// Mutation: leave a control character unescaped, or the backslash.
+func TestAMuseHookAnswersTextReadsBackWhole(t *testing.T) {
+	var text strings.Builder
+	for r := rune(0); r < 0x80; r++ {
+		text.WriteRune(r)
+	}
+	text.WriteString("\u2028\u2029 ünï 🚀 \\\" end")
+	answer := (Muse{}).hookAnswer(claudeEventFinish, "11111111-1111-4111-8111-111111111111",
+		[]HookNote{{Message: text.String()}})
+	var got struct {
+		Take     string `json:"crewlet_take"`
+		Decision string `json:"decision"`
+		Reason   string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(answer), &got); err != nil {
+		t.Fatalf("%v: %q", err, answer)
+	}
+	if got.Reason != text.String() || got.Decision != "block" ||
+		got.Take != claudeTakeToken("11111111-1111-4111-8111-111111111111") {
+		t.Fatalf("read back %+v, want the text, the block and the token as written", got)
 	}
 }
 
