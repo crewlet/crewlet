@@ -3,7 +3,6 @@ package searchconsole
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -25,18 +24,20 @@ type Product struct {
 	pages *http.Client
 }
 
-// New is the product on the engine's active document, resolver, tokens and
-// access log. hc reaches Google and pages the company's own pages; both are
-// nil in production.
+// New is the product on the engine's active document, resolver, tokens,
+// access log and apply leases. hc reaches Google and pages the company's own
+// pages; both are nil in production.
 func New(company func() *config.Company, env func() *config.Resolver, tokens googlegrowth.Tokens,
-	audit googlegrowth.Audit, hc, pages *http.Client) *Product {
+	audit googlegrowth.Audit, leases googlegrowth.Leaser, hc, pages *http.Client) *Product {
 	if pages == nil {
 		pages = httpx.Guarded(pageTimeout)
 	}
-	return &Product{company: company, pages: pages, client: &googlegrowth.Client{
+	p := &Product{company: company, pages: pages, client: &googlegrowth.Client{
 		Kind: string(Kind), Name: "Search Console", Company: company, Env: env, Tokens: tokens,
-		Audit: audit, HTTP: hc, Refused: vendorRefusal,
+		Audit: audit, Leases: leases, HTTP: hc, Refused: vendorRefusal,
 	}}
+	p.client.BeforeRead = p.before
+	return p
 }
 
 // Catalog is the product's catalog.
@@ -165,10 +166,17 @@ func (p *Product) inScope(handle string, req googlegrowth.Request) error {
 	return nil
 }
 
-// Denied logs that a person denied the held call, or that it lapsed; the
-// verdict itself is the held call's record.
+// Denied records that an administrator denied the held call, or that it
+// lapsed: its one answer.
 func (p *Product) Denied(ctx context.Context, call growth.Call) error {
-	slog.InfoContext(ctx, "growth_call_denied", "kind", string(Kind), "tool", call.Tool, "seat", call.Handle,
-		"held_call", call.HeldCall)
+	req, _, _ := p.requestOf(ctx, call)
+	p.client.Denied(ctx, call, req, p.toolClass(call.Tool))
 	return nil
+}
+
+// toolClass is the class of the tool named, which every record of its call
+// names: the class the call was made, or asked and answered, at.
+func (p *Product) toolClass(name string) growth.Class {
+	tool, _ := p.Catalog().Tool(name)
+	return tool.Class
 }

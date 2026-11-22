@@ -134,6 +134,8 @@ var integrationRows = map[integration.Kind]func(b *builder, c *config.Company, z
 	integration.KindGoogleCloud:     googleCloud,
 	integration.KindSSH:             sshHosts,
 	integration.KindAppStoreConnect: appStoreConnect,
+	integration.KindGoogleAnalytics: googleAnalytics,
+	integration.KindGoogleAds:       googleAds,
 	integration.KindAtlassian:       atlassian,
 }
 
@@ -370,6 +372,42 @@ func appStoreConnect(b *builder, c *config.Company, _ map[string]atlas.Ref) {
 		issuer := strings.ToLower(a.Connections[id].IssuerID)
 		b.account("integrations.app_store_connect.connections."+id+".issuer_id", atlas.VendorApple, issuer, issuer,
 			"App Store Connect", a.Enabled, atlas.CapabilityAppDelivery)
+	}
+}
+
+// googleAnalytics records each Google Analytics property the company narrows
+// agents to, keyed by its ID, or the vendor alone where it names none.
+func googleAnalytics(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.GoogleAnalytics
+	if g == nil {
+		return
+	}
+	if len(g.Properties) == 0 {
+		b.account("integrations.google_analytics", atlas.VendorGoogle, "analytics", "", "Google Analytics",
+			g.Enabled, atlas.CapabilityAnalytics)
+		return
+	}
+	for i, id := range g.Properties {
+		b.account("integrations.google_analytics.properties["+strconv.Itoa(i)+"]", atlas.VendorGoogle,
+			"analytics/"+id, id, "Google Analytics", g.Enabled, atlas.CapabilityAnalytics)
+	}
+}
+
+// googleAds records each Google Ads account the company names, keyed by its
+// customer ID, or the vendor alone where it names none.
+func googleAds(b *builder, c *config.Company, _ map[string]atlas.Ref) {
+	g := c.Integrations.GoogleAds
+	if g == nil {
+		return
+	}
+	if len(g.Customers) == 0 {
+		b.account("integrations.google_ads", atlas.VendorGoogle, "ads", "", "Google Ads", g.Enabled,
+			atlas.CapabilityAdvertising)
+		return
+	}
+	for i, cu := range g.Customers {
+		b.account("integrations.google_ads.customers["+strconv.Itoa(i)+"].id", atlas.VendorGoogle, "ads/"+cu.ID,
+			cu.ID, "Google Ads", g.Enabled, atlas.CapabilityAdvertising)
 	}
 }
 

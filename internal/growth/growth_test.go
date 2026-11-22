@@ -83,19 +83,25 @@ func budgetOp() growth.Operation {
 	return growth.Operation{ID: "campaign.update", Method: "POST", Path: "/{campaign}", Resource: "Campaign",
 		Class: growth.ClassOperate, Fields: []growth.FieldRule{
 			{Field: "daily_budget", Class: growth.ClassSpend, Lower: growth.ClassOperate},
-			{Field: "status", Class: growth.ClassSpend, Pausing: []string{"PAUSED"}},
+			{Field: "status", Class: growth.ClassSpend, Pausing: []any{"PAUSED"}},
 			{Field: "audience", Class: growth.ClassSpend},
 			{Field: "headline", Class: growth.ClassPublic},
+			{Field: "exportEnabled", Class: growth.ClassSpend, Pausing: []any{false}},
+			{Field: "excludedEvents", Class: growth.ClassSpend, Lower: growth.ClassOperate, Exclusions: true},
 		}}
 }
 
-// A generic update is classed by what it changes: a pause and a lower are
-// operate, an enable and a raise spend, the highest change wins, and a class
-// this build does not know is never.
+// A generic update is classed by what it changes: a pause (a state, or a
+// switch turned off) and a lower (a smaller number, an exclusion added) are
+// operate, an enable and a raise (an exclusion dropped) spend, the highest
+// change wins, a field no rule names takes the highest rule's class, and a
+// class this build does not know is never.
 //
 // Mutation: class a write by its operation alone, read a lowered budget as a
-// raise, or rank an unknown class, and a raise runs undecided, a brake waits
-// on a person, or a typo lowers a raise to read.
+// raise, compare a switch's pause as a string, read a dropped exclusion as a
+// lower, give an unruled field the operation's class, or rank an unknown
+// class, and a raise runs undecided, a brake waits on a person, or a typo
+// lowers a raise to read.
 func TestAnUpdateIsClassedByWhatItChanges(t *testing.T) {
 	t.Parallel()
 	op := budgetOp()
@@ -109,7 +115,15 @@ func TestAnUpdateIsClassedByWhatItChanges(t *testing.T) {
 		"a raise":                {[]growth.Change{{Field: "daily_budget", Before: 4000.0, After: 5000.0}}, growth.ClassSpend},
 		"an unreadable number":   {[]growth.Change{{Field: "daily_budget", Before: "a", After: "1"}}, growth.ClassSpend},
 		"a new budget":           {[]growth.Change{{Field: "daily_budget", After: "1"}}, growth.ClassSpend},
-		"a rename":               {[]growth.Change{{Field: "name", Before: "a", After: "b"}}, growth.ClassOperate},
+		"an unruled field":       {[]growth.Change{{Field: "daily_budget_micros", Before: "2", After: "1"}}, growth.ClassSpend},
+		"a switch turned off":    {[]growth.Change{{Field: "exportEnabled", Before: true, After: false}}, growth.ClassOperate},
+		"a switch turned on":     {[]growth.Change{{Field: "exportEnabled", Before: false, After: true}}, growth.ClassSpend},
+		"a switch off in words":  {[]growth.Change{{Field: "exportEnabled", Before: true, After: "false"}}, growth.ClassSpend},
+		"an exclusion added":     {[]growth.Change{{Field: "excludedEvents", Before: []any{"a"}, After: []any{"a", "b"}}}, growth.ClassOperate},
+		"a first exclusion":      {[]growth.Change{{Field: "excludedEvents", After: []any{"a"}}}, growth.ClassOperate},
+		"an exclusion dropped":   {[]growth.Change{{Field: "excludedEvents", Before: []any{"a", "b"}, After: []any{"b"}}}, growth.ClassSpend},
+		"exclusions cleared":     {[]growth.Change{{Field: "excludedEvents", Before: []any{"a"}}}, growth.ClassSpend},
+		"exclusions in words":    {[]growth.Change{{Field: "excludedEvents", Before: []any{"a"}, After: "a,b"}}, growth.ClassSpend},
 		"new public text":        {[]growth.Change{{Field: "headline", After: "Hi"}}, growth.ClassPublic},
 		"a pause and new text":   {[]growth.Change{{Field: "status", After: "PAUSED"}, {Field: "headline", After: "x"}}, growth.ClassPublic},
 		"text and a raise":       {[]growth.Change{{Field: "headline", After: "x"}, {Field: "daily_budget", Before: "1", After: "2"}}, growth.ClassSpend},
@@ -194,6 +208,9 @@ func TestACatalogIsHeldToItsRules(t *testing.T) {
 		"a role without note":  func(c *growth.Catalog) { c.Roles[0].Note = "" },
 		"a rule lowering up":   func(c *growth.Catalog) { c.Operations[1].Fields[0].Lower = growth.ClassAdmin },
 		"an unknown lower":     func(c *growth.Catalog) { c.Operations[1].Fields[0].Lower = "operat" },
+		"a numeric pause":      func(c *growth.Catalog) { c.Operations[1].Fields[1].Pausing = []any{0.0} },
+		"exclusions unlowered": func(c *growth.Catalog) { c.Operations[1].Fields[5].Lower = "" },
+		"exclusions paused":    func(c *growth.Catalog) { c.Operations[1].Fields[5].Pausing = []any{false} },
 		"a read tool's write": func(c *growth.Catalog) {
 			c.Operations[1].States = []growth.StateRule{{When: "archived", Class: growth.ClassRead}}
 			c.Tools[0].Operations = []string{"campaign.update"}

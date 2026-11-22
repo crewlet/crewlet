@@ -44,22 +44,36 @@ func (fakeTokens) GoogleGrowthToken(_ context.Context, handle string, scopes []s
 	return googleauth.SeatToken{Token: "ya29.seat-" + handle, ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
-// fakeAudit is the access log: every step a product records.
+// fakeAudit is the access log: every step a product records, and a held
+// call's one answer, after which another is not its first.
 type fakeAudit struct {
-	mu    sync.Mutex
-	steps []growth.Step
-	recs  []growth.Record
+	mu       sync.Mutex
+	steps    []growth.Step
+	recs     []growth.Record
+	answered map[string]bool
 }
 
 func (a *fakeAudit) add(s growth.Step, r growth.Record) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if s == growth.StepAllowed || s == growth.StepDenied || s == growth.StepLapsed {
+		if a.answered[r.HeldCall] {
+			return false, nil
+		}
+		if a.answered == nil {
+			a.answered = map[string]bool{}
+		}
+		a.answered[r.HeldCall] = true
+	}
 	a.steps, a.recs = append(a.steps, s), append(a.recs, r)
 	return true, nil
 }
 
 func (a *fakeAudit) Made(_ context.Context, r growth.Record) (bool, error) {
 	return a.add(growth.StepMade, r)
+}
+func (a *fakeAudit) Verdict(_ context.Context, s growth.Step, r growth.Record) (bool, error) {
+	return a.add(s, r)
 }
 func (a *fakeAudit) Applied(_ context.Context, r growth.Record) (bool, error) {
 	return a.add(growth.StepApplied, r)
@@ -72,7 +86,8 @@ func (a *fakeAudit) Failed(_ context.Context, r growth.Record) (bool, error) {
 }
 
 // fakeAds is one Google Ads account: an enabled campaign on a 100.00 budget, a
-// paused one on a 30.00 budget, in EUR.
+// paused one on a 30.00 budget, in EUR, and a batch job. trace notes each
+// search, write and lease, in order.
 type fakeAds struct {
 	mu        sync.Mutex
 	campaigns map[string][2]string // status, budget
@@ -80,6 +95,43 @@ type fakeAds struct {
 	calls     []string
 	managers  []string
 	writes    int
+	trace     []string
+	// batchOps is how many operations the batch job holds, staged the class
+	// the access log says they came to.
+	batchOps int
+	staged   growth.Class
+	// brokenCustomer answers the customer's own search with what is no JSON.
+	brokenCustomer bool
+}
+
+// note adds what happened to the trace.
+func (f *fakeAds) note(s string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.trace = append(f.trace, s)
+}
+
+// StagedClass is the access log's word on what the batch job staged.
+func (f *fakeAds) StagedClass(context.Context, string, string, string) (growth.Class, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.staged, f.staged != "", nil
+}
+
+// leases is the engine's growth act lease, in process, noting each hold and
+// release on the fake's trace.
+type leases struct {
+	locks spendguardtest.Locks
+	f     *fakeAds
+}
+
+func (l *leases) Hold(ctx context.Context, resource string) (func(), error) {
+	release, err := l.locks.Hold(ctx, resource)
+	if err != nil {
+		return nil, err
+	}
+	l.f.note("hold " + resource)
+	return func() { l.f.note("release " + resource); release() }, nil
 }
 
 func newFakeAds() *fakeAds {
@@ -102,14 +154,27 @@ func (f *fakeAds) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(v)
 	}
-	if !strings.Contains(r.URL.Path, "/customers/"+customer+"/") {
+	if strings.Contains(r.URL.Path, "/customers/") && !strings.Contains(r.URL.Path, "/customers/"+customer+"/") {
 		w.WriteHeader(http.StatusForbidden)
 		answer(map[string]any{"error": map[string]any{"code": 403, "status": "PERMISSION_DENIED", "message": "no access"}})
 		return
 	}
+	query := fmt.Sprint(body["query"])
+	if from := strings.Index(query, " FROM "); from >= 0 {
+		f.trace = append(f.trace, "search"+query[from:])
+	} else if r.Method == http.MethodPost {
+		f.trace = append(f.trace, "write "+r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
+	}
 	switch {
+	case strings.HasSuffix(r.URL.Path, "/googleAds:search") && f.brokenCustomer && strings.Contains(query, "FROM customer"):
+		_, _ = w.Write([]byte("not json"))
 	case strings.HasSuffix(r.URL.Path, "/googleAds:search"):
-		answer(map[string]any{"results": f.search(fmt.Sprint(body["query"]))})
+		answer(map[string]any{"results": f.search(query)})
+	case strings.HasSuffix(r.URL.Path, ":listPlannableUserLists"):
+		answer(map[string]any{"plannableUserLists": []any{}})
+	case strings.HasSuffix(r.URL.Path, ":run"):
+		f.writes++
+		answer(map[string]any{"name": "customers/" + customer + "/operations/1"})
 	case strings.HasSuffix(r.URL.Path, "/campaignBudgets:mutate"):
 		for _, op := range body["operations"].([]any) {
 			u := op.(map[string]any)["update"].(map[string]any)
@@ -123,7 +188,9 @@ func (f *fakeAds) serve(w http.ResponseWriter, r *http.Request) {
 		for _, op := range body["operations"].([]any) {
 			u := op.(map[string]any)["update"].(map[string]any)
 			c := f.campaigns[u["resourceName"].(string)]
-			c[0] = fmt.Sprint(u["status"])
+			if status, ok := u["status"]; ok {
+				c[0] = fmt.Sprint(status)
+			}
 			f.campaigns[u["resourceName"].(string)] = c
 		}
 		f.writes++
@@ -166,6 +233,11 @@ func (f *fakeAds) search(q string) []any {
 			rows = append(rows, map[string]any{"campaignBudget": map[string]any{"resourceName": n,
 				"amountMicros": fmt.Sprint(f.budgets[n])}})
 		}
+	case strings.Contains(q, "FROM batch_job"):
+		for _, n := range named() {
+			rows = append(rows, map[string]any{"batchJob": map[string]any{"resourceName": n, "status": "PENDING",
+				"metadata": map[string]any{"operationCount": fmt.Sprint(f.batchOps)}}})
+		}
 	case strings.Contains(q, "FROM campaign "):
 		for _, n := range named() {
 			c := f.campaigns[n]
@@ -183,6 +255,7 @@ type world struct {
 	p     *googleads.Product
 	f     *fakeAds
 	audit *fakeAudit
+	held  int
 }
 
 func newWorld(t *testing.T) *world {
@@ -227,7 +300,7 @@ roles:
 	t.Cleanup(srv.Close)
 	audit := &fakeAudit{}
 	p := googleads.New(func() *config.Company { return company }, func() *config.Resolver { return env },
-		fakeTokens{}, audit, &spendguardtest.Locks{}, nil, &http.Client{Transport: httpxtest.Rewrite(t, srv)})
+		fakeTokens{}, audit, &leases{f: f}, f, &http.Client{Transport: httpxtest.Rewrite(t, srv)})
 	return &world{p: p, f: f, audit: audit}
 }
 
@@ -262,7 +335,8 @@ func (w *world) call(t *testing.T, tool string, args map[string]any) (any, growt
 		return nil, hold, &aboveTool{class: hold.Class}
 	}
 	if def.Class.Held() {
-		call.ID, call.HeldCall = "", "held-1"
+		w.held++
+		call.ID, call.HeldCall, call.Approver = "", fmt.Sprintf("held-%d", w.held), "founder"
 	}
 	out, err := w.p.Apply(t.Context(), call, hold.Binding)
 	return out, hold, err
@@ -393,5 +467,258 @@ func TestAnAllowedSpendIsHeldToTheCapsAgainWhenItIsMade(t *testing.T) {
 	last := w.audit.recs[len(w.audit.recs)-1]
 	if w.audit.steps[len(w.audit.steps)-1] != growth.StepFailed || last.Failure != growth.FailureCapExceeded {
 		t.Errorf("the refused apply is recorded as %s %q", w.audit.steps[len(w.audit.steps)-1], last.Failure)
+	}
+}
+
+// taken is the access log's steps, as words.
+func (a *fakeAudit) taken() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := make([]string, len(a.steps))
+	for i, s := range a.steps {
+		out[i] = string(s)
+	}
+	return strings.Join(out, ",")
+}
+
+// A HELD ACT RECORDS ITS ONE ANSWER AND ACTS ONLY ON IT: a lapse and a deny
+// are recorded as the act's answer, an allow arriving after the lapse sends
+// nothing, and an allow is recorded before its write.
+//
+// Mutation: record nothing on Denied, or apply without recording the allow
+// first, and the log holds no answer or the lapsed call is made.
+func TestAHeldActRecordsItsOneAnswerAndActsOnlyOnIt(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	call := growth.Call{Handle: "growth-lead", Tool: "google_ads_set_budget",
+		Args: map[string]any{"budget": budget1, "amount": "140.00"}}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := func(held, by string) growth.Call {
+		c := call
+		c.HeldCall, c.Approver = held, by
+		return c
+	}
+	if err := w.p.Denied(t.Context(), answered("held-1", growth.EngineActor)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.p.Apply(t.Context(), answered("held-1", "founder"), hold.Binding); !refused(err) {
+		t.Fatalf("an allow after the lapse answered %v", err)
+	}
+	if err := w.p.Denied(t.Context(), answered("held-2", "founder")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.p.Apply(t.Context(), answered("held-3", "founder"), hold.Binding); err != nil {
+		t.Fatal(err)
+	}
+	if got := w.audit.taken(); got != "lapsed,denied,allowed,applied" {
+		t.Errorf("the log holds %s, want lapsed,denied,allowed,applied", got)
+	}
+	w.audit.mu.Lock()
+	denier, allower := w.audit.recs[1].Answerer, w.audit.recs[2].Answerer
+	w.audit.mu.Unlock()
+	if denier != "founder" || allower != "founder" {
+		t.Errorf("the answers name %q and %q, want the administrator", denier, allower)
+	}
+	if w.f.writes != 1 || w.f.budgets[budget1] != 140_000_000 {
+		t.Errorf("Google was written %d times, the budget is %d", w.f.writes, w.f.budgets[budget1])
+	}
+}
+
+// EVERY WRITE HOLDS THE ACCOUNT'S ONE LEASE, AND A SPEND IS HELD TO THE CAPS
+// INSIDE IT: an approved raise reads its target, the account's capacity and
+// writes under the write lease alone, as an approved publish and a pause do.
+//
+// Mutation: apply a spend through the guard's own lease, or outside the
+// client's, and it holds two leases or reads capacity unleased.
+func TestEveryWriteHoldsTheAccountsOneLease(t *testing.T) {
+	t.Parallel()
+	const lease = "write/google_ads/customers/" + customer
+	w := newWorld(t)
+	if _, _, err := w.call(t, "google_ads_set_budget", map[string]any{"budget": budget1, "amount": "120.00"}); err != nil {
+		t.Fatal(err)
+	}
+	publish := map[string]any{"operation": "googleads.customers.campaigns.mutate",
+		"path": map[string]any{"customersId": customer},
+		"body": map[string]any{"operations": []any{map[string]any{"update": map[string]any{"resourceName": pausedC,
+			"brandGuidelines": map[string]any{"mainColor": "#000000"}}, "updateMask": "brandGuidelines"}}}}
+	if _, hold, err := w.call(t, "google_ads_publish", publish); err != nil || hold.Class != growth.ClassPublic {
+		t.Fatalf("a publish answered %v as %s", err, hold.Class)
+	}
+	if _, _, err := w.call(t, "google_ads_pause", map[string]any{"resources": []any{enabledC}}); err != nil {
+		t.Fatal(err)
+	}
+	w.f.mu.Lock()
+	trace := strings.Join(w.f.trace, "\n")
+	w.f.mu.Unlock()
+	acts := strings.Split(trace, "release "+lease)
+	if len(acts) != 4 || strings.Count(trace, "hold ") != 3 {
+		t.Fatalf("three writes held %d leases:\n%s", strings.Count(trace, "hold "), trace)
+	}
+	for i, act := range acts[:3] {
+		under := act[strings.LastIndex(act, "hold "+lease):]
+		if !strings.Contains(under, "\nwrite ") || !strings.Contains(under, "\nsearch FROM campaign") {
+			t.Errorf("write %d read its target or wrote outside its lease:\n%s", i+1, act)
+		}
+	}
+	if !strings.Contains(acts[0][strings.LastIndex(acts[0], "hold "+lease):], "campaign.status != 'REMOVED'") {
+		t.Errorf("the raise's caps were not read again under its lease:\n%s", acts[0])
+	}
+}
+
+// AN APPROVED BATCH RUN IS MADE ONLY ON WHAT WAS STAGED WHEN IT WAS ASKED: an
+// operation staged after the approval moves the binding, and nothing runs.
+//
+// Mutation: bind a run to its request alone, and the job runs what nobody
+// was asked about.
+func TestAnApprovedBatchRunIsMadeOnlyOnItsStaging(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	w.f.batchOps, w.f.staged = 2, growth.ClassPublic
+	call := growth.Call{Handle: "growth-lead", Tool: "google_ads_publish", Args: map[string]any{
+		"operation": "googleads.customers.batchJobs.run",
+		"path":      map[string]any{"customersId": customer, "batchJobsId": "5"}}}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil || hold.Class != growth.ClassPublic {
+		t.Fatalf("a run of public staging is held as %s, %v", hold.Class, err)
+	}
+	w.f.mu.Lock()
+	w.f.batchOps = 3
+	w.f.mu.Unlock()
+	call.HeldCall, call.Approver = "held-1", "founder"
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); !errors.Is(err, growth.ErrMoved) || w.f.writes != 0 {
+		t.Fatalf("a run staged further after its approval answered %v (writes %d)", err, w.f.writes)
+	}
+	w.f.mu.Lock()
+	w.f.batchOps, w.f.staged = 2, growth.ClassSpend
+	w.f.mu.Unlock()
+	call.HeldCall = "held-2"
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); !errors.Is(err, growth.ErrMoved) || w.f.writes != 0 {
+		t.Fatalf("a run whose staging came to more answered %v (writes %d)", err, w.f.writes)
+	}
+}
+
+// A CALL ACTS ONLY IN THE ACCOUNT IT NAMES: a resource another account holds,
+// named in the body of a method that is no mutate, a customer_id naming
+// another account, alone or beside the path's, and a path parameter the
+// method does not name, are each refused before Google; a customer_id naming
+// the seat's account is called through its manager.
+//
+// Mutation: walk the mutate's operations alone, or read where a call acts
+// from its path alone, and another account is reached.
+func TestACallActsOnlyInTheAccountItNames(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	for name, args := range map[string]map[string]any{
+		"a recommendation of another account": {"operation": "googleads.customers.recommendations.apply",
+			"path": map[string]any{"customersId": customer},
+			"body": map[string]any{"operations": []any{map[string]any{
+				"resource_name": "customers/9999999999/recommendations/7"}}}},
+		"another account's user lists": {"operation": "googleads.listPlannableUserLists",
+			"body": map[string]any{"customer_id": "9999999999"}},
+		"two accounts": {"operation": "googleads.customers.generateReachForecast",
+			"path": map[string]any{"customersId": customer}, "body": map[string]any{"customerId": "9999999999"}},
+		"a resource with no account": {"operation": "googleads.geoTargetConstants.suggest",
+			"body": map[string]any{"campaign": "customers/9999999999/campaigns/7"}},
+		"a stray path parameter": {"operation": "googleads.customers.campaigns.mutate",
+			"path": map[string]any{"customersId": customer, "campaignsId": "1"},
+			"body": map[string]any{"operations": []any{}}},
+	} {
+		tool := "google_ads_read"
+		if strings.Contains(name, "recommendation") || strings.Contains(name, "stray") {
+			tool = "google_ads_spend"
+		}
+		if _, _, err := w.call(t, tool, args); !refused(err) {
+			t.Errorf("%s answered %v", name, err)
+		}
+	}
+	for _, c := range pathsCalled(w.f) {
+		t.Errorf("Google was asked %s", c)
+	}
+	if _, _, err := w.call(t, "google_ads_read", map[string]any{"operation": "googleads.listPlannableUserLists",
+		"body": map[string]any{"customerId": customer}}); err != nil {
+		t.Fatal(err)
+	}
+	w.f.mu.Lock()
+	defer w.f.mu.Unlock()
+	if len(w.f.managers) != 1 || w.f.managers[0] != manager {
+		t.Errorf("the seat's account was called with managers %v, want %s", w.f.managers, manager)
+	}
+}
+
+// A WRITE IS CLASSED BY WHAT GOOGLE READS OF IT: a status given by its enum's
+// number, an operation list the method does not take beside the one it does,
+// and a field named in both spellings with two values never pass as the
+// pause they could be read as.
+//
+// Mutation: compare a status by its name alone, read a mutate's
+// mutateOperations whatever its method, or drop the spelling check, and
+// enabling the paused campaign is made at once as operate.
+func TestAWriteIsClassedByWhatGoogleReads(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	update := func(fields map[string]any) map[string]any {
+		obj := map[string]any{"resourceName": pausedC}
+		for k, v := range fields {
+			obj[k] = v
+		}
+		return map[string]any{"update": obj, "updateMask": "status"}
+	}
+	mutate := func(body map[string]any) map[string]any {
+		return map[string]any{"operation": "googleads.customers.campaigns.mutate",
+			"path": map[string]any{"customersId": customer}, "body": body}
+	}
+	for name, args := range map[string]map[string]any{
+		"a status by its number": mutate(map[string]any{"operations": []any{update(map[string]any{"status": 2})}}),
+		"a decoy operation list": mutate(map[string]any{
+			"mutateOperations": []any{map[string]any{"campaignOperation": update(map[string]any{"status": "PAUSED"})}},
+			"operations":       []any{update(map[string]any{"status": "ENABLED"})}}),
+		"a status in two spellings": mutate(map[string]any{"operations": []any{map[string]any{
+			"update":      map[string]any{"resourceName": pausedC, "status": "ENABLED"},
+			"updateMask":  "status",
+			"update_mask": "name"}}}),
+		"a snake_case mask": mutate(map[string]any{"operations": []any{map[string]any{
+			"update": map[string]any{"resource_name": pausedC, "status": "ENABLED"}, "update_mask": "status"}}}),
+	} {
+		_, _, err := w.call(t, "google_ads_operate", args)
+		if !refused(err) && !errors.As(err, new(*aboveTool)) {
+			t.Errorf("%s answered %v on the operate tool", name, err)
+		}
+	}
+	if w.f.campaigns[pausedC][0] != "PAUSED" || w.f.writes != 0 {
+		t.Errorf("the paused campaign is %s after %d writes", w.f.campaigns[pausedC][0], w.f.writes)
+	}
+}
+
+// A SEARCH SERVING AN APPLY THAT GOOGLE ANSWERS UNREADABLY FAILS THE ACT AS
+// GOOGLE'S, never as an outcome not known: nothing was written.
+//
+// Mutation: fail an unreadable search as unknown_outcome, and the log says a
+// write may have happened that was never sent.
+func TestAnUnreadableSearchIsNoUnknownOutcome(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t)
+	call := growth.Call{Handle: "growth-lead", Tool: "google_ads_set_budget",
+		Args: map[string]any{"budget": budget1, "amount": "120.00"}}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.f.mu.Lock()
+	w.f.brokenCustomer = true
+	w.f.mu.Unlock()
+	call.HeldCall, call.Approver = "held-1", "founder"
+	if _, err := w.p.Apply(t.Context(), call, hold.Binding); err == nil {
+		t.Fatal("an apply whose caps could not be read was made")
+	}
+	w.audit.mu.Lock()
+	defer w.audit.mu.Unlock()
+	last := w.audit.recs[len(w.audit.recs)-1]
+	if w.audit.steps[len(w.audit.steps)-1] != growth.StepFailed || last.Failure != growth.FailureVendorUnavailable ||
+		w.f.writes != 0 {
+		t.Errorf("the apply is recorded %s %q after %d writes", w.audit.steps[len(w.audit.steps)-1], last.Failure,
+			w.f.writes)
 	}
 }

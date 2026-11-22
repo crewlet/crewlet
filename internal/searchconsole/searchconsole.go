@@ -35,6 +35,16 @@
 // resource read back as the property it verifies (dns://example.com is
 // sc-domain:example.com). A listing is cut to the seat's sites.
 //
+// # A write, under its site's lease
+//
+// Every write runs through googlegrowth's Client.Apply: an approved call's
+// answer is recorded before anything is sent and it acts only on its one
+// answer, a deny or a lapse is recorded as that answer, and under the site's
+// write lease the engine holds the call to the seat's sites and the Indexing
+// API's terms again and reads its target again (Product.before, which reads
+// none for a property added or a notification), sending nothing where it
+// moved since the approval.
+//
 // # The Indexing API's terms
 //
 // Google allows the Indexing API only for pages carrying JobPosting, or

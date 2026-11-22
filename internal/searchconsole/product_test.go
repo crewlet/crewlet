@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -22,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/searchconsole"
+	"github.com/crewlet/crewlet/internal/spendguard/spendguardtest"
 )
 
 // fakeTokens mints a token naming its scopes, as the engine's issuer would.
@@ -45,22 +47,37 @@ func (f *fakeTokens) last() []string {
 	return f.scopes[len(f.scopes)-1]
 }
 
-// fakeAudit is the access log: every step a product records, in order.
+// fakeAudit is the access log: every step a product records, in order, and a
+// held call's one answer, after which another is not its first.
 type fakeAudit struct {
-	mu      sync.Mutex
-	steps   []growth.Step
-	records []growth.Record
+	mu       sync.Mutex
+	steps    []growth.Step
+	records  []growth.Record
+	answered map[string]bool
 }
 
 func (a *fakeAudit) add(step growth.Step, r growth.Record) (bool, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if step == growth.StepAllowed || step == growth.StepDenied || step == growth.StepLapsed {
+		if a.answered[r.HeldCall] {
+			return false, nil
+		}
+		if a.answered == nil {
+			a.answered = map[string]bool{}
+		}
+		a.answered[r.HeldCall] = true
+	}
 	a.steps, a.records = append(a.steps, step), append(a.records, r)
 	return true, nil
 }
 
 func (a *fakeAudit) Made(_ context.Context, r growth.Record) (bool, error) {
 	return a.add(growth.StepMade, r)
+}
+
+func (a *fakeAudit) Verdict(_ context.Context, step growth.Step, r growth.Record) (bool, error) {
+	return a.add(step, r)
 }
 
 func (a *fakeAudit) Applied(_ context.Context, r growth.Record) (bool, error) {
@@ -100,6 +117,7 @@ const (
 type fakeGoogle struct {
 	mu        sync.Mutex
 	calls     []string
+	trace     []string
 	writes    []string
 	submitted bool
 	owners    []any
@@ -111,6 +129,7 @@ func (f *fakeGoogle) serve(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	path := r.URL.EscapedPath()
 	f.calls = append(f.calls, r.Method+" "+path)
+	f.trace = append(f.trace, r.Method+" "+path)
 	if r.Method != http.MethodGet {
 		f.writes = append(f.writes, r.Method+" "+path)
 	}
@@ -199,6 +218,29 @@ func (f *fakeGoogle) writeCount() int {
 	return len(f.writes)
 }
 
+// leases is the engine's growth act lease, in process, noting each hold and
+// release on the fake's trace.
+type leases struct {
+	locks spendguardtest.Locks
+	f     *fakeGoogle
+}
+
+func (l *leases) Hold(ctx context.Context, resource string) (func(), error) {
+	release, err := l.locks.Hold(ctx, resource)
+	if err != nil {
+		return nil, err
+	}
+	l.f.note("hold " + resource)
+	return func() { l.f.note("release " + resource); release() }, nil
+}
+
+// note adds a lease taken or released to the trace of calls.
+func (f *fakeGoogle) note(s string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.trace = append(f.trace, s)
+}
+
 // sitePages are the company's own pages, which the engine reads for the
 // Indexing API's terms.
 func sitePages(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +262,7 @@ type world struct {
 	tokens *fakeTokens
 	audit  *fakeAudit
 	self   string
+	held   int
 }
 
 func newWorld(t *testing.T, level string) *world {
@@ -263,7 +306,7 @@ roles:
 	t.Cleanup(pages.Close)
 	tokens, audit := &fakeTokens{}, &fakeAudit{}
 	p := searchconsole.New(func() *config.Company { return company }, func() *config.Resolver { return env },
-		tokens, audit, &http.Client{Transport: httpxtest.Rewrite(t, google)},
+		tokens, audit, &leases{f: f}, &http.Client{Transport: httpxtest.Rewrite(t, google)},
 		&http.Client{Transport: httpxtest.Rewrite(t, pages)})
 	self := googleauth.AccountEmail(googleauth.GrowthAccountID("Acme", "growth-lead"), "acme-crewlet-id")
 	return &world{p: p, f: f, tokens: tokens, audit: audit, self: self}
@@ -291,6 +334,10 @@ func (w *world) call(t *testing.T, tool string, args map[string]any) (any, error
 	}
 	if hold.Class.Rank() > def.Class.Rank() {
 		t.Fatalf("%s prepared a %s change on a %s tool", tool, hold.Class, def.Class)
+	}
+	if def.Class.Held() {
+		w.held++
+		call.ID, call.HeldCall, call.Approver = "", fmt.Sprintf("held-%d", w.held), "founder"
 	}
 	return w.p.Apply(t.Context(), call, hold.Binding)
 }
@@ -485,6 +532,7 @@ func TestAHeldOwnerChangeBindsToTheOwnersAsTheyRead(t *testing.T) {
 		t.Fatalf("an approval over moved owners answered %v (writes %d)", err, w.f.writeCount())
 	}
 	fresh, _ := w.p.Prepare(t.Context(), call)
+	call.HeldCall = "held-2"
 	if _, err := w.p.Apply(t.Context(), call, fresh.Binding); err != nil {
 		t.Fatal(err)
 	}
@@ -585,10 +633,87 @@ func TestEveryActIsRecordedOnceWithItsOutcome(t *testing.T) {
 	if err != nil || hold.Ask.Account != siteDom {
 		t.Fatalf("the ask is %+v, %v", hold.Ask, err)
 	}
+	held.Approver = "founder"
 	if _, err := w.p.Apply(t.Context(), held, hold.Binding); err != nil {
 		t.Fatal(err)
 	}
-	if r := one(growth.StepApplied); r.HeldCall != "held-1" || r.Class != growth.ClassAdmin || r.Call != "" {
+	steps, records := w.audit.take()
+	if len(steps) != 2 || steps[0] != growth.StepAllowed || steps[1] != growth.StepApplied ||
+		records[0].Answerer != "founder" {
+		t.Fatalf("an approved verification recorded %v, want its allow and then its outcome", steps)
+	}
+	if r := records[1]; r.HeldCall != "held-1" || r.Class != growth.ClassAdmin || r.Call != "" {
 		t.Errorf("an approved verification is recorded as %+v", r)
+	}
+}
+
+// A HELD ACT RECORDS ITS ONE ANSWER AND ACTS ONLY ON IT: a lapse and a deny
+// are recorded as the act's answer, an allow arriving after the lapse sends
+// nothing, and an allow is recorded before its write.
+//
+// Mutation: record nothing on Denied, and the log holds no answer for a
+// verification nobody allowed.
+func TestAHeldActRecordsItsOneAnswerAndActsOnlyOnIt(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "administer")
+	call := growth.Call{Handle: "growth-lead", Turn: "turn-1", Tool: "search_console_verify_site",
+		Args: map[string]any{"site": siteDom, "method": "DNS_TXT"}}
+	hold, err := w.p.Prepare(t.Context(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered := func(held, by string) growth.Call {
+		c := call
+		c.HeldCall, c.Approver = held, by
+		return c
+	}
+	if err := w.p.Denied(t.Context(), answered("held-1", growth.EngineActor)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.p.Apply(t.Context(), answered("held-1", "founder"), hold.Binding); err == nil {
+		t.Fatal("an allow after the lapse was made")
+	}
+	if err := w.p.Denied(t.Context(), answered("held-2", "founder")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.p.Apply(t.Context(), answered("held-3", "founder"), hold.Binding); err != nil {
+		t.Fatal(err)
+	}
+	steps, records := w.audit.take()
+	want := []growth.Step{growth.StepLapsed, growth.StepDenied, growth.StepAllowed, growth.StepApplied}
+	if !slices.Equal(steps, want) || records[1].Answerer != "founder" || records[0].Account != siteDom {
+		t.Errorf("the log holds %v (%+v), want %v", steps, records, want)
+	}
+	if w.f.writeCount() != 1 {
+		t.Errorf("Google was written %d times", w.f.writeCount())
+	}
+}
+
+// EVERY WRITE HOLDS ITS SITE'S ONE LEASE around reading its target and
+// sending it: a sitemap submitted at once and an approved verification.
+//
+// Mutation: read the target before the lease, and two writes on one site
+// pass on one reading.
+func TestEveryWriteHoldsItsSitesLease(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, "administer")
+	if _, err := w.call(t, "search_console_sitemap_submit", map[string]any{"site": siteWeb, "sitemap": sitemap}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.call(t, "search_console_verify_site", map[string]any{"site": siteDom, "method": "DNS_TXT"}); err != nil {
+		t.Fatal(err)
+	}
+	w.f.mu.Lock()
+	trace := strings.Join(w.f.trace, "\n")
+	w.f.mu.Unlock()
+	for site, write := range map[string]string{
+		siteWeb: "GET /webmasters/v3/sites/" + escWeb + "/sitemaps/" + escMap + "\nPUT /webmasters/v3/sites/" +
+			escWeb + "/sitemaps/" + escMap,
+		siteDom: "POST /siteVerification/v1/webResource",
+	} {
+		lease := "write/search_console/" + site
+		if !strings.Contains(trace, "hold "+lease+"\n"+write+"\nrelease "+lease) {
+			t.Errorf("the write on %s was not made under its lease:\n%s", site, trace)
+		}
 	}
 }

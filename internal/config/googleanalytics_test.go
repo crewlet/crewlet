@@ -105,8 +105,13 @@ func TestGoogleAnalyticsRefusesWhatCannotWork(t *testing.T) {
 }
 
 // A DOCUMENT STORED BEFORE GOOGLE ANALYTICS VALIDATES UNCHANGED: every new key
-// is optional, and a company on Google Cloud alone, with no growth block,
-// holds no growth level on any seat.
+// is optional, a company on Google Cloud alone, with no growth block, holds no
+// growth level on any seat, and an App Store Connect seat stored with
+// team_resources keeps it and its level through the one growth seat path.
+//
+// Mutation: make a Google Analytics key required, or let the generic seat
+// path drop a key it does not cover, and a stored document is refused or
+// loses its seat's team resources.
 func TestADocumentStoredBeforeGoogleAnalyticsValidatesUnchanged(t *testing.T) {
 	t.Parallel()
 	c, err := config.ParseCompany([]byte(strings.Replace(googleAnalyticsDoc("", ""),
@@ -120,5 +125,32 @@ func TestADocumentStoredBeforeGoogleAnalyticsValidatesUnchanged(t *testing.T) {
 	}
 	if seat := o.AgentSeatByHandle("growth-lead"); seat == nil || seat.GrowthLevels != nil {
 		t.Errorf("a seat with no growth block holds growth levels %v", seat)
+	}
+	asc := strings.Replace(googleAnalyticsDoc("", `    integrations:
+      app_store_connect: {enabled: true, level: operate, apps: ["1234567890"], team_resources: true}
+`), "  google_analytics:\n\n", `  app_store_connect:
+    enabled: true
+    connections:
+      main:
+        issuer_id: 57246542-96fe-1a63-e053-0824d011072a
+        keys:
+          app_manager: {key_id: 2X9R4HXF34, private_key: "${ASC_APP_MANAGER_KEY}"}
+`, 1)
+	c, err = config.ParseCompany([]byte(asc))
+	if err != nil {
+		t.Fatalf("an App Store Connect seat stored with team_resources was refused: %v", err)
+	}
+	o, err = c.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	role := c.Roles[0]
+	if b := role.Integrations.AppStoreConnect; b == nil || !b.TeamResources ||
+		o.AgentSeatByHandle("growth-lead").GrowthLevels["app_store_connect"] != "operate" {
+		t.Errorf("the App Store Connect seat reads %+v", b)
+	}
+	a, ok := role.GrowthSeatAccess("app_store_connect")
+	if !ok || !role.SetGrowthSeatAccess("app_store_connect", a) || !role.Integrations.AppStoreConnect.TeamResources {
+		t.Errorf("the generic seat path lost team_resources: %+v", role.Integrations.AppStoreConnect)
 	}
 }

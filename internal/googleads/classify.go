@@ -104,16 +104,15 @@ func classify(op growth.Operation, body map[string]any, l live, staged func() (g
 
 // hasRemove reports whether a batch job's mutate removes one.
 func hasRemove(body map[string]any) bool {
-	op, _ := snaked(body["operation"]).(map[string]any)
-	return op["remove"] != nil
+	return object(object(snaked(body))["operation"])["remove"] != nil
 }
 
 // applied is ApplyRecommendation's class: each recommendation's type's, read
 // live (FR-RECOMMENDATION); one the engine did not read is spend, the highest.
 func applied(body map[string]any, l live) ruled {
 	out := ruled{class: read}
-	for _, item := range list(body["operations"]) {
-		name := str(object(item)["resourceName"])
+	for _, item := range list(object(snaked(body))["operations"]) {
+		name := str(object(item)["resource_name"])
 		s := l[name]
 		c := spend
 		if s != nil {
@@ -130,8 +129,8 @@ func applied(body map[string]any, l live) ruled {
 // recommendationsToRead are the recommendations an apply names.
 func recommendationsToRead(body map[string]any) []string {
 	var out []string
-	for _, item := range list(body["operations"]) {
-		if name := str(object(item)["resourceName"]); name != "" {
+	for _, item := range list(object(snaked(body))["operations"]) {
+		if name := str(object(item)["resource_name"]); name != "" {
 			out = append(out, name)
 		}
 	}
