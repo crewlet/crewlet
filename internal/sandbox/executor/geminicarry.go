@@ -6,7 +6,6 @@ import (
 	"path"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 

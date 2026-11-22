@@ -9,7 +9,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
@@ -35,6 +34,10 @@ type chatGate struct {
 	// unpacked under "$in", into the place locate finds it, the box's own copy
 	// replaced: true only once the session is in place.
 	restore string
+	// cut is shell cutting the continued chat file "$cf" ("" where none is
+	// continued) back to what the harness may load, run once it is whole and
+	// before anything counts its lines: "" for no cut.
+	cut string
 	// release is the one release of the harness this build continues a
 	// carried session on, which the box's ($v, as `--version` printed it)
 	// must be exactly ([exactCarry]).
@@ -58,8 +61,9 @@ type freshCopy struct{ copy, file string }
 // ([Session.Replaces]); that archive, or one carried into a box with none, is
 // restored on a release that continues it, its digest recorded and read back
 // first. A file torn mid-line is cut back to its last whole line: the next
-// record would be appended onto a partial one. Neither held nor restored, the
-// run starts its minted session, on its other wiring and fresh brief, saying why.
+// record would be appended onto a partial one; then the harness's cut runs
+// ([chatGate].cut). Neither held nor restored, the run starts its minted
+// session, on its other wiring and fresh brief, saying why.
 func chatSessionGate(session Session, paths Paths, g chatGate) string {
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }
@@ -103,6 +107,9 @@ func chatSessionGate(session Session, paths Paths, g chatGate) string {
 	line(`  %s`, g.locate)
 	line(`  %s`, tornCut)
 	line(`  [ -z "$cf" ] || torn "$cf"`)
+	if g.cut != "" {
+		line(`  %s`, g.cut)
+	}
 	for _, f := range g.fresh {
 		line(`  rm -f %s`, q(f.copy))
 	}
