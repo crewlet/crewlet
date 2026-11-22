@@ -52,8 +52,8 @@ const (
 )
 
 // claudeNotesSettings is the `--settings` file of a Claude Code run wired to
-// its turn's notes ([Paths.ClaudeNotesSettings], [claudeNotesGate]): the
-// [claudeHooksOnSettings] and the hooks, nothing else.
+// its turn's notes ([Paths.ClaudeNotesSettings], [claudeNotesGate]): every
+// run's [claudeSettings] and the hooks, nothing else.
 //
 // NO FIELD NEWER THAN THE mcp_tool HOOK (2.1.118): in print mode the harness
 // SILENTLY ignores a settings file that fails validation, so one unknown field
@@ -61,7 +61,7 @@ const (
 // the model only from 2.1.163, so an older release gets no file
 // ([claudeNotesFloor]).
 type claudeNotesSettings struct {
-	claudeHooksOnSettings
+	claudeSettings
 
 	// Hooks maps an event to its matchers. A map, so the file is written in
 	// one order: encoding/json sorts its keys.
@@ -100,17 +100,16 @@ type claudeHookInput struct {
 }
 
 // claudeSteerSettings is the settings of a run whose notes are reached through
-// w: one hook at each event calling w's tool, with env as the `env` block
-// ([newClaudeSettings]).
-func claudeSteerSettings(w sandbox.SteerWiring, env map[string]string) claudeNotesSettings {
+// w: one hook at each event calling w's tool.
+func claudeSteerSettings(w sandbox.SteerWiring) claudeNotesSettings {
 	hook := []claudeHookMatcher{{Hooks: []claudeHook{{
 		Type: "mcp_tool", Server: w.Server, Tool: w.Tool,
 		Input:   claudeHookInput{Event: "${hook_event_name}", Agent: "${agent_id}"},
 		Timeout: int(ClaudeHookTimeout / time.Second),
 	}}}}
 	return claudeNotesSettings{
-		claudeHooksOnSettings: newClaudeHooksOnSettings(env),
-		Hooks:                 map[string][]claudeHookMatcher{claudeEventToolBatch: hook, claudeEventFinish: hook},
+		claudeSettings: newClaudeSettings(),
+		Hooks:          map[string][]claudeHookMatcher{claudeEventToolBatch: hook, claudeEventFinish: hook},
 	}
 }
 

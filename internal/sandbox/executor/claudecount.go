@@ -40,9 +40,6 @@ import (
 // read off: the older of the two releases (2.1.310, 2.1.322) whose counting,
 // anchor rule, estimate and compaction threshold were read and replicated. A
 // thread from an older release, or one naming none, is [sandbox.CountRelease].
-// Never below [claudeSettingsPinFloor]: the threshold is the one the run's
-// settings pin holds against a repository's own settings, so the count is read
-// only where the pin is in force (a test holds the two).
 const claudeCountFloor = "2.1.310"
 
 // countMarks is a set of [sandbox.CountMarks], by their places in that order.

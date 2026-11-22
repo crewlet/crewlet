@@ -90,14 +90,11 @@ func writeClaudeSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbo
 const claudeSkillsFloor = "2.1.118"
 
 // claudeSkillsGate is the script part that, by the harness's release
-// ([claudeRelease]), at or after [claudeSkillsFloor] adds `--plugin-dir <plugin>`
-// and sets cs to settings ([Paths.ClaudeSkillsSettings]), which switch hooks on:
-// a repository's `disableAllHooks: true` would silently drop the load report,
-// and a required skill would never unlock. On an older release a run with a
-// REQUIRED skill is refused before the harness starts (it could only fail its
-// task); any other starts without its skills, on the usual settings, and says
-// so on stderr.
-func claudeSkillsGate(plugin, settings string, required bool) string {
+// ([claudeRelease]), at or after [claudeSkillsFloor] adds `--plugin-dir <plugin>`.
+// On an older release a run with a REQUIRED skill is refused before the harness
+// starts (it could only fail its task); any other starts without its skills and
+// says so on stderr.
+func claudeSkillsGate(plugin string, required bool) string {
 	older := `echo "crewlet: this box runs Claude Code $n, older than ` + claudeSkillsFloor + `, the oldest ` +
 		`that reports loading a skill; the run starts without its company's skills" >&2`
 	if required {
@@ -106,7 +103,7 @@ func claudeSkillsGate(plugin, settings string, required bool) string {
 			`tools; upgrade Claude Code in the box image" >&2; exit 1`
 	}
 	return "if at " + floorArgs(claudeSkillsFloor) + `; then set -- "$@" --plugin-dir ` + shellword.Quote(plugin) +
-		"; cs=" + shellword.Quote(settings) + "; else " + older + "; fi\n"
+		"; else " + older + "; fi\n"
 }
 
 // anyRequired reports whether any of skills is required.

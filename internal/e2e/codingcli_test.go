@@ -837,14 +837,14 @@ type codingHook struct {
 	Input  map[string]string `json:"input"`
 }
 
-// readCodingHooks reads the hooks of the settings file at path, refusing a run
-// started with none or with one that leaves its box's retention sweep on —
-// every Claude Code run is handed the settings that hold it off, since the
-// sweep would delete what the engine carries — and a file holding hooks that
-// does not switch them on or holds one this stand-in cannot play, so a run
-// handed one fails saying so rather than playing nothing. A file with no hooks
-// plays none: the settings every run has, which a run wired to no notes, or on
-// a release that cannot read them, is started with.
+// readCodingHooks reads the hooks of the settings file at path. It refuses a
+// run started with none, or with one that leaves its box's retention sweep on
+// (every Claude Code run is handed the settings that hold it off, since the
+// sweep would delete what the engine carries), and a file holding a hook this
+// stand-in cannot play, so a run handed one fails saying so rather than
+// playing nothing. A file with no hooks plays none: the settings every run
+// has, which a run wired to no notes, or on a release that cannot read them,
+// is started with.
 func readCodingHooks(path string) (codingHooks, error) {
 	if path == "" {
 		return nil, errors.New("the run was started without --settings, so its box's harness " +
@@ -855,8 +855,7 @@ func readCodingHooks(path string) (codingHooks, error) {
 		return nil, fmt.Errorf("reading the settings file: %w", err)
 	}
 	var doc struct {
-		CleanupPeriodDays *int  `json:"cleanupPeriodDays"`
-		DisableAllHooks   *bool `json:"disableAllHooks"`
+		CleanupPeriodDays *int `json:"cleanupPeriodDays"`
 		Hooks             map[string][]struct {
 			Hooks []codingHook `json:"hooks"`
 		} `json:"hooks"`
@@ -870,10 +869,6 @@ func readCodingHooks(path string) (codingHooks, error) {
 	}
 	if len(doc.Hooks) == 0 {
 		return nil, nil
-	}
-	if doc.DisableAllHooks == nil || *doc.DisableAllHooks {
-		return nil, fmt.Errorf("the settings file does not switch hooks on, so a repository's "+
-			"own disableAllHooks would switch the run's off: %s", raw)
 	}
 	out := codingHooks{}
 	for event, matchers := range doc.Hooks {

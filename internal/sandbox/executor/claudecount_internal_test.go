@@ -653,19 +653,6 @@ func TestAWriterBelowTheCountFloorLeavesNoCount(t *testing.T) {
 	}
 }
 
-// THE COUNT IS READ ONLY WHERE THE SETTINGS PIN IS IN FORCE: a count is judged
-// against the threshold the run's settings pin over a repository's own, which a
-// release below the pin's floor is never handed: the count's floor is never
-// below the pin's.
-//
-// Mutation: set the count's floor below the pin's, and this goes red.
-func TestTheCountIsReadOnlyWhereThePinIsInForce(t *testing.T) {
-	t.Parallel()
-	if !releaseAtLeast(claudeCountFloor, claudeSettingsPinFloor) {
-		t.Errorf("the count's floor %s is below the settings pin's %s", claudeCountFloor, claudeSettingsPinFloor)
-	}
-}
-
 // cntBox is a box whose main thread of ctSession is body, beside files.
 func cntBox(body string, files map[string]string) (*sandbox.FakeSandbox, Paths) {
 	box := sandbox.NewFakeSandbox("box-count")
