@@ -17,7 +17,7 @@ import (
 )
 
 // homeBoardOf asks `home_board` as ctx and answers it as the wire carries it.
-func homeBoardOf(t *testing.T, s queries.Sources, ctx context.Context) map[string]any {
+func homeBoardOf(ctx context.Context, t *testing.T, s queries.Sources) map[string]any {
 	t.Helper()
 	r := queries.NewRegistry()
 	queries.Register(r, s)
@@ -47,7 +47,7 @@ func TestAPersonReadsTheirOwnHomeBoardUnderTheirSeat(t *testing.T) {
 	s := queries.Sources{HomeBoards: fleet}
 	pm := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "pm.doe",
 		Kind: iam.KindPerson, Seat: "pm", Stage: iam.StageActive})
-	if got := homeBoardOf(t, s, pm); got["seat"] != "pm" || got["board"] != nil || got["revision"] != 0.0 {
+	if got := homeBoardOf(pm, t, s); got["seat"] != "pm" || got["board"] != nil || got["revision"] != 0.0 {
 		t.Fatalf("before any save home_board answered %v, want pm's seat, a null board, revision 0", got)
 	}
 	const board = `{"widgets":[{"id":"n-1","kind":"note","text":"ship it"}]}`
@@ -85,7 +85,7 @@ func TestACredentialWithNoHumanSeatHasNoStoredHome(t *testing.T) {
 		"an agent": iam.WithPrincipal(t.Context(), iam.Principal{Kind: iam.KindSeat, Seat: "agent-cto",
 			Login: "agent-cto", Stage: iam.StageActive}),
 	} {
-		if got := homeBoardOf(t, s, ctx); got["seat"] != "" || got["board"] != nil || got["revision"] != 0.0 {
+		if got := homeBoardOf(ctx, t, s); got["seat"] != "" || got["board"] != nil || got["revision"] != 0.0 {
 			t.Errorf("%s read %v, want no seat, a null board and revision 0", name, got)
 		}
 	}
