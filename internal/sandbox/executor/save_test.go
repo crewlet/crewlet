@@ -173,7 +173,7 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 		}
 	}
 
-	saved, err := runner.PackSave(t.Context(), b, takerA)
+	saved, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("PackSave: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 	}
 
 	// ANOTHER TAKER'S SAVE of the same box is a file of its own.
-	other, err := runner.PackSave(t.Context(), b, takerB)
+	other, err := runner.PackSave(t.Context(), b, takerB, "")
 	if err != nil {
 		t.Fatalf("PackSave for the second taker: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestASaveIsPackedToItsTakersOwnPathAndNeverTakenAsTheJobsFinal(t *testing.T
 		MaxBytes: takeBound}); err == nil {
 		t.Error("a take of a save that asks to pack was made")
 	}
-	if _, err := runner.PackSave(t.Context(), b, ""); err == nil {
+	if _, err := runner.PackSave(t.Context(), b, "", ""); err == nil {
 		t.Error("a save naming no taker was packed")
 	}
 
@@ -495,7 +495,7 @@ var heldPacks = []struct {
 }{
 	{name: "a save",
 		make: func(t *testing.T, runner *executor.Runner, b sandbox.Sandbox) error {
-			_, err := runner.PackSave(t.Context(), b, takerA)
+			_, err := runner.PackSave(t.Context(), b, takerA, "")
 			return err
 		},
 		dest:   func(t *testing.T, b sandbox.Sandbox) []string { return savesLeft(t, b, takerA) },
@@ -1028,7 +1028,7 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 		`exec "$tar" -czf "$@"`+"\n"))
 	packedB := make(chan error, 1)
 	go func() {
-		_, err := runner.PackSave(t.Context(), b, takerB)
+		_, err := runner.PackSave(t.Context(), b, takerB, "")
 		wordInFifo(flags, "picked", "ended")
 		wordInFifo(flags, "set", "ended")
 		packedB <- err
@@ -1039,7 +1039,7 @@ func TestTwoPacksBesideOneWorkingHarnessHideNoWriteFromEachOther(t *testing.T) {
 		t.Fatalf("pack B's walk never picked the task file stamped in the box's future: it said %q (%v)",
 			word[:n], err)
 	}
-	_, errA := runner.PackSave(t.Context(), b, takerA)
+	_, errA := runner.PackSave(t.Context(), b, takerA, "")
 	wordInFifo(flags, "rewritten", "ended")
 	errB := <-packedB
 	for _, flag := range []string{"a-rewrote", "b-set"} {
@@ -1198,7 +1198,7 @@ func TestASaveOfASessionThatOnlyGrewAsItWasPackedHolds(t *testing.T) {
 				coarseClock(t, b)
 			}
 			before := boxFile(t, b, transcriptOf(b, ran.SessionID))
-			saved, err := runner.PackSave(t.Context(), b, takerA)
+			saved, err := runner.PackSave(t.Context(), b, takerA, "")
 			if err != nil {
 				t.Fatalf("the save of a session that only grew as it was packed was refused: %v", err)
 			}
@@ -1285,7 +1285,7 @@ func TestAPackWhoseBoxClockNeverMovesIsRefused(t *testing.T) {
 	asked := b.Home() + "/tar-asked"
 	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `echo "$@" >> `+shellword.Quote(asked)+"\n"+
 		`exec "$tar" -czf "$@"`+"\n"))
-	_, err := runner.PackSave(t.Context(), b, takerA)
+	_, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err == nil || !strings.Contains(err.Error(), "the box's clock did not move") {
 		t.Fatalf("the save in a box whose clock never moves answered %v, want it refused saying so", err)
 	}
@@ -1317,7 +1317,7 @@ func TestAPackOnABoxWhoseSleepTakesNoTenthIsRefused(t *testing.T) {
 	asked := b.Home() + "/tar-asked"
 	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `echo "$@" >> `+shellword.Quote(asked)+"\n"+
 		`exec "$tar" -czf "$@"`+"\n"))
-	_, err := runner.PackSave(t.Context(), b, takerA)
+	_, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err == nil || !strings.Contains(err.Error(), "this box's sleep takes no tenth of a second") {
 		t.Fatalf("the save in a box whose sleep takes no tenth answered %v, want it refused saying so", err)
 	}
@@ -1407,7 +1407,7 @@ func TestAFailedSaveLeavesTheLastOneStanding(t *testing.T) {
 	runner, b := sessionBox(t, "2.1.310")
 	_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 	p := paths(b)
-	saved, err := runner.PackSave(t.Context(), b, takerA)
+	saved, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the first save: %v", err)
 	}
@@ -1421,7 +1421,7 @@ func TestAFailedSaveLeavesTheLastOneStanding(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, afterTar(`touch `+shellword.Quote(files.task))))
-	if _, err := runner.PackSave(t.Context(), b, takerA); err == nil {
+	if _, err := runner.PackSave(t.Context(), b, takerA, ""); err == nil {
 		t.Fatal("a save of a task file written while it was packed was made")
 	}
 	if got := boxFile(t, b, saved.Path); got != last {
@@ -1440,7 +1440,7 @@ func TestAFailedSaveLeavesTheLastOneStanding(t *testing.T) {
 	if _, err := b.Exec(t.Context(), "rm -f "+shellword.Quote(p.BinDir()+"/tar"), sandbox.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	again, err := runner.PackSave(t.Context(), b, takerA)
+	again, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the save after it: %v", err)
 	}
@@ -1477,7 +1477,7 @@ func TestASaveIsNotPackedPastWhatTheScrubWouldRead(t *testing.T) {
 	asked := b.Home() + "/tar-asked"
 	writeBoxStandIn(t, b, p.BinDir()+"/tar", rewritingTar(t, `echo "$@" >> `+shellword.Quote(asked)+"\n"+
 		`exec "$tar" -czf "$@"`+"\n"))
-	_, err := runner.PackSave(t.Context(), b, takerA)
+	_, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err == nil || !strings.Contains(err.Error(), "a kept session's scrub reads, so it would be refused once packed") {
 		t.Fatalf("the save of a session past the scrub's bound answered %v, want it refused saying so", err)
 	}
@@ -1491,7 +1491,7 @@ func TestASaveIsNotPackedPastWhatTheScrubWouldRead(t *testing.T) {
 	if _, err := b.Exec(t.Context(), "rm -f "+shellword.Quote(big), sandbox.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.PackSave(t.Context(), b, takerA); err != nil {
+	if _, err := runner.PackSave(t.Context(), b, takerA, ""); err != nil {
 		t.Fatalf("the session within the bound was not saved: %v", err)
 	}
 }
@@ -1594,7 +1594,7 @@ func TestTwoSavesOfOneTakerAtOnceBothHold(t *testing.T) {
 	saved := make(chan savedAs, 2)
 	for range 2 {
 		go func() {
-			archive, err := runner.PackSave(t.Context(), b, takerA)
+			archive, err := runner.PackSave(t.Context(), b, takerA, "")
 			wordInFifo(flags, "second", "ended")
 			saved <- savedAs{archive: archive, err: err}
 		}()
@@ -1668,7 +1668,7 @@ func TestATakeOfASaveStreamsItsOwnWhateverAnotherSaveOfItsTakerLands(t *testing.
 	runner, b := sessionBox(t, "2.1.310")
 	_, ran := runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
 	forgetCapture(t, b)
-	first, err := runner.PackSave(t.Context(), b, takerA)
+	first, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the first save: %v", err)
 	}
@@ -1685,7 +1685,7 @@ func TestATakeOfASaveStreamsItsOwnWhateverAnotherSaveOfItsTakerLands(t *testing.
 		sandbox.ExecOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	second, err := runner.PackSave(t.Context(), b, takerA)
+	second, err := runner.PackSave(t.Context(), b, takerA, "")
 	if err != nil {
 		t.Fatalf("the second save: %v", err)
 	}

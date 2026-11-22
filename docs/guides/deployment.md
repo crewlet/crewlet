@@ -187,11 +187,32 @@ hours of each other:
   timeout has passed in real time, so a node whose clock runs further ahead of
   the decider's than that gives a host up early, and writes off the stopped
   run's spend while the host may still be restarting.
+- A [joining node](retention.md#the-join-runbook) waits on every node whose
+  positions-register row names an artefact and was taken by the coordination
+  store within the last forty seconds and two hours, by the joining node's
+  clock, which nothing has measured yet at boot. A joiner whose clock runs
+  further ahead of the store's than the two hours can leave a draining donor
+  unnamed and drop its offer; a stopped node named this way costs the join its
+  five seconds of collecting offers.
+- The trim and its report age other machines' instants by the clock of the
+  node reading them, each the edge of a policy or an alarm, moved by up to the
+  two hours rather than a margin: an [eviction's](retention.md#eviction) fence
+  window, from the broker's instant on the eviction; the
+  [`min_age` floor](retention.md#the-six-terms), from the broker's instant on
+  each record; the newest backup's age, stamped by the node that took it,
+  against [`backup_max_age`](retention.md#a-company-that-never-backs-up-never-trims),
+  which near its one-hour floor can refuse a fresh backup or accept one three
+  hours old; [`trim_blocked`](../reference/alarms.md#every-alarm) across a move
+  of the trim duty, from the previous holder's instant; and
+  [`maintenance_open`](../reference/alarms.md#every-alarm), from the instant
+  the entering node stamped, which can be raised at once or two hours late.
 
 Who holds a seat, a duty or a node's presence is not among them, nor how long
 its lease has left on Settings › Nodes and in `fleet_health`: a lease is judged,
 and its time left read, on the coordination store's clock alone, and every node
 takes the store's word for it ([Coordination](../concepts/coordination.md#the-three-valued-answer)).
+Nor is whether the trim honours a backup's or a join's pin: the node holding
+the trim duty judges it on its own clock, from the moment it first sees it.
 
 NTP keeps machines within milliseconds of each other; a host without it drifts,
 and a virtual machine restored from a snapshot can come back hours off.
@@ -980,6 +1001,20 @@ the limit guards none of ([When the host runs out of memory](#when-the-host-runs
 and native fragmentation. `engine_memory_limit` logs the limit, the memory and
 where it was read, what git holds and everything held outside the runtime.
 
+Inside the limit, the payload answers a node builds for its peers (a read of
+a box, a history or memory page, an assistant replay, a live relay's batches,
+a bridged call's frame, a run's tail, a code search's part, a knowledge
+search's slice, an MCP server's test, a data node's page of the estate) and
+every collection of a run's box share
+one **answer budget** of 256 MiB, each holding its weight (its byte bound times
+what it was measured to hold encoding it; a box read five times the files it
+reads, up to 160 MiB) from before its read until its reply is written, in
+arrival order, so the largest is never passed by smaller ones. An answer whose
+asker stops waiting first is answered that the budget was full. A Gitlet node
+keeps the budget as a line of its own, 284 MiB with the limit's tenth.
+`crewlet.queue.answers.wait` and `crewlet.queue.answers.held_bytes` show it;
+the budget is an engine constant, not a setting.
+
 Set `GOMEMLIMIT` yourself, `off` included, and the engine keeps it, logging
 `engine_memory_limit_explicit` with the figure it would have set. A node whose
 memory cannot be read sets none (`engine_memory_limit_unset`, a warning). A
@@ -1062,8 +1097,8 @@ drain takes milliseconds on a healthy fleet: giving leases back, closing the HTT
 which an open sandbox bridge session spends whole), flushing the auxiliary
 spend, the reads of unit repositories and the day's usage, on a seats pod the sandbox coordinator's own end (a retry still running, whose teardowns are held to one grace from the stop, a session keep still
 uploading, and the stamp of each keep it cuts, thirty seconds each), and closing
-the store. With each step waiting out its own bound it takes up to about 136 s on a member that runs seats and has lost both its
-event stream and its coordination store, about 140 s on a node without
+the store. With each step waiting out its own bound it takes up to about 141 s on a member that runs seats and has lost both its
+event stream and its coordination store, about 145 s on a node without
 `data`, and about 46 s on a member that runs none (see
 [Graceful shutdown](../concepts/agent-runtime.md#graceful-shutdown)); the extra 150 s covers that.
 So even a deployment whose turns finish in seconds
@@ -1798,17 +1833,20 @@ everywhere. A repository NO Gitlet node can hold is still
 served, without a bitmap for what was pushed since its last publication, and
 its home raises [`code_maintenance_refused`](../reference/alarms.md), its
 `code_cache_maintenance_refused` line naming the repository and the charge.
-Every figure above is of the memory the executor's pools, the store's
+Every figure above is of the memory the executor's pools, the answers in flight, the store's
 [page cache](#the-page-cache) and the read lane leave: a Gitlet node keeps them first and sizes
 Gitlet by what is left
 ([Memory](../concepts/gitlet.md#the-cache-on-a-gitlet-node)), 97 MiB for the
-transcript reads its API answers and 1 650 MiB where it runs seats too, a
+transcript reads its API answers and 1 796 MiB where it runs seats too, 284 MiB for the answers in flight, a
 sixteenth of its memory for the page cache and 128 MiB a core for git's reads, so give it that much more. They are the executor's in-process pools alone: a node
 running seats also holds its harness calls and boxes
-([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's one
-transfer takes it past its memory: it still boots and serves, logging
+([Replica count](#replica-count)). On 2 GiB of memory in all, such a node's pools
+alone take it past its memory, and its Go memory limit sits below them: under
+concurrent load at the bounds expect GC pressure, then the out-of-memory killer.
+It still boots and serves, logging
 `code_cache_memory_short` once, but at the default `node.max_concurrent` give a
-node running seats beside Gitlet 4 GiB of memory or more in all.
+node running seats beside Gitlet 4 GiB of memory or more in all, or run Gitlet
+on a node of its own.
 
 The node that publishes also holds:
 

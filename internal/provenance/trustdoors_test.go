@@ -201,6 +201,20 @@ var trustDoors = map[string]trustDoor{
 	"internal/agent/prompts/triage.go:BuildWakeTriage": {vendor, []string{
 		"internal/agent/prompts.TestATriageReadsTheWakeAndTheTaskInTheirFences",
 	}},
+	// THE RUNS AROUND AN EXECUTOR'S RUN (ADR-0176): another run's task, as
+	// its record keeps what its turn was asked (ExecutorSession), and the
+	// message one run sends another, a harness's words whoever's seat sends
+	// them (Executor), each read at the least trust; and how a run waited for
+	// ended, its reviewer's account as the executor log keeps it.
+	"internal/engine/runsaround.go:aroundOf": {vendor, []string{
+		"internal/engine.TestListRunsShowsATitleOnlyForTheSameRequester",
+	}},
+	"internal/engine/runsaround.go:file": {vendor, []string{
+		"internal/engine.TestAnotherRunsMessageIsReadFencedAtTheNextStepAsInformation",
+	}},
+	"internal/agent/runner/asked.go:waited": {vendor, []string{
+		"internal/agent/runner.TestAWaitedRunsAccountIsToldInItsFence",
+	}},
 	// The cards an assistant conversation's earlier messages showed, as its
 	// summary call reads them: the record keeps no writer, so the least trust.
 	"internal/assistant/summary.go:summaryRequest": {vendor, []string{

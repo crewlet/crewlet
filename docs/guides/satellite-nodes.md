@@ -403,6 +403,12 @@ It is a full engine process with roles subtracted. Before choosing a host:
   is admitted to claim seats only once a data node answers that its copy is
   level with its logs; while none does, its tools fail naming the estate
   nobody served.
+  - **Each answer is one message.** A read that answers a list stops at
+    4 MiB of rows, half of a message, and says where it stopped the way
+    that read says any page is short (a cursor, `more`, `truncated`), so a
+    long list arrives in pages rather than as a reply too large to send. A
+    read whose caller needs one snapshot whole (the seat registry, a
+    window's sums) is refused past that size instead, naming what to narrow.
   - Its turns' events go to a data node's event log (the audit trail cannot
     live in a store deleted at next boot), so `GET /events` on that data node
     shows them.
@@ -445,20 +451,21 @@ It is a full engine process with roles subtracted. Before choosing a host:
     [a seat's memory follows it](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
   - **A restart loses** what the changelog had not acknowledged, since the
     deleted store takes it along: a graceful stop flushes each seat for five
-    seconds (about fifty rows across a leaf link to another region); a crash
-    flushes nothing.
+    seconds (some 700 notes with their vectors across a leaf link to another
+    region, or a few thousand smaller rows), less what the seat's last cycle
+    still had crossing, which the flush waits for first; a crash flushes
+    nothing.
   - **After every boot**, each seat it takes carries back what its hydration
     brought in, in one turn a cycle that its seats share. That turn gets what
-    is left of the three hundred rows or so a cycle carries across such a link
-    after every seat's own rows and its profiles and skills (carried first).
-    While those outlast a cycle, the turn still comes once in every lap of the
-    seats ([#1040](https://github.com/crewlet/crewlet/issues/1040); see
+    is left of the several thousand rows a cycle carries across such a link
+    after every seat's own rows (carried first). While those outlast a cycle,
+    the turn still comes once in every lap of the seats (see
     [what a crash and a handoff lose](../concepts/seat-ownership.md#a-seats-memory-follows-it)).
 - **A fair queue at the link's bottleneck, each way.** The satellite holds its
-  uploads, downloads, walks and memory replays to one window across its link,
-  both ways together, four seconds at the floor, so a small request behind
-  them is answered inside its five-second term even at thirty seconds a
-  mebibyte. The floor is the rate the link gives the node's broker traffic
+  uploads, downloads, walks, memory replays and memory publishes to one window
+  across its link, both ways together, four seconds at the floor, so a small
+  request behind them is answered inside its five-second term even at thirty
+  seconds a mebibyte. The floor is the rate the link gives the node's broker traffic
   beside its own background reads: a link at exactly thirty seconds a mebibyte
   whose presence reads take two fifths of it carries a full window in 6.7
   seconds. A first-in-first-out queue adds whatever else it holds to that

@@ -147,6 +147,7 @@ const (
 	TrackerFeedUnreadable            = "crewlet.tracker.feed.unreadable"
 	WorkPickups                      = "crewlet.work.pickups"
 	SeatWakesRouted                  = "crewlet.seat.wakes.routed"
+	SeatRunCalls                     = "crewlet.seat.runs.calls"
 	TrackerSearchAnswers             = "crewlet.tracker.search.answers"
 	TrackerSearchConcurrency         = "crewlet.tracker.search.concurrency"
 	TrackerSearchScanDuration        = "crewlet.tracker.search.scan.duration"
@@ -218,4 +219,12 @@ const (
 const (
 	ExecutorSpoolHeldBytes = "crewlet.executor.spool.held_bytes"
 	ExecutorSpoolWait      = "crewlet.executor.spool.wait"
+)
+
+// THE NODE'S ANSWER BUDGET'S INSTRUMENTS, which internal/queue measures and
+// internal/engine records: every payload answer's wait for its weight, and the
+// bytes the budget holds.
+const (
+	QueueAnswerHeldBytes = "crewlet.queue.answers.held_bytes"
+	QueueAnswerWait      = "crewlet.queue.answers.wait"
 )

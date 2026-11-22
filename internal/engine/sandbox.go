@@ -111,20 +111,17 @@ func buildSandbox(c *config.Company, env *config.Resolver, otel *sandbox.OtelRec
 	})
 }
 
-// sandboxRunners is every harness this build can drive in a box: the harnesses
-// an executor can run on.
-//
-// A FUNCTION rather than a literal at the one call site, because two other
-// readers need the same list: `crewlet llm doctor` reports an executor-chain
-// member whose harness has no runner as skipped, and config refuses a chain with
-// none, both against executor.Names(). Tests hold all three together — a
-// drift would have config pass a chain the engine then refuses at the seat's
-// first launch.
+// sandboxRunners is every harness this build can drive in a box: the runners
+// registered ([executor.Registered]), the one list `crewlet llm doctor` and
+// config read too (executor.Names, config.ExecutorHarnesses), held together by
+// the executor's own test, so config never passes a chain the engine refuses at
+// the seat's first launch.
 func sandboxRunners() map[string]sandbox.Runner {
-	return map[string]sandbox.Runner{
-		executor.ClaudeCodeName: executor.NewClaudeCode(),
-		executor.OpenCodeName:   executor.NewOpenCode(),
+	runners := map[string]sandbox.Runner{}
+	for _, h := range executor.Registered() {
+		runners[h.Name()] = executor.New(h)
 	}
+	return runners
 }
 
 // Every runner [sandboxRunners] registers is offered for a save as its job
@@ -149,10 +146,16 @@ func fakeRunners(play fakePlayer) map[string]sandbox.Runner {
 	if play == nil {
 		play = demoRun
 	}
+	real := sandboxRunners()
 	runners := make(map[string]sandbox.Runner, len(executor.Names()))
 	for _, name := range executor.Names() {
 		runner := sandbox.NewFakeRunner(name)
 		runner.Player = play
+		// WHAT THE HARNESS'S RUNNER STATES, so a fake run is read as its harness's is.
+		runner.Thread = sandbox.ThreadTraitsOf(real[name])
+		if r, ok := real[name].(*executor.Runner); ok {
+			runner.Pin, runner.NotesOff = r.PinnedWindow, r.NotesOffWhy()
+		}
 		runners[name] = runner
 	}
 	return runners
@@ -1857,7 +1860,7 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 	out := &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
-		Label: asked.Label, Withdrawn: asked.Withdrawn,
+		Label: asked.Label, Withdrawn: asked.Withdrawn, Waited: asked.Waited,
 	}
 	if refused := asked.Refused; refused != nil {
 		// A REFUSAL, NEVER AN EMPTY ANSWER: the run is told the reply did
@@ -1878,7 +1881,7 @@ func runnerAsked(asked *sandbox.AskedRun, seal *sandbox.CallSeal) *runner.Asked 
 		// A FIXED CALL'S DENIAL IS RECORDED by its tool too, from the same
 		// arguments, so they are opened for a deny as well.
 		if (sandbox.HeldMakes(held.Choice) || call.Fixed) && !call.Calling() {
-			args, err := seal.OpenArguments(held.TurnID, call)
+			args, err := seal.OpenRawArguments(held.TurnID, call)
 			if err != nil {
 				// NEVER MADE WITH ARGUMENTS NOBODY APPROVED: a seal this
 				// node cannot open leaves the call unmade, and the run is
@@ -2814,7 +2817,7 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// works: this node after a restart, or the seat's next holder —
 		// see [sandbox.CoordinatorOptions.Recovered].
 		Recovered:   e.reopenAgentRun,
-		Unresumable: e.parkedRunUnresumable,
+		Unresumable: e.parkedRunRecovered,
 		// AND EVERY NOTE A PERSON SENT THE TURN THAT NO STEP REPORTED
 		// READING is recorded by the ending, as the run's record knows it
 		// (delivered where a later launch told it again, unconfirmed, missed
@@ -2849,10 +2852,12 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// FUNCTION FOR EVERY REASON, because to the indicator they are
 		// one fact — the frame that raised it has already returned. See
 		// [sandbox.CoordinatorOptions.Stopped].
-		Stopped: e.releaseWorkingStatus,
+		Stopped: e.runStopped,
 		// A HELD CALL PUT TO DELEGATES wakes them once it is parked, so
-		// each finds it waiting (ADR-0125). See delegated.go.
-		Parked: e.wakeDelegates,
+		// each finds it waiting (ADR-0125), and a run parked by
+		// `wait_for_run` is watched until its run leaves (ADR-0176). See
+		// delegated.go and runwaits.go.
+		Parked: e.runParked,
 		// A turn parked on a run a person stopped is closed on the record
 		// as stopped, and its end recorded on the executor log, by
 		// whichever node finishes the run's ending — see runstop.go.
@@ -2874,6 +2879,8 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// gets, its row read through the same router's reads and its object
 		// fetched through the same store. See executorrestore.go.
 		Restore: executorRestore{engine: e},
+		// AND WHETHER A MINTED SESSION'S ID IS ANY TURN'S, through the same reads.
+		Holders: executorRestore{engine: e},
 		// A seat's inbox is held while one of its runs holds it or an
 		// answer's resume is owed, and a retried resume asks the seat's
 		// conditions first — see [seatHold] and [Engine.mayResumeAnswer].
@@ -2918,6 +2925,9 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// A final take's wait for spool room, and the room held, recorded in
 		// the node's metrics. See spoolmeter.go.
 		Spools: spoolMeter{metrics: e.metrics},
+		// Every collection of a run's box holds its weight of the node's
+		// answer budget, beside its peers' payload answers (answermeter.go).
+		AnswerBudget: e.answerBudget,
 	}
 	// AND THIS PROCESS'S TAKER LEASE, in the node's lease store beside its seats
 	// and presence, under the ENGINE'S OWN incarnation minted once in [New] (the
@@ -3146,21 +3156,11 @@ func (e *Engine) sandboxSeatRuns(handle string) (atCap, awaitsAnswer bool) {
 	return count.AtCap(), count.Awaiting > 0
 }
 
-// sandboxConversationBusy is the dispatcher's [Dispatcher.ConversationBusy]:
-// whether one of the seat's runs works conversation, through the coordinator
-// current when the delivery arrives; none where there is no runtime.
-func (e *Engine) sandboxConversationBusy(ctx context.Context, handle, conversation string) (bool, error) {
-	rt := e.sandbox.Load()
-	if rt == nil {
-		return false, nil
-	}
-	return rt.coordinator.ConversationBusy(ctx, handle, conversation)
-}
-
-// holdSandboxConversation is the dispatcher's [Dispatcher.HoldConversation].
-func (e *Engine) holdSandboxConversation(ctx context.Context, handle, conversation string) {
+// holdAside is the dispatcher's [Dispatcher.HoldAside], through the
+// coordinator current when the delivery arrives.
+func (e *Engine) holdAside(ctx context.Context, handle string) {
 	if rt := e.sandbox.Load(); rt != nil {
-		rt.coordinator.HoldForConversation(ctx, handle, conversation)
+		rt.coordinator.HoldForAside(ctx, handle)
 	}
 }
 
@@ -3202,6 +3202,21 @@ func (h seatHold) Release(ctx context.Context, handle string, at queue.Attachmen
 		return err
 	}
 	return h.engine.backends.Queue.ResumeTopic(ctx, subject, group, at, string(inbox.HoldSandbox))
+}
+
+// Readmit hands back the seat's mail set aside under key, freed by turn's run
+// leaving it ([queue.EventQueue.Readmit]): seat_wake_readmitted names both.
+func (h seatHold) Readmit(ctx context.Context, handle, key, turn string) (int, error) {
+	subject, group, err := h.inboxOf(handle)
+	if err != nil {
+		return 0, err
+	}
+	n, err := h.engine.backends.Queue.Readmit(ctx, subject, group, key)
+	if n > 0 {
+		log.InfoContext(ctx, "seat_wake_readmitted", "seat", handle, "key", key, "turn_id", turn,
+			"deliveries", n, "detail", "the run they waited on left the seat; they run at the head of its inbox")
+	}
+	return n, err
 }
 
 // inboxOf is the inbox a hold on handle sits on, named by the seat's id — the
@@ -4060,10 +4075,10 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// to releasing first, so the sync cycle stops publishing it and the flush
 	// alone carries it; a seat whose hydration failed has no holding and flushes
 	// nothing. The flush sends, from the cycles' marks and before the successor
-	// hydrates, what the seat wrote here, then its profiles, skills and
-	// onboarding marker whole, then, while the bound has time, the rows this
-	// node held when it took the seat ([flushSeatMemory]). It has
-	// [memoryFlushTimeout]; what it does not reach is lost as a crash loses it.
+	// hydrates, what the seat wrote or changed here, then, while the bound has
+	// time, the rows this node held when it took the seat ([flushSeatMemory]).
+	// It has [memoryFlushTimeout]; what it does not reach is lost as a crash
+	// loses it.
 	// Forgetting drops the marks and boundary, so the seat's next holding here
 	// takes a new boundary and carries back everything this node holds for it, as
 	// a restart does, which restores rows onto a changelog an operator recreated.
@@ -4125,13 +4140,20 @@ type executorRun struct {
 	model string
 	// effort is the entry's reasoning effort, passed beside the model.
 	effort string
-	files  map[string]string
-	env    map[string]string
+	// webDenied is the entry's `web_tools: denied`, which its executor honours
+	// as its runs on the engine host do ([sandbox.RunRequest.WebDenied]).
+	webDenied bool
+	files     map[string]string
+	env       map[string]string
 
 	// signIn is env without the integrations' box defaults and the seat's
 	// own credentials for a tool: what the run's sign-in is judged on, since
 	// neither ever signs a harness in.
 	signIn map[string]string
+
+	// signInNames is the variables of env that sign the harness in
+	// ([signInNames], [sandbox.Spec.SignInEnv]).
+	signInNames []string
 
 	// homePaths is the variables naming the integrations' box files, each to
 	// its path under the box's home, which the launch joins onto the box's
@@ -4178,13 +4200,16 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	credentials := integrationsOwn(agent, seat.credentials)
 	env := underlay(underlay(maps.Clone(seat.env), entry), integrationsOwn(agent, seat.defaults))
 	maps.Copy(env, credentials)
+	profile := agent.Profile()
 	run := executorRun{
-		model:     agent.ModelArgument(),
-		effort:    agent.Effort(),
-		env:       env,
-		signIn:    signIn,
-		files:     agent.SandboxCredentials(),
-		homePaths: integrationsOwn(agent, seat.homePaths),
+		model:       agent.ModelArgument(),
+		effort:      agent.Effort(),
+		webDenied:   profile.EffectiveWebTools() == harnessprofile.WebToolsDenied,
+		env:         env,
+		signIn:      signIn,
+		signInNames: signInNames(agent, entry),
+		files:       agent.SandboxCredentials(),
+		homePaths:   integrationsOwn(agent, seat.homePaths),
 	}
 	for _, name := range slices.Sorted(maps.Keys(seat.credentials)) {
 		if _, kept := credentials[name]; !kept {
@@ -4202,6 +4227,25 @@ func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 		run.files[executor.CredentialDocument] = doc
 	}
 	return run
+}
+
+// signInNames is the variables that sign agent's harness in from a run's
+// environment ([sandbox.Spec.SignInEnv]): the profile's own names
+// ([harnessprofile.Profile.CredentialEnvNames]) and each of the entry's
+// variables that is part of its sign-in ([entrySignInName]), such as a cloud
+// sign-in's key. A credential-named variable of the seat's own env counts only
+// under a profile's name: for a harness reading any provider's key it is as
+// likely a tool's token (a role.sandbox.env GITLAB_TOKEN), which its tools keep.
+func signInNames(agent *harness.Provider, entry map[string]string) []string {
+	profile := agent.Profile()
+	names := profile.CredentialEnvNames(entry)
+	for name := range entry {
+		if entrySignInName(agent, name) && !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
 }
 
 // integrationsOwn is what of vars, variables an integration puts in a box, the

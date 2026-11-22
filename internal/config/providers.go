@@ -344,17 +344,25 @@ var Harnesses = []Harness{
 func (n Harness) Valid() bool { return slices.Contains(Harnesses, n) }
 
 // ExecutorHarnesses is the closed set of harnesses that can run a seat's
-// EXECUTOR: those with an in-box runner (internal/sandbox/executor).
-//
-// Every other harness drives text phases only. A launch walks the seat's
+// EXECUTOR: those with an in-box runner (internal/sandbox/executor). Every
+// other harness drives text phases only. A launch walks the seat's
 // executor chain for its first member here that is not sitting out, so a chain
 // with none can never run the turn, and config refuses it
 // ([Company.validateExecutors]).
 //
-// HELD TO THE RUNNERS THAT EXIST by a test against executor.Names(): a runner
-// missing here refuses entries that would run; one listed with no runner
-// admits entries every launch then refuses.
-var ExecutorHarnesses = []Harness{HarnessClaudeCode, HarnessOpenCode}
+// DERIVED FROM THE BUILT-IN PROFILES' executor blocks, in their order
+// ([harnessprofile.ExecutorRunners]): config cannot import the runners, and
+// the executor holds every listed name registered and every runner listed.
+// Read at first use, never at init: a push's hook links this package and pays
+// for nothing it does not read. The caller must not modify the slice.
+var ExecutorHarnesses = sync.OnceValue(func() []Harness {
+	names := harnessprofile.ExecutorRunners()
+	out := make([]Harness, len(names))
+	for i, name := range names {
+		out[i] = Harness(name)
+	}
+	return out
+})
 
 // HarnessAuthMode is how a providers.llm entry's harness authenticates.
 type HarnessAuthMode string
@@ -469,7 +477,7 @@ func (l *LLMProvider) HarnessName() string {
 // runsExecutor reports whether this entry's harness can run a seat's executor:
 // whether it has an in-box runner ([ExecutorHarnesses]).
 func (l *LLMProvider) runsExecutor() bool {
-	return slices.Contains(ExecutorHarnesses, Harness(l.HarnessName()))
+	return slices.Contains(ExecutorHarnesses(), Harness(l.HarnessName()))
 }
 
 // Timeout is the cap on one stretch of the harness's own work, applying the
@@ -634,7 +642,7 @@ func (l *LLMProvider) validate(path Path) error {
 			"%s has no in-box runner, so no run is ever launched on this entry and nothing "+
 				"reads where it would be placed: only %s launch an executor run. Remove the "+
 				"field, or move the entry to one of those harnesses",
-			l.HarnessName(), words.And(ExecutorHarnesses))
+			l.HarnessName(), words.And(ExecutorHarnesses()))
 	}
 	p.wrap(l.validateProfile(path))
 	return p.err()
@@ -664,6 +672,9 @@ func (l *LLMProvider) validateProfile(path Path) error {
 	}
 	profile, err := harnessprofile.Load(l.HarnessName(), l.Overrides)
 	switch {
+	case errors.Is(err, harnessprofile.ErrExecutorOverride):
+		p.add(at(path, "overrides.executor"), ErrConflict, "%v", err)
+		return p.err()
 	case errors.Is(err, harnessprofile.ErrOverrides):
 		p.add(at(path, "overrides"), ErrShape, "%v", err)
 		return p.err()
@@ -1018,6 +1029,13 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 				`entry's key as auth.api_key, e.g. api_key: "${DASHSCOPE_API_KEY}"`,
 			profile.APIKeyEnv, harness)
 	}
+	if mode == AuthInheritEnv && profile.APIKeyModelEnv != "" {
+		p.add(at(path, "auth.mode"), ErrConflict,
+			"inherit-env forwards %s from the engine's own environment, and the %q harness "+
+				"reads that key only beside its model in %s, which inherit-env does not set: "+
+				"set auth.mode: api-key and give the key as auth.api_key",
+			profile.APIKeyEnv, harness, profile.APIKeyModelEnv)
+	}
 	if mode == AuthInheritEnv && profile.TokenEnv == "" && profile.APIKeyEnv == "" {
 		remedy := "sign the harness in with `crewlet llm login`"
 		if profile.EnvSignIn {
@@ -1059,6 +1077,12 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"UTC), and reads the harness's limit resets in; it is not set per entry. "+
 					"Drop it, and set TZ in the engine's own environment to move every "+
 					"harness's zone", name)
+		case profile.APIKeyModelEnv:
+			p.add(entry(at(path, "env"), name), ErrConflict,
+				"%s is where this harness reads its model beside its key, which the engine "+
+					"sets from the entry: set here it would swap the entry's model and provider and "+
+					"sign the harness in uncounted. Give the key as auth.api_key with auth.mode "+
+					"api-key, and the model as model", name)
 		case profile.APIKeyEnv:
 			p.add(entry(at(path, "env"), name), ErrConflict,
 				"%s is this harness's key variable, which auth owns: whether a value "+

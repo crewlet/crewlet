@@ -265,7 +265,7 @@ providers:
       model: sonnet
 
     # OpenAI's models through Codex: for a seat's reviewer, workers and side
-    #   passes (llm_review, llm_subagent, …); only claude-code and opencode run
+    #   passes (llm_review, llm_subagent, …); only claude-code, opencode and kimi-code run
     #   a seat's executor
     gpt:
       harness: codex
@@ -506,9 +506,9 @@ client at `/operator/mcp` with your API token:
 ```
 
 It gets the same tracker, knowledge-base and chat tools a seat holds (nineteen
-over the tracker, five over the pages and nine in the chat) and thirty
+over the tracker, five over the pages and nine in the chat) and thirty-one
 more that no seat is given: the saved views, the catalogue write, a person's own
-queue, inbox and pins, the trash, the board drag, the chat's furniture (making
+queue, inbox, pins and Home board, the trash, the board drag, the chat's furniture (making
 a room, opening a conversation, a room's settings and membership, editing and
 taking back a message, how far you have read), and the gestures a person
 makes about the company rather than its work: pausing and resuming a seat,

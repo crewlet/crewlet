@@ -481,6 +481,16 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 	for i := range out {
 		out[i].Ask = asks[out[i].CommentID]
 	}
+	// Held to the answer's bytes ([statelog.RowsOf]) in the MERGED order,
+	// each notice with its ask, so a cut keeps a prefix the cursor resumes
+	// after; the two statements' scans are each held to limit+1 rows.
+	held := statelog.RowsOf(ctx)
+	for i := range out {
+		if !held.TakeEncoded(out[i]) {
+			out, more = out[:i], true
+			break
+		}
+	}
 
 	var next string
 	if more && len(out) > 0 {

@@ -281,6 +281,13 @@
 // rule the other way ([opArtifactVersionCarried]); a value a caller hands back as
 // it took it ([gitlet.CheckKey], [statelog.Position]) stays outside it. A write's answer is never refused once the write ran, and a member a later build adds to an input needs its own plan for two builds.
 //
+// # An answer is one message
+//
+// A reply past the transport's message is refused whole ([server.encodeReply]),
+// so every read declares how large its answer grows ([answerKind]): one that
+// answers rows reads them to its bound through statelog.RowsOf and says where
+// it stopped the way it says any page is short.
+//
 // # Errors keep their identity
 //
 // A tool decides what to tell a model by asking errors.Is and errors.As, so an

@@ -637,7 +637,7 @@ describe("the top bar", () => {
         unavailable: null,
         toggle: () => undefined,
         ask: () => undefined,
-        draft: () => undefined,
+        askAbout: () => undefined,
       },
     });
     fireEvent.click(await screen.findByRole("button", { name: "More" }));

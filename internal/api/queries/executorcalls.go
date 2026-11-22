@@ -27,7 +27,7 @@ func shownCalls(calls []sandbox.BridgeCall) []sandbox.BridgeCall {
 }
 
 // shownArgs is a call's arguments as the log keeps them, JSON text, redacted
-// as values ([tools.RedactedArgs]) and written again as the log writes them
+// as values ([redact.Args]) and written again as the log writes them
 // ([tools.RecordArgs]) only where that changed one, so arguments with nothing
 // to redact are served byte for byte. The log writes one object or nothing
 // (the bridge by tools.RecordArgs, its cut by internal/kept's Args), so text
@@ -41,7 +41,7 @@ func shownArgs(text string) string {
 	if args == nil {
 		return redact.Secrets(text)
 	}
-	shown := tools.RedactedArgs(args)
+	shown := redact.Args(args)
 	if reflect.DeepEqual(shown, args) {
 		return text
 	}

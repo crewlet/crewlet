@@ -2504,7 +2504,7 @@ function RuntimeSection({
             onChange={(maxRuns) => set({ maxRuns })}
             required={false}
             disabled={disabled}
-            help="How many runs the seat works side by side, never two in one conversation. Empty is 1."
+            help="How many runs the seat works side by side, never two in one conversation. Empty is 2."
             error={runCapError(form.maxRuns) ?? errorFor(["sandbox", "max_concurrent_runs"])}
           />
         </div>

@@ -119,14 +119,16 @@ type Dispatcher struct {
 	// any seat.
 	HoldSandbox func(ctx context.Context, handle string)
 
-	// ConversationBusy reports whether one of the seat's runs works the
-	// delivery's conversation, asked only below the seat's cap
-	// ([inbox.Conditions.ConversationBusy]), and HoldConversation asks the
-	// coordinator to hold the inbox while it does (ADR-0169). An error is read
-	// as busy: a store that cannot say must not start a second turn of it.
-	// Nil asks nothing.
-	ConversationBusy func(ctx context.Context, handle, conversation string) (bool, error)
-	HoldConversation func(ctx context.Context, handle, conversation string)
+	// Beside decides, below the seat's cap, whether a delivery waits on one of
+	// the seat's running executor runs (ADR-0169): the key it waits aside
+	// under, empty where it starts a turn of its own beside them; an error is a
+	// store that could not say, which defers it rather than run beside a run
+	// that may be doing its work. SetAside is told one set aside, and
+	// HoldAside asks the coordinator to hold the inbox for one that would pass
+	// what the inbox keeps aside ([queue.AsideRoom]). Nil starts every one.
+	Beside    func(ctx context.Context, handle string, evs []*events.Event) (besideAnswer, error)
+	SetAside  func(ctx context.Context, handle string, at besideAnswer, evs []*events.Event)
+	HoldAside func(ctx context.Context, handle string)
 
 	// Budget parks the seat when one of its capped token windows is
 	// refusing, or leaves less room than the delivery's launch needs, and
@@ -415,10 +417,14 @@ func (d *Dispatcher) leave(handle string) {
 // backend retires a message whose deliveries are spent rather than return it,
 // so nothing would ever pick it up and end its line. Which ones those are is
 // each message's own headroom as the queue states it
-// ([queue.DeliveriesLeftFor]); an unstated one is not taken as spent.
+// ([queue.DeliveriesLeftFor]); an unstated one is not taken as spent. A wake
+// set aside spends nothing and waits on: none.
 func settledBy(ctx context.Context, result queue.Result, evs []*events.Event) []string {
-	if result.Outcome == queue.OutcomeAck {
+	switch result.Outcome {
+	case queue.OutcomeAck:
 		return wakeIDsOf(evs)
+	case queue.OutcomeAside:
+		return nil
 	}
 	var out []string
 	for _, ev := range evs {
@@ -458,7 +464,7 @@ func goneBy(ctx context.Context, result queue.Result, evs, requeued []*events.Ev
 // messages: the backend dead-letters a message whose deliveries are spent. An
 // unstated headroom is not taken as spent, as [settledBy]'s is not.
 func deadLetters(ctx context.Context, result queue.Result, evs []*events.Event) bool {
-	if result.Outcome == queue.OutcomeAck {
+	if result.Outcome == queue.OutcomeAck || result.Outcome == queue.OutcomeAside {
 		return false
 	}
 	return slices.ContainsFunc(evs, func(ev *events.Event) bool {
@@ -517,16 +523,6 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		return queue.Ack()
 	}
 	conditions := d.conditions(handle)
-	conversation := conversationIdentityOf(evs)
-	if !conditions.SeatHeldBySandbox && d.ConversationBusy != nil {
-		busy, err := d.ConversationBusy(ctx, handle, conversation)
-		if err != nil {
-			log.WarnContext(ctx, "seat_conversation_busy_unread", "seat", handle, "error", err.Error(),
-				"detail", "the delivery is deferred rather than run beside a run that may work its conversation")
-			busy = true
-		}
-		conditions.ConversationBusy = busy
-	}
 	screening := inbox.Screen(conditions, evs)
 	if screening.NoteDeferred && d.NoteDeferred != nil {
 		d.NoteDeferred(handle)
@@ -565,12 +561,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		// the inbox the delivery was just fetched from, and with nothing
 		// stopping the consumer the copy came straight back, for the
 		// length of the run. See sandbox.SeatHold.
-		switch {
-		case !conditions.SeatHeldBySandbox && conditions.ConversationBusy:
-			if d.HoldConversation != nil {
-				d.HoldConversation(ctx, handle, conversation)
-			}
-		case d.HoldSandbox != nil:
+		if d.HoldSandbox != nil {
 			d.HoldSandbox(ctx, handle)
 		}
 		return screening.Result()
@@ -686,6 +677,14 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 			}
 			return queue.Defer(queue.DeferAnswerOwed, refusedReplyReason(handle))
 		}
+	}
+
+	// BESIDE THE SEAT'S RUNNING RUNS, below its cap (ADR-0169): a delivery
+	// of a conversation one of them works, or related to one, is routed to it
+	// and waits aside until it leaves; any other starts a turn beside them.
+	// After the answer offer, which a parked run is owed first.
+	if result, waits := d.waitBeside(ctx, handle, surviving, held); waits {
+		return result
 	}
 
 	// A HELD CONVERSATION starts no turn: its wakes are settled unrun and

@@ -353,9 +353,13 @@ var coordinatorEntries = map[string][]entryDrive{
 		name: "a delivery that reached a seat this node counts as held",
 		call: func(t *testing.T, rig *coordRig) { rig.coordinator.HoldSeat(t.Context(), "swe") },
 	}},
-	"HoldForConversation": {{
-		name: "a delivery whose conversation one of the seat's runs works",
-		call: func(t *testing.T, rig *coordRig) { rig.coordinator.HoldForConversation(t.Context(), "swe", "c") },
+	"HoldForAside": {{
+		name: "a delivery that would wait aside on an inbox holding as many as it keeps",
+		call: func(t *testing.T, rig *coordRig) { rig.coordinator.HoldForAside(t.Context(), "swe") },
+	}},
+	"KeyBusy": {{
+		name: "whether a run still holds the key a delivery would wait aside under",
+		call: func(t *testing.T, rig *coordRig) { _, _ = rig.coordinator.KeyBusy(t.Context(), "swe", RunKey("t1")) },
 	}},
 	"SeatCount": {{
 		name: "the seat's counts against its cap",
@@ -364,6 +368,10 @@ var coordinatorEntries = map[string][]entryDrive{
 	"HeldBeside": {{
 		name: "the runs a launch starts beside",
 		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.HeldBeside("swe", "t9") },
+	}},
+	"ReadsNotes": {{
+		name: "whether a harness takes another run's message, reading no row",
+		call: func(_ *testing.T, rig *coordRig) { rig.coordinator.ReadsNotes("claude-code") },
 	}},
 	"ConversationBusy": {{
 		name: "whether a run works a delivery's conversation, reading the seat's rows",
@@ -1236,6 +1244,20 @@ func (s *refusingStore) FileWake(ctx context.Context, turnID string, filing Wake
 	return s.inner.FileWake(ctx, turnID, filing)
 }
 
+func (s *refusingStore) CountRunSend(ctx context.Context, turnID, job string, delta int) error {
+	if s.called("CountRunSend") {
+		return errRefusedCall
+	}
+	return s.inner.CountRunSend(ctx, turnID, job, delta)
+}
+
+func (s *refusingStore) ListActiveOn(ctx context.Context, on RunsOn) ([]PendingRun, error) {
+	if s.called("ListActiveOn") {
+		return nil, errRefusedCall
+	}
+	return s.inner.ListActiveOn(ctx, on)
+}
+
 func (s *refusingStore) AskFoldIn(ctx context.Context, turnID string, f FoldIn) (FoldIn, error) {
 	if s.called("AskFoldIn") {
 		return FoldIn{}, errRefusedCall
@@ -1262,6 +1284,13 @@ func (s *refusingStore) ServeNotes(ctx context.Context, turnID string, serve Not
 		return nil, errRefusedCall
 	}
 	return s.inner.ServeNotes(ctx, turnID, serve)
+}
+
+func (s *refusingStore) AgainNotes(ctx context.Context, turnID string, ask NoteAgain) ([]string, []string, error) {
+	if s.called("AgainNotes") {
+		return nil, nil, errRefusedCall
+	}
+	return s.inner.AgainNotes(ctx, turnID, ask)
 }
 
 func (s *refusingStore) SettleTake(ctx context.Context, turnID string, settle NoteSettle) ([]RunNote, error) {
@@ -1297,6 +1326,20 @@ func (s *refusingStore) MarkSessionStart(ctx context.Context, turnID, launch str
 		return false, errRefusedCall
 	}
 	return s.inner.MarkSessionStart(ctx, turnID, launch, start)
+}
+
+func (s *refusingStore) BindSession(ctx context.Context, turnID string, bind SessionBind) (PendingRun, error) {
+	if s.called("BindSession") {
+		return PendingRun{}, errRefusedCall
+	}
+	return s.inner.BindSession(ctx, turnID, bind)
+}
+
+func (s *refusingStore) ReleaseSessionClaim(ctx context.Context, turnID, sessionID string) error {
+	if s.called("ReleaseSessionClaim") {
+		return errRefusedCall
+	}
+	return s.inner.ReleaseSessionClaim(ctx, turnID, sessionID)
 }
 
 func (s *refusingStore) OweRefusal(ctx context.Context, turnID, launch string, owed OwedRefusal,

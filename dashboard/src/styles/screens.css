@@ -3646,33 +3646,6 @@ a.knowledge-reader-how:hover {
   padding-block: var(--spacing-2);
 }
 
-/* A FLUSH CARD CLIPS RATHER THAN HIDES, which is the difference between a
-   sticky column head that works and one that cannot.
-
-   uilet's recipe says what the declaration is for: "the slots reach the
-   card's edges, and the clip is what makes the header's hairline and a
-   table's own corners follow the radius instead of crossing it". That is
-   `clip`'s job exactly. `hidden` also makes the card a SCROLL CONTAINER, and
-   a sticky box is confined to its nearest scrollport — a flush card has no
-   height constraint, so it grows to its content, its scroll offset is
-   permanently 0, and `top` is never applied to anything inside it.
-
-   Measured against a running engine: every `DataGrid` in a flush card had a
-   dead sticky head — the audit's 84 rows and the cost breakdown's 50 scrolled
-   their column names off the top of the window, so the reader was left
-   matching values to headers they could no longer see. This is the SAME
-   correction `.crewlet-data-grid` already carries in frame.css, for the same reason
-   and against the same property.
-
-   `clip` gives up programmatic scrolling, which is all `hidden` ever offered
-   here: a card the reader cannot scroll and nothing scrolls for them. What it
-   keeps is the rounding, which is the whole of what the recipe asked for.
-   What uilet needs is `overflow: clip` upstream, after which this rule
-   goes. */
-.crewlet-card--flush {
-  overflow: clip;
-}
-
 /* A CARD TITLE ELLIPSES RATHER THAN CLIPPING, which is the one thing uilet's
    own head cannot do for us. `.crewlet-card__title` is `white-space: nowrap`
    inside a `.crewlet-card__header-main` that hides its overflow, and it is
@@ -5951,11 +5924,11 @@ a.work-cal-chip {
   overflow-wrap: break-word;
 }
 
-/* AN ANSWER'S WORDS READ AT THE NARROW MEASURE, about 70 characters a line
-   (app/assistant/chunk/blocks.tsx), while a table or a code sample takes the
-   thread's width, where a row cut to a reading measure would scroll. */
+/* AN ANSWER'S WORDS READ AT THE READING MEASURE, the kit's Prose and reading
+   pane's (app/assistant/chunk/blocks.tsx), while a table or a code sample
+   takes the thread's width, where a row cut to a reading measure would scroll. */
 .prose.md.ask-answer > :is(p, ul, ol, blockquote, h2, h3, h4, h5, h6, .md-heading) {
-  max-width: var(--size-measure-narrow);
+  max-width: var(--size-measure);
 }
 
 /* EVERY ELEMENT'S OWN MARGIN IS ZEROED FIRST and the rhythm is one rule over
@@ -10631,8 +10604,9 @@ a.work-cal-chip {
 
 /* Ask Crewlet's page (app/assistant/chunk/AskPage.tsx): the reader's
    conversations, a column as wide as a roomy sidebar, beside the one open,
-   which runs edge to edge under its head as a chat room does. The list's
-   width is the kit's own variable; nothing here sizes the kit's boxes. */
+   which reads in one centred column under its head. The list's width and
+   the thread's column are the kit's own variables; nothing here sizes the
+   kit's boxes. */
 .ask-page {
   --ask-page-pad-x: var(--spacing-4);
   display: flex;
@@ -10688,7 +10662,13 @@ a.work-cal-chip {
   padding: var(--spacing-3) var(--ask-page-pad-x);
 }
 
+/* ONE COLUMN FOR THE WHOLE CONVERSATION: the thread holds its turns to it
+   (the kit's `column`), and the composer and a conversation being opened are
+   centred at the same width, so a question's bubble, the answer and the box
+   share both edges. The wide measure leaves an answer's words at the reading
+   measure and gives a table or code a little more. */
 .ask-page__open {
+  --crewlet-chat-thread-column: var(--size-measure-wide);
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -10744,7 +10724,8 @@ a.work-cal-chip {
 
 .ask-page__foot {
   flex: none;
-  padding: 0 var(--ask-page-pad-x) var(--spacing-3);
+  padding: 0 max(var(--ask-page-pad-x), (100% - var(--crewlet-chat-thread-column)) / 2)
+    var(--spacing-3);
 }
 
 /* A conversation on its way or not opened (Conversation.tsx's AskOpening): a
@@ -10759,6 +10740,10 @@ a.work-cal-chip {
 .ask-opening--reading {
   place-items: start stretch;
   padding: var(--spacing-4);
+}
+
+.ask-page__thread .ask-opening--reading {
+  padding-inline: max(var(--spacing-4), (100% - var(--crewlet-chat-thread-column)) / 2);
 }
 
 /* A helper's model in its page's head (components/HelperModel.tsx): the

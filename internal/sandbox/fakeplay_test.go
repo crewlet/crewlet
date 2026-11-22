@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/queue"
 )
 
 // A PLAYED JOB DOES ITS WORK WHEN IT IS POLLED, NOT WHEN IT IS STARTED, and
@@ -39,7 +41,7 @@ func TestAPlayedJobRunsOnceWhenPolledAndFinishesWithItsPlay(t *testing.T) {
 		t.Fatalf("Poll = %v, %v; want the played job ended", state, err)
 	}
 	for range 2 {
-		result, err := runner.Collect(t.Context(), box, handle)
+		result, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}
@@ -70,7 +72,7 @@ func TestEachPlayedJobIsPlayedFromItsOwnRequest(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	for handle, want := range map[RunHandle]string{first: "first", second: "second"} {
-		result, err := runner.Collect(t.Context(), box, handle)
+		result, err := runner.Collect(t.Context(), box, handle, queue.NewAnswerBudget(nil))
 		if err != nil || result.Text != want {
 			t.Errorf("job %s collected %q (%v), want %q", handle.CommandID, result.Text, err, want)
 		}
@@ -93,7 +95,7 @@ func TestAPlayedRunnerEndsAJobItDidNotStart(t *testing.T) {
 	if err != nil || state != JobEnded {
 		t.Fatalf("Poll = %v, %v; want the stranger's job reported ended", state, err)
 	}
-	result, err := runner.Collect(t.Context(), box, stranger)
+	result, err := runner.Collect(t.Context(), box, stranger, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}

@@ -112,11 +112,17 @@ const (
 	// when a person signs the company in at the server's vendor and each
 	// time the engine renews it ([Reserved] names, which no listing shows).
 	SourceMCPSignIn Source = "mcp-sign-in"
+
+	// SourceIntegrationSignIn is an integration's consent grant, written by
+	// the engine when a person signs the company in at the integration's
+	// vendor and when the vendor hands back a new refresh token
+	// ([Reserved] names, which no listing shows).
+	SourceIntegrationSignIn Source = "integration-sign-in"
 )
 
 // Sources are every write path's word.
 var Sources = []Source{SourceAPI, SourceSetup, SourceProvision, SourceCLI,
-	SourceLLMLogin, SourceIAM, SourceModels, SourceMCP, SourceMCPSignIn}
+	SourceLLMLogin, SourceIAM, SourceModels, SourceMCP, SourceMCPSignIn, SourceIntegrationSignIn}
 
 // Valid reports whether a source off the wire is one this build stamps.
 func (s Source) Valid() bool { return slices.Contains(Sources, s) }

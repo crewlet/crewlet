@@ -54,6 +54,8 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -97,6 +99,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ALaunchNeedsATurnID", testALaunchNeedsATurnID},
 		{"ALaunchAnswersTheJobItOpened", testALaunchAnswersTheJobItOpened},
 		{"ABoxsSessionStartIsRecordedOnceForItsOwnJob", testABoxsSessionStartIsRecordedOnceForItsOwnJob},
+		{"AMintedSessionIsBoundOnceToItsOwnJob", testAMintedSessionIsBoundOnceToItsOwnJob},
+		{"AMintedSessionIsOneLiveRuns", testAMintedSessionIsOneLiveRuns},
 		{"AJobItsCapEndedIsRecordedOnceForItsOwnJob", testAJobItsCapEndedIsRecordedOnceForItsOwnJob},
 		{"AJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands", testAJobsHarnessEndIsRecordedForItsOwnJobAndCutOffStands},
 		{"AJobsHarnessEndRidesEveryWriteOfItsRecord", testAJobsHarnessEndRidesEveryWriteOfItsRecord},
@@ -250,6 +254,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ListRunsListsEveryStatus", testListRunsListsEveryStatus},
 		{"ARunRowCarriesItsRepositoriesAndFloor", testARunRowCarriesItsRepositoriesAndFloor},
 		{"AnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns", testAnEarlierRunsLeadsAreNoneOfTheTurnsNextRuns},
+		{"AClaimWhoseRunHasNoRecordBindsNothing", testAClaimWhoseRunHasNoRecordBindsNothing},
+		{"AClaimACrashLeftNeverBlocksItsOwnJob", testAClaimACrashLeftNeverBlocksItsOwnJob},
 	}
 	raw = append(raw, noteRawCases...)
 	raw = append(raw, bytesRawCases...)
@@ -468,6 +474,75 @@ func testABoxsSessionStartIsRecordedOnceForItsOwnJob(t *testing.T, s sandbox.Pen
 	}
 	if ok, err := s.MarkSessionStart(ctx, "t-none", "job-1", sandbox.SessionStartContinued); err != nil || ok {
 		t.Errorf("a start for a run with no record = %v, %v", ok, err)
+	}
+}
+
+// A MINTED SESSION IS BOUND ONCE, TO ITS OWN JOB, and only as its box could
+// have started it: a fresh job binds any id but the one its launch asked it to
+// continue, a job that continued binds that one alone, and once bound the same
+// id answers as bound while any other is refused. Another job's record, a gone
+// one and no id a harness names are refused, and the next launch's job starts
+// with nothing bound. The bound id is the session the job ran.
+//
+// Mutation: let a second id write over the first, bind on another job's row,
+// take a resume's other id or a fall back's continued one, or carry the bind
+// across a relaunch, and a check goes red.
+func testAMintedSessionIsBoundOnceToItsOwnJob(t *testing.T, s sandbox.PendingStore) {
+	ctx := t.Context()
+	const (
+		first  = "session_0b9c1d3e-5f70-4a8b-9c1d-2e3f4a5b6c7d"
+		second = "session_7d6c5b4a-3f2e-4d1c-8b9a-07f5e3d1c9b0"
+		// Each turn below continues a session of its own: an id one run binds,
+		// no other run binds while it lives (testAMintedSessionIsOneLiveRuns).
+		resumed = "session_2c4e6a8b-1d3f-4b5c-9e7a-0b1c2d3e4f5a"
+		fellOff = "session_3d5f7b9c-2e4a-4c6d-8f0b-1c2d3e4f5a6b"
+	)
+	refused := func(name, turn string, bind sandbox.SessionBind) {
+		t.Helper()
+		if _, err := s.BindSession(ctx, turn, bind); !errors.Is(err, sandbox.ErrSessionBindRefused) {
+			t.Errorf("%s: %v, want it refused", name, err)
+		}
+	}
+	launch := mustLaunched(t, s, run("t-mint"))
+	refused("another job", "t-mint", sandbox.SessionBind{Launch: "another-job", ID: first})
+	refused("no id a harness names", "t-mint", sandbox.SessionBind{Launch: launch, ID: "../x"})
+	refused("a run with no record", "t-none", sandbox.SessionBind{Launch: launch, ID: first})
+	for range 2 {
+		bound, err := s.BindSession(ctx, "t-mint", sandbox.SessionBind{Launch: launch, ID: first})
+		if err != nil || bound.Launch.Minted != first {
+			t.Fatalf("BindSession = %q, %v, want %s bound", bound.Launch.Minted, err, first)
+		}
+	}
+	refused("a second id", "t-mint", sandbox.SessionBind{Launch: launch, ID: second})
+	if got := mustGet(t, s, "t-mint"); got.Launch.Minted != first || got.SessionRan() != first {
+		t.Errorf("the record binds %q and ran %q, want %s for both", got.Launch.Minted, got.SessionRan(), first)
+	}
+	mustBeginLaunch(t, s, run("t-mint"))
+	if got := mustGet(t, s, "t-mint").Launch.Minted; got != "" {
+		t.Errorf("the next job's record binds %q, want nothing bound", got)
+	}
+
+	// continuing is turn's job, its attach naming the session its launch continues.
+	continuing := func(turn, session string) string {
+		t.Helper()
+		job := mustLaunched(t, s, run(turn))
+		if err := s.AttachSandbox(t.Context(), turn, sandbox.BoxRef{SandboxID: "box-" + turn, CommandID: "cmd-1",
+			SessionID: session}, sandbox.Fence{}); err != nil {
+			t.Fatalf("the attach naming the continued session: %v", err)
+		}
+		return job
+	}
+	job := continuing("t-resume", resumed)
+	refused("a resume reporting another", "t-resume", sandbox.SessionBind{Launch: job, ID: second, Continued: true})
+	refused("a fall back reporting the continued", "t-resume", sandbox.SessionBind{Launch: job, ID: resumed})
+	if bound, err := s.BindSession(ctx, "t-resume", sandbox.SessionBind{Launch: job, ID: resumed,
+		Continued: true}); err != nil || bound.Launch.Minted != resumed {
+		t.Errorf("a resume binding the session it continued = %q, %v", bound.Launch.Minted, err)
+	}
+	job = continuing("t-fell-back", fellOff)
+	if bound, err := s.BindSession(ctx, "t-fell-back", sandbox.SessionBind{Launch: job, ID: second}); err != nil ||
+		bound.Launch.Minted != second {
+		t.Errorf("a fall back binding a session of its own = %q, %v", bound.Launch.Minted, err)
 	}
 }
 
@@ -4724,11 +4799,18 @@ func testAColleaguesAskSurvivesEveryWriteOfItsTurn(t *testing.T, s sandbox.Pendi
 	// by the frame that ends the turn — a resume, or a stop's close — so
 	// every write between the two hands it on, a relaunch's reset included:
 	// a reviewer's send-back is the same turn answering the same ask, and
-	// the relaunch's own row states none.
-	want := sandbox.ColleagueAsk{
-		ChannelID: "a2a-1", Question: "which branch?", Chain: []string{"ceo"},
-		TraceID: "tr-ask", SpanID: "sp-ask", ParentSpanID: "pp-ask",
+	// the relaunch's own row states none. The question holds a credential,
+	// and every write hands it on AS ASKED, since the answer echoes it to the
+	// asking seat's model: only the reads that serve it redact it.
+	sample := map[string]string{}
+	for _, shape := range redacttest.Shapes() {
+		sample[shape.Name] = shape.Sample
 	}
+	key := sample["anthropic-key"]
+	want := sandbox.ColleagueAsk{
+		ChannelID: "a2a-1", Chain: []string{"ceo"},
+		TraceID: "tr-ask", SpanID: "sp-ask", ParentSpanID: "pp-ask",
+	}.WithQuestion("which branch, and may it use " + key + "?")
 	r := run("t1")
 	asked := want
 	r.ColleagueAsk = &asked
@@ -4736,10 +4818,13 @@ func testAColleaguesAskSurvivesEveryWriteOfItsTurn(t *testing.T, s sandbox.Pendi
 	check := func(step string, got sandbox.PendingRun) {
 		t.Helper()
 		if got.ColleagueAsk == nil || got.ColleagueAsk.ChannelID != want.ChannelID ||
-			got.ColleagueAsk.Question != want.Question || len(got.ColleagueAsk.Chain) != 1 ||
+			got.ColleagueAsk.RawQuestion() != want.RawQuestion() || len(got.ColleagueAsk.Chain) != 1 ||
 			got.ColleagueAsk.Chain[0] != "ceo" || got.ColleagueAsk.TraceID != want.TraceID ||
 			got.ColleagueAsk.SpanID != want.SpanID || got.ColleagueAsk.ParentSpanID != want.ParentSpanID {
 			t.Fatalf("%s left ask %+v, want %+v", step, got.ColleagueAsk, want)
+		}
+		if shown := got.ColleagueAsk.Question(); strings.Contains(shown, key) || !strings.Contains(shown, redact.Marker) {
+			t.Fatalf("%s left an ask whose question reads %q, want the key as a marker", step, shown)
 		}
 	}
 	check("the launch", mustGet(t, s, "t1"))

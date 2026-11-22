@@ -99,7 +99,7 @@ func (p *Provider) toolCompletion(
 	// The harness's own words where they stand: the answer it located and
 	// stderr — never the whole of stdout, which is the tools' words too.
 	if hit, ok := classifyMarkers(p.profile, harnessOutput{
-		said: out.text, stdout: res.stdout, stderr: res.stderr, failed: failed,
+		said: out.text, stdout: res.stdout, stderr: res.stderr, record: res.record, failed: failed,
 		events: t.reader.failureLines(), at: p.now(),
 	}); ok {
 		return nil, p.classified(ctx, hit, nonEmpty(hit.Said, firstLine(out.text, res.stderr)))

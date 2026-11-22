@@ -39,6 +39,7 @@ type ArtifactsReader interface {
 	HeldObjects(ctx context.Context, id artifacts.ID, hashes []objstore.Hash) (
 		map[objstore.Hash]objstore.Object, error)
 	SeenBy(ctx context.Context, id artifacts.ID) ([]artifactsdomain.Read, error)
+	SeenByPage(ctx context.Context, id artifacts.ID, after string) ([]artifactsdomain.Read, string, error)
 	Usage(ctx context.Context) (artifactsdomain.Usage, error)
 	Trail(ctx context.Context, q artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error)
 	TrashedBefore(ctx context.Context, cutoff time.Time, limit int) ([]artifacts.ID, error)
@@ -57,6 +58,7 @@ type ArtifactsReader interface {
 
 	// Comment threads, and the work items whose assignees a comment wakes.
 	Threads(ctx context.Context, id artifacts.ID) ([]artifactsdomain.CommentThread, error)
+	ThreadsPage(ctx context.Context, id artifacts.ID, cursor string) ([]artifactsdomain.CommentThread, string, error)
 	Thread(ctx context.Context, id artifacts.ID, thread uuid.UUID) (artifactsdomain.CommentThread, error)
 	WorkItems(ctx context.Context, id artifacts.ID) ([]string, error)
 
@@ -181,7 +183,7 @@ var opArtifact = define("artifacts.artifact", opRead, artifactsDomain, false,
 		}
 		head, at, err := r.Artifact(ctx, a.ID, a.Fresh)
 		return anArtifact{Head: head, Position: at}, err
-	})
+	}).oneAnswer()
 
 type artifactListArgs struct {
 	Viewer artifactsdomain.Viewer
@@ -195,7 +197,7 @@ var opArtifactList = define("artifacts.list", opRead, artifactsDomain, false,
 			return artifactsdomain.ListPage{}, err
 		}
 		return r.List(ctx, a.Viewer, a.Query)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type artifactVersionArgs struct {
 	ID     artifacts.ID
@@ -205,7 +207,7 @@ type artifactVersionArgs struct {
 // ONE VERSION, as a tool, a screen and the artifact origin show it: read
 // leniently, so a newer build's field on an entry is a field this build does
 // not show, never a version it cannot.
-var opArtifactVersion = define("artifacts.version", opRead, artifactsDomain, false, artifactVersion)
+var opArtifactVersion = define("artifacts.version", opRead, artifactsDomain, false, artifactVersion).oneAnswer()
 
 // ONE VERSION A PUBLISH CARRIES ON, ANSWERED WHOLE ([op.answeredWhole]): a
 // publish keeping a file of an earlier version writes back the entry it read
@@ -215,7 +217,7 @@ var opArtifactVersion = define("artifacts.version", opRead, artifactsDomain, fal
 // seat's get_artifact, a screen, the artifact origin) to what a newer node
 // published.
 var opArtifactVersionCarried = define("artifacts.version_carried", opRead, artifactsDomain, false,
-	artifactVersion).answeredWhole()
+	artifactVersion).oneAnswer().answeredWhole()
 
 // artifactVersion is one retained version, read from this node's copy.
 func artifactVersion(ctx context.Context, b Backend, _ *Actor, a artifactVersionArgs) (artifactsdomain.Version, error) {
@@ -240,7 +242,7 @@ var opArtifactVersions = define("artifacts.versions", opRead, artifactsDomain, f
 			return artifactsdomain.VersionPage{}, err
 		}
 		return r.Versions(ctx, a.ID, a.Cursor, a.Limit)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type artifactRefArgs struct {
 	ID artifacts.ID
@@ -253,7 +255,7 @@ var opArtifactAssets = define("artifacts.assets", opRead, artifactsDomain, false
 			return nil, err
 		}
 		return r.Assets(ctx, a.ID)
-	})
+	}).cappedAt(artifacts.MaxAssetsPerArtifact, 2*artifacts.MaxPathBytes+assetFixedBytes)
 
 var opArtifactHistory = define("artifacts.history", opRead, artifactsDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a artifactPageArgs) (artifactsdomain.HistoryPage, error) {
@@ -262,7 +264,7 @@ var opArtifactHistory = define("artifacts.history", opRead, artifactsDomain, fal
 			return artifactsdomain.HistoryPage{}, err
 		}
 		return r.History(ctx, a.ID, a.Cursor, a.Limit)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type heldObjectsArgs struct {
 	ID     artifacts.ID
@@ -276,16 +278,32 @@ var opArtifactHeldObjects = define("artifacts.held_objects", opRead, artifactsDo
 			return nil, err
 		}
 		return r.HeldObjects(ctx, a.ID, a.Hashes)
-	})
+	}).perAsked()
+
+type seenByArgs struct {
+	ID    artifacts.ID
+	After string
+}
+
+// seenByPage is a page of who opened an artifact and where the next starts.
+type seenByPage struct {
+	Reads []artifactsdomain.Read
+	Next  string
+}
 
 var opArtifactSeenBy = define("artifacts.seen_by", opRead, artifactsDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a artifactRefArgs) ([]artifactsdomain.Read, error) {
+	func(ctx context.Context, b Backend, _ *Actor, a seenByArgs) (seenByPage, error) {
 		r, err := b.artifactsReader()
 		if err != nil {
-			return nil, err
+			return seenByPage{}, err
 		}
-		return r.SeenBy(ctx, a.ID)
-	})
+		reads, next, err := r.SeenByPage(ctx, a.ID, a.After)
+		return seenByPage{Reads: reads, Next: next}, err
+	}).rowsTo(statelog.AnswerBytes)
+
+// assetFixedBytes is an asset row's encoding past its name: its ids, content
+// type, object's key, digest and size, adder and instant, each a bounded word.
+const assetFixedBytes = 1 << 10
 
 // artifactUsageArgs carries nothing: the counters are the company's.
 type artifactUsageArgs struct{}
@@ -297,7 +315,7 @@ var opArtifactUsage = define("artifacts.usage", opRead, artifactsDomain, false,
 			return artifactsdomain.Usage{}, err
 		}
 		return r.Usage(ctx)
-	})
+	}).oneAnswer()
 
 var opArtifactTrail = define("artifacts.trail", opRead, artifactsDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q artifactsdomain.TrailQuery) (artifactsdomain.TrailPage, error) {
@@ -306,7 +324,7 @@ var opArtifactTrail = define("artifacts.trail", opRead, artifactsDomain, false,
 			return artifactsdomain.TrailPage{}, err
 		}
 		return r.Trail(ctx, q)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type trashedBeforeArgs struct {
 	Cutoff time.Time
@@ -320,7 +338,7 @@ var opArtifactTrashedBefore = define("artifacts.trashed_before", opRead, artifac
 			return nil, err
 		}
 		return r.TrashedBefore(ctx, a.Cutoff, a.Limit)
-	})
+	}).perAsked()
 
 // ---- the folder tree and the brand: reads ----------------------------------- //
 
@@ -336,7 +354,7 @@ var opArtifactFolders = define("artifacts.folders", opRead, artifactsDomain, fal
 			return artifactsdomain.FolderTree{}, err
 		}
 		return r.Folders(ctx, a.Viewer, a.Fresh)
-	})
+	}).oneAnswer()
 
 type folderArgs struct {
 	ID    string
@@ -357,7 +375,7 @@ var opArtifactFolder = define("artifacts.folder", opRead, artifactsDomain, false
 		}
 		f, at, err := r.Folder(ctx, a.ID, a.Fresh)
 		return aFolder{Folder: f, Position: at}, err
-	})
+	}).oneAnswer()
 
 type resolveFolderArgs struct {
 	Ref    string
@@ -372,7 +390,7 @@ var opArtifactResolveFolder = define("artifacts.resolve_folder", opRead, artifac
 			return artifactsdomain.Folder{}, err
 		}
 		return r.ResolveFolder(ctx, a.Ref, a.Within, a.Fresh)
-	})
+	}).oneAnswer()
 
 type brandArgs struct {
 	Fresh statelog.Freshness
@@ -392,7 +410,7 @@ var opArtifactBrand = define("artifacts.brand", opRead, artifactsDomain, false,
 		}
 		adoption, adopted, err := r.Brand(ctx, a.Fresh)
 		return anAdoption{Adoption: adoption, Adopted: adopted}, err
-	})
+	}).oneAnswer()
 
 type brandFileArgs struct {
 	Hash objstore.Hash
@@ -405,18 +423,30 @@ var opArtifactBrandFile = define("artifacts.brand_file", opRead, artifactsDomain
 			return artifactsdomain.BrandFile{}, err
 		}
 		return r.BrandFile(ctx, a.Hash)
-	})
+	}).oneAnswer()
 
 // ---- comment threads: reads ---------------------------------------------- //
 
+type threadsArgs struct {
+	ID     artifacts.ID
+	Cursor string
+}
+
+// threadsPage is a page of an artifact's threads and where the next starts.
+type threadsPage struct {
+	Threads []artifactsdomain.CommentThread
+	Next    string
+}
+
 var opArtifactThreads = define("artifacts.threads", opRead, artifactsDomain, false,
-	func(ctx context.Context, b Backend, _ *Actor, a artifactRefArgs) ([]artifactsdomain.CommentThread, error) {
+	func(ctx context.Context, b Backend, _ *Actor, a threadsArgs) (threadsPage, error) {
 		r, err := b.artifactsReader()
 		if err != nil {
-			return nil, err
+			return threadsPage{}, err
 		}
-		return r.Threads(ctx, a.ID)
-	})
+		threads, next, err := r.ThreadsPage(ctx, a.ID, a.Cursor)
+		return threadsPage{Threads: threads, Next: next}, err
+	}).rowsTo(statelog.AnswerBytes)
 
 type commentThreadArgs struct {
 	ID     artifacts.ID
@@ -430,7 +460,7 @@ var opArtifactThread = define("artifacts.thread", opRead, artifactsDomain, false
 			return artifactsdomain.CommentThread{}, err
 		}
 		return r.Thread(ctx, a.ID, a.Thread)
-	})
+	}).oneAnswer()
 
 var opArtifactWorkItems = define("artifacts.work_items", opRead, artifactsDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, a artifactRefArgs) ([]string, error) {
@@ -439,7 +469,7 @@ var opArtifactWorkItems = define("artifacts.work_items", opRead, artifactsDomain
 			return nil, err
 		}
 		return r.WorkItems(ctx, a.ID)
-	})
+	}).cappedAt(artifactsdomain.MaxLinkedWorkItems, artifacts.MaxWorkItemBytes+countBytes)
 
 // ---- a person's comment inbox: reads ------------------------------------- //
 
@@ -450,7 +480,7 @@ var opArtifactInbox = define("artifacts.read_inbox", opRead, artifactsDomain, fa
 			return artifactsdomain.InboxPage{}, err
 		}
 		return r.Inbox(ctx, q)
-	})
+	}).rowsTo(statelog.AnswerBytes)
 
 type noticeThreadsArgs struct {
 	Refs  []artifactsdomain.ThreadRef
@@ -464,7 +494,7 @@ var opArtifactNoticeThreads = define("artifacts.notice_threads", opRead, artifac
 			return nil, err
 		}
 		return r.NoticeThreads(ctx, a.Refs, a.Fresh)
-	})
+	}).perAsked()
 
 // ---- comment threads: writes ---------------------------------------------- //
 
@@ -949,7 +979,24 @@ func (a Artifacts) HeldObjects(ctx context.Context, id artifacts.ID, hashes []ob
 
 // SeenBy answers who has opened an artifact.
 func (a Artifacts) SeenBy(ctx context.Context, id artifacts.ID) ([]artifactsdomain.Read, error) {
-	return call(ctx, a.r, opArtifactSeenBy, nil, artifactRefArgs{ID: id})
+	out := []artifactsdomain.Read{}
+	for after := ""; ; {
+		reads, next, err := a.SeenByPage(ctx, id, after)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, reads...)
+		if after = next; after == "" {
+			return out, nil
+		}
+	}
+}
+
+// SeenByPage answers one page of who has opened an artifact, newest first.
+func (a Artifacts) SeenByPage(ctx context.Context, id artifacts.ID, after string) (
+	[]artifactsdomain.Read, string, error) {
+	page, err := call(ctx, a.r, opArtifactSeenBy, nil, seenByArgs{ID: id, After: after})
+	return page.Reads, page.Next, err
 }
 
 // Usage answers the company's counters.
@@ -1147,7 +1194,24 @@ func (a Artifacts) ClearBrand(ctx context.Context, c artifactsdomain.Call) (arti
 
 // Threads answers every comment thread of an artifact, with its remarks.
 func (a Artifacts) Threads(ctx context.Context, id artifacts.ID) ([]artifactsdomain.CommentThread, error) {
-	return call(ctx, a.r, opArtifactThreads, nil, artifactRefArgs{ID: id})
+	out := []artifactsdomain.CommentThread{}
+	for cursor := ""; ; {
+		threads, next, err := a.ThreadsPage(ctx, id, cursor)
+		if err != nil {
+			return nil, err
+		}
+		out = artifactsdomain.JoinThreads(out, threads)
+		if cursor = next; cursor == "" {
+			return out, nil
+		}
+	}
+}
+
+// ThreadsPage answers one page of an artifact's threads, oldest first.
+func (a Artifacts) ThreadsPage(ctx context.Context, id artifacts.ID, cursor string) (
+	[]artifactsdomain.CommentThread, string, error) {
+	page, err := call(ctx, a.r, opArtifactThreads, nil, threadsArgs{ID: id, Cursor: cursor})
+	return page.Threads, page.Next, err
 }
 
 // Thread answers one comment thread, with its remarks.

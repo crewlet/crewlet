@@ -17,8 +17,10 @@ import (
 	"github.com/crewlet/crewlet/internal/shellword"
 )
 
+func init() { Register(ClaudeCode{}) }
+
 // ClaudeCodeName is this runner's config name.
-const ClaudeCodeName = sandbox.ClaudeCodeHarness
+const ClaudeCodeName = "claude-code"
 
 // ClaudeCode drives Claude Code headless.
 //
@@ -107,6 +109,17 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		// reach is its box's cell's to bound (`container` and `e2b` keep it off the
 		// engine host, `direct` does not) beside the run env's credentials.
 		"--permission-mode", "bypassPermissions",
+	}
+	// THE ENTRY'S WEB TOOLS OFF where it denies them, as its runs on the engine
+	// host have none: on 2.1.330, under bypassPermissions, both are refused as
+	// "disabled for this session, in subagents as well as here", and a
+	// repository's settings allowing them, or an agent of its own listing them,
+	// do not bring them back. Before "$@", whose first value is a flag, so the
+	// list takes these two alone.
+	if req.WebDenied {
+		parts = append(parts, "--disallowedTools", "WebFetch", "WebSearch")
+	}
+	parts = append(parts,
 		// WHAT THE SCRIPT DECIDED BY THE HARNESS'S RELEASE: the run's settings, and
 		// the session, NAMED ON EVERY RUN ([claudeSessionGate]): a new one under the
 		// minted id (`--session-id`), a continued one with `--resume` and never
@@ -115,7 +128,7 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		// reuses the prompt its first request recorded, so a later launch's
 		// standing instructions would never be read.
 		`"$@"`,
-	}
+	)
 	// THE SYSTEM TEXT IS APPENDED, NOT SUBSTITUTED (never argv, [Paths.System]):
 	// Claude Code's own prompt stays whole, being how to drive its tools. Passed
 	// only for a run that has system text.
@@ -197,6 +210,12 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// ([parseSessionRecord]).
 	line(`printf 'id %%s\ncontinued %%s\nwhy %%s\nrelease %%s\n' "$s" "$k" "$w" "$v" > %s`,
 		shellword.Quote(paths.SessionRecord()))
+	// THE SIGN-IN STAYS THE HARNESS'S: its own environment keeps it, and the
+	// file it runs ahead of every command its model runs takes it out of that
+	// command's ([claudeToolEnv]).
+	if len(req.SignInEnv) > 0 {
+		line(`export CLAUDE_ENV_FILE=%s`, shellword.Quote(paths.ClaudeToolEnv()))
+	}
 	b.WriteString(launchHarness(strings.Join(parts, " "), paths))
 	b.WriteString(claudeCapture(paths))
 	line(`exit "$code"`)
@@ -411,7 +430,7 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	// own instead, and the copy restored is never gone on past. Recorded
 	// before the restore, a restore that failed after the box's own copy
 	// went would leave the line naming a copy that does not hold it.
-	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s", "d"), q(restoreDigestUnrecorded))
+	line(`  elif ! { %s; }; then w=%s`, recordDigest(paths, "s"), q(restoreDigestUnrecorded))
 	line(`  fi`)
 	line(`  rm -rf %s`, q(staged))
 	line(`fi`)
@@ -744,7 +763,10 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 			return "", fmt.Errorf("executor: writing the system prompt: %w", err)
 		}
 	}
-	pin := claudeSettingsPin(sandbox.ClaudeCodeWindow(req.Model))
+	if err := writeClaudeToolEnv(ctx, box, req, paths); err != nil {
+		return "", err
+	}
+	pin := claudeSettingsPin(claudeCodeWindow(req.Model))
 	if err := writeClaudeSettingsPair(ctx, box, paths.ClaudeSettings(), paths.ClaudeSettingsPinned(),
 		newClaudeSettings(nil), newClaudeSettings(pin)); err != nil {
 		return "", err
@@ -786,6 +808,32 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 		}
 	}
 	return paths.MCPConfig(), nil
+}
+
+// writeClaudeToolEnv writes, for a run handed sign-in variables
+// ([sandbox.RunRequest.SignInEnv]), the file [Paths.ClaudeToolEnv] holding
+// [claudeToolEnv] of them.
+func writeClaudeToolEnv(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) error {
+	if len(req.SignInEnv) == 0 {
+		return nil
+	}
+	names, err := toolEnvOmitted(req.SignInEnv)
+	if err != nil {
+		return err
+	}
+	if err = box.WriteFile(ctx, paths.ClaudeToolEnv(), claudeToolEnv(names)); err != nil {
+		return fmt.Errorf("executor: writing the run's tool environment file: %w", err)
+	}
+	return nil
+}
+
+// claudeToolEnv is the file CLAUDE_ENV_FILE names for a run whose sign-in is
+// names: one `unset` of them. Claude Code runs that file in the shell of each
+// command its model runs, ahead of the command, and reads its own sign-in from
+// its process environment, which the file never reaches (measured on 2.1.330:
+// the commands lacked every name, and every request carried the sign-in).
+func claudeToolEnv(names []string) []byte {
+	return []byte("unset " + strings.Join(names, " ") + "\n")
 }
 
 // writeClaudeSettingsPair writes one of a run's settings files twice: settings
@@ -883,7 +931,7 @@ func (ClaudeCode) Output(paths Paths) Output {
 // Pins is the session's layout ([claudeSessionLayout]) under the window of the
 // model req's run works under, logging a model whose window this build does not know.
 func (ClaudeCode) Pins(ctx context.Context, req sandbox.RunRequest, paths Paths) []Pinned {
-	window := sandbox.ClaudeCodeWindow(req.Model)
+	window := claudeCodeWindow(req.Model)
 	if !window.Known {
 		log.WarnContext(ctx, "executor_context_window_unknown", "model", req.Model,
 			"window_tokens", window.Tokens, "detail", "this build does not know the model's context "+
@@ -925,7 +973,7 @@ func claudeSessionLayout(paths Paths, window sandbox.ExecutorWindow) []Pinned {
 		// second memory the engine's calls are kept from (docs/concepts/llm-backends.md,
 		// "Between turns").
 		{Name: "CLAUDE_CODE_DISABLE_AUTO_MEMORY", Value: "1"},
-		// The model's window ([sandbox.ClaudeCodeWindow]), compacted at less the
+		// The model's window ([claudeCodeWindow]), compacted at less the
 		// harness's headroom; a subagent's `autoCompactWindow` can only LOWER it
 		// (2.1.312+), so no request carries more. The switches that move it are
 		// unset ([claudeCompactionOff]) and pinned in the settings.
@@ -1705,4 +1753,39 @@ func lastLine(text []byte) []byte {
 		text = text[i+1:]
 	}
 	return bytes.TrimSpace(text)
+}
+
+// threadTraits is what Claude Code's main-thread read settles: a cut-off copy
+// is counted (its thread is the copy itself), its hooks' serves show in the
+// thread, and a capture is raised only where its release's resume was read.
+func (ClaudeCode) threadTraits() sandbox.ThreadTraits {
+	return sandbox.ThreadTraits{CountsCutOff: true, Receipts: true, PlacesWithResumeRead: true}
+}
+
+// sessionTraits is how a relaunch judges a Claude Code session: by the run's
+// window, its calls keyed by their own ids, a brief at
+// [claudeChargeBytes].
+func (ClaudeCode) sessionTraits() sandbox.SessionTraits {
+	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestWindow, CallKeying: sandbox.CallKeyingByCallID,
+		Charge: claudeChargeBytes}
+}
+
+// resumeRead reports whether release is one whose resume this build read
+// ([claudeResumeRead]).
+func (ClaudeCode) resumeRead(release string) bool { return claudeResumeRead(release) }
+
+// notesOffWhy is what switches Claude Code's reading of notes off.
+func (ClaudeCode) notesOffWhy() string {
+	return "a managed policy that allows only managed hooks (allowManagedHooksOnly, " +
+		"strictPluginOnlyCustomization) or disables every hook (disableAllHooks), or a release older than " +
+		"2.1.163, the oldest whose Stop hook's answer reaches the model, which the run starts without its " +
+		"hooks and whose error stream says so"
+}
+
+// artifacts is what a Claude Code run leaves in its box of its own.
+func (ClaudeCode) artifacts(p Paths) (files, dirs []string) {
+	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeSkillsSettings(),
+			p.ClaudeSettingsPinned(), p.ClaudeNotesSettingsPinned(), p.ClaudeSkillsSettingsPinned(),
+			p.ClaudeToolEnv()},
+		[]string{p.ClaudeSkillsPlugin()}
 }

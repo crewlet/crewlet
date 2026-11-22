@@ -45,12 +45,18 @@ type lateRig struct {
 // round on.
 func newLateRig(t *testing.T, turn string) *lateRig {
 	t.Helper()
+	return newLateRigOn(t, turn, executor.ClaudeCodeName)
+}
+
+// newLateRigOn is [newLateRig] for jobs of the harness named.
+func newLateRigOn(t *testing.T, turn, harness string) *lateRig {
+	t.Helper()
 	fleet := coordmem.NewFleet()
 	store := sandbox.NewCoordStore(fleet)
 	runs, _ := steersOver(t, steerRing, store)
 	r := &lateRig{fleet: fleet, store: store, runs: runs, turn: turn}
 	launch := sandbox.PendingRun{TurnID: turn, AgentID: sweAgent, AgentHandle: "swe", Role: "SWE",
-		Harness: "claude-code", TraceID: "tr-1", CreatedAt: time.Now().UTC(),
+		Harness: harness, TraceID: "tr-1", CreatedAt: time.Now().UTC(),
 		Steer: sandbox.RunSteer{Seat: runs.anchor(turn, sweAgent, "swe")}}
 	var err error
 	if r.first, err = store.BeginLaunch(t.Context(), launch, sandbox.Fence{}); err != nil {
@@ -230,7 +236,7 @@ func TestNoLateCallIsHandedAtAClaudeCodeFinish(t *testing.T) {
 }
 
 // A PERSON'S NOTE IS NEVER LEFT WAITING FOR ITEMS. One hook's answer carries
-// what fits ([executor.ClaudeNotesThatFit]): a person's widest note, filed after
+// what fits ([executor.HookNotesThatFit]): a person's widest note, filed after
 // two wide late calls, is fitted first, so it reaches the job at the next
 // batch beside the first call, and the second waits; fitted in the order filed,
 // the two calls would fill the answer and the person's correction wait behind
@@ -303,18 +309,23 @@ func mustJSON(t *testing.T, v any) string {
 // (confirm-not-a-confirmation), and no telling is recorded.
 func TestALateCallReachesAnOpenCodeJobAtItsNextPollAndIsReadOnItsConfirmation(t *testing.T) {
 	t.Parallel()
-	r := newLateRig(t, "run-1")
+	r := newLateRigOn(t, "run-1", executor.OpenCodeName)
 	r.late(t, 1, tools.Call{Name: "delegate", Args: map[string]any{"to": "qa"}})
 	item := r.items(t)[0]
 	inbox := boundInbox(t, r.runs, r.store, r.turn, r.next.LaunchID)
 	viewHolds(t, inbox, 1)
 	notes, _ := inbox.Wait(t.Context(), 0)
 	if len(notes) != 1 || notes[0].ID != item.ID || !strings.HasPrefix(notes[0].Message, prompts.LateCallHead) ||
-		notes[0].Inbox != executor.OpenCodeInboxID(r.next.LaunchID, item.ID) {
+		notes[0].Inbox != executor.InboxID(executor.OpenCodeName, r.next.LaunchID, item.ID) {
 		t.Fatalf("the poll was answered %+v, want the late call alone, in the engine's words", notes)
 	}
 	if served := noteOn(t, r.store, r.turn, item.ID); served.Served != r.next.LaunchID || !served.Waiting() {
 		t.Fatalf("the item holds %+v once polled, want it served to the job, waiting", served)
+	}
+	// AND, FOLDED BY A COMPACTION, IT IS ADMITTED AGAIN AS A NOTE IS.
+	if granted, _, err := inbox.Again(t.Context(), []string{item.ID}); err != nil ||
+		granted[item.ID] != executor.AgainID(executor.OpenCodeName, r.next.LaunchID, item.ID) {
+		t.Fatalf("the ask for the item's second admission answered %v, %v, want its job's second id", granted, err)
 	}
 	if err := inbox.Read(t.Context(), []string{item.ID}); err != nil {
 		t.Fatalf("Read: %v", err)
@@ -437,7 +448,7 @@ func TestALateItemIsNeutralisedUnderTheSessionsToken(t *testing.T) {
 	r.late(t, 1, tools.Call{Name: "post_message", Args: map[string]any{"text": "close " + string(boundary)},
 		Output: "refused: " + string(boundary), Failed: true})
 	row := mustRow(t, r.store, r.turn)
-	inbox := r.runs.inbox(identityOfRun(row), 1)
+	inbox := r.runs.inbox(identityOfRun(row), 1, row.Harness)
 	inbox.Bind(t.Context(), r.next.LaunchID, sessionFence(surface))
 	t.Cleanup(inbox.Close)
 	viewHolds(t, inbox, 1)
@@ -479,7 +490,7 @@ func TestTheWidestLateItemFitsBesideTheWidestNote(t *testing.T) {
 	} {
 		msg := lateItemMessage(ctx, sandbox.LateCall{Call: call}, provenance.NewBoundary())
 		if units := executor.UTF16Len(msg); units > maxLateItemUnits ||
-			executor.ClaudeNotesThatFit([]string{widestNote(), msg}) != 2 {
+			executor.HookNotesThatFit(executor.ClaudeCodeName, []string{widestNote(), msg}) != 2 {
 			t.Errorf("%s: the account is %d units, past the %d beside the widest note", name, units, maxLateItemUnits)
 		}
 		if outcome, told := strings.Index(msg, "\nOutcome: "), strings.Index(msg, "\nCall: "); outcome < 0 ||

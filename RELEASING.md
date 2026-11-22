@@ -483,6 +483,9 @@ doing the thing, or does more), so read the file when you touch it:
   ruleset keeps approvals across pushes, anything pushed onto an open Dependabot
   branch merges once CI is green, so the token's scope is the only limit on what
   it can land. Weakening any of these makes the workflow reach *more*, never fail.
+  `.github/workflows/dependabot-notehelper.yml` holds the same token behind the
+  same guards and split, line for line, and writes only the two note helper
+  builds by name; read it with this one.
 - **`.github/workflows/pins.yml` runs, on its schedule, with `contents: read`
   and `issues: write` and no secret.** It is the only watcher of
   `scripts/git-pin.env`, `scripts/chromium-pin.env` and

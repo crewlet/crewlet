@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/es256"
 	"github.com/crewlet/crewlet/internal/whsec"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -68,6 +69,27 @@ const (
 	// ShapeScalewayAccessKey is a Scaleway API key's access key: SCW
 	// followed by 17 capital letters or digits.
 	ShapeScalewayAccessKey Shape = "scaleway_access_key"
+
+	// ShapeMetaToken is a Meta access token, a system user's as Business
+	// Settings generates it: EAA and letters and digits, issued by Meta and
+	// never minted.
+	ShapeMetaToken Shape = "meta_token"
+
+	// ShapeAppleKey is a private key Apple issued as a .p8 file: one PKCS#8
+	// PEM block holding a P-256 key, pasted whole, never minted.
+	ShapeAppleKey Shape = "apple_p8_key"
+
+	// ShapeAppleKeyID is an Apple API key's ID: ten capital letters or digits.
+	ShapeAppleKeyID Shape = "apple_key_id"
+
+	// ShapeAppleAdsKey is an Apple Ads API user's private key, the P-256 key
+	// whose public half the person uploaded: one PEM block, SEC 1 as
+	// `openssl ecparam` writes it or PKCS #8, pasted whole, never minted.
+	ShapeAppleAdsKey Shape = "apple_ads_key"
+
+	// ShapeAppleAdsID is an Apple Ads API user's client or team ID:
+	// SEARCHADS. and an identifier.
+	ShapeAppleAdsID Shape = "apple_ads_id"
 )
 
 // The patterns the identifier shapes hold a value to.
@@ -81,12 +103,15 @@ var (
 	scalewayAccessKeyShape = sync.OnceValue(func() *regexp.Regexp {
 		return regexp.MustCompile(`^SCW[A-Z0-9]{17}$`)
 	})
+	metaTokenShape  = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^EAA[A-Za-z0-9]{30,}$`) })
+	appleKeyIDShape = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Z0-9]{10}$`) })
 )
 
 // Multiline reports a shape whose values span lines, which its own rule
 // judges whole ([Shape.Problem]) in place of a credential's one-line rule.
 func (s Shape) Multiline() bool {
-	return s == ShapeES256Key || s == ShapeCertificateAuthority || s == ShapeSSHCertificateAuthority
+	return s == ShapeES256Key || s == ShapeCertificateAuthority || s == ShapeSSHCertificateAuthority ||
+		s == ShapeAppleKey || s == ShapeAppleAdsKey
 }
 
 // Problem is the sentence for a pasted value this shape refuses, "" for one it
@@ -116,6 +141,30 @@ func (s Shape) Problem(noun, value string) string {
 				"on Save.", noun)
 		}
 		return ""
+	case ShapeAppleKey:
+		if _, err := parseES256(value); err != nil {
+			return fmt.Sprintf("This %s is not a .p8 key: paste the whole file Apple gave you, from BEGIN "+
+				"PRIVATE KEY to END PRIVATE KEY.", noun)
+		}
+		return ""
+	case ShapeAppleAdsKey:
+		if _, err := es256.ParseKey(value); err != nil {
+			return fmt.Sprintf("This %s is not a P-256 private key: paste the whole file openssl wrote, from "+
+				"BEGIN EC PRIVATE KEY to END EC PRIVATE KEY.", noun)
+		}
+		return ""
+	case ShapeAppleAdsID:
+		if config.AppleAdsID(value) {
+			return ""
+		}
+		return fmt.Sprintf("This %s is not an Apple Ads ID: it is SEARCHADS. followed by an identifier, as "+
+			"Account Settings, API shows it.", noun)
+	case ShapeAppleKeyID:
+		if appleKeyIDShape().MatchString(value) {
+			return ""
+		}
+		return fmt.Sprintf("This %s is not an Apple key ID: it is ten capital letters or digits, shown "+
+			"beside the key.", noun)
 	case ShapeUUID:
 		if uuidShape().MatchString(value) {
 			return ""
@@ -128,6 +177,12 @@ func (s Shape) Problem(noun, value string) string {
 		}
 		return fmt.Sprintf("This %s is not a Scaleway access key: it is SCW followed by 17 capital "+
 			"letters or digits, 20 characters in all. Paste the access key shown beside the secret key.", noun)
+	case ShapeMetaToken:
+		if metaTokenShape().MatchString(value) {
+			return ""
+		}
+		return fmt.Sprintf("This %s is not a Meta access token: it is EAA followed by letters and digits. "+
+			"Paste the token Business Settings, System users, Generate new token shows once.", noun)
 	case ShapeGoogleServiceAccount:
 		if _, ok := config.GoogleCloudServiceAccount(value); ok {
 			return ""
@@ -175,8 +230,9 @@ func opaqueTokenRune(r rune) bool {
 // field, which is where a shared token ends up.
 //
 // A VENDOR-ISSUED IDENTIFIER IS NEVER MINTED: a value of [ShapeUUID],
-// [ShapeScalewayAccessKey], [ShapeGoogleServiceAccount] or [ShapeGoogleProvider]
-// names something the vendor made, and one Crewlet made up would name nothing.
+// [ShapeScalewayAccessKey], [ShapeGoogleServiceAccount], [ShapeGoogleProvider],
+// [ShapeAppleKey], [ShapeAppleKeyID], [ShapeAppleAdsKey] or [ShapeAppleAdsID] names something the vendor
+// or the person made, and one Crewlet made up would name nothing.
 func (s Shape) Mint(token func() string) (string, error) {
 	switch s {
 	case ShapeSigningKey:
@@ -187,7 +243,11 @@ func (s Shape) Mint(token func() string) (string, error) {
 		return GenerateSSHCertificateAuthority()
 	case ShapeES256Key:
 		return mintES256()
-	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleServiceAccount, ShapeGoogleProvider:
+	case ShapeMetaToken:
+		// MINTED BY META ALONE: one Crewlet made up would sign nothing in.
+		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
+	case ShapeUUID, ShapeScalewayAccessKey, ShapeGoogleServiceAccount, ShapeGoogleProvider, ShapeAppleKey,
+		ShapeAppleKeyID, ShapeAppleAdsKey, ShapeAppleAdsID:
 		return "", fmt.Errorf("setup: a %s value is issued by the vendor and cannot be minted", s)
 	default:
 		return token(), nil

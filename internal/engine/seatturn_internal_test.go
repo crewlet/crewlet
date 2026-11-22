@@ -14,7 +14,7 @@ import (
 
 // A PERSON'S ANSWER ARRIVING MID-TURN IS RECORDED AT ONCE AND RESUMED AS THE
 // SEAT'S NEXT TURN. It arrives on the seat's control topic, which no mailbox
-// turn waits for; a seat at its default cap runs one turn at a time ([node.ErrSeatFull]), so the
+// turn waits for; the rig's seat runs one turn at a time ([node.ErrSeatFull]), so the
 // resume waits for the running turn and runs once it is released
 // ([node.Config.SeatTurnEnded]), not at the five-minute backstop. Drives the
 // engine's own coordinator, gate, control-topic subscription and node hook.

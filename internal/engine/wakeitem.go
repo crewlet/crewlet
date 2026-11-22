@@ -63,6 +63,8 @@ type wakeSealBody struct {
 	Text         string           `json:"text" untrusted:"fence"`
 	Cut          int              `json:"cut"`
 	Informs      bool             `json:"informs"`
+	FromRun      string           `json:"from_run"`
+	FromSeat     string           `json:"from_seat"`
 }
 
 // errNoWakeSeal is a wake sealed by run steers built with no wake seal.
@@ -75,7 +77,7 @@ var errNoWakeSeal = errors.New("engine: these run steers hold no seal for a wake
 // ([steer.Wake.Cut]).
 func (s *runSteers) sealWake(turnID, job string, w steer.Wake) (_ sandbox.SealedWake, err error) {
 	defer origin.Stamp(&err)
-	if s.wake == nil {
+	if s.wake == nil || (w.FromARun() && s.run == nil) {
 		return sandbox.SealedWake{}, errNoWakeSeal
 	}
 	if w.At.IsZero() {
@@ -91,10 +93,16 @@ func (s *runSteers) sealWake(turnID, job string, w steer.Wake) (_ sandbox.Sealed
 			ByKind: string(w.ByKind), WorkingFor: w.WorkingFor, Conversation: w.Conversation,
 			Partition: w.Partition, Label: w.Label, OwesAnswer: w.OwesAnswer, At: w.At.UTC(),
 			Owes: w.Owes, Seen: w.Seen, Text: string(runes), Cut: w.Cut, Informs: w.Informs,
+			FromRun: w.FromRun, FromSeat: w.FromSeat,
 		})
 		if marshalErr != nil {
 			return sandbox.SealedWake{}, fmt.Errorf("engine: sealing wake %s to turn %s: %w", w.ID, turnID,
 				marshalErr)
+		}
+		if w.FromARun() {
+			// A RUN'S MESSAGE IS NEVER CUT (ADR-0176): its sender was held to
+			// [steer.MaxWakeRunes], and a seal past the item's bytes is refused.
+			return sandbox.SealedWake{ID: w.ID, Sealed: s.run.signer.Seal(body), From: w.FromRun}, nil
 		}
 		sealed := s.wake.signer.Seal(body)
 		if len(sealed) <= sandbox.MaxWakeItemBytes || len(runes) == 0 {
@@ -110,16 +118,17 @@ func (s *runSteers) sealWake(turnID, job string, w steer.Wake) (_ sandbox.Sealed
 // this node lacks the key it is sealed under, at ERROR where it does not
 // verify or opens as another turn's, job's or wake's.
 func (s *runSteers) openWake(turnID, job string, sealed sandbox.SealedWake) (steer.Wake, bool) {
-	if s.wake == nil {
+	pair := s.sealOf(sealed)
+	if pair == nil {
 		return steer.Wake{}, false
 	}
-	raw, verdict := s.wake.verifier.Open(sealed.Sealed)
+	raw, verdict := pair.verifier.Open(sealed.Sealed)
 	switch verdict {
 	case recordseal.Verified:
 	case recordseal.KeyUnknown:
 		s.warnOnce(turnID, "wake:"+sealed.ID, func() {
 			log.Warn("steer_wake_key_unknown", "turn_id", turnID, "wake_id", sealed.ID,
-				"held_keys", s.wake.verifier.KeyIDs(),
+				"held_keys", pair.verifier.KeyIDs(),
 				"detail", "the wake is sealed under a key this node does not hold, so it waits; add the "+
 					"key to secrets.keys, or a node that holds it hands the wake over")
 		})
@@ -133,7 +142,7 @@ func (s *runSteers) openWake(turnID, job string, sealed sandbox.SealedWake) (ste
 		s.wakeUnverified(turnID, sealed.ID, "the sealed body does not decode")
 		return steer.Wake{}, false
 	}
-	if body.TurnID != turnID || body.Job != job || body.ID != sealed.ID {
+	if body.TurnID != turnID || body.Job != job || body.ID != sealed.ID || body.FromRun != sealed.From {
 		s.wakeUnverified(turnID, sealed.ID, fmt.Sprintf("it was sealed as wake %q of job %q of turn %q",
 			body.ID, body.Job, body.TurnID))
 		return steer.Wake{}, false
@@ -141,7 +150,18 @@ func (s *runSteers) openWake(turnID, job string, sealed sandbox.SealedWake) (ste
 	return steer.Wake{ID: body.ID, Triggers: body.Triggers, Keys: body.Keys, By: body.By,
 		ByKind: iam.ActorKind(body.ByKind), WorkingFor: body.WorkingFor, Conversation: body.Conversation,
 		Partition: body.Partition, Label: body.Label, OwesAnswer: body.OwesAnswer, At: body.At,
-		Owes: body.Owes, Seen: body.Seen, Text: body.Text, Cut: body.Cut, Informs: body.Informs}, true
+		Owes: body.Owes, Seen: body.Seen, Text: body.Text, Cut: body.Cut, Informs: body.Informs,
+		FromRun: body.FromRun, FromSeat: body.FromSeat}, true
+}
+
+// sealOf is the seal a wake item's entry is opened in: another run's message's
+// own ([SteerRunDomain]) where it names its sending run, a wake's otherwise;
+// nil where these run steers hold none.
+func (s *runSteers) sealOf(sealed sandbox.SealedWake) *sealPair {
+	if sealed.From != "" {
+		return s.run
+	}
+	return s.wake
 }
 
 // wakeUnverified says once that a wake on turnID's record does not open.
@@ -170,11 +190,15 @@ func (s *runSteers) openWakes(turnID string, n sandbox.RunNote) []steer.Wake {
 // wakeKeyUnknown reports whether a wake item n carries a wake sealed under a
 // key this node does not hold ([runSteers.waitsForItsKey]).
 func (s *runSteers) wakeKeyUnknown(n sandbox.RunNote) bool {
-	if !n.IsWake() || s.wake == nil {
+	if !n.IsWake() {
 		return false
 	}
 	return slices.ContainsFunc(n.Wake.Wakes, func(w sandbox.SealedWake) bool {
-		_, verdict := s.wake.verifier.Open(w.Sealed)
+		pair := s.sealOf(w)
+		if pair == nil {
+			return false
+		}
+		_, verdict := pair.verifier.Open(w.Sealed)
 		return verdict == recordseal.KeyUnknown
 	})
 }
@@ -194,10 +218,9 @@ func (s *runSteers) fileWake(ctx context.Context, turnID, job string, w steer.Wa
 }
 
 // maxWakeItemUnits is the most UTF-16 units one wake item's message may take
-// ([wakeItemMessage]): what one Claude Code hook answer has left beside a
-// person's widest note, as a late call's account is held to
-// ([maxLateItemUnits]), so a note and a wake always share one answer.
-var maxWakeItemUnits = maxLateItemUnits
+// ([wakeItemMessage]): the engine's one item bound ([maxLateItemUnits]), so a
+// note and a wake always share one answer.
+const maxWakeItemUnits = maxLateItemUnits
 
 // wakeItemMessage is the wakes of one item as the inbox hands them to the
 // model of the job they are for, oldest first ([prompts.WakeMessage]), under b
@@ -360,6 +383,11 @@ func (s *runSteers) joined(ctx context.Context, ident runIdentity, items []opene
 		for _, item := range items {
 			read := readingOf(*item.held.Read)
 			for _, w := range item.wakes {
+				if w.FromARun() {
+					// ANOTHER RUN'S MESSAGE IS NO DELIVERY OF THE SEAT'S: no
+					// record says it joined, and nothing is owed on its read.
+					continue
+				}
 				if err := s.publishJoined(ctx, ident, w, item.held.For, types.JoinDelivered, &read,
 					read.At); err != nil {
 					log.ErrorContext(ctx, "steer_wake_end_unrecorded", "turn_id", ident.turn.TurnID,
@@ -407,6 +435,9 @@ func (s *runSteers) endWakes(ctx context.Context, run sandbox.PendingRun, items 
 		}
 		step := servedStep(n)
 		for _, w := range wakes {
+			if w.FromARun() {
+				continue
+			}
 			if err := s.publishJoined(ctx, ident, w, n.For, outcome, step, at); err != nil {
 				return fmt.Errorf("engine: recording what became of wake %s of turn %s: %w", w.ID, run.TurnID, err)
 			}

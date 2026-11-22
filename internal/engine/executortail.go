@@ -40,7 +40,7 @@ func (e *Engine) armExecutorTails(ctx context.Context) error {
 	if e.backends.Queue != nil {
 		q = e.backends.Queue
 	}
-	reader, stop, err := serveExecutorTails(ctx, owner, e.id, pending, e.sandboxFeeds, q)
+	reader, stop, err := serveExecutorTails(ctx, owner, e.id, pending, e.sandboxFeeds, q, e.answerBudget)
 	if err != nil {
 		return err
 	}
@@ -61,7 +61,8 @@ type sandboxTailQueue interface {
 // is a broker-less node, the whole fleet: it owns every run, answers for
 // itself, and serves nobody.
 func serveExecutorTails(ctx context.Context, owner, node string, pending sandbox.PendingReader,
-	feeds *sandbox.LiveFeeds, q sandboxTailQueue) (*sandbox.TailReader, queue.Unsubscribe, error) {
+	feeds *sandbox.LiveFeeds, q sandboxTailQueue, answers *queue.AnswerBudget) (*sandbox.TailReader,
+	queue.Unsubscribe, error) {
 
 	reader := &sandbox.TailReader{Owner: owner, Node: node, Pending: pending, Feeds: feeds,
 		Condition: tailCondition}
@@ -69,7 +70,7 @@ func serveExecutorTails(ctx context.Context, owner, node string, pending sandbox
 		return reader, nil, nil
 	}
 	reader.Queue = q
-	stop, err := sandbox.ServeTail(ctx, q, owner, node, pending, feeds, tailCondition)
+	stop, err := sandbox.ServeTail(ctx, q, owner, node, pending, feeds, tailCondition, answers)
 	if err != nil {
 		return nil, nil, err
 	}

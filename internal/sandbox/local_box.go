@@ -11,12 +11,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/shellword"
 )
@@ -175,11 +178,20 @@ func (b *directBox) Home() string { return b.layout.home() }
 // directory from, each pointed at the box's own .tmp.
 //
 // ONE LIST, so no process in the box writes a temporary file outside it.
-// TMPDIR alone is not enough: Claude Code
-// roots its per-uid temp directory at CLAUDE_CODE_TMPDIR or else a literal
-// /tmp, and Python's tempfile reads TMP and TEMP. A container or an E2B VM
-// needs none of this: its /tmp is inside the boundary.
-var TempRootEnv = []string{"TMPDIR", "TMP", "TEMP", "CLAUDE_CODE_TMPDIR"}
+// TMPDIR alone is not enough: Python's tempfile reads TMP and TEMP, and a
+// harness may root its own temporary directory at a variable of its own or
+// else a literal /tmp (its built-in profile's executor.temp_env), each set for
+// every box since a reconnected box knows no harness. A container or an E2B
+// VM needs none of this: its /tmp is inside the boundary.
+var TempRootEnv = sync.OnceValue(func() []string {
+	env := []string{"TMPDIR", "TMP", "TEMP"}
+	for _, name := range harnessprofile.ExecutorRunners() {
+		if runner, _ := harnessprofile.ExecutorOf(name); runner.TempEnv != "" && !slices.Contains(env, runner.TempEnv) {
+			env = append(env, runner.TempEnv)
+		}
+	}
+	return env
+})
 
 // childEnv is the allowlisted host environment ([hostbox.Inherit]) plus the
 // box's home, its temporary directory and the run env. Allowlisted because the
@@ -193,7 +205,7 @@ func (b *directBox) childEnv(extra map[string]string) map[string]string {
 	env["XDG_DATA_HOME"] = filepath.Join(home, ".local", "share")
 	env["XDG_STATE_HOME"] = filepath.Join(home, ".local", "state")
 	env["XDG_CACHE_HOME"] = filepath.Join(home, ".cache")
-	for _, name := range TempRootEnv {
+	for _, name := range TempRootEnv() {
 		env[name] = b.layout.tmp()
 	}
 	for key, value := range b.env {
@@ -487,6 +499,17 @@ func (b *directBox) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	}
 	content, err := readHomeFile(b.layout, rel, path, readLimit(b.readCap))
 	return content, b.explain(path, rel, err)
+}
+
+// OpenWhole implements [Sandbox] for a box on the engine host: the file
+// opened once and its size read off that open ([openHomeWhole]).
+func (b *directBox) OpenWhole(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	rel, err := b.homeRel(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	r, size, err := openHomeWhole(b.layout, rel, path, readLimit(b.readCap))
+	return r, size, b.explain(path, rel, err)
 }
 
 // OpenFile implements [Sandbox] for a box on the engine host: the file itself,
@@ -969,6 +992,16 @@ func (b *containerBox) ReadFile(ctx context.Context, path string) ([]byte, error
 	return content, b.explain(path, rel, err)
 }
 
+// OpenWhole implements [Sandbox]: the host side of the mount, opened once.
+func (b *containerBox) OpenWhole(ctx context.Context, path string) (io.ReadCloser, int64, error) {
+	rel, err := b.homeRel(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	r, size, err := openHomeWhole(b.layout, rel, path, readLimit(b.readCap))
+	return r, size, b.explain(path, rel, err)
+}
+
 // OpenFile implements [Sandbox]: the host side of the mount, read in place.
 func (b *containerBox) OpenFile(ctx context.Context, path string) (io.ReadCloser, error) {
 	rel, err := b.homeRel(path)
@@ -1133,6 +1166,30 @@ func readHomeFile(l boxLayout, rel, path string, limit int) ([]byte, error) {
 		return nil, fmt.Errorf("local sandbox: read %s: %w", path, err)
 	}
 	return content, err
+}
+
+// openHomeWhole is a local box's OpenWhole once the path is mapped onto its
+// home: the file's size from a stat of the open file, never of the path, and
+// a SECTION to that size, so bytes written after the open are not read.
+// Refused past limit as [readHomeFile] refuses it, the file closed.
+func openHomeWhole(l boxLayout, rel, path string, limit int) (io.ReadCloser, int64, error) {
+	f, err := openHomeRegular(l, rel)
+	switch {
+	case absent(err):
+		return io.NopCloser(strings.NewReader("")), 0, nil
+	case err != nil:
+		return nil, 0, fmt.Errorf("local sandbox: open %s: %w", path, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, fmt.Errorf("local sandbox: stat %s: %w", path, err)
+	}
+	if size := info.Size(); size > int64(limit) {
+		_ = f.Close()
+		return nil, 0, &FileTooLargeError{Path: path, Limit: limit, Size: size}
+	}
+	return hostSection{Reader: io.NewSectionReader(f, 0, info.Size()), Closer: f}, info.Size(), nil
 }
 
 // writeHomeFile is a local box's WriteFile once the path is mapped onto its

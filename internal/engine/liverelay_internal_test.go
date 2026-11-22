@@ -297,7 +297,7 @@ func newRelayNode(t *testing.T, broker *memory.Broker, self string,
 	n.relay = newLiveRelay(self, q, relayWireFor(t, relayRing),
 		func(context.Context) ([]string, error) { return fleet, nil },
 		liveDomains(), n.outOfService,
-		n.engine.liveListening, n.engine.deliverLive, n.engine.liveGap)
+		n.engine.liveListening, n.engine.deliverLive, n.engine.liveGap, queue.NewAnswerBudget(nil))
 	n.engine.liveRelay.Store(n.relay)
 	stop, err := n.relay.serve(t.Context())
 	if err != nil {
@@ -477,7 +477,7 @@ func TestAServerSaysWhatAFollowerCannotPlaceItselfIn(t *testing.T) {
 				return domains
 			}
 			return nil
-		}, nil, nil, nil)
+		}, nil, nil, nil, nil)
 	ctx := t.Context()
 
 	first, _ := r.answerNow(ctx, relayAsk{})
@@ -576,7 +576,7 @@ func TestARelayServerKeepsOnlyWhatAFollowerCanStillAskFor(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
 	r := newLiveRelay("a", nil, nil, nil, liveDomains(),
-		func(context.Context, ...string) []string { return nil }, nil, nil, nil)
+		func(context.Context, ...string) []string { return nil }, nil, nil, nil, nil)
 
 	r.record(liveBatch{Chat: posted("m-nobody-asked-for")})
 	if len(r.ring) != 0 || r.held != 0 {
@@ -627,7 +627,7 @@ func TestARelayServerKeepsOnlyWhatAFollowerCanStillAskFor(t *testing.T) {
 // the wake-up channel with nobody waiting on it, and a run allocates.
 func TestABatchNobodyCanAskForIsNeverCopied(t *testing.T) {
 	r := newLiveRelay("a", nil, nil, nil, liveDomains(),
-		func(context.Context, ...string) []string { return nil }, nil, nil, nil)
+		func(context.Context, ...string) []string { return nil }, nil, nil, nil, nil)
 	batch := liveBatch{Inbox: []inbox.Movement{{Source: relayInboxSource, Handle: "ana",
 		UnreadDelta: 1, Subject: "t-1", Reason: string(worklet.ReasonAssignee)}}}
 	if allocs := testing.AllocsPerRun(100, func() { r.record(batch) }); allocs != 0 {
@@ -881,7 +881,7 @@ func TestARelayServerAnswersOnlyAnAskTheFleetSigned(t *testing.T) {
 	ctx := t.Context()
 	wire := relayWireFor(t, relayRing)
 	r := newLiveRelay("a", nil, wire, nil, liveDomains(),
-		func(context.Context, ...string) []string { return nil }, nil, nil, nil)
+		func(context.Context, ...string) []string { return nil }, nil, nil, nil, nil)
 	first, _ := r.answerNow(ctx, relayAsk{})
 	r.record(liveBatch{Chat: posted("m-1")})
 	now := time.Now()
@@ -930,7 +930,7 @@ func TestARelayServerAnswersOnlyAnAskTheFleetSigned(t *testing.T) {
 		t.Errorf("an ask past its deadline was answered %+v, want unserved and nothing", got)
 	}
 
-	if _, err := newLiveRelay("a", nil, nil, nil, nil, nil, nil, nil, nil).serve(ctx); err == nil {
+	if _, err := newLiveRelay("a", nil, nil, nil, nil, nil, nil, nil, nil, nil).serve(ctx); err == nil {
 		t.Error("a relay with no envelopes served its subject, answering unsigned")
 	}
 }

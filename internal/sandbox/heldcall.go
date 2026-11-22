@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/delegated"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -90,6 +91,20 @@ const HeldApproversSSH = "ssh"
 // a person the kind's delegated-decisions rule names in escalate_to, at a
 // fresh step-up (authz's release.approve).
 const HeldApproversRelease = "release"
+
+// HeldApproversAdmin is [HeldCall.Approvers] for a growth integration's
+// spend, public or admin act: a person holding admin alone, at a fresh
+// step-up, never a lead, a named person or a delegate (ADR-0171; authz's
+// growth.*.approve). Such a call lapses at [HeldCall.LapsesAt].
+const HeldApproversAdmin = "admin"
+
+// HeldLapse is how long a growth act waits for its answer before it lapses:
+// a day, the budget cycle its change acts on. A raise allowed later acts on
+// another day's spend than the one the agent reasoned about.
+const HeldLapse = 24 * time.Hour
+
+// heldApprovers is every [HeldCall.Approvers] a call may name beside empty.
+var heldApprovers = []string{HeldApproversSSH, HeldApproversRelease, HeldApproversAdmin}
 
 // maxHeldBindingBytes bounds [HeldCall.Binding]: a SHA-256 in hex.
 const maxHeldBindingBytes = 64
@@ -269,6 +284,11 @@ type HeldCall struct {
 	// HeldAt is when the call was held.
 	HeldAt time.Time `json:"held_at"`
 
+	// LapsesAt is when a call answered by [HeldApproversAdmin] lapses
+	// unanswered, [HeldLapse] after HeldAt: the engine then answers it Deny,
+	// and nothing runs. Zero for every other call, which waits until answered.
+	LapsesAt time.Time `json:"lapses_at,omitzero"`
+
 	// CallingAt is when a resume began making the call
 	// ([PendingStore.MarkHeldCall]): zero until then, and from then on the
 	// reason no resume makes it again.
@@ -295,6 +315,10 @@ type HeldCall struct {
 
 // Calling reports whether a resume has begun making the call.
 func (h HeldCall) Calling() bool { return !h.CallingAt.IsZero() }
+
+// Lapsed reports whether the call lapses and now is past it ([HeldCall.LapsesAt]):
+// it then takes Deny alone, never an answer that makes it.
+func (h HeldCall) Lapsed(now time.Time) bool { return !h.LapsesAt.IsZero() && !now.Before(h.LapsesAt) }
 
 // Delegated reports whether the call waits on its delegates alone: put to
 // agent delegates and not yet escalated to people.
@@ -376,6 +400,22 @@ type HeldVerdict struct {
 	Reason     string    `json:"reason"`
 	Findings   []string  `json:"findings,omitempty"`
 	At         time.Time `json:"at"`
+}
+
+// Redacted is the answer with a secret its reason or findings carry replaced
+// by its marker, a copy: redacted where it is recorded, since every reader of
+// the row reads them. Who gave it, the verdict and the confidence are closed
+// words or a seat's name.
+func (v HeldVerdict) Redacted() HeldVerdict {
+	v.Reason = redact.Secrets(v.Reason)
+	if v.Findings != nil {
+		findings := make([]string, len(v.Findings))
+		for i, f := range v.Findings {
+			findings[i] = redact.Secrets(f)
+		}
+		v.Findings = findings
+	}
+	return v
 }
 
 // HeldEscalation is why a delegated call went to people: the engine's closed
@@ -515,9 +555,22 @@ func (h HeldCall) validate(decided *decision.Decision) []error {
 				"escalation on a call being held, and both come after it is held"))
 		}
 	}
-	if h.Approvers != "" && ((h.Approvers != HeldApproversSSH && h.Approvers != HeldApproversRelease) || !h.Fixed) {
+	if h.Approvers != "" && (!slices.Contains(heldApprovers, h.Approvers) || !h.Fixed) {
 		found = append(found, fieldRefusal("held_call.approvers", "names approvers this build does "+
 			"not know, or names them on a call that may be allowed always"))
+	}
+	growthAct := slices.Contains([]delegated.Kind{delegated.KindAdSpend, delegated.KindPublicPost,
+		delegated.KindAccountAdmin}, delegated.Kind(h.Act))
+	switch {
+	case growthAct != (h.Approvers == HeldApproversAdmin):
+		found = append(found, fieldRefusal("held_call.approvers", "is admin exactly for a growth act "+
+			"(ad_spend, public_post, account_admin), which an administrator alone answers"))
+	case growthAct && !h.LapsesAt.Equal(h.HeldAt.Add(HeldLapse)):
+		found = append(found, fieldRefusal("held_call.lapses_at", "is not a day after held_at, and a "+
+			"growth act lapses a day after it is held"))
+	case !growthAct && !h.LapsesAt.IsZero():
+		found = append(found, fieldRefusal("held_call.lapses_at", "is set on a call that waits until "+
+			"answered"))
 	}
 	return found
 }
@@ -566,8 +619,54 @@ func (s *CallSeal) SealArguments(turnID string, h HeldCall, args map[string]any)
 	return s.cipher.Encrypt(string(body), heldAAD("arguments", turnID, h))
 }
 
-// OpenArguments opens held call h's arguments, as run turnID's row carries it.
+// OpenArguments opens held call h's arguments, as run turnID's row carries it,
+// redacted as values ([redact.Args]): what every reader is shown but those
+// [CallSeal.OpenRawArguments] names.
 func (s *CallSeal) OpenArguments(turnID string, h HeldCall) (map[string]any, error) {
+	args, err := s.OpenRawArguments(turnID, h)
+	if err != nil {
+		return nil, err
+	}
+	return redact.Args(args), nil
+}
+
+// OpenArgumentsFor opens run's held call's arguments for one reader, by THE ONE
+// RULE every view that serves them answers by: as the call would send them,
+// with their digest ([HeldArgumentsDigest]), only to a reader who may answer
+// the call (mayAnswer, decided as internal/runanswer's May decides it) and
+// only while it waits ([PendingRun.HeldOpen]), who consents to those bytes.
+// Every other reader, and every reader once it is answered, made or ended,
+// gets them redacted ([CallSeal.OpenArguments]) and an empty digest: nothing
+// is answered from them, and a digest of the raw bytes beside their redacted
+// form would let a short secret in them be guessed.
+func (s *CallSeal) OpenArgumentsFor(run PendingRun, mayAnswer bool) (map[string]any, string, error) {
+	if run.HeldCall == nil {
+		return nil, "", fmt.Errorf("sandbox: run %s holds no call to open the arguments of", run.TurnID)
+	}
+	if !mayAnswer || !run.HeldOpen() {
+		args, err := s.OpenArguments(run.TurnID, *run.HeldCall)
+		return args, "", err
+	}
+	args, err := s.OpenRawArguments(run.TurnID, *run.HeldCall)
+	if err != nil {
+		return nil, "", err
+	}
+	digest, err := HeldArgumentsDigest(args)
+	if err != nil {
+		return nil, "", err
+	}
+	return args, digest, nil
+}
+
+// OpenRawArguments opens held call h's arguments as the call would send them.
+// ONLY WHO CONSENTS TO OR MAKES THE PENDING CALL reads these: a person shown
+// the call by [CallSeal.OpenArgumentsFor]'s rule, which is every view's; Allow
+// once's digest check, which compares and serves nothing; the delegate
+// deciding it; and the engine making, escalating, settling or digesting it.
+// Every other reader is shown [CallSeal.OpenArguments], so a new reader is
+// redacted unless it asks, and `git grep RawArguments` is the list of who
+// reads them raw.
+func (s *CallSeal) OpenRawArguments(turnID string, h HeldCall) (map[string]any, error) {
 	if s == nil {
 		return nil, ErrNoCallSeal
 	}

@@ -64,9 +64,9 @@ func (r *retention) backupGauges(ctx context.Context) {
 		return
 	}
 	if holds, err := r.fleet.Holds(ctx); err == nil {
-		// A count stuck above zero is a crashed holder: only its owner or
-		// the stale bound removes a hold, and until then the trim stalls
-		// with no other symptom.
+		// A count stuck above zero is a crashed holder, which the trim
+		// reads past once it has watched its pin go unrenewed; nothing
+		// removes the row but its owner.
 		r.metrics.Set(metrics.BackupHolds, float64(len(holds)), nil)
 	}
 	points, err := r.fleet.BackupPoints(ctx)

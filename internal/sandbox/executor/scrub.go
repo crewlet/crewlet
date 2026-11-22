@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // THE SCRUB A KEPT SESSION LEAVES ITS BOX THROUGH: every secret the engine put
@@ -215,10 +216,10 @@ func (l *lineRun) done() {
 // holds.
 const (
 	// streamHeldBytes is one redact.Stream: its stages' windows, at most
-	// about 21 MiB of text and 26 MiB of what they keep beside it, as
-	// redact's package doc states and its own test holds (21,589 and 26,941
-	// KiB), and for a moment the 484 KiB its keys' stage outgrows: 47.9 MiB.
-	streamHeldBytes = 48 << 20
+	// about 21 MiB of text and 28 MiB of what they keep beside it, as
+	// redact's package doc states and its own test holds (21,589 and 29,109
+	// KiB), and for a moment the 484 KiB its keys' stage outgrows: 49.98 MiB.
+	streamHeldBytes = 50 << 20
 	// scannerHeldBytes is one jsonscan.Scanner: its read buffer and its
 	// struct, the open containers' bits among it, as jsonscan's package doc
 	// states and its own test holds. The scrub never captures a value, so
@@ -263,6 +264,12 @@ func scrubHeldBytes(plain int64, longest int) int64 {
 	text := int64(streamHeldBytes + pieceHeldBytes + 3*longest + utf8.UTFMax + providerToolNameMax + 1)
 	return 2*text + 2*rewriteHeldBytes + archiveHeldBytes + plain/16 + plain/512 + planBlockBytes
 }
+
+// scrubLongestMax is the longest value a take's scrub can hold ([scrubber]):
+// one line of every byte a capture scrubs out (sandbox.MaxScrubBytes), in its
+// JSON form, six bytes a byte where each is a control byte, `\u00XX`: no byte
+// escapes longer ([jsonEscaped]; an invalid one writes U+FFFD, three).
+const scrubLongestMax = 6 * sandbox.MaxScrubBytes
 
 // scrubber takes the engine's own values out of text: a whole text through
 // strings.Replacer ([scrubber.apply]), and a text that arrives in pieces

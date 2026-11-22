@@ -594,9 +594,12 @@ type RoleSandbox struct {
 }
 
 // DefaultMaxConcurrentRuns is the runs a seat that names no
-// sandbox.max_concurrent_runs holds at once: one, the seat taking no other
-// conversation while its run works (ADR-0169).
-const DefaultMaxConcurrentRuns = 1
+// sandbox.max_concurrent_runs holds at once (ADR-0169). TWO: a second run keeps
+// a busy seat answering an unrelated request without a second seat, while a
+// seat at rest holds no box, so a run that never starts spends nothing; a third
+// would charge a third launch floor against the seat's budget for a gain only a
+// seat's own owner can judge.
+const DefaultMaxConcurrentRuns = 2
 
 // ConcurrentRuns is how many of the seat's executor runs may hold it at once:
 // its max_concurrent_runs, or [DefaultMaxConcurrentRuns] where it names none.
@@ -829,6 +832,12 @@ type Role struct {
 	// on and names a host: "read" or "operate", which internal/authz's SSH
 	// grants admit to ssh_read and ssh_operate. Empty is no grant.
 	SSHLevel string `yaml:"ssh_level,omitempty" json:"ssh_level,omitempty"`
+
+	// GrowthLevels is the seat's level on each growth lane it is on at, by
+	// the lane's kind ("read", "operate" or "administer"), which
+	// internal/authz's growth grants admit to that product's tools. A lane
+	// that is off is absent.
+	GrowthLevels map[string]string `yaml:"growth_levels,omitempty" json:"growth_levels,omitempty"`
 
 	// Delegate is whether an enabled delegation rule names this agent seat a
 	// delegate, which internal/authz's delegate grant admits to

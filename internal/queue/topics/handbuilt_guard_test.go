@@ -233,7 +233,7 @@ var acknowledgedDrift = map[driftKey]string{}
 var anotherVocabulary = map[driftKey]string{
 	{"executor", "agent-switched"}: "OpenCode 2's kind of message for a switch of a session's " +
 		"agent (`SessionMessage.Info`'s `type`), which a session's transcript reads off its " +
-		"export (internal/sandbox/executor/transcript.go) and this engine never publishes",
+		"export (internal/sandbox/executor/opencodetranscript.go) and this engine never publishes",
 }
 
 type hit struct {

@@ -12,15 +12,14 @@
  *
  * KEPT CURRENT three ways, because each misses what the others catch: every
  * 15 seconds while the page is open (a limit that lifted, a test that passed
- * elsewhere), when the fleet applies a new configuration (a model added or
- * removed by anyone), and when a seat's provider limit changes on the live
- * state (a model just started sitting out).
+ * elsewhere), when this node applies a new configuration (every question is
+ * asked again then, `Store.applyHealth`), and when a seat's provider limit
+ * changes on the live state (a model just started sitting out).
  */
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { EXECUTOR_HARNESSES } from "~/contract/models.ts";
 import { indexOrg, type Seat } from "~/lib/seats.ts";
-import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
+import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { usesOf, type Uses } from "~/lib/modelUses.ts";
@@ -48,6 +47,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 /** No name for any model: each is said by its id. */
 const NO_NAMES: ReadonlyMap<string, string> = new Map();
 const NO_ENTRIES: readonly ModelEntriesAnswer["entries"][number][] = [];
+const NO_EXECUTORS: readonly string[] = [];
 
 /** One model as the page draws it: the engine's reading, and for an admin the document's entry. */
 export interface ModelView {
@@ -56,7 +56,7 @@ export interface ModelView {
   model: string;
   /** Its model as a person reads it ("Claude Opus 5.5"), or its id where nothing names it (`modelNames.ts`). */
   modelName: string;
-  /** Whether its harness can run a seat's coding (`EXECUTOR_HARNESSES`, held to the engine). */
+  /** Whether its harness can run a seat's coding: one of the engine's `executor_harnesses`. */
   executor: boolean;
   /** The admin's reading, or the member's, which names no credential. */
   entry: ModelEntry | MemberModelEntry;
@@ -94,6 +94,12 @@ export interface ModelsData {
   assistant: { key: string | null };
   /** The model the Advisor explains its findings with, or null where it has none and runs its checks alone. */
   advisor: { key: string | null };
+  /**
+   * The harnesses the engine runs a seat's executor on, in the profiles' order
+   * (`executor_harnesses`): served rather than compiled in, so a runner a build
+   * adds needs no dashboard rebuild. Empty until the engine answers.
+   */
+  executors: readonly string[];
   loading: boolean;
   error: string | null;
   /**
@@ -167,7 +173,7 @@ export function modelViews(
       harness: entry.harness,
       model: entry.model,
       modelName: names.get(nameKey(entry.harness, entry.model)) ?? entry.model,
-      executor: (EXECUTOR_HARNESSES as readonly string[]).includes(entry.harness),
+      executor: answer?.executor_harnesses.includes(entry.harness) ?? false,
       entry,
       admin: answer?.reading === "admin" ? (entry as ModelEntry) : null,
       uses: usesOf(entry.used_by),
@@ -201,25 +207,19 @@ export function useModelsData(): ModelsData {
   });
   const config = useQuery("config", undefined, { enabled: admin });
   const org = useOrg();
-  const health = useEngineHealth();
   const agents = useAgents();
 
-  // A NEW CONFIGURATION APPLIED, OR A LIMIT THAT MOVED, is asked about at once.
-  const epoch = health?.applied_epoch ?? 0;
+  // A LIMIT THAT MOVED is asked about at once; a configuration applied re-reads
+  // every question (`Store.applyHealth`).
   const limits = limitsKey(agents);
   const { refetch: refetchEntries } = entries;
   const { refetch: refetchConfig } = config;
-  const seen = useRef({ epoch, limits });
+  const seen = useRef(limits);
   useEffect(() => {
-    const was = seen.current;
-    seen.current = { epoch, limits };
-    if (was.epoch !== epoch) {
-      refetchEntries();
-      if (admin) refetchConfig();
-    } else if (was.limits !== limits) {
-      refetchEntries();
-    }
-  }, [epoch, limits, admin, refetchEntries, refetchConfig]);
+    if (seen.current === limits) return;
+    seen.current = limits;
+    refetchEntries();
+  }, [limits, refetchEntries]);
 
   const seats = useMemo(() => indexOrg(org).seats.filter((s) => s.kind !== "human"), [org]);
   const doc = admin ? ((config.data as CompanyDocument | null) ?? null) : null;
@@ -243,6 +243,7 @@ export function useModelsData(): ModelsData {
     node: answer?.node ?? "",
     assistant,
     advisor,
+    executors: answer?.executor_harnesses ?? NO_EXECUTORS,
     loading: (entries.loading && !entries.data) || (admin && config.loading && !config.data),
     error: entries.error
       ? (entries.detail ?? entries.error)

@@ -83,7 +83,7 @@ func (c *Company) SeatAccessConnected(kind string) bool {
 	case "ssh":
 		return in.SSH != nil
 	}
-	return false
+	return isGrowthSeat(kind) && in.growthBlock(kind) != nil
 }
 
 // SeatAccessPending reports an integration the company connects whose seats

@@ -543,7 +543,7 @@ func (t *Router) Handle(pattern string, p Policy, h http.Handler) error {
 	case p.Action == "":
 		return newPolicyError(pattern, "names no action")
 	}
-	if _, known := rules[p.Action]; !known {
+	if _, known := ruleOf(p.Action); !known {
 		return newPolicyError(pattern,
 			"names the action "+string(p.Action)+", which this build has no rule for")
 	}

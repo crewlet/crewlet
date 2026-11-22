@@ -158,8 +158,10 @@ type MCPApproval struct {
 	// Acting is the decision the call carries out: the newest question the
 	// seat asked on that item which a person answered; null for none.
 	Acting *sandbox.HeldAct `json:"acting"`
-	// Args are what the call would send, opened from their seal: null where
-	// the seal does not open on this node.
+	// Args are what the call would send, opened from their seal: as sent
+	// while it waits on an answer the reader may give, redacted otherwise
+	// ([sandbox.CallSeal.OpenArgumentsFor]); null where the seal does not
+	// open on this node.
 	Args map[string]any `json:"args"`
 	// Status is `waiting` while the run waits on the answer, and
 	// `answered` once one is recorded and the run is carried on with it.
@@ -454,8 +456,7 @@ func (s Sources) mcpApprovals(ctx context.Context) ([]MCPApproval, error) {
 		}
 		row := MCPApproval{ID: held.ID, At: held.HeldAt, Server: held.Server, Tool: held.Tool,
 			Raw: held.Raw, Digest: held.Digest, Seat: run.AgentHandle, TurnID: run.TurnID,
-			LaunchID: run.LaunchID, Args: s.heldArguments(run), Status: MCPApprovalWaiting,
-			Acting: held.Acting}
+			LaunchID: run.LaunchID, Status: MCPApprovalWaiting, Acting: held.Acting}
 		if item := run.WorkItem; item != nil {
 			key := cmp.Or(item.Key, item.ID)
 			row.Item = &key
@@ -475,12 +476,23 @@ func (s Sources) mcpApprovals(ctx context.Context) ([]MCPApproval, error) {
 			// Not a call a person can answer yet, or any more.
 			continue
 		}
+		row.Args = s.approvalArgs(ctx, run)
 		out = append(out, row)
 	}
 	slices.SortFunc(out, func(a, b MCPApproval) int {
 		return cmp.Or(a.At.Compare(b.At), cmp.Compare(a.ID, b.ID))
 	})
 	return out, nil
+}
+
+// approvalArgs is the arguments run's held call shows the reader in ctx
+// ([sandbox.CallSeal.OpenArgumentsFor]). One whose right to answer this node
+// cannot decide yet is shown them redacted, the side a mistake must fail on:
+// the call's own read (`GET /mcp-approvals/{id}`) shows it whole to who may
+// answer it.
+func (s Sources) approvalArgs(ctx context.Context, run sandbox.PendingRun) map[string]any {
+	w, err := s.waiting(ctx, run, "")
+	return s.heldArguments(run, err == nil && w.MayAnswer)
 }
 
 // mcpStatusOf is `mcp_servers_status` read off the presence leases given, the
@@ -490,7 +502,7 @@ func (s Sources) mcpApprovals(ctx context.Context) ([]MCPApproval, error) {
 // the status question fills them from the offer it reads once
 // ([Sources.mcpServersStatus]), and a server's detail reads no shelf.
 func (s Sources) mcpStatusOf(leases []coord.Lease, records map[string]coord.NodeStatusRecord,
-	grants map[string]*coord.MCPGrant) MCPStatusAnswer {
+	grants map[string]*coord.OAuthGrant) MCPStatusAnswer {
 
 	type report struct {
 		node     string

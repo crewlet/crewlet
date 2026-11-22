@@ -3,6 +3,7 @@ package runner
 import (
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/toolname"
@@ -56,6 +57,12 @@ type Asked struct {
 	// (ADR-0114): Answer and By are empty, and the run is told the refusal
 	// in the engine's words ([RefusedReply]), never an empty answer.
 	Refused *RefusedReply
+
+	// Waited is how the run this run waited for with `wait_for_run` left its
+	// seat's slots, where the engine answered the wait (ADR-0176): told as
+	// that run's account, never as a person's answer ([Asked.waited]). Nil
+	// for every other answer, a person's answer to a wait included.
+	Waited *types.RunWaited
 }
 
 // withdrawnTail is what a run whose question or call its seat withdrew is told
@@ -168,6 +175,10 @@ func (a Asked) Continuation(b provenance.Boundary) string {
 	if a.Refused != nil {
 		return a.refusedContinuation(b)
 	}
+	if a.Waited != nil {
+		return "## The run you waited for has left its seat\n\n" + a.waited(b, "You") + "\n\n" +
+			"Carry on with the task from where you stopped, with this in mind, and finish it as the task asks."
+	}
 	if a.Held != nil {
 		return a.heldContinuation(b)
 	}
@@ -202,6 +213,10 @@ func (a Asked) Continuation(b provenance.Boundary) string {
 func (a Asked) Reseed(b provenance.Boundary) string {
 	if a.Refused != nil {
 		return a.refusedReseed(b)
+	}
+	if a.Waited != nil {
+		return "## A run before you on this task waited for another run, which has left its seat\n\n" +
+			a.waited(b, "It") + "\n\n" + happened + "\n\n" + a.freshMachine("with this in mind")
 	}
 	if a.Held != nil {
 		return a.heldReseed(b)
@@ -282,4 +297,43 @@ func (a Asked) freshMachine(with string) string {
 	}
 	return "Finish the task " + with + ", starting from whatever work in progress it left in " +
 		"the repository."
+}
+
+// waited is the account of how the run a wait was for left its seat, under
+// the fence token b, who ("You" or "It") being the run that waited: what it
+// stopped to wait for, how that run left (ended and how, parked, or gone with
+// nothing on record), what it pushed, and its reviewer's account of what
+// landed inside that account's fence where the engine handed one, which it
+// does only for a run working for the same requester (ADR-0176).
+func (a Asked) waited(b provenance.Boundary, who string) string {
+	w := a.Waited
+	var out strings.Builder
+	if a.Question != "" {
+		out.WriteString(who + " stopped to wait: " + a.asked(b) + "\n\n")
+	}
+	run := "Run `" + provenance.Neutralise(b, w.Turn) + "` of " + provenance.Neutralise(b, w.Seat)
+	switch w.Left {
+	case types.RunLeftEnded:
+		out.WriteString(run + " ended: " + provenance.Neutralise(b, strings.ReplaceAll(w.Outcome, "_", " ")) + ".")
+	case types.RunLeftParked:
+		out.WriteString(run + " stopped working and is " +
+			provenance.Neutralise(b, strings.ReplaceAll(w.Outcome, "_", " ")) + ": it may carry on later.")
+	default:
+		out.WriteString(run + " is gone, and nothing on record says how it ended.")
+	}
+	switch w.Pushed {
+	case types.RunPushedSome:
+		out.WriteString(" It pushed " + provenance.Neutralise(b, strings.Join(w.Refs, ", ")) + ".")
+	case types.RunPushedNone:
+		out.WriteString(" It pushed nothing.")
+	default:
+		out.WriteString(" What it pushed could not be read: check its branch before you build on it.")
+	}
+	if w.Branch != "" {
+		out.WriteString(" It named the branch `" + provenance.Neutralise(b, w.Branch) + "`.")
+	}
+	if w.Report != "" {
+		out.WriteString("\n\nWhat its reviewer said landed:\n" + provenance.ExecutorSession(w.Seat).Fence(b, w.Report))
+	}
+	return out.String()
 }

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"cmp"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -218,9 +219,9 @@ func signIn(t *testing.T, v *oauthVendor, a, b *Engine) {
 		t.Fatalf("StartMCPSignIn: %v", err)
 	}
 	code, state := v.authorize(t, started.AuthorizeURL)
-	if server, err := b.CompleteMCPSignIn(t.Context(), MCPSignInLanding{State: state, Code: code,
+	if server, err := completeMCP(t.Context(), b, SignInLanding{State: state, Code: code,
 		Issuer: v.srv.URL}); err != nil || server != "vendor" {
-		t.Fatalf("CompleteMCPSignIn = %q, %v", server, err)
+		t.Fatalf("CompleteSignIn = %q, %v", server, err)
 	}
 }
 
@@ -240,11 +241,11 @@ func TestASignInsStateIsSignedAndSpentOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, found, err := a.backends.Fleet.MCPSignIn(t.Context(), "vendor")
-	if err != nil || !found || record.Status != coord.MCPSignInPending {
+	record, found, err := a.backends.Fleet.OAuthSignIn(t.Context(), coord.MCPGrantFamily, "vendor")
+	if err != nil || !found || record.Status != coord.OAuthSignInPending {
 		t.Fatalf("the sign-in reads %+v, %v, %v", record, found, err)
 	}
-	plain, err := a.cipher.Decrypt(record.Sealed, signInAAD(record.ID))
+	plain, err := a.cipher.Decrypt(record.Sealed, signInAAD(coord.MCPGrantFamily, record.ID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +263,7 @@ func TestASignInsStateIsSignedAndSpentOnce(t *testing.T) {
 		"unsigned": "vendor~" + record.ID.String(),
 		"empty":    "",
 	} {
-		if _, err := b.CompleteMCPSignIn(t.Context(), MCPSignInLanding{State: forged, Code: code,
+		if _, err := completeMCP(t.Context(), b, SignInLanding{State: forged, Code: code,
 			Issuer: v.srv.URL}); !errors.Is(err, refusedState) {
 			t.Errorf("an %s state was not refused: %v", name, err)
 		}
@@ -278,7 +279,7 @@ func TestASignInsStateIsSignedAndSpentOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := node.CompleteMCPSignIn(t.Context(), MCPSignInLanding{State: state, Code: code,
+			_, err := completeMCP(t.Context(), node, SignInLanding{State: state, Code: code,
 				Issuer: v.srv.URL})
 			switch {
 			case err == nil:
@@ -295,7 +296,7 @@ func TestASignInsStateIsSignedAndSpentOnce(t *testing.T) {
 		t.Fatalf("%d callbacks completed and %d were refused, want one of each",
 			completed.Load(), refusedAgain.Load())
 	}
-	if _, err := a.CompleteMCPSignIn(t.Context(), MCPSignInLanding{State: state, Code: code,
+	if _, err := completeMCP(t.Context(), a, SignInLanding{State: state, Code: code,
 		Issuer: v.srv.URL}); !errors.Is(err, refusedState) {
 		t.Fatalf("a later callback with the same state answered %v", err)
 	}
@@ -305,29 +306,29 @@ func TestASignInsStateIsSignedAndSpentOnce(t *testing.T) {
 	if exchanges, _, _ := v.counts(); exchanges != 1 || attempts != 1 {
 		t.Fatalf("the vendor was asked to exchange %d codes and exchanged %d, want one", attempts, exchanges)
 	}
-	grant, found, err := a.backends.Fleet.MCPGrant(t.Context(), "vendor")
+	grant, found, err := a.backends.Fleet.OAuthGrant(t.Context(), coord.MCPGrantFamily, "vendor")
 	if err != nil || !found || grant.ClientID != "registered-client" || grant.By != "jane.doe" ||
 		grant.Issuer != v.srv.URL || grant.Expiry == nil {
 		t.Fatalf("the grant record is %+v, %v, %v", grant, found, err)
 	}
-	held, found, err := fleetsecrets.New(a.backends.Fleet, a.cipher).Estate().Held(t.Context(), grantRow("vendor"))
+	held, found, err := fleetsecrets.New(a.backends.Fleet, a.cipher).Estate().Held(t.Context(), grantRow(coord.MCPGrantFamily, "vendor"))
 	if err != nil || !found || !strings.Contains(held.Value, `"refresh":"rt-`) {
 		t.Fatalf("the sealed grant reads found=%t (%v)", found, err)
 	}
-	if done, _, _ := a.backends.Fleet.MCPSignIn(t.Context(), "vendor"); done.Status != coord.MCPSignInApproved ||
+	if done, _, _ := a.backends.Fleet.OAuthSignIn(t.Context(), coord.MCPGrantFamily, "vendor"); done.Status != coord.OAuthSignInApproved ||
 		done.Sealed != "" {
 		t.Fatalf("the sign-in ended %+v, want approved with its sealed half gone", done)
 	}
 
 	// A STATE PAST ITS EXPIRY is refused too, on any node.
-	later := time.Now().Add(MCPSignInTTL + time.Minute)
+	later := time.Now().Add(SignInTTL + time.Minute)
 	started, err = a.StartMCPSignIn(t.Context(), "vendor", signingJane)
 	if err != nil {
 		t.Fatal(err)
 	}
 	code, state = v.authorize(t, started.AuthorizeURL)
 	b.clock = func() time.Time { return later }
-	if _, err := b.CompleteMCPSignIn(t.Context(), MCPSignInLanding{State: state, Code: code,
+	if _, err := completeMCP(t.Context(), b, SignInLanding{State: state, Code: code,
 		Issuer: v.srv.URL}); !errors.Is(err, refusedState) {
 		t.Fatalf("a lapsed state answered %v", err)
 	}
@@ -347,15 +348,15 @@ func TestASignInComingBackFromAnotherIssuerIsRefused(t *testing.T) {
 		t.Fatalf("a cimd sign-in does not name the engine's document: %s", started.AuthorizeURL)
 	}
 	code, state := v.authorize(t, started.AuthorizeURL)
-	var refused *MCPSignInRefusal
-	if _, err := b.CompleteMCPSignIn(t.Context(), MCPSignInLanding{State: state, Code: code,
+	var refused *SignInRefusal
+	if _, err := completeMCP(t.Context(), b, SignInLanding{State: state, Code: code,
 		Issuer: "https://evil.example.com"}); !errors.As(err, &refused) {
 		t.Fatalf("a callback from another issuer answered %v", err)
 	}
 	if exchanges, _, _ := v.counts(); exchanges != 0 {
 		t.Fatal("a code from another issuer was exchanged")
 	}
-	if done, _, _ := a.backends.Fleet.MCPSignIn(t.Context(), "vendor"); done.Status != coord.MCPSignInFailed {
+	if done, _, _ := a.backends.Fleet.OAuthSignIn(t.Context(), coord.MCPGrantFamily, "vendor"); done.Status != coord.OAuthSignInFailed {
 		t.Fatalf("the sign-in ended %+v", done)
 	}
 }
@@ -404,7 +405,7 @@ func TestTwoRenewersCannotStrandAToken(t *testing.T) {
 	if sources[0] != sources[2] {
 		t.Fatal("one grant on one node is two sources")
 	}
-	held, _, err := fleetsecrets.New(a.backends.Fleet, a.cipher).Estate().Held(t.Context(), grantRow("vendor"))
+	held, _, err := fleetsecrets.New(a.backends.Fleet, a.cipher).Estate().Held(t.Context(), grantRow(coord.MCPGrantFamily, "vendor"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +438,7 @@ func TestARefusedRenewalAsksForASignInAndTheVendorNoMore(t *testing.T) {
 		!strings.Contains(err.Error(), "invalid_grant") {
 		t.Fatalf("a refused renewal answered %v", err)
 	}
-	grant, _, _ := a.backends.Fleet.MCPGrant(t.Context(), "vendor")
+	grant, _, _ := a.backends.Fleet.OAuthGrant(t.Context(), coord.MCPGrantFamily, "vendor")
 	if !grant.Failed() || !strings.Contains(grant.Failure, "invalid_grant") {
 		t.Fatalf("the grant record is %+v, want the vendor's refusal", grant)
 	}
@@ -445,7 +446,7 @@ func TestARefusedRenewalAsksForASignInAndTheVendorNoMore(t *testing.T) {
 	if _, needed := b.bearerFor(t.Context(), "vendor"); needed == nil || needed.failure == "" {
 		t.Fatalf("node b's next pass would start the server: %v", needed)
 	}
-	stale := &oauthSource{engine: b, server: "vendor", grant: grant.Grant}
+	stale := &oauthSource{engine: b, server: "vendor", kind: mcpGrants{}, grant: grant.Grant}
 	if _, err := stale.Token(t.Context()); !errors.Is(err, mcp.ErrSignInNeeded) {
 		t.Fatalf("a renewal after the refusal answered %v", err)
 	}
@@ -479,10 +480,10 @@ func TestASignOutRevokesAtTheVendorAndDeletesTheGrant(t *testing.T) {
 		t.Fatalf("the vendor was asked to revoke %v, want the grant's %q", revoked, issued)
 	}
 	if _, found, err := fleetsecrets.New(a.backends.Fleet, a.cipher).Estate().Held(t.Context(),
-		grantRow("vendor")); err != nil || found {
+		grantRow(coord.MCPGrantFamily, "vendor")); err != nil || found {
 		t.Fatalf("the sealed grant outlived the sign-out: %v, %v", found, err)
 	}
-	if _, found, _ := a.backends.Fleet.MCPGrant(t.Context(), "vendor"); found {
+	if _, found, _ := a.backends.Fleet.OAuthGrant(t.Context(), coord.MCPGrantFamily, "vendor"); found {
 		t.Fatal("the grant record outlived the sign-out")
 	}
 	if held, _ := a.HeldMCPGrant(t.Context(), "vendor"); held {
@@ -541,7 +542,7 @@ mcp_servers:
     oauth:
       client: dcr
 `))
-	var refused *MCPSignInRefusal
+	var refused *SignInRefusal
 	if _, err := weak.StartMCPSignIn(t.Context(), "vendor", signingJane); !errors.As(err, &refused) ||
 		!strings.Contains(refused.Reason, "S256") {
 		t.Errorf("a vendor offering no S256 answered %v", err)
@@ -588,12 +589,12 @@ func TestARefusedSignInLeavesThePendingOne(t *testing.T) {
 	v.mu.Lock()
 	v.authorizeAt = "http://elsewhere.example.com/authorize"
 	v.mu.Unlock()
-	var refused *MCPSignInRefusal
+	var refused *SignInRefusal
 	if _, err := a.StartMCPSignIn(t.Context(), "vendor", signingJane); !errors.As(err, &refused) ||
 		!strings.Contains(refused.Reason, "not an https address") {
 		t.Fatalf("a sign-in at a plain http endpoint elsewhere answered %v", err)
 	}
-	if got, err := a.MCPSignIn(t.Context(), pending.SignIn.ID); err != nil || got.Status != coord.MCPSignInPending {
+	if got, err := a.MCPSignIn(t.Context(), pending.SignIn.ID); err != nil || got.Status != coord.OAuthSignInPending {
 		t.Errorf("the pending sign-in after a refused one: %+v, %v", got, err)
 	}
 }
@@ -630,7 +631,7 @@ mcp_servers:
 		if a.testBearer(t.Context(), "vendor") != nil {
 			t.Fatalf("a test of the server moved to %s carries the grant", moved)
 		}
-		stale := &oauthSource{engine: a, server: "vendor", grant: mustGrant(t, a).Grant}
+		stale := &oauthSource{engine: a, server: "vendor", kind: mcpGrants{}, grant: mustGrant(t, a).Grant}
 		if _, err := stale.Token(t.Context()); !errors.Is(err, mcp.ErrSignInNeeded) {
 			t.Fatalf("a renewal for the server moved to %s answered %v", moved, err)
 		}
@@ -641,9 +642,9 @@ mcp_servers:
 	}
 }
 
-func mustGrant(t *testing.T, e *Engine) coord.MCPGrant {
+func mustGrant(t *testing.T, e *Engine) coord.OAuthGrant {
 	t.Helper()
-	g, found, err := e.backends.Fleet.MCPGrant(t.Context(), "vendor")
+	g, found, err := e.backends.Fleet.OAuthGrant(t.Context(), coord.MCPGrantFamily, "vendor")
 	if err != nil || !found {
 		t.Fatalf("the grant record: %v, %v", found, err)
 	}
@@ -689,5 +690,48 @@ func TestAValueTestSendsTheGrantOnlyToTheAddressThisNodeRuns(t *testing.T) {
 	v.mu.Unlock()
 	if !slices.ContainsFunc(presented, func(h string) bool { return strings.HasPrefix(h, "Bearer ") }) {
 		t.Fatalf("the address this node runs was presented %q, want the grant's token", presented)
+	}
+}
+
+// completeMCP finishes an MCP sign-in through e, answering the server it named.
+func completeMCP(ctx context.Context, e *Engine, l SignInLanding) (string, error) {
+	landed, err := e.CompleteSignIn(ctx, l)
+	return landed.Name, err
+}
+
+// A SIGN-IN TO A SERVER THAT MOVED TO A SERVICE IDENTITY UNDER IT is refused
+// before any code is exchanged, and tells the person there is nothing to do:
+// the engine issues that server's tokens itself.
+//
+// Mutation: drop the service identity's own remedy, and the refusal asks for
+// an oauth block the server already has.
+func TestASignInToAServerNowAServiceIdentityHasNothingToDo(t *testing.T) {
+	t.Parallel()
+	v := newOAuthVendor(t)
+	a, b := oauthNodes(t, v, "dcr")
+	started, err := a.StartMCPSignIn(t.Context(), "vendor", signingJane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, state := v.authorize(t, started.AuthorizeURL)
+	b.epoch.current.Store(companyFor(t, `
+name: Acme
+mcp_servers:
+  - name: vendor
+    transport: http
+    url: `+v.srv.URL+`/mcp
+    oauth:
+      grant: client_credentials
+      client_id: crewlet-service
+      client_secret: ${VENDOR_CLIENT_SECRET}
+`))
+	_, err = completeMCP(t.Context(), b, SignInLanding{State: state, Code: code, Issuer: v.srv.URL})
+	var refused *SignInRefusal
+	if !errors.As(err, &refused) || !strings.HasPrefix(refused.Remedy, "Nothing to do") ||
+		!strings.Contains(refused.Reason, "service identity") {
+		t.Fatalf("the sign-in answered %v, want the service identity's remedy", err)
+	}
+	if exchanges, _, _ := v.counts(); exchanges != 0 {
+		t.Fatalf("the vendor exchanged %d codes for a server that takes no grant", exchanges)
 	}
 }

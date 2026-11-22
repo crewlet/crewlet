@@ -55,6 +55,10 @@ func (d directory) PersonByLoginVouched(_ context.Context, login string) (iamdom
 	}, d.vouch, nil
 }
 
+func (d directory) SeatHoldersHeld(ctx context.Context) ([]iamdomain.SeatHolder, error) {
+	return d.SeatHolders(ctx)
+}
+
 func (d directory) SeatHolders(context.Context) ([]iamdomain.SeatHolder, error) {
 	if d.err != nil {
 		return nil, d.err

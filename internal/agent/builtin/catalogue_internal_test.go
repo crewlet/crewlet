@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
@@ -44,6 +45,17 @@ var gateRows = map[Gate]rowShape{
 	GateSSHRead:           {class: authz.ClassAdmin, seatGrant: authz.SeatGrantSSHRead},
 	GateSSHOperate:        {class: authz.ClassAdmin, seatGrant: authz.SeatGrantSSHOperate},
 	GateDelegate:          {class: authz.ClassAdmin, seatGrant: authz.SeatGrantDelegate},
+}
+
+// growthGateRow is the row shape a growth gate stands for on one product:
+// the product's grant at the gate's level, as no static row can name.
+func growthGateRow(g Gate, kind string) (rowShape, bool) {
+	for level, gate := range growthGates {
+		if gate == g {
+			return rowShape{class: authz.ClassAdmin, seatGrant: authz.GrowthSeatGrant(kind, level)}, true
+		}
+	}
+	return rowShape{}, false
 }
 
 // shapeOf is a tool's authority row as a gate would name it, and false for a
@@ -122,6 +134,11 @@ func TestEveryBuiltinsGateIsWhatItsAuthorityRowAsks(t *testing.T) {
 func TestEveryGateNamesARowAToolHas(t *testing.T) {
 	t.Parallel()
 	for _, g := range Gates {
+		if _, growthGate := growthGateRow(g, ""); growthGate {
+			// A GROWTH GATE'S SHAPE IS PER PRODUCT, held by
+			// TestEveryGrowthToolsGateIsWhatItsAuthorityRowAsks.
+			continue
+		}
 		if !g.Valid() {
 			t.Errorf("gate %q is listed and not valid", g)
 		}
@@ -139,8 +156,8 @@ func TestEveryGateNamesARowAToolHas(t *testing.T) {
 			t.Errorf("no built-in is filed as %q", g)
 		}
 	}
-	if len(gateRows) != len(Gates) {
-		t.Errorf("%d row shapes for %d gates", len(gateRows), len(Gates))
+	if len(gateRows)+len(growthGates) != len(Gates) {
+		t.Errorf("%d row shapes and %d growth gates for %d gates", len(gateRows), len(growthGates), len(Gates))
 	}
 	seen := map[rowShape]Gate{}
 	for g, shape := range gateRows {
@@ -252,22 +269,88 @@ func TestAHealthGateAdmitsASeatWhoseRoleCarriesTheGrantAndNoOther(t *testing.T) 
 }
 
 // EVERY BUILT-IN DECLARES THE VENDOR PERMISSION IT NEEDS: a closed table,
-// one declaration per filed tool, and one that reaches a vendor says which,
-// on which backend, at which level. A row cannot omit it and compile.
+// one declaration per catalogued tool, and one that reaches a vendor says
+// which, on which backend, at which level. A row cannot omit it and compile,
+// and a growth tool, on a credential the engine alone holds, reaches none.
+//
+// Mutation: file a growth tool as needing its product's permission, and the
+// reaching set grows.
 func TestEveryBuiltInDeclaresTheVendorPermissionItNeeds(t *testing.T) {
 	t.Parallel()
 	reaching := map[string]VendorNeed{}
-	for _, f := range filed {
-		if !f.vendor.Reaches() {
+	for _, tool := range Catalogued() {
+		f, _ := FilingOf(tool)
+		if !f.Vendor.Reaches() {
 			continue
 		}
-		if f.vendor.Backend == "" || f.vendor.Lane == "" || f.vendor.Permission == "" || f.vendor.Level == "" {
+		if f.Vendor.Backend == "" || f.Vendor.Lane == "" || f.Vendor.Permission == "" || f.Vendor.Level == "" {
 			t.Errorf("%s reaches %s and does not say on which backend and lane, for what, at which level",
-				f.tool, f.vendor.Vendor)
+				tool, f.Vendor.Vendor)
 		}
-		reaching[f.tool] = f.vendor
+		reaching[tool] = f.Vendor
 	}
 	if want := map[string]VendorNeed{SearchKnowledgeTool: searchesConfluence}; !maps.Equal(reaching, want) {
 		t.Errorf("the built-ins reaching a vendor are %v, want %v", reaching, want)
+	}
+}
+
+// EVERY GROWTH TOOL'S GATE IS WHAT ITS AUTHORITY ROW ASKS: its product's grant
+// at its class's level, decided by internal/authz from the same catalog, so
+// the gate the dashboard draws is the check the call meets.
+//
+// Mutation: file a growth tool one level off, and its row disagrees.
+func TestEveryGrowthToolsGateIsWhatItsAuthorityRowAsks(t *testing.T) {
+	t.Parallel()
+	seen := map[Gate]bool{}
+	for _, c := range growth.Catalogs() {
+		for _, tool := range c.Tools {
+			f, ok := FilingOf(tool.Name)
+			if !ok {
+				t.Errorf("%s is in a catalog and filed nowhere", tool.Name)
+				continue
+			}
+			want, _ := growthGateRow(f.Gate, c.Kind)
+			if shape, governed := shapeOf(tool.Name); !governed || shape != want {
+				t.Errorf("%s is filed as %q, which names %+v; its authority row asks %+v", tool.Name, f.Gate,
+					want, shape)
+			}
+			seen[f.Gate] = true
+		}
+	}
+	for _, g := range growthGates {
+		if !seen[g] {
+			t.Errorf("no growth tool is filed as %q", g)
+		}
+	}
+}
+
+// GROWTH TOOLS ARE RANKED BY THEIR PLACE IN THE ONE GROWTH GROUP, catalog
+// after catalog, so two products' tools never share a rank and the dashboard
+// draws each product's together, in [Catalogued]'s order.
+//
+// Mutation: rank a tool by its index in its own catalog, and the second
+// product's first tool ties the first product's.
+func TestGrowthToolsAreRankedByTheirPlaceInTheGroup(t *testing.T) {
+	t.Parallel()
+	catalogs := []growth.Catalog{
+		{Kind: "ads", Tools: []growth.Tool{{Name: "ads_list", Class: growth.ClassRead},
+			{Name: "ads_pause", Class: growth.ClassOperate}}},
+		{Kind: "shop", Tools: []growth.Tool{{Name: "shop_list", Class: growth.ClassRead},
+			{Name: "shop_add_user", Class: growth.ClassAdmin}}},
+	}
+	for want, c := range []struct {
+		tool string
+		gate Gate
+	}{
+		{"ads_list", GateGrowthRead}, {"ads_pause", GateGrowthOperate},
+		{"shop_list", GateGrowthRead}, {"shop_add_user", GateGrowthAdminister},
+	} {
+		f, ok := growthFilingIn(catalogs, c.tool)
+		if !ok || f.Rank != want || f.Gate != c.gate || f.Group != GroupGrowth {
+			t.Errorf("%s filed %+v (%v), want rank %d under %s", c.tool, f, ok, want, c.gate)
+		}
+	}
+	if _, ok := growthFilingIn(catalogs, "shop_nothing"); ok {
+		t.Error("a tool no catalog lists was filed")
 	}
 }

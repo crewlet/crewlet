@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/executorkeep"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -34,7 +35,7 @@ func TestARunsReasonForStartingAnewIsHeldToItsBound(t *testing.T) {
 	collected := func(why string) sandbox.Result {
 		t.Helper()
 		b.Put(p.SessionRecord(), "id "+id+"\ncontinued no\nwhy "+why+"\nrelease 2.1.310 (Claude Code)\n")
-		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+		res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 		if err != nil {
 			t.Fatalf("Collect: %v", err)
 		}

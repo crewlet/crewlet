@@ -93,7 +93,7 @@ function mount(shown: AdvisorFindingDetail, answered: AdvisorFindingDetail = sho
     unavailable: null,
     toggle: () => {},
     ask: () => {},
-    draft: () => {},
+    askAbout: () => {},
   };
   render(
     <ClientContext.Provider value={{ store, socket }}>

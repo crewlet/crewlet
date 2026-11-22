@@ -607,10 +607,13 @@ func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 		t.Fatalf("the registry holds human-only %v, want code_report_check among them", humanOnly)
 	}
 	slices.Sort(humanOnly)
-	if got := builtin.Withheld(asSeat("sre"), deps.Authorize, snapshot); !slices.Equal(got, humanOnly) {
-		t.Errorf("the granted seat is withheld %v, want the human-only %v alone", got, humanOnly)
+	// AND THE GROWTH TOOLS, which neither seat's role carries a lane for.
+	unheld := slices.Sorted(slices.Values(append(slices.Clone(humanOnly),
+		growthReadTool, growthOperateTool, growthSpendTool, growthAdminTool)))
+	if got := builtin.Withheld(asSeat("sre"), deps.Authorize, snapshot); !slices.Equal(got, unheld) {
+		t.Errorf("the granted seat is withheld %v, want the human-only and growth %v alone", got, unheld)
 	}
-	want := slices.Sorted(slices.Values(append(slices.Clone(health), humanOnly...)))
+	want := slices.Sorted(slices.Values(append(slices.Clone(health), unheld...)))
 	if got := builtin.Withheld(asSeat("dev"), deps.Authorize, snapshot); !slices.Equal(got, want) {
 		t.Errorf("the ungranted seat is withheld %v, want exactly the health tools and the human-only %v",
 			got, want)

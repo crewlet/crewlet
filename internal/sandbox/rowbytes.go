@@ -61,21 +61,28 @@ const (
 	// serves', the calls those answered, an item's late call or wakes and the
 	// notes' tellings), and that this build carries without reading: STATED HERE,
 	// so the next field a build adds is added inside it, and the build that adds
-	// it moves its own figure out of this one, as the turn's wake items took
-	// theirs ([wakeRowBytes]) and the job's fold-ins theirs ([foldInRowBytes]).
-	// The turn's read of its conversation ([PendingRun.Base]) has its own
-	// place, at [ConversationBaseMaxBytes].
-	ExtraRowBytes = 256<<10 - wakeRowBytes - foldInRowBytes
+	// it moves its own figure out of this one, as the turn's wake items, the
+	// job's fold-ins and what the turn wrote took theirs ([wakeRowBytes],
+	// [foldInRowBytes], [wroteRowBytes]). The turn's read of its conversation
+	// ([PendingRun.Base]) has its own place, at [ConversationBaseMaxBytes].
+	ExtraRowBytes = 256<<10 - wakeRowBytes - foldInRowBytes - wroteRowBytes
 
 	// wakeRowBytes is the turn's wake items' figure, moved out of the room a
 	// later build adds keys in: [MaxTurnWakes] items at their bound, a hundred
-	// KiB, which the 99,696 bytes TestTheWholeRowFitsItsBudget weighs them at
+	// KiB, which the 102,064 bytes TestTheWholeRowFitsItsBudget weighs them at
 	// leave a little over.
 	wakeRowBytes = 100 << 10
 
 	// foldInRowBytes is the job's fold-ins' figure, moved out of the room a
 	// later build adds keys in: [MaxJobFoldIns] at [MaxFoldInBytes] each.
 	foldInRowBytes = MaxJobFoldIns * MaxFoldInBytes
+
+	// wroteRowBytes is the figure of the keys of what the turn's calls wrote
+	// ([PendingRun.WroteKeys]), moved out of the room a later build adds keys
+	// in: [types.MaxWrittenRecords] keys of [writtenKeyBytes] in hex, written
+	// as themselves, 4,495 bytes with the field's name, which 4.5 KiB leaves a
+	// little over (TestTheWholeRowFitsItsBudget weighs them).
+	wroteRowBytes = 4<<10 + 512
 
 	// MaxAnswerBytes bounds a recorded answer as the row holds it (its seal
 	// and deliveries, [RecordedAnswer]) and, apart, the copies letting go of
@@ -259,8 +266,8 @@ const (
 // stated before them was read by nothing, and stayed what it was while the row
 // grew.
 const (
-	measuredOtherFields = 2_335_469
-	measuredSpare       = 379_223
+	measuredOtherFields = 2_344_079
+	measuredSpare       = 375_221
 )
 
 // The per-call bounds of the bridged call log. See [MaxBridgeCallBytes].
@@ -977,6 +984,30 @@ func keptTitle(s string) string {
 		}
 	}
 	return title
+}
+
+// keptQuestion is a colleague's question as the row keeps it, raw: within
+// [keptTitle]'s bound, and CUT WHERE ITS REDACTION ([ColleagueAsk.Question]) IS
+// AN OPENING OF THE WHOLE QUESTION'S. A cut inside a credential leaves a part
+// the redaction no longer knows as one, so such a cut moves back to where the
+// redaction settles ([redact.Settled]): the last line break before it. That
+// gives up as much as a line of the opening (all of it, for a question on one
+// line), which a question past 16 KiB can spare: the turn's own record keeps
+// the whole, and no shorter cut is known to settle. The second check holds what
+// is served, the redaction of the opening WITH the cut's note, to the opening's
+// own, so the guarantee never rests on how a rule reads the note's words.
+func keptQuestion(q string) string {
+	held := keptTitle(q)
+	opening, cut := rowRecord.Opening(held, len(q))
+	if !cut || held == q {
+		return held
+	}
+	shown := redact.Secrets(opening)
+	if strings.HasPrefix(redact.Secrets(q), shown) && strings.HasPrefix(redact.Secrets(held), shown) {
+		return held
+	}
+	held, _ = rowRecord.TextOf(opening[:redact.Settled(opening)], len(q), MaxRunTitleBytes)
+	return held
 }
 
 // answerFits reports why answer is past its share of the row

@@ -27,7 +27,7 @@ func TestADeliveredRefIsRedactedBeforeItIsRecorded(t *testing.T) {
 	secret := "ghp_" + strings.Repeat("c", 36)
 	got := (&Coordinator{}).fitResult(t.Context(), PendingRun{},
 		Result{Success: true, DeliveredRefs: []string{"wip/t1", secret}})
-	rec := collectedRecord(PendingRun{}, LaunchRecord{}, got, time.Now())
+	rec := collectedRecord(PendingRun{}, LaunchRecord{}, got, 0, time.Now())
 	for where, refs := range map[string][]string{
 		"the result": got.DeliveredRefs, "the record": rec.DeliveredRefs,
 		"the run's report": {runReport(PendingRun{}, got)},
@@ -75,7 +75,7 @@ func TestDeliveredRefsAreDedupedAndBoundedWithTheRestCounted(t *testing.T) {
 	if !strings.Contains(text, fmt.Sprintf("(and %d more its report names", got.DeliveredRefsElided)) {
 		t.Errorf("the run's report does not say the list is short: %.300q", text)
 	}
-	rec := collectedRecord(PendingRun{}, LaunchRecord{}, got, time.Now())
+	rec := collectedRecord(PendingRun{}, LaunchRecord{}, got, 0, time.Now())
 	if rec.DeliveredRefsElided != got.DeliveredRefsElided || len(rec.DeliveredRefs) != len(got.DeliveredRefs) {
 		t.Errorf("the record lists %d and counts %d", len(rec.DeliveredRefs), rec.DeliveredRefsElided)
 	}
@@ -130,7 +130,7 @@ func TestADeliveredRefThatIsNotUTF8IsCountedNeverListed(t *testing.T) {
 	}
 
 	// WHAT IS LISTED ARRIVES AS ITSELF, on the record a reader decodes.
-	raw, err := json.Marshal(collectedRecord(PendingRun{}, LaunchRecord{}, got, time.Now()))
+	raw, err := json.Marshal(collectedRecord(PendingRun{}, LaunchRecord{}, got, 0, time.Now()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestTheRecordNamesASessionAndAReleaseOfTheirShapesAlone(t *testing.T) {
 		{"", "2..310", "", ""},
 	} {
 		rec := collectedRecord(PendingRun{}, LaunchRecord{},
-			Result{SessionID: tc.session, HarnessVersion: tc.release}, time.Now())
+			Result{SessionID: tc.session, HarnessVersion: tc.release}, 0, time.Now())
 		if rec.HarnessSession != tc.wantSession || rec.HarnessVersion != tc.wantRelease {
 			t.Errorf("a box that named session %.40q (%d bytes) and release %.40q (%d bytes) is recorded "+
 				"as %.40q and %.40q; want %.40q and %.40q", tc.session, len(tc.session), tc.release,
@@ -232,8 +232,7 @@ func TestAPieceIsMeasuredAsTheRecordCarriesIt(t *testing.T) {
 		"a rewrite a redaction grows":    {growingRewrite, Result{Text: controls, Error: failure}},
 	} {
 		c := &Coordinator{condense: tc.condense}
-		rec := collectedRecord(PendingRun{}, LaunchRecord{}, c.fitResult(t.Context(), PendingRun{}, tc.result),
-			time.Now())
+		rec := collectedRecord(PendingRun{}, LaunchRecord{}, c.fitResult(t.Context(), PendingRun{}, tc.result), 0, time.Now())
 		// THE NOTE saying what was left out is not counted against the bound
 		// ([wholeLines]); a KiB holds it.
 		for piece, text := range map[string]string{"report": rec.Response, "failure": rec.Error} {
@@ -305,7 +304,7 @@ func TestTheWholeRecordFitsTheQueuesCeiling(t *testing.T) {
 			HarnessVersion: reason}},
 	} {
 		fitted := c.fitResult(t.Context(), tc.run, tc.result)
-		rec := collectedRecord(tc.run, LaunchRecord{}, fitted, time.Now())
+		rec := collectedRecord(tc.run, LaunchRecord{}, fitted, 0, time.Now())
 		if len(rec.HarnessSessionFellBack) > MaxFellBackBytes ||
 			len(rec.SessionNotKept) > executorkeep.UnkeptReasonMaxBytes {
 			t.Errorf("%s: the record's reasons are %d and %d bytes, past the KiB each is held to", name,

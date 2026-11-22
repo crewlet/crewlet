@@ -1,14 +1,15 @@
 /**
- * The models list: four figures, the engine's alarms, and a row per model
- * saying its condition, its sign-in and who runs on it.
+ * The models list: a lede, the engine's alarms, three figures, and a row per
+ * model saying its condition, its sign-in and who runs on it; with no model,
+ * one first-run card.
  *
  * The invariants: Status is health alone, and use is Used by's (QA M14); Used
  * by counts the Dashboard Assistant as a use for either reader (QA M13) and
- * names seats by their names; the figures say how many are not ready rather
- * than "3 of 4", and the card does not repeat the count (QA Minor 14); Add
- * model is the page's action, in the page bar (QA Minor 15); the actions
- * column is named (QA Minor 17); and a member reads the list without a
- * credential, a cost or an action.
+ * names seats by their names; the Ready figure names every model that is not
+ * ready by its condition, and the card does not repeat the count (QA Minor
+ * 14); Add model is the page's action, in the page bar (QA Minor 15); the
+ * actions column is named (QA Minor 17); and a member reads the list without
+ * a credential, a cost or an action.
  */
 
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -28,6 +29,7 @@ import {
 } from "~/routes/settings/models/fixtures.ts";
 import type { ModelsData } from "./data.ts";
 import { sheetRules } from "~/test/sheets.ts";
+import { HARNESS_MARKS } from "./HarnessMark.tsx";
 import { Overview } from "./Overview.tsx";
 
 /**
@@ -165,20 +167,42 @@ test("the Advisor's model is a use, for an admin and a member alike", () => {
   }
 });
 
-test("the figures say how many are not ready and why, and the card does not count again", () => {
+// ONE TILE FOR HOW THE MODELS STAND: Ready names every model that does not
+// answer by its condition, worst first, in the worst one's tone; no second
+// tile counts them again.
+test("the figures say how many are ready and why the rest are not, and the card does not count again", () => {
   mount();
   expect(tile("Models")).toContain("5");
   expect(tile("Ready")).toMatch(/2\s*of 5/);
   // M-006: A MODEL NOBODY HAS CALLED YET is not tested, never "not ready".
-  expect(tile("Ready")).toContain("2 models not ready and 1 not tested yet");
-  // The third tile's title covers what it counts.
-  expect(tile("Sitting out or cannot sign in")).toContain("1 sitting out and 1 cannot sign in");
+  expect(tile("Ready")).toContain("1 cannot sign in, 1 sitting out, and 1 not tested yet");
+  const sub = [...document.querySelectorAll<HTMLElement>(".crewlet-statcard")].find((t) =>
+    t.textContent?.startsWith("Ready"),
+  );
+  expect(sub?.querySelector(".crewlet-statcard__sub--danger")).not.toBeNull();
+  expect(document.querySelectorAll(".crewlet-statcard")).toHaveLength(3);
+  expect(tile("Sitting out or cannot sign in")).toBe("");
   // TOKENS, NEVER MONEY (dashboard-design rule 19).
   expect(tile("Tokens, 7 days")).toContain("900");
   expect(tile("Tokens, 7 days")).toContain("over 40 calls");
   expect(document.body.textContent).not.toMatch(/\$\d/);
   const head = document.querySelector(".crewlet-card__header")?.textContent ?? "";
   expect(head).not.toMatch(/\d/);
+});
+
+// A SIGN-IN EXPIRING SOON is not ready either: named, in the warning tone.
+test("Ready names a model whose sign-in expires soon, in the warning tone", () => {
+  mount(
+    modelsData({
+      entries: [modelEntry({ key: "default" }), modelEntry({ key: "soon", health: "expiring" })],
+    }),
+  );
+  expect(tile("Ready")).toMatch(/1\s*of 2/);
+  expect(tile("Ready")).toContain("1 expiring soon");
+  const ready = [...document.querySelectorAll<HTMLElement>(".crewlet-statcard")].find((t) =>
+    t.textContent?.startsWith("Ready"),
+  );
+  expect(ready?.querySelector(".crewlet-statcard__sub--warning")).not.toBeNull();
 });
 
 // THE CALLS THE TILE COUNTS are every call made, refused and failed ones
@@ -278,23 +302,50 @@ test("Used by says a model's work in the page's short words", () => {
   );
 });
 
-// M-008: WITH NO MODEL, the empty list offers the way out itself, and the
-// helpers and seats stay on the page, each reading Not set, so a company sees
-// which seats wait for a model.
-test("with no model, the list offers Add a model and every seat and helper reads Not set", () => {
+// WITH NO MODEL, ONE FIRST-RUN CARD: what a model is, who waits for one (the
+// helpers and every seat, by face and count), and the add. No row per seat is
+// drawn, since there is nothing to pick.
+test("with no model, the page is one card naming who waits and offering Add model", () => {
   const onFlow = mount(modelsData({ entries: [] }));
   expect(screen.getByText("No model yet")).toBeDefined();
-  // THE PAGE'S OWN Add model, and the empty list's.
-  expect(screen.getAllByRole("button", { name: "Add model" })).toHaveLength(1);
-  fireEvent.click(screen.getByRole("button", { name: "Add a model" }));
+  const seats = modelsData({ entries: [] }).seats.length;
+  expect(seats).toBeGreaterThan(0);
+  expect(document.body.textContent).toContain(
+    `Ask Crewlet, the Advisor, and ${seats} seats are waiting for one.`,
+  );
+  // THE FACES ARE NAMED: the sentence counts the seats, the stack says who they are.
+  expect(screen.getByRole("img", { name: /^Waiting for a model: / })).toBeDefined();
+  // THE PAGE'S OWN Add model, and the card's.
+  const page = within(document.querySelector<HTMLElement>(".page-actions")!);
+  expect(page.getAllByRole("button", { name: "Add model" })).toHaveLength(1);
+  const card = within(document.querySelector<HTMLElement>(".crewlet-empty-state")!);
+  fireEvent.click(card.getByRole("button", { name: "Add model" }));
   expect(onFlow).toHaveBeenCalledWith("add");
-  const seats = within(screen.getByRole("list", { name: "Seats" })).getAllByRole("listitem");
-  expect(seats.length).toBeGreaterThan(0);
-  for (const row of seats) expect(row.textContent).toContain("Not set");
-  const helpers = within(screen.getByRole("list", { name: "Helpers" })).getAllByRole("listitem");
-  for (const row of helpers) expect(row.textContent).toContain("Not set");
-  // NOTHING TO PICK with no model.
+  // NOTHING TO PICK, and no rows saying so: no figures, no grid, no who-runs section.
+  expect(screen.queryByRole("list", { name: "Seats" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Who runs on which model" })).toBeNull();
   expect(screen.queryAllByRole("combobox")).toHaveLength(0);
+  expect(document.querySelectorAll(".crewlet-statcard")).toHaveLength(0);
+  // EVERY HARNESS A MODEL CAN RUN ON is the card's picture, hidden from assistive technology.
+  const marks = document.querySelector(".models-first-run__marks");
+  expect(marks?.getAttribute("aria-hidden")).toBe("true");
+  expect(marks?.children.length).toBe(Object.keys(HARNESS_MARKS).length);
+});
+
+// A MEMBER reads the same card without the add.
+test("with no model, a member reads who waits and is told an admin adds them", () => {
+  mount(modelsData({ admin: false, entries: [] }));
+  expect(document.body.textContent).toContain("An admin adds models here.");
+  expect(screen.queryByRole("button", { name: "Add model" })).toBeNull();
+});
+
+// THE PAGE SAYS WHAT IT IS FOR, once, under the page bar as every Settings section does.
+test("the page opens with its lede, and the who-runs section is titled", () => {
+  mount();
+  expect(document.querySelector(".crewlet-page-note")?.textContent).toBe(
+    "The models your company runs, and who runs on each.",
+  );
+  expect(screen.getByRole("heading", { name: "Who runs on which model" })).toBeDefined();
 });
 
 // THE ORDER IN FORCE IS ON A HEAD, as on every list: the models are in key

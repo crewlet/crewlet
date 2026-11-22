@@ -25,7 +25,10 @@
 //
 //   - A seat's credential is sealed only under the name the engine derives for
 //     it ([SinkName]), never one the document names, and never one a company
-//     block references ([CompanyVariables]).
+//     block references ([CompanyVariables]). A lane whose credential the
+//     engine alone holds and calls with ([LaneSpec.EngineHeld], a growth
+//     lane, ADR-0170) seals and issues none: no seat, variable or box holds
+//     it, and its tools are the engine's own built-ins ([ToolStateOf]).
 //
 //   - Every pass computes the same plan from the document (desired), the
 //     account ledger, and what the vendor shows now (observed), and the
@@ -100,6 +103,22 @@ const (
 	LaneAWS          Lane = "aws"
 	LaneGoogleCloud  Lane = "google_cloud"
 	LaneSSH          Lane = "ssh"
+	// LaneMetaAds is a seat's level and ad accounts at Meta Ads, which the
+	// engine reaches for it with the company's system user.
+	LaneMetaAds Lane = "meta_ads"
+	// LaneAppStoreConnect is a seat's level and apps at App Store Connect,
+	// which the engine reaches for it with the company's keys.
+	LaneAppStoreConnect Lane = "app_store_connect"
+	// LaneAppleAds is a seat's level and ad accounts at Apple Ads, which the
+	// engine reaches for it with the company's API users.
+	LaneAppleAds Lane = "apple_ads"
+	// LaneGoogleAnalytics is a seat's level and properties at Google
+	// Analytics, which the engine reaches as the seat's growth identity.
+	LaneGoogleAnalytics Lane = "google_analytics"
+
+	// LaneAdMob is a seat's level and publisher accounts at AdMob, which the
+	// engine reaches for it as the company's consent grant.
+	LaneAdMob Lane = "admob"
 )
 
 // Lanes is every lane, in the order an operator reads integrations
@@ -109,7 +128,7 @@ func Lanes() []Lane {
 	return []Lane{
 		LaneSlack, LaneMattermost, LaneJira, LaneConfluence,
 		LaneGitHub, LaneGitLab, LaneDatadog, LaneCloudflare, LaneExpo, LaneDigitalOcean, LaneScaleway, LaneAWS, LaneGoogleCloud,
-		LaneSSH,
+		LaneSSH, LaneMetaAds, LaneAppStoreConnect, LaneAppleAds, LaneGoogleAnalytics, LaneAdMob,
 	}
 }
 

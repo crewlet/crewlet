@@ -26,7 +26,7 @@ import {
   type QueryRefusal,
 } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
-import { session, SessionFloors } from "~/protocol/session.ts";
+import { APPLIED_REVISION, session, SessionFloors } from "~/protocol/session.ts";
 import { useAskedAgainOnFailure } from "./failedReads.ts";
 
 export interface QueryResult<T> {
@@ -79,7 +79,7 @@ export interface QueryOptions {
    * projection pushes must not be polled on top of it.
    */
   pollMs?: number;
-  /** Ask again when the socket reconnects. Default true. */
+  /** Ask again when the socket reconnects, and when this node applies a revision. Default true. */
   refetchOnReconnect?: boolean;
   /**
    * How long each ask waits for its answer once sent, where the question's
@@ -282,9 +282,10 @@ export function useQuery<K extends QueryName>(
   useEffect(() => {
     if (!enabled) return;
     return session.onWritten((domain, refreshes) => {
-      if (SessionFloors.moves(what, domain, refreshes)) refetch();
+      const applied = refetchOnReconnect && refreshes.includes(APPLIED_REVISION);
+      if (applied || SessionFloors.moves(what, domain, refreshes)) refetch();
     });
-  }, [enabled, what, refetch]);
+  }, [enabled, what, refetch, refetchOnReconnect]);
 
   // A FAILED READ IS ASKED AGAIN BY "Try again" ([retryFailedReads]), and by
   // nothing else new: its poll and its reconnect still ask as they did.

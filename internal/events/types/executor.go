@@ -2,6 +2,7 @@ package types
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/decision"
@@ -268,11 +269,11 @@ type ExecutorCollected struct {
 	// company's `turn_engine.conversation_session.enabled` off.
 	SessionTakenBytes int64  `json:"session_taken_bytes,omitempty"`
 	SessionNotKept    string `json:"session_not_kept,omitempty"`
-	// ContextWindowTokens is the context window a Claude Code run was pinned to
-	// (CLAUDE_CODE_AUTO_COMPACT_WINDOW), from the model it ran
-	// (internal/sandbox's ClaudeCodeWindow): the harness compacts under the
-	// smaller of it and the model's own window as it holds the model. Absent
-	// for a harness whose window the engine does not set.
+	// ContextWindowTokens is the context window a run was pinned to, from the
+	// model it ran, as its runner pins it (internal/sandbox's windowPinner;
+	// Claude Code's CLAUDE_CODE_AUTO_COMPACT_WINDOW): the harness compacts under
+	// the smaller of it and the model's own window as it holds the model.
+	// Absent for a harness whose window the engine does not set.
 	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 	// Brief is which of the four briefs the launch handed its run:
 	// `continued` (the turn's session, in its last box), `continued_new_box`
@@ -705,7 +706,66 @@ type ExecutorAnswerGiven struct {
 	// no LaunchID: the holder only reads the row again, and a build that
 	// predates fold-ins spends it as an answer naming no question.
 	FoldIn string `json:"fold_in,omitempty"`
+
+	// Waited is how the run a parked run waited for (`wait_for_run`) left its
+	// seat's slots, where the engine answers that wait (ADR-0176), nil for
+	// every other answer. The node holding the seat takes it only for a run
+	// whose row waits on that very run (internal/sandbox's PendingRun.WaitsFor).
+	Waited *RunWaited `json:"waited,omitempty"`
 }
+
+// RunWaited is how a run another run waited for left its seat's slots, as the
+// engine answers the wait (ADR-0176): Left says whether it ended or parked and
+// Outcome how (its ending's outcome word, or where it parked); Report is the
+// first lines of what its reviewer said landed, only for a run working for the
+// waiting run's requester; Pushed and Refs what it pushed, as read when it
+// left.
+type RunWaited struct {
+	Turn    string    `json:"turn"`
+	Seat    string    `json:"seat"`
+	Left    RunLeft   `json:"left"`
+	Outcome string    `json:"outcome"`
+	Report  string    `json:"report" untrusted:"fence"`
+	Branch  string    `json:"branch"`
+	Pushed  RunPushed `json:"pushed"`
+	Refs    []string  `json:"refs"`
+}
+
+// RunLeft is whether a run waited for ended or parked.
+type RunLeft string
+
+const (
+	// RunLeftEnded is a run whose turn ended; Outcome is how.
+	RunLeftEnded RunLeft = "ended"
+	// RunLeftParked is a run parked on a person's answer, or on a run of its own.
+	RunLeftParked RunLeft = "parked"
+	// RunLeftGone is a run whose record is gone with nothing on record saying how it ended.
+	RunLeftGone RunLeft = "gone"
+)
+
+// RunLefts is the closed set.
+var RunLefts = []RunLeft{RunLeftEnded, RunLeftParked, RunLeftGone}
+
+// Valid reports whether l is one of [RunLefts].
+func (l RunLeft) Valid() bool { return slices.Contains(RunLefts, l) }
+
+// RunPushed is what a run waited for pushed, as read when it left.
+type RunPushed string
+
+const (
+	// RunPushedSome is a run that pushed the refs named.
+	RunPushedSome RunPushed = "pushed"
+	// RunPushedNone is a run that pushed nothing.
+	RunPushedNone RunPushed = "none"
+	// RunPushedUnknown is a run whose pushes could not be read.
+	RunPushedUnknown RunPushed = "unknown"
+)
+
+// RunPusheds is the closed set.
+var RunPusheds = []RunPushed{RunPushedSome, RunPushedNone, RunPushedUnknown}
+
+// Valid reports whether p is one of [RunPusheds].
+func (p RunPushed) Valid() bool { return slices.Contains(RunPusheds, p) }
 
 // EventType is the "executor_answer_given" wire type.
 func (ExecutorAnswerGiven) EventType() string { return "executor_answer_given" }

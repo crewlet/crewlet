@@ -538,6 +538,9 @@ type fakeGrants struct {
 	held    map[string]bool
 	revoked []string
 	err     error
+	// givenUp are the integration kinds a disconnect gave up, each with the
+	// document it was handed.
+	givenUp map[string]*config.Company
 }
 
 func (f *fakeGrants) HeldMCPGrant(_ context.Context, server string) (bool, error) {
@@ -558,6 +561,16 @@ func (f *fakeGrants) RevokeMCPServerGrant(_ context.Context, entry *config.MCPSe
 		delete(f.held, entry.Name)
 	}
 	return "revoked", "", held, nil
+}
+
+func (f *fakeGrants) GiveUpIntegrationGrant(_ context.Context, before *config.Company, kind string) (string, string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.givenUp == nil {
+		f.givenUp = map[string]*config.Company{}
+	}
+	f.givenUp[kind] = before
+	return "shared", "Crewlet deleted its copy.", true, nil
 }
 
 func (f *fakeGrants) revocations() []string {

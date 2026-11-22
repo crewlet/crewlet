@@ -73,9 +73,9 @@ func pointBox(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
 func TestThePointIsReadInTheContinuationsBox(t *testing.T) {
 	t.Parallel()
 	runner, box := pointBox(t)
-	point, err := runner.ReadOpenCodePoint(t.Context(), box, sandbox.PointAsk{Model: "stub/m", Writer: "2.3.0"})
+	point, err := runner.ReadBoxPoint(t.Context(), box, sandbox.PointAsk{Model: "stub/m", Writer: "2.3.0"})
 	if err != nil {
-		t.Fatalf("ReadOpenCodePoint: %v", err)
+		t.Fatalf("ReadBoxPoint: %v", err)
 	}
 	if point.Mark != "" || point.Release != "2.3.0" || point.Tokens != 210000 {
 		t.Fatalf("the box's point reads %+v, want 210,000 on 2.3.0", point)
@@ -105,11 +105,11 @@ func TestThePointIsReadInTheContinuationsBox(t *testing.T) {
 func TestTheReadSeesTheBoxsDocumentsNotTheImages(t *testing.T) {
 	t.Parallel()
 	runner, box := pointBox(t)
-	_, err := runner.ReadOpenCodePoint(t.Context(), box, sandbox.PointAsk{Model: "stub/m", Release: "2.3.0",
+	_, err := runner.ReadBoxPoint(t.Context(), box, sandbox.PointAsk{Model: "stub/m", Release: "2.3.0",
 		Writer: "2.3.0", Env: map[string]string{"OPENCODE_CONFIG_CONTENT": `{"image":true}`,
 			"STUB_API_KEY": "the run's key"}})
 	if err != nil {
-		t.Fatalf("ReadOpenCodePoint: %v", err)
+		t.Fatalf("ReadBoxPoint: %v", err)
 	}
 	env := boxFile(t, box, box.Home()+"/opencode-env")
 	if strings.Contains(env, "OPENCODE_CONFIG_CONTENT=") || !strings.Contains(env, "STUB_API_KEY=the run's key") {

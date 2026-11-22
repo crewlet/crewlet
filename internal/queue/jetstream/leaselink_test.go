@@ -299,6 +299,9 @@ func TestTheLeaseDialGivesUpADeadSocketWithinAHeartbeatOfTheShortestLease(t *tes
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
 	link := linktest.Lagging(t, srv.HostPort())
 	q := newQueueWith(t, Config{URL: "nats://" + link.Addr(), Token: externaltest.Token})
+	// The lease link's probe always answers here: unanswered, it moves the
+	// link by a reconnect within its bound, beside the pings this case is about.
+	q.leaseTiming = dataPathTiming{probe: func(context.Context) error { return nil }}
 	leases := leasesOf(t, q)
 	dead := linktest.Client(leaseConnName)
 	stale, back := make(chan error, 1), make(chan struct{}, 1)

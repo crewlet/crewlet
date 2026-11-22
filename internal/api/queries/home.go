@@ -791,7 +791,7 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 				return nil, err
 			}
 			items = append(items, DecisionItem{Kind: "run", At: at,
-				Run:           serialiseRun(run, calls, r, s.opened(run), waiting),
+				Run:           serialiseRun(run, calls, r, s.opened(run, waiting.MayAnswer), waiting),
 				AccessChanged: changes.of(ctx, run.AgentHandle, askedAt(run)),
 				PutToYou:      waiting.PutToYou, MayAnswer: waiting.MayAnswer, NeedsYou: waiting.NeedsYou()})
 			if !put && !waiting.NeedsYou() {

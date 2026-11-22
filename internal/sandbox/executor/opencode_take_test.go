@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -179,7 +180,7 @@ func TestAnEndedOpenCodeJobsSessionIsTakenAsItsScriptExportedIt(t *testing.T) {
 	// ([sandbox.SessionTake.Pack] false).
 	askEnd(t, runner, b, handle)
 	awaitOver(t, runner, b, handle, promptEnd, "the end gives its client five seconds")
-	res, err := runner.Collect(t.Context(), b, handle)
+	res, err := runner.Collect(t.Context(), b, handle, queue.NewAnswerBudget(nil))
 	if err != nil {
 		t.Fatalf("Collect: %v", err)
 	}

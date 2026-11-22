@@ -30,10 +30,20 @@ func (w NodeWork) MemoryPools(memory int64) int64 {
 	if w.Boxes {
 		live += int64(w.Turns+w.PeerReads)*baseTierReadBytes +
 			SessionTakesAtOnce*takeBaseHeldBytes +
-			CollectionLargeReadsAtOnce*threadChainHeldBytes +
+			CollectionLargeReadsAtOnce*largeReadHeldBytes() +
 			HoldingsReadsAtOnce*threadChainHeldBytes
 	}
 	return live * limitHeadroomHalves / 2
+}
+
+// largeReadHeldBytes is what the large slot ([CollectionLargeReadsAtOnce])
+// adds at its worst: the larger of its holders' figures, never their sum. Each
+// pass takes it through its own [passBudget] (readMainThread's, take.go's), so
+// one holds it at a time; only a collection's builds a chain, and a take's is
+// its scrub and its meter at once, counted past its base ([takeLargeHeldBytes]).
+// The chain's is whole, its base's 2.7 MiB in it, which the max never reads.
+func largeReadHeldBytes() int64 {
+	return max(threadChainHeldBytes, takeLargeHeldBytes())
 }
 
 // transcriptReads is how many transcripts w's node decodes at once: every
@@ -57,7 +67,7 @@ func (w NodeWork) transcriptReads() int {
 //	h                     1.25         1.5         2            default
 //	main thread, empty    25.5-26.2 s  23.5 s      22.5-23.3 s  22.3 s
 //	main thread, ordinary 3.7-4.2 s    2.8-2.9 s   2.35-2.4 s   2.34 s
-//	scrub, a pwd string   263 s        249-251 s   245 s        246 s
+//	scrub, a pwd string   274 s        259-261 s   255 s        256 s
 //
-// The scrub sets it: internal/sandbox's SessionScrubWait keeps 13 s at 1.5.
+// The scrub sets it: internal/sandbox's SessionScrubWait keeps 3 s at 1.5.
 const limitHeadroomHalves = 3

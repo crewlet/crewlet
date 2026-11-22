@@ -1802,7 +1802,7 @@ the same answer from every surface.
 | **Any app** | `answer_knowledge`, a person's question answered from what the company has written down; a principal no seat binds (a token or service account bound to none) is refused, since it runs on the bound seat's model | Any one of the apps the row names (`worklet` or `doclet`): the answer searches pages only for a `doclet` holder and the board only for a `worklet` holder |
 | **App or asked** | Reading one work item, and commenting on it (`get_work_item`, `comment_on_work_item`) | `worklet`, or the person an open ask on the item names, and on the comment only their answer ([You may answer what you were asked](#what-each-app-opens)) |
 | **Self** | The caller's own diary, episodes, skills and onboarding marker, and an agent seat's own executor sessions (`list_sessions`, `read_session`) | The caller, **nobody else**, not even admin |
-| **Own record** | Marking an inbox, pinned views; `mark_chat_read`, marks over one's own code notices (`code_mark_inbox`) and comment notices (`artifact_mark_inbox`, no app), files of a change marked viewed (`code_mark_viewed`) | The owner, or admin, with the row's app |
+| **Own record** | Marking an inbox, pinned views; `mark_chat_read`, marks over one's own code notices (`code_mark_inbox`) and comment notices (`artifact_mark_inbox`, no app), files of a change marked viewed (`code_mark_viewed`), one's own Home board (`save_home_board`, no app, a seated person's) | The owner, or admin, with the row's app |
 | **Own or lead** | Priorities, a person's day and queue (`set_priorities`, `my_work`, `work_inbox`, `get_person`); whether a seat works (`pause_seat`, `resume_seat`, `steer_turn`); `run_schedule` (decided on every seat the schedule wakes); `answer_executor`; and one seat's own trail (`audit.seat.read`: memory, turns, executor's live output, executor sessions with transcripts) | The owner, whoever leads them, or admin, with `worklet` on the four Worklet verbs and no app on the rest (a lead who uses no app still runs their team). A seat's owner is the person bound to it; for a note to a turn whose executor is in its box, the seat the executor's record names under its sealed anchor, which the asking node reads itself ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)). An executor's question: its **requester** (the person whose message woke the turn that launched it), otherwise whoever leads the executor's seat, so nobody who merely leads the requester answers it |
 | **Saved view** | Saving a view | With `worklet`: a **personal** view (naming an owner) is its owner's, or admin's; a **shared** one is its container's lead's (a project's, a unit's, or the page owner and whoever leads them) or admin's, the only way to a workspace-wide tab. Replacing a stored view asks twice: for the view written and for the one it overwrites as it stands |
 | **Container** | A project's policy (fields, default assignee, tag renames and archives, archiving it) and re-routing a task to another team | The project's lead, or admin, with `worklet` |
@@ -1881,6 +1881,16 @@ the `ssh_operate` rule's `escalate_to` names, at a fresh step-up; choosing the
 approving option of an `ask_to_operate` decision is decided on the same row.
 `ask_to_operate` is admin's with the `ssh_operate` seat grant. See
 [SSH](../integrations/ssh.md#the-agents-tools).
+
+**And a growth product's tools.** No row is written per tool: each tool a
+growth product's catalog lists is admin's with that product's seat grant at the
+least level its tool's class needs (`google_analytics_read`, `_operate` or
+`_administer`), which an agent's role carries where its lane is on at that
+level or above. Its held acts are answered on `growth.spend.approve`,
+`growth.public.approve` and `growth.admin.approve`, **human-only**, and App
+Store analytics is turned on with an Admin key pasted once on
+`app_store_connect.analytics.enable`, the same. See
+[ADR-0170](../../adr/0170-a-growth-integrations-credential-stays-in-the-engine.md).
 
 **And a delegate's verdict.** `review_delegated` is admin's, and its row names
 the `delegated_decisions` seat grant an enabled rule of the company's

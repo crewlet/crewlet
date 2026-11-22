@@ -877,8 +877,8 @@ const (
 // SEVEN MINUTES, from the measured worst: the minute a take may wait for its
 // spool's room ([spoolRoomWait]), the archive read twice out of a box at its
 // floor pace of a mebibyte a second (96 s at 48 MiB), and the slowest session
-// a harness writes scrubbed at its 256 MiB of plaintext (246 s, 251 s at worst
-// under the engine's memory limit): 407 s counted apart though the last two
+// a harness writes scrubbed at its 256 MiB of plaintext (256 s, 261 s at worst
+// under the engine's memory limit): 417 s counted apart though the last two
 // overlap. Only sessions a harness writes set it. A take still scrubbing at
 // its end FAILS CLOSED: nothing is kept, its place is refused and the last
 // kept copy stands, so a box costs only its own session
@@ -1282,6 +1282,12 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name, "detail", why)
 		return nil, &SessionKept{NotKept: why}
 	}
+	// A MINTING JOB'S SESSION IS BOUND BEFORE IT IS TAKEN (minted.go).
+	if current, err = c.bindMinted(ctx, current, box, runner); err != nil {
+		why := fmt.Sprintf("the job's session was not bound: %v", err)
+		log.InfoContext(ctx, "executor_session_not_kept", "turn_id", run.TurnID, "point", at.name, "detail", why)
+		return nil, &SessionKept{NotKept: why}
+	}
 	standing := false
 	if last := current.Capture; last != nil && last.LaunchSeq == current.LaunchSeq &&
 		last.Launch == run.LaunchID && last.Final {
@@ -1394,7 +1400,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, refuse(calls, takeRefusal(ctx, err))
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
-		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID})
+		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID, Session: current.Launch.Minted})
 	give()
 	if err != nil {
 		return nil, refuse(calls, takeRefusal(ctx, err))
@@ -1434,7 +1440,8 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		stamp.placeAt(*calls, current.Launch)
 	} else {
 		stamp.placeAtZero(current.Launch)
-		places = &savePlaces{run: current, resumeRead: taken.ResumeRead}
+		places = &savePlaces{run: current, resumeRead: taken.ResumeRead,
+			needsResumeRead: placesWithResumeRead(runner)}
 	}
 	stamp.At = c.now().UTC()
 	// THE PLACE IS RESERVED WITHIN THE TAKE'S OWN TIME — the room its context
@@ -2269,18 +2276,23 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 	over := c.endJob(ctx, run, box, runner, nil)
 	// THE RELEASE ALONE: a failed Collect leaves it "", which confirms nothing.
 	var result Result
-	if asksMainThread(run, BoxReadLoss) {
-		if collected, err := runner.Collect(ctx, box, run.Handle()); err == nil {
+	if asksMainThread(run, BoxReadLoss, ThreadTraitsOf(runner)) {
+		if collected, err := runner.Collect(ctx, box, run.Handle(), c.answerBudget); err == nil {
 			result.HarnessVersion = collected.HarnessVersion
 		}
 	}
 	at := readCapture(BoxReadLoss, result, over)
 	reading := c.readMainThread(ctx, run, box, runner, BoxReadLoss, at, result)
-	if err := c.settleHookReceipts(ctx, run, reading.Receipts, BoxReadLoss); err != nil {
+	if err := c.settleReceipts(ctx, run, reading.Receipts, BoxReadLoss); err != nil {
 		return nil, nil, err
 	}
 	if !c.capturing() {
 		return nil, nil, nil
+	}
+	// A MINTING JOB'S SESSION IS BOUND BEFORE ITS LOSS TAKES IT (minted.go): a
+	// bind neither made nor refused hands the read back, to be made again.
+	if _, err := c.bindMinted(ctx, run, box, runner); undecidedBind(err) {
+		return nil, nil, storeSilent(ctx, fmt.Errorf("sandbox: binding lost run %s's session: %w", run.TurnID, err))
 	}
 	spooled, kept := c.takeCapture(ctx, run, box, runner, at)
 	return spooled, kept, nil
@@ -2340,7 +2352,7 @@ func nextCaptureSeq(run PendingRun) int64 {
 	return 1
 }
 
-// maxScrubBytes bounds what one capture scrubs out by value, in all: what its
+// MaxScrubBytes bounds what one capture scrubs out by value, in all: what its
 // box was handed (by its launch and the poll's renewals, bounded together,
 // [MaxHandedBytes]) and its seeded logins read again, in the box and on the
 // host ([Coordinator.scrubValues]).
@@ -2350,8 +2362,9 @@ func nextCaptureSeq(run PendingRun) int64 {
 // scrub, which holds every value whole in one replacer, costs the host a few
 // mebibytes at most. The box's own code can write its login file, and a file
 // of millions of short strings built a replacer of a gibibyte on the engine
-// host before a byte of the session was read. A capture past it is refused.
-const maxScrubBytes = 4 * MaxHandedBytes
+// host before a byte of the session was read. A capture past it is refused,
+// so it bounds the longest value the executor's scrub holds too.
+const MaxScrubBytes = 4 * MaxHandedBytes
 
 // scrubValues is every value a capture of run's box scrubs out by value: what
 // its launch handed the box and every token the poll renewed in it since,
@@ -2362,7 +2375,7 @@ const maxScrubBytes = 4 * MaxHandedBytes
 // as holding less than its box among them ([ErrHandedIncomplete]), which
 // refuses the capture rather than scrub less; and refused too past its bounds
 // — a login read again larger than a whole launch may hand
-// ([MaxHandedBytes]), or values past [maxScrubBytes] in all — since the box's
+// ([MaxHandedBytes]), or values past [MaxScrubBytes] in all — since the box's
 // code can write its login and the scrub holds every value whole.
 func (c *Coordinator) scrubValues(ctx context.Context, run PendingRun, box Sandbox) ([]string, error) {
 	sealed, err := c.pending.Handed(ctx, run)
@@ -2413,9 +2426,9 @@ func (c *Coordinator) scrubValues(ctx context.Context, run PendingRun, box Sandb
 	for _, v := range values {
 		total += len(v)
 	}
-	if total > maxScrubBytes {
+	if total > MaxScrubBytes {
 		return nil, fmt.Errorf("the values the session would be scrubbed of are %d bytes in all, past "+
-			"the %d a capture holds for its scrub, so it is not kept", total, maxScrubBytes)
+			"the %d a capture holds for its scrub, so it is not kept", total, MaxScrubBytes)
 	}
 	return values, nil
 }
@@ -2694,6 +2707,14 @@ func (c *Coordinator) recordCapture(ctx context.Context, run PendingRun, stamp S
 		outcome, why = CaptureUnresolved, fmt.Sprint(err)
 		return false, err
 	})
+	// A MINTED SESSION'S CLAIM GOES ONCE THE LOG NAMES IT (minted.go): the
+	// log's seek guards the id from here, so the claim is no longer needed.
+	if id := stamp.SessionID; outcome == CaptureLanded && id != "" && id == run.Launch.Minted {
+		if err := c.pending.ReleaseSessionClaim(context.WithoutCancel(ctx), turn, id); err != nil {
+			log.InfoContext(ctx, "executor_session_claim_kept", "turn_id", turn, "session", id,
+				"error", err.Error(), "detail", "the claim goes with the run's record instead")
+		}
+	}
 	return outcome, why, fenced
 }
 

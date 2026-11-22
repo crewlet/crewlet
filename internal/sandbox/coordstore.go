@@ -142,6 +142,9 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// is this run's. The create writes NO part; readers tell another run's part
 	// by the name.
 	created.LeadsRun, created.LeadsAppended = run.LaunchID, 0
+	// NOR WHAT ITS CALLS WROTE, which only its log's appends fold in
+	// ([PendingRun.WroteKeys]).
+	created.WroteKeys = nil
 	created.Steer = RunSteer{Seat: bytes.Clone(run.Steer.Seat)}
 	openNotes(&created.Steer, run, run.LaunchID, now)
 	// A TRIGGER'S WORDS, HELD TO THEIR SHARE OF THE ROW ([MaxRunTitleBytes]):
@@ -150,8 +153,7 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 	// never rewritten: a relaunch keeps the row's.
 	created.TaskDescription, created.Label = keptTitle(run.TaskDescription), keptTitle(run.Label)
 	if ask := run.ColleagueAsk; ask != nil {
-		held := *ask
-		held.Question = keptTitle(ask.Question)
+		held := ask.WithQuestion(keptQuestion(ask.question))
 		created.ColleagueAsk = &held
 	}
 	raw, err := encodeRun(created)
@@ -335,7 +337,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// The held call and its audience are the old job's, and so are its
 		// fold-ins: an answer to one would let a request join work it was
 		// never asked for.
-		existing.HeldCall = nil
+		existing.HeldCall, existing.WaitsFor = nil, nil
 		existing.FoldIns = nil
 		existing.AudienceHandles, existing.AudienceFallback = nil, false
 		// EVERYTHING ITS ANSWER WAS MEASURED AGAINST: the next question is
@@ -1390,6 +1392,9 @@ func (s *CoordStore) GiveDelegateVerdict(ctx context.Context, turnID, launch, he
 	if err := v.validate(); err != nil {
 		return HeldCall{}, false, fmt.Errorf("sandbox: a verdict on held call %s of run %s: %w", heldID, turnID, err)
 	}
+	// REDACTED AFTER THE BOUNDS, which are the verdict tool's own and count
+	// what the delegate wrote.
+	given := v.Redacted()
 	var held HeldCall
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
 		if !waitsOnDelegates(*run, launch, heldID) {
@@ -1400,8 +1405,6 @@ func (s *CoordStore) GiveDelegateVerdict(ctx context.Context, turnID, launch, he
 			slices.ContainsFunc(d.Given, func(g HeldVerdict) bool { return g.By == v.By }) {
 			return false
 		}
-		given := v
-		given.Findings = slices.Clone(v.Findings)
 		d.Given = append(slices.Clone(d.Given), given)
 		held = *run.HeldCall
 		held.Delegation = &d
@@ -2301,12 +2304,12 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 // NO FENCE, deliberately: this is a LOG APPEND of a call that already ran, and
 // refusing it because the seat moved would lose true evidence (the log's
 // version guards the write). Each step is one compare-and-swap on the log's own
-// fields. After a record lands the job's spend is written (own job only,
-// [BridgeLog.take]) and a late or abandoned call is handed to the log's job,
-// never failing the append ([CoordStore.fileLateItems]). THE ONE WRITER of a
-// call's steps and spend. A gone log, a stale-round begin or withdrawal, or an
-// append naming no job is dropped, no error (see [PendingStore]). A late call
-// is answered recorded beside [ErrJobReplaced].
+// fields. After a record lands the job's spend (own job only, [BridgeLog.take])
+// and the keys of what the turn wrote ([PendingRun.WroteKeys]) are written, and
+// a late or abandoned call is handed to the log's job, never failing the append
+// ([CoordStore.fileLateItems]). THE ONE WRITER of a call's steps and spend. A
+// gone log, a stale-round begin or withdrawal, or a jobless append is dropped,
+// no error (see [PendingStore]); a late call is recorded with [ErrJobReplaced].
 func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a BridgeAppend) (bool, error) {
 	if !a.Step.Valid() {
 		return false, fmt.Errorf("sandbox: %q is no step of a bridged call", a.Step)
@@ -2357,13 +2360,18 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 		// that is over.
 		return false, nil
 	case a.Step != AppendRecord:
-		// A begin or withdrawal: no spend rides it.
+		// A begin or withdrawal: no spend rides it, nor anything it wrote.
 		return true, nil
 	case taken != takeOwn:
 		// A LATE CALL, in the log and paid by nobody: the row holds a later job,
 		// whose resume would pay it as its own. Said, so a caller asking again
-		// for an earlier attempt's spend stops. HANDED TO THE JOB THE LOG IS OPEN
-		// TO as the log lists it, which files it once however often asked.
+		// for an earlier attempt's spend stops. What it wrote reaches the row's
+		// keys in a write of its own, as a late item is filed. HANDED TO THE JOB
+		// THE LOG IS OPEN TO as the log lists it, which files it once however
+		// often asked.
+		if len(a.Wrote) > 0 {
+			s.keepWrittenKeys(ctx, turnID, logged)
+		}
 		listed, ok := logged.listedAs(a.Call)
 		if taken == takeEarlier {
 			listed, ok = logged.listedEarlierAs(a.Call)
@@ -2377,20 +2385,21 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 	// follows the reset naming the next job ([CoordStore.BeginLaunch]), so an
 	// append the log still takes as its own may find the row moved on, its spend
 	// dropped with the job. Written whether or not this append moved the log: an
-	// append asked again may be the first whose spend reaches the record.
+	// append asked again may be the first whose spend reaches the record. IN THE
+	// SAME WRITE, whatever job the row holds, the keys of the log's whole set.
 	_, _, err = s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		var changed bool
+		run.WroteKeys, changed = foldWrittenKeys(run.WroteKeys, logged.Wrote)
 		if a.Launch != run.LaunchID {
-			return false
+			return changed
 		}
-		newest := run.Launch.Bridged.Newest(a.Spent)
-		if newest == run.Launch.Bridged {
-			return false
+		if newest := run.Launch.Bridged.Newest(a.Spent); newest != run.Launch.Bridged {
+			run.Launch.Bridged, changed = newest, true
 		}
-		run.Launch.Bridged = newest
-		return true
+		return changed
 	})
 	if err != nil {
-		return true, fmt.Errorf("sandbox: record what run %s's bridged calls cost: %w", turnID, err)
+		return true, fmt.Errorf("sandbox: record what run %s's bridged calls cost and wrote: %w", turnID, err)
 	}
 	// A CALL ITS HARNESS GAVE UP ON is handed to its job once its spend is
 	// written: an error above stands, and the ask again files it.
@@ -2398,6 +2407,24 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 		s.fileLateItems(ctx, turnID, a.Launch, logged.Round, []BridgeCall{listed})
 	}
 	return true, nil
+}
+
+// keepWrittenKeys folds the keys of what logged's set holds onto turnID's row
+// ([PendingRun.WroteKeys]) in a write of its own, for a late call, whose spend
+// rides no write. NEVER AN ERROR TO ITS CALLER, whose own write landed: said,
+// and the next record of the log's own job, or of a late call that wrote,
+// folds the whole set again.
+func (s *CoordStore) keepWrittenKeys(ctx context.Context, turnID string, logged BridgeLog) {
+	_, _, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
+		var changed bool
+		run.WroteKeys, changed = foldWrittenKeys(run.WroteKeys, logged.Wrote)
+		return changed
+	})
+	if err != nil {
+		log.WarnContext(ctx, "sandbox_run_written_keys_unkept", "turn_id", turnID, "error", err.Error(),
+			"detail", "the run's row lacks the keys of what a late call wrote until its next recorded call, so "+
+				"another seat's run on that work is not shown it meanwhile")
+	}
 }
 
 // logTake is what a run's log takes one bridged append for
@@ -2663,6 +2690,7 @@ func (s *CoordStore) RecordAsk(ctx context.Context, turnID, launch string, ask A
 		}
 		run.Question, run.QuestionContext = ask.Question, ask.Context
 		run.Decision, run.Audience = ask.Decision, ask.To
+		run.WaitsFor = ask.Wait
 		if ask.Held != nil {
 			// A HELD CALL NAMES NO BRANCH (the run did not choose to stop): an
 			// earlier question's branch stays for the job carrying on.
@@ -2781,6 +2809,217 @@ func (s *CoordStore) MarkSessionStart(ctx context.Context, turnID, launch string
 		return true
 	})
 	return marked, err
+}
+
+// BindSession binds a minting job's reported session to its record. See the
+// contract on [PendingStore].
+func (s *CoordStore) BindSession(ctx context.Context, turnID string, bind SessionBind) (PendingRun, error) {
+	if bind.Launch == "" || !ValidSessionID(bind.ID) {
+		return PendingRun{}, fmt.Errorf("%w: %q is no session id a harness names, for job %q",
+			ErrSessionBindRefused, bind.ID, bind.Launch)
+	}
+	// THE RECORD'S RULES FIRST, so a report it refuses claims nothing; the same
+	// job again (a recovery, a reattach, a second save) is answered as bound,
+	// its claim made again where none stands, asking the log nothing. Then THE
+	// CLAIM, THE FRESH CHECK AND THE RECORD, in that order, so no second job
+	// checks the log in the window before this one's claim; a claim this call
+	// took is released where the record does not follow. One a crash leaves
+	// goes with the record.
+	run, found, err := s.Get(ctx, turnID)
+	switch {
+	case err != nil:
+		return PendingRun{}, err
+	case !found:
+		return PendingRun{}, fmt.Errorf("%w: turn %s holds no record", ErrSessionBindRefused, turnID)
+	}
+	if refused := sessionBindRefusal(run, bind); refused != nil {
+		return PendingRun{}, refused
+	}
+	if run.Launch.Minted == bind.ID {
+		// BOUND ALREADY, by a write whose answer may have been lost: its claim
+		// is made again where none stands, for the job the record binds.
+		if err = s.reclaimBound(ctx, turnID, bind); err != nil {
+			return PendingRun{}, err
+		}
+		return run, nil
+	}
+	took, err := s.claimSession(ctx, turnID, bind)
+	if err != nil {
+		return PendingRun{}, err
+	}
+	release := func() { s.undoClaim(context.WithoutCancel(ctx), turnID, bind, took) }
+	if bind.Fresh != nil {
+		if err = bind.Fresh(ctx, bind.ID); err != nil {
+			release()
+			return PendingRun{}, err
+		}
+	}
+	var (
+		refused error
+		held    PendingRun // the record as decided, written or already bound
+	)
+	_, _, found, err = s.writeFound(ctx, turnID, false, Fence{}, func(run *PendingRun) bool {
+		refused = sessionBindRefusal(*run, bind)
+		bound := refused == nil && run.Launch.Minted == ""
+		if bound {
+			run.Launch.Minted = bind.ID
+		}
+		held = *run
+		return bound
+	})
+	switch {
+	case err != nil:
+		// A WRITE THAT ERRED MAY HAVE LANDED: the claim stays where the record,
+		// read again, binds the id (or cannot be read to say).
+		if again, there, readErr := s.Get(context.WithoutCancel(ctx), turnID); readErr == nil &&
+			(!there || again.LaunchID != bind.Launch || again.Launch.Minted != bind.ID) {
+			release()
+		}
+		return PendingRun{}, err
+	case !found:
+		release()
+		return PendingRun{}, fmt.Errorf("%w: turn %s holds no record", ErrSessionBindRefused, turnID)
+	case refused != nil:
+		release()
+		return PendingRun{}, refused
+	}
+	return held, nil
+}
+
+// sessionClaimAttempts bounds a claim's races: each one lost is another job's
+// claim or move of the same id, so a few settle it either way.
+const sessionClaimAttempts = 4
+
+// claimSession claims bind's session for its job ([coord.SessionClaims]): an
+// id nobody claims, one its own job holds, one its turn's earlier job holds (a
+// relaunch continuing it: the claim moves with the turn), and one a run with no
+// record holds (a claim carries its record's lifetime) are its job's; one
+// another live run holds is [ErrSessionBindRefused]. It reports what this call
+// took, so a bind whose record does not follow undoes only that
+// ([CoordStore.undoClaim]).
+func (s *CoordStore) claimSession(ctx context.Context, turnID string, bind SessionBind) (claimTaken, error) {
+	ours := coord.SessionClaim{Session: bind.ID, Turn: turnID, Launch: bind.Launch}
+	for range sessionClaimAttempts {
+		held, found, err := s.runs.SessionClaim(ctx, bind.ID)
+		if err != nil {
+			return claimTaken{}, fmt.Errorf("sandbox: reading the claim of session %q: %w", bind.ID, err)
+		}
+		if !found {
+			created, createErr := s.runs.CreateSessionClaim(ctx, ours)
+			if createErr != nil || created {
+				return claimTaken{created: created}, createErr
+			}
+			continue
+		}
+		if held.Turn == turnID && held.Launch == bind.Launch {
+			return claimTaken{}, nil
+		}
+		if held.Turn != turnID {
+			if _, live, readErr := s.runs.SandboxRun(ctx, held.Turn); readErr != nil {
+				return claimTaken{}, fmt.Errorf("sandbox: reading the run claiming session %q: %w", bind.ID,
+					readErr)
+			} else if live {
+				return claimTaken{}, fmt.Errorf("%w: session %q is bound to turn %s's job %s",
+					ErrSessionBindRefused, bind.ID, held.Turn, held.Launch)
+			}
+		}
+		moved, err := s.runs.MoveSessionClaim(ctx, ours, held.Revision)
+		if err != nil || moved {
+			taken := claimTaken{}
+			if moved {
+				taken.movedFrom = &held
+			}
+			return taken, err
+		}
+	}
+	return claimTaken{}, fmt.Errorf("sandbox: claiming session %q lost every race: %w", bind.ID,
+		coord.ErrUnavailable)
+}
+
+// reclaimBound makes the claim of a session turnID's record binds already,
+// for the job it binds, where none stands; one standing is left as it is.
+func (s *CoordStore) reclaimBound(ctx context.Context, turnID string, bind SessionBind) error {
+	_, found, err := s.runs.SessionClaim(ctx, bind.ID)
+	if err == nil && !found {
+		_, err = s.runs.CreateSessionClaim(ctx, coord.SessionClaim{Session: bind.ID, Turn: turnID,
+			Launch: bind.Launch})
+	}
+	if err != nil {
+		return fmt.Errorf("sandbox: claiming bound session %q again: %w", bind.ID, err)
+	}
+	return nil
+}
+
+// claimTaken is what a bind's claim did ([CoordStore.claimSession]): made the
+// claim, or moved it from movedFrom (the turn's earlier job, or a run with no
+// record), or neither (its own job held it already).
+type claimTaken struct {
+	created   bool
+	movedFrom *coord.SessionClaim
+}
+
+// undoClaim undoes what a bind whose record did not follow took: a claim it
+// made is removed, and one it moved goes back to its earlier owner, so a
+// relaunch's failed bind never strips the session its turn continues of its
+// claim. A claim no longer the bind's is left alone.
+func (s *CoordStore) undoClaim(ctx context.Context, turnID string, bind SessionBind, taken claimTaken) {
+	if !taken.created && taken.movedFrom == nil {
+		return
+	}
+	held, found, err := s.runs.SessionClaim(ctx, bind.ID)
+	if err != nil || !found || held.Turn != turnID || held.Launch != bind.Launch {
+		return
+	}
+	if taken.created {
+		_, _ = s.runs.DeleteSessionClaim(ctx, bind.ID, held.Revision)
+		return
+	}
+	_, _ = s.runs.MoveSessionClaim(ctx, *taken.movedFrom, held.Revision)
+}
+
+// ReleaseSessionClaim removes turnID's claim of a session. See the contract on
+// [PendingStore].
+func (s *CoordStore) ReleaseSessionClaim(ctx context.Context, turnID, sessionID string) error {
+	return s.dropSessionClaim(ctx, turnID, sessionID)
+}
+
+// dropSessionClaim removes turnID's claim of sessionID, nil where turnID holds
+// none; one a failure leaves goes with the record ([coord.SessionClaims]).
+func (s *CoordStore) dropSessionClaim(ctx context.Context, turnID, sessionID string) error {
+	held, found, err := s.runs.SessionClaim(ctx, sessionID)
+	switch {
+	case err != nil:
+		return fmt.Errorf("sandbox: reading the claim of session %q: %w", sessionID, err)
+	case !found || held.Turn != turnID:
+		return nil
+	}
+	if _, err := s.runs.DeleteSessionClaim(ctx, sessionID, held.Revision); err != nil {
+		return fmt.Errorf("sandbox: releasing the claim of session %q: %w", sessionID, err)
+	}
+	return nil
+}
+
+// sessionBindRefusal is why run's record will not bind bind's report, nil where
+// it binds it or holds it bound already.
+func sessionBindRefusal(run PendingRun, bind SessionBind) error {
+	refuse := func(format string, args ...any) error {
+		return fmt.Errorf("%w: "+format, append([]any{ErrSessionBindRefused}, args...)...)
+	}
+	switch {
+	case run.LaunchID != bind.Launch:
+		return refuse("the record holds job %q, not %q", run.LaunchID, bind.Launch)
+	case run.Launch.Minted == bind.ID:
+		return nil
+	case run.Launch.Minted != "":
+		return refuse("job %s bound session %q already, and a job binds one, once", bind.Launch,
+			run.Launch.Minted)
+	case bind.Continued && bind.ID != run.SessionID:
+		return refuse("job %s continued session %q and reported %q", bind.Launch, run.SessionID, bind.ID)
+	case !bind.Continued && run.SessionID != "" && bind.ID == run.SessionID:
+		return refuse("job %s started a session of its own and reported the one it was asked to "+
+			"continue, %q", bind.Launch, bind.ID)
+	}
+	return nil
 }
 
 // MarkEndedAtDeadline records that a job's collection saw it still working past
@@ -2948,6 +3187,9 @@ func (s *CoordStore) Finish(ctx context.Context, turnID, ending string) (Pending
 		return PendingRun{}, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, err)
 	case !gone:
 		return PendingRun{}, false, nil
+	}
+	if id := run.Launch.Minted; id != "" {
+		_ = s.dropSessionClaim(ctx, turnID, id)
 	}
 	return run, true, nil
 }
@@ -3137,9 +3379,10 @@ func outranked(run PendingRun, fence Fence) bool {
 
 // encodeRun writes a run back whole, unknown keys included (top level from
 // [PendingRun.Extra], sections' own, wirekeys.go) under [marshalCarrying]'s
-// rule: declared fields win.
+// rule: declared fields win. Its colleague's ask is written as stored
+// ([storedRun]), never as served.
 func encodeRun(run PendingRun) ([]byte, error) {
-	raw, err := marshalCarrying(run, pendingRunKeys(), run.Extra)
+	raw, err := marshalCarrying(storedRunOf(run), pendingRunKeys(), run.Extra)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: encode run %s: %w", run.TurnID, err)
 	}
@@ -3203,14 +3446,16 @@ func (u *undecodableReport) skipped(ctx context.Context, key string, err error) 
 }
 
 // decodeRun reads a run and KEEPS what it cannot read (see
-// [PendingRun.Extra] for the rolling upgrade that loses it otherwise).
+// [PendingRun.Extra] for the rolling upgrade that loses it otherwise). Its
+// colleague's ask is read as stored ([storedRun]).
 func decodeRun(record coord.Record) (_ PendingRun, err error) {
 	defer origin.Stamp(&err)
-	var run PendingRun
-	extra, err := unmarshalCarrying(record.Value, &run, pendingRunKeys())
+	var stored storedRun
+	extra, err := unmarshalCarrying(record.Value, &stored, pendingRunKeys())
 	if err != nil {
 		return PendingRun{}, fmt.Errorf("sandbox: decode run %s: %w", record.Key, err)
 	}
+	run := stored.run()
 	run.Extra = extra
 	// A null state is NO state: the struct writes null for a run with none, and
 	// a raw field reads it back as four bytes, which every `len(...) == 0` test
