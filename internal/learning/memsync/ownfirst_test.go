@@ -910,9 +910,12 @@ func TestAHydrationCutAsItsBoundaryIsReadRecordsNoneAndBeginsNoHolding(t *testin
 				t.Errorf("the own pass had %s acknowledged, want %s alone", name.said(turn.own),
 					name.said(want))
 			}
-			if want := notesOf(t, peerNotes); !slices.Equal(turn.backlog, want) {
-				t.Errorf("the backlog had %s acknowledged, want the 10 notes the hydration wrote",
-					name.said(turn.backlog))
+			// In the order the hydration stamped them, which is the changelog's:
+			// the peer's rows went out together, in any order.
+			wrote := stamped(t, fresh, registered(t, "agent_diary"), 0, s.boundary(seat.Handle))
+			if !slices.Equal(turn.backlog, wrote) || len(wrote) != len(peerNotes) {
+				t.Errorf("the backlog had %s acknowledged, want the 10 notes the hydration wrote, %s",
+					name.said(turn.backlog), name.said(wrote))
 			}
 		})
 	}
