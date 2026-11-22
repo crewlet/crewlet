@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -383,15 +382,6 @@ func (k Kimi) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.
 		}
 	}
 	return paths.KimiSettings(), nil
-}
-
-// writeJSON renders v, indented, into file.
-func writeJSON(ctx context.Context, box sandbox.Sandbox, file string, v any) error {
-	blob, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	return box.WriteFile(ctx, file, blob)
 }
 
 // kimiDefaultTools is every tool Kimi Code offers a session by default, as
