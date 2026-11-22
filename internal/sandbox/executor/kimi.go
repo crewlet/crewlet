@@ -168,6 +168,8 @@ fi
 // (KIMI_MODEL_*, which adds a provider and makes it the default), the API and
 // OAuth hosts, the extra headers, and the web search and fetch services'
 // hosts and keys. Set, it replaces the entry's sign-in or services.
+// KIMI_CODE_DANGEROUS_COMMAND_GUARD is left alone: it only raises asks, which
+// the driver approves in mode auto, so it switches nothing off (2.7.2).
 var kimiRouting = []string{
 	"KIMI_MODEL_NAME", "KIMI_MODEL_API_KEY", "KIMI_MODEL_PROVIDER_TYPE", "KIMI_MODEL_BASE_URL",
 	"KIMI_MODEL_MAX_CONTEXT_SIZE", "KIMI_MODEL_MAX_OUTPUT_SIZE", "KIMI_MODEL_CAPABILITIES",
