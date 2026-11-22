@@ -164,7 +164,7 @@ func (GeminiCLI) readsCommands() {}
 // and environment file. Extensions stay on disk, unloaded ([geminiFlags]);
 // agents are off in the settings.
 var geminiHome = runHome{State: ".gemini", Owned: []string{"skills", "policies", "commands", "GEMINI.md", ".env"},
-	Memory: []string{"GEMINI.md"}}
+	Memory: []string{"GEMINI.md"}, WalksEnv: true}
 
 // Events is a new decoder for one stream ([geminiEvents]).
 func (GeminiCLI) Events() Decoder { return &geminiEvents{} }
@@ -333,12 +333,13 @@ var geminiHelperScript []byte
 
 var _ artifactHolder = GeminiCLI{}
 
-// artifacts is what a Gemini CLI run leaves in the box's work directory, each
-// written afresh by the next ([Runner.ClearArtifacts]). The home's settings,
-// policy and project registry are rewritten by every Gemini CLI run, its
-// skills, policies and commands removed first, an image's included
-// ([geminiHome]); every other harness's run leaves them alone.
-func (GeminiCLI) artifacts(p Paths) (files, dirs []string) {
+// artifactFiles is what a Gemini CLI run leaves in the box's work directory,
+// each written afresh by the next ([Runner.ClearArtifacts]): files alone, so
+// it is no [artifactDirHolder]. The home's settings, policy and project
+// registry are rewritten by every Gemini CLI run, its skills, policies and
+// commands removed first, an image's included ([geminiHome]); every other
+// harness's run leaves them alone.
+func (GeminiCLI) artifactFiles(p Paths) []string {
 	return []string{p.GeminiHelper(), p.GeminiTake(), p.GeminiTakeConfig(),
-		p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem()}, nil
+		p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem()}
 }

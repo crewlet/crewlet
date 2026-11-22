@@ -7,17 +7,17 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// qwenDrained is the note the 0.28.3 capture's host handed its run mid-turn,
+// qwenDrained is the note the 0.28.4 capture's host handed its run mid-turn,
 // as its chat file records it behind Qwen Code's framing.
 const qwenDrained = "MARK-R6-START drained note MARK-R6-END"
 
-// qwenSessionWith is 0.28.3's own chat file of a run handed one note mid-turn
+// qwenSessionWith is 0.28.4's own chat file of a run handed one note mid-turn
 // (chat-note.jsonl) with that note replaced by text, the framing Qwen Code
 // wrote kept: the session's every record as Qwen Code wrote it, the words
 // handed between steps the case's own.
 func qwenSessionWith(t *testing.T, text string) []byte {
 	t.Helper()
-	raw := string(qwenFixture(t, "0.28.3", "chat-note.jsonl"))
+	raw := string(qwenFixture(t, "0.28.4", "chat-note.jsonl"))
 	framed := func(s string) string {
 		return strings.TrimSuffix(jsonText(t, "\n[User message received during tool execution]: "+s), `"`)
 	}
@@ -37,7 +37,7 @@ func readQwen(t *testing.T, raw []byte) []executor.TranscriptEntry {
 	return got.Entries
 }
 
-// A QWEN SESSION READS AS ITS ENTRIES, A HANDED NOTE BY ITS HEADING. 0.28.3's
+// A QWEN SESSION READS AS ITS ENTRIES, A HANDED NOTE BY ITS HEADING. 0.28.4's
 // own chat file of a run that made two calls and was handed a note after the
 // first: the brief, each call and its result under the tool's name, the note
 // by its heading behind Qwen Code's framing, and the reply; never a thought,
@@ -65,13 +65,13 @@ func TestAQwenSessionReadsAsItsEntries(t *testing.T) {
 
 	captured := append(append(append([]shown(nil), first...),
 		shown{kind: executor.EntryBrief, text: "[User message received during tool execution]: " + qwenDrained}), rest...)
-	sameEntries(t, readQwen(t, qwenFixture(t, "0.28.3", "chat-note.jsonl")), captured)
+	sameEntries(t, readQwen(t, qwenFixture(t, "0.28.4", "chat-note.jsonl")), captured)
 }
 
 // A QWEN BRIEF IS READ WHATEVER IT OPENS WITH. Gemini CLI writes a session
 // context of its own ahead of the brief, which its reader passes over; Qwen
 // Code writes none, so a Qwen brief opening with Gemini's `<session_context>`
-// is the run's own words and reads as the brief. On 0.28.3's chat file, its
+// is the run's own words and reads as the brief. On 0.28.4's chat file, its
 // brief replaced.
 //
 // Mutation: pass Gemini's session context to Qwen's reader, and the brief is
@@ -79,7 +79,7 @@ func TestAQwenSessionReadsAsItsEntries(t *testing.T) {
 func TestAQwenBriefIsReadWhateverItOpensWith(t *testing.T) {
 	t.Parallel()
 	const brief = "<session_context>\nthe seat's own words\n</session_context>\nRun the probe tools."
-	raw := strings.Replace(string(qwenFixture(t, "0.28.3", "chat-note.jsonl")),
+	raw := strings.Replace(string(qwenFixture(t, "0.28.4", "chat-note.jsonl")),
 		`"text":"Run the probe tools."`, `"text":`+jsonText(t, brief), 1)
 	got := readQwen(t, []byte(raw))
 	if len(got) == 0 || got[0].Kind != executor.EntryBrief || !strings.HasPrefix(shownOf(got)[0].text, "<session_context>") {
@@ -88,7 +88,7 @@ func TestAQwenBriefIsReadWhateverItOpensWith(t *testing.T) {
 }
 
 // A QWEN COMPACTION READS AS ITS SUMMARY, ONCE, AND NOTHING IN IT HEADS A
-// NOTE. 0.28.3's own chat file of a run compacted after a note
+// NOTE. 0.28.4's own chat file of a run compacted after a note
 // (chat-compact.jsonl): the records before the compaction as written, then
 // the summary as one summary entry, then the reply. The preserved tail the
 // record copies (call_1's result and the note) is not read again, nor the
@@ -106,7 +106,7 @@ func TestAQwenCompactionReadsAsItsSummaryOnce(t *testing.T) {
 			"Resume the prior task using the summary above. Continue from the last in-flight step; " +
 			"do not acknowledge the summary, do not re-introduce, do not greet the user again."
 	}
-	raw := string(qwenFixture(t, "0.28.3", "chat-compact.jsonl"))
+	raw := string(qwenFixture(t, "0.28.4", "chat-compact.jsonl"))
 	entries := func(g string) []shown {
 		return []shown{
 			{kind: executor.EntryBrief, text: "Run the probe tools."},

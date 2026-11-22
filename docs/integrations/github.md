@@ -1050,7 +1050,7 @@ Every agent seat authors code through the [code sandbox](../concepts/code-sandbo
 
 - Commits are made as `$CREWLET_AGENT_HANDLE` with `$CREWLET_AGENT_EMAIL`. Set the seat's `email` to the app's bot noreply address, `<bot user id>+<slug>[bot]@users.noreply.github.com`, for GitHub to attribute them to the app. The bot user id is not the app id: it is the `id` GitHub answers for `GET /users/<slug>[bot]` once the app exists.
 - Each commit also credits Crewlet as co-author (`Co-authored-by: Crewlet
-  <noreply@crewlet.ai>`, with the run's `Crewlet-Run:`), shown beside the app among the commit's participants. A person's commit the agent amends or rebases is left alone. `providers.sandbox.commit_attribution:
+  <noreply@crewlet.com>`, with the run's `Crewlet-Run:`), shown beside the app among the commit's participants. A person's commit the agent amends or rebases is left alone. `providers.sandbox.commit_attribution:
   false` turns it off ([Commit attribution](../concepts/code-sandbox.md#commit-attribution)).
 - The run is detached: the turn suspends at launch and resumes with the run's report, so the agent reports the pull request in the same turn.
 

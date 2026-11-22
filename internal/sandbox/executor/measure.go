@@ -17,7 +17,8 @@ import (
 // last request, cache included. Claude Code: the last main-thread assistant
 // message's usage (subagents are sidechains). OpenCode: the newest settled
 // message that measured a prompt, by ONE rule for every reader
-// ([measuredPrompt]: [meterExport], [openCodeContext]).
+// ([measuredPrompt]: [meterExport], [openCodeContext]). Codex: the newest
+// request's input its rollout states ([codexCounting.line]).
 
 // The meter reads the scrub's output, the archive as kept, in a goroutine beside
 // the take that never holds it up: what it cannot read counts as zero, and it
@@ -48,28 +49,18 @@ type contextMeter struct {
 	estimate sandbox.NextRequest
 }
 
-// newContextMeter starts a meter for an archive of layout holding session,
-// written by release (the box's word on its harness's release,
+// newContextMeter starts a meter for an archive of carries' harness holding
+// session, written by release (the box's word on its harness's release,
 // [sandbox.SessionArchive.Version]), read within ctx, the take's own: a take
 // cut short ends the walk, whose count is then unread; ctx also ends its wait
 // for the take's large slot, which its walk holds a line past the base at a
-// time, as the take's scrub holds its pieces ([passBudget]).
-func newContextMeter(ctx context.Context, layout archiveLayout, session, release string,
+// time, as the take's scrub holds its pieces ([passBudget]). How the archive
+// is read is the harness's own ([carrier.meter]).
+func newContextMeter(ctx context.Context, carries carrier, session, release string,
 	large *passBudget) *contextMeter {
 
 	return startMeter(ctx, func(r io.Reader) (meterReading, error) {
-		var read meterReading
-		var err error
-		switch layout {
-		case archiveTar:
-			read.tokens, read.count, read.next, err = meterArchive(ctx, r, session, release, large)
-		case archiveDocument:
-			var export exportReading
-			export, err = meterExport(ctx, r, release)
-			read = meterReading{tokens: export.figure, count: export.count, provider: export.provider,
-				next: export.next}
-		}
-		return read, err
+		return carries.meter(ctx, r, session, release, large)
 	})
 }
 
