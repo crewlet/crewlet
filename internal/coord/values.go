@@ -52,14 +52,15 @@ func HoldValue(key string, size, bound int) error {
 	if size <= bound {
 		return nil
 	}
-	return fmt.Errorf("%w: %d bytes for %s, past the %d a value of its kind may be: every read "+
-		"of it carries it whole in one reply, given only the time that bound takes to cross a link",
+	return fmt.Errorf("%w: %d bytes for %s, past the %d its key's class may be, since every read "+
+		"of the key carries its value whole in one reply: store less under it, or store the bytes "+
+		"under a key of their own and name them by size and digest (ADR-0175)",
 		ErrValueTooLarge, size, key, bound)
 }
 
-// SmallValueBytes is the most a value may be whose reads keep the read term
-// alone, given no crossing of their own (internal/coord/kv's key classes, the
-// activation pointer's among them): at this bound a read's reply
+// SmallValueBytes is the most a declared class read at the read term alone,
+// given no crossing of its own, may hold (internal/coord/kv's key classes,
+// the activation pointer's among them): at this bound a read's reply
 // (internal/jsapi's ReplyBytes, the most write header included) is 23,064
 // bytes, 0.66 s at the floor, inside internal/jsprovision's ReadTerm of a
 // second. internal/coord/kv holds the figure to it.
