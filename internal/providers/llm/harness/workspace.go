@@ -1293,6 +1293,25 @@ func (w *Workspace) carryChanged(
 	if err != nil {
 		return holds, nil, err
 	}
+	if gen.Mode == syncRefresh {
+		// A KEY THE HARNESS WROTE DURING THE RUN IS NO LOGIN
+		// ([harnessprofile.Profile.RunKeys]): a refresh carries the shared
+		// login's value of each, and a file that is then its seed changed
+		// nothing. Read here, under the lock, against the login a refresh is
+		// a compare-and-swap with.
+		for name, content := range held {
+			kept := w.profile.KeepLogin(name, content, current[name])
+			held[name] = kept
+			if _, ok := changed[name]; !ok {
+				continue
+			}
+			if digestOf(kept) == gen.Seeded[name] {
+				delete(changed, name)
+			} else {
+				changed[name] = kept
+			}
+		}
+	}
 	login, write, err := w.carry(ctx, who, gen, current, held, changed)
 	if err != nil {
 		return holds, nil, err
