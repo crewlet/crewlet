@@ -32,7 +32,7 @@ func TestTheDocsMatrixIsTheCatalog(t *testing.T) {
 	}
 	for _, op := range catalog().Operations {
 		class, listed := rows[op.ID]
-		rule := ruleOf[op.ID]
+		rule := ruleOf()[op.ID]
 		switch {
 		case !listed:
 			t.Errorf("%s is offered but not in the docs' matrix", op.ID)

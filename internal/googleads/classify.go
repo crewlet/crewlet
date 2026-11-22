@@ -26,7 +26,7 @@ var services = sync.OnceValue(func() map[string]byService {
 	}
 	for _, op := range operations() {
 		service, ok := serviceOfMutate(op.ID)
-		rule := ruleOf[op.ID]
+		rule := ruleOf()[op.ID]
 		if !ok || rule == "FR-MUTATE" || rule == "FR-BATCH" {
 			// GoogleAdsService.Mutate and a batch job carry operations; they
 			// are none themselves.
@@ -58,7 +58,7 @@ type ruled struct {
 // recommendation applied, its type's class and the budget it sets. An
 // operation of a type the engine does not know refuses the call.
 func classify(op growth.Operation, body map[string]any, l live) (ruled, error) {
-	rule := ruleOf[op.ID]
+	rule := ruleOf()[op.ID]
 	switch {
 	case rule == "" && op.Class == spend:
 		measure, ok := measures(op.ID)
