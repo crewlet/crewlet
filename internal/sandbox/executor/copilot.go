@@ -119,8 +119,9 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		// The session stays in the box: synced, it would sit on the
 		// account's history too.
 		"--sync-session=off",
-		// Copilot's own list of what its tools are not handed ([copilotSecretEnv]).
-		"--secret-env-vars=" + strings.Join(copilotSecretEnv(), ","),
+		// THE TELEMETRY EXPORT'S VARIABLES KEPT FROM ITS TOOLS AND MCP SERVERS
+		// ([copilotTelemetryNames]).
+		"--secret-env-vars=" + strings.Join(copilotTelemetryNames, ","),
 	}
 	if configPath != "" {
 		parts = append(parts, "--additional-mcp-config", q("@"+configPath))
@@ -163,6 +164,11 @@ func copilotScript(req sandbox.RunRequest, session Session, paths Paths, configP
 		line(`unset %s`, strings.Join(off, " "))
 	}
 	b.WriteString(copilotSignIn())
+	// THE SIGN-IN KEPT OUT OF THE SHELL ITS MODEL RUNS COMMANDS IN, by the file
+	// BASH_ENV names, which the run's settings switch on ([copilotToolEnv]).
+	if names, err := copilotToolEnvOmitted(req); err == nil && len(names) > 0 {
+		line(`BASH_ENV=%s; export BASH_ENV`, q(paths.CopilotToolEnv()))
+	}
 	// THE CAP NAMED IN THE STREAM, for the decoder to fail a run whose
 	// extension, which enforces it, never ran ([copilotEvents]).
 	if req.Limits.MaxTurns > 0 {
@@ -227,25 +233,47 @@ var copilotSignInNames = []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TO
 // it sets itself and no entry is given.
 var copilotHeldToken = []string{"GITHUB_COPILOT_GITHUB_TOKEN", "GITHUB_COPILOT_AGENT_GITHUB_TOKEN"}
 
-// copilotTelemetryNames is every variable Copilot's own OTLP export reads its
-// endpoint or headers from (1.0.114): the run's endpoint carries its export
-// token ([sandbox.OtelReceiver]).
+// copilotToolEnv is the file BASH_ENV names for a run whose sign-in variables
+// ([sandbox.RunRequest.SignInEnv]) include one Copilot does not hide: one
+// `unset` of them, which bash runs as the shell its model's commands run in
+// starts, the run's settings having switched BASH_ENV on (bashEnv). Measured on
+// 1.0.114: those commands lacked every name, and the stream was untouched. Not
+// `--secret-env-vars`, which also rewrote each value wherever the JSON stream
+// held it, keys included (a value `type` left no line a `type`).
+func copilotToolEnv(names []string) []byte {
+	return []byte("unset " + strings.Join(names, " ") + "\n")
+}
+
+// copilotTelemetryNames is the run's OTLP export variables ([sandbox.OtelReceiver]),
+// the endpoint carrying the run's token, which `--secret-env-vars` keeps from
+// its MCP servers: Copilot keeps them from its shell itself, and hands an MCP
+// server them otherwise (measured on 1.0.114). These alone, never a sign-in
+// variable ([copilotToolEnv]): the flag also masks each value in the stream,
+// safe for the engine's long endpoints and an empty HEADERS (measured), not
+// for a value an entry may set short.
 var copilotTelemetryNames = []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_HEADERS",
 	"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
 	"OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", "OTEL_EXPORTER_OTLP_METRICS_HEADERS"}
 
-// copilotSecretEnv is what a run names in `--secret-env-vars`, which Copilot
-// keeps from its tools whatever set it while it reads them itself: its sign-in
-// ([copilotSignIn]) and its export's endpoint and headers, so the run's tools
-// are handed only the variables they need (measured on 1.0.114). Only those: a
-// listed name's value is masked wherever the stream holds it, so a short
-// provider key (`ollama`) would break the stream's JSON (measured).
-func copilotSecretEnv() []string { return slices.Concat(copilotSignInNames, copilotTelemetryNames) }
+// copilotHidden is the sign-in variables Copilot keeps out of its tools' shell
+// and MCP servers itself (measured on 1.0.114, as it does the OTLP export's
+// variables from the shell), which a run's tool environment file need not name.
+var copilotHidden = []string{"COPILOT_GITHUB_TOKEN", "COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_BEARER_TOKEN"}
+
+// copilotToolEnvOmitted is the sign-in variables of req the run's tool
+// environment file unsets ([toolEnvOmitted]): all but [copilotHidden].
+func copilotToolEnvOmitted(req sandbox.RunRequest) ([]string, error) {
+	names, err := toolEnvOmitted(req.SignInEnv)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(names, func(n string) bool { return slices.Contains(copilotHidden, n) }), nil
+}
 
 // copilotSignIn is the part of a run's script that hands Copilot its GitHub
 // sign-in under COPILOT_GITHUB_TOKEN alone: the first of [copilotSignInNames]
 // set, in Copilot's own order, so the same token signs it in, with the other
-// two and [copilotHeldToken] unset ([copilotSecretEnv]).
+// two and [copilotHeldToken] unset.
 func copilotSignIn() string {
 	return "gt=${COPILOT_GITHUB_TOKEN:-${GH_TOKEN:-$GITHUB_TOKEN}}\n" +
 		"unset " + strings.Join(slices.Concat(copilotSignInNames[1:], copilotHeldToken), " ") + "\n" +
@@ -526,6 +554,10 @@ func (Copilot) Parse(stdout []byte) sandbox.Result { return decodeAll(&copilotEv
 // read from the user's settings alone (measured).
 type copilotSettings struct {
 	Experimental bool `json:"experimental"`
+	// BashEnv has the shell the model's commands run in read the file BASH_ENV
+	// names ([copilotToolEnv]): a user-level key, which a repository's settings
+	// cannot set.
+	BashEnv bool `json:"bashEnv,omitempty"`
 }
 
 // WriteConfig writes what a Copilot run reads from its home and its work
@@ -536,7 +568,18 @@ type copilotSettings struct {
 // a fresh session's copies beside them ([sandbox.RunRequest.FreshWiring]).
 // What an earlier run wrote there the clear removes first ([Copilot.artifacts]).
 func (c Copilot) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sandbox.RunRequest, paths Paths) (string, error) {
-	if err := writeJSON(ctx, box, paths.CopilotSettings(), copilotSettings{Experimental: true}); err != nil {
+	settings := copilotSettings{Experimental: true}
+	names, err := copilotToolEnvOmitted(req)
+	if err != nil {
+		return "", err
+	}
+	if len(names) > 0 {
+		if err = box.WriteFile(ctx, paths.CopilotToolEnv(), copilotToolEnv(names)); err != nil {
+			return "", fmt.Errorf("executor: writing the run's tool environment file: %w", err)
+		}
+		settings.BashEnv = true
+	}
+	if err := writeJSON(ctx, box, paths.CopilotSettings(), settings); err != nil {
 		return "", fmt.Errorf("executor: writing Copilot's settings: %w", err)
 	}
 	system := req.System
@@ -643,7 +686,8 @@ func copilotMCP(s sandbox.MCPServer) map[string]any {
 // must not find, and a fresh session's extension beside the work directory.
 // Its settings are written whole by every run, and its sessions are kept.
 func (Copilot) artifacts(p Paths) (files, dirs []string) {
-	return []string{p.CopilotInstructions(), p.CopilotExtensionFresh()}, []string{p.CopilotExtension()}
+	return []string{p.CopilotInstructions(), p.CopilotExtensionFresh(), p.CopilotToolEnv()},
+		[]string{p.CopilotExtension()}
 }
 
 // notesOffWhy is what switches Copilot's reading of notes off: a managed policy
