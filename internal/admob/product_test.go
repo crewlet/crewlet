@@ -96,6 +96,9 @@ type fakeAdMob struct {
 	unauthFirst bool
 	// uncounted leaves the report footer's matching row count out.
 	uncounted bool
+	// accountsDown refuses every account read; hugeCampaign answers a
+	// campaign report larger than one answer holds.
+	accountsDown, hugeCampaign bool
 }
 
 func (f *fakeAdMob) serve(w http.ResponseWriter, r *http.Request) {
@@ -120,6 +123,17 @@ func (f *fakeAdMob) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case f.accountsDown && strings.HasPrefix(r.URL.Path, "/v1/accounts/") && r.Method == http.MethodGet:
+		answer(http.StatusForbidden, map[string]any{"error": map[string]any{"code": 403, "status": "PERMISSION_DENIED",
+			"message": "The requested resource is not accessible to the effective user"}})
+	case f.hugeCampaign && strings.HasSuffix(r.URL.Path, "campaignReport:generate"):
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"rows":[`))
+		row := []byte(`{"dimensionValues":{"CAMPAIGN_NAME":{"value":"` + strings.Repeat("x", 1000) + `"}}},`)
+		for range 9 << 10 {
+			_, _ = w.Write(row)
+		}
+		_, _ = w.Write([]byte(`{}]}`))
 	case r.URL.Path == "/v1/accounts":
 		answer(200, map[string]any{"account": []any{
 			map[string]any{"name": "accounts/" + mine, "publisherId": mine},
@@ -175,10 +189,17 @@ func (f *fakeAdMob) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// line is a mediation line in state.
+// line is a mediation line in state, as Google lists it.
 func line(id, state string) map[string]any {
+	l := bodyLine(id, state)
+	l["experimentVariant"] = "ORIGINAL"
+	return l
+}
+
+// bodyLine is a mediation line in state, as a change gives it.
+func bodyLine(id, state string) map[string]any {
 	return map[string]any{"id": id, "adSourceId": "5450213213286189855", "displayName": "AdMob Network",
-		"cpmMode": "LIVE", "state": state, "experimentVariant": "ORIGINAL"}
+		"cpmMode": "LIVE", "state": state}
 }
 
 // harness is a product on a company where seat `finance` is at level on mine.
@@ -363,11 +384,11 @@ func TestOnlyWhatCannotBeUndoneIsAdmin(t *testing.T) {
 		{"a line removed", patch(`mediation_group_lines["1"].state`,
 			lines(map[string]any{"1": map[string]any{"state": "REMOVED"}})), growth.ClassAdmin},
 		{"a whole line removed", patch(`mediation_group_lines["2"]`,
-			lines(map[string]any{"2": line("2", "REMOVED")})), growth.ClassAdmin},
-		{"a line map leaving a line out", patch(`mediation_group_lines`,
-			lines(map[string]any{"1": line("1", "ENABLED")})), growth.ClassAdmin},
+			lines(map[string]any{"2": bodyLine("2", "REMOVED")})), growth.ClassAdmin},
 		{"a new line", patch(`mediation_group_lines["-1"]`,
-			lines(map[string]any{"-1": line("-1", "ENABLED")})), growth.ClassOperate},
+			lines(map[string]any{"-1": bodyLine("-1", "ENABLED")})), growth.ClassOperate},
+		{"a store link given as an object", appCreate(map[string]any{"platform": "ANDROID",
+			"linkedAppInfo": map[string]any{"appStoreId": map[string]any{"x": 1}}}), growth.ClassAdmin},
 		{"a line in a state this build does not know", patch(`mediation_group_lines["1"].state`,
 			lines(map[string]any{"1": map[string]any{"state": "ARCHIVED"}})), growth.ClassAdmin},
 		{"the group's ad units", patch(`targeting.ad_unit_ids`, map[string]any{"targeting": map[string]any{
@@ -434,6 +455,26 @@ func TestAPatchWhoseMaskTheEngineCannotReadNeverReachesGoogle(t *testing.T) {
 			"path": map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
 			"query": map[string]any{"updateMask": "targeting.ad_unit_ids",
 				"update_mask": `mediation_group_lines["1"].state`}, "body": removal},
+		"the whole line map, which Google documents no mask for": {"operation": "admob.accounts.mediationGroups.patch",
+			"path":  map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
+			"query": map[string]any{"updateMask": "mediation_group_lines"}, "body": removal},
+		"a field under the line map with no line": {"operation": "admob.accounts.mediationGroups.patch",
+			"path":  map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
+			"query": map[string]any{"updateMask": "mediation_group_lines.state"}, "body": removal},
+		"a line whose id is not its key": {"operation": "admob.accounts.mediationGroups.patch",
+			"path":  map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
+			"query": map[string]any{"updateMask": `mediation_group_lines["2"]`},
+			"body":  map[string]any{"mediationGroupLines": map[string]any{"2": bodyLine("-1", "ENABLED")}}},
+		"a line setting its experiment variant": {"operation": "admob.accounts.mediationGroups.patch",
+			"path":  map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
+			"query": map[string]any{"updateMask": `mediation_group_lines["1"]`},
+			"body":  map[string]any{"mediationGroupLines": map[string]any{"1": line("1", "ENABLED")}}},
+		"a body naming another group": {"operation": "admob.accounts.mediationGroups.patch",
+			"path":  map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
+			"query": map[string]any{"updateMask": "targeting.ad_unit_ids"},
+			"body":  map[string]any{"mediationGroupId": "78"}},
+		"a stop keeping no variant": {"operation": "admob.accounts.mediationGroups.mediationAbExperiments.stop",
+			"path": map[string]any{"accountsId": mine, "mediationGroupsId": "77"}, "body": map[string]any{}},
 		"a mask in capitals": {"operation": "admob.accounts.mediationGroups.patch",
 			"path":  map[string]any{"accountsId": mine, "mediationGroupsId": "77"},
 			"query": map[string]any{"updateMask": `MEDIATION_GROUP_LINES["1"].STATE`}, "body": removal},
@@ -750,6 +791,11 @@ func TestAClosedListIsHeldInCode(t *testing.T) {
 		!strings.Contains(err.Error(), "COUNTRY") {
 		t.Errorf("a mediation dimension on a network report answered %v, want the dimensions it takes", err)
 	}
+	if _, err := h.p.Run(ctx, h.call("admob_mediation_report", map[string]any{"account": mine,
+		"metrics": []any{"CLICKS"}, "sort": []any{map[string]any{"metric": "SHOW_RATE", "order": "DESCENDING"}}})); !refusedAs(err, growth.RefusedInvalid) ||
+		!strings.Contains(err.Error(), "sort.metric takes") {
+		t.Errorf("sorting a mediation report by a network metric answered %v, want invalid", err)
+	}
 	if _, err := h.p.Prepare(ctx, h.call("admob_ad_unit_create", map[string]any{"account": mine,
 		"app_id": "ca-app-pub-1111111111111111~1", "display_name": "B", "ad_format": "BANNER_INTERSTITIAL"})); !refusedAs(err, growth.RefusedInvalid) {
 		t.Errorf("a format AdMob no longer creates answered %v, want invalid", err)
@@ -774,16 +820,15 @@ func TestANameIsKeptAsItsDigest(t *testing.T) {
 }
 
 // A LINE A CHANGE REMOVES IS SHOWN REMOVED: a line the body leaves out under
-// a mask naming it, or one a replaced line map leaves out, is what the person
-// reads and the log keeps as set to REMOVED, never as fields cleared.
+// a mask naming it is what the person reads and the log keeps as set to
+// REMOVED, never as fields cleared.
 //
-// Mutation: drop either left-out arm, and the change reads as cleared fields.
+// Mutation: drop the left-out arm, and the change reads as cleared fields.
 func TestALineAChangeRemovesIsShownRemoved(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, "administer")
 	for mask, body := range map[string]map[string]any{
 		`mediation_group_lines["2"]`: {"mediationGroupLines": map[string]any{}},
-		`mediation_group_lines`:      {"mediationGroupLines": map[string]any{"1": line("1", "ENABLED")}},
 	} {
 		hold, err := h.p.Prepare(context.Background(), h.call("admob_admin", map[string]any{
 			"operation": "admob.accounts.mediationGroups.patch",
@@ -795,5 +840,37 @@ func TestALineAChangeRemovesIsShownRemoved(t *testing.T) {
 		if want := `mediationGroupLines["2"].state: ENABLED to REMOVED`; !strings.Contains(hold.Context, want) {
 			t.Errorf("mask %s reads %q, want %q", mask, hold.Context, want)
 		}
+	}
+}
+
+// A REPORT WHOSE ACCOUNT LOOKUP FAILS LEAVES ITS ONE OUTCOME, FAILED: the
+// lookup is the engine's, so the call's own record says it failed.
+//
+// Mutation: drop the failed record, and the call leaves none.
+func TestAReportWhoseLookupFailsRecordsItsFailure(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, "read")
+	h.vend.accountsDown = true
+	if _, err := h.p.Run(context.Background(), h.call("admob_network_report", map[string]any{"account": mine,
+		"metrics": []any{"IMPRESSIONS"}})); err == nil {
+		t.Fatal("a report whose account lookup Google refused answered")
+	}
+	if steps, _ := h.audit.take(); !slices.Equal(steps, []growth.Step{growth.StepFailed}) {
+		t.Errorf("the access log holds %v, want one failed", steps)
+	}
+}
+
+// A CAMPAIGN REPORT LARGER THAN ONE ANSWER HOLDS IS REFUSED WITH ITS REMEDY,
+// never read as Google's fault: Google caps it at no row count.
+//
+// Mutation: drop the oversized arm, and the agent reads a decode error.
+func TestALargeCampaignReportSaysToNarrowIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t, "read")
+	h.vend.hugeCampaign = true
+	_, err := h.p.Run(context.Background(), h.call("admob_campaign_report", map[string]any{"account": mine,
+		"metrics": []any{"IMPRESSIONS"}, "dimensions": []any{"CAMPAIGN_NAME"}, "range": "last_7_days"}))
+	if !refusedAs(err, growth.RefusedInvalid) || !strings.Contains(err.Error(), "narrow") {
+		t.Errorf("an oversized campaign report answered %v, want a refusal saying to narrow it", err)
 	}
 }

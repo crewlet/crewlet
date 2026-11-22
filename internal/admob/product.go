@@ -124,7 +124,7 @@ func bodyInScope(req googlegrowth.Request) error {
 	for i, item := range items {
 		m, _ := item.(map[string]any)
 		parent, _ := m["parent"].(string)
-		if !strings.HasPrefix(parent, "accounts/"+req.Account+"/adUnits/") {
+		if !adUnitParent().MatchString(parent) {
 			return refusal(growth.RefusedForbidden, fmt.Sprintf("requests[%d].parent %q is not an ad unit of "+
 				"account %s, which the call names. No vendor was reached.", i, parent, req.Account))
 		}
@@ -145,10 +145,13 @@ func bodyInScope(req googlegrowth.Request) error {
 	return nil
 }
 
-// publisherRef is a reference that names its publisher: a resource name
-// (accounts/pub-…) or an app, ad unit or mapping ID (ca-app-pub-…).
-var publisherRef = sync.OnceValue(func() *regexp.Regexp {
-	return regexp.MustCompile(`(?:accounts/pub-|ca-app-pub-)([0-9]+)`)
+// publisherRef is any reference that names a publisher: a resource name
+// (accounts/pub-…), an app, ad unit or mapping ID (ca-app-pub-…), or the ID.
+var publisherRef = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`pub-([0-9]{16})`) })
+
+// adUnitParent is a batch item's parent: one ad unit, by its resource name.
+var adUnitParent = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^accounts/pub-[0-9]{16}/adUnits/[0-9]{1,20}$`)
 })
 
 // eachString calls f with every string v holds, map keys included.
@@ -209,7 +212,7 @@ func newRequest(op growth.Operation, path, query map[string]string, body map[str
 				"sets in updateMask; Google replaces each field it names, and only those. No vendor was reached.")
 		}
 		for _, p := range paths {
-			if _, ok := parseMask(p); !ok {
+			if steps, ok := parseMask(p); !ok || !documentedMask(steps) {
 				return googlegrowth.Request{}, refusal(growth.RefusedInvalid, fmt.Sprintf("updateMask path %q is "+
 					"not one AdMob takes: snake_case fields joined by dots, a line as "+
 					"mediation_group_lines[\"<line id>\"] and its ad unit as ad_unit_mappings[\"<ad unit id>\"]. "+
@@ -217,9 +220,50 @@ func newRequest(op growth.Operation, path, query map[string]string, body map[str
 			}
 		}
 	}
+	if err := groupBodyMatches(op, path, body); err != nil {
+		return googlegrowth.Request{}, err
+	}
 	req.Account = path["accountsId"]
 	req.Diff = diffOf(op, body, req.Query.Get("updateMask"))
 	return req, nil
+}
+
+// groupBodyMatches refuses a mediation group body whose own names differ from
+// what the engine classes it by: a line whose id is not its map key, a line's
+// experiment variant (Google's to set), a patch naming another group, and a
+// stop keeping no variant the engine knows.
+func groupBodyMatches(op growth.Operation, path map[string]string, body map[string]any) error {
+	bad := func(format string, args ...any) error {
+		return refusal(growth.RefusedInvalid, fmt.Sprintf(format, args...)+" No vendor was reached.")
+	}
+	switch op.ID {
+	case "admob.accounts.mediationGroups.mediationAbExperiments.stop":
+		if choice, _ := body["variantChoice"].(string); choice != variantA && choice != variantB {
+			return bad("variantChoice is %s or %s.", variantA, variantB)
+		}
+	case "admob.accounts.mediationGroups.patch", "admob.accounts.mediationGroups.create":
+		lines, _ := body[linesField].(map[string]any)
+		for key, v := range lines {
+			l, _ := v.(map[string]any)
+			if id, set := l["id"]; set && id != key {
+				return bad("line %q gives id %v; a line's id is its key in mediationGroupLines.", key, id)
+			}
+			if _, set := l["experimentVariant"]; set {
+				return bad("line %q sets experimentVariant, which Google alone sets.", key)
+			}
+		}
+		if op.Method != "PATCH" {
+			return nil
+		}
+		group := path["mediationGroupsId"]
+		if id, set := body["mediationGroupId"]; set && id != group {
+			return bad("the body names mediation group %v; the call changes group %s.", id, group)
+		}
+		if name, set := body["name"]; set && name != "accounts/"+path["accountsId"]+"/mediationGroups/"+group {
+			return bad("the body names %v; the call changes group %s.", name, group)
+		}
+	}
+	return nil
 }
 
 // queryKeys are the query parameters op takes: a listing's paging, and its

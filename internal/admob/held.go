@@ -135,6 +135,13 @@ func classOf(req googlegrowth.Request, before []byte) growth.Class {
 	changes := req.Changes(current)
 	for i := range changes {
 		changes[i].Field = canonical(changes[i].Field)
+		for _, r := range req.Op.Fields {
+			// A VALUE UNDER A RULE'S FIELD (an object given for it) is the
+			// rule's to class, never a field no rule names.
+			if strings.HasPrefix(changes[i].Field, r.Field+".") {
+				changes[i].Field = r.Field
+			}
+		}
 	}
 	return growth.Classify(req.Op, changes)
 }
@@ -254,10 +261,9 @@ func digestOf(v any) string {
 }
 
 // maskChanges are the changes a patch makes: each path of its update mask,
-// with its value before and after (newRequest refused a path it cannot read).
-// A whole mediation line is each of its fields that differs, and the whole
-// line map each line's, a line it leaves out being removed, so each change is
-// classed on its own.
+// with its value before and after (newRequest refused any path Google does
+// not document). A whole mediation line is each of its fields that differs,
+// so each change is classed on its own.
 func maskChanges(mask string, before, after map[string]any) []growth.Change {
 	var out []growth.Change
 	for _, path := range maskPaths(mask) {
@@ -274,19 +280,6 @@ func maskChanges(mask string, before, after map[string]any) []growth.Change {
 				continue
 			}
 			out = append(out, lineChanges(label, b, a)...)
-		case len(steps) == 1 && steps[0].name == linesField:
-			bl, _ := b.(map[string]any)
-			al, _ := a.(map[string]any)
-			for _, id := range sortedKeys(union(bl, al)) {
-				line := labelOf([]step{{name: linesField, key: id}})
-				if _, kept := al[id]; !kept {
-					// A LINE THE NEW MAP LEAVES OUT IS REMOVED by the replacement.
-					was, _ := bl[id].(map[string]any)
-					out = append(out, growth.Change{Field: line + ".state", Before: was["state"], After: lineRemoved})
-					continue
-				}
-				out = append(out, lineChanges(line, bl[id], al[id])...)
-			}
 		case !reflect.DeepEqual(b, a):
 			out = append(out, growth.Change{Field: label, Before: b, After: a})
 		}
@@ -374,6 +367,27 @@ func parseMask(path string) ([]step, bool) {
 		path = path[1:]
 	}
 	return out, len(out) > 0
+}
+
+// lineFields are the fields of a line a mask may name on their own.
+var lineFields = []string{"cpmMicros", "cpmMode", "state", "displayName"}
+
+// documentedMask reports whether steps is one of the update mask paths Google
+// documents for a mediation group: a line, a line's ad unit mapping or one of
+// its fields, or the group's ad units. Any other path Google might read in a
+// way the engine does not class.
+func documentedMask(steps []step) bool {
+	switch {
+	case len(steps) == 2 && steps[0] == step{name: "targeting"} && steps[1] == step{name: "adUnitIds"}:
+		return true
+	case len(steps) == 0 || steps[0].name != linesField || steps[0].key == "":
+		return false
+	case len(steps) == 1:
+		return true
+	case len(steps) == 2 && steps[1].name == "adUnitMappings":
+		return steps[1].key != ""
+	}
+	return len(steps) == 2 && steps[1].key == "" && slices.Contains(lineFields, steps[1].name)
 }
 
 // labelOf is a path as a change names it: camelCase, its keys kept.
