@@ -180,8 +180,14 @@ func applied(op growth.Operation, body map[string]any, l live) (ruled, error) {
 		case len(budgets) == 1 && slices.Contains(newBudgetAmounts, budgets[0]) && str(s["campaign_budget"]) != "":
 			o := operation{service: "campaign_budget", kind: opUpdate, name: str(s["campaign_budget"]),
 				object: map[string]any{"amount_micros": lookup(m, budgets[0])}, mask: []string{"amount_micros"}}
-			var spends bool
-			c, spends = budgetFamily().classOf(o, l)
+			// The amount is what a budget recommendation does; it never lowers
+			// what another type's recommendation is.
+			bc, spends := budgetFamily().classOf(o, l)
+			if strings.Contains(kind, "BUDGET") {
+				c = bc
+			} else {
+				c = higher(c, bc)
+			}
 			out.ops, out.spends = append(out.ops, o), out.spends || spends
 		default:
 			c = admin
