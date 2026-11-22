@@ -90,7 +90,7 @@ Pick the harness by whose models you want, then the sign-in by how you pay:
 | Models | `harness` | Signs in with | Runs a seat's executor |
 |---|---|---|---|
 | Anthropic's (Claude) | `claude-code` — the default | a Claude Pro / Max login, a headless `CLAUDE_CODE_OAUTH_TOKEN` minted from it, or an Anthropic API key (`auth.mode: api-key`) | yes |
-| OpenAI's (GPT) | `codex` | a ChatGPT Plus / Pro login, or an OpenAI API key (`auth.mode: api-key`) | no — the other phases only |
+| OpenAI's (GPT) | `codex` | a ChatGPT Plus / Pro login, or an OpenAI API key (`auth.mode: api-key`) | yes |
 | Google's (Gemini) | `gemini-cli` | a Google account login (an individual's free Code Assist tier, Google AI Pro or Ultra, or an organization's Code Assist licence), a Gemini API key (`GEMINI_API_KEY`), or Vertex AI | yes; a person's notes, late calls and wakes reach its run only as it is about to finish ([Gemini CLI](code-sandbox.md#gemini-cli)) |
 | Alibaba's (Qwen) | `qwen-code` | an OpenAI-compatible key (`OPENAI_API_KEY`), or a Qwen subscription login (not measured against Qwen's service) | yes; a note reaches its run between tool batches, never after the last ([Qwen Code's notes](code-sandbox.md#qwen-codes-notes)) |
 | Open models: OpenRouter, a hosted provider, a local server | `opencode` | the model provider's key in `env`, under that provider's own variable, or a login of OpenCode's own | yes |
@@ -101,12 +101,12 @@ Pick the harness by whose models you want, then the sign-in by how you pay:
 
 Every agent seat's executor is its harness's own run in a [sandbox](code-sandbox.md),
 doing the seat's work and code work alike; this build has a harness runner for
-`claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` and `kimi-code` only, each listed by its built-in profile's
+`claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` and `kimi-code` only, each listed by its built-in profile's
 `executor` block, which no `overrides` can set. Any other harness serves a seat's reviewer,
 workers and side passes (`llm_review`, `llm_subagent`, `llm_auxiliary`,
 `llm_judge`, `llm_triage`) — its own loop on this host, shell and editor denied, the seat's tools
 its only working tools. A seat whose `llm` chain holds no entry on one of those
-seven is refused on the write ([Where the harness runs](#where-the-harness-runs)).
+eight is refused on the write ([Where the harness runs](#where-the-harness-runs)).
 
 A seat can mix harnesses: executor on one entry, reviewer on another, auxiliary
 work on a third — see [Per-phase models](#per-phase-models).
@@ -171,14 +171,14 @@ mints no headless token, so a container rebuilt on every deploy carries its logi
 as a [credential bundle](#4-move-a-login-onto-another-host). On an API key,
 `auth.mode: api-key` reads `CODEX_API_KEY`, not `OPENAI_API_KEY`: it is the
 variable `codex exec` signs requests with (with only `OPENAI_API_KEY` set it sent
-no `Authorization` header; measured on 0.153.4 and 0.164.0). A key kept under
+no `Authorization` header; measured on 0.171.0). A key kept under
 `OPENAI_API_KEY` is named as `auth.api_key: "${OPENAI_API_KEY}"`.
 
 Codex runs with its shell off and its own `--sandbox read-only`, so its one local
 tool, `apply_patch`, writes nothing — see [Tool calls on
-this host](#tool-calls-on-this-host). It has no harness runner, so a Codex entry
-cannot run an executor: a seat's `llm` points at a `claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code`
-entry, and Codex serves its reviewer, workers or side passes.
+this host](#tool-calls-on-this-host). That is the phases on this host: a seat's
+executor on a Codex entry is Codex's own fully permissioned run in a box ([The
+executor's run in a box](#the-executors-run-in-a-box)).
 
 ### Open models, OpenRouter and local servers: OpenCode
 
@@ -515,10 +515,10 @@ being applied is warned about.
 | Harness | Levels | Passed as | Where the model decides |
 |---|---|---|---|
 | `claude-code` | `low` `medium` `high` `xhigh` `max` | `--effort` | Refused on the models Claude Code runs without effort (Claude 3, Opus 4 and 4.1, Sonnet 4 and 4.5, Haiku 4.5); Opus 4.5 takes up to `high`, Opus and Sonnet 4.6 skip `xhigh`. An alias takes every level, though on a cloud provider or gateway `haiku` can name Haiku 4.5, which runs without effort. |
-| `codex` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `-c model_reasoning_effort` | The model's API refuses a level it lacks. |
+| `codex` | `none` `minimal` `low` `medium` `high` `xhigh` `max` `ultra` `persistent` | `-c model_reasoning_effort` | The model's API refuses a level it lacks. |
 | `opencode` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | the model's variant, `provider/model#level` | Variants are each model's, from models.dev; a run on one the model lacks fails with OpenCode's "Variant unavailable". |
 | `copilot` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | A model that refuses the effort fails the call, with the provider's message on stderr. |
-| `grok` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | A level the model's menu lacks is refused by name. |
+| `grok` | `none` `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | A name that is no level is refused; a level the model's menu lacks is ignored with a warning. |
 | `muse-code` | `minimal` `low` `medium` `high` `xhigh` `max` | `--reasoning-effort` | Per model. |
 | `hermes` | `none` `minimal` `low` `medium` `high` `xhigh` `max` `ultra` | `--reasoning` | Lowered to the nearest level the route takes. |
 | `pi` | `off` `minimal` `low` `medium` `high` `xhigh` `max` | `--thinking` | Clamped to the model's levels. |
@@ -792,7 +792,8 @@ start on what it wrote down: per entry, a fallback entry's call never starts on
 the key of the entry before it.
 
 **Between turns.** Each profile declares its `volatile_paths` — sessions,
-transcripts, history, todo state. They are deleted whenever none of the seat's
+transcripts, history, todo state, and the instructions, skills, commands and
+hooks a harness would read from the home (`grok`'s). They are deleted whenever none of the seat's
 calls is in flight: as its first call opens a generation and as its last closes
 it ([Concurrency within a seat](#concurrency-within-a-seat)). This covers the
 engine-host calls (reviewer, delegated workers, onboarding, side passes); a
@@ -862,13 +863,13 @@ other MCP server — the home's, a project's or a plugin's — starts beside it
 | `harness` | Tools offered | What keeps the call to its directory |
 |---|---|---|
 | `claude-code` | `WebFetch`, `WebSearch` (`--tools` names the tools that exist; `--allowedTools` lets them run) | `--setting-sources ""`, so no settings file adds hooks, permissions, MCP servers or plugins; `CLAUDE_CODE_DISABLE_CLAUDE_MDS` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY` (`isolation_env`) keep the `CLAUDE.md` family and auto-memory out (the `.git` file does not stop that walk). `--strict-mcp-config` (only `--mcp-config`'s servers: none on a text function, the seat's on a run with tools), `--disable-slash-commands`, `--no-session-persistence`. `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` stops every connection not the call's own; `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS` drops the repository status. A machine-wide managed settings file (administrator-writable) still applies |
-| `codex` | web search, and `apply_patch`, which `--sandbox read-only` keeps from writing anything | `project_root_markers=[]` beside the `.git` file; skills, rules, hooks, connectors, plugins and memories off; the shell, `view_image`, the goal, multi-agent and `request_user_input` tools off; `--ignore-user-config` (no `config.toml` or declared MCP server is read); `--ephemeral` on a text function, and `CODEX_SQLITE_HOME` in the call's own directory. A run with tools drops `--ephemeral`, since its session file is the record of its requests; the sessions directory is volatile |
+| `codex` | web search, and `apply_patch`, which `--sandbox read-only` keeps from writing anything | the walk stopped at the call's directory, by the `.git` file there and `project_root_markers=[]`; skills, rules and hooks off; connectors, plugins and memories set off (their effect not observable on an API-key run of 0.171.0); the shell, `view_image`, the goal, multi-agent and `request_user_input` tools off; `--ignore-user-config` (no `config.toml` or declared MCP server is read); `--ephemeral` on a text function, and `CODEX_SQLITE_HOME` in the call's own directory. A run with tools drops `--ephemeral`, since its session file is the record of its requests; the sessions directory is volatile |
 | `gemini-cli` | `web_fetch`, `google_web_search` | A policy file in the seat's home denies every tool and allows the two web tools above the denial (a machine-wide policy under `/etc/gemini-cli/policies`, administrator-writable, outranks it). The first `.gemini/.env` or `.env` found walking up to `/` is loaded and the `.git` file does not stop it, so the call's directory holds one of each, only a comment. `GEMINI_CLI_TRUST_WORKSPACE=true` trusts the call's directory, which a headless run requires (untrusted, every call exited 55); usage statistics off. `--allowed-mcp-server-names crewlet` on every call, so no MCP server but the engine's starts, a home extension's included |
-| `qwen-code` | `web_fetch` (`web_search` only where a DashScope search backend is configured) | `tools.core` allows the web tools and `permissions.deny` names every other tool 0.28.3 registers; memory extraction, chat recording, usage statistics, skills, hooks and the harness's retry rounds off. `--allowed-mcp-server-names crewlet` on every call, so no MCP server but the engine's starts, a home extension's included. The `.git` file does not stop its `.env` walk, so the call's directory holds its own `.qwen/.env` |
+| `qwen-code` | `web_fetch` (`web_search` only where a DashScope search backend is configured) | `tools.core` allows the web tools and `permissions.deny` names every other tool 0.28.4 registers; memory extraction, chat recording, usage statistics, skills, hooks and the harness's retry rounds off. `--allowed-mcp-server-names crewlet` on every call, so no MCP server but the engine's starts, a home extension's included. The `.git` file does not stop its `.env` walk, so the call's directory holds its own `.qwen/.env` |
 | `opencode` | `webfetch`, `websearch` | `OPENCODE_CONFIG_PROJECT_DISABLE` (`isolation_env`) switches off the project configuration walk, and `OPENCODE_CONFIG_DIR` points into the call's directory, where the policy is seeded — see [Tool calls on this host](#tool-calls-on-this-host). The managed configuration (`/etc/opencode` on Linux), administrator-writable, still applies |
 | `cursor-agent` | `WebFetch` (a `.cursor/cli.json` in the call's directory denies shell, write and read) | `--trust`, without which print mode refuses the new directory ("Workspace Trust Required"), and `--exclude-workspace-context`. With the `.git` file no hook, `cli.json` or `mcp.json` above the call is read. **Its rule loader does walk to `/`**: both measured builds open every `AGENTS.md`, `CLAUDE.md` and `.cursor/rules` file from the call's directory up, flag or not. None was in the run request, which carries the user message alone; what the service asks afterwards could not be measured. Put `state_dir` outside any tree holding such files |
 | `copilot` | `web_fetch` (`--available-tools`, its URLs allowed by `--allow-all-urls`; the 1.0.114 bundle lists a `web_search` among its GitHub server's tools on a GitHub sign-in, not measured) | The `.git` file ends the walk for instruction files, hooks and repository settings. Custom-agent discovery walks past it to the enclosing repository's root; none reaches a request, since the task tool that lists them is unavailable. `--disable-client-telemetry`, and `COPILOT_AUTO_UPDATE=false` |
-| `grok` | `web_search`, `web_fetch` (`--tools`, every other built-in in `--disallowed-tools`; `GROK_WEB_FETCH=1`, since the fetch ships off, and `--allow WebFetch`, without which a headless run's first fetch cancelled the run) | No `--trust`, so a headless run loads no project rules. It reads the enclosing repository's `.git/config` and `HEAD` past the `.git` file; nothing reached the request. Background workflows, the turn-summary request and cross-session memory off |
+| `grok` | `web_search`, `web_fetch` (`--tools`, every other built-in in `--disallowed-tools`; `GROK_WEB_FETCH=1`, since the fetch ships off, and `--allow WebFetch`, without which a headless run's first fetch cancelled the run) | No `--trust`, so a headless run loads no project rules; nothing of the enclosing repository's `.git` reached the request. A call starts with no instructions, skills, commands or hooks in its home: `.grok`'s, `.claude`'s and `.cursor`'s are pruned every generation, and the home's `config.toml` turns the other vendors' skills, rules and instruction files off. Background workflows, the turn-summary request and cross-session memory off |
 | `muse-code` | `web_search`, `web_fetch` (`run.toolset` in the seeded settings) | The run trusts its workspace (`--trust-workspace`, without which 1.4.25 starts no MCP server), and the workspace is the call's own directory: the `.git` file ends the harness's walk for project rules, skills, hooks and servers there. `--no-foreign-personal-context` keeps other harnesses' personal rules and skills (a `CLAUDE.md` under the home's `.claude`) out; `--disable-reminders` turns off the reminder requests that each re-sent the prompt |
 | `kimi-code` | `FetchURL`, and `WebSearch` where a Moonshot search service is configured (the agent file's allowlist) | The `.git` file ends the `AGENTS.md` chain and keeps the project's skills out of the prompt's `# Skills` list, which names them without a `Skill` tool. Telemetry off |
 | `hermes` | `web_search`, `web_extract` (`--toolsets web`) | The `.git` file ends its walk for `.hermes.md` and the `AGENTS.md` chain; it reads `CLAUDE.md` and `.cursorrules` from the call's directory alone. A seeded `config.yaml` turns off the coding brief a project marker within six levels above would switch on, the title request and memory |
@@ -935,7 +936,7 @@ Where the loop runs, what else it may touch and how long it lives are the
 | How it reaches the seat's tools | over HTTP, the [MCP bridge](#the-tool-bridge) | a stdio relay into a unix socket this process serves for the run alone ([below](#the-seats-tools-as-one-mcp-server)); no listener |
 | Who decides each call | the bridge: grant, skill guard, fence, order and the run's end, per call; the rounds are the harness's alone | the phase's tool loop: grant, skill guard, fence, budget, round cap, terminator, a person's note ([every gate](#every-call-passes-the-phases-gates)) |
 | Lifetime | **detached** — outlives the turn, resumes it later | the turn's own: the phase starts a run, ends it when needed, and starts the next |
-| Needs | a sign-in *plus* a harness runner for the harness (`claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code`), `providers.sandbox` and a bridge the box can reach | a sign-in on this host, and a tool route in the harness's profile (`mcp`) |
+| Needs | a sign-in *plus* a harness runner for the harness (`claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code`), `providers.sandbox` and a bridge the box can reach | a sign-in on this host, and a tool route in the harness's profile (`mcp`) |
 
 **The executor is the vendor's whole harness**: a real shell, editor and
 checkout. **Every other phase is the turn's own**: every call passes the phase's
@@ -947,7 +948,7 @@ So one entry serves both: a seat whose `llm` names a `claude-code` entry runs
 its executor as Claude Code in a box and its reviewer, workers and side passes
 as Claude Code on this host. A harness with no harness runner serves the second
 column alone — a launch passes over it — and a seat whose executor chain holds
-no `claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code` entry is refused on the write.
+no `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code` entry is refused on the write.
 
 ### The executor's run in a box
 
@@ -1124,7 +1125,8 @@ instead the seat's system prompt, which tells it the run ends with that call.
 Its rounds are uncapped unless the seat's `role.sandbox.max_turns`, else
 `providers.sandbox.default_max_turns`, sets a turn cap, which becomes the
 harness's own on every runner — Claude Code's `--max-turns`, Gemini CLI's and Qwen Code's `model.maxSessionTurns`, OpenCode's agent
-`steps`, the extension's abort past the cap on Copilot ([its runner](code-sandbox.md#github-copilot-cli)), Muse Code's `--max-model-steps`, Kimi Code's steps a turn.
+`steps`, the extension's abort past the cap on Copilot ([its runner](code-sandbox.md#github-copilot-cli)), Muse Code's `--max-model-steps`, Kimi Code's steps a turn — and a Codex run's note helper counts its
+model responses and interrupts the turn at the cap.
 #### The tool bridge
 
 The seat's tools cannot be shipped into the box: most are MCP children
@@ -1372,13 +1374,13 @@ from a file a *variable* names, a channel `--help` never shows.
 | `harness` | Measured on | `system_prompt` — replaces | `append_system_prompt` — keeps the harness's own | Per-call text ahead of the engine's |
 |---|---|---|---|---|
 | `claude-code` | 2.1.303, 2.1.310 | flag, file: `--system-prompt-file` | flag, file: `--append-system-prompt-file`, with `--exclude-dynamic-system-prompt-sections` | none, on either channel |
-| `codex` | 0.153.4, 0.164.0 | config key, file: `-c model_instructions_file={file}`, with the permissions and environment blocks switched off | discovered file, read always: `AGENTS.md` in the call's directory, after codex's own prompt | replace: none (the engine's text is the first prompt byte); append: codex's heading naming the call's directory |
+| `codex` | 0.171.0 | config key, file: `-c model_instructions_file={file}`, with the permissions and environment blocks switched off | discovered file, read always: `AGENTS.md` in the call's directory, after codex's own prompt | replace: none (the engine's text is the first prompt byte); append: codex's heading naming the call's directory |
 | `gemini-cli` | 0.70.0 | variable, file: `GEMINI_SYSTEM_MD` | — none | none |
-| `qwen-code` | 0.28.3 | variable, file: `QWEN_SYSTEM_MD` | variable, file: `QWEN_SYSTEM_IDENTITY_MD` — the engine's text in place of the vendor's opening identity sentence, the rest kept byte for byte | none |
+| `qwen-code` | 0.28.4 | variable, file: `QWEN_SYSTEM_MD` | variable, file: `QWEN_SYSTEM_IDENTITY_MD` — the engine's text in place of the vendor's opening identity sentence, the rest kept byte for byte | none |
 | `opencode` | 2.0.32, 2.1.4 | discovered file, selected: `.crewlet-config/agents/crewlet-seat.md`, run with `--agent crewlet-seat` | discovered file, read always: `.crewlet-config/AGENTS.md` | replace: none; append: an `Instructions from: <path>` line naming a file in the call's directory |
 | `cursor-agent` | 2026.09.10, 2026.10.22 | — | — (Cursor's service assembles the system prompt, and the run request carries none) | — |
 | `copilot` | 1.0.114 | — none in prompt mode | discovered file, read always: `AGENTS.md` in the call's directory | its environment block, naming the call's directory |
-| `grok` | 1.0.70 | flag, text on argv: `--system-prompt-override` | flag, text on argv: `--rules`, at the very end of the vendor's prompt | none |
+| `grok` | 1.0.92 | flag, text on argv: `--system-prompt-override` | flag, text on argv: `--rules`, at the very end of the vendor's prompt | none |
 | `muse-code` | 1.4.25 | — none per call | variable, file: `TBH_EVAL_APPEND_SYSTEM_PROMPT_FILE`, undocumented | none |
 | `kimi-code` | 2.7.2 | flag, agent file: `--agent-file`, body `{system}` | flag, agent file: `--agent-file`, body `{system}` then `${base_prompt}` | none: the vendor's per-call text follows the engine's |
 | `hermes` | 0.23.3 | — | — | — |
@@ -1391,9 +1393,11 @@ for both.
 
 **What a row says, where it is not obvious:**
 
-- `codex` cuts `AGENTS.md` at 32 KiB by default, silently, so the profile sets
+- `codex` cuts `AGENTS.md` at 32 KiB by default, saying so in its stream (an
+  `error` item "Loaded only 32768 of 240000 bytes from `…/AGENTS.md` … under the
+  32768-byte project instruction budget"), so the profile sets
   `project_doc_max_bytes` to its largest value (a 240 KB seat prompt reached the
-  model whole with it). Not `developer_instructions`, although it would sit
+  model whole with it, on 0.171.0). Not `developer_instructions`, although it would sit
   higher: it is a string, so it reaches codex on argv, or in a `--profile` file a
   seat's concurrent calls share.
 - `gemini-cli` has no channel that keeps its prompt: no flag, setting or variable
@@ -1754,14 +1758,14 @@ So every profile **denies the harness's shell and file tools** wherever the vend
 
 The shell is the one that matters: the seat's home and environment are isolated, the filesystem is not, and a harness with a shell reads whatever the engine user can read. Every built-in profile ends with the web tools and nothing else ([which ones, per harness](#isolation-the-part-that-actually-matters)). A vendor with no such switch is declared `local_tools: vendor-default` with a note naming the missing switch, and `crewlet llm doctor` **measures** the stance rather than trusting it (see [Operating it](#operating-it)).
 
-**Name the tools that exist, not only the ones to deny.** A deny list leaves on offer whatever it does not name. With file and shell tools denied, Claude Code 2.1.303 still offered fourteen tools (scheduling, worktrees, agent messaging, workflows) and ran a `CronCreate` the model asked for; Copilot 1.0.114 offered 21, refusing only once called; grok 1.0.70 twelve, including `write` and the image and video tools; Gemini CLI its sub-agents, plan mode and skills; Qwen Code its worktree, agent and skill tools, and an `enter_worktree` ran without a prompt. So each of those profiles names the tools a call *has*: `--tools
+**Name the tools that exist, not only the ones to deny.** A deny list leaves on offer whatever it does not name. With file and shell tools denied, Claude Code 2.1.303 still offered fourteen tools (scheduling, worktrees, agent messaging, workflows) and ran a `CronCreate` the model asked for; Copilot 1.0.114 offered 21, refusing only once called; grok 1.0.92, on the deny list written for 1.0.70, a new `update_goal`; Gemini CLI its sub-agents, plan mode and skills; Qwen Code its worktree, agent and skill tools, and an `enter_worktree` ran without a prompt. So each of those profiles names the tools a call *has*: `--tools
 WebFetch,WebSearch`, `--available-tools`, grok's `--tools`, a Gemini policy denying every tool and allowing the two web tools above the denial, Qwen Code's `tools.core`. A call to anything else is refused and runs nothing.
 
 **Read how each vendor applies its allowlist.**
 
-- grok's fails *open*: a name the build does not know makes it warn that "other tools stay available" and apply none of the list. So the profile names only the two web tools 1.0.70 knows and passes a deny list naming every other built-in. A denial wins over the allowlist and an unknown deny name is skipped, so the pair fails closed both ways: a renamed web tool leaves the deny list in force, and a new tool is outside the allowlist.
+- grok's `--tools` drops the whole list on a name the build does not know, warning that "other tools stay available". So the profile names only the two web tools 1.0.92 knows and passes a deny list naming every other built-in by its 1.0.92 name. A denial wins over the allowlist and an unknown deny name is skipped with a warning while the rest apply, so the pair fails closed both ways: a renamed web tool leaves the deny list in force, and a new tool is outside the allowlist.
 - Copilot's `--available-tools` fails closed: a name matching no tool adds nothing.
-- Qwen Code's `tools.core` covers only the tools the vendor calls core, so the profile's `permissions.deny` names every other tool 0.28.3 registers.
+- Qwen Code's `tools.core` covers only the tools the vendor calls core, so the profile's `permissions.deny` names every other tool 0.28.4 registers.
 - `kimi-code`: an unrecognised entry "is reported with a warning" and matches nothing, so a stale name costs one tool rather than lifting the restriction.
 
 The flag's name says nothing about which way it fails.
@@ -1790,7 +1794,7 @@ The switch is `OPENCODE_CONFIG_PROJECT_DISABLE` because OpenCode 2 reads `OPENCO
 
 **A refusal and a removal are not the same guard.** `muse-code`: its `--disable-shell` and `--disable-write` flags take the shell and the writes off the surface but leave the rest of the harness's own tools offered (`read_file`, `search`, the subagent and work families, `read_skill`, measured on 1.4.25). What narrows the surface to the web tools is `run.toolset` in the seeded `settings.json`: an allowlist of exact tool names, validated against the harness's registry at startup, replacing the surface outright. The profile ships both: the allowlist is the denial, the flags cover a settings file that failed to apply.
 
-`codex` shows the residual a removal can leave. Its profile switches the shell off (`features.shell_tool` and `features.unified_exec`) with `view_image`, the goal, multi-agent and `request_user_input` tools and image generation, so a shell call is answered "unsupported call" and runs nothing. That leaves web search and `apply_patch`, which has no switch: codex offers it whenever the model's catalogue entry names a patch format. `--sandbox read-only` makes it write nothing, but it still reads a file to check a patch, so a patch naming a file outside the call is answered with whether that file exists and holds the patch's lines, never its content. A filesystem permission profile reading only the call's directory would close that; it was measured and not adopted, because codex then reads even the call's `AGENTS.md` through its bubblewrap helper, and on a host where no user namespace can be created every call failed. That residual is why `local_tools: denied` is a claim `crewlet llm doctor` **measures** rather than one you take on trust, and why Ask Crewlet, which needs a harness left with no tool at all, refuses codex.
+`codex` shows the residual a removal can leave. Its profile switches the shell off (`features.shell_tool`; `features.unified_exec` is set beside it and changes nothing on its own) with `view_image`, the goal, multi-agent and `request_user_input` tools, and sets image generation off (its effect not observable on an API-key run of 0.171.0), so a shell call is answered "unsupported call" and runs nothing. That leaves web search and `apply_patch`, which has no switch: codex offers it whenever the model's catalogue entry names a patch format. `--sandbox read-only` makes it write nothing, but it still reads a file to check a patch, so a patch naming a file outside the call is answered with whether that file exists and holds the patch's lines, never its content. A filesystem permission profile reading only the call's directory would close that; it was measured and not adopted, because codex then reads even the call's `AGENTS.md` through its bubblewrap helper, and on a host where no user namespace can be created every call failed. That residual is why `local_tools: denied` is a claim `crewlet llm doctor` **measures** rather than one you take on trust, and why Ask Crewlet, which needs a harness left with no tool at all, refuses codex.
 
 **The denial does not always live in a flag.** `kimi-code`'s tool policy is `[tools]` and `[[permission.rules]]` in `config.toml`, which is also where `kimi login` writes the OAuth reference and model catalogue, so it is a *credential* here and seeding a policy into it would destroy the login. What is left is the **agent file**, the same `--agent-file` that carries the system prompt: its frontmatter allowlist is the denial. That is why a channel whose file carries policy is passed on every call (see [A channel with a shape](#a-channel-with-a-shape)).
 
@@ -1805,7 +1809,7 @@ The switch is `OPENCODE_CONFIG_PROJECT_DISABLE` because OpenCode 2 reads `OPENCO
 | Profile | How web is turned off | Measured |
 |---|---|---|
 | `claude-code` | `WebFetch` and `WebSearch` move from `--allowedTools` to `--disallowedTools` | refused on 2.1.310 |
-| `codex` | `-c web_search="disabled"` in place of `"live"`; the read-only sandbox already cuts the shell's network | refused on 0.150.1 |
+| `codex` | `-c web_search="disabled"` in place of `"live"`; the read-only sandbox already cuts the shell's network | the request offers no `web_search` tool, on 0.171.0 |
 | `opencode` | the seeded policy keeps its deny-all rule and drops the two allow rules | not measured; derived from the 2.0 permissions format |
 | `pi` | nothing changes: `--no-tools` already sends no tools | measured on 0.85.1 (no web tool exists) |
 | `copilot` | `web_fetch` and `web_search` leave `--available-tools`, which then names `crewlet` alone (an empty one offers every tool), and no URL is allowed | refused on 1.0.114: "Tool 'web_fetch' does not exist", with every URL allowed |
@@ -1900,7 +1904,7 @@ Measured per harness against the installed binary, through the engine's own code
 | `opencode` | `opencode serve` started first, the server in the call's own `opencode.jsonc` (`codemode: false`, `crewlet_*` allowed), polled until connected; the run is `run --server` | its JSON output, a step per request; calls only once they have run; the last step's counts from the server's session | name and arguments | at once | yes | 600 s (`timeout.execution`) | none it reports: its step limit exits 0 |
 | `cursor-agent` | the call's own `.cursor/mcp.json` (the call's directory is its project root); `--approve-mcps`; `cli.json` allows `Mcp(crewlet:*)` | its `stream-json` output, **read from its bundle, not measured** | name and arguments | declared at once, **not measured** | declared no, **not measured** | 60 s, the SDK's, with no knob in print mode | none |
 | `copilot` | `--additional-mcp-config` naming a file in the call's directory; `--available-tools crewlet`, `--allow-tool crewlet`; the home's own server list seeded empty | its session's events file in the seat's home, by the working directory it names | `com.github.copilot/toolCallId` | at once | yes | 600 s | none |
-| `grok` | an agent file in the call's directory declaring the server (`--agent`); `--allow MCPTool(*)`; `--deny Read(**)`; only `crewlet` on the home's MCP allowlist; the model reaches the tools through `search_tool` and `use_tool` | its `streaming-json` output | name and arguments | at once | no | 6,000 s, fixed | `max_turns_reached`: exit 1 |
+| `grok` | an agent file in the call's directory declaring the server (`--agent`); `--allow MCPTool(*)`; `--deny Read(**)`; the home's `config.toml` names no server and turns the other vendors' sources off; the model reaches the tools through `search_tool` and `use_tool` | its `streaming-json` output | name and arguments | at once | no | 6,000 s, fixed | `max_turns_reached`: exit 1 |
 | `muse-code` | `-c mcpServers.crewlet=…` in a run that trusts its own directory, and `run.toolset` naming `mcp__crewlet__*` beside the web tools | its JSON output; counts only for the whole run, so each request is estimated as read and the total settles it | `idempotencyKey` | one at a time | no | 300 s, its own, with no knob | none: the round cap stops it |
 | `kimi-code` | the call's own `.kimi-code/mcp.json` (`KIMI_CODE_TRUST_WORKSPACE=1`); the agent file lists `mcp__crewlet__*` | its wire log in the seat's home, by the working directory its `profile.bind` names | name and arguments | one at a time | no | 600 s (`toolTimeoutMs`) | none, unless `KIMI_LOOP_MAX_STEPS_PER_TURN` is set |
 | `hermes` | the home's `config.yaml`, the run's relay and socket through its environment; `--toolsets web,crewlet` | a file in the call's directory a post-request hook appends each response to, under the names the model asked for | name and arguments | one at a time | no | 600 s (in that file) | none: the round cap stops it |
@@ -2465,8 +2469,8 @@ problem.
 run](#the-executors-run-in-a-box) needs a harness runner for the entry's own
 harness, and `hermes` and `pi` have none. An entry's model is written for its own
 harness and its sign-in is that harness's, so a launch passes over a `hermes` or
-`pi` member of a seat's chain; a seat whose chain holds no `claude-code` or
-`opencode` entry is [refused](code-sandbox.md#failure-modes). A key given in the
+`pi` member of a seat's chain; a seat whose chain holds no `claude-code`, `codex`
+or `opencode` entry is [refused](code-sandbox.md#failure-modes). A key given in the
 seat's `role.sandbox.env` is counted by the remote-box check as well, except the
 seat's own credential for a tool: a line that hands a box CLI one of the agent's
 integration credentials, such as doctl's
@@ -2731,7 +2735,7 @@ sidesteps all of this.
 | `harness` | Binary | Signs in with | Notes |
 |---|---|---|---|
 | `claude-code` | `claude` | Claude Pro / Max, or an Anthropic API key (`ANTHROPIC_API_KEY`, its `api_key_env`) | The default. `claude auth login` (and `auth status` / `auth logout`). `claude setup-token` gives a headless `CLAUDE_CODE_OAUTH_TOKEN`. A seat keeps Claude Code's own system prompt (`--append-system-prompt-file`), a side pass replaces it (`--system-prompt-file`). Web tools only (`--tools WebFetch,WebSearch`) beside the seat's server; `--setting-sources ""` and the two `CLAUDE.md` switches keep every settings and project file out. The reference tool route: its `stream-json` record shows every request (counts true with `--include-partial-messages`) and each call's id. Full usage incl. cache tokens. Runs a seat's executor. |
-| `codex` | `codex` | ChatGPT Plus / Pro, or an OpenAI API key (`CODEX_API_KEY`) | `codex login`; no headless token. The key goes in `CODEX_API_KEY`, which `codex exec` signs requests with (`OPENAI_API_KEY` alone sent no `Authorization` header). A seat keeps codex's prompt and adds its text in an `AGENTS.md` in the call's directory; a side pass replaces it (`-c model_instructions_file`). Streams JSONL; shell off, `--sandbox read-only`, so its own tools are web search and an `apply_patch` that writes nothing. A run with tools reads its rollout file per request and does not re-read a changed tool list. Serves the phases on this host only. |
+| `codex` | `codex` | ChatGPT Plus / Pro, or an OpenAI API key (`CODEX_API_KEY`) | `codex login`; no headless token. The key goes in `CODEX_API_KEY`, which `codex exec` signs requests with (`OPENAI_API_KEY` alone sent no `Authorization` header). A seat keeps codex's prompt and adds its text in an `AGENTS.md` in the call's directory; a side pass replaces it (`-c model_instructions_file`). Streams JSONL; shell off, `--sandbox read-only`, so its own tools are web search and an `apply_patch` that writes nothing. A run with tools reads its rollout file per request and does not re-read a changed tool list. Runs a seat's executor on 0.171.0, a newer release with fresh sessions only ([Codex](code-sandbox.md#codex)): a ChatGPT login in a local cell only, `CODEX_API_KEY` anywhere. |
 | `gemini-cli` | `gemini` | a Google account login (an individual's free Code Assist tier, Google AI Pro or Ultra, or an organization's Code Assist licence, as Gemini CLI 0.70.0's own authentication guide lists them), `GEMINI_API_KEY`, or Vertex AI under `auth.mode: env` (`GOOGLE_GENAI_USE_VERTEXAI: "true"`, its project and key in `env`); a login whose account Google gives no Code Assist tier is refused as `IneligibleTierError`, named as a refused sign-in | No login subcommand: sign in with `gemini` yourself and adopt that login with `-from-host`. Under `subscription` the profile sets `GOOGLE_GENAI_USE_GCA=true` (`subscription_env`) so the harness uses the copied login (without it every call exited 41, "Please set an Auth method"). One system-prompt channel, `GEMINI_SYSTEM_MD`, replacing the harness's prompt for a seat and a side pass alike. Web tools only, by a policy file; usage read per model and summed. `GOOGLE_CLOUD_PROJECT` passes through. Runs a seat's executor ([Code sandbox › Gemini CLI](code-sandbox.md#gemini-cli)), where its own prompt is kept and the seat's instructions added after it. |
 | `qwen-code` | `qwen` | an OpenAI-compatible key (`OPENAI_API_KEY`), under `auth.mode: api-key`, or a Qwen subscription login (not measured against Qwen's service) | A keyed entry is `auth.mode: api-key` and names its key as `auth.api_key`; `OPENAI_API_KEY` is [shared](#5-a-metered-api-key), so the engine never reads it in the entry's place. A subscription login is adopted with `-from-host` and run with `--auth-type qwen-subscription` ([The other harnesses](#the-other-harnesses)). Signs in with `--auth-type openai`, the endpoint in `OPENAI_BASE_URL` in the entry's `env` ([example](#the-other-harnesses)). A seat's system prompt replaces the harness's opening identity sentence and keeps the rest (`QWEN_SYSTEM_IDENTITY_MD`); a side pass's replaces it whole (`QWEN_SYSTEM_MD`). Answer and usage from `--output-format stream-json`'s result event. Web tools only. Runs a seat's executor over ACP ([Code sandbox › Qwen Code](code-sandbox.md#qwen-code)), where its own prompt is kept and the seat's instructions replace its opening sentence. |
 | `opencode` | `opencode` | a provider key in `env`, or a login of OpenCode's own | **OpenCode 2 only**: `@opencode/cli` (`opencode --version` prints `opencode v2.…`); 1.x (`opencode-ai`) runs neither the profile nor a coding box. Every command runs `--standalone`; without it OpenCode drives a background service on a port shared by every home on the machine, keeping the credentials of whichever call started it. `opencode auth login` (only `auth list` for status, no logout; see [the login it keeps in its own database](#1-broker-the-vendors-own-login-any-harness)). A provider key goes in `env` under that provider's own variable, and `doctor` counts it ([A provider key in `env`](#6-a-provider-key-in-env-opencode-hermes-pi)). `model` is `<provider>/<model>` (`anthropic/claude-sonnet-5`, `openrouter/anthropic/claude-sonnet-5`); a bare id is refused on a write. Prompt on stdin; no project configuration from the working directory or its ancestors, only the call's own (see [Tool calls on this host](#tool-calls-on-this-host)); a seat's system prompt in that configuration's `AGENTS.md`, after OpenCode's own, a side pass's as an agent there, replacing it; failures read from the class in its own JSON `error` events only; tokens from the call's session. Runs a seat's executor. |
@@ -2943,7 +2947,7 @@ it runs on.
 | `effort_note` | On a profile with no `effort`, why the harness has none the engine passes, said in the refusal of an entry's `effort`. |
 | `env_sign_in` | The harness reads its model provider's key from its own environment, so a [credential-named](#6-a-provider-key-in-env-opencode-hermes-pi) variable in the entry's `env` signs it in. |
 | `credential_paths` | The login files, relative to the seat home: each must name a file inside it (not the home itself, not a path ending in a separator), no two may share a file name, and none may be named `crewlet-bundle.json` (a bundle's manifest, naming the harness it was exported from) or, beside a `credential_store`, `exported-credentials` (the store's document): the shared directory and a bundle keep each file under its name. |
-| `volatile_paths` | Sessions, transcripts and history, deleted whenever none of the seat's calls is in flight — as its generation opens and as it closes. Each must stay inside the seat home; a directory is fine. The home's `tmp`, where `TMPDIR` points, is pruned with them whatever the list says. |
+| `volatile_paths` | Sessions, transcripts and history, and what the harness would read from the home as instructions or hooks, deleted whenever none of the seat's calls is in flight — as its generation opens and as it closes. Each must stay inside the seat home; a directory is fine. The home's `tmp`, where `TMPDIR` points, is pruned with them whatever the list says. |
 | `home_daemon` | `{pid_file, stop_args}`: a process the harness starts for a call and keeps in the background to serve the home's later calls with that call's environment (Hermes Agent's gateway). `pid_file` is the file it keeps in the seat home while it runs; `stop_args` the harness's own command that stops the home's daemon and exits 0 when there is none. Declared, a home runs one call at a time, and the engine runs `stop_args` whenever `pid_file` is there as a call releases the home and before a call opens it ([Concurrency within a seat](#concurrency-within-a-seat)). |
 | `login_args` | The vendor's own interactive login, for `crewlet llm login`. |
 | `capture_token_args` | The command that mints a headless token on stdout (`-capture-token`). |
@@ -3230,7 +3234,7 @@ executor      : seats: swe, qa
 
 The **seats** line is which agent seats' executor chains hold this entry, resolved as the launch
 resolves them. The **runner** line is whether this build can drive that harness as a harness: there
-are seven runners, `claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` and `kimi-code`, and a member naming any other harness is skipped at
+are eight runners, `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` and `kimi-code`, and a member naming any other harness is skipped at
 launch rather than faulted (it still serves that seat's text calls). The **tool bridge** line is
 where the run's box dials the seat's tools, which turns on the entry's cell: a `direct` box dials
 the node's own listener on loopback where the node binds `api.port`, whatever its roles, and
@@ -3370,12 +3374,12 @@ skips all three and says so on each line.
 - **Cursor Agent on a team account** runs what the team's required plugins configure, MCP servers
   and hooks included, and its tool route is mostly unmeasured
   ([per harness](#what-each-harness-does-with-the-seats-tools)).
-- **A seat's executor needs more than a sign-in.** A harness with a harness runner (`claude-code` or
-  `opencode`), a `providers.sandbox` catalogue to place the run in, and a bridge URL a box can dial.
+- **A seat's executor needs more than a sign-in.** A harness with a harness runner (`claude-code`,
+  `codex` or `opencode`), a `providers.sandbox` catalogue to place the run in, and a bridge URL a box can dial.
   `crewlet llm doctor` checks all of it ([Operating it](#operating-it)).
 - **Code work is the executor's run.** A seat's [code sandbox](code-sandbox.md) work is its
   executor's own run, on the entry the launch picks from its `llm` chain, running *that entry's own
-  harness*, so only a `claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code` entry can do it. On any backend including remote
+  harness*, so only a `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code` entry can do it. On any backend including remote
   E2B, what travels into the box is the entry's `env` (a gateway's address, a cloud provider's
   switch, `opencode`'s [provider key](#6-a-provider-key-in-env-opencode-hermes-pi)) and what signs
   the harness in: a headless token (`crewlet llm login <key>
@@ -3383,12 +3387,13 @@ skips all three and says so on each line.
   `inherit-env` forwards. The login itself (credential files, or OpenCode's exported login) never
   travels to a remote box: it carries a refresh token whose rotation is shared fleet state. So a
   `claude-code` entry with no headless token or key (nor a gateway's token or a cloud provider's
-  switch in its `env`), or an `opencode` entry signed in only by `crewlet llm login`, needs a
+  switch in its `env`), a `codex` entry on its ChatGPT login alone, or an `opencode` entry signed
+  in only by `crewlet llm login`, needs a
   [local cell](code-sandbox.md#local-sandboxes) (`providers.sandbox.local` plus `run_in: direct` or
   `container`), which is seeded with the login and, when the box closes, writes back one its run
   refreshed, only while the shared login still holds what the box was seeded with, by the same
-  compare-and-swap a seat's refresh takes. A seat's `llm` points at a `claude-code`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code`
-  entry; any other harness (Codex, `hermes`, `pi`) serves its reviewer,
+  compare-and-swap a seat's refresh takes. A seat's `llm` points at a `claude-code`, `codex`, `gemini-cli`, `qwen-code`, `opencode`, `copilot`, `muse-code` or `kimi-code`
+  entry; any other harness (`hermes`, `pi`) serves its reviewer,
   workers and side passes; see [Code Sandbox](code-sandbox.md#failure-modes).
 - **No per-call sampling, effort or output cap.** Each is the harness's own configuration of its
   model ([What an entry does not set](#what-an-entry-does-not-set)).

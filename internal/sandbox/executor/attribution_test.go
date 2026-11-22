@@ -320,6 +320,19 @@ var creditBoxes = map[string]func(t *testing.T) (*executor.Runner, sandbox.Sandb
 				"sh \"$HOME/scenario.sh\" > \"$HOME/observed\" 2> \"$HOME/observed.err\"\n")
 		return runner, b
 	},
+	// The app-server's stand-in runs the scenario before it serves: the
+	// model's shell commands run under the app-server's environment, which
+	// the wrapper gave it ([codexStandIn] answers `codex-cli 0.171.0`).
+	executor.CodexName: func(t *testing.T) (*executor.Runner, sandbox.Sandbox) {
+		runner, b, _ := codexBox(t, "0.171.0")
+		path := executor.PathsFor(b).BinDir() + "/codex"
+		standIn, err := b.ReadFile(t.Context(), path)
+		if err != nil || !strings.Contains(string(standIn), "\napp-server)\n") {
+			t.Fatalf("the codex stand-in has no app-server branch (%v)", err)
+		}
+		writeBoxStandIn(t, b, path, strings.Replace(string(standIn), "\napp-server)\n", "\napp-server)\n  "+scenarioRun, 1))
+		return runner, b
+	},
 	executor.GeminiCLIName: geminiCreditBox,
 	// Its helper's stand-in runs the scenario: Qwen Code and its shell run
 	// under the helper's environment, which the wrapper gave it.

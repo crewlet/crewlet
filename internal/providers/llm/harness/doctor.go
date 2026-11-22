@@ -548,6 +548,12 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 					"it was written for %s", path, strings.Join(p.profile.VersionArgs, " "),
 				orNone(p.profile.WrittenFor)))
 		}
+		if line, problem := p.executorRelease(ctx, opts, version); line != "" {
+			c.set(CheckExecutor, strings.TrimPrefix(c.at(CheckExecutor).Detail+"\n"+line, "\n"))
+			if problem != "" {
+				c.fail(CheckExecutor, CheckKindConfig, problem)
+			}
+		}
 	}
 
 	for _, problem := range refused {
