@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/shellword"
@@ -36,9 +37,10 @@ const ClaudeCodeName = "claude-code"
 type ClaudeCode struct{}
 
 var (
-	_ Harness        = ClaudeCode{}
-	_ saver          = ClaudeCode{}
-	_ artifactHolder = ClaudeCode{}
+	_ Harness           = ClaudeCode{}
+	_ saver             = ClaudeCode{}
+	_ artifactHolder    = ClaudeCode{}
+	_ artifactDirHolder = ClaudeCode{}
 )
 
 // NewClaudeCode returns the runner.
@@ -392,6 +394,11 @@ func claudeSessionGate(session Session, paths Paths, rewired bool) string {
 	}
 	line(`if [ -z "$h" ]; then`)
 	line(`  if [ ! -s %s ]; then w='it is not in this box, and no archive of it was carried here'`, carried)
+	// A BOX RELEASE THAT DOES NOT READ continues nothing carried, as the
+	// engine's check holds it ([boxNamedNoRelease]): no bare MAJOR.MINOR.PATCH,
+	// as [releaseOf] reads one; `at` alone takes one for a current release,
+	// which every other gate wants ([claudeRelease]).
+	line(`  elif ! { %s[ -n "$rv" ]; }; then w=%s`, bareReleaseShell("rv"), q(boxNamedNoRelease("Claude Code")))
 	line(`  elif ! at %s; then w="this box runs Claude Code $n, older than %s, the oldest that continues a session carried from another box"`,
 		floorArgs(claudeCarryFloor), claudeCarryFloor)
 	line(`  elif ! command -v tar > /dev/null 2>&1 || ! command -v gzip > /dev/null 2>&1; then w='this box has no tar and gzip to restore its archive with'`)
@@ -1044,19 +1051,38 @@ func (ClaudeCode) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Claude Code release writer
 // can be continued in a box whose Claude Code is release box ([carrier]): the
-// box at or after [claudeCarryFloor], the writer at or after
-// [claudeCarriedWriterFloor], and never a box older than the release that wrote
-// the session, which reads only what it and the releases before it wrote.
-func (ClaudeCode) Continues(box, writer string) (bool, string) {
+// box's release read and at or after [claudeCarryFloor], the writer as
+// [ClaudeCode.ContinuesWriter] holds it, and never a box older than the
+// release that wrote the session, which reads only what it and the releases
+// before it wrote.
+func (c ClaudeCode) Continues(box, writer string) (bool, string) {
 	switch {
+	case !releaseReads(box):
+		return false, boxNamedNoRelease("Claude Code")
 	case !releaseAtLeast(box, claudeCarryFloor):
 		return false, fmt.Sprintf("this box runs Claude Code %s, older than %s, the oldest that "+
 			"continues a session carried from another box", box, claudeCarryFloor)
-	case !releaseAtLeast(writer, claudeCarriedWriterFloor):
+	}
+	if ok, why := c.ContinuesWriter(writer); !ok {
+		return false, why
+	}
+	if !releaseAtLeast(box, writer) {
+		return false, carriedOlder("Claude Code", box, writer)
+	}
+	return true, ""
+}
+
+// ContinuesWriter reports whether a session Claude Code release writer wrote
+// can be continued at all ([carrier]): the writer read and at or after
+// [claudeCarriedWriterFloor]. A writer that does not read continues nowhere
+// ([writerNamedNoRelease]).
+func (ClaudeCode) ContinuesWriter(writer string) (bool, string) {
+	if !releaseReads(writer) {
+		return false, writerNamedNoRelease("Claude Code")
+	}
+	if !releaseAtLeast(writer, claudeCarriedWriterFloor) {
 		return false, fmt.Sprintf("the session was written by Claude Code %s, older than %s, the "+
 			"first whose compaction summaries survive a resume", writer, claudeCarriedWriterFloor)
-	case !releaseAtLeast(box, writer):
-		return false, carriedOlder("Claude Code", box, writer)
 	}
 	return true, ""
 }
@@ -1460,23 +1486,20 @@ func releaseAtLeast(version, floor string) bool {
 	return true
 }
 
-// releaseNumbers is the three numbers of version, as a harness's `--version`
-// printed it, read once its spaces are trimmed, up to the first character
-// that is neither a digit nor a dot. False for a version this code cannot
-// read: one with fewer than three numbers, or one of a number past what an
-// int holds.
+// releaseNumbers is the three numbers of the bare release version names, as
+// a harness's `--version` printed it, read as [harnessprofile.Release] reads
+// it, the one reading the runners, the sandbox and the doctor share: a
+// pre-release, a fourth number (`1.4.25.1`) or anything but three runs of
+// digits names none. False for a version that names none, or one of a number
+// past what an int holds.
 func releaseNumbers(version string) ([3]int, bool) {
-	v := strings.TrimSpace(version)
-	if cut := strings.IndexFunc(v, func(r rune) bool { return (r < '0' || r > '9') && r != '.' }); cut >= 0 {
-		v = v[:cut]
-	}
-	fields := strings.Split(v, ".")
 	var out [3]int
-	if len(fields) < 3 {
+	release := harnessprofile.Release(version)
+	if release == "" {
 		return out, false
 	}
-	for i := range 3 {
-		n, err := strconv.Atoi(fields[i])
+	for i, field := range strings.SplitN(release, ".", 3) {
+		n, err := strconv.Atoi(field)
 		if err != nil {
 			return out, false
 		}
@@ -1684,17 +1707,23 @@ func (ClaudeCode) notesOffWhy() string {
 		"hooks and whose error stream says so"
 }
 
-// artifacts is what a Claude Code run leaves in its box of its own, and what
-// a box keeps that no run may take up from an earlier one: the harness's state
-// file `.claude.json` (MCP servers keyed by directory) with its lock and
-// backups, and the instruction files of the home, which lies above the
-// workspace ([sandbox.WorkspaceSubdir]) on the walk a harness makes up from its
-// working directory. Removed whatever harness the box runs next.
-func (ClaudeCode) artifacts(p Paths) (files, dirs []string) {
+// artifactFiles is the files a Claude Code run leaves in its box of its own,
+// and what a box keeps that no run may take up from an earlier one: the
+// harness's state file `.claude.json` (MCP servers keyed by directory), and
+// the instruction files of the home, which lies above the workspace
+// ([sandbox.WorkspaceSubdir]) on the walk a harness makes up from its working
+// directory. Removed whatever harness the box runs next.
+func (ClaudeCode) artifactFiles(p Paths) []string {
 	cfg := p.ClaudeConfigDir()
 	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeRepoSettings(),
-			p.ClaudeNestedOff(), p.ClaudeToolEnv(), cfg + "/.claude.json", cfg + "/CLAUDE.md",
-			p.Home + "/CLAUDE.md", p.Home + "/CLAUDE.local.md", p.Home + "/AGENTS.md"},
-		[]string{p.ClaudeSkillsPlugin(), p.ClaudeRepoPlugins(), cfg + "/.claude.json.lock", cfg + "/backups",
-			cfg + "/rules"}
+		p.ClaudeNestedOff(), p.ClaudeToolEnv(), cfg + "/.claude.json", cfg + "/CLAUDE.md",
+		p.Home + "/CLAUDE.md", p.Home + "/CLAUDE.local.md", p.Home + "/AGENTS.md"}
+}
+
+// artifactDirs is the directories a Claude Code run leaves in its box of its
+// own, and those of its state file's lock and backups and of its rules.
+func (ClaudeCode) artifactDirs(p Paths) []string {
+	cfg := p.ClaudeConfigDir()
+	return []string{p.ClaudeSkillsPlugin(), p.ClaudeRepoPlugins(), cfg + "/.claude.json.lock", cfg + "/backups",
+		cfg + "/rules"}
 }
