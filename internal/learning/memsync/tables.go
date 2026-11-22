@@ -82,9 +82,9 @@ type table struct {
 	// a row whose parent is still not in the store ([table.parentHeld]),
 	// counted as an orphan: written, its foreign key refused the seat on every
 	// node lacking the parent, over a row nothing reads alone. It is missing
-	// after a turn cut between a version the holding wrote and an unchanged
-	// skill the backlog carries, or when this store skipped it for another
-	// skill of that name ([table.onConflict]).
+	// when a crash or a cut flush came after a pass carried the version of a
+	// skill made and refined since that pass read the skills, or when this
+	// store skipped it for another skill of that name ([table.onConflict]).
 	// TestEveryReferenceBetweenCarriedTablesNamesAParentReplayedFirst holds
 	// every schema reference between carried tables to a parent listed first.
 	parent *reference
