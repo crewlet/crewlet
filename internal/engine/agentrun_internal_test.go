@@ -210,6 +210,7 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 	runners := map[string]*sandbox.FakeRunner{
 		"claude-code": sandbox.NewFakeRunner("claude-code"),
 		"codex":       sandbox.NewFakeRunner("codex"),
+		"copilot":     sandbox.NewFakeRunner("copilot"),
 		"kimi-code":   sandbox.NewFakeRunner("kimi-code"),
 		"opencode":    sandbox.NewFakeRunner("opencode"),
 	}
@@ -228,8 +229,8 @@ func launchRigRestoring(t *testing.T, c *Company, bridge *mcpbridge.Bridge,
 	manager, err := sandbox.NewManager(sandbox.ManagerOptions{
 		Providers: providers, DefaultPlacement: sandbox.Direct,
 		Runners: map[string]sandbox.Runner{
-			"claude-code": runners["claude-code"], "codex": runners["codex"], "kimi-code": runners["kimi-code"],
-			"opencode": runners["opencode"],
+			"claude-code": runners["claude-code"], "codex": runners["codex"], "copilot": runners["copilot"],
+			"kimi-code": runners["kimi-code"], "opencode": runners["opencode"],
 		},
 		DefaultSetup:     defaults,
 		AttributeCommits: c.Config.Providers.Sandbox.AttributesCommits(),
@@ -362,7 +363,7 @@ func TestALaunchPlacesTheRunInItsMembersCell(t *testing.T) {
 // and the denied entry's run goes out with its web tools.
 func TestAnEntrysWebDenialReachesItsExecutor(t *testing.T) {
 	t.Parallel()
-	for _, agent := range []string{"claude-code", "codex", "opencode"} {
+	for _, agent := range []string{"claude-code", "codex", "copilot", "opencode"} {
 		for _, denied := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s denied %v", agent, denied), func(t *testing.T) {
 				t.Parallel()
