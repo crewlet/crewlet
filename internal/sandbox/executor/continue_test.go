@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -555,14 +554,10 @@ func boxHas(t *testing.T, box sandbox.Sandbox, path string) bool {
 // at the Claude Code runner's PinnedWindow less the harness's headroom whatever the seat
 // set (its own window, DISABLE_AUTO_COMPACT, DISABLE_COMPACT,
 // CLAUDE_AUTOCOMPACT_PCT_OVERRIDE, CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE), so no
-// request carries more or compacts where the engine does not reckon. Its
-// settings' `env` block, the whole pin, holds the same window with both
-// overrides and a resume's switches blank, against a repository's own
-// settings (TestAResumeUnsetsWhatMovesWhatItHandsItsModel).
+// request carries more or compacts where the engine does not reckon.
 //
-// Mutation: drop the window from the pins or a variable from the unsets, or
-// hand 2.1.310 the settings without the pin, and the harness's environment or
-// its settings show it.
+// Mutation: drop the window from the pins or a variable from the unsets, and
+// the harness's environment shows it.
 func TestAContinuedClaudeSessionRunsUnderTheEnginesWindow(t *testing.T) {
 	t.Parallel()
 	runner, box := sessionBox(t, "2.1.310")
@@ -586,35 +581,15 @@ func TestAContinuedClaudeSessionRunsUnderTheEnginesWindow(t *testing.T) {
 			t.Errorf("the harness's environment keeps %s, which switches its compaction off or moves its point", off)
 		}
 	}
-	named := after(strings.Split(strings.TrimSpace(boxFile(t, box, box.Home()+"/argv")), "\n"), "--settings")
-	var settings struct {
-		Env map[string]string `json:"env"`
-	}
-	if err := json.Unmarshal([]byte(boxFile(t, box, named)), &settings); err != nil {
-		t.Fatalf("the settings the harness was handed, %q, do not read: %v", named, err)
-	}
-	if want := map[string]string{
-		"CLAUDE_CODE_AUTO_COMPACT_WINDOW":     strconv.Itoa(executor.NewClaudeCode().PinnedWindow(model)),
-		"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE":     "",
-		"CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE": "",
-		"CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "",
-		"CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP": "",
-		"DISABLE_AUTOUPDATER":                 "1",
-	}; !maps.Equal(settings.Env, want) {
-		got, _ := json.Marshal(settings.Env)
-		t.Errorf("the settings the harness was handed, %q, hold env %s, want the window pinned and both "+
-			"overrides and both of a resume's switches blank, over a repository's own", named, got)
-	}
 }
 
 // A BOX'S CLAUDE CODE RELEASE CANNOT CHANGE UNDER A SESSION IT CONTINUES IN
 // PLACE. Every run starts with DISABLE_AUTOUPDATER=1 over the seat's own value,
-// and the settings a release that takes the pin is handed set it too, over a
-// repository's own; so the release that wrote the box's copy resumes it (the
-// package doc's "A box's release is pinned").
+// so the release that wrote the box's copy resumes it (the package doc's "A
+// box's release is pinned").
 //
 // Mutation (claudecode.go): drop DISABLE_AUTOUPDATER from claudeSessionLayout's
-// pins or from claudeSettingsPin's block, and a check goes red.
+// pins, and this goes red.
 func TestABoxsClaudeCodeReleaseCannotChangeUnderItsSession(t *testing.T) {
 	t.Parallel()
 	runner, box := sessionBox(t, "2.1.310")
@@ -628,47 +603,21 @@ func TestABoxsClaudeCodeReleaseCannotChangeUnderItsSession(t *testing.T) {
 	if !slices.Contains(env, "DISABLE_AUTOUPDATER=1") {
 		t.Error("the harness's environment lacks DISABLE_AUTOUPDATER=1, the seat's own value replaced")
 	}
-	named := after(strings.Split(strings.TrimSpace(boxFile(t, box, box.Home()+"/argv")), "\n"), "--settings")
-	var settings struct {
-		Env map[string]string `json:"env"`
-	}
-	if err := json.Unmarshal([]byte(boxFile(t, box, named)), &settings); err != nil {
-		t.Fatalf("the settings the harness was handed, %q, do not read: %v", named, err)
-	}
-	if got, set := settings.Env["DISABLE_AUTOUPDATER"]; !set || got != "1" {
-		t.Errorf("the settings the harness was handed, %q, set DISABLE_AUTOUPDATER to %q, want 1 over a "+
-			"repository's own", named, got)
-	}
 }
 
 // A RESUME UNSETS WHAT MOVES WHAT IT HANDS ITS MODEL, on every release and sh,
 // whatever the seat set: CLAUDE_CODE_RESUME_INTERRUPTED_TURN (reruns the
 // cut-off turn before the brief, repeating a call that may have run),
 // CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP (past 5 MiB reads the transcript by a
-// rule that can hand the model other records) and CLAUDE_CODE_REMOTE. A
-// repository's settings could set the first two again, so 2.1.310's pinned
-// settings name both, blank; 2.1.309, below the pin's floor, gets no `env`
-// block and still resumes, held only by the script's unset.
+// rule that can hand the model other records) and CLAUDE_CODE_REMOTE.
 //
 // Mutation: drop either switch from the unsets, or unset them only on a fresh
-// start or only where the pin applies, and a resumed harness starts with it;
-// leave either out of the pin, and 2.1.310's settings leave it to the repo.
+// start, and a resumed harness starts with it.
 func TestAResumeUnsetsWhatMovesWhatItHandsItsModel(t *testing.T) {
 	t.Parallel()
 	seat := map[string]string{"CLAUDE_CODE_RESUME_INTERRUPTED_TURN": "1", "CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP": "1",
 		"CLAUDE_CODE_REMOTE": "true"}
-	// ONE RELEASE ON EACH SIDE OF THE PIN'S FLOOR, held to it here, so a floor
-	// that moves past either fails this case rather than leave a side unplayed.
-	releases := []struct {
-		release string
-		pinned  bool
-	}{{release: "2.1.310", pinned: true}, {release: "2.1.309", pinned: false}}
-	for _, r := range releases {
-		if executor.ReleaseAtLeast(r.release, executor.ClaudeSettingsPinFloor) != r.pinned {
-			t.Fatalf("%s is no longer on the side of the pin's floor, %s, this case plays it on (takes the pin: %v)",
-				r.release, executor.ClaudeSettingsPinFloor, r.pinned)
-		}
-	}
+	releases := []struct{ release string }{{release: "2.1.310"}, {release: "2.1.309"}}
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		for _, r := range releases {
 			t.Run(r.release, func(t *testing.T) {
@@ -699,36 +648,6 @@ func TestAResumeUnsetsWhatMovesWhatItHandsItsModel(t *testing.T) {
 							t.Errorf("the resumed harness started with %s, which moves what its resume hands "+
 								"its model", kv)
 						}
-					}
-				}
-				named, want := after(argvOf(t, b), "--settings"), p.ClaudeSettings()
-				if r.pinned {
-					want = p.ClaudeSettingsPinned()
-				}
-				if named != want {
-					t.Fatalf("the resumed harness was handed the settings %q, want %q", named, want)
-				}
-				var settings struct {
-					Env map[string]string `json:"env"`
-				}
-				if err := json.Unmarshal([]byte(boxFile(t, b, named)), &settings); err != nil {
-					t.Fatalf("the settings the resumed harness was handed, %q, do not read: %v", named, err)
-				}
-				if !r.pinned {
-					// NO PIN BEHIND THE UNSET: these settings name no variable, so
-					// the environment above is all that holds the switches off.
-					if settings.Env != nil {
-						got, _ := json.Marshal(settings.Env)
-						t.Errorf("the settings %s was handed, %q, hold env %s, which a release older than the "+
-							"pin's floor is not handed", r.release, named, got)
-					}
-					return
-				}
-				for _, name := range []string{"CLAUDE_CODE_RESUME_INTERRUPTED_TURN",
-					"CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP"} {
-					if value, set := settings.Env[name]; !set || value != "" {
-						t.Errorf("the settings the resumed harness was handed, %q, hold %s as %q (named: %v), want it "+
-							"named and blank, over a repository's own", named, name, value, set)
 					}
 				}
 			})

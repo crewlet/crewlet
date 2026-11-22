@@ -71,8 +71,7 @@ func TestAClaudeCodeRunTakesItsSkillsAsAPluginOfItsOwn(t *testing.T) {
 }
 
 // A CLAUDE CODE RUN'S SKILLS ARE ADDED BY THE BOX'S RELEASE: at or after
-// claudeSkillsFloor the run starts with its plugin, on the settings that keep
-// its hook on. On an older release a run with a required skill is refused
+// claudeSkillsFloor the run starts with its plugin. On an older release a run with a required skill is refused
 // before its harness starts (its tools would be refused for good), and one with
 // advisory skills starts without them.
 //
@@ -82,8 +81,7 @@ func TestAClaudeCodeRunTakesItsSkillsAsAPluginOfItsOwn(t *testing.T) {
 func TestAClaudeCodeRunsSkillsAreAddedByItsRelease(t *testing.T) {
 	t.Parallel()
 	p := executor.Paths{Home: "/home/box"}
-	gate := `if at 2 1 118; then set -- "$@" --plugin-dir '` + p.ClaudeSkillsPlugin() + `'; cs='` +
-		p.ClaudeSkillsSettings() + `'; else `
+	gate := `if at 2 1 118; then set -- "$@" --plugin-dir '` + p.ClaudeSkillsPlugin() + `'; else `
 	tail := func(script string) string {
 		_, after, ok := strings.Cut(script, gate)
 		if !ok {

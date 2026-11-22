@@ -22,12 +22,10 @@ func (p Paths) ClaudeNotesSystem() string { return p.WorkDir() + "/system-notes.
 // run is started with [Paths.ClaudeNotesSettings] in its place.
 //
 // BESIDE mcp.json, never in the checkout's `.claude/`: the checkout is the
-// repository's, which the run edits and a commit carries, and a file there would
-// replace the repository's own project settings rather than sit above them.
-// `--settings` adds a layer the harness ranks above the repository's settings and
-// below a managed policy, so the repository keeps its own and the run's settings
-// are there whatever it holds. Under WorkDir, so a `git clean` in the brief
-// cannot remove it from under the run.
+// repository's, which the run edits and a commit carries, and the run reads no
+// project settings there. `--settings` is the one settings layer the run reads
+// besides a managed policy ([claudeScript]'s `--setting-sources`). Under WorkDir, so a `git clean`
+// in the brief cannot remove it from under the run.
 func (p Paths) ClaudeSettings() string { return p.WorkDir() + "/claude-settings.json" }
 
 // ClaudeToolEnv is the file a Claude Code run's harness runs ahead of each
@@ -42,33 +40,6 @@ func (p Paths) ClaudeToolEnv() string { return p.WorkDir() + "/claude-tool-env.s
 // it starts ([claudeNotesGate]). Beside it, and in the work directory for the
 // reason it is.
 func (p Paths) ClaudeNotesSettings() string { return p.WorkDir() + "/claude-settings-notes.json" }
-
-// ClaudeSkillsSettings is where a Claude Code run handed skills of its own has
-// its settings written with hooks switched on ([claudeHooksOnSettings]), so
-// the plugin's hook that reports each load runs whatever the repository's own
-// settings say: the file the run's script names in place of
-// [Paths.ClaudeSettings] on a release that runs that hook ([claudeSkillsGate]),
-// unless it starts the notes' hooks, whose own settings switch hooks on too
-// ([Paths.ClaudeNotesSettings]). Beside the others, for their reason.
-func (p Paths) ClaudeSkillsSettings() string { return p.WorkDir() + "/claude-settings-skills.json" }
-
-// ClaudeSettingsPinned is [Paths.ClaudeSettings]'s pinned copy: the same
-// settings with the compaction point and a resume's load pinned besides
-// ([claudeSettingsPin]), which the run's script names in that file's place on
-// a release that takes the pin ([claudePinGate]). Beside it, for its reason.
-func (p Paths) ClaudeSettingsPinned() string { return p.WorkDir() + "/claude-settings-pinned.json" }
-
-// ClaudeNotesSettingsPinned is [Paths.ClaudeNotesSettings]'s pinned copy
-// ([Paths.ClaudeSettingsPinned]).
-func (p Paths) ClaudeNotesSettingsPinned() string {
-	return p.WorkDir() + "/claude-settings-notes-pinned.json"
-}
-
-// ClaudeSkillsSettingsPinned is [Paths.ClaudeSkillsSettings]'s pinned copy
-// ([Paths.ClaudeSettingsPinned]).
-func (p Paths) ClaudeSkillsSettingsPinned() string {
-	return p.WorkDir() + "/claude-settings-skills-pinned.json"
-}
 
 // ClaudeSkillsPlugin is the DIRECTORY of the plugin a Claude Code run is handed
 // its own skills in ([sandbox.RunRequest.Skills], [ClaudeCode.WriteConfig]):

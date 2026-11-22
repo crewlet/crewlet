@@ -1222,8 +1222,7 @@
 // by default, so the release that wrote a session, or answered for it, could
 // differ from the one that resumes it. So every Claude Code run pins
 // DISABLE_AUTOUPDATER=1, in the wrapper over the seat's, the image's or a
-// profile's value ([claudeSessionLayout]) and in its settings pin over a
-// repository's own ([claudeSettingsPin]), and the in-place path needs no
+// profile's value ([claudeSessionLayout]), and the in-place path needs no
 // stricter telling. A managed settings file still wins over it, as over every
 // pin: an image's or a host's policy is its operator's own.
 //
