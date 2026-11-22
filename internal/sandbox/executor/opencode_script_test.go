@@ -19,14 +19,14 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// fakeOpenCode is an `opencode` answering as 2.0.32 does, recording each call in
+// fakeOpenCode is an `opencode` answering as OpenCode 2 does, recording each call in
 // FAKE_DIR. `serve` writes its password down before printing it, as a real
 // server does: written after, a loaded runner's script presented it first and
 // was refused. A server's end is read off `serve.alive`, which only it holds
 // open and the kernel closes as it exits ([serverPipe]), never its pid, which
 // kill -0 finds until reaped (#1164); `up` reads the pid's state, since sh
 // cannot ask a pipe without blocking. FAKE_PIPE_CUT stops an answer into a pipe
-// after n bytes with success, as 2.0.32 and 2.1.4 stop past a 64 KiB multiple;
+// after n bytes with success, as earlier OpenCode 2 releases stop past a 64 KiB multiple;
 // pages print byte for byte (`answerfile`), as the budget cases measure them.
 // FAKE_RUN_SLEEP alone `exec`s the sleep: dash holds a SIGINT landing as it
 // forks a foreground command, so a shell in front could miss a group SIGINT.
@@ -65,7 +65,7 @@ answerfile() {
 case "$1" in
 --version)
   [ -z "${FAKE_VERSION_FAIL:-}" ] || { echo "$FAKE_VERSION_FAIL" >&2; exit 3; }
-  echo "${FAKE_VERSION:-opencode v2.0.32}" ;;
+  echo "${FAKE_VERSION:-opencode v2.3.0}" ;;
 auth)
   case "$2" in
   import) cat > "$d/imported"; cp "$d/imported" "$d/db" ;;
@@ -222,7 +222,7 @@ type scriptOpts struct {
 }
 
 // pipeCut is where a case's OpenCode cuts an answer into a pipe (FAKE_PIPE_CUT):
-// 64 KiB, the multiple 2.0.32 and 2.1.4 stop at.
+// 64 KiB, the multiple earlier OpenCode 2 releases stop at.
 const pipeCut = 64 << 10
 
 // longMessages is a session's messages, one whose text alone passes n bytes.
@@ -900,7 +900,7 @@ func TestOnlyTheServerIsHandedTheRunsSession(t *testing.T) {
 // model beside the continuation brief's copy. So after the run and before its
 // server stops, the script cancels every inbox item of the plugin's shape and
 // nothing else (an id OpenCode minted, an id inside a note's text). A run wired
-// to no notes asks nothing. The listing is OpenCode 2.1.4's own shape.
+// to no notes asks nothing. The listing is OpenCode 2's own shape.
 //
 // Mutation: drop the cancel, run it after the server stops, or match any
 // `msg_` id, and this goes red.
@@ -958,7 +958,7 @@ func TestARunCancelsTheNotesItsSessionNeverDelivered(t *testing.T) {
 }
 
 // A NOTE LISTED PAST WHAT A PIPE HOLDS IS CANCELLED TOO: the listing carries
-// each item's whole text, and 2.0.32 and 2.1.4 stop an answer into a pipe after
+// each item's whole text, and earlier OpenCode 2 releases stop an answer into a pipe after
 // a 64 KiB multiple and exit 0, so the script reads it from a file. Every sh.
 //
 // Mutation: read the listing through a pipe again, and the note past the cut
@@ -1021,8 +1021,8 @@ func TestARunWithNoConfigurationStartsNothing(t *testing.T) {
 // A SERVER NAMED THE WAY OPENCODE NAMES IT: readiness matches the `mcp.list`
 // answer as text, so a name is spelled as JSON.stringify spells it; spelled by
 // encoding/json, which escapes `&`, `<`, `>`, U+2028 and U+2029, such a server
-// never matches and the run waits out the bound. The answer is 2.0.32's own
-// from `opencode api mcp.list`, only its scratch directory replaced.
+// never matches and the run waits out the bound. The answer is OpenCode 2's
+// own from `opencode api mcp.list`, only its scratch directory replaced.
 //
 // Mutation: spell the names with json.Marshal, and the run waits the bound
 // and says a server was still connecting.
@@ -1132,7 +1132,7 @@ func TestOpenCodeServersThatShadowTheEnginesToolsAreRefused(t *testing.T) {
 
 // A SERVER LISTED PAST WHAT A PIPE HOLDS IS STILL SEEN. `mcp.list` lists every
 // server the image and repository declare, a failed one with its error, and
-// 2.0.32 and 2.1.4 stop an answer into a pipe after a 64 KiB multiple and exit
+// earlier OpenCode 2 releases stop an answer into a pipe after a 64 KiB multiple and exit
 // 0; read from a file, a server listed after a long error is seen: a declared
 // one, settled, starts the run, and a shadowing one refuses it. The stand-in
 // cuts at 4 KiB rather than [pipeCut]: the cut's place is the release's, and
@@ -1842,6 +1842,34 @@ func TestAnOpenCodeThatFailsIsToldFromOneThatIsMissing(t *testing.T) {
 		if missing.code != 127 || !strings.Contains(missing.stderr, "no opencode on the box PATH") ||
 			strings.Contains(missing.stderr, "--version failed") {
 			t.Errorf("a box with no opencode said (exit %d):\n%s", missing.code, missing.stderr)
+		}
+	})
+}
+
+// AN OPENCODE OLDER THAN THE RELEASE SUPPORTED IS REFUSED BY NAME at the run's
+// start, before anything is driven, saying the release it runs and the one
+// supported; a newer one runs, and so does one whose release does not read.
+//
+// Mutation: compare the release as text, refuse a newer one, or drop the
+// check, and this goes red.
+func TestAnOpenCodeOlderThanTheReleaseSupportedIsRefusedByName(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		for _, older := range []string{"opencode v2.2.99", "opencode v1.99.0", "opencode v2.0.0"} {
+			run := runScript(t, scriptOpts{shell: sh, env: []string{"FAKE_VERSION=" + older}})
+			if run.code == 0 || !strings.Contains(run.stderr, "OpenCode "+strings.TrimPrefix(older, "opencode v")) ||
+				!strings.Contains(run.stderr, "OpenCode 2.3.0") {
+				t.Errorf("a box printing %q ran (exit %d) or was not told the release:\n%s", older, run.code, run.stderr)
+			}
+			if run.callIndex("serve ") >= 0 || run.callIndex("run ") >= 0 {
+				t.Errorf("a box printing %q was driven anyway:\n%s", older, strings.Join(run.calls, "\n"))
+			}
+		}
+		for _, runs := range []string{"opencode v2.3.0", "opencode v2.10.0", "opencode v3.0.0", "opencode nightly"} {
+			run := runScript(t, scriptOpts{shell: sh, env: []string{"FAKE_VERSION=" + runs}})
+			if strings.Contains(run.stderr, "supports OpenCode") || run.callIndex("serve ") < 0 {
+				t.Errorf("a box printing %q was refused or not driven:\n%s", runs, run.stderr)
+			}
 		}
 	})
 }

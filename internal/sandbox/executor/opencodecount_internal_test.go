@@ -82,7 +82,7 @@ func ocFixture(t *testing.T, path ...string) []byte {
 // results among them at the spans of their answers. Over the exports 2.3.0
 // wrote in the probe of its boundaries (a step answered with text, and a step
 // whose tool answered 40,000 characters, which OpenCode counted at 10,000
-// tokens, then an interrupted step), the real export of 2.0.32 this package
+// tokens, then an interrupted step), the real export of 2.3.0 this package
 // keeps, and a reply that reports reasoning: each figure is the one an
 // independent reading of the same rule over the file's spans finds. The
 // floor's last-request figure, read in the same walk, is unchanged. Mutation:
@@ -101,10 +101,10 @@ func TestAnOpenCodeExportIsCountedAsOpenCodeCountsIt(t *testing.T) {
 			bound: 1272, figure: 1201, owner: "stub"},
 		"a step whose tool answered 40,000 characters": {doc: ocFixture(t, "2.3.0", "tool.json"),
 			release: "2.3.0", bound: 11412, figure: 1202, owner: "stub"},
-		"the real export of 2.0.32": {doc: ocFixture(t, "2.0.32", "export.json"), release: "2.0.32",
-			bound: 2663, figure: 1215, restart: "msg_19ef0b4a70016wg3C2nPBIdgEY", owner: "stub"},
+		"the real export of 2.3.0": {doc: ocFixture(t, "2.3.0", "export.json"), release: "2.3.0",
+			bound: 2808, figure: 1217, restart: "msg_20296d33d001DUiVaybRFx66zd", owner: "stub"},
 		"a reply that reports reasoning": {doc: ocDoc(t, ocUser("msg_u", "go", "[]"), reasoned, ocIdle),
-			release: "2.2.7", bound: 160 + ocCharge(ocIdle), figure: 123, owner: "stub"},
+			release: "2.3.0", bound: 160 + ocCharge(ocIdle), figure: 123, owner: "stub"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -310,14 +310,14 @@ func TestAReleaseOutsideTheSetIsNoCount(t *testing.T) {
 	}
 }
 
-// THE OPENCODE SET IS THE RELEASES PROBED: exactly the four whose rules were
-// read in their shipped code and measured at their boundaries, each read as
-// the box names it, blanks trimmed, and no release beside them.
+// THE OPENCODE SET IS THE RELEASE PROBED: exactly 2.3.0, whose rules were read
+// in its shipped code and measured at their boundaries, read as the box names
+// it, blanks trimmed, and no release beside it.
 //
-// Mutation: add a fifth release, and this goes red.
+// Mutation: add a second release, and this goes red.
 func TestTheOpenCodeSetIsTheReleasesProbed(t *testing.T) {
 	t.Parallel()
-	probed := []string{"2.0.32", "2.1.4", "2.2.7", "2.3.0"}
+	probed := []string{"2.3.0"}
 	if !slices.Equal(openCodeCountReleases, probed) {
 		t.Errorf("the set is %s, want the releases probed, %s", strings.Join(openCodeCountReleases, ", "),
 			strings.Join(probed, ", "))

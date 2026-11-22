@@ -678,16 +678,16 @@ func versionBox(printed string, code int, errText string, asked *[]string) *sand
 
 // THE CONTINUATION CHECK READS THE BOX HARNESS'S RELEASE AND HOLDS IT TO THE
 // FLOORS. A carried session is continued only by the harness that wrote it, in
-// the format this build restores, on a box at or past its floor (Claude Code
-// 2.1.310, OpenCode 2.0.32) and no older than the writing release; for Claude
-// Code, only a session 2.1.300 or later wrote. An unreadable release counts as
-// current. The printed release is returned for the run's record whatever the
+// the format this build restores: for Claude Code on a box at or past 2.1.310,
+// no older than the writing release, a session 2.1.300 or later wrote, an
+// unreadable release counted current; for OpenCode only where the box and the
+// writer are both exactly 2.3.0. The printed release is returned for the run's record whatever the
 // answer; a harness that does not answer is no continuation, a box that cannot
 // be asked an error. One login-shell exec reads it, the bin directory first on PATH.
 //
 // Mutation: compare against the writer's floor alone, let an older box take a
-// newer writer's session, or read an unreadable release as too old, and a row
-// goes red.
+// newer writer's session, read an unreadable Claude Code release as too old,
+// or let OpenCode continue off 2.3.0, and a row goes red.
 func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 	t.Parallel()
 	claudeArchive := func(release string) sandbox.SessionArchive {
@@ -714,15 +714,18 @@ func TestTheContinuationCheckHoldsTheBoxsReleaseToTheFloors(t *testing.T) {
 		"claude older than its writer":      {executor.NewClaudeCode(), "2.1.310 (Claude Code)\n", 0, claudeArchive("2.1.312"), false, "2.1.310", "older than the 2.1.312"},
 		"claude, an unreadable release":     {executor.NewClaudeCode(), "Claude Code nightly\n", 0, claudeArchive("2.1.310"), true, "", ""},
 		"claude, an unreadable writer":      {executor.NewClaudeCode(), "2.1.310 (Claude Code)\n", 0, claudeArchive(""), true, "2.1.310", ""},
-		"claude, another harness's session": {executor.NewClaudeCode(), "2.1.310 (Claude Code)\n", 0, openCodeArchive("2.0.32"), false, "2.1.310", "continued only by the harness that wrote it"},
+		"claude, another harness's session": {executor.NewClaudeCode(), "2.1.310 (Claude Code)\n", 0, openCodeArchive("2.3.0"), false, "2.1.310", "continued only by the harness that wrote it"},
 		"claude, another format": {executor.NewClaudeCode(), "2.1.310 (Claude Code)\n", 0,
 			sandbox.SessionArchive{Harness: executor.ClaudeCodeName, SessionID: "s", Format: executor.ClaudeArchiveFormat + 1, Version: "2.1.310"},
 			false, "2.1.310", "restores claude-code's format"},
 		"claude that does not answer":         {executor.NewClaudeCode(), "", 127, claudeArchive("2.1.310"), false, "", "did not say its release"},
-		"opencode at the floor":               {executor.NewOpenCode(), "opencode v2.0.32\n", 0, openCodeArchive("2.0.32"), true, "2.0.32", ""},
-		"opencode below the floor":            {executor.NewOpenCode(), "opencode v2.0.31\n", 0, openCodeArchive("2.0.31"), false, "2.0.31", "older than 2.0.32"},
-		"opencode older than its writer":      {executor.NewOpenCode(), "opencode v2.1.4\n", 0, openCodeArchive("2.2.5"), false, "2.1.4", "older than the 2.2.5"},
-		"opencode, another harness's session": {executor.NewOpenCode(), "opencode v2.1.4\n", 0, claudeArchive("2.1.310"), false, "2.1.4", "continued only by the harness that wrote it"},
+		"opencode on its release":             {executor.NewOpenCode(), "opencode v2.3.0\n", 0, openCodeArchive("2.3.0"), true, "2.3.0", ""},
+		"opencode, an older box":              {executor.NewOpenCode(), "opencode v2.2.99\n", 0, openCodeArchive("2.3.0"), false, "2.2.99", "continues only on OpenCode 2.3.0"},
+		"opencode, a newer box":               {executor.NewOpenCode(), "opencode v2.3.1\n", 0, openCodeArchive("2.3.0"), false, "2.3.1", "continues only on OpenCode 2.3.0"},
+		"opencode, an unreadable box":         {executor.NewOpenCode(), "opencode nightly\n", 0, openCodeArchive("2.3.0"), false, "", "did not say"},
+		"opencode, an older writer":           {executor.NewOpenCode(), "opencode v2.3.0\n", 0, openCodeArchive("2.2.99"), false, "2.3.0", "only a session 2.3.0 wrote"},
+		"opencode, a newer writer":            {executor.NewOpenCode(), "opencode v2.3.0\n", 0, openCodeArchive("2.3.1"), false, "2.3.0", "only a session 2.3.0 wrote"},
+		"opencode, another harness's session": {executor.NewOpenCode(), "opencode v2.3.0\n", 0, claudeArchive("2.1.310"), false, "2.3.0", "continued only by the harness that wrote it"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -777,9 +780,9 @@ func TestTheContinuationCheckSaysWhetherTheBoxsResumeWasRead(t *testing.T) {
 		"claude 2.1.316":                {runner: cc, printed: "2.1.316 (Claude Code)\n", archive: claude},
 		"claude, an unreadable release": {runner: cc, printed: "Claude Code nightly\n", archive: claude},
 		"claude that does not answer":   {runner: cc, code: 127, archive: claude},
-		"opencode": {runner: executor.NewOpenCode(), printed: "opencode v2.1.4\n",
+		"opencode": {runner: executor.NewOpenCode(), printed: "opencode v2.3.0\n",
 			archive: sandbox.SessionArchive{Harness: executor.OpenCodeName, SessionID: "ses_s",
-				Format: executor.OpenCodeArchiveFormat, Version: "2.1.4"}},
+				Format: executor.OpenCodeArchiveFormat, Version: "2.3.0"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

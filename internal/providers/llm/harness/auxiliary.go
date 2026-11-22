@@ -17,7 +17,7 @@ import (
 // brackets the call: a [harnessprofile.CredentialStore]'s import and export
 // around a seat's generation, and a [harnessprofile.Profile.UsageArgs] report.
 //
-// Each takes about half a second on an idle host (OpenCode 2.0.32; the private
+// Each takes about half a second on an idle host (OpenCode 2; the private
 // server `--standalone` starts). Thirty seconds is sixty times that, so a host at
 // max_concurrent harnesses does not fail a generation or lose a call's counts
 // over a slow start, and a twentieth of the per-call cap (timeout_seconds, 600),

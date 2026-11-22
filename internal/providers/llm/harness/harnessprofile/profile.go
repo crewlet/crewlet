@@ -301,7 +301,7 @@ const (
 	// compares each sentinel by EQUALITY with the string at
 	// [Profile.MarkerPath]. A substring search is wrong: tool-call arguments
 	// print as raw JSON, so injected text could bench the credential on a clean
-	// exit 0. Stderr is not searched (empty, measured on 2.0.32).
+	// exit 0. Stderr is not searched (empty, measured on OpenCode 2).
 	// [Profile.Validate] requires jsonl, the discriminator, events and path.
 	MarkerScopeEvents MarkerScope = "events"
 )
@@ -878,8 +878,8 @@ type Profile struct {
 	// UsageArgs is a command run AFTER the call, in the same home, directory and
 	// environment, printing the token counts as one JSON document that
 	// [Profile.Usage] reads; `{session}` is the id [Profile.SessionArgs] gave.
-	// OpenCode 2.0's `run --format json` drops the FINAL `step_finish` (2.0.32),
-	// so stdout would undercharge.
+	// An earlier OpenCode 2 release's `run --format json` dropped the FINAL
+	// `step_finish`, so stdout alone can undercharge.
 	//
 	// A failed or unreadable report is not a failed call: counts fall back to
 	// stdout (the estimate, where none) with a warning:
@@ -898,7 +898,7 @@ type Profile struct {
 	// which concurrent calls share while each system prompt is its own.
 	// OpenCode 2 reads `opencode.json`, agents and plugins from the working
 	// directory and EVERY ANCESTOR, where a project's permissions beat the
-	// seat's (2.0.32); with that walk off ([Profile.IsolationEnv]) it reads only
+	// seat's; with that walk off ([Profile.IsolationEnv]) it reads only
 	// OPENCODE_CONFIG_DIR, inside the call directory, where the `in: work` seed
 	// and agent file go. A machine-wide MANAGED configuration (`/etc/opencode`)
 	// cannot be switched off. Set only for a command run AS A CALL (login,
@@ -911,7 +911,7 @@ type Profile struct {
 	// [Profile.Env] because env, passthrough_env and an entry's env are layered
 	// OVER the isolation and refused naming [Profile.IsolationVariables]: an
 	// entry's `OPENCODE_CONFIG_PROJECT_DISABLE: "0"` (or empty) silently
-	// restored every ancestor's configuration (2.0.32). The NAME the vendor
+	// restored every ancestor's configuration. The NAME the vendor
 	// reads FIRST, never a fallback (OpenCode 2 reads
 	// `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG`).
 	// Never a credential, a variable the engine sets ([HomeIsolation]) or empty.

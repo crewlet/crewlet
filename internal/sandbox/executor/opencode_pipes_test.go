@@ -10,8 +10,8 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// NO OPENCODE ANSWER IS READ THROUGH A PIPE. Into a pipe, OpenCode 2.0.32 and
-// 2.1.4 stop an answer after a 64 KiB multiple and exit 0; into a regular file
+// NO OPENCODE ANSWER IS READ THROUGH A PIPE. Into a pipe, earlier OpenCode 2
+// releases stop an answer after a 64 KiB multiple and exit 0; into a regular file
 // every release measured writes it whole. So no rendered script has an `opencode` call
 // inside a command substitution or in a pipeline element a `|` follows, itself
 // or in a group, subshell, compound command or function there; each finding

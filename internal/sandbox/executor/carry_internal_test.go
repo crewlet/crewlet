@@ -132,7 +132,7 @@ func TestAReleasePastTheLogsBoundIsNone(t *testing.T) {
 	line := strings.Repeat("2", 1<<20) + ".1.310 (Claude Code)"
 	for printed, want := range map[string]string{
 		"2.1.310 (Claude Code)": "2.1.310",
-		"opencode v2.0.32":      "2.0.32",
+		"opencode v2.3.0":       "2.3.0",
 		at + " (Claude Code)":   at,
 		"9" + at:                "",
 		at + "9 (Claude Code)":  "",

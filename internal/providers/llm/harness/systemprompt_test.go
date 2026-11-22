@@ -177,7 +177,7 @@ func TestEveryProfileWithASystemPromptChannelNamesASubstitutionWeMake(t *testing
 		// 2026.09.10 and 2026.10.22: Cursor's own service assembles the
 		// system prompt, and the run request carries none.
 		"cursor-agent": "",
-		// 2.0.32 and 2.1.4: no flag and no variable, but a DISCOVERED
+		// earlier OpenCode 2 releases: no flag and no variable, but a DISCOVERED
 		// AGENT — `agents/<name>.md` in its configuration directory, which
 		// the profile points inside the per-call directory, its body
 		// replacing the harness's own prompt — which `--agent` selects. Its

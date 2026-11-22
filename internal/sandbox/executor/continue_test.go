@@ -768,7 +768,7 @@ func openCodeTaken(t *testing.T, messages string) int64 {
 		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
 	const session = "ses_0123456789abcdef0123456789"
 	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
-		[]byte("id "+session+"\nrelease 2.0.32\n")); err != nil {
+		[]byte("id "+session+"\nrelease 2.3.0\n")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {
@@ -797,8 +797,8 @@ func openCodeTaken(t *testing.T, messages string) int64 {
 // recorded usage, never a subagent's or a later one that recorded none.
 // OpenCode's is the last settled assistant message that measured a prompt,
 // never a failed one or a compaction's request, in a written export as in each
-// release's real one (testdata/opencode: the answer to "Carry on.", 1015 tokens
-// uncached and 200 read; every later step failed, one measuring 1217).
+// release's real one (testdata/opencode: the answer to "Carry on.", 1017 tokens
+// uncached and 200 read; every later step failed, one measuring 1219).
 //
 // Mutation: read the first usage rather than the last, count a sidechain, a
 // failed message or a compaction, or leave the cache out, and a figure goes
@@ -852,8 +852,8 @@ func TestTheContextASessionCarriesIsReadOffItsArchive(t *testing.T) {
 			if err := json.Unmarshal([]byte(openCodeExportFixture(t, version)), &export); err != nil {
 				t.Fatalf("the fixture does not decode: %v", err)
 			}
-			if got := openCodeTaken(t, string(export.Messages)); got != 1015+200+0 {
-				t.Errorf("the session's last request carried %d tokens, want 1215", got)
+			if got := openCodeTaken(t, string(export.Messages)); got != 1017+200+0 {
+				t.Errorf("the session's last request carried %d tokens, want 1217", got)
 			}
 		})
 	}
@@ -879,11 +879,11 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 		"claude, a writer too old": {executor.NewClaudeCode(), sandbox.SessionArchive{Harness: executor.ClaudeCodeName,
 			Format: executor.ClaudeArchiveFormat, Version: "2.1.299"}, false, "older than 2.1.300"},
 		"claude, opencode's session": {executor.NewClaudeCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
-			Format: executor.OpenCodeArchiveFormat, Version: "2.0.32"}, false, "continued only by the harness that wrote it"},
+			Format: executor.OpenCodeArchiveFormat, Version: "2.3.0"}, false, "continued only by the harness that wrote it"},
 		"opencode's own": {executor.NewOpenCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
-			Format: executor.OpenCodeArchiveFormat, Version: "2.2.5"}, true, ""},
+			Format: executor.OpenCodeArchiveFormat, Version: "2.3.0"}, true, ""},
 		"opencode, another format": {executor.NewOpenCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
-			Format: executor.OpenCodeArchiveFormat + 1, Version: "2.2.5"}, false, "format"},
+			Format: executor.OpenCodeArchiveFormat + 1, Version: "2.3.0"}, false, "format"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -897,7 +897,7 @@ func TestARunnerRestoresOnlyWhatItCouldContinue(t *testing.T) {
 
 // A CONTINUED OPENCODE RUN IS CONFIGURED WITH ITS OWN INSTRUCTIONS, as a fresh
 // one is. An import writes none of OpenCode's per-session instruction state
-// (session/transfer.ts at 2.0.32 and 2.2.5), so a carried session's first
+// (OpenCode 2's session/transfer.ts), so a carried session's first
 // request reads the run's instruction file as its first: this run's
 // instructions are its system prompt, and no earlier launch's ride along as
 // updates. So a continuing run is configured exactly as a fresh one, its
@@ -920,7 +920,7 @@ func TestAContinuedOpenCodeRunIsConfiguredWithItsOwnInstructions(t *testing.T) {
 	fresh := configure(sandbox.RunRequest{System: "the first launch's instructions"})
 	continued := configure(sandbox.RunRequest{System: "this launch's instructions", Resume: carriedOpenCode,
 		Carried: &sandbox.CarriedSession{Archive: sandbox.SessionArchive{Harness: executor.OpenCodeName,
-			SessionID: carriedOpenCode, Format: executor.OpenCodeArchiveFormat, Version: "2.0.32"},
+			SessionID: carriedOpenCode, Format: executor.OpenCodeArchiveFormat, Version: "2.3.0"},
 			Body: strings.NewReader(openCodeExport(carriedOpenCode))}})
 	if continued != fresh || !strings.Contains(continued, `"instructions"`) || !strings.Contains(continued, p.System()) {
 		t.Errorf("the continued run is configured\n%s\nwant the fresh run's configuration, naming %s:\n%s",

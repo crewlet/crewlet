@@ -48,14 +48,14 @@ func exportCorpus(t *testing.T) []exportDoc {
 	t.Helper()
 	var corpus []exportDoc
 	root := filepath.Join("testdata", "opencode")
-	for _, path := range []string{"2.0.32/export.json", "2.2.5/export.json", "2.3.0/text.json", "2.3.0/tool.json"} {
+	for _, path := range []string{"2.3.0/export.json", "2.3.0/text.json", "2.3.0/tool.json"} {
 		raw, err := os.ReadFile(filepath.Join(root, path))
 		if err != nil {
 			t.Fatal(err)
 		}
 		corpus = append(corpus, exportDoc{path, string(raw)})
 	}
-	for _, release := range []string{"2.0.32", "2.1.4", "2.2.7", "2.3.0"} {
+	for _, release := range []string{"2.3.0"} {
 		archives, err := filepath.Glob(filepath.Join(root, release, "holdings", "*.json.gz"))
 		if err != nil {
 			t.Fatal(err)
@@ -458,7 +458,7 @@ func TestAHoldingsReadingReadsAnExportAsItsWalkDid(t *testing.T) {
 	starts := []sandbox.RunStart{ohBegan, {After: "msg_user"}}
 	check := func(name, doc, session string, start sandbox.RunStart, calls []sandbox.LoggedCall) {
 		oracle, whole, pieces := holdingsReadOf(t, doc, session, start,
-			sandbox.HoldingsAsk{Calls: calls, Resumer: "2.2.7"})
+			sandbox.HoldingsAsk{Calls: calls, Resumer: "2.3.0"})
 		if whole != oracle || pieces != oracle {
 			t.Errorf("%s %.200q:\nwalk   %.400s\npieces %.400s\nwant   %.400s", name, doc, whole, pieces, oracle)
 		}
@@ -576,7 +576,7 @@ func TestATextsDigestIsItsWholeTextsWhereverItsPiecesEnd(t *testing.T) {
 func TestTheExportWalkMovesAReadingsAnswersOnlyAsListed(t *testing.T) {
 	t.Parallel()
 	c := ohCall(1, "echo", `{"t":1}`, "done")
-	ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"}
+	ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.3.0"}
 	literal := `"completed":4.` + strings.Repeat("0", exportValueMaxBytes)
 	past := ohDoc(ohUser, strings.Replace(ohStep(ohDone("echo", `{"t":1}`, "done")), `"completed":4`, literal, 1))
 	if h, err := readOpenCodeHoldingsWhole(t.Context(), strings.NewReader(past), math.MaxInt, ohSession, ohBegan,
@@ -604,7 +604,7 @@ func TestTheExportWalkMovesAReadingsAnswersOnlyAsListed(t *testing.T) {
 	}
 	long := ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, strings.Repeat("l", 8<<10))))
 	long8 := ohCall(1, "echo", `{"t":1}`, strings.Repeat("l", 8<<10))
-	ask = sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{long8}, Resumer: "2.2.7"}
+	ask = sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{long8}, Resumer: "2.3.0"}
 	if _, err := readOpenCodeHoldingsWhole(t.Context(), strings.NewReader(long), 4<<10, ohSession, ohBegan,
 		ask); err == nil {
 		t.Fatal("the decode walk read a message past its bound; the case moves nothing")

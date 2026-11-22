@@ -30,7 +30,7 @@ var fakeWritten int
 // fakeWrite writes b to stdout, as the harness would — unless FAKE_PIPE_CUT is
 // n and stdout is a PIPE: then only the first n bytes of everything it would
 // print are written, and the process exits 0 the moment they are, as OpenCode
-// 2.0.32 and 2.1.4 were measured doing (Bun's asynchronous writes to a pipe,
+// earlier OpenCode 2 releases were measured doing (Bun's asynchronous writes to a pipe,
 // lost at exit). Into a regular file it writes everything.
 func fakeWrite(b []byte) {
 	n, _ := strconv.Atoi(os.Getenv("FAKE_PIPE_CUT"))

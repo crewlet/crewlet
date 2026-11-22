@@ -17,13 +17,13 @@
 // request carries, and reports it delivered (`session.inbox.delivered`). Only
 // then is it confirmed read to the engine, which records it read by the run's
 // job; a note admitted and never delivered is never confirmed, and waits for
-// the run's review. Measured on OpenCode 2.0.32 and 2.1.4.
+// the run's review. Measured on earlier OpenCode 2 releases (not on 2.3.0).
 //
 // ONLY WHILE THE SESSION'S EXECUTION RUNS. Notes are polled and admitted
 // between the run's session's `session.execution.started` (or any step of it
 // starting) and its `succeeded`, `failed` or `interrupted`, and each with
 // `resume: false`: a steer admitted once an execution has settled starts
-// nothing — measured on 2.1.4 — where one that resumed the session would start
+// nothing — measured on an earlier OpenCode 2 release (not on 2.3.0) — where one that resumed the session would start
 // an execution `opencode run` no longer watches, whose answer nobody reads and
 // whose server the run's script then stops. So a note sent after the run's
 // last step waits on the run's record for its review. One whose admission
