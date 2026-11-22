@@ -1,7 +1,7 @@
 /**
  * A value kept per reader in this browser, validated on every read: what one
- * person made of a page at one desk (their Home's board, the order of their
- * pinned shelf), which belongs to neither the company document nor its audit
+ * person made of a page at one desk (the order of their pinned shelf, the
+ * engine's last answer for their Home board), which belongs to neither the company document nor its audit
  * trail.
  *
  * KEYED BY THE READER (`lib/reader.ts`), so one browser shared by two people

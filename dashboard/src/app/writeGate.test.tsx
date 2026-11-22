@@ -67,6 +67,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "with the reason it cannot act as its hint",
     suite: "app/palette/Palette.test.tsx",
   },
+  "routes/home/board/kept.ts": {
+    why: "Home's Done and a group folded outside editing save the reader's board; a press that cannot save says why",
+    suite: "routes/home/Board.test.tsx",
+  },
   "routes/atlas/AddEntry.tsx": {
     why: "Company › Atlas's Add entry, and the dialog every atlas write is made in",
     suite: "routes/atlas/writes.test.tsx",

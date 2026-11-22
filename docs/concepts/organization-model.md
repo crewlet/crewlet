@@ -368,6 +368,7 @@ roles:
 - **Executor**, on any turn it is out for: kept the same 24 hours and ended when the mailbox is retired, each launch announced as lost.
 - **Memory** (diary, episodes, counterparty profiles, onboarding markers): kept, keyed by the handle or the agent id derived from it, so a seat added again under the same handle reattaches to it.
 - **A removed human seat's chat read state** (how far its holder had read in each room, mutes, do-not-disturb): kept 24 hours, then forgotten.
+- **A removed human seat's Home board** (the widgets its holder placed on the dashboard's Home): kept 24 hours, then forgotten.
 - **An agent seat made a person's** gets the same 24 hours; it is the one departure that can be reversed: made an agent's again within them, it is the same seat and returns to its backlog.
 
 A handle never changes in place: a document giving a seat a different handle removes the old seat and adds a new one. Every write mints the handle a seat leaves out and stores it, so correcting a `name` by editing the stored document (the org builder, `GET` then `PUT /config`, `PATCH /config`, the per-entity routes) keeps the handle. A **file** is minted afresh on every import: correcting a `name` in a file that leaves `handle` out and importing again replaces the agent seat with no warning. Declare `handle` on every seat in a file you keep, or start it from `crewlet config export`, which writes every handle out.
