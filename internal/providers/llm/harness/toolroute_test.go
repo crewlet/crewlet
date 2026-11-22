@@ -574,16 +574,18 @@ func TestALoginRefreshedMidRunIsCarriedBackWhileItGoesOn(t *testing.T) {
 	t.Parallel()
 	p := fakeClaude(t, fakeScript{Responses: []fakeResponse{
 		{Text: "checking", Calls: []fakeCall{{Name: "check"}}, Usage: fakeUsage{Input: 1, Output: 1},
-			RefreshLogin: `{"token":"refreshed"}`},
+			RefreshLogin: `{"claudeAiOauth":{"accessToken":"refreshed","expiresAt":2,"refreshToken":"r1"}}`},
 		// A second refresh before the run ends, which the release carries —
 		// over the first, which the run carried itself.
-		{Text: "done", Usage: fakeUsage{Input: 1, Output: 1}, RefreshLogin: `{"token":"refreshed again"}`},
+		{Text: "done", Usage: fakeUsage{Input: 1, Output: 1}, RefreshLogin: `{"claudeAiOauth":{"accessToken":"refreshed again","expiresAt":3,"refreshToken":"r2"}}`},
 	}}, func(c *Config) { c.Auth = Auth{Mode: AuthSubscription} })
 	shared := filepath.Join(p.Workspace().CredentialsDir(), ".credentials.json")
 	if err := os.MkdirAll(filepath.Dir(shared), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(shared, []byte(`{"token":"original"}`), 0o600); err != nil {
+	// Claude Code's own shape, its keys in order and on one line, so what a
+	// refresh carries reads back byte for byte as the harness wrote it.
+	if err := os.WriteFile(shared, []byte(`{"claudeAiOauth":{"accessToken":"original","expiresAt":1,"refreshToken":"r0"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	host := newTestHost(t, "check")
@@ -593,7 +595,7 @@ func TestALoginRefreshedMidRunIsCarriedBackWhileItGoesOn(t *testing.T) {
 	host.handle("check", func(context.Context, map[string]any) (string, bool) {
 		deadline := time.Now().Add(3 * time.Second)
 		for time.Now().Before(deadline) {
-			if raw, _ := os.ReadFile(shared); string(raw) == `{"token":"refreshed"}` { //nolint:gosec // the test's own dir
+			if raw, _ := os.ReadFile(shared); string(raw) == `{"claudeAiOauth":{"accessToken":"refreshed","expiresAt":2,"refreshToken":"r1"}}` { //nolint:gosec // the test's own dir
 				carriedDuringRun = true
 				return "carried", false
 			}
@@ -612,7 +614,7 @@ func TestALoginRefreshedMidRunIsCarriedBackWhileItGoesOn(t *testing.T) {
 		t.Error("the refreshed login was not carried back while the run was alive")
 	}
 	raw, err := os.ReadFile(shared) //nolint:gosec // the test's own dir
-	if err != nil || string(raw) != `{"token":"refreshed again"}` {
+	if err != nil || string(raw) != `{"claudeAiOauth":{"accessToken":"refreshed again","expiresAt":3,"refreshToken":"r2"}}` {
 		t.Fatalf("the shared login holds %q (%v) after the run, want the second refresh — "+
 			"judged against the seed rather than the carry the run made, it was dropped as "+
 			"superseded by that very carry", raw, err)

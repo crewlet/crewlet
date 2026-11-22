@@ -166,7 +166,8 @@ func runFakeHarness() {
 		if key := os.Getenv("FAKE_VENDOR_API_KEY"); key != "" {
 			written := os.MkdirAll(filepath.Dir(path), 0o700)
 			if written == nil {
-				written = os.WriteFile(path, []byte("a session for "+key), 0o600)
+				session, _ := json.Marshal(map[string]string{"token": "a session for " + key})
+				written = os.WriteFile(path, session, 0o600)
 			}
 			if written != nil {
 				fmt.Fprint(os.Stderr, "UNWRITABLE: ", written)
