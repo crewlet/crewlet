@@ -60,7 +60,8 @@ func (Codex) layout() archiveLayout { return archiveTar }
 // [codexCarryFloor], and never a box older than the writer. The writer is the
 // release that LAST ran the session (the record's `--version`), never the
 // rollout's session_meta.cli_version, which names the release that began it:
-// a resume appends to the rollout and writes no new session_meta.
+// a resume appends to the rollout and writes no new session_meta (measured on
+// 0.171.0: one session_meta, at line 0, in every rollout, resumed or not).
 func (Codex) Continues(box, writer string) (bool, string) {
 	switch {
 	case !releaseAtLeast(box, codexCarryFloor):
