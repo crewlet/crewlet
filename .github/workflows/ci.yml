@@ -884,9 +884,10 @@ jobs:
       # The race detector is not optional: the engine's concurrency model is
       # real parallelism, so every "atomic because single-threaded" assumption
       # is a data race until the detector says otherwise. -count=1, -race and
-      # -timeout 30m all live in the Makefile now; 30m is a HANG DETECTOR
-      # rather than a budget, because go's own default is 10 minutes PER
-      # PACKAGE.
+      # -timeout 45m all live in the Makefile now; 45m is a HANG DETECTOR
+      # rather than a budget, 1.4 times the slowest package's race run
+      # (internal/sandbox/executor, 1,918 s on two cores), because go's own
+      # default is 10 minutes PER PACKAGE.
       #
       # THE PACKAGES THAT RUN ALONE ARE EXCLUDED, and run in the `end-to-end
       # gates` shards below. Not a coverage cut (CI runs both and `make check`
