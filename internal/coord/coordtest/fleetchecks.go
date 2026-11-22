@@ -284,7 +284,7 @@ func raceBudgets(ctx context.Context, f coord.Fleet, round int, at time.Time) []
 
 func raceRuns(ctx context.Context, f coord.Fleet, round int, _ time.Time) []error {
 	turn := fmt.Sprintf("turn-raced-%d", round)
-	created := landed(f.CreateSandboxRun(ctx, turn, []byte(`{"n":1}`)))
+	created := landed(f.CreateSandboxRun(ctx, turn, []byte(`{"n":1}`), nil))
 	if errs := created.as("the first CreateSandboxRun"); len(errs) > 0 {
 		return errs
 	}
@@ -302,7 +302,7 @@ func raceRuns(ctx context.Context, f coord.Fleet, round int, _ time.Time) []erro
 		return errs
 	}
 	won, errs := race(func() (bool, error) {
-		return f.CreateSandboxRun(ctx, turn, []byte(`{"n":2}`))
+		return f.CreateSandboxRun(ctx, turn, []byte(`{"n":2}`), nil)
 	})
 	if len(errs) > 0 {
 		return raced("CreateSandboxRun", errs)

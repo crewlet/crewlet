@@ -235,7 +235,7 @@ func TestATombstoneAReplicaServedIsReadFromTheLeaderOnACluster(t *testing.T) {
 	}
 	listed := map[string]string{}
 	err = listUnder(ctx, viaFollower, read, replayKV{KeyValue: kv, pass: behind},
-		jetstream.AllKeys, "the bucket", func(kve jetstream.KeyValueEntry) error {
+		jetstream.AllKeys, "the bucket", false, func(kve jetstream.KeyValueEntry) error {
 			listed[kve.Key()] = string(kve.Value())
 			return nil
 		})
