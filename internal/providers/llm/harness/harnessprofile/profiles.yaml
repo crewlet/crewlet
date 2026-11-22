@@ -4196,6 +4196,12 @@ hermes:
     - sentinel: "resolved without credentials"
 
 pi:
+  # The in-box runner (internal/sandbox/executor's pi.go), on 1.6.0 or later.
+  # No refuses_root: 1.6.0 ran as uid 0 and ran its tools (measured in a
+  # node:24-bookworm container). No e2b_template: E2B prebuilds no image
+  # holding pi, so an e2b box runs the company's own template.
+  executor:
+    runner: true
   binary: pi
   # `@earendil-works/pi-coding-agent`. The project moved from Mario Zechner's
   # `@mariozechner` scope to Earendil Works, so the older package name is a
