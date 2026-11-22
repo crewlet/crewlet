@@ -147,3 +147,22 @@ test.each([
     expect(rows()).toEqual([...want]);
   },
 );
+
+// A HELPER'S MODEL CHOSEN HERE REACHES THE ASK BUTTON with no reload: the
+// button draws the viewer's answer, read from the revision this node runs.
+test("the viewer, which says whether Ask Crewlet has a model, is asked again once this node applies a revision", async () => {
+  const { store, asked } = mountSettings(
+    <Models />,
+    { llm_entries: () => answer("default", "spare"), config: DOC },
+    { hash: "#/settings/models" },
+  );
+  await act(afterMicrotasks);
+  const viewerReads = () => asked.filter((what) => what === "viewer").length;
+  const before = viewerReads();
+  expect(before).toBeGreaterThan(0);
+  await act(async () => {
+    store.applyHealth(healthFrame({ applied_epoch: 5 }));
+  });
+  await act(afterMicrotasks);
+  expect(viewerReads()).toBe(before + 1);
+});

@@ -1,0 +1,8 @@
+{"type":"init","timestamp":"2026-11-21T18:23:32.772Z","session_id":"6b8d5e13-304f-44a6-aa06-9f3ccff25600","model":"gemini-2.5-pro"}
+{"type":"message","timestamp":"2026-11-21T18:23:32.775Z","role":"user","content":"Call the slow tool, then echo, then answer."}
+{"type":"tool_use","timestamp":"2026-11-21T18:23:32.974Z","tool_name":"mcp_probe_slow","tool_id":"mcp_probe_slow__mcp_probe_slow_1795285412920_0","parameters":{"seconds":20}}
+{"type":"tool_result","timestamp":"2026-11-21T18:23:53.104Z","tool_id":"mcp_probe_slow__mcp_probe_slow_1795285412920_0","status":"success","output":"slept 20s"}
+{"type":"tool_use","timestamp":"2026-11-21T18:23:53.126Z","tool_name":"mcp_probe_echo","tool_id":"mcp_probe_echo__mcp_probe_echo_1795285433121_0","parameters":{"text":"hello"}}
+{"type":"tool_result","timestamp":"2026-11-21T18:23:53.183Z","tool_id":"mcp_probe_echo__mcp_probe_echo_1795285433121_0","status":"success","output":"echo: hello"}
+{"type":"message","timestamp":"2026-11-21T18:23:53.217Z","role":"assistant","content":"STUB-ANSWER: done after mcp_probe_echo.","delta":true}
+{"type":"result","timestamp":"2026-11-21T18:23:53.241Z","status":"success","stats":{"total_tokens":3261,"input_tokens":3000,"output_tokens":150,"cached":1200,"input":1800,"duration_ms":20471,"tool_calls":2,"models":{"gemini-2.5-pro":{"total_tokens":3261,"input_tokens":3000,"output_tokens":150,"cached":1200,"input":1800}}}}

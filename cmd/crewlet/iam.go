@@ -25,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -1166,7 +1167,7 @@ func shellWord(value string) string {
 	if value != "" && strings.IndexFunc(value, special) < 0 {
 		return value
 	}
-	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+	return shellword.Quote(value)
 }
 
 // personName is what to show where a name would go.

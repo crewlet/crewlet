@@ -1,0 +1,689 @@
+// crewlet's Qwen Code helper: the ACP host a run's script starts as its
+// harness (qwen.go, QwenCode.Command), and the command its skill hook runs.
+// Plain node with no imports beyond its own: Qwen Code is an npm package that
+// needs node 22, so every box that runs it has one, and nothing is installed
+// or fetched. It dials only out: Qwen Code's stdio, the run's notes route and
+// skill route.
+//
+//   node qwen-helper.mjs run <config> <session id>
+//     Reads the brief on stdin and runs it as one ACP turn of
+//     `qwen --acp --approval-mode yolo --extensions none`: initialize; session/new under the
+//     run's minted id; the bridge connected (qwen/status/workspace/mcp);
+//     session/prompt. Every session/update Qwen Code sends is written to
+//     stdout as it came, a line each, with the helper's own lines
+//     (`crewlet_qwen_*`) between them: the stream the runner reads
+//     (qwenstream.go). Stops with session/cancel, never a signal: SIGTERM
+//     tears the chat file Qwen Code is writing (measured on 0.28.3).
+//
+//   node qwen-helper.mjs skill <config>
+//     The PostToolUse hook on the `skill` tool: reports the skill loaded to
+//     the run's skill route by the name the engine handed it under.
+//
+// NOTES (the runner note contract's poll channel). While the turn runs, the
+// helper polls the notes route and keeps what it fetched. Qwen Code asks for
+// mid-turn messages after every tool batch of the main agent
+// (craft/drainMidTurnQueue), gives each ask 2 s and stops asking for the rest
+// of the session after three that time out; the helper answers every ask from
+// what it already holds, at once, so it never meets either, handing every
+// note it holds (drain). Qwen Code puts each before the next request as a
+// text framed `\n[User message received during tool execution]: `, and
+// records each in the session's chat file as its own `type:user`, subtype
+// `mid_turn_user_message`, before that request goes out (0.28.3). A note is
+// confirmed read on the notes route only once the chat file holds that record
+// with its exact text, matched in order (two identical notes need two
+// records), and an assistant record after it, the reply to the request that
+// carried it; one with no reply (its request failed, was cancelled or the run
+// was killed) is never confirmed, and the engine serves it again. What the helper fetched and never handed
+// dies with it: nothing of it is left in Qwen Code's session.
+import { spawn } from "node:child_process"
+import fs from "node:fs"
+import path from "node:path"
+
+// framing is what Qwen Code puts before a drained message, in the request and
+// in its record (measured on 0.28.3).
+const framing = "\n[User message received during tool execution]: "
+
+// limitExit is what the helper exits with where Qwen Code failed the turn on
+// its vendor's 429 after its own retries (the session/prompt error's code):
+// the status mod 256, as Gemini CLI exits (geministream.go). The runner reads
+// a limit only off a run that exited so (qwen.go, limitExit).
+const limitExit = 429 % 256
+
+// stoppedExit is what the helper exits with once a signal stopped the turn,
+// as a process SIGTERM ended would.
+const stoppedExit = 143
+
+// mcpPollMs is the pause between two asks of the workspace's MCP status: the
+// measured bridge went from disconnected to connected 0.4 to 0.7 s after
+// session/new, so a quarter second costs at most that much of the start.
+const mcpPollMs = 250
+
+// pollAbortMs bounds one poll of the notes route: the engine holds an empty
+// poll ten seconds (internal/api/mcpbridge, steerHold), so twenty is that
+// hold and as much again for a relay and a slow network.
+const pollAbortMs = 20_000
+
+// readAbortMs bounds one confirmation: a single write on the run's record.
+const readAbortMs = 10_000
+
+// backoffFirstMs and backoffMostMs pace a failed request of the notes route:
+// a second, doubling to thirty, reset by the next that succeeds, as
+// OpenCode's plugin paces them (opencode_steer.js).
+const backoffFirstMs = 1_000
+const backoffMostMs = 30_000
+
+// confirmEveryMs is how often the chat file is read for the records of the
+// notes handed: a note is recorded within tens of milliseconds of the next
+// request, and a second's delay in confirming it costs nothing.
+const confirmEveryMs = 1_000
+
+// stopWaitMs bounds Qwen Code's answer to session/cancel (measured within
+// 60 ms) and to the window's ask once a turn is over, and stopExitMs its exit once its stdin closes on a stopped run (2.4 s
+// measured): with the last confirmations (hurriedPostMs) they stay inside the
+// five seconds the run's script gives the helper (internal/sandbox's
+// JobStopGrace) in every measured case, and the helper kills Qwen Code
+// itself before the script kills the helper.
+const stopWaitMs = 2_000
+const stopExitMs = 3_000
+
+// hurriedPostMs bounds the last confirmations of a run a signal stopped: a
+// second, so the cancel, the confirmations and Qwen Code's exit together stay
+// inside the five seconds the run's script gives the helper.
+const hurriedPostMs = 1_000
+
+// exitWaitMs bounds the wait for Qwen Code to exit once its turn is over and
+// its stdin closed: the 2.4 s measured, and room on a busy box.
+const exitWaitMs = 10_000
+
+const [mode, configPath, sessionID] = process.argv.slice(2)
+
+// ---- the skill hook -------------------------------------------------------
+
+// skill reports one load of a skill. NOTHING FAILS THE RUN: Qwen Code goes on
+// whatever a hook does, and an unreported load is reported afresh when the
+// model's next call to a covered tool is refused with the skill to load.
+async function skill() {
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8"))
+    const input = JSON.parse(fs.readFileSync(0, "utf8"))
+    const name = input?.tool_input?.skill
+    if (config.skills && input?.tool_name === "skill" && typeof name === "string" && name !== "") {
+      // Written as `crewlet-x` (qwenSkillName), reported as `crewlet:x`.
+      const prefix = config.namespace + "-"
+      const listed = name.startsWith(prefix) ? config.namespace + ":" + name.slice(prefix.length) : name
+      await fetch(config.skills, {
+        method: "POST",
+        body: JSON.stringify({ skill: listed }),
+        headers: { "content-type": "application/json" },
+        signal: AbortSignal.timeout(readAbortMs),
+      })
+    }
+  } catch {
+    // Said above: the load is reported again.
+  }
+  process.stdout.write("{}")
+}
+
+// ---- the run --------------------------------------------------------------
+
+// run is the whole turn, and the helper's exit status.
+async function run() {
+  const config = { ...JSON.parse(fs.readFileSync(configPath, "utf8")), session: sessionID }
+  const brief = fs.readFileSync(0, "utf8")
+  const out = (line) => process.stdout.write(JSON.stringify(line) + "\n")
+  const host = new Host(config, out)
+  return host.run(brief)
+}
+
+// Host is one turn of Qwen Code driven over ACP.
+class Host {
+  constructor(config, out) {
+    this.config = config
+    this.out = out
+    this.nextID = 0
+    this.pending = new Map()
+    // failedRequest is the newest model request Qwen Code reported ending in
+    // an error, by its execution id: the one a 429 failure's record names.
+    this.failedRequest = ""
+    this.exited = null
+    this.outputClosed = false
+    this.stopping = false
+    this.inbox = new Inbox(config, out)
+  }
+
+  async run(brief) {
+    // No extension is loaded: one in the home adds its context file, hooks
+    // and MCP servers (measured on 0.28.4).
+    const args = ["--acp", "--auth-type", this.config.authType, "--approval-mode", "yolo", "--extensions", "none"]
+    // ITS OWN PROCESS GROUP, so a signal meant for the job's processes
+    // reaches the helper, which stops the turn with session/cancel, and never
+    // Qwen Code itself; a helper killed outright closes Qwen Code's stdin,
+    // and it exits.
+    this.child = spawn("qwen", args, { stdio: ["pipe", "pipe", "inherit"], detached: true })
+    this.exited = new Promise((resolve) => {
+      this.child.on("exit", (code, signal) => resolve({ code, signal }))
+      this.child.on("error", (err) => {
+        // NOT STARTED (no `qwen` on PATH): no output will ever answer.
+        process.stderr.write("crewlet: Qwen Code could not be started: " + err.message + "\n")
+        this.closed("Qwen Code could not be started: " + err.message)
+        resolve({ code: null, signal: null, error: err })
+      })
+    })
+    this.child.stdin.on("error", () => {})
+    this.read(this.child.stdout)
+    for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) process.on(sig, () => this.stop())
+
+    const session = this.config.session
+    let ended
+    try {
+      await this.call("initialize", {
+        protocolVersion: 1,
+        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      })
+      await this.call("session/new", { cwd: process.cwd(), mcpServers: [], _meta: { "qwen-code/sessionId": session } })
+      this.out({ type: "crewlet_qwen_session", session_id: session })
+      const missing = await this.awaitServers(session)
+      if (missing !== "") {
+        this.out({ type: "crewlet_qwen_end", error: { message: missing } })
+        process.stderr.write("crewlet: " + missing + "\n")
+        await this.close()
+        return 1
+      }
+      this.inbox.start(this.chatFile(session))
+      this.prompting = true
+      this.promptID = this.nextID + 1
+      ended = await this.call("session/prompt", { sessionId: session, prompt: [{ type: "text", text: brief }] }, true)
+    } catch (err) {
+      ended = { error: { message: String(err?.message ?? err) } }
+    }
+    this.prompting = false
+    await this.inbox.stop(this.stopping)
+    if (!this.stopping && !this.outputClosed) {
+      const usage = await this.call("qwen/status/session/context_usage", { sessionId: session }, true, stopWaitMs)
+      const window = usage?.result?.usage?.contextWindowSize
+      if (Number.isSafeInteger(window) && window > 0) this.out({ type: "crewlet_qwen_window", context_window: window })
+    }
+    let code = 0
+    if (ended?.error) {
+      const error = { code: ended.error.code, message: String(ended.error.message ?? "") }
+      // THE PROVIDER'S WORDS where Qwen Code relays them (a prompt past the
+      // window: -32603 "Internal error", the provider's sentence in details).
+      if (typeof ended.error.data?.details === "string") error.details = ended.error.data.details
+      code = 1
+      if (error.code === 429) {
+        code = limitExit
+        const said = this.limitRecord(session)
+        if (said !== "") this.out({ type: "crewlet_qwen_limit", status_code: 429, error_message: said })
+      }
+      this.out({ type: "crewlet_qwen_end", error })
+    } else {
+      this.out({ type: "crewlet_qwen_end", stop_reason: String(ended?.result?.stopReason ?? "") })
+    }
+    if (this.stopping) code = stoppedExit
+    const gone = await this.close()
+    if (!gone.ok) process.stderr.write("crewlet: Qwen Code did not exit once its turn was over; it was killed\n")
+    return code
+  }
+
+  // awaitServers waits for the run's MCP servers to connect, and is why the
+  // run cannot start: "" once the bridge is connected, or the wait is over
+  // with only other servers left (said on stderr; the run goes on without
+  // them, as Qwen Code would).
+  async awaitServers(session) {
+    const wanted = this.config.servers ?? []
+    if (wanted.length === 0) return ""
+    const deadline = Date.now() + this.config.mcpWaitMs
+    let connected = new Set()
+    for (;;) {
+      const status = await this.call("qwen/status/workspace/mcp", { sessionId: session }, true)
+      connected = new Set(
+        (status?.result?.servers ?? []).filter((s) => s?.mcpStatus === "connected").map((s) => s.name),
+      )
+      if (wanted.every((name) => connected.has(name))) return ""
+      if (this.outputClosed || this.stopping) throw new Error("Qwen Code stopped before its MCP servers connected")
+      if (Date.now() >= deadline) break
+      await sleep(mcpPollMs)
+    }
+    const left = wanted.filter((name) => !connected.has(name))
+    const bridge = this.config.bridge
+    if (bridge && left.includes(bridge)) {
+      return `Qwen Code did not connect the run's tool bridge (${bridge}) within ` +
+        `${this.config.mcpWaitMs / 1000}s, so the run was not started`
+    }
+    process.stderr.write(`crewlet: starting without the MCP servers that did not connect: ${left.join(", ")}\n`)
+    return ""
+  }
+
+  // stop ends the turn as a signal asks: session/cancel, which Qwen Code
+  // answers by ending the prompt with stopReason cancelled; the rest of the
+  // run's end follows from there.
+  stop() {
+    if (this.stopping) return
+    this.stopping = true
+    if (!this.prompting) {
+      this.close()
+      return
+    }
+    this.notify("session/cancel", { sessionId: this.config.session })
+    // A TURN THAT DOES NOT END ON THE CANCEL is ended here, so the helper still
+    // closes Qwen Code's stdin inside the run's grace.
+    setTimeout(() => {
+      const settle = this.pending.get(this.promptID)
+      this.pending.delete(this.promptID)
+      settle?.({ error: { message: "Qwen Code did not end its turn on session/cancel" } })
+    }, stopWaitMs).unref()
+  }
+
+  // close closes Qwen Code's stdin, its way to exit, and waits for it to go;
+  // ok false where it had to be killed.
+  async close() {
+    try {
+      this.child.stdin.end()
+    } catch {
+      // Gone already.
+    }
+    const wait = this.stopping ? stopExitMs : exitWaitMs
+    const over = new AbortController()
+    const gone = await Promise.race([this.exited, sleep(wait, over.signal).then(() => null)])
+    over.abort()
+    if (gone !== null) return { ok: true }
+    try {
+      process.kill(-this.child.pid, "SIGKILL")
+    } catch {
+      // Gone meanwhile.
+    }
+    await this.exited
+    return { ok: false }
+  }
+
+  // chatFile is where Qwen Code records session: its home's projects
+  // directory, keyed by the working directory's real path with every
+  // character but a letter or digit made a dash (0.28.3).
+  chatFile(session) {
+    const key = process.cwd().replace(/[^a-zA-Z0-9]/g, "-")
+    return path.join(this.config.qwenHome, "projects", key, "chats", session + ".jsonl")
+  }
+
+  // limitRecord is the provider's own words for the 429 Qwen Code failed the
+  // turn on: the error record its chat file holds for the request that
+  // failed last, "" where none names it. The file is the box's and the model's
+  // shell can write it, so only the record of the failing request is read,
+  // the first naming its execution id, and only after a 429 failure.
+  limitRecord(session) {
+    if (this.failedRequest === "") return ""
+    let text = ""
+    try {
+      text = fs.readFileSync(this.chatFile(session), "utf8")
+    } catch {
+      return ""
+    }
+    for (const line of text.split("\n")) {
+      let record
+      try {
+        record = JSON.parse(line)
+      } catch {
+        continue
+      }
+      const ev = record?.systemPayload?.uiEvent
+      if (record?.type === "system" && record?.subtype === "ui_telemetry" && ev?.["event.name"] === "qwen-code.api_error" &&
+        ev.execution_id === this.failedRequest && ev.status_code === 429 && typeof ev.error_message === "string") {
+        return ev.error_message
+      }
+    }
+    return ""
+  }
+
+  // read follows Qwen Code's stdout a JSON-RPC message a line.
+  read(stream) {
+    let buf = ""
+    stream.setEncoding("utf8")
+    stream.on("data", (chunk) => {
+      buf += chunk
+      for (let at = buf.indexOf("\n"); at >= 0; at = buf.indexOf("\n")) {
+        const line = buf.slice(0, at)
+        buf = buf.slice(at + 1)
+        this.message(line)
+      }
+    })
+    stream.on("end", () => this.closed("Qwen Code closed its output"))
+  }
+
+  // closed settles everything still waiting on an answer that will not come.
+  closed(why) {
+    this.outputClosed = true
+    for (const [, settle] of this.pending) settle({ error: { message: why } })
+    this.pending.clear()
+  }
+
+  // message handles one line of Qwen Code's.
+  message(line) {
+    let m
+    try {
+      m = JSON.parse(line)
+    } catch {
+      return
+    }
+    if (m.id !== undefined && m.method === undefined) {
+      const settle = this.pending.get(m.id)
+      this.pending.delete(m.id)
+      settle?.(m)
+      return
+    }
+    if (m.method === "session/update") {
+      const life = m.params?.update?._meta?.executionLifecycle
+      if (life?.kind === "request" && life.phase === "ended" && life.outcome === "error") {
+        this.failedRequest = String(life.executionId ?? "")
+      }
+      process.stdout.write(line + "\n")
+      return
+    }
+    if (m.id === undefined) return
+    switch (m.method) {
+      case "craft/drainMidTurnQueue":
+        // AT ONCE, from what is held: the ask's 2 s are Qwen Code's.
+        this.answer(m.id, { messages: this.inbox.drain() })
+        return
+      case "session/request_permission": {
+        // Never asked under yolo (measured); a headless run cannot ask anybody.
+        const option = (m.params?.options ?? []).find((o) => /^allow/.test(o?.kind ?? ""))
+        this.answer(m.id, option ? { outcome: { outcome: "selected", optionId: option.optionId } }
+          : { outcome: { outcome: "cancelled" } })
+        return
+      }
+      default:
+        this.send({ jsonrpc: "2.0", id: m.id, error: { code: -32601, message: "Method not found" } })
+    }
+  }
+
+  send(message) {
+    try {
+      this.child.stdin.write(JSON.stringify(message) + "\n")
+    } catch {
+      // Gone: its exit ends the run.
+    }
+  }
+
+  answer(id, result) { this.send({ jsonrpc: "2.0", id, result }) }
+
+  notify(method, params) { this.send({ jsonrpc: "2.0", method, params }) }
+
+  // call sends a request and resolves with Qwen Code's answer. An error
+  // answer rejects, unless whole is set, which hands it back as it came; a
+  // bound, where given, resolves with nothing once it passes.
+  call(method, params, whole = false, boundMs = 0) {
+    const id = ++this.nextID
+    const answered = new Promise((resolve, reject) => {
+      this.pending.set(id, (m) => {
+        if (m.error && !whole) reject(new Error(`${method}: ${m.error.message ?? "refused"}`))
+        else resolve(m)
+      })
+    })
+    this.send({ jsonrpc: "2.0", id, method, params })
+    if (boundMs <= 0) return answered
+    let timer
+    const bound = new Promise((resolve) => (timer = setTimeout(() => resolve(null), boundMs)))
+    return Promise.race([answered, bound]).finally(() => clearTimeout(timer))
+  }
+}
+
+// Inbox is the run's notes: polled from the notes route while the turn runs,
+// handed at the next ask, and confirmed read once the chat file records them.
+class Inbox {
+  constructor(config, out) {
+    this.url = config.notes ?? ""
+    this.out = out
+    this.cursor = 0
+    // held is fetched and not yet handed; handed is handed and not yet
+    // recorded, in the order handed; matched is recorded and not yet known
+    // to have reached the model plain (record); owed is confirmed and not yet
+    // posted.
+    this.held = []
+    this.handed = []
+    this.matched = []
+    this.owed = []
+    this.life = new AbortController()
+    this.refused = false
+    this.offset = 0
+    this.partial = ""
+  }
+
+  start(chat) {
+    if (this.url === "") return
+    this.chat = chat
+    this.polling = this.poll()
+    this.confirming = this.confirmLoop()
+  }
+
+  // drain is the answer to one ask: every note held, oldest first. Each
+  // message of one answer becomes a record of its own holding its exact text,
+  // in order (two in one answer measured on 0.28.3), which is what confirms
+  // it.
+  drain() {
+    const notes = this.held.splice(0)
+    for (const note of notes) {
+      this.handed.push(note)
+      this.out({ type: "crewlet_qwen_note", id: note.id, message: note.message })
+    }
+    return notes.map((note) => note.message)
+  }
+
+  // stop ends the polling and confirms what the chat file shows. A match no
+  // reply followed is never confirmed: Qwen Code records a note before the
+  // request carrying it goes out, and that request may have failed, been
+  // cancelled or been cut off by the stop. Hurried where a signal stopped the
+  // run.
+  async stop(hurried) {
+    if (this.url === "") return
+    this.done = true
+    this.life.abort()
+    await this.polling
+    await this.confirming
+    this.scan()
+    await this.post(hurried ? hurriedPostMs : readAbortMs)
+  }
+
+  async poll() {
+    let wait = 0
+    while (!this.done && !this.refused) {
+      const began = Date.now()
+      const answer = await request("GET", this.url + "/notes?after=" + this.cursor, undefined, pollAbortMs, this.life.signal)
+      if (this.done) return
+      if (answer.refused) {
+        this.refused = true
+        return
+      }
+      if (answer.ok && this.admit(answer.text)) {
+        wait = 0
+        // AN EMPTY ANSWER CUT SHORT of the engine's hold waits out a second
+        // before the next poll, so no answer drives the helper faster.
+        const early = backoffFirstMs - (Date.now() - began)
+        if (early > 0) await sleep(early, this.life.signal)
+        continue
+      }
+      wait = wait === 0 ? backoffFirstMs : Math.min(wait * 2, backoffMostMs)
+      await sleep(wait, this.life.signal)
+    }
+  }
+
+  // admit holds each new note of one poll's answer, advancing the cursor.
+  // False for an answer that is not one.
+  admit(text) {
+    let notes
+    try {
+      notes = JSON.parse(text)?.notes
+    } catch {
+      return false
+    }
+    if (!Array.isArray(notes)) return false
+    for (const note of notes) {
+      if (!wellFormed(note) || note.seq <= this.cursor) continue
+      this.held.push({ id: note.id, message: note.message })
+      this.cursor = note.seq
+    }
+    return true
+  }
+
+  async confirmLoop() {
+    while (!this.done) {
+      await sleep(confirmEveryMs, this.life.signal)
+      if (this.done) return
+      this.scan()
+      await this.post(readAbortMs)
+    }
+  }
+
+  // scan reads the chat file from where it last stopped and confirms, in
+  // order, each note handed whose record it finds.
+  scan() {
+    if (this.handed.length === 0 && this.matched.length === 0) return
+    let fd
+    try {
+      fd = fs.openSync(this.chat, "r")
+    } catch {
+      return
+    }
+    try {
+      const size = fs.fstatSync(fd).size
+      if (size < this.offset) {
+        this.offset = 0
+        this.partial = ""
+      }
+      const chunk = Buffer.alloc(Math.min(size - this.offset, 8 << 20))
+      const n = chunk.length === 0 ? 0 : fs.readSync(fd, chunk, 0, chunk.length, this.offset)
+      this.offset += n
+      const lines = (this.partial + chunk.subarray(0, n).toString("utf8")).split("\n")
+      this.partial = lines.pop()
+      for (const line of lines) this.record(line)
+    } finally {
+      fs.closeSync(fd)
+    }
+  }
+
+  // record matches the next note handed where line is its record, and
+  // confirms the matches an assistant record follows: a response to a request
+  // that carried them plain. A compaction before it keeps a match only where
+  // its text survives plain past the summary (ADR-0177; qwenconfirm.go's
+  // qwenNotesHeld, the same rule); one it drops is served again. A line that
+  // does not parse drops every match: it may have been a compaction that
+  // summarized them, so their notes are served again rather than confirmed.
+  record(line) {
+    if (line.trim() === "") return
+    let r
+    try {
+      r = JSON.parse(line)
+    } catch {
+      this.matched = []
+      return
+    }
+    if (r?.type === "assistant") {
+      this.owed.push(...this.matched.splice(0).map((note) => note.id))
+    } else if (r?.type === "system" && r?.subtype === "chat_compression") {
+      const tail = preserved(r.systemPayload)
+      this.matched = this.matched.filter((note) => {
+        const n = tail.get(note.message) ?? 0
+        tail.set(note.message, n - 1)
+        return n > 0
+      })
+    } else if (r?.type === "user" && r?.subtype === "mid_turn_user_message" && this.handed.length > 0 &&
+      r?.message?.parts?.[0]?.text === framing + this.handed[0].message) {
+      this.matched.push(this.handed.shift())
+    }
+  }
+
+  // post confirms what is owed, asked again after a failure until bound.
+  async post(boundMs) {
+    const until = Date.now() + boundMs
+    let wait = 0
+    while (this.owed.length > 0 && !this.refused && Date.now() < until) {
+      const ids = this.owed.slice()
+      const answer = await request("POST", this.url + "/read", JSON.stringify({ ids }), Math.max(1, until - Date.now()))
+      if (answer.refused) {
+        this.refused = true
+        return
+      }
+      if (answer.ok) {
+        this.owed = this.owed.filter((id) => !ids.includes(id))
+        wait = 0
+        continue
+      }
+      wait = wait === 0 ? backoffFirstMs : Math.min(wait * 2, backoffMostMs)
+      await sleep(Math.min(wait, Math.max(0, until - Date.now())))
+    }
+  }
+}
+
+// preserved counts, by text, what a chat_compression record keeps plain: each
+// text part of a user entry of its history past the prefix, the framing cut.
+// The prefix is the larger of summaryPrefixLength and contextPrefixLength,
+// which no capture tells apart, so a summarized note is never kept
+// (qwenconfirm.go's qwenPreserved, the same rule). A summary prefix that does
+// not read keeps nothing.
+function preserved(payload) {
+  const kept = new Map()
+  const summary = payload?.summaryPrefixLength
+  const context = payload?.contextPrefixLength
+  const history = payload?.compressedHistory
+  if (!Number.isSafeInteger(summary) || summary < 0 || !Array.isArray(history)) return kept
+  const prefix = Number.isSafeInteger(context) ? Math.max(summary, context) : summary
+  for (const entry of history.slice(prefix)) {
+    if (entry?.role !== "user") continue
+    for (const part of Array.isArray(entry?.parts) ? entry.parts : []) {
+      if (typeof part?.text !== "string") continue
+      const text = part.text.startsWith(framing) ? part.text.slice(framing.length) : part.text
+      kept.set(text, (kept.get(text) ?? 0) + 1)
+    }
+  }
+  return kept
+}
+
+// wellFormed says whether a poll's note is one the helper can hand.
+function wellFormed(note) {
+  return note !== null && typeof note === "object" && Number.isSafeInteger(note.seq) && note.seq > 0 &&
+    typeof note.id === "string" && note.id !== "" && typeof note.message === "string" && note.message !== ""
+}
+
+// request makes one request of the notes route within ms, ended early by
+// signal: refused for a token the route no longer resolves or a run with no
+// notes route, ok with the answer's text for any other success.
+async function request(method, target, body, ms, signal) {
+  const signals = [AbortSignal.timeout(ms)]
+  if (signal) signals.push(signal)
+  try {
+    const response = await fetch(target, {
+      method,
+      body,
+      headers: body === undefined ? undefined : { "content-type": "application/json" },
+      signal: AbortSignal.any(signals),
+    })
+    const text = await response.text()
+    if (response.status === 401 || response.status === 404) return { refused: true }
+    return { ok: response.ok, text }
+  } catch {
+    return {}
+  }
+}
+
+// sleep resolves after ms, or as soon as signal ends.
+function sleep(ms, signal) {
+  return new Promise((resolve) => {
+    if (signal?.aborted) return resolve()
+    const timer = setTimeout(done, ms)
+    function done() {
+      clearTimeout(timer)
+      signal?.removeEventListener("abort", done)
+      resolve()
+    }
+    signal?.addEventListener("abort", done, { once: true })
+  })
+}
+
+// LAST, once every class above is defined: a class is not hoisted, and the
+// run's Host would not yet exist where the mode is read.
+if (mode === "skill") {
+  await skill()
+} else if (mode === "run") {
+  process.exitCode = await run()
+} else {
+  process.stderr.write(`crewlet: qwen-helper.mjs has no mode ${JSON.stringify(mode)}\n`)
+  process.exitCode = 2
+}

@@ -393,25 +393,27 @@ func (e *Engine) executorSource() (executorTrash, bool) {
 		now: func() time.Time { return time.Now().UTC() }}, true
 }
 
-// liveTurns reads every turn the fleet's run records hold.
+// liveTurns reads every turn the fleet's run records hold, off their standing
+// ([coord.SandboxRuns.SandboxRunStandings]): a record's key is its turn id, so
+// no record need cross a leaf's link whole for it.
 //
-// EVERY RECORD IS A LIVE TURN, WHATEVER IT HOLDS: a run's record is deleted
-// once its ending is decided (sandbox's Finish), so one still there is
-// unfinished, even of a status this build does not know or bytes it cannot
-// decode. Its key is the turn id, which needs no decoding. The sandbox's
-// listings skip both, so read through them the retention would age out the
-// session of a run a newer build parked on a person's answer.
+// EVERY RECORD IS A LIVE TURN, WHATEVER IT HOLDS OR STATES: a run's record is
+// deleted once its ending is decided (sandbox's Finish), so one still there is
+// unfinished, even of a status this build does not know, bytes it cannot
+// decode or no standing. The sandbox's listings skip the first two, so read
+// through them the retention would age out the session of a run a newer
+// build parked on a person's answer.
 func liveTurns(runs interface {
-	SandboxRuns(ctx context.Context) ([]coord.Record, error)
+	SandboxRunStandings(ctx context.Context) ([]coord.StoodRun, error)
 }) func(context.Context) (map[string]bool, error) {
 	return func(ctx context.Context) (map[string]bool, error) {
-		records, err := runs.SandboxRuns(ctx)
+		stood, err := runs.SandboxRunStandings(ctx)
 		if err != nil {
 			return nil, err
 		}
-		out := make(map[string]bool, len(records))
-		for _, record := range records {
-			out[record.Key] = true
+		out := make(map[string]bool, len(stood))
+		for _, run := range stood {
+			out[run.TurnID] = true
 		}
 		return out, nil
 	}

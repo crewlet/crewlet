@@ -44,6 +44,9 @@ type Fleet struct {
 	custody   map[string]string
 	rebases   map[string]rebaseEntry
 	runs      map[string]coord.Record
+	// runStandings is each record's standing as its last write stated it,
+	// by turn id; a record whose last write stated none has no entry.
+	runStandings map[string]coord.RunStanding
 	// runParts are the parts beside the runs' records, by turn id and part
 	// ([coord.RunPart]) — kept apart from runs as the KV keeps them under
 	// keys a listing of records never reads.
@@ -226,6 +229,7 @@ func NewFleet() *Fleet {
 		custody:           map[string]string{},
 		rebases:           map[string]rebaseEntry{},
 		runs:              map[string]coord.Record{},
+		runStandings:      map[string]coord.RunStanding{},
 		runParts:          map[runPartKey]coord.Record{},
 		secrets:           map[string]coord.SecretRecord{},
 		integrations:      map[string][]byte{},
@@ -460,14 +464,14 @@ func (f *Fleet) Activate(_ context.Context, req coord.ActivationRequest) (coord.
 
 	// HELD TO THE KV's BOUNDS, the body to what one key holds and the
 	// pointer, at its widest, to its own, refused before anything changes.
-	if err = coord.HoldValue("the activation's body", len(payload)); err != nil {
+	if err = coord.HoldValue("the activation's body", len(payload), coord.MaxValueBytes); err != nil {
 		return coord.Activation{}, err
 	}
 	size, err := coord.ActivationBytes(req)
 	if err != nil {
 		return coord.Activation{}, fmt.Errorf("coord/memory: %w", err)
 	}
-	if err = coord.HoldPointer(size); err != nil {
+	if err = coord.HoldValue("the activation pointer", size, coord.MaxPointerBytes); err != nil {
 		return coord.Activation{}, err
 	}
 	// The body, then the pointer, as the KV writes them (see
@@ -1089,7 +1093,7 @@ func (f *Fleet) PutIntegrationStatus(_ context.Context, kind string, value []byt
 	if kind == "" {
 		return errors.New("coord/memory: an integration status needs a surface name")
 	}
-	if err := coord.HoldValue("the integration status of "+kind, len(value)); err != nil {
+	if err := coord.HoldValue("the integration status of "+kind, len(value), coord.MaxValueBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()
@@ -1127,7 +1131,7 @@ func (f *Fleet) PutAtlasSourceStatus(_ context.Context, kind string, value []byt
 	if kind == "" {
 		return errors.New("coord/memory: an atlas source standing needs a source name")
 	}
-	if err := coord.HoldValue("the atlas source standing of "+kind, len(value)); err != nil {
+	if err := coord.HoldValue("the atlas source standing of "+kind, len(value), coord.MaxValueBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()
@@ -1164,7 +1168,7 @@ func (f *Fleet) PutAtlasSourceRefresh(_ context.Context, kind string, value []by
 	if kind == "" {
 		return errors.New("coord/memory: an atlas source refresh ask needs a source name")
 	}
-	if err := coord.HoldValue("the atlas source refresh ask for "+kind, len(value)); err != nil {
+	if err := coord.HoldValue("the atlas source refresh ask for "+kind, len(value), coord.MaxValueBytes); err != nil {
 		return err
 	}
 	f.mu.Lock()

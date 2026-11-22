@@ -97,7 +97,7 @@ import { FinishStatus, type Finish } from "./FinishStatus.tsx";
 import { Review, type ReviewCheck, type SaveStage } from "./steps/Review.tsx";
 import { SignInStep, sharedSecret } from "./steps/SignInStep.tsx";
 import { routeOf, testWords, type TestState } from "./steps/testCall.ts";
-import { UseItFor } from "./steps/UseItFor.tsx";
+import { UseItFor, everythingHelpers } from "./steps/UseItFor.tsx";
 import { WhereItRuns } from "./steps/WhereItRuns.tsx";
 
 /** A change the engine's dry run accepted, against the revision it read. */
@@ -234,13 +234,15 @@ function newDraft(data: ModelsData): Draft {
   const d = emptyDraft(data.executors);
   const taken = data.models.map((m) => m.admin?.sign_in.variable ?? "").filter(Boolean);
   d.variable = suggestedVariable(d, taken);
-  // THE COMPANY'S FIRST MODEL does everything for every seat until a second one arrives.
+  // THE COMPANY'S FIRST MODEL does everything for every seat and helper until a second one arrives.
   if (data.models.length === 0 && data.seats.length > 0) {
+    const helpers = everythingHelpers(data, d.harness);
     d.intent = "all";
     d.uses = usesForIntent(
       "all",
       data.seats.map((s) => s.handle),
-      false,
+      helpers.assistant,
+      helpers.advisor,
     );
   }
   return d;
@@ -373,7 +375,12 @@ export function ModelWizard({
   const set = (patch: Partial<Draft>) => {
     // A CHANGED CHOICE CLEARS WHAT BELONGS TO THE OLD ONE (`withChoices`): the
     // model, its effort, the pasted credential and the secret's name.
-    const next = withChoices(draft, patch, { original, taken, named: variableNamed });
+    const next = withChoices(draft, patch, {
+      original,
+      taken,
+      named: variableNamed,
+      everything: (d) => everythingHelpers(data, d.harness),
+    });
     setDraft(next.draft);
     setVariableNamed(next.named);
     // THE STORED CREDENTIAL IS ONLY ITS OWN SCOPE'S, so replacing it ends where the scope moved.
@@ -599,9 +606,16 @@ export function ModelWizard({
   function summary(): string {
     const verb = original ? `Edit model ${draft.key}` : `Add model ${draft.key}`;
     const seats = new Set(Object.values(draft.uses.jobs).flat()).size;
+    // EVERYTHING WITH NO SEAT is the helpers it gave, by name.
+    const helpers = [
+      ...(draft.uses.assistant ? ["Ask Crewlet"] : []),
+      ...(draft.uses.advisor ? ["the Advisor"] : []),
+    ];
     const what =
       draft.intent === "all"
-        ? "every job"
+        ? seats > 0
+          ? "every job"
+          : listed(helpers)
         : draft.intent === "none" || draft.intent === "custom"
           ? ""
           : draft.intent === "assistant"

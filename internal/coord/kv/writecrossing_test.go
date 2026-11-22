@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -113,7 +115,8 @@ func listingNearTheBound(t *testing.T) coord.MCPListing {
 
 // deadlined is a bucket's client handle that records the deadline of the
 // context each write it is handed waits in, beside the instant it was handed
-// it, and answers every write as written.
+// it, and answers every write as written; a conditional write reaches it as
+// its client's publish ([deadlined.publish]).
 //
 // EMBEDS THE INTERFACE: the four writes are four of dozens of methods.
 type deadlined struct {
@@ -138,9 +141,9 @@ func (d *deadlined) Put(ctx context.Context, _ string, _ []byte) (uint64, error)
 	return 1, nil
 }
 
-func (d *deadlined) Update(ctx context.Context, _ string, _ []byte, _ uint64) (uint64, error) {
+func (d *deadlined) publish(ctx context.Context, _ *nats.Msg, _ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 	d.note(ctx, "update")
-	return 2, nil
+	return &jetstream.PubAck{Sequence: 2}, nil
 }
 
 func (d *deadlined) Delete(ctx context.Context, _ string, _ ...jetstream.KVDeleteOpt) error {
@@ -189,7 +192,8 @@ func TestACoordinationWriteIsGivenItsBytesCrossingOnlyAcrossALink(t *testing.T) 
 				}
 
 				d := &deadlined{}
-				b := settled(termed{term: jsapi.RequestTerm}, d, c.reach)
+				b := settled(termed{term: jsapi.RequestTerm, publish: d.publish},
+					named{KeyValue: d, bucket: "crossing"}, c.reach, undeclaredHolding)
 				write := func(ctx context.Context) {
 					t.Helper()
 					if _, err := b.Put(ctx, key, value); err != nil {
@@ -243,12 +247,12 @@ type refusingInFlight struct {
 // errPast is what refusingInFlight answers an attempt waiting past its bound.
 var errPast = errors.New("an attempt waited past the write's bound")
 
-func (r *refusingInFlight) Update(ctx context.Context, _ string, _ []byte, _ uint64) (uint64, error) {
+func (r *refusingInFlight) publish(ctx context.Context, _ *nats.Msg, _ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 	r.note(ctx, "update")
 	if deadline, _ := ctx.Deadline(); deadline.After(r.past) { //fixedwait:stated the deadline an attempt was handed against the bound its write began with, both on the case's bubble clock
-		return 0, errPast
+		return nil, errPast
 	}
-	return 0, refusedAs(jetstream.JSErrCodeStreamWrongLastSequenceConstant)
+	return nil, leaderRefusal(jetstream.JSErrCodeStreamWrongLastSequenceConstant)
 }
 
 func (r *refusingInFlight) Bucket() string { return "refusing" }
@@ -274,7 +278,7 @@ func TestASettledWriteMetByInFlightAnswersForeverEndsUndecidedAtItsBound(t *test
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
 		r := &refusingInFlight{past: start.Add(bound)}
-		b := settled(termed{term: jsapi.RequestTerm}, r, AcrossLink)
+		b := settled(termed{term: jsapi.RequestTerm, publish: r.publish}, r, AcrossLink, undeclaredHolding)
 		_, err := b.Update(context.Background(), key, value, 1)
 		var undecided *jsinflight.Undecided
 		if !errors.As(err, &undecided) || !errors.Is(err, context.DeadlineExceeded) {
@@ -367,7 +371,7 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 	}
 	synctest.Test(t, func(t *testing.T) {
 		d := &deadlined{}
-		b := settled(termed{term: jsapi.RequestTerm}, d, AcrossLink)
+		b := settled(termed{term: jsapi.RequestTerm}, d, AcrossLink, runsHolding)
 		key := strings.Repeat("k", longestRunKey)
 		if _, err := b.Put(context.Background(), key, make([]byte, coord.MaxValueBytes)); err != nil {
 			t.Fatalf("put a value at what one key holds: %v", err)
@@ -376,7 +380,7 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 			t.Fatalf("the put reached the client %d times, want once, with a deadline", len(d.writes))
 		}
 		written := d.writes[0].deadline.Sub(d.writes[0].at) - jsapi.RequestTerm
-		read := runsReadTerm(t, AcrossLink) - jsprovision.ReadTerm
+		read := AcrossLink.readCrossing()
 		if given := read + written; given != coord.MaxValueCrossing {
 			t.Errorf("a settled bucket across a link gives a change of a run's value at what one key "+
 				"holds %v beyond the read term and the request term — %v for its read's reply and %v "+
@@ -397,52 +401,186 @@ func TestARunsValueIsGivenItsCrossingOnlyAcrossALink(t *testing.T) {
 	}
 }
 
-// A READ OF A RUN'S VALUE IS GIVEN THE CROSSING OF A REPLY AT ITS BOUND, AND
-// NONE OF ITS HANDLING — AND NO OTHER BUCKET'S READ IS GIVEN EITHER.
+// EVERY READ IS GIVEN THE CROSSING OF ITS CLASS'S BOUND, AND EVERY PASS OR
+// WATCH THE RAW CROSSING OF THE LARGEST VALUE UNDER ITS FILTER.
 //
 // A run's change starts with the leader's read, its reply 8 MiB at the bound:
-// four minutes at the slowest link pace, re-asked mid-crossing, never answered
-// in the bare read term. So it gets that crossing across a link, none in
-// process, and never the handling, which would push a re-ask past a 5 s reason
-// (TestAMembersChangeOfARunsValueAsksItsReadAgainInsideItsReason).
+// four minutes at the slowest link pace, none of its handling. A body's read
+// gets its arrival; the pointer and claims keep the term. A pass over the runs,
+// values or headers alone, is quiet 185 s across a link, 5 s in process, and
+// beats at that. A class is held to one key, read at the term only if it
+// crosses inside it ([undeclared] aside).
 //
-// Mutation: read the runs bucket as any other, skip declaring it large, drop
-// the crossing or add the handling, and its row goes red; declare every bucket
-// large, and the claims' does.
-func TestARunsValueIsReadGivenTheCrossingOfAReplyAtItsBoundAndNoHandling(t *testing.T) {
+// Mutation: let leaderFor ignore the class, read bodies at the term, declare a
+// class past one key, let most drop rest, or give a headers pass passIdle.
+func TestEveryReadIsGivenTheCrossingOfItsClassBound(t *testing.T) {
 	t.Parallel()
 	// THE FIGURES STATED, not derived again: a full value with the most header,
 	// base64-encoded in its reply's envelope, is exactly eight mebibytes: 240
-	// seconds at thirty a mebibyte.
+	// seconds at thirty a mebibyte. Its raw delivery behind a protocol line
+	// takes 180.007 s.
 	if reply := jsapi.ReplyBytes(coord.MaxValueBytes + kvHeaderBytes); reply != 8<<20 {
 		t.Fatalf("the reply to a read of a run's value at its bound is %d bytes, want eight mebibytes", reply)
 	}
-	for reach, want := range map[Reach]time.Duration{
-		InProcess:  jsprovision.ReadTerm,
-		AcrossLink: jsprovision.ReadTerm + 240*time.Second,
-	} {
-		if got := runsReadTerm(t, reach); got != want {
-			t.Errorf("a read of a run's value %s is given a term of %v, want %v", reach, got, want)
-		}
+	runQuiet := passIdle + jsapi.Sending(coord.MaxValueBytes+kvHeaderBytes, objstore.MiBPace)
+	if runQuiet < 185*time.Second || runQuiet > 185*time.Second+10*time.Millisecond {
+		t.Fatalf("a run's value at its bound crosses raw in %v beside the pass's idle, want 185.0 s", runQuiet)
 	}
+	turnID := uuid.Must(uuid.NewV7()).String()
+	body := bodyKey(coord.BodyRef{SHA256: strings.Repeat("0", 64)})
 	nc := embeddedNATS(t)
 	for _, reach := range []Reach{InProcess, AcrossLink} {
 		store := openFleetVia(t, jsOf(nc), reach, fmt.Sprintf("x%d", bucketSeq.Add(1)))
-		runs, err := newLeaderReader(store.js, store.runs)
+		runTerm, quiet := jsprovision.ReadTerm, passIdle
+		if reach == AcrossLink {
+			runTerm, quiet = jsprovision.ReadTerm+240*time.Second, runQuiet
+		}
+		for _, c := range []struct {
+			bucket     jetstream.KeyValue
+			key        string // "" for a filter no read names
+			keys       string
+			term, idle time.Duration
+		}{
+			{store.runs, encodeKey(turnID), encodeKey(turnID), runTerm, quiet},
+			{store.runs, partKeys(turnID)[0], partKeys(turnID)[0], runTerm, quiet},
+			{store.runs, "", runRecordKeys, 0, quiet},
+			{store.runs, "", jetstream.AllKeys, 0, quiet},
+			{store.config, activationKey, activationKey, jsprovision.ReadTerm, passIdle},
+			{store.config, body, body, jsprovision.ReadTerm +
+				jsapi.Arrival(coord.MaxValueBytes+kvHeaderBytes, reach.pace()), passIdle +
+				jsapi.Sending(coord.MaxValueBytes+kvHeaderBytes, reach.pace())},
+			{store.claims, "delivery", jetstream.AllKeys, jsprovision.ReadTerm, passIdle},
+		} {
+			if c.key != "" {
+				read, err := newLeaderReader(store.js, c.bucket)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := read.leaderFor(c.key).Term(); got != c.term {
+					t.Errorf("%s's %q %s is read at a term of %v, want %v", c.bucket.Bucket(), c.key,
+						reach, got, c.term)
+				}
+			}
+			if got := c.bucket.(settledBucket).quiet(c.keys); got != c.idle {
+				t.Errorf("a pass over %s's %q %s is quiet after %v, want %v", c.bucket.Bucket(), c.keys,
+					reach, got, c.idle)
+			}
+		}
+		standing, err := beginPass(t.Context(), store.js, store.runs, runRecordKeys, "the runs' standing", true)
+		if err != nil {
+			t.Fatalf("begin a pass of the runs' standing %s: %v", reach, err)
+		}
+		info, err := standing.w.(*bucketWatcher).sub.ConsumerInfo()
+		standing.stop()
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got, want := runs.leader.Term(), runsReadTerm(t, reach); got != want {
-			t.Errorf("the fleet store's runs %s are read at a term of %v, want %v", reach, got, want)
+		if standing.quiet != quiet || info.Config.Heartbeat != quiet {
+			t.Errorf("a pass of the runs' standing %s is quiet after %v and beats at %v, want both %v",
+				reach, standing.quiet, info.Config.Heartbeat, quiet)
 		}
-		claims, err := newLeaderReader(store.js, store.claims)
-		if err != nil {
-			t.Fatal(err)
+	}
+	for _, h := range openedHoldings(t, nc) {
+		classes := []class{h.rest}
+		for _, k := range h.classes {
+			classes = append(classes, k.class)
 		}
-		if got := claims.leader.Term(); got != jsprovision.ReadTerm {
-			t.Errorf("the fleet store's claims %s are read at a term of %v, want the read term %v",
-				reach, got, jsprovision.ReadTerm)
+		for _, c := range classes {
+			if c.bound <= 0 || c.bound > coord.MaxValueBytes {
+				t.Errorf("a class is held to %d bytes, want within 1..%d, what one key holds", c.bound,
+					coord.MaxValueBytes)
+			}
+			// undeclared is exempt by value: a class equal to it IS it.
+			if c.reply == replyTerm && c != undeclared && c.bound > coord.SmallValueBytes {
+				t.Errorf("a class of %d bytes is read at the term, past the %d that cross inside it",
+					c.bound, coord.SmallValueBytes)
+			}
 		}
+	}
+}
+
+// openedHoldings is the holding of every bucket a fleet store and a lease
+// store settle as they open, read off the handles themselves, so a bucket
+// opened with a holding of its own is held to the class rules unlisted.
+func openedHoldings(t *testing.T, nc *nats.Conn) []holding {
+	t.Helper()
+	store := openFleetForTest(t, nc, fmt.Sprintf("h%d", bucketSeq.Add(1)))
+	fields := reflect.ValueOf(store).Elem()
+	var found []holding
+	for i := range fields.NumField() {
+		if fields.Type().Field(i).Type != reflect.TypeFor[jetstream.KeyValue]() {
+			continue
+		}
+		// Read without Interface: reflection hands out no unexported value.
+		found = append(found, reflectedHolding(fields.Field(i).Elem().FieldByName("holding")))
+	}
+	leases := openStore(t, nc, time.Minute)
+	for _, kv := range []jetstream.KeyValue{leases.leases.kv, leases.duties.kv, leases.counter.kv} {
+		found = append(found, kv.(settledBucket).holding)
+	}
+	for _, want := range []holding{runsHolding, configHolding, undeclaredHolding} {
+		if !slices.ContainsFunc(found, want.same) {
+			t.Fatalf("premise: no opened bucket holds %+v, so the walk read the handles wrong", want)
+		}
+	}
+	return found
+}
+
+// reflectedHolding is the holding a settled handle's reflected field holds.
+func reflectedHolding(v reflect.Value) holding {
+	classOf := func(c reflect.Value) class {
+		return class{bound: int(c.FieldByName("bound").Int()), reply: reply(c.FieldByName("reply").Int())}
+	}
+	h := holding{rest: classOf(v.FieldByName("rest"))}
+	keys := v.FieldByName("classes")
+	for j := range keys.Len() {
+		k := keys.Index(j)
+		h.classes = append(h.classes, keyClass{keys: k.FieldByName("keys").String(),
+			class: classOf(k.FieldByName("class"))})
+	}
+	return h
+}
+
+// A SMALL CLASS'S REPLY CROSSES THE FLOOR INSIDE THE READ TERM: at
+// coord.SmallValueBytes it is 23,328 bytes, 0.67 s at the slowest pace a link
+// is allowed. Held here, since internal/coord cannot import the pace.
+//
+// Mutation: raise coord.SmallValueBytes to 32 KiB (1.32 s), and it is red.
+func TestASmallClassCrossesTheFloorInsideTheReadTerm(t *testing.T) {
+	t.Parallel()
+	if reply := jsapi.ReplyBytes(coord.SmallValueBytes + kvHeaderBytes); reply != 23_328 {
+		t.Errorf("the reply to a read of a small value at its bound is %d bytes, want 23,328", reply)
+	}
+	if crossing := jsapi.Crossing(coord.SmallValueBytes+kvHeaderBytes, objstore.MiBPace); crossing >= jsprovision.ReadTerm {
+		t.Errorf("a small value's reply crosses a link at the floor in %v, not inside the read term %v",
+			crossing, jsprovision.ReadTerm)
+	}
+}
+
+// A SETTLED WRITE IS HELD TO ITS CLASS'S BOUND, refused before anything is
+// sent: the activation pointer past coord.MaxPointerBytes, read at the term by
+// every probe, while a body of the same size beside it is written.
+//
+// Mutation: hold every value to coord.MaxValueBytes in carriedBack, and the
+// pointer is written.
+func TestASettledWriteIsHeldToItsClassBound(t *testing.T) {
+	t.Parallel()
+	d := &deadlined{}
+	b := settled(termed{term: jsapi.RequestTerm}, named{KeyValue: d, bucket: "config"}, AcrossLink, configHolding)
+	value := make([]byte, coord.MaxPointerBytes+1)
+	_, err := b.Put(t.Context(), activationKey, value)
+	if !errors.Is(err, coord.ErrValueTooLarge) || !strings.Contains(err.Error(), "8192") {
+		t.Errorf("a pointer of %d bytes put = %v, want coord.ErrValueTooLarge naming its bound, 8192",
+			len(value), err)
+	}
+	if len(d.writes) != 0 {
+		t.Fatalf("the refused pointer reached the client %d times, want never", len(d.writes))
+	}
+	if _, err := b.Put(t.Context(), "body.x", value); err != nil {
+		t.Errorf("a body of %d bytes put = %v, want it written", len(value), err)
+	}
+	if len(d.writes) != 1 {
+		t.Errorf("the body reached the client %d times, want once", len(d.writes))
 	}
 }
 
@@ -485,25 +623,6 @@ func TestAMembersChangeOfARunsValueAsksItsReadAgainInsideItsReason(t *testing.T)
 			"two and four seconds", reason, asked)
 	}
 }
-
-// runsReadTerm is the term a read of a bucket declared to hold values at what
-// one key holds ([holdingLarge]) is given, opened at reach: the store's own
-// reader of it ([newLeaderReader]), on a client that answers nothing.
-func runsReadTerm(t *testing.T, reach Reach) time.Duration {
-	t.Helper()
-	read, err := newLeaderReader(connless{termed{term: jsapi.RequestTerm}},
-		holdingLarge(settled(termed{term: jsapi.RequestTerm}, named{bucket: "runs"}, reach)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return read.leader.Term()
-}
-
-// connless is a client of the account's API that reaches no broker: enough to
-// address a leader's reads and read their term, which asks nothing.
-type connless struct{ termed }
-
-func (connless) Conn() *nats.Conn { return nil }
 
 // named is a bucket's handle that says its name and does nothing else.
 type named struct {

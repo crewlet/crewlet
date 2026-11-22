@@ -27,6 +27,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/shellword"
 )
 
 // THE EXECUTOR'S HARNESS: this test binary again, standing in for Claude Code
@@ -209,9 +210,9 @@ func codingShim(endpoint, versionFile string) string {
 		"# The executor's harness: the e2e test binary, standing in for Claude\n"+
 		"# Code. See internal/e2e/codingcli_test.go.\n"+
 		"exec env %s=%s %s=%s %s=%s %s '-test.run=^$' \"$@\"\n",
-		harnessEnv, shellQuote(endpoint), codingVersionFileEnv, shellQuote(versionFile),
-		procgrouptest.GORACE, shellQuote(procgrouptest.StandInRaceOptions()),
-		shellQuote(scriptedHarnessBinary))
+		harnessEnv, shellword.Quote(endpoint), codingVersionFileEnv, shellword.Quote(versionFile),
+		procgrouptest.GORACE, shellword.Quote(procgrouptest.StandInRaceOptions()),
+		shellword.Quote(scriptedHarnessBinary))
 }
 
 // writeCodingShim writes [codingShim] for endpoint under dir and returns its
@@ -252,7 +253,7 @@ func codingSandbox(boxes, shim string) string {
         commands:
           - %q
         brief: The stand-in harness is installed.
-`, boxes, `mkdir -p "$HOME/.crewlet/bin" && cp `+shellQuote(shim)+
+`, boxes, `mkdir -p "$HOME/.crewlet/bin" && cp `+shellword.Quote(shim)+
 		` "$HOME/.crewlet/bin/claude" && chmod +x "$HOME/.crewlet/bin/claude"`)
 }
 
@@ -276,11 +277,6 @@ func codingEntryOn(key, stateDir, model string) string {
       model: %s
       state_dir: %q
 `, key, model, stateDir)
-}
-
-// shellQuote quotes s for a POSIX shell.
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // codingArgs is what the stand-in reads off the argv the runner wrote, and the
@@ -772,7 +768,17 @@ func pushThrough(ctx context.Context, answer string, stderr io.Writer) error {
 		return fmt.Errorf("the checkout's answer gives no commands to run:\n%s", answer)
 	}
 	if path := os.Getenv(codingTokenEnv); path != "" {
-		if err := os.WriteFile(path, []byte(os.Getenv(sandbox.GitTokenVar)), 0o600); err != nil {
+		token, err := os.ReadFile(os.Getenv(sandbox.GitAccessFileVar))
+		if err != nil || len(token) == 0 {
+			return fmt.Errorf("reading the run's git token from the file its environment names: %q, %w", token, err)
+		}
+		// THE TOKEN IS IN NO VARIABLE of the run: its file alone holds it.
+		for _, kv := range os.Environ() {
+			if name, value, _ := strings.Cut(kv, "="); strings.Contains(value, string(token)) {
+				return fmt.Errorf("the run's variable %s holds its git token, which only its file holds", name)
+			}
+		}
+		if err := os.WriteFile(path, token, 0o600); err != nil {
 			return fmt.Errorf("keeping the run's git token: %w", err)
 		}
 	}

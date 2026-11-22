@@ -147,7 +147,7 @@ func TestCopilotsRunIsReadFromItsOwnSessionEvents(t *testing.T) {
 	script := routeCase
 	script.ForeignRecord = true
 	p := fakeAs(t, "copilot", script, nil)
-	planted := filepath.Join(p.Workspace().KeySeatDir(llm.SeatOf(t.Context())), "home", ".copilot", "mcp-config.json")
+	planted := filepath.Join(p.Workspace().KeySeatDir(llm.SeatOf(t.Context()), p.Key()), "home", ".copilot", "mcp-config.json")
 	if err := os.MkdirAll(filepath.Dir(planted), 0o700); err != nil {
 		t.Fatal(err)
 	}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/shellword"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
@@ -94,11 +95,6 @@ func onNodeGits(t *testing.T, body func(t *testing.T, git string)) {
 	}
 }
 
-// quote is s as one POSIX shell word.
-func quote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
 // countingWriter counts what it is given and keeps none of it.
 type countingWriter struct{ n int64 }
 
@@ -144,7 +140,7 @@ func newPIDFile(t testing.TB) pidFile {
 	return pidFile{path: filepath.Join(t.TempDir(), "pid")}
 }
 
-func (f pidFile) shell() string { return quote(f.path) }
+func (f pidFile) shell() string { return shellword.Quote(f.path) }
 
 func (f pidFile) read(t testing.TB) int {
 	t.Helper()

@@ -16,14 +16,14 @@ import (
 // A COORDINATION VALUE IS HELD TO WHAT ITS LEADER'S READ CARRIES BACK ACROSS A
 // LINK. The leader's reply carries the value base64-encoded, a third larger,
 // and a leaf closes its whole link on a reply past the transport. So
-// coord.MaxValueBytes, with the client's largest write header, is the most
-// that reply carries over a leaf: a value at it round-trips whole from the
-// leader, and one a byte past is refused by Put and Update before sending, as
-// coord.ErrValueTooLarge, never an outage.
+// coord.MaxValueBytes, with the largest write header (a run's widest standing
+// in it), is the most that reply carries over a leaf: a value at it written
+// with that standing round-trips whole from the leader, and one a byte past is
+// refused by Put and Update before sending, as coord.ErrValueTooLarge.
 //
 // Mutation: drop the bound from Put or from Update, and its write a byte past
-// it is stored; or state the contract's bound past what the reply carries,
-// and the derivation is refused.
+// it is stored; count kvHeaderBytes without the standing, or state the
+// contract's bound past what the reply carries, and the derivation is refused.
 func TestACoordinationValueIsHeldToWhatItsLeadersReadCarriesBackAcrossALink(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -34,7 +34,7 @@ func TestACoordinationValueIsHeldToWhatItsLeadersReadCarriesBackAcrossALink(t *t
 	if err != nil {
 		t.Fatalf("open the bucket through the leaf: %v", err)
 	}
-	b := settled(client, raw, AcrossLink)
+	b := settled(client, raw, AcrossLink, undeclaredHolding)
 	room := coord.MaxValueBytes
 	if want := jsapi.MaxReadable(client.Conn().MaxPayload()) - kvHeaderBytes; room != want {
 		t.Fatalf("a value is held to %d bytes, and a leaf's link carries back one of %d", room, want)
@@ -43,8 +43,8 @@ func TestACoordinationValueIsHeldToWhatItsLeadersReadCarriesBackAcrossALink(t *t
 	if _, err := rand.Read(value); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Put(ctx, "at-the-bound", value); err != nil {
-		t.Fatalf("a value at the bound, %d bytes, was refused: %v", room, err)
+	if _, err := b.(settledBucket).update(ctx, "at-the-bound", value, 0, &widestStanding); err != nil {
+		t.Fatalf("a value at the bound, %d bytes, with the widest standing was refused: %v", room, err)
 	}
 	reader, err := newLeaderReader(client, raw)
 	if err != nil {
@@ -88,8 +88,8 @@ func TestACreateRefusedForItsValuesSizeWasNeverSent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the bucket through the leaf: %v", err)
 	}
-	b := settled(client, raw, AcrossLink)
-	_, err = createKey(ctx, client, b, "too-large", make([]byte, coord.MaxValueBytes+1))
+	b := settled(client, raw, AcrossLink, undeclaredHolding)
+	_, err = createKey(ctx, client, b, "too-large", make([]byte, coord.MaxValueBytes+1), nil)
 	if !errors.Is(err, coord.ErrValueTooLarge) || errors.Is(err, errCreateUnanswered) {
 		t.Fatalf("a create a byte past the bound = %v, want coord.ErrValueTooLarge and not a "+
 			"write that may have landed", err)
@@ -108,7 +108,7 @@ func TestACreateRefusedForItsValuesSizeWasNeverSent(t *testing.T) {
 // reads as an outage.
 func TestARefusalMadeBeforeAnythingWasSentIsNeverMarked(t *testing.T) {
 	t.Parallel()
-	refused := coord.HoldValue("crewlet_test/key", coord.MaxValueBytes+1)
+	refused := coord.HoldValue("crewlet_test/key", coord.MaxValueBytes+1, coord.MaxValueBytes)
 	for name, err := range map[string]error{
 		"unavailable":  unavailable("write the key", refused),
 		"writeUnknown": writeUnknown("write the key", refused),

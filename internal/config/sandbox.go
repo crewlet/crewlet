@@ -185,8 +185,9 @@ type E2BSandbox struct {
 	// Domain points at a self-hosted cluster. Empty is the vendor cloud.
 	//
 	// ONE FIELD IS THE WHOLE CLOUD-TO-SELF-HOSTED SWITCH: the control-plane
-	// address and every box's own hostname are both derived from it, so
-	// there is no second address that can disagree with the first.
+	// address and every box's own hostname are derived from it, a box's unless
+	// E2B answers a domain of its own for it, so no second setting can
+	// disagree with the first.
 	Domain string `yaml:"domain,omitempty" json:"domain,omitempty" desc:"Self-hosted sandbox cluster domain; empty = vendor cloud."`
 
 	// Template is the box image.
@@ -718,7 +719,7 @@ func (s *SandboxSetupStep) validate(path Path) error {
 // whatever its run checks out (internal/engine,
 // TestABoxIsConfiguredByEnvironment).
 func ReservedSandboxEnv() []string {
-	return append([]string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL"}, ReservedCheckEnv()...)
+	return append([]string{"CREWLET_GIT_ACCESS_FILE", "CREWLET_GIT_URL"}, ReservedCheckEnv()...)
 }
 
 // ReservedCheckEnv is every variable the engine sets in a CHECK'S box alone:
@@ -750,8 +751,9 @@ var reservedSandboxEnvReasons = map[string]string{
 		"its own credential, and a value here would send those reads, and that credential, elsewhere",
 	"CREWLET_CHECK_SUMMARY": "it is the file a check's command writes its summary to, read back when the " +
 		"check ends, and a value here would have the summary written where it is never read",
-	"CREWLET_GIT_TOKEN": "it is the run's own credential on Gitlet, minted for each " +
-		"of its launches on a node that serves it, and a value here would break its clones and pushes",
+	"CREWLET_GIT_ACCESS_FILE": "it is the file in the box holding the run's own credential on Gitlet, " +
+		"minted for each of its launches on a node that serves it, and a value here would break its clones " +
+		"and pushes",
 	"CREWLET_GIT_URL": "it is the base a run clones Gitlet's repositories from and " +
 		"pushes them to (CREWLET_BOX_GIT_URL on the launching node), and a value here would send its git " +
 		"elsewhere",

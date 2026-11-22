@@ -74,7 +74,8 @@ func (r *stagedRuns) failNext(create, row error) {
 
 // CreateSandboxRun answers an armed failure ([stagedRuns.failNext]), and
 // creates the record as the records would otherwise.
-func (r *stagedRuns) CreateSandboxRun(ctx context.Context, turnID string, value []byte) (bool, error) {
+func (r *stagedRuns) CreateSandboxRun(ctx context.Context, turnID string, value []byte,
+	standing *coord.RunStanding) (bool, error) {
 	r.mu.Lock()
 	fail := r.createFail
 	r.createFail = nil
@@ -82,7 +83,7 @@ func (r *stagedRuns) CreateSandboxRun(ctx context.Context, turnID string, value 
 	if fail != nil {
 		return false, fail
 	}
-	return r.records.CreateSandboxRun(ctx, turnID, value)
+	return r.records.CreateSandboxRun(ctx, turnID, value, standing)
 }
 
 // MutateSandboxRun counts each read-decide-write of a run's record

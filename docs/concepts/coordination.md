@@ -190,12 +190,18 @@ makes ending it safe. The client sends the marker that ends a pass on a
 delivery, so a pass whose pending messages are all removed before it reaches
 them — the last counters of a window ageing out, a marker another node's sweep
 purged — receives nothing and would wait for ever: measured as one listing of
-an idle budget bucket that held its caller for nine minutes. So once the
-index has answered, a pass that goes **five seconds** without a delivery is
-ended there (the broker's own idle interval for this kind of consumer), and
-every key the index named that it had not delivered is read from the leader
-like any other key it lost. Every delivery restarts the five seconds, so only
-a pass the broker has stopped feeding is ever ended this way. The marker
+an idle budget bucket that held its caller for nine minutes. So a pass that
+goes quiet is ended there, and every key the index named that it had not
+delivered is read from the leader like any other key it lost. The index is read
+before the pass begins: across a link its answer would otherwise cross behind
+the values the pass is already delivering. Quiet is **five seconds** without a
+delivery (the broker's own idle interval for this kind of consumer) in the
+store's own process; across a link it adds the time the largest value the pass
+may deliver takes to cross at the slowest pace allowed, as stored rather than
+base64-encoded: 185 seconds for the sandbox runs, five for a bucket read at the
+term. Every delivery restarts it, so only a pass the broker has stopped feeding,
+or one whose pending messages were removed, is ever ended this way; across a
+link the second holds a listing of the runs up to 185 seconds. The marker
 sweep, which nothing certifies and which owes nobody a complete answer, ends a
 pass that goes quiet the same way and sweeps the rest on its next tick.
 
@@ -210,7 +216,7 @@ bridge opens it for the turn's notes. A first answer is
 the one a node replaces its copy with, so it is certified like any other: a
 pause the pass had not delivered when it ended is read from the leader rather
 than left out, which would lift that seat's hold, and a pass that goes quiet is
-ended after the same five seconds rather than leaving the node with no answer
+ended after the same quiet rather than leaving the node with no answer
 — and deferring every delivery it receives — until somebody next pauses or
 resumes a seat. The changes then come from the same consumer, so none can fall
 between the answer and the first change, and a revision of a record no newer
@@ -219,6 +225,27 @@ state pushed late would put a tab back on a cursor its person had moved past.
 It costs what a listing costs, once for each watch a node starts — a family's
 at boot, a run's each time the node takes the run up — and again whenever a
 watch has to be re-opened.
+
+A watch of a shared-state bucket, and the pass under each of its listings, is
+the store's **own consumer**, not the client library's KV watch. That one has
+the broker send a heartbeat every five seconds and starts its consumer over
+when nothing arrived in ten; no heartbeat passes a value still crossing, so
+across a link a value longer than ten seconds to arrive is cut and sent again
+for ever. Measured, a run's record taking 20 or 25 seconds to cross never
+arrived, and about four copies of it were carried in four times its crossing.
+The store's consumer beats at the pass's quiet for what it watches, so the same
+records arrived once, at 20.5 and 25.6 seconds. The cost is a lost consumer
+noticed after up to twice that quiet: six minutes for a run's watch across a
+link, ten seconds in process. The marker sweep's consumer carries headers
+alone, which cross in milliseconds, and beats every five seconds. The pass of
+the sandbox runs' **standing** carries headers alone too: the seat, the
+handle's SHA-256 and the lease epoch a run's writer states as headers in the
+same message as its record, which the boot's epoch floor and one seat's
+listings read in place of the records. It keeps the runs' quiet and beats at
+it, since its headers wait behind any record its link is carrying. A record
+that pass missed, or one stating none (an older version's write), is read
+whole. Every crossing is counted for one value on the link at
+a time, as a write's is.
 
 A key live from before the listing began until after it ended is therefore in
 it, however often it was rewritten in between and whichever replica served the
@@ -237,7 +264,7 @@ a bucket with no age would otherwise keep the marker of every record it ever
 removed, and every listing whose pass met one would read it again, so without
 the sweep a listing's cost grew with every record the company had ever
 removed. It is never a read per key, unless the broker stopped delivering a
-pass for a whole five seconds and the rest of it had to be read key by key.
+pass for a whole quiet and the rest of it had to be read key by key.
 
 Past the broker's page size for that index, **100,000 keys under one
 filter**, the index is read a page at a time, each page its own leader read,
@@ -412,15 +439,18 @@ that window.
 
 ### What one key holds
 
-**A value is at most 6,290,542 bytes** (`coord.MaxValueBytes`), on every
-backend, and a write past it is refused before anything is sent, as too large
+**A value is at most 6,290,346 bytes** (`coord.MaxValueBytes`), on every
+backend, and at most what its key's class declares: each bucket names its
+classes where it is opened. A write past either is refused before anything
+is sent, as too large
 (`coord.ErrValueTooLarge`): a definite answer no retry changes, never the
 store being unavailable. The leader read's reply carries the value
 base64-encoded in JSON, a third larger, and a node without `data` reads the
 store across its leaf link, whose server closes the whole link to the fleet
 (every lease and mailbox the node holds going with it) on any message past the
 transport's 8 MiB. So a value is held to the largest whose read crosses that
-link, less the most header a write of a key carries. The in-memory twin
+link, less the most header a write of a key carries: 342 bytes, a run's
+standing among them. The in-memory twin
 refuses exactly the same values, so a test passing on it passes on the store.
 
 Two kinds of value come near it, and both are held to it where they are made:
@@ -434,7 +464,12 @@ The activation pointer that names the body is held to 8 KiB
 because every probe on every node reads it: at its bound its read crosses the
 slowest link allowed in a third of a second. The body is read only by a node
 that lacks the revision, given the time its recorded size takes to cross.
-Every other record is bounded by its own fields far below it.
+Every other record is kept far below it by its own fields, but its bucket
+declares no class yet, so it is held to what one key holds and read at the
+term until [#1814](https://github.com/crewlet/crewlet/issues/1814) declares
+each bucket's classes. A class declared to be read within the read term alone,
+as the pointer is, is at most 16 KiB (`coord.SmallValueBytes`): its read
+crosses the slowest link in two thirds of a second.
 
 ### A compare-and-set waits for the leader to decide
 
@@ -503,19 +538,21 @@ A read of a **large value waits as long as its reply takes to cross.** The
 leader's reply carries the value base64-encoded in JSON, a third larger, heard
 only once its last byte is in. A read is otherwise re-asked every two seconds
 and never waits longer than thirty seconds, the longest silence the broker
-keeps. For a bucket whose values are budgeted to what one key holds (a sandbox
-run's record and the parts beside it) a reply at the bound is eight mebibytes:
-four minutes across a link at the floor. Held to thirty seconds, a record past
+keeps. Each class of key is read by the time its bound takes. A sandbox run's record
+and the parts beside it are budgeted to what one key holds, so a reply at the
+bound is eight mebibytes: four minutes across a link at the floor. Held to thirty seconds, a record past
 about 768 KiB could not be read across a slow link, nor changed by the
 read-decide-write every change is; and each two-second re-ask put another
 whole reply on the link the first was still crossing. So across a link a read
-of such a bucket is given the crossing of a reply at its bound at the floor,
-beyond the read term and the thirty seconds, and is asked once. On a member's
+of a run's key is given the crossing of a reply at its bound at the floor,
+beyond the read term and the thirty seconds, and is asked once. An activation
+body is given its arrival as well, the time to build and decode it, since no
+writer waits on its read. On a member's
 own connection, which crosses nothing, it keeps the read term: a caller waits
 within a reason of its own (five seconds at the shortest), and a request a
 member dropped across an election is asked again two seconds later, where the
 new leader answers it. Building and decoding an eight-mebibyte reply takes
-tens of milliseconds. A bucket of small values keeps the read term and the
+tens of milliseconds. A class of small values keeps the read term and the
 thirty seconds wherever the node is.
 
 ---
@@ -576,7 +613,7 @@ flowchart LR
 | `channels` | Who is asking whom, and whether the ask is still open. The record authorizing an answer is read by the node that owns the *answering* seat — never the one that opened it | [Event System § Agent-to-agent](event-system.md) |
 | `fires` | Has this scheduled dispatch already been claimed, and has anybody claimed this minute at all (the question a restart's catchup pass asks before it records a fire as missed). The scheduler is a singleton *duty*, so it moves, and a successor reading its own database found an empty ledger and gave every company two standups | [Scheduling § At-most-once](scheduling.md#at-most-once) |
 | `rebases` | Which instant a unit of work's tracker, knowledge-base and chat writes are minted at, for the work that began longer ago than the [operation ledger](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted) remembers — a trigger dispatched a month late, a turn resumed a month after it parked. The attempt that finds its work's start past that horizon mints at its own instant and records it here, and every later attempt at the same work — a crash re-run, a retried resume, the next half of the turn — inherits it. Company-wide because the next attempt runs wherever the seat's delivery is taken next: a successor reading its own database found nothing and wrote every write of the attempt before it a second time | [Turn Engine § A turn's two identities](turn-engine.md#a-turns-two-identities) |
-| `sandbox runs` | Every agent seat's executor, one record per turn: its box and, for a local box, the node it runs on (`launch_node`), its turn's parked state, its owner and fencing epoch, its grants on Gitlet and the floor its box reads at, a person's answer sealed under the fleet keyring, a stop's decision, and whether its tokens are already charged — and, beside each record under a key of its own, the run's bridged tool log, which no listing reads, which is written only beside a record, and which the record's delete removes with it; and beside it too the secrets the run's box was handed, sealed — by its launch, and every token the completion poll renewed in the box since, each recorded there before the poll wrote it, or the set marked as holding less than the box where it cannot be — which only a capture of its session (to scrub them out), the next launch's opening (to carry them forward into a box it continues in) and the poll's record of a renewed token (a read of the record, then one compare-and-swap of the set) read, and which the record's delete removes as well; and beside it too the turn's leads, what carried each session of the run on (a person's answer, a review that sent a round back, the turn's task), each sealed under the fleet keyring, which only a resume reads and only the attach that names a job's command writes, ahead of its write of the record, and which the record's delete removes as well. A run outlives its turn, its process and sometimes its node, and is recovered by whichever node owns the seat *next*. After the launch creates it, every change is one read-decide-write the store runs: a write another writer beat is decided again on the record as it then stands, within the bound every fleet key shares ([above](#the-three-valued-answer)), because one run's record takes every tool call its box makes — from as many as twenty subagents at once — beside its seat's own writes. Every flip of the run, every listing and every git request of its box reads the record whole, and never the tool log beside it ([Code Sandbox § The run's record](code-sandbox.md#the-runs-record-and-what-it-costs-to-read)). A node can watch the tool log beside a run's record by its own key and hear only the log's writes, never the record's. A node can watch one run's record by its turn id and hear only that run's changes — which the node serving the run's tool bridge does, for the turn's notes: from the run's launch to its turn's end the record carries every note a person sent the turn, each sealed under the fleet keyring and filed by any node with one of those writes ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)) | [Code Sandbox](code-sandbox.md) |
+| `sandbox runs` | Every agent seat's executor, one record per turn: its box and, for a local box, the node it runs on (`launch_node`), its turn's parked state, its owner and fencing epoch, its grants on Gitlet and the floor its box reads at, a person's answer sealed under the fleet keyring, a stop's decision, and whether its tokens are already charged — and, beside each record under a key of its own, the run's bridged tool log, which no listing reads, which is written only beside a record, and which the record's delete removes with it; and beside it too the secrets the run's box was handed, sealed — by its launch, and every token the completion poll renewed in the box since, each recorded there before the poll wrote it, or the set marked as holding less than the box where it cannot be — which only a capture of its session (to scrub them out), the next launch's opening (to carry them forward into a box it continues in) and the poll's record of a renewed token (a read of the record, then one compare-and-swap of the set) read, and which the record's delete removes as well; and beside it too the turn's leads, what carried each session of the run on (a person's answer, a review that sent a round back, the turn's task), each sealed under the fleet keyring, which only a resume reads and only the attach that names a job's command writes, ahead of its write of the record, and which the record's delete removes as well. A run outlives its turn, its process and sometimes its node, and is recovered by whichever node owns the seat *next*. After the launch creates it, every change is one read-decide-write the store runs: a write another writer beat is decided again on the record as it then stands, within the bound every fleet key shares ([above](#the-three-valued-answer)), because one run's record takes every tool call its box makes — from as many as twenty subagents at once — beside its seat's own writes. Every flip of the run, every listing of the fleet's runs and every git request of its box reads the record whole, and never the tool log beside it; the boot's epoch floor, the executor sessions' retention and one seat's listings read the standing its writer states in the same message instead, and only that seat's records whole ([Code Sandbox § The run's record](code-sandbox.md#the-runs-record-and-what-it-costs-to-read)). A node can watch the tool log beside a run's record by its own key and hear only the log's writes, never the record's. A node can watch one run's record by its turn id and hear only that run's changes — which the node serving the run's tool bridge does, for the turn's notes: from the run's launch to its turn's end the record carries every note a person sent the turn, each sealed under the fleet keyring and filed by any node with one of those writes ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)) | [Code Sandbox](code-sandbox.md) |
 | `secrets` | The company's credentials, one sealed envelope per `${VAR}` name, and the engine's own sealed rows under names no `${VAR}` reaches (the identity estate's key under `iam/`, and each MCP server's OAuth grant under `mcp/<server>/refresh`, which no operator surface lists, reveals or deletes). Coordination holds bytes it has no key for; the Tier A keyring opens them at the edge. It was the last kind of company-wide state living in a node's own database, so `crewlet secrets set` reached one node and a rotation half-landed | [Secret Store](secret-store.md) |
 | `integrations` | Where each external surface's reconcile pass got to: its phase, its findings, the address it was set up against, and whether a disconnect has been asked for. It is company-wide because the loop is a fleet singleton and moves — a status in a node's own database would be a screen that changed answer depending on which node served the page | [Integration Reconcile](integration-reconcile.md) |
 | `atlas sources` | Each [atlas](atlas.md) source's standing: when it was last read whole, what that read cost in calls and withheld values, its last fault, the listings it was refused, and which entries it has stopped seeing since when. Company-wide because the collect duty that rewrites it is a fleet singleton and moves | [Atlas § What integrations read](atlas.md#what-integrations-read) |
@@ -663,7 +700,7 @@ The sweep removes only what it saw. It purges each key **through the marker's ow
 
 The same sweep removes a part kept beside an executor's record — its bridged tool log, or the sealed secrets its box was handed — whose run has no record, written before the cutoff: the one value a removal can leave behind, when the node removing a run stops between the record's removal and its parts'. It is found in the same pass of the runs' bucket the marker sweep makes, which already names every record and every part, so a sweep walks the bucket once: a part whose record that pass holds no value for is a candidate, its record is then read from the leader, and the part is removed only as the pass found it, so a run written again under its turn keeps its parts. The removal that ends a run leaves a part alone where a record stands beside it again by then: that is the turn's next run, whose launch opens the log to its own job and writes its own job's handed secrets.
 
-The pass carries each key's metadata, never its value, so a sweep moves no run log.
+The pass's consumer delivers each key's headers only, never its value, so a sweep moves no run log.
 
 ### Superseded bodies are swept
 

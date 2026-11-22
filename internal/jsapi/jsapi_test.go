@@ -24,6 +24,9 @@ func TestAnUnnamedAPIIsRefused(t *testing.T) {
 	if _, err := zero.Client(&nats.Conn{}); !errors.Is(err, jsapi.ErrUnnamed) {
 		t.Errorf("Client on the zero API = %v, want ErrUnnamed", err)
 	}
+	if _, err := zero.Push(&nats.Conn{}); !errors.Is(err, jsapi.ErrUnnamed) {
+		t.Errorf("Push on the zero API = %v, want ErrUnnamed", err)
+	}
 	if _, err := zero.Subject("$JS.API.INFO"); !errors.Is(err, jsapi.ErrUnnamed) {
 		t.Errorf("Subject on the zero API = %v, want ErrUnnamed", err)
 	}

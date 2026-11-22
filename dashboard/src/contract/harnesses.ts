@@ -75,7 +75,7 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
   },
   "gemini-cli": {
     binary: "gemini",
-    signIns: ["api-key", "host-login"],
+    signIns: ["api-key", "host-login", "cloud"],
     keyEnv: "GEMINI_API_KEY",
     login: "adopt",
     efforts: [],
@@ -84,9 +84,10 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
   },
   "qwen-code": {
     binary: "qwen",
-    signIns: ["api-key"],
+    signIns: ["api-key", "host-login"],
     keyEnv: "OPENAI_API_KEY",
     keyShared: true,
+    login: "adopt",
     efforts: [],
     effortNote:
       "Qwen Code reads its reasoning effort only from its own settings file, which the engine writes for each call",
@@ -134,7 +135,7 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
     signIns: ["api-key", "host-login"],
     providerKeys: true,
     login: "command",
-    efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
   },
   pi: {
     binary: "pi",

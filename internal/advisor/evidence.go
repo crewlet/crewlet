@@ -425,48 +425,46 @@ type said struct{ title, why string }
 // engineWords is every engine class's words.
 var engineWords = map[Class]said{
 	ClassAgentMentionsWithoutAsk: {"Agents woke each other with comments that asked nothing.",
-		"A comment that names an agent wakes it, and these asked it nothing, so each started a " +
-			"turn with nothing to answer."},
+		"Each one started a turn with nothing to answer. A comment that names an agent wakes it, " +
+			"even when it asks nothing."},
 	ClassPersonRequestsWithoutAsk: {"Agents asked a person for something without asking them a question.",
-		"Agents asked these people for an answer or an action in comments that put no question to " +
-			"them with an ask, so nothing in them reached the Inbox as a decision."},
+		"Nothing in these comments reached their Inbox as a decision. They asked for an answer or an " +
+			"action without putting a question to them with an ask."},
 	ClassAskOvertaken: {"People answered questions that no longer needed an answer.",
-		"These answers went to a question its asker had asked again since, or whose item had " +
-			"already finished."},
+		"People spent time on answers the work had already moved past. Each went to a question its " +
+			"asker had asked again since, or whose item had already finished."},
 	ClassNoticeLoad: {"A person was sent more notices than anyone reads.",
-		"Most of the notices these people were sent asked nothing of them, so what does ask them " +
-			"waits among the rest."},
+		"What does need them waits among notices that ask nothing."},
 	ClassNoopShare: {"An agent was woken for turns that changed nothing.",
-		"A quarter or more of these agents' turns committed nothing: no work moved and no words written."},
+		"Those turns cost tokens and moved nothing. A quarter or more of these agents' turns committed " +
+			"nothing: no work moved and no words written."},
 	ClassPickupStillWaiting: {"Agents picked up work and moved none of it.",
-		"These pickups ended with words only (a comment or a chat post) and nothing typed on the " +
-			"item, as when an agent says the item still waits on something."},
+		"Each one cost a turn on work that could not move yet. They ended in a comment or a chat post " +
+			"with nothing typed on the item, as when an agent says the item still waits on something."},
 	ClassRedeliveredSeen: {"Wakes repeated changes an agent had already read.",
-		"These agents were woken for changes a turn of theirs had already read, so the engine " +
-			"absorbed the wakes instead of starting turns."},
+		"The engine skipped these, so they started no turns."},
 	ClassRemoveSeat: {"A group of seats sat idle most of two weeks.",
-		"Every seat of this group was idle most of the time it could take a turn, and almost nothing " +
-			"waited for them, so one seat fewer would cost nothing in waiting work."},
-	ClassFalseAlarm: {"An objective alarm fired and cleared within minutes, again and again.",
-		"Each of these cleared within ten minutes of its raise: the node recovered from a short " +
-			"burst by itself, so they were not outages, and nobody needs to act on the next one like them."},
-	ClassAuxiliaryShare: {"An agent spent a large share of its tokens on auxiliary calls.",
-		"More than 15% of the tokens these agents' turns spent went to auxiliary calls inside them " +
-			"rather than to the turns' own work."},
+		"Removing one seat would cost nothing in waiting work. Every seat of this group was idle most " +
+			"of the time it could take a turn, and almost nothing waited for them."},
+	ClassFalseAlarm: {"A service-quality alarm kept firing and clearing within minutes.",
+		"These were not outages, and nobody needs to act on the next one like them. Each cleared " +
+			"within ten minutes: the node recovered from a short burst by itself."},
+	ClassAuxiliaryShare: {"An agent spent a large share of its tokens on learning.",
+		"Those tokens went to preparing memory and context, not to the work itself. More than 15% of " +
+			"these agents' turn tokens went to calls on their learning model."},
 }
 
 // reviewWords is each way a review waits: on the agent holding it, on a
 // person its holder asked, or on nobody.
 var reviewWords = map[string]said{
 	"holder": {"Work in review waited a day for the agent holding it.",
-		"The agent holding these items in review took no turn on them in the last 24 hours (a turn " +
-			"on a linked pull request counts on the change, not the item), so the work behind them waits."},
+		"The work behind these items waits until the agent acts on them. A turn on a linked pull " +
+			"request counts on the change, not the item."},
 	"asked": {"Work in review waited a day for a person's answer.",
-		"Their holders asked this person to review them a day ago or more, so the work behind them " +
-			"waits on that answer."},
+		"The work behind these items waits on this person's review."},
 	"nobody": {"Work in review has no reviewer.",
-		"Their holder moved these items into review itself and asked nobody, so no seat holds the " +
-			"review. The work pickup hands each back to its holder to act on it or name a reviewer."},
+		"The work behind these items waits until their holder acts or names a reviewer. The work " +
+			"pickup hands each back to its holder."},
 }
 
 // engineSentences is what each engine class's note says about the pattern.
@@ -563,7 +561,7 @@ func approvalRubberStamp(ev Evidence, _ func(string) SeatKind) []Finding {
 		out = append(out, Finding{
 			Class: ClassApprovalRubberStamp, Severity: SeverityNote, Actor: ActorOwner,
 			Source: SourceEvidence, Area: AreaApprovals, Subject: Subject{Kind: SubjectSeat, Seat: asker},
-			Title: "A person chose an agent's recommendation in nearly every decision it asked.",
+			Title: "A person took an agent's recommendation in nearly every decision.",
 			Why: "Each decision still costs a press and makes the agent wait. Whether the agent may " +
 				"act on some kinds of them without asking is your call.",
 			Item: fmt.Sprintf("%s chose %s's recommendation in %d of %d decisions",
@@ -594,8 +592,8 @@ func noVerifiedBackup(ev Evidence, _ func(string) SeatKind) []Finding {
 		Class: ClassNoVerifiedBackup, Severity: SeverityBlocks, Actor: ActorOwner,
 		Source: SourceEvidence, Area: AreaDurability, Subject: Subject{Kind: SubjectCompany},
 		Title: "Your company has no recent verified backup.",
-		Why: "No verified backup within the backup policy's age has been recorded, so a lost " +
-			"disk would lose the company's records, and the engine keeps every log until one is.",
+		Why: "A lost disk would lose the company's records. A backup counts once it is verified and " +
+			"within the backup policy's age.",
 		Evidence: []Fact{{Key: "logs", Value: int64(ev.Backup.Logs)}},
 		// TAKEN ON THE DASHBOARD, whose Backups & retention takes one with a
 		// press: an external step's sentence sent a person to `crewlet backup`
@@ -840,10 +838,10 @@ func inboundSilent(ev Evidence, _ func(string) SeatKind) []Finding {
 		Class: ClassInboundSilent, Severity: SeverityCosts, Actor: ActorOwner, Source: SourceEvidence,
 		Area: AreaIntegrations, Subject: Subject{Kind: SubjectIntegration, Name: name},
 		Path:  "integrations." + string(kind),
-		Title: "Pull requests your work waited on reached it only through the engine's poll.",
-		Why: "When the webhook delivers a merge or a close, the item waiting on it hears within a " +
-			"minute. These were learned by the poll instead, each at least ten minutes late, and no " +
-			"delivery has settled one since, so the webhook is not reaching this company.",
+		Title: "Pull requests reached your work only through the engine's poll.",
+		Why: "Work waiting on a merge or a close hears of it ten minutes or more late. The webhook " +
+			"would tell it within a minute, and no delivery has settled one since the poll did, so " +
+			"the webhook is not reaching this company.",
 		Item:     words.Count(polled.Count, "pull request", "pull requests"),
 		Evidence: []Fact{{Key: "polled", Value: int64(polled.Count)}, {Key: "delivered", Value: int64(delivered.Count)}},
 		Fix: Fix{Kind: FixExternalStep, Options: []Option{}, Setting: string(kind),
