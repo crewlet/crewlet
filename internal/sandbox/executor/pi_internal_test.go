@@ -525,19 +525,19 @@ func TestAPiRunsExtensionCarriesItsOwnWiring(t *testing.T) {
 }
 
 // A PI SESSION CONTINUES ONLY BETWEEN BOXES ON EXACTLY THE SUPPORTED RELEASE,
-// writer and box both 1.6.0; any other pair is refused, the reason naming both
-// releases. A box whose release is unread is held to the writer alone, its
-// script holding the box to the release ([piSessionGate]).
+// writer and box both 1.6.0; any other pair is refused, the reason naming the
+// release it refuses and the supported one. A release that does not read, the
+// box's or the writer's, is no release and continues nothing.
 //
-// Mutation: compare releases by order rather than equality, or drop either
-// side's check: this goes red.
+// Mutation: compare releases by order rather than equality, take an unread
+// release for the supported one, or drop either side's check: this goes red.
 func TestAPiSessionContinuesOnlyBetweenBoxesOnTheSupportedRelease(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		box, writer string
 		ok          bool
 	}{
-		{"1.6.0", "1.6.0", true}, {"", "1.6.0", true}, {"1.7.0", "1.6.0", false}, {"1.6.0", "1.7.0", false},
+		{"1.6.0", "1.6.0", true}, {"", "1.6.0", false}, {"1.7.0", "1.6.0", false}, {"1.6.0", "1.7.0", false},
 		{"1.5.2", "1.5.2", false}, {"1.6.0", "1.5.2", false}, {"", "1.7.0", false}, {"1.6.0", "", false},
 		{"", "", false},
 	} {

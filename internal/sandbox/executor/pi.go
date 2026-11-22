@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"io"
 	"maps"
 	"math"
 	"slices"
@@ -42,6 +43,8 @@ var (
 	_ noteReader        = Pi{}
 	_ notesOffExplainer = Pi{}
 	_ artifactHolder    = Pi{}
+	_ artifactDirHolder = Pi{}
+	_ inPlaceGate       = Pi{}
 	_ sessionJudge      = Pi{}
 	_ skillHolder       = Pi{}
 )
@@ -324,19 +327,53 @@ func (Pi) layout() archiveLayout { return archiveTar }
 
 // Continues reports whether a session written by Pi release writer can be
 // continued in a box whose Pi is release box ([carrier]): only both exactly
-// [piSupported]. A box whose release is unread ("", a restore judged before
-// the box is asked) is held to the writer alone, and its script, which reads
-// the box's own, holds the box to it ([piSessionGate]).
-func (Pi) Continues(box, writer string) (bool, string) {
-	switch {
-	case writer != piSupported:
-		return false, fmt.Sprintf("the session was written by Pi %s, and a session is continued only between "+
-			"boxes on Pi %s, the release this build supports", writer, piSupported)
-	case box != "" && box != piSupported:
-		return false, fmt.Sprintf("this box runs Pi %s, and the session, written by Pi %s, is continued only "+
-			"between boxes on Pi %s, the release this build supports", box, writer, piSupported)
+// [piSupported]. A release that does not read is no release, the box's as
+// much as the writer's.
+func (p Pi) Continues(box, writer string) (bool, string) {
+	if ok, why := p.ContinuesWriter(writer); !ok {
+		return false, why
 	}
-	return true, ""
+	return p.continuesInPlace(box)
+}
+
+// ContinuesWriter is [Pi.Continues] judged of the writer alone ([carrier]):
+// only a session [piSupported] wrote; one any other release wrote, or one
+// whose writer named no release this build reads, is refused, saying so.
+func (Pi) ContinuesWriter(writer string) (bool, string) {
+	if writer == piSupported {
+		return true, ""
+	}
+	wrote := fmt.Sprintf("Pi %.64s", writer)
+	if writer == "" {
+		wrote = "a Pi that named no release this build reads"
+	}
+	return false, fmt.Sprintf("the session was written by %s, and a session is continued only between "+
+		"boxes on Pi %s, the release this build supports", wrote, piSupported)
+}
+
+// continuesInPlace reports whether a box whose Pi is release box continues a
+// session at all, the copy it holds as much as one carried to it
+// ([inPlaceGate]): only on [piSupported], as the run's own gate holds it
+// ([piSessionGate]), so the engine asks before a relaunch hands the brief
+// that continues the box's copy.
+func (Pi) continuesInPlace(box string) (bool, string) {
+	if box == piSupported {
+		return true, ""
+	}
+	runs := fmt.Sprintf("this box runs Pi %.64s", box)
+	if box == "" {
+		runs = "this box's Pi named no release this build reads"
+	}
+	return false, fmt.Sprintf("%s, and a session is continued only on Pi %s, the release this build supports",
+		runs, piSupported)
+}
+
+// meter is the take's meter of a Pi archive ([carrier.meter]): no figure.
+// This build reads no count or estimate of a Pi session's next request off
+// its archive; a Pi run's window is read off its own records at collection.
+// The archive is left to the caller, which drains it ([startMeter]).
+func (Pi) meter(context.Context, io.Reader, string, string, *passBudget) (meterReading, error) {
+	return meterReading{}, nil
 }
 
 // piCapture is the part of a run's script that packs its session once its
@@ -554,21 +591,27 @@ func piMCP(s sandbox.MCPServer) map[string]any {
 	return out
 }
 
-// artifacts is what a Pi run leaves in its box of its own, removed before every
-// run: its extension and skills, and everything pi reads from its agent
-// directory that a command of an earlier run could have written there (its
-// system-prompt and context files, saved trust, its own provider definitions,
-// whose keys can be commands, the catalogue's cache, extensions, skills,
-// prompts, themes, installed packages and its own session store), all but the
-// login ([Paths.PiAgentDir]'s auth.json) and the files the run writes afresh
-// ([Pi.WriteConfig]). Its sessions are kept.
-func (Pi) artifacts(p Paths) (files, dirs []string) {
+// artifactFiles is the files a Pi run leaves in its box of its own, removed
+// before every run: everything pi reads from its agent directory that a
+// command of an earlier run could have written there (its system-prompt and
+// context files, saved trust, its own provider definitions, whose keys can be
+// commands, and the catalogue's cache), all but the login
+// ([Paths.PiAgentDir]'s auth.json) and the files the run writes afresh
+// ([Pi.WriteConfig]).
+func (Pi) artifactFiles(p Paths) []string {
 	a := p.PiAgentDir() + "/"
-	files = []string{a + "SYSTEM.md", a + "APPEND_SYSTEM.md", a + "AGENTS.md", a + "AGENTS.override.md",
+	return []string{a + "SYSTEM.md", a + "APPEND_SYSTEM.md", a + "AGENTS.md", a + "AGENTS.override.md",
 		a + "CLAUDE.md", a + "trust.json", a + "models.json", a + "models-store.json", a + "keybindings.json"}
-	dirs = []string{p.PiRun(), a + "extensions", a + "skills", a + "prompts", a + "themes", a + "npm", a + "git",
+}
+
+// artifactDirs is the directories a Pi run leaves in its box of its own,
+// removed whole: its run's own (the extension and skills), and its agent
+// directory's extensions, skills, prompts, themes, installed packages and
+// its own session store. The sessions the engine carries are kept.
+func (Pi) artifactDirs(p Paths) []string {
+	a := p.PiAgentDir() + "/"
+	return []string{p.PiRun(), a + "extensions", a + "skills", a + "prompts", a + "themes", a + "npm", a + "git",
 		a + "sessions"}
-	return files, dirs
 }
 
 // notesOffWhy is what switches a Pi run's reading of notes off: the extension
