@@ -102,6 +102,7 @@ export const HARNESS_FACTS: Readonly<Record<string, HarnessFacts>> = {
   },
   copilot: {
     binary: "copilot",
+    webDeniable: true,
     signIns: ["api-key", "host-login"],
     keyEnv: "COPILOT_GITHUB_TOKEN",
     login: "command",
