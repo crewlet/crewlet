@@ -787,11 +787,10 @@ func packDigest(paths Paths, session, staged string) string {
 }
 
 // recordDigest is the part of a box's script that records the line `<session>
-// <digest>` — the values of the shell variable session names and of d, where
-// every pack and restore takes the archive's cksum — in
-// the box's list of the archives its copy holds ([Paths.SessionDigests]) and
-// reads it back: true only where the digest is not empty and the line is
-// there after. READ BACK, never taken on the append's word: a write a full
+// <digest>` — the values of the shell variable session names and of d, which
+// every caller's cksum fills — in the box's list of the archives its copy
+// holds ([Paths.SessionDigests]) and reads it back: true only where the digest
+// is not empty and the line is there after. READ BACK, never taken on the append's word: a write a full
 // disk lost can be one its writer was told landed. What every pack records
 // before it moves its archive into place ([packDigest]), and every restore
 // before its run continues what it restored ([claudeSessionGate],
