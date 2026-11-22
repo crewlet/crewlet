@@ -67,6 +67,28 @@
       "auth.json": "{\n  \"https://auth.x.ai::client-placeholder\": {\n    \"key\": \"access-1\",\n    \"auth_mode\": \"oidc\",\n    \"user_id\": \"user-seat\",\n    \"email\": \"seat@example.com\",\n    \"refresh_token\": \"refresh-1\",\n    \"expires_at\": \"2026-11-22T10:00:00Z\",\n    \"oidc_issuer\": \"https://auth.x.ai\",\n    \"oidc_client_id\": \"client-placeholder\"\n  }\n}\n"
     }
   },
+  "hermes": {
+    "other": {
+      ".env": "ANTHROPIC_API_KEY=key-9\n",
+      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"nous\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"access-9\",\n      \"refresh_token\": \"refresh-9\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\"\n    }\n  }\n}\n",
+      "nous_auth.json": "{\n  \"refresh_token\": \"refresh-9\",\n  \"portal_base_url\": \"https://portal.example.com\"\n}\n"
+    },
+    "planted": {
+      ".env": "ANTHROPIC_API_KEY=key-1\nOPENAI_BASE_URL=https://PLANTED-SETTING.example.com/v1\n",
+      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"nous\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"access-1\",\n      \"refresh_token\": \"refresh-1\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\"\n    }\n  }\n}\n",
+      "nous_auth.json": "{\n  \"refresh_token\": \"refresh-1\",\n  \"portal_base_url\": \"https://portal.example.com\"\n}\n"
+    },
+    "refresh": {
+      ".env": "ANTHROPIC_API_KEY=key-1\n",
+      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"nous\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"access-2\",\n      \"refresh_token\": \"refresh-2\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\"\n    }\n  }\n}\n",
+      "nous_auth.json": "{\n  \"refresh_token\": \"refresh-2\",\n  \"portal_base_url\": \"https://portal.example.com\"\n}\n"
+    },
+    "seed": {
+      ".env": "# Written by hermes setup\nexport ANTHROPIC_API_KEY=key-1\nOPENAI_BASE_URL=\"https://SHARED-SETTING.example.com/v1\"  # a setting\nHERMES_SETTING='SHARED-SETTING'\n",
+      "auth.json": "{\n  \"version\": 1,\n  \"active_provider\": \"nous\",\n  \"providers\": {\n    \"nous\": {\n      \"access_token\": \"access-1\",\n      \"refresh_token\": \"refresh-1\",\n      \"client_id\": \"hermes-cli\",\n      \"portal_base_url\": \"https://portal.example.com\",\n      \"expires_at\": \"2026-11-22T11:00:00Z\"\n    }\n  }\n}\n",
+      "nous_auth.json": "{\n  \"refresh_token\": \"refresh-1\",\n  \"portal_base_url\": \"https://portal.example.com\"\n}\n"
+    }
+  },
   "kimi-code": {
     "other": {
       "config.toml": "default_model = \"kimi-code/kimi-for-coding\"\ndefault_provider = \"managed:kimi-code\"\nthinking = true\n\n[providers.\"managed:kimi-code\"]\ntype = \"kimi\"\napi_key = \"\"\nbase_url = \"https://other.example.com/coding/v1\"\n\n[providers.\"managed:kimi-code\".oauth]\nstorage = \"file\"\nkey = \"oauth/kimi-code\"\n\n[models.\"kimi-code/kimi-for-coding\"]\nprovider = \"managed:kimi-code\"\nmodel = \"kimi-for-coding\"\n\n[services.moonshot_search]\nbase_url = \"https://other.example.com/coding/v1/search\"\n",

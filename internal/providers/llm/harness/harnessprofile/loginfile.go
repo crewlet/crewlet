@@ -24,7 +24,8 @@ import (
 // reaches no other. A zero FileRule is a login file with no other rule.
 type FileRule struct {
 	// Name is the file's name in the shared directory, which says its format
-	// (TOML for a `.toml` name, else JSON with every `//` line set aside) and
+	// (TOML for a `.toml` name, a `.env` file's variables for a `.env` one, else
+	// JSON with every `//` line set aside) and
 	// whether it is a [CredentialStore]'s document ([CredentialStoreDocument]),
 	// which a refresh holds to the logins it was handed
 	// ([KeepHandedCredentials]).
@@ -158,9 +159,19 @@ func (r FileRule) SameAccount(home, shared []byte) bool {
 // toml reports whether the file is TOML.
 func (r FileRule) toml() bool { return strings.HasSuffix(r.Name, ".toml") }
 
+// dotenv reports whether the file is a `.env` file ([parseDotenv]).
+func (r FileRule) dotenv() bool { return strings.HasSuffix(r.Name, ".env") }
+
 // decode reads content as the file's format into an object; empty content is
 // an empty object.
 func (r FileRule) decode(content []byte) (map[string]any, error) {
+	if r.dotenv() {
+		doc := map[string]any{}
+		for key, value := range parseDotenv(content) {
+			doc[key] = value
+		}
+		return doc, nil
+	}
 	if r.toml() {
 		doc := map[string]any{}
 		if _, err := toml.Decode(string(content), &doc); err != nil {
@@ -182,6 +193,9 @@ func (r FileRule) decode(content []byte) (map[string]any, error) {
 // encode writes doc in the file's format, header (a JSON file's leading `//`
 // lines) first.
 func (r FileRule) encode(doc map[string]any, header []byte) ([]byte, error) {
+	if r.dotenv() {
+		return encodeDotenv(doc), nil
+	}
 	if r.toml() {
 		var out bytes.Buffer
 		if err := toml.NewEncoder(&out).Encode(doc); err != nil {
