@@ -760,8 +760,8 @@ func worstRow(t *testing.T) PendingRun {
 	held := &HeldCall{ID: uuid.NewString(), LaunchID: uuid.NewString(), Server: plain(32), Tool: plain(128),
 		Raw: plain(128), Digest: plain(64), Arguments: plain(MaxHeldArgsBytes - 2), Fixed: true,
 		Approvers: plain(32), Binding: plain(maxHeldBindingBytes), Acting: acting, Act: plain(32),
-		Subject: plain(maxHeldBindingBytes), Delegation: delegation, HeldAt: worstAt, CallingAt: worstAt,
-		MadeAt: worstAt}
+		Subject: plain(maxHeldBindingBytes), Delegation: delegation, HeldAt: worstAt, LapsesAt: worstAt,
+		CallingAt: worstAt, MadeAt: worstAt}
 	held.Result = heldResultAtItsWorst(t, *held)
 	// THE CALL A PERSON APPROVED, as the store records it on the held call
 	// ([approvedCall]) and a reset carries it on to the log it is owed to

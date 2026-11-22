@@ -66,6 +66,19 @@ const (
 	MaxOverruled      = 16
 	OverruledMaxBytes = 40
 
+	// MaxGrowthChanges bounds a growth record's changes: a public ask's ten
+	// acts (growth.MaxPublicActs), each a text and a field or two, with room.
+	MaxGrowthChanges = 32
+
+	// GrowthValueMaxBytes bounds a changed field's value: an id, a status, an
+	// amount or a name as its vendor caps it (Meta's 400-character names, with
+	// room). Longer words are published text, kept as their digest.
+	GrowthValueMaxBytes = 512
+
+	// GrowthLabelMaxBytes bounds a changed field's label, a product's few
+	// words for it ("Daily budget").
+	GrowthLabelMaxBytes = 64
+
 	// MaxPageSize is the most rows a page answers, DefaultPageSize what a page
 	// that names none takes.
 	MaxPageSize     = 100

@@ -27,7 +27,7 @@ import (
 // one its own searches are handed to, its fleet being itself.
 func (e *Engine) serveCodeSearch(ctx context.Context, nodeID string, reads codesearch.Reads,
 	units int) (queue.Unsubscribe, error) {
-	srv, err := codesearch.NewServer(e.codeSearchWire, nodeID, reads, units)
+	srv, err := codesearch.NewServer(e.codeSearchWire, nodeID, reads, units, e.answerBudget)
 	if err != nil {
 		return nil, err
 	}

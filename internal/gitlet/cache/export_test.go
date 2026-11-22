@@ -370,6 +370,11 @@ func MemoryNeeded(transfers, cores int, engine func(memory int64) int64) int64 {
 	return memoryNeeded(transfers, cores, engine)
 }
 
+// ShortPoolsRemedy and ShortRemedy are what code_cache_memory_short says follows
+// and how to fix it: the engine's pools past what the node leaves the Go
+// runtime, or its git lanes past the rest.
+const ShortPoolsRemedy, ShortRemedy = shortPoolsRemedy, shortRemedy
+
 // MemoryReserved is what c keeps of the node's memory from background work,
 // as Open fixed it.
 func MemoryReserved(c *Cache) int64 { return c.memReserve }

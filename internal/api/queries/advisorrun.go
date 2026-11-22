@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor/duty"
 	"github.com/crewlet/crewlet/internal/advisor/modelpass"
 	"github.com/crewlet/crewlet/internal/advisordomain"
+	"github.com/crewlet/crewlet/internal/growth"
 	"github.com/crewlet/crewlet/internal/notice"
 )
 
@@ -235,6 +236,34 @@ func nonNilMap[K comparable, V any](m map[K]V) map[K]V {
 // log itself, so the notices of its blocking findings could not be said.
 const UnreadFindings = "findings"
 
+// UnreadGrowthSignals is the unread word of a node that could not read the
+// fleet's status records, so what the growth products met at their vendors
+// could not be said; the build's own API retirements still are.
+const UnreadGrowthSignals = "growth_signals"
+
+// growthNotices is the notices of what the growth products meet: this build's
+// catalogs' retirements, and every live node's growth signals off its status
+// record; false where those records cannot be read.
+func (s Sources) growthNotices(ctx context.Context, now time.Time) ([]notice.Notice, bool) {
+	catalogs := growth.Catalogs()
+	if s.Coord == nil || s.NodeStatuses == nil {
+		return notice.FromCatalogs(catalogs, nil, now), true
+	}
+	_, records, err := s.liveStatuses(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "advisor_growth_signals_unread", "error", err.Error())
+		return notice.FromCatalogs(catalogs, nil, now), false
+	}
+	var nodes []notice.NodeGrowth
+	for node, r := range records {
+		if r.Growth != nil {
+			nodes = append(nodes, notice.NodeGrowth{Node: node, Signals: *r.Growth})
+		}
+	}
+	slices.SortFunc(nodes, func(a, b notice.NodeGrowth) int { return strings.Compare(a.Node, b.Node) })
+	return slices.Concat(notice.FromCatalogs(catalogs, nodes, now), notice.FromClockSkews(nodes)), true
+}
+
 // AdvisorNotices is `advisor_notices`: the platform notices the Advisor's
 // blocking findings, the fleet's alarms and the held conversations raise
 // (ADR-0116), and what the latest run could not read.
@@ -276,7 +305,11 @@ func (s Sources) advisorNotices(ctx context.Context, _ Params) (any, error) {
 	for _, l := range listed {
 		findings = append(findings, l.Finding)
 	}
-	out.Notices = notice.WithFindings(notice.Read(findings, fleet, held, now), listed)
+	vendors, vendorsKnown := s.growthNotices(ctx, now)
+	if !vendorsKnown {
+		out.Unread = append(out.Unread, UnreadGrowthSignals)
+	}
+	out.Notices = notice.WithFindings(notice.Read(findings, fleet, held, vendors, now), listed)
 	return out, nil
 }
 

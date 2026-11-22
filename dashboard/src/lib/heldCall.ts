@@ -31,10 +31,13 @@ export async function answerHeldCall(
   id: string,
   answer: HeldAnswer,
   argumentsSha256?: string,
+  note?: string,
 ): Promise<McpApprovalAnswer> {
-  const sent = await rest.request("POST", `/mcp-approvals/${pathSegment(id)}`, {
-    body: argumentsSha256 ? { answer, arguments_sha256: argumentsSha256 } : { answer },
-  });
+  const body: Record<string, string> = { answer };
+  if (argumentsSha256) body.arguments_sha256 = argumentsSha256;
+  // A held growth call's answer carries the person's note back to the agent.
+  if (note?.trim()) body.note = note.trim();
+  const sent = await rest.request("POST", `/mcp-approvals/${pathSegment(id)}`, { body });
   return sent.body as McpApprovalAnswer;
 }
 

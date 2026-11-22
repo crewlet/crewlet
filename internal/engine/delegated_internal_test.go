@@ -254,3 +254,34 @@ func TestAMergeAlreadyMadeIsAnsweredWithoutWakingItsDelegate(t *testing.T) {
 		}
 	}
 }
+
+// A growth act nobody answered lapses a day after it was held, not before:
+// the engine answers it Deny, once, with the reason, and an act already being
+// answered is left alone.
+//
+// Mutation: compare the lapse the wrong way round, or sweep acts that wait on
+// no lapse, and a raise runs days after the agent reasoned about it, or an SSH
+// command a person has not read yet is denied.
+func TestAGrowthActLapsesADayAfterItWasHeld(t *testing.T) {
+	t.Parallel()
+	heldAt := time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC)
+	store := sandbox.NewCoordStore(memory.NewFleet())
+	sandboxtest.GrowthParked(t, store, "t-spend", heldAt)
+	sandboxtest.DelegatedParked(t, store, "t-ssh", []string{"security-a"}, heldAt)
+	var answered []string
+	answer := func(_ context.Context, run sandbox.PendingRun, said string) error {
+		if !strings.Contains(said, "lapsed") {
+			t.Errorf("the lapse said %q", said)
+		}
+		answered = append(answered, run.TurnID)
+		return nil
+	}
+	sweepLapsed(t.Context(), store, answer, heldAt.Add(sandbox.HeldLapse-time.Second))
+	if len(answered) != 0 {
+		t.Fatalf("answered %v before the lapse", answered)
+	}
+	sweepLapsed(t.Context(), store, answer, heldAt.Add(sandbox.HeldLapse))
+	if len(answered) != 1 || answered[0] != "t-spend" {
+		t.Fatalf("answered %v at the lapse, want the growth act alone", answered)
+	}
+}

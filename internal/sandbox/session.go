@@ -2271,7 +2271,7 @@ func (c *Coordinator) readLost(ctx context.Context, run PendingRun) (*spooledCap
 	// THE RELEASE ALONE: a failed Collect leaves it "", which confirms nothing.
 	var result Result
 	if asksMainThread(run, BoxReadLoss, ThreadTraitsOf(runner)) {
-		if collected, err := runner.Collect(ctx, box, run.Handle()); err == nil {
+		if collected, err := runner.Collect(ctx, box, run.Handle(), c.answerBudget); err == nil {
 			result.HarnessVersion = collected.HarnessVersion
 		}
 	}

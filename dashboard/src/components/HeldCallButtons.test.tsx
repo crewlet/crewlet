@@ -13,6 +13,7 @@ vi.mock("~/lib/heldCall.ts", async (actual) => ({
     question: "May sre run a command on api-1 as crewlet-ops?",
     arguments: { host: "api-1", command: "sudo sh -s", stdin: "echo one\necho two\n" },
     arguments_sha256: "ab".repeat(32),
+    card: null,
   })),
 }));
 
@@ -73,6 +74,7 @@ test("a merge's review reads as the merge, and Allow once names what was shown",
       reason: "**urgent** [see](https://evil.example)",
     },
     arguments_sha256: "cd".repeat(32),
+    card: null,
   });
   render(
     <ToastProvider>

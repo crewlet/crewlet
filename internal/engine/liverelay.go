@@ -255,6 +255,9 @@ type liveRelay struct {
 	listening func() bool
 	deliver   func(liveBatch)
 	gap       func(domains []string)
+	// answers is the node's answer budget an answer holds its weight of,
+	// after its wait ([relayAnswerWeight]).
+	answers *queue.AnswerBudget
 
 	// relayed is the domains this node's sockets hear from a peer now, in
 	// [liveDomains]' order; nil or empty for none.
@@ -286,11 +289,11 @@ type liveRelay struct {
 func newLiveRelay(self string, q relayQueue, wire *relayWire,
 	roster func(context.Context) ([]string, error), domains []string,
 	outOfService func(context.Context, ...string) []string, listening func() bool,
-	deliver func(liveBatch), gap func([]string)) *liveRelay {
+	deliver func(liveBatch), gap func([]string), answers *queue.AnswerBudget) *liveRelay {
 
 	return &liveRelay{self: self, queue: q, wire: wire, taken: signedask.NewGuard(),
 		roster: roster, domains: domains, outOfService: outOfService,
-		listening: listening, deliver: deliver, gap: gap, epoch: rand.Text(),
+		listening: listening, deliver: deliver, gap: gap, answers: answers, epoch: rand.Text(),
 		moved: make(chan struct{})}
 }
 
@@ -448,12 +451,40 @@ func (r *liveRelay) serve(ctx context.Context) (queue.Unsubscribe, error) {
 	if r.wire == nil {
 		return nil, errNoRelayWire
 	}
-	// WORK DONE NOW: an answer reads this node's ring and returns.
+	// WORK DONE NOW: an answer reads this node's ring and returns. Its weight
+	// is held AFTER its wait, never through it: what it carries is known
+	// then, and a wait holding the budget would hold every other answer.
 	return r.queue.Serve(ctx, liveRelaySubject(r.self), queue.ConcurrentAnswers,
 		func(ctx context.Context, raw []byte) ([]byte, error) {
-			return r.wire.SealReply(r.answerSealed(ctx, raw, time.Now()))
+			out := r.answerSealed(ctx, raw, time.Now())
+			wait, cancel := context.WithTimeout(ctx, liveRelayHold)
+			release, err := r.answers.Acquire(wait, queue.AnswerLiveRelay, relayAnswerWeight(out))
+			cancel()
+			if err != nil {
+				return nil, fmt.Errorf("engine: answer a live relay ask: %w", err)
+			}
+			defer release()
+			return r.wire.SealReply(out)
 		})
 }
+
+// relayAnswerWeight is what an answer holds of the node's answer budget
+// ([queue.AnswerBudget]) while it is sealed and its reply written: the batches
+// it carries five times, from the code (the ring's own bytes, their encoding
+// as raw JSON, the encoder's buffer, and the seal's base64 at 4/3), and
+// [relayEnvelopeBytes] for the rest of the reply.
+func relayAnswerWeight(out relayAnswer) int64 {
+	carried := 0
+	for _, b := range out.Batches {
+		carried += len(b)
+	}
+	return 5*int64(carried) + relayEnvelopeBytes
+}
+
+// relayEnvelopeBytes is the most an answer's fields beside its batches weigh,
+// sealed: an epoch, two sequences and a sentence, a few hundred bytes, held
+// at 4 KiB.
+const relayEnvelopeBytes = 4 << 10
 
 // answerSealed answers one sealed ask, and ALWAYS answers: a silent server is
 // indistinguishable from a down one, and its follower would wait out its whole
@@ -796,7 +827,7 @@ func (e *Engine) armLiveRelay(ctx context.Context) error {
 		return nil
 	}
 	relay := newLiveRelay(e.id, e.backends.Queue, e.relayWire, e.dataRoster,
-		liveDomains(), e.local.outOfService, e.liveListening, e.deliverLive, e.liveGap)
+		liveDomains(), e.local.outOfService, e.liveListening, e.deliverLive, e.liveGap, e.answerBudget)
 	stop, err := relay.serve(ctx)
 	if err != nil {
 		return fmt.Errorf("engine: serve the live relay: %w", err)

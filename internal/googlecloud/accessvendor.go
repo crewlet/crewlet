@@ -531,7 +531,7 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 // until it reads back. Its token grant and its roles are the op's next steps.
 func (s *accessSession) create(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	id := AccountID(s.company, in.Seat.Handle)
-	email := AccountEmail(id, s.client.IdentityProject())
+	email := googleauth.AccountEmail(id, s.client.IdentityProject())
 	sa, err := s.client.CreateServiceAccount(ctx, id, displayName(s.company, in.Seat.Handle),
 		description(s.company, in.Seat.Handle))
 	made := s.client.clock().Now()
@@ -833,15 +833,20 @@ func (s *accessSession) disable(ctx context.Context, in seataccess.ApplyInput) (
 
 // awaitDisabled waits until the account reads back disabled, or enabled.
 func (s *accessSession) awaitDisabled(ctx context.Context, uid string, disabled bool) error {
+	return s.refused(awaitDisabled(ctx, s.client, uid, disabled), "")
+}
+
+// awaitDisabled waits until c reads the account back disabled, or enabled.
+func awaitDisabled(ctx context.Context, c *Client, uid string, disabled bool) error {
 	what := readEnabled
 	if disabled {
 		what = readDisabled
 	}
-	_, err := awaitObserved(ctx, s.client.clock(), what, func() (bool, error) {
-		sa, found, err := s.client.ServiceAccount(ctx, uid)
+	_, err := awaitObserved(ctx, c.clock(), what, func() (bool, error) {
+		sa, found, err := c.ServiceAccount(ctx, uid)
 		return err != nil || (found && sa.Disabled == disabled), err
 	})
-	return s.refused(err, "")
+	return err
 }
 
 // remove takes any role the account still holds, deletes it, and waits until

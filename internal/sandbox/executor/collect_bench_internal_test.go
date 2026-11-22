@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/redact/redacttest"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -113,7 +114,7 @@ func BenchmarkACollectionAtItsBounds(b *testing.B) {
 			for range b.N {
 				var got sandbox.Result
 				held = max(held, benchHeldDuring(func() {
-					got, err = runner.Collect(b.Context(), box, sandbox.RunHandle{})
+					got, err = runner.Collect(b.Context(), box, sandbox.RunHandle{}, queue.NewAnswerBudget(nil))
 				}))
 				if err != nil {
 					b.Fatalf("Collect: %v", err)

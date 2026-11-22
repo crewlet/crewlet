@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 	"github.com/crewlet/crewlet/internal/nodebudget"
+	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -32,16 +33,17 @@ func TestTheLimitIsNineTenthsOfWhatIsHeldOutsideLeaves(t *testing.T) {
 	}
 }
 
-// A NODE'S LINES ARE ITS POOLS OVER NINE TENTHS, ITS PAGE CACHE AND ITS READ
-// LANE: the runtime's line is what keeps the limit at the pools where the node
-// holds what it keeps (nine tenths of it is the pools), the page cache is
+// A NODE'S LINES ARE ITS POOLS AND ITS ANSWER BUDGET OVER NINE TENTHS, ITS PAGE
+// CACHE AND ITS READ LANE: the runtime's lines keep the limit at the pools and
+// the answers in flight where the node holds what it keeps, the page cache is
 // sized by the memory only where the node sizes it so, and the read lane is
 // its slots at gitproc.ReadMemory. What it keeps is every line; what it holds
 // outside the runtime is the page cache and the read lane.
 //
-// Mutations, each red: count the pools without the tenth; size the page cache
-// by the memory where the node keeps the floor; count one read slot; leave a
-// line out of what the node keeps or holds outside.
+// Mutations, each red: count the pools without the tenth; count the answer
+// budget without the tenth; size the page cache by the memory where the node
+// keeps the floor; count one read slot; leave a line out of what the node
+// keeps or holds outside.
 func TestANodesLinesAreItsPoolsItsPageCacheAndItsReadLane(t *testing.T) {
 	t.Parallel()
 	const memory, conns, reads = int64(8) << 30, 32, 4
@@ -55,13 +57,16 @@ func TestANodesLinesAreItsPoolsItsPageCacheAndItsReadLane(t *testing.T) {
 		if want := work.MemoryPools(memory) * 10 / 9; l.Runtime != want {
 			t.Errorf("the runtime's line is %d, want the pools over nine tenths, %d", l.Runtime, want)
 		}
+		if want := int64(queue.AnswerBudgetBytes) * 10 / 9; l.Answers != want {
+			t.Errorf("the answers' line is %d, want the answer budget over nine tenths, %d", l.Answers, want)
+		}
 		if want := store.PageCacheShare(sizedBy, conns); l.PageCache != want {
 			t.Errorf("sized by the memory %v: the page cache is %d, want %d", sized, l.PageCache, want)
 		}
 		if want := reads * gitproc.ReadMemory; l.ReadLane != want {
 			t.Errorf("the read lane is %d, want %d slots at %d", l.ReadLane, reads, gitproc.ReadMemory)
 		}
-		if l.Kept() != l.Runtime+l.PageCache+l.ReadLane || l.Outside() != l.PageCache+l.ReadLane {
+		if l.Kept() != l.Runtime+l.Answers+l.PageCache+l.ReadLane || l.Outside() != l.PageCache+l.ReadLane {
 			t.Errorf("lines %+v: kept %d, outside %d, want every line and the page cache with the read lane",
 				l, l.Kept(), l.Outside())
 		}

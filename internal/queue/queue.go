@@ -215,6 +215,27 @@
 // closes its whole link on one past the transport, crewlet/crewlet#1031), so
 // it is found from its headers and read raw.
 //
+// # The node's answer budget
+//
+// ConcurrentAnswers bounds how many answers a registration builds at once, not
+// their bytes, and a payload answer holds a multiple of its reply while it is
+// built: 64 box reads at once held 495 MiB of replies and raised the node's RSS
+// by up to 1.25 GiB, 64 history answers at the transport's limit 510 MiB and
+// 1.18 GiB (crewlet/crewlet#1782). So every payload answer on a node also
+// acquires from ONE AnswerBudget of AnswerBudgetBytes, at its weight: its byte
+// bound times its measured encode multiple, stated where each answerer reads.
+// The hold is taken before the read and given back once the reply is written
+// (Replying, which both backends wrap every answer in), FIFO and within the
+// answer's context, a wait that ends naming the budget (ErrAnswerBudget). An
+// answer acquires once (a second hold in one answer is refused): FIFO, it could
+// otherwise wait behind itself. One that holds and then asks a peer is only an
+// assistant replay on a node without the estate, whose snapshot crosses the
+// estate router; the data nodes answering it read their own stores and ask
+// nobody, so no cycle of waits forms. The internal/nodebudget Answers line keeps
+// the budget in a node's memory. Every Serve registration in the tree is
+// declared payload (the kind it acquires, and where) or small (the bound that
+// keeps it so), and a test sweeps the source for one that is neither.
+//
 // # Testing the contract
 //
 // The suite reads "nothing more was delivered" behind each backend's own
@@ -285,11 +306,10 @@ const MaxPayloadBytes = 8 << 20
 // answers at once when what it answers is work it does NOW. SIXTY-FOUR, twice
 // the default `node.max_concurrent`: two nodes' full turns, each asking a peer,
 // never queue behind each other, and a request past it waits for a slot
-// ([EventQueue.Serve] says how far it is buffered). It bounds the answers built
-// at once, not their bytes, which suits answers of a few KiB. A registration
-// whose answers carry payloads bounds each one's bytes where it reads it
-// (eventfan, memread, the chat pages).
-//
+// ([EventQueue.Serve] says how far it is buffered). THE COUNT BOUNDS SMALL
+// ANSWERS, of a few KiB. A PAYLOAD answer is bounded by bytes where it reads,
+// and holds its weight of the node's [AnswerBudget] until its reply is written:
+// the count times those bounds fits no node (package doc; answersweep_test.go).
 // A REGISTRATION WHOSE ANSWERS WAIT (a push proposal behind its repository's
 // earlier pushes) passes its own queue's bound and is a registration of its
 // own: a slot held through the wait blocks every other request there.

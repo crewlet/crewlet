@@ -2923,6 +2923,9 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// A final take's wait for spool room, and the room held, recorded in
 		// the node's metrics. See spoolmeter.go.
 		Spools: spoolMeter{metrics: e.metrics},
+		// Every collection of a run's box holds its weight of the node's
+		// answer budget, beside its peers' payload answers (answermeter.go).
+		AnswerBudget: e.answerBudget,
 	}
 	// AND THIS PROCESS'S TAKER LEASE, in the node's lease store beside its seats
 	// and presence, under the ENGINE'S OWN incarnation minted once in [New] (the

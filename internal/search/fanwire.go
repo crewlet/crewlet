@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/textindex"
 )
 
 // THE FAN-OUT'S WIRE, and why it is its own encoding rather than an event.
@@ -116,9 +118,10 @@ func (b Broker) Scatter(ctx context.Context, q FanQuery, table []Assigned) ([]Sl
 // silent rather than volunteering a range somebody else also holds, because
 // two answers over one range would count those buckets twice and merge one
 // document's score against itself.
-func ServeSlices(ctx context.Context, q queue.EventQueue, self string, scan Scanner) (queue.Unsubscribe, error) {
-	if q == nil || scan == nil {
-		return nil, fmt.Errorf("search: serve slices with no queue or no scanner")
+func ServeSlices(ctx context.Context, q queue.EventQueue, self string, scan Scanner,
+	answers *queue.AnswerBudget) (queue.Unsubscribe, error) {
+	if q == nil || scan == nil || answers == nil {
+		return nil, fmt.Errorf("search: serve slices with no queue, no scanner or no answer budget")
 	}
 	return q.Serve(ctx, SliceSubject, queue.ConcurrentAnswers, func(ctx context.Context, raw []byte) ([]byte, error) {
 		var req slicePayload
@@ -139,6 +142,17 @@ func ServeSlices(ctx context.Context, q queue.EventQueue, self string, scan Scan
 		if !named {
 			return nil, errNotMine
 		}
+		// THE ASKER'S OWN BOUND, held here too: the scan's weight is its terms'.
+		if err := knowledge.CheckQuery(req.Text); err != nil {
+			return nil, fmt.Errorf("search: a slice request: %w", err)
+		}
+		wait, cancel := context.WithTimeout(ctx, SliceAnswerWait)
+		release, err := answers.Acquire(wait, queue.AnswerSlice, sliceWeight(req.Text))
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("search: %w", err)
+		}
+		defer release()
 		slice, err := scan.Scan(ctx, FanQuery{
 			Text: req.Text, Containers: req.Containers, Sources: req.Sources,
 			Vector: req.Vector, Model: req.Model, Dim: req.Dim,
@@ -151,6 +165,37 @@ func ServeSlices(ctx context.Context, q queue.EventQueue, self string, scan Scan
 		return json.Marshal(sliceReply{Version: sliceProtocol, Slice: slice})
 	})
 }
+
+// sliceWeight is what a slice for query text holds of the node's answer budget
+// ([queue.AnswerBudget]) from its scan until its reply is written, from the
+// code: each of its terms reads at most [maxPostingScan] postings, held as a
+// row and as a score keyed by its document, [postingHeldBytes] a posting at
+// worst, and [sliceReplyBytes] for the reply. The semantic half ranks in the
+// store and hands back [FuseN] rows. At [knowledge.MaxQueryBytes], at most 134
+// terms of [textindex.MinTermLength]: 164 MiB; a query of a few words, a few MiB.
+func sliceWeight(text string) int64 {
+	return int64(len(textindex.Terms(text)))*maxPostingScan*postingHeldBytes + sliceReplyBytes
+}
+
+// postingHeldBytes is what one posting a lexical scan read holds at worst,
+// from the code ([Indexer.Search]): its textindex.Posting in the term's slice,
+// 32 bytes at up to twice append's capacity with the array it grew from (96);
+// its document's key, "page:" or "task:" and a uuid, 41 bytes in the
+// allocator's 48-byte class (48); and the score map's slot for the key, 24
+// bytes at 7/8 load, up to twice that before the map grows (55): 199 bytes,
+// held at 256 for each allocation's own overhead.
+const postingHeldBytes = 256
+
+// sliceReplyBytes is the reply's bound: [FuseN] scored keys a half, each key
+// at most 128 bytes and its score, encoded with the slice's other fields: 64
+// KiB.
+const sliceReplyBytes = 64 << 10
+
+// SliceAnswerWait is the longest a slice waits for its weight of the node's
+// answer budget: [SemanticScanBudget], what a coordinator waits for its peers'
+// slices by default ([FanOut.Budget]), so a slice admitted later is one nobody
+// merges.
+const SliceAnswerWait = SemanticScanBudget
 
 // errNotMine is how a node declines a request that named somebody else.
 //
