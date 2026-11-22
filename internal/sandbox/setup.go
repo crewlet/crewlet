@@ -33,8 +33,8 @@ const DefaultSetupTimeout = 10 * time.Minute
 //
 // The exception is Gitlet, whose repositories a run is granted: the
 // `code_checkout` granting one hands the run the engine's [CodingSteps] to run
-// itself, never at launch, with the run's credential and [BoxGit] (ADR-0093)
-// in the launch's own environment.
+// itself, never at launch, with [BoxGit]'s environment (ADR-0093) and the
+// run's credential in the file it names ([GitAccessStep]).
 type SetupStep struct {
 	// Name is a short identifier, used in logs and setup-failure errors.
 	Name string `yaml:"name" json:"name"`

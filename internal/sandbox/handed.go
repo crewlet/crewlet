@@ -124,12 +124,12 @@ const (
 
 // handedSecrets is what req hands its box out of a credential position: what
 // [LaunchRequest.Secrets] names (every `${...}` it resolved, every variable whose
-// name says credential, the entry's sign-in), every MCP server's env, headers and
-// resolved references, the strings of each seeded login, and two secrets no
-// request field names, minted for this job after the request was built: the run's
-// export token in env's telemetry endpoint ([withTelemetry]) and its Gitlet
-// credential ([GitTokenVar], from [LaunchRequest.RunEnv]). Each is kept whole and
-// by its JSON strings ([secretValues]).
+// name says credential, the entry's sign-in, and the Gitlet credential the launch
+// writes into the box, [LaunchEnv.GitAccess]), every MCP server's env, headers and
+// resolved references, the strings of each seeded login, and the run's export
+// token in env's telemetry endpoint ([withTelemetry]), minted for this job after
+// the request was built. Each is kept whole and by its JSON strings
+// ([secretValues]).
 func handedSecrets(req LaunchRequest, env map[string]string) HandedSecrets {
 	var values []string
 	add := func(vs ...string) {
@@ -145,7 +145,6 @@ func handedSecrets(req LaunchRequest, env map[string]string) HandedSecrets {
 	if _, token, ok := strings.Cut(env[otelBoxEndpointVar], otelTokenPath); ok {
 		add(token)
 	}
-	add(env[GitTokenVar])
 	for _, name := range slices.Sorted(maps.Keys(req.MCPServers)) {
 		server := req.MCPServers[name]
 		for _, key := range slices.Sorted(maps.Keys(server.Env)) {
