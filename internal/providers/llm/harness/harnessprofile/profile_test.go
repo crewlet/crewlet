@@ -785,3 +785,34 @@ func TestAnAuthFailureSaysWhatItMeant(t *testing.T) {
 		}
 	}
 }
+
+// A SIGN-IN'S ARGS NEED THAT SIGN-IN. key_args follow complete_args on a call
+// signing in with a key and subscription_args on one signing in with a login,
+// so either on a profile with no such sign-in would be passed on no call, and
+// an empty element is one the harness would read as a value: each refused.
+// Qwen Code's profile, which signs in both ways, loads.
+//
+// Mutation: drop validateSignInArgs, and every refusal goes.
+func TestASignInsArgsNeedThatSignIn(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		overrides map[string]any
+		want      string
+	}{
+		"key args with no key": {map[string]any{"api_key_env": "", "api_key_env_shared": false},
+			"key_args is set, but no key signs this harness in"},
+		"login args with no login": {map[string]any{"credential_paths": []any{}},
+			"subscription_args is set, but the harness keeps no login"},
+		"an empty element": {map[string]any{"key_args": []any{"--auth-type", " "}}, "key_args[1] is empty"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if _, err := Load("qwen-code", tc.overrides); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Load = %v, want a refusal saying %q", err, tc.want)
+			}
+		})
+	}
+	if _, err := Load("qwen-code", nil); err != nil {
+		t.Errorf("the shipped qwen-code profile does not load: %v", err)
+	}
+}

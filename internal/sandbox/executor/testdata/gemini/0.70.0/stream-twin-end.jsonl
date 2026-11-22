@@ -1,0 +1,21 @@
+{"type":"init","timestamp":"2026-11-21T22:24:12.522Z","session_id":"11111111-2222-4333-8444-555555555555","model":"gemini-2.5-pro"}
+{"type":"message","timestamp":"2026-11-21T22:24:12.523Z","role":"user","content":"Call the slow tool, then echo, then answer."}
+{"type":"tool_use","timestamp":"2026-11-21T22:24:12.622Z","tool_name":"mcp_crewlet_slow","tool_id":"mcp_crewlet_slow__mcp_crewlet_slow_1795299852586_0","parameters":{"seconds":1}}
+{"type":"tool_result","timestamp":"2026-11-21T22:24:13.784Z","tool_id":"mcp_crewlet_slow__mcp_crewlet_slow_1795299852586_0","status":"success","output":"slept 1s"}
+{"type":"tool_use","timestamp":"2026-11-21T22:24:13.812Z","tool_name":"mcp_crewlet_echo","tool_id":"mcp_crewlet_echo__mcp_crewlet_echo_1795299853804_0","parameters":{"text":"hello"}}
+{"type":"tool_result","timestamp":"2026-11-21T22:24:13.927Z","tool_id":"mcp_crewlet_echo__mcp_crewlet_echo_1795299853804_0","status":"success","output":"echo: hello"}
+{"type":"message","timestamp":"2026-11-21T22:24:13.963Z","role":"assistant","content":"STUB-ANSWER: done after mcp_crewlet_echo.","delta":true}
+{"type":"error","timestamp":"2026-11-21T22:24:14.275Z","severity":"warning","message":"Agent execution blocked: ## A note from Lead, sent while this turn was running: CAP-TWIN-END"}
+{"type":"tool_use","timestamp":"2026-11-21T22:24:14.295Z","tool_name":"mcp_crewlet_slow","tool_id":"mcp_crewlet_slow__mcp_crewlet_slow_1795299854290_0","parameters":{"seconds":1}}
+{"type":"tool_result","timestamp":"2026-11-21T22:24:15.403Z","tool_id":"mcp_crewlet_slow__mcp_crewlet_slow_1795299854290_0","status":"success","output":"slept 1s"}
+{"type":"tool_use","timestamp":"2026-11-21T22:24:15.427Z","tool_name":"mcp_crewlet_echo","tool_id":"mcp_crewlet_echo__mcp_crewlet_echo_1795299855423_0","parameters":{"text":"hello"}}
+{"type":"tool_result","timestamp":"2026-11-21T22:24:15.513Z","tool_id":"mcp_crewlet_echo__mcp_crewlet_echo_1795299855423_0","status":"success","output":"echo: hello"}
+{"type":"message","timestamp":"2026-11-21T22:24:15.528Z","role":"assistant","content":"STUB-ANSWER: done after mcp_crewlet_echo.","delta":true}
+{"type":"error","timestamp":"2026-11-21T22:24:15.828Z","severity":"warning","message":"Agent execution blocked: ## A note from Lead, sent while this turn was running: CAP-TWIN-END"}
+{"type":"tool_use","timestamp":"2026-11-21T22:24:15.839Z","tool_name":"mcp_crewlet_slow","tool_id":"mcp_crewlet_slow__mcp_crewlet_slow_1795299855837_0","parameters":{"seconds":1}}
+{"type":"tool_result","timestamp":"2026-11-21T22:24:16.940Z","tool_id":"mcp_crewlet_slow__mcp_crewlet_slow_1795299855837_0","status":"success","output":"slept 1s"}
+{"type":"tool_use","timestamp":"2026-11-21T22:24:16.970Z","tool_name":"mcp_crewlet_echo","tool_id":"mcp_crewlet_echo__mcp_crewlet_echo_1795299856966_0","parameters":{"text":"hello"}}
+{"type":"tool_result","timestamp":"2026-11-21T22:24:17.110Z","tool_id":"mcp_crewlet_echo__mcp_crewlet_echo_1795299856966_0","status":"success","output":"echo: hello"}
+{"type":"message","timestamp":"2026-11-21T22:24:17.131Z","role":"assistant","content":"STUB-ANSWER: done after mcp_crewlet_echo.","delta":true}
+{"type":"result","timestamp":"2026-11-21T22:24:17.456Z","status":"success","stats":{"total_tokens":9783,"input_tokens":9000,"output_tokens":450,"cached":3600,"input":5400,"duration_ms":4935,"tool_calls":6,"models":{"gemini-2.5-pro":{"total_tokens":9783,"input_tokens":9000,"output_tokens":450,"cached":3600,"input":5400}}}}
+{"type":"crewlet_gemini_usage","session_id":"11111111-2222-4333-8444-555555555555","requests":9,"tokens":{"input":9000,"output":450,"cached":3600,"thoughts":270,"tool":63}}

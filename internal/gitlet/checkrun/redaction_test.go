@@ -51,7 +51,14 @@ func TestEveryOutputOfACheckIsRedactedBeforeItIsCutOrKept(t *testing.T) {
 	d.Report.JUnit = "out/junit.xml"
 	key := f.queue(oidOf("a"), d)
 	box := f.container.box(t)
-	minted := f.container.spec(0).Env[sandbox.GitTokenVar]
+	// THE TOKEN ITS FILE HOLDS, written by the box's setup, which is over once
+	// the attempt names its box.
+	f.await(key, "named its box", func(r gitlet.CheckRow) bool { return r.Box != "" })
+	raw, err := box.ReadFile(t.Context(), sandbox.GitAccessFile)
+	if err != nil || len(raw) == 0 {
+		t.Fatalf("the box's token file: %q, %v", raw, err)
+	}
+	minted := string(raw)
 	redacts(t, minted)
 
 	// The old tail's cut, CheckTailBytes from the end, falls 20 bytes into the
