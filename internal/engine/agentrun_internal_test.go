@@ -363,14 +363,14 @@ func TestAnEntrysWebDenialReachesItsExecutor(t *testing.T) {
 				t.Parallel()
 				c, seat := chainCompany(t, chainMember{key: "api", agent: agent,
 					model: "anthropic/claude-golden", webDenied: denied})
-				e, jobs := launchRig(t, c, bridgeFor(t, mcpbridge.Options{
+				e, runners := launchRigRunners(t, c, bridgeFor(t, mcpbridge.Options{
 					Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 				}))
 				l := launcherOn(e, c, seat, "t1")
 				if _, err := l.LaunchExecutor(t.Context(), launchRequest(l, nil)); err != nil {
 					t.Fatalf("LaunchExecutor: %v", err)
 				}
-				started := jobs.Started()
+				started := runners[agent].Started()
 				if len(started) != 1 || started[0].WebDenied != denied {
 					t.Fatalf("started %d runs, the first web denied %v; want one, web denied %v",
 						len(started), len(started) > 0 && started[0].WebDenied, denied)
