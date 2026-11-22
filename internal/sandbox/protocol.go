@@ -1194,6 +1194,12 @@ type RunRequest struct {
 	// carries — see [CommitAttribution]. Nil credits nothing: the run's git
 	// is left exactly as the box and the repository configure it.
 	Attribution *CommitAttribution
+
+	// SignInEnv is the names of Env that sign the harness in: the entry's
+	// own credentials, which a runner keeps out of the model's shell where
+	// its harness offers a way, the harness itself still reading them. Nil
+	// names none.
+	SignInEnv []string
 }
 
 // SkillNamespace is what a run's harness lists every skill of

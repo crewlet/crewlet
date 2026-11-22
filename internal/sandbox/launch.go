@@ -205,6 +205,10 @@ type LaunchRequest struct {
 	// that named it. Nil hands none.
 	Secrets []string
 
+	// SignInEnv is the names of the job's environment that sign its harness
+	// in ([RunRequest.SignInEnv]). Nil names none.
+	SignInEnv []string
+
 	// Skills are the skills the job's harness is handed as its own — see
 	// [RunRequest.Skills]. Nil hands none. Where the job reports loading one
 	// is its opening's to say ([Opening.SkillLoads]), as the job's endpoint
@@ -1059,6 +1063,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// [Opening.SkillLoads].
 		Skills:     req.Skills,
 		SkillLoads: skillLoads,
+		SignInEnv:  req.SignInEnv,
 		// THE CREDIT ON THE JOB'S OWN COMMITS, naming the turn — the run's
 		// page is addressed by it, and every job of the turn is that one
 		// run's — the seat, and the item the turn is charged to
