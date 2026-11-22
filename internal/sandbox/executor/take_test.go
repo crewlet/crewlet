@@ -377,7 +377,7 @@ func TestTwoReadsOfOneJobAtOnceNeverMoveAHalfMadeArchive(t *testing.T) {
 					strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
 				const session = "ses_0123456789abcdef0123456789"
 				if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
-					[]byte("id "+session+"\nrelease 2.3.0\n")); err != nil {
+					[]byte("id "+session+"\nrelease 2.3.2\n")); err != nil {
 					t.Fatal(err)
 				}
 				// THE BOX'S OPENCODE HOLDS THE SESSION, and no run's script
@@ -777,7 +777,7 @@ func overJobs() []overJob {
 					strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
 				const session = "ses_0123456789abcdef0123456789"
 				if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
-					[]byte("id "+session+"\nrelease 2.3.0\n")); err != nil {
+					[]byte("id "+session+"\nrelease 2.3.2\n")); err != nil {
 					t.Fatal(err)
 				}
 				// THE BOX'S OPENCODE HOLDS THE SESSION, and no run's script

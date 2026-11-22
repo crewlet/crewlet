@@ -185,7 +185,7 @@
 // at a compaction of any status ([openCodeRestart]) every part fact dropped;
 // an assistant step's names within its set and none twice, no `metadata`, its
 // `time` names within `created`, `streamed`, `completed` and `firstToken`
-// (2.3.0's), once each, `completed` a number a double reads above zero, as
+// (2.3.2's), once each, `completed` a number a double reads above zero, as
 // JSON.parse does (a settled step, the only kind the export holds), the rest
 // read for nothing; each item an object of type text,
 // reasoning or tool, the list whole.
@@ -639,13 +639,13 @@
 // a five-second busy timeout, and a standalone probe and export complete
 // beside a server live, stopped mid-step or killed, and beside one answering
 // its own small writes, 17 to 22 saves in 30 s with none failed and the
-// slowest at 2.6 s (2.3.0). A save holds the
+// slowest at 2.6 s (untested on 2.3.2). A save holds the
 // session to its last settled message: the step in flight is absent, and its
 // calls are the job's own, told past any point the save states. Every
 // standalone call runs with the models fetch and the updater off and loopback
 // first in NO_PROXY ([openCodeStandalonePins]): a standalone call reaches its
-// own in-process server over HTTP on loopback, which a proxy that never
-// answers hangs, and none measured opened a connection of its own.
+// own in-process server over HTTP on loopback; a proxy that never answers held
+// up no 2.3.2 export (measured).
 //
 // BOUNDED BY THE EXPORT'S BYTES: one empty or past [heldPlainMax], what a kept
 // session's scrub reads, is refused before gzip. The database bounds nothing,
@@ -653,14 +653,15 @@
 //
 // ONE AT A TIME IN A NODE'S OWN MEMORY, AND WAITING FOR ROOM. An export peaks
 // at up to about ten times its session. Measured as the process's own VmHWM
-// beside a live server, less 90 MiB, over the database's bytes and its WAL's:
+// beside a live server, less 90 MiB, over the database's bytes and its WAL's
+// (untested on 2.3.2):
 //
-//	ASCII only (2.3.0): 3.9 to 4.8; 64 MiB peaks at 347 to 404 MiB,
+//	ASCII only: 3.9 to 4.8; 64 MiB peaks at 347 to 404 MiB,
 //	  200 MiB at 881 to 890 MiB
-//	mixed non-ASCII text in every text part (2.3.0): 6.6 to 7.3; 79 MiB at
+//	mixed non-ASCII text in every text part: 6.6 to 7.3; 79 MiB at
 //	  616 MiB
 //	a character past Latin-1 in every string, or a dash past ASCII in every
-//	  text part (2.3.0): 8.5 to 10.9, and between 16 and 64 MiB a
+//	  text part: 8.5 to 10.9, and between 16 and 64 MiB a
 //	  slope of 7.5 to 9.7 with intercepts of 93 to 138 MiB; 64 MiB at 701 to
 //	  731 MiB
 //
@@ -677,7 +678,7 @@
 //
 // SAVED ONLY ON A RELEASE MEASURED: saves make the pack on demand, once rare,
 // one every running job takes each interval, and releases differ in what a
-// standalone call writes (2.3.0 changes the database file) and in what an
+// standalone call writes (2.3.2 changes the database file) and in what an
 // export holds. So a record naming a release
 // outside [openCodeCountReleases] is refused before its pack
 // ([OpenCode.PackSave]), and a release added there is measured for its saves
@@ -945,8 +946,8 @@
 // document's references resolved, so nothing it answered is logged or kept
 // but the values the point is decided by and the plugins' names.
 //
-// THE POINT ([openCodePointAt]), read in 2.3.0's shipped code and measured at
-// its boundaries: the model's limit (the smaller of its input and context
+// THE POINT ([openCodePointAt]), read in 2.3.2's code, measured at its default
+// limit's boundary: the model's limit (the smaller of its input and context
 // limits, else its input limit, else its context limit), less a buffer the
 // highest document sets below it (tokens, or a `"N%"` share), else less the
 // larger of fifteen hundredths of it and 16,000 tokens once the limit is

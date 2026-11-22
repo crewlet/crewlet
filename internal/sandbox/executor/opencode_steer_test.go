@@ -257,7 +257,7 @@ func (p *probe) sees(name, session string, messages ...map[string]any) {
 	}
 }
 
-// userText is a user message of a model request as OpenCode 2.3.0 hands its
+// userText is a user message of a model request as OpenCode 2.3.2 hands its
 // hooks one: its id and a single text part.
 func userText(id, text string) map[string]any {
 	return map[string]any{"id": id, "role": "user", "content": []map[string]any{{"type": "text", "text": text}}}

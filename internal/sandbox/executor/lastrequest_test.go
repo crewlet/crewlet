@@ -531,7 +531,7 @@ func openCodeContextFixture(t *testing.T, version, name string) string {
 }
 
 // openCodeContextVersions are the releases a real run's message list is kept of.
-var openCodeContextVersions = []string{"2.3.0"}
+var openCodeContextVersions = []string{"2.3.2"}
 
 // linesOf is a run's stream, its lines.
 func linesOf(stream string) []string {
@@ -721,9 +721,9 @@ func TestAPagePastTheBudgetIsSaidAndEndsTheReading(t *testing.T) {
 	})
 }
 
-// A PAGE PAST WHAT A PIPE HOLDS IS READ WHOLE. Into a pipe, earlier OpenCode 2
-// releases stop writing an answer after a 64 KiB multiple and exit 0, so the
-// script has OpenCode write each page to a file and prints it from there, as
+// A PAGE PAST WHAT A PIPE HOLDS IS READ WHOLE. A cut into a pipe exits 0
+// (2.3.2 cut none to 1 MiB, measured), so the script has OpenCode write each
+// page to a file and prints it from there, as
 // with its other answers: a settled step's page three times what a pipe holds,
 // from an OpenCode that cuts what it pipes, is printed whole and gives its figure.
 //

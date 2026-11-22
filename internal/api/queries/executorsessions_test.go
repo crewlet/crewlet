@@ -228,7 +228,7 @@ func sealedSession(t *testing.T, store *executordomain.SessionStore, handle stri
 	at := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
 	return executordomain.Session{
 		Handle: handle, Turn: turn, ConversationKey: "chat:room", Harness: executor.OpenCodeName,
-		HarnessVersion: "2.3.0", Object: put.Object, ContentKey: put.ContentKey,
+		HarnessVersion: "2.3.2", Object: put.Object, ContentKey: put.ContentKey,
 		ArchiveFormat: executor.OpenCode{}.ArchiveFormat(), CapturedAt: at, EndedAt: at.Add(time.Minute),
 		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted, Decision: "done"},
 	}

@@ -100,7 +100,7 @@ func keptSession(t *testing.T, seat, text string) (*seatSessions, *executordomai
 	}
 	at := time.Date(2031, 4, 7, 9, 0, 0, 0, time.UTC)
 	row := executordomain.Session{Handle: seat, Turn: turn, ConversationKey: "chat:room",
-		Harness: executor.OpenCodeName, HarnessVersion: "2.3.0", Object: put.Object,
+		Harness: executor.OpenCodeName, HarnessVersion: "2.3.2", Object: put.Object,
 		ContentKey: put.ContentKey, ArchiveFormat: executor.OpenCode{}.ArchiveFormat(),
 		CapturedAt: at, EndedAt: at.Add(time.Minute),
 		Ending: &executorkeep.Ending{Outcome: executorkeep.OutcomeCompleted}}

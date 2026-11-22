@@ -166,7 +166,7 @@ func runStartOf(cursor string) string {
 
 // releasePattern is a release's MAJOR.MINOR.PATCH, wherever a harness's
 // `--version` prints it: first for Claude Code (`2.1.310 (Claude Code)`),
-// after a name for OpenCode (`opencode v2.3.0`).
+// after a name for OpenCode (`opencode v2.3.2`).
 var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 
 // releaseOf is the release a harness's `--version` printed, "2.1.310", or ""

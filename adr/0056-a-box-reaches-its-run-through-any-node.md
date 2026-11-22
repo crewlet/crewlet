@@ -158,7 +158,7 @@ executor run for. So the engine hands every bridged server the bridge's own
 bound for a call, which each harness's settings carry as the server's timeout,
 Claude Code's `timeout` and OpenCode's `timeout.execution`; past it the
 harness gives the call up and cancels it, whatever progress flows (measured on
-Claude Code 2.1.310 and an earlier OpenCode 2 release). The bound is the two seat-lease
+Claude Code 2.1.310, and on OpenCode 2.3.2 with none flowing). The bound is the two seat-lease
 lifetimes a call may wait for a holder, plus the longest bound the surface's
 tools declare (a seat MCP server's request timeout, `delegate`'s call cap),
 never under the engine's one-call ceiling, plus a minute for the bridge's own

@@ -14,8 +14,8 @@ import (
 // held one only where the box's point proves it whole.
 
 // pointAt is a box's point at tokens, the engine's own pair's 170,000 where
-// the cases say nothing else: OpenCode 2.3.0's on a 200,000-token limit.
-func pointAt(tokens int64) BoxPoint { return BoxPoint{Release: "2.3.0", Tokens: tokens, Charge: 4} }
+// the cases say nothing else: OpenCode 2.3.2's on a 200,000-token limit.
+func pointAt(tokens int64) BoxPoint { return BoxPoint{Release: "2.3.2", Tokens: tokens, Charge: 4} }
 
 // briefOf is a brief of n bytes.
 func briefOf(n int) string { return strings.Repeat("b", n) }
@@ -41,7 +41,7 @@ func TestOpenCodeSendsWholeStrictlyBelowThePoint(t *testing.T) {
 	}{
 		{name: "one token under, with the brief", point: pointAt(170000), bound: 167998, want: true},
 		{name: "at the point, with the brief", point: pointAt(170000), bound: 167999},
-		{name: "compaction off, far past", point: BoxPoint{Release: "2.3.0", Never: true}, bound: 900000,
+		{name: "compaction off, far past", point: BoxPoint{Release: "2.3.2", Never: true}, bound: 900000,
 			want: true},
 		{name: "a marked point, far under", point: BoxPoint{Tokens: 170000, Mark: PointDefaulted}, bound: 10},
 		{name: "a point at or below zero", point: pointAt(0), bound: 1},
@@ -157,7 +157,7 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureLogs(t)
-			rig, opened, req := opencodeKept(t, true, "2.3.0")
+			rig, opened, req := opencodeKept(t, true, "2.3.2")
 			rig.runner.Point = func(PointAsk) (BoxPoint, error) { return pointAt(tc.point), nil }
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 				rig.runner, tc.reused, false, RunSources{})
@@ -191,7 +191,7 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 		req.Continue = &Continuation{SessionID: "sess-own", Brief: savePointSameBox, Told: toldBySavePoint,
 			Summarized: summarizedSameBox, SummarizedTold: toldAsSummary,
 			Count: &ResumedCount{Tokens: 100000}, CountProvider: "stub"}
-		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.0"}}
+		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.2"}}
 		got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"), rig.runner,
 			true, false, RunSources{})
 		t.Cleanup(got.release)
@@ -200,7 +200,7 @@ func TestAnOpenCodeContinuationThatMayCompactIsHandedTheSummarizedBrief(t *testi
 				got.brief, got.told, got.decision().Summarized)
 		}
 		asks := rig.runner.PointAsks()
-		if len(asks) != 1 || asks[0].Writer != "2.3.0" || asks[0].Sources == nil || asks[0].Release != "" {
+		if len(asks) != 1 || asks[0].Writer != "2.3.2" || asks[0].Sources == nil || asks[0].Release != "" {
 			t.Errorf("the copy's box was asked %+v, want one ask of the writer the job before's record "+
 				"names, in its box, its release asked", asks)
 		}
@@ -233,12 +233,12 @@ func TestTheOwnCopyIsReadToo(t *testing.T) {
 		inBox       bool
 	}{
 		{name: "its own box, the harness ended there", reused: true, inBox: true},
-		{name: "its own box, the copy replaced", interrupted: true, reused: true, release: "2.3.0", inBox: true},
-		{name: "a new box", interrupted: true, release: "2.3.0"},
+		{name: "its own box, the copy replaced", interrupted: true, reused: true, release: "2.3.2", inBox: true},
+		{name: "a new box", interrupted: true, release: "2.3.2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig, opened, req := opencodeKept(t, tc.interrupted, "2.3.0")
+			rig, opened, req := opencodeKept(t, tc.interrupted, "2.3.2")
 			rig.runner.Point = func(PointAsk) (BoxPoint, error) { return pointAt(170000), nil }
 			sources := RunSources{System: "the run's own"}
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
@@ -298,7 +298,7 @@ func TestAFailedReadHandsTheSummarizedBrief(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rig, opened, req := opencodeKept(t, true, "2.3.0")
+			rig, opened, req := opencodeKept(t, true, "2.3.2")
 			rig.runner.Point = tc.point
 			got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 				rig.runner, false, false, RunSources{})
@@ -316,7 +316,7 @@ func TestAFailedReadHandsTheSummarizedBrief(t *testing.T) {
 		req.Continue = &Continuation{SessionID: "sess-own", Brief: savePointSameBox, Told: toldBySavePoint,
 			Summarized: summarizedSameBox, SummarizedTold: toldAsSummary,
 			Count: &ResumedCount{Tokens: 1000}, CountProvider: "stub"}
-		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.0"}}
+		opened := PendingRun{TurnID: "t1", AgentHandle: "swe", LaunchSeq: 2, Prior: PriorBox{Writer: "2.3.2"}}
 		// ITS RUNNER INTERFACE ALONE, so no read of a point is offered.
 		got := rig.coordinator.continueSession(t.Context(), req, opened, NewFakeSandbox("box-1"),
 			struct{ Runner }{rig.runner}, true, false, RunSources{})

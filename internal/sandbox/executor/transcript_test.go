@@ -294,7 +294,7 @@ func openCodeUser(text string) string {
 
 // openCodeFixtureVersions are the OpenCode releases a real export is kept of,
 // testdata/opencode/<version>/export.json: the one release this build drives.
-var openCodeFixtureVersions = []string{"2.3.0"}
+var openCodeFixtureVersions = []string{"2.3.2"}
 
 // openCodeExportFixture is the export OpenCode version printed for one session:
 // a REAL `opencode session export` of a session the release ran (@opencode/cli
@@ -323,7 +323,7 @@ var openCodeMinted = regexp.MustCompile(`\b(?:sh|ses)_[0-9A-Za-z]+|\b[0-9a-f]{40
 
 // openCodeBackground is what OpenCode's shell answered a call it ran in the
 // background, beside the process it started, the ids it minted read past
-// ([openCodeMinted]): two text items, a line apart, as 2.3.0 writes them.
+// ([openCodeMinted]): two text items, a line apart, as 2.3.2 writes them.
 func openCodeBackground(pid string) string {
 	return "Command moved to the background (shell ID: <id>).\nPID: " + pid + "\n" +
 		"Output is streaming to: /work/xdg/data/opencode/shell/<id>/<id>.out\n" +
@@ -337,7 +337,7 @@ func openCodeBackground(pid string) string {
 }
 
 // openCodeSubagent is what OpenCode's subagent tool answered a call it started
-// in the background, the session it minted read past, as 2.3.0 writes it.
+// in the background, the session it minted read past, as 2.3.2 writes it.
 const openCodeSubagent = "The subagent is working in the background (sessionID: <id>). You will receive a " +
 	"<subagent> message when it goes idle, and again after each later round of work.\n" +
 	"DO NOT sleep, poll, proactively check on its progress, or duplicate this subagent's work.\n" +
@@ -351,9 +351,9 @@ func openCodeFixtureTranscript(version string) []shown {
 	// THE READ'S FAILURE is OpenCode's own words, and the shell's pids the
 	// processes the two runs of the steps started.
 	notFound, pids := map[string]string{
-		"2.3.0": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. " +
+		"2.3.2": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. " +
 			"The nearest folder that does is /.",
-	}[version], map[string][2]string{"2.3.0": {"198", "330"}}[version]
+	}[version], map[string][2]string{"2.3.2": {"198", "330"}}[version]
 	fixed := shown{kind: executor.EntryModel, text: "Fixed: the cache takes its lock."}
 	steps := func(note []shown, pid string) []shown {
 		return slices.Concat([]shown{

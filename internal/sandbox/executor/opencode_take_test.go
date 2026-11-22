@@ -36,7 +36,7 @@ func TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed(t *testing.T) {
 		strings.Replace(fakeOpenCode, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
 	const session = "ses_0123456789abcdef0123456789"
 	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
-		[]byte("id "+session+"\nrelease 2.3.0\n")); err != nil {
+		[]byte("id "+session+"\nrelease 2.3.2\n")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -92,9 +92,9 @@ func TestAnOpenCodeSessionIsPackedOnDemandAndKeptScrubbed(t *testing.T) {
 }
 
 // AN OPENCODE SESSION PACKED ON DEMAND IS PACKED WHOLE BY AN OPENCODE THAT CUTS
-// WHAT IT WRITES INTO A PIPE: earlier OpenCode 2 releases stop writing a standalone export
-// into a pipe after a 64 KiB multiple, exiting 0 (the take's scrub then refused
-// the cut archive and the pack failed), so the pack writes it to a file and
+// WHAT IT WRITES INTO A PIPE: such a cut exits 0 (2.3.2 wrote a 1 MiB
+// standalone export into a pipe whole, measured), and the take's scrub refuses
+// the cut archive, so the pack writes it to a file and
 // gzips that. An export past the cut gunzips whole, and that whole
 // archive's digest is the one the box keeps.
 //
@@ -108,7 +108,7 @@ func TestAnOpenCodeSessionPackedOnDemandIsPackedWhole(t *testing.T) {
 		"d="+shQuote(dir)+" FAKE_PIPE_CUT="+strconv.Itoa(pipeCut), 1))
 	const session = "ses_0123456789abcdef0123456789"
 	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
-		[]byte("id "+session+"\nrelease 2.3.0\n")); err != nil {
+		[]byte("id "+session+"\nrelease 2.3.2\n")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {
@@ -232,7 +232,7 @@ func TestAnOpenCodeSessionTheBoxCouldNotBeAskedAboutIsAFailedPack(t *testing.T) 
 		strings.Replace(broken, `d="$FAKE_DIR"`, "d="+shQuote(dir), 1))
 	const session = "ses_0123456789abcdef0123456789"
 	if err := b.WriteFile(t.Context(), paths(b).SessionRecord(),
-		[]byte("id "+session+"\nrelease 2.3.0\n")); err != nil {
+		[]byte("id "+session+"\nrelease 2.3.2\n")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0o700); err != nil {

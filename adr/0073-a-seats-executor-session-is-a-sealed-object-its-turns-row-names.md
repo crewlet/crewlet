@@ -2907,7 +2907,7 @@ a child that has exited and is not yet reaped as running (crewlet#1164); ends
 the call `SIGTERM` first and `SIGKILL` past `JobStopGrace`; and reaps it.
 
 The bounds are constants, one a kind of call, each set from a probe of
-OpenCode 2, 2.3.0 among the releases probed: every call timed in a run's own
+OpenCode 2 (on 2.3.2 only the readiness `mcp.list` re-measured, 0.4 s): every call timed in a run's own
 script, twenty of each kind on an idle box and on one whose two cores were kept
 busy, and exports and pages of sessions of up to 256 MiB. `openCodeCallWait`,
 ten seconds, holds a call whose answer is a few KiB, the slowest measured 687
@@ -4315,8 +4315,8 @@ qualifying where those three prompt parts are above zero and it ended on no
 error) and its estimate of every message after it, the reply's own tool
 results among them, at a rounded quarter of each one's UTF-16 length,
 restarted at its newest completed compaction. Read in the shipped code of
-2.3.0, and measured on it: every boundary its point predicts split there, one
-token apart.
+2.3.2 and measured at its default limit's boundary; the other boundaries are
+untested on 2.3.2.
 
 **The count.** The engine bounds that count from above off the session's
 export, at both places one is read whole: the take's meter, over the archive
@@ -4633,7 +4633,7 @@ server's address and password are the run's script's alone. Every release
 measured opens its database in WAL mode with a five-second busy timeout, and a
 standalone probe and export complete beside a server live, stopped mid-step or
 killed, and beside one writing small session rows, 17 to 22 saves in 30 s
-with none failed on either side (2.3.0). A save
+with none failed on either side (untested on 2.3.2). A save
 holds the session's settled messages: the step in flight is absent, and its
 calls lie past any point the save states. Every standalone call runs with the
 models fetch and the updater off and loopback first in `NO_PROXY`, which
@@ -4709,8 +4709,8 @@ box's database, so a job whose database holds much besides its session waits
 where its room would hold the export; a final pack on demand checks no room, so
 one whose export alone exceeds it can take its box or the engine past its
 limit; the run's own end export runs in its server, which may peak alike, and
-takes no slot; on 2.3.0 every standalone call writes the database
-file, measured beside small writers only; a relaunch from an OpenCode save no
+takes no slot; on 2.3.2 a standalone call writes the database file
+(measured); a relaunch from an OpenCode save no
 reading answers is told every call of its round past the save's point; a save
 stays at zero, and tells more, where its launch continued the box's own copy in
 place, the conversation's base or no kept capture of its round, where its box
@@ -4778,7 +4778,7 @@ step's `0` items, the slowest, in 10.7 to 11.0 s, inside the 30 s wait; beside a
 person's read of a 64 MiB export, which holds 18 to 19 MiB on the same walk,
 the two hold 18 to 19 MiB.
 
-**The releases.** A session is read only where OpenCode 2.3.0 wrote it
+**The releases.** A session is read only where OpenCode 2.3.2 wrote it
 (`openCodeHoldingsReleases`, a set and never a range, compared whole): it was
 driven, writer and box, through the engine's own
 bridge and render, and every part these rules count, on the export as the take

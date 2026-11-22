@@ -55,7 +55,7 @@ const openCodeContextEvent = "crewlet.context"
 // message. A job that ended by itself ends on a step's error at most once, but
 // one that made no request pages back into the session it took up, which an
 // end request may have left with two interrupted steps: the real exports
-// (testdata/opencode/2.3.0/export.json) hold the measuring step
+// (testdata/opencode/2.3.2/export.json) hold the measuring step
 // fourth newest, behind two interrupted and one refused. SIX holds that and
 // two failures more. Past it, the job's record keeps the measure carried along
 // its copy's lineage.
@@ -73,9 +73,9 @@ const openCodeContextPages = 6
 const openCodeContextBytes = 1 << 20
 
 // openCodeListenWait bounds the wait for the run's private server to say where
-// it listens: about a second on an earlier OpenCode 2 release, most of it the runtime
-// starting, so sixty is room for a contended box, short of holding a seat for
-// a server that is never coming up.
+// it listens: 0.4 to 0.5 s on 2.3.2 (six starts, a 2-core container), so
+// sixty is room for a contended box, short of holding a seat for a server
+// that is never coming up.
 const openCodeListenWait = 60 * time.Second
 
 // openCodeClock is the command a run's script reads the time from, in whole
@@ -95,12 +95,12 @@ const openCodeMCPWait = 60 * time.Second
 // and the login's `auth export`. Past it the call is ended and the script goes
 // on as where the server is gone ([openCodeBounded]).
 //
-// TEN SECONDS, about fifteen times the slowest such call measured (687 ms, a
-// readiness `mcp.list` on an earlier OpenCode 2 release; each kind under
-// 0.7 s on 2.3.0, a busy 2-core box; crewlet#1088's probe). Past it a call costs only what a gone server
-// costs: a usage line, a steer left, an unsettled step. OpenCode bounds
-// nothing itself: its client waits on a call as long as an answering server
-// takes.
+// TEN SECONDS, about three times the slowest such call measured on 2.3.2: a
+// readiness `mcp.list` answers in 0.4 s, and in 3.5 s where the server's
+// OTLP endpoint refuses connections (a 2-core container; the other kinds
+// untested on 2.3.2). Past it a call costs only what a gone server costs: a
+// usage line, a steer left, an unsettled step. OpenCode bounds nothing itself:
+// its client waits on a call as long as an answering server takes.
 const openCodeCallWait = 10 * time.Second
 
 // openCodeSessionCallWait bounds one call a run's script makes to its own
@@ -236,7 +236,7 @@ func (OpenCode) Session(req sandbox.RunRequest) Session {
 // release ([openCodeScript]); one on a newer runs, its sessions fresh; and a
 // carried session continues only where the box and the writer are both
 // exactly it ([OpenCode.Continues]).
-const openCodeRelease = "2.3.0"
+const openCodeRelease = "2.3.2"
 
 // openCodeArchiveFormat is the layout an OpenCode run packs its session in: the
 // document `opencode session export` prints — the session and its settled
@@ -326,20 +326,20 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 // openCodeStandalonePins is what every standalone call of a pack on demand runs
 // under: the models fetch and the updater off, and loopback first in NO_PROXY
 // and no_proxy, so a proxy the box's environment names never takes the
-// in-process server a standalone call reaches over HTTP on loopback (an
-// earlier OpenCode 2 release hung behind a proxy that does not answer). None measured opened a connection
-// of its own either way; the pins keep a save, which every running job takes
-// every interval, from depending on that.
+// in-process server a standalone call reaches over HTTP on loopback. On
+// 2.3.2 a standalone export with no pins, behind a proxy that never answers,
+// finished as fast as with them (measured); the pins keep a save, which every
+// running job takes every interval, from depending on that.
 const openCodeStandalonePins = `export OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1` + "\n" +
 	`NO_PROXY="127.0.0.1,localhost,::1${NO_PROXY:+,$NO_PROXY}" no_proxy="127.0.0.1,localhost,::1${no_proxy:+,$no_proxy}"; export NO_PROXY no_proxy` + "\n"
 
 // openCodeSaveNeedFactor and openCodeSaveNeedBase are the memory an OpenCode
 // save's export is held to need: the factor times its database's bytes and
-// its WAL's, plus the base. Twelve and 128 MiB hold every point measured (the
-// steepest a slope of 9.7 and an intercept of 93 MiB, an earlier OpenCode 2
-// release with a character past Latin-1 in every string), and a fifth's room for a shape not measured
-// at the bound; an all-ASCII session, about 4.5, is over-counted. The package
-// doc has the measurements.
+// its WAL's, plus the base. Twelve and 128 MiB hold the steepest point
+// measured (a slope of 9.7 and an intercept of 93 MiB, a character past
+// Latin-1 in every string; untested on 2.3.2), and a fifth's room for a shape
+// not measured at the bound; an all-ASCII session, about 4.5, is
+// over-counted. The package doc has the measurements.
 const (
 	openCodeSaveNeedFactor = 12
 	openCodeSaveNeedBase   = 128 << 20
@@ -419,8 +419,8 @@ func openCodeOlderCheck() string {
 // writes only to a file or /dev/null: stdout is the event stream.
 //
 // EVERY ANSWER OF OPENCODE'S IT READS GOES THROUGH A FILE, never a pipe or
-// `$(opencode …)`: into a pipe, earlier OpenCode 2 releases stopped after a
-// 64 KiB multiple and exited 0 ([openCodePack]). One rule with no exception, rather
+// `$(opencode …)`: a cut into a pipe exits 0 unseen, though 2.3.2 cut none to
+// 1 MiB (measured; [openCodePack]). One rule with no exception, rather
 // than an argument per answer about its size: answers go to
 // [openCodeAnswerFile], the message list's pages and a pack's to their own
 // files. TestNoOpenCodeAnswerIsReadThroughAPipe holds every rendered script to
@@ -461,11 +461,10 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// harness interrupts the session through its server first, which settles
 	// the step in flight so the export holds it, then ends the client within
 	// the grace. The client ended alone left the server working: the export
-	// held nothing of the step, and its tool call still ran (measured on
-	// earlier OpenCode 2 releases; the API names it `session.interrupt`, not
-	// `session.abort`). On 2.3.0 the client never finishes its shutdown at
-	// SIGTERM, so it is
-	// killed at the grace and the end recorded as killed. The interrupt is
+	// held nothing of the step, and its tool call still ran (untested on
+	// 2.3.2; the API names it `session.interrupt`, not `session.abort`). On
+	// 2.3.2 the interrupted client is gone within 0.2 s of its SIGTERM
+	// (measured), so the end is recorded as asked. The interrupt is
 	// BOUNDED ([openCodeBounded]), never by the request it serves: a server that never answers leaves the step
 	// unsettled, as a gone one does, and no end waits on the server.
 	b.WriteString(endPrologue(paths, times.stop))
@@ -793,9 +792,9 @@ func openCodeCapture(paths Paths, times openCodeTimes) string {
 // session's note inbox; where bounded, one empty or past [heldPlainMax] is
 // refused before gzip, saying which, as the take would refuse it unread.
 //
-// THE EXPORT GOES TO A FILE that gzip then reads, never a pipe: piped,
-// earlier OpenCode 2 releases cut a large export at a 64 KiB multiple with
-// status 0. call prefixes the export: the run's script bounds it; a pack on
+// THE EXPORT GOES TO A FILE that gzip then reads, never a pipe: a piped
+// export cut short exits 0, which the take would only refuse later (2.3.2
+// wrote a 1 MiB export into a pipe whole, measured). call prefixes the export: the run's script bounds it; a pack on
 // demand runs it bare, under [sandbox.SessionPackWait], since OpenCode's WAL
 // database lets it complete beside a live, stopped, killed or writing server.
 func openCodePack(paths Paths, staged, dest, server, call string, bounded bool) string {
