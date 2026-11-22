@@ -1038,7 +1038,8 @@ type Profile struct {
 	// nobody made. Holding none of its keys such a file is not a login
 	// ([Profile.HoldsLogin]); a credential file not named here is one whenever
 	// it exists. Every key the harness signs in from: one it reads that is not
-	// named leaves a login the engine takes for none.
+	// named leaves a login the engine takes for none. Of a TOML file, they are
+	// also all a seat or a run is handed of it ([Profile.KeepLoginTOML]).
 	LoginKeys map[string][]string `yaml:"login_keys,omitempty"`
 
 	// RunKeys names, by a credential file's NAME, the keys (dotted, into a
