@@ -226,8 +226,9 @@ type saveTaken struct {
 	policy  SessionPolicy
 	archive SessionArchive
 	counted int64
-	// room is the room its spool holds, from before its pack ([spoolHold]).
-	room *spoolHold
+	// room is the room its sealed spool holds, and scrubbing its scrub's
+	// spool's, from before its pack ([takeRoomBytes]).
+	room, scrubbing *spoolHold
 	// sealed is the size of the object the keep landed.
 	sealed int64
 }
@@ -258,6 +259,7 @@ func (c *Coordinator) saveTask(ctx, duty context.Context, job saveJob) saveOutco
 		// ITS ROOM BACK ONCE ITS KEEP HAS ENDED, as its spool's removal gives
 		// it, or where none was spooled.
 		defer in.room.release()
+		defer in.scrubbing.release()
 		out = c.takeSave(ctx, job, point, in, out, passed, inflight)
 	}
 	switch out.class {
@@ -308,11 +310,12 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 
 	run := job.run
 	packed := false
-	var spooling *spoolHold
+	var spooling, scrubbing *spoolHold
 	// STOOD DOWN where the coordinator stopped, or the duty ended while the
 	// box phase ran: past the pack the save is the coordinator's.
 	end := func(class saveClass, why string) (*saveTaken, saveOutcome) {
 		spooling.release()
+		scrubbing.release()
 		if (class == saveNotYet || class == saveFailed) && (ctx.Err() != nil || (!packed && duty.Err() != nil)) {
 			class = saveStoodDown
 		}
@@ -381,14 +384,16 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 	if !held {
 		return end(saveNotYet, takerUnheld)
 	}
-	// ROOM FOR ITS SPOOL AT THE SEALED BOUND, taken before the pack slot and
+	// ROOM FOR ITS SPOOLS AT THE SEALED BOUND, taken before the pack slot and
 	// never waited for: a save that finds none is due again, and leaves a
-	// final take the room saves never fill ([spoolRoomBytes]).
-	if spooling = c.trySpoolRoom(executorkeep.SealedMaxBytes); spooling == nil {
+	// final take the room saves never fill ([spoolRoomBytes]). The scrub's
+	// spool's part is split off at once ([takeRoomBytes]).
+	if spooling = c.trySpoolRoom(takeRoomBytes); spooling == nil {
 		out.unplaced = "spool"
 		return end(saveNotYet, fmt.Sprintf("this node's session spools fill their room (%d bytes)",
 			spoolRoomBytes))
 	}
+	scrubbing = spooling.split(takeRoomBytes - executorkeep.SealedMaxBytes)
 	// ONE PACK AT A TIME in a box that shares the node's memory
 	// ([Coordinator.sharedPack]), given back as the pack returns.
 	give, err := c.packSlot(duty, row)
@@ -438,7 +443,7 @@ func (c *Coordinator) saveInHand(ctx, duty context.Context, job saveJob, out sav
 	}
 	out.counted = counted
 	return &saveTaken{box: box, saver: saver, row: row, policy: policy, archive: archive, counted: counted,
-		room: spooling}, out
+		room: spooling, scrubbing: scrubbing}, out
 }
 
 // saveRow is rule 7: the ONE READ of the run's row a save's place, save point
@@ -609,8 +614,15 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 		out.unplaced = "scrub"
 		return end(saveFailed, err.Error())
 	}
+	dir, err := c.spoolHere()
+	if err != nil {
+		release()
+		out.unplaced = "spool"
+		return end(saveFailed, err.Error())
+	}
 	taken, err := in.saver.TakeSession(take, in.box, SessionTake{Save: in.archive.Path, Scrub: scrub,
-		MaxBytes: executorkeep.SessionMaxBytes, Scope: row.AgentID, Session: row.Launch.Minted})
+		MaxBytes: executorkeep.SessionMaxBytes, Scope: row.AgentID, Session: row.Launch.Minted,
+		Spool: in.scrubbing.spooling(dir)})
 	switch {
 	case err != nil:
 		out.unplaced = "take"
