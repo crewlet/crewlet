@@ -223,7 +223,7 @@ func TestAKeyLinesOpeningIsShownAsItSettlesAsTheWholeTextHasIt(t *testing.T) {
 					n = min(n, len(c.text)-at)
 					pending += c.text[at : at+n]
 					at += n
-					cut := Settled(pending)
+					cut := SettledByBoth(t, pending)
 					shown.WriteString(Secrets(pending[:cut]))
 					pending = pending[cut:]
 				}
