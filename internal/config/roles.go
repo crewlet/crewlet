@@ -472,6 +472,10 @@ type RoleIntegrations struct {
 	AppleAds        *RoleAppleAds        `yaml:"apple_ads,omitempty" json:"apple_ads,omitempty" desc:"This seat's Apple Ads access: whether it is on, its level and its ad accounts."`
 	GoogleAnalytics *RoleGoogleAnalytics `yaml:"google_analytics,omitempty" json:"google_analytics,omitempty" desc:"This seat's Google Analytics access: whether it is on, its level and its properties."`
 	AdMob           *RoleAdMob           `yaml:"admob,omitempty" json:"admob,omitempty" desc:"This seat's AdMob access: whether it is on, its level and its publisher accounts."`
+	AdSense         *RoleAdSense         `yaml:"adsense,omitempty" json:"adsense,omitempty" desc:"This seat's AdSense access: whether it is on, its level and its publisher accounts."`
+	GoogleAds       *RoleGoogleAds       `yaml:"google_ads,omitempty" json:"google_ads,omitempty" desc:"This seat's Google Ads access: whether it is on, its level and its accounts."`
+	SearchConsole   *RoleSearchConsole   `yaml:"search_console,omitempty" json:"search_console,omitempty" desc:"This seat's Search Console access: whether it is on, its level and its sites."`
+	GooglePlay      *RoleGooglePlay      `yaml:"google_play,omitempty" json:"google_play,omitempty" desc:"This seat's Google Play access: whether it is on, its level and its apps."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
