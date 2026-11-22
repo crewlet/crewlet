@@ -55,7 +55,7 @@ const openCodeContextEvent = "crewlet.context"
 // message. A job that ended by itself ends on a step's error at most once, but
 // one that made no request pages back into the session it took up, which an
 // end request may have left with two interrupted steps: the real exports
-// (testdata/opencode/{2.0.32,2.2.5}/export.json) hold the measuring step
+// (testdata/opencode/2.3.0/export.json) hold the measuring step
 // fourth newest, behind two interrupted and one refused. SIX holds that and
 // two failures more. Past it, the job's record keeps the measure carried along
 // its copy's lineage.
@@ -73,7 +73,7 @@ const openCodeContextPages = 6
 const openCodeContextBytes = 1 << 20
 
 // openCodeListenWait bounds the wait for the run's private server to say where
-// it listens: about a second on OpenCode 2.0.32, most of it the runtime
+// it listens: about a second on an earlier OpenCode 2 release, most of it the runtime
 // starting, so sixty is room for a contended box, short of holding a seat for
 // a server that is never coming up.
 const openCodeListenWait = 60 * time.Second
@@ -96,8 +96,8 @@ const openCodeMCPWait = 60 * time.Second
 // on as where the server is gone ([openCodeBounded]).
 //
 // TEN SECONDS, about fifteen times the slowest such call measured (687 ms, a
-// readiness `mcp.list` on OpenCode 2.2.7; each kind under 0.7 s on 2.0.32 to
-// 2.3.0, a busy 2-core box; crewlet#1088's probe). Past it a call costs only what a gone server
+// readiness `mcp.list` on an earlier OpenCode 2 release; each kind under
+// 0.7 s on 2.3.0, a busy 2-core box; crewlet#1088's probe). Past it a call costs only what a gone server
 // costs: a usage line, a steer left, an unsettled step. OpenCode bounds
 // nothing itself: its client waits on a call as long as an answering server
 // takes.
@@ -111,8 +111,8 @@ const openCodeCallWait = 10 * time.Second
 //
 // THIRTY SECONDS, about five times the slowest measured: 6.4 s to export a 256
 // MiB session (the most a kept session's export holds unpacked, the scrub's
-// plaintext bound, [scrubPlainMax]) on a busy 2-core box, OpenCode
-// 2.1.4. Past it only the wait is lost: an export it ended is packed on demand
+// plaintext bound, [scrubPlainMax]) on a busy 2-core box, an earlier
+// OpenCode 2 release. Past it only the wait is lost: an export it ended is packed on demand
 // once the job is over ([OpenCode.Pack]), and a page it ended leaves the
 // figure carried along the copy's lineage.
 const openCodeSessionCallWait = 30 * time.Second
@@ -124,8 +124,8 @@ const openCodeSessionCallWait = 30 * time.Second
 // database until exported, and every production teardown of a run in flight
 // kills it outright ([sandbox.Local.Kill], `docker rm -f`). An OAuth token
 // lives an hour or more, so thirty seconds leaves under one refresh in a
-// hundred in the window, at one export per interval (0.14 s on OpenCode
-// 2.0.32, under half a percent of a core); ten seconds would triple that for a
+// hundred in the window, at one export per interval (0.14 s on an earlier
+// OpenCode 2 release, under half a percent of a core); ten seconds would triple that for a
 // window a mid-run kill already makes rare.
 const openCodeLoginSync = 30 * time.Second
 
@@ -231,11 +231,12 @@ func (OpenCode) Session(req sandbox.RunRequest) Session {
 	return Session{ID: "ses_" + newOpenCodeSession()}
 }
 
-// openCodeCarryFloor is the oldest OpenCode release a box continues a carried
-// session on, and the oldest whose session it continues: 2.0.32, the release
-// the script, the session's export and import, and the import's refusal of an
-// id it holds were measured on. Nothing older is a release this runner drives.
-const openCodeCarryFloor = "2.0.32"
+// openCodeRelease is the one OpenCode release this runner supports, its
+// newest: a box on an older one is refused at the run's start, naming its
+// release ([openCodeScript]); one on a newer runs, its sessions fresh; and a
+// carried session continues only where the box and the writer are both
+// exactly it ([OpenCode.Continues]).
+const openCodeRelease = "2.3.0"
 
 // openCodeArchiveFormat is the layout an OpenCode run packs its session in: the
 // document `opencode session export` prints — the session and its settled
@@ -325,8 +326,8 @@ func openCodePackNow(paths Paths, session, staged, dest string, room bool) strin
 // openCodeStandalonePins is what every standalone call of a pack on demand runs
 // under: the models fetch and the updater off, and loopback first in NO_PROXY
 // and no_proxy, so a proxy the box's environment names never takes the
-// in-process server a standalone call reaches over HTTP on loopback (2.0.32,
-// which a proxy that does not answer hangs). None measured opened a connection
+// in-process server a standalone call reaches over HTTP on loopback (an
+// earlier OpenCode 2 release hung behind a proxy that does not answer). None measured opened a connection
 // of its own either way; the pins keep a save, which every running job takes
 // every interval, from depending on that.
 const openCodeStandalonePins = `export OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_AUTOUPDATE=1` + "\n" +
@@ -335,8 +336,8 @@ const openCodeStandalonePins = `export OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_
 // openCodeSaveNeedFactor and openCodeSaveNeedBase are the memory an OpenCode
 // save's export is held to need: the factor times its database's bytes and
 // its WAL's, plus the base. Twelve and 128 MiB hold every point measured (the
-// steepest a slope of 9.7 and an intercept of 93 MiB, 2.2.7 with a character
-// past Latin-1 in every string), and a fifth's room for a shape not measured
+// steepest a slope of 9.7 and an intercept of 93 MiB, an earlier OpenCode 2
+// release with a character past Latin-1 in every string), and a fifth's room for a shape not measured
 // at the bound; an all-ASCII session, about 4.5, is over-counted. The package
 // doc has the measurements.
 const (
@@ -372,20 +373,45 @@ const openCodeNotHeld = `*'Session not found'*|*NotFoundError*`
 func (OpenCode) layout() archiveLayout { return archiveDocument }
 
 // Continues reports whether a session written by OpenCode release writer can
-// be continued in a box whose OpenCode is release box ([carrier]): both at or
-// after [openCodeCarryFloor], and never a box older than the writer.
+// be continued in a box whose OpenCode is release box ([carrier]): only where
+// both are exactly [openCodeRelease], an unreadable release included in the
+// rest, which start fresh.
 func (OpenCode) Continues(box, writer string) (bool, string) {
 	switch {
-	case !releaseAtLeast(box, openCodeCarryFloor):
-		return false, fmt.Sprintf("this box runs OpenCode %s, older than %s, the oldest that "+
-			"continues a session carried from another box", box, openCodeCarryFloor)
-	case !releaseAtLeast(writer, openCodeCarryFloor):
-		return false, fmt.Sprintf("the session was written by OpenCode %s, older than %s, the "+
-			"oldest whose session another box continues", writer, openCodeCarryFloor)
-	case !releaseAtLeast(box, writer):
-		return false, carriedOlder("OpenCode", box, writer)
+	case box != openCodeRelease:
+		return false, fmt.Sprintf("this box runs OpenCode %s, and a carried session continues only on "+
+			"OpenCode %s", releaseSaid(box), openCodeRelease)
+	case writer != openCodeRelease:
+		return false, fmt.Sprintf("the session was written by OpenCode %s, and only a session %s wrote "+
+			"continues in another box", releaseSaid(writer), openCodeRelease)
 	}
 	return true, ""
+}
+
+// releaseSaid is release as a sentence names it, an unreadable one said so.
+func releaseSaid(release string) string {
+	if release == "" {
+		return "of a release it did not say"
+	}
+	return release
+}
+
+// openCodeOlderCheck is the script's refusal of a box whose OpenCode 2 is
+// older than [openCodeRelease], read off `opencode v<release>` in `$v`, each
+// number compared as a number.
+func openCodeOlderCheck() string {
+	var maj, mnr, pat int
+	if _, err := fmt.Sscanf(openCodeRelease, "%d.%d.%d", &maj, &mnr, &pat); err != nil {
+		panic("executor: openCodeRelease is no release: " + openCodeRelease)
+	}
+	return fmt.Sprintf(`older() { case "$1" in [0-9]*.[0-9]*.[0-9]*) ;; *) return 1;; esac; `+
+		`o=$IFS; IFS=.; set -- $1; IFS=$o; `+
+		`[ "$1" -lt %[1]d ] 2> /dev/null && return 0; [ "$1" -gt %[1]d ] 2> /dev/null && return 1; `+
+		`[ "$2" -lt %[2]d ] 2> /dev/null && return 0; [ "$2" -gt %[2]d ] 2> /dev/null && return 1; `+
+		`[ "$3" -lt %[3]d ] 2> /dev/null; }; `+
+		`r=${v#*v}; if older "$r"; then echo "crewlet: this box runs OpenCode $r; the opencode runner `+
+		`supports OpenCode %[4]s, its newest — install it in the box image" >&2; exit 1; fi`,
+		maj, mnr, pat, openCodeRelease)
 }
 
 // openCodeScript is the run's script for one session ([OpenCode.Command]).
@@ -393,8 +419,8 @@ func (OpenCode) Continues(box, writer string) (bool, string) {
 // writes only to a file or /dev/null: stdout is the event stream.
 //
 // EVERY ANSWER OF OPENCODE'S IT READS GOES THROUGH A FILE, never a pipe or
-// `$(opencode …)`: into a pipe, OpenCode 2.0.32 and 2.1.4 stop after a 64 KiB
-// multiple and exit 0 ([openCodePack]). One rule with no exception, rather
+// `$(opencode …)`: into a pipe, earlier OpenCode 2 releases stopped after a
+// 64 KiB multiple and exited 0 ([openCodePack]). One rule with no exception, rather
 // than an argument per answer about its size: answers go to
 // [openCodeAnswerFile], the message list's pages and a pack's to their own
 // files. TestNoOpenCodeAnswerIsReadThroughAPipe holds every rendered script to
@@ -435,9 +461,10 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	// harness interrupts the session through its server first, which settles
 	// the step in flight so the export holds it, then ends the client within
 	// the grace. The client ended alone left the server working: the export
-	// held nothing of the step, and its tool call still ran (2.0.32, 2.1.4,
-	// whose API names it `session.interrupt`, not `session.abort`). On 2.2.7
-	// and 2.3.0 the client never finishes its shutdown at SIGTERM, so it is
+	// held nothing of the step, and its tool call still ran (measured on
+	// earlier OpenCode 2 releases; the API names it `session.interrupt`, not
+	// `session.abort`). On 2.3.0 the client never finishes its shutdown at
+	// SIGTERM, so it is
 	// killed at the grace and the end recorded as killed. The interrupt is
 	// BOUNDED ([openCodeBounded]), never by the request it serves: a server that never answers leaves the step
 	// unsettled, as a gone one does, and no end waits on the server.
@@ -454,11 +481,15 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 		ans, vrr, vrr, ans, vrr)
 	line(`v=$(cat %s); rm -f %s %s`, ans, ans, vrr)
 	line(`case "$v" in [0-9]*) echo "crewlet: this box runs OpenCode $v; the opencode runner drives OpenCode 2 (the @opencode/cli package) — install it in the box image" >&2; exit 1;; esac`)
+	// AN OLDER 2.x IS REFUSED BY NAME ([openCodeRelease]); a newer runs, and
+	// one whose release does not read as three numbers is let run, as a
+	// release the engine cannot read is taken for a current one.
+	line(`%s`, openCodeOlderCheck())
 	// THE SERVER'S PASSWORD IS ITS OWN: `opencode serve` given
 	// OPENCODE_PASSWORD or OPENCODE_SERVER_PASSWORD prints none, and the
 	// listen wait would run out. So both are unset, the wait asks for the
 	// password line too, and the run's clients are handed it as
-	// OPENCODE_PASSWORD, which a client reads first (2.0.32); the server is
+	// OPENCODE_PASSWORD, which a client reads first; the server is
 	// started without it, so nothing the agent runs inherits it.
 	line(`unset OPENCODE_PASSWORD OPENCODE_SERVER_PASSWORD`)
 	// THE RUN'S CONFIGURATION, refused where there is none: the server would
@@ -472,7 +503,7 @@ func openCodeScript(req sandbox.RunRequest, session Session, paths Paths, times 
 	b.WriteString(openCodeBounded(paths, times))
 	b.WriteString(openCodeCursor())
 	// holds: the file is a whole, non-empty JSON array. A database that
-	// dropped a credential it could not refresh exports `[]` (2.0.32), which
+	// dropped a credential it could not refresh exports `[]`, which
 	// must never replace the box's login: the teardown would write it back
 	// over the shared one.
 	line(`holds() { t=$(tr -d '[:space:]' < "$1") || return 1; case "$t" in '['*']') [ "$t" != '[]' ];; *) return 1;; esac; }`)
@@ -763,7 +794,7 @@ func openCodeCapture(paths Paths, times openCodeTimes) string {
 // refused before gzip, saying which, as the take would refuse it unread.
 //
 // THE EXPORT GOES TO A FILE that gzip then reads, never a pipe: piped,
-// OpenCode 2.0.32 and 2.1.4 cut a large export at a 64 KiB multiple with
+// earlier OpenCode 2 releases cut a large export at a 64 KiB multiple with
 // status 0. call prefixes the export: the run's script bounds it; a pack on
 // demand runs it bare, under [sandbox.SessionPackWait], since OpenCode's WAL
 // database lets it complete beside a live, stopped, killed or writing server.
@@ -941,7 +972,7 @@ func openCodeExporter(sync time.Duration, file string) string {
 // delivered, once `opencode run` has exited and before the server stops. Such
 // a note already waits on the run's record for the review or the next brief,
 // but the session's inbox is durable: left pending, OpenCode put it before a
-// continued run's next prompt too, and the model read it twice (2.1.4). Only
+// continued run's next prompt too, and the model read it twice. Only
 // the plugin's own ids ([OpenCode.inboxID]) are read out of the listing, as
 // text (a note's quotes are escaped there), from the answer file, never a pipe
 // ([openCodeScript]). Each call is bounded ([openCodeCallWait]) and the
@@ -982,8 +1013,8 @@ func openCodeReadiness(servers map[string]sandbox.MCPServer) string {
 // ($s) lists a server whose tools OpenCode would name like those of a server
 // the run offers directly ([sandbox.MCPServer.AlwaysLoaded]): the engine's
 // own. OpenCode names a tool `<server>_<tool>`, writing every character
-// outside `A-Za-z0-9_-` as `_`, a later registration replacing the earlier
-// (2.0.32 to 2.2.7), so a server `crewlet_x` or `crewlet.x` would answer or
+// outside `A-Za-z0-9_-` as `_`, a later registration replacing the earlier,
+// so a server `crewlet_x` or `crewlet.x` would answer or
 // lose the engine's `x_y`. A seat's server cannot be named so, but the image's
 // or repository's configuration can declare one ([OpenCode.WriteConfig]). The
 // character after the name is listed rather than ranged, so no locale changes
@@ -1010,7 +1041,7 @@ func openCodeShadowCheck(servers map[string]sandbox.MCPServer) string {
 
 // jsonStringify spells s as JavaScript's JSON.stringify does, as OpenCode
 // prints a server's name, not as encoding/json does: Go escapes `&`, `<`, `>`,
-// U+2028 and U+2029, which JSON.stringify leaves literal (2.0.32), so such a
+// U+2028 and U+2029, which JSON.stringify leaves literal, so such a
 // name never matched and the run waited out [openCodeMCPWait]. JSON.stringify
 // escapes exactly `"`, `\` and the control characters below U+0020, five in
 // short form, the rest as `\u` and four lowercase hex digits. A byte that is
@@ -1863,8 +1894,8 @@ func (d *openCodeEvents) Result() sandbox.Result {
 		}
 	}
 	// NO TURN COUNT ([sandbox.Result.Turns]): the session report carries none,
-	// and 2.0.32 prints `step_start` for the first step and rarely for the
-	// later ones, so a count off them would be right only by luck. None
+	// and OpenCode 2 has printed `step_start` for the first step and rarely
+	// for the later ones, so a count off them would be right only by luck. None
 	// reported counts as the one call the engine asked for.
 	if !success {
 		res.Error = d.errText

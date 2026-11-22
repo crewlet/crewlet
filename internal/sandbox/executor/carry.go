@@ -120,8 +120,7 @@ var errNoRunStart = errors.New("executor: no start")
 // cursor of a session's message list asked newest first: what an OpenCode
 // run's script records as where the run began ([openCodeRunStart]); "" for
 // anything else. OpenCode's cursor is the unpadded base64url of
-// `JSON.stringify({id, order, direction})` (read in the 2.0.32, 2.1.4 and
-// 2.2.7 bundles; testdata/opencode/<version>/context),
+// `JSON.stringify({id, order, direction})` (read in OpenCode 2's bundle),
 // read whole or not at all: held to [runStartCursorMax], decoded strictly and
 // walked as one object ([eachKey]) of exactly those keys, each once, each a
 // string. Order must be `desc` and direction `next`: any other names the
@@ -167,7 +166,7 @@ func runStartOf(cursor string) string {
 
 // releasePattern is a release's MAJOR.MINOR.PATCH, wherever a harness's
 // `--version` prints it: first for Claude Code (`2.1.310 (Claude Code)`),
-// after a name for OpenCode (`opencode v2.0.32`).
+// after a name for OpenCode (`opencode v2.3.0`).
 var releasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 
 // releaseOf is the release a harness's `--version` printed, "2.1.310", or ""

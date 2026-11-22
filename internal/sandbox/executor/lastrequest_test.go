@@ -290,7 +290,7 @@ func TestOpenCodesFigureIsItsNewestSettledMeasuredMessage(t *testing.T) {
 // read off the export a take streams out of its box (the capture's) and the
 // message list as the job ends (the job's record's), both by one rule. So each
 // release's real export gives one figure either way: its steps handed to the
-// list's reading one a page, newest first, give the export's own 1215, the step
+// list's reading one a page, newest first, give the export's own 1217, the step
 // that answered "Carry on.", behind two interrupted and one its provider refused.
 //
 // Mutation: drop the error check from the rule, and an interrupted step's
@@ -324,8 +324,8 @@ func TestTheRulesForAnExportAndForTheAPIAreOne(t *testing.T) {
 				t.Fatal(err)
 			}
 			exported := openCodeTaken(t, string(all))
-			if listed.Tokens != 1215 || exported != 1215 {
-				t.Errorf("the list's reading gives %d (%s) and the export's %d, want both the export's 1215",
+			if listed.Tokens != 1217 || exported != 1217 {
+				t.Errorf("the list's reading gives %d (%s) and the export's %d, want both the export's 1217",
 					listed.Tokens, why, exported)
 			}
 		})
@@ -531,7 +531,7 @@ func openCodeContextFixture(t *testing.T, version, name string) string {
 }
 
 // openCodeContextVersions are the releases a real run's message list is kept of.
-var openCodeContextVersions = []string{"2.0.32", "2.2.7"}
+var openCodeContextVersions = []string{"2.3.0"}
 
 // linesOf is a run's stream, its lines.
 func linesOf(stream string) []string {
@@ -721,8 +721,8 @@ func TestAPagePastTheBudgetIsSaidAndEndsTheReading(t *testing.T) {
 	})
 }
 
-// A PAGE PAST WHAT A PIPE HOLDS IS READ WHOLE. Into a pipe, OpenCode 2.0.32 and
-// 2.1.4 stop writing an answer after a 64 KiB multiple and exit 0, so the
+// A PAGE PAST WHAT A PIPE HOLDS IS READ WHOLE. Into a pipe, earlier OpenCode 2
+// releases stop writing an answer after a 64 KiB multiple and exit 0, so the
 // script has OpenCode write each page to a file and prints it from there, as
 // with its other answers: a settled step's page three times what a pipe holds,
 // from an OpenCode that cuts what it pipes, is printed whole and gives its figure.

@@ -16,7 +16,7 @@ import (
 )
 
 // ocSaveSession is the session an OpenCode save case's run worked in: the one
-// the real export of 2.0.32 this package keeps holds.
+// the real export of 2.3.0 this package keeps holds.
 const ocSaveSession = "ses_0123456789abcdef0123456789abcdef"
 
 // openCodeSaving is an OpenCode box whose stand-in answers as [fakeOpenCode],
@@ -89,7 +89,7 @@ func exported(t *testing.T, dir string) bool {
 // drop the digest or the pins, and a check goes red.
 func TestAnOpenCodeSaveIsExportedBesideItsServerToItsTakersOwnPath(t *testing.T) {
 	t.Parallel()
-	runner, b, dir := openCodeSaving(t, "2.0.32", "")
+	runner, b, dir := openCodeSaving(t, "2.3.0", "")
 	p := paths(b)
 	const capture = "the job's own capture, as its script left it"
 	if err := b.WriteFile(t.Context(), p.SessionCapture(), []byte(capture)); err != nil {
@@ -101,8 +101,8 @@ func TestAnOpenCodeSaveIsExportedBesideItsServerToItsTakersOwnPath(t *testing.T)
 	}
 	if !strings.HasPrefix(saved.Path, p.SessionSave(takerA, "")) || saved.SessionID != ocSaveSession ||
 		saved.Harness != executor.OpenCodeName || saved.Format != executor.OpenCodeArchiveFormat ||
-		saved.Version != "2.0.32" || saved.Size <= 0 {
-		t.Errorf("the save is described as %+v, want session %s of OpenCode 2.0.32 at a place of its own named "+
+		saved.Version != "2.3.0" || saved.Size <= 0 {
+		t.Errorf("the save is described as %+v, want session %s of OpenCode 2.3.0 at a place of its own named "+
 			"after its taker, %s…", saved, ocSaveSession, p.SessionSave(takerA, ""))
 	}
 	if got := boxFile(t, b, p.SessionCapture()); got != capture {
@@ -177,7 +177,7 @@ func TestAnOpenCodeSaveSaysNothingOnlyOnOpenCodesOwnWord(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			runner, b, dir := openCodeSaving(t, "2.0.32", "")
+			runner, b, dir := openCodeSaving(t, "2.3.0", "")
 			tc.edit(t, b, dir)
 			saved, err := runner.PackSave(t.Context(), b, takerA)
 			switch {
@@ -226,7 +226,7 @@ func TestAnOpenCodeExportPastWhatTheScrubReadsIsNeverPacked(t *testing.T) {
 			}
 			t.Run(name+", a "+pack+"'s pack", func(t *testing.T) {
 				t.Parallel()
-				runner, b, _ := openCodeSaving(t, "2.0.32", tc.vars)
+				runner, b, _ := openCodeSaving(t, "2.3.0", tc.vars)
 				if tc.database > 0 {
 					sparse(t, openCodeDatabase(b), tc.database)
 				}
@@ -267,7 +267,7 @@ func TestAnOpenCodeExportPastWhatTheScrubReadsIsNeverPacked(t *testing.T) {
 // broken export lands as a save.
 func TestAnOpenCodeSaveWhoseExportFailsLeavesNothing(t *testing.T) {
 	t.Parallel()
-	runner, b, dir := openCodeSaving(t, "2.0.32", "")
+	runner, b, dir := openCodeSaving(t, "2.3.0", "")
 	before, err := runner.PackSave(t.Context(), b, takerA)
 	if err != nil {
 		t.Fatalf("the save before: %v", err)
@@ -329,8 +329,8 @@ func TestAnOpenCodeSaveOfAReleaseNoProbeMeasuredIsRefusedUnpacked(t *testing.T) 
 // Mutation: build the meter only for a take that names no save.
 func TestATakeOfAnOpenCodeSaveCountsItAndNamesItsNewestCompaction(t *testing.T) {
 	t.Parallel()
-	runner, b, dir := openCodeSaving(t, "2.0.32", "")
-	doc, err := os.ReadFile(filepath.Join("testdata", "opencode", "2.0.32", "export.json"))
+	runner, b, dir := openCodeSaving(t, "2.3.0", "")
+	doc, err := os.ReadFile(filepath.Join("testdata", "opencode", "2.3.0", "export.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +349,7 @@ func TestATakeOfAnOpenCodeSaveCountsItAndNamesItsNewestCompaction(t *testing.T) 
 		t.Fatalf("reading the take: %v", err)
 	}
 	_ = taken.Body.Close()
-	const newest = "msg_19ef0b4a70016wg3C2nPBIdgEY"
+	const newest = "msg_20296d33d001DUiVaybRFx66zd"
 	if count := taken.Count(); count == nil || count.Mark != "" || count.Restart == nil || *count.Restart != newest {
 		t.Errorf("the take of the save counts %+v, want the export counted, restarting at %s", count, newest)
 	}
@@ -384,7 +384,7 @@ func TestAnOpenCodeSaveWaitsForTheRoomItsExportTakes(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			runner, b, dir := openCodeSaving(t, "2.0.32", "")
+			runner, b, dir := openCodeSaving(t, "2.3.0", "")
 			if tc.noDatabase {
 				if err := os.Remove(openCodeDatabase(b)); err != nil {
 					t.Fatal(err)

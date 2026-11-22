@@ -12,8 +12,8 @@ import (
 // logs each call's arguments in order, keeps the environment and working
 // directory config.get was asked in, answers `--version` as 2.3.0, and
 // answers model.list and config.get with the files the case wrote into the
-// box's home, but cut short where its output is a pipe, as 2.0.32 and 2.1.4
-// cut theirs at 64 KiB.
+// box's home, but cut short where its output is a pipe, as earlier OpenCode 2
+// releases cut theirs at 64 KiB.
 const pointStandIn = `#!/bin/sh
 printf '%s\n' "$*" >> "$HOME/opencode-calls"
 answer() { if [ -p /dev/stdout ]; then printf '{"cut'; else cat "$HOME/$1"; fi; }

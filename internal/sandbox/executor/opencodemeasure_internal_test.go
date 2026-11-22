@@ -136,7 +136,7 @@ func TestTheMeterReadsAnExportAsTheDecoderDid(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1170, 9))
 	var exports []string
-	for _, version := range []string{"2.0.32", "2.2.5"} {
+	for _, version := range []string{"2.3.0"} {
 		b, err := os.ReadFile("testdata/opencode/" + version + "/export.json")
 		if err != nil {
 			t.Fatal(err)

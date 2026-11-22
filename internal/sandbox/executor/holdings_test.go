@@ -270,7 +270,7 @@ func TestAReadingIsOnlyOfAWriterItsRulesWereMeasuredOn(t *testing.T) {
 		"a later writer whose number no int holds": {executor.NewClaudeCode(),
 			rhSession("2.1.99999999999999999999"), false},
 		"OpenCode's runner, asked for a resumer outside its set": {executor.NewOpenCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
-			SessionID: "ses_s", Format: executor.OpenCodeArchiveFormat, Version: "2.2.5"}, false},
+			SessionID: "ses_s", Format: executor.OpenCodeArchiveFormat, Version: "2.3.1"}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

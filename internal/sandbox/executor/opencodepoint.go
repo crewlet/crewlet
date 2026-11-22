@@ -39,11 +39,10 @@ const openCodePointCleanupWait = 10 * time.Second
 
 // The share of a model's limit OpenCode holds back below its point where no
 // buffer is set, and the floor it holds back at least once the limit is twice
-// it (read in each release's point function, measured at its boundaries).
+// it (read in 2.3.0's point function, measured at its boundaries).
 const (
-	openCodeShareOn2032 = 0.10
-	openCodeShare       = 0.15
-	openCodeShareFloor  = 16000
+	openCodeShare      = 0.15
+	openCodeShareFloor = 16000
 )
 
 // The bytes of OpenCode's renders the read charges beside what each renders
@@ -117,7 +116,7 @@ func (OpenCode) readBoxPoint(ctx context.Context, box sandbox.Sandbox,
 // openCodePointScript is the one exec the read runs ([Runner.ReadBoxPoint]):
 // the login imported where the box holds one, the release asked where the
 // launch has none, model.list and config.get each answered into a file (a
-// pipe cuts OpenCode's output at 64 KiB on 2.0.32 and 2.1.4), the plugin
+// pipe can cut OpenCode's output at a 64 KiB multiple), the plugin
 // folders listed, and in the box that holds the session's copy the sizes of
 // the instruction files OpenCode may hand it. Every line it prints is the
 // read's: `status`, `cwd`, `dir`, `plugin`, `walk`, `instr`.
@@ -288,7 +287,7 @@ func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandb
 			"option, which edits the conversation server-side", provider, model))
 	}
 	auto := docs.auto == nil || *docs.auto
-	limit := record.limitOn(release)
+	limit := record.limit()
 	if listed && auto {
 		switch {
 		case !docs.statesLimit(provider, model, record):
@@ -307,7 +306,7 @@ func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandb
 	}
 	if !auto {
 		point.Never = true
-	} else if point.Tokens, err = openCodePointAt(release, limit, docs.buffer); err != nil {
+	} else if point.Tokens, err = openCodePointAt(limit, docs.buffer); err != nil {
 		return pointMarked(sandbox.PointUnread, "the box's compaction buffer did not read: "+err.Error())
 	}
 	if ask.Sources != nil {
@@ -316,38 +315,32 @@ func openCodePointOf(ask sandbox.PointAsk, a openCodeAnswers, paths Paths) sandb
 	return point
 }
 
-// openCodePointAt is the point a release compacts at for a model of limit L
+// openCodePointAt is the point OpenCode compacts at for a model of limit L
 // (above zero) under buffer, nil where no document sets one: L less a buffer
-// below L (2.0.32 takes any buffer, one at or past L compacting at every
-// request), a `"N%"` buffer read as round(L·N/100) on 2.2.7 and 2.3.0; else L
-// less the larger of the release's share of L and [openCodeShareFloor] once L
-// is twice it.
-func openCodePointAt(release string, limit int64, buffer json.RawMessage) (int64, error) {
+// below L, a `"N%"` buffer read as round(L·N/100); else L less the larger of
+// [openCodeShare] of L and [openCodeShareFloor] once L is twice it.
+func openCodePointAt(limit int64, buffer json.RawMessage) (int64, error) {
 	if buffer != nil {
-		held, err := openCodeBufferOf(release, limit, buffer)
+		held, err := openCodeBufferOf(limit, buffer)
 		if err != nil {
 			return 0, err
 		}
-		if release == "2.0.32" || held < limit {
+		if held < limit {
 			return limit - held, nil
 		}
-	}
-	share := openCodeShare
-	if release == "2.0.32" {
-		share = openCodeShareOn2032
 	}
 	floor := int64(0)
 	if limit >= 2*openCodeShareFloor {
 		floor = openCodeShareFloor
 	}
-	return limit - max(int64(math.Floor(float64(limit)*share)), floor), nil
+	return limit - max(int64(math.Floor(float64(limit)*openCodeShare)), floor), nil
 }
 
 // openCodeBufferOf is the tokens a buffer holds back from a limit of L: an
-// integer, or on 2.2.7 and 2.3.0 a `"N%"` of L rounded half up as
-// JavaScript's Math.round does. Anything else does not read, since a release
-// whose schema refuses it starts no run on it.
-func openCodeBufferOf(release string, limit int64, raw json.RawMessage) (int64, error) {
+// integer, or a `"N%"` of L rounded half up as JavaScript's Math.round does.
+// Anything else does not read, since a release whose schema refuses it starts
+// no run on it.
+func openCodeBufferOf(limit int64, raw json.RawMessage) (int64, error) {
 	var n int64
 	if err := json.Unmarshal(raw, &n); err == nil {
 		if n < 0 {
@@ -356,7 +349,7 @@ func openCodeBufferOf(release string, limit int64, raw json.RawMessage) (int64, 
 		return n, nil
 	}
 	var text string
-	if err := json.Unmarshal(raw, &text); err != nil || (release != "2.2.7" && release != "2.3.0") {
+	if err := json.Unmarshal(raw, &text); err != nil {
 		return 0, fmt.Errorf("the buffer %s is no integer this release takes", raw)
 	}
 	digits, percent := strings.CutSuffix(text, "%")
@@ -656,12 +649,12 @@ type openCodeModel struct {
 	contextManagement bool
 }
 
-// limitOn is the model's limit as release reads it: the smaller of its input
-// and context limits where both are set on 2.2.7 and 2.3.0, else its input
-// limit, else its context limit.
-func (m openCodeModel) limitOn(release string) int64 {
+// limit is the model's limit as OpenCode reads it: the smaller of its input
+// and context limits where both are set, else its input limit, else its
+// context limit.
+func (m openCodeModel) limit() int64 {
 	in, ctx := m.Limit.Input, m.Limit.Context
-	if in > 0 && ctx > 0 && (release == "2.2.7" || release == "2.3.0") {
+	if in > 0 && ctx > 0 {
 		return min(in, ctx)
 	}
 	if in > 0 {

@@ -153,10 +153,9 @@ func TestCompactionOffSendsWholeWhateverTheCount(t *testing.T) {
 }
 
 // THE HIGHEST DOCUMENT'S BUFFER MOVES THE POINT. A buffer below the limit is
-// held back from it; the highest document that sets one decides it; 2.2.7
-// and 2.3.0 take `"N%"` of the limit where the older
-// releases take an integer alone; a buffer at or past the limit leaves the
-// release's share on every release but 2.0.32, which takes it as it is.
+// held back from it; the highest document that sets one decides it; a
+// `"N%"` takes that share of the limit, rounded half up; a buffer at or past
+// the limit leaves the share.
 //
 // Mutation: take the lowest document's buffer, or apply a buffer past the
 // limit on 2.3.0, and a case goes red.
@@ -173,13 +172,11 @@ func TestTheHighestDocumentsBufferMovesThePoint(t *testing.T) {
 			documents: []string{`{"compaction":{"buffer":40000}}`, `{"compaction":{"buffer":30000}}`}},
 		{name: "a share on 2.3.0", release: "2.3.0", want: 175000,
 			documents: []string{`{"compaction":{"buffer":"12.5%"}}`}},
-		{name: "a share on 2.2.7", release: "2.2.7", want: 200000 - 25001,
+		{name: "a share rounded half up", release: "2.3.0", want: 200000 - 25001,
 			documents: []string{`{"compaction":{"buffer":"12.5005%"}}`}},
-		{name: "a share on 2.1.4", release: "2.1.4", mark: sandbox.PointUnread,
-			documents: []string{`{"compaction":{"buffer":"10%"}}`}},
+		{name: "a share that is no number", release: "2.3.0", mark: sandbox.PointUnread,
+			documents: []string{`{"compaction":{"buffer":"ten%"}}`}},
 		{name: "past the limit on 2.3.0", release: "2.3.0", want: 170000,
-			documents: []string{`{"compaction":{"buffer":250000}}`}},
-		{name: "past the limit on 2.0.32", release: "2.0.32", want: -50000,
 			documents: []string{`{"compaction":{"buffer":250000}}`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -193,22 +190,21 @@ func TestTheHighestDocumentsBufferMovesThePoint(t *testing.T) {
 	}
 }
 
-// THE SHARE IS THE RELEASE'S. With no buffer, OpenCode holds back the larger
-// of a share of the limit and 16,000 tokens once the limit is twice that: a
-// tenth on 2.0.32 and fifteen hundredths after it (measured at each one's
-// boundaries); a limit under 32,000 holds back the share alone.
+// THE SHARE. With no buffer, OpenCode holds back the larger of fifteen
+// hundredths of the limit and 16,000 tokens once the limit is twice that
+// (measured at its boundaries on 2.3.0); a limit under 32,000 holds back the
+// share alone.
 //
-// Mutation: take 2.1.4's share on 2.0.32, or hold back 16,000 under 32,000,
-// and a case goes red.
-func TestTheShareIsTheReleases(t *testing.T) {
+// Mutation: take a tenth, or hold back 16,000 under 32,000, and a case goes
+// red.
+func TestTheShareHoldsBackFifteenHundredths(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		release string
 		limit   int64
 		want    int64
 	}{
-		{"2.0.32", 200000, 180000}, {"2.1.4", 200000, 170000}, {"2.2.7", 200000, 170000},
-		{"2.3.0", 200000, 170000}, {"2.3.0", 300000, 255000}, {"2.0.32", 100000, 84000},
+		{"2.3.0", 200000, 170000}, {"2.3.0", 300000, 255000}, {"2.3.0", 100000, 84000},
 		{"2.3.0", 20000, 17000},
 	} {
 		models := modelsAnswer(pointModel{provider: "stub", model: "m", context: tc.limit})
@@ -219,20 +215,16 @@ func TestTheShareIsTheReleases(t *testing.T) {
 	}
 }
 
-// THE INPUT LIMIT IS THE SMALLER ON 2.2.7. From 2.2.7 OpenCode takes the
-// smaller of a model's input and context limits where both are set; before
-// it, the input limit where set, else the context limit.
+// THE LIMIT IS THE SMALLER OF INPUT AND CONTEXT. OpenCode takes the smaller of
+// a model's input and context limits where both are set.
 //
-// Mutation: take the smaller on 2.1.4, and a case goes red.
-func TestTheInputLimitIsTheSmallerOn227(t *testing.T) {
+// Mutation: take the input limit where both are set, and this goes red.
+func TestTheLimitIsTheSmallerOfInputAndContext(t *testing.T) {
 	t.Parallel()
 	models := modelsAnswer(pointModel{provider: "stub", model: "m", context: 200000, input: 300000})
-	for release, want := range map[string]int64{"2.0.32": 270000, "2.1.4": 255000, "2.2.7": 170000,
-		"2.3.0": 170000} {
-		got := readPoint(release, models, configAnswer(stated(200000)), listingOf(), nil)
-		if got.Mark != "" || got.Tokens != want {
-			t.Errorf("OpenCode %s with input 300,000 and context 200,000 reads %+v, want %d", release, got, want)
-		}
+	got := readPoint("2.3.0", models, configAnswer(stated(200000)), listingOf(), nil)
+	if got.Mark != "" || got.Tokens != 170000 {
+		t.Errorf("OpenCode 2.3.0 with input 300,000 and context 200,000 reads %+v, want 170,000", got)
 	}
 }
 
@@ -336,8 +328,8 @@ func TestABoxOfAnotherReleaseThanTheWritersIsNoPoint(t *testing.T) {
 		box, writer string
 		want        sandbox.PointMark
 	}{
-		{"2.3.0", "2.3.0", ""}, {"2.3.0", "2.2.7", sandbox.PointPair}, {"2.3.0", "", sandbox.PointPair},
-		{"2.2.0", "2.2.0", sandbox.PointRelease},
+		{"2.3.0", "2.3.0", ""}, {"2.3.0", "2.4.0", sandbox.PointPair}, {"2.3.0", "", sandbox.PointPair},
+		{"2.4.0", "2.4.0", sandbox.PointRelease},
 	} {
 		ask := sandbox.PointAsk{Model: "stub/m", Release: tc.box, Writer: tc.writer}
 		got := openCodePointOf(ask, openCodeAnswers{release: tc.box, models: models,

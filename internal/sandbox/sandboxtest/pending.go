@@ -1000,7 +1000,7 @@ func testAHarnessEndWritesTheCountsProvider(t *testing.T, s sandbox.PendingStore
 	mustClaim(t, s, turn)
 	count := &sandbox.ResumedCount{Tokens: 42_000, Restart: new("msg_c")}
 	for _, said := range []struct{ provider, release string }{{"stub", "2.3.0"}, {"openrouter", "2.3.0"},
-		{"openrouter", "2.2.7"}} {
+		{"openrouter", "2.4.0"}} {
 		read := sandbox.EndRead{End: sandbox.HarnessEndOwnRun, Count: count, CountProvider: said.provider,
 			CountRelease: said.release}
 		if ok, err := s.MarkHarnessEnd(t.Context(), turn, launch, read); err != nil || !ok {
