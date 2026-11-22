@@ -195,6 +195,25 @@ func (c *Company) MetaAdsSeat(handle string) *RoleMetaAds {
 	return nil
 }
 
+// GrowthKind is the seat block's integration kind, the company block's.
+func (*RoleMetaAds) GrowthKind() string { return (*MetaAds)(nil).GrowthKind() }
+
+// SeatAccess is the block as seat access reads it.
+func (r *RoleMetaAds) SeatAccess() GrowthSeatAccess {
+	return GrowthSeatAccess{On: r.Enabled, Level: string(growth.LevelOf(r.Level)), Scope: r.AdAccounts}
+}
+
+// SetSeatAccess writes the block from seat access; business_resources is kept.
+func (r *RoleMetaAds) SetSeatAccess(a GrowthSeatAccess) {
+	r.Enabled, r.Level, r.AdAccounts = a.On, a.Level, a.Scope
+}
+
+func (r *RoleMetaAds) seatScopeKey() string { return "ad_accounts" }
+func (r *RoleMetaAds) seatEnabled() **bool  { return &r.Enabled }
+
+// check holds the block to the company's reach.
+func (r *RoleMetaAds) check(c *Company, p *problems, here Path) { c.checkMetaAds(p, here, r) }
+
 // GrowthSeatLevel is the seat's level while its block is on, "" while off.
 func (r *RoleMetaAds) GrowthSeatLevel() string {
 	if r == nil || r.Enabled == nil || !*r.Enabled {
