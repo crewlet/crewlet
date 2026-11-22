@@ -14,7 +14,7 @@ import (
 // A Qwen Code run's stream, as its helper writes it (qwen_helper.mjs): every
 // ACP session/update notification Qwen Code sent, verbatim, a line each —
 // agent_message_chunk, agent_thought_chunk, tool_call and tool_call_update,
-// measured on 0.28.3 — and the helper's own lines, each typed
+// measured on 0.28.4 — and the helper's own lines, each typed
 // `crewlet_qwen_*`, saying what the notifications do not: the session, each
 // note handed, the window, the 429's words and how the turn ended.
 
@@ -47,7 +47,7 @@ func (QwenCode) limitExit(code int) bool { return code == qwenLimitExit }
 
 // qwenContextSentences are the providers' own words for a request past the
 // model's window, which Qwen Code relays in the prompt's error details
-// (OpenAI's and DashScope's, measured under ACP and stream-json on 0.28.3);
+// (OpenAI's and DashScope's, measured under ACP and stream-json on 0.28.4);
 // read off the end line alone, which no tool output reaches.
 var qwenContextSentences = []string{"maximum context length", "Range of input length should be"}
 
@@ -285,7 +285,7 @@ func (d *qwenEvents) opened(call *qwenCall, input json.RawMessage) {
 // countRequest adds one request's counts to the run's spend. INPUT HOLDS THE
 // CACHE: inputTokens is the request's whole prompt, cachedReadTokens the part
 // of it served from the cache (OpenAI's prompt_tokens and its cached share;
-// measured under ACP on 0.28.3, where each request's context_usage total is its
+// measured under ACP on 0.28.4, where each request's context_usage total is its
 // inputTokens, the cached prefix inside it). OUTPUT HOLDS THE THOUGHTS:
 // outputTokens is the reply's whole count, reasoning included (OpenAI's
 // completion_tokens; every request's totalTokens is its input and output

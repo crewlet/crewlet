@@ -15,7 +15,7 @@ import (
 )
 
 // The invariants the built-in qwen-code profile keeps, each measured against
-// Qwen Code 0.28.3 (see the profile's comments): a call offers the
+// Qwen Code 0.28.4 (see the profile's comments): a call offers the
 // web tools and nothing else, a seat's phases keep the harness's own system prompt
 // and a side pass replaces it, the answer and its token counts are read from
 // the result event, a key or the paid login signs the harness in, nothing above the call's
@@ -91,7 +91,7 @@ func qwenStrings(t *testing.T, doc map[string]any, path string) []string {
 // qwenWebTools are the harness's own web tools, the only ones a call keeps.
 var qwenWebTools = []string{"web_fetch", "web_search"}
 
-// qwenMeasuredTools is every tool name Qwen Code 0.28.3 registers (its
+// qwenMeasuredTools is every tool name Qwen Code 0.28.4 registers (its
 // ToolNames table), the web tools included.
 var qwenMeasuredTools = []string{
 	"advisor", "agent", "artifact", "ask_user_question", "autofix_pr", "create_sub_session",
@@ -142,9 +142,9 @@ func TestQwenCodeOffersTheWebToolsAndNothingElse(t *testing.T) {
 // NOTHING IS CARRIED FROM ONE CALL TO THE NEXT. Qwen Code records a call's transcript
 // under `.qwen/projects/<slug>/chats` and extracts memories, in requests of its own, into
 // `.qwen/memories` and `.qwen/projects/*/memory`. The switches stop each at the source (no
-// recording, extraction, consolidation or skill review; measured on 0.28.3, no projects
+// recording, extraction, consolidation or skill review; measured on 0.28.4, no projects
 // directory and no extra request) and the volatile paths prune what a build ignoring a
-// switch leaves, with the per-project scratch, the usage record 0.28.3 writes per call,
+// switch leaves, with the per-project scratch, the usage record 0.28.4 writes per call,
 // and the global QWEN.md, AGENTS.md and rules it reads into the system prompt.
 //
 // The request-log directory is pinned in the seat's home for the same reason: the
@@ -244,7 +244,7 @@ func TestQwenCodeIsConfiguredByTheCallAlone(t *testing.T) {
 
 	env := childEnv(qwenCode(t), &Checkout{Home: t.TempDir(), Cache: t.TempDir(), Work: t.TempDir()}, nil, Auth{})
 	if got := env["QWEN_CODE_MODELS_DEV"]; got != "off" {
-		t.Errorf("QWEN_CODE_MODELS_DEV = %q, want off: 0.28.3 refreshes the models.dev catalogue otherwise", got)
+		t.Errorf("QWEN_CODE_MODELS_DEV = %q, want off: 0.28.4 refreshes the models.dev catalogue otherwise", got)
 	}
 
 	p, err := New(Config{
@@ -361,7 +361,7 @@ func TestQwenCodeSeatAppendsAndASidePassReplaces(t *testing.T) {
 // qwen-subscription` in a home holding the adopted
 // subscription_credentials.json, whole. Without the flag the harness exits
 // "No auth type is selected" unless OPENAI_MODEL or QWEN_MODEL is set. The
-// login's file is its documented shape (0.28.3), NOT MEASURED against Qwen's
+// login's file is its documented shape (0.28.4), NOT MEASURED against Qwen's
 // service.
 //
 // Mutations, each red: leave the sign-in flag in complete_args (a login call
@@ -418,7 +418,7 @@ func TestQwenCodeSignsInByItsModeChosenOnArgv(t *testing.T) {
 
 // NO MCP SERVER BUT THE ENGINE'S STARTS, ON ANY CALL. Qwen Code starts every
 // server it finds, an extension's in the seat's home among them, unless
-// --allowed-mcp-server-names names the ones it may: measured on 0.28.3, a call
+// --allowed-mcp-server-names names the ones it may: measured on 0.28.4, a call
 // with no tools (each of doctor's probes) started the home extension's server,
 // and a call with the flag and no crewlet server started none and ran. So the
 // flag is in complete_args, on every call, and a run with tools adds it no
@@ -447,12 +447,12 @@ func TestQwenCodeStartsNoMCPServerButTheEnginesOnAnyCall(t *testing.T) {
 	}
 }
 
-// What Qwen Code 0.28.3 printed with --output-format stream-json for a call
+// What Qwen Code 0.28.4 printed with --output-format stream-json for a call
 // that fetched a page (refused, with no network) and then answered, trimmed of
 // fields nothing reads: its init event, the response's prose and its call as
 // two turns, the tool's result, the turn that answered, and the result event
 // with the call's totals.
-const qwenStream = `{"type":"system","subtype":"init","session_id":"s1","tools":["web_fetch"],"model":"qwen3-coder-plus","qwen_code_version":"0.28.3"}
+const qwenStream = `{"type":"system","subtype":"init","session_id":"s1","tools":["web_fetch"],"model":"qwen3-coder-plus","qwen_code_version":"0.28.4"}
 {"type":"assistant","session_id":"s1","parent_tool_use_id":null,"message":{"type":"message","role":"assistant","model":"qwen3-coder-plus","content":[{"type":"text","text":"Let me look."}],"stop_reason":null,"usage":{"input_tokens":0,"output_tokens":0}}}
 {"type":"assistant","session_id":"s1","parent_tool_use_id":null,"message":{"type":"message","role":"assistant","model":"qwen3-coder-plus","content":[{"type":"tool_use","id":"call_3","name":"web_fetch","input":{"url":"https://example.com/","prompt":"summarise"}}],"stop_reason":"tool_use","usage":{"input_tokens":1003,"output_tokens":50,"cache_read_input_tokens":600,"total_tokens":1053}}}
 {"type":"user","session_id":"s1","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_3","is_error":true,"content":"Error during fetch for https://example.com/: fetch failed (cause: getaddrinfo EAI_AGAIN example.com)"}]}}
@@ -485,7 +485,7 @@ func TestQwenCodeReadsTheAnswerFromTheResultEvent(t *testing.T) {
 	}
 }
 
-// A REFUSED REQUEST IS NAMED FOR WHAT IT IS. Measured on 0.28.3
+// A REFUSED REQUEST IS NAMED FOR WHAT IT IS. Measured on 0.28.4
 // against a stub answering every request with the status: the harness exits 1 and
 // its result event's error carries "[API Error: <status> <the provider's
 // message>]" — on a 429 within about a minute, because the profile turns the
