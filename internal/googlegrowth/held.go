@@ -119,12 +119,14 @@ func (c *Client) Card(call growth.Call, h Held, binding string, class growth.Cla
 // built afresh from the call, or Err where that failed (the request kept as
 // far as it was built, for the record); its tool's class, which every record
 // of it names; the product's scope check, which Apply runs under the lease;
-// and how its answer is cut, nil for not at all.
+// the product's own read of its target where Google serves no get, nil for
+// [Client.Read]; and how its answer is cut, nil for not at all.
 type Write struct {
 	Req   Request
 	Err   error
 	Class growth.Class
 	Scope func(ctx context.Context) error
+	Read  func(ctx context.Context) ([]byte, error)
 	Cut   func(any) any
 }
 
@@ -159,7 +161,7 @@ func (c *Client) Apply(ctx context.Context, call growth.Call, w Write, binding s
 			return nil, c.failEarly(ctx, held, r, err)
 		}
 	}
-	h, err := c.Read(act, call.Handle, w.Req)
+	h, err := c.readTarget(act, call.Handle, w)
 	if err != nil {
 		return nil, c.failEarly(ctx, held, r, err)
 	}
@@ -182,6 +184,19 @@ func (c *Client) Apply(ctx context.Context, call growth.Call, w Write, binding s
 		c.note(ctx, growth.StepMade, r)
 	}
 	return out, nil
+}
+
+// readTarget is w's target as read now: the product's own read where it has
+// one, else [Client.Read].
+func (c *Client) readTarget(ctx context.Context, handle string, w Write) (Held, error) {
+	if w.Read == nil {
+		return c.Read(ctx, handle, w.Req)
+	}
+	raw, err := w.Read(ctx)
+	if err != nil {
+		return Held{Req: w.Req}, err
+	}
+	return NewHeld(w.Req, raw), nil
 }
 
 // hold takes resource's lease, or answers why it could not.
