@@ -1,6 +1,7 @@
 package googleauth_test
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -230,5 +231,36 @@ func TestAnAPIsHeaderRidesTheCallButNeverTheBearer(t *testing.T) {
 	}
 	if bare := f.seen[len(f.seen)-1]; bare.Get("Authorization") != "" {
 		t.Errorf("a call with no bearer sent authorization %q", bare.Get("Authorization"))
+	}
+}
+
+// A FILE RIDES AS ITSELF AND A DOWNLOAD IS STREAMED: a Bytes body reaches
+// Google with its own content type and nothing re-encoded, and an answer read
+// into a writer arrives there whole, never decoded.
+//
+// Mutation: JSON-encode every body, and the upload's content type is
+// application/json.
+func TestAFileRidesAsItselfAndADownloadIsStreamed(t *testing.T) {
+	t.Parallel()
+	f, conn := newFake(t)
+	token, _, err := conn.SeatToken(t.Context(), seatAccount, []string{analytics}, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got bytes.Buffer
+	err = conn.Send(t.Context(), googleauth.Call{Method: http.MethodPost,
+		Address: "https://analyticsdata.googleapis.com/v1beta/x?uploadType=media", Bearer: token,
+		Body: googleauth.Bytes{ContentType: "image/png", Data: []byte("\x89PNG")}}, &got)
+	if err != nil {
+		t.Fatalf("an upload answered %v", err)
+	}
+	f.mu.Lock()
+	seen := f.seen[len(f.seen)-1]
+	f.mu.Unlock()
+	if seen.Get("Content-Type") != "image/png" {
+		t.Errorf("Google read content type %q", seen.Get("Content-Type"))
+	}
+	if !strings.Contains(got.String(), `"rowCount":1`) {
+		t.Errorf("the streamed answer is %q", got.String())
 	}
 }
