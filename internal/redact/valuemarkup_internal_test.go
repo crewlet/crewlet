@@ -290,3 +290,28 @@ func TestAKeyBeforeAValuePastMarkupIsFoundWithinItsLabelsRun(t *testing.T) {
 		}
 	}
 }
+
+// A VALUE PAST MARKUP TRIES NO KEY PAST ITS LABEL'S RUN ([keyBefore]): read
+// past the markup of `Password: | hunter2x9 |`, the value asks whether a key's
+// label begins before its word, and the pattern is tried only before where
+// that label would stop ([labelEnd]), at the `|`, however many key words
+// follow on the line before its next key. Counted, not timed ([keyTried]):
+// the cost is the tries, and a count is the same on any runner.
+//
+// Mutation: search to [MaxReach] past the word, as keyBefore once did, and
+// the tries grow with the key words after the value. Not parallel: it sets
+// keyTried, which parallel tests would race on.
+func TestAValuePastMarkupTriesNoKeyPastItsLabelsRun(t *testing.T) {
+	tries := 0
+	keyTried = func() { tries++ }
+	defer func() { keyTried = nil }()
+	read := func(words int) int {
+		tries = 0
+		_ = Secrets("Password: | hunter2x9 | " + strings.Repeat("password ", words) + "password: x\n")
+		return tries
+	}
+	if short, long := read(16), read(4096); long != short {
+		t.Errorf("a value past markup tried the pattern %d times before 4096 key words and %d before 16: "+
+			"the search reads past its label's run", long, short)
+	}
+}
