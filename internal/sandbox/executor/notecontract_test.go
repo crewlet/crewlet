@@ -49,6 +49,12 @@ var noteFixtures = map[string]noteFixture{
 		confirms: codexConfirmsATake,
 		reaches:  codexRealBoxsNotesReachTheBridgesRoute,
 	},
+	executor.CopilotName: {
+		reads:    true,
+		wakeRead: executor.CopilotWakeRead,
+		confirms: executor.CopilotConfirmsATake,
+		reaches:  copilotReachesTheBridgesRoute,
+	},
 	executor.KimiName: {
 		reads:    true,
 		wakeRead: executor.KimiWakeRead,

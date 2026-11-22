@@ -395,13 +395,13 @@ func TestAStreamAnswersItsWritersErrorAndRefusesAWriteOnceClosed(t *testing.T) {
 // BenchmarkStreamAtThePlaintextBound streams 256 MiB through a [redact.Stream]
 // in 64 KiB writes, the most the take's scrub reads of an archive at once: the
 // plaintext bound of one reading (internal/sandbox/executor's scrubPlainMax),
-// which SessionScrubWait reads twice within its seven minutes. Three texts: a
+// which a take's scrub redacts once within SessionScrubWait. Three texts: a
 // kept session (JSON lines, credentials, base64 images); a key's armour then
 // 200-byte tokens, which the later claims stages step at as markers; a
 // password's value every seven bytes. Two runs on two
 // cores of the build machine: the kept session at 17.6 MB/s, 15.3 s a reading,
 // allocating its 18 MB of buffers; the dense tokens at 6.9 to 7.0 MB/s, 38 to
-// 39 s; the dense passwords at 1.9 MB/s, 142 s, within the wait read twice.
+// 39 s; the dense passwords at 1.9 MB/s, 142 s, within the wait.
 // Secrets, which reads a text whole, ran 4.3 times as fast.
 func BenchmarkStreamAtThePlaintextBound(b *testing.B) {
 	for _, c := range []struct {

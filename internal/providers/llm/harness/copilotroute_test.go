@@ -9,15 +9,18 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
 // Copilot, as the fake plays it: every server the home's mcp-config.json names
-// started beside the one --additional-mcp-config adds, no id of its own with a
-// call, and the record in the session's events file under the home — a turn
-// per request, its usage_record and its assistant.message written before its
-// calls run — with the answer alone on stdout and the run's counts in its usage
-// report (measured on 1.0.103; see the profile).
+// started beside the one --additional-mcp-config adds, each call's toolCallId
+// in `_meta` as `com.github.copilot/toolCallId`, and the record in the session's
+// events file under the home — a turn per request, its usage_record and its
+// assistant.message written before its calls run — with the answer alone on
+// stdout and the run's counts in its usage report (measured on 1.0.114; see
+// the profile).
 func init() {
 	fakeHarnesses["copilot"] = fakeHarness{
 		server: func() (string, []string, error) {
@@ -39,6 +42,7 @@ func init() {
 			}
 			return serverIn(raw)
 		},
+		meta:     func(id string) sdk.Meta { return sdk.Meta{"com.github.copilot/toolCallId": id} },
 		recorder: newCopilotRecorder,
 	}
 }
@@ -53,11 +57,11 @@ func copilotEvent(kind string, data map[string]any) map[string]any {
 }
 
 // copilotUsage is a turn's usage_record: its input count the whole prompt, the
-// cached tokens inside it.
+// cached tokens, read and written, inside it.
 func copilotUsage(model, call string, u fakeUsage) map[string]any {
 	return copilotEvent("session.usage_record", map[string]any{"usage": map[string]any{"model": model,
-		"inputTokens": u.Input + u.CacheRead, "outputTokens": u.Output, "cacheReadTokens": u.CacheRead,
-		"apiCallId": call}})
+		"inputTokens": u.Input + u.CacheRead + u.CacheWrite, "outputTokens": u.Output,
+		"cacheReadTokens": u.CacheRead, "cacheWriteTokens": u.CacheWrite, "apiCallId": call}})
 }
 
 func newCopilotRecorder(script fakeScript, _ []byte) (fakeRecorder, error) {
@@ -115,8 +119,9 @@ func (c *copilotRecorder) answered(i int, _ fakeResponse, ids []string, results 
 func (c *copilotRecorder) end(script fakeScript, total fakeUsage, last string) int {
 	if path := argAfter("--usage-output-file"); path != "" {
 		raw, _ := json.Marshal(map[string]any{"providerModelMetrics": []any{map[string]any{"metrics": map[string]any{
-			"usage": map[string]any{"inputTokens": total.Input + total.CacheRead, "outputTokens": total.Output,
-				"cacheReadTokens": total.CacheRead}}}}})
+			"usage": map[string]any{"inputTokens": total.Input + total.CacheRead + total.CacheWrite,
+				"outputTokens": total.Output, "cacheReadTokens": total.CacheRead,
+				"cacheWriteTokens": total.CacheWrite}}}}})
 		_ = os.WriteFile(path, raw, 0o600)
 	}
 	if script.Exit == 0 {
@@ -128,14 +133,15 @@ func (c *copilotRecorder) end(script fakeScript, total fakeUsage, last string) i
 // COPILOT'S RUN IS READ FROM ITS OWN SESSION'S EVENTS. With -s its stdout is
 // the answer alone, so each request — a turn — is read from the events file
 // the harness keeps under the home, its counts and its calls written before the
-// calls run. The session's directory is named by an id the harness mints, so the
+// calls run, each call joined to its request by the toolCallId it carries in
+// `_meta`. The session's directory is named by an id the harness mints, so the
 // run's file is told from a concurrent run's by the working directory its
 // first event names, and its home's mcp-config.json — whose servers the harness
 // starts on every run — is the profile's own, empty, whatever was there.
 //
-// Mutation: drop the profile's owner, and the other run's FOREIGN turn is this
-// run's; drop the mcp-config.json seed, and the server planted in the home
-// starts (the fake fails the run).
+// Mutation: drop the profile's owner, and the other run's FOREIGN turn is
+// this run's; drop the seed, and the planted server starts; drop
+// call_id_meta, and the route's options differ.
 func TestCopilotsRunIsReadFromItsOwnSessionEvents(t *testing.T) {
 	t.Parallel()
 	script := routeCase
@@ -150,8 +156,15 @@ func TestCopilotsRunIsReadFromItsOwnSessionEvents(t *testing.T) {
 	}
 	host := holdsTheRoute(t, p, llm.ServeOptions{
 		Relists: true, ToolTimeout: 10 * time.Minute, ObservesRequests: true, Concurrency: llm.CallsAtOnce,
+		CallIDMeta: "com.github.copilot/toolCallId",
 	}, llm.Usage{Input: 340, Output: 29, CacheRead: 100})
-	for _, turn := range host.latestTurns() {
+	_, calls, _, _ := host.snapshot()
+	turns := host.latestTurns()
+	if id, _ := calls[0].Meta["com.github.copilot/toolCallId"].(string); id == "" || id != turns[0].Calls[0].ID {
+		t.Errorf("the call carried toolCallId %q and the events name %q: they must join",
+			calls[0].Meta["com.github.copilot/toolCallId"], turns[0].Calls[0].ID)
+	}
+	for _, turn := range turns {
 		if strings.Contains(turn.Text, "FOREIGN") {
 			t.Errorf("another run's session events were read as this one's: %+v", turn)
 		}
