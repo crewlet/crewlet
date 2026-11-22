@@ -179,7 +179,7 @@ var opAccessGrowthChanged = define("access.growth_changed", opRead, accessDomain
 			return 0, err
 		}
 		return r.GrowthChanged(ctx, a.Query, a.Fresh)
-	})
+	}).oneAnswer()
 
 // ---- the writes: the engine's, each under the operation it carries ---------- //
 
