@@ -14,7 +14,7 @@ import (
 // A Qwen Code run's stream, as its helper writes it (qwen_helper.mjs): every
 // ACP session/update notification Qwen Code sent, verbatim, a line each —
 // agent_message_chunk, agent_thought_chunk, tool_call and tool_call_update,
-// measured on 0.28.3 and 0.26.1 — and the helper's own lines, each typed
+// measured on 0.28.3 — and the helper's own lines, each typed
 // `crewlet_qwen_*`, saying what the notifications do not: the session, each
 // note handed, the window, the 429's words and how the turn ended.
 

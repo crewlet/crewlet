@@ -11,7 +11,7 @@ import (
 
 // GEMINI CLI'S SESSION FILE, read as a transcript: one JSON object a line, a
 // header, `$set` lines, and entries, each `user` or `gemini` (measured on
-// 0.70.0 and 0.65.0). A `user` entry's content is the API's parts
+// 0.70.0). A `user` entry's content is the API's parts
 // ([geminiParts]): the harness's own session context first, then the brief,
 // each call's response, and the note a finish was blocked with. A `gemini`
 // entry is one response, its words a string and its calls in `toolCalls`;
