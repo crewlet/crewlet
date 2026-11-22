@@ -24,16 +24,18 @@ func codexMetered(t *testing.T, rollout []byte, release string) meterReading {
 	return read
 }
 
-// CODEX COUNTS A SESSION AT ITS NEWEST FIGURE AND WHAT CAME AFTER: the newest
+// CODEX COUNTS A SESSION AT ITS NEWEST LAST TOTAL ALONE, as it does before a
+// turn, which a carried session's next request opens: the newest
 // token_count's last_token_usage.total_tokens (after a compaction, Codex's
-// own estimate of the replaced history), plus each response item written
-// since at four bytes a token; the meter's figure is the newest request's
+// own estimate of the replaced history), never the cumulative total and
+// never the items since (CODEX-MEASURE §16.4). The window is the model's own,
+// the reported 95% scaled back; the meter's figure is the newest request's
 // input, and the next request is estimated at the count.
 //
 // Mutation: anchor on total_token_usage or the first token_count, take the
-// compaction request's 60000 for the history after it, charge the items at
-// another rate, or skip the items after the anchor, and a figure goes wrong.
-func TestCodexCountsASessionAtItsNewestFigureAndWhatCameAfter(t *testing.T) {
+// compaction request's 60000 for the history after it, add the note written
+// after the anchor, or report the 95% window, and a figure goes wrong.
+func TestCodexCountsASessionAtItsNewestLastTotalAlone(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
 		fixture       string
@@ -42,7 +44,7 @@ func TestCodexCountsASessionAtItsNewestFigureAndWhatCameAfter(t *testing.T) {
 	}{
 		{"rollout.jsonl", 1290, 1234, ""},
 		{"compaction-note-before.jsonl", 6070, 60000, "ordinal-25"},
-		{"compaction-note-after.jsonl", 6053 + 219, 60000, "ordinal-18"},
+		{"compaction-note-after.jsonl", 6053, 60000, "ordinal-18"},
 	} {
 		raw := codexRolloutFixture(t)
 		if c.fixture != "rollout.jsonl" {
@@ -52,7 +54,7 @@ func TestCodexCountsASessionAtItsNewestFigureAndWhatCameAfter(t *testing.T) {
 		n, ok := read.count.Bound()
 		restart, known := read.count.Restarted()
 		if !ok || n != c.count || read.tokens != c.figure || read.next.Tokens != c.count ||
-			read.count.Window != 258400 || !known || restart != c.restart {
+			read.count.Window != 272000 || !known || restart != c.restart {
 			t.Errorf("%s: count %d (%v) at %q (%v), figure %d, next %d, window %d; want %d at %q, figure %d",
 				c.fixture, n, ok, restart, known, read.tokens, read.next.Tokens, read.count.Window,
 				c.count, c.restart, c.figure)

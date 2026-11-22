@@ -13,15 +13,18 @@ import (
 )
 
 // WHAT CODEX COUNTS A SESSION AT BEFORE ITS NEXT REQUEST, read off the rollout
-// a capture packed ([codexCounting.line]): Codex's own figure for its context,
-// the newest token_count's last_token_usage.total_tokens (which it rewrites as
-// an estimate of the replaced history once a compaction ends, measured on
-// 0.171.0), plus every response item written after it at [codexChargeBytes].
+// a capture packed ([codexCounting.line]). The next request of a carried
+// session always opens a turn (`exec resume` is one), and before a turn Codex
+// compares the newest token_count's last_token_usage.total_tokens with its
+// limit, adding neither the new input nor the items since (CODEX-MEASURE §16.4,
+// 0.171.0). The estimate of items since is mid-turn alone, which no count read
+// meets: a copy cut off mid-turn is not counted ([Codex.threadTraits]).
 // A rollout with no such figure, or a compaction after the newest, holds what
 // no rollout states (the system prompt and tools), so the count is marked.
 
 // codexChargeBytes is the fewest bytes Codex's own estimate counts as a
-// token: it estimates a text at its UTF-8 length over four, rounded up.
+// token: it estimates a text at its UTF-8 length over four, rounded up
+// (CODEX-MEASURE §16.4).
 const codexChargeBytes sandbox.Charge = 4
 
 // codexCountRead reports whether release is one whose count rule this build
@@ -31,16 +34,26 @@ func codexCountRead(release string) bool { return release == codexCarryFloor }
 // codexCounting is one walk's account of a rollout for the count, the meter's
 // figure and the window ([codexCounting.line]).
 type codexCounting struct {
-	// anchored says a token_count stated Codex's figure, base; after is the
-	// bytes of the response items written since, and compacted says a
-	// compaction ended after it.
+	// anchored says a token_count stated Codex's figure, base, and compacted
+	// that a compaction ended after it.
 	anchored, compacted bool
-	base, after         int64
+	base                int64
 	// figure is the input of the newest request that stated one; window the
-	// least context window Codex reported.
+	// least raw window Codex reported ([codexRawWindow]).
 	figure, window int64
 	// restart names the newest compaction, "" for none.
 	restart string
+}
+
+// codexRawWindow is the model's own window that a rollout's
+// model_context_window states: Codex reports 95% of it, and compacts at 90%
+// of it unless a limit is configured (CODEX-MEASURE §16.4). Rounded down, so
+// a window read is never above the model's; zero for none.
+func codexRawWindow(reported int64) int64 {
+	if reported <= 0 {
+		return 0
+	}
+	return reported * 20 / 19
 }
 
 // codexCountWire is the part of a token_count or compacted payload the count
@@ -57,8 +70,11 @@ type codexCountWire struct {
 	WindowID string `json:"window_id"`
 }
 
-// line reads one rollout line of size bytes: THE ONE RULE of Codex's count.
-func (c *codexCounting) line(raw []byte, size int) {
+// line reads one rollout line: THE ONE RULE of Codex's count, as measured
+// (CODEX-MEASURE §16.4): the newest token_count's last total, per request and
+// never the cumulative one, rewritten by Codex as its estimate of the history
+// a compaction replaced.
+func (c *codexCounting) line(raw []byte) {
 	var env struct {
 		Type    string         `json:"type"`
 		Ordinal int64          `json:"ordinal"`
@@ -68,20 +84,18 @@ func (c *codexCounting) line(raw []byte, size int) {
 		return
 	}
 	switch p := env.Payload; {
-	case env.Type == "response_item":
-		c.after += int64(size)
 	case env.Type == "compacted":
-		c.compacted, c.after = true, 0
+		c.compacted = true
 		c.restart = p.WindowID
 		if c.restart == "" {
 			c.restart = "ordinal-" + strconv.FormatInt(env.Ordinal, 10)
 		}
 	case env.Type == "event_msg" && p.Type == "token_count" && p.Info != nil && p.Info.Last != nil:
-		c.anchored, c.compacted, c.base, c.after = true, false, max(p.Info.Last.Total, 0), 0
+		c.anchored, c.compacted, c.base = true, false, max(p.Info.Last.Total, 0)
 		if p.Info.Last.Input > 0 {
 			c.figure = p.Info.Last.Input
 		}
-		if w := p.Info.Window; w > 0 && (c.window == 0 || w < c.window) {
+		if w := codexRawWindow(p.Info.Window); w > 0 && (c.window == 0 || w < c.window) {
 			c.window = w
 		}
 	}
@@ -99,7 +113,7 @@ func (c *codexCounting) count(marks countMarks) *sandbox.ResumedCount {
 	out := &sandbox.ResumedCount{Window: c.window, Restart: &restart}
 	switch mark := marks.first(); mark {
 	case "":
-		out.Tokens = c.base + codexChargeBytes.Tokens(c.after)
+		out.Tokens = c.base
 	case sandbox.CountUnread, sandbox.CountRelease:
 		out.Mark, out.Restart = mark, nil
 	default:
@@ -126,7 +140,7 @@ func codexMeter(ctx context.Context, r io.Reader, release string) (meterReading,
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			c.line(body, len(body))
+			c.line(body)
 			return nil
 		}, func(n int) error {
 			return fmt.Errorf("%w: line %d", errCodexRolloutLine, n)
@@ -226,8 +240,9 @@ func (Codex) readMainThread(ctx context.Context, box sandbox.Sandbox, paths Path
 func (Codex) threadTraits() sandbox.ThreadTraits { return sandbox.ThreadTraits{} }
 
 // sessionTraits is how a relaunch judges a Codex session: by the run's window,
-// which Codex compacts at; its calls keyed by their own call_id, which a
-// resume carries over unchanged; a brief at [codexChargeBytes].
+// whose limit the runner pins and Codex compacts at; its calls keyed by their
+// own call_id, which a resume replays unchanged; a brief at
+// [codexChargeBytes] (each measured, CODEX-MEASURE §16.4).
 func (Codex) sessionTraits() sandbox.SessionTraits {
 	return sandbox.SessionTraits{FirstRequest: sandbox.FirstRequestWindow, CallKeying: sandbox.CallKeyingByCallID,
 		Charge: codexChargeBytes}
