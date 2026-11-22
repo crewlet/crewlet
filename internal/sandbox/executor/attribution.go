@@ -47,7 +47,7 @@ const (
 // participants. Not `Signed-off-by`, which certifies the Developer Certificate
 // of Origin (only the party answerable for the code can) and GitHub renders
 // as nothing.
-const CoAuthor = "Crewlet <noreply@crewlet.ai>"
+const CoAuthor = "Crewlet <noreply@crewlet.com>"
 
 // The keys of the Crewlet trailers: the seat that made a commit, the run that
 // wrote it, and the work item its turn is charged to. A trailer is a claim the

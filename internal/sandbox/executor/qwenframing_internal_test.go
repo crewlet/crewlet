@@ -5,7 +5,7 @@ import "testing"
 // A QWEN CODE NOTE IS READ AS ONE THROUGH QWEN CODE'S FRAMING. Qwen Code puts
 // a drained message on a line after `[User message received during tool
 // execution]: ` (its record of a note the measured run handed it,
-// testdata/qwen/0.28.3/chat-note.jsonl), so a note it records opens with its
+// testdata/qwen/0.28.4/chat-note.jsonl), so a note it records opens with its
 // heading after that framing and nothing else, and is filed as a note; a
 // heading after any other words on its line still heads nothing.
 //
