@@ -65,10 +65,11 @@ func TestACodexRunLoadsOnlyWhatItsLaunchWrites(t *testing.T) {
 // CODEX_HOME/AGENTS.md holds the checkout's file under its root, its skill
 // is the run's as `repo:check`, its config reached neither the Codex home nor
 // the app-server's command line, and that command line declares the nested
-// hook and its trust, the note helper it runs written beside it.
+// hook and its trust, the note helper it runs executable beside it, the run
+// saying nothing of a missing helper.
 //
-// Mutation: drop the gate from the script, or the hook's flags from the
-// app-server, and a check goes red.
+// Mutation: drop the gate from the script, test the helper with -x, or drop
+// the hook's flags from the app-server, and a check goes red.
 func TestACodexRunIsHandedItsCheckoutAndTheHookForALaterOne(t *testing.T) {
 	t.Parallel()
 	runner, box, record := codexBox(t, "0.171.0")
@@ -111,7 +112,10 @@ func TestACodexRunIsHandedItsCheckoutAndTheHookForALaterOne(t *testing.T) {
 			t.Error("the repository's .codex/config.toml reached the run's configuration")
 		}
 	}
-	if _, err := os.Stat(p.CodexNoteHelper()); err != nil {
-		t.Errorf("the note helper the hook runs is not in the box: %v", err)
+	if info, err := os.Stat(p.CodexNoteHelper()); err != nil || info.Mode().Perm()&0o100 == 0 {
+		t.Errorf("the note helper the hook runs is not executable in the box (%v, %v)", info, err)
+	}
+	if errs := boxFile(t, box, p.Err()); strings.Contains(errs, "no note helper") {
+		t.Errorf("the run said its box has no note helper:\n%s", errs)
 	}
 }

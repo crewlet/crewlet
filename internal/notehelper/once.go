@@ -28,6 +28,7 @@ import (
 var oneShots = map[string]func(ctx context.Context, f flags, stdin io.Reader, stdout, stderr io.Writer,
 	getenv func(string) string) int{
 	"muse-hook":    runMuseHook,
+	"codex-launch": runCodexLaunch,
 	"codex-nested": runCodexNested,
 }
 
