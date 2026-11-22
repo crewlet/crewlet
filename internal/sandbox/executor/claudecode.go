@@ -177,8 +177,9 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	line(`if at %s; then export CLAUDE_CODE_TRANSCRIPT_LOCAL_GC=1; else unset CLAUDE_CODE_TRANSCRIPT_LOCAL_GC; fi`,
 		floorArgs(claudeLocalGCFloor))
 	// THE RUN'S OWN SETTINGS, ONE FILE, as cs: on every run the settings that
-	// hold the harness's own retention sweep off ([claudeSettings]), unless the
-	// notes' gate below names the same settings with the notes' hooks.
+	// hold the harness's own retention sweep off ([claudeSettings]), unless a
+	// gate below names the same settings with its hooks: the repositories'
+	// ([claudeRepoGate]), then the notes' ([claudeNotesGate]).
 	line(`set --; cs=%s`, shellword.Quote(paths.ClaudeSettings()))
 	// THE RUN'S OWN SKILLS, and the hook that reports each load, in the
 	// plugin [ClaudeCode.WriteConfig] wrote, on a release that runs the hook
@@ -191,6 +192,10 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	// its release reads what they answer, in the settings that hold them —
 	// AND ITS SYSTEM TEXT, told of notes only where they are read: the gate
 	// decides both.
+	// THE REPOSITORIES' INSTRUCTIONS, SKILLS, COMMANDS AND AGENTS, without their
+	// settings, which the run reads no source of ([claudeRepoGate]); before the
+	// notes' gate, whose settings hold the nested hook too.
+	b.WriteString(claudeRepoGate(paths))
 	if req.Steer.Set() {
 		plain := ""
 		if req.System != "" {
@@ -198,9 +203,6 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 		}
 		b.WriteString(claudeNotesGate(paths.ClaudeNotesSettings(), paths.ClaudeNotesSystem(), plain))
 	}
-	// THE REPOSITORIES' INSTRUCTIONS, SKILLS, COMMANDS AND AGENTS, without their
-	// settings, which the run reads no source of ([claudeRepoGate]).
-	b.WriteString(claudeRepoGate(paths))
 	line(`set -- "$@" --settings "$cs"`)
 	// THE ENTRY'S EFFORT, as its runs on the engine host pass it, on a release
 	// that takes the flag ([claudeEffortFloor]).
@@ -310,7 +312,7 @@ const claudeCarriedWriterFloor = "2.1.300"
 // at or after [claudeNotesFloor] the settings with the notes' hooks
 // ([Paths.ClaudeNotesSettings]) and the standing instructions told of notes
 // ([Paths.ClaudeNotesSystem]); on an older one, which the error stream says,
-// every run's settings ([Paths.ClaudeSettings]) and the plain instructions
+// the settings chosen before it ([claudeRepoGate]) and the plain instructions
 // ([Paths.System]), none if none.
 //
 // THE SYSTEM TEXT IS CHOSEN WITH THE HOOKS, because only this script knows
@@ -739,13 +741,22 @@ func (c ClaudeCode) WriteConfig(ctx context.Context, box sandbox.Sandbox, req sa
 	if err := writeClaudeSettings(ctx, box, paths.ClaudeSettings(), newClaudeSettings()); err != nil {
 		return "", err
 	}
+	if err := writeClaudeSettings(ctx, box, paths.ClaudeRepoSettings(), claudeRepoSettings{
+		claudeSettings: newClaudeSettings(),
+		Hooks:          map[string][]claudeHookMatcher{claudeEventToolUsed: claudeNestedHooks(paths)},
+	}); err != nil {
+		return "", err
+	}
+	if err := box.WriteFile(ctx, paths.ClaudeNestedHook(), []byte(claudeNestedHook)); err != nil {
+		return "", fmt.Errorf("executor: writing the run's nested hook: %w", err)
+	}
 	if len(req.Skills) > 0 {
 		if err := writeClaudeSkills(ctx, box, req.Skills, req.SkillLoads, paths); err != nil {
 			return "", err
 		}
 	}
 	if req.Steer.Set() {
-		if err := writeClaudeSettings(ctx, box, paths.ClaudeNotesSettings(), claudeSteerSettings(req.Steer)); err != nil {
+		if err := writeClaudeSettings(ctx, box, paths.ClaudeNotesSettings(), claudeSteerSettings(req.Steer, paths)); err != nil {
 			return "", err
 		}
 		told := withNoteInstruction(req.System, c.NoteInstruction())
@@ -1677,8 +1688,8 @@ func (ClaudeCode) notesOffWhy() string {
 // working directory. Removed whatever harness the box runs next.
 func (ClaudeCode) artifacts(p Paths) (files, dirs []string) {
 	cfg := p.ClaudeConfigDir()
-	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(),
-			p.ClaudeToolEnv(), cfg + "/.claude.json", cfg + "/CLAUDE.md",
+	return []string{p.ClaudeNotesSystem(), p.ClaudeSettings(), p.ClaudeNotesSettings(), p.ClaudeRepoSettings(),
+			p.ClaudeNestedHook(), p.ClaudeToolEnv(), cfg + "/.claude.json", cfg + "/CLAUDE.md",
 			p.Home + "/CLAUDE.md", p.Home + "/CLAUDE.local.md", p.Home + "/AGENTS.md"},
 		[]string{p.ClaudeSkillsPlugin(), p.ClaudeRepoPlugins(), cfg + "/.claude.json.lock", cfg + "/backups",
 			cfg + "/rules"}

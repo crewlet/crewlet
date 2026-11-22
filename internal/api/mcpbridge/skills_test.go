@@ -110,14 +110,15 @@ func TestALoadTheHarnessReportsIsTheRunsOwnLoad(t *testing.T) {
 }
 
 // A NAME THE RUN WAS NOT HANDED IS NONE OF ITS TOOL SKILLS: a load of the
-// checkout's own skill, a name without the namespace it was listed under, or
-// a variable the harness never filled in is answered as quietly as a load is,
-// and recorded nowhere.
+// checkout's own skill (a repository's, listed under the repository's name
+// even where its name is a seat skill's), a name without the namespace it was
+// listed under, or a variable the harness never filled in is answered as
+// quietly as a load is, and recorded nowhere.
 func TestASkillTheRunWasNotHandedIsRecordedNowhere(t *testing.T) {
 	t.Parallel()
 	f := newSkillsFixture(t, handed)
 	box := dial(t, f.endpoint)
-	for _, name := range []string{"pdf", "mcp-github", "${tool_input.skill}", ""} {
+	for _, name := range []string{"pdf", "app:mcp-github", "crewlet-2:mcp-github", "mcp-github", "${tool_input.skill}", ""} {
 		if res := callTool(t, box, mcpbridge.SkillTool, map[string]any{"skill": name}); res.IsError || text(res) != "" {
 			t.Errorf("a report of %q was answered %q (error %v), want empty text", name, text(res), res.IsError)
 		}

@@ -292,9 +292,15 @@ func TestTheSettingsFilesAreTheMeasuredShapes(t *testing.T) {
 		t.Fatalf("WriteConfig: %v", err)
 	}
 	shape(t, b, p.ClaudeSettings(), every)
+	// The nested hook of the repositories' instructions, in the settings of a
+	// run handed them and in the notes'.
+	nested := `"PostToolUse": [{"matcher": "Read|Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command",
+		"command": "sh '` + p.ClaudeNestedHook() + `' '` + p.ClaudeRepoPlugins() + `'", "timeout": 10}]}]`
+	shape(t, b, p.ClaudeRepoSettings(), `{"cleanupPeriodDays": 36500, "hooks": {`+nested+`}}`)
 	shape(t, b, p.ClaudeNotesSettings(), `{
 		"cleanupPeriodDays": 36500,
 		"hooks": {
+			`+nested+`,
 			"PostToolBatch": [{"hooks": [{"type": "mcp_tool", "server": "crewlet", "tool": "steer_take",
 				"input": {"event": "${hook_event_name}", "agent": "${agent_id}"}, "timeout": 10}]}],
 			"Stop": [{"hooks": [{"type": "mcp_tool", "server": "crewlet", "tool": "steer_take",
@@ -518,26 +524,29 @@ func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 		Steer: steerWiring}, p, ""))
 	forEachShell(t, func(t *testing.T, sh boxShell) {
 		for _, tc := range []struct {
-			version string
-			hooks   bool
+			version     string
+			hooks, repo bool
 		}{
-			{"2.1.150 (Claude Code)", false},
-			{"2.1.162 (Claude Code)", false},
-			{"2.0.300 (Claude Code)", false},
-			{"1.9.999 (Claude Code)", false},
-			{"2.1.163 (Claude Code)", true},
-			{"2.1.309 (Claude Code)", true},
-			{"2.1.310 (Claude Code)", true},
-			{"2.2.0 (Claude Code)", true},
-			{"10.0.0 (Claude Code)", true},
-			{"", true},
-			{"Claude Code, a version of its own", true},
+			{"2.1.150 (Claude Code)", false, true},
+			{"2.1.162 (Claude Code)", false, true},
+			{"2.0.300 (Claude Code)", false, false},
+			{"1.9.999 (Claude Code)", false, false},
+			{"2.1.163 (Claude Code)", true, true},
+			{"2.1.309 (Claude Code)", true, true},
+			{"2.1.310 (Claude Code)", true, true},
+			{"2.2.0 (Claude Code)", true, true},
+			{"10.0.0 (Claude Code)", true, true},
+			{"", true, true},
+			{"Claude Code, a version of its own", true, true},
 		} {
 			t.Run(tc.version, func(t *testing.T) {
 				args, stderr := scriptArgv(t, sh, script, tc.version)
-				// One settings file: the hooks' where they are read, every
-				// run's where not.
+				// One settings file: the notes' where they are read, else the
+				// repositories' where those are handed, else every run's.
 				settings := p.ClaudeSettings()
+				if tc.repo {
+					settings = p.ClaudeRepoSettings()
+				}
 				if tc.hooks {
 					settings = p.ClaudeNotesSettings()
 				}
@@ -581,21 +590,25 @@ func TestAClaudeCodeOlderThanItsNoteFloorStartsWithoutTheHooks(t *testing.T) {
 func TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		version string
-		steer   sandbox.SteerWiring
-		hooks   bool
+		version     string
+		steer       sandbox.SteerWiring
+		hooks, repo bool
 	}{
-		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true},
-		"wired to its notes, below the note floor":         {"2.1.150 (Claude Code)", steerWiring, false},
+		"wired to its notes, on a release that reads them": {"2.1.310 (Claude Code)", steerWiring, true, true},
+		"wired to its notes, below the note floor":         {"2.1.150 (Claude Code)", steerWiring, false, true},
 		"wired to its notes, on a release it cannot read": {"Claude Code, a version of its own", steerWiring,
-			true},
-		"wired to none":                       {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false},
-		"wired to none, below the note floor": {"2.1.150 (Claude Code)", sandbox.SteerWiring{}, false},
+			true, true},
+		"wired to none":                       {"2.1.310 (Claude Code)", sandbox.SteerWiring{}, false, true},
+		"wired to none, below the note floor": {"2.1.150 (Claude Code)", sandbox.SteerWiring{}, false, true},
+		"below the repositories' floor":       {"2.1.117 (Claude Code)", sandbox.SteerWiring{}, false, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			run := startOn(t, tc.version, sandbox.RunRequest{Brief: "x", System: "be careful", Steer: tc.steer})
 			want := run.paths.ClaudeSettings()
+			if tc.repo {
+				want = run.paths.ClaudeRepoSettings()
+			}
 			if tc.hooks {
 				want = run.paths.ClaudeNotesSettings()
 			}
@@ -606,8 +619,8 @@ func TestEveryClaudeCodeRunIsStartedWithItsBoxsSweepHeldOff(t *testing.T) {
 				t.Errorf("the settings the harness was handed hold cleanupPeriodDays %q, want 36500: "+
 					"its box would sweep the session it carries", days)
 			}
-			if hooked := len(run.settings["hooks"]) > 0; hooked != tc.hooks {
-				t.Errorf("the settings the harness was handed hold hooks: %v, want %v", hooked, tc.hooks)
+			if hooked := len(run.settings["hooks"]) > 0; hooked != (tc.hooks || tc.repo) {
+				t.Errorf("the settings the harness was handed hold hooks: %v, want %v", hooked, tc.hooks || tc.repo)
 			}
 		})
 	}
@@ -647,18 +660,18 @@ func startOn(t *testing.T, release string, req sandbox.RunRequest) startedOn {
 	return startedOn{argv: argv, paths: p, named: after(argv, "--settings"), settings: settings}
 }
 
-// A RUN IS HANDED ITS NOTES' SETTINGS OR EVERY RUN'S, AND NOTHING ELSE: the
-// notes' where its launch wired it to them and its release reads a note
-// (2.1.163), every run's otherwise, skills or none. Its plugin is added from
-// the release that runs its load hook (2.1.118), on either settings. Neither
-// holds `disableAllHooks`: the run reads no settings source that could switch
-// its hooks off, and a managed policy wins over any value its own file holds.
+// A RUN IS HANDED THE SETTINGS ITS RELEASE READS, AND NOTHING ELSE: the notes'
+// where its launch wired it to them and its release reads a note (2.1.163), the
+// repositories' from 2.1.118, every run's below, skills or none. Its plugin is
+// added from 2.1.118 too. None holds `disableAllHooks`: the run reads no
+// settings source that could switch its hooks off, and a managed policy wins
+// over any value its own file holds.
 // Played on a real box, the harness a stand-in that keeps the file its
 // --settings names.
 //
 // Mutation: name another settings file at the skills' gate, or write
 // disableAllHooks into the run's settings, and a row goes red.
-func TestARunIsHandedItsNotesSettingsOrEveryRuns(t *testing.T) {
+func TestARunIsHandedTheSettingsItsReleaseReads(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		release        string
@@ -689,6 +702,9 @@ func TestARunIsHandedItsNotesSettingsOrEveryRuns(t *testing.T) {
 				t.Errorf("the run was started with its skills' plugin: %v, want %v (argv %q)", got, tc.plugged, run.argv)
 			}
 			want := run.paths.ClaudeSettings()
+			if executor.ReleaseAtLeast(strings.TrimSuffix(tc.release, " (Claude Code)"), "2.1.118") {
+				want = run.paths.ClaudeRepoSettings()
+			}
 			if tc.notes {
 				want = run.paths.ClaudeNotesSettings()
 			}
@@ -723,9 +739,9 @@ var claudeSettingsSince = map[string]string{
 	// A whole number ≥ 0 in the schema of 0.2.116, the oldest read (its
 	// changelog adds it in 0.2.117): older than any file's floor.
 	"cleanupPeriodDays": "0.2.116",
-	// The key is older, but the engine writes only mcp_tool hooks under it
-	// (held below), which 2.1.118 first runs (its changelog:
-	// "Hooks can now invoke MCP tools directly via `type: \"mcp_tool\"`").
+	// The key is older, but the engine writes only mcp_tool hooks, which
+	// 2.1.118 first runs (its changelog: "Hooks can now invoke MCP tools
+	// directly via `type: \"mcp_tool\"`"), and command hooks, older still.
 	"hooks": "2.1.118",
 }
 
@@ -747,6 +763,7 @@ func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T
 	}
 	oldest := map[string]string{
 		p.ClaudeSettings():      executor.ClaudeSettingSourcesFloor,
+		p.ClaudeRepoSettings():  executor.ClaudeRepoFloor,
 		p.ClaudeNotesSettings(): executor.ClaudeNotesFloor,
 	}
 	held := map[string]bool{}
@@ -793,7 +810,7 @@ func TestNoSettingsFileHoldsAKeyNewerThanTheOldestReleaseItIsHanded(t *testing.T
 			for event, matchers := range hooks {
 				for _, matcher := range matchers {
 					for _, hook := range matcher.Hooks {
-						if hook.Type != "mcp_tool" {
+						if hook.Type != "mcp_tool" && hook.Type != "command" {
 							t.Errorf("%s holds a %s hook of type %q, whose first release this case has not read",
 								file, event, hook.Type)
 						}

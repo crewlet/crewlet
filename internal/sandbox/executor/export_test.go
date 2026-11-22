@@ -238,11 +238,13 @@ func AttributionHook(a sandbox.CommitAttribution, hooks string) ([]byte, error) 
 func HooksParameter(hooks string) string { return hooksParameter(hooks) }
 
 // ClaudeSettingSourcesFloor is the oldest Claude Code release a run is started
-// on, and ClaudeNotesFloor the oldest started with its notes' hooks
-// ([claudeSettingSourcesFloor], [claudeNotesFloor]).
+// on, ClaudeNotesFloor the oldest started with its notes' hooks, and
+// ClaudeRepoFloor the oldest handed its repositories' instructions
+// ([claudeSettingSourcesFloor], [claudeNotesFloor], [claudeRepoFloor]).
 const (
 	ClaudeSettingSourcesFloor = claudeSettingSourcesFloor
 	ClaudeNotesFloor          = claudeNotesFloor
+	ClaudeRepoFloor           = claudeRepoFloor
 )
 
 // ReleaseAtLeast reports whether a Claude Code release is at or after floor,

@@ -874,6 +874,11 @@ func readCodingHooks(path string) (codingHooks, error) {
 	for event, matchers := range doc.Hooks {
 		for _, matcher := range matchers {
 			for _, hook := range matcher.Hooks {
+				// THE NESTED HOOK of the repositories' instructions, a script
+				// in the box this stand-in, which reads no file, has no use for.
+				if hook.Type == "command" && event == "PostToolUse" {
+					continue
+				}
 				if hook.Type != "mcp_tool" || hook.Server != config.ToolServerName {
 					return nil, fmt.Errorf("a %s hook calls %s on server %q, and the run's only "+
 						"server is the bridge, %q", event, hook.Type, hook.Server, config.ToolServerName)
@@ -881,6 +886,9 @@ func readCodingHooks(path string) (codingHooks, error) {
 				out[event] = append(out[event], hook)
 			}
 		}
+	}
+	if len(out) == 0 {
+		return nil, nil
 	}
 	return out, nil
 }

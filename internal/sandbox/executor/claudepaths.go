@@ -56,3 +56,12 @@ func (p Paths) ClaudeSkillsPlugin() string { return p.WorkDir() + "/claude-skill
 // agents, and the directory importing their CLAUDE.local.md ([claudeRepoGate]).
 // Rebuilt by every run, and cleared before it ([ClaudeCode.artifacts]).
 func (p Paths) ClaudeRepoPlugins() string { return p.WorkDir() + "/claude-repo" }
+
+// ClaudeRepoSettings is the settings of a Claude Code run handed its
+// repositories' instructions and not its notes: every run's and the nested
+// hook ([claudeRepoSettings]), named in [Paths.ClaudeSettings]' place on a
+// release that takes them ([claudeRepoGate]).
+func (p Paths) ClaudeRepoSettings() string { return p.WorkDir() + "/claude-settings-repo.json" }
+
+// ClaudeNestedHook is the script of the run's nested hook ([claudeNestedHook]).
+func (p Paths) ClaudeNestedHook() string { return p.WorkDir() + "/claude-nested.sh" }
