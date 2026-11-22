@@ -181,8 +181,13 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done","ter
 		} `json:"hooks"`
 	}
 	readJSON(t, filepath.Join(record, "settings.json"), &settings)
-	if settings.DisableAllHooks == nil || *settings.DisableAllHooks {
-		t.Errorf("the settings do not switch hooks on explicitly: %v", settings.DisableAllHooks)
+	// The run reads no settings source that could switch its hooks off
+	// (`--setting-sources ""`), so its own settings need not say so.
+	if i := slices.Index(argv, "--setting-sources"); i < 0 || i+1 >= len(argv) || argv[i+1] != "" {
+		t.Errorf("the harness reads a settings source that could switch its hooks off: %q", argv)
+	}
+	if settings.DisableAllHooks != nil {
+		t.Errorf("the run's settings hold disableAllHooks %v", *settings.DisableAllHooks)
 	}
 	var servers struct {
 		Servers map[string]struct{ URL string } `json:"mcpServers"`
