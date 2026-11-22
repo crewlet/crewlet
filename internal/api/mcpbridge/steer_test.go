@@ -43,7 +43,7 @@ type fakeInbox struct {
 	cancels []sandbox.NoteCall
 	reads   [][]string
 	folds   [][]string
-	agains  [][]string
+	asks    [][]string
 	// spentIDs are the notes an ask for a second admission finds at their
 	// budget.
 	spentIDs []string
@@ -96,7 +96,7 @@ func (i *fakeInbox) Read(_ context.Context, ids []string) error {
 func (i *fakeInbox) Again(_ context.Context, ids []string) (map[string]string, []string, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	i.agains = append(i.agains, ids)
+	i.asks = append(i.asks, ids)
 	granted, spent := map[string]string{}, []string(nil)
 	for _, id := range ids {
 		if slices.Contains(i.spentIDs, id) {
@@ -875,14 +875,14 @@ func TestAnAskForASecondAdmissionIsGatedLikeAReadAndAnswersIDsAlone(t *testing.T
 		t.Errorf("an ask answered %d %s, want n-1 granted and n-2 spent, ids alone", status, body)
 	}
 	f.inbox.mu.Lock()
-	agains := slices.Clone(f.inbox.agains)
+	asks := slices.Clone(f.inbox.asks)
 	f.inbox.mu.Unlock()
 	finished.inbox.mu.Lock()
-	finishedAgains := len(finished.inbox.agains)
+	finishedAsks := len(finished.inbox.asks)
 	finished.inbox.mu.Unlock()
-	if len(agains) != 1 || !slices.Equal(agains[0], []string{"n-1", "n-2"}) || finishedAgains != 0 {
-		t.Errorf("the inboxes were asked %v and %d, want the one well-formed ask's ids alone", agains,
-			finishedAgains)
+	if len(asks) != 1 || !slices.Equal(asks[0], []string{"n-1", "n-2"}) || finishedAsks != 0 {
+		t.Errorf("the inboxes were asked %v and %d, want the one well-formed ask's ids alone", asks,
+			finishedAsks)
 	}
 	if res, err := f.server.Client().Get(url); err == nil {
 		if res.StatusCode != http.StatusMethodNotAllowed {
