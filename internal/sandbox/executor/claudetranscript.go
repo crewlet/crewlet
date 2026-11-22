@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"path"
 	"strings"
 	"time"
 
@@ -1105,4 +1106,66 @@ func (c *claudeAnswer) entry(e TranscriptEntry, s *entryShape) pendingEntry {
 	}
 	c.entrySet = true
 	return c.entryP
+}
+
+// transcript reads a Claude Code archive ([claudeArchiveFormat]).
+func (ClaudeCode) transcript(ctx context.Context, b *transcriptBuilder, archive io.Reader) error {
+	return b.claudeArchive(ctx, archive)
+}
+
+// claudeThread is whose transcript a member of the archive named name is: the
+// session's own, `projects/crewlet/<session>.jsonl` (the empty thread), or a
+// subagent's, `projects/crewlet/<session>/subagents/<name>.jsonl` (the thread
+// named after its file) — and false for every other member.
+func claudeThread(name string) (string, bool) {
+	rest, ok := strings.CutPrefix(path.Clean(name), "projects/"+claudeProjectDir+"/")
+	if !ok {
+		return "", false
+	}
+	stem, ok := strings.CutSuffix(rest, ".jsonl")
+	if !ok {
+		return "", false
+	}
+	switch parts := strings.Split(stem, "/"); {
+	case len(parts) == 1 && parts[0] != "":
+		return "", true
+	case len(parts) == 3 && parts[1] == "subagents" && parts[2] != "":
+		return parts[2], true
+	}
+	return "", false
+}
+
+// hookLineKind is the kind of entry the line the run's own hook printed is: a
+// wake where it opens with wakes ([hookWakeOne], a count and [hookWakesMany]),
+// a late call where it names such calls alone ([hookCallOne], a count and
+// [hookCallsMany]), and a note otherwise, as every line naming a note opens
+// with it.
+func hookLineKind(line string) EntryKind {
+	count, rest, _ := strings.Cut(line, " ")
+	counted := count != "" && strings.Trim(count, "0123456789") == ""
+	switch {
+	case strings.HasPrefix(line, hookWakeOne) || (counted && strings.HasPrefix(rest, hookWakesMany)):
+		return EntryWake
+	case strings.HasPrefix(line, hookCallOne) || (counted && strings.HasPrefix(rest, hookCallsMany)):
+		return EntryLateCall
+	}
+	return EntryNote
+}
+
+// notARecord says a line of the record, n bytes long, that is no record.
+func (b *transcriptBuilder) notARecord(n int) error {
+	return b.unread(fmt.Sprintf("a line of %s of the harness's record is not a record, "+
+		"and was not read", humanSize(int64(n))))
+}
+
+// claudeTime is a record's `timestamp`, an RFC 3339 instant, or zero where it
+// carries none this read can parse, or none an answer can carry
+// ([carriedInstant]): the parser takes the year 0000 at any offset, which is a
+// year before it in UTC.
+func claudeTime(raw string) time.Time {
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return carriedInstant(at.UTC())
 }

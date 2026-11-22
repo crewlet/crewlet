@@ -635,7 +635,8 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 	}
 	// NEVER PAST WHAT ITS SEAT'S LEDGER COUNTED: its room was shrunk to it, and
 	// the seal is refused before a byte past it lands.
-	spooled, err := c.spool(take, row, stamp, taken, &savePlaces{run: row, resumeRead: taken.ResumeRead}, in.room)
+	spooled, err := c.spool(take, row, stamp, taken, &savePlaces{run: row, resumeRead: taken.ResumeRead,
+		needsResumeRead: placesWithResumeRead(in.saver)}, in.room)
 	if err != nil {
 		why := takeRefusal(take, err)
 		if errors.Is(err, errSpoolPastHold) {

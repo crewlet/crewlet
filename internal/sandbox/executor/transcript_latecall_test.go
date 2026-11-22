@@ -169,7 +169,7 @@ func TestAHookAnswerNamesWhatReachedTheRun(t *testing.T) {
 			executor.EntryNote},
 		{"a note alone", []executor.HookNote{note}, "a note from ada reached the run", executor.EntryNote},
 	} {
-		answer := executor.ClaudeHookAnswer("PostToolBatch", hookTake, tc.notes)
+		answer := executor.HookAnswer(executor.ClaudeCodeName, "PostToolBatch", hookTake, tc.notes)
 		var out struct {
 			SystemMessage string `json:"systemMessage"`
 		}
@@ -201,7 +201,7 @@ func TestTheStandingInstructionQuotesTheHeadingALateCallOpensWith(t *testing.T) 
 	if heading != prompts.LateCallHead {
 		t.Fatalf("the account opens with %q, not its heading %q", heading, prompts.LateCallHead)
 	}
-	for _, instruction := range []string{executor.ClaudeCodeSteerInstruction, executor.OpenCodeSteerInstruction} {
+	for _, instruction := range noteInstructions() {
 		if !strings.Contains(instruction, `"`+heading+`"`) {
 			t.Errorf("the instruction does not quote the heading a late call opens with (%q):\n%s", heading,
 				instruction)

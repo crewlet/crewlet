@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/version"
 )
 
@@ -259,10 +260,22 @@ var (
 	knownNodeBuckets  = []NodeBucket{"1", "2-3", "4-8", "9+"}
 	knownOS           = []OS{"linux", "darwin", unknownValue}
 	knownArch         = []Arch{"amd64", "arm64", unknownValue}
-	knownHarnesses    = []HarnessName{"claude-code", "opencode"}
 	knownStreams      = []StreamKind{"embedded", "nats", unknownValue}
 	knownCoordination = []CoordinationKind{"local", "embedded-kv", unknownValue}
 	knownSandboxes    = []SandboxKind{"none", "direct", "container", "e2b", unknownValue}
+
+	// knownHarnesses is the harnesses that run a seat's executor, as the
+	// built-in profiles list them (harnessprofile.ExecutorRunners, which
+	// config.ExecutorHarnesses reads too; this package cannot import config,
+	// whose tests reach it through the sandbox), read at first use, never at
+	// init: a push's hook links this package.
+	knownHarnesses = sync.OnceValue(func() []HarnessName {
+		var out []HarnessName
+		for _, name := range harnessprofile.ExecutorRunners() {
+			out = append(out, HarnessName(name))
+		}
+		return out
+	})
 
 	// EACH PATTERN IS BUILT AT FIRST USE: every process links this package, a
 	// push's hook among them, and a bounded repeat compiles to a program holding
@@ -335,7 +348,7 @@ func goVersionOf(s string) GoVersion {
 // harnessOf is the block a report carries for a harness, nil for a harness this
 // build does not name or a release not of the shape a harness gives.
 func harnessOf(name, release string) *Harness {
-	if !slices.Contains(knownHarnesses, HarnessName(name)) || len(release) > 32 || !harnessShape().MatchString(release) {
+	if !slices.Contains(knownHarnesses(), HarnessName(name)) || len(release) > 32 || !harnessShape().MatchString(release) {
 		return nil
 	}
 	return &Harness{Name: HarnessName(name), Version: HarnessVersion(release)}
