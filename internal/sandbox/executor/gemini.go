@@ -113,12 +113,12 @@ func geminiScript(req sandbox.RunRequest, session Session, paths Paths) string {
 		// began again where it did; the release last ([parseSessionRecord]).
 		`printf 'id %s\ncontinued %s\nwhy %s\nrelease %s\n' "$s" "$k" "$w" "$v" > ` + q(paths.SessionRecord()),
 	}
-	// THE SESSION'S RECORD OF TAKES EXISTS BEFORE THE RUN, opened with the
-	// count of the session's lines as the run starts ([geminiConfirmed]): an
-	// empty record settles a take never recorded (its hook killed first) as
-	// absent once the job ends, and only a missing one, lost with its box,
-	// waits. The count keeps a take from being confirmed by a delivery an
-	// earlier job's run made, which a continued session holds.
+	// THE SESSION'S RECORD OF TAKES OPENS WITH ITS START LINE BEFORE THE RUN,
+	// the count of the session's lines as the run starts ([geminiConfirmed]): a
+	// record holding it settles a take never recorded (its hook killed first)
+	// as absent once the job ends, and one without it, lost with its box, waits
+	// (a line, as a box reads a missing file as empty). The count keeps a take
+	// from being confirmed by a delivery an earlier job's run made.
 	if req.Steer.Set() {
 		lines = append(lines, `n=0; [ -z "$cf" ] || n=$(wc -l < "$cf" | tr -d ' '); mkdir -p `+q(paths.GeminiTakesDir())+
 			` && printf '{"from":%s}\n' "$n" >> `+q(paths.GeminiTakesDir())+`/"$s".jsonl || exit 1`)
