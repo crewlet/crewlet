@@ -2571,9 +2571,9 @@ which sign the entry in again.
 **Any one file that holds a login is a login.** `hermes` keeps API keys in `.env`
 and an OAuth pool in `auth.json`, and an entry may use either alone; `gemini-cli`
 signs in without `google_accounts.json`. A file the harness also keeps its own
-state in holds a login only once the key its profile's `login_keys` names is in it:
-without that key it is still written, read and seeded with the rest, but not
-reported, exported or logged out as a login.
+state in holds a login only once one of the keys its profile's `login_keys` names is
+in it: without any of them it is still written, read and seeded with the rest, but
+not reported, exported or logged out as a login.
 
 **A write states the whole login.** `-from-host` adopts your login as it is: a file
 your home does not hold is removed from the shared login rather than left beside
@@ -2925,7 +2925,7 @@ it runs on.
 | `marker_scope` | Where markers match: `answer-and-stderr` (default), `stderr`, or `events` (the class in the harness's own failure events, compared by equality; `jsonl` only, and stderr is not searched). |
 | `marker_events` | Under `marker_scope: events`, the event kinds (read through `event_type_path`) the harness reports a failure in. Refused beside any other scope. |
 | `marker_path` | Under `marker_scope: events`, where in such an event the failure class is; a sentinel must equal it. Refused beside any other scope. |
-| `login_keys` | By a credential file's name, the top-level key that file holds only once the harness has signed in — for a file the harness also keeps its own state in (`copilot`'s `config.json` and `copilotTokens`, `cursor-agent`'s `cli-config.json` and `authInfo`). Without its key such a file is not a login: `doctor` does not report it, a bundle does not carry it, a logout leaves it, and it does not keep a configured bundle from being restored. Read as JSON once lines opening with `//` are set aside; a file that does not read that way counts as a login. Each name must be a `credential_paths` file name. |
+| `login_keys` | By a credential file's name, the top-level keys that file holds a login under — for a file the harness also keeps its own state in (`copilot`'s `config.json` and `copilotTokens` and `authTokens`, which Copilot keeps the same token under; `cursor-agent`'s `cli-config.json` and `authInfo`). Holding none of them such a file is not a login: `doctor` does not report it, a bundle does not carry it, a logout leaves it, and it does not keep a configured bundle from being restored. Read as JSON once lines opening with `//` are set aside; a file that does not read that way counts as a login. Each name must be a `credential_paths` file name. |
 | `host_credential_paths` | Where the harness keeps its login in a person's own home, for `-from-host`: each names a file, under a file name `credential_paths` also has, because an adopted file is kept under its name and a seat is seeded only with those names. |
 | `local_tools` | The profile's stance on the harness's own tools: `denied` or `vendor-default`. |
 | `local_tools_note` | Why a `vendor-default` stance is one. |

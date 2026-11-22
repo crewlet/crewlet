@@ -232,10 +232,10 @@ func TestABundleRestoresOnlyIntoTheHarnessItNames(t *testing.T) {
 			want := map[string]string{}
 			for _, file := range profileLoginNames(source.profile) {
 				want[file] = fmt.Sprintf(`{"harness":%q,"file":%q}`, from, file)
-				if key, ok := source.profile.LoginKeys[file]; ok {
+				if keys, ok := source.profile.LoginKeys[file]; ok {
 					// A file the harness keeps settings in too is a login
-					// only holding its key.
-					want[file] = fmt.Sprintf(`{"harness":%q,"file":%q,%q:"placeholder"}`, from, file, key)
+					// only holding one of its keys.
+					want[file] = fmt.Sprintf(`{"harness":%q,"file":%q,%q:"placeholder"}`, from, file, keys[0])
 				}
 				writeFile(t, filepath.Join(source.ws.CredentialsDir(), file), want[file])
 			}
