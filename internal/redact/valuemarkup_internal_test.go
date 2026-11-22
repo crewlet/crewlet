@@ -259,7 +259,7 @@ func TestAKeysRunIsNoValueOfASuffixSpelledWithoutItsQuote(t *testing.T) {
 // at the word or past it, so the search ends there.
 //
 // Mutation: end the label's run at a key's marker, at `_`, or at the word
-// itself, or start it inside a marker, and an answer differs.
+// itself, and an answer differs.
 func TestAKeyBeforeAValuePastMarkupIsFoundWithinItsLabelsRun(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1897, 1))

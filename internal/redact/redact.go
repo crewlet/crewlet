@@ -1626,11 +1626,11 @@ func ownMarkup[T textual](text T, from, end int, keyBefore func(w int) bool) int
 // keyBefore is [ownMarkup]'s keyBefore for a value read from from: whether
 // the first password's key at or past from, read no further than [MaxReach]
 // past the word ending at w, has a label beginning before w. Only a key
-// beginning by [labelEnd] can, so none past it is read (its first rune read
-// whole: a word opening there is found).
+// beginning before [labelEnd] can, a key's word opening with a letter, so
+// none past it is read.
 func keyBefore[T textual](text T, from int) func(w int) bool {
 	return func(w int) bool {
-		k := keyFrom(text, from, labelEnd(text, w, w+MaxReach)+utf8.UTFMax, w+MaxReach)
+		k := keyFrom(text, from, labelEnd(text, w, w+MaxReach), w+MaxReach)
 		return k >= 0 && labelStart(text, from, k) < w
 	}
 }
@@ -1834,20 +1834,15 @@ func labelRune(r rune) bool {
 	return r == ' ' || r == '\t' || unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("-'.()/", r)
 }
 
-// labelEnd is the first place at or past w, where a word ends and never inside
-// a rune, short of bound, where a label read back to before w would stop
+// labelEnd is the first place at or past w, where a word ends (at a space, an
+// escaped break or the text's end, so never inside a rune or a key's marker),
+// short of bound, where a label read back to before w would stop
 // ([labelStart]): a rune no label is written in, outside a key's marker. A key
 // further on has a label beginning at w or past it, so a search for a key
 // whose label begins before w ends there ([keyBefore]) and costs the label's
 // run, not [MaxReach] of the text.
 func labelEnd[T textual](text T, w, bound int) int {
 	bound = min(bound, len(text))
-	for s := max(0, w-len(keyMarker)+1); s < w; s++ {
-		if tHasPrefix(text[s:], keyMarker) {
-			w = s + len(keyMarker)
-			break
-		}
-	}
 	for w < bound {
 		if tHasPrefix(text[w:], keyMarker) {
 			w += len(keyMarker)
