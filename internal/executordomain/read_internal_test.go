@@ -491,6 +491,31 @@ func TestTheSeatsHoldingRowsAreListed(t *testing.T) {
 	}
 }
 
+// A SESSION ANY TURN'S ROW NAMES IS HELD, whatever its seat, and one no row
+// names is not: the question a minted session's bind asks before it binds an
+// id its box reported. An empty id is refused, never answered.
+//
+// Mutation: ask one seat's rows alone, or answer an unnamed id held, and a case
+// goes red.
+func TestASessionAnyTurnNamesIsHeld(t *testing.T) {
+	t.Parallel()
+	e := newEstate(t)
+	const (
+		named = "session_0b9c1d3e-5f70-4a8b-9c1d-2e3f4a5b6c7d"
+		other = "session_7d6c5b4a-3f2e-4d1c-8b9a-07f5e3d1c9b0"
+	)
+	e.capture(capturing("ana", "chat:room", newTurn(), 1, 1, 100, budget))
+	e.capture(capturingSession("ben", "chat:room", newTurn(), named, 1))
+	for id, want := range map[string]bool{named: true, other: false} {
+		if got, err := e.reader().SessionHeld(t.Context(), id, stale); err != nil || got != want {
+			t.Errorf("session %s held: (%v, %v), want %v", id, got, err, want)
+		}
+	}
+	if _, err := e.reader().SessionHeld(t.Context(), "", stale); !errors.Is(err, ErrInvalid) {
+		t.Errorf("an empty session id: %v, want ErrInvalid", err)
+	}
+}
+
 // A ROW THAT NAMES NO SESSION SAYS WHICH OF THREE REASONS, off the row the
 // applier leaves: the turn captured nothing (so far while live, at all once
 // ended); its end took its older capture off because its newest was not kept
