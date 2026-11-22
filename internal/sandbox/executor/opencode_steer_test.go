@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -836,7 +837,17 @@ type openCodePlugin struct {
 	} `json:"options"`
 }
 
-// steerPluginOf is the one plugin the run's configuration at path names.
+// runPlugins is plugins without the tool-environment plugin every run's
+// configuration names last ([Paths.OpenCodeToolEnvPlugin]), which its own
+// cases hold (opencode_toolenv_test.go).
+func runPlugins(plugins []openCodePlugin) []openCodePlugin {
+	return slices.DeleteFunc(slices.Clone(plugins), func(p openCodePlugin) bool {
+		return path.Base(p.Package) == "opencode-tool-env"
+	})
+}
+
+// steerPluginOf is the one plugin the run's configuration at path names, but
+// the tool-environment one ([runPlugins]).
 func steerPluginOf(t *testing.T, path string) openCodePlugin {
 	t.Helper()
 	raw, err := os.ReadFile(path) //nolint:gosec // the run's configuration, under the test's box
@@ -849,10 +860,11 @@ func steerPluginOf(t *testing.T, path string) openCodePlugin {
 	if err := json.Unmarshal(raw, &cfg); err != nil {
 		t.Fatalf("unmarshal: %v\n%s", err, raw)
 	}
-	if len(cfg.Plugins) != 1 {
-		t.Fatalf("the configuration names %d plugins, want the notes plugin alone:\n%s", len(cfg.Plugins), raw)
+	plugins := runPlugins(cfg.Plugins)
+	if len(plugins) != 1 {
+		t.Fatalf("the configuration names %d plugins, want the notes plugin alone:\n%s", len(plugins), raw)
 	}
-	return cfg.Plugins[0]
+	return plugins[0]
 }
 
 // readReference is what OpenCode reads a `{file:<path>}` reference as: the
