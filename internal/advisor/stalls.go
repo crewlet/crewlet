@@ -106,52 +106,50 @@ var documented = []documentedDetector{
 // [ClassWorkConcentrated], which reads its seat's turns at once ([concentratedWhy]).
 var stallWords = map[Class]said{
 	ClassRoundCap: {"Agent runs ended on their round cap before they finished.",
-		"Each run stopped at the round cap its seat runs under, so what it spent bought no finished " +
-			"work and the item is started again. A cap below what the work takes costs more than it saves."},
+		"What those runs spent bought no finished work, and the item starts again. A cap below what " +
+			"the work takes costs more than it saves."},
 	ClassBudgetStopped: {"Agents stopped on their token budget while holding open work.",
-		"A seat whose budget is spent takes no turn until its window resets, and the open work it " +
-			"holds waits that long, however pressing it is."},
+		"That work waits until the budget window resets, however pressing it is. A seat whose budget " +
+			"is spent takes no turn until then."},
 	ClassWorkConcentrated: {"One agent holds most of the open work.", concentratedWhyAt(1)},
 	ClassWorkBottleneck: {"Open work waits on one item.",
-		"Everything waiting on it, directly or through other items, moves only when it does, so it " +
-			"is the company's critical path."},
+		"Nothing that waits on it, directly or through other items, moves until it does. It is the " +
+			"company's critical path."},
 	ClassWorkHeldByPerson: {"Agent work that needs no decision waits behind a person.",
-		"Agents could do this work now, but it waits on an item that waits on a person: their answer " +
-			"to a question on it, or the item they hold. It moves when they do."},
-	ClassAlarmNoop: {"An agent was woken on the engine's alarms for turns that changed nothing.",
-		"Every agent that holds the health grant is woken each time an alarm fires or clears, so an " +
-			"alarm another agent already answers still starts a turn here, and half or more of these " +
-			"changed nothing."},
+		"Agents could do this work now, but it moves only when the person does. It waits on their " +
+			"answer to a question, or on an item they hold."},
+	ClassAlarmNoop: {"An agent woke on the engine's alarms for turns that changed nothing.",
+		"It pays for alarms another agent already answers. Every agent holding the health grant wakes " +
+			"each time an alarm fires or clears."},
 	ClassAddSeat: {"Work waited for a group of seats that was busy all week.",
-		"Day after day work wanted these seats and did not get them, while every one of them was busy most " +
-			"of the time it could take a turn, so the work waits on how many seats there are."},
+		"The work waits because there are too few of these seats. Day after day work wanted them while " +
+			"every one was busy most of the time it could take a turn."},
 	ClassWakeReasonWaste: {"A kind of wake mostly changed nothing.",
-		"Every wake starts a turn on the seat's model, so a kind of wake whose turns change nothing is spend " +
-			"with nothing to show for it, across every seat it reaches."},
+		"Most of what these wakes spend buys nothing, on every seat they reach. Every wake starts a " +
+			"turn on the seat's model."},
 	ClassTurnCostOutlier: {"Some seats' turns cost several times the others'.",
-		"A turn many times the company's typical cost is usually a long context, a large answer read again, or " +
-			"a run that loops, and it is paid on every turn the seat takes."},
+		"The extra is paid on every turn the seat takes. It is usually a long context, a large answer " +
+			"read again, or a run that loops."},
 	ClassScheduleLoad: {"A seat's schedules keep it busy while its work waits.",
-		"Every scheduled run is a turn the seat spends on the check rather than on the work it holds, so its " +
-			"own items wait to start."},
-	ClassModelLimit: {"A model entry's usage limit kept its seats from working.",
-		"While an entry's usage limit stands, every seat on it waits, whatever it holds, so the hours it is " +
-			"out are hours those seats cannot work."},
+		"Each check takes a turn its own work could have used."},
+	ClassModelLimit: {"A model's usage limit kept the seats on it from working.",
+		"While the limit stands, every seat on it waits, whatever it holds."},
 	ClassModelHeld: {"An agent's work waited on its model's limit.",
-		"While the model an agent runs on is at its limit, the agent takes no turn, so the work it " +
-			"holds stands still until the limit resets, however pressing it is."},
+		"Its work stands still until the limit resets, however pressing it is. While its model is at " +
+			"its limit, the agent takes no turn."},
 	ClassPoolWaits: {"Callers queued for a database connection on a node.",
-		"The node's database pool had no connection free when callers asked, so they waited, and " +
-			"every request, turn and write on that node waited with them."},
-	ClassMergeNoChecks: {"Merges a delegate allowed went to a person because the branch requires no check.",
-		"A delegate's allow of a merge stands only where the code host shows the change passed CI, so " +
-			"in a repository whose branch requires no check every merge waits on a person."},
-	ClassWorkImbalance: {"One seat holds most of its job's open work while another seat doing that job holds little.",
-		"Work queued on the busy seat waits its turn there while a seat that could take it sits " +
-			"idle, so moving the work not yet started shortens the wait without adding a seat."},
+		"Every request, turn and write on that node waited with them. Its database pool had no " +
+			"connection free when they asked."},
+	ClassMergeNoChecks: {"Merges a delegate allowed still went to a person.",
+		"Every merge into this repository waits on a person. A delegate's allow stands only where the " +
+			"code host shows the change passed CI."},
+	ClassWorkImbalance: {"One seat holds most of a job's open work while another has little.",
+		"Its queue waits while a seat that could take the work sits idle. Moving the work not yet " +
+			"started shortens the wait without adding a seat."},
 	ClassBlockedNoCause: {"Work is blocked on something nobody holds.",
-		"These items wait on an item nobody holds, an item that was removed, or a change nothing is " +
-			"moving, so no seat's turn will end the wait and the item records nothing more about why."},
+		"No seat's turn will end the wait, so it lasts until someone steps in. Each waits on an item " +
+			"nobody holds, an item that was removed, or a change nothing is moving. The item records " +
+			"nothing more about why."},
 }
 
 // stallFinding is an owner's finding of class in its class's words.
@@ -465,12 +463,11 @@ func concentratedWhy(c *config.Company, seat string) string {
 
 // concentratedWhyAt is the why for an agent that runs runs turns at once.
 func concentratedWhyAt(runs int) string {
+	const lead = "Its work waits in line while other agents have little to do."
 	if runs <= 1 {
-		return "An agent takes one turn at a time, so the work it holds waits its turn while other agents " +
-			"have little to do."
+		return lead + " An agent takes one turn at a time."
 	}
-	return fmt.Sprintf("This agent takes at most %d turns at once (its sandbox.max_concurrent_runs), so the "+
-		"work it holds past those waits its turn while other agents have little to do.", runs)
+	return fmt.Sprintf("%s This agent takes at most %d turns at once (its sandbox.max_concurrent_runs).", lead, runs)
 }
 
 // workBottleneck is one finding per open item an agent seat, or nobody, holds

@@ -31,7 +31,7 @@ func TestAPartLeftBesideARemovedRunIsSwept(t *testing.T) {
 	f := openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
 	ctx := t.Context()
 	for _, turn := range []string{"t-live", "t-crashed"} {
-		if _, err := f.CreateSandboxRun(ctx, turn, []byte(`{"status":"running"}`)); err != nil {
+		if _, err := f.CreateSandboxRun(ctx, turn, []byte(`{"status":"running"}`), nil); err != nil {
 			t.Fatalf("create %s: %v", turn, err)
 		}
 		for _, part := range coord.RunParts() {
@@ -83,7 +83,7 @@ func TestARunsLogRemovalLeavesTheLogOfTheTurnsNextRun(t *testing.T) {
 	f := openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
 	ctx := t.Context()
 	const turn = "t-relaunched"
-	if _, err := f.CreateSandboxRun(ctx, turn, []byte(`{"status":"launching"}`)); err != nil {
+	if _, err := f.CreateSandboxRun(ctx, turn, []byte(`{"status":"launching"}`), nil); err != nil {
 		t.Fatalf("create the next run: %v", err)
 	}
 	if _, ok, err := f.MutateSandboxRunPart(ctx, turn, coord.RunLog, func(coord.Record, bool) ([]byte, error) {
@@ -117,7 +117,7 @@ func TestALogWhoseRunIsLaunchedAgainAfterTheSweepsPassIsKept(t *testing.T) {
 	f := openFleetForTest(t, nc, fmt.Sprintf("f%d", bucketSeq.Add(1)))
 	ctx := t.Context()
 	const turn = "t-launched-again"
-	if _, err := f.CreateSandboxRun(ctx, turn, []byte(`{"status":"running"}`)); err != nil {
+	if _, err := f.CreateSandboxRun(ctx, turn, []byte(`{"status":"running"}`), nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if _, ok, err := f.MutateSandboxRunPart(ctx, turn, coord.RunLog, func(coord.Record, bool) ([]byte, error) {
@@ -133,7 +133,7 @@ func TestALogWhoseRunIsLaunchedAgainAfterTheSweepsPassIsKept(t *testing.T) {
 		t.Fatalf("the sweep's pass: %v", err)
 	}
 	// THE TURN LAUNCHED AGAIN, after the pass found its log alone.
-	if _, err := f.CreateSandboxRun(ctx, turn, []byte(`{"status":"launching"}`)); err != nil {
+	if _, err := f.CreateSandboxRun(ctx, turn, []byte(`{"status":"launching"}`), nil); err != nil {
 		t.Fatalf("create again: %v", err)
 	}
 

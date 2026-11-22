@@ -2483,7 +2483,10 @@ type PendingStore interface {
 
 	// ListActiveForSeat is the "is this seat busy?" read, by the HANDLE the seat
 	// runs under: the key this node's per-seat bookkeeping counts by, which its
-	// callers (running, recovering, reply-matching) already hold.
+	// callers (running, recovering, reply-matching) already hold. It and
+	// [PendingStore.ListActiveForSeatID] select on the runs' standing
+	// (internal/coord's RunStanding), reading whole only that seat's records
+	// and any record stating none, so a seat's read never moves every row.
 	ListActiveForSeat(ctx context.Context, handle string) ([]PendingRun, error)
 
 	// ListActiveForSeatID is the same seat's unfinished runs selected by its ID

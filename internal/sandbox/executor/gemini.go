@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"cmp"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -39,11 +40,13 @@ func (GeminiCLI) Session(sandbox.RunRequest) Session { return Session{ID: uuid.N
 
 // geminiFlags is what both the prompt's export and the run itself are started
 // with: the export depends on the tools the approval mode offers, on the model
-// family and on the servers admitted, so it is made with the run's own. Each
-// of the run's servers is admitted by name, so an extension the image
-// installed starts none of its own (the text phases measured the flag).
+// family and on the servers admitted, so it is made with the run's own. No
+// extension is loaded (`--extensions none`: an extension in the home adds its
+// context file, skills and hooks, measured on 0.70.0), and each of the run's
+// servers is admitted by name.
 func geminiFlags(req sandbox.RunRequest) []string {
-	flags := []string{"-p", `""`, "--output-format", "stream-json", "--approval-mode", "yolo"}
+	flags := []string{"-p", `""`, "--output-format", "stream-json", "--approval-mode", "yolo",
+		"--extensions", "none"}
 	if req.Model != "" {
 		flags = append(flags, "-m", shellword.Quote(req.Model))
 	}
@@ -122,21 +125,46 @@ func geminiSystemText(h GeminiCLI, req sandbox.RunRequest) string {
 // Output is the event stream on stdout, which is also the result: Gemini CLI
 // ends it with a `result` event, and the script appends the run's spend after
 // it. The brief goes on stdin (`-p ""` reads it there), so no brief is ever on
-// a command line. Unset is what moves the harness's state or prompt from
-// where the script put them: an image or profile setting either would send
-// the run to another home or replace the prompt the script built.
+// a command line. Unset is GEMINI_CLI_HOME, which would send the run to
+// another home; the prompt's variables are pinned ([GeminiCLI.Pins]).
 func (GeminiCLI) Output(paths Paths) Output {
-	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true,
-		Unset: []string{"GEMINI_CLI_HOME", "GEMINI_SYSTEM_MD", "GEMINI_WRITE_SYSTEM_MD"}}
+	return Output{Stdout: paths.Result(), Events: true, BriefOnStdin: true, Unset: []string{"GEMINI_CLI_HOME"}}
 }
+
+// geminiCodeAssist is Gemini CLI's own Code Assist endpoint, which a login's
+// requests go to unless CODE_ASSIST_ENDPOINT names another (read from 0.70.0).
+const geminiCodeAssist = "https://cloudcode-pa.googleapis.com"
 
 // Pins are what a headless run needs whatever the image says: a trusted
 // workspace (an untrusted one exits 55 before any request) and no browser (a
 // login the run cannot use exits 41 at once instead of asking to open one and
 // reading the brief as the answer; the profile's text phases measured both).
-func (GeminiCLI) Pins(context.Context, sandbox.RunRequest, Paths) []Pinned {
-	return []Pinned{{Name: "GEMINI_CLI_TRUST_WORKSPACE", Value: "true"}, {Name: "NO_BROWSER", Value: "true"}}
+//
+// AND EVERY VARIABLE THAT MOVES A REQUEST OR REPLACES THE PROMPT, set whether
+// or not the entry names one: Gemini CLI fills each variable its environment
+// lacks from an `.env` file. The base URLs keep the entry's value or are
+// empty, which Gemini CLI reads as its own endpoint; the Code Assist endpoint
+// is named, since an empty one is read as a URL; the prompt files are `false`
+// until the script names its own (measured on 0.70.0).
+func (GeminiCLI) Pins(_ context.Context, req sandbox.RunRequest, _ Paths) []Pinned {
+	return []Pinned{{Name: "GEMINI_CLI_TRUST_WORKSPACE", Value: "true"}, {Name: "NO_BROWSER", Value: "true"},
+		{Name: "GEMINI_SYSTEM_MD", Value: "false"}, {Name: "GEMINI_WRITE_SYSTEM_MD", Value: "false"},
+		{Name: "CODE_ASSIST_ENDPOINT", Value: cmp.Or(req.Env["CODE_ASSIST_ENDPOINT"], geminiCodeAssist)},
+		{Name: "GOOGLE_GEMINI_BASE_URL", Value: req.Env["GOOGLE_GEMINI_BASE_URL"]},
+		{Name: "GOOGLE_VERTEX_BASE_URL", Value: req.Env["GOOGLE_VERTEX_BASE_URL"]}}
 }
+
+// readsCommands marks Gemini CLI as running a brief that begins with `/` as
+// one of its commands (`/init` wrote a GEMINI.md, measured on 0.70.0).
+func (GeminiCLI) readsCommands() {}
+
+// geminiHome is what a Gemini CLI run may load from the box that its launch
+// did not write ([runHome]): the home's skills (the run's own are written
+// after), policies (the run's file is written after), commands, memory file
+// and environment file. Extensions stay on disk, unloaded ([geminiFlags]);
+// agents are off in the settings.
+var geminiHome = runHome{State: ".gemini", Owned: []string{"skills", "policies", "commands", "GEMINI.md", ".env"},
+	Memory: []string{"GEMINI.md"}}
 
 // Events is a new decoder for one stream ([geminiEvents]).
 func (GeminiCLI) Events() Decoder { return &geminiEvents{} }
@@ -180,17 +208,10 @@ func (g GeminiCLI) WriteConfig(ctx context.Context, box sandbox.Sandbox, req san
 		}
 		files[paths.GeminiSkills()+"/"+geminiSkillName(s)+"/SKILL.md"] = file
 	}
-	// THE LAST RUN'S SKILLS GO FIRST: Gemini CLI reads skills only from the
-	// home's skills directory, which may hold the image's own, so the run's
-	// are named apart ([geminiSkillName]) and only those are removed.
-	res, err := box.Exec(ctx, "rm -rf "+shellword.Quote(paths.GeminiSkills())+"/"+sandbox.SkillNamespace+"-*",
-		sandbox.ExecOptions{})
-	if err != nil {
-		return "", fmt.Errorf("executor: clearing the last run's skills for Gemini CLI: %w", err)
-	}
-	if res.ExitCode != 0 {
-		return "", fmt.Errorf("executor: clearing the last run's skills for Gemini CLI exited %d: %s",
-			res.ExitCode, strings.TrimSpace(res.Stderr))
+	// EVERYTHING AN EARLIER RUN OR THE IMAGE LEFT GOES FIRST, the home's
+	// skills and policies among it, so the run loads only what it writes.
+	if err := geminiHome.prune(ctx, box, paths.Home, "Gemini CLI"); err != nil {
+		return "", err
 	}
 	for path, content := range files {
 		if err := box.WriteFile(ctx, path, content); err != nil {
@@ -314,8 +335,9 @@ var _ artifactHolder = GeminiCLI{}
 
 // artifacts is what a Gemini CLI run leaves in the box's work directory, each
 // written afresh by the next ([Runner.ClearArtifacts]). The home's settings,
-// policy and project registry are rewritten by every Gemini CLI run and left
-// alone by every other harness's, since the image may keep its own there.
+// policy and project registry are rewritten by every Gemini CLI run, its
+// skills, policies and commands removed first, an image's included
+// ([geminiHome]); every other harness's run leaves them alone.
 func (GeminiCLI) artifacts(p Paths) (files, dirs []string) {
 	return []string{p.GeminiHelper(), p.GeminiTake(), p.GeminiTakeConfig(),
 		p.GeminiDefaultSystem(), p.GeminiExportErr(), p.GeminiSystem()}, nil

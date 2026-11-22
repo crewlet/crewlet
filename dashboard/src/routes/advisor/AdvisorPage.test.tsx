@@ -16,7 +16,7 @@ import type { AdvisorKeptFinding, AdvisorRunSummary } from "~/protocol/advisorFi
 import { ranked } from "./words.ts";
 import { runView, runWords } from "./Run.tsx";
 
-vi.mock("./GoLiveReview.tsx", () => ({ GoLiveReview: () => <p>Review what each agent can do</p> }));
+vi.mock("./GoLiveReview.tsx", () => ({ GoLiveReview: () => <p>What each agent can do</p> }));
 
 // A FIXED MIDDAY: a row words its instants by the reader's calendar day, so a
 // fixture taken from the real clock read "3 days ago" for two days near
@@ -334,7 +334,7 @@ test("while anything blocks, the review of each agent's access is offered after 
   ]);
   mount(answer);
   await screen.findByText("No model signs in");
-  expect(screen.getByText("Review what each agent can do")).toBeDefined();
+  expect(screen.getByText("What each agent can do")).toBeDefined();
   expect(screen.queryByText(/Go-live check/)).toBeNull();
 });
 
@@ -359,9 +359,10 @@ test("the head says when the checks last ran, and Run starts them", async () => 
   };
   const { sent, answer } = engine([], run);
   mount(answer);
-  await screen.findByText(
-    "All checks ran 4 minutes ago. It found 2 new findings and closed 1 finding.",
-  );
+  await screen.findByText("Checked 4 minutes ago");
+  const head = document.querySelector<HTMLElement>(".advisor-head__run")!;
+  expect(head.textContent).toContain("2 new");
+  expect(head.textContent).toContain("1 closed");
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
   });
@@ -410,9 +411,9 @@ test("an atlas finding offers its fix where the engine named its entries, and th
   mount(answer);
   await screen.findByText("3 services have no owner");
   expect(screen.getAllByRole("button", { name: "Review the fix" })).toHaveLength(1);
-  expect(screen.getByRole("link", { name: "Open the atlas" }).getAttribute("href")).toBe(
-    "#/company/atlas",
-  );
+  expect(screen.queryByRole("link", { name: "Open the atlas" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "More for 2 sources are stale" }));
+  expect(await screen.findByRole("menuitem", { name: "Open the atlas" })).toBeDefined();
 });
 
 // A PAGE STILL HELD while the next is asked for is not drawn twice.
@@ -462,10 +463,10 @@ test("the run line says only what the run moved", () => {
 test("the run line's placement is on the page's own box, never on the kit's Text", async () => {
   const { answer } = engine([]);
   mount(answer);
-  await screen.findByText("The checks have not run yet.");
+  await screen.findByText("Not run yet");
   const box = document.querySelector(".advisor-head__run")!;
   expect(box.classList.contains("crewlet-text")).toBe(false);
-  expect(box.querySelector(".crewlet-text")?.textContent).toBe("The checks have not run yet.");
+  expect(box.textContent).toContain("Not run yet");
   expect(document.querySelector(".crewlet-text.advisor-head__run")).toBeNull();
 });
 
@@ -476,7 +477,7 @@ test("the review of each agent's access comes after what to change", async () =>
   const { answer } = engine([finding({ severity: "blocks", title: "No model signs in" })]);
   mount(answer);
   const list = await screen.findByText("What to change");
-  const review = screen.getByText("Review what each agent can do");
+  const review = screen.getByText("What each agent can do");
   expect(list.compareDocumentPosition(review) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
@@ -618,8 +619,11 @@ test("a finding's ask action drafts its own question", async () => {
   const { control, about } = assistant();
   mount(answer, "findings", control);
   await screen.findByText("Capped runs");
+  // A PRESS THAT CHANGES NOTHING IS NO BUTTON ON A ROW: it is in its menu.
+  expect(screen.queryByRole("button", { name: /Ask about the cap/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "More for Capped runs" }));
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: /Ask about the cap/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Ask about the cap" }));
   });
   expect(about).toEqual([{ question, send: false }]);
 });
