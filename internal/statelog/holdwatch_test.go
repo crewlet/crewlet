@@ -2,6 +2,7 @@ package statelog_test
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -11,15 +12,19 @@ import (
 )
 
 // listedHolds is a register whose listing is scripted, on a clock the case
-// steps: each listing takes during on that clock.
+// steps: each listing takes during on that clock, and fails with err if set.
 type listedHolds struct {
 	clock  *stepClock
 	during time.Duration
 	holds  []coord.TrimHold
+	err    error
 }
 
 func (l *listedHolds) Holds(context.Context) ([]coord.TrimHold, error) {
 	l.clock.advance(l.during)
+	if l.err != nil {
+		return nil, l.err
+	}
 	return slices.Clone(l.holds), nil
 }
 
@@ -145,5 +150,26 @@ func TestAHoldReadWithNoRevisionIsNeverIgnored(t *testing.T) {
 	c.listAt(0, "n0/join", watchedHold("n0/join", 0))
 	if silent, term := c.listAt(10*time.Minute, "n0/join", watchedHold("n0/join", 0)); silent != 0 || !pinsTheLog(term) {
 		t.Fatalf("a hold with no revision reads silent for %v (%s), want pinned", silent, term.Detail)
+	}
+}
+
+// A FAILED LISTING KEEPS WHAT THE WATCH HAS SEEN: a write's silence still
+// counts from its first listing, so a store failing every other listing never
+// lets a crashed holder pin the log for ever.
+func TestAFailedListingKeepsWhatTheWatchHasSeen(t *testing.T) {
+	t.Parallel()
+	c := newWatchCase(t)
+	c.listAt(0, "n0/join", watchedHold("n0/join", 1))
+	c.clock.set(c.t0.Add(30 * time.Second))
+	c.lister.err = errors.New("the store did not answer")
+	if _, _, err := c.watch.Read(t.Context(), c.lister); err == nil {
+		t.Fatal("a failed listing read back no error")
+	}
+	c.lister.err = nil
+	silent, term := c.listAt(70*time.Second, "n0/join", watchedHold("n0/join", 1))
+	if silent != 70*time.Second || pinsTheLog(term) {
+		t.Fatalf("a write listed at 0 and again at 70s, with a failed listing "+
+			"between, reads silent for %v (%s), want 70s and read past",
+			silent, term.Detail)
 	}
 }
