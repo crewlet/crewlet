@@ -307,3 +307,96 @@ func (s *watchSpy) handedBack(ctx context.Context, t *testing.T, store *FleetSto
 	}
 	return reached
 }
+
+// holdFor is the hold owner holds in holds, and whether there is one.
+func holdFor(holds []coord.TrimHold, owner string) (coord.TrimHold, bool) {
+	for _, h := range holds {
+		if h.Owner == owner {
+			return h, true
+		}
+	}
+	return coord.TrimHold{}, false
+}
+
+// putHoldReason writes owner's hold on one stream, saying why.
+func putHoldReason(ctx context.Context, t *testing.T, f *FleetStore, owner, reason string) {
+	t.Helper()
+	if err := f.PutHold(ctx, coord.TrimHold{Owner: owner, Reason: reason,
+		Streams: map[string]coord.Position{"S": {Stream: "S", Seq: 1}},
+	}); err != nil {
+		t.Fatalf("put %s's hold (%s): %v", owner, reason, err)
+	}
+}
+
+// A TRIM HOLD A MEMBER HANDS BACK STALE IS READ FROM THE LEADER.
+//
+// The pass reads one random member's copy, and the listing trusts a live Put
+// it delivers. The trim ignores a hold whose one write it has watched stand
+// unrenewed past its bound, so a member still holding a write the holder has
+// since renewed would have it ignore a live pin. Each listed hold is read
+// again from the leader: its newest write, with that write's revision.
+func TestATrimHoldAMemberHandsBackStaleIsReadFromTheLeader(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	nc := embeddedNATS(t)
+	f := openFleet(t, nc)
+	owner := coord.HoldOwner("n0", "backup")
+	putHoldReason(ctx, t, f, owner, "first")
+	behind := recordPass(ctx, t, f.positions)
+	putHoldReason(ctx, t, f, owner, "second")
+	read, err := newLeaderReader(f.js, f.positions)
+	if err != nil {
+		t.Fatalf("address the leader: %v", err)
+	}
+	newest, err := read.live(ctx, coord.HoldKey(owner))
+	if err != nil {
+		t.Fatalf("read the renewal from the leader: %v", err)
+	}
+
+	f.positions = replayKV{KeyValue: f.positions, pass: behind}
+	holds, err := f.Holds(ctx)
+	if err != nil {
+		t.Fatalf("Holds: %v", err)
+	}
+	got, ok := holdFor(holds, owner)
+	if !ok || got.Reason != "second" {
+		t.Fatalf("the listing holds %+v, want %s's renewal (\"second\"): the "+
+			"write a member that is behind handed back is one the holder has "+
+			"since replaced", holds, owner)
+	}
+	if got.Revision != newest.Revision() {
+		t.Fatalf("the renewal was listed at revision %d, want the leader's %d: "+
+			"the trim names a write by its revision, and an older one reads as "+
+			"a pin left unrenewed", got.Revision, newest.Revision())
+	}
+}
+
+// A TRIM HOLD RELEASED SINCE A MEMBER'S COPY IS NOT LISTED.
+//
+// A released hold a member still hands back as live is the holder's last
+// write standing unrenewed for ever: the trim would watch it and ignore it,
+// or pin on it, but either way it reads a pin nobody holds. The leader's
+// answer, that the key holds no live value, is the listing's.
+func TestATrimHoldReleasedSinceAMembersCopyIsNotListed(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	nc := embeddedNATS(t)
+	f := openFleet(t, nc)
+	owner := coord.HoldOwner("n0", "backup")
+	putHoldReason(ctx, t, f, owner, "copying the log")
+	behind := recordPass(ctx, t, f.positions)
+	if err := f.ReleaseHold(ctx, owner); err != nil {
+		t.Fatalf("ReleaseHold: %v", err)
+	}
+
+	f.positions = replayKV{KeyValue: f.positions, pass: behind}
+	holds, err := f.Holds(ctx)
+	if err != nil {
+		t.Fatalf("Holds: %v", err)
+	}
+	if len(holds) != 0 {
+		t.Fatalf("the listing holds %+v after %s released its hold: the live "+
+			"Put a member that is behind handed back is not the leader's answer",
+			holds, owner)
+	}
+}

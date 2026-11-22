@@ -130,7 +130,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/admob"
+	"github.com/crewlet/crewlet/internal/appleads"
 	"github.com/crewlet/crewlet/internal/appstoreconnect"
+	"github.com/crewlet/crewlet/internal/metaads"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
@@ -149,6 +152,7 @@ import (
 	"github.com/crewlet/crewlet/internal/expo"
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/gitlab"
+	"github.com/crewlet/crewlet/internal/googleanalytics"
 	"github.com/crewlet/crewlet/internal/googleauth"
 	"github.com/crewlet/crewlet/internal/googlecloud"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -983,11 +987,25 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		reqs = expo.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
+	case integration.KindMetaAds:
+		// No roster: no seat holds a token (ADR-0170).
+		block := company.Integrations.MetaAds
+		guide = metaads.Guide()
+		reqs = metaads.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block.GrowthEnabled()
 	case integration.KindAppStoreConnect:
 		// No roster: no seat holds a key (ADR-0170).
 		block := company.Integrations.AppStoreConnect
 		guide = appstoreconnect.Guide()
 		reqs = appstoreconnect.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block.GrowthEnabled()
+	case integration.KindAppleAds:
+		// No roster: no seat holds a key (ADR-0170).
+		block := company.Integrations.AppleAds
+		guide = appleads.Guide()
+		reqs = appleads.Requirements(block, s.resolve)
 		configured = block != nil
 		enabled = block.GrowthEnabled()
 	case integration.KindDigitalOcean:
@@ -1026,6 +1044,22 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		block := company.Integrations.SSH
 		guide = sshint.Guide()
 		reqs = sshint.Requirements(block, s.resolve)
+		configured = block != nil
+		enabled = block != nil && block.Enabled
+	case integration.KindAdMob:
+		// No roster: every agent reaches AdMob through the company's consent
+		// grant, and no seat holds a token (ADR-0170).
+		block := company.Integrations.AdMob
+		guide = admob.Guide()
+		reqs = admob.Requirements(company, s.resolve)
+		configured = block != nil
+		enabled = block.GrowthEnabled()
+	case integration.KindGoogleAnalytics:
+		// No roster and no credential: agents sign in as their growth
+		// identities, which the Google identity pass makes.
+		block := company.Integrations.GoogleAnalytics
+		guide = googleanalytics.Guide()
+		reqs = googleanalytics.Requirements(company)
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindSlack:

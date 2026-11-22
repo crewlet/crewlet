@@ -191,6 +191,34 @@ func TestADigitalOceanTeamWithASpaceIsAnAccount(t *testing.T) {
 	}
 }
 
+// A GOOGLE ANALYTICS PROPERTY IS AN ACCOUNT, keyed by its ID, with the
+// analytics capability; a company that names none holds the vendor alone.
+func TestAGoogleAnalyticsPropertyIsAnAccount(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	c.Integrations.GoogleAnalytics = &config.GoogleAnalytics{Enabled: true, Properties: []string{"123456789"}}
+	account := find(t, read(c), atlas.KindAccount, "google/analytics/123456789")
+	if account.Name != "Google Analytics" || !slices.Contains(factOf(account, atlas.FactCapability), "analytics") {
+		t.Errorf("the property's account is %+v", account)
+	}
+	c.Integrations.GoogleAnalytics.Properties = nil
+	find(t, read(c), atlas.KindAccount, "google/analytics")
+}
+
+// AN ADMOB PUBLISHER ACCOUNT IS AN ACCOUNT, keyed by its ID, with the
+// monetization capability; a company that names none holds the vendor alone.
+func TestAnAdMobPublisherAccountIsAnAccount(t *testing.T) {
+	t.Parallel()
+	c := derive.AcmeCompany()
+	c.Integrations.AdMob = &config.AdMob{Enabled: true, Accounts: []string{"pub-1234567890123456"}}
+	account := find(t, read(c), atlas.KindAccount, "google/admob/pub-1234567890123456")
+	if account.Name != "AdMob" || !slices.Contains(factOf(account, atlas.FactCapability), "monetization") {
+		t.Errorf("the publisher account is %+v", account)
+	}
+	c.Integrations.AdMob.Accounts = nil
+	find(t, read(c), atlas.KindAccount, "google/admob")
+}
+
 // A TOOL SERVER IS KNOWN BY ITS COMMAND, NEVER ITS ARGUMENTS: an argument is
 // where a person passes a token by mistake, and it is no secret position.
 func TestAToolServerIsKnownByItsCommandNotItsArguments(t *testing.T) {

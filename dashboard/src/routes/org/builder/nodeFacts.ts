@@ -218,7 +218,9 @@ export type Tool =
   | "scaleway"
   | "aws"
   | "google_cloud"
-  | "ssh";
+  | "ssh"
+  | "google_analytics"
+  | "admob";
 
 /** How each tool is named on screen. */
 export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
@@ -237,6 +239,8 @@ export const TOOL_NAMES: Readonly<Record<Tool, string>> = {
   aws: "AWS",
   google_cloud: "Google Cloud",
   ssh: "SSH",
+  google_analytics: "Google Analytics",
+  admob: "AdMob",
 };
 
 /**
