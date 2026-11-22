@@ -64,8 +64,7 @@ func TestARunsStandingCrossesALeafsLinkWithoutItsRecords(t *testing.T) {
 // holds the value and the standing together, so no reader sees one without
 // the other. A change stating none leaves none.
 //
-// Mutation: publish without the client's domain prefix, and the leaf's write
-// fails; send the standing in a second publish, and the record's revision
+// Mutation: send the standing in a second publish, and the record's revision
 // carries none.
 func TestAStandingLandsInTheMessageOfItsRecord(t *testing.T) {
 	t.Parallel()
@@ -113,6 +112,57 @@ func TestAStandingLandsInTheMessageOfItsRecord(t *testing.T) {
 	stood, err := leaf.SandboxRunStandings(ctx)
 	if err != nil || len(stood) != 1 || stood[0].Standing != nil {
 		t.Errorf("the standing after a change stating none = %+v, %v; want the run, stating none", stood, err)
+	}
+}
+
+// A STANDING IS PUBLISHED WHERE THE CLIENT'S OWN UPDATE PUBLISHES: on the
+// key's subject behind the client's API prefix, the fleet's domain for a
+// leaf's client and none for a member's. A subject of another form can still
+// reach the stream through a leaf's link, so the subject itself is compared,
+// as each connection sees its own publish.
+//
+// Mutation: publish without the domain prefix, or with it on every client,
+// and the two subjects part.
+func TestAStandingIsPublishedWhereTheClientsOwnUpdateIs(t *testing.T) {
+	t.Parallel()
+	for name, client := range map[string]jetstream.JetStream{
+		"a leaf's client, in the fleet's domain": leafClient(t),
+		"a member's client":                      jsOf(embeddedNATS(t)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := t.Context()
+			b := openFleetVia(t, client, AcrossLink, fmt.Sprintf("p%d", bucketSeq.Add(1))).runs.(settledBucket)
+			seen, err := client.Conn().SubscribeSync(">")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = seen.Unsubscribe() }()
+			if err := client.Conn().Flush(); err != nil {
+				t.Fatal(err)
+			}
+			theirs, ours := encodeKey("theirs"), encodeKey("ours")
+			if _, err := b.KeyValue.Update(ctx, theirs, []byte(theirs), 0); err != nil {
+				t.Fatalf("the client's own update: %v", err)
+			}
+			standing := coord.StandingOf(uuid.New(), "swe", 1)
+			if _, err := b.update(ctx, ours, []byte(ours), 0, &standing); err != nil {
+				t.Fatalf("an update stating a standing: %v", err)
+			}
+			subjects := map[string]string{}
+			for len(subjects) < 2 {
+				m, err := seen.NextMsgWithContext(ctx)
+				if err != nil {
+					t.Fatalf("the two writes' publishes, %v seen: %v", subjects, err)
+				}
+				if key := string(m.Data); key == theirs || key == ours {
+					subjects[key] = strings.TrimSuffix(m.Subject, key)
+				}
+			}
+			if subjects[ours] != subjects[theirs] {
+				t.Errorf("a standing was published under %q, the client's own update under %q",
+					subjects[ours], subjects[theirs])
+			}
+		})
 	}
 }
 
